@@ -191,7 +191,7 @@ export interface ResolvedStatusLabel {
 /** One extension's transcript rows, under the notice id it won. */
 export interface ResolvedNoticeRows {
   readonly id: string
-  readonly rows: (session: ActiveExtensionSession) => ReadonlyArray<NoticeRow>
+  readonly rows: (session: ActiveExtensionSession) => Option.Option<ReadonlyArray<NoticeRow>>
 }
 
 export interface ResolvedTuiExtensions {

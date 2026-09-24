@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Option, Stream } from "effect"
+import { Deferred, Effect, Option, Stream } from "effect"
+import { createSignal } from "solid-js"
 import {
   AgentEvent,
   AgentName,
@@ -30,6 +31,7 @@ import cacheExtension, {
   scanCacheMisses,
   showsMissRow,
 } from "../../src/extensions/cache.client"
+import type { AnyExtensionClientModule, NoticeRow } from "../../src/extensions/client-facets"
 import { App } from "../../src/app"
 import { provideClientServices } from "../extension-test-harness-boundary"
 import {
@@ -104,6 +106,7 @@ const makeHistory = () => {
     readonly turn: string
     readonly usage: Usage
     readonly model?: ModelId
+    readonly pricedModel?: ModelId
     readonly costUsd?: number
   }) => {
     at(
@@ -124,6 +127,7 @@ const makeHistory = () => {
         step: 1,
         usage: { outputTokens: 100, ...opts.usage },
         model: opts.model ?? SONNET,
+        pricedModel: opts.pricedModel ?? opts.model ?? SONNET,
         costUsd: opts.costUsd ?? 0.05,
       }),
     )
@@ -323,6 +327,30 @@ describe("scanCacheMisses", () => {
     }),
   )
 
+  it.live("a response that took most of the lifetime names the response, not a short pause", () =>
+    Effect.sync(() => {
+      const history = makeHistory()
+      history.input(0, "t1")
+      const responseEnd = SECOND + 7 * MINUTE
+      history.step({
+        start: SECOND,
+        end: responseEnd,
+        turn: "t1",
+        usage: { inputTokens: 30_000, cacheWriteTokens: 30_000 },
+      })
+      // One second after the long response ended, 7m after it started.
+      history.step({
+        start: responseEnd + SECOND,
+        end: responseEnd + 5 * SECOND,
+        turn: "t1",
+        usage: missedStep,
+      })
+      const miss = onlyMiss(scanCacheMisses(history.envelopes))
+      expect(miss.cause).toEqual(CacheMissCause.cases.Response.make({ ms: 7 * MINUTE }))
+      expect(missText(miss, 0)).toBe("cache expired during a 7m response · 30k tokens re-billed")
+    }),
+  )
+
   it.live("a miss inside the TTL on the same model is a changed prefix", () =>
     Effect.sync(() => {
       const history = cachedFirstStep()
@@ -432,6 +460,57 @@ describe("cache miss price", () => {
     }),
   )
 
+  it.live("the missed tokens are the re-written prefix first, then uncached input", () =>
+    Effect.sync(() => {
+      // 30k cached before; this step read 10k, wrote 20k and sent 10k uncached.
+      const history = cachedFirstStep()
+      history.input(14 * MINUTE, "t2")
+      history.step({
+        start: 14 * MINUTE + 10 * SECOND,
+        end: 15 * MINUTE,
+        turn: "t2",
+        usage: { inputTokens: 40_000, cacheReadTokens: 10_000, cacheWriteTokens: 20_000 },
+      })
+      const miss = onlyMiss(scanCacheMisses(history.envelopes))
+      expect(miss.missedTokens).toBe(20_000)
+      // All 20k were written again at 2.50 $/M where a hit reads them at 0.20 $/M.
+      expect(missCostUsd(miss, priceOf(SONNET))).toBeCloseTo(0.046, 10)
+      // Past the writes, the rest paid the input rate.
+      expect(missCostUsd({ ...miss, missedTokens: 25_000 }, priceOf(SONNET))).toBeCloseTo(
+        (20_000 * 2.3 + 5000 * 1.8) / 1_000_000,
+        10,
+      )
+    }),
+  )
+
+  it.live("a step a driver routed is priced by the model the runtime priced it by", () =>
+    Effect.sync(() => {
+      const PROXIED = ModelId.make("proxy/claude-sonnet-5")
+      const history = makeHistory()
+      history.input(0, "t1")
+      history.step({
+        start: SECOND,
+        end: 10 * SECOND,
+        turn: "t1",
+        usage: { inputTokens: 30_000, cacheWriteTokens: 30_000 },
+        model: PROXIED,
+        pricedModel: SONNET,
+      })
+      history.input(14 * MINUTE, "t2")
+      history.step({
+        start: 14 * MINUTE + 10 * SECOND,
+        end: 15 * MINUTE,
+        turn: "t2",
+        usage: missedStep,
+        model: PROXIED,
+        pricedModel: SONNET,
+      })
+      const miss = onlyMiss(scanCacheMisses(history.envelopes))
+      expect(miss.cause._tag).toBe("Idle")
+      expect(miss.pricedModel).toBe(SONNET)
+    }),
+  )
+
   it.live("an unbilled step or an unpriced model costs nothing", () =>
     Effect.sync(() => {
       const history = cachedFirstStep()
@@ -509,7 +588,94 @@ const twoMissHistory = () => {
   return history
 }
 
+const rowsOf = (rows: Option.Option<ReadonlyArray<NoticeRow>>) => Option.getOrThrow(rows)
+
+/** The client extension with a catalog the test sets, fed one history. */
+const setupWithCatalog = (initial: Option.Option<ReadonlyArray<Model>>) =>
+  Effect.gen(function* () {
+    const subscribers = new Set<(envelope: EventEnvelope) => void>()
+    const session = { sessionId, branchId }
+    const [catalog, setCatalog] = createSignal(initial)
+    const contributions = yield* provideClientServices(cacheExtension.setup, {
+      currentSession: () => Option.some(session),
+      sessionEventSubscribers: subscribers,
+      modelCatalog: catalog,
+    })
+    const deliver = (envelopes: ReadonlyArray<EventEnvelope>) => {
+      for (const envelope of envelopes) for (const cb of subscribers) cb(envelope)
+    }
+    const [notices] = contributions.noticeRows ?? []
+    const [label] = contributions.statusLabels ?? []
+    return {
+      deliver,
+      setCatalog,
+      rows: () => Option.flatten(Option.fromUndefinedOr(notices?.rows(session))),
+      label: () => label?.produce() ?? [],
+    }
+  })
+
 describe("cache client extension", () => {
+  it.scopedLive("a routed step's row carries the price of the model the runtime priced", () =>
+    Effect.gen(function* () {
+      const PROXIED = ModelId.make("proxy/claude-sonnet-5")
+      const extension = yield* setupWithCatalog(Option.some(models))
+      const history = makeHistory()
+      history.input(0, "t1")
+      history.step({
+        start: SECOND,
+        end: 10 * SECOND,
+        turn: "t1",
+        usage: { inputTokens: 30_000, cacheWriteTokens: 30_000 },
+        model: PROXIED,
+        pricedModel: SONNET,
+      })
+      history.input(14 * MINUTE, "t2")
+      history.step({
+        start: 14 * MINUTE + 10 * SECOND,
+        end: 15 * MINUTE,
+        turn: "t2",
+        usage: missedStep,
+        model: PROXIED,
+        pricedModel: SONNET,
+      })
+      extension.deliver(history.envelopes)
+      expect(rowsOf(extension.rows()).map((row) => row.text)).toEqual([
+        "cache expired after 14m idle · 30k tokens re-billed ~$0.07",
+      ])
+      expect(extension.label()).toEqual([{ text: "cache waste $0.07", color: "textMuted" }])
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
+  it.scopedLive("rows wait for the catalog, then are born priced and never change", () =>
+    Effect.gen(function* () {
+      const extension = yield* setupWithCatalog(Option.none())
+      extension.deliver(twoMissHistory().envelopes)
+      // No catalog yet: the source cannot say what its rows are.
+      expect(Option.isNone(extension.rows())).toBe(true)
+      expect(extension.label()).toEqual([])
+      extension.setCatalog(Option.some(models))
+      const [born] = rowsOf(extension.rows())
+      expect(born?.text).toBe("cache expired after 14m idle · 30k tokens re-billed ~$0.07")
+      // A catalog reload with other prices leaves the row it drew as it was.
+      const doubled = models.map(
+        (model) =>
+          new Model({
+            ...model,
+            pricing: Option.getOrUndefined(
+              Option.map(Option.fromUndefinedOr(model.pricing), (pricing) => ({
+                ...pricing,
+                cacheWrite: 10,
+              })),
+            ),
+          }),
+      )
+      extension.setCatalog(Option.some(doubled))
+      const [after] = rowsOf(extension.rows())
+      expect(after).toBe(born)
+      expect(extension.label()).toEqual([{ text: "cache waste $0.07", color: "textMuted" }])
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
   it.scopedLive("replayed then live envelopes draw one row and total every miss", () =>
     Effect.gen(function* () {
       const subscribers = new Set<(envelope: EventEnvelope) => void>()
@@ -517,7 +683,7 @@ describe("cache client extension", () => {
       const contributions = yield* provideClientServices(cacheExtension.setup, {
         currentSession: () => Option.some(session),
         sessionEventSubscribers: subscribers,
-        models: () => models,
+        modelCatalog: () => Option.some(models),
       })
       const history = twoMissHistory()
       // The feed replays from the start on mount, then a reconnect delivers the same ids live.
@@ -525,7 +691,9 @@ describe("cache client extension", () => {
         for (const envelope of history.envelopes) for (const cb of subscribers) cb(envelope)
       }
       const [notices] = contributions.noticeRows ?? []
-      const rows = notices?.rows(session) ?? []
+      const rows = rowsOf(
+        Option.flatMap(Option.fromUndefinedOr(notices), (source) => source.rows(session)),
+      )
       expect(rows.map((row) => row.text)).toEqual([
         "cache expired after 14m idle · 30k tokens re-billed ~$0.07",
       ])
@@ -547,55 +715,128 @@ describe("cache client extension", () => {
 
   it.live("a resumed session draws the miss row in the transcript", () =>
     Effect.gen(function* () {
-      const history = twoMissHistory()
-      const lastEventId = history.envelopes.length
-      const client = createMockClient({
-        auth: { listProviders: () => Effect.succeed([]) },
-        branch: { getTree: () => Effect.succeed([]) },
-        model: { list: () => Effect.succeed(models) },
-        // The shell's catalog holds the models of registered drivers.
-        driver: {
-          list: () =>
-            Effect.succeed({ drivers: [{ id: "anthropic" }], overrides: {}, agents: [testAgent] }),
-        },
-        session: {
-          getSnapshot: () =>
-            Effect.succeed({
-              sessionId,
-              branchId,
-              messages: [],
-              lastEventId,
-              reasoningLevel: Option.getOrUndefined(Option.none()),
-              resolvedModelId: SONNET,
-              agent: AgentName.make("main"),
-              runtime: { _tag: "Idle" satisfies "Idle", queue: emptyQueueSnapshot() },
-              metrics: { turns: 3, durationMs: 0, costUsd: 0.15, lastInputTokens: 34_000 },
-            }),
-          events: () => Stream.concat(Stream.make(...history.envelopes), Stream.never),
-        },
+      const setup = yield* renderResumed({
+        catalog: Effect.succeed(models),
+        extension: cacheExtension,
       })
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <App missingAuthProviders={[]} />, {
-          client,
-          runtime: createMockRuntime(),
-          builtins: [cacheExtension],
-          width: 100,
-          height: 30,
-          initialSession: {
-            id: sessionId,
-            activeBranchId: branchId,
-            name: "Cache",
-            createdAt: dateFromMillis(0),
-            updatedAt: dateFromMillis(0),
-          },
-        }),
-      )
+      yield* waitForFrame(setup.rendered, (frame) => frame.includes(`◌ ${IDLE_ROW}`), "miss row")
       yield* waitForFrame(
-        setup,
-        (frame) => frame.includes("◌ cache expired after 14m idle · 30k tokens re-billed ~$0.07"),
-        "miss row",
+        setup.rendered,
+        (frame) => frame.includes("cache waste $0.07"),
+        "status total",
       )
-      yield* waitForFrame(setup, (frame) => frame.includes("cache waste $0.07"), "status total")
+    }).pipe(Effect.timeout("8 seconds")),
+  )
+
+  it.live("an extension that loads after the feed opened still draws the resumed rows", () =>
+    Effect.gen(function* () {
+      const loaded = yield* Deferred.make<void>()
+      const late = {
+        ...cacheExtension,
+        setup: Deferred.await(loaded).pipe(Effect.andThen(cacheExtension.setup)),
+      }
+      const setup = yield* renderResumed({ catalog: Effect.succeed(models), extension: late })
+      // The feed opens and replays without waiting for the extension.
+      yield* waitForFrame(setup.rendered, () => setup.feedOpened(), "feed open", 4000)
+      yield* Deferred.succeed(loaded, void 0)
+      yield* waitForFrame(
+        setup.rendered,
+        (frame) => frame.includes(`◌ ${IDLE_ROW}`),
+        "miss row",
+        4000,
+      )
+    }).pipe(Effect.timeout("8 seconds")),
+  )
+
+  it.live("a catalog that lands after the feed shows the row once, already priced", () =>
+    Effect.gen(function* () {
+      const catalogReady = yield* Deferred.make<void>()
+      const setup = yield* renderResumed({
+        catalog: Deferred.await(catalogReady).pipe(Effect.as(models)),
+        extension: cacheExtension,
+      })
+      const drawn: Array<string> = []
+      const record = (frame: string) => {
+        for (const line of frame.split("\n")) if (line.includes("◌")) drawn.push(line.trim())
+      }
+      yield* waitForFrame(setup.rendered, () => setup.feedOpened(), "feed open", 4000)
+      // The feed has replayed; the rows wait for the prices.
+      for (let pass = 0; pass < 10; pass++) {
+        yield* waitForFrame(setup.rendered, (frame) => {
+          record(frame)
+          return true
+        })
+      }
+      expect(drawn).toEqual([])
+      yield* Deferred.succeed(catalogReady, void 0)
+      yield* waitForFrame(
+        setup.rendered,
+        (frame) => {
+          record(frame)
+          return frame.includes(`◌ ${IDLE_ROW}`)
+        },
+        "priced miss row",
+        4000,
+      )
+      expect(new Set(drawn)).toEqual(new Set([`◌ ${IDLE_ROW}`]))
     }).pipe(Effect.timeout("8 seconds")),
   )
 })
+
+const IDLE_ROW = "cache expired after 14m idle · 30k tokens re-billed ~$0.07"
+
+/** The App resumed on the two-miss history, with the catalog load and the cache extension given. */
+const renderResumed = (opts: {
+  readonly catalog: Effect.Effect<ReadonlyArray<Model>>
+  readonly extension: AnyExtensionClientModule
+}) =>
+  Effect.gen(function* () {
+    const history = twoMissHistory()
+    const lastEventId = history.envelopes.length
+    let opened = false
+    const client = createMockClient({
+      auth: { listProviders: () => Effect.succeed([]) },
+      branch: { getTree: () => Effect.succeed([]) },
+      model: { list: () => opts.catalog },
+      // The shell's catalog holds the models of registered drivers.
+      driver: {
+        list: () =>
+          Effect.succeed({ drivers: [{ id: "anthropic" }], overrides: {}, agents: [testAgent] }),
+      },
+      session: {
+        getSnapshot: () =>
+          Effect.succeed({
+            sessionId,
+            branchId,
+            messages: [],
+            lastEventId,
+            reasoningLevel: Option.getOrUndefined(Option.none()),
+            resolvedModelId: SONNET,
+            agent: AgentName.make("main"),
+            runtime: { _tag: "Idle" satisfies "Idle", queue: emptyQueueSnapshot() },
+            metrics: { turns: 3, durationMs: 0, costUsd: 0.15, lastInputTokens: 34_000 },
+          }),
+        events: () => {
+          opened = true
+          return Stream.concat(Stream.make(...history.envelopes), Stream.never)
+        },
+      },
+    })
+    const rendered = yield* Effect.promise(() =>
+      renderWithProviders(() => <App missingAuthProviders={[]} />, {
+        client,
+        runtime: createMockRuntime(),
+        builtins: [opts.extension],
+        width: 100,
+        height: 30,
+        initialSession: {
+          id: sessionId,
+          activeBranchId: branchId,
+          name: "Cache",
+          createdAt: dateFromMillis(0),
+          updatedAt: dateFromMillis(0),
+        },
+      }),
+    )
+    return { rendered, feedOpened: () => opened }
+  })

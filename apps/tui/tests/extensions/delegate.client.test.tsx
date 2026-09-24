@@ -165,6 +165,7 @@ describe("delegate rows in native scrollback", () => {
               return (
                 <NativeTranscript
                   items={items}
+                  settled
                   streaming={false}
                   footerHeight={3}
                   expanded={false}

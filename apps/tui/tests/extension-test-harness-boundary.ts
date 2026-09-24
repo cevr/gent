@@ -29,8 +29,8 @@ export interface ClientExtensionHarnessOptions {
   readonly requestEffect?: (request: ActiveClientSession) => Effect.Effect<unknown, Error>
   readonly requestReply?: unknown
   readonly sessionEventSubscribers?: Set<(envelope: EventEnvelope) => void>
-  /** The model catalog the shell holds; empty by default. */
-  readonly models?: () => ReadonlyArray<Model>
+  /** The model catalog the shell holds; settled empty by default. */
+  readonly modelCatalog?: () => Option.Option<ReadonlyArray<Model>>
   /**
    * Workspace the extension sees. Defaults to a shared `/tmp` pair, which is
    * fine for a setup that only reads `cwd`; a test whose extension writes
@@ -88,7 +88,7 @@ export const makeClientTestTransport = (
         opts.sessionEventSubscribers?.delete(cb)
       }
     },
-    models: opts.models ?? (() => []),
+    modelCatalog: opts.modelCatalog ?? (() => Option.some([])),
   }
 }
 

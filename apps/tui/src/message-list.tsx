@@ -958,6 +958,8 @@ export const splitFooterHeight = (terminalHeight: number, requestedHeight: numbe
 
 interface NativeTranscriptProps {
   items: SessionItem[]
+  /** The items are final: no source still derives rows that would land among them. */
+  settled: boolean
   streaming: boolean
   footerHeight: number
   expanded: boolean
@@ -1276,9 +1278,10 @@ export function NativeTranscript(props: NativeTranscriptProps) {
   })
 
   // Scrollback is immutable, so nothing commits until every client renderer
-  // has loaded; the live view draws the plain rows meanwhile.
+  // has loaded and every notice-row source has answered; the live view draws
+  // the rows it has meanwhile.
   createEffect(() => {
-    if (!ext.loaded()) return
+    if (!ext.loaded() || !props.settled) return
     if (!nativeOutputReady() || props.streaming || props.expanded || props.overlayOpen) return
     const items = displayedItems()
     const next = items.map((item) => transcriptFingerprint(item))

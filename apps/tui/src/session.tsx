@@ -1605,6 +1605,7 @@ type SessionFeedClient = Pick<
   | "applySessionSnapshot"
   | "applySessionEvent"
   | "applyBufferedSessionEvent"
+  | "resetSessionEvents"
 >
 
 type SessionFeedStore = {
@@ -1626,19 +1627,28 @@ const compareSessionItems = (a: SessionItem, b: SessionItem): number => {
   return 1
 }
 
+interface NoticeRowItems {
+  readonly items: ReadonlyMap<NoticeRow, SessionItem>
+  /** Every source answered its rows; one still deriving holds native history. */
+  readonly settled: boolean
+}
+
 /**
  * The client extensions' notice rows for one branch, merged into the feed's
  * rows. Each row keeps its transcript item while the extension answers the
  * same row object, so the transcript does not remount rows that did not change.
  */
-const noticeRowItems = (
+export const noticeRowItems = (
   sources: ReadonlyArray<ResolvedNoticeRows>,
   session: ActiveExtensionSession,
   previous: ReadonlyMap<NoticeRow, SessionItem>,
-): Map<NoticeRow, SessionItem> => {
+): NoticeRowItems => {
   const next = new Map<NoticeRow, SessionItem>()
+  let settled = true
   for (const source of sources) {
-    for (const row of source.rows(session)) {
+    const rows = source.rows(session)
+    if (Option.isNone(rows)) settled = false
+    for (const row of Option.getOrElse(rows, () => [])) {
       next.set(
         row,
         previous.get(row) ?? {
@@ -1653,7 +1663,7 @@ const noticeRowItems = (
       )
     }
   }
-  return next
+  return { items: next, settled }
 }
 
 // ── Build messages from raw ──
@@ -2062,13 +2072,6 @@ export function useSessionFeed(
   /** Read at send time, so the owner decides whether the prompt is still unsent. */
   takeInitialPrompt?: () => Option.Option<StartupPrompt>,
   canSendPrompt?: () => boolean,
-  /**
-   * The feed opens only once this answers true. The session view passes the
-   * client extensions' load: the branch replays from its first event when the
-   * feed opens, and an extension that derives rows from events (the cache
-   * notices) must be subscribed by then to see the whole history.
-   */
-  subscribersReady: () => boolean = () => true,
 ): SessionFeed {
   const [store, setStore] = createStore<{ messages: Message[]; events: SessionEvent[] }>({
     messages: [],
@@ -2242,6 +2245,7 @@ export function useSessionFeed(
     streamMessageId = Option.none()
     eventSeq = 0
     processedEnvelopeIds = new Set()
+    client.resetSessionEvents()
   }
 
   const items = createMemo((): SessionItem[] =>
@@ -2311,8 +2315,8 @@ export function useSessionFeed(
   )
 
   createEffect(
-    on([activeSessionKey, feedKey, subscribersReady], ([active, key, ready]) => {
-      if (Option.isNone(active) || active.value !== key || !ready) return
+    on([activeSessionKey, feedKey], ([active, key]) => {
+      if (Option.isNone(active) || active.value !== key) return
 
       // Reset all projection state on identity change
       if (Option.isNone(currentKey) || currentKey.value !== key) {
@@ -2556,6 +2560,8 @@ export function useSessionFeed(
 
 export interface SessionController {
   items: () => SessionItem[]
+  /** Every notice-row source answered: the items are final and may reach native history. */
+  itemsSettled: () => boolean
   messages: () => Message[]
   forkMessages: () => readonly DurableMessage[]
   queueState: () => QueueState
@@ -2898,22 +2904,21 @@ export function createSessionController(props: {
     // Gate prompt send on auth resolution and on the branch picker — the feed
     // waits for the stream plus this signal.
     () => !authGatePending() && !branchPickerOpen(),
-    ext.loaded,
   )
 
-  const noticeItems = createMemo<Map<NoticeRow, SessionItem>>(
+  const notices = createMemo<NoticeRowItems>(
     (previous) =>
       noticeRowItems(
         ext.noticeRows(),
         { sessionId: props.sessionId, branchId: props.branchId },
-        previous,
+        previous.items,
       ),
-    new Map(),
+    { items: new Map(), settled: true },
   )
   const items = createMemo<SessionItem[]>(() => {
-    const notices = noticeItems()
-    if (notices.size === 0) return feed.items()
-    return [...feed.items(), ...notices.values()].sort(compareSessionItems)
+    const rows = notices().items
+    if (rows.size === 0) return feed.items()
+    return [...feed.items(), ...rows.values()].sort(compareSessionItems)
   })
   const promptSearch = createPromptSearchController({
     state: () => {
@@ -3216,6 +3221,7 @@ export function createSessionController(props: {
 
   return {
     items,
+    itemsSettled: () => notices().settled,
     messages: feed.messages,
     forkMessages: () => {
       const overlay = uiState().overlay

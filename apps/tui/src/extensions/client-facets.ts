@@ -154,14 +154,19 @@ export interface ClientTransport {
   readonly onExtensionStateChanged: (
     cb: (pulse: { sessionId: SessionId; branchId: BranchId; extensionId: string }) => void,
   ) => () => void
-  /** Subscribe to every event for the active session/branch. */
+  /**
+   * Subscribe to every event for the active session/branch. A subscriber that
+   * joins after the feed opened first receives the envelopes the feed already
+   * delivered for that branch, in order, then the live ones; ids can repeat
+   * after a reconnect, so a subscriber skips any it has seen.
+   */
   readonly onSessionEvent: (cb: (envelope: EventEnvelope) => void) => () => void
   /**
    * The active session's model catalog, prices included: the list the shell
-   * loads for its model picker, read straight through. Reactive; empty until
-   * the first load lands.
+   * loads for its model picker, read straight through. Reactive; `None` until
+   * the first load settles (a failed load settles with no models).
    */
-  readonly models: () => ReadonlyArray<Model>
+  readonly modelCatalog: () => Option.Option<ReadonlyArray<Model>>
   /**
    * Read live detail for one loop, by explicit key rather than the active
    * session: the caller is asking about a row, which is usually not the
@@ -203,7 +208,7 @@ export interface ClientTransport {
  */
 export type ClientShellTransport = Pick<
   ClientTransport,
-  "currentSession" | "onExtensionStateChanged" | "onSessionEvent" | "models"
+  "currentSession" | "onExtensionStateChanged" | "onSessionEvent" | "modelCatalog"
 > & {
   readonly client: GentNamespacedClient
   readonly runtime: GentRuntime
@@ -219,7 +224,7 @@ const transportFacet = (payload: ClientShellTransport): ClientTransport => ({
   ) => requestExtensionAt(payload, ref, input, activeSession),
   onExtensionStateChanged: payload.onExtensionStateChanged,
   onSessionEvent: payload.onSessionEvent,
-  models: payload.models,
+  modelCatalog: payload.modelCatalog,
   agentDetail: (key) => agentDetailAt(payload, key),
   deleteSession: (sessionId) =>
     shellRead(payload, "session.delete", (client) => client.session.delete({ sessionId })).pipe(
@@ -771,8 +776,13 @@ export interface NoticeRow {
 
 interface NoticeRowContribution {
   readonly id: string
-  /** The rows of one branch. Reactive: the transcript reads it again when it changes. */
-  readonly rows: (session: ActiveExtensionSession) => ReadonlyArray<NoticeRow>
+  /**
+   * The rows of one branch. Reactive: the transcript reads it again when it
+   * changes. `None` while the source cannot yet say what its rows are: native
+   * history commits nothing until every source answers, so a row is born with
+   * its final text and never lands behind rows scrollback already holds.
+   */
+  readonly rows: (session: ActiveExtensionSession) => Option.Option<ReadonlyArray<NoticeRow>>
 }
 
 export interface AutocompleteContribution {

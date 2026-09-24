@@ -60,6 +60,8 @@ export const CacheMissCause = Schema.TaggedUnion({
   ModelSwitch: {},
   /** Same model inside the cache lifetime: the prefix itself changed. */
   PrefixChanged: {},
+  /** The previous response itself took most of the lifetime, measured from its start. */
+  Response: { ms: Schema.Finite },
   /** The cache expired while one tool call ran between two steps of a turn. */
   Tool: { toolName: Schema.String, ms: Schema.Finite },
   /** The cache expired while the turn waited for an interaction to be answered. */
@@ -81,6 +83,8 @@ export interface CacheMiss {
   /** When the paying request started; the row sits there, ahead of the step's answer. */
   readonly startedAt: number
   readonly model: string
+  /** The catalog id the runtime priced the step by; a driver override routes it. */
+  readonly pricedModel: string
   /** Prefix tokens the previous request had cached that this one did not read. */
   readonly missedTokens: number
   readonly inputTokens: number
@@ -157,8 +161,14 @@ export const makeCacheScan = (): CacheScan => {
     input: Option.Option<string>,
   ): CacheMissCause => {
     if (model !== prior.model) return CacheMissCause.cases.ModelSwitch.make({})
-    if (at - prior.startedAt <= CACHE_TTL_MS) return CacheMissCause.cases.PrefixChanged.make({})
-    const gapMs = Math.max(0, at - prior.endedAt)
+    // The lifetime runs from the start of the request that refreshed the
+    // cache; the cause names what took that interval.
+    const gapMs = Math.max(0, at - prior.startedAt)
+    if (gapMs <= CACHE_TTL_MS) return CacheMissCause.cases.PrefixChanged.make({})
+    const response = { name: "response", ms: Math.max(0, prior.endedAt - prior.startedAt) }
+    if (Option.isSome(covers(Option.some(response), gapMs))) {
+      return CacheMissCause.cases.Response.make({ ms: response.ms })
+    }
     const sameTurn =
       Option.isSome(input) && Option.isSome(prior.input) && input.value === prior.input.value
     if (sameTurn) {
@@ -194,6 +204,7 @@ export const makeCacheScan = (): CacheScan => {
     const cacheReadTokens = usage.value.cacheReadTokens ?? 0
     const cacheWriteTokens = usage.value.cacheWriteTokens ?? 0
     const model = event.model ?? ""
+    const pricedModel = event.pricedModel ?? model
     const reported = cacheReadTokens + cacheWriteTokens > 0
     const miss = Option.flatMap(previous, (prior): Option.Option<CacheMiss> => {
       if (!reported && !prior.reportedCache) return Option.none()
@@ -203,6 +214,7 @@ export const makeCacheScan = (): CacheScan => {
         eventId: envelope.id,
         startedAt: begun.at,
         model,
+        pricedModel,
         missedTokens,
         inputTokens: promptTokens,
         cacheReadTokens,
@@ -295,22 +307,22 @@ export const scanCacheMisses = (envelopes: Iterable<EventEnvelope>): ReadonlyArr
 type ModelPricing = NonNullable<Model["pricing"]>
 
 /**
- * What the miss cost over a cache hit: its tokens at the rate this step paid
- * for uncached input and cache writes, less the cache-read rate. A provider
- * that bills no writes (OpenAI) pays the input rate. An unbilled step, or a
- * model the catalog does not price, cost nothing.
+ * What the miss cost over a cache hit. The re-billed prefix was written to
+ * the cache again, so the missed tokens fill this step's cache writes first,
+ * at the write rate; the rest paid the uncached input rate. Each part is
+ * priced over the cache-read rate it would have paid. A provider that bills
+ * no writes (OpenAI) reports none, so every missed token paid the input rate.
+ * An unbilled step, or a model the catalog does not price, cost nothing.
  */
 export const missCostUsd = (miss: CacheMiss, pricing: Option.Option<ModelPricing>): number => {
   if (!miss.billed || Option.isNone(pricing)) return 0
   const price = pricing.value
-  const uncached = Math.max(0, miss.inputTokens - miss.cacheReadTokens - miss.cacheWriteTokens)
-  const paidTokens = uncached + miss.cacheWriteTokens
-  if (paidTokens <= 0) return 0
-  const paidRate =
-    (uncached * price.input + miss.cacheWriteTokens * (price.cacheWrite ?? price.input)) /
-    paidTokens
   const readRate = price.cacheRead ?? price.input
-  return (miss.missedTokens * Math.max(0, paidRate - readRate)) / 1_000_000
+  const rewritten = Math.min(miss.missedTokens, miss.cacheWriteTokens)
+  const uncached = Math.max(0, miss.missedTokens - rewritten)
+  const writeWaste = rewritten * Math.max(0, (price.cacheWrite ?? price.input) - readRate)
+  const inputWaste = uncached * Math.max(0, price.input - readRate)
+  return (writeWaste + inputWaste) / 1_000_000
 }
 
 /** pi's rule: a row for a miss of at least 20k tokens or 10 cents. */
@@ -320,6 +332,7 @@ export const showsMissRow = (miss: CacheMiss, costUsd: number): boolean =>
 const causeText = CacheMissCause.match({
   ModelSwitch: () => "cache miss after model switch",
   PrefixChanged: () => "cache miss: prefix changed",
+  Response: (cause) => `cache expired during a ${formatAge(cause.ms)} response`,
   Tool: (cause) => `cache expired during ${formatAge(cause.ms)} ${cause.toolName}`,
   Approval: (cause) => `cache expired waiting ${formatAge(cause.ms)} for approval`,
   Paused: (cause) => `cache expired while the turn paused ${formatAge(cause.ms)}`,
@@ -358,10 +371,18 @@ const envelopeBranch = (event: AgentEvent): Option.Option<string> => {
   return Option.none()
 }
 
+/** A miss as priced when its row was born; the row is absent below the display threshold. */
+interface PricedMiss {
+  readonly costUsd: number
+  readonly row: Option.Option<NoticeRow>
+}
+
 interface BranchMisses {
   readonly scan: CacheScan
   readonly misses: Accessor<ReadonlyArray<CacheMiss>>
   readonly setMisses: Setter<ReadonlyArray<CacheMiss>>
+  /** Each miss as priced the first time the catalog was there to price it. */
+  readonly born: Map<number, PricedMiss>
 }
 
 export default defineClientExtension(CACHE_EXTENSION_ID, {
@@ -374,7 +395,7 @@ export default defineClientExtension(CACHE_EXTENSION_ID, {
         const known = Option.fromUndefinedOr(branches.get(key))
         if (Option.isSome(known)) return known.value
         const [misses, setMisses] = createSignal<ReadonlyArray<CacheMiss>>([])
-        const created = { scan: makeCacheScan(), misses, setMisses }
+        const created = { scan: makeCacheScan(), misses, setMisses, born: new Map() }
         branches.set(key, created)
         return created
       }
@@ -391,65 +412,69 @@ export default defineClientExtension(CACHE_EXTENSION_ID, {
         ),
       )
 
-      const prices = createMemo(
-        () =>
-          new Map<string, Option.Option<ModelPricing>>(
-            transport.models().map((model) => [model.id, Option.fromUndefinedOr(model.pricing)]),
-          ),
-      )
-      const priced = (key: string) =>
-        branch(key)
-          .misses()
-          .map((miss) => ({
-            miss,
-            costUsd: missCostUsd(
-              miss,
-              Option.flatten(Option.fromUndefinedOr(prices().get(miss.model))),
+      // No price is known until the catalog settles, so no miss is priced before then.
+      const prices = createMemo(() =>
+        Option.map(
+          transport.modelCatalog(),
+          (catalog) =>
+            new Map<string, Option.Option<ModelPricing>>(
+              catalog.map((model) => [model.id, Option.fromUndefinedOr(model.pricing)]),
             ),
-          }))
+        ),
+      )
 
-      // A row keeps its object while its text holds, so the transcript keeps its row.
-      const rowsByEvent = new Map<number, NoticeRow>()
-      const row = (miss: CacheMiss, costUsd: number): NoticeRow => {
-        const text = missText(miss, costUsd)
-        const known = Option.filter(
-          Option.fromUndefinedOr(rowsByEvent.get(miss.eventId)),
-          (held) => held.text === text,
-        )
+      // A miss is priced once, when it is first read with the catalog, and its
+      // row is born then with its final text: scrollback never holds a row
+      // that changes after, and a later catalog reload rewrites nothing.
+      const priceOnce = (
+        born: Map<number, PricedMiss>,
+        miss: CacheMiss,
+        catalog: ReadonlyMap<string, Option.Option<ModelPricing>>,
+      ): PricedMiss => {
+        const known = Option.fromUndefinedOr(born.get(miss.eventId))
         if (Option.isSome(known)) return known.value
-        const next: NoticeRow = {
+        const costUsd = missCostUsd(
+          miss,
+          Option.flatten(Option.fromUndefinedOr(catalog.get(miss.pricedModel))),
+        )
+        const row = Option.some<NoticeRow>({
           key: String(miss.eventId),
           createdAt: miss.startedAt,
           glyph: MISS_GLYPH,
           color: "warning",
-          text,
-        }
-        rowsByEvent.set(miss.eventId, next)
-        return next
+          text: missText(miss, costUsd),
+        }).pipe(Option.filter(() => showsMissRow(miss, costUsd)))
+        const priced = { costUsd, row }
+        born.set(miss.eventId, priced)
+        return priced
       }
+      const priced = (key: string): Option.Option<ReadonlyArray<PricedMiss>> =>
+        Option.map(prices(), (catalog) => {
+          const target = branch(key)
+          return target.misses().map((miss) => priceOnce(target.born, miss, catalog))
+        })
 
       return clientContributions(
         noticeRowContribution({
           id: "cache.misses",
           rows: (session) =>
-            priced(branchKey(session))
-              .filter(({ miss, costUsd }) => showsMissRow(miss, costUsd))
-              .map(({ miss, costUsd }) => row(miss, costUsd)),
+            Option.map(priced(branchKey(session)), (misses) =>
+              misses.flatMap((miss) => Option.toArray(miss.row)),
+            ),
         }),
         statusLabelContribution({
           priority: 60,
-          produce: (): ReadonlyArray<{ readonly text: string; readonly color: "textMuted" }> =>
-            Option.match(transport.currentSession(), {
-              onNone: () => [],
-              onSome: (session) => {
-                const total = priced(branchKey(session)).reduce(
-                  (sum, { costUsd }) => sum + costUsd,
-                  0,
-                )
-                if (total <= 0) return []
-                return [{ text: `cache waste $${total.toFixed(2)}`, color: "textMuted" }]
-              },
-            }),
+          produce: (): ReadonlyArray<{ readonly text: string; readonly color: "textMuted" }> => {
+            const total = Option.getOrElse(
+              Option.map(
+                Option.flatMap(transport.currentSession(), (session) => priced(branchKey(session))),
+                (misses) => misses.reduce((sum, miss) => sum + miss.costUsd, 0),
+              ),
+              () => 0,
+            )
+            if (total <= 0) return []
+            return [{ text: `cache waste $${total.toFixed(2)}`, color: "textMuted" }]
+          },
         }),
       )
     })

@@ -710,6 +710,7 @@ export function Session(props: SessionProps) {
         {/* Messages */}
         <NativeTranscript
           items={controller.items()}
+          settled={controller.itemsSettled()}
           streaming={controller.activity().phase !== "idle"}
           footerHeight={footerHeight()}
           expanded={controller.uiState().transcriptExpanded}

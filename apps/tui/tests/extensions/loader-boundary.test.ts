@@ -315,9 +315,8 @@ describe("resolveTuiExtensions", () => {
   // replaces a shipped notice by claiming its id.
   test("notice rows key by id; a higher scope replaces, a same-scope claim is dropped", () => {
     const session = { sessionId: SessionId.make("s"), branchId: BranchId.make("b") }
-    const rowsSaying = (text: string) => (): ReadonlyArray<NoticeRow> => [
-      { key: "1", createdAt: 0, glyph: "◌", color: "warning", text },
-    ]
+    const rowsSaying = (text: string) => (): Option.Option<ReadonlyArray<NoticeRow>> =>
+      Option.some([{ key: "1", createdAt: 0, glyph: "◌", color: "warning", text }])
     const notice = (text: string) =>
       noticeRowContribution({ id: "cache.misses", rows: rowsSaying(text) })
     const resolved = resolveTuiExtensions([
@@ -327,12 +326,14 @@ describe("resolveTuiExtensions", () => {
       make("user-other", "user", noticeRowContribution({ id: "other", rows: rowsSaying("other") })),
     ])
 
-    expect(resolved.noticeRows.map((source) => [source.id, source.rows(session)[0]?.text])).toEqual(
-      [
-        ["cache.misses", "user"],
-        ["other", "other"],
-      ],
-    )
+    const firstText = (rows: Option.Option<ReadonlyArray<NoticeRow>>) =>
+      Option.getOrElse(rows, () => [])[0]?.text
+    expect(
+      resolved.noticeRows.map((source) => [source.id, firstText(source.rows(session))]),
+    ).toEqual([
+      ["cache.misses", "user"],
+      ["other", "other"],
+    ])
     expect(resolved.failures).toEqual([
       {
         id: "b-cache",
@@ -1373,7 +1374,7 @@ const testRuntime = makeClientRuntime({
     currentSession: () => Option.none(),
     onExtensionStateChanged: () => () => {},
     onSessionEvent: () => () => {},
-    models: () => [],
+    modelCatalog: () => Option.none(),
   },
   workspace: { cwd: "/tmp/test-cwd", home: "/tmp/test-home" },
   shell: { cast: castTestShellEffect, pane: makePaneSlot() },
@@ -1719,7 +1720,7 @@ export default defineClientExtension("@test/dup", {
           }),
         onExtensionStateChanged: () => () => {},
         onSessionEvent: () => () => {},
-        models: () => [],
+        modelCatalog: () => Option.none(),
       },
     })
     return Effect.gen(function* () {

@@ -162,7 +162,7 @@ export function ExtensionUIProvider(props: {
       currentSession: client.sessionIdentity,
       onExtensionStateChanged: (cb) => client.onExtensionStateChanged(cb),
       onSessionEvent: (cb) => client.onSessionEvent(cb),
-      models: client.models,
+      modelCatalog: client.modelCatalog,
     },
     workspace: {
       cwd: workspace.cwd,
