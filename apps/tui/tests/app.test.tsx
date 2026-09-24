@@ -1094,6 +1094,37 @@ describe("App auth gate", () => {
       expect(view.steers).toEqual(["Cancel"])
     }).pipe(Effect.timeout("10 seconds")),
   )
+  // A key the btw ask line takes never reaches the session scope, and it is
+  // still another gesture: the second ctrl+c cancels the next turn.
+  it.live("a key the btw ask line takes between two ctrl+c presses makes the second cancel", () =>
+    Effect.gen(function* () {
+      const view = yield* mountRunningTurnWithError
+      yield* Effect.promise(() => view.setup.mockInput.typeText("/btw"))
+      view.setup.mockInput.pressEnter()
+      yield* waitForFrame(view.setup, (frame) => frame.includes("btw · fork"), "btw pane")
+      view.setup.mockInput.pressKey("c", { ctrl: true })
+      yield* waitForFrame(view.setup, () => view.steers.length === 1, "first cancel")
+      yield* Effect.promise(() => view.setup.mockInput.typeText("w"))
+      view.setup.mockInput.pressKey("c", { ctrl: true })
+      yield* waitForFrame(view.setup, () => view.steers.length === 2, "second cancel")
+      expect(view.shutdowns()).toBe(0)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  // A paste the btw ask line takes is another gesture too.
+  it.live("a paste the btw ask line takes between two ctrl+c presses makes the second cancel", () =>
+    Effect.gen(function* () {
+      const view = yield* mountRunningTurnWithError
+      yield* Effect.promise(() => view.setup.mockInput.typeText("/btw"))
+      view.setup.mockInput.pressEnter()
+      yield* waitForFrame(view.setup, (frame) => frame.includes("btw · fork"), "btw pane")
+      view.setup.mockInput.pressKey("c", { ctrl: true })
+      yield* waitForFrame(view.setup, () => view.steers.length === 1, "first cancel")
+      yield* Effect.promise(() => view.setup.mockInput.pasteBracketedText("why"))
+      view.setup.mockInput.pressKey("c", { ctrl: true })
+      yield* waitForFrame(view.setup, () => view.steers.length === 2, "second cancel")
+      expect(view.shutdowns()).toBe(0)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   // The quit window is for a press that follows the cancel; a draft made in
   // between is nearer, so the next ctrl+c clears it and never quits over it.
   // A paste reaches the composer without a key event, so no key disarms it.

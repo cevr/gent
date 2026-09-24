@@ -107,7 +107,7 @@ import {
 } from "./message-list"
 import type { ToolCall } from "./tool-renderers"
 import { useRenderer } from "@opentui/solid"
-import { type ScopedKeyboardEvent, useScopedKeyboard } from "./terminal"
+import { type ScopedKeyboardEvent, useInputWatch, useScopedKeyboard } from "./terminal"
 import { useExtensionUI } from "./extensions/host"
 import type { ActiveExtensionSession, NoticeRow } from "./extensions/client-facets"
 import type { ResolvedNoticeRows } from "./extensions/loader-boundary"
@@ -3212,14 +3212,22 @@ export function createSessionController(props: {
     })
   }
 
+  // Any key or paste between two ctrl+c presses is another gesture (a keybind,
+  // a transcript toggle, a typed character, also one a docked pane takes), so
+  // it disarms their quit. Escape keeps its own arm, which its branch reads.
+  const disarmInterruptQuit = () => {
+    if (Option.exists(quitArmed, (armed) => armed.key === "interrupt")) disarmQuit()
+  }
+  useInputWatch({
+    key: (event) => {
+      if (event.ctrl === true && event.name === "c") return
+      disarmInterruptQuit()
+    },
+    paste: disarmInterruptQuit,
+  })
+
   useScopedKeyboard((event) => {
-    // Any key between two ctrl+c presses is another gesture (a keybind, a
-    // transcript toggle, a typed character), so it disarms their quit.
-    // Escape keeps its own arm, which its branch below reads.
     const interrupt = event.ctrl === true && event.name === "c"
-    if (!interrupt && Option.exists(quitArmed, (armed) => armed.key === "interrupt")) {
-      disarmQuit()
-    }
     // A keybind between two escapes is a different gesture, so it disarms the quit.
     if (command.handleKeybind(event, ext.commands())) {
       disarmQuit()
