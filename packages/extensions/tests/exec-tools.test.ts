@@ -918,6 +918,11 @@ describe("classifyBashCommand", () => {
       `F=-rf; rm "$F" ${x}`,
       'M=--hard; git reset "$M"',
       `rm "$(printf -- -rf)" ${x}`,
+      // A brace expansion makes more words, and any of them may be a flag.
+      `rm {-rf,${x}}`,
+      `rm {-r,-f} ${x}`,
+      "git reset {--hard,}",
+      "git reset --{hard,}",
       // An unquoted option value still splits.
       `cp -t $D ${x}`,
       // Accepted over-asks: any dynamic operand may be a flag too.
@@ -936,6 +941,9 @@ describe("classifyBashCommand", () => {
       "ls $DIR",
       'ls "$DIR"',
       "echo $HOME",
+      // A glob matches names of files; a brace after `--` makes operands.
+      "rm *.log",
+      "rm -- {a,b}.log",
       // The value of an option the table names.
       `psql -d "$DB" -c 'select 1'`,
       'git -C "$dir" status',

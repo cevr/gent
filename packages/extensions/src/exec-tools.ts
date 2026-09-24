@@ -542,8 +542,11 @@ const startsExpansion = (text: string, index: number) =>
 /** Text known only at run time: an expansion or a substitution. */
 const DYNAMIC_TEXT = /\$[\w{(@*#?!$-]|`/
 
-/** A glob (`*`, `?`, `[…]`) or a brace expansion (`{a,b}`, `{1..3}`) in unquoted text. */
-const PATTERN_TEXT = /[*?]|\[[^\]]*\]|\{[^{}]*(,|\.\.)[^{}]*\}/
+/** A brace expansion (`{a,b}`, `{1..3}`): one word becomes several. */
+const BRACE_TEXT = /\{[^{}]*(?:,|\.\.)[^{}]*\}/
+
+/** A glob (`*`, `?`, `[…]`) or a brace expansion in unquoted text. */
+const PATTERN_TEXT = new RegExp(String.raw`[*?]|\[[^\]]*\]|${BRACE_TEXT.source}`)
 
 /** The characters `start` to `end` of the source as one word; `expands` when the shell expands it (a heredoc body). */
 const sourceWord = (
@@ -3933,9 +3936,11 @@ const EXPANDS_TO_WORDS = /^\$(?:[@*]|\{[@*]\}|\{\w+\[[@*]\]\})$/
  * A word before `--` known only at run time, where the command may read it
  * as a flag a risk reads (`-rf`, `--hard`): an unquoted expansion splits
  * (`rm $F`), `"$@"` passes on the words of a function's caller or of `set
- * --`, and a quoted `"$F"` stays one word that may still be `-rf`. Only the
- * value of an option the table names (`cp -t "$d"`, `psql -d "$DB"`) is no
- * flag, and only when it does not split.
+ * --`, and a quoted `"$F"` stays one word that may still be `-rf`. A brace
+ * expansion (`rm {-rf,x}`, `git reset --{hard,}`) also makes the words at
+ * run time; a glob does not, since it matches only names of files (`rm
+ * *.log`). Only the value of an option the table names (`cp -t "$d"`,
+ * `psql -d "$DB"`) is no flag, and only when it does not split.
  */
 const runTimeOptions = (
   resolved: ResolvedCommand,
@@ -3957,7 +3962,10 @@ const runTimeOptions = (
     Arr.findFirst(
       args.slice(0, end),
       (word, index) =>
-        word.splits || EXPANDS_TO_WORDS.test(word.text) || (word.dynamic && !values.has(index)),
+        word.splits ||
+        EXPANDS_TO_WORDS.test(word.text) ||
+        (word.pattern && BRACE_TEXT.test(word.text)) ||
+        (word.dynamic && !values.has(index)),
     ),
     (word): BashRisk => ({
       level: "destructive",
