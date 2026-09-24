@@ -542,7 +542,7 @@ const readCredentialsFile: Effect.Effect<
 const sameStoredCredential = Option.makeEquivalence(Schema.toEquivalence(ClaudeCredentials))
 
 /**
- * What a write-back found. `Kept` means the store still held the credential
+ * What a write-back found. `Kept` means the store still held a credential
  * the refresh started from, so the refreshed one is the one to use (whether
  * or not the blob took the splice). `Superseded` means another writer
  * changed the store during the refresh; its credential wins.
@@ -554,19 +554,33 @@ const WriteBack = Schema.TaggedUnion({
 type WriteBack = typeof WriteBack.Type
 
 /**
- * Splice `creds` into the stored blob `raw`, but only while it still holds
- * `expected`, the credential the refresh started from. Another writer (a
- * new sign-in, the `claude` CLI's own refresh) wins over this refresh.
+ * What the store may hold for a refresh's write-back to go ahead: what the
+ * pre-refresh read found (none when that read failed), and the held
+ * credential the refresh may have used instead. Either one is a base this
+ * refresh started from; anything else was written by another writer.
+ */
+interface RefreshBase {
+  readonly read: Option.Option<ClaudeCredentials>
+  readonly held: Option.Option<ClaudeCredentials>
+}
+
+/**
+ * Splice `creds` into the stored blob `raw`, but only while it still holds a
+ * credential the refresh started from (`base`). Another writer (a new
+ * sign-in, the `claude` CLI's own refresh) wins over this refresh.
  */
 const compareAndWrite = <E, R>(
   raw: string,
   creds: ClaudeCredentials,
-  expected: Option.Option<ClaudeCredentials>,
+  base: RefreshBase,
   write: (blob: string) => Effect.Effect<void, E, R>,
 ): Effect.Effect<WriteBack, E, R> =>
   Effect.gen(function* () {
     const stored = yield* Effect.option(decodeCredentials(raw))
-    if (!sameStoredCredential(stored, expected)) {
+    const startedFrom =
+      sameStoredCredential(stored, base.read) ||
+      (Option.isSome(stored) && sameStoredCredential(stored, base.held))
+    if (!startedFrom) {
       return WriteBack.cases.Superseded.make({ stored })
     }
     const updated = updateCredentialBlob(raw, creds)
@@ -576,7 +590,7 @@ const compareAndWrite = <E, R>(
 
 const writeCredentialsFile = (
   creds: ClaudeCredentials,
-  expected: Option.Option<ClaudeCredentials>,
+  base: RefreshBase,
 ): Effect.Effect<
   WriteBack,
   ProviderAuthError,
@@ -596,7 +610,7 @@ const writeCredentialsFile = (
     if (exists) {
       raw = yield* fs.readFileString(credentialsFile).pipe(Effect.mapError(mapFsError))
     }
-    return yield* compareAndWrite(raw, creds, expected, (blob) =>
+    return yield* compareAndWrite(raw, creds, base, (blob) =>
       fs.writeFileString(credentialsFile, blob).pipe(
         // chmod 0600 after write so the credentials file is not
         // world-readable on first creation.
@@ -744,8 +758,8 @@ const readClaudeCodeCredentials: Effect.Effect<
  * `acct` field is preserved by reading the existing entry first.
  *
  * The write is a compare-and-swap: it re-reads the stored blob and writes
- * only while it still holds `expected`, the credential read before the
- * refresh. A sign-in (or a CLI refresh) written meanwhile is newer than
+ * only while it still holds a credential the refresh started from (the one
+ * read before the refresh, or the held one it may have used). A sign-in (or a CLI refresh) written meanwhile is newer than
  * this refresh, so it survives and the result names it.
  *
  * Errors are surfaced as `ProviderAuthError` for the caller to log:
@@ -754,7 +768,7 @@ const readClaudeCodeCredentials: Effect.Effect<
  */
 const writeBackCredentials = (
   creds: ClaudeCredentials,
-  expected: Option.Option<ClaudeCredentials>,
+  base: RefreshBase,
 ): Effect.Effect<
   WriteBack,
   ProviderAuthError,
@@ -763,7 +777,7 @@ const writeBackCredentials = (
   Effect.gen(function* () {
     const platform = yield* AnthropicPlatform
     if (platform.platform !== "darwin") {
-      return yield* writeCredentialsFile(creds, expected)
+      return yield* writeCredentialsFile(creds, base)
     }
 
     // A read failure surfaces as a typed error, so the refresh call site
@@ -787,7 +801,7 @@ const writeBackCredentials = (
         ),
       ),
     )
-    return yield* compareAndWrite(raw, creds, expected, (blob) =>
+    return yield* compareAndWrite(raw, creds, base, (blob) =>
       Effect.gen(function* () {
         const accountName = Option.getOrElse(
           yield* getKeychainAccountName(CLAUDE_KEYCHAIN_SERVICE),
@@ -948,8 +962,8 @@ const refreshClaudeCodeCredentials = (
         // Best-effort write-back so subsequent processes pick up the
         // new token. A failure here doesn't lose the refresh — the
         // caller has it in memory.
-        const expected = Exit.getSuccess(current)
-        const outcome = yield* writeBackCredentials(refreshed.value, expected).pipe(
+        const base = { read: Exit.getSuccess(current), held }
+        const outcome = yield* writeBackCredentials(refreshed.value, base).pipe(
           Effect.catchEager((e: ProviderAuthError) =>
             Effect.logWarning("anthropic.oauth.writeback.failed").pipe(
               Effect.annotateLogs({ error: String(e) }),
