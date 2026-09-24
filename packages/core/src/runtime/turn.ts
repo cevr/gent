@@ -445,13 +445,17 @@ const isObservableModelOutputPart = (part: Response.AnyPart): boolean => {
   }
 }
 
-/** Close the step on a stream failure: log it, end the stream, and surface the error. */
+/**
+ * Close the step on a stream failure: log it, end the stream, and surface the
+ * error. The end names the model: the step ran on it, settled or not.
+ */
 const reportStreamFailure = <E>(
   params: {
     messageId: MessageId
     step: number
     sessionId: SessionId
     branchId: BranchId
+    modelId: ModelIdType
     formatStreamError: (streamError: E) => string
   },
   streamError: E,
@@ -465,6 +469,7 @@ const reportStreamFailure = <E>(
         branchId: params.branchId,
         messageId: params.messageId,
         step: params.step,
+        model: params.modelId,
         outcome: "Failed",
       }),
     )
@@ -483,7 +488,7 @@ export const collectModelTurnResponse = (params: {
   turnStream: Stream.Stream<Response.AnyPart, ProviderError>
   sessionId: SessionId
   branchId: BranchId
-  modelId: string
+  modelId: ModelIdType
   activeStream: ActiveStreamHandle
   formatStreamError: (streamError: ProviderError) => string
 }) =>
@@ -542,6 +547,7 @@ export const collectFailedModelTurnResponse = (params: {
   streamError: ProviderError
   sessionId: SessionId
   branchId: BranchId
+  modelId: ModelIdType
   activeStream: ActiveStreamHandle
   formatStreamError: (streamError: ProviderError) => string
 }) =>
@@ -1541,6 +1547,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
             streamError,
             sessionId: params.sessionId,
             branchId: params.branchId,
+            modelId: resolved.modelId,
             activeStream: params.activeStream,
             formatStreamError: causeMessage,
           }),
@@ -1723,7 +1730,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
 
     /**
      * The model the branch last ran on or was told it continues with: a
-     * settled step's `StreamEnded`, or a model-change notice's announced
+     * step's `StreamEnded`, or a model-change notice's announced
      * model, whichever the log holds last. The step boundary compares it with
      * the model the next step resolves; where the settings event sits in the
      * log does not matter. A notice counts because the model reads it on every
@@ -2230,6 +2237,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
                   step: params.step,
                   sessionId: scope.sessionId,
                   branchId: scope.branchId,
+                  model: params.resolved.modelId,
                   interrupted: true,
                   outcome: "Interrupted",
                 }),

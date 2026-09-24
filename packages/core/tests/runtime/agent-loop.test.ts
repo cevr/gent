@@ -153,6 +153,7 @@ import {
   EventStore,
   EventStoreError,
   MessageReceived,
+  type StreamEnded,
   ToolCallStarted,
   ToolCallSucceeded,
   TurnCompleted,
@@ -2886,6 +2887,80 @@ const brokenAfterPartialOutput = (calls: Ref.Ref<number>) =>
       )
     }),
   )
+
+describe("a step that does not settle", () => {
+  // Each `StreamEnded` names the model the step ran on, so a usage row is
+  // never modelless: the step spent tokens on that model whether or not it
+  // settled.
+  it.scopedLive("an interrupted step and a broken step name their model", () =>
+    Effect.gen(function* () {
+      const { layer: signalLayer, controls } = yield* LanguageModelLayers.signal("one. two.")
+      const interruptedRun = yield* createRpcHarness({ ...e2ePreset, providerLayer: signalLayer })
+      const calls = yield* Ref.make(0)
+      const brokenRun = yield* createRpcHarness({
+        ...e2ePreset,
+        providerLayer: brokenAfterPartialOutput(calls),
+      })
+      const endedSteps = (run: typeof brokenRun) =>
+        run.client.session.events({ sessionId: run.sessionId, branchId: run.branchId }).pipe(
+          Stream.takeUntil(({ event }) => event._tag === "TurnCompleted"),
+          Stream.runCollect,
+          Effect.map((envelopes) => {
+            const ended: Array<{
+              readonly outcome: StreamEnded["outcome"]
+              readonly model: Option.Option<ModelId>
+            }> = []
+            for (const { event } of envelopes) {
+              if (event._tag === "StreamEnded") {
+                ended.push({ outcome: event.outcome, model: Option.fromUndefinedOr(event.model) })
+              }
+            }
+            return ended
+          }),
+          Effect.forkScoped,
+        )
+
+      const interruptedSteps = yield* endedSteps(interruptedRun)
+      yield* interruptedRun.client.message.send({
+        sessionId: interruptedRun.sessionId,
+        branchId: interruptedRun.branchId,
+        content: "answer me",
+      })
+      yield* controls.waitForStreamStart.pipe(Effect.timeout("5 seconds"))
+      yield* interruptedRun.client.steer.command({
+        command: {
+          _tag: "Cancel",
+          sessionId: interruptedRun.sessionId,
+          branchId: interruptedRun.branchId,
+          requestId: "req-interrupted-step-model",
+        } satisfies SteerCommand,
+      })
+
+      const brokenSteps = yield* endedSteps(brokenRun)
+      yield* brokenRun.client.message.send({
+        sessionId: brokenRun.sessionId,
+        branchId: brokenRun.branchId,
+        content: "answer me",
+      })
+
+      const interrupted = yield* Fiber.join(interruptedSteps)
+      const broken = yield* Fiber.join(brokenSteps)
+      expect([...interrupted, ...broken].map((step) => step.outcome)).toEqual([
+        "Interrupted",
+        "Failed",
+        "Failed",
+        "Failed",
+      ])
+      // Both harnesses run the same agent, so every end names the same model.
+      const models = [...interrupted, ...broken].map((step) => step.model)
+      expect(models.every((model) => Option.isSome(model))).toBe(true)
+      expect(new Set(models.map((model) => Option.getOrElse(model, () => "")))).toHaveProperty(
+        "size",
+        1,
+      )
+    }).pipe(Effect.timeout("20 seconds")),
+  )
+})
 
 describe("turn lifecycle hooks", () => {
   it.scopedLive("a turn that answers reports neither interrupt nor failure", () =>
