@@ -3176,6 +3176,47 @@ const killsHard = (args: ReadonlyArray<string>) =>
 const SQL_DESTRUCTIVE =
   /\b(delete|drop|truncate|prepare|execute|program)\b|\b(do)\s+(?:\$|e?'|u&'|language\b)/i
 
+/**
+ * The words a SQL statement may start with and stay safe: it reads, adds
+ * rows (`INSERT`) or frames a transaction. Any other start asks: `UPDATE`,
+ * `REPLACE`, `COPY … TO`, `ALTER`, `CREATE`, `VACUUM INTO`, `ATTACH`, `SET`.
+ * DuckDB reads with `FROM t` and `SUMMARIZE t`.
+ */
+const SQL_READ_STARTS = new Set([
+  ...["select", "with", "values", "table", "from", "show", "explain", "describe", "desc"],
+  ...["summarize", "pragma", "insert", "begin", "commit", "rollback", "end", "use"],
+])
+
+/**
+ * Words that write over rows or to a file in a statement that starts as a
+ * read: `WITH x AS (UPDATE …)`, `EXPLAIN ANALYZE UPDATE`, `ON CONFLICT DO
+ * UPDATE`, `INSERT OR REPLACE`, `INTO OUTFILE`, `lo_export(…)`.
+ */
+const SQL_OVERWRITES =
+  /\b(update|merge|upsert|overwrite|outfile|dumpfile|lo_export|lo_unlink|or\s+replace)\b/i
+
+/**
+ * The first statement of `text` that does not start as a read, by the word
+ * that shows it. The text is split at `;` and new lines, and no quote is
+ * read: a `;` in a string only makes more statements. A client command
+ * (`\d`, `.tables`) is judged by the client's own list. `name=value` (a
+ * psql variable) is its value, and one plain word there is data.
+ */
+const sqlWrite = (text: string): Option.Option<string> => {
+  const variable = Option.fromNullishOr(/^[A-Za-z_]\w*=/.exec(text))
+  const sql = Option.match(variable, {
+    onNone: () => text,
+    onSome: ([name]) => text.slice(name.length),
+  })
+  if (Option.isSome(variable) && /^[\w.:/+-]*$/.test(sql)) return Option.none()
+  return Arr.findFirst(sql.split(/[;\n]/), (statement) => {
+    const start = /^[\s(]*([A-Za-z_]+|\S)/.exec(statement)?.[1]?.toLowerCase() ?? ""
+    if (start === "" || start === "\\" || start === ".") return Option.none()
+    if (!SQL_READ_STARTS.has(start)) return Option.some(start)
+    return Option.map(Option.fromNullishOr(SQL_OVERWRITES.exec(statement)), ([word]) => word)
+  })
+}
+
 /** `text`, and each text after a letter of its leading short option cluster (`-XcDELETE`). */
 const sqlTexts = (text: string): ReadonlyArray<string> => {
   const letters = /^-[A-Za-z]+/.exec(text)?.[0].length ?? 0
@@ -3282,8 +3323,8 @@ const MYSQL: SqlClient = {
 }
 
 const SQLITE: SqlClient = {
-  valued: { long: names("cmd init separator newline nullvalue c s f"), singleDash: true },
-  names: {},
+  valued: { long: names("cmd init separator newline nullvalue vfs c s f"), singleDash: true },
+  names: { long: names("vfs"), singleDash: true },
   nameOperands: 1,
   sql: { long: names("cmd c s"), singleDash: true },
   output: {},
@@ -3335,7 +3376,8 @@ const sqlWords = (
  * may bring options with it), a client command outside its read-only list, or output
  * sent to a file or a program. Else it asks when its text holds a word of
  * `SQL_DESTRUCTIVE`: any argument, option values as written, or its
- * readable input.
+ * readable input. Else it asks when a statement of its SQL does not start
+ * as a read (`sqlWrite`).
  */
 const sqlRisk =
   (client: SqlClient): CommandRisk =>
@@ -3374,10 +3416,14 @@ const sqlRisk =
     if (Option.isSome(command)) {
       return destructive(`a SQL client command outside the read-only list: ${command.value}`)
     }
-    return Arr.findFirst([...texts, ...inputTexts].flatMap(sqlTexts), (text) =>
+    const trigger = Arr.findFirst([...texts, ...inputTexts].flatMap(sqlTexts), (text) =>
       Option.flatMap(Option.fromNullishOr(SQL_DESTRUCTIVE.exec(text)), ([, word, block]) =>
         destructive(`SQL ${(word ?? block ?? "").toUpperCase()}`),
       ),
+    )
+    if (Option.isSome(trigger)) return trigger
+    return Option.flatMap(Arr.findFirst(commandTexts, sqlWrite), (word) =>
+      destructive(`SQL that writes: ${word.toUpperCase()}`),
     )
   }
 

@@ -1942,6 +1942,55 @@ describe("classifyBashCommand", () => {
     }
   })
 
+  // Each statement must start as a read: an UPDATE with no WHERE, a REPLACE,
+  // a COPY TO a file or an ALTER loses data with no trigger word. The text
+  // is split at `;` and new lines only, so a `;` in a string asks too.
+  test("a SQL statement that does not start as a read asks", () => {
+    const x = "/nonexistent/gent-probe-x"
+    for (const command of [
+      "psql -c 'UPDATE gent_probe_x SET a = NULL'",
+      `sqlite3 ${x}.db 'UPDATE gent_probe_x SET a = 0'`,
+      "mysql -e 'REPLACE INTO gent_probe_x VALUES (1)'",
+      `psql -c "COPY gent_probe_x TO '${x}'"`,
+      `duckdb -c "COPY (SELECT 1) TO '${x}.csv'"`,
+      "psql -c 'ALTER TABLE gent_probe_x RENAME TO y'",
+      `sqlite3 ${x}.db "VACUUM INTO '${x}'"`,
+      "psql -c 'select 1; update gent_probe_x set a = 1'",
+      "echo 'UPDATE gent_probe_x SET a = 1' | psql",
+      "psql <<'EOF'\nUPDATE gent_probe_x SET a = 1;\nEOF",
+      // A read start that writes all the same.
+      "psql -c 'WITH x AS (UPDATE gent_probe_x SET a = 1 RETURNING *) SELECT 1'",
+      "psql -c 'EXPLAIN ANALYZE UPDATE gent_probe_x SET a = 1'",
+      "psql -c 'INSERT INTO gent_probe_x VALUES (1) ON CONFLICT (a) DO UPDATE SET a = 2'",
+      `sqlite3 ${x}.db 'INSERT OR REPLACE INTO gent_probe_x VALUES (1)'`,
+      `mysql -e "SELECT 1 INTO OUTFILE '${x}'"`,
+      `psql -c "SELECT lo_export(1, '${x}')"`,
+      // Accepted over-asks: a new table, a `;` inside a string, a leading comment.
+      "psql -c 'CREATE TABLE gent_probe_x (a int)'",
+      `psql -c "SELECT 'a;b'"`,
+      "psql -c '-- note\nSELECT 1'",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      "psql -c 'SELECT a FROM gent_probe_x; SELECT 2;'",
+      "psql -c '(SELECT 1) UNION (SELECT 2)'",
+      "psql -c 'WITH x AS (SELECT 1) SELECT * FROM x'",
+      "psql -c 'EXPLAIN SELECT 1'",
+      "psql -c 'select replace(a, 1, 2) from gent_probe_x'",
+      "psql -c '\\d gent_probe_x'",
+      "mysql -e 'DESCRIBE gent_probe_x'",
+      "mysql -e 'use app; show tables'",
+      `sqlite3 ${x}.db 'PRAGMA table_info(gent_probe_x)'`,
+      "psql -c 'BEGIN; INSERT INTO gent_probe_x VALUES (1); COMMIT'",
+      "psql -v n=1 -c 'select :n'",
+      `sqlite3 ${x}.db`,
+      `sqlite3 -vfs unix ${x}.db 'select 1'`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
   test("SQL from a file or unreadable input, and SQL that builds and runs SQL, asks", () => {
     const f = "/nonexistent/gent-probe-x/q.sql"
     const db = "/nonexistent/gent-probe-x/db"
