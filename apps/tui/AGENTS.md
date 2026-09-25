@@ -37,6 +37,10 @@
 - `useKeyboard(handler)` - Key events, check `e.name === "escape"`
 - `useTheme()` - Returns `{ theme, selected, all, mode, setMode, set }`. Theme colors are RGBA from `@opentui/core`.
 
+## Copy on select
+
+Who owns the mouse decides who copies. In the split footer (the session view) `renderer.useMouse` is off: the terminal, or a multiplexer such as herdr or tmux, selects and copies itself. The expanded transcript, the palette and every overlay that holds the composer (`overlayHoldsComposer`: the sign-in pane, the model and branch pickers) turn it on, so OpenTUI draws the selection and the terminal never sees the drag. There `useCopyOnSelect` (`terminal.tsx`, mounted once in `AppContent`) copies a finished, non-empty selection with `renderer.copyToClipboardOSC52`: OSC 52, wrapped by OpenTUI for tmux and screen; herdr takes it plain. Do not add a second copy path. A test reads the bytes by rendering with `output: new TerminalOutput()` (`render-harness-boundary.tsx`).
+
 ## Theme System
 
 Ported from opencode. Key patterns:

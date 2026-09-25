@@ -18,7 +18,12 @@ import { type Session as ClientSession, useClient } from "./client"
 import { formatDuration, randomId, truncate } from "./utils"
 import { createMemo, createSignal, ErrorBoundary, For, type JSX, Show } from "solid-js"
 import { buildSyntaxStyle, resolveThemeColor, ThemeProvider, useTheme } from "./theme"
-import { KeyboardScopeProvider, useScopedKeyboard, useTerminalDimensions } from "./terminal"
+import {
+  KeyboardScopeProvider,
+  useCopyOnSelect,
+  useScopedKeyboard,
+  useTerminalDimensions,
+} from "./terminal"
 import type { RGBA } from "@opentui/core"
 import { MessageList, NativeTranscript, splitFooterHeight } from "./message-list"
 import { Composer, ComposerFrame } from "./composer"
@@ -871,6 +876,7 @@ function AppContent(props: AppProps) {
     env.shutdown()
     return true
   })
+  useCopyOnSelect()
 
   // Which session shows is the client's to say. `switchSession` is the one
   // writer, and every pane that moves the reader between sessions goes

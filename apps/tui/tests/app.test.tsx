@@ -7,14 +7,18 @@ import {
   Deferred,
   Duration,
   Effect,
+  Encoding,
   Exit,
+  Layer,
   Logger,
   Option,
   Queue,
   References,
   Schema,
+  Scope,
   Stream,
 } from "effect"
+import { BunServices } from "@effect/platform-bun"
 import { TestClock } from "effect/testing"
 import { RpcClientError } from "effect/unstable/rpc/RpcClientError"
 import { SocketCloseError } from "effect/unstable/socket/Socket"
@@ -54,11 +58,18 @@ import {
   renderFrame,
   renderWithProviders,
   applySnapshotAgent,
+  TerminalOutput,
 } from "./render-harness-boundary"
+import { LinkOpener, LinkOpenerError } from "../src/os"
 import { createSignal, onMount, type Signal } from "solid-js"
 import { ProviderAuthError } from "@gent/core/extensions/api"
 import { type ClientContextValue, useClient } from "../src/client"
-import { type RenderWaitTimeoutError, waitForFrame, waitUntilAdvancing } from "./helpers-boundary"
+import {
+  type RenderWaitTimeoutError,
+  waitForFrame,
+  waitUntil,
+  waitUntilAdvancing,
+} from "./helpers-boundary"
 import { useTerminalDimensions } from "../src/terminal"
 import { SyntaxStyle } from "@opentui/core"
 import { type Message, MessageList, type SessionItem } from "../src/message-list"
@@ -3777,6 +3788,157 @@ const createMutableRuntime = (initialState: ConnectionState) => {
     },
   }
 }
+
+// ── copy on select ──────────────────────────────────────────────────────────
+
+describe("App copy on select", () => {
+  const deviceUrl = "https://auth.openai.com/codex/device"
+
+  /** Services whose link opener fails as on a box with no browser, so the URL stays on screen. */
+  const noBrowserServices = Effect.gen(function* () {
+    const built = yield* Layer.build(
+      Layer.merge(
+        BunServices.layer,
+        LinkOpener.Test({
+          open: (url) => Effect.fail(new LinkOpenerError({ message: `no browser for ${url}` })),
+        }),
+      ),
+    )
+    const scope = yield* Scope.Scope
+    return Context.makeUnsafe<unknown>(Context.add(built, Scope.Scope, scope).mapUnsafe)
+  })
+
+  /** The bytes an OSC 52 copy of `text` to the clipboard sends the terminal. */
+  const osc52 = (text: string) => `\u001b]52;c;${Encoding.encodeBase64(text)}\u001b\\`
+
+  /**
+   * The enforced sign-in on its OAuth screen, the device URL `url` on screen,
+   * on a terminal that keeps what the renderer writes. The sign-in pane is an
+   * overlay, so OpenTUI tracks the mouse: the terminal sees no drag.
+   */
+  const mountOAuthScreen = (url: string) =>
+    Effect.gen(function* () {
+      const output = new TerminalOutput()
+      const client = createMockClient({
+        auth: {
+          listProviders: () =>
+            Effect.succeed([
+              {
+                provider: "openai",
+                hasKey: false,
+                required: true,
+                source: noAuthSource,
+                authType: absent,
+              },
+            ]),
+          listMethods: () =>
+            Effect.succeed({ openai: [{ label: "ChatGPT (device code)", type: "oauth" }] }),
+          authorize: () =>
+            Effect.succeed({
+              authorizationId: "auth-device",
+              url,
+              method: "auto",
+              instructions: "Open the URL and enter this code:\nWXYZ-1234",
+            }),
+          // The device poll waits for a code the reader never enters.
+          callback: () => Effect.never,
+        },
+      })
+      const services = yield* noBrowserServices
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <App />, {
+          client,
+          runtime: createMockRuntime(),
+          services,
+          output,
+          initialAgent: AgentName.make("main"),
+          initialSession: {
+            id: SessionId.make("session-a"),
+            activeBranchId: BranchId.make("branch-a"),
+            name: "A",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        }),
+      )
+      yield* waitForFrame(setup, (frame) => frame.includes("ChatGPT (device code)"), "methods")
+      setup.mockInput.pressEnter()
+      const head = url.slice(0, 24)
+      const frame = yield* waitForFrame(
+        setup,
+        (next) => next.includes(head) && next.includes("WXYZ-1234"),
+        "the device URL on the sign-in pane",
+      )
+      return { setup, output, span: urlSpan(frame, url) }
+    })
+
+  /**
+   * Where `url` sits in the frame: its first cell, and the row and the column
+   * just past its last cell. A long URL wraps, so it runs on over rows at the
+   * column it starts at.
+   */
+  const urlSpan = (frame: string, url: string) => {
+    const rows = frame.split("\n")
+    const top = rows.findIndex((line) => line.includes(url.slice(0, 24)))
+    const column = rows[top]?.indexOf(url.slice(0, 24)) ?? -1
+    let consumed = 0
+    let bottom = top
+    let end = column
+    while (consumed < url.length && bottom < rows.length) {
+      const line = rows[bottom] ?? ""
+      let length = 0
+      while (line[column + length] === url[consumed + length] && consumed + length < url.length)
+        length += 1
+      consumed += length
+      end = column + length
+      if (consumed < url.length) bottom += 1
+    }
+    expect(consumed).toBe(url.length)
+    return { column, top, bottom, end }
+  }
+
+  it.scopedLive("a mouse selection over the sign-in URL copies it through OSC 52", () =>
+    Effect.gen(function* () {
+      const { setup, output, span } = yield* mountOAuthScreen(deviceUrl)
+      expect(span.top).toBe(span.bottom)
+      expect(output.written()).not.toContain("\u001b]52;")
+
+      yield* Effect.promise(() => setup.mockMouse.drag(span.column, span.top, span.end, span.top))
+      yield* waitUntil(
+        () => output.written().includes(osc52(deviceUrl)),
+        "the OSC 52 copy of the URL",
+      )
+      expect(output.written()).toContain(osc52(deviceUrl))
+      setup.renderer.destroy()
+    }).pipe(Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive("a URL that wraps copies whole, with no line break where it wraps", () =>
+    Effect.gen(function* () {
+      const longUrl = `https://auth.example.com/oauth/authorize?client_id=gent&scope=${"x".repeat(150)}&state=end`
+      const { setup, output, span } = yield* mountOAuthScreen(longUrl)
+      expect(span.bottom).toBeGreaterThan(span.top)
+
+      yield* Effect.promise(() =>
+        setup.mockMouse.drag(span.column, span.top, span.end, span.bottom),
+      )
+      yield* waitUntil(() => output.written().includes("\u001b]52;"), "an OSC 52 copy")
+      expect(output.written()).toContain(osc52(longUrl))
+      setup.renderer.destroy()
+    }).pipe(Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive("a click on the URL selects nothing and copies nothing", () =>
+    Effect.gen(function* () {
+      const { setup, output, span } = yield* mountOAuthScreen(deviceUrl)
+
+      yield* Effect.promise(() => setup.mockMouse.click(span.column + 3, span.top))
+      yield* waitForFrame(setup, () => true)
+      expect(output.written()).not.toContain("\u001b]52;")
+      setup.renderer.destroy()
+    }).pipe(Effect.timeout("8 seconds")),
+  )
+})
 
 // ── agents view on the left arrow ───────────────────────────────────────────
 
