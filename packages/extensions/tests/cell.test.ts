@@ -1446,6 +1446,48 @@ describe("cell worker process", () => {
     12000,
   )
 
+  // Bindings were the global names the worker lacked at start, so a cell that
+  // rebound a Bun global (`prompt`, `performance`) or a host namespace bound
+  // nothing: no report, no snapshot, and a reset kept its value.
+  it.scopedLive(
+    "a declaration that rebinds a worker global is a binding; the host namespaces come back each cell",
+    () =>
+      Effect.gen(function* () {
+        const kernel = yield* openCellKernel({
+          worker: yield* cellWorkerLaunch,
+          cwd: packageDirectory,
+        })
+        const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
+        const evaluate = (code: string) =>
+          kernel.evaluate(code).pipe(Effect.provideService(CellOperationHost, host))
+        const bound = yield* evaluate("const prompt = 'draft'; var performance = 5; 1")
+        expect(bound.bindings).toEqual(["performance", "prompt"])
+        expect(bound.bindingCount).toBe(2)
+        // A cell may shadow a host namespace for its own run; the next cell has it back.
+        expect((yield* evaluate("const tools = 7; typeof tools")).display).toBe("number")
+        const after = yield* evaluate("[typeof tools, typeof context.status].join(',')")
+        expect(after.display).toBe("function,function")
+        expect(after.bindingCount).toBe(2)
+        const snapshot = yield* kernel.snapshot
+        expect(snapshot.bindings.map((binding) => binding.name).sort()).toEqual([
+          "performance",
+          "prompt",
+        ])
+        // A reset puts every rebound global back as the worker found it.
+        yield* kernel.reset
+        expect((yield* evaluate("[typeof prompt, typeof performance.now].join(',')")).display).toBe(
+          "function,function",
+        )
+        expect([...(yield* kernel.restore(snapshot.bindings))].sort()).toEqual([
+          "performance",
+          "prompt",
+        ])
+        expect((yield* evaluate("[prompt, performance].join(',')")).display).toBe("draft,5")
+        yield* kernel.close
+      }).pipe(Effect.timeout("10 seconds"), Effect.provide(platformLayer)),
+    12000,
+  )
+
   it.scopedLive(
     "a source-run worker ignores the project bunfig preload and .env files",
     () =>
