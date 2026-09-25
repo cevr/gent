@@ -760,6 +760,50 @@ describe("recorded cell execution", () => {
     10000,
   )
 
+  // A bound function prints as native code, so only identity marks a host
+  // getter. A cell's getter that never returns must not hang its worker. The
+  // error is thrown, not bound, so only the error reader sees it.
+  it.scopedLive(
+    "a cell's own bound getter on a thrown error never runs",
+    () =>
+      Effect.gen(function* () {
+        const worker = yield* buildCellWorker
+        const [define, looping, after] = yield* setupCalls([
+          "let kept = 7",
+          "throw Object.defineProperty(new Error('x'), 'message', { get: function () { for (;;) {} }.bind(null) })",
+          "kept",
+        ])
+        if (!define || !looping || !after) return yield* Effect.die("Missing test cells")
+        const host = CellOperationHost.of({
+          catalog: hostCatalog("start"),
+          call: () => Effect.succeed({}),
+        })
+        const cells = Context.get(
+          yield* Layer.build(
+            CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }),
+          ),
+          CellExecution,
+        )
+        const ReplyText = Schema.Union([
+          Schema.Struct({ message: Schema.String }),
+          Schema.Struct({ display: Schema.String }),
+        ])
+        const reply = (call: typeof looping) =>
+          cells.run(call).pipe(
+            Effect.provideService(CellOperationHost, host),
+            Effect.map((result) => {
+              const text = Schema.decodeUnknownSync(ReplyText)(result.result)
+              if ("message" in text) return text.message
+              return text.display
+            }),
+          )
+        expect(yield* reply(define)).toBe("7")
+        expect(yield* reply(looping)).toBe("Error")
+        expect(yield* reply(after)).toBe("7")
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
+    10000,
+  )
+
   it.scopedLive(
     "restores the saved namespace into a replaced worker and into a new branch owner",
     () =>

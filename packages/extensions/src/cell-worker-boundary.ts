@@ -257,18 +257,45 @@ const UNREADABLE_ERROR_TEXT = "A thrown value that cannot be read"
 /** Prototype links a property read follows before it gives up. */
 const PROTOTYPE_DEPTH_LIMIT = 32
 
-/** The descriptor's getter when the runtime provides it, not the cell. */
-const nativeGetter = (descriptor: PropertyDescriptor) =>
-  Option.filter(Option.liftPredicate(Reflect.get(descriptor, "get"), Predicate.isFunction), (get) =>
-    /\{\s*\[native code\]\s*\}$/.test(Function.prototype.toString.call(get)),
-  )
+/** A getter a descriptor holds; none for a data property. */
+const descriptorGetter = (descriptor: PropertyDescriptor) =>
+  Option.liftPredicate(Reflect.get(descriptor, "get"), Predicate.isFunction)
+
+/**
+ * The host getters an error read runs: those on `Error.prototype` and on
+ * Bun's `BuildMessage` and `ResolveMessage` prototypes, taken when the worker
+ * loads, before any cell runs. A closed set compared by identity: a cell's
+ * own getter, a bound one that prints as native code included, is never in it.
+ */
+const hostErrorGetters: ReadonlySet<unknown> = new Set(
+  [
+    Error.prototype,
+    ...["BuildMessage", "ResolveMessage"].flatMap((name) =>
+      Option.toArray(
+        Option.liftPredicate(Reflect.get(globalThis, name), Predicate.isFunction).pipe(
+          Option.flatMap((type) =>
+            Option.liftPredicate(Reflect.get(type, "prototype"), Predicate.isObjectKeyword),
+          ),
+        ),
+      ),
+    ),
+  ].flatMap((prototype) =>
+    Object.values(Object.getOwnPropertyDescriptors(prototype)).flatMap((descriptor) =>
+      Option.toArray(descriptorGetter(descriptor)),
+    ),
+  ),
+)
+
+/** The descriptor's getter when the host provides it, not the cell. */
+const hostGetter = (descriptor: PropertyDescriptor) =>
+  Option.filter(descriptorGetter(descriptor), (get) => hostErrorGetters.has(get))
 
 /**
  * A property of a thrown value, read from its descriptors along the prototype
  * chain, so a getter the cell wrote never runs; none when absent or behind
- * such a getter. A native getter runs: Bun keeps a `BuildMessage`'s message
- * and position behind one. A Proxy's traps and a native getter can still
- * throw; `errorText` catches that.
+ * such a getter. A host getter runs: Bun keeps a `BuildMessage`'s message and
+ * position behind one. A Proxy's traps and a host getter can still throw;
+ * `errorText` catches that.
  */
 // oxlint-disable-next-line effect/noObjectParameters -- a thrown value has any JavaScript shape; descriptors read it without running its getters
 const errorProperty = (target: object, key: string): Option.Option<unknown> => {
@@ -277,7 +304,7 @@ const errorProperty = (target: object, key: string): Option.Option<unknown> => {
     const descriptor = Option.fromUndefinedOr(Object.getOwnPropertyDescriptor(holder.value, key))
     if (Option.isSome(descriptor)) {
       if ("value" in descriptor.value) return Option.some(descriptor.value.value)
-      return Option.map(nativeGetter(descriptor.value), (get) => Reflect.apply(get, target, []))
+      return Option.map(hostGetter(descriptor.value), (get) => Reflect.apply(get, target, []))
     }
     holder = Option.liftPredicate(Object.getPrototypeOf(holder.value), Predicate.isObjectKeyword)
   }
