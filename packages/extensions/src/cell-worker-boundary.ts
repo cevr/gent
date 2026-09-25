@@ -647,13 +647,13 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
   let reported = new Map<string, unknown>()
   const reportBindings = () => {
     const current = namespace()
-    const changed = [...current.entries()]
+    const named = [...current.entries()]
       .filter(([name, value]) => !reported.has(name) || !Object.is(reported.get(name), value))
       .map(([name]) => name)
       .sort()
       .slice(0, maximumCellBindings)
     reported = current
-    return { bindings: changed, bindingCount: current.size }
+    return { bindings: named, bindingCount: current.size }
   }
   const installConsole = (value: typeof hostConsole) =>
     Effect.sync(() => {
