@@ -891,8 +891,8 @@ export const findRepoTempDirectories = (file: string, text: string): ReadonlyArr
  * run and every parallel gate: what one test writes there (prompt history,
  * goal and wake files, a skills cache, `<cwd>/.gent/prompts`), the next one
  * reads (`<cwd>/.gent/extensions`, `<cwd>/AGENTS.md`), so a result depends on
- * run order. Reported in test code, and in the test layers of product source
- * (`GentPlatform.Test`; see `sharedHomeScanCode`), both outside the tooling
+ * run order. Reported in test code, and in the test layers of product and example
+ * source (`GentPlatform.Test`; see `sharedHomeScanCode`), all outside the tooling
  * package, at a `home`, `HOME`, `homeDir`, `homeDirectory`, `dataDir`,
  * `GENT_DATA_DIR`, `cwd` (or a `…Cwd` name such as `sessionCwd`), `userDir`
  * or `projectDir` name given a value with `:` or
@@ -954,11 +954,16 @@ const isSharedTempValue = (value: string): boolean =>
   (SHARED_TEMP_ROOT.test(value) || TEMP_ROOT_CALL.test(value)) && !UNIQUE_TEMP_CALL.test(value)
 
 /**
- * A test-layer declaration in product source: a `static Test` member, or a
- * binding whose name has a `Test` word part (`AgentLoopTestActor`).
+ * A test-layer declaration in product source: a `static` or `static readonly`
+ * member, a binding, or an object key (`Test:`) whose name is a test layer's.
+ * A test layer's name is `Test`, a PascalCase name ending in `Test`,
+ * `TestLayer` or `TestActor` (`LinkOpenerTest`, `AgentLoopTestActor`), or any
+ * name ending in `TestLayer` (`makeTestLayer`). A name with a `Test` word part
+ * that names no layer (`runTestTool`, `isTestMode`, `TestModeLabel`) is
+ * product code: its body is not read.
  */
 const TEST_LAYER_DECLARATION =
-  /^\s*(?:static\s+|(?:export\s+)?(?:const|let|function)\s+)\w*Test(?![a-z])\w*\b/
+  /^\s*(?:(?:static\s+(?:readonly\s+)?|(?:export\s+)?(?:const|let|function)\s+)(?:(?:[A-Z]\w*)?Test(?:Layers?|Actor)?|\w*TestLayers?)\b|(?:readonly\s+)?(?:[A-Z]\w*)?Test(?:Layers?|Actor)?\s*:)/
 
 /**
  * `code` with every line blanked but the test layers', so line numbers hold.
@@ -988,15 +993,21 @@ const testLayerLines = (code: string): string => {
   return kept.join("\n")
 }
 
+/** An example extension's source: code an author copies, so its test layers are read too. */
+const isExampleSource = (file: string): boolean =>
+  /^examples\/.+\.[cm]?[jt]sx?$/.test(file) && !isTestSupport(file)
+
 /**
  * The code the shared-home scan reads: all of a test file, and the test
- * layers of a product file (`GentPlatform.Test`). The guard's own tests spell
- * the reported shapes as probe text, so the tooling package is out.
+ * layers of a product or example file (`GentPlatform.Test`). The guard's own
+ * tests spell the reported shapes as probe text, so the tooling package is out.
  */
 const sharedHomeScanCode = (file: string, text: string): Option.Option<string> => {
   if (file.startsWith("packages/tooling/")) return Option.none()
   if (isTestCode(file)) return Option.some(withoutComments(text))
-  if (isShippedSource(file)) return Option.some(testLayerLines(withoutComments(text)))
+  if (isShippedSource(file) || isExampleSource(file)) {
+    return Option.some(testLayerLines(withoutComments(text)))
+  }
   return Option.none()
 }
 

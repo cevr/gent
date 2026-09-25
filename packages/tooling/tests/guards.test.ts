@@ -764,6 +764,50 @@ describe("shared test home checker", () => {
     expect(lines(source, product)).toEqual([10, 21])
   })
 
+  test("a `static readonly Test` member and a `Test:` object key are test layers", () => {
+    const product = "packages/core/src/runtime/platform.ts"
+    const source = [
+      "export class Platform extends Context.Service<Platform>()(TAG) {",
+      "  static readonly Test = Layer.succeed(Platform, {",
+      '    homeDirectory: Effect.succeed("/tmp"),',
+      "  })",
+      "}",
+      "export const Layers = {",
+      '  Live: Layer.succeed(Platform, { home: "/tmp" }),',
+      "  Test: Layer.succeed(Platform, {",
+      '    home: "/tmp",',
+      "  }),",
+      "}",
+    ].join("\n")
+    expect(lines(source, product)).toEqual([3, 9])
+  })
+
+  test("an example extension's test layer is read as product source is", () => {
+    const source = [
+      'const live = { home: "/tmp" }',
+      "export const NotesTest = Layer.succeed(Notes, {",
+      '  home: "/tmp",',
+      "})",
+    ].join("\n")
+    expect(lines(source, "examples/extensions/session-notes.ts")).toEqual([3])
+  })
+
+  test("a binding with a `Test` word part that is no layer is product code", () => {
+    const product = "packages/core/src/runtime/tools.ts"
+    const source = [
+      "const runTestTool = (toolCall: ToolCall) =>",
+      '  run(toolCall, { cwd: "/tmp" })',
+      "export const isTestMode = (config: Config) =>",
+      '  config.home === "/tmp"',
+      "const TestModeLabel = {",
+      '  cwd: "/tmp",',
+      "}",
+      "const makeTestLayer = () =>",
+      '  Layer.succeed(Platform, { home: "/tmp" })',
+    ].join("\n")
+    expect(lines(source, product)).toEqual([9])
+  })
+
   test("the tooling package is out of scope; the test harness is test code", () => {
     const source = 'homeDirectory: Effect.succeed("/tmp"),'
     expect(lines(source, "packages/tooling/tests/guards.test.ts")).toEqual([])
