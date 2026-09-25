@@ -9,7 +9,7 @@ SAFETY (mandatory; on 2026-09-23 a heredoc of guard probe text ran `rm -rf ~`):
 - Probe strings target only harmless paths such as `/nonexistent/gent-probe-x`; never `~`, `$HOME`, `/`, `.` or a real repo path.
 - To unstage, use `git restore --staged <file>`. Delete with `trash`.
 - Live binary. This file is the one owner of the rule; prompts and work rules point here and never restate it.
-  - A live gent run uses `--debug` only, with `GENT_DATA_DIR` under the scratch directory your prompt names. Never `bun run link`.
+  - A live gent run uses `--debug` only, with `GENT_DATA_DIR` under the scratch directory your prompt names. Never `bun run install:global`.
   - Exception 1, the efficiency measurement only: a run under the in-repo capture preload `.claude/skills/architecture-loop/fetch-capture.ts` (never a copy outside the repo) with fake provider keys and no `--debug`, with `HOME`, `GENT_AUTH_DIRECTORY` and `GENT_DATA_DIR` under the scratch directory (the preload refuses to start otherwise). The preload answers every provider request itself, so no request leaves the box but the model catalog read (`GET https://models.dev/api.json`), which it forwards.
   - Exception 2, the orchestrator's live check only (`SKILL.md` step 9): `bun run gamut`, on real models with the owner's login, its data directory under `$TMPDIR/gent-gamut-*`. It is the only run that calls a paid model. No other agent (sweep, apply, counsel, or the agent inside the gamut session) runs `bun run gamut`.
   - Every other run never calls a paid model.

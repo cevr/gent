@@ -16,7 +16,7 @@
     "fmt": "env -u FORCE_COLOR NO_COLOR=1 oxfmt --ignore-path=.oxlintignore",
     "fmt:check": "env -u FORCE_COLOR NO_COLOR=1 oxfmt --ignore-path=.oxlintignore --check",
     "build": "turbo run build",
-    "link": "turbo run link --filter=@gent/tui",
+    "install:global": "turbo run install:global --filter=@gent/tui --ui=stream",
     "test": "turbo run test --ui=stream --concurrency=1",
     "test:e2e": "turbo run test:e2e --ui=stream --concurrency=1",
     "gate": "env -u FORCE_COLOR NO_COLOR=1 concurrently -n type,style,build \"bun run typecheck\" \"bun run lint && bun run fmt:check\" \"bun run build\" && bun run test",

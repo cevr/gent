@@ -10,7 +10,7 @@ bun run typecheck  # patched TypeScript 7 + Effect diagnostics, must pass clean;
 bun run lint       # oxlint (gent rules + type-aware lints), the guards (`bun run guards`), and the lint-offs probe (`bun run lint:offs`)
 bun run test       # Gate tests. NOT bare `bun test` (picks up flaky e2e)
 bun run smoke      # Headless mode smoke test
-bun run link       # Build, then point ~/.bun/bin/gent at this checkout (uncached)
+bun run install:global  # Build, then copy gent and its gent-cell worker into Bun's global bin (~/.bun/bin)
 bun run clean      # Remove turbo caches (.turbo)
 ```
 

@@ -55,10 +55,10 @@ It reads the run's own `data.db` read-only and prints:
    `GENT_DATA_DIR` at the pane, so the run writes its own `data.db` in the
    scratch dir. Auth is unaffected: the auth store resolves from
    `${home}/.gent/auth`, not the data dir, so the real credentials still work.
-2. **The wrong binary.** `~/.bun/bin/gent` points at whichever checkout last
-   ran `bun run link`; only that command moves it, and the gate and the build
+2. **The wrong binary.** `~/.bun/bin/gent` is a copy of whichever checkout last
+   ran `bun run install:global`; only that command replaces it, and the gate and the build
    leave it alone. `up` builds this checkout and launches its own binary (the
-   one under `apps/tui/`) by absolute path, and never runs `bun run link`. It
+   one under `apps/tui/`) by absolute path, and never runs `bun run install:global`. It
    builds through the root build, so the `gent-cell` worker beside the binary
    is this checkout's too.
 3. **The stale TUI.** `pkill` returns before the process releases the PTY, so

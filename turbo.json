@@ -13,7 +13,7 @@
       "inputs": ["src/**", "tsconfig.json", "package.json"],
       "outputs": ["dist/**"]
     },
-    "link": {
+    "install:global": {
       "dependsOn": ["build"],
       "outputs": [],
       "cache": false

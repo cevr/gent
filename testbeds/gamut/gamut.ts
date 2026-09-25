@@ -377,9 +377,9 @@ const prepareAndLaunch = async (
   if (build) {
     // Build from THIS checkout. `gent` and its `gent-cell` worker are compiled
     // binaries: source edits show nothing until a rebuild, and `~/.bun/bin/gent`
-    // may point elsewhere. The root build is turbo's, so an unchanged checkout
+    // may be another build. The root build is turbo's, so an unchanged checkout
     // is a cache hit. The build never claims the global name; only
-    // `bun run link` does.
+    // `bun run install:global` does.
     console.log("building gent from this checkout…")
     await $`bun run build`.cwd(CHECKOUT).quiet()
   }
