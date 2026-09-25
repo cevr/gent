@@ -447,15 +447,14 @@ const buildCallbackRoutes = (
       const errorDescription = url.searchParams.get("error_description")
 
       // The state is checked first: a request that does not carry this
-      // flow's state is not the provider's redirect, so its error text is
-      // not trusted.
+      // flow's state is not the provider's redirect (a stale tab, another
+      // login), so its error text is not trusted and it leaves the wait
+      // running.
       if (stateParam !== expectedState) {
-        const errorMsg = "Invalid state"
-        yield* Deferred.fail(
-          deferred,
-          new OAuthError({ reason: "state-mismatch", message: errorMsg }),
+        return HttpServerResponse.setStatus(
+          HttpServerResponse.html(HTML_ERROR("Invalid state")),
+          400,
         )
-        return HttpServerResponse.setStatus(HttpServerResponse.html(HTML_ERROR(errorMsg)), 400)
       }
       if (Option.isSome(error)) {
         const errorMsg = errorDescription ?? error.value
@@ -515,6 +514,9 @@ const tokensToRefreshResult = (tokens: TokenResponse, now: number): OpenAIRefres
   return result
 }
 
+/** A login's tokens for this caller, and what the login holds after. */
+type Exchanged = readonly [OpenAIOAuthTokens, Option.Option<OpenAIOAuthTokens>]
+
 /**
  * Begin the OpenAI OAuth (Codex CLI) flow. The returned Effect is
  * `Scope`-requiring: the caller's scope owns the redirect HTTP server
@@ -560,7 +562,16 @@ const authorizeOpenAI: Effect.Effect<
     Effect.tapError((error) => Deferred.fail(deferred, error)),
     Effect.forkScoped,
   )
+  // Closing the flow (a pasted code finished it, or the abandoned-login
+  // timer fired) ends a browser wait still in flight.
+  yield* Effect.addFinalizer(() =>
+    Deferred.fail(
+      deferred,
+      new OAuthError({ reason: "callback-timeout", message: "The browser login closed" }),
+    ),
+  )
 
+  const exchanged = yield* SynchronizedRef.make(Option.none<OpenAIOAuthTokens>())
   const callback = (manualInput?: string): Effect.Effect<OpenAIOAuthTokens, OAuthError> =>
     Effect.gen(function* () {
       let code: string
@@ -584,9 +595,22 @@ const authorizeOpenAI: Effect.Effect<
         code = payload.code
       }
 
-      const tokens = yield* exchangeCodeWithFetch(code, redirectUri, pkce.verifier)
-      const now = yield* Clock.currentTimeMillis
-      return tokensToOAuthResult(tokens, now)
+      // One exchange per login: a caller that arrives while another
+      // exchanges waits and takes its tokens; a failed exchange leaves the
+      // login to the next code.
+      return yield* SynchronizedRef.modifyEffect(exchanged, (held) =>
+        Option.match(held, {
+          onSome: (tokens) => Effect.succeed<Exchanged>([tokens, held]),
+          onNone: () =>
+            Effect.gen(function* () {
+              const tokens = yield* exchangeCodeWithFetch(code, redirectUri, pkce.verifier)
+              const now = yield* Clock.currentTimeMillis
+              const result = tokensToOAuthResult(tokens, now)
+              const next: Exchanged = [result, Option.some(result)]
+              return next
+            }),
+        }),
+      )
     })
 
   return {
@@ -1255,6 +1279,8 @@ export const buildCodexTransformClient = (
 type PendingCallbackEntry = {
   readonly flow: OpenAIAuthorizationFlow
   readonly close: Effect.Effect<void>
+  /** Settles when the caller that claimed the login has stored its credential. */
+  readonly finished: Deferred.Deferred<void, ProviderAuthError>
   readonly timeoutFiber: Fiber.Fiber<void>
 }
 
@@ -1686,6 +1712,41 @@ export const buildOpenAIModelDriver = (
   const refusedKeys: RefusedKeys = Ref.makeUnsafe(HashSet.empty())
   // The reasoning items the API could not decrypt for this driver's account.
   const rejectedReasoning: RejectedReasoning = Ref.makeUnsafe(HashSet.empty())
+  /**
+   * Hold a pending login under a 5-minute abandoned-login timer. The timer
+   * clears the entry and closes the login's scope (the redirect listener).
+   * It is detached: `authorize` returns at once, and a child fiber would
+   * stop with it.
+   */
+  const holdLogin = (authorizationId: string, login: Omit<PendingCallbackEntry, "timeoutFiber">) =>
+    Effect.gen(function* () {
+      const timeoutFiber = yield* Effect.sleep(Duration.minutes(5)).pipe(
+        Effect.flatMap(() =>
+          Effect.gen(function* () {
+            pendingCallbacks.delete(authorizationId)
+            yield* login.close
+          }),
+        ),
+        Effect.forkDetach,
+      )
+      pendingCallbacks.set(authorizationId, { ...login, timeoutFiber })
+    })
+  /**
+   * Claim a login to finish it: the one caller that takes it from the map
+   * stops its timer, closes its scope and gets it back. A login another
+   * caller took is none.
+   */
+  const claimLogin = (authorizationId: string, flow: OpenAIAuthorizationFlow) =>
+    Effect.gen(function* () {
+      const held = Option.fromNullishOr(pendingCallbacks.get(authorizationId)).pipe(
+        Option.filter((current) => current.flow === flow),
+      )
+      if (Option.isNone(held)) return held
+      pendingCallbacks.delete(authorizationId)
+      yield* Fiber.interrupt(held.value.timeoutFiber)
+      yield* held.value.close
+      return held
+    })
   return {
     id: "openai",
     name: "OpenAI",
@@ -1736,10 +1797,9 @@ export const buildOpenAIModelDriver = (
           )
         }
 
-        // Fail closed — no stored OAuth, no stored API key, no env var.
-        // Previous versions fell through to `OpenAiClient.layer({})` and let
-        // the unauthenticated request fail late as a generic HTTP error,
-        // masking the real auth failure for non-TUI callers.
+        // Fail closed — no stored OAuth, no stored API key, no env var. An
+        // unauthenticated request would fail late as a generic HTTP error
+        // and hide the auth failure.
         return yield* new ProviderAuthError({
           message:
             "OpenAI credentials unavailable: no ChatGPT OAuth, stored API key, or OPENAI_API_KEY env var",
@@ -1785,40 +1845,23 @@ export const buildOpenAIModelDriver = (
                 }),
             ),
           )
-          // 5-minute TTL on abandoned auth attempts. Without this an
-          // abandoned flow leaves the redirect HTTP server resident
-          // until extension teardown. The fiber both clears the map
-          // entry and closes the OAuth scope (tears down the listener).
-          // It is detached: `authorize` returns at once, and a child fiber
-          // would stop with it. `callback` interrupts it.
-          const timeoutFiber = yield* Effect.sleep(Duration.minutes(5)).pipe(
-            Effect.flatMap(() =>
-              Effect.gen(function* () {
-                pendingCallbacks.delete(ctx.authorizationId)
-                yield* close
-              }),
-            ),
-            Effect.forkDetach,
-          )
-          pendingCallbacks.set(ctx.authorizationId, {
-            flow,
-            close,
-            timeoutFiber,
-          })
+          const finished = yield* Deferred.make<void, ProviderAuthError>()
+          yield* holdLogin(ctx.authorizationId, { flow, close, finished })
           return Option.some(flow.authorization)
         }),
       callback: (ctx) =>
         Effect.gen(function* () {
-          const entry = pendingCallbacks.get(ctx.authorizationId)
-          pendingCallbacks.delete(ctx.authorizationId)
-          const pendingEntry = Option.fromNullishOr(entry)
+          const pendingEntry = Option.fromNullishOr(pendingCallbacks.get(ctx.authorizationId))
           if (Option.isNone(pendingEntry)) {
             return yield* new ProviderAuthError({
               message: "OpenAI OAuth callback state is missing or expired",
             })
           }
-          yield* Fiber.interrupt(pendingEntry.value.timeoutFiber)
-          const result = yield* pendingEntry.value.flow.callback(ctx.code).pipe(
+          const entry = pendingEntry.value
+          // A device poll can outlast the timer, so the timer stops while
+          // the callback runs and a failed callback arms a new one.
+          const result = yield* Fiber.interrupt(entry.timeoutFiber).pipe(
+            Effect.andThen(entry.flow.callback(ctx.code)),
             Effect.mapError(
               (e) =>
                 new ProviderAuthError({
@@ -1826,8 +1869,23 @@ export const buildOpenAIModelDriver = (
                   cause: e,
                 }),
             ),
-            Effect.ensuring(pendingEntry.value.close),
+            // The login stays pending after a failure or an interrupt: a
+            // failed browser wait (the port taken) still leaves the pasted
+            // code to finish it. Only the first of two concurrent failures
+            // re-arms the timer, and a login a concurrent callback finished
+            // stays gone.
+            Effect.onError(() =>
+              Effect.suspend(() => {
+                if (pendingCallbacks.get(ctx.authorizationId) !== entry) return Effect.void
+                return holdLogin(ctx.authorizationId, entry)
+              }),
+            ),
           )
+          // A browser callback and a pasted code can both reach here with
+          // the one exchange's tokens. The caller that claims the login
+          // stores them; the other waits for that store's outcome.
+          const claimed = yield* claimLogin(ctx.authorizationId, entry.flow)
+          if (Option.isNone(claimed)) return yield* Deferred.await(entry.finished)
           const signedIn: OpenAICredentials = {
             access: result.access,
             refresh: result.refresh,
@@ -1839,7 +1897,7 @@ export const buildOpenAIModelDriver = (
             credentialCellRef,
             signedIn,
             ctx.persist(result),
-          )
+          ).pipe(Effect.onExit((exit) => Deferred.done(entry.finished, exit)))
         }),
     },
   }
