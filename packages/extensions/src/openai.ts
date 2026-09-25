@@ -514,6 +514,9 @@ const tokensToRefreshResult = (tokens: TokenResponse, now: number): OpenAIRefres
   return result
 }
 
+/** A login's tokens for this caller, and what the login holds after. */
+type Exchanged = readonly [OpenAIOAuthTokens, Option.Option<OpenAIOAuthTokens>]
+
 /**
  * Begin the OpenAI OAuth (Codex CLI) flow. The returned Effect is
  * `Scope`-requiring: the caller's scope owns the redirect HTTP server
@@ -568,6 +571,7 @@ const authorizeOpenAI: Effect.Effect<
     ),
   )
 
+  const exchanged = yield* SynchronizedRef.make(Option.none<OpenAIOAuthTokens>())
   const callback = (manualInput?: string): Effect.Effect<OpenAIOAuthTokens, OAuthError> =>
     Effect.gen(function* () {
       let code: string
@@ -591,9 +595,22 @@ const authorizeOpenAI: Effect.Effect<
         code = payload.code
       }
 
-      const tokens = yield* exchangeCodeWithFetch(code, redirectUri, pkce.verifier)
-      const now = yield* Clock.currentTimeMillis
-      return tokensToOAuthResult(tokens, now)
+      // One exchange per login: a caller that arrives while another
+      // exchanges waits and takes its tokens; a failed exchange leaves the
+      // login to the next code.
+      return yield* SynchronizedRef.modifyEffect(exchanged, (held) =>
+        Option.match(held, {
+          onSome: (tokens) => Effect.succeed<Exchanged>([tokens, held]),
+          onNone: () =>
+            Effect.gen(function* () {
+              const tokens = yield* exchangeCodeWithFetch(code, redirectUri, pkce.verifier)
+              const now = yield* Clock.currentTimeMillis
+              const result = tokensToOAuthResult(tokens, now)
+              const next: Exchanged = [result, Option.some(result)]
+              return next
+            }),
+        }),
+      )
     })
 
   return {
@@ -1262,6 +1279,8 @@ export const buildCodexTransformClient = (
 type PendingCallbackEntry = {
   readonly flow: OpenAIAuthorizationFlow
   readonly close: Effect.Effect<void>
+  /** Settles when the caller that claimed the login has stored its credential. */
+  readonly finished: Deferred.Deferred<void, ProviderAuthError>
   readonly timeoutFiber: Fiber.Fiber<void>
 }
 
@@ -1699,30 +1718,34 @@ export const buildOpenAIModelDriver = (
    * It is detached: `authorize` returns at once, and a child fiber would
    * stop with it.
    */
-  const holdLogin = (
-    authorizationId: string,
-    flow: OpenAIAuthorizationFlow,
-    close: Effect.Effect<void>,
-  ) =>
+  const holdLogin = (authorizationId: string, login: Omit<PendingCallbackEntry, "timeoutFiber">) =>
     Effect.gen(function* () {
       const timeoutFiber = yield* Effect.sleep(Duration.minutes(5)).pipe(
         Effect.flatMap(() =>
           Effect.gen(function* () {
             pendingCallbacks.delete(authorizationId)
-            yield* close
+            yield* login.close
           }),
         ),
         Effect.forkDetach,
       )
-      pendingCallbacks.set(authorizationId, { flow, close, timeoutFiber })
+      pendingCallbacks.set(authorizationId, { ...login, timeoutFiber })
     })
-  /** Finish a login: stop its timer, drop it and close its scope. */
-  const finishLogin = (authorizationId: string, close: Effect.Effect<void>) =>
+  /**
+   * Claim a login to finish it: the one caller that takes it from the map
+   * stops its timer, closes its scope and gets it back. A login another
+   * caller took is none.
+   */
+  const claimLogin = (authorizationId: string, flow: OpenAIAuthorizationFlow) =>
     Effect.gen(function* () {
-      const held = Option.fromNullishOr(pendingCallbacks.get(authorizationId))
+      const held = Option.fromNullishOr(pendingCallbacks.get(authorizationId)).pipe(
+        Option.filter((current) => current.flow === flow),
+      )
+      if (Option.isNone(held)) return held
       pendingCallbacks.delete(authorizationId)
-      if (Option.isSome(held)) yield* Fiber.interrupt(held.value.timeoutFiber)
-      yield* close
+      yield* Fiber.interrupt(held.value.timeoutFiber)
+      yield* held.value.close
+      return held
     })
   return {
     id: "openai",
@@ -1822,7 +1845,8 @@ export const buildOpenAIModelDriver = (
                 }),
             ),
           )
-          yield* holdLogin(ctx.authorizationId, flow, close)
+          const finished = yield* Deferred.make<void, ProviderAuthError>()
+          yield* holdLogin(ctx.authorizationId, { flow, close, finished })
           return Option.some(flow.authorization)
         }),
       callback: (ctx) =>
@@ -1853,11 +1877,15 @@ export const buildOpenAIModelDriver = (
             Effect.onError(() =>
               Effect.suspend(() => {
                 if (pendingCallbacks.get(ctx.authorizationId) !== entry) return Effect.void
-                return holdLogin(ctx.authorizationId, entry.flow, entry.close)
+                return holdLogin(ctx.authorizationId, entry)
               }),
             ),
           )
-          yield* finishLogin(ctx.authorizationId, entry.close)
+          // A browser callback and a pasted code can both reach here with
+          // the one exchange's tokens. The caller that claims the login
+          // stores them; the other waits for that store's outcome.
+          const claimed = yield* claimLogin(ctx.authorizationId, entry.flow)
+          if (Option.isNone(claimed)) return yield* Deferred.await(entry.finished)
           const signedIn: OpenAICredentials = {
             access: result.access,
             refresh: result.refresh,
@@ -1869,7 +1897,7 @@ export const buildOpenAIModelDriver = (
             credentialCellRef,
             signedIn,
             ctx.persist(result),
-          )
+          ).pipe(Effect.onExit((exit) => Deferred.done(entry.finished, exit)))
         }),
     },
   }

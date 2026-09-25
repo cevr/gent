@@ -9,6 +9,7 @@ import {
   Layer,
   Option,
   Predicate,
+  Ref,
   Schema,
   Semaphore,
   Stream,
@@ -2677,6 +2678,59 @@ describe("buildOpenAIModelDriver — OAuth login lifetime", () => {
       expect(pending.has("stale-tab")).toBe(false)
     }),
   )
+
+  it.live("a browser callback and a pasted code at once exchange and persist once", () =>
+    Effect.gen(function* () {
+      const port = yield* freePort
+      const pending: PendingCallbacks = new Map()
+      const { authorize, callback } = yield* makeDriver(pending)
+      const authorization = yield* authorize(authContext(0, "both")).pipe(
+        Effect.provideService(OAuthRedirectPort, port),
+      )
+      if (Option.isNone(authorization)) return yield* Effect.die(new Error("no authorization"))
+      const state = new URL(authorization.value.url).searchParams.get("state") ?? ""
+      const fetchState = makeFakeFetchState()
+      // The token endpoint answers only once both callers are in.
+      const exchangeStarted = yield* Deferred.make<void>()
+      const releaseExchange = yield* Deferred.make<void>()
+      const slowTokens = fakeFetchLayer(fetchState, () =>
+        Deferred.succeed(exchangeStarted, void 0).pipe(
+          Effect.andThen(Deferred.await(releaseExchange)),
+          Effect.as(tokenReply()),
+        ),
+      )
+      const persisted = yield* Ref.make(0)
+      const context = {
+        ...authContext(0, "both"),
+        persist: () => Ref.update(persisted, (n) => n + 1),
+      }
+      const browser = yield* Effect.forkChild(callback(context).pipe(Effect.provide(slowTokens)))
+      const query = new URLSearchParams({ state, code: "browser-code" })
+      yield* waitFor(
+        HttpClient.get(`http://localhost:${port}/auth/callback?${query.toString()}`).pipe(
+          Effect.map((response) => response.status),
+          Effect.provide(FetchHttpClient.layer),
+        ),
+        () => true,
+        2_000,
+        "redirect server",
+      )
+      yield* Deferred.await(exchangeStarted)
+      const pasted = yield* Effect.forkChild(
+        callback({ ...context, code: `pasted-code#${state}` }).pipe(Effect.provide(slowTokens)),
+      )
+      // The paste reaches the exchange, or its wait for it, before the answer.
+      yield* Effect.yieldNow.pipe(Effect.repeat({ times: 50 }))
+      yield* Deferred.succeed(releaseExchange, void 0)
+      const results = yield* Effect.all([Fiber.await(browser), Fiber.await(pasted)]).pipe(
+        Effect.timeout("3 seconds"),
+      )
+      expect(results.map((exit) => Exit.isSuccess(exit))).toEqual([true, true])
+      expect(exchangedCodes(fetchState)).toEqual(["browser-code"])
+      expect(yield* Ref.get(persisted)).toBe(1)
+      expect(pending.has("both")).toBe(false)
+    }),
+  )
 })
 describe("buildOpenAIModelDriver — token endpoint outage", () => {
   it.live(
@@ -2871,6 +2925,7 @@ describe("buildOpenAIModelDriver — a new sign-in replaces the held account", (
           callback: () => Effect.succeed(signedIn),
         },
         close: Effect.void,
+        finished: yield* Deferred.make<void, ProviderAuthError>(),
         timeoutFiber,
       })
       const callback = Option.getOrThrow(Option.fromUndefinedOr(driver.auth?.callback))
