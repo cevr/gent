@@ -1,7 +1,9 @@
 import { BunServices } from "@effect/platform-bun"
-import { Effect, FileSystem, Path } from "effect"
+import { Config, Effect, FileSystem, Path } from "effect"
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { describe, expect, it } from "effect-bun-test"
-import { requireContextModules, steeringFilesAmong } from "../src/check-guide-code"
+import { fileSet } from "../src/check-guardrails"
+import { requireContextModules, steeringFiles, steeringFilesAmong } from "../src/check-guide-code"
 
 const contextTest = it.scopedLive.layer(BunServices.layer)
 
@@ -45,6 +47,25 @@ describe("the steering files the check reads", () => {
       // `docs/gone.md` is still in the index but was trashed from the worktree.
       const listed = ["AGENTS.md", "CLAUDE.md", "docs/gone.md"]
       expect(yield* steeringFilesAmong(repoRoot, listed)).toEqual(["AGENTS.md"])
+    }),
+  )
+
+  contextTest("the check reads the staged steering files, not an untracked one", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+      const repoRoot = yield* fs.makeTempDirectoryScoped({ prefix: "gent-guide-root-" })
+      // Git's whole environment: no hook's `GIT_INDEX_FILE`, no user config.
+      const env = { PATH: yield* Config.string("PATH"), HOME: repoRoot }
+      const git = (args: ReadonlyArray<string>) =>
+        spawner.exitCode(ChildProcess.make("git", args, { cwd: repoRoot, env, extendEnv: false }))
+      yield* fs.writeFileString(path.join(repoRoot, "AGENTS.md"), "# Agents\n")
+      yield* fs.makeDirectory(path.join(repoRoot, "docs"))
+      yield* fs.writeFileString(path.join(repoRoot, "docs", "draft.md"), "# Draft\n")
+      expect(yield* git(["init", "-q"])).toBe(ChildProcessSpawner.ExitCode(0))
+      expect(yield* git(["add", "AGENTS.md"])).toBe(ChildProcessSpawner.ExitCode(0))
+      expect(yield* steeringFiles(repoRoot, fileSet(repoRoot, env))).toEqual(["AGENTS.md"])
     }),
   )
 })

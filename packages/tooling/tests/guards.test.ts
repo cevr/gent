@@ -48,7 +48,7 @@ import {
   RETIRED_SURFACES,
   workspaceTsconfigs,
 } from "../src/guards"
-import { indexFileNames, scanTrackedTexts } from "../src/check-guardrails"
+import { indexFileNames, scanTrackedTexts, trackedTexts } from "../src/check-guardrails"
 import { BunServices } from "@effect/platform-bun"
 import { Config, Effect, FileSystem, Option, Path } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
@@ -914,7 +914,7 @@ describe("an ignore row must match a file oxlint would lint", () => {
   })
 })
 
-describe("every existence question reads the git index", () => {
+describe("every guard reads one file set, the git index", () => {
   const gitTest = it.scopedLive.layer(BunServices.layer)
   const PROBE = "packages/extensions/src/probe-new.ts"
 
@@ -996,6 +996,47 @@ describe("every existence question reads the git index", () => {
       yield* git(root, ["add", PROBE], hookIndex)
       expect(yield* indexFileNames(root, yield* scratchEnv(root, hookIndex))).toContain(PROBE)
       expect(yield* indexFileNames(root, yield* scratchEnv(root))).not.toContain(PROBE)
+    }),
+  )
+
+  const STAGED_TEST = "packages/core/tests/runtime/probe.test.ts"
+  const STAGED_VIOLATION = 'const TEST_DIR = join(import.meta.dir, "../../.tmp-probe")\n'
+  // Multibyte text: the index read splits blobs by byte size, not by characters.
+  const STAGED_NEIGHBOUR: readonly [string, string] = ["docs/probe.md", "café — naïve ✓\n"]
+
+  gitTest("in a hook the scan reads the staged text, not the fix left on disk", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* scratchRepo([[STAGED_TEST, STAGED_VIOLATION], STAGED_NEIGHBOUR])
+      const hookIndex = { GIT_INDEX_FILE: path.join(root, ".git", "next-index.lock") }
+      yield* git(root, ["read-tree", "HEAD"], hookIndex)
+      yield* git(root, ["add", STAGED_TEST, STAGED_NEIGHBOUR[0]], hookIndex)
+      // The commit holds the violation; only the working file is fixed.
+      yield* fs.writeFileString(path.join(root, STAGED_TEST), "export {}\n")
+      const env = yield* scratchEnv(root, hookIndex)
+      const indexFiles = yield* indexFileNames(root, env)
+      const texts = yield* trackedTexts(root, env, indexFiles)
+      expect(texts).toEqual([
+        { file: "README.md", text: "scratch\n" },
+        { file: STAGED_NEIGHBOUR[0], text: STAGED_NEIGHBOUR[1] },
+        { file: STAGED_TEST, text: STAGED_VIOLATION },
+      ])
+      const { findings } = scanTrackedTexts(texts, indexFiles)
+      expect(findings.filter((finding) => finding.file === STAGED_TEST)).toHaveLength(1)
+    }),
+  )
+
+  gitTest("outside a hook the scan reads the working file", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* scratchRepo([[STAGED_TEST, STAGED_VIOLATION]])
+      yield* git(root, ["add", STAGED_TEST])
+      yield* fs.writeFileString(path.join(root, STAGED_TEST), "export {}\n")
+      const env = yield* scratchEnv(root)
+      const texts = yield* trackedTexts(root, env, [STAGED_TEST])
+      expect(texts).toEqual([{ file: STAGED_TEST, text: "export {}\n" }])
     }),
   )
 })

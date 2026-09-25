@@ -91,21 +91,124 @@ const trackedSymlinks = Effect.promise(() => Bun.$`git ls-files --stage`.text())
   ),
 )
 
-const readTrackedFile = Effect.fn("Tooling.readTrackedFile")(function* (file: string) {
-  const source = Bun.file(file)
-  if (!(yield* Effect.promise(() => source.exists()))) return Option.none()
-  return Option.some({ file, text: yield* Effect.promise(() => source.text()) })
+/** One tracked file the scan reads: its path and its text. */
+export interface TrackedText {
+  readonly file: string
+  readonly text: string
+}
+
+/** The disk text of each of `files` under `root` that exists there. */
+const diskTexts = (root: string, files: ReadonlyArray<string>) =>
+  Effect.forEach(
+    files,
+    Effect.fnUntraced(function* (file: string) {
+      const source = Bun.file(`${root}/${file}`)
+      if (!(yield* Effect.promise(() => source.exists()))) return Option.none<TrackedText>()
+      return Option.some({ file, text: yield* Effect.promise(() => source.text()) })
+    }),
+    { concurrency: 32 },
+  ).pipe(Effect.map((reads) => reads.flatMap(Option.toArray)))
+
+/**
+ * The staged text of each of `files` in the index `env` names, read in one
+ * `git cat-file --batch` call (the whole repository, about 12 MB, reads in
+ * about 0.1 s). Each reply is a header `<oid> blob <size>` and `size` bytes,
+ * or `<name> missing`.
+ */
+const indexTexts = (root: string, env: typeof Bun.env, files: ReadonlyArray<string>) =>
+  Effect.map(
+    Effect.promise(() =>
+      Bun.$`git cat-file --batch < ${new Response(files.map((file) => `:${file}\n`).join(""))}`
+        .cwd(root)
+        .env({ ...env })
+        .quiet()
+        .arrayBuffer(),
+    ),
+    (buffer) => {
+      const bytes = new Uint8Array(buffer)
+      const decoder = new TextDecoder()
+      const texts: Array<TrackedText> = []
+      let at = 0
+      for (const file of files) {
+        const end = bytes.indexOf(0x0a, at)
+        const header = decoder.decode(bytes.subarray(at, end)).split(" ")
+        at = end + 1
+        if (header.at(-1) === "missing") continue
+        const size = Number(header[2])
+        texts.push({ file, text: decoder.decode(bytes.subarray(at, at + size)) })
+        at += size + 1
+      }
+      return texts
+    },
+  )
+
+/**
+ * The text of each of `files` under `root`, in the same reading as the file
+ * set (`indexFileNames`). In a pre-commit hook (`GIT_INDEX_FILE` set) it is
+ * the staged text, so the scan reads the commit being made, not a fix left
+ * unstaged on disk. Outside a hook it is the working file: a scan run by hand
+ * sees the edits being made.
+ */
+export const trackedTexts = (
+  root: string,
+  env: typeof Bun.env,
+  files: ReadonlyArray<string>,
+): Effect.Effect<ReadonlyArray<TrackedText>> =>
+  Option.match(Option.fromNullishOr(env["GIT_INDEX_FILE"]), {
+    onNone: () => diskTexts(root, files),
+    onSome: () => indexTexts(root, env, files),
+  })
+
+/** The file set under `root` and a reader of its texts, both under git's environment `env`. */
+export interface FileSet {
+  readonly files: Effect.Effect<ReadonlyArray<string>>
+  readonly texts: (files: ReadonlyArray<string>) => Effect.Effect<ReadonlyArray<TrackedText>>
+}
+
+export const fileSet = (root: string, env: typeof Bun.env): FileSet => ({
+  files: indexFileNames(root, env),
+  texts: (files) => trackedTexts(root, env, files),
 })
+
+/** The file set under this process's own git environment: a hook's index, in a hook. */
+export const processFileSet = (root: string): FileSet => fileSet(root, Bun.env)
+
+/** The texts of the file set, by path; every repo file a guard reads comes from here. */
+type RepoTexts = ReadonlyMap<string, string>
+
+const readTrackedFile = (texts: RepoTexts, file: string): Option.Option<TrackedText> =>
+  Option.map(Option.fromNullishOr(texts.get(file)), (text) => ({ file, text }))
 
 /**
  * Every config the guards read goes through one reader. Tsconfigs and the
  * lint config are JSON with comments and trailing commas; a manifest is plain
- * JSON, a subset. The schema names only the fields a check reads.
+ * JSON, a subset. The schema names only the fields a check reads. A repo
+ * config's text comes from the file set; an installed manifest's from disk.
  */
-const readJsonc = Effect.fn("Tooling.readJsonc")(function* <
+const readRepoJsonc = <S extends Schema.Top & { readonly DecodingServices: never }>(
+  texts: RepoTexts,
+  path: string,
+  schema: S,
+) =>
+  Effect.flatMap(
+    Effect.fromOption(Option.fromNullishOr(texts.get(path))).pipe(
+      Effect.mapError(() => `${path}: not in the git index`),
+    ),
+    (text) => decodeJsonc(path, text, schema),
+  )
+
+const readInstalledJsonc = <S extends Schema.Top & { readonly DecodingServices: never }>(
+  path: string,
+  schema: S,
+) =>
+  Effect.flatMap(
+    Effect.promise(() => Bun.file(path).text()),
+    (text) => decodeJsonc(path, text, schema),
+  )
+
+const decodeJsonc = Effect.fn("Tooling.decodeJsonc")(function* <
   S extends Schema.Top & { readonly DecodingServices: never },
->(path: string, schema: S) {
-  const text = yield* Effect.promise(() => Bun.file(path).text())
+>(path: string, text: string, schema: S) {
   const parsed = yield* Effect.try({
     try: (): unknown => Bun.JSONC.parse(text),
     catch: (error) => `${path}: ${String(error)}`,
@@ -123,12 +226,17 @@ const LINT_PLUGIN = "packages/tooling/src/gent-rules.ts"
 
 /** The findings that read the lint and compiler configs rather than one source file. */
 const lintConfigFindings = Effect.fn("Tooling.lintConfigFindings")(function* (
+  texts: RepoTexts,
   indexFiles: ReadonlyArray<string>,
   sourceTexts: ReadonlyMap<string, string>,
 ) {
-  const { text: configText, value: config } = yield* readJsonc(OXLINT_CONFIG, OxlintConfigSchema)
-  const tsconfig = yield* readJsonc(ROOT_TSCONFIG, TsConfigPluginsSchema)
-  const ignoreText = Option.match(yield* readTrackedFile(OXLINT_IGNORE), {
+  const { text: configText, value: config } = yield* readRepoJsonc(
+    texts,
+    OXLINT_CONFIG,
+    OxlintConfigSchema,
+  )
+  const tsconfig = yield* readRepoJsonc(texts, ROOT_TSCONFIG, TsConfigPluginsSchema)
+  const ignoreText = Option.match(readTrackedFile(texts, OXLINT_IGNORE), {
     onNone: () => "",
     onSome: (read) => read.text,
   })
@@ -147,9 +255,10 @@ const GUIDE_CHECK_TURBO = "examples/turbo.json"
 
 /** The guide check's cache key against the steering files, new ones included. */
 const guideInputFindings = Effect.fn("Tooling.guideInputFindings")(function* (
+  texts: RepoTexts,
   indexFiles: ReadonlyArray<string>,
 ) {
-  const { value } = yield* readJsonc(GUIDE_CHECK_TURBO, TurboTypecheckInputsSchema)
+  const { value } = yield* readRepoJsonc(texts, GUIDE_CHECK_TURBO, TurboTypecheckInputsSchema)
   return findUnhashedSteeringFiles(GUIDE_CHECK_TURBO, value.tasks.typecheck.inputs, indexFiles)
 })
 
@@ -195,7 +304,7 @@ const readInstalled = Effect.fn("Tooling.readInstalled")(function* (
   for (const base of bases) {
     const path = `${base}node_modules/${name}/package.json`
     if (!(yield* Effect.promise(() => Bun.file(path).exists()))) continue
-    const read = yield* Effect.result(readJsonc(path, InstalledPackageSchema))
+    const read = yield* Effect.result(readInstalledJsonc(path, InstalledPackageSchema))
     if (Result.isSuccess(read)) return Option.some(installedDependency(name, read.success.value))
   }
   return Option.none<InstalledDependency>()
@@ -236,15 +345,16 @@ const scriptsOf = (packageJson: PackageJson): ReadonlyArray<string> =>
  * workspaces use.
  */
 const dependencyScopes = Effect.fn("Tooling.dependencyScopes")(function* (
+  texts: RepoTexts,
   root: ManifestRead,
   manifests: ReadonlyMap<string, ManifestRead>,
   indexFiles: ReadonlyArray<string>,
 ) {
-  const reads = yield* Effect.forEach(indexFiles.filter(isDependencyUseFile), readTrackedFile, {
-    concurrency: 32,
-  })
   const useTexts = new Map<string, string>(
-    reads.flatMap(Option.toArray).map(({ file, text }) => [file, text]),
+    indexFiles
+      .filter(isDependencyUseFile)
+      .flatMap((file) => Option.toArray(readTrackedFile(texts, file)))
+      .map(({ file, text }) => [file, text]),
   )
   const rootScope: DependencyScope = {
     manifest: ROOT_MANIFEST,
@@ -273,13 +383,14 @@ const dependencyScopes = Effect.fn("Tooling.dependencyScopes")(function* (
 
 /** The findings that read every manifest and every workspace tsconfig. */
 const packageSurfaceFindings = Effect.fn("Tooling.packageSurfaceFindings")(function* (
+  texts: RepoTexts,
   indexFiles: ReadonlyArray<string>,
 ) {
-  const root = yield* readJsonc(ROOT_MANIFEST, PackageJsonSchema)
+  const root = yield* readRepoJsonc(texts, ROOT_MANIFEST, PackageJsonSchema)
   const manifestPaths = workspaceManifests(root.value.workspaces ?? [], indexFiles)
   const manifestReads = yield* Effect.forEach(
     manifestPaths,
-    (path) => readJsonc(path, PackageJsonSchema),
+    (path) => readRepoJsonc(texts, path, PackageJsonSchema),
     { concurrency: 8 },
   )
   const manifests = new Map<string, ManifestRead>(
@@ -288,7 +399,7 @@ const packageSurfaceFindings = Effect.fn("Tooling.packageSurfaceFindings")(funct
   const tsconfigPaths = workspaceTsconfigs(indexFiles)
   const tsconfigs = yield* Effect.forEach(
     tsconfigPaths,
-    (path) => Effect.result(readJsonc(path, TsConfigSchema)),
+    (path) => Effect.result(readRepoJsonc(texts, path, TsConfigSchema)),
     { concurrency: 8 },
   )
   const unreadable: Array<Finding> = []
@@ -305,7 +416,7 @@ const packageSurfaceFindings = Effect.fn("Tooling.packageSurfaceFindings")(funct
   return [
     ...unreadable,
     ...findPackageSurfaceFindings(packageJsonByPath, tsconfigByPath),
-    ...findUnusedDependencies(yield* dependencyScopes(root, manifests, indexFiles)),
+    ...findUnusedDependencies(yield* dependencyScopes(texts, root, manifests, indexFiles)),
     ...findUnusedCatalogEntries(
       { manifest: ROOT_MANIFEST, text: root.text, packageJson: root.value },
       [...manifests.values()].map((read) => read.value),
@@ -320,12 +431,6 @@ const packageSurfaceFindings = Effect.fn("Tooling.packageSurfaceFindings")(funct
     ),
   ]
 })
-
-/** One tracked file the scan reads: its path and its text. */
-export interface TrackedText {
-  readonly file: string
-  readonly text: string
-}
 
 /** A manifest: its `scripts` can set a `GENT_*` variable, the way an operator's shell does. */
 const isManifest = (file: string): boolean => /(?:^|\/)package\.json$/.test(file)
@@ -386,29 +491,27 @@ export const scanTrackedTexts = (
 const program = Effect.gen(function* () {
   const indexFiles = yield* indexFileNames(".", Bun.env)
   const symlinks = yield* trackedSymlinks
-  const textFiles = yield* Effect.forEach(
-    indexFiles
+  const read = yield* trackedTexts(
+    ".",
+    Bun.env,
+    indexFiles.filter((file) => !symlinks.has(file)),
+  )
+  const texts: RepoTexts = new Map(read.map(({ file, text }) => [file, text]))
+  const textFiles = read.filter(
+    ({ file }) =>
       // The steering files and docs are Markdown and the hook is YAML; they
       // join the pass so their own scans get the text.
-      .filter(
-        (file) =>
-          /\.(?:[cm]?[jt]sx?|jsonc?)$/.test(file) || isSteeringFile(file) || file === HOOK_FILE,
-      )
-      .filter((file) => !file.includes("/dist/") && !symlinks.has(file)),
-    readTrackedFile,
-    { concurrency: 32 },
+      (/\.(?:[cm]?[jt]sx?|jsonc?)$/.test(file) || isSteeringFile(file) || file === HOOK_FILE) &&
+      !file.includes("/dist/"),
   )
 
-  const { findings: treeFindings, sourceTexts } = scanTrackedTexts(
-    textFiles.flatMap(Option.toArray),
-    indexFiles,
-  )
+  const { findings: treeFindings, sourceTexts } = scanTrackedTexts(textFiles, indexFiles)
   const findings: Array<Finding> = [
     ...treeFindings,
     // The lint config must not name a file or a rule that is gone.
-    ...(yield* lintConfigFindings(indexFiles, sourceTexts)),
-    ...(yield* packageSurfaceFindings(indexFiles)),
-    ...(yield* guideInputFindings(indexFiles)),
+    ...(yield* lintConfigFindings(texts, indexFiles, sourceTexts)),
+    ...(yield* packageSurfaceFindings(texts, indexFiles)),
+    ...(yield* guideInputFindings(texts, indexFiles)),
   ]
 
   // Two finders may report one line with one message; say it once.
