@@ -1,10 +1,11 @@
 /** @jsxImportSource @opentui/solid */
 
 import { afterEach } from "bun:test"
+import { Writable } from "node:stream" // eslint-disable-line effect/noNodeBuiltinImport -- the renderer writes to a Node stream; a test terminal must be one.
 import { BunServices } from "@effect/platform-bun"
 import { Config, Context, Effect, FileSystem, Layer, Option, Path, Scope, Stream } from "effect"
 import { render } from "@opentui/solid"
-import { createTestRenderer } from "@opentui/core/testing"
+import { createTestRenderer, type TestRendererOptions } from "@opentui/core/testing"
 import type { JSX } from "solid-js"
 import { KeyboardScopeProvider, TerminalDimensionsProvider } from "../src/terminal"
 import { ThemeProvider } from "../src/theme"
@@ -256,6 +257,54 @@ const getServices = (): Promise<Context.Context<unknown>> => {
   )
 }
 
+// ── terminal output ─────────────────────────────────────────────────────────
+
+/**
+ * A terminal a test reads back. OpenTUI's test stdout drops what the renderer
+ * writes; handed to `renderWithProviders` as `output`, this one keeps every
+ * byte in order, so a test can assert on a sequence the renderer sends the
+ * terminal itself (an OSC 52 copy), not only on what it draws.
+ */
+export class TerminalOutput extends Writable {
+  readonly isTTY = true
+  private readonly chunks: Uint8Array[] = []
+
+  constructor(
+    readonly columns = 80,
+    readonly rows = 24,
+  ) {
+    super()
+  }
+
+  override _write(chunk: Uint8Array, _encoding: string, callback: () => void) {
+    // The renderer reuses its output buffer once the write returns: keep a copy
+    // (`Buffer#slice` would share the memory).
+    this.chunks.push(new Uint8Array(chunk))
+    callback()
+  }
+
+  getColorDepth() {
+    return 24
+  }
+
+  /** The stream as the renderer's stdout: it only writes, and reads the TTY fields above. */
+  stdout(): NodeJS.WriteStream {
+    // oxlint-disable-next-line effect/noAs, effect/noChainedTypeAssertions -- a Writable with the TTY fields OpenTUI reads stands in for stdout, as OpenTUI's own test stdout does.
+    return this as unknown as NodeJS.WriteStream
+  }
+
+  /** Everything the renderer has written so far. */
+  written(): string {
+    const bytes = new Uint8Array(this.chunks.reduce((total, chunk) => total + chunk.length, 0))
+    let offset = 0
+    for (const chunk of this.chunks) {
+      bytes.set(chunk, offset)
+      offset += chunk.length
+    }
+    return new TextDecoder().decode(bytes)
+  }
+}
+
 export const renderWithProviders = (
   node: () => JSX.Element,
   options?: {
@@ -276,6 +325,8 @@ export const renderWithProviders = (
      * a `LinkOpener.Test` layer). Defaults to the shared host context.
      */
     services?: Context.Context<unknown>
+    /** A terminal that keeps what the renderer writes; OpenTUI's own drops it. */
+    output?: TerminalOutput
   },
 ): Promise<TestRenderSetup> =>
   Effect.runPromise(
@@ -293,11 +344,20 @@ export const renderWithProviders = (
       // written under it never reach another test or another run.
       const home = yield* makeRenderHome
 
+      // A kept terminal takes the renderer's bytes as a real stdout would.
+      const output = Option.match(Option.fromNullishOr(options?.output), {
+        onNone: (): Partial<TestRendererOptions> => ({}),
+        onSome: (terminal): Partial<TestRendererOptions> => ({
+          stdout: terminal.stdout(),
+          bufferedOutput: "stdout",
+        }),
+      })
       const setup = yield* Effect.promise(() =>
         createTestRenderer({
           width: options?.width ?? 80,
           height: options?.height ?? 24,
           exitOnCtrlC: false,
+          ...output,
         }),
       )
       currentSetup = Option.some(setup)

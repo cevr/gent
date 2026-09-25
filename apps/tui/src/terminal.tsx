@@ -3,6 +3,7 @@ import {
   useKeyboard,
   usePaste,
   useRenderer,
+  useSelectionHandler,
   useTerminalDimensions as useRendererTerminalDimensions,
 } from "@opentui/solid"
 import { Option } from "effect"
@@ -44,6 +45,31 @@ export function TerminalDimensionsProvider(props: ParentProps) {
 
 export const useTerminalDimensions = (): Accessor<TerminalDimensions> =>
   Option.getOrThrow(useContext(TerminalDimensionsContext))
+
+// ── copy on select ──────────────────────────────────────────────────────────
+
+/**
+ * A mouse selection copies its text when the drag ends, as Claude Code and
+ * Codex do. While OpenTUI tracks the mouse (the expanded transcript, an
+ * overlay such as the sign-in pane, the command palette) the terminal never
+ * sees the drag, so neither it nor a multiplexer around it (herdr, tmux) can
+ * copy; the renderer owns the selection and sends the copy itself as an OSC 52
+ * write. OpenTUI wraps it for tmux and screen, and a terminal or multiplexer
+ * that takes OSC 52 puts it on the clipboard. In the split footer the mouse is
+ * the terminal's, and its own selection copies.
+ *
+ * A click selects nothing, and an empty OSC 52 write would clear the
+ * clipboard, so it copies nothing. The selection stays on screen after the
+ * copy.
+ */
+export function useCopyOnSelect() {
+  const renderer = useRenderer()
+  useSelectionHandler((selection) => {
+    const text = selection.getSelectedText()
+    if (text.length === 0) return
+    renderer.copyToClipboardOSC52(text)
+  })
+}
 
 // ── keyboard provider ───────────────────────────────────────────────────────
 
