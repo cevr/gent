@@ -656,6 +656,7 @@ export function Session(props: SessionProps) {
     buildContextLabels({
       metrics: client.sessionMetrics(),
       contextLength: client.modelInfo()?.contextLength,
+      inputLimit: client.modelInfo()?.inputLimit,
       theme,
     }).concat(costLabels())
 

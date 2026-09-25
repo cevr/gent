@@ -563,7 +563,7 @@ interface ClientSessionValue {
  * The context gauge's whole input.
  *
  * The two halves are one value because `buildContextLabels` prefers the
- * projection over the live token count whenever it carries a limit. Held apart,
+ * projection over the live token count whenever it carries an input budget. Held apart,
  * a projection left from the previous session outranks the fresh token count of
  * the new one and renders the old percentage.
  */

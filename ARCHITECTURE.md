@@ -123,7 +123,11 @@ updates this list in the same commit.
     still in the window, the messages before that reply count at least as much
     as that step's reported input, less the system and tool size its own
     request carried (`StreamEnded.requestOverheadTokens`). Its output never
-    counts.
+    counts. The TUI's `ctx N%` and `context.status().percent` divide that
+    estimate by the budget the projection records (`availableInputTokens`),
+    so both read 100% where the window hands off, also when the input cap is
+    below the window. A session with no projection yet reads the last step's
+    input against the window or the input cap, whichever is smaller.
     A request the provider refuses as too long (`RetryPolicy.contextOverflow`,
     one pattern list in `packages/core/src/domain/driver.ts`; the byte cap
     `request_too_large` is not an overflow) hands the window off once and runs
