@@ -252,7 +252,49 @@ const AGGREGATE_DETAIL_LIMIT = 3
 /** The stderr a `ShellError` shows, from its end. */
 const SHELL_STDERR_LIMIT = 2000
 
-const errorLine = (error: Error) => `${error.name}: ${error.message}`
+/** What a thrown value shows when reading it throws: a trapping Proxy, for one. */
+const UNREADABLE_ERROR_TEXT = "A thrown value that cannot be read"
+/** Prototype links a property read follows before it gives up. */
+const PROTOTYPE_DEPTH_LIMIT = 32
+
+/** The descriptor's getter when the runtime provides it, not the cell. */
+const nativeGetter = (descriptor: PropertyDescriptor) =>
+  Option.filter(Option.liftPredicate(Reflect.get(descriptor, "get"), Predicate.isFunction), (get) =>
+    /\{\s*\[native code\]\s*\}$/.test(Function.prototype.toString.call(get)),
+  )
+
+/**
+ * A property of a thrown value, read from its descriptors along the prototype
+ * chain, so a getter the cell wrote never runs; none when absent or behind
+ * such a getter. A native getter runs: Bun keeps a `BuildMessage`'s message
+ * and position behind one. A Proxy's traps and a native getter can still
+ * throw; `errorText` catches that.
+ */
+// oxlint-disable-next-line effect/noObjectParameters -- a thrown value has any JavaScript shape; descriptors read it without running its getters
+const errorProperty = (target: object, key: string): Option.Option<unknown> => {
+  let holder = Option.some(target)
+  for (let depth = 0; depth < PROTOTYPE_DEPTH_LIMIT && Option.isSome(holder); depth++) {
+    const descriptor = Option.fromUndefinedOr(Object.getOwnPropertyDescriptor(holder.value, key))
+    if (Option.isSome(descriptor)) {
+      if ("value" in descriptor.value) return Option.some(descriptor.value.value)
+      return Option.map(nativeGetter(descriptor.value), (get) => Reflect.apply(get, target, []))
+    }
+    holder = Option.liftPredicate(Object.getPrototypeOf(holder.value), Predicate.isObjectKeyword)
+  }
+  return Option.none()
+}
+
+/** `name: message`, each read only when its value is a string. */
+const errorLine = (error: Error) => {
+  const name = Option.getOrElse(
+    Option.filter(errorProperty(error, "name"), Predicate.isString),
+    () => "Error",
+  )
+  return Option.match(Option.filter(errorProperty(error, "message"), Predicate.isString), {
+    onNone: () => name,
+    onSome: (message) => `${name}: ${message}`,
+  })
+}
 
 /** Where a Bun `BuildMessage` (a cell syntax error) points. */
 const BuildPosition = Schema.Struct({
@@ -268,14 +310,55 @@ const SYSTEM_ERROR_FIELD_LIMIT = 200
 
 /** One line of the system error fields an error holds as scalars; none gives no line. */
 const systemErrorFields = (error: Error): ReadonlyArray<string> => {
-  const fields = SYSTEM_ERROR_FIELDS.flatMap((key) => {
-    const value: unknown = Reflect.get(error, key)
-    if (!Predicate.isString(value) && !Predicate.isNumber(value)) return []
-    return [`${key}: ${String(value).slice(0, SYSTEM_ERROR_FIELD_LIMIT)}`]
-  })
+  const fields = SYSTEM_ERROR_FIELDS.flatMap((key) =>
+    Option.match(
+      Option.filter(
+        errorProperty(error, key),
+        Predicate.or(Predicate.isString, Predicate.isNumber),
+      ),
+      {
+        onNone: () => [],
+        onSome: (value) => [`${key}: ${String(value).slice(0, SYSTEM_ERROR_FIELD_LIMIT)}`],
+      },
+    ),
+  )
   if (fields.length === 0) return []
   return [`  ${fields.join(", ")}`]
 }
+
+/** An `AggregateError`'s first inner errors, one line each, and a count of the rest. */
+const aggregateDetail = (inner: ReadonlyArray<unknown>): ReadonlyArray<string> => {
+  const listed = Array.from({ length: Math.min(inner.length, AGGREGATE_DETAIL_LIMIT) }, (_, i) =>
+    Option.match(errorProperty(inner, String(i)), {
+      onNone: () => "  (an inner value that cannot be read)",
+      onSome: (each) => {
+        if (Predicate.isError(each)) return `  ${errorLine(each)}`
+        if (Predicate.isObjectKeyword(each)) return "  (an inner value that is not an error)"
+        return `  ${String(each)}`
+      },
+    }),
+  )
+  const rest = inner.length - listed.length
+  if (rest > 0) return [...listed, `  … ${rest} more`]
+  return listed
+}
+
+/** A `BuildMessage`'s position as one line; none for any other error. */
+const positionDetail = (error: Error): Option.Option<string> =>
+  Option.filter(errorProperty(error, "position"), Predicate.isObjectKeyword).pipe(
+    Option.flatMap((where) =>
+      Schema.decodeUnknownOption(BuildPosition)({
+        line: Option.getOrUndefined(errorProperty(where, "line")),
+        column: Option.getOrUndefined(errorProperty(where, "column")),
+        lineText: Option.getOrUndefined(errorProperty(where, "lineText")),
+      }),
+    ),
+    Option.map(({ line, column, lineText }) => {
+      const at = `  at line ${line}, column ${column}`
+      if (Predicate.isUndefined(lineText)) return at
+      return `${at}: ${lineText.trim()}`
+    }),
+  )
 
 /**
  * The detail an error keeps outside its message, one line each and with no
@@ -283,29 +366,15 @@ const systemErrorFields = (error: Error): ReadonlyArray<string> => {
  * `ShellError`'s stderr, or a system error's code, path and syscall.
  */
 const errorDetail = (error: Error): ReadonlyArray<string> => {
-  if (error instanceof AggregateError) {
-    const inner: ReadonlyArray<unknown> = error.errors
-    const listed = inner.slice(0, AGGREGATE_DETAIL_LIMIT).map((each) => {
-      if (Predicate.isError(each)) return `  ${errorLine(each)}`
-      return `  ${String(each)}`
-    })
-    const rest = inner.length - listed.length
-    if (rest > 0) return [...listed, `  … ${rest} more`]
-    return listed
-  }
-  if (Predicate.hasProperty(error, "position")) {
-    const position = Schema.decodeUnknownOption(BuildPosition)(error.position)
-    if (Option.isSome(position)) {
-      const { line, column, lineText } = position.value
-      let at = `  at line ${line}, column ${column}`
-      if (Predicate.isNotUndefined(lineText)) at = `${at}: ${lineText.trim()}`
-      return [at]
-    }
-  }
-  if (Predicate.hasProperty(error, "stderr") && error.stderr instanceof Uint8Array) {
-    const stderr = new TextDecoder().decode(error.stderr).trim()
-    if (stderr.length === 0) return []
-    return [`stderr: ${stderr.slice(-SHELL_STDERR_LIMIT)}`]
+  const inner = Option.filter(errorProperty(error, "errors"), Array.isArray)
+  if (error instanceof AggregateError && Option.isSome(inner)) return aggregateDetail(inner.value)
+  const position = positionDetail(error)
+  if (Option.isSome(position)) return [position.value]
+  const stderr = Option.filter(errorProperty(error, "stderr"), Predicate.isUint8Array)
+  if (Option.isSome(stderr)) {
+    const text = new TextDecoder().decode(stderr.value).trim()
+    if (text.length === 0) return []
+    return [`stderr: ${text.slice(-SHELL_STDERR_LIMIT)}`]
   }
   return systemErrorFields(error)
 }
@@ -357,25 +426,35 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
   // about the cell's code, so an error goes back as its name and message, with
   // its cause one level deep. A failed host operation already carries the
   // host's message.
-  const errorText = (cause: unknown): string => {
+  const renderError = (cause: unknown): string => {
     if (!Predicate.isError(cause)) return display(cause)
     const head = [errorLine(cause), ...errorDetail(cause)].join("\n")
-    if (Predicate.isUndefined(cause.cause)) return head
-    // An Error cause stops at its own line: never recurse, so a looped or deep chain cannot overflow.
-    if (Predicate.isError(cause.cause)) return `${head}\ncaused by ${errorLine(cause.cause)}`
-    return `${head}\ncaused by ${display(cause.cause)}`
+    return Option.match(Option.filter(errorProperty(cause, "cause"), Predicate.isNotUndefined), {
+      onNone: () => head,
+      // An Error cause stops at its own line: never recurse, so a looped or deep chain cannot overflow.
+      onSome: (inner) => {
+        if (Predicate.isError(inner)) return `${head}\ncaused by ${errorLine(inner)}`
+        return `${head}\ncaused by ${display(inner)}`
+      },
+    })
   }
+  /**
+   * The one guard every error text goes through: a read that throws (a Proxy
+   * trap, a native getter) gives `UNREADABLE_ERROR_TEXT`, never a worker death.
+   */
+  const total =
+    (render: (cause: unknown) => string) =>
+    (cause: unknown): string =>
+      Option.getOrElse(Option.liftThrowable(render)(cause), () => UNREADABLE_ERROR_TEXT)
+  const errorText = total(renderError)
+  const failureText = total((cause) => {
+    if (Schema.is(CellEvaluationError)(cause)) return cause.message
+    return renderError(cause)
+  })
   const failure = (phase: CellEvaluationError["phase"], cause: unknown) =>
     new CellEvaluationError({
       phase,
-      message: Option.liftPredicate(cause, Schema.is(CellEvaluationError))
-        .pipe(
-          Option.match({
-            onNone: () => errorText(cause),
-            onSome: (hostFailure) => hostFailure.message,
-          }),
-        )
-        .slice(0, maximumCellDisplayLength),
+      message: failureText(cause).slice(0, maximumCellDisplayLength),
       output: rendered(),
     })
   // The catalog is data the host already validated. The namespace reads it on every access,
