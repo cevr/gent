@@ -9,6 +9,7 @@ import {
   Layer,
   Option,
   Predicate,
+  Ref,
   Schema,
   Semaphore,
   Stream,
@@ -2489,6 +2490,15 @@ describe("buildOpenAIModelDriver — OAuth login lifetime", () => {
       }
       return { authorize: authorize.value, callback: callback.value }
     })
+  /** End a login a test left pending: stop its timer and close its listener. */
+  const dropLogin = (pending: PendingCallbacks, authorizationId: string) =>
+    Effect.gen(function* () {
+      const held = Option.fromNullishOr(pending.get(authorizationId))
+      pending.delete(authorizationId)
+      if (Option.isNone(held)) return
+      yield* Fiber.interrupt(held.value.timeoutFiber)
+      yield* held.value.close
+    })
   const authContext = (methodIndex: number, authorizationId: string) => ({
     sessionId: SessionId.make("s1"),
     methodIndex,
@@ -2560,6 +2570,7 @@ describe("buildOpenAIModelDriver — OAuth login lifetime", () => {
       )
       expect(Exit.isFailure(exit)).toBe(true)
       if (Exit.isFailure(exit)) expect(String(exit.cause)).toContain("redirect server failed")
+      yield* dropLogin(pending, "blocked")
     }),
   )
 
@@ -2590,8 +2601,134 @@ describe("buildOpenAIModelDriver — OAuth login lifetime", () => {
       )
       expect(page).toContain("&lt;script&gt;alert(1)&lt;/script&gt;")
       expect(page).not.toContain("<script>alert")
-      // Completes the flow: stops the timer and closes the redirect server.
+      // The provider's error fails the browser wait; the login stays for a pasted code.
       yield* Effect.exit(callback(authContext(0, "escaped")))
+      yield* dropLogin(pending, "escaped")
+    }),
+  )
+
+  const tokenReply = () => ({
+    status: 200,
+    body: '{"access_token":"new-access","refresh_token":"new-refresh","expires_in":3600}',
+  })
+  const exchangedCodes = (state: FakeFetchState) =>
+    state.captured
+      .filter((request) => request.url.endsWith("/oauth/token"))
+      .map((request) => new URLSearchParams(request.body ?? "").get("code"))
+
+  it.scopedLive("a failed browser wait keeps the login, and a pasted code finishes it", () =>
+    Effect.gen(function* () {
+      const held = yield* heldPort
+      const pending: PendingCallbacks = new Map()
+      const { authorize, callback } = yield* makeDriver(pending)
+      const authorization = yield* authorize(authContext(0, "pasted")).pipe(
+        Effect.provideService(OAuthRedirectPort, held.port),
+      )
+      if (Option.isNone(authorization)) return yield* Effect.die(new Error("no authorization"))
+      const state = new URL(authorization.value.url).searchParams.get("state") ?? ""
+      const bare = yield* Effect.exit(callback(authContext(0, "pasted"))).pipe(
+        Effect.timeout("3 seconds"),
+      )
+      expect(Exit.isFailure(bare)).toBe(true)
+      expect(pending.has("pasted")).toBe(true)
+
+      const fetchState = makeFakeFetchState()
+      const pasted = yield* Effect.exit(
+        callback({ ...authContext(0, "pasted"), code: `pasted-code#${state}` }),
+      ).pipe(Effect.provide(fakeFetchLayer(fetchState, tokenReply)))
+      expect(Exit.isSuccess(pasted)).toBe(true)
+      expect(exchangedCodes(fetchState)).toEqual(["pasted-code"])
+      expect(pending.has("pasted")).toBe(false)
+    }),
+  )
+
+  it.live("a request with another state leaves the browser wait running", () =>
+    Effect.gen(function* () {
+      const port = yield* freePort
+      const pending: PendingCallbacks = new Map()
+      const { authorize, callback } = yield* makeDriver(pending)
+      const authorization = yield* authorize(authContext(0, "stale-tab")).pipe(
+        Effect.provideService(OAuthRedirectPort, port),
+      )
+      if (Option.isNone(authorization)) return yield* Effect.die(new Error("no authorization"))
+      const state = new URL(authorization.value.url).searchParams.get("state") ?? ""
+      const fetchState = makeFakeFetchState()
+      const wait = yield* Effect.forkChild(
+        callback(authContext(0, "stale-tab")).pipe(
+          Effect.provide(fakeFetchLayer(fetchState, tokenReply)),
+        ),
+      )
+      const visit = (query: URLSearchParams) =>
+        HttpClient.get(`http://localhost:${port}/auth/callback?${query.toString()}`).pipe(
+          Effect.map((response) => response.status),
+          Effect.provide(FetchHttpClient.layer),
+        )
+      // The redirect server starts on its own fiber; retry until it listens.
+      const stale = yield* waitFor(
+        visit(new URLSearchParams({ state: "another-login", code: "stale-code" })),
+        () => true,
+        2_000,
+        "redirect server",
+      )
+      expect(stale).toBe(400)
+      expect(yield* visit(new URLSearchParams({ state, code: "browser-code" }))).toBe(200)
+      const exit = yield* Fiber.await(wait).pipe(Effect.timeout("3 seconds"))
+      expect(Exit.isSuccess(exit)).toBe(true)
+      expect(exchangedCodes(fetchState)).toEqual(["browser-code"])
+      expect(pending.has("stale-tab")).toBe(false)
+    }),
+  )
+
+  it.live("a browser callback and a pasted code at once exchange and persist once", () =>
+    Effect.gen(function* () {
+      const port = yield* freePort
+      const pending: PendingCallbacks = new Map()
+      const { authorize, callback } = yield* makeDriver(pending)
+      const authorization = yield* authorize(authContext(0, "both")).pipe(
+        Effect.provideService(OAuthRedirectPort, port),
+      )
+      if (Option.isNone(authorization)) return yield* Effect.die(new Error("no authorization"))
+      const state = new URL(authorization.value.url).searchParams.get("state") ?? ""
+      const fetchState = makeFakeFetchState()
+      // The token endpoint answers only once both callers are in.
+      const exchangeStarted = yield* Deferred.make<void>()
+      const releaseExchange = yield* Deferred.make<void>()
+      const slowTokens = fakeFetchLayer(fetchState, () =>
+        Deferred.succeed(exchangeStarted, void 0).pipe(
+          Effect.andThen(Deferred.await(releaseExchange)),
+          Effect.as(tokenReply()),
+        ),
+      )
+      const persisted = yield* Ref.make(0)
+      const context = {
+        ...authContext(0, "both"),
+        persist: () => Ref.update(persisted, (n) => n + 1),
+      }
+      const browser = yield* Effect.forkChild(callback(context).pipe(Effect.provide(slowTokens)))
+      const query = new URLSearchParams({ state, code: "browser-code" })
+      yield* waitFor(
+        HttpClient.get(`http://localhost:${port}/auth/callback?${query.toString()}`).pipe(
+          Effect.map((response) => response.status),
+          Effect.provide(FetchHttpClient.layer),
+        ),
+        () => true,
+        2_000,
+        "redirect server",
+      )
+      yield* Deferred.await(exchangeStarted)
+      const pasted = yield* Effect.forkChild(
+        callback({ ...context, code: `pasted-code#${state}` }).pipe(Effect.provide(slowTokens)),
+      )
+      // The paste reaches the exchange, or its wait for it, before the answer.
+      yield* Effect.yieldNow.pipe(Effect.repeat({ times: 50 }))
+      yield* Deferred.succeed(releaseExchange, void 0)
+      const results = yield* Effect.all([Fiber.await(browser), Fiber.await(pasted)]).pipe(
+        Effect.timeout("3 seconds"),
+      )
+      expect(results.map((exit) => Exit.isSuccess(exit))).toEqual([true, true])
+      expect(exchangedCodes(fetchState)).toEqual(["browser-code"])
+      expect(yield* Ref.get(persisted)).toBe(1)
+      expect(pending.has("both")).toBe(false)
     }),
   )
 })
@@ -2788,6 +2925,7 @@ describe("buildOpenAIModelDriver — a new sign-in replaces the held account", (
           callback: () => Effect.succeed(signedIn),
         },
         close: Effect.void,
+        finished: yield* Deferred.make<void, ProviderAuthError>(),
         timeoutFiber,
       })
       const callback = Option.getOrThrow(Option.fromUndefinedOr(driver.auth?.callback))

@@ -672,6 +672,8 @@ const ModelsDevCost = Schema.Struct({
 })
 const ModelsDevLimit = Schema.Struct({
   context: Schema.Finite,
+  /** The input cap, where it is below the window (the GPT-5 family: 272k of 400k). */
+  input: Schema.optional(Schema.Finite),
 })
 const ModelsDevModel = Schema.Struct({
   name: Schema.optional(Schema.String),
@@ -730,6 +732,9 @@ const parsePricing = (value: ModelsDevModel["cost"]): Option.Option<ModelPricing
 const parseContextLength = (value: ModelsDevModel["limit"]): Option.Option<number> =>
   Option.fromUndefinedOr(value).pipe(Option.map(({ context }) => context))
 
+const parseInputLimit = (value: ModelsDevModel["limit"]): Option.Option<number> =>
+  Option.fromUndefinedOr(value).pipe(Option.flatMap(({ input }) => Option.fromUndefinedOr(input)))
+
 /**
  * The models.dev payload as gent's canonical `Model[]`. A malformed entry is
  * dropped, and so is a model without tool calling: every gent turn sends tools.
@@ -761,6 +766,7 @@ const parseModelsDev = (data: Schema.Json): ReadonlyArray<Model> => {
           provider: ProviderId.make(providerId),
           ...omitUndefined({
             contextLength: Option.getOrUndefined(contextLength),
+            inputLimit: Option.getOrUndefined(parseInputLimit(modelValue.limit)),
             pricing: Option.getOrUndefined(pricing),
             releaseDate: Option.getOrUndefined(releaseDate),
             reasoning: modelValue.reasoning,
@@ -1001,6 +1007,9 @@ const isChatMessages = Schema.is(ChatMessages)
 const isSystemChatMessage = Schema.is(
   Schema.Struct({ role: Schema.Literals(["system", "developer"]), content: Schema.String }),
 )
+const isDeveloperChatMessage = Schema.is(
+  Schema.Struct({ role: Schema.Literal("developer"), content: Schema.String }),
+)
 
 /**
  * The request in the shape a chat-completions API expects of the system
@@ -1011,6 +1020,9 @@ const isSystemChatMessage = Schema.is(
  * context update: Mistral rejects a request whose last message is not user or
  * tool, and `toPrompt` puts the turn notices there. A system message inside
  * the conversation keeps its role: the rule is about the last message only.
+ * Every system message goes with the `system` role: the SDK names `developer`
+ * for any model id that starts with `o` (Mistral's `open-*` models), and the
+ * Mistral chat schema has no `developer` role.
  */
 const withHostContextUpdates = (
   request: HttpClientRequest.HttpClientRequest,
@@ -1024,12 +1036,17 @@ const withHostContextUpdates = (
   const end = messages.findLastIndex((message) => !isSystemChatMessage(message))
   if (start < 0) return request
   const leading = messages.slice(0, start).filter(isSystemChatMessage)
-  if (leading.length <= 1 && end === messages.length - 1) return request
+  const developer = messages.some(isDeveloperChatMessage)
+  if (!developer && leading.length <= 1 && end === messages.length - 1) return request
   const head = Option.match(Option.fromUndefinedOr(leading[0]), {
     onNone: () => [],
-    onSome: (first) => [
-      { ...first, content: leading.map((message) => message.content).join("\n\n") },
+    onSome: () => [
+      { role: "system", content: leading.map((message) => message.content).join("\n\n") },
     ],
+  })
+  const conversation = messages.slice(start, end + 1).map((message) => {
+    if (!isDeveloperChatMessage(message)) return message
+    return { ...message, role: "system" }
   })
   const trailing = messages.slice(end + 1).map((message) => {
     if (!isSystemChatMessage(message)) return message
@@ -1037,7 +1054,7 @@ const withHostContextUpdates = (
   })
   return HttpClientRequest.bodyJsonUnsafe(request, {
     ...body.value,
-    messages: [...head, ...messages.slice(start, end + 1), ...trailing],
+    messages: [...head, ...conversation, ...trailing],
   })
 }
 

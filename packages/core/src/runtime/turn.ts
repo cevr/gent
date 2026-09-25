@@ -59,7 +59,6 @@ import {
   Option,
   Predicate,
   Ref,
-  Result,
   Schema,
   type Scope,
   Semaphore,
@@ -148,11 +147,11 @@ import {
   ModelContextCapabilityError,
   ModelContextCapabilityFailure,
   ModelContextLedger,
-  ModelContextProjectionError,
   announcedModel,
   modelChangeNotice,
   projectContextWindow,
-  projectModelContext,
+  projectCurrentWindow,
+  type StepMeasure,
   toPrompt,
   turnNoticesText,
 } from "./model-context.js"
@@ -422,6 +421,8 @@ export interface CollectedTurnResponse {
   readonly messageProjection: TurnResponseMessages
   readonly interrupted: boolean
   readonly streamFailed: boolean
+  /** The provider refused the request as too long, before any output, and the turn may recover. */
+  readonly contextOverflow: boolean
 }
 
 const publishEventOrDie = (event: AgentEvent) =>
@@ -452,6 +453,7 @@ export const collectNormalizedResponse = (params: {
     },
     interrupted: params.interrupted,
     streamFailed: params.streamFailed,
+    contextOverflow: false,
   }
 }
 
@@ -476,9 +478,25 @@ const isObservableModelOutputPart = (part: Response.AnyPart): boolean => {
   }
 }
 
+/** What the user reads after a refusal the turn recovers from. */
+const CONTEXT_OVERFLOW_RECOVERY =
+  "the provider refused the context as too long; handing the window off and running the step again"
+
+/** What the user reads when the handed-off window is refused as well; the turn ends. */
+const CONTEXT_OVERFLOW_AGAIN =
+  "the provider refused the context as too long again after the window was handed off; the latest messages alone are longer than the model accepts"
+
+/** Text a stream failure adds to its error, and whether the turn goes on past it. */
+interface StreamFailureNote {
+  readonly text: string
+  /** The turn recovers: the error is published as a notice. */
+  readonly notice: boolean
+}
+
 /**
  * Close the step on a stream failure: log it, end the stream, and surface the
- * error. The end names the model: the step ran on it, settled or not.
+ * error. The end names the model: the step ran on it, settled or not. A
+ * `note` adds to the error; one the turn recovers from makes it a notice.
  */
 const reportStreamFailure = <E>(
   params: {
@@ -491,6 +509,7 @@ const reportStreamFailure = <E>(
   },
   streamError: E,
   message: string,
+  note: Option.Option<StreamFailureNote> = Option.none(),
 ) =>
   Effect.gen(function* () {
     yield* Effect.logWarning(message).pipe(Effect.annotateLogs({ error: String(streamError) }))
@@ -504,11 +523,21 @@ const reportStreamFailure = <E>(
         outcome: "Failed",
       }),
     )
+    const error = params.formatStreamError(streamError)
     yield* publishEventOrDie(
-      ErrorOccurred.make({
-        sessionId: params.sessionId,
-        branchId: params.branchId,
-        error: params.formatStreamError(streamError),
+      Option.match(note, {
+        onNone: () =>
+          ErrorOccurred.make({ sessionId: params.sessionId, branchId: params.branchId, error }),
+        onSome: (next) => {
+          const failure = {
+            sessionId: params.sessionId,
+            branchId: params.branchId,
+            error: `${error}; ${next.text}`,
+          }
+          // Only a recovery is a notice; a turn that ends on it stays an error.
+          if (next.notice) return ErrorOccurred.make({ ...failure, notice: true })
+          return ErrorOccurred.make(failure)
+        },
       }),
     )
   })
@@ -581,22 +610,36 @@ export const collectFailedModelTurnResponse = (params: {
   modelId: ModelIdType
   activeStream: ActiveStreamHandle
   formatStreamError: (streamError: ProviderError) => string
+  /** The provider refused the request as too long, and the turn will hand off and retry. */
+  contextOverflow: boolean
+  /** The provider refused as too long a window this turn already handed off. */
+  refusedAgain?: boolean
 }) =>
   Effect.gen(function* () {
     const interrupted = yield* wasInterrupted(params.activeStream)
+    const contextOverflow = params.contextOverflow && !interrupted
     if (!interrupted) {
+      let note = Option.none<StreamFailureNote>()
+      if (contextOverflow) note = Option.some({ text: CONTEXT_OVERFLOW_RECOVERY, notice: true })
+      else if (params.refusedAgain === true) {
+        note = Option.some({ text: CONTEXT_OVERFLOW_AGAIN, notice: false })
+      }
       yield* reportStreamFailure(
         params,
         params.streamError,
         "stream error before output, retries exhausted",
+        note,
       )
     }
 
-    return collectNormalizedResponse({
-      responseParts: [],
-      streamFailed: !interrupted,
-      interrupted,
-    })
+    return {
+      ...collectNormalizedResponse({
+        responseParts: [],
+        streamFailed: !interrupted,
+        interrupted,
+      }),
+      contextOverflow,
+    }
   })
 
 // ── turn-ledger ─────────────────────────────────────────────────────────────
@@ -1404,6 +1447,8 @@ const toolCallsFromResponseParts = (
 type ModelTurnSource = {
   /** The compaction summary written for this step, and its price when its model has one. */
   readonly compaction: Option.Option<{ readonly costUsd: Option.Option<number> }>
+  /** The chars/4 estimate of the system prompt, notices and tools this request carries. */
+  readonly overheadTokens: number
   readonly stream: Stream.Stream<Response.AnyPart, ProviderError>
   readonly formatStreamError: (streamError: ProviderError) => string
   readonly collect: <R>(
@@ -1424,6 +1469,13 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   sessionId: SessionId
   branchId: BranchId
   activeStream: ActiveStreamHandle
+  /** What the provider reported the branch's last settled step took. */
+  measure: Option.Option<StepMeasure>
+  /**
+   * The provider refused this turn's last request as too long: this step
+   * hands the window off first, and a second refusal ends the turn.
+   */
+  overflowed: boolean
 }) {
   const extensionRegistry = yield* ExtensionRegistry
   const publishEventOrDie = (event: ErrorOccurred | ProviderRetrying) =>
@@ -1515,8 +1567,14 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       }),
     })
   }
+  // The catalog's input cap binds whatever window the agent names: a provider
+  // refuses input past it however large the window is.
+  const inputLimit = Option.fromUndefinedOr(modelOption.value.inputLimit).pipe(
+    Option.filter((limit) => Number.isSafeInteger(limit) && limit > 0),
+  )
   const budget = ModelContextBudget.make({
     contextLimitTokens: contextLimit,
+    ...omitUndefined({ inputLimitTokens: Option.getOrUndefined(inputLimit) }),
     reservedSystemTokens:
       resolved.systemPrompt.reduce((sum, block) => sum + estimateTextTokens(block), 0) +
       Option.match(turnNoticesText(resolved.notices.map(({ notice }) => notice)), {
@@ -1541,17 +1599,6 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   // projection of a new turn drops whatever an earlier turn left behind.
   if (params.step <= 1) yield* ledger.discardDirective
   const directive = yield* ledger.pendingDirective
-  const project = (messages: ReadonlyArray<Message>) =>
-    Effect.gen(function* () {
-      const projection = projectModelContext(messages, budget)
-      if (Result.isFailure(projection)) {
-        return yield* new ModelContextProjectionError({
-          modelId: contextModelId,
-          failure: projection.failure,
-        })
-      }
-      return projection.success
-    })
   // Set once a summary model is admitted: from then on its call may spend
   // tokens whether or not a summary comes back.
   const summaryAdmitted = yield* Ref.make(false)
@@ -1561,8 +1608,9 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
     modelId: contextModelId,
     messages: resolved.messages,
     budget,
+    measure: params.measure,
+    overflowed: params.overflowed,
     directive,
-    project,
     persist: persistDurableMessage,
     // The summary is plain text under a small output cap. Reasoning tokens
     // count against that cap on some providers, so the summary asks for none
@@ -1593,7 +1641,12 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   const compactionCostUsd = Option.flatMap(compaction, (value) => value.costUsd)
 
   const finalWindow = messagesInCurrentWindow(durableMessages)
-  const projection = yield* project(finalWindow)
+  const projection = yield* projectCurrentWindow({
+    modelId: contextModelId,
+    messages: durableMessages,
+    budget,
+    measure: params.measure,
+  })
   const handoffMessageId = Option.getOrUndefined(currentHandoffId(finalWindow))
   yield* ledger.recordProjection({
     estimatedTokens: projection.estimatedTokens,
@@ -1648,6 +1701,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
 
   return {
     compaction,
+    overheadTokens: budget.reservedSystemTokens + budget.reservedToolTokens,
     stream: rawStream.pipe(
       Stream.mapError(
         // oxlint-disable-next-line effect/noUnknownParameters -- Model streams expose provider-specific error values.
@@ -1695,6 +1749,13 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
             modelId: resolved.modelId,
             activeStream: params.activeStream,
             formatStreamError: causeMessage,
+            // One recovery per refusal: a step that already handed off, or the
+            // last step of the budget, fails the turn as any failure does.
+            contextOverflow:
+              !params.overflowed &&
+              !params.finalStep &&
+              retryPolicy.contextOverflow(streamError.cause),
+            refusedAgain: params.overflowed && retryPolicy.contextOverflow(streamError.cause),
           }),
         ),
         Effect.tap((collected) => {
@@ -1749,8 +1810,12 @@ const computeStreamEndedCost: (params: {
  */
 const StepOutcome = Schema.TaggedUnion({
   Interrupted: {},
-  /** The stream failed; `partialOutput` says whether observable output was saved first. */
-  Failed: { partialOutput: Schema.Boolean },
+  /**
+   * The stream failed; `partialOutput` says whether observable output was saved
+   * first, `contextOverflow` that the provider refused the request as too long
+   * and the turn may hand off and retry.
+   */
+  Failed: { partialOutput: Schema.Boolean, contextOverflow: Schema.Boolean },
   /** The model asked for tools; the response parts carry them. */
   ToolCalls: { count: Schema.Int },
   /** No tool calls: an answer, nothing at all, or output cut off at the limit. */
@@ -1761,7 +1826,12 @@ type StepOutcome = Schema.Schema.Type<typeof StepOutcome>
 export const classifyStep = (collected: CollectedTurnResponse): StepOutcome => {
   const observable = collected.responseParts.some(isObservableModelOutputPart)
   if (collected.interrupted) return StepOutcome.cases.Interrupted.make({})
-  if (collected.streamFailed) return StepOutcome.cases.Failed.make({ partialOutput: observable })
+  if (collected.streamFailed) {
+    return StepOutcome.cases.Failed.make({
+      partialOutput: observable,
+      contextOverflow: collected.contextOverflow,
+    })
+  }
   const count = toolCallsFromResponseParts(collected.responseParts).length
   if (count > 0) return StepOutcome.cases.ToolCalls.make({ count })
   return StepOutcome.cases.Answered.make({
@@ -1823,6 +1893,8 @@ const StepResult = Schema.TaggedUnion({
     unanswered: Schema.Boolean,
   },
   Interaction: { outcome: TurnOutcome },
+  /** The provider refused the request as too long: the next step hands the window off first. */
+  HandOff: { currentTurnAgent: AgentName },
 })
 type StepResult = Schema.Schema.Type<typeof StepResult>
 
@@ -1880,33 +1952,75 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
      * the model the next step resolves; where the settings event sits in the
      * log does not matter. A notice counts because the model reads it on every
      * later step: a step on the new model that breaks, or a resend after an
-     * interrupt, does not need the switch announced again. The cursor only
-     * bounds the read to the events since the last one it saw; the value is
-     * always re-derived from the log.
+     * interrupt, does not need the switch announced again.
+     *
+     * The same read finds the provider's measure of the last settled step:
+     * the input on its `StreamEnded` and the overhead that request carried,
+     * tied to the reply that step stored. The projection counts the messages
+     * before that reply at that size (derived from the log, never kept beside
+     * it). A row with no recorded overhead measures nothing.
+     *
+     * The cursor only bounds the read to the events since the last one it
+     * saw; the values are always re-derived from the log.
      */
     const knownStepModel = ({ event }: EventEnvelope): Option.Option<ModelIdType> => {
       if (event._tag === "StreamEnded") return Option.fromUndefinedOr(event.model)
       if (event._tag === "MessageReceived") return announcedModel(event.message)
       return Option.none()
     }
-    const lastKnownStep = yield* Ref.make<{
+    const knownStepMeasure = ({ event }: EventEnvelope): Option.Option<StepMeasure> => {
+      if (event._tag !== "StreamEnded") return Option.none()
+      return Option.all([
+        Option.fromUndefinedOr(event.messageId),
+        Option.fromUndefinedOr(event.step),
+        Option.fromUndefinedOr(event.usage),
+        Option.fromUndefinedOr(event.requestOverheadTokens),
+      ]).pipe(
+        Option.map(([messageId, step, usage, overheadTokens]) => ({
+          replyId: stepAddress(messageId, step).assistant,
+          inputTokens: usage.inputTokens,
+          overheadTokens,
+        })),
+      )
+    }
+    interface KnownSteps {
       readonly cursor: number
       readonly model: Option.Option<ModelIdType>
-    }>({ cursor: 0, model: Option.none() })
-    const lastKnownModel = Effect.gen(function* () {
+      readonly measure: Option.Option<StepMeasure>
+    }
+    const lastKnownStep = yield* Ref.make<KnownSteps>({
+      cursor: 0,
+      model: Option.none(),
+      measure: Option.none(),
+    })
+    const newest = <A>(
+      events: ReadonlyArray<EventEnvelope>,
+      read: (envelope: EventEnvelope) => Option.Option<A>,
+      otherwise: Option.Option<A>,
+    ): Option.Option<A> => {
+      const index = events.findLastIndex((envelope) => Option.isSome(read(envelope)))
+      return Option.match(Option.fromUndefinedOr(events[index]), {
+        onNone: () => otherwise,
+        onSome: read,
+      })
+    }
+    const readKnownSteps = Effect.gen(function* () {
       const known = yield* Ref.get(lastKnownStep)
       const events = yield* eventStorage.listEvents({
         sessionId: scope.sessionId,
         branchId: scope.branchId,
         afterId: known.cursor,
       })
-      const knownIndex = events.findLastIndex((envelope) => Option.isSome(knownStepModel(envelope)))
-      const current = Option.match(Option.fromUndefinedOr(events[knownIndex]), {
-        onNone: () => known,
-        onSome: (envelope) => ({ cursor: envelope.id, model: knownStepModel(envelope) }),
-      })
+      const current: KnownSteps = {
+        cursor: Option.match(Option.fromUndefinedOr(events.at(-1)), {
+          onNone: () => known.cursor,
+          onSome: (envelope) => envelope.id,
+        }),
+        model: newest(events, knownStepModel, known.model),
+        measure: newest(events, knownStepMeasure, known.measure),
+      }
       yield* Ref.set(lastKnownStep, current)
-      return current.model
+      return current
     })
     const clearProcessLocalReplayBindings = (assistantMessageId: string) =>
       processLocalReplay.clearBindingsWithPrefix(
@@ -2244,6 +2358,8 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       finalStep: boolean
       resolved: ResolvedTurnContext
       activeStream: ActiveStreamHandle
+      measure: Option.Option<StepMeasure>
+      overflowed: boolean
     }) {
       const persistAssistantPartsWithBindingsAt = (
         at: StepAddress,
@@ -2289,6 +2405,8 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         sessionId: scope.sessionId,
         branchId: scope.branchId,
         activeStream: params.activeStream,
+        measure: params.measure,
+        overflowed: params.overflowed,
       })
       if (Option.isSome(source.compaction))
         yield* scope.turnLedger.noteCompaction(source.compaction.value.costUsd)
@@ -2348,6 +2466,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             sessionId: scope.sessionId,
             branchId: scope.branchId,
             usage: collected.messageProjection.usage,
+            requestOverheadTokens: source.overheadTokens,
             model: params.resolved.modelId,
             costUsd: Option.getOrUndefined(streamEndedCost),
             pricedModel,
@@ -3078,6 +3197,8 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       readonly step: number
       readonly currentTurnAgent: AgentNameType
       readonly turnProfile: AgentLoopTurnProfile
+      /** The provider refused the last step as too long; this one hands the window off first. */
+      readonly overflowed: boolean
     }) {
       const resolvedAtBoundary = yield* resolveForState(params.state, params.turnProfile)
       // `resolveTurnContext` published `ErrorOccurred` and gave up — an unknown
@@ -3099,14 +3220,15 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       })
       // A `/model` switch lands here, never between a tool call and its
       // result: the settings writer only records the choice.
-      const previousModel = yield* lastKnownModel.pipe(
+      const knownSteps = yield* readKnownSteps.pipe(
         Effect.catch((cause) =>
           Effect.logWarning("turn.model-change-read-failed").pipe(
             Effect.annotateLogs({ error: String(cause) }),
-            Effect.as(Option.none<ModelIdType>()),
+            Effect.as({ model: Option.none<ModelIdType>(), measure: Option.none<StepMeasure>() }),
           ),
         ),
       )
+      const previousModel = knownSteps.model
       if (Option.isSome(previousModel) && previousModel.value !== resolved.modelId) {
         yield* appendBoundaryLine(
           modelChangeNotice({
@@ -3178,6 +3300,8 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             finalStep,
             resolved,
             activeStream,
+            measure: knownSteps.measure,
+            overflowed: params.overflowed,
           })
         }).pipe(Effect.ensuring(Ref.set(scope.activeStreamRef, Option.none()))),
       )
@@ -3242,7 +3366,12 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       return yield* Match.type<StepOutcome>().pipe(
         Match.tagsExhaustive({
           Interrupted: () => Effect.succeed(stop({ interrupted: true })),
-          Failed: ({ partialOutput }) => {
+          Failed: ({ partialOutput, contextOverflow }) => {
+            // Refused as too long before any output: the same window would be
+            // refused again, so the next step hands it off first.
+            if (contextOverflow) {
+              return Effect.succeed(StepResult.cases.HandOff.make({ currentTurnAgent }))
+            }
             if (!partialOutput) return Effect.succeed(stop({ streamFailed: true }))
             return continueOr(CONTINUATION_INSTRUCTION, stop({ streamFailed: true }))
           },
@@ -3310,17 +3439,30 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
        * Returns the `Stop` that ends the turn, or the `Interaction` that
        * suspends it. Everything `finalizeTurn` needs already rides on `Stop`,
        * so the loop hands that value up instead of unpacking it into flags.
+       *
+       * A step the provider refused as too long is run again after a handoff
+       * (`HandOff`); the step after it that settles clears the mark, so each
+       * refusal gets one recovery and a refusal of the handed-off window ends
+       * the turn.
        */
       const runSteps = Effect.fn("AgentLoop.runSteps")(function* (from: number) {
         let step = from
         let agent = turnAgent
+        let overflowed = false
         while (true) {
           step++
           if (yield* scope.turnInterruption.interrupted) {
             return endStep(agent, { interrupted: true })
           }
-          const result = yield* runTurnStep({ state, step, currentTurnAgent: agent, turnProfile })
-          if (result._tag !== "Continue") return result
+          const result: StepResult = yield* runTurnStep({
+            state,
+            step,
+            currentTurnAgent: agent,
+            turnProfile,
+            overflowed,
+          })
+          overflowed = result._tag === "HandOff"
+          if (result._tag !== "Continue" && result._tag !== "HandOff") return result
           agent = result.currentTurnAgent
         }
       })

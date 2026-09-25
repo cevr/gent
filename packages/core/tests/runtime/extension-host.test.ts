@@ -182,7 +182,9 @@ const ambientContext = Effect.gen(function* () {
     host: testHostFacts().host,
   })
   return provider.forRun({ sessionId, branchId, interactive: true, clientRequest: Option.none() })
-}).pipe(Effect.provide(RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" })))
+}).pipe(
+  Effect.provide(RuntimeEnvironment.Live({ cwd: "/tmp", home: "/nonexistent/gent-test-home" })),
+)
 
 describe("ambient extension host context", () => {
   it.live("assembles with no host services in scope", () =>
@@ -1368,7 +1370,7 @@ describe("resolveTurnProfile", () => {
     Effect.gen(function* () {
       const runtimeEnvironmentLayer = RuntimeEnvironment.Live({
         cwd: "/tmp/runtime-context-default",
-        home: "/tmp/runtime-context-home",
+        home: "/nonexistent/runtime-context-home",
       })
       const defaults: TurnProfileDefaults = {
         baseSections: [{ id: "default", content: "Default", priority: 1 }],
@@ -1400,7 +1402,7 @@ describe("resolveTurnProfile", () => {
     Effect.gen(function* () {
       const runtimeEnvironmentLayer = RuntimeEnvironment.Live({
         cwd: "/tmp/runtime-context-fail",
-        home: "/tmp/runtime-context-home",
+        home: "/nonexistent/runtime-context-home",
       })
       const testLayer = Layer.mergeAll(
         testSqliteStorage(() => Layer.empty, {}),
@@ -1452,7 +1454,7 @@ describe("resolveTurnProfile", () => {
       ])
       const runtimeEnvironmentLayer = RuntimeEnvironment.Live({
         cwd: "/tmp/runtime-context-default",
-        home: "/tmp/runtime-context-home",
+        home: "/nonexistent/runtime-context-home",
       })
       const testLayer = Layer.mergeAll(
         testSqliteStorage(() => Layer.empty, {}),
@@ -1744,7 +1746,7 @@ describe("extension activation isolation", () => {
       const result = yield* setupExtensions({
         extensions: [good, bad].map(builtin),
         cwd: "/tmp",
-        home: "/tmp",
+        home: "/nonexistent/gent-test-home",
         disabled: new Set(),
       })
 
@@ -1762,7 +1764,7 @@ describe("extension activation isolation", () => {
       const result = yield* setupExtensions({
         extensions: [builtin(extension)],
         cwd: "/tmp",
-        home: "/tmp",
+        home: "/nonexistent/gent-test-home",
         disabled: new Set(),
       })
       expect(result.active[0]?.artifactIdentity).toBeUndefined()
@@ -1785,7 +1787,7 @@ describe("extension activation isolation", () => {
           },
         ],
         cwd: "/tmp",
-        home: "/tmp",
+        home: "/nonexistent/gent-test-home",
         disabled: new Set(),
       })
 
@@ -1976,7 +1978,7 @@ describe("extension activation isolation", () => {
           ),
         ],
         cwd: "/tmp",
-        home: "/tmp",
+        home: "/nonexistent/gent-test-home",
         disabled: new Set(),
       })
 
@@ -2008,7 +2010,7 @@ describe("extension activation isolation", () => {
           makeBuiltin("blank-desc", Effect.succeed({ tools: [rawToolLeaf("blanky", "   \t\n")] })),
         ].map(builtin),
         cwd: "/tmp",
-        home: "/tmp",
+        home: "/nonexistent/gent-test-home",
         disabled: new Set(),
       })
 
@@ -2047,7 +2049,7 @@ describe("extension activation isolation", () => {
           ),
         ].map(builtin),
         cwd: "/tmp",
-        home: "/tmp",
+        home: "/nonexistent/gent-test-home",
         disabled: new Set(),
       })
 
@@ -2075,7 +2077,7 @@ describe("extension activation isolation", () => {
           builtin(makeBuiltin("rpc-no-desc", Effect.succeed({ requests: [undescribedRequest] }))),
         ],
         cwd: "/tmp",
-        home: "/tmp",
+        home: "/nonexistent/gent-test-home",
         disabled: new Set(),
       })
 
@@ -2262,7 +2264,7 @@ describe("setup platform services", () => {
       const result = yield* setupExtensions({
         extensions: [{ extension: cryptoSetupExtension, scope: "user", sourcePath: "/tmp/c.ts" }],
         cwd: "/tmp",
-        home: "/tmp",
+        home: "/nonexistent/gent-test-home",
         disabled: new Set(),
       })
       expect(result.failed).toEqual([])
@@ -3016,7 +3018,7 @@ describe("host session facet", () => {
       Effect.provide(
         Layer.merge(
           testSqliteStorage(noBranchTools.storage, noBranchTools.migrations),
-          RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
+          RuntimeEnvironment.Live({ cwd: "/tmp", home: "/nonexistent/gent-test-home" }),
         ),
       ),
     ),
@@ -3097,7 +3099,7 @@ describe("client request origin", () => {
       Effect.provide(
         Layer.merge(
           testSqliteStorage(noBranchTools.storage, noBranchTools.migrations),
-          RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
+          RuntimeEnvironment.Live({ cwd: "/tmp", home: "/nonexistent/gent-test-home" }),
         ),
       ),
     ),
@@ -3441,12 +3443,12 @@ export default { manifest: { id: "home-user" }, setup: Effect.void };`,
           sourcePath: "/tmp/raw-setup.ts",
         },
         "/tmp/project-cwd",
-        "/tmp/home-dir",
+        "/nonexistent/home-dir",
       )
 
       // Loader-built narrowed shape is observable from raw setup
       expect(captured.cwd).toBe("/tmp/project-cwd")
-      expect(captured.home).toBe("/tmp/home-dir")
+      expect(captured.home).toBe("/nonexistent/home-dir")
       // Public host facts strip read/write authority; only narrowed facts remain
       expect(captured.hasReadAuthority).toBe(false)
     }).pipe(Effect.provide(fsLayer)),
@@ -4811,7 +4813,7 @@ const makeMutationsLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageMod
     ExtensionRegistry.fromResolved(resolvedExtensions),
     ToolRunner.Test(),
     ApprovalService.Test(),
-    RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
+    RuntimeEnvironment.Live({ cwd: "/tmp", home: "/nonexistent/gent-test-home" }),
     ConfigService.Test(),
     BunServices.layer,
     ModelRegistry.Test(),
@@ -5195,7 +5197,7 @@ const hookCtx = {
     sessionId: SessionId.make("s"),
     branchId: BranchId.make("b"),
     cwd: "/tmp",
-    home: "/tmp",
+    home: "/nonexistent/gent-test-home",
   }),
 }
 
@@ -5566,7 +5568,7 @@ describe("live Profile", () => {
 
         yield* openProfile({
           cwd: "/tmp",
-          home: "/tmp",
+          home: "/nonexistent/gent-test-home",
           platform: "darwin",
           extensions: [extension],
         })
@@ -5626,7 +5628,7 @@ describe("live Profile", () => {
           Effect.gen(function* () {
             const runtime = yield* openProfile({
               cwd: "/tmp",
-              home: "/tmp",
+              home: "/nonexistent/gent-test-home",
               platform: "darwin",
               extensions: [extension],
             })
@@ -5643,7 +5645,7 @@ describe("live Profile", () => {
                 sessionId: SessionId.make("s"),
                 branchId: BranchId.make("b"),
                 cwd: "/tmp",
-                home: "/tmp",
+                home: "/nonexistent/gent-test-home",
               }),
             }
 
@@ -5724,7 +5726,7 @@ describe("live Profile", () => {
         ]) {
           const runtime = yield* openProfile({
             cwd: "/tmp",
-            home: "/tmp",
+            home: "/nonexistent/gent-test-home",
             platform: "darwin",
             extensions,
           })
@@ -5740,7 +5742,7 @@ describe("live Profile", () => {
       Effect.gen(function* () {
         const { layerContext } = yield* openProfile({
           cwd: "/tmp",
-          home: "/tmp",
+          home: "/nonexistent/gent-test-home",
           platform: "darwin",
           extensions: [dynamicExtension],
         })
@@ -5758,7 +5760,7 @@ describe("live Profile", () => {
             sessionId: SessionId.make("s"),
             branchId: BranchId.make("b"),
             cwd: "/tmp",
-            home: "/tmp",
+            home: "/nonexistent/gent-test-home",
           }),
         }
         const result = yield* registryService

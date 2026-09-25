@@ -156,11 +156,8 @@ export type SkillEntry = typeof SkillEntry.Type
 
 // Skills Service Interface
 //
-// `Skills` is a read-only surface — it exposes the loaded skill set
-// (`list`) but no reload/refresh path. Skill loading runs once
-// in the Live layer's setup; if a runtime reload becomes a real need
-// later it should arrive as an admin `request` capability or a fresh
-// resource start, not a method on the read interface.
+// `Skills` is a read-only surface: it exposes the skill set the Live layer
+// loads once, at setup, and has no reload.
 
 interface SkillsService {
   readonly list: Effect.Effect<ReadonlyArray<SkillEntry>>
@@ -172,11 +169,7 @@ export class Skills extends Context.Service<Skills, SkillsService>()(
   static Live = (options: {
     cwd: string
     home: string
-  }): Layer.Layer<
-    Skills,
-    PlatformError.PlatformError,
-    FileSystem.FileSystem | Path.Path | Crypto.Crypto
-  > =>
+  }): Layer.Layer<Skills, never, FileSystem.FileSystem | Path.Path | Crypto.Crypto> =>
     Layer.effect(
       Skills,
       Effect.gen(function* () {
@@ -185,14 +178,16 @@ export class Skills extends Context.Service<Skills, SkillsService>()(
 
         // A skills dir is user-owned and shared across workspaces: one
         // dangling link or unreadable file must not fail the branch loop.
-        // Each failing path is skipped with a warning.
+        // Neither does an unwritable bundle cache or an unreadable ancestor
+        // of the working directory. Each failing path is skipped with a
+        // warning.
         const skipOnError =
           (target: string) =>
-          <A>(effect: Effect.Effect<A, PlatformError.PlatformError>) =>
+          <A, R>(effect: Effect.Effect<A, PlatformError.PlatformError, R>) =>
             effect.pipe(
               Effect.asSome,
               Effect.catch((error) =>
-                Effect.logWarning("skills: skipped unreadable path").pipe(
+                Effect.logWarning("skills: skipped a failing path").pipe(
                   Effect.annotateLogs({ path: target, error: String(error) }),
                   Effect.as(Option.none<A>()),
                 ),
@@ -234,7 +229,7 @@ export class Skills extends Context.Service<Skills, SkillsService>()(
             return result
           })
 
-        // Find git root by walking up from cwd
+        // Find git root by walking up from cwd; a failed walk stops at cwd.
         const findGitRoot = Effect.gen(function* () {
           let dir = options.cwd
           while (true) {
@@ -266,15 +261,21 @@ export class Skills extends Context.Service<Skills, SkillsService>()(
 
         const loadAllSkills = Effect.gen(function* () {
           // ── Global sources ──
+          const bundled = yield* installBundledSkills(options.home).pipe(
+            skipOnError(path.join(options.home, ".cache", "gent", "skills")),
+          )
           const globalDirs = [
             ...SKILL_DIRS.map((d) => path.join(options.home, d)),
-            yield* installBundledSkills(options.home),
+            ...Option.toArray(bundled),
           ]
 
           // ── Local sources ──
           // Walk from cwd up to git root, collecting skill dirs at each ancestor.
           // Closest to cwd wins dedup within local level.
-          const gitRoot = yield* findGitRoot
+          const gitRoot = yield* findGitRoot.pipe(
+            skipOnError(options.cwd),
+            Effect.map(Option.flatten),
+          )
           const stopAt = Option.getOrElse(gitRoot, () => options.cwd)
 
           // A local dir that is also a global dir (a session in the home
@@ -493,14 +494,13 @@ export const SkillsRpc = defineRequests(SKILLS_EXTENSION_ID, {
 // ── extension ───────────────────────────────────────────────────────────────
 
 /**
- * @gent/skills extension — exposes user/project skills (`.md` files
- * under `~/.claude/skills/` and `<cwd>/.claude/skills/`) to agents.
+ * @gent/skills extension: exposes user and project skills (`.md` files under
+ * the `SKILL_DIRS` of the home directory and of each directory from the
+ * working directory up to its git root) and the bundled skills to agents.
  *
- * The Skills service is branch-scoped. Skills are read from disk once per
- * branch and never reload (`skills.ts`), so branch lifetime is the honest
- * lifetime: a new branch picks up skills added since, and nothing outlives
- * the loop that read them. Request RPCs and the turn projection read it
- * directly; no actor mirror is needed.
+ * The Skills service is branch-scoped: skills are read from disk once per
+ * branch, so a new branch picks up skills added since. Request RPCs and the
+ * turn projection read it directly.
  */
 
 // ── Extension ──

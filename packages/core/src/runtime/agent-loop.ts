@@ -1191,19 +1191,15 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
     Effect.ignore,
   )
 
-  /** True when the turn `messageId` opened runs and an interrupt already stops it. */
-  const stopping = Effect.fn("AgentLoop.stopping")(function* (messageId: MessageId) {
+  /** The running turn's stop latch, read once; none when no turn runs. */
+  const stopLatch = Effect.fn("AgentLoop.stopLatch")(function* () {
     const snap = yield* scope.inbox.phase
-    if (snap._tag === "Idle") return false
-    if (snap.message.id !== messageId) return false
-    return yield* scope.turnInterruption.interrupted
-  })
-
-  /** True when a turn runs and the stop that first latched it came from requester `by`. */
-  const stoppingFor = Effect.fn("AgentLoop.stoppingFor")(function* (by: string) {
-    const snap = yield* scope.inbox.phase
-    if (snap._tag === "Idle") return false
-    return Option.contains(yield* scope.turnInterruption.stoppedFor, by)
+    if (snap._tag === "Idle") return Option.none<StopLatch>()
+    return Option.some<StopLatch>({
+      messageId: snap.message.id,
+      stopped: yield* scope.turnInterruption.interrupted,
+      by: yield* scope.turnInterruption.stoppedFor,
+    })
   })
 
   /**
@@ -1364,8 +1360,7 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
     admitAndStart,
     interruptActiveStream: interruptActiveStream(scope.activeStreamRef),
     interrupt,
-    stopping,
-    stoppingFor,
+    stopLatch,
     respondInteraction,
     withdrawAdmittedTurn,
     withSideMutation: <A, E, R2>(effect: Effect.Effect<A, E, R2>): Effect.Effect<A, E, R2> =>
@@ -1447,10 +1442,8 @@ type AgentLoopBehavior = {
   ) => Effect.Effect<Option.Option<RunningState>, AgentLoopError | FollowUpQueueFull>
   /** `by` names the stop's requester; the first interrupt of a turn records it. */
   interrupt: (messageId?: MessageId, by?: string) => Effect.Effect<boolean, AgentLoopError>
-  /** True when the turn `messageId` opened runs and an interrupt already stops it. */
-  stopping: (messageId: MessageId) => Effect.Effect<boolean>
-  /** True when a turn runs and the stop that first latched it came from requester `by`. */
-  stoppingFor: (by: string) => Effect.Effect<boolean>
+  /** The running turn's stop latch, read once; none when no turn runs. */
+  stopLatch: () => Effect.Effect<Option.Option<StopLatch>>
   respondInteraction: (requestId: InteractionRequestId) => Effect.Effect<void, AgentLoopError>
   withSideMutation: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
   /** Mark the per-entity behavior ready to accept state mutations. */
@@ -2006,8 +1999,7 @@ const makeAgentLoopBehavior = (
       startNextIfIdle: worker.startNextIfIdle,
       admitAndStart: worker.admitAndStart,
       interrupt: worker.interrupt,
-      stopping: worker.stopping,
-      stoppingFor: worker.stoppingFor,
+      stopLatch: worker.stopLatch,
       respondInteraction: worker.respondInteraction,
       withSideMutation: worker.withSideMutation,
       start,
@@ -2039,13 +2031,12 @@ const makeAgentLoopBehavior = (
  * embedded payload IS the authority. Ops with no embedded payload
  * (`RespondInteraction` and the branch commands) carry explicit target fields.
  *
- * **Execution id key** per op:
- * - `Submit` — `message.id` (live-only)
- * - `SubmitAndWait` — `message.id` (live-only; the reply waits for the turn)
- * - `SubmitDurable` — `message.id` (persisted; actor owns request idempotency)
- * - `QueueFollowUp` — `message.id` (live-only)
- * - `Steer` — `commandId` (persisted; actor owns request idempotency)
- * - `RespondInteraction` — `requestId` (persisted)
+ * **Execution id key** per op: the `AgentLoop` entity in
+ * `domain/agent-loop.ts` names each op's key and whether it is persisted.
+ * A message-carrying op (`Submit`, `SubmitAndWait`, `SubmitDurable`,
+ * `QueueFollowUp`) keys by `message.id` through `messageTarget`. Every
+ * branch command keys by `commandId` through `branchTarget`; `Steer` keys
+ * by `commandId` too, and `RespondInteraction` by `requestId`.
  *
  * Schemas reuse gent's existing domain (`Message`, `RunSpec`,
  * `SteerCommand`) rather than introducing a parallel envelope shape.
@@ -2053,22 +2044,17 @@ const makeAgentLoopBehavior = (
  * @module
  */
 
+/** The running turn's stop latch: its message, whether a stop latched, and who asked first. */
+interface StopLatch {
+  readonly messageId: MessageId
+  readonly stopped: boolean
+  readonly by: Option.Option<string>
+}
+
 const isActiveLoopState = Predicate.or(
   Predicate.isTagged("Running"),
   Predicate.isTagged("WaitingForInteraction"),
 )
-
-/**
- * When a turn is finished, told from the outside.
- *
- * A turn is over when the loop no longer holds its message: not starting it,
- * not running it, not waiting on it, and not keeping it queued. That is read
- * off the loop's own state, so no event subscription can miss it. Failure is
- * a monotonic counter (`turnFailure.epoch`); a caller records where it stood
- * before starting the turn (`waitBaseline`). A later mark that names
- * the caller's message is this turn's failure; a mark for another message is
- * not.
- */
 
 const BehaviorHandle = Schema.declare<AgentLoopBehavior>((value): value is AgentLoopBehavior =>
   Predicate.hasProperty(value, "awaitExit"),
@@ -2179,6 +2165,13 @@ const waitBaseline = (behavior: AgentLoopBehavior): Effect.Effect<WaitBaseline> 
 
 /**
  * Wait until the loop has released `messageId`, started after `baseline`.
+ *
+ * A turn is over when the loop no longer holds its message: not starting it,
+ * not running it, not waiting on it, and not keeping it queued. That is read
+ * off the loop's own state, so no event subscription can miss it. Failure is
+ * a monotonic counter (`turnFailure.epoch`); a caller records where it stood
+ * before starting the turn (`waitBaseline`). A later mark that names the
+ * caller's message is this turn's failure; a mark for another message is not.
  *
  * It ends three ways, and all three end the wait: the loop lets the message
  * go (its own turn ran, or it left the queue unrun), the turn fails, or
@@ -2852,17 +2845,18 @@ const buildAgentLoopActorHandlers = (config: {
       const by = Option.map(requester, stopRequesterKey)
       // Read before the cancellation is recorded: a turn that starts after
       // the record latches itself, and that latch is this stop's.
-      const open = lifecycleHandle(yield* Ref.get(lifecycleRef))
-      const alreadyStopping = yield* Option.match(open, {
-        onNone: () => Effect.succeed(false),
-        onSome: (loop) => loop.stopping(messageId),
+      const latch = yield* Option.match(lifecycleHandle(yield* Ref.get(lifecycleRef)), {
+        onNone: () => Effect.succeed(Option.none<StopLatch>()),
+        onSome: (loop) => loop.stopLatch(),
       })
-      const requesterStopsTurn = yield* Option.match(
-        Option.zipWith(open, by, (loop, key) => ({ loop, key })),
-        {
-          onNone: () => Effect.succeed(false),
-          onSome: ({ loop, key }) => loop.stoppingFor(key),
-        },
+      // An interrupt already stops the turn this message opened.
+      const alreadyStopping = Option.exists(
+        latch,
+        (turn) => turn.messageId === messageId && turn.stopped,
+      )
+      // The stop that first latched the running turn came from this requester.
+      const requesterStopsTurn = Option.exists(latch, (turn) =>
+        Option.exists(by, (key) => Option.contains(turn.by, key)),
       )
       yield* operations
         .cancelTurn({ sessionId, branchId, messageId })

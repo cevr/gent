@@ -6,7 +6,7 @@ Building gent - minimal, opinionated agent harness (built with Effect).
 
 ```bash
 bun install
-bun run typecheck  # patched TypeScript 7 + Effect diagnostics, must pass clean; also compiles the docs/extensions.md code blocks
+bun run typecheck  # patched TypeScript 7 + Effect diagnostics, must pass clean; also compiles the ts and tsx blocks of the steering docs
 bun run lint       # oxlint (gent rules + type-aware lints), the guards (`bun run guards`), and the lint-offs probe (`bun run lint:offs`)
 bun run test       # Gate tests. NOT bare `bun test` (picks up flaky e2e)
 bun run smoke      # Headless mode smoke test
@@ -48,7 +48,7 @@ bun run --cwd apps/tui dev sessions
 - **Bun peer deps** - Bun resolves to minimum version; can cause version mismatches with @effect packages.
 - **No `any` casts** - oxlint enforces. Causes type drift bugs. Import the owning type instead of redeclaring it.
 - **Package boundary imports** - Use `@gent/core/extensions/api` for extension authoring. Use `@gent/core/protocol` for shared client schemas, projections, and RPC types. Use `@gent/core/host` for what a host composes (platform, config loader, storage, workspace headers, server root, the scripted model). Use `@gent/core/test-utils` in tests only; product code never imports it. Each entry re-exports only names with a real consumer; a `host` name needs a product caller, so a name only tests read belongs in `test-utils`. A test outside core arranges host state through `test-utils` operations (`captureTurnTools`, `runtimeHostContext`, `plantToolCallBinding`, `plantInFlightTurn`, `recordInteractionDecision`, `storedEvents`, `staticToolBinding`), never through core's own Tags, and never imports `packages/core/src/` by relative path. Core implementation tests import their owning `packages/core/src/` modules by relative path. Files inside `packages/core/src/` also use relative imports.
-- **Extension authority** - Extension leaves receive input/event params only. Use `const ctx = yield* ExtensionContext` for host facades (`Session`, `Interaction`, `FileLock`, `State`) and extension-owned service Tags for private state. Files, paths, processes, and ids come from the Effect platform services (`FileSystem`, `Path`, `ChildProcessSpawner`, `Crypto`), with `runProcess` for commands, `path.resolve(ctx.cwd, p)` for relative paths, and `writeFileAtomic` (`packages/core/src/runtime/gent-platform.ts`, exported from `@gent/core/extensions/api` and `@gent/core/host`) for atomic writes; no facet duplicates an Effect platform service. Shipped extensions never import core internals such as `FileLockService` or `EventStore` — yield the matching `ExtensionContext` facet instead. Every facade verb is uniform: any extension that can yield `ExtensionContext` gets it, including the addressed `Session` verbs (`create`, `send` with its `delivery` mode `turn`/`queue`/`steer`, `stop`, `events`, `delete`, `dequeueFollowUp`). Do not add ctx parameters, read/write/capability grants, or privileged builtin registries; a shipped extension is never more privileged than a user extension (the `gent/core-entry-boundary` oxlint rule in `packages/tooling/src/gent-rules.ts` enforces the import side).
+- **Extension authority** - Extension leaves receive input/event params only. Use `const ctx = yield* ExtensionContext` for host facades (`Session`, `Interaction`, `FileLock`, `State`) and extension-owned service Tags for private state. Files, paths, processes, and ids come from the Effect platform services (`FileSystem`, `Path`, `ChildProcessSpawner`, `Crypto`), with `runProcess` for commands, `path.resolve(ctx.cwd, p)` for relative paths, and `writeFileAtomic` (`packages/core/src/runtime/gent-platform.ts`, exported from `@gent/core/extensions/api` and `@gent/core/host`) for atomic writes; no facet duplicates an Effect platform service. Shipped extensions never import core internals such as `FileLockService` or `EventStore` — yield the matching `ExtensionContext` facet instead. Every facade verb is uniform: any extension that can yield `ExtensionContext` gets it, including every verb of the `Session` facet (`ExtensionSessionService` in `packages/core/src/domain/extension.ts`), such as `send` with its `delivery` mode `turn`/`queue`/`steer`. Do not add ctx parameters, read/write/capability grants, or privileged builtin registries; a shipped extension is never more privileged than a user extension (the `gent/core-entry-boundary` oxlint rule in `packages/tooling/src/gent-rules.ts` enforces the import side).
 - **No self-imports** - Inside `packages/core/src/`, always use relative imports. Never `@gent/core/*`.
 - **Effect.fn recursive** - For recursive generators, annotate variable type: `const fn: (...) => Effect<A,E,R> = Effect.fn(...)`
 - **Wide event boundaries** - `WideEvent.set()` requires a `withWideEvent` boundary in scope. Import `WideEvent`, `WideEventBoundary`, and `withWideEvent` from `effect-wide-event` directly.
@@ -131,21 +131,38 @@ New extension tests should include at least one RPC acceptance test via `createR
 ### Test layers
 
 ```typescript
-// Sequence provider for deterministic LLM responses
-const { layer: providerLayer, controls } =
-  yield * LanguageModelLayers.sequence([toolCallStep("echo", { text: "hello" }), textStep("Done.")])
+import { Effect } from "effect"
+import {
+  baseLocalLayer,
+  createRpcHarness,
+  LanguageModelLayers,
+  testAgent,
+  testTurnExtension,
+  textStep,
+  toolCallStep,
+} from "@gent/core/test-utils"
 
 // Full in-process stack (real services, event store, and storage)
-import { baseLocalLayer } from "@gent/core/test-utils"
-const layer = baseLocalLayer()
+export const layer = baseLocalLayer({ agents: [testAgent] })
 
-// RPC acceptance harness (real per-request scopes)
-import { createRpcHarness } from "@gent/core/test-utils"
-const { client, sessionId, branchId } = yield * createRpcHarness({ providerLayer, extensions })
-
-// Sequence recording for event assertions (core tests, relative import)
-import { RecordingEventStore, SequenceRecorder } from "../../src/test-utils/harness"
+export const acceptance = Effect.gen(function* () {
+  // Sequence provider for deterministic LLM responses
+  const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+    toolCallStep("echo", { text: "hello" }),
+    textStep("Done."),
+  ])
+  // RPC acceptance harness (real per-request scopes)
+  const { client, sessionId, branchId } = yield* createRpcHarness({
+    agents: [testAgent],
+    extensionInputs: [testTurnExtension],
+    providerLayer,
+  })
+  yield* client.message.send({ sessionId, branchId, content: "hi" })
+  yield* controls.assertDone
+})
 ```
+
+Core tests record the event sequence for assertions with `RecordingEventStore` and `SequenceRecorder`, imported by relative path from `packages/core/src/test-utils/harness.ts`.
 
 ## Key Files
 

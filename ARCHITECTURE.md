@@ -112,7 +112,20 @@ updates this list in the same commit.
     When the newest turn alone overflows, the handoff anchors inside the turn
     at a step boundary and keeps the newest steps that fit half the budget.
     A summary that cannot be produced degrades to truncation with a visible
-    notice. Receipts: `packages/core/src/runtime/model-context.ts`,
+    notice. The budget is the smaller of the model's input cap
+    (`Model.inputLimit`, from models.dev `limit.input`) and its window less
+    the output reserve. The estimate is chars/4. When the last step's reply is
+    still in the window, the messages before that reply count at least as much
+    as that step's reported input, less the system and tool size its own
+    request carried (`StreamEnded.requestOverheadTokens`). Its output never
+    counts.
+    A request the provider refuses as too long (`RetryPolicy.contextOverflow`,
+    one pattern list in `packages/core/src/domain/driver.ts`; the byte cap
+    `request_too_large` is not an overflow) hands the window off once and runs
+    the step again. The step drops the history, or the summary of an earlier
+    handoff when nothing else is left. A second refusal fails the turn with an
+    error that says so.
+    Receipts: `packages/core/src/runtime/model-context.ts`,
     `packages/core/src/runtime/turn.ts`,
     `packages/extensions/src/compaction.ts`.
 

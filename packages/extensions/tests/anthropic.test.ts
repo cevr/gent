@@ -80,7 +80,7 @@ const testPlatformLayer = Layer.succeed(
   AnthropicPlatform,
   AnthropicPlatform.of({
     platform: "darwin",
-    home: "/tmp/gent-test-home",
+    home: "/nonexistent/gent-test-home",
     env: {},
   }),
 )
@@ -1707,7 +1707,7 @@ describe("AnthropicPlatform.fromSetup", () => {
 const FUTURE_MS = 1_800_000_000_000
 const testPlatform = AnthropicPlatform.of({
   platform: "darwin",
-  home: "/tmp/gent-test-home",
+  home: "/nonexistent/gent-test-home",
   env: {},
 })
 /** The driver's services as setup captures them: the running platform, its crypto, and the Claude Code facts. */

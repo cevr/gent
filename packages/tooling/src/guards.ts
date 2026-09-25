@@ -882,6 +882,90 @@ export const findRepoTempDirectories = (file: string, text: string): ReadonlyArr
     .map((index) => ({ file, line: index + 1, message: TEMP_IN_REPO_MESSAGE }))
 }
 
+/**
+ * Guard: a test's home or data directory is its own.
+ *
+ * A fixed path under the shared temp root (`/tmp`, `/var/tmp`,
+ * `/private/tmp`, `/dev/shm`, or `tmpdir()` itself) given as a test's home or
+ * data directory is shared by every run and every parallel gate: what one
+ * test writes there (prompt history, goal and wake files, a skills cache),
+ * the next one reads, so a result depends on run order. Reported in test code
+ * outside the tooling package, at a `home`, `HOME`, `homeDir`,
+ * `homeDirectory`, `dataDir` or `GENT_DATA_DIR` name given a value with `:` or
+ * `=`. The value is read as an expression, not as the rest of the line: it
+ * may start on the next line, and it ends at a `,`, `;`, closing bracket or
+ * line end outside its own brackets, strings and template interpolations, so
+ * a sibling property's `/tmp` is not its value. The value is shared when it
+ * names such a path in a string or template (`"/tmp/case"`,
+ * `path.join("/tmp", "case")`) or calls `tmpdir()` (`` `${tmpdir()}/case` ``,
+ * `Path.join(tmpdir(), "case")`), unless it makes a unique directory
+ * (`mkdtemp*`, `makeTempDirectory*`). That reads a property, a JSX attribute,
+ * a binding, a parameter default (`home: string = "/tmp"`), a fallback
+ * (`home: overrides ?? "/tmp"`) and a wrapped value
+ * (`homeDirectory: Effect.succeed("/tmp")`) alike. A test that writes there
+ * takes `makeTempDirectoryScoped`; a test that only names a home takes a path
+ * no test can create, such as `/nonexistent/<name>`.
+ */
+const SHARED_HOME_KEY =
+  /\b(?:home|HOME|homeDir|homeDirectory|dataDir|GENT_DATA_DIR)\b\s*(?::|=(?![=>]))/g
+
+const SHARED_TEMP_ROOT = /["'`](?:(?:\/private)?(?:\/var)?\/tmp|\/dev\/shm)(?=[/"'`$])/
+
+const TEMP_ROOT_CALL = /\btmpdir\(\)/
+
+const UNIQUE_TEMP_CALL = /\b(?:mkdtemp|makeTempDirectory)/
+
+const SHARED_TEMP_HOME_MESSAGE =
+  "a test home or data directory under the shared temp root is shared by every run and parallel gate; use `makeTempDirectoryScoped` when the test writes there, or a `/nonexistent/<name>` path when it only names one"
+
+/**
+ * One step over a value expression: past a string or a one-line template (a
+ * `${}` inside one is part of the value either way), or one character.
+ */
+const valueStep = (text: string, at: number): number => {
+  if (["'", '"', "`"].includes(text[at] ?? "")) return quotedEnd(text, at)
+  return at + 1
+}
+
+/**
+ * Where the value expression that starts at `start` ends: a `,`, `;`, closing
+ * bracket or line end outside the value's own brackets and strings.
+ */
+const valueEnd = (text: string, start: number): number => {
+  let depth = 0
+  let at = start
+  while (at < text.length) {
+    const char = text[at] ?? ""
+    if (depth === 0 && ",;\n)]}".includes(char)) return at
+    if ("([{".includes(char)) depth += 1
+    if (")]}".includes(char)) depth -= 1
+    at = valueStep(text, at)
+  }
+  return text.length
+}
+
+/** Whether a home's value expression is a path under the shared temp root. */
+const isSharedTempValue = (value: string): boolean =>
+  (SHARED_TEMP_ROOT.test(value) || TEMP_ROOT_CALL.test(value)) && !UNIQUE_TEMP_CALL.test(value)
+
+export const findSharedTestHomes = (file: string, text: string): ReadonlyArray<Finding> => {
+  // The guard's own tests spell the reported shapes as probe text.
+  if (!isTestCode(file) || file.startsWith("packages/tooling/")) return []
+  const code = withoutComments(text)
+  const reported = new Set<number>()
+  for (const key of code.matchAll(SHARED_HOME_KEY)) {
+    const afterKey = key.index + key[0].length
+    // The value may start on the next line: `home:` then `"/tmp"`.
+    const start = afterKey + (/^\s*/.exec(code.slice(afterKey))?.[0].length ?? 0)
+    if (isSharedTempValue(code.slice(start, valueEnd(code, start)))) {
+      reported.add(code.slice(0, key.index).split("\n").length)
+    }
+  }
+  return [...reported]
+    .sort((a, b) => a - b)
+    .map((line) => ({ file, line, message: SHARED_TEMP_HOME_MESSAGE }))
+}
+
 // ── the pre-commit hook runs the guards ─────────────────────────────────────
 
 /**
@@ -1054,12 +1138,12 @@ export const findUnmatchedOverrideGlobs = (
 }
 
 /**
- * An `.oxlintignore` row that matches no file oxlint would walk. oxlint also
- * honors `.gitignore`, so `trackedFiles` (tracked and untracked, minus what
- * git ignores) is the set a row can still take out. A row follows gitignore
- * form: a trailing `/` names a directory, a row with no inner `/` matches at
- * any depth, a leading `/` anchors at the root. Comment, blank and `!` rows
- * are skipped.
+ * An `.oxlintignore` row that matches no file oxlint would walk in a clean
+ * clone. oxlint also honors `.gitignore`, so `trackedFiles` is the committed
+ * set (`committedFilesCommand`): a row that only a local file matches
+ * passes here and fails in CI. A row follows gitignore form: a trailing `/`
+ * names a directory, a row with no inner `/` matches at any depth, a leading
+ * `/` anchors at the root. Comment, blank and `!` rows are skipped.
  */
 export const findUnmatchedIgnoreRows = (
   ignoreFile: string,
@@ -1078,7 +1162,7 @@ export const findUnmatchedIgnoreRows = (
       {
         file: ignoreFile,
         line: index + 1,
-        message: `ignore row \`${row}\` matches no file oxlint would lint (git-ignored files are skipped already); delete the row, or fix it`,
+        message: `ignore row \`${row}\` matches no committed file oxlint would lint (git-ignored files are skipped already); delete the row, or fix it`,
       },
     ]
   })
@@ -2204,6 +2288,11 @@ export const findRetiredSurfaces = (file: string, text: string): ReadonlyArray<F
  * - A path carrying a shell or URL character (a space, `$`, `:` or `#`),
  *   which marks it as a fragment of a command line rather than a filename.
  *
+ * A relative Markdown link, `[text](target)`, is a path claim too: its target
+ * resolves against the file's own directory, less any `#anchor`. A target
+ * with a scheme (`https:`) or a leading `/` or `#` is not a repo path, and a
+ * link inside backticks or a fence is code, not a link.
+ *
  * @module
  */
 
@@ -2212,12 +2301,14 @@ export const findRetiredSurfaces = (file: string, text: string): ReadonlyArray<F
  * The root `AGENTS.md`, `CLAUDE.md` and `ARCHITECTURE.md`, a package's own
  * `AGENTS.md` or `CLAUDE.md`, `docs/` but its dated research, a testbed's
  * `README.md` (the root `CLAUDE.md` sends agents to the gamut one), the
- * dependency patch notes in `patches/README.md`, and the project skills under
- * `.claude/skills/`. The path claims and the retired-surface rows both read
- * exactly this set.
+ * dependency patch notes in `patches/README.md`, the project skills under
+ * `.claude/skills/`, and the skills gent ships to its own model under
+ * `packages/extensions/src/skills/bundled/`. The path claims, the Markdown
+ * links, the retired-surface rows and the code-block compile all read exactly
+ * this set.
  */
 const STEERING_PROSE =
-  /^(?:(?:AGENTS|CLAUDE|ARCHITECTURE)\.md|(?:apps|packages)\/[^/]+\/(?:AGENTS|CLAUDE)\.md|docs\/(?!research\/).+\.md|testbeds\/[^/]+\/README\.md|patches\/README\.md|\.claude\/skills\/.+\.md)$/
+  /^(?:(?:AGENTS|CLAUDE|ARCHITECTURE)\.md|(?:apps|packages)\/[^/]+\/(?:AGENTS|CLAUDE)\.md|docs\/(?!research\/).+\.md|testbeds\/[^/]+\/README\.md|patches\/README\.md|\.claude\/skills\/.+\.md|packages\/extensions\/src\/skills\/bundled\/.+\.md)$/
 
 export const isSteeringFile = (file: string): boolean => STEERING_PROSE.test(file)
 
@@ -2270,6 +2361,41 @@ const directoryPrefixesOf = (tracked: Iterable<string>): ReadonlySet<string> => 
   return prefixes
 }
 
+/** A Markdown link's target: `(target)` after `[text]`, with an optional `"title"`, `'title'` or `(title)`. */
+const MARKDOWN_LINK = /\[[^\]\n]*\]\(([^)\s]+)(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?\s*\)/g
+
+/** A link target that is not a repo path: a URL, a root-relative path, or an anchor. */
+const NOT_REPO_TARGET = /^(?:[a-z][a-z0-9+.-]*:|\/|#)/i
+
+/** `target` resolved against `directory`, with `.` and `..` segments folded; none above the root. */
+const resolveRelative = (directory: string, target: string): Option.Option<string> => {
+  const segments: Array<string> = directory.split("/").filter((segment) => segment.length > 0)
+  for (const segment of target.split("/")) {
+    if (segment === "" || segment === ".") continue
+    if (segment !== "..") segments.push(segment)
+    else if (segments.length === 0) return Option.none()
+    else segments.pop()
+  }
+  return Option.some(segments.join("/"))
+}
+
+/** The relative link targets of a prose line that name no tracked path from `directory`. */
+const danglingLinkTargets = (
+  line: string,
+  directory: string,
+  tracked: ReadonlySet<string>,
+  prefixes: ReadonlySet<string>,
+): ReadonlyArray<string> =>
+  [...line.replace(BACKTICKED, "").matchAll(MARKDOWN_LINK)]
+    .map((match) => Option.getOrElse(Option.fromNullishOr(match[1]), () => ""))
+    .filter((target) => !NOT_REPO_TARGET.test(target))
+    .filter((target) =>
+      Option.match(resolveRelative(directory, target.replace(/#.*$/, "")), {
+        onNone: () => true,
+        onSome: (resolved) => !existsInTree(resolved, tracked, prefixes),
+      }),
+    )
+
 export const findSteeringFilePaths = (
   file: string,
   text: string,
@@ -2279,6 +2405,7 @@ export const findSteeringFilePaths = (
 
   const tracked = new Set(trackedFiles)
   const prefixes = directoryPrefixesOf(trackedFiles)
+  const directory = file.slice(0, Math.max(file.lastIndexOf("/"), 0))
   const findings: Finding[] = []
   let inFence = false
   for (const [index, line] of text.split("\n").entries()) {
@@ -2297,60 +2424,240 @@ export const findSteeringFilePaths = (
         message: `steering file names \`${claimed}\`, which no tracked file matches -- point it at the path that exists, or drop the reference`,
       })
     }
+    for (const target of danglingLinkTargets(line, directory, tracked, prefixes)) {
+      findings.push({
+        file,
+        line: index + 1,
+        message: `steering file links \`${target}\`, which resolves to no tracked file from \`${file}\` -- point the link at the file that exists, or drop it`,
+      })
+    }
   }
   return findings
 }
 
-// ── the extension guide's code compiles ─────────────────────────────────────
+// ── every bundled skill file ships ──────────────────────────────────────────
 
 /**
- * Guard: the ```ts blocks of the extension guide compile with the repo's
- * compiler options and Effect diagnostics.
+ * Guard: every Markdown file under the bundled skills directory ships.
  *
- * An extension author copies these blocks, so a block that no longer
- * compiles, or that the repo's own diagnostics reject, teaches the wrong
- * code. `check-guide-code.ts` writes each block to a scoped temp directory as
- * its own module, runs `tsc` over them with the root tsconfig, and reports
- * each diagnostic at its line in the guide.
+ * The skills module imports each bundled file as text and lists it in
+ * `bundledSkillFiles` under its path in the skill tree, which is where the
+ * skill's own links find it once installed. A file added to the directory
+ * without an import is not shipped, and nothing fails: the build, the
+ * typecheck and the skill tests read only what is imported. A listed path
+ * that differs from the imported file installs the right text under the wrong
+ * name, so a `SKILL.md` link to it dangles.
+ *
+ * Read: the tracked files under `BUNDLED_SKILLS_DIRECTORY` and the text of
+ * `BUNDLED_SKILLS_MODULE`, comments blanked. Reported: a Markdown file with no import (at the
+ * file), and an import whose `bundledSkillFiles` row is missing or names
+ * another path (at the import).
  */
-export const GUIDE_FILE = "docs/extensions.md"
+export const BUNDLED_SKILLS_MODULE = "packages/extensions/src/skills.ts"
+const BUNDLED_SKILLS_DIRECTORY = "packages/extensions/src/skills/bundled/"
 
-/** One ```ts block: its code and the guide line of its first code line. */
-export interface GuideBlock {
-  readonly line: number
-  readonly code: string
+/** `import name from "./skills/bundled/<path>"`: the binding and the bundled path. */
+const BUNDLED_IMPORT = /^import\s+([A-Za-z_$][\w$]*)\s+from\s+["']\.\/skills\/bundled\/([^"']+)["']/
+
+/** A `bundledSkillFiles` row, `["<path>", name]`, across lines or on one. */
+const BUNDLED_ROW = /\[\s*["']([^"']+)["']\s*,\s*([A-Za-z_$][\w$]*)\s*,?\s*\]/g
+
+export const findUnshippedSkillFiles = (
+  moduleText: string,
+  trackedFiles: ReadonlyArray<string>,
+): ReadonlyArray<Finding> => {
+  // A commented-out import or row ships nothing, so neither is read.
+  const code = withoutComments(moduleText)
+  const imported = new Map<string, { readonly path: string; readonly line: number }>()
+  for (const [index, line] of code.split("\n").entries()) {
+    const match = Option.fromNullishOr(BUNDLED_IMPORT.exec(line.trimStart()))
+    if (Option.isSome(match))
+      imported.set(match.value[1] ?? "", { path: match.value[2] ?? "", line: index + 1 })
+  }
+  const rows = new Map<string, string>()
+  for (const match of code.matchAll(BUNDLED_ROW)) rows.set(match[2] ?? "", match[1] ?? "")
+  const importedPaths = new Set([...imported.values()].map((entry) => entry.path))
+  const findings: Array<Finding> = trackedFiles
+    .filter((file) => file.startsWith(BUNDLED_SKILLS_DIRECTORY) && file.endsWith(".md"))
+    .filter((file) => !importedPaths.has(file.slice(BUNDLED_SKILLS_DIRECTORY.length)))
+    .map((file) => ({
+      file,
+      line: 1,
+      message: `a bundled skill file that \`${BUNDLED_SKILLS_MODULE}\` does not import never ships; import it as text and list it in \`bundledSkillFiles\`, or delete it`,
+    }))
+  for (const [name, entry] of imported) {
+    const listed = Option.fromNullishOr(rows.get(name))
+    if (Option.isSome(listed) && listed.value === entry.path) continue
+    findings.push({
+      file: BUNDLED_SKILLS_MODULE,
+      line: entry.line,
+      message: Option.match(listed, {
+        onNone: () =>
+          `\`${name}\` imports \`${entry.path}\`, but no \`bundledSkillFiles\` row lists it, so it never installs`,
+        onSome: (path) =>
+          `\`${name}\` imports \`${entry.path}\`, but its \`bundledSkillFiles\` row installs it as \`${path}\`, where the skill's links do not find it`,
+      }),
+    })
+  }
+  return findings
 }
 
-const TS_FENCE_OPEN = /^```ts\s*$/
-const FENCE_CLOSE = /^```\s*$/
+/**
+ * Guard: the guide check's cache key reads exactly the steering prose.
+ *
+ * `check-guide-code.ts` runs as the examples package's typecheck, and turbo
+ * replays a cached result while the task's `inputs` hash the same. An input
+ * list that misses a steering file (`../docs/*.md` against
+ * `docs/topic/guide.md`) replays a pass after that file alone changes; one
+ * that reads a Markdown file outside the set reruns the check for nothing. So
+ * over the tracked and new files, the `.md` files the inputs match must be the
+ * files `isSteeringFile` accepts. Turbo globs are relative to the package, so
+ * `../x` names the repo path `x`, and a `!` input subtracts.
+ */
+/** The part of a package's `turbo.json` the guide input check reads. */
+export const TurboTypecheckInputsSchema = Schema.Struct({
+  tasks: Schema.Struct({
+    typecheck: Schema.Struct({ inputs: Schema.Array(Schema.String) }),
+  }),
+})
 
-export const guideCodeBlocks = (text: string): ReadonlyArray<GuideBlock> => {
-  const blocks: Array<GuideBlock> = []
-  let start = -1
-  const lines = text.split("\n")
-  for (const [index, line] of lines.entries()) {
-    if (start === -1 && TS_FENCE_OPEN.test(line)) start = index + 1
-    else if (start !== -1 && FENCE_CLOSE.test(line)) {
-      blocks.push({ line: start + 1, code: lines.slice(start, index).join("\n") })
-      start = -1
+export const findUnhashedSteeringFiles = (
+  file: string,
+  inputs: ReadonlyArray<string>,
+  trackedFiles: ReadonlyArray<string>,
+): ReadonlyArray<Finding> => {
+  const packageDirectory = file.slice(0, file.lastIndexOf("/") + 1)
+  const repoGlob = (input: string): RegExp => {
+    if (input.startsWith("../")) return globMatcher(input.slice(3))
+    return globMatcher(packageDirectory + input)
+  }
+  const included = inputs.filter((input) => !input.startsWith("!")).map(repoGlob)
+  const excluded = inputs
+    .filter((input) => input.startsWith("!"))
+    .map((input) => repoGlob(input.slice(1)))
+  const hashed = (path: string): boolean =>
+    included.some((glob) => glob.test(path)) && !excluded.some((glob) => glob.test(path))
+  const message = (path: string): string => {
+    if (isSteeringFile(path)) {
+      return `the typecheck inputs miss steering file \`${path}\`, so a change to it alone replays a cached guide check; make the inputs match \`isSteeringFile\``
     }
+    return `the typecheck inputs read \`${path}\`, which is not steering prose, so a change to it reruns the guide check for nothing; make the inputs match \`isSteeringFile\``
+  }
+  return trackedFiles
+    .filter((path) => path.endsWith(".md") && hashed(path) !== isSteeringFile(path))
+    .map((path) => ({ file, line: 1, message: message(path) }))
+}
+
+// ── the steering prose's code compiles ──────────────────────────────────────
+
+/**
+ * Guard: every ```ts, ```typescript and ```tsx block of the steering prose
+ * (`STEERING_PROSE`) compiles with the repo's compiler options and Effect
+ * diagnostics.
+ *
+ * An agent or an extension author copies these blocks, so a block that no
+ * longer compiles, or that the repo's own diagnostics reject, teaches the
+ * wrong code. `check-guide-code.ts` writes each block to a scoped temp
+ * directory as its own module, runs `tsc` once per compile context, and
+ * reports each diagnostic at its line in the file that holds the block.
+ *
+ * A block compiles in the context of its file: a block under `apps/tui/`
+ * with the TUI tsconfig and the TUI's dependencies (Solid JSX from
+ * `@opentui/solid`), every other block with the root tsconfig and the
+ * examples package's dependencies (`effect`, `@gent/core` and its entries),
+ * the way an extension resolves them.
+ *
+ * A block that cannot compile on its own is marked by the line
+ * `<!-- illustrative: <why> -->` directly above its fence and is skipped. The
+ * reason is required: a mark without one marks nothing, and the block
+ * compiles.
+ */
+
+/** Where a block compiles: the tsconfig it extends and the `node_modules` it resolves from. */
+export interface GuideCodeContext {
+  readonly name: string
+  readonly tsconfig: string
+  readonly modules: string
+}
+
+const EXTENSION_CONTEXT: GuideCodeContext = {
+  name: "extension",
+  tsconfig: "tsconfig.json",
+  modules: "examples/node_modules",
+}
+
+const TUI_CONTEXT: GuideCodeContext = {
+  name: "tui",
+  tsconfig: "apps/tui/tsconfig.json",
+  modules: "apps/tui/node_modules",
+}
+
+export const guideCodeContextOf = (file: string): GuideCodeContext => {
+  if (file.startsWith("apps/tui/")) return TUI_CONTEXT
+  return EXTENSION_CONTEXT
+}
+
+/** One code block: its file, the file line of its first code line, and its code. */
+interface GuideBlock {
+  readonly file: string
+  readonly line: number
+  readonly code: string
+  readonly extension: "ts" | "tsx"
+}
+
+/** The fence languages that compile, and the module extension each is written with. */
+const BLOCK_EXTENSION = new Map<string, GuideBlock["extension"]>([
+  ["ts", "ts"],
+  ["typescript", "ts"],
+  ["tsx", "tsx"],
+])
+const FENCE_OPEN = /^```\S*\s*$/
+const FENCE_CLOSE = /^```\s*$/
+const ILLUSTRATIVE_MARK = /^<!--\s*illustrative:\s*\S.*-->\s*$/
+
+/** Whether the line above the fence at `fence` marks its block illustrative. */
+const markedIllustrative = (lines: ReadonlyArray<string>, fence: number): boolean =>
+  fence > 0 && ILLUSTRATIVE_MARK.test(lines[fence - 1] ?? "")
+
+export const guideCodeBlocks = (file: string, text: string): ReadonlyArray<GuideBlock> => {
+  const blocks: Array<GuideBlock> = []
+  const lines = text.split("\n")
+  let open = Option.none<{ readonly start: number; readonly language: string }>()
+  for (const [index, line] of lines.entries()) {
+    if (Option.isNone(open)) {
+      if (!FENCE_OPEN.test(line)) continue
+      open = Option.some({ start: index + 1, language: line.slice(3).trim() })
+      continue
+    }
+    if (!FENCE_CLOSE.test(line)) continue
+    const { start, language } = open.value
+    open = Option.none()
+    const extension = Option.fromNullishOr(BLOCK_EXTENSION.get(language))
+    if (Option.isNone(extension) || markedIllustrative(lines, start - 1)) continue
+    blocks.push({
+      file,
+      line: start + 1,
+      code: lines.slice(start, index).join("\n"),
+      extension: extension.value,
+    })
   }
   return blocks
 }
 
-/** The module file a block is written to: `b1.ts` for the first. */
-export const guideBlockFile = (index: number): string => `b${index + 1}.ts`
+/** The module file a block is written to: `b1.ts` for the first, `b2.tsx` for a TSX second. */
+export const guideBlockFile = (index: number, block: GuideBlock): string =>
+  `b${index + 1}.${block.extension}`
 
-const BLOCK_DIAGNOSTIC = /(?:^|[/\\])b(\d+)\.ts\((\d+),(\d+)\)/
+const BLOCK_DIAGNOSTIC = /(?:^|[/\\])b(\d+)\.tsx?\((\d+),(\d+)\)/
 
-/** A `tsc` output line with its block position replaced by the guide position. */
+/** A `tsc` output line with its block position replaced by the position in the block's file. */
 export const guideDiagnosticLine = (line: string, blocks: ReadonlyArray<GuideBlock>): string =>
   Option.fromNullishOr(BLOCK_DIAGNOSTIC.exec(line)).pipe(
     Option.flatMap((match) =>
       Option.fromNullishOr(blocks.at(Number(match[1]) - 1)).pipe(
         Option.map(
           (block) =>
-            `${GUIDE_FILE}:${block.line + Number(match[2]) - 1}:${match[3]}${line.slice(match.index + match[0].length)}`,
+            `${block.file}:${block.line + Number(match[2]) - 1}:${match[3]}${line.slice(match.index + match[0].length)}`,
         ),
       ),
     ),
