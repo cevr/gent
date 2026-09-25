@@ -499,9 +499,10 @@ const projectRuntimeState = (s: AgentLoopState): SessionRuntimeState => {
   return Match.type<LoopState>().pipe(
     Match.tagsExhaustive({
       Idle: () => SessionRuntimeStateSchema.cases.Idle.make({ queue }),
-      Running: () => SessionRuntimeStateSchema.cases.Running.make({ queue }),
-      WaitingForInteraction: () =>
-        SessionRuntimeStateSchema.cases.WaitingForInteraction.make({ queue }),
+      Running: ({ startedAtMs }) =>
+        SessionRuntimeStateSchema.cases.Running.make({ queue, startedAtMs }),
+      WaitingForInteraction: ({ startedAtMs }) =>
+        SessionRuntimeStateSchema.cases.WaitingForInteraction.make({ queue, startedAtMs }),
     }),
   )(s.state)
 }

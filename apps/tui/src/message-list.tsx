@@ -11,6 +11,7 @@ import {
   parseBashOutput,
   plural,
   previewOutput,
+  truncate,
   workingIconFrame,
 } from "./utils"
 import { DateTime, Effect, Fiber, Match, Option, Predicate, Schema } from "effect"
@@ -322,6 +323,10 @@ interface MessageMetadataInfo {
   customType?: string
   hidden?: boolean
   details?: unknown
+  /** The server stamps it on every message a client sent: the reader typed it. */
+  fromClient?: boolean
+  /** The extension that sent the message (`Session.send`). */
+  extensionId?: string
 }
 
 export type AssistantSegment =
@@ -393,8 +398,12 @@ function UserMessage(props: MessageRowProps & { customType?: string; fullDetail:
     Option.fromUndefinedOr(props.customType).pipe(
       Option.filter(() => !props.fullDetail),
       Option.flatMap((customType) =>
-        Option.orElse(Option.fromUndefinedOr(ext.messageRenderers().get(customType)), () =>
-          Option.fromUndefinedOr(runtimeRows.get(customType)),
+        Option.orElse(
+          Option.map(
+            Option.fromUndefinedOr(ext.messageRenderers().get(customType)),
+            (entry) => entry.component,
+          ),
+          () => Option.fromUndefinedOr(runtimeRows.get(customType)),
         ),
       ),
     )
@@ -954,6 +963,116 @@ export const splitFooterHeight = (terminalHeight: number, requestedHeight: numbe
   return Math.min(maximum, Math.max(1, requestedHeight))
 }
 
+// ── sticky last prompt ──────────────────────────────────────────────────────
+
+/**
+ * The text of a prompt the reader posted, or `None` when `item` is not one.
+ * The one place that decides whose message it is, from its metadata:
+ *
+ * - The reader's own: a user message the server stamped as a client's
+ *   (`fromClient`), typed or a steer that joined the running turn.
+ * - A custom type whose message renderer names it a prompt (`promptOf`), in
+ *   the text the reader asked: a `/btw` fork's question.
+ * - Nothing else: a message another agent or an extension sent (a parent's
+ *   `Session.send`, a wake, a delegate start) carries no client origin, and a
+ *   row stored before the origin existed carries none either.
+ *
+ * A queued follow-up has not run yet, and a hidden message is not drawn.
+ */
+export const readerPrompt = (
+  item: SessionItem,
+  promptOf: (customType: string) => Option.Option<(content: string) => string>,
+): Option.Option<string> => {
+  if (!isMessageItem(item) || item.role !== "user") return Option.none()
+  if (Predicate.isNotUndefined(item.pendingMode) || item.metadata?.hidden === true)
+    return Option.none()
+  if (item.metadata?.fromClient === true) return Option.some(item.content)
+  return Option.fromUndefinedOr(item.metadata?.customType).pipe(
+    Option.flatMap(promptOf),
+    Option.map((text) => text(item.content)),
+  )
+}
+
+/** `UserRow` opens with a one-row top margin; the prompt's text starts under it. */
+const PROMPT_TEXT_ROW = 1
+
+/** Where the transcript stands, in rows, as `promptOnScreen` reads it. */
+interface PromptGeometry {
+  /** A displayed item's measured height, by its display index. */
+  readonly heightAt: (index: number) => Option.Option<number>
+  /** The prompt's item. */
+  readonly index: number
+  /** How many leading items native history holds. */
+  readonly committed: number
+  /** The live content's rows, widgets included. */
+  readonly liveHeight: number
+  /** The rows the live tail may take before the pinned row takes one. */
+  readonly liveRows: number
+  /** The rows of native history the terminal shows above the app, the pinned row drawn. */
+  readonly scrollbackRows: number
+}
+
+/**
+ * Whether the prompt's first text row is on screen, reckoned as if the pinned
+ * row were drawn. Reckoning one way only keeps the answer stable: drawing the
+ * row cannot move the prompt back into view and hide it again.
+ *
+ * A live prompt is on screen while its row is at or below the viewport's top:
+ * the viewport sticks to the bottom, so a live tail taller than it cuts rows
+ * off the top. A committed prompt is on screen while it and the history rows
+ * after it fit in the rows the terminal shows above the app. An unmeasured
+ * height met before the answer is known counts as on screen, so nothing is
+ * pinned on a guess.
+ *
+ * The sums stop once they pass what decides the answer, so the work is
+ * bounded by the rows on screen, never by how much history lies beyond them.
+ */
+export const promptOnScreen = (geometry: PromptGeometry): boolean => {
+  /** Rows of items `from` up to `to`, or `past` itself once they exceed it. */
+  const rowsUpTo = (from: number, to: number, past: number): Option.Option<number> => {
+    let total = 0
+    for (let index = from; index < to && total <= past; index++) {
+      const height = geometry.heightAt(index)
+      if (Option.isNone(height)) return Option.none()
+      total += height.value
+    }
+    return Option.some(total)
+  }
+  if (geometry.index < geometry.committed) {
+    const past = geometry.scrollbackRows + PROMPT_TEXT_ROW
+    return Option.match(rowsUpTo(geometry.index, geometry.committed, past), {
+      onNone: () => true,
+      onSome: (rows) => rows <= past,
+    })
+  }
+  const viewport = Math.min(Math.max(1, geometry.liveHeight), geometry.liveRows - 1)
+  const scrollTop = Math.max(0, geometry.liveHeight - viewport)
+  const past = scrollTop - PROMPT_TEXT_ROW
+  return Option.match(rowsUpTo(geometry.committed, geometry.index, past), {
+    onNone: () => true,
+    onSome: (above) => above >= past,
+  })
+}
+
+/** The pinned prompt: `↑ <first line>`, cut to the width with an ellipsis. */
+function StickyPrompt(props: { readonly text: string; readonly width: number }) {
+  const { theme } = useTheme()
+  const line = () =>
+    Option.fromUndefinedOr(
+      props.text
+        .split("\n")
+        .map((text) => text.trim())
+        .find((text) => text.length > 0),
+    ).pipe(Option.getOrElse(() => ""))
+  return (
+    <box height={1} flexShrink={0} paddingLeft={1}>
+      <text wrapMode="none" style={{ fg: theme.textMuted }}>
+        {truncate(`↑ ${line()}`, Math.max(1, props.width - 2))}
+      </text>
+    </box>
+  )
+}
+
 // ── native scrollback transcript ────────────────────────────────────────────
 
 interface NativeTranscriptProps {
@@ -1231,7 +1350,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     const returning = renderer.screenMode === "alternate-screen"
     renderer.footerHeight = splitFooterHeight(
       dimensions().height,
-      props.footerHeight + Math.max(1, liveHeight()),
+      props.footerHeight + stickyRows() + Math.max(1, liveHeight()),
     )
     renderer.screenMode = "split-footer"
     renderer.externalOutputMode = "capture-stdout"
@@ -1322,54 +1441,118 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     if (props.expanded) return props.items
     return displayedItems().slice(committedCount())
   })
+  /**
+   * The last posted prompt, pinned in one row above the live tail while its
+   * own row is off screen above: scrolled out of the live viewport, or deep
+   * enough in native history that the terminal no longer shows it. Derived
+   * from the displayed items, so a switch of branch or session pins that
+   * branch's prompt. The row is the first thing a short terminal gives up: it
+   * shows only while the live tail keeps a row of its own beside it. The
+   * expanded transcript and an overlay draw on the alternate screen, where
+   * nothing is pinned.
+   */
+  const promptOf = (customType: string) =>
+    Option.flatMap(Option.fromUndefinedOr(ext.messageRenderers().get(customType)), (renderer) =>
+      Option.fromUndefinedOr(renderer.prompt),
+    )
+  /**
+   * The reader's last prompt and its display index. A memo of the displayed
+   * items alone: a measurement never re-runs it, and it scans back from the
+   * end only as far as that prompt.
+   */
+  const lastPrompt = createMemo(
+    (): Option.Option<{ readonly index: number; readonly text: string }> => {
+      const items = displayedItems()
+      for (let index = items.length - 1; index >= 0; index--) {
+        const text = Option.flatMap(Option.fromUndefinedOr(items[index]), (item) =>
+          readerPrompt(item, promptOf),
+        )
+        if (Option.isSome(text)) return Option.some({ index, text: text.value })
+      }
+      return Option.none()
+    },
+  )
+  /** Per measurement: a height lookup by index and sums bounded by the screen. */
+  const stickyPrompt = createMemo((): Option.Option<string> => {
+    if (props.expanded || props.overlayOpen || liveRows() < 2) return Option.none()
+    const prompt = lastPrompt()
+    if (Option.isNone(prompt)) return Option.none()
+    measurementVersion()
+    const items = displayedItems()
+    const height = dimensions().height
+    const onScreen = promptOnScreen({
+      heightAt: (index) =>
+        Option.flatMap(Option.fromUndefinedOr(items[index]), (item) =>
+          Option.fromUndefinedOr(itemHeights.get(item)),
+        ),
+      index: prompt.value.index,
+      committed: committedCount(),
+      liveHeight: liveHeight(),
+      liveRows: liveRows(),
+      scrollbackRows:
+        height - splitFooterHeight(height, props.footerHeight + 1 + Math.max(1, liveHeight())),
+    })
+    if (onScreen) return Option.none()
+    return Option.some(prompt.value.text)
+  })
+  const stickyRows = () => {
+    if (Option.isSome(stickyPrompt())) return 1
+    return 0
+  }
+
   const viewportHeight = () => {
     if (props.expanded) return Math.max(0, dimensions().height - props.footerHeight)
-    return Math.min(Math.max(1, liveHeight()), liveRows())
+    return Math.min(Math.max(1, liveHeight()), liveRows() - stickyRows())
   }
 
   return (
-    <scrollbox
-      ref={(value) => {
-        viewport = Option.some(value)
-      }}
-      height={viewportHeight()}
-      minHeight={0}
-      overflow="hidden"
-      // Measure content without the current viewport height as a limit.
-      viewportOptions={{ overflow: "scroll" }}
-      // Let the live tail shrink after leading messages enter native history.
-      contentOptions={{ minHeight: 0 }}
-      flexShrink={1}
-      stickyScroll
-      stickyStart="bottom"
-      focusable={false}
-      verticalScrollbarOptions={{ visible: false }}
-    >
-      <box
-        flexDirection="column"
-        flexShrink={0}
-        onSizeChange={function () {
-          if (props.expanded || props.overlayOpen) return
-          setLiveHeight(this.height)
+    <box flexDirection="column" flexShrink={1} minHeight={0}>
+      <Show when={Option.getOrUndefined(stickyPrompt())}>
+        {(prompt) => <StickyPrompt text={prompt()} width={dimensions().width} />}
+      </Show>
+      <scrollbox
+        ref={(value) => {
+          viewport = Option.some(value)
         }}
+        height={viewportHeight()}
+        minHeight={0}
+        overflow="hidden"
+        // Measure content without the current viewport height as a limit.
+        viewportOptions={{ overflow: "scroll" }}
+        // Let the live tail shrink after leading messages enter native history.
+        contentOptions={{ minHeight: 0 }}
+        flexShrink={1}
+        stickyScroll
+        stickyStart="bottom"
+        focusable={false}
+        verticalScrollbarOptions={{ visible: false }}
       >
-        <For each={liveItems()}>
-          {(item, index) => (
-            <box
-              flexDirection="column"
-              flexShrink={0}
-              onSizeChange={function () {
-                if (itemHeights.get(item) === this.height) return
-                itemHeights.set(item, this.height)
-                setMeasurementVersion((version) => version + 1)
-              }}
-            >
-              {props.renderItems([item], props.streaming && index() === liveItems().length - 1)}
-            </box>
-          )}
-        </For>
-        {props.children}
-      </box>
-    </scrollbox>
+        <box
+          flexDirection="column"
+          flexShrink={0}
+          onSizeChange={function () {
+            if (props.expanded || props.overlayOpen) return
+            setLiveHeight(this.height)
+          }}
+        >
+          <For each={liveItems()}>
+            {(item, index) => (
+              <box
+                flexDirection="column"
+                flexShrink={0}
+                onSizeChange={function () {
+                  if (itemHeights.get(item) === this.height) return
+                  itemHeights.set(item, this.height)
+                  setMeasurementVersion((version) => version + 1)
+                }}
+              >
+                {props.renderItems([item], props.streaming && index() === liveItems().length - 1)}
+              </box>
+            )}
+          </For>
+          {props.children}
+        </box>
+      </scrollbox>
+    </box>
   )
 }

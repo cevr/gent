@@ -1,5 +1,5 @@
 import { describe, expect, it, test } from "effect-bun-test"
-import { Effect, Fiber, Option, Predicate, Queue, Ref, Schema, Stream } from "effect"
+import { Clock, Effect, Fiber, Option, Predicate, Queue, Ref, Schema, Stream } from "effect"
 import { BranchId, ExtensionContext, ref, SessionId, ToolCallId } from "@gent/core/extensions/api"
 import { AgentEvent } from "@gent/core/protocol"
 import {
@@ -39,6 +39,7 @@ const live = (overrides: { session: string; branch: string; status?: string }): 
   sessionId: sid(overrides.session),
   branchId: bid(overrides.branch),
   status: Option.some(overrides.status ?? "Running"),
+  runningSince: Option.none(),
 })
 
 const durable = (overrides: {
@@ -508,6 +509,8 @@ const ReplySchema = Schema.Struct({
       parentSessionId: Schema.optional(Schema.String),
       sideThread: Schema.Boolean,
       activity: Schema.optional(Schema.String),
+      createdAt: Schema.optional(Schema.Finite),
+      runningSince: Schema.optional(Schema.Finite),
     }),
   ),
 })
@@ -524,7 +527,10 @@ const openHarness = Effect.gen(function* () {
 
 type Harness = Effect.Success<typeof openHarness>
 
-const requestRows = (harness: Harness, input: { readonly query?: string }) =>
+const requestRows = (
+  harness: Harness,
+  input: { readonly query?: string; readonly root?: string },
+) =>
   Effect.gen(function* () {
     const raw = yield* harness.client.extension.request({
       sessionId: harness.sessionId,
@@ -739,6 +745,59 @@ describe("AgentsViewExtension via RPC", () => {
             "child idle",
           )
           expect(rowOf(idle.reply, child.sessionId)?.activity).toBeUndefined()
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    10_000,
+  )
+
+  it.live(
+    "a child woken after it settled runs since its new turn began, not since it was created",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer, controls } =
+            yield* LanguageModelLayers.signal("Done with the loader.")
+          const harness = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            cwd: "/tmp/agents-view-rpc-woken",
+          })
+          const child = yield* harness.client.session.create({
+            cwd: "/tmp/agents-view-rpc-woken",
+            parentSessionId: harness.sessionId,
+            parentBranchId: harness.branchId,
+          })
+          const rowOf = (reply: typeof ReplySchema.Type) =>
+            reply.rows.find((row) => row.sessionId === child.sessionId)
+          const send = (content: string) =>
+            harness.client.message.send({
+              sessionId: child.sessionId,
+              branchId: child.branchId,
+              content,
+            })
+          // The first task runs and settles.
+          yield* send("look at the loader")
+          yield* controls.waitForStreamStart
+          yield* controls.emitAll
+          yield* waitFor(
+            requestRows(harness, {}),
+            ({ reply }) => rowOf(reply)?.section === "idle",
+            5_000,
+            "child settled",
+          )
+          const wokenAt = yield* Clock.currentTimeMillis
+          // A correction wakes it: a new turn, held open by the model gate.
+          yield* send("also check the tests")
+          const running = yield* waitFor(
+            requestRows(harness, {}),
+            ({ reply }) => rowOf(reply)?.section === "running",
+            5_000,
+            "child running again",
+          )
+          const row = rowOf(running.reply)
+          expect(row?.createdAt ?? Number.POSITIVE_INFINITY).toBeLessThan(wokenAt)
+          expect(row?.runningSince ?? 0).toBeGreaterThanOrEqual(wokenAt)
+          yield* controls.emitAll
         }).pipe(Effect.timeout("8 seconds")),
       ),
     10_000,
@@ -971,6 +1030,38 @@ describe("AgentsViewExtension via RPC", () => {
           expect(rowFor(sessionOnly.sessionId)?.sideThread).toBe(true)
           expect(handoffRow?.sideThread).toBe(false)
           expect(rowFor(harness.sessionId)?.sideThread).toBe(false)
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    10_000,
+  )
+
+  it.live(
+    "a root listing holds that session's subtree and no session beside it",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const harness = yield* openHarness
+          const child = yield* harness.client.session.create({
+            cwd: "/tmp/agents-view-rpc-child",
+            parentSessionId: harness.sessionId,
+            parentBranchId: harness.branchId,
+          })
+          const grandchild = yield* harness.client.session.create({
+            cwd: "/tmp/agents-view-rpc-grandchild",
+            parentSessionId: child.sessionId,
+            parentBranchId: child.branchId,
+          })
+          // Another conversation in the same workspace.
+          const beside = yield* harness.client.session.create({ cwd: "/tmp/agents-view-rpc" })
+
+          const { reply } = yield* requestRows(harness, { root: harness.sessionId })
+          expect(reply.rows.map((row) => row.sessionId).toSorted()).toEqual(
+            [harness.sessionId, child.sessionId, grandchild.sessionId].toSorted(),
+          )
+          // The root's own loop is live, so its row still carries the live half.
+          expect(reply.rows.find((row) => row.sessionId === harness.sessionId)?.live).toBe(true)
+          const whole = yield* requestRows(harness, {})
+          expect(whole.reply.rows.map((row) => row.sessionId)).toContain(beside.sessionId)
         }).pipe(Effect.timeout("8 seconds")),
       ),
     10_000,

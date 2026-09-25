@@ -9,6 +9,8 @@ import {
   type Message as ListMessage,
   MessageList,
   NativeTranscript,
+  promptOnScreen,
+  readerPrompt,
   reasoningMarkdown,
   type SessionEvent,
   type SessionItem,
@@ -3269,4 +3271,379 @@ describe("native transcript commit handover", () => {
       }).pipe(Effect.timeout("10 seconds")),
     15_000,
   )
+})
+
+// ── sticky last prompt ──────────────────────────────────────────────────────
+
+describe("sticky last prompt", () => {
+  /** A prompt the reader typed: the server stamps its client origin. */
+  const prompt = (id: string, text: string): ListMessage => ({
+    ...userMessage("regular-message", id, text, "queued"),
+    pendingMode: absent,
+    metadata: { fromClient: true },
+  })
+  /** A user-role message an extension sent: a parent's message, a wake, a delegate start. */
+  const extensionSent = (id: string, text: string): ListMessage => ({
+    ...userMessage("regular-message", id, text, "queued"),
+    pendingMode: absent,
+    metadata: { extensionId: "@gent/delegate" },
+  })
+  const reply = (id: string, lines: number): ListMessage => {
+    const text = Array.from({ length: lines }, (_, index) => `${id} line ${index + 1}`).join("\n\n")
+    return {
+      _tag: "regular-message",
+      id,
+      role: "assistant",
+      content: text,
+      reasoning: "",
+      images: [],
+      createdAt: 0,
+      toolCalls: absent,
+      segments: [{ _tag: "text", content: text }],
+    }
+  }
+  const count = (frame: string, text: string) => frame.split(text).length - 1
+
+  /** The transcript over `items` with a three-row footer, as the session view mounts it. */
+  const mountTranscript = (
+    items: () => SessionItem[],
+    options: { readonly streaming?: boolean; readonly height?: number; readonly footer?: number },
+  ) =>
+    Effect.gen(function* () {
+      let extensionsLoaded = () => false
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => {
+            extensionsLoaded = useExtensionUI().loaded
+            return (
+              <NativeTranscript
+                items={items()}
+                settled
+                streaming={options.streaming === true}
+                footerHeight={options.footer ?? 3}
+                expanded={false}
+                disclosure="collapsed"
+                displayRevision={0}
+                overlayOpen={false}
+                renderItems={(visible, streaming) => (
+                  <MessageList
+                    items={visible}
+                    disclosure="collapsed"
+                    syntaxStyle={syntaxStyle}
+                    streaming={streaming}
+                  />
+                )}
+              >
+                <box />
+              </NativeTranscript>
+            )
+          },
+          { width: 50, height: options.height ?? 16 },
+        ),
+      )
+      yield* Effect.promise(() => setup.flush()).pipe(
+        Effect.repeat({ until: () => extensionsLoaded() }),
+        Effect.timeout("5 seconds"),
+      )
+      for (let pass = 0; pass < 6; pass++) yield* Effect.promise(() => setup.flush())
+      return setup
+    })
+
+  it.live("no pinned row while the prompt is on screen", () =>
+    Effect.gen(function* () {
+      const setup = yield* mountTranscript(() => [prompt("p1", "ASK-ONE"), reply("r1", 1)], {})
+      expect(count(renderFrame(setup), "ASK-ONE")).toBe(1)
+      expect(renderFrame(setup)).not.toContain("↑ ASK-ONE")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.live("a streaming reply that pushes the prompt out above pins it in one row", () =>
+    Effect.gen(function* () {
+      const setup = yield* mountTranscript(() => [prompt("p1", "ASK-ONE"), reply("r1", 20)], {
+        streaming: true,
+      })
+      const frame = yield* waitForFrame(setup, (next) => next.includes("↑ ASK-ONE"), "pinned")
+      // The original is scrolled out, so the reader sees it once, pinned.
+      expect(count(frame, "ASK-ONE")).toBe(1)
+      const pinned = frame.split("\n").filter((line) => line.includes("↑ ASK-ONE"))
+      expect(pinned).toHaveLength(1)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.live("a prompt committed far into native history stays pinned, cut to the width", () =>
+    Effect.gen(function* () {
+      const long = `ASK-LONG ${"word ".repeat(40)}`
+      const setup = yield* mountTranscript(() => [prompt("p1", long), reply("r1", 20)], {})
+      const frame = yield* waitForFrame(setup, (next) => next.includes("↑ ASK-LONG"), "pinned")
+      const pinned = frame.split("\n").find((line) => line.includes("↑ ASK-LONG")) ?? ""
+      expect(pinned.trimEnd()).toMatch(/…$/)
+      expect(pinned.trimEnd().length).toBeLessThanOrEqual(50)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.live("the pinned row follows the branch in view, and a queued follow-up is not posted", () =>
+    Effect.gen(function* () {
+      const [items, setItems] = createSignal<SessionItem[]>([
+        prompt("p1", "ASK-ONE"),
+        reply("r1", 20),
+        // Waiting in the queue: the reader has not seen it run.
+        userMessage("regular-message", "q1", "QUEUED-ASK", "queued"),
+      ])
+      const setup = yield* mountTranscript(items, { streaming: true })
+      const frame = yield* waitForFrame(setup, (next) => next.includes("↑ ASK-ONE"), "pinned")
+      expect(frame).not.toContain("↑ QUEUED-ASK")
+      // Another branch: its own last prompt, derived from its own messages.
+      setItems([prompt("p2", "ASK-TWO"), reply("r2", 20)])
+      yield* waitForFrame(
+        setup,
+        (next) => next.includes("↑ ASK-TWO") && !next.includes("ASK-ONE"),
+        "pinned on the other branch",
+      )
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.live("a message another agent sent after the reader's prompt leaves that prompt pinned", () =>
+    Effect.gen(function* () {
+      const setup = yield* mountTranscript(
+        () => [
+          prompt("p1", "ASK-ONE"),
+          reply("r1", 20),
+          extensionSent("w1", "PARENT-SAYS"),
+          reply("r2", 20),
+        ],
+        { streaming: true },
+      )
+      const frame = yield* waitForFrame(setup, (next) => next.includes("↑ ASK-ONE"), "pinned")
+      expect(frame).not.toContain("↑ PARENT-SAYS")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.live("a steer the reader typed that joined the running turn is the pinned prompt", () =>
+    Effect.gen(function* () {
+      const steer: ListMessage = {
+        ...userMessage("interjection-message", "s1", "STEER-NOW", "steer"),
+        pendingMode: absent,
+        metadata: { fromClient: true },
+      }
+      const setup = yield* mountTranscript(
+        () => [prompt("p1", "ASK-ONE"), reply("r1", 4), steer, reply("r2", 20)],
+        { streaming: true },
+      )
+      yield* waitForFrame(setup, (next) => next.includes("↑ STEER-NOW"), "pinned steer")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.live("in a /btw fork the fork's question is the pinned prompt, as the reader asked it", () =>
+    Effect.gen(function* () {
+      const asked: ListMessage = {
+        ...userMessage(
+          "regular-message",
+          "btw-1",
+          forkQuestionText(SessionId.make("01a0ca0cb3e7"), "WHY-THIS"),
+          "queued",
+        ),
+        pendingMode: absent,
+        metadata: { customType: BTW_QUESTION_TYPE, extensionId: "@gent/btw" },
+      }
+      const setup = yield* mountTranscript(() => [asked, reply("r1", 20)], { streaming: true })
+      const frame = yield* waitForFrame(setup, (next) => next.includes("↑ WHY-THIS"), "pinned")
+      expect(frame).not.toContain("↑ A side question")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.live(
+    "a streaming reply's growth reads no history item: the pin work per frame is flat in history length",
+    () =>
+      Effect.gen(function* () {
+        const HISTORY = 2_000
+        let roleReads = 0
+        /** An assistant row that counts every read of its role: a scan of history reads it. */
+        const counted = (id: string): SessionItem => {
+          const item = reply(id, 1)
+          const { role } = item
+          Object.defineProperty(item, "role", {
+            get: () => {
+              roleReads++
+              return role
+            },
+          })
+          return item
+        }
+        const history: SessionItem[] = [
+          prompt("p0", "ASK-ONE"),
+          ...Array.from({ length: HISTORY }, (_, index) => counted(`h${index}`)),
+        ]
+        const tail = history.at(-1)
+        const [grown, setGrown] = createSignal(1)
+        let extensionsLoaded = () => false
+        const setup = yield* Effect.promise(() =>
+          renderWithProviders(
+            () => {
+              extensionsLoaded = useExtensionUI().loaded
+              return (
+                <NativeTranscript
+                  items={history}
+                  settled
+                  streaming
+                  footerHeight={3}
+                  expanded={false}
+                  disclosure="collapsed"
+                  displayRevision={0}
+                  overlayOpen={false}
+                  renderItems={(visible) => (
+                    <Show when={visible[0] === tail} fallback={<text>row</text>}>
+                      <text>{Array.from({ length: grown() }, () => "GROW").join("\n")}</text>
+                    </Show>
+                  )}
+                >
+                  <box />
+                </NativeTranscript>
+              )
+            },
+            { width: 50, height: 16 },
+          ),
+        )
+        yield* Effect.promise(() => setup.flush()).pipe(
+          Effect.repeat({ until: () => extensionsLoaded() }),
+          Effect.timeout("5 seconds"),
+        )
+        yield* waitForFrame(setup, (next) => next.includes("↑ ASK-ONE"), "pinned")
+        const before = roleReads
+        for (let step = 2; step < 42; step++) {
+          setGrown(step)
+          yield* Effect.promise(() => setup.flush())
+        }
+        // Each growth step is a new measurement; none of them scans history.
+        expect(roleReads - before).toBe(0)
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
+  )
+
+  it.live("a terminal too short for the row keeps the live tail and pins nothing", () =>
+    Effect.gen(function* () {
+      // Two rows left for the transcript: the live tail keeps them both.
+      const setup = yield* mountTranscript(() => [prompt("p1", "ASK-ONE"), reply("r1", 20)], {
+        streaming: true,
+        height: 12,
+        footer: 9,
+      })
+      expect(renderFrame(setup)).not.toContain("↑ ASK-ONE")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+})
+
+describe("readerPrompt", () => {
+  const user = (
+    metadata: ListMessage["metadata"],
+    options: {
+      readonly tag?: "regular-message" | "interjection-message"
+      readonly queued?: true
+    } = {},
+  ): ListMessage => {
+    const base = userMessage(options.tag ?? "regular-message", "m", "TEXT", "queued")
+    if (options.queued === true) return { ...base, metadata }
+    return { ...base, pendingMode: absent, metadata }
+  }
+  const noTypes = () => Option.none<(content: string) => string>()
+  const btwTypes = (customType: string) =>
+    Option.liftPredicate(
+      (content: string) => `asked: ${content}`,
+      () => customType === "btw",
+    )
+  const read = (
+    message: ListMessage,
+    types: (customType: string) => Option.Option<(content: string) => string> = noTypes,
+  ) => Option.getOrUndefined(readerPrompt(message, types))
+
+  test("the reader's own messages are prompts: typed, or a steer that joined the turn", () => {
+    expect(read(user({ fromClient: true }))).toBe("TEXT")
+    expect(read(user({ fromClient: true }, { tag: "interjection-message" }))).toBe("TEXT")
+  })
+
+  test("a message another agent or an extension sent is not the reader's prompt", () => {
+    // A parent's `session.send`, a delegate start, a wake, a legacy row with no origin.
+    expect(read(user({ extensionId: "@gent/delegate" }))).toBeUndefined()
+    expect(read(user({ extensionId: "@gent/wake", customType: "wake" }))).toBeUndefined()
+    expect(read(user(absent))).toBeUndefined()
+  })
+
+  test("a queued follow-up is not a prompt until it runs, and a hidden message never is", () => {
+    expect(read(user({ fromClient: true }, { queued: true }))).toBeUndefined()
+    expect(read(user({ fromClient: true, hidden: true }))).toBeUndefined()
+  })
+
+  test("a custom type whose renderer names it a prompt is the reader's, in its asked text", () => {
+    expect(read(user({ extensionId: "@gent/btw", customType: "btw" }), btwTypes)).toBe(
+      "asked: TEXT",
+    )
+    expect(read(user({ extensionId: "@gent/x", customType: "other" }), btwTypes)).toBeUndefined()
+  })
+})
+
+describe("promptOnScreen", () => {
+  const known =
+    (rows: ReadonlyArray<number>) =>
+    (index: number): Option.Option<number> =>
+      Option.fromUndefinedOr(rows[index])
+
+  test("a live prompt is on screen while its first row is at or below the viewport's top", () => {
+    // Live content of 10 rows in a viewport of 6 (7 rows less the pinned one): rows 0-3 are cut.
+    const at = (heights: ReadonlyArray<number>) =>
+      promptOnScreen({
+        heightAt: known(heights),
+        index: 1,
+        committed: 0,
+        liveHeight: 10,
+        liveRows: 7,
+        scrollbackRows: 0,
+      })
+    // The prompt's text starts one row into its item, under the row's top margin.
+    expect(at([3, 2, 5])).toBe(true)
+    expect(at([2, 2, 6])).toBe(false)
+  })
+
+  test("a committed prompt is on screen while the history rows after it fit above the region", () => {
+    const committed = (scrollbackRows: number) =>
+      promptOnScreen({
+        heightAt: known([2, 5, 4]),
+        index: 0,
+        committed: 2,
+        liveHeight: 4,
+        liveRows: 10,
+        scrollbackRows,
+      })
+    // Its text row and the reply under it: 1 + 5 rows of history.
+    expect(committed(6)).toBe(true)
+    expect(committed(5)).toBe(false)
+  })
+
+  test("an unmeasured row counts as on screen, so nothing is pinned on a guess", () => {
+    expect(
+      promptOnScreen({
+        heightAt: (index) => Option.liftPredicate(2, () => index === 1),
+        index: 1,
+        committed: 0,
+        liveHeight: 40,
+        liveRows: 5,
+        scrollbackRows: 0,
+      }),
+    ).toBe(true)
+  })
+
+  test("a prompt deep in history reads only the rows on screen, not the history after it", () => {
+    let reads = 0
+    const onScreen = promptOnScreen({
+      heightAt: () => {
+        reads++
+        return Option.some(2)
+      },
+      index: 0,
+      committed: 2_000,
+      liveHeight: 4,
+      liveRows: 10,
+      scrollbackRows: 12,
+    })
+    expect(onScreen).toBe(false)
+    expect(reads).toBeLessThanOrEqual(8)
+  })
 })

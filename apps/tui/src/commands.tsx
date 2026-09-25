@@ -89,6 +89,13 @@ function parseKeybind(config: string): Option.Option<Keybind> {
   return Option.some(keybind)
 }
 
+/**
+ * A keybind with no ctrl or meta is a key the composer also reads: an arrow
+ * moves its cursor, a letter types. It belongs to a command only while the
+ * composer is idle; otherwise the composer keeps it.
+ */
+const isBareKeybind = (keybind: Keybind): boolean => !keybind.ctrl && !keybind.meta
+
 function matchKeybind(
   keybind: Keybind,
   event: { name: string; ctrl?: boolean; shift?: boolean; meta?: boolean },
@@ -116,6 +123,12 @@ interface CommandContextValue {
       meta?: boolean
     },
     commands: ReadonlyArray<Command>,
+    /**
+     * The composer holds no draft and nothing else holds the keys (no
+     * overlay, pane, shell mode or interaction). Only then does a bare
+     * keybind fire.
+     */
+    composerIdle: boolean,
   ) => boolean
   paletteOpen: Accessor<boolean>
   openPalette: () => void
@@ -143,6 +156,7 @@ export function CommandProvider(props: CommandProviderProps) {
       meta?: boolean
     },
     commands: ReadonlyArray<Command>,
+    composerIdle: boolean,
   ): boolean => {
     // Check for palette keybind (Ctrl+P)
     if (event.ctrl === true && event.name === "p" && event.shift !== true && event.meta !== true) {
@@ -154,7 +168,9 @@ export function CommandProvider(props: CommandProviderProps) {
     if (paletteOpen()) return false
 
     for (const cmd of commands) {
-      const kb = Option.flatMap(Option.fromNullishOr(cmd.keybind), parseKeybind)
+      const kb = Option.flatMap(Option.fromNullishOr(cmd.keybind), parseKeybind).pipe(
+        Option.filter((keybind) => composerIdle || !isBareKeybind(keybind)),
+      )
       if (Option.isSome(kb) && matchKeybind(kb.value, event)) {
         cmd.onSelect()
         return true

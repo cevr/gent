@@ -14,6 +14,7 @@ import {
   ClientError,
   describeCellCode,
   expandFileRefs,
+  fitWidth,
   fileUrl,
   formatActivityHeader,
   formatAge,
@@ -1092,6 +1093,15 @@ describe("truncate", () => {
     expect(truncate("anything", 0)).toBe("")
     expect(truncate("abcdefghij", 6)).toBe("abcde…")
     expect(truncate("abcdefghij", 6)).not.toContain("...")
+  })
+})
+
+describe("fitWidth", () => {
+  test("a cut or padded name fills exactly its column budget, wide glyphs included", () => {
+    for (const name of ["漢字漢字漢字漢字漢字", "漢字", "👩‍💻 fix", "👩‍💻".repeat(9), "plain"]) {
+      expect(Bun.stringWidth(fitWidth(name, 12))).toBe(12)
+    }
+    expect(fitWidth("漢字", 6)).toBe("漢字  ")
   })
 })
 

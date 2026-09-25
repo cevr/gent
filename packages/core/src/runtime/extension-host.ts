@@ -2541,6 +2541,12 @@ interface ExtensionSessionControlService {
 /** Decoding entity ids is cheap; bound it so a large registry does not stall a listing. */
 const ACTIVE_LOOP_DECODE_CONCURRENCY = 8
 
+/** When the loop's current turn began; an idle loop runs no turn. */
+const turnStartOf = (state: SessionRuntimeState): Option.Option<number> => {
+  if (state._tag === "Idle") return Option.none()
+  return Option.some(state.startedAtMs)
+}
+
 interface ExtensionHostContextInput {
   /** Built by the caller over `GentPlatform`, which is an Effect rather than a service Tag. */
   readonly host: ExtensionHostPlatform
@@ -2921,10 +2927,11 @@ export const makeExtensionHostContextProvider = (
           Effect.mapError(sessionError("listBranches")),
           inWorkspace,
         ),
-        listSessions: sessions((storage) => storage.listSessions).pipe(
-          Effect.mapError(sessionError("listSessions")),
-          inWorkspace,
-        ),
+        listSessions: (params) =>
+          Option.match(Option.fromUndefinedOr(params?.root), {
+            onNone: () => sessions((storage) => storage.listSessions),
+            onSome: (root) => relationships((storage) => storage.getSessionTree(root)),
+          }).pipe(Effect.mapError(sessionError("listSessions")), inWorkspace),
         listActiveLoops: registry((stateRegistry) =>
           Effect.gen(function* () {
             const workspaceId = yield* CurrentWorkspaceId
@@ -2945,10 +2952,14 @@ export const makeExtensionHostContextProvider = (
                   entityType: AgentLoopActor.name,
                   entityId: entityIdOf(workspaceId, loop.sessionId, loop.branchId),
                 }).pipe(
-                  Effect.map((state) => Option.some(state._tag)),
-                  Effect.catchEager(() => Effect.succeed(Option.none<string>())),
+                  Effect.asSome,
+                  Effect.catchEager(() => Effect.succeed(Option.none<SessionRuntimeState>())),
                   Effect.provideService(ActorStateRegistry, stateRegistry),
-                  Effect.map((status) => ({ ...loop, status })),
+                  Effect.map((state) => ({
+                    ...loop,
+                    status: Option.map(state, (read) => read._tag),
+                    runningSince: Option.flatMap(state, turnStartOf),
+                  })),
                 ),
               { concurrency: ACTIVE_LOOP_DECODE_CONCURRENCY },
             )

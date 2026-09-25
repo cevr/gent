@@ -15,6 +15,7 @@ import {
   clientContributions,
   decoration,
   defineClientExtension,
+  fitWidth,
   formatAge,
   PickerFrame,
   pickerHeight,
@@ -24,6 +25,7 @@ import {
   SelectList,
   type SelectListRow,
   sessionQuery,
+  textWidth,
   truncate,
   usePickerGeometry,
   useTerminalDimensions,
@@ -392,9 +394,9 @@ export function ThreadPane(props: {
 
   const rowLine = (window: ThreadWindow): string => {
     const age = formatAge(DateTime.toEpochMillis(DateTime.nowUnsafe()) - window.updatedAt)
-    const width = Math.max(0, rowWidth() - age.length - 2)
+    const width = Math.max(0, rowWidth() - textWidth(age) - 2)
     const left = `${marker(window)}  ${windowLabel(window)}`
-    return `${truncate(left, width).padEnd(width)}  ${age}`
+    return `${fitWidth(left, width)}  ${age}`
   }
 
   const rows = (): ReadonlyArray<SelectListRow<ThreadWindow>> =>

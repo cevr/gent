@@ -28,7 +28,7 @@ export {
   forkQuestionText,
   type ForkView as ForkViewType,
 } from "./btw.js"
-export { AgentsViewRpc, type AgentRowEntry } from "./agents-view.js"
+export { AgentsViewRpc, type AgentRowEntry, type ListAgentsInput } from "./agents-view.js"
 export {
   WAKE_EXTENSION_ID,
   WAKE_MESSAGE_TYPE,

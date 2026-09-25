@@ -4,7 +4,11 @@ import { Clock, Deferred, Effect, Option } from "effect"
 import { TestClock } from "effect/testing"
 import { createSignal, Show } from "solid-js"
 import { BranchId, dateFromMillis, Session, SessionId } from "@gent/core/protocol"
-import { type AgentRowEntry, DELEGATE_EXTENSION_ID } from "@gent/extensions/client"
+import {
+  type AgentRowEntry,
+  DELEGATE_EXTENSION_ID,
+  type ListAgentsInput,
+} from "@gent/extensions/client"
 import {
   AgentsPane,
   detailLabel,
@@ -121,8 +125,8 @@ describe("Agents controller reload", () => {
 
       const controller = yield* provideClientServices(
         makeAgentsController(
-          (query) => {
-            asked.push(query)
+          ({ query }) => {
+            asked.push(query ?? "")
             return Effect.succeed([])
           },
           () => Effect.never,
@@ -141,6 +145,40 @@ describe("Agents controller reload", () => {
 
       expect(asked).toEqual(["dep", "dep"])
     }),
+  )
+})
+
+describe("Agents controller listing scope", () => {
+  it.scopedLive(
+    "the closed pane reads the current session's subtree, the open pane every session",
+    () =>
+      Effect.gen(function* () {
+        const asked: Array<ListAgentsInput> = []
+        const pane = makePaneSlot()
+        const controller = yield* provideClientServices(
+          makeAgentsController(
+            (input) => {
+              asked.push(input)
+              return Effect.succeed([])
+            },
+            () => Effect.never,
+          ),
+          {
+            currentSession: () =>
+              Option.some({ sessionId: SessionId.make("here"), branchId: BranchId.make("here") }),
+            shell: { pane },
+          },
+        )
+
+        // Only the tray shows: it draws one subtree, so it asks for that one.
+        controller.refresh("")
+        yield* Effect.yieldNow
+        pane.open("agents.pane")
+        controller.refresh("")
+        yield* Effect.yieldNow
+
+        expect(asked).toEqual([{ query: "", root: SessionId.make("here") }, { query: "" }])
+      }),
   )
 })
 
@@ -436,8 +474,8 @@ describe("Agents pane refresh while open", () => {
         const clock = yield* TestClock.make()
         const controller = yield* provideClientServices(
           makeAgentsController(
-            (query) => {
-              asked.push(query)
+            ({ query }) => {
+              asked.push(query ?? "")
               return Effect.succeed([])
             },
             () => Effect.never,
@@ -722,7 +760,7 @@ describe("Agents pane navigation", () => {
 
       const frame = renderFrame(setup)
       expect(frame).toContain("Idle (1)")
-      expect(frame).toContain("Alpha  ·  running")
+      expect(frame).toContain("Alpha · running")
     }),
   )
 
@@ -938,7 +976,7 @@ describe("Agents pane framing", () => {
 
       // One muted footer line, immediately under the bottom rule.
       const bottom = lines.findLastIndex((line) => line.startsWith("────"))
-      expect(lines[bottom + 1]).toContain("↑↓ move   ↵ open   ^x delete   esc close   ^t hide")
+      expect(lines[bottom + 1]).toContain("↑↓ move   ↵ → open   ← esc close   ^x delete   ^t hide")
 
       // Every capability the pane had inside the bordered box still draws:
       // the section heading, the row, and the detail line, each on its own
@@ -1203,6 +1241,152 @@ const rows = [
   root("other-root", "running"),
   child("other-child", "running", "other-root"),
 ]
+
+describe("agents pane rows", () => {
+  /** The pane over `listed`, in the order the server sent them, at `width` columns. */
+  const paneOver = (listed: ReadonlyArray<AgentRowEntry>, width: number) =>
+    Effect.promise(() =>
+      renderWithProviders(
+        () => (
+          <AgentsPane
+            open={true}
+            controller={{
+              rows: () => listed,
+              current: () => Option.none(),
+              error: () => Option.none(),
+              loading: () => false,
+              refresh: () => {},
+              reload: () => {},
+              detail: () => Option.none(),
+              select: () => {},
+              open: () => true,
+            }}
+            onSelect={() => {}}
+            onToggle={() => {}}
+            onDelete={() => {}}
+            onClose={() => {}}
+          />
+        ),
+        { width, height: 24 },
+      ),
+    )
+
+  it.live(
+    "each agent is one line with its glyph, task, what it does now and its time, running first, at 43 columns",
+    () =>
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis
+        const listed: ReadonlyArray<AgentRowEntry> = [
+          {
+            ...child("worker", "running", "root"),
+            name: "delegate: fix the loader",
+            runningSince: now - 72_000,
+            updatedAt: now - 1_000,
+            activity: "running bash bun test",
+          },
+          { ...child("waiting", "idle", "root"), updatedAt: now - 180_000 },
+          { ...child("stored", "inactive", "root"), updatedAt: now - 2 * 3_600_000 },
+        ]
+        const setup = yield* paneOver(listed, 43)
+        const frame = yield* waitForFrame(setup, (next) => next.includes("Agents"), "pane")
+        const lines = frame.split("\n")
+        const rule = lines.find((line) => line.startsWith("────")) ?? ""
+        const lineOf = (text: string) => lines.findIndex((line) => line.includes(text))
+
+        // The running agent: spinner, task, its current activity and how long it has run.
+        const worker = lines[lineOf("· running bash")] ?? ""
+        expect(worker).toMatch(/[◇◈◆] delegate.* · running bash/)
+        expect(worker.trimEnd()).toMatch(/1m 1\ds$/)
+        // The others: a still dot and the age of their last step.
+        expect(lines[lineOf("waiting task")]).toContain("• delegate: waiting task")
+        expect(lines[lineOf("waiting task")]?.trimEnd()).toMatch(/3m$/)
+        expect(lines[lineOf("stored task")]?.trimEnd()).toMatch(/2h$/)
+        // Running first, in the order the server sent.
+        expect(lineOf("· running bash")).toBeLessThan(lineOf("waiting task"))
+        expect(lineOf("waiting task")).toBeLessThan(lineOf("stored task"))
+        // Each row fits inside the rule, with nothing wrapped onto a line of its own.
+        for (const text of ["· running bash", "waiting task", "stored task"]) {
+          expect(lines.filter((line) => line.includes(text))).toHaveLength(1)
+          expect(lines[lineOf(text)]?.trimEnd().length ?? 0).toBeLessThanOrEqual(
+            rule.trimEnd().length,
+          )
+        }
+      }),
+  )
+
+  it.live("a long task name leaves room for what the agent is doing", () =>
+    Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis
+      const listed: ReadonlyArray<AgentRowEntry> = [
+        {
+          ...child("worker", "running", "root"),
+          name: `delegate: ${"x".repeat(120)}`,
+          runningSince: now - 5_000,
+          activity: "running read src/loader.ts",
+        },
+      ]
+      const setup = yield* paneOver(listed, 43)
+      const frame = yield* waitForFrame(setup, (next) => next.includes("delegate:"), "pane")
+      const row = frame.split("\n").find((line) => line.includes("delegate:")) ?? ""
+      expect(row).toContain("…")
+      expect(row).toContain("· running")
+      expect(row.trimEnd()).toMatch(/\ds$/)
+    }),
+  )
+
+  it.live("a child woken after it settled shows its current run time, not its age", () =>
+    Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis
+      const listed: ReadonlyArray<AgentRowEntry> = [
+        {
+          ...child("woken", "running", "root"),
+          createdAt: now - 2 * 3_600_000,
+          updatedAt: now - 1_000,
+          runningSince: now - 5_000,
+          activity: "running bash bun test",
+        },
+      ]
+      const setup = yield* paneOver(listed, 43)
+      const frame = yield* waitForFrame(setup, (next) => next.includes("· running"), "pane")
+      const row = frame.split("\n").find((line) => line.includes("· running")) ?? ""
+      expect(row.trimEnd()).toMatch(/ [56]s$/)
+      expect(row).not.toContain("2h")
+    }),
+  )
+
+  it.live("a wide-character task name keeps the time on the row at 43 columns", () =>
+    Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis
+      const listed: ReadonlyArray<AgentRowEntry> = [
+        {
+          ...child("cjk", "idle", "root"),
+          name: "delegate: 修复加载器的所有问题并重新运行全部测试然后提交",
+          updatedAt: now - 180_000,
+        },
+        {
+          ...child("emoji", "inactive", "root"),
+          name: "delegate: 🚀 ship 🧪 tests 👩‍💻 review 🔥🔥🔥🔥🔥🔥🔥🔥🔥",
+          updatedAt: now - 2 * 3_600_000,
+        },
+        { ...child("waiting", "idle", "root"), updatedAt: now - 180_000 },
+      ]
+      const setup = yield* paneOver(listed, 43)
+      const frame = yield* waitForFrame(setup, (next) => next.includes("delegate:"), "pane")
+      const lines = frame.split("\n")
+      const cjk = lines.find((line) => line.includes("修复")) ?? ""
+      const emoji = lines.find((line) => line.includes("ship")) ?? ""
+      const plain = lines.find((line) => line.includes("waiting task")) ?? ""
+      // The name is cut once, by the row, not clipped again by the renderer.
+      expect(cjk).toMatch(/delegate: 修复加载器.*…\s+3m/)
+      expect(cjk).not.toContain("...")
+      expect(emoji.trimEnd()).toMatch(/…\s+2h$/)
+      // The time column ends on the same display column as a plain-text row.
+      const edge = (row: string) => Bun.stringWidth(row.trimEnd())
+      expect(edge(cjk)).toBe(edge(plain))
+      expect(edge(emoji)).toBe(edge(plain))
+    }),
+  )
+})
 
 describe("agents pane counts and detail", () => {
   it.live("a working loop names the turn it is on, not finished turns and time", () =>
@@ -1528,8 +1712,8 @@ describe("Agents controller across a session switch", () => {
       const active = Option.some(key("only"))
       const controller = yield* provideClientServices(
         makeAgentsController(
-          (query) =>
-            Option.match(Option.fromUndefinedOr(gates.get(query)), {
+          ({ query }) =>
+            Option.match(Option.fromUndefinedOr(gates.get(query ?? "")), {
               onNone: () => Effect.never,
               onSome: (gate) => Deferred.await(gate),
             }),

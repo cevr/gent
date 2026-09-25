@@ -16,7 +16,7 @@ import {
   type ClientRuntime,
   type InteractionRendererComponent,
   makeClientContextLayer,
-  type MessageRenderer,
+  type MessageRendererEntry,
   type PaneOwner,
 } from "./client-facets.js"
 import {
@@ -88,7 +88,7 @@ interface ExtensionUIContextValue {
    */
   readonly setPaneOwner: (owner: Option.Option<PaneOwner>) => void
   /** Message-row renderers by `metadata.customType`. */
-  readonly messageRenderers: Accessor<Map<string, MessageRenderer>>
+  readonly messageRenderers: Accessor<Map<string, MessageRendererEntry>>
   readonly widgets: Accessor<ReadonlyArray<ResolvedWidget>>
   /**
    * Every command the reader can run: the session's own, the client
