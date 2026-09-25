@@ -185,7 +185,7 @@ export const oneGenerate = (
     headers?: Record<string, string>
     body: string
   },
-  prompt: string = "hi",
+  prompt: Prompt.RawInput = "hi",
 ): Effect.Effect<void> =>
   LanguageModel.generateText({ prompt }).pipe(
     Effect.asVoid,
