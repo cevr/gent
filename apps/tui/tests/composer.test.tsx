@@ -66,7 +66,22 @@ const draftSession = {
 const renderWithProviders: typeof renderHarness = (ui, options) =>
   renderHarness(ui, { initialSession: draftSession, ...options })
 
-const testLayer = Layer.merge(BunFileSystem.layer, BunServices.layer)
+/**
+ * Each test runs with its own gent data directory, a scoped temp directory,
+ * so a `!cmd` whose output passes the cap spills there, never into the real
+ * home. The rest of the config still comes from the environment.
+ */
+const scopedDataDir = ConfigProvider.layerAdd(
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const dataDir = yield* fs.makeTempDirectoryScoped({ prefix: "gent-composer-data-" })
+    return ConfigProvider.fromEnvRecord({ GENT_DATA_DIR: dataDir })
+  }),
+  { asPrimary: true },
+)
+const testLayer = scopedDataDir.pipe(
+  Layer.provideMerge(Layer.merge(BunFileSystem.layer, BunServices.layer)),
+)
 const shellTest = it.scopedLive.layer(testLayer)
 
 describe("executeShell", () => {
@@ -155,6 +170,11 @@ describe("executeShell", () => {
       // Output should be truncated to ~2000 lines
       const lineCount = result.output.split("\n").length
       expect(lineCount).toBeLessThanOrEqual(2001)
+      // The spill lands in this test's own data directory, not the real home.
+      const savedPath = yield* Effect.fromOption(result.savedPath)
+      const directory = yield* shellOutputDirectory()
+      expect(directory).toContain("/gent-composer-data-")
+      expect(savedPath.startsWith(`${directory}/`)).toBe(true)
     }),
   )
 
@@ -170,6 +190,9 @@ describe("executeShell", () => {
 
       // Output should be under 50KB
       expect(result.output.length).toBeLessThanOrEqual(50 * 1024)
+      const savedPath = yield* Effect.fromOption(result.savedPath)
+      expect(savedPath.startsWith(`${yield* shellOutputDirectory()}/`)).toBe(true)
+      expect(savedPath).toContain("/gent-composer-data-")
     }),
   )
 
