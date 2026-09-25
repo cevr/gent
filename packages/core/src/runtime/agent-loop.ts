@@ -48,6 +48,8 @@ import {
   type QueuedTurnItem,
   type QueueEntryInfo,
   QueueSnapshot,
+  type RequesterBranch,
+  requesterBranchKey,
   SteeringQueueEntryInfo,
 } from "../domain/message.js"
 import {
@@ -81,8 +83,6 @@ import {
   queueFollowUpOn,
   type RemoveFollowUpInput,
   type StopMessageInput,
-  type StopRequester,
-  stopRequesterKey,
   stopMessageOn,
   type RequestExtensionInput,
   type RespondInteractionInput,
@@ -644,6 +644,12 @@ export type LoopInbox = {
    * each sees what the other decided.
    */
   readonly withdrawSteering: (messageId: MessageId) => Effect.Effect<boolean, AgentLoopError>
+  /**
+   * Take back every waiting steering item one other branch sent (its
+   * `requesterBranchKey`); true when one was taken. A joined or taken item
+   * stays, as for `withdrawSteering`.
+   */
+  readonly withdrawSteeringFrom: (sender: string) => Effect.Effect<boolean, AgentLoopError>
   /** Does the loop still own this message, anywhere? */
   readonly holds: (state: AgentLoopState, messageId: MessageId) => boolean
   readonly moveToPhase: (next: LoopState) => Effect.Effect<void>
@@ -879,6 +885,14 @@ export const makeLoopInbox = (
         return { ...queue, steering: kept }
       }).pipe(Effect.withSpan("LoopInbox.withdrawSteering"))
 
+    const sentBy = (sender: string) => (item: QueuedTurnItem) =>
+      Predicate.isNotUndefined(item.sender) && requesterBranchKey(item.sender) === sender
+    const withdrawSteeringFrom = (sender: string) =>
+      removeFromQueue("withdrew a sender's steering", (queue) => {
+        if (!queue.steering.some(sentBy(sender))) return queue
+        return { ...queue, steering: queue.steering.filter(Predicate.not(sentBy(sender))) }
+      }).pipe(Effect.withSpan("LoopInbox.withdrawSteeringFrom"))
+
     const dropSteeringDelivered = (delivered: ReadonlyArray<QueuedTurnItem>) => {
       if (delivered.length === 0) return Effect.void
       const deliveredIds = new Set<string>(delivered.map((item) => item.message.id))
@@ -946,6 +960,7 @@ export const makeLoopInbox = (
       drain,
       withdraw,
       withdrawSteering,
+      withdrawSteeringFrom,
       holds: loopHoldsMessage,
       moveToPhase,
     } satisfies LoopInbox
@@ -1208,7 +1223,10 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
   /**
    * True when a turn (the one `messageId` names, if given) was running and is
    * now stopping. `by` names the stop's requester, recorded when this is the
-   * turn's first interrupt.
+   * turn's first interrupt. The requester's own steers that wait to join the
+   * turn go with it: they are taken back under the interrupt permit, before
+   * the turn's end can hand one on as the next turn. The requester reports
+   * the stopped turn, so no later stop of those steers names the branch again.
    */
   const interrupt = Effect.fn("AgentLoop.interrupt")(function* (
     messageId?: MessageId,
@@ -1223,7 +1241,10 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
       // The latch is set before anything can resume the parked turn, so an
       // answer that wins the resume still runs a turn that stops at once.
       if (Predicate.isUndefined(by)) yield* scope.turnInterruption.interrupt
-      else yield* scope.turnInterruption.interruptFor(by)
+      else {
+        yield* scope.turnInterruption.interruptFor(by)
+        yield* scope.inbox.withdrawSteeringFrom(by)
+      }
       if (snap._tag === "WaitingForInteraction") return { latched: true, waiting: true }
       yield* interruptActiveStream(scope.activeStreamRef)
       yield* scope.interruptToolWork
@@ -1682,7 +1703,9 @@ const makeAgentLoopBehavior = (
           if (command._tag === "Interject" && isOwnBranch(command)) {
             return followUp.steer(command, Option.fromUndefinedOr(clientRequest))
           }
-          return steerLoop(command).pipe(provideLoopClient)
+          // The target records this branch as the sender: a stop this branch
+          // asks for there takes the steer back with the turn it waits to join.
+          return steerLoop(command, { sessionId, branchId }).pipe(provideLoopClient)
         },
         stopMessage: (input) => stopMessageOn(input).pipe(provideLoopClient),
         holdResident: residency.held,
@@ -2819,6 +2842,7 @@ const buildAgentLoopActorHandlers = (config: {
     const interjectionItem = Effect.fn("AgentLoopActor.interjectionItem")(function* (
       commandId: ActorCommandId,
       command: InterjectCommand,
+      sender: Option.Option<RequesterBranch>,
     ) {
       const message = Message.cases.interjection.make({
         id: interjectionMessageId(commandId),
@@ -2829,7 +2853,11 @@ const buildAgentLoopActorHandlers = (config: {
         createdAt: yield* DateTime.nowAsDate,
         ...Record.filter({ metadata: command.metadata }, Predicate.isNotUndefined),
       })
-      const item: QueuedTurnItem = { message, wake: command.wake }
+      const item: QueuedTurnItem = {
+        message,
+        wake: command.wake,
+        ...Record.filter({ sender: Option.getOrUndefined(sender) }, Predicate.isNotUndefined),
+      }
       return item
     })
 
@@ -2846,11 +2874,12 @@ const buildAgentLoopActorHandlers = (config: {
      * read the state first and steered second would race a turn that ended in
      * between.
      *
-     * `start` is the one difference between the two callers. The mailbox
-     * starts at once (`startNextQueuedTurnIfIdle`: the take and the start run
-     * in one permit region). A re-entrant caller holds the
-     * side-mutation permit, so its wake starts after the permit is released
-     * (`wakeAfterPermit`).
+     * `start` and `sender` are the differences between the two callers. The
+     * mailbox starts at once (`startNextQueuedTurnIfIdle`: the take and the
+     * start run in one permit region), and carries the other branch that sent
+     * the steer. A re-entrant caller holds the side-mutation permit, so its
+     * wake starts after the permit is released (`wakeAfterPermit`); its steer
+     * comes from this branch and names no sender.
      */
     const interject = Effect.fn("AgentLoopActor.interject")(function* (
       handle: AgentLoopBehavior,
@@ -2858,8 +2887,9 @@ const buildAgentLoopActorHandlers = (config: {
       command: InterjectCommand,
       clientRequest: Option.Option<ClientRequestGrant>,
       start: (handle: AgentLoopBehavior) => Effect.Effect<void, AgentLoopError>,
+      sender: Option.Option<RequesterBranch>,
     ) {
-      const item = yield* interjectionItem(commandId, command)
+      const item = yield* interjectionItem(commandId, command, sender)
       const { result: before } = yield* admitWithOrigin(item, clientRequest, (admitted) =>
         handle.inbox.steer(admitted),
       )
@@ -2884,6 +2914,7 @@ const buildAgentLoopActorHandlers = (config: {
         command,
         clientRequest,
         wakeAfterPermit,
+        Option.none(),
       )
     })
 
@@ -2901,12 +2932,15 @@ const buildAgentLoopActorHandlers = (config: {
      * branch, so the take-back answers false and the branch is named once.
      * A take-back while any other stop (the user's, another branch's) stops
      * that turn is true: nobody else tells the requester its steer is gone.
+     * A stop that reaches the running turn takes the requester's own waiting
+     * steers with it (`interrupt`), so a later stop of one finds nothing,
+     * whether that turn has ended by then or not.
      */
     const stopMessage = Effect.fn("AgentLoopActor.stopMessage")(function* (
       messageId: MessageId,
-      requester: Option.Option<StopRequester>,
+      requester: Option.Option<RequesterBranch>,
     ) {
-      const by = Option.map(requester, stopRequesterKey)
+      const by = Option.map(requester, requesterBranchKey)
       // Read before the cancellation is recorded: a turn that starts after
       // the record latches itself, and that latch is this stop's.
       const latch = yield* Option.match(lifecycleHandle(yield* Ref.get(lifecycleRef)), {
@@ -2938,6 +2972,7 @@ const buildAgentLoopActorHandlers = (config: {
     const applySteer = Effect.fn("AgentLoopActor.applySteer")(function* (
       commandId: ActorCommandId,
       command: SteerCommandType,
+      sender: Option.Option<RequesterBranch>,
     ) {
       yield* ensureTarget(command)
       yield* markWrite
@@ -2958,8 +2993,13 @@ const buildAgentLoopActorHandlers = (config: {
 
         case "Interject":
           // A mailbox steer carries no client grant: it came from outside the branch.
-          yield* interject(handle, commandId, command, Option.none(), (h) =>
-            startNextQueuedTurnIfIdle(h),
+          yield* interject(
+            handle,
+            commandId,
+            command,
+            Option.none(),
+            (h) => startNextQueuedTurnIfIdle(h),
+            sender,
           )
           return
       }
@@ -2991,7 +3031,11 @@ const buildAgentLoopActorHandlers = (config: {
           }).pipe(provideActorWorkspace),
       ),
       Steer: Effect.fn("AgentLoop.Steer")(({ operation }: HandlerRequest<SteerInput>) =>
-        applySteer(operation.commandId, operation.command).pipe(provideActorWorkspace),
+        applySteer(
+          operation.commandId,
+          operation.command,
+          Option.fromUndefinedOr(operation.sender),
+        ).pipe(provideActorWorkspace),
       ),
       RespondInteraction: Effect.fn("AgentLoop.RespondInteraction")(
         ({ operation }: HandlerRequest<RespondInteractionInput>) =>

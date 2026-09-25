@@ -1729,6 +1729,16 @@ export const emptyQueueSnapshot = (): QueueSnapshot =>
 // only module that interprets these values; this file declares their shape.
 
 /**
+ * A branch that asks another branch for something: it steers that branch, or
+ * it stops what a message opens there. A stop from a branch takes back the
+ * steers the same branch sent into the turn it stops.
+ */
+export const RequesterBranch = Schema.Struct({ sessionId: SessionId, branchId: BranchId })
+export type RequesterBranch = typeof RequesterBranch.Type
+export const requesterBranchKey = (branch: RequesterBranch): string =>
+  `${branch.sessionId}/${branch.branchId}`
+
+/**
  * One turn waiting in a branch's queue. A row written before admission moved
  * onto the session may still carry `agentOverride`, `runSpec` or
  * `interactive`; the struct ignores keys it does not declare, so the row
@@ -1736,6 +1746,12 @@ export const emptyQueueSnapshot = (): QueueSnapshot =>
  */
 export const QueuedTurnItem = Schema.Struct({
   message: Message,
+  /**
+   * The other branch that steered this item in. A stop that branch asks for
+   * takes the item back with the turn it waited to join. Absent on the
+   * branch's own items and on rows written before the field.
+   */
+  sender: Schema.optional(RequesterBranch),
   /**
    * The admitter asked for a turn even when the branch has no prior history.
    *

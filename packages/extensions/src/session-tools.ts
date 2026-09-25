@@ -310,7 +310,10 @@ export const sessionMessageBody = (from: SessionMessageSender, content: string):
  * turn, and the sender stops it when its own turn is interrupted: the user
  * who stops a parent means its work, and a correction the parent sent is
  * part of it. A message that still waits in the child's queue is taken back
- * the same way, by the one stop that names its message. A turn the user
+ * the same way, by the one stop that names its message. When the sender's
+ * delegate stop reached the child's turn first, that stop took the waiting
+ * message with the turn: the send stop then reaches nothing, and the child
+ * is named once, under the delegate's stopped children. A turn the user
  * opened in the child is not the sender's, and the stop never names it.
  *
  * Only sends to a child are kept: an interrupt reaches down the spawn tree,
