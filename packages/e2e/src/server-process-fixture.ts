@@ -136,7 +136,7 @@ export const spawnServer = ({
           stderr: "ignore",
         }),
       ),
-      (proc) => killProcess(proc).pipe(Effect.andThen(waitForProcessExit(proc.pid, 5_000))),
+      (proc) => stopProcess(proc, 5_000),
     )
     const url = yield* readReadyUrl(proc, readyWithin)
     return { url: `${url}/rpc`, proc }
@@ -164,3 +164,19 @@ export const killProcess = (proc: Bun.Subprocess, signal?: NodeJS.Signals): Effe
   Effect.sync(() => {
     proc.kill(signal)
   }).pipe(Effect.ignoreCause)
+
+/**
+ * Stop `proc`: SIGTERM, and wait up to `graceMs` for its exit. A process
+ * still alive then gets SIGKILL and a second wait; one that outlives both is
+ * logged, since nothing more can stop it.
+ */
+export const stopProcess = (proc: Bun.Subprocess, graceMs: number): Effect.Effect<void> =>
+  Effect.gen(function* () {
+    yield* killProcess(proc)
+    if (yield* waitForProcessExit(proc.pid, graceMs)) return
+    yield* killProcess(proc, "SIGKILL")
+    if (yield* waitForProcessExit(proc.pid, graceMs)) return
+    yield* Effect.logWarning("process outlived SIGTERM and SIGKILL").pipe(
+      Effect.annotateLogs({ pid: proc.pid, graceMs }),
+    )
+  })

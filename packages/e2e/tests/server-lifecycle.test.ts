@@ -9,6 +9,7 @@ import { makeTempDirectoryScoped } from "@gent/core/test-utils"
 import {
   killProcess,
   spawnServer,
+  stopProcess,
   waitForProcessExit,
   waitUntil,
 } from "../src/server-process-fixture"
@@ -42,6 +43,34 @@ describe("server lifecycle", () => {
         expect(yield* answersWithin(port, "8 seconds")).toBe(false)
       }).pipe(Effect.timeout("12 seconds")),
     15_000,
+  )
+
+  it.live(
+    "a process that ignores SIGTERM is stopped with SIGKILL after the grace period",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          // `exec` keeps the ignored SIGTERM, so the pid that prints "ready" ignores it.
+          const proc = yield* Effect.acquireRelease(
+            Effect.sync(() =>
+              // oxlint-disable-next-line effect/noGlobals -- stopProcess takes the Bun.Subprocess spawnServer makes.
+              Bun.spawn(["sh", "-c", 'trap "" TERM; echo ready; exec sleep 30'], {
+                stdout: "pipe",
+                stderr: "ignore",
+              }),
+            ),
+            // Test cleanup when the stop under test failed to end it.
+            (child) => killProcess(child, "SIGKILL"),
+          )
+          const reader = proc.stdout.getReader()
+          const first = yield* Effect.promise(() => reader.read())
+          expect(new TextDecoder().decode(first.value)).toContain("ready")
+          reader.releaseLock()
+          yield* stopProcess(proc, 300)
+          expect(yield* waitForProcessExit(proc.pid, 2_000)).toBe(true)
+        }),
+      ).pipe(Effect.timeout("8 seconds")),
+    10_000,
   )
 
   it.live(
