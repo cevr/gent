@@ -31,7 +31,14 @@ The SAFETY rules live once, in `.claude/skills/architecture-loop/safety.md` ([`s
 
 5. **Triage.** Group the findings into batches, one per set of files (core, extensions, TUI, tooling, efficiency, live fixes). Write the pass section of the ledger: the verdict, the decisions, and a triage table (batch, rift, items). Done when every finding is in a batch or rejected with a receipt.
 
-6. **Apply.** Each batch gets its own rift from the warm source at main: `rift create --name p<N>-<batch> --copy-all <warm source>`, then create branch `p<N>-<batch>` inside it. Rift needs a filesystem with reflinks; where it has none, a git worktree on a new branch `p<N>-<batch>` from main is the fallback, with `bun install` and `bun run build` run in it, and "rift" in the steps below means that worktree. Launch one apply agent per batch from [`prompts/apply.md`](prompts/apply.md). Batches that touch disjoint files run in parallel; a batch that needs another batch's files starts from main after that batch merges. Done per batch when the rift tree is clean and its last commit passed the hook.
+6. **Apply.** Each batch gets its own rift from the warm source at main. Rift needs a filesystem with reflinks.
+   - On the devbox:
+     - The warm source is `/workspaces/gent` (btrfs), a clone whose `origin` is the main checkout.
+     - Refresh it before each pass with `git -C /workspaces/gent pull --ff-only`, then `bun install --frozen-lockfile` if the lockfile changed, then `bun run build`.
+     - Create each rift with `rift create /workspaces/gent --into /workspaces/.rifts --copy-all --name p<N>-<batch>`, then create branch `p<N>-<batch>` inside it.
+   - The merge step fetches the branch into the main checkout first: `git fetch <rift> p<N>-<batch>:p<N>-<batch>`.
+   - Remove a merged rift with `rift remove <rift>`.
+   - Where no reflink filesystem exists, the fallback is a git worktree on a new branch `p<N>-<batch>` from main. Run `bun install` and `bun run build` in it, and "rift" in the steps below means that worktree. Launch one apply agent per batch from [`prompts/apply.md`](prompts/apply.md). Batches that touch disjoint files run in parallel; a batch that needs another batch's files starts from main after that batch merges. Done per batch when the rift tree is clean and its last commit passed the hook.
 
 7. **Counsel.** One round per batch, from [`prompts/counsel.md`](prompts/counsel.md). The apply agent fixes each defect with a test that is red first, in one fixup round, then moves on. Done when every defect has a commit or a written rejection.
 
