@@ -3742,6 +3742,9 @@ interface ManifestText {
   readonly packageJson: PackageJson
 }
 
+/** One exact semver version, with optional prerelease and build parts. */
+const EXACT_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/
+
 /** The root blocks that map a package name to a version. */
 const PIN_BLOCKS: ReadonlyArray<"catalog" | "overrides"> = ["catalog", "overrides"]
 
@@ -3768,6 +3771,15 @@ export const findEffectVersionDrift = (
     ]
   }
   const version = expected.value
+  if (!EXACT_VERSION.test(version)) {
+    return [
+      {
+        file: root.manifest,
+        line: lineInBlock(root.text, "catalog", '"effect":'),
+        message: `catalog["effect"] is "${version}", not an exact version; a range, tag or catalog reference lets the install pick a version the patches and pins do not name`,
+      },
+    ]
+  }
   const pins: ReadonlyArray<EffectPin> = [
     ...PIN_BLOCKS.flatMap((block) =>
       Object.entries(root.packageJson[block] ?? {}).map(([name, pinned]) => ({

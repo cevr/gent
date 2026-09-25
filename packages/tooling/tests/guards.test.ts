@@ -3499,17 +3499,17 @@ describe("the Effect packages share one version", () => {
     "{",
     '  "devDependencies": { "effect": "catalog:", "@effect/tsgo": "0.41.0" },',
     '  "overrides": {',
-    '    "effect": "4.1",',
-    '    "@effect/ai-openai": "4.0"',
+    '    "effect": "4.1.0",',
+    '    "@effect/ai-openai": "4.0.0"',
     "  },",
     '  "catalog": {',
-    '    "effect": "4.1",',
-    '    "@effect/platform-bun": "4.1",',
+    '    "effect": "4.1.0",',
+    '    "@effect/platform-bun": "4.1.0",',
     '    "picomatch": "^4"',
     "  },",
     '  "patchedDependencies": {',
     '    "@opentui/core@0.5.11": "patches/a.patch",',
-    '    "@effect/ai-anthropic@4.0": "patches/b.patch"',
+    '    "@effect/ai-anthropic@4.0.0": "patches/b.patch"',
     "  }",
     "}",
   ].join("\n")
@@ -3518,11 +3518,11 @@ describe("the Effect packages share one version", () => {
     text: rootText,
     packageJson: {
       devDependencies: { effect: "catalog:", "@effect/tsgo": "0.41.0" },
-      overrides: { effect: "4.1", "@effect/ai-openai": "4.0" },
-      catalog: { effect: "4.1", "@effect/platform-bun": "4.1", picomatch: "^4" },
+      overrides: { effect: "4.1.0", "@effect/ai-openai": "4.0.0" },
+      catalog: { effect: "4.1.0", "@effect/platform-bun": "4.1.0", picomatch: "^4" },
       patchedDependencies: {
         "@opentui/core@0.5.11": "patches/a.patch",
-        "@effect/ai-anthropic@4.0": "patches/b.patch",
+        "@effect/ai-anthropic@4.0.0": "patches/b.patch",
       },
     },
   }
@@ -3530,8 +3530,8 @@ describe("the Effect packages share one version", () => {
   test("an override and a patch behind catalog.effect are reported at their lines", () => {
     const findings = findEffectVersionDrift(root, [])
     expect(findings.map((finding) => [finding.line, finding.message])).toEqual([
-      [5, expect.stringContaining('overrides["@effect/ai-openai"] pins 4.0')],
-      [14, expect.stringContaining('patchedDependencies["@effect/ai-anthropic"] pins 4.0')],
+      [5, expect.stringContaining('overrides["@effect/ai-openai"] pins 4.0.0')],
+      [14, expect.stringContaining('patchedDependencies["@effect/ai-anthropic"] pins 4.0.0')],
     ])
   })
 
@@ -3539,7 +3539,7 @@ describe("the Effect packages share one version", () => {
     const sdkText = [
       "{",
       '  "dependencies": {',
-      '    "@effect/opentelemetry": "4.1"',
+      '    "@effect/opentelemetry": "4.1.0"',
       "  }",
       "}",
     ].join("\n")
@@ -3547,15 +3547,15 @@ describe("the Effect packages share one version", () => {
       ...root,
       packageJson: {
         ...root.packageJson,
-        overrides: { effect: "4.1" },
-        patchedDependencies: { "@effect/ai-anthropic@4.1": "patches/b.patch" },
+        overrides: { effect: "4.1.0" },
+        patchedDependencies: { "@effect/ai-anthropic@4.1.0": "patches/b.patch" },
       },
     }
     const findings = findEffectVersionDrift(agreeing, [
       {
         manifest: "packages/sdk/package.json",
         text: sdkText,
-        packageJson: { dependencies: { "@effect/opentelemetry": "4.1" } },
+        packageJson: { dependencies: { "@effect/opentelemetry": "4.1.0" } },
       },
     ])
     expect(findings).toEqual([
@@ -3563,9 +3563,25 @@ describe("the Effect packages share one version", () => {
         file: "packages/sdk/package.json",
         line: 3,
         message: expect.stringContaining(
-          'dependencies["@effect/opentelemetry"] is the literal "4.1"',
+          'dependencies["@effect/opentelemetry"] is the literal "4.1.0"',
         ),
       },
     ])
+  })
+
+  test("catalog.effect must be one exact version, not a range, a tag or a catalog reference", () => {
+    const withEffect = (effect: string) => {
+      const text = ["{", '  "catalog": {', `    "effect": "${effect}"`, "  }", "}"].join("\n")
+      return findEffectVersionDrift(
+        { manifest: "package.json", text, packageJson: { catalog: { effect } } },
+        [],
+      ).map((finding) => [finding.line, finding.message])
+    }
+    for (const spec of ["^4.0.0", "~4.0.0", ">=4.0.0 <5", "latest", "catalog:", "4.x"]) {
+      expect(withEffect(spec)).toEqual([
+        [3, expect.stringContaining(`catalog["effect"] is "${spec}"`)],
+      ])
+    }
+    expect(withEffect("4.0.0-rc.112")).toEqual([])
   })
 })
