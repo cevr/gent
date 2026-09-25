@@ -1,6 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import {
   Cause,
+  Crypto,
   Deferred,
   Effect,
   Exit,
@@ -55,6 +56,12 @@ import {
   waitFor,
 } from "@gent/core/test-utils"
 import { SessionId } from "@gent/core/protocol"
+import { BunCrypto } from "@effect/platform-bun"
+
+/** The Crypto a host provides; the OpenAI driver captures it at setup. */
+const hostCrypto = Effect.runSync(
+  Effect.service(Crypto.Crypto).pipe(Effect.provide(BunCrypto.layer)),
+)
 
 // ── credential cache ────────────────────────────────────────────────────────
 
@@ -224,7 +231,13 @@ describe("OpenAI credential cache — token endpoint timeout", () => {
       )
       const cellRef =
         yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
-      const driver = buildOpenAIModelDriver(cellRef, new Map(), Option.none(), testCatalogSource())
+      const driver = buildOpenAIModelDriver(
+        cellRef,
+        new Map(),
+        Option.none(),
+        testCatalogSource(),
+        hostCrypto,
+      )
       const store = makeFakeAuthStore(
         { lastWritten: Option.none(), failNext: false },
         Option.some({ access: "stale-access", refresh: "stale-refresh", expires: 0 }),
@@ -998,6 +1011,7 @@ describe("OpenAI device-code login", () => {
         new Map(),
         Option.none(),
         testCatalogSource(),
+        hostCrypto,
       )
       const methods = Option.fromNullishOr(driver.auth?.methods).pipe(Option.getOrElse(() => []))
       expect(methods.map((method) => `${method.type}:${method.label}`)).toEqual([
@@ -1963,6 +1977,7 @@ describe("OpenAI cache routing", () => {
         noopCallbacks(),
         Option.none(),
         testCatalogSource(),
+        hostCrypto,
       )
       const codec = Schema.fromJsonString(
         Schema.Struct({ prompt_cache_key: Schema.optional(Schema.String) }),
@@ -2016,6 +2031,7 @@ describe("OpenAI cache routing", () => {
         noopCallbacks(),
         Option.none(),
         testCatalogSource(),
+        hostCrypto,
       )
       const codec = Schema.fromJsonString(Schema.Struct({ prompt_cache_key: Schema.String }))
       const fetchState = makeFakeFetchState()
@@ -2049,6 +2065,7 @@ describe("OpenAI cache routing", () => {
         noopCallbacks(),
         Option.none(),
         testCatalogSource(),
+        hostCrypto,
       )
       const fetchState = makeFakeFetchState()
       for (const cacheKey of ["same-session", "same-session", "other-session"]) {
@@ -2136,6 +2153,7 @@ describe("OpenAI reasoning replay", () => {
         noopCallbacks(),
         Option.none(),
         testCatalogSource(),
+        hostCrypto,
       )
       for (const authInfo of [makeApiAuthInfo("sk-replay"), makeOAuthInfo()]) {
         const model = yield* driver.resolveModel("gpt-5.4", authInfo, { reasoning: "high" })
@@ -2203,6 +2221,7 @@ describe("OpenAI reasoning replay", () => {
             noopCallbacks(),
             Option.none(),
             testCatalogSource(),
+            hostCrypto,
           )
           const generate = (state: FakeFetchState) =>
             Effect.gen(function* () {
@@ -2243,6 +2262,7 @@ describe("OpenAI reasoning replay", () => {
         noopCallbacks(),
         Option.none(),
         testCatalogSource(),
+        hostCrypto,
       )
       const other = encodeExternalJson({
         error: {
@@ -2311,6 +2331,7 @@ describe("OpenAI reasoning hints", () => {
         noopCallbacks(),
         Option.none(),
         testCatalogSource(),
+        hostCrypto,
       )
       const fetchState = makeFakeFetchState()
       for (const modelName of models) {
@@ -2424,6 +2445,7 @@ describe("buildOpenAIModelDriver — OAuth callback state", () => {
         noopCallbacks(),
         Option.none(),
         testCatalogSource(),
+        hostCrypto,
       )
       const callback = Option.fromUndefinedOr(driver.auth?.callback)
       if (Option.isNone(callback)) {
@@ -2456,6 +2478,7 @@ describe("buildOpenAIModelDriver — OAuth login lifetime", () => {
         pending,
         Option.none(),
         testCatalogSource(),
+        hostCrypto,
       )
       const authorize = Option.fromUndefinedOr(driver.auth?.authorize)
       const callback = Option.fromUndefinedOr(driver.auth?.callback)
@@ -2567,6 +2590,7 @@ describe("buildOpenAIModelDriver — token endpoint outage", () => {
           noopCallbacks(),
           Option.none(),
           testCatalogSource(),
+          hostCrypto,
         )
         let tokenEndpointDown = true
         const fetchState = makeFakeFetchState()
@@ -2615,6 +2639,7 @@ describe("buildOpenAIModelDriver — revoked sign-in", () => {
         noopCallbacks(),
         Option.none(),
         testCatalogSource(),
+        hostCrypto,
       )
       const fetchState = makeFakeFetchState()
       const fetchLayer = fakeFetchLayer(fetchState, (request) => {
@@ -2658,6 +2683,7 @@ describe("buildOpenAIModelDriver — revoked sign-in", () => {
         noopCallbacks(),
         Option.none(),
         testCatalogSource(),
+        hostCrypto,
       )
       // The held token passes the resolve-time check; the server then
       // revokes it: the model request gets a 401 and the refresh a 400.
@@ -2772,6 +2798,7 @@ describe("buildOpenAIModelDriver — a new sign-in replaces the held account", (
         pending,
         Option.none(),
         testCatalogSource(),
+        hostCrypto,
       )
       const store = makeStore()
       yield* signIn(driver, pending, store.write)
@@ -2818,6 +2845,7 @@ describe("buildOpenAIModelDriver — a new sign-in replaces the held account", (
         pending,
         Option.none(),
         testCatalogSource(),
+        hostCrypto,
       )
       const fetchState = makeFakeFetchState()
       const fetchLayer = fakeFetchLayer(fetchState, (request) => {
@@ -2885,7 +2913,13 @@ describe("buildOpenAIModelDriver — a new sign-in replaces the held account", (
           makeDurableCell(oldAccount),
         )
         const pending: PendingCallbacks = new Map()
-        const driverA = buildOpenAIModelDriver(cellA, pending, Option.none(), testCatalogSource())
+        const driverA = buildOpenAIModelDriver(
+          cellA,
+          pending,
+          Option.none(),
+          testCatalogSource(),
+          hostCrypto,
+        )
         // The new sign-in expires inside the freshness margin, so profile B refreshes it.
         yield* signIn(driverA, pending, store.write, { ...newSignIn, expires: 30_000 })
 
@@ -2924,7 +2958,13 @@ describe("buildOpenAIModelDriver — a new sign-in replaces the held account", (
           makeDurableCell(oldAccount),
         )
         const pending: PendingCallbacks = new Map()
-        const driverA = buildOpenAIModelDriver(cellA, pending, Option.none(), testCatalogSource())
+        const driverA = buildOpenAIModelDriver(
+          cellA,
+          pending,
+          Option.none(),
+          testCatalogSource(),
+          hostCrypto,
+        )
 
         const refreshing = yield* Effect.forkChild(profileB.getFresh)
         yield* Deferred.await(refreshStarted)
@@ -2994,7 +3034,13 @@ describe("buildOpenAIModelDriver — a new sign-in replaces the held account", (
           makeDurableCell(oldAccount),
         )
         const pending: PendingCallbacks = new Map()
-        const driverA = buildOpenAIModelDriver(cellA, pending, Option.none(), testCatalogSource())
+        const driverA = buildOpenAIModelDriver(
+          cellA,
+          pending,
+          Option.none(),
+          testCatalogSource(),
+          hostCrypto,
+        )
         yield* signIn(driverA, pending, store.write)
 
         // The retry finds the sign-in, not the credential the rotation replaced.
@@ -3020,6 +3066,7 @@ describe("buildOpenAIModelDriver — OAuth path uses external cache Ref", () => 
         noopCallbacks(),
         Option.none(),
         testCatalogSource(),
+        hostCrypto,
       )
       // Pre-seed the cred Ref directly (test owns it). If
       // `makeOauthOpenAILayer` regressed to allocating its own internal
@@ -3064,6 +3111,7 @@ describe("buildOpenAIModelDriver — OAuth path uses external cache Ref", () => 
           noopCallbacks(),
           Option.none(),
           testCatalogSource(),
+          hostCrypto,
         )
         const model = yield* driver.resolveModel("gpt-5.4", makeOAuthInfo())
         const fetchState = makeFakeFetchState()
@@ -3097,6 +3145,7 @@ describe("buildOpenAIModelDriver — OAuth path uses external cache Ref", () => 
         noopCallbacks(),
         Option.none(),
         testCatalogSource(),
+        hostCrypto,
       )
       const model = yield* driver.resolveModel("gpt-5.4", makeOAuthInfo())
       const fetchState = makeFakeFetchState()
@@ -3134,6 +3183,7 @@ describe("buildOpenAIModelDriver — OAuth path uses external cache Ref", () => 
           noopCallbacks(),
           Option.none(),
           testCatalogSource(),
+          hostCrypto,
         )
         const model1 = yield* driver.resolveModel("gpt-5.4", makeOAuthInfo())
         const fetchState1 = makeFakeFetchState()
@@ -3168,6 +3218,7 @@ describe("buildOpenAIModelDriver — OAuth path uses external cache Ref", () => 
         noopCallbacks(),
         Option.none(),
         testCatalogSource(),
+        hostCrypto,
       )
       for (const modelName of ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"]) {
         const model = yield* driver.resolveModel(modelName, makeOAuthInfo())
@@ -3192,6 +3243,7 @@ describe("buildOpenAIModelDriver — OAuth path uses external cache Ref", () => 
         noopCallbacks(),
         Option.none(),
         testCatalogSource(),
+        hostCrypto,
       )
       const error = yield* driver.resolveModel("gpt-3.5-turbo", makeOAuthInfo()).pipe(Effect.flip)
       expect(error.message).toMatch(/not available with ChatGPT OAuth/)
@@ -3226,6 +3278,7 @@ describe("buildOpenAIModelDriver — 401 invalidate seam fires through the rewir
           noopCallbacks(),
           Option.none(),
           testCatalogSource(),
+          hostCrypto,
         )
         const model = yield* driver.resolveModel("gpt-5.4", makeOAuthInfo())
         const fetchState = makeFakeFetchState()
@@ -3276,6 +3329,7 @@ describe("buildOpenAIModelDriver — API-key path is plain SDK", () => {
           noopCallbacks(),
           Option.none(),
           testCatalogSource(),
+          hostCrypto,
         )
         const model = yield* driver.resolveModel("gpt-5.4", makeApiAuthInfo("sk-test-1234"))
         const fetchState = makeFakeFetchState()
@@ -3300,6 +3354,7 @@ describe("buildOpenAIModelDriver — API-key path is plain SDK", () => {
           noopCallbacks(),
           Option.none(),
           testCatalogSource(),
+          hostCrypto,
         )
         // The compaction summary's hints (core turn.ts) plus a user-set agent temperature.
         const model = yield* driver.resolveModel("gpt-5", makeApiAuthInfo("sk-test-1234"), {
@@ -3342,6 +3397,7 @@ describe("buildOpenAIModelDriver — API-key path is plain SDK", () => {
           noopCallbacks(),
           Option.none(),
           testCatalogSource(),
+          hostCrypto,
         )
         const hints: ProviderHints = { reasoning: "high" }
         // The documented refusal: developers.openai.com/api/docs/guides/reasoning.
@@ -3385,6 +3441,7 @@ describe("buildOpenAIModelDriver — API-key path is plain SDK", () => {
         noopCallbacks(),
         Option.none(),
         testCatalogSource(),
+        hostCrypto,
       )
       const state = makeFakeFetchState()
       const model = yield* driver.resolveModel("gpt-5", makeApiAuthInfo("sk-test-1234"), {
@@ -3411,6 +3468,7 @@ describe("buildOpenAIModelDriver — API-key path is plain SDK", () => {
         noopCallbacks(),
         Option.none(),
         testCatalogSource(),
+        hostCrypto,
       )
       const model = yield* driver.resolveModel("gpt-4.1", makeApiAuthInfo("sk-test-1234"), {
         temperature: 0.3,
@@ -3433,6 +3491,7 @@ describe("buildOpenAIModelDriver — API-key path is plain SDK", () => {
         noopCallbacks(),
         Option.none(),
         testCatalogSource(),
+        hostCrypto,
       )
       const model = yield* driver.resolveModel("gpt-5.4", makeApiAuthInfo("sk-test-1234"))
       const fetchState = makeFakeFetchState()

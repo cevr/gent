@@ -25,6 +25,7 @@ import {
   Cause,
   Clock,
   Context,
+  type Crypto,
   FileSystem,
   Deferred,
   Effect,
@@ -1709,10 +1710,12 @@ const testPlatform = AnthropicPlatform.of({
   home: "/tmp/gent-test-home",
   env: {},
 })
-/** The driver's services as setup captures them: the running platform plus the Claude Code facts. */
+/** The driver's services as setup captures them: the running platform, its crypto, and the Claude Code facts. */
 const driverServices = (platform: typeof testPlatform) =>
   Effect.map(
-    Effect.context<FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner>(),
+    Effect.context<
+      FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto
+    >(),
     Context.add(AnthropicPlatform, platform),
   )
 const buildAnthropicModelDriver = (

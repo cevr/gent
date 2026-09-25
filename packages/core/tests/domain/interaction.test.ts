@@ -1,11 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Cause, Clock, Deferred, Effect, Exit, Fiber, Layer, Option, Queue, Schema } from "effect"
-import {
-  InteractionStorage,
-  type InteractionStorageService,
-  SqliteStorage,
-} from "../../src/storage/storage"
-import { ensureStorageParents } from "../../src/test-utils/harness"
+import { InteractionStorage, type InteractionStorageService } from "../../src/storage/storage"
+import { ensureStorageParents, testSqliteStorage } from "../../src/test-utils/harness"
 import { EventStoreError } from "../../src/domain/event"
 import {
   CurrentInteractionOwner,
@@ -80,7 +76,7 @@ const shownRequest = (
 // ============================================================================
 describe("Interaction Request", () => {
   const storageLive = Layer.mergeAll(
-    SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(Layer.provide(GentPlatform.Test())),
+    testSqliteStorage(() => Layer.empty, {}),
     GentPlatform.Test(),
   )
   const callbacksFor = (is: InteractionStorage["Service"]): InteractionStorageConfig => ({

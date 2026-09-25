@@ -1,13 +1,14 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Layer } from "effect"
 import { SqlClient } from "effect/unstable/sql"
-import { MessageStorage, SqliteStorage } from "../../src/storage/storage"
+import { MessageStorage } from "../../src/storage/storage"
 import {
   type BranchToolFeature,
   CurrentBranchToolFeature,
   noBranchTools,
 } from "../../src/runtime/tools"
 import { emptyErasedResourceLayer } from "../../src/runtime/extension-host"
+import { testSqliteStorage } from "../../src/test-utils/harness"
 
 /**
  * A branch-tool feature is input to the runtime, not part of it.
@@ -48,9 +49,7 @@ describe("branch tool feature", () => {
       // And the store works, not merely exists.
       const storage = yield* MessageStorage
       expect(storage).toBeDefined()
-    }).pipe(
-      Effect.provide(SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations)),
-    ),
+    }).pipe(Effect.provide(testSqliteStorage(noBranchTools.storage, noBranchTools.migrations))),
   )
 
   it.effect("creates the tables of whichever feature the root names", () =>
@@ -58,7 +57,7 @@ describe("branch tool feature", () => {
       const tables = yield* tableNames
       expect(tables).toContain("widget_slots")
       expect(tables).toContain("messages")
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql(widgetTools.storage, widgetTools.migrations))),
+    }).pipe(Effect.provide(testSqliteStorage(widgetTools.storage, widgetTools.migrations))),
   )
 
   it.effect("reports the stateless-tools feature when no root bound one", () =>

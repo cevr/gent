@@ -35,10 +35,10 @@ import {
   UsageSchema,
 } from "../../src/domain/event"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { EventStorage, MessageStorage, SqliteStorage } from "../../src/storage/storage"
+import { EventStorage, MessageStorage } from "../../src/storage/storage"
 import { EventStoreLive } from "../../src/runtime/session"
 import { noBranchTools } from "../../src/runtime/tools"
-import { ensureStorageParents } from "../../src/test-utils/harness"
+import { ensureStorageParents, testSqliteStorage } from "../../src/test-utils/harness"
 
 // ── turn response collectors ────────────────────────────────────────────────
 
@@ -325,7 +325,7 @@ describe("classifyStep", () => {
 
 const FIXED_NOW = dateFromMillis(1_767_225_600_000)
 
-const storage = SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations)
+const storage = testSqliteStorage(noBranchTools.storage, noBranchTools.migrations)
 const layer = Layer.provideMerge(Layer.provide(EventStoreLive, storage), storage)
 
 const assistantWithCall = (params: {
@@ -572,7 +572,7 @@ describe("durable message persistence", () => {
       }).pipe(
         Effect.provide(
           Layer.mergeAll(
-            SqliteStorage.TestWithSql(() => Layer.empty, {}),
+            testSqliteStorage(() => Layer.empty, {}),
             publisher.layer,
           ),
         ),

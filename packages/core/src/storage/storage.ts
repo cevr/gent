@@ -2,6 +2,7 @@ import {
   Array as Arr,
   Clock,
   Context,
+  type Crypto,
   DateTime,
   Effect,
   FileSystem,
@@ -76,7 +77,6 @@ import {
   type StoredInteractionDecision,
 } from "../domain/interaction.js"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
-import { BunCrypto } from "@effect/platform-bun"
 import type { MessageStorage as ClusterMessageStorage } from "effect/unstable/cluster"
 import { fromSqlClient as encoreSqlMessageStorage } from "effect-encore"
 
@@ -2058,7 +2058,7 @@ export type ExtraRepositories<A, E, R> = (
 const provideFocusedRepositories = <A, E, R>(
   base: Layer.Layer<SqlClient.SqlClient, E, R>,
   extra: ExtraRepositories<A, E, R>,
-): Layer.Layer<FocusedStorage | A, E, R | GentPlatform> => {
+): Layer.Layer<FocusedStorage | A, E, R | GentPlatform | Crypto.Crypto> => {
   const interactionStorage = Layer.provide(InteractionStorage.Live, base)
   return Layer.mergeAll(
     extra(base, interactionStorage),
@@ -2072,7 +2072,7 @@ const provideFocusedRepositories = <A, E, R>(
     Layer.provide(SessionOperationStorage.Live, base),
     Layer.provide(ToolCallBindingStorage.Live, base),
     Layer.provide(TurnRecordStorage.Live, base),
-    Layer.provide(encoreSqlMessageStorage(), Layer.merge(base, BunCrypto.layer)),
+    Layer.provide(encoreSqlMessageStorage(), base),
     interactionStorage,
   )
 }
@@ -2122,25 +2122,12 @@ export const SqliteStorage = {
   ): Layer.Layer<
     FocusedStorage | A,
     StorageError | PlatformError.PlatformError,
-    FileSystem.FileSystem | Path.Path | GentPlatform
+    FileSystem.FileSystem | Path.Path | GentPlatform | Crypto.Crypto
   > => provideFocusedRepositories(makeLiveSqliteLayer(dbPath, featureMigrations), extra),
 
   MemoryWithSql: <A>(
     extra: ExtraRepositories<A, StorageError, never>,
     featureMigrations: FeatureMigrations,
-  ): Layer.Layer<FocusedStorage | A, StorageError, GentPlatform> =>
+  ): Layer.Layer<FocusedStorage | A, StorageError, GentPlatform | Crypto.Crypto> =>
     provideFocusedRepositories(makeMemorySqliteLayer(featureMigrations), extra),
-
-  // `TestWithSql` is the closed-context variant: it self-provides
-  // `GentPlatform.Test()` so storage tests can yield it without wiring a
-  // platform layer themselves. Production callers use `LiveWithSql` /
-  // `MemoryWithSql` and supply the live `GentPlatform`.
-  TestWithSql: <A>(
-    extra: ExtraRepositories<A, StorageError, never>,
-    featureMigrations: FeatureMigrations,
-  ): Layer.Layer<FocusedStorage | A, StorageError> =>
-    Layer.provide(
-      provideFocusedRepositories(makeMemorySqliteLayer(featureMigrations), extra),
-      GentPlatform.Test(),
-    ),
 }
