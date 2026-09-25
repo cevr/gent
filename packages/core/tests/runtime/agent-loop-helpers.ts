@@ -38,16 +38,12 @@ import { testAgents } from "../helpers/test-preset"
 import { type ToolCapability } from "@gent/core/extensions/api"
 import type { AnyResourceContribution } from "../../src/domain/extension"
 import { type AgentEvent, EventEnvelope, EventId, EventStore } from "../../src/domain/event"
-import {
-  BranchStorage,
-  SessionStorage,
-  SqliteStorage,
-  type StorageError,
-} from "../../src/storage/storage"
+import { BranchStorage, SessionStorage, type StorageError } from "../../src/storage/storage"
 import {
   RecordingEventStore,
   SequenceRecorder,
   ensureStorageParents,
+  testSqliteStorage,
 } from "../../src/test-utils/harness"
 import {
   type BranchId,
@@ -249,6 +245,29 @@ export const steerAgentLoop = (command: SteerCommand) =>
       }),
     )
   })
+/** Stop what one message opens; true when the stop reached it. */
+export const stopAgentLoopMessage = (input: {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly messageId: MessageId
+  readonly requestId: string
+}) =>
+  Effect.gen(function* () {
+    yield* ensureAgentLoopStorageParents(input)
+    const actorClientFactory = yield* AgentLoopActor.Context
+    const ref = yield* actorClientFactory(
+      entityIdOf(DefaultWorkspaceId, input.sessionId, input.branchId),
+    )
+    return yield* ref.execute(
+      AgentLoopActor.StopMessage.make({
+        workspaceId: DefaultWorkspaceId,
+        sessionId: input.sessionId,
+        branchId: input.branchId,
+        commandId: ActorCommandId.make(input.requestId),
+        messageId: input.messageId,
+      }),
+    )
+  })
 export const respondAgentLoopInteraction = (input: {
   readonly sessionId: SessionId
   readonly branchId: BranchId
@@ -290,7 +309,7 @@ export const actorTestRoot = <S = never, ES = never, X = never, EX = never>(
   },
 ) => {
   const baseDeps = Layer.mergeAll(
-    params.storage ?? SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
+    params.storage ?? testSqliteStorage(noBranchTools.storage, noBranchTools.migrations),
     actorTestModelLayer(params),
     params.registry ?? makeExtRegistry(),
     RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),

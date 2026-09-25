@@ -80,6 +80,7 @@ import { SessionRuntime } from "../runtime/session.js"
 import {
   type AgentLoopClientServices,
   dequeueFollowUpOn,
+  stopMessageOn,
   queueFollowUpOn,
 } from "../domain/agent-loop.js"
 import { type ApprovalDecision, encodeInteractionDecision } from "../domain/interaction.js"
@@ -97,8 +98,10 @@ import {
   AgentLoopQueueStorage,
   BranchStorage,
   EventStorage,
+  type ExtraRepositories,
   InteractionStorage,
   SessionStorage,
+  SqliteStorage,
   ToolCallBindingStorage,
 } from "../storage/storage.js"
 import {
@@ -110,7 +113,9 @@ import {
   matchesEventFilter,
 } from "../domain/event.js"
 import { type LanguageModel, Model as AiModel } from "effect/unstable/ai"
-import type { GentPlatform } from "../runtime/gent-platform.js"
+import { GentPlatform } from "../runtime/gent-platform.js"
+import { BunCrypto } from "@effect/platform-bun"
+import type { FeatureMigrations } from "../storage/schema.js"
 import { BunPlatformLive } from "../runtime/gent-platform-bun.js"
 
 // ── extension-host-context ──────────────────────────────────────────────────
@@ -134,6 +139,7 @@ const defaultSession = (): ExtensionSessionService => ({
   delete: () => die("Session.delete"),
   send: () => die("Session.send"),
   stop: () => die("Session.stop"),
+  stopMessage: () => die("Session.stopMessage"),
   events: () => Stream.die("Session.events"),
   dequeueFollowUp: () => die("Session.dequeueFollowUp"),
   listBranches: die("Session.listBranches"),
@@ -270,6 +276,7 @@ export const testToolContext = (overrides?: TestToolContextOverrides): TestToolC
     delete: dieStub("session.delete"),
     send: dieStub("session.send"),
     stop: dieStub("session.stop"),
+    stopMessage: dieStub("session.stopMessage"),
     events: () => Stream.die("session.events"),
     dequeueFollowUp: dieStub("session.dequeueFollowUp"),
     listBranches: dieEffect("session.listBranches"),
@@ -481,6 +488,20 @@ export const collectTestContributions = <E, R>(
     return yield* collector.seal
   })
 
+/**
+ * In-memory SQLite storage with its platform closed: deterministic ids from
+ * `GentPlatform.Test()` and the Bun `Crypto` the host would provide. Storage
+ * tests yield it without wiring a platform layer; product callers use
+ * `SqliteStorage.LiveWithSql` / `MemoryWithSql` under the host's platform.
+ */
+export const testSqliteStorage = <A>(
+  extra: ExtraRepositories<A, StorageError, never>,
+  featureMigrations: FeatureMigrations,
+) =>
+  SqliteStorage.MemoryWithSql(extra, featureMigrations).pipe(
+    Layer.provide(Layer.merge(GentPlatform.Test(), BunCrypto.layer)),
+  )
+
 // Mock Helpers
 
 const sameAdmission = Schema.toEquivalence(SessionAdmission)
@@ -614,6 +635,7 @@ export const runtimeHostContext = Effect.fn("test.runtimeHostContext")(function*
       dequeueFollowUp: (input) => dequeueFollowUpOn(input).pipe(Effect.provideContext(loopClient)),
       send: (input) => runtime.sendUserMessage(input),
       steer: (command) => runtime.steer(command),
+      stopMessage: (input) => stopMessageOn(input).pipe(Effect.provideContext(loopClient)),
     },
   })
   return provider.forRun(hostRun(run))

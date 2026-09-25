@@ -63,6 +63,7 @@ import {
   ensureStorageParents,
   RecordingEventStore,
   SequenceRecorder,
+  testSqliteStorage,
 } from "../../src/test-utils/harness"
 import {
   finishPart,
@@ -124,7 +125,6 @@ import {
   type RelationshipStorage,
   SessionOperationStorage,
   SessionStorage,
-  SqliteStorage,
   ToolCallBindingStorage,
 } from "../../src/storage/storage"
 import {
@@ -144,6 +144,7 @@ import {
   runAgentLoop,
   scriptedProvider,
   steerAgentLoop,
+  stopAgentLoopMessage,
   submitAgentLoop,
   waitFor as waitForOption,
   waitForPhase,
@@ -205,6 +206,7 @@ import {
   buildRunningState,
   entityIdOf,
   type FollowUpQueueFull,
+  interjectionMessageId,
   type LoopState,
   type RunningState,
   toWaitingForInteractionState,
@@ -867,6 +869,92 @@ describe("continuation", () => {
         // The turn it joined answered it, so a restart must not answer it again.
         expect(Predicate.isNotUndefined(joined) && isRuntimeUserMessage(joined)).toBe(true)
       }).pipe(Effect.provide(makeLayer(providerLayer, [echoTool])))
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+  // A sender that takes its message back (its own turn was interrupted) must
+  // not have it read by the turn the receiver is running.
+  it.live("a stop that names a waiting interjection takes it back before the turn reads it", () =>
+    Effect.gen(function* () {
+      const requestId = RequestId.make("req-interject-taken-back")
+      const promptTexts: Array<string> = []
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        { ...toolCallStep("echo", { text: "step 1" }), gated: true },
+        {
+          ...textStep("Done without the message."),
+          assertOptions: (options) => {
+            for (const message of Prompt.make(options.prompt).content) {
+              if (message.role !== "user") continue
+              for (const part of message.content) {
+                if (part.type === "text") promptTexts.push(part.text)
+              }
+            }
+          },
+        },
+      ])
+      const eventsRef = yield* Ref.make<AgentEvent[]>([])
+      yield* Effect.gen(function* () {
+        const agentLoop = yield* makeAgentLoopService
+        const messageStorage = yield* MessageStorage
+        const fiber = yield* Effect.forkChild(
+          runAgentLoop(agentLoop, makeContMessage("a turn the sender does not own")),
+        )
+        yield* controls.waitForCall(0)
+        yield* steerAgentLoop({
+          _tag: "Interject",
+          sessionId: contSessionId,
+          branchId: contBranchId,
+          requestId,
+          message: "TAKEN-BACK",
+          wake: true,
+        })
+        const stop = {
+          sessionId: contSessionId,
+          branchId: contBranchId,
+          messageId: interjectionMessageId(requestId),
+        }
+        // The stop reports that it reached the message: it took the steer back.
+        expect(yield* stopAgentLoopMessage({ ...stop, requestId: "req-take-back" })).toBe(true)
+        yield* controls.emitAll(0)
+        yield* Fiber.join(fiber)
+        // Once taken back, the loop holds nothing of it: a later stop reaches nothing.
+        expect(yield* stopAgentLoopMessage({ ...stop, requestId: "req-take-back-again" })).toBe(
+          false,
+        )
+        // The running turn is not the one the stop named: it runs to its end.
+        expect(yield* controls.callCount).toBe(2)
+        const completed = (yield* Ref.get(eventsRef)).filter(Schema.is(TurnCompleted))
+        expect(completed).toHaveLength(1)
+        expect(completed[0]?.interrupted).not.toBe(true)
+        expect(promptTexts).not.toContain("TAKEN-BACK")
+        const messages = yield* messageStorage.listMessages(contBranchId)
+        expect(messages.filter((message) => message._tag === "interjection")).toHaveLength(0)
+        yield* waitForPhase(agentLoop, { sessionId: contSessionId, branchId: contBranchId }, "Idle")
+        expect(yield* controls.callCount).toBe(2)
+      }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+  it.live("a stop that names the running turn's message reports that it stopped the turn", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        { ...toolCallStep("echo", { text: "step 1" }), gated: true },
+        textStep("Never reached."),
+      ])
+      const eventsRef = yield* Ref.make<AgentEvent[]>([])
+      yield* Effect.gen(function* () {
+        const agentLoop = yield* makeAgentLoopService
+        const message = makeContMessage("a turn a stop names")
+        const fiber = yield* Effect.forkChild(runAgentLoop(agentLoop, message))
+        yield* controls.waitForCall(0)
+        const stop = { sessionId: contSessionId, branchId: contBranchId, messageId: message.id }
+        expect(yield* stopAgentLoopMessage({ ...stop, requestId: "req-stop-running" })).toBe(true)
+        yield* controls.emitAll(0)
+        yield* Fiber.join(fiber)
+        const completed = (yield* Ref.get(eventsRef)).filter(Schema.is(TurnCompleted))
+        expect(completed.map((event) => event.interrupted)).toEqual([true])
+        yield* waitForPhase(agentLoop, { sessionId: contSessionId, branchId: contBranchId }, "Idle")
+        // The turn ended: a later stop of the same message reaches nothing.
+        expect(yield* stopAgentLoopMessage({ ...stop, requestId: "req-stop-ended" })).toBe(false)
+      }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
     }).pipe(Effect.timeout("4 seconds")),
   )
   it.live("an interjection that asks to wake starts a turn on an idle branch", () =>
@@ -3790,10 +3878,7 @@ describe("agent-loop recovery race", () => {
           ),
         )
 
-        const baseStorage = SqliteStorage.TestWithSql(
-          noBranchTools.storage,
-          noBranchTools.migrations,
-        )
+        const baseStorage = testSqliteStorage(noBranchTools.storage, noBranchTools.migrations)
         const wrappedQueueStorage = gatedQueueStorageLayer(
           reopenGate,
           reopenEntered,
@@ -5114,7 +5199,7 @@ const makeTestExtensions = (
   ])
 }
 
-const makeClusterRunnerLayer = <A>(storageLayer: ReturnType<typeof SqliteStorage.TestWithSql<A>>) =>
+const makeClusterRunnerLayer = <A>(storageLayer: ReturnType<typeof testSqliteStorage<A>>) =>
   Layer.provide(
     SingleRunner.layer({ runnerStorage: "memory" }),
     Layer.merge(storageLayer, BunCrypto.layer),
@@ -5128,7 +5213,7 @@ const makeRuntimeLayer = (
   const resolvedExtensions = makeTestExtensions(tools, requests)
   const recorderLayer = SequenceRecorder.Live
   const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
-  const storageLayer = SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations)
+  const storageLayer = testSqliteStorage(noBranchTools.storage, noBranchTools.migrations)
   let toolRunnerLayer = ToolRunner.Test()
   if (tools.length > 0) toolRunnerLayer = ToolRunner.Live
   const baseDeps = Layer.mergeAll(
@@ -5740,6 +5825,8 @@ describe("wake admission", () => {
         item: QueuedTurnItem,
       ) => Effect.Effect<unknown, AgentLoopError | FollowUpQueueFull>
       readonly queue: Effect.Effect<LoopQueueStateType>
+      readonly inbox: Effect.Success<ReturnType<typeof makeLoopInbox>>
+      readonly loopRef: TxSubscriptionRef.TxSubscriptionRef<AgentLoopState>
     }) => Effect.Effect<A, AgentLoopError | FollowUpQueueFull>,
   ) =>
     Effect.gen(function* () {
@@ -5760,7 +5847,8 @@ describe("wake admission", () => {
         }),
         startedRef: yield* Ref.make(true),
         turnSettled: (messageId) => Effect.succeed(messageId === MessageId.make("settled")),
-        messageStored: () => Effect.succeed(false),
+        // The running turn opened on "busy", so its message is stored.
+        messageStored: (messageId) => Effect.succeed(messageId === MessageId.make("busy")),
       }).pipe(
         Effect.provideService(AgentLoopQueueStorage, {
           getQueueState: () => Ref.get(rows),
@@ -5770,8 +5858,57 @@ describe("wake admission", () => {
       return yield* body({
         admit: (item) => inbox.admit(item, { queueOnly: true }),
         queue: TxSubscriptionRef.get(loopRef).pipe(Effect.map((s) => s.queue)),
+        inbox,
+        loopRef,
       })
     })
+
+  // A stop's take-back and a step's join decide over the same queue: the
+  // message is either taken back and never joined, or joined and not taken.
+  it.live("a take-back that arrives while a step joins the steer does not also take it", () =>
+    withInbox(({ inbox }) =>
+      Effect.gen(function* () {
+        const steer = queuedMessage("steer-racing-a-join", "CORRECTION")
+        yield* inbox.steer({ message: steer })
+        const joining = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        const joined: Array<string> = []
+        const delivery = yield* inbox
+          .deliverSteering({
+            finalStep: false,
+            join: (item) =>
+              Deferred.succeed(joining, void 0).pipe(
+                Effect.andThen(Deferred.await(release)),
+                Effect.andThen(Effect.sync(() => joined.push(String(item.message.id)))),
+              ),
+          })
+          .pipe(Effect.forkChild)
+        yield* Deferred.await(joining)
+        const takeBack = yield* inbox.withdrawSteering(steer.id).pipe(Effect.forkChild)
+        // The take-back runs its course before the join finishes, if nothing orders them.
+        yield* Effect.yieldNow.pipe(Effect.repeat({ times: 20 }))
+        yield* Deferred.succeed(release, void 0)
+        yield* Fiber.join(delivery)
+        const takenBack = yield* Fiber.join(takeBack)
+        expect(joined).toEqual([String(steer.id)])
+        expect(takenBack).toBe(false)
+      }).pipe(Effect.timeout("2 seconds"), Effect.orDie),
+    ),
+  )
+
+  it.effect("a take-back removes a queued copy of the steer whose turn is running", () =>
+    withInbox(({ inbox, loopRef }) =>
+      Effect.gen(function* () {
+        const copy: QueuedTurnItem = { message: queuedMessage("busy", "busy (steer copy)") }
+        yield* TxSubscriptionRef.update(loopRef, (s) => ({
+          ...s,
+          queue: { ...s.queue, steering: [copy] },
+        }))
+        expect(yield* inbox.withdrawSteering(copy.message.id)).toBe(true)
+        expect((yield* TxSubscriptionRef.get(loopRef)).queue.steering).toEqual([])
+      }),
+    ),
+  )
 
   it.effect("a queued follow-up that asks to wake makes the stored queue wake", () =>
     withInbox((inbox) =>
@@ -6386,10 +6523,7 @@ describe("queue drain regression", () => {
         // already holds the interjection at that instant says which of the two
         // writes went first, without failing either.
         const transcriptHeldAtDrop = yield* Ref.make(Option.none<boolean>())
-        const storageLayer = SqliteStorage.TestWithSql(
-          noBranchTools.storage,
-          noBranchTools.migrations,
-        )
+        const storageLayer = testSqliteStorage(noBranchTools.storage, noBranchTools.migrations)
         const queueStorageLayer = Layer.provide(
           Layer.effect(
             AgentLoopQueueStorage,
@@ -7765,10 +7899,7 @@ describe("streaming", () => {
           Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
         )
       })
-      const baseStorageLayer = SqliteStorage.TestWithSql(
-        noBranchTools.storage,
-        noBranchTools.migrations,
-      )
+      const baseStorageLayer = testSqliteStorage(noBranchTools.storage, noBranchTools.migrations)
       const layer = actorTestRoot({ provider: providerLayer, storage: baseStorageLayer })
       yield* Effect.scoped(
         Effect.gen(function* () {
@@ -8472,7 +8603,7 @@ describe("streaming", () => {
           Effect.gen(function* () {
             // One database outlives both processes.
             const storage = yield* Layer.build(
-              SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
+              testSqliteStorage(noBranchTools.storage, noBranchTools.migrations),
             )
             const processLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) =>
               actorTestRoot({ provider: providerLayer, storage: Layer.succeedContext(storage) })
@@ -9544,7 +9675,7 @@ describe("tool binding replay", () => {
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
-          SqliteStorage.TestWithSql(() => Layer.empty, {}),
+          testSqliteStorage(() => Layer.empty, {}),
           EventStore.Memory,
         ),
       ),
@@ -9617,7 +9748,7 @@ describe("tool binding replay", () => {
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
-          SqliteStorage.TestWithSql(() => Layer.empty, {}),
+          testSqliteStorage(() => Layer.empty, {}),
           EventStore.Memory,
         ),
       ),
@@ -9658,7 +9789,7 @@ describe("tool binding replay", () => {
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
-          SqliteStorage.TestWithSql(() => Layer.empty, {}),
+          testSqliteStorage(() => Layer.empty, {}),
           EventStore.Memory,
         ),
       ),
@@ -9731,7 +9862,7 @@ describe("tool binding replay", () => {
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
-          SqliteStorage.TestWithSql(() => Layer.empty, {}),
+          testSqliteStorage(() => Layer.empty, {}),
           EventStore.Memory,
         ),
       ),
@@ -9795,7 +9926,7 @@ describe("tool binding replay", () => {
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
-          SqliteStorage.TestWithSql(() => Layer.empty, {}),
+          testSqliteStorage(() => Layer.empty, {}),
           EventStore.Memory,
         ),
       ),
@@ -9872,7 +10003,7 @@ describe("tool binding replay", () => {
 })
 
 describe("session depth guard", () => {
-  const depthStorage = SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations)
+  const depthStorage = testSqliteStorage(noBranchTools.storage, noBranchTools.migrations)
   const run = <A, E>(
     effect: Effect.Effect<
       A,

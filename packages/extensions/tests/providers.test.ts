@@ -3,6 +3,7 @@ import {
   ConfigProvider,
   Clock,
   Context,
+  type Crypto,
   Deferred,
   Effect,
   Fiber,
@@ -403,7 +404,10 @@ describe("models.dev catalog", () => {
           ]),
         )
         const platform = yield* Effect.context<
-          FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
+          | FileSystem.FileSystem
+          | Path.Path
+          | ChildProcessSpawner.ChildProcessSpawner
+          | Crypto.Crypto
         >()
         const driver = buildAnthropicModelDriver(
           yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(

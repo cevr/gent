@@ -17,6 +17,7 @@ import * as Prompt from "effect/unstable/ai/Prompt"
 import { BranchId, MessageId, SessionId } from "../../src/domain/ids"
 import { CurrentWorkspaceId } from "../../src/server/workspace-rpc"
 import { makeTempDirectoryScoped } from "../../src/test-utils/language-model"
+import { testSqliteStorage } from "../../src/test-utils/harness"
 
 // ── feature migrations ──────────────────────────────────────────────────────
 
@@ -52,8 +53,8 @@ const widgetMigrations: FeatureMigrations = {
   }),
 }
 
-const kernelOnly = SqliteStorage.TestWithSql(() => Layer.empty, {})
-const withWidgets = SqliteStorage.TestWithSql(() => Layer.empty, widgetMigrations)
+const kernelOnly = testSqliteStorage(() => Layer.empty, {})
+const withWidgets = testSqliteStorage(() => Layer.empty, widgetMigrations)
 
 describe("feature migrations", () => {
   it.live("core builds only the kernel's tables when no feature contributes any", () =>

@@ -51,6 +51,7 @@ import {
   RecordingEventStore,
   runtimeHostContext,
   SequenceRecorder,
+  testSqliteStorage,
 } from "../../src/test-utils/harness"
 import {
   defineExtension,
@@ -88,7 +89,6 @@ import {
   EventStorage,
   MessageStorage,
   SessionStorage,
-  SqliteStorage,
 } from "../../src/storage/storage"
 import { SessionRuntime } from "../../src/runtime/session"
 import { ModelCompactionError, ModelContextCompactor } from "../../src/runtime/model-context"
@@ -124,7 +124,7 @@ const makeTestExtensions = (tools: ReadonlyArray<ToolCapability> = []) => {
 }
 const sessionRuntimeLayers = (config: Parameters<typeof AgentLoopLiveActor>[0]) =>
   Layer.provideMerge(AgentLoopLiveActor(config), SessionRuntime.Client)
-const makeClusterRunnerLayer = <A>(storageLayer: ReturnType<typeof SqliteStorage.TestWithSql<A>>) =>
+const makeClusterRunnerLayer = <A>(storageLayer: ReturnType<typeof testSqliteStorage<A>>) =>
   Layer.provide(
     SingleRunner.layer({ runnerStorage: "memory" }),
     Layer.merge(storageLayer, BunCrypto.layer),
@@ -137,7 +137,7 @@ const makeRuntimeLayer = (
   const resolvedExtensions = makeTestExtensions(tools)
   const recorderLayer = SequenceRecorder.Live
   const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
-  const storageLayer = SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations)
+  const storageLayer = testSqliteStorage(noBranchTools.storage, noBranchTools.migrations)
   const baseDepsWithoutProfile = Layer.mergeAll(
     storageLayer,
     makeClusterRunnerLayer(storageLayer),
@@ -173,7 +173,7 @@ const makeLiveToolRuntimeLayer = (
   const resolvedExtensions = makeTestExtensions(tools)
   const recorderLayer = SequenceRecorder.Live
   const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
-  const storageLayer = SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations)
+  const storageLayer = testSqliteStorage(noBranchTools.storage, noBranchTools.migrations)
   const baseDeps = Layer.mergeAll(
     storageLayer,
     makeClusterRunnerLayer(storageLayer),
