@@ -25,7 +25,7 @@ import {
   type AnyExtensionHook,
 } from "../../src/domain/extension"
 import {
-  buildResourceLayer,
+  buildScopeResources,
   compileExtensionHooks,
   CurrentExtensionHostContext,
   resolveExtensions,
@@ -162,7 +162,18 @@ describe("defineExtension", () => {
         sourcePath: "builtin",
         contributions,
       } satisfies LoadedExtension
-      yield* Effect.scoped(Layer.build(buildResourceLayer([loaded], "process")).pipe(Effect.asVoid))
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const started = yield* buildScopeResources({
+            extensions: [loaded],
+            scope: "process",
+            context: Context.makeUnsafe<unknown>(new Map()),
+            parent: yield* Effect.scope,
+            restore: (effect) => effect,
+          })
+          expect(started.failed).toEqual([])
+        }),
+      )
       expect(log).toEqual(["startup-1", "startup-2", "shutdown-2", "shutdown-1"])
     }))
 

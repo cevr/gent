@@ -85,7 +85,7 @@ import {
   type ToolCapability,
 } from "../domain/capability.js"
 import { type AgentDefinition, Model } from "../domain/agent.js"
-import { causeMessage, omitUndefined } from "../domain/guards.js"
+import { causeChainMessage, causeMessage, omitUndefined } from "../domain/guards.js"
 import {
   DriverError,
   DriverFailureId,
@@ -987,7 +987,7 @@ const collectResourceEntries = (
       .map((resource) => ({ extensionId: ext.manifest.id, resource })),
   )
 
-export const buildResourceLayer = (
+const buildResourceLayer = (
   extensions: ReadonlyArray<LoadedExtension>,
   scope: ResourceScope = "process",
 ): ErasedResourceLayer => {
@@ -1001,6 +1001,119 @@ export const buildResourceLayer = (
     emptyErasedResourceLayer,
   )
 }
+
+/** Makes a region of an uninterruptible effect interruptible (`Effect.uninterruptibleMask`). */
+type Restore = <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
+
+/** One extension whose Resources of a scope failed to build, and the cause. */
+interface FailedResourceBuild {
+  /** The extension suspended at the `startup` phase, with the full cause. */
+  readonly failure: FailedExtension
+  /** The messages down the cause chain, for a reader. */
+  readonly message: string
+}
+
+/**
+ * The resolved extensions with some suspended: their tools, requests, hooks,
+ * agents and drivers leave the registry, and they are reported failed. A
+ * profile suspends an extension whose process Resource failed this way
+ * (`resolveExtensions` over the rest); a branch loop suspends one whose
+ * branch Resource failed, for that loop only.
+ */
+export const suspendExtensions = (
+  resolved: ResolvedExtensions,
+  failed: ReadonlyArray<FailedExtension>,
+): ResolvedExtensions => {
+  if (failed.length === 0) return resolved
+  const suspended = new Set(failed.map((failure) => failure.manifest.id))
+  return resolveExtensions(
+    resolved.extensions.filter((extension) => !suspended.has(extension.manifest.id)),
+    [...resolved.failedExtensions, ...failed],
+  )
+}
+
+interface BuiltScopeResources {
+  /** The extensions whose Resources of the scope are live (or have none). */
+  readonly active: ReadonlyArray<LoadedExtension>
+  readonly failed: ReadonlyArray<FailedResourceBuild>
+  /** The given context with every live extension's services merged over it. */
+  readonly context: Context.Context<unknown>
+}
+
+/**
+ * Build one scope's Resources extension by extension, in resolution order, so
+ * a later extension's service wins exactly as it does in the registry. Each
+ * extension builds in its own child of `parent`, over the services the
+ * extensions before it built. A build that fails closes its own scope, is
+ * logged naming its extension, and is returned in `failed`; the other
+ * extensions' Resources stay live. Process and branch Resources both build
+ * here.
+ *
+ * `reuse` hands over services an earlier build left to share instead of
+ * building them; `built` receives each new build and the scope that holds it.
+ * Only a build runs inside `restore`: an interrupt of the caller there stops
+ * the whole build, while an extension that interrupts itself is a failure.
+ */
+export const buildScopeResources = (params: {
+  readonly extensions: ReadonlyArray<LoadedExtension>
+  readonly scope: ResourceScope
+  readonly context: Context.Context<unknown>
+  readonly parent: Scope.Scope
+  readonly restore: Restore
+  readonly reuse?: (extension: LoadedExtension) => Option.Option<Context.Context<unknown>>
+  readonly built?: (
+    extension: LoadedExtension,
+    scope: Scope.Closeable,
+    context: Context.Context<unknown>,
+  ) => void
+}): Effect.Effect<BuiltScopeResources> =>
+  Effect.gen(function* () {
+    let context = params.context
+    const active: Array<LoadedExtension> = []
+    const failed: Array<FailedResourceBuild> = []
+    for (const extension of sortExtensionsByScope(params.extensions)) {
+      if (collectResourceEntries([extension], params.scope).length === 0) {
+        active.push(extension)
+        continue
+      }
+      const reused = params.reuse?.(extension) ?? Option.none()
+      if (Option.isSome(reused)) {
+        context = Context.merge(context, reused.value)
+        active.push(extension)
+        continue
+      }
+      const extensionScope = yield* Scope.fork(params.parent)
+      const built = yield* params
+        .restore(
+          Layer.build(buildResourceLayer([extension], params.scope)).pipe(
+            Effect.provideContext(context),
+            Effect.provideService(Scope.Scope, extensionScope),
+          ),
+        )
+        .pipe(Effect.exit)
+      if (Exit.isSuccess(built)) {
+        params.built?.(extension, extensionScope, built.value)
+        context = Context.merge(context, built.value)
+        active.push(extension)
+        continue
+      }
+      yield* Scope.close(extensionScope, built)
+      // An interrupt of the caller stops the whole build; it is not a failed
+      // extension. An extension that interrupts itself is. The cause cannot
+      // tell them apart, the fiber can: an interruptible no-op fails at once
+      // only when this fiber was interrupted.
+      if (Cause.hasInterruptsOnly(built.cause)) yield* params.restore(Effect.void)
+      const error = Cause.pretty(built.cause)
+      yield* Effect.logError("extension.resource.failed").pipe(
+        Effect.annotateLogs({ extensionId: extension.manifest.id, scope: params.scope, error }),
+      )
+      failed.push({
+        failure: toFailedExtension(extension, "startup", error),
+        message: causeChainMessage(Cause.squash(built.cause)),
+      })
+    }
+    return { active, failed, context }
+  })
 
 // ── host-platform ───────────────────────────────────────────────────────────
 
@@ -1922,9 +2035,6 @@ export interface SessionProfileCacheService {
   readonly resolve: (cwd: string) => Effect.Effect<SessionProfile, never, ScopeType.Scope>
 }
 
-/** Makes a region of an uninterruptible effect interruptible (`Effect.uninterruptibleMask`). */
-type Restore = <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
-
 /** One (workspace, cwd) place: at most one current profile, one build lock. */
 const placeKey = (workspaceId: WorkspaceId, cwd: string): string =>
   [workspaceId, cwd].join("\u0000")
@@ -2104,19 +2214,12 @@ export class SessionProfileCache extends Context.Service<
           restore: Restore,
         ): Effect.Effect<StartedProcessResources> =>
           Effect.gen(function* () {
-            let context = platformServicesContext
             const chain = [place]
-            const active: Array<LoadedExtension> = []
-            const failed: Array<FailedExtension> = []
             const versions = new Map<string, string>()
             for (const file of [...scan.user.paths, ...scan.project.paths]) {
               versions.set(file.path, file.version)
             }
-            for (const extension of sortExtensionsByScope(extensions)) {
-              if (collectResourceEntries([extension], "process").length === 0) {
-                active.push(extension)
-                continue
-              }
+            const identityOf = (extension: LoadedExtension) => {
               const source = Option.match(
                 Option.fromUndefinedOr(versions.get(extension.sourcePath)),
                 {
@@ -2124,49 +2227,37 @@ export class SessionProfileCache extends Context.Service<
                   onSome: (version) => `${extension.sourcePath}@${version}`,
                 },
               )
-              const identity = `${extension.scope}:${extension.manifest.id}:${source}`
-              const key = [...chain, identity].join("\u0000")
-              const shared = Option.fromNullishOr(sharedResources.get(key))
-              if (Option.isSome(shared)) {
+              return `${extension.scope}:${extension.manifest.id}:${source}`
+            }
+            const started = yield* buildScopeResources({
+              extensions,
+              scope: "process",
+              context: platformServicesContext,
+              parent: serverScope,
+              restore,
+              reuse: (extension) => {
+                const identity = identityOf(extension)
+                const key = [...chain, identity].join("\u0000")
+                const shared = Option.fromNullishOr(sharedResources.get(key))
+                if (Option.isNone(shared)) return Option.none()
                 shared.value.holders += 1
                 held.push(key)
-                context = Context.merge(context, shared.value.context)
                 chain.push(identity)
-                active.push(extension)
-                continue
-              }
-              const extensionScope = yield* Scope.fork(serverScope)
-              const built = yield* restore(
-                Layer.build(buildResourceLayer([extension], "process")).pipe(
-                  Effect.provideContext(context),
-                  Effect.provideService(Scope.Scope, extensionScope),
-                ),
-              ).pipe(Effect.exit)
-              if (Exit.isSuccess(built)) {
-                sharedResources.set(key, {
-                  scope: extensionScope,
-                  context: built.value,
-                  holders: 1,
-                })
+                return Option.some(shared.value.context)
+              },
+              built: (extension, scope, context) => {
+                const identity = identityOf(extension)
+                const key = [...chain, identity].join("\u0000")
+                sharedResources.set(key, { scope, context, holders: 1 })
                 held.push(key)
-                context = Context.merge(context, built.value)
                 chain.push(identity)
-                active.push(extension)
-                continue
-              }
-              yield* Scope.close(extensionScope, built)
-              // An interrupt of this resolve stops the whole build; it is not a
-              // failed extension. An extension that interrupts itself is. The
-              // cause cannot tell them apart, the fiber can: an interruptible
-              // no-op fails at once only when this fiber was interrupted.
-              if (Cause.hasInterruptsOnly(built.cause)) yield* restore(Effect.void)
-              const error = Cause.pretty(built.cause)
-              yield* Effect.logError("session-profile.resource.failed").pipe(
-                Effect.annotateLogs({ extensionId: extension.manifest.id, error }),
-              )
-              failed.push(toFailedExtension(extension, "startup", error))
+              },
+            })
+            return {
+              active: started.active,
+              failed: started.failed.map(({ failure }) => failure),
+              context: started.context,
             }
-            return { active, failed, context }
           })
 
         /**

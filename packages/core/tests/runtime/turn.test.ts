@@ -268,7 +268,7 @@ describe("session route driver", () => {
 const collected = (
   responseParts: ReadonlyArray<Response.AnyPart>,
   flags: Partial<
-    Pick<CollectedTurnResponse, "interrupted" | "streamFailed" | "contextOverflow">
+    Pick<CollectedTurnResponse, "interrupted" | "streamFailed" | "contextOverflow" | "windowFull">
   > = {},
 ): CollectedTurnResponse => ({
   responseParts,
@@ -276,6 +276,7 @@ const collected = (
   interrupted: false,
   streamFailed: false,
   contextOverflow: false,
+  windowFull: false,
   ...flags,
 })
 
@@ -309,26 +310,70 @@ describe("classifyStep", () => {
     const outcome = classifyStep(
       collected([textDeltaPart("thinking"), toolCallPart("a", {}), toolCallPart("b", {})]),
     )
-    expect(outcome).toEqual({ _tag: "ToolCalls", count: 2 })
+    expect(outcome).toEqual({ _tag: "ToolCalls", count: 2, contextOverflow: false })
   })
 
   test("a plain reply is Answered with neither flag", () => {
     const outcome = classifyStep(
       collected([textDeltaPart("done"), finishPart({ finishReason: "stop" })]),
     )
-    expect(outcome).toEqual({ _tag: "Answered", empty: false, truncated: false })
+    expect(outcome).toEqual({
+      _tag: "Answered",
+      empty: false,
+      truncated: false,
+      contextOverflow: false,
+    })
   })
 
   test("no observable output is an empty answer", () => {
     const outcome = classifyStep(collected([finishPart({ finishReason: "stop" })]))
-    expect(outcome).toEqual({ _tag: "Answered", empty: true, truncated: false })
+    expect(outcome).toEqual({
+      _tag: "Answered",
+      empty: true,
+      truncated: false,
+      contextOverflow: false,
+    })
   })
 
   test("a length finish marks the answer truncated", () => {
     const outcome = classifyStep(
       collected([textDeltaPart("cut off"), finishPart({ finishReason: "length" })]),
     )
-    expect(outcome).toEqual({ _tag: "Answered", empty: false, truncated: true })
+    expect(outcome).toEqual({
+      _tag: "Answered",
+      empty: false,
+      truncated: true,
+      contextOverflow: false,
+    })
+  })
+
+  test("an unknown finish alone is a finished answer", () => {
+    const outcome = classifyStep(
+      collected([textDeltaPart("done"), finishPart({ finishReason: "unknown" })]),
+    )
+    expect(outcome).toEqual({
+      _tag: "Answered",
+      empty: false,
+      truncated: false,
+      contextOverflow: false,
+    })
+  })
+
+  test("a full window marks the answer truncated and hands off when the turn may", () => {
+    const parts = [textDeltaPart("cut off"), finishPart({ finishReason: "unknown" })]
+    expect(classifyStep(collected(parts, { windowFull: true, contextOverflow: true }))).toEqual({
+      _tag: "Answered",
+      empty: false,
+      truncated: true,
+      contextOverflow: true,
+    })
+    // A window already handed off this turn is only continued.
+    expect(classifyStep(collected(parts, { windowFull: true }))).toEqual({
+      _tag: "Answered",
+      empty: false,
+      truncated: true,
+      contextOverflow: false,
+    })
   })
 })
 

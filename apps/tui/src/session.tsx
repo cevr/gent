@@ -47,6 +47,7 @@ import {
   Model,
   type ModelContextMetrics,
   type ModelId,
+  modelInputCeilingTokens,
   projectMessage,
   ReasoningEffort,
   type SessionId,
@@ -136,20 +137,18 @@ const pressureColor = (pct: number, theme: ThemeColors): RGBA => {
 }
 
 /**
- * `ctx 42%`: percent of the model's context window. The provider's count of
- * the projected step's input includes the system prompt and the tools, which
- * the projection's estimate leaves out, so it wins once that step reports it;
- * until then (a step still streaming, a model just switched) the estimate reads.
- * What the projection dropped is in the thread pane.
+ * `ctx 42%`: the messages' share of the input the projection lets them take.
+ * Both numbers leave out the system prompt, the tools and the output
+ * reserve, and the estimate is anchored on the last step's measured input,
+ * so the gauge reads 100% where the window hands off, also on a model whose
+ * input cap is below its window. What the projection dropped is in the
+ * thread pane.
  */
-const projectionLabel = (
-  context: ModelContextMetrics,
-  latestInputTokens: number,
-  theme: ThemeColors,
-): StatusRowLabel => {
-  let tokens = context.estimatedTokens
-  if (latestInputTokens > 0) tokens = latestInputTokens
-  const pct = Math.min(100, Math.round((tokens / context.contextLimitTokens) * 100))
+const projectionLabel = (context: ModelContextMetrics, theme: ThemeColors): StatusRowLabel => {
+  const pct = Math.min(
+    100,
+    Math.round((context.estimatedTokens / context.availableInputTokens) * 100),
+  )
   return { text: `ctx ${pct}%`, color: pressureColor(pct, theme) }
 }
 
@@ -162,17 +161,28 @@ const projectionLabel = (
  */
 export function buildContextLabels(input: {
   readonly metrics: SessionMetrics
-  // eslint-disable-next-line effect/noNullish -- this mirrors the optional client snapshot field.
-  readonly contextLength: number | undefined
+  /** The session's model, for its catalog limits. */
+  readonly model: Option.Option<Pick<Model, "contextLength" | "inputLimit" | "outputLimit">>
   readonly theme: ThemeColors
 }): StatusRowLabel[] {
   const projection = input.metrics.context
-  if (Option.isSome(projection) && projection.value.contextLimitTokens > 0) {
-    // The projection names the window the model works in.
-    return [projectionLabel(projection.value, input.metrics.latestInputTokens, input.theme)]
+  if (Option.isSome(projection) && projection.value.availableInputTokens > 0) {
+    // The projection names the input the messages may take.
+    return [projectionLabel(projection.value, input.theme)]
   }
+  // No projection yet (a session from before projections): the provider's
+  // count against the input one request may carry, the ceiling the turn's
+  // budget uses, so the gauge reads full where the turn hands off.
   const tokens = input.metrics.latestInputTokens
-  const limit = Option.fromNullishOr(input.contextLength)
+  const limit = Option.flatMap(input.model, (model) =>
+    Option.map(Option.fromUndefinedOr(model.contextLength), (window) =>
+      modelInputCeilingTokens({
+        contextLimitTokens: window,
+        inputLimitTokens: Option.fromUndefinedOr(model.inputLimit),
+        outputLimitTokens: Option.fromUndefinedOr(model.outputLimit),
+      }),
+    ),
+  )
   if (tokens > 0 && Option.isSome(limit) && limit.value > 0) {
     const pct = Math.min(100, Math.round((tokens / limit.value) * 100))
     return [{ text: `${formatTokens(tokens)} (${pct}%)`, color: pressureColor(pct, input.theme) }]
