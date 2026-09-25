@@ -45,7 +45,8 @@ import {
   type InitialState,
   QueueWidget,
   resolveInitialState,
-  resolveStartupAuthState,
+  resolveHeadlessMissingProviders,
+  resolveStartupAgent,
 } from "../src/app"
 import {
   createMockClient,
@@ -65,8 +66,10 @@ import { useExtensionUI } from "../src/extensions/host"
 import { builtinClientModules } from "../src/extensions/builtins"
 import {
   ClientContext,
+  clientCommandContribution,
   clientContributions,
   defineClientExtension,
+  type AnyExtensionClientModule,
   type NoticeRow,
   noticeRowContribution,
   widgetContribution,
@@ -98,8 +101,8 @@ const expectAppBootstrapFailure = (
     return reason.value.error
   })
 
-describe("resolveStartupAuthState", () => {
-  it.live("uses the session snapshot agent for interactive startup", () =>
+describe("startup agent and headless auth", () => {
+  it.live("interactive startup uses the session snapshot agent and lists no providers", () =>
     Effect.gen(function* () {
       const calls: Array<{
         agentName?: AgentName
@@ -156,15 +159,10 @@ describe("resolveStartupAuthState", () => {
           parentBranchId: absent,
         },
       }
-      const auth = yield* resolveStartupAuthState({
-        client,
-        state,
-      })
-      expect(auth.initialAgent).toBe(AgentName.make("deepwork"))
-      expect(auth.missingProviders).toEqual([ProviderId.make("openai")])
-      expect(calls).toEqual([
-        { agentName: AgentName.make("deepwork"), sessionId: SessionId.make("session-a") },
-      ])
+      const agent = yield* resolveStartupAgent({ client, state })
+      expect(agent).toEqual(Option.some(AgentName.make("deepwork")))
+      // The session view's auth gate checks the providers itself, once mounted.
+      expect(calls).toEqual([])
     }),
   )
   it.live("a headless session checks auth for the agent it was created with", () =>
@@ -198,7 +196,15 @@ describe("resolveStartupAuthState", () => {
         auth: {
           listProviders: (input: { agentName?: AgentName; sessionId?: string }) => {
             calls.push(input)
-            return Effect.succeed([])
+            return Effect.succeed([
+              {
+                provider: "openai",
+                hasKey: false,
+                required: true,
+                source: noAuthSource,
+                authType: absent,
+              },
+            ])
           },
         },
       })
@@ -217,17 +223,14 @@ describe("resolveStartupAuthState", () => {
         },
         prompt: "hi",
       }
-      const auth = yield* resolveStartupAuthState({
-        client,
-        state,
-      })
-      expect(auth.initialAgent).toBeUndefined()
+      const missing = yield* resolveHeadlessMissingProviders({ client, state })
+      expect(missing).toEqual([ProviderId.make("openai")])
       expect(calls).toEqual([
         { agentName: AgentName.make("deepwork"), sessionId: SessionId.make("session-a") },
       ])
     }),
   )
-  it.live("a session with no branch yet checks auth for the default agent", () =>
+  it.live("a session with no branch yet starts as the default agent", () =>
     Effect.gen(function* () {
       const calls: Array<{
         agentName?: AgentName
@@ -254,17 +257,12 @@ describe("resolveStartupAuthState", () => {
           parentBranchId: absent,
         },
       }
-      const auth = yield* resolveStartupAuthState({
-        client,
-        state,
-      })
-      expect(auth.initialAgent).toBe(DEFAULT_AGENT_NAME)
-      expect(calls).toEqual([
-        { agentName: DEFAULT_AGENT_NAME, sessionId: SessionId.make("session-a") },
-      ])
+      const agent = yield* resolveStartupAgent({ client, state })
+      expect(agent).toEqual(Option.some(DEFAULT_AGENT_NAME))
+      expect(calls).toEqual([])
     }),
   )
-  it.live("skips pre-auth gating while the user is choosing a branch", () =>
+  it.live("names no agent while the user is choosing a branch", () =>
     Effect.gen(function* () {
       const calls: Array<{
         agentName?: AgentName
@@ -305,12 +303,8 @@ describe("resolveStartupAuthState", () => {
           },
         ],
       }
-      const auth = yield* resolveStartupAuthState({
-        client,
-        state,
-      })
-      expect(auth.initialAgent).toBeUndefined()
-      expect(auth.missingProviders).toEqual([])
+      const agent = yield* resolveStartupAgent({ client, state })
+      expect(agent).toEqual(Option.none())
       expect(calls).toEqual([])
     }),
   )
@@ -490,7 +484,7 @@ function ClientProbe(props: { readonly onReady: (client: ClientContextValue) => 
  * The runtime stream says Running once and then stays quiet, as it does
  * through a long generation or a long tool call.
  */
-const mountRunningTurn = (height = 24) =>
+const mountRunningTurn = (height = 24, extensions: ReadonlyArray<AnyExtensionClientModule> = []) =>
   Effect.gen(function* () {
     const sessionId = SessionId.make("session-running")
     const branchId = BranchId.make("branch-running")
@@ -542,14 +536,14 @@ const mountRunningTurn = (height = 24) =>
       renderWithProviders(
         () => (
           <>
-            <App missingAuthProviders={[]} />
+            <App />
             <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
           </>
         ),
         {
           client,
           runtime: createMockRuntime(),
-          builtins: [...builtinClientModules, activityProbe],
+          builtins: [...builtinClientModules, activityProbe, ...extensions],
           height,
           initialSession: {
             id: sessionId,
@@ -697,7 +691,7 @@ const mountShortTerminalWithTrays = (
       renderWithProviders(
         () => (
           <>
-            <App missingAuthProviders={[]} />
+            <App />
             <ClientProbe onReady={options.onClient ?? (() => {})} />
           </>
         ),
@@ -802,7 +796,7 @@ const mountNoticeSources = (ids: ReadonlyArray<string>) =>
       renderWithProviders(
         () => (
           <>
-            <App missingAuthProviders={[]} />
+            <App />
             <ExtensionUIProbe onReady={(value) => (ext = Option.some(value))} />
           </>
         ),
@@ -900,7 +894,7 @@ describe("App auth gate", () => {
         renderWithProviders(
           () => (
             <>
-              <App missingAuthProviders={[]} />
+              <App />
               <TerminalDimensionsProbe />
             </>
           ),
@@ -961,7 +955,7 @@ describe("App auth gate", () => {
         renderWithProviders(
           () => (
             <>
-              <App missingAuthProviders={[]} />
+              <App />
               <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
             </>
           ),
@@ -982,11 +976,11 @@ describe("App auth gate", () => {
       applySnapshotAgent(clientContext, AgentName.make("deepwork"))
       const frame = yield* waitForFrame(
         setup,
-        (next) => next.includes("API Keys"),
+        (next) => next.includes("Sign in ·"),
         "API Keys after agent switch",
       )
       expect(calls.length).toBeGreaterThan(0)
-      expect(frame).toContain("API Keys")
+      expect(frame).toContain("Sign in ·")
       setup.renderer.destroy()
     }),
   )
@@ -1021,7 +1015,7 @@ describe("App auth gate", () => {
       })
       const runtime = createMockRuntime()
       const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <App missingAuthProviders={["openai"]} />, {
+        renderWithProviders(() => <App />, {
           client,
           runtime,
           initialAgent: AgentName.make("deepwork"),
@@ -1036,7 +1030,7 @@ describe("App auth gate", () => {
       )
       const frame = yield* waitForFrame(
         setup,
-        (next) => next.includes("API Keys"),
+        (next) => next.includes("Sign in ·"),
         "API Keys from initial agent",
       )
       // The auth check names the session that is actually mounted. It used to
@@ -1051,9 +1045,140 @@ describe("App auth gate", () => {
       // checking; it settles instead. (Two checks: the agent arrives after the
       // first, which predates the overlay being the picker's owner.)
       expect(calls.length).toBe(2)
-      expect(frame).toContain("API Keys")
+      expect(frame).toContain("Sign in ·")
       setup.renderer.destroy()
     }),
+  )
+  /**
+   * The enforced sign-in on a `height`-row terminal: openai is required and
+   * has no key, zzprovider is optional. The gate opens the pane on openai's
+   * sign-in methods.
+   */
+  const mountSignIn = (height = 24, savedKeys: Array<string> = []) =>
+    Effect.gen(function* () {
+      const client = createMockClient({
+        auth: {
+          setKey: (input: { readonly provider: string; readonly key: string }) =>
+            Effect.sync(() => {
+              savedKeys.push(input.key)
+            }),
+          listProviders: () =>
+            Effect.succeed([
+              {
+                provider: "openai",
+                hasKey: false,
+                required: true,
+                source: noAuthSource,
+                authType: absent,
+              },
+              {
+                provider: "zzprovider",
+                hasKey: false,
+                required: false,
+                source: noAuthSource,
+                authType: absent,
+              },
+            ]),
+          listMethods: () => Effect.succeed({ openai: [apiMethod] }),
+        },
+      })
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <App />, {
+          client,
+          runtime: createMockRuntime(),
+          initialAgent: AgentName.make("main"),
+          height,
+          initialSession: {
+            id: SessionId.make("session-a"),
+            activeBranchId: BranchId.make("branch-a"),
+            name: "A",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        }),
+      )
+      yield* waitForFrame(setup, (frame) => frame.includes("API key [api]"), "openai's methods")
+      return setup
+    })
+  // The method screen is its own pane: the provider list it came from is gone,
+  // so its rows never read as the choice. The key screen draws no list at all.
+  it.live("the sign-in method and key screens draw no provider rows", () =>
+    Effect.gen(function* () {
+      const setup = yield* mountSignIn()
+      const methods = renderFrame(setup)
+      expect(methods).not.toContain("zzprovider")
+      expect(methods).not.toContain("openai [none]")
+      setup.mockInput.pressEnter()
+      const key = yield* waitForFrame(setup, (frame) => frame.includes("API key ›"), "key line")
+      expect(key).not.toContain("zzprovider")
+      expect(key).not.toContain("API key [api]")
+      setup.renderer.destroy()
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  // Docked, not modal: the sign-in draws under the composer's status row like
+  // every pane, and a short terminal keeps its cursor row.
+  it.live("the sign-in docks under the composer and keeps its cursor row at 10 rows", () =>
+    Effect.gen(function* () {
+      const setup = yield* mountSignIn()
+      const lines = renderFrame(setup).split("\n")
+      const input = lines.findIndex((line) => line.startsWith("┃"))
+      const method = lines.findIndex((line) => line.includes("API key [api]"))
+      expect(input).toBeGreaterThanOrEqual(0)
+      expect(method).toBeGreaterThan(input)
+      expect(renderFrame(setup)).not.toContain("╭")
+      setup.resize(setup.renderer.terminalWidth, 10)
+      yield* waitForFrame(
+        setup,
+        (frame) => setup.renderer.terminalHeight === 10 && frame.includes("API key [api]"),
+        "the cursor row at 10 rows",
+      )
+      // Pasted text reaches the key line through the pane's own scope.
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, (frame) => frame.includes("API key ›"), "key line")
+      yield* Effect.promise(() => setup.mockInput.pasteBracketedText("sk-abc\n"))
+      yield* waitForFrame(setup, (frame) => frame.includes("API key › ******"), "masked key")
+      setup.renderer.destroy()
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  // A paste can carry terminal escape sequences (a colour code copied out of
+  // another terminal) and C1 controls. The key keeps only its text: whole
+  // sequences drop, not just their escape byte.
+  it.live("a pasted key drops whole escape sequences and C1 controls", () =>
+    Effect.gen(function* () {
+      const saved: Array<string> = []
+      const setup = yield* mountSignIn(24, saved)
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, (frame) => frame.includes("API key ›"), "key line")
+      yield* Effect.promise(() =>
+        setup.mockInput.pasteBracketedText(
+          "sk-a\u001b[31mb\u001b[0m\u0085c\u001b]0;title\u0007d\u009b1me",
+        ),
+      )
+      yield* waitForFrame(setup, (frame) => frame.includes("API key › *"), "masked key")
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, () => saved.length === 1, "the key saved")
+      expect(saved).toEqual(["sk-abcde"])
+      setup.renderer.destroy()
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  // A key longer than the row shows the tail of its mask, so the caret the
+  // reader types at stays on screen.
+  it.live("a long key keeps the caret on screen", () =>
+    Effect.gen(function* () {
+      const setup = yield* mountSignIn()
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, (frame) => frame.includes("API key ›"), "key line")
+      yield* Effect.promise(() => setup.mockInput.pasteBracketedText("sk-" + "x".repeat(200)))
+      const frame = yield* waitForFrame(
+        setup,
+        (current) => current.includes("API key › …*"),
+        "the mask's tail",
+      )
+      const line = frame.split("\n").find((row) => row.includes("API key ›")) ?? ""
+      expect(line.trimEnd().endsWith("*│")).toBe(true)
+      expect(line.length).toBeLessThanOrEqual(setup.renderer.terminalWidth)
+      setup.renderer.destroy()
+    }).pipe(Effect.timeout("10 seconds")),
   )
   it.live("a send refused after a switch waits in its own session, draft and reason both", () =>
     Effect.gen(function* () {
@@ -1096,7 +1221,7 @@ describe("App auth gate", () => {
         renderWithProviders(
           () => (
             <>
-              <App missingAuthProviders={[]} />
+              <App />
               <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
             </>
           ),
@@ -1177,7 +1302,7 @@ describe("App auth gate", () => {
         renderWithProviders(
           () => (
             <>
-              <App missingAuthProviders={[]} />
+              <App />
               <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
             </>
           ),
@@ -1224,7 +1349,7 @@ describe("App auth gate", () => {
         branch: { getTree: () => Effect.succeed([]) },
       })
       const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <App missingAuthProviders={[]} />, {
+        renderWithProviders(() => <App />, {
           client,
           runtime: createMockRuntime(),
           initialSession: {
@@ -1288,6 +1413,36 @@ describe("App auth gate", () => {
       yield* waitForFrame(view.setup, () => view.steers.length === 1, "cancel")
       expect(view.steers).toEqual(["Cancel"])
       expect(view.shutdowns()).toBe(0)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  // Keybinds run before the ctrl+c ladder: an extension that bound ctrl+c
+  // would take the turn cancel and the quit. The loader refuses the keybind,
+  // so ctrl+c cancels the turn and the command keeps its palette row.
+  it.live("an extension keybind on ctrl+c is refused, and ctrl+c cancels the turn", () =>
+    Effect.gen(function* () {
+      let fired = 0
+      const grabber = defineClientExtension("@test/ctrl-c-grabber", {
+        setup: Effect.succeed(
+          clientCommandContribution({
+            id: "grabber.ctrl-c",
+            title: "Grab ctrl+c",
+            keybind: "ctrl+c",
+            onSelect: () => {
+              fired += 1
+            },
+          }),
+        ),
+      })
+      const view = yield* mountRunningTurn(24, [grabber])
+      view.setup.mockInput.pressKey("c", { ctrl: true })
+      yield* waitForFrame(view.setup, () => view.steers.length === 1, "cancel")
+      expect(view.steers).toEqual(["Cancel"])
+      expect(fired).toBe(0)
+      yield* waitForFrame(
+        view.setup,
+        (frame) => frame.includes('keybind "ctrl+c"'),
+        "the refused keybind listed with the failed extensions",
+      )
     }).pipe(Effect.timeout("10 seconds")),
   )
   // Children that keep waking the parent start a new turn after each cancel;
@@ -1520,7 +1675,7 @@ describe("App auth gate", () => {
         renderWithProviders(
           () => (
             <>
-              <App missingAuthProviders={[]} />
+              <App />
               <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
             </>
           ),
@@ -1561,7 +1716,7 @@ describe("App auth gate", () => {
         branch: { getTree: () => Effect.succeed([]) },
       })
       const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <App missingAuthProviders={[]} />, {
+        renderWithProviders(() => <App />, {
           client,
           runtime: createMockRuntime(),
           builtins: builtinClientModules,
@@ -1599,7 +1754,7 @@ describe("App auth gate", () => {
         renderWithProviders(
           () => (
             <>
-              <App missingAuthProviders={[]} />
+              <App />
               <ExtensionUIProbe onReady={(value) => (ext = Option.some(value))} />
             </>
           ),
@@ -1654,7 +1809,7 @@ describe("App auth gate", () => {
   it.live("a pane that opens over a previewing prompt search gives the draft back", () =>
     Effect.gen(function* () {
       const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <App missingAuthProviders={[]} />, {
+        renderWithProviders(() => <App />, {
           client: createMockClient({
             auth: { listProviders: () => Effect.succeed([]) },
             branch: { getTree: () => Effect.succeed([]) },
@@ -1691,7 +1846,7 @@ describe("App auth gate", () => {
   it.live("an unknown slash command comes back to the draft with its reason", () =>
     Effect.gen(function* () {
       const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <App missingAuthProviders={[]} />, {
+        renderWithProviders(() => <App />, {
           client: createMockClient({
             auth: { listProviders: () => Effect.succeed([]) },
             branch: { getTree: () => Effect.succeed([]) },
@@ -1733,7 +1888,7 @@ describe("App auth gate", () => {
         renderWithProviders(
           () => (
             <>
-              <App missingAuthProviders={[]} />
+              <App />
               <ExtensionUIProbe onReady={(value) => (ext = Option.some(value))} />
             </>
           ),
@@ -1815,7 +1970,7 @@ describe("App auth gate", () => {
             renderWithProviders(
               () => (
                 <>
-                  <App missingAuthProviders={[]} />
+                  <App />
                   <ExtensionUIProbe onReady={(value) => (ext = Option.some(value))} />
                 </>
               ),
@@ -1911,7 +2066,7 @@ describe("App auth gate", () => {
         renderWithProviders(
           () => (
             <>
-              <App missingAuthProviders={[]} />
+              <App />
               <ExtensionUIProbe onReady={(value) => (ext = Option.some(value))} />
             </>
           ),
@@ -1978,10 +2133,18 @@ describe("App auth gate", () => {
       setup.renderer.destroy()
     }).pipe(Effect.timeout("10 seconds")),
   )
-  // At 14 rows the composer takes six of the footer's twelve, and the agents
-  // pane's rules and title take three more: three rows are left for the
-  // filter row, the section heading and the cursor row. The trays, the key
-  // hint and the detail line give way for them.
+  /**
+   * The docked pane closes inside the terminal: its bottom rule is the last
+   * row drawn, or the key hint under it is.
+   */
+  const closesInside = (drawn: ReadonlyArray<string>) => {
+    const rule = drawn.findLastIndex((line) => line.startsWith("─"))
+    return rule >= 0 && drawn.length - 1 - rule <= 1
+  }
+  // At 14 rows the composer takes four of the footer's twelve once its blank
+  // rows give way, and the agents pane's rules and title take three more: the
+  // filter row, the section heading and the cursor row fit. The trays, the
+  // blank rows and the detail line give way for them.
   it.live("the agents pane keeps its cursor row in view at the smallest height that holds it", () =>
     Effect.gen(function* () {
       const setup = yield* mountShortTerminalWithTrays(14)
@@ -1995,9 +2158,8 @@ describe("App auth gate", () => {
       const opened = renderFrame(setup)
       expect(opened).toContain("┃")
       expect(opened).not.toContain("alarm in now")
-      // The pane closes inside the terminal: its bottom rule is the last row drawn.
       const drawn = opened.split("\n").filter((line) => line.trim().length > 0)
-      expect(drawn.at(-1)?.startsWith("─")).toBe(true)
+      expect(closesInside(drawn)).toBe(true)
       setup.mockInput.pressArrow("down")
       yield* waitForFrame(
         setup,
@@ -2044,8 +2206,7 @@ describe("App auth gate", () => {
         const cursor = pane.filter((line) => line.includes("delegate: task 3"))
         expect(cursor).toHaveLength(1)
         expect(cursor[0]).not.toContain("turn ")
-        // The pane closes inside the terminal: its bottom rule is the last row drawn.
-        expect(pane.at(-1)?.startsWith("─")).toBe(true)
+        expect(closesInside(pane)).toBe(true)
       }).pipe(Effect.timeout("10 seconds")),
     )
   }
@@ -2084,7 +2245,7 @@ describe("App auth gate", () => {
     const cursor = pane.filter((line) => line.includes(cursorText))
     expect(cursor).toHaveLength(1)
     expect(cursor[0]).not.toContain(notOnCursor)
-    expect(pane.at(-1)?.startsWith("─")).toBe(true)
+    expect(closesInside(pane)).toBe(true)
   }
   for (const height of [13, 12, 11]) {
     it.live(`the thread pane at ${height} rows keeps its cursor row and overdraws nothing`, () =>
@@ -2161,10 +2322,11 @@ describe("App auth gate", () => {
       }).pipe(Effect.timeout("10 seconds")),
     )
   }
-  // Under 11 rows, with a turn running, the composer and the "Generating" row
-  // leave a pane two rows, one or none. Under three rows the frame drops its
-  // rules and note row, so its rows go to the cursor row; at none it draws
-  // nothing. Either way no row is drawn over a rule or over the status row.
+  // Under 9 rows, with a turn running and the blank footer rows given way,
+  // the "Generating" row, the input and the status row leave a pane two rows,
+  // one or none (8 rows: 3, 7: 2, 6: 1, 5: none). Under three rows the frame
+  // drops its rules and note row, so its rows go to the cursor row; at none it
+  // draws nothing. Either way no row is drawn over a rule or over the status row.
   const sendPrompts = (view: { readonly setup: TestSetup; readonly sent: Array<string> }) =>
     Effect.gen(function* () {
       for (const prompt of ["first prompt", "second prompt"]) {
@@ -2218,13 +2380,13 @@ describe("App auth gate", () => {
       .split("\n")
       .every((line) => (!line.includes("─") || /^─+$/.test(line.trim())) && rowClean(line))
   for (const pane of shortPanes) {
-    it.live(`the ${pane.name} overdraws nothing from 10 rows down to 6`, () =>
+    it.live(`the ${pane.name} overdraws nothing from 10 rows down to 5`, () =>
       Effect.gen(function* () {
         const view = yield* mountRunningTurn()
         yield* pane.open(view)
         yield* waitForFrame(view.setup, (frame) => frame.includes(pane.shown), "the pane")
         const width = view.setup.renderer.terminalWidth
-        for (const height of [10, 9, 8, 7, 6]) {
+        for (const height of [10, 9, 8, 7, 6, 5]) {
           view.setup.resize(width, height)
           yield* waitForFrame(
             view.setup,
@@ -2238,6 +2400,112 @@ describe("App auth gate", () => {
       }).pipe(Effect.timeout("10 seconds")),
     )
   }
+  // With a turn running, the footer's three blank rows (above the activity
+  // row, above the input, above the status row) give way before a pane loses
+  // its cursor row: the reasoning picker keeps "● default" down to 6 rows.
+  it.live("the blank footer rows give way so a pane keeps its cursor row down to 6 rows", () =>
+    Effect.gen(function* () {
+      const view = yield* mountRunningTurn()
+      yield* typeCommand("/think")(view.setup)
+      yield* waitForFrame(view.setup, (frame) => frame.includes("● default"), "the pane")
+      const width = view.setup.renderer.terminalWidth
+      for (const height of [8, 7, 6]) {
+        view.setup.resize(width, height)
+        yield* waitForFrame(
+          view.setup,
+          (frame) =>
+            view.setup.renderer.terminalHeight === height &&
+            frame.includes("● default") &&
+            frame.includes("┃") &&
+            // The activity row is whole: the transcript tail, left no row,
+            // draws nothing over it.
+            frame.split("\n").some((line) => line.startsWith("  Generating")),
+          `the cursor row at ${height} rows`,
+        )
+      }
+      // Grown back, the blank rows return: a blank row sits above the input.
+      view.setup.resize(width, 24)
+      yield* waitForFrame(
+        view.setup,
+        (current) => {
+          const lines = current.split("\n")
+          const input = lines.findIndex((line) => line.startsWith("┃"))
+          return (
+            view.setup.renderer.terminalHeight === 24 &&
+            current.includes("● default") &&
+            input > 0 &&
+            lines[input - 1]?.trim() === ""
+          )
+        },
+        "the blank rows back on the full terminal",
+      )
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  // The give-way is reckoned as if the blank rows were drawn, so a pane that
+  // fits once they give way does not bring them back and lose its rows again:
+  // at 10-12 rows (a squeezed reasoning picker) the blank rows stay given and
+  // the frame holds still across draws.
+  const withoutClock = (frame: string) => frame.replace(/\(\d+s\)/g, "")
+  const blankRowsGiven = (frame: string) => {
+    const lines = frame.split("\n")
+    const generating = lines.findIndex((line) => line.includes("Generating"))
+    return generating >= 0 && lines[generating + 1]?.startsWith("┃") === true
+  }
+  for (const height of [12, 11, 10]) {
+    it.live(`the footer holds still at ${height} rows with a pane open`, () =>
+      Effect.gen(function* () {
+        const view = yield* mountRunningTurn()
+        yield* typeCommand("/think")(view.setup)
+        yield* waitForFrame(view.setup, (frame) => frame.includes("● default"), "the pane")
+        view.setup.resize(view.setup.renderer.terminalWidth, height)
+        yield* waitForFrame(
+          view.setup,
+          (frame) =>
+            view.setup.renderer.terminalHeight === height &&
+            frame.includes("● default") &&
+            blankRowsGiven(frame),
+          `the pane at ${height} rows, its blank rows given`,
+        )
+        // The pane reads its new rows one draw after the layout gives them.
+        for (let draw = 0; draw < 4; draw++) yield* Effect.promise(() => view.setup.renderOnce())
+        const seen = new Set<string>()
+        for (let draw = 0; draw < 6; draw++) {
+          yield* Effect.promise(() => view.setup.renderOnce())
+          seen.add(withoutClock(renderFrame(view.setup)))
+        }
+        expect(seen.size).toBe(1)
+        expect(blankRowsGiven(renderFrame(view.setup))).toBe(true)
+      }).pipe(Effect.timeout("10 seconds")),
+    )
+  }
+  // The ghost line offers what the popup's cursor row already shows, so it
+  // gives way with the blank rows: at 11 rows the popup keeps its key hint,
+  // no ghost line draws, and the frame holds still across draws.
+  it.live("the ghost line gives way with the blank rows for a squeezed popup", () =>
+    Effect.gen(function* () {
+      const view = yield* mountRunningTurn()
+      view.setup.resize(view.setup.renderer.terminalWidth, 11)
+      yield* Effect.promise(() => view.setup.mockInput.typeText("/thre"))
+      yield* waitForFrame(
+        view.setup,
+        (frame) =>
+          view.setup.renderer.terminalHeight === 11 &&
+          frame.includes("/thread") &&
+          blankRowsGiven(frame),
+        "the popup at 11 rows, its blank rows given",
+      )
+      for (let draw = 0; draw < 4; draw++) yield* Effect.promise(() => view.setup.renderOnce())
+      const seen = new Set<string>()
+      for (let draw = 0; draw < 6; draw++) {
+        yield* Effect.promise(() => view.setup.renderOnce())
+        seen.add(withoutClock(renderFrame(view.setup)))
+      }
+      expect(seen.size).toBe(1)
+      const frame = renderFrame(view.setup)
+      expect(frame).not.toContain("⇥")
+      expect(frame).toContain("Tab Complete")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   // A pane with no row on screen takes no keys: the reader cannot see what a
   // key would do there. Typing goes past the agents pane to the composer.
   it.live("typing reaches the composer past an agents pane that has no row", () =>
@@ -2245,10 +2513,10 @@ describe("App auth gate", () => {
       const view = yield* mountRunningTurn()
       view.setup.mockInput.pressArrow("left")
       yield* waitForFrame(view.setup, (frame) => frame.includes("Agents ·"), "the agents pane")
-      view.setup.resize(view.setup.renderer.terminalWidth, 6)
+      view.setup.resize(view.setup.renderer.terminalWidth, 5)
       yield* waitForFrame(
         view.setup,
-        (frame) => view.setup.renderer.terminalHeight === 6 && !frame.includes("›"),
+        (frame) => view.setup.renderer.terminalHeight === 5 && !frame.includes("›"),
         "the agents pane with no row",
       )
       yield* Effect.promise(() => view.setup.mockInput.typeText("typed past"))
@@ -2263,18 +2531,19 @@ describe("App auth gate", () => {
       yield* typeCommand("/think")(view.setup)
       yield* waitForFrame(view.setup, (frame) => frame.includes("● default"), "the pane")
       const width = view.setup.renderer.terminalWidth
-      view.setup.resize(width, 6)
+      view.setup.resize(width, 5)
       yield* waitForFrame(
         view.setup,
-        (frame) => view.setup.renderer.terminalHeight === 6 && !frame.includes("● default"),
+        (frame) => view.setup.renderer.terminalHeight === 5 && !frame.includes("● default"),
         "the pane with no row",
       )
       view.setup.mockInput.pressEscape()
       // gent/no-sleep: allow a lone escape byte stays in the stdin parser until its timeout flushes it as a key
       yield* Effect.sleep("100 millis")
-      // The held pane let go of the composer: typing reaches it at 6 rows.
+      // The held pane let go of the composer: typing at 5 rows reaches it. With
+      // no pane open the blank rows are back, so the draft shows once the
+      // terminal grows.
       yield* Effect.promise(() => view.setup.mockInput.typeText("after"))
-      yield* waitForFrame(view.setup, (frame) => frame.includes("┃ after"), "the draft")
       view.setup.resize(width, 24)
       yield* waitForFrame(
         view.setup,
@@ -2282,6 +2551,34 @@ describe("App auth gate", () => {
         "the full terminal",
       )
       expect(renderFrame(view.setup)).not.toContain("Reasoning ·")
+      expect(view.steers).toEqual([])
+      expect(view.shutdowns()).toBe(0)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  // An extension pane with no row takes no keys either, and Esc closes it the
+  // same way: the turn runs on, and the pane is gone when the terminal grows.
+  it.live("esc closes an extension pane that has no row and leaves the turn running", () =>
+    Effect.gen(function* () {
+      const view = yield* mountRunningTurn()
+      view.setup.mockInput.pressArrow("left")
+      yield* waitForFrame(view.setup, (frame) => frame.includes("Agents ·"), "the agents pane")
+      const width = view.setup.renderer.terminalWidth
+      view.setup.resize(width, 5)
+      yield* waitForFrame(
+        view.setup,
+        (frame) => view.setup.renderer.terminalHeight === 5 && !frame.includes("Agents ·"),
+        "the agents pane with no row",
+      )
+      view.setup.mockInput.pressEscape()
+      // gent/no-sleep: allow a lone escape byte stays in the stdin parser until its timeout flushes it as a key
+      yield* Effect.sleep("100 millis")
+      view.setup.resize(width, 24)
+      yield* waitForFrame(
+        view.setup,
+        (frame) => view.setup.renderer.terminalHeight === 24 && frame.includes("Generating"),
+        "the full terminal",
+      )
+      expect(renderFrame(view.setup)).not.toContain("Agents ·")
       expect(view.steers).toEqual([])
       expect(view.shutdowns()).toBe(0)
     }).pipe(Effect.timeout("10 seconds")),
@@ -2313,11 +2610,12 @@ describe("App auth gate", () => {
       expect(frame).not.toContain("+1 more working")
     }).pipe(Effect.timeout("10 seconds")),
   )
-  // At 13 rows the btw pane has one body row: it holds the answer's last line,
-  // not the blank row between turns, and the pane still closes on its rule.
+  // At 10 rows (the blank footer rows given way) the btw pane has one body
+  // row: it holds the answer's last line, not the blank row between turns,
+  // and the pane still closes on its rule.
   it.live("the btw pane holds the answer's last line in a one-row body", () =>
     Effect.gen(function* () {
-      const setup = yield* mountShortTerminalWithTrays(13)
+      const setup = yield* mountShortTerminalWithTrays(10)
       yield* Effect.promise(() => setup.mockInput.typeText("/btw which task is hardest?"))
       setup.mockInput.pressEnter()
       yield* waitForFrame(
@@ -2329,6 +2627,35 @@ describe("App auth gate", () => {
         .split("\n")
         .filter((line) => line.trim().length > 0)
       expect(drawn.at(-1)?.startsWith("─")).toBe(true)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  // Below one body row the btw transcript has no row: it hides whole, and the
+  // ask line keeps its row, never drawn over by the transcript's top line.
+  it.live("the btw ask line is never drawn over when the transcript has no row", () =>
+    Effect.gen(function* () {
+      const setup = yield* mountShortTerminalWithTrays(24)
+      yield* Effect.promise(() => setup.mockInput.typeText("/btw which task is hardest?"))
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("ANSWER-TAIL") && frame.includes("ask ›"),
+        "the btw pane",
+      )
+      const width = setup.renderer.terminalWidth
+      for (const height of [9, 8, 6]) {
+        setup.resize(width, height)
+        yield* waitForFrame(
+          setup,
+          (frame) => setup.renderer.terminalHeight === height && frame.includes("ask ›"),
+          `the ask line at ${height} rows`,
+        )
+        for (let draw = 0; draw < 4; draw++) yield* Effect.promise(() => setup.renderOnce())
+        const asks = renderFrame(setup)
+          .split("\n")
+          .filter((line) => line.includes("›"))
+        expect(asks).toHaveLength(1)
+        expect(asks[0]?.trimEnd()).toBe(" ask › │")
+      }
     }).pipe(Effect.timeout("10 seconds")),
   )
   it.live("an interjection steers a running turn while an error shows", () =>
@@ -2360,7 +2687,6 @@ describe("App auth gate", () => {
       renderWithProviders(
         () => (
           <App
-            missingAuthProviders={[]}
             initialBranches={Option.some([
               {
                 id: BranchId.make("branch-a"),
@@ -2475,7 +2801,6 @@ describe("App auth gate", () => {
         renderWithProviders(
           () => (
             <App
-              missingAuthProviders={[]}
               initialBranches={Option.some([
                 {
                   id: BranchId.make("branch-a"),
@@ -2549,7 +2874,7 @@ describe("App auth gate", () => {
       })
       const runtime = createMockRuntime()
       const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <App missingAuthProviders={["openai"]} />, {
+        renderWithProviders(() => <App />, {
           client,
           runtime,
           initialAgent: AgentName.make("cowork"),
@@ -2579,10 +2904,10 @@ describe("App auth gate", () => {
       // Auth overlay should appear
       const authFrame = yield* waitForFrame(
         setup,
-        (next) => next.includes("API Keys"),
+        (next) => next.includes("Sign in ·"),
         "auth overlay",
       )
-      expect(authFrame).toContain("API Keys")
+      expect(authFrame).toContain("Sign in ·")
       // Prompt still not sent while auth overlay is open
       expect(sentMessages).toEqual([])
       setup.renderer.destroy()
@@ -2609,7 +2934,7 @@ describe("App auth gate", () => {
         },
       })
       const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <App missingAuthProviders={["openai"]} />, {
+        renderWithProviders(() => <App />, {
           client,
           runtime: createMockRuntime(),
           initialAgent: AgentName.make("cowork"),
@@ -2622,7 +2947,7 @@ describe("App auth gate", () => {
           },
         }),
       )
-      yield* waitForFrame(setup, (frame) => frame.includes("API Keys"), "the sign-in")
+      yield* waitForFrame(setup, (frame) => frame.includes("Sign in ·"), "the sign-in")
       const destroy = setup.renderer.destroy.bind(setup.renderer)
       setup.renderer.destroy = () => {
         shutdowns += 1
@@ -2663,7 +2988,7 @@ describe("App auth gate", () => {
       })
       const runtime = createMockRuntime()
       const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <App missingAuthProviders={[]} />, {
+        renderWithProviders(() => <App />, {
           client,
           runtime,
           initialAgent: AgentName.make("cowork"),
@@ -2719,7 +3044,7 @@ describe("App auth gate", () => {
       })
       const runtime = createMockRuntime()
       const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <App missingAuthProviders={[]} />, {
+        renderWithProviders(() => <App />, {
           client,
           runtime,
           initialAgent: AgentName.make("cowork"),
@@ -2767,7 +3092,7 @@ describe("App auth gate", () => {
       })
       const runtime = createMockRuntime()
       const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <App missingAuthProviders={[]} />, {
+        renderWithProviders(() => <App />, {
           client,
           runtime,
           initialAgent: AgentName.make("cowork"),
@@ -2787,7 +3112,7 @@ describe("App auth gate", () => {
         "retryable auth error",
       )
       setup.mockInput.pressKey("r")
-      yield* waitForFrame(setup, (frame) => !frame.includes("API Keys"), "auth retry resolved")
+      yield* waitForFrame(setup, (frame) => !frame.includes("Sign in ·"), "auth retry resolved")
       expect(authChecks).toBe(3)
       setup.renderer.destroy()
     }),
@@ -2902,7 +3227,6 @@ describe("App auth gate", () => {
           () => (
             <>
               <App
-                missingAuthProviders={[]}
                 initialBranches={Option.some([
                   {
                     id: alphaBranchId,
@@ -2951,7 +3275,7 @@ describe("App auth gate", () => {
       expect(sentMessages).toEqual([])
       initialAuthCheckResolved = true
       yield* Deferred.succeed(initialAuthCheck, void 0)
-      yield* waitForFrame(setup, (frame) => frame.includes("API Keys"), "auth gate")
+      yield* waitForFrame(setup, (frame) => frame.includes("Sign in ·"), "auth gate")
       expect(sentMessages).toEqual([])
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
@@ -2959,12 +3283,12 @@ describe("App auth gate", () => {
       yield* Effect.promise(() => setup.renderOnce())
       yield* waitForFrame(
         setup,
-        (frame) => frame.includes("Enter API key for openai"),
+        (frame) => frame.includes("Sign in · openai · API key"),
         "openai key input",
       )
       yield* Effect.promise(() => setup.mockInput.typeText("sk-test"))
       setup.mockInput.pressEnter()
-      yield* waitForFrame(setup, (frame) => !frame.includes("API Keys"), "auth overlay closed")
+      yield* waitForFrame(setup, (frame) => !frame.includes("Sign in ·"), "auth overlay closed")
       expect(hasOpenAiKey).toBe(true)
       yield* waitForFrame(
         setup,
@@ -3077,7 +3401,7 @@ describe("App auth gate", () => {
         renderWithProviders(
           () => (
             <>
-              <App missingAuthProviders={["openai"]} />
+              <App />
               <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
             </>
           ),
@@ -3099,7 +3423,7 @@ describe("App auth gate", () => {
         ),
       )
       const clientContext = yield* requireClient(ctx)
-      yield* waitForFrame(setup, (frame) => frame.includes("API Keys"), "auth gate")
+      yield* waitForFrame(setup, (frame) => frame.includes("Sign in ·"), "auth gate")
       applySnapshotAgent(clientContext, AgentName.make("deepwork"))
       yield* waitForFrame(setup, () => sessionAuthChecks >= 2, "stale session auth check started")
       setup.mockInput.pressEnter()
@@ -3107,12 +3431,12 @@ describe("App auth gate", () => {
       setup.mockInput.pressEnter()
       yield* waitForFrame(
         setup,
-        (frame) => frame.includes("Enter API key for openai"),
+        (frame) => frame.includes("Sign in · openai · API key"),
         "openai key input",
       )
       yield* Effect.promise(() => setup.mockInput.typeText("sk-test"))
       setup.mockInput.pressEnter()
-      yield* waitForFrame(setup, (frame) => !frame.includes("API Keys"), "auth resolved")
+      yield* waitForFrame(setup, (frame) => !frame.includes("Sign in ·"), "auth resolved")
       yield* waitForFrame(
         setup,
         () => sentMessages.some((message) => message.content === initialPrompt),
@@ -3130,7 +3454,7 @@ describe("App auth gate", () => {
       // gent/no-sleep: allow real-clock gap so the resumed-send fiber resolves before assertion
       yield* Effect.sleep("20 millis")
       yield* Effect.promise(() => setup.renderOnce())
-      expect(renderFrame(setup)).not.toContain("API Keys")
+      expect(renderFrame(setup)).not.toContain("Sign in ·")
       expect(sentMessages.filter((message) => message.content === initialPrompt)).toHaveLength(1)
       setup.renderer.destroy()
     }),
@@ -3153,7 +3477,7 @@ describe("App auth gate", () => {
         renderWithProviders(
           () => (
             <>
-              <App missingAuthProviders={[]} />
+              <App />
               <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
             </>
           ),
@@ -3215,7 +3539,7 @@ describe("App auth gate", () => {
         renderWithProviders(
           () => (
             <>
-              <App missingAuthProviders={[]} />
+              <App />
               <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
             </>
           ),
@@ -3275,7 +3599,7 @@ describe("App auth gate", () => {
           },
         })
         const setup = yield* Effect.promise(() =>
-          renderWithProviders(() => <App missingAuthProviders={[]} />, {
+          renderWithProviders(() => <App />, {
             client,
             runtime: createMockRuntime(),
             initialAgent: AgentName.make("cowork"),
@@ -3321,7 +3645,7 @@ describe("App auth gate", () => {
         renderWithProviders(
           () => (
             <>
-              <App missingAuthProviders={[]} />
+              <App />
               <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
             </>
           ),
@@ -3961,7 +4285,7 @@ describe("debug playground", () => {
           const [session] = yield* client.session.list()
           const initialSession = yield* Effect.fromNullishOr(session)
           const setup = yield* Effect.promise(() =>
-            renderWithProviders(() => <App missingAuthProviders={[]} />, {
+            renderWithProviders(() => <App />, {
               client,
               runtime,
               initialSession,
@@ -4004,7 +4328,7 @@ describe("client extension status", () => {
         renderWithProviders(
           () => (
             <>
-              <App missingAuthProviders={[]} />
+              <App />
               <ExtensionUIProbe onReady={(value) => (ext = Option.some(value))} />
             </>
           ),

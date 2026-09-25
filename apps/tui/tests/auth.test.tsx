@@ -3,6 +3,8 @@ import { describe, expect, it, test } from "effect-bun-test"
 import { Context, Deferred, Effect, Layer, Option, Scope } from "effect"
 import {
   AgentName,
+  BranchId,
+  dateFromMillis,
   type AuthAuthorization,
   type AuthMethod,
   type AuthProviderInfo,
@@ -20,6 +22,7 @@ import {
   transitionAuth,
 } from "../src/auth"
 import { BunServices } from "@effect/platform-bun"
+import { App } from "../src/app"
 import { LinkOpener, LinkOpenerError } from "../src/os"
 import { type ClientContextValue, useClient } from "../src/client"
 import {
@@ -27,6 +30,7 @@ import {
   createMockClient,
   createMockRuntime,
   renderWithProviders,
+  renderFrame,
 } from "./render-harness-boundary"
 import { waitForFrame } from "./helpers-boundary"
 import { onMount } from "solid-js"
@@ -407,7 +411,7 @@ describe("Auth route", () => {
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
-      yield* waitForFrame(setup, (frame) => frame.includes("Enter API key for anthropic"))
+      yield* waitForFrame(setup, (frame) => frame.includes("Sign in · anthropic · API key"))
       yield* Effect.promise(() => setup.mockInput.typeText("old-key"))
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressEnter()
@@ -420,15 +424,15 @@ describe("Auth route", () => {
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
-      yield* waitForFrame(setup, (frame) => frame.includes("Enter API key for openai"))
+      yield* waitForFrame(setup, (frame) => frame.includes("Sign in · openai · API key"))
       yield* Deferred.succeed(oldKeySave, void 0)
       const frame = yield* waitForFrame(
         setup,
         (next) =>
-          next.includes("Enter API key for openai") &&
+          next.includes("Sign in · openai · API key") &&
           !next.includes("API key saved for anthropic"),
       )
-      expect(frame).toContain("Enter API key for openai")
+      expect(frame).toContain("Sign in · openai · API key")
       expect(frame).not.toContain("API key saved for anthropic")
       setup.renderer.destroy()
     }),
@@ -866,11 +870,11 @@ describe("Auth route", () => {
         (next) => next.includes("Could not open a browser") && callbackCalls.length === 1,
         "device flow keeps waiting without a browser",
       )
-      expect(frame).toContain("Authorize openai")
+      expect(frame).toContain("Sign in · openai ·")
       expect(frame).toContain("WXYZ-1234")
       expect(panelText(frame)).toContain("https://auth.openai.com/codex/device")
       expect(frame).not.toContain("Failed to open URL")
-      expect(frame).not.toContain("r=retry")
+      expect(frame).not.toContain("r retry")
       expect(callbackCalls).toEqual([
         expect.objectContaining({ provider: "openai", authorizationId: "auth-device" }),
       ])
@@ -945,7 +949,7 @@ describe("Auth route", () => {
         applySnapshotAgent(yield* requireClient(ctx), AgentName.make("cowork"))
         yield* Effect.yieldNow
         const reconnected = yield* waitForFrame(setup, () => true)
-        expect(reconnected).toContain("Authorize openai")
+        expect(reconnected).toContain("Sign in · openai ·")
         expect(reconnected).toContain("WXYZ-1234")
         expect(panelText(reconnected)).toContain("https://auth.openai.com/codex/device")
         expect(providerLoads).toBe(1)
@@ -996,5 +1000,113 @@ describe("Auth route", () => {
       expect(frame).not.toContain("Failed to open URL")
       setup.renderer.destroy()
     }).pipe(Effect.timeout("8 seconds")),
+  )
+
+  // ── oauth rows on a short terminal ────────────────────────────────
+  //
+  // The rows go in order of need. The user code and the URL are what the
+  // reader came for; the title and, while the flow waits, the optional paste
+  // line give way before any of them.
+
+  /** The App with the enforced sign-in docked, on its OAuth screen. */
+  const mountOAuth = (authorization: AuthAuthorization) =>
+    Effect.gen(function* () {
+      const client = createMockClient({
+        auth: {
+          listProviders: () =>
+            Effect.succeed([
+              {
+                provider: "openai",
+                hasKey: false,
+                required: true,
+                source: "none",
+                authType: absent,
+              },
+            ]),
+          listMethods: () =>
+            Effect.succeed({ openai: [{ label: "ChatGPT sign-in", type: "oauth" }] }),
+          authorize: () => Effect.succeed(authorization),
+          // The flow waits: the poll or the browser callback has not finished.
+          callback: () => Effect.never,
+        },
+      })
+      const services = yield* servicesWithLinkOpener(() => Effect.void)
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <App />, {
+          client,
+          runtime: createMockRuntime(),
+          services,
+          initialAgent: AgentName.make("main"),
+          initialSession: {
+            id: SessionId.make("session-oauth"),
+            activeBranchId: BranchId.make("branch-oauth"),
+            name: "A",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        }),
+      )
+      yield* waitForFrame(setup, (frame) => frame.includes("ChatGPT sign-in"), "the methods")
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, (frame) => frame.includes("Paste code"), "the OAuth screen")
+      return setup
+    })
+
+  /** Each row of the frame, trimmed, joined: a wrapped URL reads whole. */
+  const joinedRows = (frame: string) =>
+    frame
+      .split("\n")
+      .map((line) => line.trim())
+      .join("")
+
+  const shortHeights: ReadonlyArray<number> = [16, 14, 12, 11, 10, 9, 8]
+
+  it.scopedLive("a waiting device flow keeps the code and url over the optional paste line", () =>
+    Effect.gen(function* () {
+      const setup = yield* mountOAuth({
+        authorizationId: "auth-device",
+        url: "https://auth.openai.com/codex/device",
+        method: "auto",
+        instructions: "Open the URL and enter this code:\nWXYZ-1234",
+      })
+      for (const height of shortHeights) {
+        setup.resize(80, height)
+        yield* waitForFrame(setup, () => setup.renderer.terminalHeight === height, `${height} rows`)
+        for (let draw = 0; draw < 6; draw++) yield* Effect.promise(() => setup.renderOnce())
+        const frame = renderFrame(setup)
+        const needs = frame.includes("WXYZ-1234") && frame.includes("codex/device")
+        // Down to 8 rows the pane still holds the code and the URL.
+        expect({ height, needs }).toEqual({ height, needs: true })
+      }
+      setup.renderer.destroy()
+    }).pipe(Effect.timeout("20 seconds")),
+  )
+
+  it.scopedLive("a long waiting url keeps its rows before the title and the paste line", () =>
+    Effect.gen(function* () {
+      const url = `https://auth.openai.com/oauth/authorize?response_type=code&client_id=app_x&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback&scope=openid+profile+email+offline_access&state=${"s".repeat(60)}-END`
+      const setup = yield* mountOAuth({
+        authorizationId: "auth-long",
+        url,
+        method: "auto",
+        instructions: "Complete authorization in your browser.",
+      })
+      for (const height of shortHeights) {
+        setup.resize(80, height)
+        yield* waitForFrame(setup, () => setup.renderer.terminalHeight === height, `${height} rows`)
+        for (let draw = 0; draw < 6; draw++) yield* Effect.promise(() => setup.renderOnce())
+        const frame = renderFrame(setup)
+        const urlWhole = joinedRows(frame).includes(url)
+        const titled = frame.includes("Sign in · openai ·")
+        const paste = frame.includes("Paste code")
+        // Neither the title nor the optional paste line keeps a row the URL needs.
+        expect({ height, titled: titled && !urlWhole, paste: paste && !urlWhole }).toEqual({
+          height,
+          titled: false,
+          paste: false,
+        })
+      }
+      setup.renderer.destroy()
+    }).pipe(Effect.timeout("20 seconds")),
   )
 })

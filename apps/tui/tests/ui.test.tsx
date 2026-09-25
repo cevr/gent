@@ -616,20 +616,32 @@ describe("picker height rule", () => {
     return Effect.void
   })
 
-  /** A frame over a two-line body; its rows once drawn at 80×40. */
+  /** A frame over a two-row list, which reports its rows; the frame's rows once drawn at 80×40. */
   const frameRows = (note: {
     readonly detail?: Option.Option<string>
     readonly error?: Option.Option<string>
   }) =>
     Effect.gen(function* () {
+      const bodyRows = (): ReadonlyArray<SelectListRow<string>> =>
+        ["BODY-1", "BODY-2"].map((label) =>
+          selectable(label, (_selected, id) => (
+            <box id={id}>
+              <text>{label}</text>
+            </box>
+          )),
+        )
       const setup = yield* Effect.promise(() =>
         renderWithProviders(
           () => (
-            <PickerFrame lines={2} title="TITLE" footer="KEY-HINT" {...note}>
-              <box flexDirection="column" flexGrow={1}>
-                <text>BODY-1</text>
-                <text>BODY-2</text>
-              </box>
+            <PickerFrame title="TITLE" footer="KEY-HINT" {...note}>
+              <SelectList
+                id="frame-rows"
+                open={true}
+                rows={bodyRows}
+                rowKey={(label) => label}
+                onSelect={() => {}}
+                onDismiss={() => {}}
+              />
             </PickerFrame>
           ),
           { width: 80, height: 40 },

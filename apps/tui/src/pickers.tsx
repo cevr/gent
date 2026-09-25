@@ -216,9 +216,6 @@ export function PromptSearchPalette(props: PromptSearchPaletteProps) {
 
         return (
           <PickerFrame
-            // The query row draws above the list, and the frame counts it.
-            lines={items().length}
-            queryRow
             title={`Prompt search · ${items().length}`}
             footer={"type to filter · ↑↓ move · ↵ accept · esc cancel"}
           >
@@ -366,7 +363,6 @@ export function BranchPicker(props: BranchPickerProps) {
       {/* One line per branch: no heading opens a group and no detail line
           follows the list. */}
       <PickerFrame
-        lines={props.branches.length}
         title={`Resume: ${props.sessionName}`}
         footer={"↑↓ move   ↵ resume branch   esc close"}
         error={error()}
@@ -448,7 +444,6 @@ export function MessagePicker(props: MessagePickerProps) {
   return (
     <Show when={props.open}>
       <PickerFrame
-        lines={items().length}
         title={`Fork from message · ${items().length}`}
         footer={"↑↓ move · ↵ fork here · esc close"}
       >
@@ -564,9 +559,6 @@ export function SettingsPicker(props: SettingsPickerProps) {
   return (
     <Show when={props.open}>
       <PickerFrame
-        // The query row draws above the list, and the frame counts it.
-        lines={visible().length}
-        queryRow
         title={`${props.title} · ${visible().length}`}
         footer={"type to filter · ↑↓ move · ↵ select · esc close"}
       >
