@@ -2947,6 +2947,20 @@ describe("background shell through a cell", () => {
 
         // The whole user-role notice, the file line included, fits the bound.
         expect(text.length).toBeLessThanOrEqual(maximumModelToolResultChars)
+        // The frame, the head, one cut marker, the tail, then the file line.
+        const wholeChars = Array.from(
+          { length: hugeLineCount },
+          (_, index) => `line ${index + 1}\n`.length,
+        ).reduce((sum, chars) => sum + chars, 0)
+        expect(text).toMatch(
+          new RegExp(
+            [
+              "^Background command completed \\(exit code 0\\):\\n```\\n\\$ seq 1 4000 \\| sed 's/\\^/line /'\\n",
+              "line 1\\n[^]*\\n\\n\\.\\.\\. \\[\\d+ characters truncated\\] \\.\\.\\.\\n\\n[^]*line 4000\\n",
+              `\\n\\n\\[The whole output is in \\S+ \\(${wholeChars} characters\\); page it with the read tool's offset and limit\\.\\]\\n\`\`\`$`,
+            ].join(""),
+          ),
+        )
         // Head and tail both survive; the middle is cut.
         expect(text).toContain("line 1\n")
         expect(text).toContain(`line ${hugeLineCount}`)
@@ -2988,6 +3002,31 @@ describe("background shell through a cell", () => {
         expect(file.startsWith(`${dataDir}/background-bash/`)).toBe(true)
         const saved = yield* fs.readFileString(path.resolve("/tmp", file))
         expect(saved.trimEnd().split("\n")).toHaveLength(hugeLineCount)
+      }).pipe(Effect.timeout("20 seconds")),
+    30_000,
+  )
+
+  it.scopedLive.layer(BunServices.layer)(
+    "a job whose file cannot be written still reports its ends",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const home = yield* fs.makeTempDirectoryScoped({ prefix: "gent-bg-output-" })
+        // A data directory that is a file: no job file can go under it.
+        const dataDir = path.join(home, "not-a-directory")
+        yield* fs.writeFileString(dataDir, "")
+        const text = yield* hugeBackgroundNotice([
+          RuntimeEnvironment.Live({ cwd: "/tmp", home }),
+          Layer.succeed(
+            ConfigProvider.ConfigProvider,
+            ConfigProvider.fromEnv({ env: { GENT_DATA_DIR: dataDir } }),
+          ),
+        ])
+        expect(text.length).toBeLessThanOrEqual(maximumModelToolResultChars)
+        expect(text).toContain("line 1\n")
+        expect(text).toContain(`line ${hugeLineCount}`)
+        expect(text).toContain("[The whole output could not be saved.]")
       }).pipe(Effect.timeout("20 seconds")),
     30_000,
   )
@@ -3991,6 +4030,103 @@ describe("ExecToolsExtension (bash) via model turn", () => {
         }).pipe(Effect.timeout("12 seconds")),
       ),
     15_000,
+  )
+})
+
+describe("background job output", () => {
+  /** Live heap bytes after a full collection; Bun counts array buffers in it. */
+  const liveBytes = Effect.sync(() => {
+    Bun.gc(true)
+    return process.memoryUsage().heapUsed
+  })
+
+  it.scopedLive.layer(BunFileSystem.layer)(
+    "a running job's output is in its file, not in server memory",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-bg-stream-" })
+        const produced = `${directory}/produced`
+        const release = `${directory}/release`
+        const bytes = 96 * 1024 * 1024
+        const mark = "\nMID-RUN-MARK\n"
+        const command = `head -c ${bytes} /dev/zero | tr '\\0' x; printf '\\nMID-RUN-MARK\\n'; touch ${produced}; while ! test -f ${release}; do sleep 0.02; done; printf 'after release\\n'`
+        const toolCallId = ToolCallId.make("bg-stream-call")
+        const calls = yield* Ref.make(0)
+        const providerLayer = LanguageModelLayers.testStream(() =>
+          Ref.updateAndGet(calls, (n) => n + 1).pipe(
+            Effect.map((call) => {
+              if (call === 1) {
+                return Stream.fromIterable([
+                  toolCallPart("bash", { command, run_in_background: true }, { toolCallId }),
+                  finishPart({ finishReason: "tool-calls" }),
+                ])
+              }
+              return Stream.fromIterable([
+                textDeltaPart(`reply ${call}`),
+                finishPart({ finishReason: "stop" }),
+              ])
+            }),
+          ),
+        )
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+          cwd: directory,
+          extraLayers: [RuntimeEnvironment.Live({ cwd: directory, home: directory })],
+        })
+        const file = `${directory}/.gent/background-bash/${sessionId}/${branchId}/${toolCallId}.txt`
+        const baseline = yield* liveBytes
+        yield* client.message.send({ sessionId, branchId, content: "start the job" })
+        yield* waitFor(fs.exists(produced), (exists) => exists, 20_000, "the job printed")
+
+        // The job printed 96 MiB and still runs; the server holds only its ends.
+        const held = (yield* liveBytes) - baseline
+        expect(held).toBeLessThan(bytes / 8)
+
+        // The file is readable before the job exits and holds all of it so far.
+        const size = yield* waitFor(
+          fs.stat(file).pipe(
+            Effect.map((info) => Number(info.size)),
+            Effect.orElseSucceed(() => 0),
+          ),
+          (current) => current >= bytes + mark.length,
+          5_000,
+          "the running job's file",
+        )
+        expect(size).toBe(bytes + mark.length)
+        // The start result names the file, so the model can read it mid-run.
+        const started = yield* client.session.getSnapshot({ sessionId, branchId })
+        const results = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(
+          started.messages.filter((message) => message.role === "tool"),
+        )
+        expect(results).toContain(file)
+
+        yield* fs.writeFileString(release, "go")
+        yield* waitFor(
+          client.session.getSnapshot({ sessionId, branchId }),
+          (snapshot) =>
+            snapshot.runtime._tag === "Idle" &&
+            snapshot.messages.some((message) =>
+              message.parts.some(
+                (part) => part.type === "text" && part.text.includes("after release"),
+              ),
+            ),
+          10_000,
+          "the completion notice",
+        )
+        const notice = (yield* client.session.getSnapshot({ sessionId, branchId })).messages
+          .flatMap((message) => message.parts)
+          .flatMap((part) => {
+            if (part.type === "text" && part.text.includes("after release")) return [part.text]
+            return []
+          })
+        expect(notice).toHaveLength(1)
+        expect(notice[0]?.length ?? 0).toBeLessThanOrEqual(maximumModelToolResultChars)
+        expect(notice[0]).toContain(`The whole output is in ${file} (`)
+        expect(notice[0]).toContain("MID-RUN-MARK")
+      }).pipe(Effect.timeout("40 seconds")),
+    45_000,
   )
 })
 
