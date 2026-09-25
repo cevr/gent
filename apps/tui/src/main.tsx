@@ -422,7 +422,7 @@ const main = Command.make("gent", gentFlags, (input) => runGent({ ...input, cont
  *
  * The session id is the only handle on a conversation once the TUI exits, so
  * the exit prints it. Naming one is the ordinary case; omitting it asks for the
- * most recent session here, which is what `--continue` used to mean.
+ * most recent session in this directory.
  */
 const resume = Command.make(
   "resume",

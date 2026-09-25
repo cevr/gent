@@ -182,8 +182,8 @@ export function buildContextLabels(input: {
 /**
  * The labels that sit beside the model name: its effort, and the debug mark.
  *
- * The context gauge used to be here too. It moved to {@link buildContextLabels}
- * when the row grew a right-anchored group — effort names how the model is
+ * The context gauge is in {@link buildContextLabels}, in the row's
+ * right-anchored group — effort names how the model is
  * configured, the gauge reports what the session has spent, and the two
  * belong at opposite ends.
  */
@@ -709,7 +709,7 @@ type SessionOverlayState =
   /**
    * The branch picker. The boot flow is the only thing that opens it, so
    * escape quits: a reader who never chose a branch has nowhere to fall back
-   * to, which is what the old boot route did too.
+   * to.
    */
   | { readonly _tag: "branches"; readonly branches: readonly Branch[] }
   | PromptSearchOverlayState
@@ -1367,14 +1367,11 @@ const describeAmbiguous = (query: string, candidates: readonly Model[]): string 
 /**
  * Every command the reader could mean, ranked best first.
  *
- * The filtering used to happen here, by asking whether the slash name or the
- * title contained the filter, and the surviving commands kept their
- * registration order. Both halves were wrong for a popup whose first row is
- * preselected: a title match counted for as much as a name match, so `/ag` led
- * with `/fork` ("Fork from Mess**ag**e"), and nothing afterwards reordered it.
- *
- * Now the list is built unfiltered — names and aliases both — and
- * {@link rankAutocompleteItems} decides what matches and in what order. It
+ * The list is built unfiltered — names and aliases both — and
+ * {@link rankAutocompleteItems} decides what matches and in what order. The
+ * popup preselects its first row, so a title match must not count for as much
+ * as a name match: `/ag` leads with `/agents`, not `/fork` ("Fork from
+ * Mess**ag**e"). It
  * scores names far above descriptions, so a command whose description happens
  * to carry the letters still appears, but never ahead of the one actually
  * named.
@@ -1382,7 +1379,7 @@ const describeAmbiguous = (query: string, candidates: readonly Model[]): string 
  * `frecency` carries the reader's own pick history. Without it `/t` answers
  * `think` forever, because `think` and `thread` tie on everything but length;
  * with it, the one this reader actually opens wins. It defaults to "no
- * history", so a caller that has not loaded a store ranks exactly as before.
+ * history", so a caller that has not loaded a store ranks on the match alone.
  */
 export const slashAutocompleteItems = (
   commands: readonly Command[],
@@ -2347,11 +2344,8 @@ export function useSessionFeed(
                   sessionId: session,
                   branchId: branch,
                 })
-                // Pending-interaction hydration on session entry now comes from
-                // event-stream replay via the `after` cursor below — there is no
-                // more privileged extension-snapshot side-channel. If the
-                // interaction extension wants explicit hydration, it should
-                // expose a typed query the client polls on session entry.
+                // Pending interactions hydrate on session entry from
+                // event-stream replay via the `after` cursor below.
 
                 client.log.info("feed.snapshot.hydrated", {
                   key,

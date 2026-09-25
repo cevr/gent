@@ -26,15 +26,11 @@ import { type ScopedKeyboardEvent, useScopedKeyboard, useTerminalDimensions } fr
  * whole of this state; everything else the pane needs it reads from the
  * catalog it was loaded with.
  *
- * Three things this reducer used to carry are gone, because nothing read
- * them: a `Loading` screen the render treated exactly like an empty
- * `List`, and the `deleting` / `authorizing` / `submitting` in-flight
- * flags, which no render path and no key handler ever consulted. An RPC
- * that is in flight is already visible as the screen not having changed
- * yet, and the route's version counter is what actually decides whether
- * its reply still counts.
+ * The state has no loading screen and no in-flight flags: an RPC that is
+ * in flight shows as the screen not having changed yet, and the route's
+ * version counter decides whether its reply still counts.
  *
- * Cursor movement is gone too: `SelectList` owns the selected row for
+ * The state holds no cursor: `SelectList` owns the selected row for
  * both the provider list and the method list, so a screen below the list
  * records only the provider it was opened *for*, and an OAuth flow only
  * the method index it was started with.
@@ -246,9 +242,8 @@ export const missingRequired = (catalog: AuthCatalog): ReadonlyArray<AuthProvide
  * A reply can outlive the screen that asked for it: the reader switches
  * agent, or presses escape, while an RPC is in flight. One counter decides
  * that. Every action bumps it and captures the new value; a reply whose
- * captured value is no longer current is dropped, unseen. Two counters used
- * to guard this — one for loads, one for actions — which only meant a load
- * could be dropped by a rule an action did not share.
+ * captured value is no longer current is dropped, unseen. Loads and actions
+ * share the counter, so one rule drops both.
  *
  * @module
  */

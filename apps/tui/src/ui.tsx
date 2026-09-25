@@ -531,7 +531,7 @@ export function TrayFrame(props: { children: JSX.Element }) {
  * SelectList — the one selectable list in the TUI.
  *
  * Every pane that lets a reader move a cursor down rows and press enter is
- * this component. It owns the whole block those panes used to hand-write:
+ * this component. It owns the whole block of list behavior:
  * the selection index and its wrap-around, the query string, the key table
  * (up/down, ^p/^n, enter, escape, backspace, printable characters), the
  * scroll sync that keeps the cursor row in view, the sticky selection that
