@@ -14,17 +14,11 @@ import { shortId, truncate, truncateStart, useRequiredContext } from "./utils"
 import { useTerminalDimensions } from "./terminal"
 import { matchSorter } from "match-sorter"
 import { useClient } from "./client"
-import {
-  PickerFrame,
-  pickerHeight,
-  selectable,
-  SelectList,
-  type SelectListApi,
-  type SelectListRow,
-} from "./ui"
+import { PickerFrame, selectable, SelectList, type SelectListApi, type SelectListRow } from "./ui"
 import { textWidth } from "./text-width-adapter"
 import { useTheme } from "./theme"
 import { useExtensionUI } from "./extensions/host"
+import { type Keybind, parseKeybind } from "./extensions/loader-boundary"
 
 // ── command types ───────────────────────────────────────────────────────────
 
@@ -48,51 +42,11 @@ export interface Command {
   readonly onSlash?: (args: string) => void
 }
 
-interface Keybind {
-  key: string
-  ctrl: boolean
-  shift: boolean
-  meta: boolean
-}
-
-function parseKeybind(config: string): Option.Option<Keybind> {
-  if (config.length === 0) return Option.none()
-
-  const parts = config.toLowerCase().split("+")
-  const keybind: Keybind = {
-    key: "",
-    ctrl: false,
-    shift: false,
-    meta: false,
-  }
-
-  for (const part of parts) {
-    switch (part) {
-      case "ctrl":
-      case "control":
-        keybind.ctrl = true
-        break
-      case "shift":
-        keybind.shift = true
-        break
-      case "meta":
-      case "cmd":
-      case "command":
-        keybind.meta = true
-        break
-      default:
-        keybind.key = part
-        break
-    }
-  }
-
-  return Option.some(keybind)
-}
-
 /**
  * A keybind with no ctrl or meta is a key the composer also reads: an arrow
- * moves its cursor, a letter types. It belongs to a command only while the
- * composer is idle; otherwise the composer keeps it.
+ * moves its cursor. It belongs to a command only while the composer is idle;
+ * otherwise the composer keeps it. A key that types a character never gets
+ * here: `resolveCommands` refuses it.
  */
 const isBareKeybind = (keybind: Keybind): boolean => !keybind.ctrl && !keybind.meta
 
@@ -603,8 +557,6 @@ export function CommandPalette() {
     }
   })
 
-  const paletteHeight = () => pickerHeight(filteredItems().length, dimensions().height)
-
   const hasDetails = () =>
     filteredItems().some((item) => Boolean(item.description?.trim() || item.shortcut))
   const labelWidth = () => {
@@ -700,7 +652,7 @@ export function CommandPalette() {
 
   return (
     <Show when={command.paletteOpen()}>
-      <PickerFrame height={paletteHeight()} title={paletteTitle()} footer={footerHint()}>
+      <PickerFrame lines={filteredItems().length} title={paletteTitle()} footer={footerHint()}>
         <SelectList
           id="command-palette"
           queryRow={() => (
@@ -715,7 +667,7 @@ export function CommandPalette() {
           open={command.paletteOpen()}
           rows={rows}
           rowKey={(item) => item.id}
-          filter={{ onQueryChange: setSearchQuery, showInput: false }}
+          filter={{ onQueryChange: setSearchQuery }}
           empty={emptyRow}
           api={(api) => (list = Option.some(api))}
           extraKeys={(event, selected) => {

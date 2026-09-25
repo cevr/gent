@@ -1428,6 +1428,50 @@ describe("AutocompletePopup renderer", () => {
       expect(ghosts.at(-1)).toBe("monitor")
     }),
   )
+  it.live("a query typed in the composer after the cursor moved selects the top match", () =>
+    Effect.gen(function* () {
+      const names = ["agents", "branch", "btw", "model", "mermaid", "new"]
+      const [filter, setFilter] = createSignal("")
+      const picked: Array<string> = []
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => {
+            const ui = useExtensionUI()
+            ui.setDynamicAutocomplete([
+              {
+                prefix: "/",
+                title: "Commands",
+                items: (typed) =>
+                  names
+                    .filter((name) => name.startsWith(typed))
+                    .map((name) => ({ id: name, label: `/${name}` })),
+              },
+            ])
+            return (
+              <AutocompletePopup
+                state={{ type: "/", filter: filter(), triggerPos: 0 }}
+                onSelect={(value) => picked.push(value)}
+                onComplete={() => {}}
+                onClose={() => {}}
+                onGhostChange={() => {}}
+              />
+            )
+          },
+          { width: 80, height: 24 },
+        ),
+      )
+      yield* waitForFrame(setup, (frame) => frame.includes("/new"), "items")
+      for (let press = 0; press < 5; press++) setup.mockInput.pressArrow("down")
+      yield* Effect.promise(() => setup.renderOnce())
+      // The composer narrows the rows to branch and btw; the top match is branch.
+      setFilter("b")
+      yield* waitForFrame(setup, (frame) => !frame.includes("/new"), "narrowed")
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      expect(picked).toEqual(["branch"])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
   it.live("leaves every key to the composer while it has nothing to select", () =>
     Effect.gen(function* () {
       const picked: Array<string> = []

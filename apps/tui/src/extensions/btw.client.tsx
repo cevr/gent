@@ -26,7 +26,7 @@ import {
   widgetContribution,
 } from "@gent/tui/extensions"
 
-// ── builtins/btw.client ─────────────────────────────────────────────────────
+// ── btw fork pane ───────────────────────────────────────────────────────────
 
 /**
  * `/btw` fork pane.

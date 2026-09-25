@@ -44,7 +44,7 @@ Ported from opencode. Key patterns:
 
 - `Ctrl+P` opens palette
 - One `Command` shape (`id`, `title`, `category`, optional `keybind`, `slash`, `aliases`, `onSelect`, `onSlash`) and one resolved list, `useExtensionUI().commands()`
-- A keybind with no ctrl or meta (a bare key such as `left`) is a key the composer also reads, so it fires only while the composer is idle: an empty draft in editing mode, no overlay or docked pane, no interaction, the transcript collapsed (`composerIdle` in `session.tsx`). Any extension can bind one. `←` opens the agents pane this way; in the pane `←` or Esc closes it and `→` or Enter switches to the row, as `←`/`→` move between palette levels
+- A keybind with no ctrl or meta (a bare key such as `left`) is a key the composer also reads, so it fires only while the composer is idle: an empty draft in editing mode, no overlay or docked pane, no interaction, the transcript collapsed (`composerIdle` in `session.tsx`). Any extension can bind one to a key that types nothing (an arrow, a function key). A bare key that types a character (`j`, `?`, `shift+j`, `space`) would take the first character of every message: `resolveCommands` refuses that keybind in every scope and lists it with the failed extensions; the command keeps its slash and palette row. `←` opens the agents pane this way; in the pane `←` or Esc closes it and `→` or Enter switches to the row, as `←`/`→` move between palette levels
 - `resolveCommands` merges the session's own commands (`setSessionCommands`, builtin scope), client extension commands, and server slash commands (builtin scope). Precedence is project > user > builtin; a higher scope takes a slash or keybind from the earlier owner, and a same-scope claim is dropped and listed with the failed extensions
 
 ## Error Handling
@@ -100,11 +100,16 @@ command palette's "Branches" level switches branches after that.
 The footer (composer, trays, docked panes) never outgrows the split-footer
 region (`maxHeight` in `app.tsx`). While a docked pane is open the trays
 hide (`TrayFrame` reads the `DockProvider` count each `PickerFrame` adds to),
-so the pane the reader opened gets the rows. The pane is then the one box
-that gives way, in whole rows (`PickerFrame` sets a `flexBasis`, not a
-`height`: OpenTUI turns shrinking off on a box whose height is set);
-squeezed, it drops its key hint, then its title, before its body's last row.
-Inside the body the order goes on: the frame's `detail` line gives way
+so the pane the reader opened gets the rows. A list pane passes the `lines`
+its body draws (headings included) and the frame adds its chrome and its
+note row and caps the sum (`pickerHeight`); the btw transcript asks for a
+`height` outright. The note row is the pane's `detail` line, or its `error`
+in the detail's place: a pane with a detail line keeps the row while the
+detail is `None`, so it does not jump when the text arrives. The pane is
+then the one box that gives way, in whole rows (`PickerFrame` sets a
+`flexBasis`, not a `height`: OpenTUI turns shrinking off on a box whose
+height is set); squeezed, it drops its key hint, then its title, before its
+body's last row. Inside the body the order goes on: the note row gives way
 first, then the `SelectList` headings, then its filter row, and one row stays
 for the cursor (the list reads its rows from the frame). A pane that draws
 its own query line (the autocomplete popup, the command palette) passes it as
@@ -204,7 +209,7 @@ Special prefixes at input start trigger different modes:
 
 ### Refused submissions
 
-- A submit leaves the composer before it is sent. A send the server refuses, or a `!cmd` that cannot spawn, comes back to the draft of the branch it was sent from, with its reason (`ComposerRefusals` in `session.tsx`)
+- A submit leaves the composer before it is sent. A send the server refuses, a `!cmd` that cannot spawn, or a `/command` no command source names, comes back to the draft of the branch it was sent from, with its reason (`ComposerRefusals` in `session.tsx`)
 - A `!cmd` that ran but whose output the server refused comes back as that output, a plain message, and the reason says the command ran. Enter sends the output; it never runs the command again. Once back it is an ordinary draft: an `@path` in it expands on that send, as in any draft
 - A refused message as large as a paste (`isLargePaste`) comes back into the composer on screen as a paste placeholder; a kept draft of a branch the reader left holds the text itself, and a kept block that joins a composer on screen is written the same way. A refused command always comes back as its text, so the reader sees the command Enter would run
 - A lost connection is not a refusal: the send may have landed. It retries four times under its first request id (`SEND_RETRY` in `utils.ts`, shared with the startup prompt and the headless send's predicate), and the text comes back only after the last try. That text keeps the request id: Enter on it unchanged sends it under the same id, so the server's dedup runs it once. An edited text, a draft that joins several refused texts, or a text the server answered goes under a new id. The `-p` startup prompt is a submission too: it is sent once, and a failed send comes back to the draft of its branch with its reason
@@ -231,6 +236,12 @@ at 2000 lines or 50 KB of UTF-8, counted by the core line rule.
 | `/fork`            | Fork from a message                                              |
 | `/thread`          | Thread pane: the sessions and windows this one runs on           |
 | `/btw`, `/side`    | Fork pane: ask a parallel session on the side                    |
+
+A command sent before every command source has answered (the client
+extensions' load and the session's server slash list, `commandsSettled` in
+`extensions/host.tsx`) waits for them, then resolves. Only then does an
+unresolved command come back to its draft with `Unknown command: /x`. A
+command still waiting when the session view goes comes back to its draft too.
 
 ## Extensions
 
@@ -273,7 +284,7 @@ Extension pipeline: `host.tsx` (static builtin imports) → `loader-boundary.ts`
 - **Transport-only widgets**: there is no in-process snapshot cache. A widget reads server state through `sessionQuery` (in `client-facets.ts`), which yields `ClientContext`, keys each reply on `(sessionId, branchId)` and drops a reply for a session the shell has left. `follow: true` reads again on every session move. The widget refreshes it on typed session events or `transport.onExtensionStateChanged` pulses. The goal label (`builtins.tsx`) and the wake tray (`wake.client.tsx`) are the canonical examples.
 - **Lifecycle**: register Solid `createRoot(dispose)` disposers AND pulse unsubscribes via `lifecycle.addCleanup`. The provider's `onCleanup` runs them in order on unmount, so widget setups leave no detached roots behind.
 - Widgets are zero-prop components that read through `ClientContext`, never the host's Solid contexts (`useClient()`, `useExtensionUI()`). Host chrome that reads them (the connection and queue widgets) renders from `app.tsx`
-- Extensions have no overlays. A pane is a `below-input` widget that renders while `shell.pane.isOpen(id)` is true. The extension opens and closes it by name with `shell.pane.open(id)` and `shell.pane.close(id)` (agents, thread, btw). The session view owns the one pane slot: it is the session overlay, shared with the model, reasoning and branch pickers, so at most one pane is open. Opening a pane replaces the open one. `close(id)` of a pane that is no longer open does nothing. A pane does not hold the composer. A pane that takes typed text reads keys through `useScopedKeyboard`, as the agents filter and the btw ask line do: an `<input>` would take the terminal's focus from the composer, and the composer would not get it back. A key or paste a pane takes still reaches every `useInputWatch` watcher, which runs before the scopes and takes nothing; the session disarms its ctrl+c quit there.
+- Extensions have no overlays. A pane is a `below-input` widget that renders while `shell.pane.isOpen(id)` is true. The extension opens and closes it by name with `shell.pane.open(id)` and `shell.pane.close(id)` (agents, thread, btw). The session view owns the one pane slot: it is the session overlay, shared with the model, reasoning, branch, fork-from-message and prompt-search pickers, so at most one pane is open. The boot branch picker and an enforced sign-in hold the slot: nothing opens over them until they close. Opening a pane replaces the open one, and the replaced overlay's cancel runs in the reducer (`cancelOverlay` in `session.tsx`): prompt search gives the composer back the draft it opened over, and a late event from its list does nothing. `close(id)` of a pane that is no longer open does nothing. A pane does not hold the composer. A pane that takes typed text reads keys through `useScopedKeyboard`, as the agents filter and the btw ask line do: an `<input>` would take the terminal's focus from the composer, and the composer would not get it back. A key or paste a pane takes still reaches every `useInputWatch` watcher, which runs before the scopes and takes nothing; the session disarms its ctrl+c quit there.
 - The TUI host (`src/` outside `extensions/`) never imports `@gent/extensions`; the `gent/core-entry-boundary` oxlint rule enforces it. One extension's view is a client extension that reads its server state through `ClientContext.transport`
 - `useExtensionUI()` provides the resolved contributions (tool renderers excepted: `useToolRenderers()`), the load `failures`, and `clientRuntime`; widgets read the session from `transport.currentSession()`
 - **Tool renderers**: `rendererContribution(toolNames, component)` keys a renderer on a real tool id. The model sees only `cell`, so the cell renderer hands each live op to the renderer registered for the op's tool (`RegisteredToolCall` in `tool-renderers.tsx`, the one lookup the transcript also uses). An op draws collapsed, as a sub-row with its own header: a cell that reads thirty files must not draw thirty file bodies. `ToolFrameBody` hides the header of one frame only; a frame nested in its body draws its header again. An op with no renderer keeps its one-line receipt. After a reload the session snapshot projects each cell's ops from the branch's stored tool events (`ToolInteraction.operations`), keyed by the cell's message and call id. A projected op carries only what its collapsed row draws, within one 8 KB encoded budget, keys included: the tool, the status, the summary, the scalar input fields (each whole or left out, up to 4 KB), and a bounded output (top-level scalars such as a bash `exitCode`; each string whole, or its head, a marker line and its tail, cut at code points). A cut string has a `cuts` record with its whole line count, the line its tail starts on, and whether its head or tail keeps only part of a line; renderers count and number lines through `outputRows` in `tool-renderers.tsx`, so a cut output draws true counts and line numbers, and marks a part of a line with `…` on the side it lost. A cut array (a grep's matches) draws its whole total and a `· ··· N more matches` gap between its head and tail. Every line count, the cut record's included, uses `lineCount` from `@gent/core/protocol`: a final newline ends the last line. A head or tail that keeps nothing is absent from the excerpt. It draws through its renderer again, with the same collapsed row as before the reload. A forked branch copies messages, not events, so there the saved result's receipts draw as lines. The host provides the map through `ToolRenderersProvider`. The "tool renderer reach" test in `loader-boundary.test.ts` fails on a renderer name that no shipped extension registers as a tool

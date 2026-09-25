@@ -25,7 +25,7 @@ import {
   useTheme,
 } from "@gent/tui/extensions"
 
-// ── builtins/delegate.client ────────────────────────────────────────────────
+// ── delegate rows ───────────────────────────────────────────────────────────
 
 /**
  * The `delegate.start` row and the child-completion row.

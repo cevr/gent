@@ -6,7 +6,6 @@ import {
   decoration,
   pickerHeight,
   PickerFrame,
-  pickerLines,
   selectable,
   SelectList,
   SelectListEvent,
@@ -291,26 +290,6 @@ describe("select list filter", () => {
       yield* Effect.promise(() => setup.renderOnce())
       // Only the open reset; tab contributed nothing.
       expect(seen).toEqual([""])
-    }),
-  )
-
-  it.live("hides the query row when the pane asks it to", () =>
-    Effect.gen(function* () {
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <SelectList
-            id="fruit"
-            open={true}
-            rows={() => plainRows(fruits)}
-            rowKey={(fruit) => fruit.id}
-            filter={{ onQueryChange: () => {}, showInput: false }}
-            onSelect={() => {}}
-            onDismiss={() => {}}
-          />
-        )),
-      )
-      yield* waitForFrame(setup, () => renderFrame(setup).includes("Apple"), "open")
-      expect(renderFrame(setup)).not.toContain("›")
     }),
   )
 })
@@ -627,17 +606,66 @@ const wideModel = new Model({
 })
 
 describe("picker height rule", () => {
-  it.live("counts the lines a pane draws, not the items it holds", () => {
-    // A flat list spends one line per item; a pane that opens groups with
-    // headings and closes with a detail line spends more, and counting items
-    // alone would starve its body.
-    expect(pickerLines(0, 1)).toBe(0)
-    expect(pickerLines(3, 0)).toBe(3)
-    expect(pickerLines(3, 1)).toBe(4)
-    // Six rows is the cap, plus the frame's own five lines of chrome.
-    expect(pickerHeight(pickerLines(20, 1), 40)).toBe(11)
+  it.live("six body lines is the cap, plus the frame's own five lines of chrome", () => {
+    expect(pickerHeight(2, 40)).toBe(7)
+    expect(pickerHeight(20, 40)).toBe(11)
+    // Never more than half the terminal.
+    expect(pickerHeight(20, 12)).toBe(7)
     return Effect.void
   })
+
+  /** A frame over a two-line body; its rows once drawn at 80×40. */
+  const frameRows = (note: {
+    readonly detail?: Option.Option<string>
+    readonly error?: Option.Option<string>
+  }) =>
+    Effect.gen(function* () {
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <PickerFrame lines={2} title="TITLE" footer="KEY-HINT" {...note}>
+              <box flexDirection="column" flexGrow={1}>
+                <text>BODY-1</text>
+                <text>BODY-2</text>
+              </box>
+            </PickerFrame>
+          ),
+          { width: 80, height: 40 },
+        ),
+      )
+      yield* waitForFrame(setup, (frame) => frame.includes("KEY-HINT"), "frame")
+      return { rows: renderedFrameRows(renderFrame(setup)), frame: renderFrame(setup) }
+    })
+
+  it.live("a pane with a detail line gets its row, drawn or not yet", () =>
+    Effect.gen(function* () {
+      expect((yield* frameRows({})).rows).toBe(pickerHeight(2, 40))
+      // The row stays while the detail has nothing to say, so the pane does
+      // not jump when the text arrives.
+      const waiting = yield* frameRows({ detail: Option.none() })
+      expect(waiting.rows).toBe(pickerHeight(3, 40))
+      const empty = yield* frameRows({ detail: Option.some("") })
+      expect(empty.rows).toBe(pickerHeight(3, 40))
+      const said = yield* frameRows({ detail: Option.some("DETAIL-LINE") })
+      expect(said.rows).toBe(pickerHeight(3, 40))
+      expect(said.frame).toContain("DETAIL-LINE")
+    }),
+  )
+
+  it.live("an error draws in the note row and is budgeted as it", () =>
+    Effect.gen(function* () {
+      const failed = yield* frameRows({ error: Option.some("ERROR-LINE") })
+      expect(failed.rows).toBe(pickerHeight(3, 40))
+      expect(failed.frame).toContain("ERROR-LINE")
+      const both = yield* frameRows({
+        detail: Option.some("DETAIL-LINE"),
+        error: Option.some("ERROR-LINE"),
+      })
+      expect(both.rows).toBe(pickerHeight(3, 40))
+      expect(both.frame).toContain("ERROR-LINE")
+      expect(both.frame).not.toContain("DETAIL-LINE")
+    }),
+  )
 })
 
 describe("docked panes", () => {
@@ -666,7 +694,7 @@ describe("docked panes", () => {
       )
       yield* waitForFrame(setup, (frame) => frame.includes("open session"), "thread pane")
       // One heading, one window, one detail line: three drawn lines.
-      expect(renderedFrameRows(renderFrame(setup))).toBe(pickerHeight(pickerLines(2, 1), 40))
+      expect(renderedFrameRows(renderFrame(setup))).toBe(pickerHeight(3, 40))
     }),
   )
 
@@ -689,7 +717,7 @@ describe("docked panes", () => {
       )
       yield* waitForFrame(setup, (frame) => frame.includes("Model · 1"), "settings pane")
       // One row plus the query row above it.
-      expect(renderedFrameRows(renderFrame(setup))).toBe(pickerHeight(pickerLines(1, 1), 40))
+      expect(renderedFrameRows(renderFrame(setup))).toBe(pickerHeight(2, 40))
     }),
   )
 

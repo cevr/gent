@@ -781,10 +781,58 @@ interface SessionUiTransitionResult {
   readonly effects: readonly SessionUiEffect[]
 }
 
+/**
+ * Events that put something in the one slot. The boot branch picker and an
+ * enforced sign-in hold the slot until they close: the startup prompt and the
+ * auth gate wait on them, so a pane opened over them would let the prompt
+ * send into a branch the reader never chose.
+ */
+const SLOT_OPENERS: ReadonlySet<SessionUiEvent["_tag"]> = new Set([
+  "OpenFork",
+  "OpenMermaid",
+  "OpenAuth",
+  "OpenSettingsPicker",
+  "OpenBranches",
+  "OpenPane",
+  "PromptSearch",
+])
+
+const slotHeld = (overlay: SessionOverlayState): boolean =>
+  overlay._tag === "branches" || (overlay._tag === "auth" && overlay.enforceAuth)
+
+/** Only a preview reaches the composer; the palette closes through the overlay. */
+const composerEffects = (
+  effects: ReturnType<typeof transitionPromptSearch>["effects"],
+): readonly SessionUiEffect[] =>
+  effects
+    .filter((effect) => effect._tag === "Preview")
+    .map((effect): SessionUiEffect => ({ _tag: "RestoreComposer", text: effect.text }))
+
+/**
+ * What an overlay leaves behind when something else takes its slot: its own
+ * cancel. Prompt search gives the composer back the draft it opened over; the
+ * other overlays hold nothing outside the slot.
+ */
+const cancelOverlay = (overlay: SessionOverlayState): readonly SessionUiEffect[] => {
+  if (overlay._tag !== "prompt-search") return []
+  return composerEffects(
+    transitionPromptSearch(overlay.state, PromptSearchEventSchema.cases.Cancel.make({})).effects,
+  )
+}
+
 export function transitionSessionUi(
   state: SessionUiState,
   event: SessionUiEvent,
 ): SessionUiTransitionResult {
+  if (slotHeld(state.overlay) && SLOT_OPENERS.has(event._tag)) return { state, effects: [] }
+  const result = transitionSlot(state, event)
+  // Prompt search events move their own overlay; any other event that takes
+  // the slot from an overlay runs that overlay's cancel first.
+  if (event._tag === "PromptSearch" || result.state.overlay === state.overlay) return result
+  return { state: result.state, effects: [...cancelOverlay(state.overlay), ...result.effects] }
+}
+
+function transitionSlot(state: SessionUiState, event: SessionUiEvent): SessionUiTransitionResult {
   return Match.value(event).pipe(
     Match.tagsExhaustive({
       ClearDisplay: (): SessionUiTransitionResult => ({
@@ -856,13 +904,15 @@ export function transitionSessionUi(
         effects: [],
       }),
       PromptSearch: (event): SessionUiTransitionResult => {
+        // A late event from a palette that lost the slot (its list's cleanup,
+        // say) acts on nothing: the overlay in the slot now is not its own.
+        if (state.overlay._tag !== "prompt-search" && event.event._tag !== "Open") {
+          return { state, effects: [] }
+        }
         let promptState = PromptSearchStateFactory.closed()
         if (state.overlay._tag === "prompt-search") promptState = state.overlay.state
         const result = transitionPromptSearch(promptState, event.event)
-        // Only a preview reaches the composer; the palette closes through the overlay.
-        const effects = result.effects
-          .filter((effect) => effect._tag === "Preview")
-          .map((effect): SessionUiEffect => ({ _tag: "RestoreComposer", text: effect.text }))
+        const effects = composerEffects(result.effects)
         let nextOverlay: SessionOverlayState = { _tag: "none" }
         if (result.state._tag === "open") {
           nextOverlay = { _tag: "prompt-search", state: result.state }
@@ -2582,6 +2632,13 @@ export function useSessionFeed(
 
 // ── session controller ──────────────────────────────────────────────────────
 
+/** A submitted slash command, and the way back to its draft if nothing runs it. */
+interface HeldSlashCommand {
+  readonly cmd: string
+  readonly args: string
+  readonly refuse: (reason: string) => void
+}
+
 export interface SessionController {
   items: () => SessionItem[]
   /**
@@ -2615,7 +2672,15 @@ export interface SessionController {
     target: SessionIdentity,
     requestId: string,
   ) => Effect.Effect<void, GentClientRpcError>
-  onSlashCommand: (cmd: string, args: string) => Effect.Effect<void>
+  /**
+   * Run a slash command. One no command source names is handed to `refuse`
+   * with its reason; the composer gives it back to the draft it came from.
+   */
+  onSlashCommand: (
+    cmd: string,
+    args: string,
+    refuse: (reason: string) => void,
+  ) => Effect.Effect<void>
   onRestoreQueue: () => void
   dispatchComposer: (event: ComposerEvent) => void
   resolveAuthGate: () => void
@@ -3128,37 +3193,49 @@ export function createSessionController(props: {
     closeOverlay()
   }
 
-  const runSlashCommand = (cmd: string, args: string) => {
-    const result = executeSlashCommand(cmd, args, ext.commands())
+  // A command no source names is refused: it goes back to its draft with the reason.
+  const runSlashCommand = (held: HeldSlashCommand) => {
+    const result = executeSlashCommand(held.cmd, held.args, ext.commands())
     Option.match(Option.fromNullishOr(result.error), {
       onNone: () => {},
-      onSome: (error) => client.setError(error),
+      onSome: held.refuse,
     })
   }
 
-  // A command sent before the client extensions finish loading may belong to
-  // one of them: it waits for the load to settle, then resolves. Only a
-  // settled load reports `Unknown command`.
-  const [heldSlashCommands, setHeldSlashCommands] = createSignal<
-    ReadonlyArray<readonly [cmd: string, args: string]>
-  >([])
+  // A command sent before every command source has answered (the client
+  // extensions' load, the session's server slash list) may belong to one of
+  // them: it waits for them to settle, then resolves. Only settled sources
+  // report `Unknown command`. A command still held when the session view
+  // goes comes back to its draft.
+  let heldSlashCommands: ReadonlyArray<HeldSlashCommand> = []
   createEffect(
-    on(ext.loaded, (loaded) => {
-      if (!loaded) return
-      const held = heldSlashCommands()
-      if (held.length === 0) return
-      setHeldSlashCommands([])
-      for (const [cmd, args] of held) runSlashCommand(cmd, args)
+    on(ext.commandsSettled, (settled) => {
+      if (!settled || heldSlashCommands.length === 0) return
+      const held = heldSlashCommands
+      heldSlashCommands = []
+      for (const command of held) runSlashCommand(command)
     }),
   )
+  onCleanup(() => {
+    const held = heldSlashCommands
+    heldSlashCommands = []
+    for (const command of held) {
+      command.refuse(`Not run: /${command.cmd} was still waiting for the session's commands`)
+    }
+  })
 
-  const onSlashCommand = (cmd: string, args: string): Effect.Effect<void> =>
+  const onSlashCommand = (
+    cmd: string,
+    args: string,
+    refuse: (reason: string) => void,
+  ): Effect.Effect<void> =>
     Effect.sync(() => {
-      if (!ext.loaded() && !isSlashCommandName(cmd, ext.commands())) {
-        setHeldSlashCommands((held) => [...held, [cmd, args]])
+      const command: HeldSlashCommand = { cmd, args, refuse }
+      if (!ext.commandsSettled() && !isSlashCommandName(cmd, ext.commands())) {
+        heldSlashCommands = [...heldSlashCommands, command]
         return
       }
-      runSlashCommand(cmd, args)
+      runSlashCommand(command)
     })
 
   const onModelSelect = (modelId: ModelId) => {

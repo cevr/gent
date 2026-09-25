@@ -25,7 +25,7 @@ import {
   widgetContribution,
 } from "@gent/tui/extensions"
 
-// ── builtins/wake.client ────────────────────────────────────────────────────
+// ── wake tray ───────────────────────────────────────────────────────────────
 
 /**
  * The wake tray under the status line.
