@@ -17,7 +17,6 @@ import {
   findPlatformDuplicationViolations,
   findReadersWithoutWriters,
   findRetiredSurfaces,
-  findSafetyBlockDrift,
   findSteeringFilePaths,
   findSuppressionInventoryFindings,
   findTuiSessionIdentityReads,
@@ -618,84 +617,6 @@ describe("repo temp directory guard", () => {
   test("product source is out of scope", () => {
     const source = 'const dir = { directory: path.resolve(import.meta.dir, "..") }'
     expect(findRepoTempDirectories("packages/core/src/runtime/x.ts", source)).toEqual([])
-  })
-})
-
-// ── loop prompt SAFETY block ────────────────────────────────────────────────
-
-describe("loop prompt SAFETY block guard", () => {
-  const APPLY = ".claude/skills/architecture-loop/prompts/apply.md"
-  const SWEEP = ".claude/skills/architecture-loop/prompts/sweep.md"
-  const prompt = (...rules: ReadonlyArray<string>) =>
-    [
-      "```",
-      "Work rules:",
-      "- one",
-      "",
-      "SAFETY (mandatory):",
-      ...rules,
-      "",
-      "Report: x",
-      "```",
-    ].join("\n")
-
-  test("two identical blocks pass", () => {
-    const texts = new Map([
-      [APPLY, prompt("- a", "- b")],
-      [SWEEP, prompt("- a", "- b")],
-    ])
-    expect(findSafetyBlockDrift(texts)).toEqual([])
-  })
-
-  test("a rule in one block only is reported at the other block", () => {
-    const texts = new Map([
-      [APPLY, prompt("- a", "- b")],
-      [SWEEP, prompt("- a")],
-    ])
-    expect(findSafetyBlockDrift(texts)).toEqual([
-      {
-        file: SWEEP,
-        line: 5,
-        message: expect.stringContaining(`differs from the one in ${APPLY}`),
-      },
-    ])
-  })
-
-  test("a prompt without the block is reported", () => {
-    const texts = new Map([
-      [APPLY, prompt("- a")],
-      [SWEEP, "no block"],
-    ])
-    expect(findSafetyBlockDrift(texts).map((finding) => finding.file)).toEqual([SWEEP])
-  })
-
-  test("a SAFETY block outside the fenced prompt is reported", () => {
-    const outside = ["```", "Work rules:", "- one", "```", "", "SAFETY (mandatory):", "- a"].join(
-      "\n",
-    )
-    const texts = new Map([
-      [APPLY, prompt("- a")],
-      [SWEEP, outside],
-    ])
-    expect(findSafetyBlockDrift(texts)).toEqual([
-      { file: SWEEP, line: 6, message: expect.stringContaining("outside the fenced prompt") },
-    ])
-  })
-
-  test("a rule added after a blank line in one block is reported", () => {
-    const texts = new Map([
-      [APPLY, prompt("- a")],
-      [SWEEP, prompt("- a", "", "- b")],
-    ])
-    expect(findSafetyBlockDrift(texts).map((finding) => finding.file)).toEqual([SWEEP])
-  })
-
-  test("trailing whitespace alone is no drift", () => {
-    const texts = new Map([
-      [APPLY, prompt("- a", "- b")],
-      [SWEEP, prompt("- a  ", "- b\t")],
-    ])
-    expect(findSafetyBlockDrift(texts)).toEqual([])
   })
 })
 
@@ -1798,8 +1719,13 @@ describe("steering file paths", () => {
     expect(messagesOfSteeringPath(text)).toEqual([])
   })
 
-  test("ignores a path outside the five source roots", () => {
-    expect(messagesOfSteeringPath("see `docs/gone.md` and `scripts/gone.ts`")).toEqual([])
+  test("ignores a path outside the eight tree roots", () => {
+    expect(messagesOfSteeringPath("see `scripts/gone.ts` and `gone.md`")).toEqual([])
+  })
+
+  test("reports a missing docs, patches or skill file", () => {
+    const text = "see `docs/gone.md`, `patches/gone.patch` and `.claude/skills/x/safety.md`"
+    expect(messagesOfSteeringPath(text)).toHaveLength(3)
   })
 
   test("reads a path only when it sits in backticks", () => {

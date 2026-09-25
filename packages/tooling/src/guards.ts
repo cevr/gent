@@ -872,90 +872,6 @@ export const findRepoTempDirectories = (file: string, text: string): ReadonlyArr
     .map((index) => ({ file, line: index + 1, message: TEMP_IN_REPO_MESSAGE }))
 }
 
-// ── the loop prompts carry one SAFETY block ─────────────────────────────────
-
-/**
- * Guard: the sweep and apply prompts of the architecture loop carry the same
- * SAFETY block. Each agent reads only its own prompt, so a rule added to one
- * copy leaves the other agents without it. The block must sit inside the
- * fenced prompt template, which is the text an agent receives (`safetyBlock`
- * reads its extent).
- */
-const SAFETY_PROMPTS: ReadonlyArray<string> = [
-  ".claude/skills/architecture-loop/prompts/apply.md",
-  ".claude/skills/architecture-loop/prompts/sweep.md",
-]
-
-const PROMPT_FENCE = /^\s*```/
-
-/** One prompt's SAFETY block: where it starts, its text, and whether the fenced prompt holds it. */
-interface SafetyBlock {
-  readonly line: number
-  readonly block: string
-  readonly fenced: boolean
-}
-
-/**
- * The `SAFETY` line and what follows it, through blank lines and rule lines,
- * up to the next heading (a line that is neither blank, a `- ` rule nor an
- * indented continuation) or the closing fence. Trailing whitespace and
- * trailing blank lines are not part of the block.
- */
-const safetyBlock = (text: string): Option.Option<SafetyBlock> => {
-  const lines = text.split("\n")
-  const start = lines.findIndex((line) => line.startsWith("SAFETY"))
-  if (start === -1) return Option.none()
-  const fences = lines.slice(0, start).filter((line) => PROMPT_FENCE.test(line)).length
-  const block: Array<string> = [(lines[start] ?? "").trimEnd()]
-  for (const line of lines.slice(start + 1)) {
-    const heading = line.trim().length > 0 && !line.startsWith("- ") && !/^\s/.test(line)
-    if (PROMPT_FENCE.test(line) || heading) break
-    block.push(line.trimEnd())
-  }
-  while (block.at(-1) === "") block.pop()
-  return Option.some({ line: start + 1, block: block.join("\n"), fenced: fences % 2 === 1 })
-}
-
-export const findSafetyBlockDrift = (
-  texts: ReadonlyMap<string, string>,
-): ReadonlyArray<Finding> => {
-  const blocks = SAFETY_PROMPTS.map((file) => ({
-    file,
-    found: Option.flatMap(Option.fromNullishOr(texts.get(file)), safetyBlock),
-  }))
-  const findings: Array<Finding> = []
-  for (const { file, found } of blocks) {
-    if (Option.isNone(found)) {
-      findings.push({
-        file,
-        line: 1,
-        message: "the loop prompt has no SAFETY block; copy it from the other prompt",
-      })
-    }
-  }
-  const present = blocks.flatMap(({ file, found }) =>
-    Option.match(found, { onNone: () => [], onSome: (value) => [{ file, ...value }] }),
-  )
-  for (const outside of present.filter((block) => !block.fenced)) {
-    findings.push({
-      file: outside.file,
-      line: outside.line,
-      message:
-        "the SAFETY block sits outside the fenced prompt, so the agent never receives it; move it inside the fence",
-    })
-  }
-  const [first, ...others] = present
-  for (const other of others) {
-    if (other.block === first?.block) continue
-    findings.push({
-      file: other.file,
-      line: other.line,
-      message: `the SAFETY block differs from the one in ${first?.file}; edit both together`,
-    })
-  }
-  return findings
-}
-
 // ── the pre-commit hook runs the guards ─────────────────────────────────────
 
 /**
@@ -2163,9 +2079,9 @@ export const findRetiredSurfaces = (file: string, text: string): ReadonlyArray<F
  * the document is read once, and a `CLAUDE.md` that becomes a file of its own
  * is read as one.
  *
- * What is read: text in backticks that starts with one of the five source
- * roots — `packages/`, `apps/`, `plans/`, `testbeds/`, `examples/`. Backticks
- * are what makes the reference a claim about a path; prose naming a file
+ * What is read: text in backticks that starts with one of the eight tree
+ * roots: `packages/`, `apps/`, `plans/`, `testbeds/`, `examples/`, `docs/`,
+ * `patches/`, `.claude/`. Backticks are what makes the reference a claim about a path; prose naming a file
  * without them is left alone. A path is satisfied when `git ls-files` lists
  * it, or lists anything under it, which lets a directory reference such as
  * `packages/core/src/` stand on the files it contains.
@@ -2200,8 +2116,8 @@ const STEERING_PROSE =
 
 export const isSteeringFile = (file: string): boolean => STEERING_PROSE.test(file)
 
-/** The five roots under which a backticked path is a claim about the tree. */
-const SOURCE_ROOT = /^(?:packages|apps|plans|testbeds|examples)\//
+/** The eight roots under which a backticked path is a claim about the tree. */
+const SOURCE_ROOT = /^(?:packages|apps|plans|testbeds|examples|docs|patches|\.claude)\//
 
 /** Text between backticks, which is what marks a reference as a path. */
 const BACKTICKED = /`([^`\n]+)`/g
