@@ -4,12 +4,14 @@ import { BunGentPlatformLive } from "../../src/runtime/gent-platform-bun"
 import {
   GentPlatform,
   ProcessError,
+  resolveDataDir,
   runProcess,
   SignalError,
   writeFileAtomic,
 } from "../../src/runtime/gent-platform"
 import { BunChildProcessSpawner, BunFileSystem, BunServices } from "@effect/platform-bun"
 import type * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner"
+import { homedir, tmpdir } from "node:os"
 
 /**
  * Locks the GentPlatform service contract end-to-end.
@@ -468,6 +470,20 @@ describe("writeFileAtomic", () => {
       yield* fs.writeFileString(reference, "")
       yield* writeFileAtomic(plain, "{}")
       expect(yield* modeOf(fs, plain)).toBe(yield* modeOf(fs, reference))
+    }),
+  )
+})
+
+// ── data directory ──────────────────────────────────────────────────────────
+
+describe("resolveDataDir", () => {
+  // The shared test preload gives each test process a temp home and clears
+  // GENT_DATA_DIR, so a test that forgets to scope a data directory writes
+  // under a temp directory, never the real home.
+  it.effect("a test that sets no data directory resolves a temp one, not the real home", () =>
+    Effect.gen(function* () {
+      expect(homedir().startsWith(tmpdir())).toBe(true)
+      expect(yield* resolveDataDir(homedir())).toBe(`${homedir()}/.gent`)
     }),
   )
 })
