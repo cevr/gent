@@ -879,10 +879,10 @@ describe("estimateTokens", () => {
         createdAt: dateFromMillis(1_767_225_600_000),
       }),
     ]
-    // The stored result is ~10,000 tokens; the model sees 8,000 chars plus a locator.
+    // The stored result is ~10,000 tokens; the model sees at most 8,000 chars, locator included.
     const tokens = estimateTokens(messages)
-    expect(tokens).toBeLessThan(2_200)
-    expect(tokens).toBeGreaterThan(2_000)
+    expect(tokens).toBeLessThanOrEqual(2_000)
+    expect(tokens).toBeGreaterThan(1_900)
   })
 
   test("multiple messages sum correctly", () => {
@@ -1360,6 +1360,45 @@ describe("AI transcript projection", () => {
     )
     expect(boundedResult.text).toContain(`[${boundedResult.omittedChars} characters truncated]`)
     expect(boundedResult.text.length).toBeLessThanOrEqual(maximumModelToolResultChars)
+  })
+
+  test("the whole bounded result the model sees, paging fields included, fits the bound", () => {
+    let nested: Schema.Json = { level: 0 }
+    for (let level = 1; level < 800; level += 1) nested = { level, next: nested }
+    const quoted = 'say "hi"\n\tthen \\leave\n'
+    const results: ReadonlyArray<readonly [string, Schema.Json]> = [
+      ["one long string", { output: "x".repeat(maximumModelToolResultChars * 3) }],
+      ["a long escaped string", { output: quoted.repeat(maximumModelToolResultChars) }],
+      ["a string result", "y".repeat(maximumModelToolResultChars * 2)],
+      ["numbers", Array.from({ length: 5_000 }, (_, index) => index * 1_000)],
+      ["short escaped strings", Array.from({ length: 1_000 }, () => quoted)],
+      ["deep nesting", nested],
+      [
+        "many keys",
+        Object.fromEntries(Array.from({ length: 3_000 }, (_, index) => [`key${index}`, index])),
+      ],
+    ]
+    for (const [name, result] of results) {
+      const bounded = boundToolResultForModel(
+        Prompt.toolResultPart({
+          id: ToolCallId.make("tc-whole-bound"),
+          name: "t",
+          isFailure: false,
+          providerExecuted: false,
+          result,
+        }),
+      )
+      const wire = encodeWire(Schema.decodeUnknownSync(Schema.Json)(bounded.result))
+      expect({ name, fits: wire.length <= maximumModelToolResultChars }).toEqual({
+        name,
+        fits: true,
+      })
+      // The bound is spent, not wasted.
+      expect({ name, used: wire.length > maximumModelToolResultChars - 400 }).toEqual({
+        name,
+        used: true,
+      })
+    }
   })
 
   test("converts visible Gent messages to Effect Prompt messages without Gent metadata", () => {

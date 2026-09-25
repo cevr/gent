@@ -159,35 +159,42 @@ const cutStringChars = (value: Schema.Json, cap: number): number =>
   jsonStrings(value).reduce((sum, text) => sum + headTailChars(text, cap).omittedChars, 0)
 
 /**
- * The largest string cap that keeps the encoded `value` within `maxChars`,
- * or none when even `MINIMUM_STRING_CAP` does not.
+ * The largest size in `[low, high]` whose bounded result the provider
+ * encodes within `maxChars`, whole, paging fields included; none when even
+ * `low` does not fit. Larger sizes encode longer, so a binary search finds it.
  */
-const stringCapWithin = (value: Schema.Json, maxChars: number): Option.Option<number> => {
-  const fits = (cap: number) =>
-    Option.exists(encodeToolResultJson(capStrings(value, cap)), (text) => text.length <= maxChars)
-  if (!fits(MINIMUM_STRING_CAP)) return Option.none()
-  let low = MINIMUM_STRING_CAP
-  let high = maxChars
-  while (low < high) {
-    const mid = Math.ceil((low + high) / 2)
-    if (fits(mid)) low = mid
-    else high = mid - 1
+const largestFitting = (
+  low: number,
+  high: number,
+  maxChars: number,
+  boundedAt: (size: number) => Schema.Json,
+): Option.Option<Schema.Json> => {
+  const fits = (size: number) =>
+    Option.exists(encodeToolResultJson(boundedAt(size)), (text) => text.length <= maxChars)
+  if (!fits(low)) return Option.none()
+  let fitting = low
+  let above = high
+  while (fitting < above) {
+    const mid = Math.ceil((fitting + above) / 2)
+    if (fits(mid)) fitting = mid
+    else above = mid - 1
   }
-  return Option.some(low)
+  return Option.some(boundedAt(fitting))
 }
 
 /**
  * Bound one tool result for the model, with a locator for the rest. The
  * stored message and its events keep the full result;
  * `context.read(toolCallId, { offset, limit })` in the cell pages its JSON
- * text, `totalChars` long.
+ * text, `totalChars` long. The whole bounded result, paging fields included,
+ * encodes within `maxChars`.
  *
  * The bounded result keeps the result's shape in `result`, each long string
  * cut to its head and tail, so the provider encodes the content once, as it
  * does an unbounded result. `omittedChars` counts the string characters cut.
- * A result whose strings cannot carry the cut (many short strings, or no
- * strings) is cut as JSON text in `text` instead, which the provider then
- * encodes a second time.
+ * A result whose strings cannot carry the cut (many short strings, or bulk
+ * that is not string: numbers, keys, nesting) is cut as JSON text in `text`
+ * instead, which the provider then encodes a second time.
  */
 export const boundToolResultForModel = (
   part: Prompt.ToolResultPart,
@@ -201,21 +208,26 @@ export const boundToolResultForModel = (
     read: `context.read("${part.id}", { offset, limit })`,
   }
   const structured = Option.flatMap(decodeToolResultJson(part.result), (value) =>
-    Option.map(stringCapWithin(value, maxChars), (cap) => ({
+    largestFitting(MINIMUM_STRING_CAP, maxChars, maxChars, (cap) => ({
       ...locator,
       omittedChars: cutStringChars(value, cap),
       result: capStrings(value, cap),
     })),
   )
+  const asText = (size: number): Schema.Json => {
+    const bounded = headTailChars(encoded.value, size)
+    return { ...locator, omittedChars: bounded.omittedChars, text: bounded.text }
+  }
   return Prompt.toolResultPart({
     id: part.id,
     name: part.name,
     isFailure: part.isFailure,
     providerExecuted: part.providerExecuted,
-    result: Option.getOrElse(structured, () => {
-      const bounded = headTailChars(encoded.value, maxChars)
-      return { ...locator, omittedChars: bounded.omittedChars, text: bounded.text }
-    }),
+    result: Option.getOrElse(
+      Option.orElse(structured, () => largestFitting(0, maxChars, maxChars, asText)),
+      // Only a bound smaller than the paging fields leaves nothing to fit.
+      () => asText(0),
+    ),
   })
 }
 
