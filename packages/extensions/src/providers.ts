@@ -672,6 +672,8 @@ const ModelsDevCost = Schema.Struct({
 })
 const ModelsDevLimit = Schema.Struct({
   context: Schema.Finite,
+  /** The input cap, where it is below the window (the GPT-5 family: 272k of 400k). */
+  input: Schema.optional(Schema.Finite),
 })
 const ModelsDevModel = Schema.Struct({
   name: Schema.optional(Schema.String),
@@ -730,6 +732,9 @@ const parsePricing = (value: ModelsDevModel["cost"]): Option.Option<ModelPricing
 const parseContextLength = (value: ModelsDevModel["limit"]): Option.Option<number> =>
   Option.fromUndefinedOr(value).pipe(Option.map(({ context }) => context))
 
+const parseInputLimit = (value: ModelsDevModel["limit"]): Option.Option<number> =>
+  Option.fromUndefinedOr(value).pipe(Option.flatMap(({ input }) => Option.fromUndefinedOr(input)))
+
 /**
  * The models.dev payload as gent's canonical `Model[]`. A malformed entry is
  * dropped, and so is a model without tool calling: every gent turn sends tools.
@@ -761,6 +766,7 @@ const parseModelsDev = (data: Schema.Json): ReadonlyArray<Model> => {
           provider: ProviderId.make(providerId),
           ...omitUndefined({
             contextLength: Option.getOrUndefined(contextLength),
+            inputLimit: Option.getOrUndefined(parseInputLimit(modelValue.limit)),
             pricing: Option.getOrUndefined(pricing),
             releaseDate: Option.getOrUndefined(releaseDate),
             reasoning: modelValue.reasoning,
