@@ -64,6 +64,24 @@ const steeringFiles = Effect.fn("Tooling.steeringFiles")(function* (repoRoot: st
   return files.filter((file, index) => path.join(repoRoot, file) === real[index])
 })
 
+/**
+ * A context's `node_modules`, which must be installed. The temp directory
+ * links to it, so a missing one would leave every import unresolved and read
+ * as a wall of unrelated diagnostics; it fails here, by name, instead.
+ */
+export const requireContextModules = Effect.fn("Tooling.requireContextModules")(function* (
+  repoRoot: string,
+  context: GuideCodeContext,
+) {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const modules = path.join(repoRoot, context.modules)
+  if (yield* fs.exists(modules)) return modules
+  return yield* new GuideCodeError({
+    message: `  the ${context.name} blocks resolve from \`${context.modules}\`, which is missing; run \`bun install\``,
+  })
+})
+
 /** Compile one context's blocks in `directory`; the lines of any failure. */
 const compileContext = Effect.fn("Tooling.compileContext")(function* (
   repoRoot: string,
@@ -80,7 +98,8 @@ const compileContext = Effect.fn("Tooling.compileContext")(function* (
     include: names,
   }
   yield* fs.writeFileString(path.join(directory, "tsconfig.json"), yield* encodeJson(tsconfig))
-  yield* fs.symlink(path.join(repoRoot, context.modules), path.join(directory, "node_modules"))
+  const modules = yield* requireContextModules(repoRoot, context)
+  yield* fs.symlink(modules, path.join(directory, "node_modules"))
   const tsc = path.join(repoRoot, "node_modules", ".bin", "tsc")
   const result = yield* run(tsc, ["-p", directory, "--pretty", "false"], directory)
   if (result.exitCode === 0) return []

@@ -890,28 +890,80 @@ export const findRepoTempDirectories = (file: string, text: string): ReadonlyArr
  * data directory is shared by every run and every parallel gate: what one
  * test writes there (prompt history, goal and wake files, a skills cache),
  * the next one reads, so a result depends on run order. Reported in test code
- * outside the tooling package: a `home`, `HOME`, `homeDir`, `homeDirectory`,
- * `dataDir` or `GENT_DATA_DIR` name followed on its line by such a path, with
- * no other string, comma or semicolon between them. That reads a property, a
- * JSX attribute, a binding, a parameter default (`home: string = "/tmp"`), a
- * fallback (`home ?? "/tmp"`) and a wrapped value
+ * outside the tooling package, at a `home`, `HOME`, `homeDir`,
+ * `homeDirectory`, `dataDir` or `GENT_DATA_DIR` name given a value with `:` or
+ * `=`. The value is read as an expression, not as the rest of the line: it
+ * may start on the next line, and it ends at a `,`, `;`, closing bracket or
+ * line end outside its own brackets, strings and template interpolations, so
+ * a sibling property's `/tmp` is not its value. The value is shared when it
+ * names such a path in a string or template (`"/tmp/case"`,
+ * `path.join("/tmp", "case")`) or calls `tmpdir()` (`` `${tmpdir()}/case` ``,
+ * `Path.join(tmpdir(), "case")`), unless it makes a unique directory
+ * (`mkdtemp*`, `makeTempDirectory*`). That reads a property, a JSX attribute,
+ * a binding, a parameter default (`home: string = "/tmp"`), a fallback
+ * (`home: overrides ?? "/tmp"`) and a wrapped value
  * (`homeDirectory: Effect.succeed("/tmp")`) alike. A test that writes there
  * takes `makeTempDirectoryScoped`; a test that only names a home takes a path
  * no test can create, such as `/nonexistent/<name>`.
  */
-const SHARED_TEMP_HOME =
-  /\b(?:home|HOME|homeDir|homeDirectory|dataDir|GENT_DATA_DIR)\b(?:[^"'`\n,;]*?["'`](?:(?:\/private)?(?:\/var)?\/tmp|\/dev\/shm)(?:\/[^"'`]*)?["'`]|\s*[:=]\s*\{?\s*(?:os\.)?tmpdir\(\)\s*(?:[,;})]|$))/
+const SHARED_HOME_KEY =
+  /\b(?:home|HOME|homeDir|homeDirectory|dataDir|GENT_DATA_DIR)\b\s*(?::|=(?![=>]))/g
+
+const SHARED_TEMP_ROOT = /["'`](?:(?:\/private)?(?:\/var)?\/tmp|\/dev\/shm)(?=[/"'`$])/
+
+const TEMP_ROOT_CALL = /\btmpdir\(\)/
+
+const UNIQUE_TEMP_CALL = /\b(?:mkdtemp|makeTempDirectory)/
 
 const SHARED_TEMP_HOME_MESSAGE =
   "a test home or data directory under the shared temp root is shared by every run and parallel gate; use `makeTempDirectoryScoped` when the test writes there, or a `/nonexistent/<name>` path when it only names one"
 
+/**
+ * One step over a value expression: past a string or a one-line template (a
+ * `${}` inside one is part of the value either way), or one character.
+ */
+const valueStep = (text: string, at: number): number => {
+  if (["'", '"', "`"].includes(text[at] ?? "")) return quotedEnd(text, at)
+  return at + 1
+}
+
+/**
+ * Where the value expression that starts at `start` ends: a `,`, `;`, closing
+ * bracket or line end outside the value's own brackets and strings.
+ */
+const valueEnd = (text: string, start: number): number => {
+  let depth = 0
+  let at = start
+  while (at < text.length) {
+    const char = text[at] ?? ""
+    if (depth === 0 && ",;\n)]}".includes(char)) return at
+    if ("([{".includes(char)) depth += 1
+    if (")]}".includes(char)) depth -= 1
+    at = valueStep(text, at)
+  }
+  return text.length
+}
+
+/** Whether a home's value expression is a path under the shared temp root. */
+const isSharedTempValue = (value: string): boolean =>
+  (SHARED_TEMP_ROOT.test(value) || TEMP_ROOT_CALL.test(value)) && !UNIQUE_TEMP_CALL.test(value)
+
 export const findSharedTestHomes = (file: string, text: string): ReadonlyArray<Finding> => {
   // The guard's own tests spell the reported shapes as probe text.
   if (!isTestCode(file) || file.startsWith("packages/tooling/")) return []
-  const lines = withoutComments(text).split("\n")
-  return [...lines.keys()]
-    .filter((index) => SHARED_TEMP_HOME.test(lines[index] ?? ""))
-    .map((index) => ({ file, line: index + 1, message: SHARED_TEMP_HOME_MESSAGE }))
+  const code = withoutComments(text)
+  const reported = new Set<number>()
+  for (const key of code.matchAll(SHARED_HOME_KEY)) {
+    const afterKey = key.index + key[0].length
+    // The value may start on the next line: `home:` then `"/tmp"`.
+    const start = afterKey + (/^\s*/.exec(code.slice(afterKey))?.[0].length ?? 0)
+    if (isSharedTempValue(code.slice(start, valueEnd(code, start)))) {
+      reported.add(code.slice(0, key.index).split("\n").length)
+    }
+  }
+  return [...reported]
+    .sort((a, b) => a - b)
+    .map((line) => ({ file, line, message: SHARED_TEMP_HOME_MESSAGE }))
 }
 
 // ── the pre-commit hook runs the guards ─────────────────────────────────────
@@ -1088,7 +1140,7 @@ export const findUnmatchedOverrideGlobs = (
 /**
  * An `.oxlintignore` row that matches no file oxlint would walk in a clean
  * clone. oxlint also honors `.gitignore`, so `trackedFiles` is the committed
- * set (`git ls-files --cached`): a row that only a new local file matches
+ * set (`committedFilesCommand`): a row that only a local file matches
  * passes here and fails in CI. A row follows gitignore form: a trailing `/`
  * names a directory, a row with no inner `/` matches at any depth, a leading
  * `/` anchors at the root. Comment, blank and `!` rows are skipped.
@@ -2309,8 +2361,8 @@ const directoryPrefixesOf = (tracked: Iterable<string>): ReadonlySet<string> => 
   return prefixes
 }
 
-/** A Markdown link's target: `(target)` after `[text]`, up to a space or the close. */
-const MARKDOWN_LINK = /\[[^\]\n]*\]\(([^)\s]+)\)/g
+/** A Markdown link's target: `(target)` after `[text]`, with an optional `"title"`, `'title'` or `(title)`. */
+const MARKDOWN_LINK = /\[[^\]\n]*\]\(([^)\s]+)(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?\s*\)/g
 
 /** A link target that is not a repo path: a URL, a root-relative path, or an anchor. */
 const NOT_REPO_TARGET = /^(?:[a-z][a-z0-9+.-]*:|\/|#)/i
@@ -2397,7 +2449,7 @@ export const findSteeringFilePaths = (
  * name, so a `SKILL.md` link to it dangles.
  *
  * Read: the tracked files under `BUNDLED_SKILLS_DIRECTORY` and the text of
- * `BUNDLED_SKILLS_MODULE`. Reported: a Markdown file with no import (at the
+ * `BUNDLED_SKILLS_MODULE`, comments blanked. Reported: a Markdown file with no import (at the
  * file), and an import whose `bundledSkillFiles` row is missing or names
  * another path (at the import).
  */
@@ -2414,14 +2466,16 @@ export const findUnshippedSkillFiles = (
   moduleText: string,
   trackedFiles: ReadonlyArray<string>,
 ): ReadonlyArray<Finding> => {
+  // A commented-out import or row ships nothing, so neither is read.
+  const code = withoutComments(moduleText)
   const imported = new Map<string, { readonly path: string; readonly line: number }>()
-  for (const [index, line] of moduleText.split("\n").entries()) {
-    const match = Option.fromNullishOr(BUNDLED_IMPORT.exec(line))
+  for (const [index, line] of code.split("\n").entries()) {
+    const match = Option.fromNullishOr(BUNDLED_IMPORT.exec(line.trimStart()))
     if (Option.isSome(match))
       imported.set(match.value[1] ?? "", { path: match.value[2] ?? "", line: index + 1 })
   }
   const rows = new Map<string, string>()
-  for (const match of moduleText.matchAll(BUNDLED_ROW)) rows.set(match[2] ?? "", match[1] ?? "")
+  for (const match of code.matchAll(BUNDLED_ROW)) rows.set(match[2] ?? "", match[1] ?? "")
   const importedPaths = new Set([...imported.values()].map((entry) => entry.path))
   const findings: Array<Finding> = trackedFiles
     .filter((file) => file.startsWith(BUNDLED_SKILLS_DIRECTORY) && file.endsWith(".md"))
@@ -2446,6 +2500,52 @@ export const findUnshippedSkillFiles = (
     })
   }
   return findings
+}
+
+/**
+ * Guard: the guide check's cache key reads exactly the steering prose.
+ *
+ * `check-guide-code.ts` runs as the examples package's typecheck, and turbo
+ * replays a cached result while the task's `inputs` hash the same. An input
+ * list that misses a steering file (`../docs/*.md` against
+ * `docs/topic/guide.md`) replays a pass after that file alone changes; one
+ * that reads a Markdown file outside the set reruns the check for nothing. So
+ * over the tracked and new files, the `.md` files the inputs match must be the
+ * files `isSteeringFile` accepts. Turbo globs are relative to the package, so
+ * `../x` names the repo path `x`, and a `!` input subtracts.
+ */
+/** The part of a package's `turbo.json` the guide input check reads. */
+export const TurboTypecheckInputsSchema = Schema.Struct({
+  tasks: Schema.Struct({
+    typecheck: Schema.Struct({ inputs: Schema.Array(Schema.String) }),
+  }),
+})
+
+export const findUnhashedSteeringFiles = (
+  file: string,
+  inputs: ReadonlyArray<string>,
+  trackedFiles: ReadonlyArray<string>,
+): ReadonlyArray<Finding> => {
+  const packageDirectory = file.slice(0, file.lastIndexOf("/") + 1)
+  const repoGlob = (input: string): RegExp => {
+    if (input.startsWith("../")) return globMatcher(input.slice(3))
+    return globMatcher(packageDirectory + input)
+  }
+  const included = inputs.filter((input) => !input.startsWith("!")).map(repoGlob)
+  const excluded = inputs
+    .filter((input) => input.startsWith("!"))
+    .map((input) => repoGlob(input.slice(1)))
+  const hashed = (path: string): boolean =>
+    included.some((glob) => glob.test(path)) && !excluded.some((glob) => glob.test(path))
+  const message = (path: string): string => {
+    if (isSteeringFile(path)) {
+      return `the typecheck inputs miss steering file \`${path}\`, so a change to it alone replays a cached guide check; make the inputs match \`isSteeringFile\``
+    }
+    return `the typecheck inputs read \`${path}\`, which is not steering prose, so a change to it reruns the guide check for nothing; make the inputs match \`isSteeringFile\``
+  }
+  return trackedFiles
+    .filter((path) => path.endsWith(".md") && hashed(path) !== isSteeringFile(path))
+    .map((path) => ({ file, line: 1, message: message(path) }))
 }
 
 // ── the steering prose's code compiles ──────────────────────────────────────

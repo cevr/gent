@@ -28,6 +28,7 @@ import {
   findUnmatchedOverrideGlobs,
   findUnmatchedTsconfigOverrides,
   findUnshippedSkillFiles,
+  findUnhashedSteeringFiles,
   BUNDLED_SKILLS_MODULE,
   findUnneededOffs,
   findUnusedCatalogEntries,
@@ -47,7 +48,7 @@ import {
   RETIRED_SURFACES,
   workspaceTsconfigs,
 } from "../src/guards"
-import { scanTrackedTexts } from "../src/check-guardrails"
+import { committedFilesCommand, scanTrackedTexts } from "../src/check-guardrails"
 import { Option } from "effect"
 
 // ── blanket eslint disable ──────────────────────────────────────────────────
@@ -684,8 +685,38 @@ describe("shared test home checker", () => {
       'const home = mkdtempSync(join(tmpdir(), "gent-home-"))',
       'const homePage = "/tmp/page"',
       '// home: "/tmp" in a comment',
+      'if (home === "/tmp/x") return',
+      'const probe = home => "/tmp/x"',
     ].join("\n")
     expect(lines(source)).toEqual([])
+  })
+
+  test("the value is read as an expression: across a line break, in a template or a join", () => {
+    const source = [
+      "const env = {",
+      "  home:",
+      '    "/tmp",',
+      "}",
+      "const a = { home: `${tmpdir()}/case` }",
+      'const b = { home: Path.join(tmpdir(), "case") }',
+      'const c = { home: path.join("/tmp", "case") }',
+    ].join("\n")
+    expect(lines(source)).toEqual([2, 5, 6, 7])
+  })
+
+  test("a shared path in a sibling property does not make a unique home shared", () => {
+    const source = [
+      'const home = mkdtempSync(join(tmpdir(), "gent-home-")); const opts = { directory: "/tmp" }',
+      'const env = { home: yield* makeTempDirectoryScoped("gent-home-"), directory: "/tmp" }',
+      'const env2 = { home: root, cwd: "/tmp" }',
+      'const env3 = { home: yield* fs.makeTempDirectoryScoped({ directory: "/tmp" }) }',
+      'const env4 = { home: mkdtempSync("/tmp/gent-home-") }',
+      // A template is one value: its `'` opens no string that runs past the comma.
+      'const env5 = { home: `${root}/it\'s`, cwd: "/tmp" }',
+    ]
+    // Each alone too: a value read past its end would take a later line's `mkdtemp`.
+    expect(source.flatMap((line) => lines(line))).toEqual([])
+    expect(lines(source.join("\n"))).toEqual([])
   })
 
   test("product source and the tooling package are out of scope", () => {
@@ -833,6 +864,19 @@ describe("an ignore row must match a file oxlint would lint", () => {
     expect(
       findUnmatchedIgnoreRows(".oxlintignore", text, tracked).map((finding) => finding.line),
     ).toEqual([2, 3])
+  })
+})
+
+describe("the committed file set the config rows match", () => {
+  test("in a commit hook it is the index git is committing, partial commits included", () => {
+    expect(committedFilesCommand(Option.some(".git/next-index-1.lock"))).toEqual([
+      "ls-files",
+      "--cached",
+    ])
+  })
+
+  test("outside a hook it is the tree of the last commit, which is what CI checks out", () => {
+    expect(committedFilesCommand(Option.none())).toEqual(["ls-tree", "-r", "--name-only", "HEAD"])
   })
 })
 
@@ -1937,6 +1981,14 @@ describe("steering file links", () => {
     expect(linkLines("AGENTS.md", "see [x](../outside.md)")).toEqual([1])
   })
 
+  test("a link with a title is read by its target", () => {
+    const text = [
+      '- [Gone](references/gone.md "The gone one")',
+      "- [Fix](references/fix-root-causes.md 'Fix root causes')",
+    ].join("\n")
+    expect(linkLines(skill, text)).toEqual([1])
+  })
+
   test("a URL, an anchor, a root path, a backticked or a fenced link is not read", () => {
     const text = [
       "[site](https://example.com/gone.md) and [top](#top) and [abs](/gone.md)",
@@ -1999,6 +2051,77 @@ describe("bundled skill files", () => {
 
   test("a file of another kind under the directory is not a skill file", () => {
     expect(findUnshippedSkillFiles(moduleText, [...tracked, `${directory}notes.txt`])).toEqual([])
+  })
+
+  test("a row or an import in a comment does not ship the file", () => {
+    const rowOff = moduleText.replace(
+      '  ["principles/SKILL.md", principlesSkill],',
+      '  // ["principles/SKILL.md", principlesSkill],',
+    )
+    expect(findUnshippedSkillFiles(rowOff, tracked)).toMatchObject([
+      { file: BUNDLED_SKILLS_MODULE, line: 2 },
+    ])
+    const blockOff = moduleText
+      .replace("  [\n", "  /* [\n")
+      .replace("    fixRootCauses,\n  ],", "    fixRootCauses,\n  ], */")
+    expect(findUnshippedSkillFiles(blockOff, tracked)).toMatchObject([
+      { file: BUNDLED_SKILLS_MODULE, line: 1 },
+    ])
+    const importOff = moduleText.replace("import fixRootCauses", "// import fixRootCauses")
+    expect(findUnshippedSkillFiles(importOff, tracked)).toMatchObject([
+      { file: `${directory}principles/references/fix-root-causes.md`, line: 1 },
+    ])
+  })
+})
+
+// ── the guide check's inputs are the steering files ─────────────────────────
+
+describe("guide check inputs", () => {
+  const exact = [
+    "extensions/**/*.ts",
+    "../AGENTS.md",
+    "../CLAUDE.md",
+    "../ARCHITECTURE.md",
+    "../apps/*/AGENTS.md",
+    "../apps/*/CLAUDE.md",
+    "../packages/*/AGENTS.md",
+    "../packages/*/CLAUDE.md",
+    "../docs/**/*.md",
+    "!../docs/research/**",
+    "../testbeds/*/README.md",
+    "../patches/README.md",
+    "../.claude/skills/**/*.md",
+    "../packages/extensions/src/skills/bundled/**/*.md",
+  ]
+  const tracked = [
+    "AGENTS.md",
+    "README.md",
+    "docs/extensions.md",
+    "docs/research/2026-09-06-x.md",
+    "apps/tui/AGENTS.md",
+    "packages/extensions/src/skills/bundled/principles/SKILL.md",
+    "examples/extensions/a.ts",
+  ]
+  const files = (inputs: ReadonlyArray<string>, extra: ReadonlyArray<string> = []) =>
+    findUnhashedSteeringFiles("examples/turbo.json", inputs, [...tracked, ...extra]).map(
+      (finding) => finding.message,
+    )
+
+  test("inputs that read exactly the steering files pass", () => {
+    expect(files(exact, ["docs/topic/guide.md"])).toEqual([])
+  })
+
+  test("a nested steering file the inputs miss is reported", () => {
+    const shallow = exact.map((input) => input.replace("../docs/**/*.md", "../docs/*.md"))
+    const messages = files(shallow, ["docs/topic/guide.md"])
+    expect(messages).toHaveLength(1)
+    expect(messages[0]).toContain("docs/topic/guide.md")
+  })
+
+  test("an input that reads a Markdown file outside the steering set is reported", () => {
+    const messages = files([...exact.filter((input) => !input.startsWith("!")), "../*.md"])
+    expect(messages.some((message) => message.includes("docs/research/2026-09-06-x.md"))).toBe(true)
+    expect(messages.some((message) => message.includes("README.md"))).toBe(true)
   })
 })
 
