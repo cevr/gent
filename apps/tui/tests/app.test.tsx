@@ -1448,9 +1448,6 @@ describe("App auth gate", () => {
       )
       yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
       yield* Effect.promise(() => setup.mockInput.typeText("/btw"))
-      // The session view shows before the client extensions load; `/btw` is
-      // a command once the popup lists it.
-      yield* waitForFrame(setup, (frame) => frame.includes("parallel session"), "btw command")
       setup.mockInput.pressEnter()
       yield* waitForFrame(setup, (frame) => frame.includes("btw · fork"), "btw pane")
       const destroy = setup.renderer.destroy.bind(setup.renderer)
@@ -1460,6 +1457,69 @@ describe("App auth gate", () => {
       setup.mockInput.pressKey("c", { ctrl: true })
       yield* waitForFrame(setup, () => shutdowns > 0, "quit")
       setup.renderer.destroy = destroy
+      setup.renderer.destroy()
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  it.live("a slash command typed before the client extensions load runs once they do", () =>
+    Effect.gen(function* () {
+      const release = yield* Deferred.make<void>()
+      const held = defineClientExtension("@test/held-load", {
+        setup: Deferred.await(release).pipe(Effect.as(clientContributions())),
+      })
+      let ext = Option.none<ReturnType<typeof useExtensionUI>>()
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <>
+              <App missingAuthProviders={[]} />
+              <ExtensionUIProbe onReady={(value) => (ext = Option.some(value))} />
+            </>
+          ),
+          {
+            client: createMockClient({
+              auth: { listProviders: () => Effect.succeed([]) },
+              branch: { getTree: () => Effect.succeed([]) },
+            }),
+            runtime: createMockRuntime(),
+            builtins: [...builtinClientModules, held],
+            initialSession: {
+              id: SessionId.make("session-a"),
+              activeBranchId: BranchId.make("branch-a"),
+              name: "Session A",
+              createdAt: dateFromMillis(0),
+              updatedAt: dateFromMillis(0),
+            },
+          },
+        ),
+      )
+      yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
+      expect(Option.exists(ext, (value) => value.loaded())).toBe(false)
+      yield* Effect.promise(() => setup.mockInput.typeText("/btw"))
+      yield* waitForFrame(setup, (frame) => frame.includes("/btw"), "the typed command")
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("Unknown command") || !frame.includes("/btw"),
+        "the command sent",
+      )
+      expect(renderFrame(setup)).not.toContain("Unknown command")
+      // A command no extension names waits too, and reports once the load settles.
+      yield* Effect.promise(() => setup.mockInput.typeText("/nonesuch"))
+      yield* waitForFrame(setup, (frame) => frame.includes("/nonesuch"), "the unknown command")
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("Unknown command") || !frame.includes("/nonesuch"),
+        "the unknown command sent",
+      )
+      expect(renderFrame(setup)).not.toContain("Unknown command")
+      yield* Deferred.complete(release, Effect.void)
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("btw · fork") && frame.includes("Unknown command: /nonesuch"),
+        "btw pane and the settled unknown command",
+      )
+      expect(renderFrame(setup)).not.toContain("Unknown command: /btw")
       setup.renderer.destroy()
     }).pipe(Effect.timeout("10 seconds")),
   )

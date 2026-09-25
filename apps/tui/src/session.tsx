@@ -96,7 +96,7 @@ import {
   readFrecencyLookup,
   recordFrecencyPick,
 } from "./autocomplete"
-import { type Command, executeSlashCommand, useCommand } from "./commands"
+import { type Command, executeSlashCommand, isSlashCommandName, useCommand } from "./commands"
 import { createStore, produce, type SetStoreFunction } from "solid-js/store"
 import {
   addStep,
@@ -3107,13 +3107,37 @@ export function createSessionController(props: {
     closeOverlay()
   }
 
+  const runSlashCommand = (cmd: string, args: string) => {
+    const result = executeSlashCommand(cmd, args, ext.commands())
+    Option.match(Option.fromNullishOr(result.error), {
+      onNone: () => {},
+      onSome: (error) => client.setError(error),
+    })
+  }
+
+  // A command sent before the client extensions finish loading may belong to
+  // one of them: it waits for the load to settle, then resolves. Only a
+  // settled load reports `Unknown command`.
+  const [heldSlashCommands, setHeldSlashCommands] = createSignal<
+    ReadonlyArray<readonly [cmd: string, args: string]>
+  >([])
+  createEffect(
+    on(ext.loaded, (loaded) => {
+      if (!loaded) return
+      const held = heldSlashCommands()
+      if (held.length === 0) return
+      setHeldSlashCommands([])
+      for (const [cmd, args] of held) runSlashCommand(cmd, args)
+    }),
+  )
+
   const onSlashCommand = (cmd: string, args: string): Effect.Effect<void> =>
     Effect.sync(() => {
-      const result = executeSlashCommand(cmd, args, ext.commands())
-      Option.match(Option.fromNullishOr(result.error), {
-        onNone: () => {},
-        onSome: (error) => client.setError(error),
-      })
+      if (!ext.loaded() && !isSlashCommandName(cmd, ext.commands())) {
+        setHeldSlashCommands((held) => [...held, [cmd, args]])
+        return
+      }
+      runSlashCommand(cmd, args)
     })
 
   const onModelSelect = (modelId: ModelId) => {
