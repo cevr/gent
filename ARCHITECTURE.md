@@ -506,7 +506,9 @@ Shape:
 - Project instructions are an extension, not a profile field. `@gent/agents`
   reads `AGENTS.md` (or `CLAUDE.md`) from the gent home, the project and the
   project-local `.gent/` on every turn and contributes the `project-instructions`
-  prompt section at priority 70 beside the persona sections. Core builds no
+  prompt section at priority 70 beside the persona sections. Launched from home
+  (`hasProjectScope` is false), the project-local `.gent/` is the gent home and
+  is read once. Core builds no
   instruction text and the profile carries none; an edit to `AGENTS.md` reaches
   the next turn.
 - Tool-result spill: the model sees at most 8,000 characters of any tool
