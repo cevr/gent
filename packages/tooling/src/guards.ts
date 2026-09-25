@@ -1531,17 +1531,32 @@ interface PlatformBunBindings {
 const alternation = (names: ReadonlyArray<string>): ReadonlyArray<string> =>
   [names].filter((list) => list.length > 0).map((list) => list.map(escapeRegExp).join("|"))
 
-/** One pass of `const X = <module>` and `const X = <namespace>.<Module>` aliases. */
-const aliasedModules = (code: string, bindings: PlatformBunBindings): ReadonlyArray<string> =>
-  [
+/** A member access, plain or optional: `BunCrypto.layer` and `BunCrypto?.layer` read the same member. */
+const MEMBER = String.raw`\s*\??\.\s*`
+
+/**
+ * One pass of `const X = <module>`, `const X = <namespace>.<Module>` and
+ * `const { <Module> } = <namespace>` aliases.
+ */
+const aliasedModules = (code: string, bindings: PlatformBunBindings): ReadonlyArray<string> => [
+  ...[
     ...alternation(bindings.modules),
-    ...alternation(bindings.namespaces).map((names) => String.raw`(?:${names})\s*\.\s*\w+`),
+    ...alternation(bindings.namespaces).map((names) => String.raw`(?:${names})${MEMBER}\w+`),
   ].flatMap((source) =>
     firstCaptures(
       code,
       new RegExp(String.raw`${DECLARE}\s+(${BINDING_NAME})\s*=\s*(?:${source})${ALIAS_END}`, "g"),
     ),
-  )
+  ),
+  ...alternation(bindings.namespaces).flatMap((names) =>
+    boundNames(
+      code,
+      new RegExp(String.raw`${DECLARE}\s*\{([^}]*)\}\s*=\s*(?:${names})${ALIAS_END}`, "g"),
+      DESTRUCTURE_SPECIFIER,
+      anyExport,
+    ),
+  ),
+]
 
 const platformBunBindings = (code: string): PlatformBunBindings => {
   const imported: PlatformBunBindings = {
@@ -1575,20 +1590,26 @@ const platformBunBindings = (code: string): PlatformBunBindings => {
 
 /**
  * The pattern of a layer provision: a module's `.layer*`, a namespace's
- * `.<Module>.layer*`, a layer binding, or `.layer*` on an inline
- * `await import(...)`. Whitespace may sit around each `.`, so an access split
- * across lines still matches. Constructors such as `BunSocket.makeNet` and
- * runners such as `BunRuntime.runMain` are not provisions.
+ * `.<Module>.layer*`, a layer binding, `.layer*` on an inline
+ * `await import(...)`, or a destructure that takes `layer*` from a module
+ * (`const { layer } = BunCrypto`, reported where it takes the layer). Each
+ * access may be optional (`?.`), and whitespace may sit around it, so an
+ * access split across lines still matches. Constructors such as
+ * `BunSocket.makeNet` and runners such as `BunRuntime.runMain` are not
+ * provisions.
  */
 const platformBunLayerPattern = (bindings: PlatformBunBindings): RegExp => {
   const provisions = [
-    ...alternation(bindings.modules).map((names) => String.raw`(?:${names})\s*\.\s*layer\w*`),
+    ...alternation(bindings.modules).map((names) => String.raw`(?:${names})${MEMBER}layer\w*`),
+    ...alternation(bindings.modules).map(
+      (names) => String.raw`\{[^}]*(?<![\w$])layer\w*[^}]*\}\s*=\s*(?:${names})${ALIAS_END}`,
+    ),
     ...alternation(bindings.namespaces).map(
-      (names) => String.raw`(?:${names})\s*\.\s*\w+\s*\.\s*layer\w*`,
+      (names) => String.raw`(?:${names})${MEMBER}\w+${MEMBER}layer\w*`,
     ),
     ...alternation(bindings.layers),
-    String.raw`\(\s*${dynamicImport(PLATFORM_BUN_MODULE)}\s*\)\s*\.\s*layer\w*`,
-    String.raw`\(\s*${dynamicImport(PLATFORM_BUN_PACKAGE)}\s*\)\s*\.\s*\w+\s*\.\s*layer\w*`,
+    String.raw`\(\s*${dynamicImport(PLATFORM_BUN_MODULE)}\s*\)${MEMBER}layer\w*`,
+    String.raw`\(\s*${dynamicImport(PLATFORM_BUN_PACKAGE)}\s*\)${MEMBER}\w+${MEMBER}layer\w*`,
   ]
   return new RegExp(String.raw`(?<![\w$.])(?:${provisions.join("|")})(?![\w$])`, "g")
 }

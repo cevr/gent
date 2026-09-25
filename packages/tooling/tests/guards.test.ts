@@ -1352,6 +1352,27 @@ describe("platform duplication guards", () => {
     ])
   })
 
+  test("a destructured or optional layer access is reported", () => {
+    const text = [
+      'import { BunCrypto, BunPath } from "@effect/platform-bun"',
+      'import * as PlatformBun from "@effect/platform-bun"',
+      "const { layer } = BunCrypto",
+      "const { layer: pathLayer, make } = BunPath",
+      "const { BunServices } = PlatformBun",
+      "const a = BunCrypto?.layer",
+      "const b = PlatformBun?.BunFileSystem?.layer",
+      "const c = BunServices.layer",
+      "const { make: makePath } = BunPath",
+    ].join("\n")
+    expect(provisionLines("packages/extensions/src/probe.ts", text)).toEqual([
+      [3, expect.stringContaining("`{ layer } = BunCrypto`")],
+      [4, expect.stringContaining("`{ layer: pathLayer, make } = BunPath`")],
+      [6, expect.stringContaining("`BunCrypto?.layer`")],
+      [7, expect.stringContaining("`PlatformBun?.BunFileSystem?.layer`")],
+      [8, expect.stringContaining("`BunServices.layer`")],
+    ])
+  })
+
   test("a layer access split across lines is reported at its first line", () => {
     const text = [
       'import { BunServices } from "@effect/platform-bun"',
