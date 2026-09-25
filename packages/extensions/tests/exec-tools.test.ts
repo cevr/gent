@@ -1,6 +1,5 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import {
-  Clock,
   ConfigProvider,
   Deferred,
   Effect,
@@ -949,7 +948,7 @@ describe("BashTool execution", () => {
     processTestTimeout,
   )
 
-  it.live(
+  it.scopedLive(
     "terminal background job retries replay durable completion instead of spawning work",
     () =>
       Effect.gen(function* () {
@@ -978,9 +977,9 @@ describe("BashTool execution", () => {
             send: onQueue((notice) => Deferred.succeed(sent, notice)),
           },
         )
-        const millis = yield* Clock.currentTimeMillis
+        const directory = yield* makeTempDirectoryScoped("gent-background-bash-")
         const storageLayer = SqliteStorage.LiveWithSql(
-          `/tmp/gent-background-bash-terminal-${millis}.db`,
+          `${directory}/storage.db`,
           () => Layer.empty,
           {},
         ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)))
@@ -1101,7 +1100,7 @@ describe("BashTool execution", () => {
     processTestTimeout,
   )
 
-  it.live(
+  it.scopedLive(
     "failed background job does not notify before failure state is durable",
     () =>
       Effect.gen(function* () {
@@ -1130,9 +1129,9 @@ describe("BashTool execution", () => {
             send: onQueue((notice) => Deferred.succeed(sent, notice)),
           },
         )
-        const millis = yield* Clock.currentTimeMillis
+        const directory = yield* makeTempDirectoryScoped("gent-background-bash-")
         const storageLayer = SqliteStorage.LiveWithSql(
-          `/tmp/gent-background-bash-failure-${millis}.db`,
+          `${directory}/storage.db`,
           () => Layer.empty,
           {},
         ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)))
@@ -1154,7 +1153,7 @@ describe("BashTool execution", () => {
     processTestTimeout,
   )
 
-  it.live(
+  it.scopedLive(
     "a repeated start of a job a restart interrupted sends no message and leaves the job unread",
     () =>
       Effect.gen(function* () {
@@ -1183,9 +1182,9 @@ describe("BashTool execution", () => {
           },
         )
         const scope = yield* Scope.make()
-        const millis = yield* Clock.currentTimeMillis
+        const directory = yield* makeTempDirectoryScoped("gent-background-bash-")
         const storageLayer = SqliteStorage.LiveWithSql(
-          `/tmp/gent-background-bash-${millis}.db`,
+          `${directory}/storage.db`,
           () => Layer.empty,
           {},
         ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)))
@@ -1233,14 +1232,14 @@ describe("BashTool execution", () => {
     processTestTimeout,
   )
 
-  it.live(
+  it.scopedLive(
     "another profile building in the same server leaves a running job running",
     () =>
       Effect.gen(function* () {
         const ctx = { ...stubCtx, toolCallId: ToolCallId.make("tc-two-profiles") }
-        const millis = yield* Clock.currentTimeMillis
+        const directory = yield* makeTempDirectoryScoped("gent-background-bash-")
         const storageLayer = SqliteStorage.LiveWithSql(
-          `/tmp/gent-background-bash-profiles-${millis}.db`,
+          `${directory}/storage.db`,
           () => Layer.empty,
           {},
         ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)))
@@ -1424,7 +1423,7 @@ describe("BashTool execution", () => {
     processTestTimeout,
   )
 
-  it.live(
+  it.scopedLive(
     "a refused completion a later replay delivers is not also kept as a notice",
     () =>
       Effect.gen(function* () {
@@ -1462,9 +1461,9 @@ describe("BashTool execution", () => {
             ),
           },
         )
-        const millis = yield* Clock.currentTimeMillis
+        const directory = yield* makeTempDirectoryScoped("gent-background-bash-")
         const storageLayer = SqliteStorage.LiveWithSql(
-          `/tmp/gent-background-bash-refused-replay-${millis}.db`,
+          `${directory}/storage.db`,
           () => Layer.empty,
           {},
         ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)))
@@ -1812,14 +1811,14 @@ describe("a background completion the full follow-up queue refused", () => {
 // ── background bash across a restart ───────────────────────────────────────
 
 describe("a background job the server stopped", () => {
-  it.live(
+  it.scopedLive(
     "is marked interrupted when its fiber stops, not left running under this process",
     () =>
       Effect.gen(function* () {
         const ctx = { ...stubCtx, toolCallId: ToolCallId.make("tc-stopped-fiber") }
-        const millis = yield* Clock.currentTimeMillis
+        const directory = yield* makeTempDirectoryScoped("gent-background-bash-")
         const storageLayer = SqliteStorage.LiveWithSql(
-          `/tmp/gent-background-bash-stopped-${millis}.db`,
+          `${directory}/storage.db`,
           () => Layer.empty,
           {},
         ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)))
