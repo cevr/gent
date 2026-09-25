@@ -842,6 +842,7 @@ const wakeTurnHooks = (home: string) =>
             branchId,
             messageId: MessageId.make("wake-message"),
             joinedMessageIds: new Set(),
+            startedAtMs: 0,
             durationMs: 10,
             agentName: builtinAgent.name,
             interrupted: false,

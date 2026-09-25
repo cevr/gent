@@ -359,6 +359,8 @@ export interface TurnAfterInput {
    * resumed after a restart names none from before it.
    */
   readonly joinedMessageIds: ReadonlySet<MessageId>
+  /** When the turn started, in epoch milliseconds; a turn resumed after a park or a restart keeps its start. */
+  readonly startedAtMs: number
   readonly durationMs: number
   readonly agentName: AgentName
   readonly interrupted: boolean

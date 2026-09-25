@@ -875,3 +875,67 @@ describe("goal interrupted turn", () => {
     12_000,
   )
 })
+
+// ── a goal created mid-turn ─────────────────────────────────────────────────
+
+describe("a goal created mid-turn", () => {
+  it.scopedLive(
+    "the turn that created the goal is not charged its tokens",
+    () =>
+      Effect.gen(function* () {
+        const calls = yield* Ref.make(0)
+        const continuing = yield* Deferred.make<void>()
+        // Step one spends past the budget and creates the goal; step two
+        // answers. The continuation the goal queues stays open.
+        const providerLayer = LanguageModelLayers.testStream(() =>
+          Effect.gen(function* () {
+            const call = yield* Ref.updateAndGet(calls, (n) => n + 1)
+            if (call === 1) {
+              return Stream.fromIterable([
+                toolCallPart(
+                  "goal",
+                  { action: "create", objective: "Write the pelican poem", tokenBudget: 10 },
+                  { toolCallId: ToolCallId.make("create-1") },
+                ),
+                finishPart({
+                  finishReason: "tool-calls",
+                  usage: { inputTokens: 30, outputTokens: 12 },
+                }),
+              ])
+            }
+            if (call === 2) {
+              return Stream.fromIterable([
+                textDeltaPart("goal set"),
+                finishPart({ finishReason: "stop", usage: { inputTokens: 40, outputTokens: 3 } }),
+              ])
+            }
+            yield* Deferred.succeed(continuing, void 0)
+            return Stream.never
+          }),
+        )
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+        })
+        yield* client.message.send({ sessionId, branchId, content: "set a goal and start" })
+        yield* Deferred.await(continuing)
+        const goal = yield* client.extension
+          .request({
+            sessionId,
+            branchId,
+            extensionId: GOAL_EXTENSION_ID,
+            capabilityId: "goal.get",
+            input: {},
+          })
+          .pipe(
+            Effect.map((snapshot) =>
+              Option.fromUndefinedOr(Schema.decodeUnknownSync(GoalSnapshot)(snapshot).goal),
+            ),
+          )
+        expect(Option.map(goal, (value) => value.status)).toEqual(Option.some("active"))
+        expect(Option.map(goal, (value) => value.tokensUsed)).toEqual(Option.some(0))
+        expect(Option.map(goal, (value) => value.continuationsUsed)).toEqual(Option.some(1))
+      }).pipe(Effect.timeout("10 seconds")),
+    12_000,
+  )
+})

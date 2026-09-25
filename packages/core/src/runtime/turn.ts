@@ -2557,6 +2557,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           durationMs: params.durationMs,
           messageId: params.messageId,
           joinedMessageIds: yield* scope.turnLedger.joined,
+          startedAtMs: params.startedAtMs,
           agentName: params.agentName,
           interrupted: params.turnInterrupted,
           streamFailed: params.streamFailed,
