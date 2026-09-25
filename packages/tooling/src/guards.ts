@@ -958,7 +958,9 @@ export const findHookWithoutGuards = (file: string, text: string): ReadonlyArray
  *
  * - An `.oxlintrc.json` override whose `files` glob matches no tracked file.
  *   The override for `packages/sdk/src/supervisor.ts` outlived that file and
- *   kept turning a rule off for nothing.
+ *   kept turning a rule off for nothing. The same holds for an `.oxlintignore`
+ *   row (a dead `.tmp-*` row sat there) and for an `include` glob of an Effect
+ *   language-service override in the root tsconfig.
  * - A rule defined in `gent-rules.ts` that the root config never enables. Five such
  *   rules accumulated; one of them (`no-make-unsafe`) could not be enabled at
  *   all, because shipped code would have failed it.
@@ -1050,6 +1052,77 @@ export const findUnmatchedOverrideGlobs = (
   }
   return findings
 }
+
+/**
+ * An `.oxlintignore` row that matches no file oxlint would walk. oxlint also
+ * honors `.gitignore`, so `trackedFiles` (tracked and untracked, minus what
+ * git ignores) is the set a row can still take out. A row follows gitignore
+ * form: a trailing `/` names a directory, a row with no inner `/` matches at
+ * any depth, a leading `/` anchors at the root. Comment, blank and `!` rows
+ * are skipped.
+ */
+export const findUnmatchedIgnoreRows = (
+  ignoreFile: string,
+  text: string,
+  trackedFiles: ReadonlyArray<string>,
+): ReadonlyArray<Finding> =>
+  text.split("\n").flatMap((raw, index) => {
+    const row = raw.trim()
+    if (row.length === 0 || row.startsWith("#") || row.startsWith("!")) return []
+    const bare = row.replace(/\/+$/, "").replace(/^\//, "")
+    let glob = bare
+    if (!row.startsWith("/") && !bare.includes("/")) glob = `**/${bare}`
+    const matchers = [globMatcher(glob), globMatcher(`${glob}/**`)]
+    if (trackedFiles.some((file) => matchers.some((matcher) => matcher.test(file)))) return []
+    return [
+      {
+        file: ignoreFile,
+        line: index + 1,
+        message: `ignore row \`${row}\` matches no file oxlint would lint (git-ignored files are skipped already); delete the row, or fix it`,
+      },
+    ]
+  })
+
+/** The root tsconfig's Effect language-service overrides: the part this guard reads. */
+export const TsConfigPluginsSchema = Schema.Struct({
+  compilerOptions: Schema.optional(
+    Schema.Struct({
+      plugins: Schema.optional(
+        Schema.Array(
+          Schema.Struct({
+            overrides: Schema.optional(
+              Schema.Array(
+                Schema.Struct({ include: Schema.optional(Schema.Array(Schema.String)) }),
+              ),
+            ),
+          }),
+        ),
+      ),
+    }),
+  ),
+})
+
+/** An `include` glob of a tsconfig plugin override that matches no tracked file. */
+export const findUnmatchedTsconfigOverrides = (
+  configFile: string,
+  configText: string,
+  config: typeof TsConfigPluginsSchema.Type,
+  trackedFiles: ReadonlyArray<string>,
+): ReadonlyArray<Finding> =>
+  (config.compilerOptions?.plugins ?? [])
+    .flatMap((plugin) => plugin.overrides ?? [])
+    .flatMap((override) => override.include ?? [])
+    .flatMap((glob) => {
+      const matcher = globMatcher(glob)
+      if (trackedFiles.some((file) => matcher.test(file))) return []
+      return [
+        {
+          file: configFile,
+          line: lineOfGlob(configText, glob),
+          message: `tsconfig plugin override \`include: "${glob}"\` matches no tracked file; delete it, or fix the glob`,
+        },
+      ]
+    })
 
 // ---------------------------------------------------------------------------
 // (a2) An "off" that suppresses nothing

@@ -23,7 +23,9 @@ import {
   findUnadaptedSeams,
   findUnconsumedExports,
   findUnenabledPluginRules,
+  findUnmatchedIgnoreRows,
   findUnmatchedOverrideGlobs,
+  findUnmatchedTsconfigOverrides,
   findUnneededOffs,
   findUnusedCatalogEntries,
   findUnusedDependencies,
@@ -755,6 +757,53 @@ describe("an override must match a tracked file", () => {
       ["apps/tui/tests/deep/case.test.ts", "apps/tui/src/app.tsx"],
     )
     expect(findings).toEqual([])
+  })
+})
+
+describe("an ignore row must match a file oxlint would lint", () => {
+  const tracked = [
+    "packages/extensions/src/skills/markdown.d.ts",
+    "packages/tooling/fixtures/case.ts",
+    "packages/core/src/index.ts",
+  ]
+
+  test("a row that takes out a file is silent, in each gitignore form", () => {
+    const text = [
+      "# comment",
+      "",
+      "**/*.d.ts",
+      "packages/tooling/fixtures/",
+      "/packages/core",
+      "index.ts",
+      "!packages/keep.ts",
+    ].join("\n")
+    expect(findUnmatchedIgnoreRows(".oxlintignore", text, tracked)).toEqual([])
+  })
+
+  test("a row for build output git already ignores is reported at its line", () => {
+    const text = ["**/*.d.ts", "**/dist/", ".tmp-*"].join("\n")
+    expect(
+      findUnmatchedIgnoreRows(".oxlintignore", text, tracked).map((finding) => finding.line),
+    ).toEqual([2, 3])
+  })
+})
+
+describe("a tsconfig plugin override must match a tracked file", () => {
+  const config = (include: ReadonlyArray<string>) => ({
+    compilerOptions: { plugins: [{ overrides: [{ include }] }] },
+  })
+
+  test("an include glob that matches is silent, a dead one is reported at its line", () => {
+    const text = `{\n  "include": ["**/tests/**/*.ts",\n  "testbeds/gone/gone.ts"]\n}`
+    const findings = findUnmatchedTsconfigOverrides(
+      "tsconfig.json",
+      text,
+      config(["**/tests/**/*.ts", "testbeds/gone/gone.ts"]),
+      ["packages/core/tests/a.test.ts"],
+    )
+    expect(findings.map((finding) => [finding.line, finding.message])).toEqual([
+      [3, expect.stringContaining('`include: "testbeds/gone/gone.ts"` matches no tracked file')],
+    ])
   })
 })
 

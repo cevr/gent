@@ -25,7 +25,9 @@ import {
   findUnadaptedSeams,
   findUnconsumedExports,
   findUnenabledPluginRules,
+  findUnmatchedIgnoreRows,
   findUnmatchedOverrideGlobs,
+  findUnmatchedTsconfigOverrides,
   findUnusedSuppressionApprovals,
   HOOK_FILE,
   isSteeringFile,
@@ -39,6 +41,7 @@ import {
   type PackageJson,
   PackageJsonSchema,
   type TsConfigJson,
+  TsConfigPluginsSchema,
   TsConfigSchema,
   workspaceManifests,
   workspaceTsconfigs,
@@ -92,18 +95,27 @@ const readJsonc = Effect.fn("Tooling.readJsonc")(function* <
 })
 
 const OXLINT_CONFIG = ".oxlintrc.json"
+const OXLINT_IGNORE = ".oxlintignore"
+const ROOT_TSCONFIG = "tsconfig.json"
 const LINT_PLUGIN = "packages/tooling/src/gent-rules.ts"
 
-/** The two findings that read the lint config rather than one source file. */
+/** The findings that read the lint and compiler configs rather than one source file. */
 const lintConfigFindings = Effect.fn("Tooling.lintConfigFindings")(function* (
   trackedFiles: ReadonlyArray<string>,
   sourceTexts: ReadonlyMap<string, string>,
 ) {
   const { text: configText, value: config } = yield* readJsonc(OXLINT_CONFIG, OxlintConfigSchema)
+  const tsconfig = yield* readJsonc(ROOT_TSCONFIG, TsConfigPluginsSchema)
+  const ignoreText = Option.match(yield* readTrackedFile(OXLINT_IGNORE), {
+    onNone: () => "",
+    onSome: (read) => read.text,
+  })
   const rootRules = new Set(Object.keys(config.rules ?? {}))
   const pluginText = Option.getOrElse(Option.fromNullishOr(sourceTexts.get(LINT_PLUGIN)), () => "")
   return [
     ...findUnmatchedOverrideGlobs(OXLINT_CONFIG, configText, config, trackedFiles),
+    ...findUnmatchedIgnoreRows(OXLINT_IGNORE, ignoreText, trackedFiles),
+    ...findUnmatchedTsconfigOverrides(ROOT_TSCONFIG, tsconfig.text, tsconfig.value, trackedFiles),
     ...findUnenabledPluginRules(LINT_PLUGIN, pluginText, Object.keys(gentRules.rules), rootRules),
   ]
 })
