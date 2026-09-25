@@ -5,6 +5,7 @@ import {
   Layer,
   Option,
   Predicate,
+  Record,
   Ref,
   Result,
   Schema,
@@ -33,7 +34,11 @@ import type { EventStorageError } from "../storage/storage.js"
 // ── ai-transcript ───────────────────────────────────────────────────────────
 
 interface PromptTranscriptOptions {
-  readonly systemPrompt?: string
+  /**
+   * The system prompt in cache blocks, one leading system message each: a
+   * driver can end a cached prefix at a block (see `systemPromptBlocks`).
+   */
+  readonly systemPrompt?: ReadonlyArray<string>
   readonly includeHidden?: boolean
   /** The turn's notices, placed after the conversation; see `turnNoticesText`. */
   readonly notices?: ReadonlyArray<TurnNotice>
@@ -120,10 +125,76 @@ export const maximumModelToolResultChars = 8_000
 
 const encodeToolResultJson = Schema.encodeUnknownOption(Schema.fromJsonString(Schema.Json))
 
+const decodeToolResultJson = Schema.decodeUnknownOption(Schema.Json)
+
 /**
- * Bound one tool result for the model with head-plus-tail text and a
- * locator for the rest. The stored message and its events keep the full
- * result; `context.read(toolCallId, { offset, limit })` in the cell pages it.
+ * The shortest string cap a bounded result may use. Below it, most of a cut
+ * string would be its marker, so a result with that many strings is cut as
+ * JSON text instead.
+ */
+const MINIMUM_STRING_CAP = 256
+
+const isJsonArray = (value: Schema.Json): value is Schema.JsonArray => Array.isArray(value)
+const isJsonObject = (value: Schema.Json): value is Schema.JsonObject =>
+  Predicate.isObject(value) && !Array.isArray(value)
+
+/** `value` with each string longer than `cap` cut to its head and tail. */
+const capStrings = (value: Schema.Json, cap: number): Schema.Json => {
+  if (Predicate.isString(value)) return headTailChars(value, cap).text
+  if (isJsonArray(value)) return value.map((item) => capStrings(item, cap))
+  if (isJsonObject(value)) return Record.map(value, (item) => capStrings(item, cap))
+  return value
+}
+
+/** Each string of `value`, in document order. */
+const jsonStrings = (value: Schema.Json): ReadonlyArray<string> => {
+  if (Predicate.isString(value)) return [value]
+  if (isJsonArray(value)) return value.flatMap(jsonStrings)
+  if (isJsonObject(value)) return Object.values(value).flatMap(jsonStrings)
+  return []
+}
+
+/** The characters `capStrings(value, cap)` cuts out of the strings of `value`. */
+const cutStringChars = (value: Schema.Json, cap: number): number =>
+  jsonStrings(value).reduce((sum, text) => sum + headTailChars(text, cap).omittedChars, 0)
+
+/**
+ * The largest size in `[low, high]` whose bounded result the provider
+ * encodes within `maxChars`, whole, paging fields included; none when even
+ * `low` does not fit. Larger sizes encode longer, so a binary search finds it.
+ */
+const largestFitting = (
+  low: number,
+  high: number,
+  maxChars: number,
+  boundedAt: (size: number) => Schema.Json,
+): Option.Option<Schema.Json> => {
+  const fits = (size: number) =>
+    Option.exists(encodeToolResultJson(boundedAt(size)), (text) => text.length <= maxChars)
+  if (!fits(low)) return Option.none()
+  let fitting = low
+  let above = high
+  while (fitting < above) {
+    const mid = Math.ceil((fitting + above) / 2)
+    if (fits(mid)) fitting = mid
+    else above = mid - 1
+  }
+  return Option.some(boundedAt(fitting))
+}
+
+/**
+ * Bound one tool result for the model, with a locator for the rest. The
+ * stored message and its events keep the full result;
+ * `context.read(toolCallId, { offset, limit })` in the cell pages its JSON
+ * text, `totalChars` long. The whole bounded result, paging fields included,
+ * encodes within `maxChars`.
+ *
+ * The bounded result keeps the result's shape in `result`, each long string
+ * cut to its head and tail, so the provider encodes the content once, as it
+ * does an unbounded result. `omittedChars` counts the string characters cut.
+ * A result whose strings cannot carry the cut (many short strings, or bulk
+ * that is not string: numbers, keys, nesting) is cut as JSON text in `text`
+ * instead, which the provider then encodes a second time.
  */
 export const boundToolResultForModel = (
   part: Prompt.ToolResultPart,
@@ -131,19 +202,32 @@ export const boundToolResultForModel = (
 ): Prompt.ToolResultPart => {
   const encoded = encodeToolResultJson(part.result)
   if (Option.isNone(encoded) || encoded.value.length <= maxChars) return part
-  const bounded = headTailChars(encoded.value, maxChars)
+  const locator = {
+    truncated: true,
+    totalChars: encoded.value.length,
+    read: `context.read("${part.id}", { offset, limit })`,
+  }
+  const structured = Option.flatMap(decodeToolResultJson(part.result), (value) =>
+    largestFitting(MINIMUM_STRING_CAP, maxChars, maxChars, (cap) => ({
+      ...locator,
+      omittedChars: cutStringChars(value, cap),
+      result: capStrings(value, cap),
+    })),
+  )
+  const asText = (size: number): Schema.Json => {
+    const bounded = headTailChars(encoded.value, size)
+    return { ...locator, omittedChars: bounded.omittedChars, text: bounded.text }
+  }
   return Prompt.toolResultPart({
     id: part.id,
     name: part.name,
     isFailure: part.isFailure,
     providerExecuted: part.providerExecuted,
-    result: {
-      truncated: true,
-      totalChars: bounded.totalChars,
-      omittedChars: bounded.totalChars - maxChars,
-      read: `context.read("${part.id}", { offset, limit })`,
-      text: bounded.text,
-    },
+    result: Option.getOrElse(
+      Option.orElse(structured, () => largestFitting(0, maxChars, maxChars, asText)),
+      // Only a bound smaller than the paging fields leaves nothing to fit.
+      () => asText(0),
+    ),
   })
 }
 
@@ -213,8 +297,9 @@ export const turnNoticesText = (notices: ReadonlyArray<TurnNotice>): Option.Opti
   )
 
 /**
- * The request a step sends: the system prompt, the conversation, then the
- * turn's notices as one system message after the last message.
+ * The request a step sends: the system prompt (a system message per cache
+ * block), the conversation, then the turn's notices as one system message
+ * after the last message.
  *
  * The notices change from turn to turn and the rest does not, so they go
  * last: the system prompt and the conversation stay one cacheable prefix
@@ -230,11 +315,11 @@ export const toPrompt = (
   messages: ReadonlyArray<Message>,
   options?: PromptTranscriptOptions,
 ): Prompt.Prompt => {
-  const promptMessages = [...toPromptMessages(messages, options)]
-  const systemPrompt = options?.systemPrompt
-  if (!Predicate.isUndefined(systemPrompt) && systemPrompt !== "") {
-    promptMessages.unshift(Prompt.systemMessage({ content: systemPrompt }))
-  }
+  const systemBlocks = (options?.systemPrompt ?? []).filter((block) => block !== "")
+  const promptMessages = [
+    ...systemBlocks.map((block) => Prompt.systemMessage({ content: block })),
+    ...toPromptMessages(messages, options),
+  ]
   const notices = turnNoticesText(options?.notices ?? [])
   if (Option.isSome(notices)) promptMessages.push(Prompt.systemMessage({ content: notices.value }))
 

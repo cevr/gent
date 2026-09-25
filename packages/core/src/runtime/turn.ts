@@ -14,11 +14,14 @@ import {
   resolveAgentModel,
 } from "../domain/agent.js"
 import {
+  AGENT_PROMPT_PRIORITY,
+  compileSharedSystemPrompt,
   compileSystemPrompt,
   dateSection,
   getToolId,
   getToolMetadata,
   type PromptSection,
+  systemPromptBlocks,
   type ToolCapability,
 } from "../domain/capability.js"
 import {
@@ -173,12 +176,12 @@ export const buildTurnPromptSections = (
 ): ReadonlyArray<PromptSection> => {
   const sections: PromptSection[] = [...baseSections]
 
-  // Agent addendum
+  // Agent addendum: the agent's own, after the part its children share.
   if (!Predicate.isUndefined(agent.systemPromptAddendum) && agent.systemPromptAddendum !== "") {
     sections.push({
       id: "agent-addendum",
       content: `## Agent: ${agent.name}\n${agent.systemPromptAddendum}`,
-      priority: 90,
+      priority: AGENT_PROMPT_PRIORITY + 90,
     })
   }
 
@@ -187,7 +190,8 @@ export const buildTurnPromptSections = (
     metadata: getToolMetadata(tool),
   }))
 
-  // Tool list — tools with promptSnippet get listed explicitly
+  // Tool list — tools with promptSnippet get listed explicitly. It follows
+  // the tool set, which differs by agent, so it is the agent's own part.
   const snippets = toolsWithMetadata
     .filter((tool) => !Predicate.isUndefined(tool.metadata.promptSnippet))
     .map((tool) => `- **${tool.id}**: ${tool.metadata.promptSnippet}`)
@@ -195,11 +199,12 @@ export const buildTurnPromptSections = (
     sections.push({
       id: "tool-list",
       content: `## Available Tools\n\n${snippets.join("\n")}`,
-      priority: 42,
+      priority: AGENT_PROMPT_PRIORITY + 2,
     })
   }
 
-  // Tool guidelines — collected from active tools + conditional rules
+  // Tool guidelines — collected from active tools + conditional rules; the
+  // agent's own part, like the tool list.
   // Every guideline comes from the tool that owns it. The loop does not know
   // tool names -- a tool that wants to steer the model toward another one says
   // so in its own `promptGuidelines`.
@@ -209,7 +214,7 @@ export const buildTurnPromptSections = (
     sections.push({
       id: "tool-guidelines",
       content: `## Tool Guidelines\n\n${deduped.map((g) => `- ${g}`).join("\n")}`,
-      priority: 44,
+      priority: AGENT_PROMPT_PRIORITY + 4,
     })
   }
 
@@ -1095,7 +1100,8 @@ export const recordToolOutcome = (params: {
 interface ResolvedTurnContext {
   currentTurnAgent: AgentNameType
   messages: ReadonlyArray<Message>
-  systemPrompt: string
+  /** The system prompt as cache blocks: the part children share, then the agent's own (`systemPromptBlocks`). */
+  systemPrompt: ReadonlyArray<string>
   modelId: ModelIdType
   reasoning?: ReasoningEffort
   temperature?: number
@@ -1352,7 +1358,7 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
     tools,
     toolBindings,
     hostToolBindings,
-    systemPrompt,
+    systemPrompt: systemPromptBlocks(systemPrompt, compileSharedSystemPrompt(sections)),
     modelId: route.modelId,
     reasoning: Option.getOrUndefined(route.reasoningLevel),
     temperature: dispatchAgent.temperature,
@@ -1505,7 +1511,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   const budget = ModelContextBudget.make({
     contextLimitTokens: contextLimit,
     reservedSystemTokens:
-      estimateTextTokens(resolved.systemPrompt) +
+      resolved.systemPrompt.reduce((sum, block) => sum + estimateTextTokens(block), 0) +
       Option.match(turnNoticesText(resolved.notices.map(({ notice }) => notice)), {
         onNone: () => 0,
         onSome: estimateTextTokens,

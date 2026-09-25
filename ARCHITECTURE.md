@@ -523,11 +523,24 @@ Shape:
   is read once. Core builds no
   instruction text and the profile carries none; an edit to `AGENTS.md` reaches
   the next turn.
+- The system prompt has two parts. Sections below `AGENT_PROMPT_PRIORITY`
+  (`packages/core/src/domain/capability.ts`: persona, sessions, boundaries,
+  environment, date, project instructions, skills) are the part a session
+  shares with its children, byte for byte, whatever tools each has; the
+  agent's own sections (tool list, tool guidelines, the cell guide, children
+  guidance, an agent addendum) and what `systemPrompt` hooks append (the host
+  tool list, session naming) follow. The turn sends the parts as two system
+  blocks (`systemPromptBlocks`), and the Anthropic driver marks the end of the
+  shared one on the API-key path, so a fresh child with its parent's tool set
+  reads it from its parent's cache entry (the tool definitions come first in
+  the cached prefix, so a child with other tools reads none of it).
 - Tool-result spill: the model sees at most 8,000 characters of any tool
   result (head plus tail); the stored message and its events keep the full
   result, and the bounded result carries a `read` locator for
-  `context.read(toolCallId, { offset, limit })`. Context pressure drops before
-  compaction ever runs.
+  `context.read(toolCallId, { offset, limit })`. The bounded result keeps the
+  result's shape with each long string cut, so the provider encodes the text
+  once; only a result of many short strings is cut as JSON text.
+  Context pressure drops before compaction ever runs.
 - The cell subsumes host tools the Bun runtime already provides: `fetch` for
   network reads and `bun:sqlite` on the data directory's `data.db` for past sessions. No
   `webfetch` or `search_sessions` tool ships; `read_session` stays as the

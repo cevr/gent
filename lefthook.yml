@@ -9,8 +9,9 @@ pre-commit:
     # has been rewritten under them.
     - name: guards
       run: bun run guards
-    # `lint:fix` is oxlint alone; the guards above are the other half of
-    # `bun run lint`, which the gate runs as one command.
+    # `lint:fix` is oxlint alone; the guards above and the offs check below
+    # are the other parts of `bun run lint`, which the gate runs as one
+    # command.
     - name: lint+fmt
       run: bun run lint:fix && bun run fmt
       stage_fixed: true
@@ -18,5 +19,15 @@ pre-commit:
       run: bun run typecheck
     - name: build
       run: bun run build
-    - name: test
-      run: bun run test
+    # After every job that writes: the offs check and the tests only read the
+    # tree, so they run side by side. The offs check lints the tree as it will
+    # be committed: every "off" in `.oxlintrc.json` still suppresses a
+    # diagnostic.
+    - name: read-only checks
+      group:
+        parallel: true
+        jobs:
+          - name: lint-offs
+            run: bun run lint:offs
+          - name: test
+            run: bun run test

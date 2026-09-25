@@ -2462,6 +2462,11 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     text: "nodeBuiltinImport:off — test fixture lifecycle comes from bun:test",
   },
   {
+    file: "packages/tooling/src/test-preload.ts",
+    scope: "file",
+    text: "nodeBuiltinImport:off — the test preload runs in bun's test host before any Effect runtime",
+  },
+  {
     file: "packages/core/src/test-utils/language-model.ts",
     scope: "next-line",
     text: "strictEffectProvide:off test entry point",

@@ -1277,6 +1277,45 @@ describe("message part projection", () => {
     }
   })
 
+  test("a cut output costs each code point as the wire encodes it, escapes included", () => {
+    const hex = (codePoint: string) =>
+      [...codePoint].map((unit) => unit.codePointAt(0)?.toString(16)).join("+")
+    const tricky = [
+      ...Array.from({ length: 0x20 }, (_, unit) => String.fromCharCode(unit)),
+      '"',
+      "\\",
+      "/",
+      "\u007f",
+      "é",
+      " ",
+      " ",
+      "\ud800",
+      "\udfff",
+      "😀",
+      "\u{10ffff}",
+    ]
+    for (const codePoint of tricky) {
+      const text = codePoint.repeat(12_000)
+      // A text result costs each code point encoded once; a string field of a
+      // JSON result costs it encoded twice (JSON in a JSON string).
+      const plain = projectOperation("bash", { command: "gen" }, text)
+      const field = projectOperation("bash", { command: "gen" }, encodeValue({ stdout: text }))
+      const paths: ReadonlyArray<readonly [string, typeof plain]> = [
+        ["text", plain],
+        ["field", field],
+      ]
+      for (const [path, operation] of paths) {
+        const label = `U+${hex(codePoint)} ${path}`
+        const wire = encodeValue(operation).length
+        // Never over the budget, and short of it only by the cut record's widest
+        // numbers, the whole-line trim and part of one code point: a cost off
+        // by one character per code point misses by thousands.
+        expect(wire, label).toBeLessThanOrEqual(8_192)
+        expect(wire, label).toBeGreaterThan(8_192 - 96)
+      }
+    }
+  })
+
   test("projects Gent transcript parts without exposing persisted field names", () => {
     const toolCallId = ToolCallId.make("tc-projection")
     const textPart = Prompt.textPart({ text: "hello" })

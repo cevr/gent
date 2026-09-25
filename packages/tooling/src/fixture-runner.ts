@@ -1,5 +1,5 @@
 import { Effect, FileSystem, Option, Path, Schema } from "effect"
-import { type LintDiagnostic, overrideOffs, rootOffs } from "./guards"
+import { findUnneededOffs, type LintDiagnostic, overrideOffs, rootOffs } from "./guards"
 
 const DiagnosticSchema = Schema.Struct({
   code: Schema.optional(Schema.String),
@@ -161,12 +161,22 @@ export const labeledDiagnostics = (report: OxlintReport) => {
   return { labeled, unlabeled }
 }
 
-/** One oxlint process whose wait an interruption stops: the process is killed on release. */
-const spawnOxlintInterruptibly = Effect.fn("Tooling.spawnOxlintInterruptibly")(function* (
+/** What one oxlint process wrote and how it exited. */
+export interface OxlintOutput {
+  readonly stdout: string
+  readonly stderr: string
+  readonly exitCode: number
+}
+
+/** Runs `oxlint --format=json` with `args` in `cwd`. The lint offs check takes a fake in tests. */
+export type OxlintProcess = (
   args: ReadonlyArray<string>,
   cwd: string,
-) {
-  const { stdout, stderr, exitCode } = yield* Effect.acquireUseRelease(
+) => Effect.Effect<OxlintOutput>
+
+/** One oxlint process whose wait an interruption stops: the process is killed on release. */
+export const oxlintProcess: OxlintProcess = (args, cwd) =>
+  Effect.acquireUseRelease(
     Effect.sync(() =>
       Bun.spawn(["bunx", "oxlint", "--format=json", ...args], {
         cwd,
@@ -185,15 +195,36 @@ const spawnOxlintInterruptibly = Effect.fn("Tooling.spawnOxlintInterruptibly")(f
       ),
     (proc) => Effect.sync(() => proc.kill()),
   )
-  const report = yield* decodeOxlintReport(stdout).pipe(
-    Effect.mapError(
-      (error) =>
-        new OxlintRunError({
-          message: `oxlint exited ${exitCode} without a JSON report: ${error.message}\nstderr:\n${stderr}`,
-        }),
-    ),
+
+/**
+ * oxlint's exit codes for a finished run: 0 with no errors, 1 with lint
+ * errors. The probe run reports errors by design; any other code is a crash
+ * or a fatal status, whatever the report holds.
+ */
+const FINISHED_EXIT_CODES: ReadonlySet<number> = new Set([0, 1])
+
+/** A probe run that lints fewer files than this read the wrong tree or no tree. */
+const MIN_PROBED_FILES = 100
+
+/**
+ * The probe run's report, read closed: a crash or fatal exit code, a report
+ * that does not decode (empty, cut off), or one that linted too few files is
+ * an `OxlintRunError`, never a report that makes every "off" look unneeded.
+ */
+export const readProbeRun = Effect.fn("Tooling.readProbeRun")(function* (output: OxlintOutput) {
+  const failed = (reason: string) =>
+    new OxlintRunError({
+      message: `the probe oxlint run ${reason} (exit ${output.exitCode})\nstderr:\n${output.stderr}`,
+    })
+  if (!FINISHED_EXIT_CODES.has(output.exitCode)) return yield* failed("did not finish")
+  const report = yield* decodeOxlintReport(output.stdout).pipe(
+    Effect.mapError((error) => failed(`wrote no whole JSON report: ${error.message}`)),
   )
-  return { report, exitCode, stderr }
+  if (report.number_of_files <= MIN_PROBED_FILES) {
+    return yield* failed(`linted ${report.number_of_files} files`)
+  }
+  const run: OxlintRun = { report, exitCode: output.exitCode, stderr: output.stderr }
+  return run
 })
 
 /**
@@ -202,7 +233,9 @@ const spawnOxlintInterruptibly = Effect.fn("Tooling.spawnOxlintInterruptibly")(f
  * through; `findUnneededOffs` reads it. The caller bounds the run
  * with `Effect.timeout`; the process is killed when it fires.
  */
-export const lintWithoutOffs = Effect.fn("Tooling.lintWithoutOffs")(function* () {
+export const lintWithoutOffs = Effect.fn("Tooling.lintWithoutOffs")(function* (
+  spawn: OxlintProcess = oxlintProcess,
+) {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
   const configText = yield* fs.readFileString(path.join(REPO_ROOT, ".oxlintrc.json"))
@@ -215,9 +248,37 @@ export const lintWithoutOffs = Effect.fn("Tooling.lintWithoutOffs")(function* ()
     variantPath,
     yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(variant),
   )
-  const run = yield* spawnOxlintInterruptibly(
-    ["--ignore-path=.oxlintignore", "-c", variantPath],
-    REPO_ROOT,
+  const run = yield* readProbeRun(
+    yield* spawn(["--ignore-path=.oxlintignore", "-c", variantPath], REPO_ROOT),
   )
   return { configText, config, run }
+})
+
+/** The lint config holds an "off" that suppresses nothing, or the probe could not tell. */
+export class LintOffsError extends Schema.TaggedError<LintOffsError>()("LintOffsError", {
+  failures: Schema.Array(Schema.String),
+}) {}
+
+/**
+ * Every "off" in the root config, root block and overrides, suppresses a
+ * diagnostic. Fails closed: a probe run that did not finish with a whole
+ * report is a failure, and so is a diagnostic that names no file or rule,
+ * since dropping it would make its "off" look unneeded.
+ */
+export const checkLintOffs = Effect.fn("Tooling.checkLintOffs")(function* (
+  spawn: OxlintProcess = oxlintProcess,
+) {
+  const probed = yield* lintWithoutOffs(spawn).pipe(
+    Effect.mapError((error) => new LintOffsError({ failures: [error.message] })),
+  )
+  const { labeled, unlabeled } = labeledDiagnostics(probed.run.report)
+  const failures = [
+    ...unlabeled.map(
+      (diagnostic) => `a diagnostic with no file or no rule id: ${diagnostic.message}`,
+    ),
+    ...findUnneededOffs(".oxlintrc.json", probed.configText, probed.config, labeled).map(
+      (finding) => `${finding.file}:${finding.line}: ${finding.message}`,
+    ),
+  ]
+  if (failures.length > 0) return yield* new LintOffsError({ failures })
 })

@@ -56,7 +56,7 @@ import {
   SteerCommand,
   ToolCallId,
 } from "@gent/core/protocol"
-import { e2ePreset } from "./helpers/test-preset"
+import { e2ePreset, shippedPreset } from "./helpers/test-preset"
 import { isToolResultFor } from "./helpers/tool-event.js"
 import * as AiError from "effect/unstable/ai/AiError"
 import type * as Prompt from "effect/unstable/ai/Prompt"
@@ -2274,6 +2274,133 @@ describe("delegation guidance", () => {
         }).pipe(Effect.timeout("10 seconds")),
       ),
     12_000,
+  )
+
+  // The shipped composition: a cell turn, project instructions in the cwd.
+  it.live(
+    "a fresh child's prompt opens with its parent's shared part, byte for byte",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const home = yield* makeTempDirectoryScoped("delegate-shared-home-")
+          const cwd = yield* makeTempDirectoryScoped("delegate-shared-cwd-")
+          yield* fs.writeFileString(`${cwd}/AGENTS.md`, "PROJECT-RULE: every agent reads this.")
+          const parentBlocks: Array<ReadonlyArray<string>> = []
+          const childBlocks: Array<ReadonlyArray<string>> = []
+          let parentCalls = 0
+          const providerLayer = LanguageModelLayers.testStream((options) => {
+            const blocks = turnRequestText(options.prompt).systemBlocks
+            if (promptTexts(options.prompt)[0]?.endsWith(childTask) === true) {
+              childBlocks.push(blocks)
+              return Effect.succeed(reply("pong"))
+            }
+            parentBlocks.push(blocks)
+            parentCalls += 1
+            if (parentCalls === 1) {
+              const code = `await tools.delegate.start({ todo: "${childTask}" })`
+              return Effect.succeed(toolStep("cell", { code }, "cell-start-1"))
+            }
+            if (parentCalls === 2) return Effect.succeed(reply("started, ending my turn"))
+            return Effect.succeed(reply("read it"))
+          })
+          const harness = yield* createRpcHarness({
+            ...shippedPreset,
+            providerLayer,
+            cwd,
+            extraLayers: [RuntimeEnvironment.Live({ cwd, home })],
+          })
+          yield* harness.client.message.send({
+            sessionId: harness.sessionId,
+            branchId: harness.branchId,
+            content: "delegate the ping",
+          })
+          yield* waitFor(
+            Effect.sync(() => childBlocks.length),
+            (count) => count > 0,
+            8_000,
+            "the child sent its first request",
+          )
+          const [parentShared = "", parentOwn = ""] = parentBlocks[0] ?? []
+          const [childShared = ""] = childBlocks[0] ?? []
+          // The shared part: persona, sessions, project instructions.
+          expect(childShared).toBe(parentShared)
+          for (const section of ["# Sessions", "PROJECT-RULE"]) {
+            expect(parentShared).toContain(section)
+          }
+          // The agent's own part follows it: the cell guide, the children
+          // guidance, the host tools.
+          for (const section of ["# Working in the cell", "# Children", "## Host Tools"]) {
+            expect(parentShared).not.toContain(section)
+          }
+          expect(parentOwn).toContain("# Working in the cell")
+          expect(parentOwn).toContain("# Children")
+          expect(parentOwn).toContain("## Host Tools")
+        }).pipe(Effect.provide(BunFileSystem.layer), Effect.timeout("14 seconds")),
+      ),
+    16_000,
+  )
+
+  // The tool list, the tool guidelines and the cell guide follow the tool set,
+  // so they are the agent's own part.
+  it.live(
+    "a fresh child with other tools than its parent still opens with its parent's shared part",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const home = yield* makeTempDirectoryScoped("delegate-tools-home-")
+          const cwd = yield* makeTempDirectoryScoped("delegate-tools-cwd-")
+          yield* fs.writeFileString(`${cwd}/AGENTS.md`, "PROJECT-RULE: every agent reads this.")
+          const parentBlocks: Array<ReadonlyArray<string>> = []
+          const childBlocks: Array<ReadonlyArray<string>> = []
+          let parentCalls = 0
+          const providerLayer = LanguageModelLayers.testStream((options) => {
+            const blocks = turnRequestText(options.prompt).systemBlocks
+            if (promptTexts(options.prompt)[0]?.endsWith(childTask) === true) {
+              childBlocks.push(blocks)
+              return Effect.succeed(reply("pong"))
+            }
+            parentBlocks.push(blocks)
+            parentCalls += 1
+            if (parentCalls === 1) {
+              const input = `{ todo: "${childTask}", overrides: { deniedTools: ["cell"] } }`
+              const code = `await tools.delegate.start(${input})`
+              return Effect.succeed(toolStep("cell", { code }, "cell-start-1"))
+            }
+            if (parentCalls === 2) return Effect.succeed(reply("started, ending my turn"))
+            return Effect.succeed(reply("read it"))
+          })
+          const harness = yield* createRpcHarness({
+            ...shippedPreset,
+            providerLayer,
+            cwd,
+            extraLayers: [RuntimeEnvironment.Live({ cwd, home })],
+          })
+          yield* harness.client.message.send({
+            sessionId: harness.sessionId,
+            branchId: harness.branchId,
+            content: "delegate the ping",
+          })
+          yield* waitFor(
+            Effect.sync(() => childBlocks.length),
+            (count) => count > 0,
+            8_000,
+            "the child sent its first request",
+          )
+          const [parentShared = "", parentOwn = ""] = parentBlocks[0] ?? []
+          const [childShared = "", childOwn = ""] = childBlocks[0] ?? []
+          expect(childShared).toBe(parentShared)
+          expect(parentShared).toContain("PROJECT-RULE")
+          // The parent works in the cell; the child, denied it, calls tools natively.
+          expect(parentOwn).toContain("# Working in the cell")
+          expect(childOwn).not.toContain("# Working in the cell")
+          expect(childOwn).toContain("## Available Tools")
+          // Every later step of the parent sends the same shared block.
+          for (const blocks of parentBlocks) expect(blocks[0]).toBe(parentShared)
+        }).pipe(Effect.provide(BunFileSystem.layer), Effect.timeout("14 seconds")),
+      ),
+    16_000,
   )
 })
 

@@ -1692,7 +1692,7 @@ describe("Provider model resolution", () => {
                 metadata: { hidden: true },
               }),
             ],
-            { systemPrompt: "System policy." },
+            { systemPrompt: ["System policy."] },
           ),
         })
         expect(parts.length).toBe(1)

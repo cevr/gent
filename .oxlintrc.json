@@ -209,6 +209,17 @@
       }
     },
     {
+      // The shared test preload runs in bun's test host before any Effect
+      // runtime: it sets the process's data directory synchronously, and
+      // removes it after the process's last test.
+      "files": ["packages/tooling/src/test-preload.ts"],
+      "rules": {
+        "effect/noGlobals": "off",
+        "effect/noNodeBuiltinImport": "off",
+        "effect/noTestLifecycleHooks": "off"
+      }
+    },
+    {
       // A test composes the layers its operation needs; that is the test norm.
       "files": ["**/tests/**", "**/integration/**", "**/*.test.ts", "**/*.test.tsx"],
       "rules": {

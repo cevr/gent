@@ -1467,7 +1467,16 @@ export const transformPayload = (
  *      sends as a `<host-context-update>` user message: the runtime's turn
  *      notices) takes no marker. It changes from turn to turn, so a marker
  *      on it would write an entry no later request reads, and the next step
- *      would find no entry at the conversation's end.
+ *      would find no entry at the conversation's end;
+ *   3. on the API-key path, the end of the shared part of the system prompt:
+ *      the runtime sends the prompt as two system blocks, the part a session
+ *      shares with its children and then the agent's own part (the children
+ *      guidance, the host tool list). A fresh child's first request reads the
+ *      shared part back from its parent's entry. The marker goes only where
+ *      the shared text reaches `SHARED_PREFIX_MIN_CHARS`: a shorter prefix is
+ *      below the minimum cacheable length, and the marker would spend a slot
+ *      for nothing. The Claude Code path joins the blocks into one relocated
+ *      block, so it has no such point.
  *
  * The tool list takes no marker of its own: it renders first, so the
  * system prompt's marker caches it, and alone it is below the minimum
@@ -1480,6 +1489,12 @@ export const transformPayload = (
 type CachePrefixEnd = "system" | "first-user"
 
 const CACHE_BREAKPOINT_LIMIT = 4
+/**
+ * 1,024 tokens at about 4 characters a token: the minimum cacheable prefix of
+ * Sonnet 5 and Opus 4.8 (512 on Opus 5, up to 4,096 on older models). Counted
+ * on the system text alone, the tools on top only lengthen the prefix.
+ */
+const SHARED_PREFIX_MIN_CHARS = 4_096
 const EPHEMERAL_CACHE: JsonRecord = { type: "ephemeral" }
 /** Content block types that take `cache_control`. Thinking blocks and empty text do not. */
 const CACHEABLE_BLOCK_TYPES: ReadonlySet<unknown> = new Set([
@@ -1544,7 +1559,29 @@ const markLastCacheable = (blocks: ReadonlyArray<JsonRecord>) =>
 const systemPromptBlockIndex = (content: ReadonlyArray<JsonRecord>): number =>
   content.findIndex((block) => block["type"] !== "tool_result" && isCacheableBlock(block))
 
-/** The payload with `cache_control` at the end of the system prompt and on the conversation tail. */
+/**
+ * The system blocks with the end of the shared part marked: the cacheable
+ * block before the last one, when the text through it is long enough to cache.
+ */
+const markSharedSystemEnd = (
+  system: ReadonlyArray<JsonRecord>,
+): Option.Option<ReadonlyArray<JsonRecord>> => {
+  const last = system.findLastIndex(isCacheableBlock)
+  const shared = system.slice(0, Math.max(last, 0)).findLastIndex(isCacheableBlock)
+  if (shared < 0) return Option.none()
+  let chars = 0
+  for (const block of system.slice(0, shared + 1)) {
+    const text = block["text"]
+    if (Predicate.isString(text)) chars += text.length
+  }
+  if (chars < SHARED_PREFIX_MIN_CHARS) return Option.none()
+  return markBlockAt(system, shared)
+}
+
+/**
+ * The payload with `cache_control` at the end of the system prompt, on the
+ * conversation tail, and at the end of the system prompt's shared part.
+ */
 const markCacheBreakpoints = (payload: JsonRecord, prefixEnd: CachePrefixEnd): JsonRecord => {
   const result = { ...payload }
   let budget = CACHE_BREAKPOINT_LIMIT - countCacheMarkers(payload)
@@ -1589,6 +1626,12 @@ const markCacheBreakpoints = (payload: JsonRecord, prefixEnd: CachePrefixEnd): J
     messages.findLastIndex((message) => !isHostContextUpdate(message)),
     markLastCacheable,
   )
+  const system = result["system"]
+  if (prefixEnd === "system" && isRecordArray(system)) {
+    spend(markSharedSystemEnd(system), (marked) => {
+      result["system"] = marked
+    })
+  }
   if (isRecordArray(payload["messages"])) result["messages"] = messages
   return result
 }
