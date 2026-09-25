@@ -127,7 +127,9 @@ updates this list in the same commit.
     estimate by the budget the projection records (`availableInputTokens`),
     so both read 100% where the window hands off, also when the input cap is
     below the window. A session with no projection yet reads the last step's
-    input against the window or the input cap, whichever is smaller.
+    input against `modelInputCeilingTokens` (`@gent/core/protocol`): the
+    window less the output reserve, never past the input cap, the same
+    ceiling the turn's budget uses.
     A request the provider refuses as too long (`RetryPolicy.contextOverflow`,
     one pattern list in `packages/core/src/domain/driver.ts`; the byte cap
     `request_too_large` is not an overflow) hands the window off once and runs

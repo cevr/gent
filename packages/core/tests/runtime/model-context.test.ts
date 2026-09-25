@@ -27,6 +27,7 @@ import {
   maximumModelToolResultChars,
   messagesInCurrentWindow,
   modelChangeNotice,
+  modelInputCeilingTokens,
   outputReserveTokens,
   ModelCompactionError,
   ModelContextBudget,
@@ -812,6 +813,24 @@ describe("output reserve", () => {
     expect(
       outputReserveTokens({ contextLimitTokens: 128_000, outputLimitTokens: Option.none() }),
     ).toBe(32_000)
+  })
+
+  test("the input ceiling is the window less the reserve, never past the input cap", () => {
+    const ceiling = (params: {
+      readonly window: number
+      readonly input?: number
+      readonly output?: number
+    }) =>
+      modelInputCeilingTokens({
+        contextLimitTokens: params.window,
+        inputLimitTokens: Option.fromUndefinedOr(params.input),
+        outputLimitTokens: Option.fromUndefinedOr(params.output),
+      })
+    expect(ceiling({ window: 200_000 })).toBe(168_000)
+    expect(ceiling({ window: 200_000, output: 8_000 })).toBe(192_000)
+    expect(ceiling({ window: 32_768 })).toBe(24_576)
+    // GPT-5: the input cap binds below the window less the reserve.
+    expect(ceiling({ window: 400_000, input: 272_000, output: 128_000 })).toBe(272_000)
   })
 })
 

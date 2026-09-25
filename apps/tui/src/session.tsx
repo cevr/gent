@@ -47,6 +47,7 @@ import {
   Model,
   type ModelContextMetrics,
   type ModelId,
+  modelInputCeilingTokens,
   projectMessage,
   ReasoningEffort,
   type SessionId,
@@ -160,11 +161,8 @@ const projectionLabel = (context: ModelContextMetrics, theme: ThemeColors): Stat
  */
 export function buildContextLabels(input: {
   readonly metrics: SessionMetrics
-  // eslint-disable-next-line effect/noNullish -- this mirrors the optional client snapshot field.
-  readonly contextLength: number | undefined
-  /** The model's input cap, when the catalog names one below its window. */
-  // eslint-disable-next-line effect/noNullish -- this mirrors the optional client snapshot field.
-  readonly inputLimit: number | undefined
+  /** The session's model, for its catalog limits. */
+  readonly model: Option.Option<Pick<Model, "contextLength" | "inputLimit" | "outputLimit">>
   readonly theme: ThemeColors
 }): StatusRowLabel[] {
   const projection = input.metrics.context
@@ -173,14 +171,16 @@ export function buildContextLabels(input: {
     return [projectionLabel(projection.value, input.theme)]
   }
   // No projection yet (a session from before projections): the provider's
-  // count against the most input one request may carry.
+  // count against the input one request may carry, the ceiling the turn's
+  // budget uses, so the gauge reads full where the turn hands off.
   const tokens = input.metrics.latestInputTokens
-  const limit = Option.fromNullishOr(input.contextLength).pipe(
-    Option.map((window) =>
-      Math.min(
-        window,
-        Option.getOrElse(Option.fromNullishOr(input.inputLimit), () => window),
-      ),
+  const limit = Option.flatMap(input.model, (model) =>
+    Option.map(Option.fromUndefinedOr(model.contextLength), (window) =>
+      modelInputCeilingTokens({
+        contextLimitTokens: window,
+        inputLimitTokens: Option.fromUndefinedOr(model.inputLimit),
+        outputLimitTokens: Option.fromUndefinedOr(model.outputLimit),
+      }),
     ),
   )
   if (tokens > 0 && Option.isSome(limit) && limit.value > 0) {

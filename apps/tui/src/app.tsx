@@ -655,8 +655,7 @@ export function Session(props: SessionProps) {
   const rightAnchoredLabels = (): StatusRowLabel[] =>
     buildContextLabels({
       metrics: client.sessionMetrics(),
-      contextLength: client.modelInfo()?.contextLength,
-      inputLimit: client.modelInfo()?.inputLimit,
+      model: Option.fromNullishOr(client.modelInfo()),
       theme,
     }).concat(costLabels())
 

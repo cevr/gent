@@ -147,6 +147,7 @@ import {
   estimateTextTokens,
   estimateToolSchemaTokens,
   messagesInCurrentWindow,
+  isTokenLimit,
   outputReserveTokens,
   ModelContextBudget,
   ModelContextCapabilityError,
@@ -1579,7 +1580,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   // The catalog's input cap binds whatever window the agent names: a provider
   // refuses input past it however large the window is.
   const inputLimit = Option.fromUndefinedOr(modelOption.value.inputLimit).pipe(
-    Option.filter((limit) => Number.isSafeInteger(limit) && limit > 0),
+    Option.filter(isTokenLimit),
   )
   const reservedOutputTokens = outputReserveTokens({
     contextLimitTokens: contextLimit,
