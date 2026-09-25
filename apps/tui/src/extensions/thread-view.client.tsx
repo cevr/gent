@@ -9,7 +9,6 @@ import {
   windowDetails,
 } from "@gent/core/protocol"
 import {
-  ChromePanel,
   clientCommandContribution,
   ClientContext,
   clientContributions,
@@ -18,8 +17,6 @@ import {
   fitWidth,
   formatAge,
   PickerFrame,
-  pickerHeight,
-  pickerLines,
   plural,
   selectable,
   SelectList,
@@ -28,13 +25,12 @@ import {
   textWidth,
   truncate,
   usePickerGeometry,
-  useTerminalDimensions,
   useTheme,
   widgetContribution,
 } from "@gent/tui/extensions"
 import { childTaskBody } from "@gent/extensions/client"
 
-// ── builtins/thread-view.client ─────────────────────────────────────────────
+// ── thread pane ─────────────────────────────────────────────────────────────
 
 /**
  * Thread view — one docked pane over the chain of sessions and the context
@@ -385,7 +381,6 @@ export function ThreadPane(props: {
   // off top and bottom under the composer, so a row budgets the picker's
   // columns rather than a bordered pane's.
   const { rowWidth } = usePickerGeometry()
-  const dimensions = useTerminalDimensions()
 
   const marker = (window: ThreadWindow): string => {
     if (isCurrent(window) && window.index === windows().filter(isCurrent).length) return "› "
@@ -438,18 +433,16 @@ export function ThreadPane(props: {
   const title = () =>
     `Thread · ${plural(props.controller.sessions(), "session")} · ${plural(windows().length, "window")}`
 
-  // A heading opens each session and a detail line sits under the list, so the
-  // pane draws more lines than it has windows.
-  const paneHeight = () =>
-    pickerHeight(pickerLines(threadItems(windows()).length, 1), dimensions().height)
-
   return (
     <Show when={props.open}>
+      {/* A heading opens each session, so the pane draws more lines than it
+          has windows; the frame adds the detail line under them. */}
       <PickerFrame
-        height={paneHeight()}
+        lines={threadItems(windows()).length}
         title={title()}
         footer={"↑↓ move   ↵ open session   esc close"}
         detail={Option.liftPredicate(detailFor(cursor()), () => windows().length > 0)}
+        error={props.controller.error()}
       >
         <SelectList
           id="thread"
@@ -466,8 +459,6 @@ export function ThreadPane(props: {
           onSelect={props.onSelect}
           onDismiss={props.onClose}
         />
-
-        <ChromePanel.Error error={Option.getOrUndefined(props.controller.error())} />
       </PickerFrame>
     </Show>
   )

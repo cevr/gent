@@ -978,6 +978,38 @@ describe("one pane slot", () => {
     expect(closed.state.overlay).toEqual({ _tag: "none" })
   })
 
+  test("the boot branch picker and an enforced sign-in keep the slot until they close", () => {
+    const opens: ReadonlyArray<Parameters<typeof transitionSessionUi>[1]> = [
+      { _tag: "OpenPane", id: "agents.pane" },
+      { _tag: "OpenFork", messages: [] },
+      { _tag: "OpenMermaid" },
+      { _tag: "OpenAuth", enforceAuth: false },
+      { _tag: "OpenSettingsPicker", picker: "model" },
+      { _tag: "OpenBranches", branches: [] },
+      { _tag: "PromptSearch", event: { _tag: "Open", draftBeforeOpen: "draft" } },
+      { _tag: "PromptSearch", event: { _tag: "Cancel" } },
+    ]
+    const branches = SessionUiState.initial(Option.some([]))
+    const signIn = transitionSessionUi(SessionUiState.initial(), {
+      _tag: "OpenAuth",
+      enforceAuth: true,
+    }).state
+    for (const held of [branches, signIn]) {
+      const kept = opens.filter((event) => transitionSessionUi(held, event).state === held)
+      expect(kept).toEqual([...opens])
+      expect(transitionSessionUi(held, { _tag: "CloseOverlay" }).state.overlay).toEqual({
+        _tag: "none",
+      })
+    }
+    // A sign-in the reader opened is theirs to leave for another pane.
+    const optional = transitionSessionUi(SessionUiState.initial(), {
+      _tag: "OpenAuth",
+      enforceAuth: false,
+    }).state
+    const pane = transitionSessionUi(optional, { _tag: "OpenPane", id: "agents.pane" })
+    expect(pane.state.overlay).toEqual({ _tag: "pane", id: "agents.pane" })
+  })
+
   test("a pane leaves the composer and the session keys live; a picker holds them", () => {
     expect(overlayHoldsComposer(open("agents.pane").overlay)).toBe(false)
     expect(overlayHoldsComposer({ _tag: "model" })).toBe(true)
@@ -1031,6 +1063,43 @@ describe("prompt search overlay", () => {
     })
     expect(accepted.state.overlay).toEqual({ _tag: "none" })
     expect(accepted.effects).toEqual([{ _tag: "RestoreComposer", text: "second" }])
+  })
+
+  test("an overlay that replaces a previewing search gives the draft back, and a late event is ignored", () => {
+    const opened = transitionSessionUi(SessionUiState.initial(), {
+      _tag: "PromptSearch",
+      event: { _tag: "Open", draftBeforeOpen: "mine" },
+    })
+    const previewing = transitionSessionUi(opened.state, {
+      _tag: "PromptSearch",
+      event: { _tag: "Highlight", entry: Option.some("older prompt") },
+    }).state
+    const replacers: ReadonlyArray<Parameters<typeof transitionSessionUi>[1]> = [
+      { _tag: "OpenPane", id: "agents.pane" },
+      { _tag: "OpenFork", messages: [] },
+      { _tag: "OpenMermaid" },
+      { _tag: "OpenAuth", enforceAuth: false },
+      { _tag: "OpenSettingsPicker", picker: "model" },
+      { _tag: "OpenBranches", branches: [] },
+      { _tag: "CloseOverlay" },
+    ]
+    for (const event of replacers) {
+      const replaced = transitionSessionUi(previewing, event)
+      expect(replaced.state.overlay._tag).not.toBe("prompt-search")
+      expect(replaced.effects).toEqual([{ _tag: "RestoreComposer", text: "mine" }])
+    }
+    // The list's cleanup runs after the pane took the slot: it changes nothing.
+    const pane = transitionSessionUi(previewing, { _tag: "OpenPane", id: "agents.pane" }).state
+    const lates: ReadonlyArray<Parameters<typeof transitionSessionUi>[1]> = [
+      { _tag: "PromptSearch", event: { _tag: "Highlight", entry: Option.none() } },
+      { _tag: "PromptSearch", event: { _tag: "Cancel" } },
+      { _tag: "PromptSearch", event: { _tag: "Accept" } },
+    ]
+    for (const late of lates) {
+      const after = transitionSessionUi(pane, late)
+      expect(after.state).toBe(pane)
+      expect(after.effects).toEqual([])
+    }
   })
 
   test("a list that emptied previews the draft, and accepting before a move keeps it", () => {

@@ -1406,7 +1406,8 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     const next = items.map((item) => transcriptFingerprint(item))
     measurementVersion()
     retryVersion()
-    const available = liveRows()
+    // The rows the live tail really has: the pinned prompt takes one.
+    const available = liveRows() - stickyRows()
     untrack(() => {
       const prefixMatches = committed.every((value, index) => next[index] === value)
       if (!prefixMatches) {

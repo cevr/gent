@@ -192,6 +192,39 @@ describe("OpenAI-compatible provider drivers", () => {
       }
     }).pipe(Effect.provide(platformLayer)),
   )
+
+  // `toPrompt` sends the system prompt as one system message per cache block.
+  // Only the Anthropic marker reads the blocks; a chat-completions API caches
+  // prefixes on its own, so it gets the one system message it expects.
+  it.live("the system prompt blocks go as one leading system message", () =>
+    Effect.gen(function* () {
+      for (const extension of [MistralExtension, GoogleExtension]) {
+        const contributions = yield* collectTestContributions(extension.setup)
+        const driver = onlyDriver(contributions.modelDrivers ?? [])
+        const model = yield* driver.resolveModel("compat-model", makeApiAuthInfo("key"))
+        const fetchState = makeFakeFetchState()
+        yield* oneGenerate(model, fetchState, () => chatHappyResponse("compat-model"), [
+          { role: "system", content: "Shared instructions." },
+          { role: "system", content: "Agent instructions." },
+          { role: "user", content: "Start the job." },
+          { role: "system", content: "Answer in one line from now on." },
+          { role: "user", content: "What is running?" },
+        ])
+        const body = yield* Schema.decodeEffect(ChatRequestJson)(
+          Option.getOrThrow(Option.fromUndefinedOr(fetchState.captured.at(-1)?.body)),
+        )
+        expect(body.messages.map((message) => message.role)).toEqual([
+          "system",
+          "user",
+          "system",
+          "user",
+        ])
+        // Joined as the prompt's blocks join, so the text is the one-block prompt.
+        expect(body.messages[0]?.content).toBe("Shared instructions.\n\nAgent instructions.")
+        expect(body.messages[2]?.content).toBe("Answer in one line from now on.")
+      }
+    }).pipe(Effect.provide(platformLayer)),
+  )
 })
 
 /** The chat-completions request fields the notice test reads. */

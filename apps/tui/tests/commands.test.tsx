@@ -178,6 +178,60 @@ describe("executeSlashCommand", () => {
     expect(failures.map((failure) => failure.id)).toEqual(["@gent/example-models"])
   })
 
+  test("a keybind that types a character is refused in every scope, and the command stays", () => {
+    const { commands, failures } = resolveCommands([
+      {
+        id: "@gent/session",
+        scope: "builtin",
+        source: "builtin:@gent/session",
+        commands: [
+          cmd({ id: "session.left", slash: "left", keybind: "left" }),
+          cmd({ id: "session.help", slash: "help", keybind: "shift+/" }),
+        ],
+      },
+      {
+        id: "@test/keys",
+        scope: "project",
+        source: "/project/keys.client.ts",
+        commands: [
+          cmd({ id: "project.j", slash: "j", keybind: "j" }),
+          cmd({ id: "project.space", slash: "space", keybind: "space" }),
+          cmd({ id: "project.ctrl-j", slash: "ctrl-j", keybind: "ctrl+j" }),
+          cmd({ id: "project.emoji", slash: "emoji", keybind: "🙂" }),
+          cmd({ id: "project.accent", slash: "accent", keybind: "é" }),
+          cmd({ id: "project.f1", slash: "f1", keybind: "f1" }),
+          cmd({ id: "project.tab", slash: "tab", keybind: "tab" }),
+        ],
+      },
+    ])
+    const keybinds = Object.fromEntries(
+      commands.map((command) => [
+        command.id,
+        Option.getOrElse(Option.fromNullishOr(command.keybind), () => "none"),
+      ]),
+    )
+    expect(keybinds).toEqual({
+      "session.left": "left",
+      "session.help": "none",
+      "project.j": "none",
+      "project.space": "none",
+      "project.ctrl-j": "ctrl+j",
+      "project.emoji": "none",
+      "project.accent": "none",
+      "project.f1": "f1",
+      "project.tab": "tab",
+    })
+    expect(commands.find((command) => command.id === "session.help")?.slash).toBe("help")
+    expect(failures.map((failure) => failure.id)).toEqual([
+      "@gent/session",
+      "@test/keys",
+      "@test/keys",
+      "@test/keys",
+      "@test/keys",
+    ])
+    expect(failures[1]?.reason).toContain('keybind "j"')
+  })
+
   test("a slash beats another command's alias", () => {
     let winner = ""
     const commands = [

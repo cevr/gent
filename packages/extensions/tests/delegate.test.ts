@@ -2282,9 +2282,11 @@ describe("delegation guidance", () => {
     12_000,
   )
 
-  // The shipped composition: a cell turn, project instructions in the cwd.
+  // The shipped composition: a cell turn, project instructions in the cwd. The
+  // child denies session.send, so a section that follows the tool set would
+  // differ here if it sat in the shared part.
   it.live(
-    "a fresh child's prompt opens with its parent's shared part, byte for byte",
+    "a fresh child's prompt opens with its parent's shared part, byte for byte, whatever tools it denies",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -2304,7 +2306,7 @@ describe("delegation guidance", () => {
             parentBlocks.push(blocks)
             parentCalls += 1
             if (parentCalls === 1) {
-              const code = `await tools.delegate.start({ todo: "${childTask}" })`
+              const code = `await tools.delegate.start({ todo: "${childTask}", overrides: { deniedTools: ["session.send"] } })`
               return Effect.succeed(toolStep("cell", { code }, "cell-start-1"))
             }
             if (parentCalls === 2) return Effect.succeed(reply("started, ending my turn"))
@@ -2328,20 +2330,18 @@ describe("delegation guidance", () => {
             "the child sent its first request",
           )
           const [parentShared = "", parentOwn = ""] = parentBlocks[0] ?? []
-          const [childShared = ""] = childBlocks[0] ?? []
-          // The shared part: persona, sessions, project instructions.
+          const [childShared = "", childOwn = ""] = childBlocks[0] ?? []
+          // The shared part: persona, project instructions.
           expect(childShared).toBe(parentShared)
-          for (const section of ["# Sessions", "PROJECT-RULE"]) {
-            expect(parentShared).toContain(section)
-          }
-          // The agent's own part follows it: the cell guide, the children
-          // guidance, the host tools.
-          for (const section of ["# Working in the cell", "# Children", "## Host Tools"]) {
+          expect(parentShared).toContain("PROJECT-RULE")
+          // The agent's own part follows it: the cell guide, the sessions and
+          // children guidance, the host tools.
+          const own = ["# Working in the cell", "# Sessions", "# Children", "## Host Tools"]
+          for (const section of own) {
             expect(parentShared).not.toContain(section)
+            expect(parentOwn).toContain(section)
           }
-          expect(parentOwn).toContain("# Working in the cell")
-          expect(parentOwn).toContain("# Children")
-          expect(parentOwn).toContain("## Host Tools")
+          expect(childOwn).not.toContain("# Sessions")
         }).pipe(Effect.provide(BunFileSystem.layer), Effect.timeout("14 seconds")),
       ),
     16_000,

@@ -12,6 +12,7 @@ import {
   createSignal,
   For,
   type JSX,
+  on,
   onCleanup,
   onMount,
   Show,
@@ -41,10 +42,10 @@ import {
 } from "./utils"
 import {
   PickerFrame,
-  pickerHeight,
   PickerHost,
   selectable,
   SelectList,
+  type SelectListApi,
   type SelectListRow,
 } from "./ui"
 import { useExtensionUI } from "./extensions/host"
@@ -393,6 +394,18 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
     props.onGhostChange(Option.none())
   })
 
+  // The composer owns the query, so the list never sees it typed. A new
+  // query is a new list: the cursor goes back to the top match, as a query
+  // typed into the list itself does.
+  let list = Option.none<SelectListApi>()
+  createEffect(
+    on(
+      () => props.state.filter,
+      () => Option.map(list, (api) => api.reset()),
+      { defer: true },
+    ),
+  )
+
   // The list binds escape only while it has rows; the popup closes on it always.
   useScopedKeyboard((e) => {
     if (e.name !== "escape") return false
@@ -401,8 +414,6 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
   })
 
   const dimensions = useTerminalDimensions()
-
-  const popupHeight = () => pickerHeight(visibleItems().length, dimensions().height)
 
   // Title from the first matching contribution
   const title = () =>
@@ -474,7 +485,7 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
 
   return (
     <PickerFrame
-      height={popupHeight()}
+      lines={visibleItems().length}
       title={title()}
       footer={footerHint()}
       onSqueezeChange={props.onSqueezeChange}
@@ -493,6 +504,7 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
         rows={rows}
         rowKey={(item) => item.id}
         sticky={() => Option.some(0)}
+        api={(api) => (list = Option.some(api))}
         empty={emptyRow}
         onCursor={setCursor}
         extraKeys={(event, selected) => {
@@ -896,9 +908,19 @@ function useComposerController(): ComposerController {
 
     const [cmd, args] = parsed.value
     client.log.info("slash-command", { cmd })
+    const order = refusals.nextOrder()
+    const drafted = draftedIn()
+    Option.map(drafted, (target) => refusals.submitted(target.branchId, text))
     clearInput()
 
-    cast(client.surfaceError(sc.onSlashCommand(cmd, args)))
+    // A command nothing runs comes back to the draft it was written in.
+    const refuseCommand = (reason: string) =>
+      Option.match(drafted, {
+        onNone: () => client.setError(reason),
+        onSome: (target) =>
+          refuse(target, { order, text, shell: false, requestId: Option.none() }, reason),
+      })
+    cast(client.surfaceError(sc.onSlashCommand(cmd, args, refuseCommand)))
     return true
   }
 

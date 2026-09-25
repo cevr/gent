@@ -568,6 +568,7 @@ const CellOutputSchema = Schema.Struct({
   _tag: Schema.optional(Schema.String),
   display: Schema.optional(Schema.String),
   bindings: Schema.optional(Schema.Array(Schema.String)),
+  bindingCount: Schema.optional(Schema.Finite),
   truncated: Schema.optional(Schema.Boolean),
   message: Schema.optional(Schema.String),
   error: Schema.optional(Schema.String),
@@ -577,6 +578,39 @@ const CellOutputSchema = Schema.Struct({
   diagnostics: Schema.optional(Schema.String),
   stateLost: Schema.optional(Schema.Boolean),
 })
+
+/**
+ * The bindings line of a cell result. A result with `bindingCount` names the
+ * bindings its cell added or rebound, then counts the whole namespace. A
+ * result stored before the count existed lists the whole namespace, so it
+ * reads as such. None when there is nothing to show.
+ */
+const cellBindingsLine = (value: typeof CellOutputSchema.Type) => {
+  const names = value.bindings ?? []
+  return Option.match(Option.fromUndefinedOr(value.bindingCount), {
+    onNone: () =>
+      Option.map(
+        Option.liftPredicate(names, (list) => list.length > 0),
+        (list) => ({
+          label: "bindings",
+          names: list.join(", "),
+          count: "",
+        }),
+      ),
+    onSome: (count) =>
+      Option.map(
+        Option.liftPredicate(count, (total) => total > 0),
+        (total) => ({
+          label: "bound",
+          names: Option.getOrElse(
+            Option.liftPredicate(names.join(", "), (text) => text.length > 0),
+            () => "none",
+          ),
+          count: ` · ${plural(total, "binding")} in all`,
+        }),
+      ),
+  })
+}
 
 interface OperationLine {
   readonly tool: string
@@ -659,7 +693,7 @@ function CellToolRenderer(props: ToolRendererProps) {
     }),
   )
   const bindings = createMemo(() =>
-    Option.match(data(), { onNone: () => [], onSome: (value) => value.bindings ?? [] }),
+    Option.match(data(), { onNone: () => Option.none(), onSome: cellBindingsLine }),
   )
   const truncated = createMemo(() =>
     Option.match(data(), { onNone: () => false, onSome: (value) => value.truncated ?? false }),
@@ -760,11 +794,14 @@ function CellToolRenderer(props: ToolRendererProps) {
       <Show when={truncated()}>
         <text style={{ fg: theme.warning }}>display truncated</text>
       </Show>
-      <Show when={bindings().length > 0}>
-        <text>
-          <span style={{ fg: theme.textMuted }}>bindings: </span>
-          <span style={{ fg: theme.text }}>{bindings().join(", ")}</span>
-        </text>
+      <Show when={Option.getOrUndefined(bindings())}>
+        {(line) => (
+          <text>
+            <span style={{ fg: theme.textMuted }}>{line().label}: </span>
+            <span style={{ fg: theme.text }}>{line().names}</span>
+            <span style={{ fg: theme.textMuted }}>{line().count}</span>
+          </text>
+        )}
       </Show>
       <Show
         when={Option.getOrUndefined(
