@@ -154,7 +154,8 @@ describe("OpenAI-compatible provider drivers", () => {
   // Mistral rejects a request whose last message is not user or tool, so a
   // turn notice sent as a trailing system message failed every later turn.
   // It goes as a `<host-context-update>` user message, as the Anthropic
-  // driver sends it; the system prompt stays a system message.
+  // driver sends it; the system prompt and a system message inside the
+  // conversation stay system messages.
   it.live("a turn notice after the conversation goes as a host context update", () =>
     Effect.gen(function* () {
       const notice = Option.getOrThrow(
@@ -167,14 +168,23 @@ describe("OpenAI-compatible provider drivers", () => {
         const fetchState = makeFakeFetchState()
         yield* oneGenerate(model, fetchState, () => chatHappyResponse("compat-model"), [
           { role: "system", content: "Fixed session instructions." },
+          { role: "user", content: "Start the job." },
+          { role: "system", content: "Answer in one line from now on." },
           { role: "user", content: "What is running?" },
           { role: "system", content: notice },
         ])
         const body = yield* Schema.decodeEffect(ChatRequestJson)(
           Option.getOrThrow(Option.fromUndefinedOr(fetchState.captured.at(-1)?.body)),
         )
-        expect(body.messages.map((message) => message.role)).toEqual(["system", "user", "user"])
+        expect(body.messages.map((message) => message.role)).toEqual([
+          "system",
+          "user",
+          "system",
+          "user",
+          "user",
+        ])
         expect(body.messages[0]?.content).toBe("Fixed session instructions.")
+        expect(body.messages[2]?.content).toBe("Answer in one line from now on.")
         expect(body.messages.at(-1)?.content).toBe(
           "<host-context-update>\nHost status for this turn, not a message from the user.\n\n# Stopped &lt;children&gt;\n\n- one\n</host-context-update>",
         )

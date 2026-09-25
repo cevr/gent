@@ -1003,9 +1003,11 @@ const isSystemChatMessage = Schema.is(
 )
 
 /**
- * The request with each system message after the conversation's start sent
- * as a host context update. Mistral rejects a request whose last message is
- * not user or tool, and the turn notices come last.
+ * The request with the system messages after the last conversation message
+ * sent as a host context update. Mistral rejects a request whose last message
+ * is not user or tool, and `toPrompt` puts the turn notices there. A system
+ * message inside the conversation keeps its role: the rule is about the
+ * last message only, so the trailing run is all that needs a new role.
  */
 const withHostContextUpdates = (
   request: HttpClientRequest.HttpClientRequest,
@@ -1015,10 +1017,10 @@ const withHostContextUpdates = (
   if (Option.isNone(body)) return request
   const messages = body.value["messages"]
   if (!isChatMessages(messages)) return request
-  const start = messages.findIndex((message) => !isSystemChatMessage(message))
-  if (start < 0 || !messages.slice(start).some(isSystemChatMessage)) return request
+  const end = messages.findLastIndex((message) => !isSystemChatMessage(message))
+  if (end < 0 || end === messages.length - 1) return request
   const next = messages.map((message, index) => {
-    if (index < start || !isSystemChatMessage(message)) return message
+    if (index <= end || !isSystemChatMessage(message)) return message
     return { role: "user", content: hostContextUpdateText(message.content) }
   })
   return HttpClientRequest.bodyJsonUnsafe(request, { ...body.value, messages: next })
