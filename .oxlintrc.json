@@ -203,6 +203,26 @@
       }
     },
     {
+      // The efficiency capture preload replaces the global fetch before gent
+      // loads, so it is plain Bun, not an Effect program: it reads its
+      // environment, the operator's script JSON and each request body, and
+      // throws before the run starts when the environment is unsafe.
+      "files": [".claude/skills/architecture-loop/fetch-capture.ts"],
+      "rules": {
+        "effect/noAs": "off",
+        "effect/noAsyncFunction": "off",
+        "effect/noGlobals": "off",
+        "effect/noNewError": "off",
+        "effect/noNodeBuiltinImport": "off",
+        "effect/noNullish": "off",
+        "effect/noRuntimeTypeof": "off",
+        "effect/noTernary": "off",
+        "effect/noThrowStatement": "off",
+        "effect/noUnsafeDictionaryType": "off",
+        "node/no-process-env": "off"
+      }
+    },
+    {
       "files": ["packages/tooling/src/check-guardrails.ts"],
       "rules": {
         "effect/noGlobals": "off"

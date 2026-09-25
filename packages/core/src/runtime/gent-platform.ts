@@ -129,7 +129,7 @@ export class GentPlatform extends Context.Service<GentPlatform, GentPlatformApi>
           }),
           pid: Effect.succeed(1),
           execPath: Effect.succeed("/usr/bin/node"),
-          homeDirectory: Effect.succeed("/tmp"),
+          homeDirectory: Effect.succeed("/nonexistent/gent-test-home"),
           signal: () => Effect.void,
           // Deterministic, content-derived stub: same input → same digest.
           // Length matches the real `sha256`/`md5` hex output (64/32) so

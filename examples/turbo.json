@@ -22,6 +22,7 @@
         "../packages/extensions/src/skills/bundled/**/*.md",
         "../apps/tui/tsconfig.json",
         "../packages/tooling/src/check-guide-code.ts",
+        "../packages/tooling/src/check-guardrails.ts",
         "../packages/tooling/src/guards.ts",
         "../packages/tooling/src/gent-rules.ts"
       ]

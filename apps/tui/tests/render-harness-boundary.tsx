@@ -3,6 +3,7 @@
 import { afterEach } from "bun:test"
 import { BunServices } from "@effect/platform-bun"
 import {
+  Config,
   Context,
   Effect,
   Exit,
@@ -10,7 +11,6 @@ import {
   Layer,
   Option,
   Path,
-  Predicate,
   Scope,
   Stream,
 } from "effect"
@@ -58,41 +58,16 @@ let currentSetup: Option.Option<TestRenderSetup> = Option.none()
  * reach another test or another run. The homes live under one root per test
  * process: prompt-history writes queue behind one process-wide gate, so a
  * write a test did not wait for can land after the test and make its removed
- * home again. The root holds those; a later test process removes the roots of
- * processes that have ended.
+ * home again. The root holds those. It is made on first use inside the
+ * process's own `HOME`: the temp home the shared test preload makes, and
+ * removes in a global `afterAll` after the process's last test. So each
+ * process removes its own root and never reads another's.
  */
-const HOMES_PREFIX = "gent-tui-homes-"
-
-/** Whether `pid` names a running process; EPERM means it runs as another user. */
-const processRuns = (pid: number) =>
-  Effect.try({
-    try: () => process.kill(pid, 0),
-    catch: (error) => Predicate.hasProperty(error, "code") && error.code === "EPERM",
-  }).pipe(Effect.as(true), Effect.catch(Effect.succeed))
-
-let homesRoot = Option.none<string>()
-
-/** This process's root, made on first use; it removes the roots of ended processes. */
-const homesRootOnce = Effect.gen(function* () {
-  if (Option.isSome(homesRoot)) return homesRoot.value
-  const fs = yield* FileSystem.FileSystem
-  const path = yield* Path.Path
-  const root = yield* fs.makeTempDirectory({ prefix: `${HOMES_PREFIX}${process.pid}-` })
-  homesRoot = Option.some(root)
-  const tmp = path.dirname(root)
-  for (const name of yield* fs.readDirectory(tmp)) {
-    if (!name.startsWith(HOMES_PREFIX)) continue
-    const pid = Number(name.slice(HOMES_PREFIX.length).split("-")[0])
-    if (!Number.isInteger(pid) || (yield* processRuns(pid))) continue
-    yield* fs.remove(path.join(tmp, name), { recursive: true }).pipe(Effect.ignore)
-  }
-  return root
-})
-
-/** A home under this process's root, removed when its scope closes. */
 const makeRenderHome = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
-  const root = yield* homesRootOnce
+  const path = yield* Path.Path
+  const root = path.join(yield* Config.string("HOME"), "render-homes")
+  yield* fs.makeDirectory(root, { recursive: true })
   return yield* fs.makeTempDirectoryScoped({ directory: root, prefix: "home-" })
 }).pipe(Effect.provide(BunServices.layer), Effect.orDie)
 

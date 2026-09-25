@@ -3579,7 +3579,7 @@ describe("loop open hooks", () => {
             const { client } = yield* createRpcClient(
               layerFor(countingReply("first answer", firstCalls)),
             )
-            const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+            const { sessionId, branchId } = yield* client.session.create({})
             yield* client.message.send({ sessionId, branchId, content: "hello" })
             // The receipt is written before the loop goes idle: a restart
             // after this point has no turn to resume.
@@ -3660,7 +3660,7 @@ describe("loop open hooks", () => {
         const started = yield* Effect.scoped(
           Effect.gen(function* () {
             const { client } = yield* createRpcClient(layerFor(first.layer))
-            const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+            const { sessionId, branchId } = yield* client.session.create({})
             yield* client.message.send({ sessionId, branchId, content: "hello" })
             yield* first.controls.waitForStreamStart
             return { sessionId, branchId }
@@ -3727,7 +3727,7 @@ describe("loop open hooks", () => {
             const { client } = yield* createRpcClient(
               layerFor(countingReply("first answer", firstCalls)),
             )
-            const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+            const { sessionId, branchId } = yield* client.session.create({})
             yield* client.message.send({ sessionId, branchId, content: "hello" })
             // The receipt is written before the loop goes idle: a restart
             // after this point has no turn to resume.
@@ -4456,7 +4456,7 @@ describe("model-change notice", () => {
                 storagePath: dbPath,
               }),
             )
-            const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+            const { sessionId, branchId } = yield* client.session.create({})
             yield* client.message
               .send({ sessionId, branchId, content: "switch twice" })
               .pipe(Effect.forkScoped)
@@ -4939,7 +4939,7 @@ describe("turn record", () => {
             storagePath: dbPath,
           }),
         )
-        const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+        const { sessionId, branchId } = yield* client.session.create({})
         // The turn is done only when `TurnCompleted` lands: the reply text is
         // durable before the final step boundary writes the record.
         const completed = yield* client.session.events({ sessionId, branchId }).pipe(
@@ -5001,7 +5001,7 @@ describe("turn record", () => {
                 storagePath: dbPath,
               }),
             )
-            const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+            const { sessionId, branchId } = yield* client.session.create({})
             yield* client.message
               .send({ sessionId, branchId, content: "gap then probe" })
               .pipe(Effect.forkScoped)
@@ -5088,7 +5088,7 @@ describe("turn record", () => {
                 storagePath: dbPath,
               }),
             )
-            const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+            const { sessionId, branchId } = yield* client.session.create({})
             yield* client.message
               .send({ sessionId, branchId, content: "run the resume probe" })
               .pipe(Effect.forkScoped)
@@ -5166,7 +5166,7 @@ describe("turn record", () => {
                 storagePath: dbPath,
               }),
             )
-            const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+            const { sessionId, branchId } = yield* client.session.create({})
             yield* client.message
               .send({ sessionId, branchId, content: "run both probes" })
               .pipe(Effect.forkScoped)
@@ -5248,7 +5248,7 @@ describe("turn record", () => {
                 storagePath: dbPath,
               }),
             )
-            const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+            const { sessionId, branchId } = yield* client.session.create({})
             yield* client.message
               .send({ sessionId, branchId, content: "run the probe" })
               .pipe(Effect.forkScoped)
@@ -5365,7 +5365,10 @@ const makeRuntimeLayer = (
     eventStoreLayer,
     recorderLayer,
     toolRunnerLayer,
-    RuntimeEnvironment.Live({ cwd: "/tmp", home: "/nonexistent/gent-test-home" }),
+    RuntimeEnvironment.Live({
+      cwd: "/nonexistent/gent-test-cwd",
+      home: "/nonexistent/gent-test-home",
+    }),
     ConfigService.Test(),
     BunServices.layer,
     ModelRegistry.Test(),
@@ -9650,7 +9653,7 @@ describe("tool binding replay", () => {
             }),
           )
           const cache = yield* SessionProfileCache
-          const profile = yield* cache.resolve("/tmp")
+          const profile = yield* cache.resolve((yield* RuntimeEnvironment).cwd)
           const current = yield* captureCurrentToolBinding(toolCall.name)
           if (Option.isNone(current)) return yield* Effect.die("Expected captured capability")
           const replay = yield* ProcessLocalToolReplay
@@ -9718,7 +9721,7 @@ describe("tool binding replay", () => {
           toolCallId: ToolCallId.make("process-local-call"),
         }
         const cache = yield* SessionProfileCache
-        const profile = yield* cache.resolve("/tmp")
+        const profile = yield* cache.resolve((yield* RuntimeEnvironment).cwd)
         const generationId = profile.generationId
         const current = yield* captureCurrentToolBinding("@test/replay-tool")
         if (Option.isNone(current)) return yield* Effect.die("Expected captured capability")
@@ -10364,12 +10367,12 @@ describe("a repeated durable send", () => {
               return Deferred.succeed(running, void 0).pipe(Effect.andThen(Effect.never))
             })
             const { client } = yield* createRpcClient(layerFor(providerLayer))
-            const created = yield* client.session.create({ cwd: "/tmp" })
+            const created = yield* client.session.create({})
             yield* Ref.set(
               target,
               Option.some({ sessionId: created.sessionId, branchId: created.branchId }),
             )
-            const opened = yield* client.session.create({ cwd: "/tmp" })
+            const opened = yield* client.session.create({})
             const senderTarget = { sessionId: opened.sessionId, branchId: opened.branchId }
             yield* client.session.getSnapshot(senderTarget)
             yield* Deferred.await(running)
@@ -10458,7 +10461,7 @@ describe("a tool call a restart cut short", () => {
               toolCallStep("side_effect", {}),
             ])
             const { client } = yield* createRpcClient(layerFor(providerLayer))
-            const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+            const { sessionId, branchId } = yield* client.session.create({})
             yield* client.message.send({ sessionId, branchId, content: "do it once" })
             yield* Deferred.await(running)
             return { sessionId, branchId }
@@ -10546,7 +10549,7 @@ describe("a tool call a restart cut short", () => {
             storagePath: dbPath,
           }),
         )
-        const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+        const { sessionId, branchId } = yield* client.session.create({})
         // The database refuses any turn row that carries a parked mark.
         yield* Effect.sync(() => {
           const db = new Database(dbPath)

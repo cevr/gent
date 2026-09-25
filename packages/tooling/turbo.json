@@ -5,7 +5,8 @@
       "inputs": [
         "$TURBO_EXTENDS$",
         "../../testbeds/gamut/gamut.ts",
-        "../../testbeds/gamut/tests/**/*.ts"
+        "../../testbeds/gamut/tests/**/*.ts",
+        "../../.claude/skills/architecture-loop/fetch-capture.ts"
       ]
     }
   }

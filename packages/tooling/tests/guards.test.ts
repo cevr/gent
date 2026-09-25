@@ -48,8 +48,11 @@ import {
   RETIRED_SURFACES,
   workspaceTsconfigs,
 } from "../src/guards"
-import { committedFilesCommand, scanTrackedTexts } from "../src/check-guardrails"
-import { Option } from "effect"
+import { indexFileNames, scanTrackedTexts, trackedTexts } from "../src/check-guardrails"
+import { BunServices } from "@effect/platform-bun"
+import { Config, Effect, FileSystem, Option, Path } from "effect"
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
+import { it } from "effect-bun-test"
 
 // ── blanket eslint disable ──────────────────────────────────────────────────
 
@@ -676,12 +679,25 @@ describe("shared test home checker", () => {
     expect(lines(source)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9])
   })
 
-  test("a scoped temp home, a path no test can create, or a cwd alone is not reported", () => {
+  test("a working or extension directory under the shared temp root is reported like a home", () => {
+    const source = [
+      'const { sessionId } = yield* client.session.create({ cwd: "/tmp" })',
+      'const alphaCwd = "/tmp/gent-alpha-profile"',
+      'loadClientExtensions({ userDir: "/tmp/user", projectDir: "/tmp/project" })',
+      '...(yield* runtimeHostContext({ ...parent, sessionCwd: "/tmp" })),',
+      "const facts = { cwd: tmpdir() }",
+    ].join("\n")
+    expect(lines(source)).toEqual([1, 2, 3, 4, 5])
+  })
+
+  test("a scoped temp home, a path no test can create, or a temp path under another name is not reported", () => {
     const source = [
       'const home = yield* fs.makeTempDirectoryScoped({ prefix: "gent-home-" })',
-      'const env = { cwd: "/tmp", home: "/nonexistent/gent-test-home" }',
-      'RuntimeEnvironment.Live({ home, cwd: "/tmp" })',
-      'RuntimeEnvironment.Live({ home: root, cwd: "/tmp" })',
+      'const env = { cwd: "/nonexistent/gent-test-cwd", home: "/nonexistent/gent-test-home" }',
+      "RuntimeEnvironment.Live({ home, cwd })",
+      'RuntimeEnvironment.Live({ home: root, cwd: yield* makeTempDirectoryScoped("gent-cwd-") })',
+      'const workspace = workspaceIdForCwd("/tmp/run-workspace")',
+      '{ extension, scope: "user", sourcePath: "/tmp/good.ts" }',
       'const home = mkdtempSync(join(tmpdir(), "gent-home-"))',
       'const homePage = "/tmp/page"',
       '// home: "/tmp" in a comment',
@@ -708,21 +724,94 @@ describe("shared test home checker", () => {
     const source = [
       'const home = mkdtempSync(join(tmpdir(), "gent-home-")); const opts = { directory: "/tmp" }',
       'const env = { home: yield* makeTempDirectoryScoped("gent-home-"), directory: "/tmp" }',
-      'const env2 = { home: root, cwd: "/tmp" }',
+      'const env2 = { home: root, directory: "/tmp" }',
       'const env3 = { home: yield* fs.makeTempDirectoryScoped({ directory: "/tmp" }) }',
       'const env4 = { home: mkdtempSync("/tmp/gent-home-") }',
       // A template is one value: its `'` opens no string that runs past the comma.
-      'const env5 = { home: `${root}/it\'s`, cwd: "/tmp" }',
+      'const env5 = { home: `${root}/it\'s`, directory: "/tmp" }',
     ]
     // Each alone too: a value read past its end would take a later line's `mkdtemp`.
     expect(source.flatMap((line) => lines(line))).toEqual([])
     expect(lines(source.join("\n"))).toEqual([])
   })
 
-  test("product source and the tooling package are out of scope", () => {
+  test("a test layer in product source is read, the product code around it is not", () => {
+    const product = "packages/core/src/runtime/gent-platform.ts"
+    const source = [
+      "export class GentPlatform extends Context.Service<GentPlatform>()(TAG) {",
+      "  static Live = Layer.succeed(GentPlatform, {",
+      '    homeDirectory: Effect.succeed("/tmp"),',
+      "  })",
+      '  static Test = (prefix = "id"): Layer.Layer<GentPlatform> =>',
+      "    Layer.effect(",
+      "      GentPlatform,",
+      "      Effect.gen(function* () {",
+      "        return GentPlatform.of({",
+      '          homeDirectory: Effect.succeed("/tmp"),',
+      "        })",
+      "      }),",
+      "    )",
+      "  static Other = Layer.succeed(GentPlatform, {",
+      '    homeDirectory: Effect.succeed("/tmp"),',
+      "  })",
+      "}",
+      "export const FakeTestActor = (config: {",
+      "  readonly id: string",
+      "}) =>",
+      '  Layer.succeed(Actor, { home: "/tmp" })',
+      'const fallback = { home: "/tmp", cwd: "/tmp" }',
+    ].join("\n")
+    expect(lines(source, product)).toEqual([10, 21])
+  })
+
+  test("a `static readonly Test` member and a `Test:` object key are test layers", () => {
+    const product = "packages/core/src/runtime/platform.ts"
+    const source = [
+      "export class Platform extends Context.Service<Platform>()(TAG) {",
+      "  static readonly Test = Layer.succeed(Platform, {",
+      '    homeDirectory: Effect.succeed("/tmp"),',
+      "  })",
+      "}",
+      "export const Layers = {",
+      '  Live: Layer.succeed(Platform, { home: "/tmp" }),',
+      "  Test: Layer.succeed(Platform, {",
+      '    home: "/tmp",',
+      "  }),",
+      "}",
+    ].join("\n")
+    expect(lines(source, product)).toEqual([3, 9])
+  })
+
+  test("an example extension's test layer is read as product source is", () => {
+    const source = [
+      'const live = { home: "/tmp" }',
+      "export const NotesTest = Layer.succeed(Notes, {",
+      '  home: "/tmp",',
+      "})",
+    ].join("\n")
+    expect(lines(source, "examples/extensions/session-notes.ts")).toEqual([3])
+  })
+
+  test("a binding with a `Test` word part that is no layer is product code", () => {
+    const product = "packages/core/src/runtime/tools.ts"
+    const source = [
+      "const runTestTool = (toolCall: ToolCall) =>",
+      '  run(toolCall, { cwd: "/tmp" })',
+      "export const isTestMode = (config: Config) =>",
+      '  config.home === "/tmp"',
+      "const TestModeLabel = {",
+      '  cwd: "/tmp",',
+      "}",
+      "const makeTestLayer = () =>",
+      '  Layer.succeed(Platform, { home: "/tmp" })',
+    ].join("\n")
+    expect(lines(source, product)).toEqual([9])
+  })
+
+  test("the tooling package is out of scope; the test harness is test code", () => {
     const source = 'homeDirectory: Effect.succeed("/tmp"),'
-    expect(lines(source, "packages/core/src/runtime/gent-platform.ts")).toEqual([])
     expect(lines(source, "packages/tooling/tests/guards.test.ts")).toEqual([])
+    expect(lines(source, "packages/tooling/src/guards.ts")).toEqual([])
     expect(lines(source, "packages/core/src/test-utils/harness.ts")).toEqual([1])
   })
 })
@@ -815,7 +904,9 @@ describe("an override must match a tracked file", () => {
       configFor(["**/sdk/src/supervisor.ts"]),
       ["packages/sdk/src/server.ts"],
     )
-    expect(messages(findings)).toEqual([expect.stringContaining("matches no tracked file")])
+    expect(messages(findings)).toEqual([
+      expect.stringContaining("matches no staged or committed file"),
+    ])
   })
 
   test("the finding points at the line the glob sits on", () => {
@@ -867,17 +958,131 @@ describe("an ignore row must match a file oxlint would lint", () => {
   })
 })
 
-describe("the committed file set the config rows match", () => {
-  test("in a commit hook it is the index git is committing, partial commits included", () => {
-    expect(committedFilesCommand(Option.some(".git/next-index-1.lock"))).toEqual([
-      "ls-files",
-      "--cached",
-    ])
-  })
+describe("every guard reads one file set, the git index", () => {
+  const gitTest = it.scopedLive.layer(BunServices.layer)
+  const PROBE = "packages/extensions/src/probe-new.ts"
 
-  test("outside a hook it is the tree of the last commit, which is what CI checks out", () => {
-    expect(committedFilesCommand(Option.none())).toEqual(["ls-tree", "-r", "--name-only", "HEAD"])
-  })
+  /**
+   * Git's whole environment for the scratch repository: `PATH`, and the
+   * repository itself as `HOME`, so no user config applies. Nothing is
+   * inherited: a pre-commit hook exports `GIT_INDEX_FILE` and friends, which
+   * would aim the scratch git at the real repository's index.
+   */
+  const scratchEnv = (root: string, extra: Readonly<Record<string, string>> = {}) =>
+    Effect.map(Config.string("PATH"), (PATH) => ({ PATH, HOME: root, ...extra }))
+
+  const git = (
+    root: string,
+    args: ReadonlyArray<string>,
+    extra: Readonly<Record<string, string>> = {},
+  ) =>
+    Effect.gen(function* () {
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+      const identity = ["-c", "user.name=probe", "-c", "user.email=probe@example.invalid"]
+      const command = ChildProcess.make("git", [...identity, ...args], {
+        cwd: root,
+        env: yield* scratchEnv(root, extra),
+        extendEnv: false,
+      })
+      expect(yield* spawner.exitCode(command)).toBe(ChildProcessSpawner.ExitCode(0))
+    })
+
+  /** A scratch repository with one commit, and `files` written but not added. */
+  const scratchRepo = (files: ReadonlyArray<readonly [string, string]>) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "gent-guard-index-" })
+      yield* fs.writeFileString(path.join(root, "README.md"), "scratch\n")
+      yield* git(root, ["init", "-q"])
+      yield* git(root, ["add", "README.md"])
+      yield* git(root, ["commit", "-qm", "init"])
+      for (const [file, text] of files) {
+        yield* fs.makeDirectory(path.dirname(path.join(root, file)), { recursive: true })
+        yield* fs.writeFileString(path.join(root, file), text)
+      }
+      return root
+    })
+
+  gitTest("a staged new file outside a hook satisfies the override that names it", () =>
+    Effect.gen(function* () {
+      const root = yield* scratchRepo([[PROBE, "export {}\n"]])
+      yield* git(root, ["add", PROBE])
+      const findings = findUnmatchedOverrideGlobs(
+        CONFIG,
+        `{ "files": ["${PROBE}"] }`,
+        { overrides: [{ files: [PROBE] }] },
+        yield* indexFileNames(root, yield* scratchEnv(root)),
+      )
+      expect(findings).toEqual([])
+    }),
+  )
+
+  gitTest("an untracked file does not satisfy a steering file's path claim", () =>
+    Effect.gen(function* () {
+      const root = yield* scratchRepo([[PROBE, "export {}\n"]])
+      const { findings } = scanTrackedTexts(
+        [{ file: "AGENTS.md", text: `The probe lives in \`${PROBE}\`.\n` }],
+        yield* indexFileNames(root, yield* scratchEnv(root)),
+      )
+      expect(messages(findings.filter((finding) => finding.file === "AGENTS.md"))).toEqual([
+        expect.stringContaining(`\`${PROBE}\`, which no staged or committed file matches`),
+      ])
+    }),
+  )
+
+  gitTest("in a hook the index git hands the hook is the file set", () =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path
+      const root = yield* scratchRepo([[PROBE, "export {}\n"]])
+      const hookIndex = { GIT_INDEX_FILE: path.join(root, ".git", "next-index.lock") }
+      yield* git(root, ["read-tree", "HEAD"], hookIndex)
+      yield* git(root, ["add", PROBE], hookIndex)
+      expect(yield* indexFileNames(root, yield* scratchEnv(root, hookIndex))).toContain(PROBE)
+      expect(yield* indexFileNames(root, yield* scratchEnv(root))).not.toContain(PROBE)
+    }),
+  )
+
+  const STAGED_TEST = "packages/core/tests/runtime/probe.test.ts"
+  const STAGED_VIOLATION = 'const TEST_DIR = join(import.meta.dir, "../../.tmp-probe")\n'
+  // Multibyte text: the index read splits blobs by byte size, not by characters.
+  const STAGED_NEIGHBOUR: readonly [string, string] = ["docs/probe.md", "café — naïve ✓\n"]
+
+  gitTest("in a hook the scan reads the staged text, not the fix left on disk", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* scratchRepo([[STAGED_TEST, STAGED_VIOLATION], STAGED_NEIGHBOUR])
+      const hookIndex = { GIT_INDEX_FILE: path.join(root, ".git", "next-index.lock") }
+      yield* git(root, ["read-tree", "HEAD"], hookIndex)
+      yield* git(root, ["add", STAGED_TEST, STAGED_NEIGHBOUR[0]], hookIndex)
+      // The commit holds the violation; only the working file is fixed.
+      yield* fs.writeFileString(path.join(root, STAGED_TEST), "export {}\n")
+      const env = yield* scratchEnv(root, hookIndex)
+      const indexFiles = yield* indexFileNames(root, env)
+      const texts = yield* trackedTexts(root, env, indexFiles)
+      expect(texts).toEqual([
+        { file: "README.md", text: "scratch\n" },
+        { file: STAGED_NEIGHBOUR[0], text: STAGED_NEIGHBOUR[1] },
+        { file: STAGED_TEST, text: STAGED_VIOLATION },
+      ])
+      const { findings } = scanTrackedTexts(texts, indexFiles)
+      expect(findings.filter((finding) => finding.file === STAGED_TEST)).toHaveLength(1)
+    }),
+  )
+
+  gitTest("outside a hook the scan reads the working file", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* scratchRepo([[STAGED_TEST, STAGED_VIOLATION]])
+      yield* git(root, ["add", STAGED_TEST])
+      yield* fs.writeFileString(path.join(root, STAGED_TEST), "export {}\n")
+      const env = yield* scratchEnv(root)
+      const texts = yield* trackedTexts(root, env, [STAGED_TEST])
+      expect(texts).toEqual([{ file: STAGED_TEST, text: "export {}\n" }])
+    }),
+  )
 })
 
 describe("a tsconfig plugin override must match a tracked file", () => {
@@ -894,7 +1099,12 @@ describe("a tsconfig plugin override must match a tracked file", () => {
       ["packages/core/tests/a.test.ts"],
     )
     expect(findings.map((finding) => [finding.line, finding.message])).toEqual([
-      [3, expect.stringContaining('`include: "testbeds/gone/gone.ts"` matches no tracked file')],
+      [
+        3,
+        expect.stringContaining(
+          '`include: "testbeds/gone/gone.ts"` matches no staged or committed file',
+        ),
+      ],
     ])
   })
 })

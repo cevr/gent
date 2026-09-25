@@ -97,7 +97,7 @@ export const makeClientExtensionRuntime = (
       makeClientTestTransport(opts),
     ),
     workspace: Option.getOrElse(Option.fromUndefinedOr(opts.workspace), () => ({
-      cwd: "/tmp/test-cwd",
+      cwd: "/nonexistent/test-cwd",
       home: "/nonexistent/test-home",
     })),
     shell: {

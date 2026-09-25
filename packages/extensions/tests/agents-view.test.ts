@@ -521,7 +521,7 @@ const openHarness = Effect.gen(function* () {
     ...e2ePreset,
     providerLayer,
     extensionInputs: [AgentsViewExtension],
-    cwd: "/tmp/agents-view-rpc",
+    cwd: "/nonexistent/agents-view-rpc",
   })
 })
 
@@ -663,7 +663,7 @@ describe("AgentsViewExtension via RPC", () => {
           // Proves `listSessions` is wired: an unwired facet dies instead.
           const row = reply.rows.find((candidate) => candidate.sessionId === sessionId)
           expect(row).toBeDefined()
-          expect(row!.cwd).toBe("/tmp/agents-view-rpc")
+          expect(row!.cwd).toBe("/nonexistent/agents-view-rpc")
           // No parent link, so the session sits at the root of the tree.
           expect(row!.depth).toBe(0)
           // The request ran on this session's loop, so the loop is resident and
@@ -705,10 +705,10 @@ describe("AgentsViewExtension via RPC", () => {
           const harness = yield* createRpcHarness({
             ...e2ePreset,
             providerLayer,
-            cwd: "/tmp/agents-view-rpc-activity",
+            cwd: "/nonexistent/agents-view-rpc-activity",
           })
           const child = yield* harness.client.session.create({
-            cwd: "/tmp/agents-view-rpc-activity",
+            cwd: "/nonexistent/agents-view-rpc-activity",
             parentSessionId: harness.sessionId,
             parentBranchId: harness.branchId,
           })
@@ -760,10 +760,10 @@ describe("AgentsViewExtension via RPC", () => {
           const harness = yield* createRpcHarness({
             ...e2ePreset,
             providerLayer,
-            cwd: "/tmp/agents-view-rpc-woken",
+            cwd: "/nonexistent/agents-view-rpc-woken",
           })
           const child = yield* harness.client.session.create({
-            cwd: "/tmp/agents-view-rpc-woken",
+            cwd: "/nonexistent/agents-view-rpc-woken",
             parentSessionId: harness.sessionId,
             parentBranchId: harness.branchId,
           })
@@ -814,10 +814,10 @@ describe("AgentsViewExtension via RPC", () => {
           const harness = yield* createRpcHarness({
             ...e2ePreset,
             providerLayer,
-            cwd: "/tmp/agents-view-rpc-filter",
+            cwd: "/nonexistent/agents-view-rpc-filter",
           })
           const child = yield* harness.client.session.create({
-            cwd: "/tmp/agents-view-rpc-filter",
+            cwd: "/nonexistent/agents-view-rpc-filter",
             parentSessionId: harness.sessionId,
             parentBranchId: harness.branchId,
           })
@@ -880,10 +880,10 @@ describe("AgentsViewExtension via RPC", () => {
           const harness = yield* createRpcHarness({
             ...e2ePreset,
             providerLayer,
-            cwd: "/tmp/agents-view-rpc-turns",
+            cwd: "/nonexistent/agents-view-rpc-turns",
           })
           const child = yield* harness.client.session.create({
-            cwd: "/tmp/agents-view-rpc-turns",
+            cwd: "/nonexistent/agents-view-rpc-turns",
             parentSessionId: harness.sessionId,
             parentBranchId: harness.branchId,
           })
@@ -966,10 +966,10 @@ describe("AgentsViewExtension via RPC", () => {
           // Neither has a loop, so both sit in one section: a row nests only
           // under a parent drawn in its own section.
           const parent = yield* harness.client.session.create({
-            cwd: "/tmp/agents-view-rpc-parent",
+            cwd: "/nonexistent/agents-view-rpc-parent",
           })
           const child = yield* harness.client.session.create({
-            cwd: "/tmp/agents-view-rpc-child",
+            cwd: "/nonexistent/agents-view-rpc-child",
             parentSessionId: parent.sessionId,
             parentBranchId: parent.branchId,
           })
@@ -1003,17 +1003,20 @@ describe("AgentsViewExtension via RPC", () => {
           const harness = yield* openHarness
           const parent = { parentSessionId: harness.sessionId, parentBranchId: harness.branchId }
           // A delegate child or a `/btw` fork opens a thread of its own.
-          const spawned = yield* harness.client.session.create({ cwd: "/tmp/spawned", ...parent })
+          const spawned = yield* harness.client.session.create({
+            cwd: "/nonexistent/spawned",
+            ...parent,
+          })
           // A handoff continues the parent's thread.
           const handoff = yield* harness.client.session.create({
-            cwd: "/tmp/handoff",
+            cwd: "/nonexistent/handoff",
             continueThread: true,
             ...parent,
           })
 
           // A child may name only its parent session.
           const sessionOnly = yield* harness.client.session.create({
-            cwd: "/tmp/session-only",
+            cwd: "/nonexistent/session-only",
             parentSessionId: harness.sessionId,
           })
 
@@ -1042,17 +1045,19 @@ describe("AgentsViewExtension via RPC", () => {
         Effect.gen(function* () {
           const harness = yield* openHarness
           const child = yield* harness.client.session.create({
-            cwd: "/tmp/agents-view-rpc-child",
+            cwd: "/nonexistent/agents-view-rpc-child",
             parentSessionId: harness.sessionId,
             parentBranchId: harness.branchId,
           })
           const grandchild = yield* harness.client.session.create({
-            cwd: "/tmp/agents-view-rpc-grandchild",
+            cwd: "/nonexistent/agents-view-rpc-grandchild",
             parentSessionId: child.sessionId,
             parentBranchId: child.branchId,
           })
           // Another conversation in the same workspace.
-          const beside = yield* harness.client.session.create({ cwd: "/tmp/agents-view-rpc" })
+          const beside = yield* harness.client.session.create({
+            cwd: "/nonexistent/agents-view-rpc",
+          })
 
           const { reply } = yield* requestRows(harness, { root: harness.sessionId })
           expect(reply.rows.map((row) => row.sessionId).toSorted()).toEqual(

@@ -31,7 +31,6 @@ const makeCtx = (
       sessionId: SessionId.make("test-session"),
       branchId: BranchId.make("test-branch"),
       toolCallId: ToolCallId.make("test-call"),
-      cwd: "/tmp",
       home: "/nonexistent/gent-test-home",
       Interaction: interaction,
     }),

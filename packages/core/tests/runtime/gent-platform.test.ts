@@ -12,6 +12,7 @@ import {
 import { BunChildProcessSpawner, BunFileSystem, BunServices } from "@effect/platform-bun"
 import type * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner"
 import { homedir, tmpdir } from "node:os"
+import { makeTempDirectoryScoped } from "../../src/test-utils/language-model"
 
 /**
  * Locks the GentPlatform service contract end-to-end.
@@ -185,11 +186,13 @@ describe("runProcess", () => {
     "respects cwd option",
     () =>
       Effect.gen(function* () {
-        const result = yield* provideBun(runProcess("pwd", [], { cwd: "/tmp" }))
-        // /tmp may resolve to /private/tmp on macOS
-        expect(result.stdout.trim()).toMatch(/\/tmp$/)
+        const fs = yield* FileSystem.FileSystem
+        const cwd = yield* makeTempDirectoryScoped("gent-test-cwd-")
+        const result = yield* provideBun(runProcess("pwd", [], { cwd }))
+        // the temp root may resolve through a symlink (/private/tmp on macOS)
+        expect(result.stdout.trim()).toBe(yield* fs.realPath(cwd))
         expect(result.exitCode).toBe(0)
-      }).pipe(withProcessTimeout),
+      }).pipe(withProcessTimeout, Effect.scoped, Effect.provide(BunFileSystem.layer)),
     processTestTimeout,
   )
   it.live(

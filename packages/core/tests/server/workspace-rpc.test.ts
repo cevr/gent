@@ -71,11 +71,11 @@ describe("workspace RPC middleware", () => {
 
         yield* inWorkspace(
           validWorkspaceId,
-          client["session.create"]({ name: "workspace-a-session", cwd: "/tmp/a" }),
+          client["session.create"]({ name: "workspace-a-session", cwd: "/nonexistent/a" }),
         )
         yield* inWorkspace(
           otherWorkspaceId,
-          client["session.create"]({ name: "workspace-b-session", cwd: "/tmp/b" }),
+          client["session.create"]({ name: "workspace-b-session", cwd: "/nonexistent/b" }),
         )
 
         const first = yield* inWorkspace(validWorkspaceId, client["session.list"]())
@@ -116,7 +116,7 @@ describe("workspace RPC middleware", () => {
     Effect.gen(function* () {
       const path = yield* Path.Path
       const platform = yield* GentPlatform
-      const cwd = "/tmp/gent/nested/.."
+      const cwd = "/nonexistent/gent/nested/.."
 
       // The shape `dependencies.ts` used to compute on its own. It must keep
       // matching the shared derivation, or the server and its clients split.
