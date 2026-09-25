@@ -1686,6 +1686,108 @@ describe("App auth gate", () => {
       setup.renderer.destroy()
     }).pipe(Effect.timeout("10 seconds")),
   )
+  // A connection drop while the list is in flight is not an answer: the held
+  // command waits, and the reconnect lists the server commands again.
+  // The failed reply may reach the client before or after the connection
+  // state says the socket closed.
+  for (const first of ["failure", "state"]) {
+    const failureFirst = first === "failure"
+    it.live(
+      `a slash command held across a dropped listing runs once the reconnect lists (${first} first)`,
+      () =>
+        Effect.gen(function* () {
+          const drop = yield* Deferred.make<void>()
+          const failed = yield* Deferred.make<void>()
+          const requests: Array<unknown> = []
+          let listings = 0
+          const lifecycle = createMutableRuntime(
+            ConnectionState.cases.Connected.make({ generation: 0 }),
+          )
+          let ext = Option.none<ReturnType<typeof useExtensionUI>>()
+          const setup = yield* Effect.promise(() =>
+            renderWithProviders(
+              () => (
+                <>
+                  <App missingAuthProviders={[]} />
+                  <ExtensionUIProbe onReady={(value) => (ext = Option.some(value))} />
+                </>
+              ),
+              {
+                client: createMockClient({
+                  auth: { listProviders: () => Effect.succeed([]) },
+                  branch: { getTree: () => Effect.succeed([]) },
+                  extension: {
+                    listSlashCommands: () =>
+                      Effect.suspend(() => {
+                        listings += 1
+                        if (listings === 1) {
+                          return Deferred.await(drop).pipe(
+                            Effect.andThen(
+                              Effect.fail(
+                                new RpcClientError({
+                                  reason: new SocketCloseError({ code: 1006 }),
+                                }),
+                              ),
+                            ),
+                            Effect.ensuring(Deferred.succeed(failed, void 0)),
+                          )
+                        }
+                        return Effect.succeed([
+                          {
+                            name: "probe",
+                            extensionId: "@test/server-probe",
+                            capabilityId: "probe",
+                          },
+                        ])
+                      }),
+                    request: (input: { readonly capabilityId: string; readonly input: unknown }) =>
+                      Effect.sync(() => {
+                        if (input.capabilityId === "probe") requests.push(input.input)
+                      }),
+                  },
+                }),
+                runtime: lifecycle.runtime,
+                builtins: builtinClientModules,
+                initialSession: {
+                  id: SessionId.make("session-a"),
+                  activeBranchId: BranchId.make("branch-a"),
+                  name: "Session A",
+                  createdAt: dateFromMillis(0),
+                  updatedAt: dateFromMillis(0),
+                },
+              },
+            ),
+          )
+          yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
+          yield* waitForFrame(
+            setup,
+            () => Option.exists(ext, (value) => value.loaded()),
+            "client extensions loaded",
+          )
+          yield* Effect.promise(() => setup.mockInput.typeText("/probe now"))
+          yield* waitForFrame(setup, (frame) => frame.includes("/probe now"), "the typed command")
+          setup.mockInput.pressEnter()
+          yield* waitForFrame(setup, (frame) => !frame.includes("/probe now"), "the command held")
+          // The connection drops with the listing in flight.
+          const reconnecting = () =>
+            lifecycle.emit(ConnectionState.cases.Reconnecting.make({ attempt: 1, generation: 1 }))
+          if (!failureFirst) reconnecting()
+          yield* Deferred.succeed(drop, void 0)
+          yield* Deferred.await(failed)
+          // Two render passes let the host take the failed reply.
+          yield* waitForFrame(setup, () => true, "the failed reply taken")
+          yield* waitForFrame(setup, () => true, "the failed reply taken")
+          expect(renderFrame(setup)).not.toContain("Unknown command")
+          if (failureFirst) reconnecting()
+          lifecycle.emit(ConnectionState.cases.Connected.make({ generation: 1 }))
+          yield* waitForFrame(setup, () => requests.length === 1, "the server command ran")
+          expect(requests).toEqual(["now"])
+          expect(listings).toBe(2)
+          expect(renderFrame(setup)).not.toContain("Unknown command")
+          setup.renderer.destroy()
+        }).pipe(Effect.timeout("10 seconds")),
+    )
+  }
   // At 14 rows the composer takes six of the footer's twelve, and the agents
   // pane's rules and title take three more: three rows are left for the
   // filter row, the section heading and the cursor row. The trays, the key
