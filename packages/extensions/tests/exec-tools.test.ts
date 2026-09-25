@@ -51,6 +51,7 @@ import {
   testToolContext,
   type TestToolContext,
   turnRequestText,
+  RuntimeEnvironment,
   SqliteStorage,
 } from "@gent/core/test-utils"
 import { shippedPreset } from "./helpers/test-preset.js"
@@ -2741,9 +2742,11 @@ describe("background shell through a cell", () => {
   )
 
   it.scopedLive.layer(BunFileSystem.layer)(
-    "bounds a huge completion notice and points at the stored tool result",
+    "a huge completion notice is bounded and names a file that holds the whole output",
     () =>
       Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const home = yield* fs.makeTempDirectoryScoped({ prefix: "gent-bg-output-" })
         // Far past the model-facing bound, so the notice must be cut.
         const lineCount = 4000
         const input = yield* Schema.encodeEffect(Schema.fromJsonString(BashParams))({
@@ -2759,6 +2762,7 @@ describe("background shell through a cell", () => {
           ...shippedPreset,
           providerLayer,
           durableApproval: true,
+          extraLayers: [RuntimeEnvironment.Live({ cwd: "/tmp", home })],
         })
         const notice = yield* client.session.events({ sessionId, branchId }).pipe(
           Stream.filter(
@@ -2799,14 +2803,19 @@ describe("background shell through a cell", () => {
 
         // The user-role notice carries a bounded copy, not the whole output.
         expect(text.length).toBeLessThan(maximumModelToolResultChars * 2)
-        expect(text).toContain("characters truncated")
-        expect(text).toContain("characters omitted")
-        // Head and tail both survive, so the model can page either way.
+        // Head and tail both survive; the middle is cut.
         expect(text).toContain("line 1\n")
         expect(text).toContain(`line ${lineCount}`)
-        // The locator points back at the stored tool result.
-        expect(text).toContain("context.read(")
-        expect(text).toContain("{ offset, limit }")
+        expect(text).not.toContain(`line ${lineCount / 2}\n`)
+        // One omitted count: the cut marker's.
+        expect(text.match(/\d+ (of \d+ )?characters (truncated|omitted)/g)).toHaveLength(1)
+        // The notice names a file under the data directory that a read
+        // reaches, and the file holds the whole output, the cut middle too.
+        const file = /The whole output is in (\S+) /.exec(text)?.[1] ?? ""
+        expect(file.startsWith(`${home}/.gent/background-bash/`)).toBe(true)
+        const saved = yield* fs.readFileString(file)
+        expect(saved).toContain(`line ${lineCount / 2}\n`)
+        expect(saved.trimEnd().split("\n")).toHaveLength(lineCount)
       }).pipe(Effect.timeout("20 seconds")),
     30_000,
   )
@@ -3801,7 +3810,8 @@ describe("a background completion the full follow-up queue refused", () => {
         const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-bg-queue-full-" })
         const storagePath = `${directory}/gent.db`
         const release = `${directory}/release`
-        const command = `while ! test -f ${release}; do sleep 0.02; done; printf queue-full-output`
+        // Past the notice's output bound, so the notice names the saved file.
+        const command = `while ! test -f ${release}; do sleep 0.02; done; printf 'queue-full-output\\n'; seq 1 1000`
         const holding = yield* Deferred.make<void>()
         const releaseHold = yield* Deferred.make<void>()
         const notices = yield* Ref.make<ReadonlyArray<string>>([])
@@ -3833,6 +3843,7 @@ describe("a background completion the full follow-up queue refused", () => {
           providerLayer,
           storagePath,
           cwd: directory,
+          extraLayers: [RuntimeEnvironment.Live({ cwd: directory, home: directory })],
         })
         const idle = (label: string) =>
           waitFor(
@@ -3885,6 +3896,10 @@ describe("a background completion the full follow-up queue refused", () => {
         expect(shown.length).toBeGreaterThan(0)
         expect(shown[0]).toContain(command)
         expect(shown[0]).toContain("queue-full-output")
+        expect(shown[0]).not.toContain("\n500\n")
+        const file = /The whole output is in (\S+) /.exec(shown[0] ?? "")?.[1] ?? ""
+        expect(file.startsWith(`${directory}/.gent/background-bash/`)).toBe(true)
+        expect(yield* fs.readFileString(file)).toContain("\n500\n")
         // No message carries the completion: it lived in the notices only.
         const snapshot = yield* client.session.getSnapshot({ sessionId, branchId })
         const texts = snapshot.messages.flatMap((message) =>
