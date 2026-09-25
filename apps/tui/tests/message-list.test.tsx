@@ -1860,7 +1860,7 @@ describe("FX transcript treatment", () => {
   )
 
   it.live(
-    "a blocked command reads as declined and a background one as running on, not as exits",
+    "a blocked command an earlier version stored reads as declined and a background one as running on, not as exits",
     () =>
       Effect.gen(function* () {
         const { live } = yield* cellBeforeAndAfterReload("assistant-declined", [

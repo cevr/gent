@@ -645,7 +645,7 @@ describe("model compaction RPC boundary", () => {
             yield* client.message.send({
               sessionId,
               branchId,
-              content: `rpc-failure-old-${index} ${"y".repeat(50_000)}`,
+              content: `rpc-failure-old-${index} ${"y".repeat(40_000)}`,
               requestId: RequestId.make(`rpc-failure-old-${index}`),
             })
             yield* waitFor(
