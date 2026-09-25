@@ -21,7 +21,9 @@ import { ExtensionUIProvider } from "../src/extensions/host"
 import type { AnyExtensionClientModule } from "../src/extensions/client-facets"
 import { ComposerMemoryProvider } from "../src/session"
 import {
+  AgentEvent,
   AgentName,
+  EventEnvelope,
   BranchId,
   ModelId,
   SessionId,
@@ -29,7 +31,7 @@ import {
   type GentNamespacedClient,
   ConnectionState,
 } from "@gent/core/protocol"
-import { emptyQueueSnapshot, testAgent, type SessionRuntimeState } from "@gent/core/test-utils"
+import { emptyQueueSnapshot, EventId, testAgent } from "@gent/core/test-utils"
 
 const noop = () => {}
 const noopLog: ClientLog = { debug: noop, info: noop, warn: noop, error: noop }
@@ -81,8 +83,24 @@ export const createMockClient = (overrides?: NamespaceOverrides): GentNamespaced
           },
         }),
       updateSettings: () => noRpcError({ modelId: absent, reasoningLevel: absent }),
-      events: () => Stream.empty,
-      watchRuntime: () => Stream.fromIterable<SessionRuntimeState>([]),
+      // As the server's: the events stream ends its (empty) replay with the
+      // synchronized marker and stays open; the runtime watch stays open.
+      events: (input: { readonly sessionId: SessionId; readonly branchId: BranchId }) =>
+        Stream.concat(
+          Stream.make(
+            EventEnvelope.make({
+              id: EventId.make(0),
+              event: AgentEvent.cases.StreamSynchronized.make({
+                sessionId: input.sessionId,
+                branchId: input.branchId,
+                lastEventId: EventId.make(0),
+              }),
+              createdAt: 0,
+            }),
+          ),
+          Stream.never,
+        ),
+      watchRuntime: () => Stream.never,
     },
     branch: {
       list: () => noRpcError([]),

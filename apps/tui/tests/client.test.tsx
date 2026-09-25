@@ -10,7 +10,9 @@ import {
   type SessionRuntimeState,
 } from "@gent/core/test-utils"
 import { describe, expect, it, test } from "effect-bun-test"
-import { Deferred, Effect, Option, Predicate, Schema, Stream } from "effect"
+import { Clock, Context, Deferred, Effect, Option, Predicate, Schema, Stream } from "effect"
+import { TestClock } from "effect/testing"
+import type { GentRuntime } from "@gent/sdk"
 import {
   type ActiveInteraction,
   AgentEvent,
@@ -45,7 +47,7 @@ import {
 } from "../src/client"
 import { createRoot, createSignal, onMount } from "solid-js"
 import { createMockClient, createMockRuntime, renderWithProviders } from "./render-harness-boundary"
-import { inRuntime, waitForFrame, waitUntil } from "./helpers-boundary"
+import { inRuntime, waitForFrame, waitUntil, waitUntilAdvancing } from "./helpers-boundary"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { InteractionRequestId } from "@gent/core/extensions/branch-tools"
 import { useSessionFeed } from "../src/session"
@@ -1793,6 +1795,133 @@ describe("useSessionFeed", () => {
       )
       expect(snapshotCount).toBe(1)
     }),
+  )
+
+  /**
+   * Mount a feed on a test clock whose events stream delivers `served` and
+   * then fails, while the runtime watch delivers its current state and stays
+   * open. Answers the test-clock time of the first five snapshot fetches and
+   * the most runtime watches open at once.
+   */
+  const failingFeedFetches = (served: ReadonlyArray<EventEnvelope>) =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-feed-hot-loop")
+      const branchId = BranchId.make("branch-feed-hot-loop")
+      const fetches: Array<number> = []
+      let openWatches = 0
+      let mostWatches = 0
+      let watchDelivered = yield* Deferred.make<void>()
+      // The feed runs on a test clock, so the backoff runs in test time.
+      const clock = yield* TestClock.make()
+      const withClock = <R,>() =>
+        Context.makeUnsafe<R>(new Map<string, unknown>([[Clock.Clock.key, clock]]))
+      const runtime: GentRuntime = {
+        ...createMockRuntime(),
+        cast: (effect) => {
+          Effect.runForkWith(withClock())(effect)
+        },
+        fork: (effect) => Effect.runForkWith(withClock())(effect),
+      }
+      const dispose = createRoot((disposeRoot) => {
+        const [active] = createSignal(makeSession(sessionId, branchId))
+        const client = feedClientStub({
+          sessionIdentity: identityOf(active),
+          client: createMockClient({
+            session: {
+              getSnapshot: () =>
+                Effect.gen(function* () {
+                  fetches.push(yield* Clock.currentTimeMillis)
+                  watchDelivered = yield* Deferred.make<void>()
+                  return snapshotFor(sessionId, branchId)
+                }),
+              // The events stream fails once the watch delivered, as a
+              // decode failure does on a live connection.
+              events: () =>
+                Stream.concat(
+                  Stream.fromEffect(Deferred.await(watchDelivered)).pipe(
+                    Stream.drain,
+                    Stream.concat(Stream.fromIterable(served)),
+                  ),
+                  Stream.fail(
+                    new RpcClientError({
+                      reason: new RpcClientDefect({
+                        message: "Error decoding message",
+                        cause: "bad frame",
+                      }),
+                    }),
+                  ),
+                ),
+              watchRuntime: () =>
+                Stream.make(runtimeSnapshot()).pipe(
+                  Stream.concat(
+                    Stream.fromEffect(Deferred.succeed(watchDelivered, void 0)).pipe(Stream.drain),
+                  ),
+                  Stream.concat(Stream.never),
+                  Stream.onStart(
+                    Effect.sync(() => {
+                      openWatches += 1
+                      mostWatches = Math.max(mostWatches, openWatches)
+                    }),
+                  ),
+                  Stream.ensuring(Effect.sync(() => (openWatches -= 1))),
+                ),
+            },
+          }),
+          runtime,
+        })
+        useSessionFeed(
+          () => sessionId,
+          () => branchId,
+          client,
+          runtime.cast,
+          {
+            onInteraction: () => {},
+            onInteractionDismissed: () => {},
+            onQueueSnapshot: () => {},
+            onBranchSwitch: () => {},
+          },
+        )
+        return disposeRoot
+      })
+      yield* waitUntilAdvancing(
+        clock.adjust("1 second"),
+        () => fetches.length >= 5,
+        "five snapshot fetches",
+        3_000,
+      ).pipe(Effect.ensuring(Effect.sync(dispose)))
+      return { fetches: fetches.slice(0, 5), mostWatches }
+    })
+
+  // A feed that fails right after it opens (an envelope the client cannot
+  // decode, a failing branch stream) never served, so it backs off instead
+  // of refetching the snapshot every second.
+  it.scopedLive("a feed that fails before its replay arrives backs off", () =>
+    Effect.gen(function* () {
+      const { fetches, mostWatches } = yield* failingFeedFetches([])
+      // Unserved attempts back off 1 s, 2 s, 4 s, 8 s.
+      expect(fetches).toEqual([0, 1_000, 3_000, 7_000, 15_000])
+      // Each attempt's runtime watch closes with it.
+      expect(mostWatches).toBe(1)
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
+  it.scopedLive("a feed that served its replay retries a second after it drops", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-feed-hot-loop")
+      const branchId = BranchId.make("branch-feed-hot-loop")
+      const { fetches } = yield* failingFeedFetches([
+        makeEnvelope(
+          0,
+          AgentEvent.cases.StreamSynchronized.make({
+            sessionId,
+            branchId,
+            lastEventId: EventId.make(0),
+          }),
+        ),
+      ])
+      // Each attempt served, so each drop starts a fresh sequence.
+      expect(fetches).toEqual([0, 1_000, 2_000, 3_000, 4_000])
+    }).pipe(Effect.timeout("4 seconds")),
   )
 
   it.live("displays repeated events and resumed tool calls once with their final status", () =>
