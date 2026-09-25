@@ -3530,6 +3530,82 @@ describe("sticky last prompt", () => {
       expect(renderFrame(setup)).not.toContain("↑ ASK-ONE")
     }).pipe(Effect.timeout("10 seconds")),
   )
+
+  /**
+   * Rows of exact heights: each draws `<ID>-TOP`, then `<id>-1` and on. The
+   * text that reached native history collects in `committed`.
+   */
+  const mountExact = (
+    rows: ReadonlyArray<{
+      readonly item: SessionItem
+      readonly name: string
+      readonly lines: number
+    }>,
+  ) =>
+    Effect.gen(function* () {
+      let extensionsLoaded = () => false
+      const committed: string[] = []
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => {
+            extensionsLoaded = useExtensionUI().loaded
+            useRenderer().on("external_output", (event: CliRendererExternalOutputEvent) => {
+              committed.push(new TextDecoder().decode(event.snapshot.getRealCharBytes(false)))
+            })
+            return (
+              <NativeTranscript
+                items={rows.map((row) => row.item)}
+                settled
+                streaming={false}
+                footerHeight={3}
+                expanded={false}
+                disclosure="collapsed"
+                displayRevision={0}
+                overlayOpen={false}
+                renderItems={(visible) => {
+                  const row = rows.find((candidate) => candidate.item === visible[0])
+                  const name = row?.name ?? ""
+                  const text = Array.from({ length: row?.lines ?? 1 }, (_, index) => {
+                    if (index === 0) return `${name.toUpperCase()}-TOP`
+                    return `${name}-${index}`
+                  }).join("\n")
+                  return <text>{text}</text>
+                }}
+              >
+                <box />
+              </NativeTranscript>
+            )
+          },
+          { width: 50, height: 16 },
+        ),
+      )
+      yield* Effect.promise(() => setup.flush()).pipe(
+        Effect.repeat({ until: () => extensionsLoaded() }),
+        Effect.timeout("5 seconds"),
+      )
+      for (let pass = 0; pass < 8; pass++) yield* Effect.promise(() => setup.flush())
+      return { setup, committed }
+    })
+
+  it.live("under the pinned row every line of the live tail stays in view", () =>
+    Effect.gen(function* () {
+      // The tail's 11 rows fill the live rows exactly; the pinned row takes one.
+      const { setup, committed } = yield* mountExact([
+        { item: prompt("p0", "ASK-ONE"), name: "p0", lines: 1 },
+        { item: reply("h1", 1), name: "h1", lines: 20 },
+        { item: reply("tail", 1), name: "tail", lines: 11 },
+      ])
+      yield* waitForFrame(setup, (next) => next.includes("↑ ASK-ONE"), "pinned")
+      for (let pass = 0; pass < 4; pass++) yield* Effect.promise(() => setup.flush())
+      const frame = renderFrame(setup)
+      const history = committed.join("")
+      // A line is in view on screen or in native history, never in neither.
+      const lost = ["TAIL-TOP", "tail-5", "tail-10"].filter(
+        (line) => !frame.includes(line) && !history.includes(line),
+      )
+      expect(lost).toEqual([])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
 })
 
 describe("readerPrompt", () => {
