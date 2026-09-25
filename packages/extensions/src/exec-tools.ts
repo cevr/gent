@@ -2724,10 +2724,8 @@ const TMUX_ALIASES: ReadonlyMap<string, string> = new Map(
 
 /**
  * The tmux command a written name names: the command, its alias, or the
- * command it is an unambiguous prefix of (`split` is `split-window`). An
- * ambiguous prefix makes tmux exit with an error: reading it as a row it
- * prefixes (`display-p` as `display-popup`) asks only for a command that
- * does nothing.
+ * command it is a prefix of (`split` is `split-window`). An ambiguous prefix
+ * reads as the first command it prefixes that has a row.
  */
 const tmuxCommandName = (written: string): string => {
   if (written === "" || TMUX_COMMANDS.includes(written)) return written
@@ -3186,12 +3184,8 @@ const BashResult = Schema.Struct({
   stdout: Schema.String,
   stderr: Schema.String,
   exitCode: Schema.Finite,
-  /**
-   * Absent when the command ran to its end. A background command has no real
-   * exit code yet. `blocked` is read only from results stored by an earlier
-   * version, which declined a command; nothing writes it now.
-   */
-  status: Schema.optional(Schema.Literals(["blocked", "background"])),
+  /** Absent when the command ran to its end. A background command has no real exit code yet. */
+  status: Schema.optional(Schema.Literals(["background"])),
 })
 
 const SIGKILL_DELAY_MS = 3000

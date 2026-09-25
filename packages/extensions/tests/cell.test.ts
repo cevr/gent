@@ -6171,7 +6171,7 @@ const shippedSignatures: ReadonlyArray<readonly [ToolCapability, string]> = [
   ],
   [
     BashTool,
-    '- tools.bash(input: { command: string; timeout?: number; cwd?: string; run_in_background?: boolean }): Promise<{ stdout: string; stderr: string; exitCode: number; status?: "blocked" | "background" }> // Execute shell commands',
+    '- tools.bash(input: { command: string; timeout?: number; cwd?: string; run_in_background?: boolean }): Promise<{ stdout: string; stderr: string; exitCode: number; status?: "background" }> // Execute shell commands',
   ],
   [
     ReadTool,

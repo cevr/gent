@@ -705,20 +705,17 @@ describe("BashTool execution", () => {
     processTestTimeout,
   )
 
-  // The command runs and fails at once: its directory does not exist.
+  // The stub context's `approve` dies, so an ask would fail the test. The
+  // command runs and fails at once: its directory does not exist.
   it.live(
     "a command runs as given, with no ask",
     () =>
       Effect.gen(function* () {
-        const ctx: TestToolContext = {
-          ...stubCtx,
-          Interaction: { ...stubCtx.Interaction, approve: dieStub("approve") },
-        }
         const result = yield* provideBun(
           runToolWithCtx(
             BashTool,
             { command: "git -C /nonexistent/gent-probe-x push --force" },
-            ctx,
+            stubCtx,
           ),
         )
         expect(result.status).toBeUndefined()

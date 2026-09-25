@@ -35,7 +35,7 @@ const BashOutputJson = Schema.fromJsonString(
     stdout: Schema.String,
     stderr: Schema.String,
     exitCode: Schema.Finite,
-    status: Schema.optional(Schema.Literals(["blocked", "background"])),
+    status: Schema.optional(Schema.Literals(["background"])),
   }),
 )
 const encodeBashOutput = Schema.encodeSync(BashOutputJson)
