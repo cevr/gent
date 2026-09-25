@@ -2881,6 +2881,66 @@ describe("classifyBashCommand", () => {
     }
   })
 
+  test("a command the table does not name runs a later word that names a command the guard reads", () => {
+    const x = "/nonexistent/gent-probe-x"
+    const r = `rm -rf ${x}`
+    for (const command of [
+      `poetry run ${r}`,
+      `poetry run bash -c '${r}'`,
+      `conda run -n base ${r}`,
+      `firejail --net=none ${r}`,
+      `buildah run ctr -- ${r}`,
+      `machinectl shell root@ /bin/${r}`,
+      "aws-vault exec prof -- git push --force",
+      `lxc exec c -- ${r}`,
+      `adb shell ${r}`,
+      `ls | entr ${r}`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      "poetry run pytest",
+      'grep -rn "git push --force" src',
+      "man git-reset",
+      'for f in rm git; do echo "$f"; done',
+      "pip install requests",
+      "systemctl status nginx",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  test("run0, and tools that run a quoted script on a host, a VM, a file change or in Tcl, are read", () => {
+    const x = "/nonexistent/gent-probe-x"
+    const r = `rm -rf ${x}`
+    for (const command of [
+      `run0 ${r}`,
+      `run0 -u root ${r}`,
+      `run0 rm ${x}`,
+      `echo '${r}' | run0`,
+      `vagrant ssh -c '${r}'`,
+      `gcloud compute ssh vm --zone z --command '${r}'`,
+      `gcloud compute ssh vm --command='${r}'`,
+      `nodemon --exec '${r}'`,
+      `ls | entr -s '${r}'`,
+      `ansible all -m shell -a '${r}'`,
+      `expect -c 'spawn ${r}'`,
+      `autossh -M 0 host '${r}'`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      "run0 systemctl restart nginx",
+      "vagrant ssh -c 'ls -la'",
+      "ansible all -m ping",
+      "nodemon --exec 'ts-node' src/index.ts",
+      "ls | entr -s 'make test'",
+      "autossh -M 0 host ls",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
   test("cluster, infrastructure and compose deletions ask; their reads do not", () => {
     for (const command of [
       "kubectl delete pod gent-probe-x",

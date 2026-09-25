@@ -2366,6 +2366,51 @@ const collectInvocations = (
       }
     }
   }
+  for (const later of unnamedRunnerCommands(command))
+    collectInvocations(segment, later, into, placeholder)
+}
+
+/**
+ * Commands whose words are data even when a word names a command (`grep
+ * git`, `man rm`, `mkdir sudo`), and shell keywords whose words are a list
+ * (`for f in rm git`).
+ */
+const DATA_COMMANDS: ReadonlySet<string> = new Set([
+  ...["echo", "printf", "grep", "egrep", "fgrep", "rg", "ag", "ack", "cat", "bat", "less", "more"],
+  ...["head", "tail", "ls", "man", "which", "whereis", "type", "file", "stat", "wc", "sort"],
+  ...["uniq", "diff", "cmp", "awk", "tr", "cut", "jq", "yq", "base64", "xxd", "tldr", "help"],
+  ...["info", "whatis", "apropos", "test", "[", "[[", "true", "false", "read", "set", "unset"],
+  ...["export", "declare", "local", "typeset", "readonly", "return", "exit", "cd", "pushd"],
+  ...["popd", "mkdir", "touch", "ln", "basename", "dirname", "realpath", "readlink", "curl"],
+  ...["wget", "tar", "zip", "unzip", "gzip", "gunzip", "node", "python", "python3", "ruby"],
+  ...["perl", "deno", "go", "make", "just", "alias", "unalias", "complete", "compgen"],
+  ...["for", "select", "case", "in"],
+])
+
+/** Whether the guard reads what a command named `name` runs: a path of the table, or a shell. */
+const readsCommand = (name: string) =>
+  COMMAND_SPECS.has(name) ||
+  SPEC_PARENTS.has(name) ||
+  SHELL_NAMES.has(name) ||
+  FOREIGN_SHELLS.has(name)
+
+/**
+ * A command the table does not name may run a command it is given
+ * (`poetry run rm -rf x`, `firejail git push`, `buildah run c -- sh -c
+ * …`): each later word that is not an option and names a command the
+ * guard reads starts a command too, unless its words are data
+ * (`DATA_COMMANDS`). Where such a word is data, reading it as a command
+ * only asks for approval of a command that runs nothing.
+ */
+const unnamedRunnerCommands = (
+  command: ReadonlyArray<ShellWord>,
+): ReadonlyArray<ReadonlyArray<ShellWord>> => {
+  const name = commandName(command[0]?.text ?? "")
+  if (name === "" || COMMAND_SPECS.has(name) || DATA_COMMANDS.has(name)) return []
+  return command.flatMap((word, index) => {
+    if (index === 0 || word.text.startsWith("-") || !readsCommand(commandName(word.text))) return []
+    return [command.slice(index)]
+  })
 }
 
 const invocationName = (invocation: Invocation) => commandName(invocation.words[0]?.text ?? "")
@@ -3636,14 +3681,14 @@ const rmRisk: CommandRisk = ({ parsed }) =>
     "rm with -r/-f flags",
   )
 
-/** `sudo rm`, with or without flags, in any reading of sudo's options. */
+/** `sudo rm` (`doas rm`, `run0 rm`), with or without flags, in any reading of the runner's options. */
 const rootRmRisk: CommandRisk = ({ resolved }) => {
   const { words, spec } = resolved
   return destructiveWhen(
     commandStarts(words, spec.valued, {}).some(
       (start) => commandName(words[start]?.text ?? "") === "rm",
     ),
-    "sudo rm",
+    `${resolved.path} rm`,
   )
 }
 
@@ -3973,8 +4018,10 @@ const FIND_OUTPUTS = ["fprint", "fprint0", "fprintf", "fls"]
 /**
  * Every command the guard reads, by command path. A word in command position
  * after a `Command` run is a command again (`sudo git push`, `if git diff`,
- * `xargs git add`). A command missing here runs nothing the guard sees: its
- * words are data.
+ * `xargs git add`). A command missing here may run a command it is given:
+ * a later word that names a command the guard reads starts one too
+ * (`unnamedRunnerCommands`). A row is needed where options, a computed
+ * command word or a quoted script matter.
  */
 const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
   Object.entries({
@@ -3999,6 +4046,17 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
       rootRmRisk,
     ),
     doas: spec(options("uC", "", "Lns"), [command(), inputShell("s")], rootRmRisk),
+    // systemd's `run0`: with no command, it starts a root shell.
+    run0: spec(
+      options(
+        "uDg",
+        "unit property description slice user group nice chdir setenv background machine shell-prompt-prefix area lightweight",
+        "hVi",
+        "no-ask-password slice-inherit pty pipe via-shell empower help version",
+      ),
+      [command(), inputShell("")],
+      rootRmRisk,
+    ),
     // `-S` splits its value into the command it runs.
     env: spec(
       options("aCLPSUu", "argv0 unset chdir split-string", "0iv", "ignore-environment null debug"),
@@ -4210,6 +4268,47 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
     fd: spec({}, [Run.cases.FindExec.make({ actions: ["-x", "-X", "--exec", "--exec-batch"] })]),
     eval: spec({}, [joined()]),
     ssh: spec(options("bcDEeFIiJLlmOopQRSWwB"), [joined(1)]),
+    // autossh takes ssh's options, and `-M port` for its monitor.
+    autossh: spec(options("bcDEeFIiJLlmMOopQRSWwB"), [joined(1)]),
+    // Scripts run on a VM or a host (`vagrant ssh -c`, `gcloud compute ssh
+    // --command`, ansible's shell module arguments), when a file changes
+    // (`nodemon --exec cmd args`, `entr -s 'cmd'`, `entr cmd args`), or in
+    // Tcl (`expect -c 'spawn cmd'`, whose words the shell reader splits).
+    "vagrant ssh": spec(options("c", "command", "pt", "plain tty no-tty"), [
+      optionScript("c", ["command"]),
+    ]),
+    ...each(
+      ["gcloud compute ssh", "gcloud beta compute ssh", "gcloud alpha compute ssh"],
+      spec(
+        options(
+          "",
+          "command zone project ssh-key-file ssh-flag container strict-host-key-checking account configuration",
+          "",
+          "internal-ip tunnel-through-iap dry-run plain force-key-file-overwrite quiet",
+        ),
+        [optionScript("", ["command"])],
+      ),
+    ),
+    nodemon: spec(
+      options(
+        "xweid",
+        "exec watch ext ignore delay signal config",
+        "qLIVvhC",
+        "quiet legacy-watch no-stdin verbose version help no-colors",
+      ),
+      [optionScript("x", ["exec"]), optionScript("x", ["exec"], true)],
+    ),
+    entr: spec(options("", "", "acdnprsz"), [command(), joined(0, 1)]),
+    ansible: spec(
+      options(
+        "aBcefilMmPtTu",
+        "args background connection extra-vars forks inventory limit module-path module-name poll tree timeout user become-user become-method private-key vault-password-file vault-id",
+        "bCDkKov",
+        "become check diff ask-pass ask-become-pass one-line verbose",
+      ),
+      [optionScript("a", ["args"])],
+    ),
+    expect: spec(options("cfD", "", "bdinNv"), [optionScript("c")]),
     watch: spec(options("n", "interval"), [joined()]),
     // `trap '<script>' SIGNAL`: the script runs when the signal (or `EXIT`) comes.
     trap: spec({}, [joined(0, 1)]),
