@@ -582,3 +582,38 @@ Decisions:
 | Tooling    | Merged `2d8494ef`. TL16-1 override-off probe (`probeConfig` keeps every key, reads `code`/`rule_id`, unlabeled diagnostics fail, inner timeout); TL16-2 dead-export scan of test helpers, scripts and gamut; child-session writer check moved from a text guard to the oxlint rule `gent/child-session-writer-admits` (innermost function of any form, 5 invalid fixture cases); retired cell path row catches any core file or directory naming the cell; skill pathspecs; gamut `status` prints stored pulses per extension. Gate 1 on the `runProcess` flake only; core re-run 1067 pass. Flake probe: 0 hangs in 30,000 runs at load 15-18, 2 hits in 3,200 at load ~52 while parallel rift gates ran — load, not a code defect; assertions kept. Agent used two non-destructive python3 heredocs (rule breach, reported).             |
 | Extensions | Merged `3c8cc36d`. X16-1 `resolveDataDir(home)` moved into core (gent-platform.ts, exported from extensions/api and host); SDK `dataPaths` and the branch state store follow `GENT_DATA_DIR`; an empty value removes the file; anthropic yields the host FileSystem/Path/ChildProcessSpawner (`AnthropicDriverServices`). Counsel fixups: a read treats `NotFound` as empty behind the `exists` fast path (a catch-only read slowed every turn and timed out the cell recovery test 3 of 7); comments say why auth and the fff cache stay outside the data dir. Gate 0. Open: `PLATFORM_LAYER` widening (TL16-4), `Crypto` in `ExtensionLoaderServices`, TUI Bun layers.                                                                                                                                                                   |
 | Live check | herdr gamut sol-luna on main `b26c850a`. Six children spawned (fifth start refused by the 4-child cap), all reported; wake alarm fired and its file lived in `<data>/wakes/` and was removed after the fire, none in `~/.gent/wakes`; guard probes: alias-hidden `rm -rf`, `PS0` substitution and `kubectl delete` asked (declined, blocked), `alias r=rm` and quoted-brace `rm` ran with no ask; follow-up turn read 23,296 of 23,656 input tokens from cache (notices after the boundary); Ctrl-C stopped the running child and the next turn reported it without restarting it; agents pane fits at 43 columns. Finding D17-1: the cascade missed Task 6, whose turn the parent had started with `session.send` after its delegate run settled — batch p17-deleg. Polish: the alias ask reason shows `$@` rather than naming the alias. |
+
+## Pass 17 (sweep of main at `4508c92f`)
+
+Verdict: not polish; guard blind spots found (TL17-1 to TL17-6, platform layers outside the root), so this pass is not the last. The sweeps ran on the owner's Mac; their reports stayed there, and every item below is re-verified in the source before its fix. The work moved to the Linux devbox at `4508c92f`: the build hard-coded `bun-darwin-arm64` and failed on Linux (the darwin `@opentui` native package is not installed there), so `5c22179c` compiles for the host, decided by use-the-platform. The efficiency sweep was stopped before it finished; it runs again this pass.
+
+Findings (P2 unless marked):
+
+- TUI: the agents pane cursor re-anchors on every 2 s poll (`SelectList` `on(values)` with new row identities); TUI17-1 the short-terminal rule lives only in the agents pane (`/thread` at 11-13 rows, filtered `/model` and `/think` at 11-12 rows overlap); Bun layers provided outside the platform root (workspace.tsx, extensions/host.tsx, builtins.tsx); TUI17-2 nine comments that tell history (P3).
+- Delegate: D17-1 (seen live) a parent interrupt leaves running a child turn that the parent opened with `session.send` after the child's delegate run settled.
+- Extensions: PX17-1 turn notices reach the OpenAI-compatible drivers as a trailing `system` message (Mistral rejects it, so every later turn fails); X17-1 a job completion or wake fire is lost silently when the follow-up queue is full; CX17-1 a cell binding with a throwing getter or a trapping Proxy kills the worker at the snapshot; TX17-1 a session started in `$HOME` loads `~/.gent/AGENTS.md` twice every step; P3 stale docs, three duplicate driver-precedence tests, two unloaded examples, a bare block.
+- Guard: G17-1 a variable after an unnamed flag reads as a subcommand (over-ask); G17-2 brace words such as `cp f{,.bak}` count as flags (over-ask); G17-3 `docker exec`, `docker compose exec` and `kubectl exec` inner commands are rated safe (fail-open); unpinned xargs-git, kubectl and compose option tables.
+- Tooling: `PLATFORM_LAYER` catches layers by name only; `Crypto` in `ExtensionLoaderServices` unchecked per composition root; TL17-1 `.oxlintignore` `.tmp-*` row matches nothing; TL17-2 two dead root lint offs the probe skips; TL17-3 the SAFETY rules are missing from the skill; TL17-4 the dead-export scan skips `examples/`; TL17-5 no guard ties the Effect version across the catalog, overrides and patches; TL17-6 stale comments.
+
+Decisions:
+
+- D17-1: the sender owns the record. `session-tools` records each send (child session, message id, sender branch) at send time and reacts to its own interrupted turn: it dequeues a still-queued send, otherwise stops the child turn by message id, and writes a notice only for a stop that took effect. The record lives in memory unless the apply agent shows a child turn outlives the process. Decided by locality (the send and its undo in one module) and subtract-before-you-add. `SessionMessageDetails.from` gains an optional `branchId` (additive).
+- PX17-1: one owner for the `<host-context-update>` wrap, shared by the Anthropic and OpenAI-compatible drivers. Decided by fix-root-causes.
+- X17-1: a lost completion becomes a turn notice. Decided by acknowledge-before-processing.
+- Item order: the `PLATFORM_LAYER` widening lands after the TUI batch moves its Bun layers, as a second tooling round from main. Decided by migrate-callers-then-delete-legacy-apis.
+
+### Pass 17 triage
+
+| Batch      | Rift          | Items                                                                                                              |
+| ---------- | ------------- | ------------------------------------------------------------------------------------------------------------------ |
+| TUI        | `p17-tui`     | agents pane cursor, TUI17-1, TUI Bun layers, TUI17-2                                                               |
+| Delegate   | `p17-deleg`   | D17-1, delegate.ts state-file doc                                                                                  |
+| Extensions | `p17-ext`     | PX17-1, X17-1, CX17-1, TX17-1, P3 docs, tests, examples                                                            |
+| Guard      | `p17-guard`   | G17-1 to G17-3, xargs-git and option-table pins, differential                                                      |
+| Tooling    | `p17-tooling` | `Crypto` roots, TL17-1 to TL17-6; then `PLATFORM_LAYER` widening after `p17-tui`                                   |
+| Efficiency | none          | re-run of the stopped sweep (tokens per turn, cache prefix stability, per-turn runtime work, TUI polls, gate time) |
+
+### Pass 17 results
+
+| Batch | Result |
+| ----- | ------ |
