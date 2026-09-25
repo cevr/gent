@@ -436,14 +436,24 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
   }
   // Bindings are the globals a cell adds after this evaluator starts. Eval-declared vars are configurable, so reset can delete them.
   const baseline = new Set(Object.getOwnPropertyNames(globalThis))
+  const bindingKeys = () =>
+    Object.getOwnPropertyNames(globalThis).filter((key) => !baseline.has(key) && !reserved.has(key))
+  /**
+   * Each binding's value, read from its descriptor: an accessor gives its
+   * getter, which the snapshot names as a function, so reading the namespace
+   * never runs cell code.
+   */
   const namespace = () => {
     const bindings = new Map<string, unknown>()
-    for (const key of Object.getOwnPropertyNames(globalThis)) {
-      if (!baseline.has(key) && !reserved.has(key)) bindings.set(key, Reflect.get(globalThis, key))
+    for (const key of bindingKeys()) {
+      const descriptor = Option.fromUndefinedOr(Object.getOwnPropertyDescriptor(globalThis, key))
+      if (Option.isNone(descriptor)) continue
+      if ("value" in descriptor.value) bindings.set(key, descriptor.value.value)
+      else bindings.set(key, Reflect.get(descriptor.value, "get"))
     }
     return bindings
   }
-  const bindingNames = () => [...namespace().keys()].sort().slice(0, maximumCellBindings)
+  const bindingNames = () => bindingKeys().sort().slice(0, maximumCellBindings)
   const installConsole = (value: typeof hostConsole) =>
     Effect.sync(() => {
       Object.defineProperty(globalThis, "console", { value, writable: true, configurable: true })
@@ -576,7 +586,7 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
     reset: Semaphore.withPermit(
       permit,
       Effect.sync(() => {
-        for (const name of namespace().keys()) Reflect.deleteProperty(globalThis, name)
+        for (const name of bindingKeys()) Reflect.deleteProperty(globalThis, name)
       }),
     ),
   }

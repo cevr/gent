@@ -875,6 +875,10 @@ Inner operation bindings and durable approvals use the stores described below.
 The namespace section of `cell.ts` keeps the top-level bindings of the last good
 cell per branch (`cell_namespaces`) and restores them into a replacement worker;
 the first result after a restore names what came back and what was omitted.
+The worker reads each binding from its property descriptor, so a snapshot
+never calls a global accessor (it is omitted as a function), and a value whose
+encoding throws (a throwing getter, a trapping Proxy) is omitted as
+`unsupported`; the worker and the rest of the namespace stay.
 The first kernel start of a branch with no saved namespace fixes its starting
 namespace in its own row. For the opening branch (the oldest) of a handoff
 session (a parent, not spawned: `isSpawnedSession`), that is a copy of the one
