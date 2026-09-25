@@ -232,6 +232,36 @@ describe("executeSlashCommand", () => {
     expect(failures[1]?.reason).toContain('keybind "j"')
   })
 
+  // A keybind runs before the Esc ladder: a bare escape would take the turn
+  // cancel and the quit away from Esc.
+  test("a bare escape keybind is refused, and one with ctrl stays", () => {
+    const { commands, failures } = resolveCommands([
+      {
+        id: "@test/keys",
+        scope: "project",
+        source: "/project/keys.client.ts",
+        commands: [
+          cmd({ id: "project.escape", slash: "escape", keybind: "escape" }),
+          cmd({ id: "project.shift-escape", slash: "shift-escape", keybind: "shift+escape" }),
+          cmd({ id: "project.ctrl-escape", slash: "ctrl-escape", keybind: "ctrl+escape" }),
+        ],
+      },
+    ])
+    const keybinds = Object.fromEntries(
+      commands.map((command) => [
+        command.id,
+        Option.getOrElse(Option.fromNullishOr(command.keybind), () => "none"),
+      ]),
+    )
+    expect(keybinds).toEqual({
+      "project.escape": "none",
+      "project.shift-escape": "none",
+      "project.ctrl-escape": "ctrl+escape",
+    })
+    expect(failures).toHaveLength(2)
+    expect(failures[0]?.reason).toContain('keybind "escape"')
+  })
+
   test("a slash beats another command's alias", () => {
     let winner = ""
     const commands = [

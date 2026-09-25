@@ -497,12 +497,15 @@ function TestComposer(props: {
     queueState: () => ({ steering: [], followUp: [] }),
     interactionState,
     saveDraft: () => {},
-    uiState: SessionUiState.initial,
+    // Suspended: a session pane (the model picker) holds the composer.
+    uiState: (): SessionUiState => {
+      if (props.suspended !== true) return SessionUiState.initial()
+      return { ...SessionUiState.initial(), overlay: { _tag: "model" } }
+    },
     composerState: props.composerState ?? (() => ComposerState.idle()),
     promptSearch: {
       state: PromptSearchState.closed,
       entries: () => [],
-      isOpen: () => props.suspended === true,
       open: () => {},
       onEvent: () => {},
     },
@@ -1583,7 +1586,6 @@ function TestComposerGhost(props: {
     promptSearch: {
       state: PromptSearchState.closed,
       entries: () => [],
-      isOpen: () => false,
       open: () => {},
       onEvent: () => {},
     },
@@ -1828,7 +1830,6 @@ function TestComposerSlashEnter(props: {
     promptSearch: {
       state: PromptSearchState.closed,
       entries: () => [],
-      isOpen: () => false,
       open: () => {},
       onEvent: () => {},
     },

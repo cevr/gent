@@ -2,7 +2,18 @@
 
 import { afterEach } from "bun:test"
 import { BunServices } from "@effect/platform-bun"
-import { Context, Effect, Layer, Option, Scope, Stream } from "effect"
+import {
+  Context,
+  Effect,
+  Exit,
+  FileSystem,
+  Layer,
+  Option,
+  Path,
+  Predicate,
+  Scope,
+  Stream,
+} from "effect"
 import { render } from "@opentui/solid"
 import { createTestRenderer } from "@opentui/core/testing"
 import type { JSX } from "solid-js"
@@ -21,7 +32,9 @@ import { ExtensionUIProvider } from "../src/extensions/host"
 import type { AnyExtensionClientModule } from "../src/extensions/client-facets"
 import { ComposerMemoryProvider } from "../src/session"
 import {
+  AgentEvent,
   AgentName,
+  EventEnvelope,
   BranchId,
   ModelId,
   SessionId,
@@ -29,7 +42,7 @@ import {
   type GentNamespacedClient,
   ConnectionState,
 } from "@gent/core/protocol"
-import { emptyQueueSnapshot, testAgent, type SessionRuntimeState } from "@gent/core/test-utils"
+import { emptyQueueSnapshot, EventId, testAgent } from "@gent/core/test-utils"
 
 const noop = () => {}
 const noopLog: ClientLog = { debug: noop, info: noop, warn: noop, error: noop }
@@ -37,6 +50,55 @@ const noopLog: ClientLog = { debug: noop, info: noop, warn: noop, error: noop }
 type TestRenderSetup = Awaited<ReturnType<typeof createTestRenderer>>
 
 let currentSetup: Option.Option<TestRenderSetup> = Option.none()
+
+// ── temp homes ──────────────────────────────────────────────────────────────
+
+/**
+ * Each render gets its own home, so prompt history, frecency and caches never
+ * reach another test or another run. The homes live under one root per test
+ * process: prompt-history writes queue behind one process-wide gate, so a
+ * write a test did not wait for can land after the test and make its removed
+ * home again. The root holds those; a later test process removes the roots of
+ * processes that have ended.
+ */
+const HOMES_PREFIX = "gent-tui-homes-"
+
+/** Whether `pid` names a running process; EPERM means it runs as another user. */
+const processRuns = (pid: number) =>
+  Effect.try({
+    try: () => process.kill(pid, 0),
+    catch: (error) => Predicate.hasProperty(error, "code") && error.code === "EPERM",
+  }).pipe(Effect.as(true), Effect.catch(Effect.succeed))
+
+let homesRoot = Option.none<string>()
+
+/** This process's root, made on first use; it removes the roots of ended processes. */
+const homesRootOnce = Effect.gen(function* () {
+  if (Option.isSome(homesRoot)) return homesRoot.value
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const root = yield* fs.makeTempDirectory({ prefix: `${HOMES_PREFIX}${process.pid}-` })
+  homesRoot = Option.some(root)
+  const tmp = path.dirname(root)
+  for (const name of yield* fs.readDirectory(tmp)) {
+    if (!name.startsWith(HOMES_PREFIX)) continue
+    const pid = Number(name.slice(HOMES_PREFIX.length).split("-")[0])
+    if (!Number.isInteger(pid) || (yield* processRuns(pid))) continue
+    yield* fs.remove(path.join(tmp, name), { recursive: true }).pipe(Effect.ignore)
+  }
+  return root
+})
+
+/** A home under this process's root, removed when its scope closes. */
+const makeRenderHome = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem
+  const root = yield* homesRootOnce
+  return yield* fs.makeTempDirectoryScoped({ directory: root, prefix: "home-" })
+}).pipe(Effect.provide(BunServices.layer), Effect.orDie)
+
+/** The scopes that own each render's home; closed after the test. */
+let renderScopes: Array<Scope.Closeable> = []
+
 let sharedServices: Option.Option<Context.Context<unknown>> = Option.none()
 const defaultWorkspaceCwd = new URL("../../..", import.meta.url).pathname
 
@@ -81,8 +143,24 @@ export const createMockClient = (overrides?: NamespaceOverrides): GentNamespaced
           },
         }),
       updateSettings: () => noRpcError({ modelId: absent, reasoningLevel: absent }),
-      events: () => Stream.empty,
-      watchRuntime: () => Stream.fromIterable<SessionRuntimeState>([]),
+      // As the server's: the events stream ends its (empty) replay with the
+      // synchronized marker and stays open; the runtime watch stays open.
+      events: (input: { readonly sessionId: SessionId; readonly branchId: BranchId }) =>
+        Stream.concat(
+          Stream.make(
+            EventEnvelope.make({
+              id: EventId.make(0),
+              event: AgentEvent.cases.StreamSynchronized.make({
+                sessionId: input.sessionId,
+                branchId: input.branchId,
+                lastEventId: EventId.make(0),
+              }),
+              createdAt: 0,
+            }),
+          ),
+          Stream.never,
+        ),
+      watchRuntime: () => Stream.never,
     },
     branch: {
       list: () => noRpcError([]),
@@ -250,6 +328,11 @@ export const renderWithProviders = (
       }
       const client = Option.getOrElse(Option.fromNullishOr(options?.client), createMockClient)
       const runtime = Option.getOrElse(Option.fromNullishOr(options?.runtime), createMockRuntime)
+      // Each render gets its own home: prompt history, frecency and caches
+      // written under it never reach another test or another run.
+      const homeScope = yield* Scope.make()
+      renderScopes.push(homeScope)
+      const home = yield* makeRenderHome.pipe(Scope.provide(homeScope))
 
       const setup = yield* Effect.promise(() =>
         createTestRenderer({
@@ -282,7 +365,7 @@ export const renderWithProviders = (
                       <CommandProvider>
                         <WorkspaceProvider
                           cwd={options?.cwd ?? defaultWorkspaceCwd}
-                          home="/nonexistent/gent-test-home"
+                          home={home}
                           services={services}
                         >
                           <ClientProvider
@@ -327,10 +410,13 @@ export const destroyRenderSetup = (setup: TestRenderSetup) => {
   setup.renderer.destroy()
 }
 
-// eslint-disable-next-line effect/noTestLifecycleHooks -- OpenTUI renderers require synchronous per-test teardown at this shared test boundary.
+// eslint-disable-next-line effect/noTestLifecycleHooks -- OpenTUI renderers require synchronous per-test teardown at this shared test boundary; the renders' homes are removed after it.
 afterEach(() => {
   if (Option.isSome(currentSetup)) destroyRenderSetup(currentSetup.value)
   currentSetup = Option.none()
+  const scopes = renderScopes
+  renderScopes = []
+  return Effect.runPromise(Effect.forEach(scopes, (scope) => Scope.close(scope, Exit.void)))
 })
 
 /**

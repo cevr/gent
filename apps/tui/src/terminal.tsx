@@ -144,16 +144,30 @@ export function KeyboardScopeProvider(props: ParentProps) {
   )
 }
 
+/**
+ * Whether the scopes under it take keys and pastes. A pane that draws no
+ * row gates its scopes off, so a key the reader cannot see acted on goes
+ * past it. Gates nest: a scope takes input only while every gate over it is open.
+ */
+const KeyboardGateContext = createContext<() => boolean>(() => true)
+
+export function KeyboardGate(props: ParentProps<{ open: () => boolean }>) {
+  const outer = useContext(KeyboardGateContext)
+  const open = () => outer() && props.open()
+  return <KeyboardGateContext.Provider value={open}>{props.children}</KeyboardGateContext.Provider>
+}
+
 export function useScopedKeyboard(handler: ScopedKeyHandler, options?: ScopedKeyboardOptions) {
   const context = useRequiredContext(
     KeyboardScopeContext,
     "useScopedKeyboard must be used within KeyboardScopeProvider",
   )
+  const gate = useContext(KeyboardGateContext)
 
   onMount(() => {
     const unregister = context.register({
       handler,
-      when: options?.when,
+      when: () => gate() && options?.when?.() !== false,
       capture: options?.capture,
       paste: options?.paste,
     })

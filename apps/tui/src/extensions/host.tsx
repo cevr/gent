@@ -27,9 +27,10 @@ import {
   createSignal,
   type JSX,
   onCleanup,
+  on,
   onMount,
 } from "solid-js"
-import { useRequiredContext } from "../utils"
+import { isConnectionLoss, useRequiredContext } from "../utils"
 import { builtinClientModules } from "./builtins"
 import { ToolRenderersProvider } from "../tool-renderers"
 import type { Command } from "../commands"
@@ -151,13 +152,23 @@ export function ExtensionUIProvider(props: {
   const [loaded, setLoaded] = createSignal(false)
   const [sessionCommands, setSessionCommands] = createSignal<ReadonlyArray<Command>>([])
   const [serverCommands, setServerCommands] = createSignal<ReadonlyArray<CommandSource>>([])
-  // The session whose server slash commands have answered, listed or failed.
-  const [serverListed, setServerListed] = createSignal<Option.Option<SessionId>>(Option.none())
+  // The session and connection whose server slash commands have answered,
+  // listed or failed. An answer settles only its own connection: the server a
+  // reconnect reaches may list other commands.
+  const [serverListed, setServerListed] = createSignal<
+    Option.Option<{ readonly sessionId: SessionId; readonly generation: number }>
+  >(Option.none())
   const commandsSettled = () =>
     loaded() &&
     Option.match(client.activeSessionId(), {
       onNone: () => true,
-      onSome: (id) => Option.contains(serverListed(), id),
+      onSome: (id) =>
+        Option.exists(
+          serverListed(),
+          (listed) =>
+            listed.sessionId === id &&
+            Option.contains(client.connectedGeneration(), listed.generation),
+        ),
     })
   const [dynamicAutocomplete, setDynamicAutocomplete] = createSignal<
     ReadonlyArray<AutocompleteContribution>
@@ -253,99 +264,112 @@ export function ExtensionUIProvider(props: {
       .finally(() => setLoaded(true))
   })
 
-  // The contributed rows belong to the session, not to its name: track the id
-  // alone so a rename leaves the list up instead of clearing it for a round trip.
-  createEffect(() => {
-    const current = client.activeSessionId()
-    if (Option.isNone(current)) {
+  // The contributed rows belong to the session, not to its name: a move to
+  // another session clears them, a rename leaves the list up.
+  createEffect(
+    on(client.activeSessionId, () => {
       setServerCommands([])
-      return
-    }
-    setServerCommands([])
-    setServerListed(Option.none())
+      setServerListed(Option.none())
+    }),
+  )
 
-    let active = true
-    const listed = () => {
-      if (active) setServerListed(current)
-    }
-    onCleanup(() => {
-      active = false
-    })
+  // Listed once per session and connection: a reconnect lists again, so a
+  // listing a dropped connection cut short is not lost, and a command held
+  // for it waits for that answer. A refusal is an answer and settles this
+  // connection.
+  createEffect(
+    on([client.activeSessionId, client.connectedGeneration], ([current, generation]) => {
+      if (Option.isNone(current) || Option.isNone(generation)) return
 
-    client.runtime.cast(
-      client.client.extension.listSlashCommands({ sessionId: current.value }).pipe(
-        Effect.tap((cmds) =>
-          Effect.sync(() => {
-            if (!active) return
-            const byExtension = new Map<string, Array<Command>>()
-            for (const c of cmds) {
-              const run = (args: string) => {
-                const activeSession = Option.fromNullishOr(client.session())
-                if (Option.isNone(activeSession)) return
-                const sid = activeSession.value.sessionId
-                const bid = activeSession.value.branchId
-                client.runtime.cast(
-                  client.client.extension
-                    .request({
-                      sessionId: sid,
-                      extensionId: c.extensionId,
-                      capabilityId: c.capabilityId,
-                      input: args,
-                      branchId: bid,
-                    })
-                    .pipe(
-                      Effect.catchEager((error) =>
-                        Effect.logWarning("slash.command.failed").pipe(
-                          Effect.annotateLogs({
-                            extensionId: c.extensionId,
-                            capabilityId: c.capabilityId,
-                            error: String(error),
-                          }),
+      let active = true
+      const listed = () => {
+        if (active)
+          setServerListed(Option.some({ sessionId: current.value, generation: generation.value }))
+      }
+      onCleanup(() => {
+        active = false
+      })
+
+      client.runtime.cast(
+        client.client.extension.listSlashCommands({ sessionId: current.value }).pipe(
+          Effect.tap((cmds) =>
+            Effect.sync(() => {
+              if (!active) return
+              const byExtension = new Map<string, Array<Command>>()
+              for (const c of cmds) {
+                const run = (args: string) => {
+                  const activeSession = Option.fromNullishOr(client.session())
+                  if (Option.isNone(activeSession)) return
+                  const sid = activeSession.value.sessionId
+                  const bid = activeSession.value.branchId
+                  client.runtime.cast(
+                    client.client.extension
+                      .request({
+                        sessionId: sid,
+                        extensionId: c.extensionId,
+                        capabilityId: c.capabilityId,
+                        input: args,
+                        branchId: bid,
+                      })
+                      .pipe(
+                        Effect.catchEager((error) =>
+                          Effect.logWarning("slash.command.failed").pipe(
+                            Effect.annotateLogs({
+                              extensionId: c.extensionId,
+                              capabilityId: c.capabilityId,
+                              error: String(error),
+                            }),
+                          ),
                         ),
                       ),
-                    ),
-                )
-              }
+                  )
+                }
 
-              const base = {
-                id: `server:${c.name}`,
-                title: Option.getOrElse(Option.fromNullishOr(c.displayName), () =>
-                  Option.getOrElse(Option.fromNullishOr(c.description), () => c.name),
-                ),
-                slash: c.name,
-                category: Option.getOrElse(Option.fromNullishOr(c.category), () => "Extension"),
-                onSelect: () => run(""),
-                onSlash: run,
+                const base = {
+                  id: `server:${c.name}`,
+                  title: Option.getOrElse(Option.fromNullishOr(c.displayName), () =>
+                    Option.getOrElse(Option.fromNullishOr(c.description), () => c.name),
+                  ),
+                  slash: c.name,
+                  category: Option.getOrElse(Option.fromNullishOr(c.category), () => "Extension"),
+                  onSelect: () => run(""),
+                  onSlash: run,
+                }
+                const command = Option.match(Option.fromNullishOr(c.keybind), {
+                  onNone: (): Command => base,
+                  onSome: (keybind): Command => ({ ...base, keybind }),
+                })
+                byExtension.set(c.extensionId, [
+                  ...Option.getOrElse(
+                    Option.fromNullishOr(byExtension.get(c.extensionId)),
+                    () => [],
+                  ),
+                  command,
+                ])
               }
-              const command = Option.match(Option.fromNullishOr(c.keybind), {
-                onNone: (): Command => base,
-                onSome: (keybind): Command => ({ ...base, keybind }),
-              })
-              byExtension.set(c.extensionId, [
-                ...Option.getOrElse(Option.fromNullishOr(byExtension.get(c.extensionId)), () => []),
-                command,
-              ])
-            }
-            setServerCommands(
-              [...byExtension].map(([extensionId, commands]) => ({
-                id: extensionId,
-                scope: "builtin",
-                source: `server:${extensionId}`,
-                commands,
-              })),
-            )
-            listed()
-          }),
+              setServerCommands(
+                [...byExtension].map(([extensionId, commands]) => ({
+                  id: extensionId,
+                  scope: "builtin",
+                  source: `server:${extensionId}`,
+                  commands,
+                })),
+              )
+              listed()
+            }),
+          ),
+          Effect.catchEager((error) =>
+            Effect.sync(() => {
+              // A drop is not an answer: the reconnect lists again.
+              if (isConnectionLoss(error)) return
+              if (active) setServerCommands([])
+              listed()
+            }),
+          ),
         ),
-        Effect.catchEager(() =>
-          Effect.sync(() => {
-            if (active) setServerCommands([])
-            listed()
-          }),
-        ),
-      ),
-    )
-  })
+      )
+    }),
+  )
 
   // The session's commands first, then the client extensions', then the
   // server's: inside builtin scope the earlier source keeps a contested key.

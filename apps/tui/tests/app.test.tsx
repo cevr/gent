@@ -57,7 +57,7 @@ import {
 import { createSignal, onMount, type Signal } from "solid-js"
 import { ProviderAuthError } from "@gent/core/extensions/api"
 import { type ClientContextValue, useClient } from "../src/client"
-import { waitForFrame, waitUntilAdvancing } from "./helpers-boundary"
+import { type RenderWaitTimeoutError, waitForFrame, waitUntilAdvancing } from "./helpers-boundary"
 import { useTerminalDimensions } from "../src/terminal"
 import { SyntaxStyle } from "@opentui/core"
 import { type Message, MessageList, type SessionItem } from "../src/message-list"
@@ -486,100 +486,117 @@ function ClientProbe(props: { readonly onReady: (client: ClientContextValue) => 
 }
 
 /**
- * The session view over a turn that runs, with an error on screen from a
- * `/model` that matched nothing. The runtime stream says Running once and then
- * stays quiet, as it does through a long generation or a long tool call.
+ * The session view over a turn that runs, on a terminal `height` rows tall.
+ * The runtime stream says Running once and then stays quiet, as it does
+ * through a long generation or a long tool call.
  */
-const mountRunningTurnWithError = Effect.gen(function* () {
-  const sessionId = SessionId.make("session-running")
-  const branchId = BranchId.make("branch-running")
-  const running = { _tag: "Running" satisfies "Running", queue: emptyQueueSnapshot() }
-  const steers: Array<string> = []
-  const sent: Array<string> = []
-  let shutdowns = 0
-  let readActivity = () => "unmounted"
-  const activityProbe = defineClientExtension("@test/activity-probe", {
-    setup: Effect.gen(function* () {
-      const { activity } = yield* ClientContext
-      readActivity = () => activity.snapshot().state
-      return clientContributions()
-    }),
-  })
-  const client = createMockClient({
-    auth: { listProviders: () => Effect.succeed([]) },
-    branch: { getTree: () => Effect.succeed([]) },
-    session: {
-      getSnapshot: () =>
-        Effect.succeed({
-          sessionId,
-          branchId,
-          messages: [],
-          lastEventId: nullValue,
-          reasoningLevel: absent,
-          resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
-          agent: AgentName.make("main"),
-          runtime: running,
-          metrics: { turns: 1, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
-        }),
-      watchRuntime: () => Stream.concat(Stream.make(running), Stream.never),
-    },
-    steer: {
-      command: (input: { readonly command: { readonly _tag: string } }) =>
-        Effect.sync(() => {
-          steers.push(input.command._tag)
-        }),
-    },
-    message: {
-      send: (input: { readonly content: string }) =>
-        Effect.sync(() => {
-          sent.push(input.content)
-        }),
-    },
-  })
-  let ctx = Option.none<ClientContextValue>()
-  const setup = yield* Effect.promise(() =>
-    renderWithProviders(
-      () => (
-        <>
-          <App missingAuthProviders={[]} />
-          <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
-        </>
-      ),
-      {
-        client,
-        runtime: createMockRuntime(),
-        builtins: [...builtinClientModules, activityProbe],
-        initialSession: {
-          id: sessionId,
-          activeBranchId: branchId,
-          name: "Running",
-          createdAt: dateFromMillis(0),
-          updatedAt: dateFromMillis(0),
-        },
+const mountRunningTurn = (height = 24) =>
+  Effect.gen(function* () {
+    const sessionId = SessionId.make("session-running")
+    const branchId = BranchId.make("branch-running")
+    const running = { _tag: "Running" satisfies "Running", queue: emptyQueueSnapshot() }
+    const steers: Array<string> = []
+    const sent: Array<string> = []
+    let shutdowns = 0
+    let readActivity = () => "unmounted"
+    const activityProbe = defineClientExtension("@test/activity-probe", {
+      setup: Effect.gen(function* () {
+        const { activity } = yield* ClientContext
+        readActivity = () => activity.snapshot().state
+        return clientContributions()
+      }),
+    })
+    const client = createMockClient({
+      auth: { listProviders: () => Effect.succeed([]) },
+      branch: { getTree: () => Effect.succeed([]) },
+      session: {
+        getSnapshot: () =>
+          Effect.succeed({
+            sessionId,
+            branchId,
+            messages: [],
+            lastEventId: nullValue,
+            reasoningLevel: absent,
+            resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
+            agent: AgentName.make("main"),
+            runtime: running,
+            metrics: { turns: 1, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
+          }),
+        watchRuntime: () => Stream.concat(Stream.make(running), Stream.never),
       },
-    ),
-  )
-  setup.renderer.destroy = () => {
-    shutdowns += 1
-  }
-  yield* waitForFrame(
-    setup,
-    () => ctx.pipe(Option.exists((value) => value.isStreaming())),
-    "running turn",
-  )
-  yield* waitForFrame(setup, () => readActivity() !== "unmounted", "activity probe loaded")
-  yield* Effect.promise(() => setup.mockInput.typeText("/model typo"))
-  setup.mockInput.pressEnter()
-  yield* waitForFrame(setup, (frame) => frame.includes("No model matches"), "error shown")
-  const clientValue = yield* requireClient(ctx)
-  return {
-    setup,
-    client: clientValue,
-    steers,
-    sent,
-    shutdowns: () => shutdowns,
-    activity: () => readActivity(),
-  }
+      steer: {
+        command: (input: { readonly command: { readonly _tag: string } }) =>
+          Effect.sync(() => {
+            steers.push(input.command._tag)
+          }),
+      },
+      message: {
+        send: (input: { readonly content: string }) =>
+          Effect.sync(() => {
+            sent.push(input.content)
+          }),
+      },
+    })
+    let ctx = Option.none<ClientContextValue>()
+    const setup = yield* Effect.promise(() =>
+      renderWithProviders(
+        () => (
+          <>
+            <App missingAuthProviders={[]} />
+            <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
+          </>
+        ),
+        {
+          client,
+          runtime: createMockRuntime(),
+          builtins: [...builtinClientModules, activityProbe],
+          height,
+          initialSession: {
+            id: sessionId,
+            activeBranchId: branchId,
+            name: "Running",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        },
+      ),
+    )
+    setup.renderer.destroy = () => {
+      shutdowns += 1
+    }
+    yield* waitForFrame(
+      setup,
+      () => ctx.pipe(Option.exists((value) => value.isStreaming())),
+      "running turn",
+    )
+    yield* waitForFrame(setup, () => readActivity() !== "unmounted", "activity probe loaded")
+    const clientValue = yield* requireClient(ctx)
+    return {
+      setup,
+      client: clientValue,
+      steers,
+      sent,
+      shutdowns: () => shutdowns,
+      activity: () => readActivity(),
+    }
+  })
+
+type TestSetup = Awaited<ReturnType<typeof renderWithProviders>>
+
+/** Type a slash command and press Enter. */
+const typeCommand = (command: string) => (setup: TestSetup) =>
+  Effect.gen(function* () {
+    yield* Effect.promise(() => setup.mockInput.typeText(command))
+    setup.mockInput.pressEnter()
+  })
+
+/** `mountRunningTurn` with an error on screen from a `/model` that matched nothing. */
+const mountRunningTurnWithError = Effect.gen(function* () {
+  const view = yield* mountRunningTurn()
+  yield* Effect.promise(() => view.setup.mockInput.typeText("/model typo"))
+  view.setup.mockInput.pressEnter()
+  yield* waitForFrame(view.setup, (frame) => frame.includes("No model matches"), "error shown")
+  return view
 })
 
 /**
@@ -1301,6 +1318,96 @@ describe("App auth gate", () => {
       expect(view.steers).toEqual(["Cancel"])
     }).pipe(Effect.timeout("10 seconds")),
   )
+  // A pane the session docks over the composer is the nearest thing: ctrl+c
+  // closes it as Esc does, and the ladder goes on from there.
+  const heldPanes: ReadonlyArray<{
+    readonly name: string
+    readonly title: string
+    readonly open: (setup: TestSetup) => Effect.Effect<void>
+    /** A draft typed before the pane opens; a slash pane opens from an empty one. */
+    readonly draft: Option.Option<string>
+  }> = [
+    { name: "/model", title: "Model ·", open: typeCommand("/model"), draft: Option.none() },
+    { name: "/think", title: "Reasoning ·", open: typeCommand("/think"), draft: Option.none() },
+    {
+      name: "prompt search",
+      title: "Prompt search",
+      open: (setup) => Effect.sync(() => setup.mockInput.pressKey("r", { ctrl: true })),
+      draft: Option.some("kept draft"),
+    },
+  ]
+  for (const pane of heldPanes) {
+    it.live(`ctrl+c closes the ${pane.name} pane before it cancels the turn`, () =>
+      Effect.gen(function* () {
+        const view = yield* mountRunningTurn()
+        if (Option.isSome(pane.draft)) {
+          const draft = pane.draft.value
+          yield* Effect.promise(() => view.setup.mockInput.typeText(draft))
+          yield* waitForFrame(view.setup, (frame) => frame.includes(draft), "the draft")
+        }
+        yield* pane.open(view.setup)
+        yield* waitForFrame(view.setup, (frame) => frame.includes(pane.title), "the pane")
+        view.setup.mockInput.pressKey("c", { ctrl: true })
+        yield* waitForFrame(view.setup, (frame) => !frame.includes(pane.title), "the pane closed")
+        expect(view.shutdowns()).toBe(0)
+        expect(view.steers).toEqual([])
+        if (Option.isSome(pane.draft)) {
+          const draft = pane.draft.value
+          // The composer holds the draft it had when the pane opened.
+          expect(renderFrame(view.setup)).toContain(draft)
+          view.setup.mockInput.pressKey("c", { ctrl: true })
+          yield* waitForFrame(view.setup, (frame) => !frame.includes(draft), "the draft cleared")
+        }
+        view.setup.mockInput.pressKey("c", { ctrl: true })
+        yield* waitForFrame(view.setup, () => view.steers.length === 1, "the turn cancelled")
+        expect(view.shutdowns()).toBe(0)
+        view.setup.mockInput.pressKey("c", { ctrl: true })
+        yield* waitForFrame(view.setup, () => view.shutdowns() > 0, "quit")
+      }).pipe(Effect.timeout("10 seconds")),
+    )
+  }
+  // Each render has its own home: no prompt an earlier test or run sent is
+  // in its history.
+  // Prompt search holds the composer: a paste while it previews an entry
+  // does not land in the draft behind it.
+  it.live("a paste during prompt search does not reach the composer", () =>
+    Effect.gen(function* () {
+      const view = yield* mountRunningTurn()
+      for (const prompt of ["first prompt", "second prompt"]) {
+        yield* Effect.promise(() => view.setup.mockInput.typeText(prompt))
+        view.setup.mockInput.pressEnter()
+        yield* waitForFrame(view.setup, () => view.sent.includes(prompt), `sent ${prompt}`)
+      }
+      view.setup.mockInput.pressKey("r", { ctrl: true })
+      yield* waitForFrame(view.setup, (frame) => frame.includes("Prompt search · 2"), "search")
+      view.setup.mockInput.pressArrow("down")
+      yield* Effect.promise(() => view.setup.renderOnce())
+      yield* Effect.promise(() => view.setup.mockInput.pasteBracketedText("PASTED-ZQ"))
+      yield* waitForFrame(view.setup, () => true, "the paste taken")
+      yield* waitForFrame(view.setup, () => true, "the paste taken")
+      expect(renderFrame(view.setup)).not.toContain("PASTED-ZQ")
+      view.setup.mockInput.pressEnter()
+      const frame = yield* waitForFrame(
+        view.setup,
+        (next) => !next.includes("Prompt search"),
+        "the entry accepted",
+      )
+      expect(frame).toContain("┃ first prompt")
+      expect(frame).not.toContain("PASTED-ZQ")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  it.live("a render starts with an empty prompt history", () =>
+    Effect.gen(function* () {
+      const view = yield* mountRunningTurn()
+      view.setup.mockInput.pressKey("r", { ctrl: true })
+      const frame = yield* waitForFrame(
+        view.setup,
+        (next) => next.includes("Prompt search"),
+        "prompt search",
+      )
+      expect(frame).toContain("Prompt search · 0")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   // A key the btw ask line takes never reaches the session scope, and it is
   // still another gesture: the second ctrl+c cancels the next turn.
   it.live("a key the btw ask line takes between two ctrl+c presses makes the second cancel", () =>
@@ -1686,6 +1793,191 @@ describe("App auth gate", () => {
       setup.renderer.destroy()
     }).pipe(Effect.timeout("10 seconds")),
   )
+  // A connection drop while the list is in flight is not an answer: the held
+  // command waits, and the reconnect lists the server commands again.
+  // The failed reply may reach the client before or after the connection
+  // state says the socket closed.
+  for (const first of ["failure", "state"]) {
+    const failureFirst = first === "failure"
+    it.live(
+      `a slash command held across a dropped listing runs once the reconnect lists (${first} first)`,
+      () =>
+        Effect.gen(function* () {
+          const drop = yield* Deferred.make<void>()
+          const failed = yield* Deferred.make<void>()
+          const requests: Array<unknown> = []
+          let listings = 0
+          const lifecycle = createMutableRuntime(
+            ConnectionState.cases.Connected.make({ generation: 0 }),
+          )
+          let ext = Option.none<ReturnType<typeof useExtensionUI>>()
+          const setup = yield* Effect.promise(() =>
+            renderWithProviders(
+              () => (
+                <>
+                  <App missingAuthProviders={[]} />
+                  <ExtensionUIProbe onReady={(value) => (ext = Option.some(value))} />
+                </>
+              ),
+              {
+                client: createMockClient({
+                  auth: { listProviders: () => Effect.succeed([]) },
+                  branch: { getTree: () => Effect.succeed([]) },
+                  extension: {
+                    listSlashCommands: () =>
+                      Effect.suspend(() => {
+                        listings += 1
+                        if (listings === 1) {
+                          return Deferred.await(drop).pipe(
+                            Effect.andThen(
+                              Effect.fail(
+                                new RpcClientError({
+                                  reason: new SocketCloseError({ code: 1006 }),
+                                }),
+                              ),
+                            ),
+                            Effect.ensuring(Deferred.succeed(failed, void 0)),
+                          )
+                        }
+                        return Effect.succeed([
+                          {
+                            name: "probe",
+                            extensionId: "@test/server-probe",
+                            capabilityId: "probe",
+                          },
+                        ])
+                      }),
+                    request: (input: { readonly capabilityId: string; readonly input: unknown }) =>
+                      Effect.sync(() => {
+                        if (input.capabilityId === "probe") requests.push(input.input)
+                      }),
+                  },
+                }),
+                runtime: lifecycle.runtime,
+                builtins: builtinClientModules,
+                initialSession: {
+                  id: SessionId.make("session-a"),
+                  activeBranchId: BranchId.make("branch-a"),
+                  name: "Session A",
+                  createdAt: dateFromMillis(0),
+                  updatedAt: dateFromMillis(0),
+                },
+              },
+            ),
+          )
+          yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
+          yield* waitForFrame(
+            setup,
+            () => Option.exists(ext, (value) => value.loaded()),
+            "client extensions loaded",
+          )
+          yield* Effect.promise(() => setup.mockInput.typeText("/probe now"))
+          yield* waitForFrame(setup, (frame) => frame.includes("/probe now"), "the typed command")
+          setup.mockInput.pressEnter()
+          yield* waitForFrame(setup, (frame) => !frame.includes("/probe now"), "the command held")
+          // The connection drops with the listing in flight.
+          const reconnecting = () =>
+            lifecycle.emit(ConnectionState.cases.Reconnecting.make({ attempt: 1, generation: 1 }))
+          if (!failureFirst) reconnecting()
+          yield* Deferred.succeed(drop, void 0)
+          yield* Deferred.await(failed)
+          // Two render passes let the host take the failed reply.
+          yield* waitForFrame(setup, () => true, "the failed reply taken")
+          yield* waitForFrame(setup, () => true, "the failed reply taken")
+          expect(renderFrame(setup)).not.toContain("Unknown command")
+          if (failureFirst) reconnecting()
+          lifecycle.emit(ConnectionState.cases.Connected.make({ generation: 1 }))
+          yield* waitForFrame(setup, () => requests.length === 1, "the server command ran")
+          expect(requests).toEqual(["now"])
+          expect(listings).toBe(2)
+          expect(renderFrame(setup)).not.toContain("Unknown command")
+          setup.renderer.destroy()
+        }).pipe(Effect.timeout("10 seconds")),
+    )
+  }
+  // Settled means settled for this connection: a listing the last connection
+  // answered says nothing of the server the reconnect reached. A command
+  // submitted while the new listing is in flight waits for it.
+  it.live("a slash command submitted while a reconnect lists again waits for that listing", () =>
+    Effect.gen(function* () {
+      const relisted = yield* Deferred.make<void>()
+      const requests: Array<unknown> = []
+      let listings = 0
+      const lifecycle = createMutableRuntime(
+        ConnectionState.cases.Connected.make({ generation: 0 }),
+      )
+      let ext = Option.none<ReturnType<typeof useExtensionUI>>()
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <>
+              <App missingAuthProviders={[]} />
+              <ExtensionUIProbe onReady={(value) => (ext = Option.some(value))} />
+            </>
+          ),
+          {
+            client: createMockClient({
+              auth: { listProviders: () => Effect.succeed([]) },
+              branch: { getTree: () => Effect.succeed([]) },
+              extension: {
+                listSlashCommands: () =>
+                  Effect.suspend(() => {
+                    listings += 1
+                    // The first server has no /probe; the one the reconnect reaches has.
+                    if (listings === 1) return Effect.succeed([])
+                    return Deferred.await(relisted).pipe(
+                      Effect.as([
+                        {
+                          name: "probe",
+                          extensionId: "@test/server-probe",
+                          capabilityId: "probe",
+                        },
+                      ]),
+                    )
+                  }),
+                request: (input: { readonly capabilityId: string; readonly input: unknown }) =>
+                  Effect.sync(() => {
+                    if (input.capabilityId === "probe") requests.push(input.input)
+                  }),
+              },
+            }),
+            runtime: lifecycle.runtime,
+            builtins: builtinClientModules,
+            initialSession: {
+              id: SessionId.make("session-a"),
+              activeBranchId: BranchId.make("branch-a"),
+              name: "Session A",
+              createdAt: dateFromMillis(0),
+              updatedAt: dateFromMillis(0),
+            },
+          },
+        ),
+      )
+      yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
+      yield* waitForFrame(
+        setup,
+        () => Option.exists(ext, (value) => value.loaded() && value.commandsSettled()),
+        "the first listing settled",
+      )
+      lifecycle.emit(ConnectionState.cases.Reconnecting.make({ attempt: 1, generation: 1 }))
+      lifecycle.emit(ConnectionState.cases.Connected.make({ generation: 1 }))
+      yield* waitForFrame(setup, () => listings === 2, "the reconnect lists again")
+      yield* Effect.promise(() => setup.mockInput.typeText("/probe now"))
+      yield* waitForFrame(setup, (frame) => frame.includes("/probe now"), "the typed command")
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("Unknown command") || !frame.includes("/probe now"),
+        "the command sent",
+      )
+      expect(renderFrame(setup)).not.toContain("Unknown command")
+      yield* Deferred.succeed(relisted, void 0)
+      yield* waitForFrame(setup, () => requests.length === 1, "the server command ran")
+      expect(requests).toEqual(["now"])
+      expect(renderFrame(setup)).not.toContain("Unknown command")
+      setup.renderer.destroy()
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   // At 14 rows the composer takes six of the footer's twelve, and the agents
   // pane's rules and title take three more: three rows are left for the
   // filter row, the section heading and the cursor row. The trays, the key
@@ -1869,6 +2161,131 @@ describe("App auth gate", () => {
       }).pipe(Effect.timeout("10 seconds")),
     )
   }
+  // Under 11 rows, with a turn running, the composer and the "Generating" row
+  // leave a pane two rows, one or none. Under three rows the frame drops its
+  // rules and note row, so its rows go to the cursor row; at none it draws
+  // nothing. Either way no row is drawn over a rule or over the status row.
+  const sendPrompts = (view: { readonly setup: TestSetup; readonly sent: Array<string> }) =>
+    Effect.gen(function* () {
+      for (const prompt of ["first prompt", "second prompt"]) {
+        yield* Effect.promise(() => view.setup.mockInput.typeText(prompt))
+        view.setup.mockInput.pressEnter()
+        yield* waitForFrame(view.setup, () => view.sent.includes(prompt), `sent ${prompt}`)
+      }
+    })
+  const shortPanes: ReadonlyArray<{
+    readonly name: string
+    readonly open: (view: {
+      readonly setup: TestSetup
+      readonly sent: Array<string>
+    }) => Effect.Effect<void, RenderWaitTimeoutError>
+    /** Drawn while the pane is open at full height. */
+    readonly shown: string
+    /** A row of the pane holds one entry, never two drawn over each other. */
+    readonly rowClean: (line: string) => boolean
+  }> = [
+    {
+      name: "reasoning picker",
+      open: (view) => typeCommand("/think")(view.setup),
+      shown: "● default",
+      rowClean: (line) => !line.includes("●") || line.includes("● default"),
+    },
+    {
+      name: "command palette",
+      open: (view) => Effect.sync(() => view.setup.mockInput.pressKey("p", { ctrl: true })),
+      shown: "Switch color theme",
+      rowClean: (line) => !line.includes("Switch") || line.trim().startsWith("Theme"),
+    },
+    {
+      name: "prompt search",
+      open: (view) =>
+        sendPrompts(view).pipe(
+          Effect.andThen(Effect.sync(() => view.setup.mockInput.pressKey("r", { ctrl: true }))),
+        ),
+      shown: "second prompt",
+      rowClean: (line) => !line.includes("prompt") || /(first|second) prompt$/.test(line.trimEnd()),
+    },
+    {
+      name: "agents pane",
+      open: (view) => Effect.sync(() => view.setup.mockInput.pressArrow("left")),
+      shown: "Agents ·",
+      rowClean: () => true,
+    },
+  ]
+  /** A rule is only rule, and no pane row is two rows drawn over each other. */
+  const overdrawsNothing = (frame: string, rowClean: (line: string) => boolean) =>
+    frame
+      .split("\n")
+      .every((line) => (!line.includes("─") || /^─+$/.test(line.trim())) && rowClean(line))
+  for (const pane of shortPanes) {
+    it.live(`the ${pane.name} overdraws nothing from 10 rows down to 6`, () =>
+      Effect.gen(function* () {
+        const view = yield* mountRunningTurn()
+        yield* pane.open(view)
+        yield* waitForFrame(view.setup, (frame) => frame.includes(pane.shown), "the pane")
+        const width = view.setup.renderer.terminalWidth
+        for (const height of [10, 9, 8, 7, 6]) {
+          view.setup.resize(width, height)
+          yield* waitForFrame(
+            view.setup,
+            (frame) =>
+              view.setup.renderer.terminalHeight === height &&
+              frame.includes("┃") &&
+              overdrawsNothing(frame, pane.rowClean),
+            `the ${pane.name} at ${height} rows`,
+          )
+        }
+      }).pipe(Effect.timeout("10 seconds")),
+    )
+  }
+  // A pane with no row on screen takes no keys: the reader cannot see what a
+  // key would do there. Typing goes past the agents pane to the composer.
+  it.live("typing reaches the composer past an agents pane that has no row", () =>
+    Effect.gen(function* () {
+      const view = yield* mountRunningTurn()
+      view.setup.mockInput.pressArrow("left")
+      yield* waitForFrame(view.setup, (frame) => frame.includes("Agents ·"), "the agents pane")
+      view.setup.resize(view.setup.renderer.terminalWidth, 6)
+      yield* waitForFrame(
+        view.setup,
+        (frame) => view.setup.renderer.terminalHeight === 6 && !frame.includes("›"),
+        "the agents pane with no row",
+      )
+      yield* Effect.promise(() => view.setup.mockInput.typeText("typed past"))
+      yield* waitForFrame(view.setup, (frame) => frame.includes("┃ typed past"), "the draft")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  // A held pane with no row takes no keys, yet Esc still closes it, as the
+  // pane's own Esc does, and the turn runs on.
+  it.live("esc closes a held pane that has no row and leaves the turn running", () =>
+    Effect.gen(function* () {
+      const view = yield* mountRunningTurn()
+      yield* typeCommand("/think")(view.setup)
+      yield* waitForFrame(view.setup, (frame) => frame.includes("● default"), "the pane")
+      const width = view.setup.renderer.terminalWidth
+      view.setup.resize(width, 6)
+      yield* waitForFrame(
+        view.setup,
+        (frame) => view.setup.renderer.terminalHeight === 6 && !frame.includes("● default"),
+        "the pane with no row",
+      )
+      view.setup.mockInput.pressEscape()
+      // gent/no-sleep: allow a lone escape byte stays in the stdin parser until its timeout flushes it as a key
+      yield* Effect.sleep("100 millis")
+      // The held pane let go of the composer: typing reaches it at 6 rows.
+      yield* Effect.promise(() => view.setup.mockInput.typeText("after"))
+      yield* waitForFrame(view.setup, (frame) => frame.includes("┃ after"), "the draft")
+      view.setup.resize(width, 24)
+      yield* waitForFrame(
+        view.setup,
+        (frame) => view.setup.renderer.terminalHeight === 24 && frame.includes("┃ after"),
+        "the full terminal",
+      )
+      expect(renderFrame(view.setup)).not.toContain("Reasoning ·")
+      expect(view.steers).toEqual([])
+      expect(view.shutdowns()).toBe(0)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   // The live run: an alarm and three working children filled the trays, and
   // the btw pane showed its question but not the fork's stored answer.
   it.live("the btw pane keeps the fork's answer in view on a short terminal with full trays", () =>
@@ -1928,64 +2345,93 @@ describe("App auth gate", () => {
       expect(view.sent).toEqual([])
     }).pipe(Effect.timeout("10 seconds")),
   )
-  it.live("escape in the boot branch picker quits, because no branch was chosen", () =>
-    Effect.gen(function* () {
-      // The picker is where a resumed multi-branch session starts. With no
-      // branch chosen there is nothing behind it to fall back to, so escape
-      // has to leave the program, not just close the pane.
-      let shutdowns = 0
-      const client = createMockClient({
-        auth: { listProviders: () => Effect.succeed([]) },
-        branch: { getTree: () => Effect.succeed([]) },
-      })
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <App
-              missingAuthProviders={[]}
-              initialBranches={Option.some([
-                {
-                  id: BranchId.make("branch-a"),
-                  sessionId: SessionId.make("session-a"),
-                  name: "main",
-                  createdAt: dateFromMillis(0),
-                },
-                {
-                  id: BranchId.make("branch-b"),
-                  sessionId: SessionId.make("session-a"),
-                  name: "side",
-                  createdAt: dateFromMillis(1),
-                },
-              ])}
-            />
-          ),
-          {
-            client,
-            runtime: createMockRuntime(),
-            initialSession: {
-              id: SessionId.make("session-a"),
-              activeBranchId: BranchId.make("branch-a"),
-              name: "Session A",
-              createdAt: dateFromMillis(0),
-              updatedAt: dateFromMillis(0),
-            },
-          },
+  const quitKeys: ReadonlyArray<{ readonly name: string; readonly press: (s: TestSetup) => void }> =
+    [
+      { name: "escape", press: (setup) => setup.mockInput.pressEscape() },
+      { name: "ctrl+c", press: (setup) => setup.mockInput.pressKey("c", { ctrl: true }) },
+    ]
+  /** A resumed session with two branches: the boot branch picker is open over it. */
+  const mountBootBranchPicker = Effect.gen(function* () {
+    const client = createMockClient({
+      auth: { listProviders: () => Effect.succeed([]) },
+      branch: { getTree: () => Effect.succeed([]) },
+    })
+    const setup = yield* Effect.promise(() =>
+      renderWithProviders(
+        () => (
+          <App
+            missingAuthProviders={[]}
+            initialBranches={Option.some([
+              {
+                id: BranchId.make("branch-a"),
+                sessionId: SessionId.make("session-a"),
+                name: "main",
+                createdAt: dateFromMillis(0),
+              },
+              {
+                id: BranchId.make("branch-b"),
+                sessionId: SessionId.make("session-a"),
+                name: "side",
+                createdAt: dateFromMillis(1),
+              },
+            ])}
+          />
         ),
+        {
+          client,
+          runtime: createMockRuntime(),
+          initialSession: {
+            id: SessionId.make("session-a"),
+            activeBranchId: BranchId.make("branch-a"),
+            name: "Session A",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        },
+      ),
+    )
+    yield* waitForFrame(setup, (frame) => frame.includes("Resume: Session A"), "picker")
+    return setup
+  })
+  // A key the picker's list declines does not reach the composer behind it:
+  // `!` does not turn the composer to shell mode.
+  it.live("a key the boot branch picker declines leaves the composer alone", () =>
+    Effect.gen(function* () {
+      const setup = yield* mountBootBranchPicker
+      yield* Effect.promise(() => setup.mockInput.typeText("!"))
+      yield* waitForFrame(setup, () => true, "the key taken")
+      yield* waitForFrame(setup, () => true, "the key taken")
+      setup.mockInput.pressEnter()
+      const frame = yield* waitForFrame(
+        setup,
+        (next) => !next.includes("Resume: Session A"),
+        "the branch chosen",
       )
-      yield* waitForFrame(setup, (frame) => frame.includes("Resume: Session A"), "picker")
-      // `useEnv().shutdown` is a no-op in the harness, so observe the renderer
-      // teardown the controller performs alongside it.
-      const destroy = setup.renderer.destroy.bind(setup.renderer)
-      setup.renderer.destroy = () => {
-        shutdowns += 1
-      }
-      setup.mockInput.pressEscape()
-      yield* waitForFrame(setup, () => shutdowns > 0, "quit")
-      setup.renderer.destroy = destroy
-      expect(shutdowns).toBe(1)
-      setup.renderer.destroy()
-    }),
+      expect(frame).not.toContain("$")
+      expect(frame).toContain("┃")
+    }).pipe(Effect.timeout("10 seconds")),
   )
+  for (const key of quitKeys)
+    it.live(`${key.name} in the boot branch picker quits, because no branch was chosen`, () =>
+      Effect.gen(function* () {
+        // The picker is where a resumed multi-branch session starts. With no
+        // branch chosen there is nothing behind it to fall back to, so escape
+        // has to leave the program, not just close the pane.
+        let shutdowns = 0
+        const setup = yield* mountBootBranchPicker
+        // `useEnv().shutdown` is a no-op in the harness, so observe the renderer
+        // teardown the controller performs alongside it.
+        const destroy = setup.renderer.destroy.bind(setup.renderer)
+        setup.renderer.destroy = () => {
+          shutdowns += 1
+        }
+        key.press(setup)
+        yield* waitForFrame(setup, () => shutdowns > 0, "quit")
+        setup.renderer.destroy = destroy
+        expect(shutdowns).toBe(1)
+        setup.renderer.destroy()
+      }),
+    )
   it.live("branch picker does not trigger auth gating before a branch is selected", () =>
     Effect.gen(function* () {
       const calls: Array<{
@@ -2141,6 +2587,51 @@ describe("App auth gate", () => {
       expect(sentMessages).toEqual([])
       setup.renderer.destroy()
     }),
+  )
+  // An enforced sign-in holds the slot: with a required key missing there is
+  // no session to fall back to, so ctrl+c quits over it.
+  it.live("ctrl+c over an enforced sign-in quits", () =>
+    Effect.gen(function* () {
+      let shutdowns = 0
+      const client = createMockClient({
+        auth: {
+          listProviders: () =>
+            Effect.succeed([
+              {
+                provider: "openai",
+                hasKey: false,
+                required: true,
+                source: "none",
+                authType: absent,
+              },
+            ]),
+          listMethods: () => Effect.succeed({ openai: [apiMethod] }),
+        },
+      })
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <App missingAuthProviders={["openai"]} />, {
+          client,
+          runtime: createMockRuntime(),
+          initialAgent: AgentName.make("cowork"),
+          initialSession: {
+            id: SessionId.make("session-a"),
+            activeBranchId: BranchId.make("branch-a"),
+            name: "A",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        }),
+      )
+      yield* waitForFrame(setup, (frame) => frame.includes("API Keys"), "the sign-in")
+      const destroy = setup.renderer.destroy.bind(setup.renderer)
+      setup.renderer.destroy = () => {
+        shutdowns += 1
+      }
+      setup.mockInput.pressKey("c", { ctrl: true })
+      yield* waitForFrame(setup, () => shutdowns > 0, "quit")
+      setup.renderer.destroy = destroy
+      setup.renderer.destroy()
+    }).pipe(Effect.timeout("10 seconds")),
   )
   it.live("cold start with prompt does not continue when auth checking fails", () =>
     Effect.gen(function* () {

@@ -727,6 +727,7 @@ export function AgentsPane(props: {
           has rows; the frame adds the detail line under them. */}
       <PickerFrame
         lines={paneItems(visible()).length}
+        queryRow
         title={`Agents · ${countsLabel(visible())}`}
         footer={"↑↓ move   ↵ → open   ← esc close   ^x delete   ^t hide"}
         detail={Option.liftPredicate(

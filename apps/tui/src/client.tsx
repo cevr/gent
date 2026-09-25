@@ -462,6 +462,8 @@ interface ClientTransportValue {
   // eslint-disable-next-line effect/noNullish -- RPC transport exposes an absent state before startup.
   connectionState: () => ConnectionState | undefined
   waitForTransportReady: Effect.Effect<void>
+  /** The generation of the open connection; None while it is not connected. */
+  connectedGeneration: () => Option.Option<number>
   isReconnecting: () => boolean
   // eslint-disable-next-line effect/noNullish -- UI transport exposes null when no issue is present.
   connectionIssue: () => string | null
@@ -962,11 +964,15 @@ export function ClientProvider(props: ClientProviderProps) {
     onCleanup(unsubscribe)
   })
 
-  const workerEpoch = createMemo<Option.Option<number>>(() => {
-    const state = connectionState()
-    if (Option.isNone(state) || state.value._tag !== "Connected") return Option.none()
-    return Option.some(state.value.generation)
-  })
+  const connectedGeneration = createMemo<Option.Option<number>>(
+    () => {
+      const state = connectionState()
+      if (Option.isNone(state) || state.value._tag !== "Connected") return Option.none()
+      return Option.some(state.value.generation)
+    },
+    Option.none<number>(),
+    { equals: Option.makeEquivalence<number>((left, right) => left === right) },
+  )
 
   const isReconnecting = () => {
     const state = connectionState()
@@ -979,7 +985,7 @@ export function ClientProvider(props: ClientProviderProps) {
   const extensionHealthDependencies = (): readonly [
     Option.Option<number>,
     Option.Option<SessionId>,
-  ] => [workerEpoch(), Option.map(sessionOption(), (value) => value.sessionId)]
+  ] => [connectedGeneration(), Option.map(sessionOption(), (value) => value.sessionId)]
 
   createEffect(
     on(
@@ -1170,6 +1176,7 @@ export function ClientProvider(props: ClientProviderProps) {
 
     connectionState: connectionStateValue,
     waitForTransportReady: runtime.lifecycle.waitForReady,
+    connectedGeneration,
     isReconnecting,
     extensionHealth,
     connectionIssue: connectionIssueValue,

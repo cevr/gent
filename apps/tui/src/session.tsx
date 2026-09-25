@@ -14,6 +14,7 @@ import {
   type Array as Arr,
   Clock,
   DateTime,
+  Deferred,
   Duration,
   Effect,
   Equal,
@@ -1356,7 +1357,6 @@ interface PromptSearchController {
   readonly state: () => PromptSearchState
   /** The history the palette searches, newest first. */
   readonly entries: () => readonly string[]
-  readonly isOpen: () => boolean
   readonly open: () => void
   readonly onEvent: (event: PromptSearchEvent) => void
 }
@@ -1370,7 +1370,6 @@ function createPromptSearchController(params: {
   return {
     state: params.state,
     entries: params.entries,
-    isOpen: () => params.state()._tag === "open",
     open: () => {
       params.dispatch(PromptSearchEvent.cases.Open.make({ draftBeforeOpen: params.draft() }))
     },
@@ -1600,7 +1599,8 @@ const reconnectBackoff = Schedule.min([
 
 /**
  * Runs a stream and runs it again whenever it ends. `effectFactory` gets the
- * `ready` effect and runs it once its stream is open and serving.
+ * `ready` effect and runs it once its stream has delivered, not when it
+ * opens: a stream that fails before it delivers has not served.
  *
  * Attempts that end before they serve back off from one second up to thirty.
  * A stream that served starts a fresh sequence when it drops: after a long
@@ -2405,104 +2405,124 @@ export function useSessionFeed(
       client.log.info("feed.activate", { key })
 
       const streamFiber = client.runtime.fork(
-        Effect.scoped(
-          runWithReconnect(
-            (ready) =>
-              Effect.gen(function* () {
-                client.log.info("feed.snapshot.fetch", { key })
-                const snapshot = yield* client.client.session.getSnapshot({
+        runWithReconnect(
+          (ready) =>
+            Effect.gen(function* () {
+              client.log.info("feed.snapshot.fetch", { key })
+              const snapshot = yield* client.client.session.getSnapshot({
+                sessionId: session,
+                branchId: branch,
+              })
+              // Pending interactions hydrate on session entry from
+              // event-stream replay via the `after` cursor below.
+
+              client.log.info("feed.snapshot.hydrated", {
+                key,
+                messageCount: snapshot.messages.length,
+                lastEventId: snapshot.lastEventId,
+              })
+
+              const snapshotApplied = yield* Effect.sync(() => {
+                if (Option.isNone(currentKey) || currentKey.value !== key) return false
+                client.applySessionSnapshot(snapshot)
+                callbacks.onQueueSnapshot(snapshot.runtime.queue)
+                setStore("messages", buildMessages(snapshot.messages))
+                return true
+              })
+              if (!snapshotApplied) return yield* Effect.never
+
+              const after = Option.getOrElse(
+                Option.fromNullishOr(lastSeenEventIdByKey.get(key)),
+                () => 0,
+              )
+
+              const eventStream = client.client.session.events({
+                sessionId: session,
+                branchId: branch,
+                after,
+              })
+
+              // The attempt served once both streams delivered: the events
+              // stream its replay (the `StreamSynchronized` marker), the
+              // runtime watch its current state (the server's watch emits
+              // it first). A stream that fails before that backs off.
+              const eventsServed = yield* Deferred.make<void>()
+              const runtimeServed = yield* Deferred.make<void>()
+              yield* Effect.all([Deferred.await(eventsServed), Deferred.await(runtimeServed)]).pipe(
+                Effect.andThen(ready),
+                Effect.forkScoped,
+              )
+
+              client.log.info("feed.stream.open", { key, after })
+              const eventsFiber = yield* eventStream.pipe(
+                Stream.runForEach((envelope) =>
+                  Effect.gen(function* () {
+                    if (envelope.event._tag === "StreamSynchronized") {
+                      yield* Deferred.succeed(eventsServed, void 0)
+                    }
+                    if (Option.isNone(currentKey) || currentKey.value !== key) return
+                    client.setConnectionIssue(Option.getOrNull(Option.none()))
+                    yield* processEnvelope(
+                      envelope,
+                      branch,
+                      key,
+                      Option.fromNullishOr(snapshot.lastEventId),
+                    )
+                  }),
+                ),
+                Effect.forkScoped,
+              )
+              const runtimeFiber = yield* client.client.session
+                .watchRuntime({
                   sessionId: session,
                   branchId: branch,
                 })
-                // Pending interactions hydrate on session entry from
-                // event-stream replay via the `after` cursor below.
-
-                client.log.info("feed.snapshot.hydrated", {
-                  key,
-                  messageCount: snapshot.messages.length,
-                  lastEventId: snapshot.lastEventId,
-                })
-
-                const snapshotApplied = yield* Effect.sync(() => {
-                  if (Option.isNone(currentKey) || currentKey.value !== key) return false
-                  client.applySessionSnapshot(snapshot)
-                  callbacks.onQueueSnapshot(snapshot.runtime.queue)
-                  setStore("messages", buildMessages(snapshot.messages))
-                  return true
-                })
-                if (!snapshotApplied) return yield* Effect.never
-
-                const after = Option.getOrElse(
-                  Option.fromNullishOr(lastSeenEventIdByKey.get(key)),
-                  () => 0,
-                )
-
-                const eventStream = client.client.session.events({
-                  sessionId: session,
-                  branchId: branch,
-                  after,
-                })
-
-                client.log.info("feed.stream.open", { key, after })
-                const eventsFiber = yield* eventStream.pipe(
-                  Stream.runForEach((envelope) =>
-                    Effect.gen(function* () {
-                      if (Option.isNone(currentKey) || currentKey.value !== key) return
-                      client.setConnectionIssue(Option.getOrNull(Option.none()))
-                      yield* processEnvelope(
-                        envelope,
-                        branch,
-                        key,
-                        Option.fromNullishOr(snapshot.lastEventId),
-                      )
-                    }),
+                .pipe(
+                  Stream.runForEach((next) =>
+                    Deferred.succeed(runtimeServed, void 0).pipe(
+                      Effect.andThen(
+                        Effect.sync(() => {
+                          if (Option.isNone(currentKey) || currentKey.value !== key) return
+                          client.setConnectionIssue(Option.getOrNull(Option.none()))
+                          if (next._tag === "Idle") resolveRetryingEvents(setStore)
+                          client.applySessionRuntime({
+                            sessionId: session,
+                            branchId: branch,
+                            runtime: next,
+                          })
+                          callbacks.onQueueSnapshot(next.queue)
+                        }),
+                      ),
+                    ),
                   ),
                   Effect.forkScoped,
                 )
-                const runtimeFiber = yield* client.client.session
-                  .watchRuntime({
-                    sessionId: session,
-                    branchId: branch,
-                  })
-                  .pipe(
-                    Stream.runForEach((next) =>
-                      Effect.sync(() => {
-                        if (Option.isNone(currentKey) || currentKey.value !== key) return
-                        client.setConnectionIssue(Option.getOrNull(Option.none()))
-                        if (next._tag === "Idle") resolveRetryingEvents(setStore)
-                        client.applySessionRuntime({
-                          sessionId: session,
-                          branchId: branch,
-                          runtime: next,
-                        })
-                        callbacks.onQueueSnapshot(next.queue)
-                      }),
-                    ),
-                    Effect.forkScoped,
-                  )
 
-                yield* Effect.sync(() => {
-                  if (Option.isNone(currentKey) || currentKey.value !== key) return
-                  setStreamReadyKey(Option.some(key))
-                })
-                yield* ready
-
-                return yield* Effect.raceFirst(Fiber.join(eventsFiber), Fiber.join(runtimeFiber))
-              }),
-            {
-              label: "feed.events",
-              log: client.log,
-              onError: (err) => {
+              yield* Effect.sync(() => {
                 if (Option.isNone(currentKey) || currentKey.value !== key) return
-                client.log.error("feed.error", {
-                  key,
-                  error: formatConnectionIssue(err),
-                })
-                client.setConnectionIssue(formatConnectionIssue(err))
-              },
-              waitForRetry: () => client.waitForTransportReady,
+                setStreamReadyKey(Option.some(key))
+              })
+
+              return yield* Effect.raceFirst(Fiber.join(eventsFiber), Fiber.join(runtimeFiber))
+            }).pipe(
+              // One scope per attempt: the stream that is still open when
+              // the other ends closes with the attempt, so a retry never
+              // leaves a second subscription behind.
+              Effect.scoped,
+            ),
+          {
+            label: "feed.events",
+            log: client.log,
+            onError: (err) => {
+              if (Option.isNone(currentKey) || currentKey.value !== key) return
+              client.log.error("feed.error", {
+                key,
+                error: formatConnectionIssue(err),
+              })
+              client.setConnectionIssue(formatConnectionIssue(err))
             },
-          ),
+            waitForRetry: () => client.waitForTransportReady,
+          },
         ),
       )
 
@@ -3328,8 +3348,16 @@ export function createSessionController(props: {
     const now = DateTime.toEpochMillis(DateTime.nowUnsafe())
     const second = quitArmedFor("interrupt", now)
     disarmQuit()
-    if (overlayHoldsComposer(uiState().overlay)) {
-      exit()
+    const overlay = uiState().overlay
+    if (overlayHoldsComposer(overlay)) {
+      // The boot branch picker and an enforced sign-in hold the slot: there
+      // is nothing behind them to fall back to, so ctrl+c quits. Any other
+      // held pane is the nearest thing, and ctrl+c closes it as Esc does.
+      if (slotHeld(overlay)) {
+        exit()
+        return
+      }
+      closeOverlay()
       return
     }
     if (uiState().transcriptExpanded) {
@@ -3414,7 +3442,15 @@ export function createSessionController(props: {
       handleInterrupt()
       return true
     }
-    if (overlayHoldsComposer(uiState().overlay)) return false
+    const overlay = uiState().overlay
+    if (overlayHoldsComposer(overlay)) {
+      // A held pane takes its own Esc. One that reaches here found no row of
+      // the pane on a short terminal (`KeyboardGate`), and it closes the pane
+      // as the pane's own Esc does. The panes that hold the slot keep theirs.
+      if (event.name !== "escape" || slotHeld(overlay)) return false
+      closeOverlay()
+      return true
+    }
 
     if (event.name === "escape") {
       handleEscape()
