@@ -524,10 +524,10 @@ Shape:
   instruction text and the profile carries none; an edit to `AGENTS.md` reaches
   the next turn.
 - The system prompt has two parts. Sections below `AGENT_PROMPT_PRIORITY`
-  (`packages/core/src/domain/capability.ts`: persona, sessions, boundaries,
+  (`packages/core/src/domain/capability.ts`: persona, boundaries,
   environment, date, project instructions, skills) are the part a session
   shares with its children, byte for byte, whatever tools each has; the
-  agent's own sections (tool list, tool guidelines, the cell guide, children
+  agent's own sections (tool list, tool guidelines, the cell guide, sessions and children
   guidance, an agent addendum) and what `systemPrompt` hooks append (the host
   tool list, session naming) follow. The turn sends the parts as two system
   blocks (`systemPromptBlocks`), and the Anthropic driver marks the end of the
