@@ -315,8 +315,8 @@ export const turnNoticesText = (notices: ReadonlyArray<TurnNotice>): Option.Opti
 
 /**
  * The request a step sends: the system prompt (a system message per cache
- * block), the conversation, then the turn's notices as one system message
- * after the last message.
+ * block; the OpenAI-compatible drivers join them into one), the conversation,
+ * then the turn's notices as one system message after the last message.
  *
  * The notices change from turn to turn and the rest does not, so they go
  * last: the system prompt and the conversation stay one cacheable prefix
