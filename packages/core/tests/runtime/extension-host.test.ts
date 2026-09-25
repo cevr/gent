@@ -1,6 +1,7 @@
 import {
   Cause,
   Context,
+  Crypto,
   Data,
   Deferred,
   Effect,
@@ -2234,6 +2235,62 @@ describe("extension activation isolation", () => {
         { manifest: { id: ExtensionId.make("self-interrupting") }, phase: "startup" },
       ])
     }).pipe(Effect.provide(Layer.merge(fsLayer, ConfigService.Test()))),
+  )
+})
+
+// ── setup platform services ──────────────────────────────────────────────────
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+// A user-shaped extension whose setup mints an id with Effect `Crypto` and
+// names its slash command's description after it.
+const cryptoSetupExtension = defineExtension({
+  id: "crypto-setup",
+  setup: Effect.gen(function* () {
+    const id = yield* (yield* Crypto.Crypto).randomUUIDv7.pipe(Effect.orDie)
+    const host = yield* ExtensionHost
+    yield* host.register(
+      "request",
+      request({
+        id: "minted",
+        slash: { name: "minted", description: id },
+        description: id,
+        input: Schema.String,
+        output: Schema.Void,
+        execute: () => Effect.void,
+      }),
+    )
+  }),
+})
+
+describe("setup platform services", () => {
+  it.live("the loader gives setup the Crypto service", () =>
+    Effect.gen(function* () {
+      const result = yield* setupExtensions({
+        extensions: [{ extension: cryptoSetupExtension, scope: "user", sourcePath: "/tmp/c.ts" }],
+        cwd: "/tmp",
+        home: "/tmp",
+        disabled: new Set(),
+      })
+      expect(result.failed).toEqual([])
+      const minted = result.active[0]?.contributions.requests?.[0]
+      expect(minted?.description).toMatch(UUID_PATTERN)
+    }).pipe(Effect.provide(fsLayer)),
+  )
+
+  it.live("the E2E root gives setup the Crypto service", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { client, sessionId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer: LanguageModelLayers.debug(),
+          extensionInputs: [...e2ePreset.extensionInputs, cryptoSetupExtension],
+        })
+        const commands = yield* client.extension.listSlashCommands({ sessionId })
+        const minted = commands.find((command) => command.name === "minted")
+        expect(minted?.description).toMatch(UUID_PATTERN)
+      }).pipe(Effect.timeout("20 seconds")),
+    ),
   )
 })
 
