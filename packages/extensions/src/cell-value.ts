@@ -850,7 +850,6 @@ const displayKeyScanLength = 10_000
 const holeScanLength = 10_000
 const breakLength = 80
 const compactLevels = 3
-const minimumSplitLength = 16
 const unreadableDisplay = "[unreadable]"
 
 interface DisplayContext {
@@ -873,7 +872,7 @@ interface Layout {
   readonly open: string
   readonly close: string
   readonly keys: ReadonlyArray<PropertyKey>
-  /** An array-like list, which groups more than six items in columns. */
+  /** An array-like list, which packs its items onto lines. */
   readonly list: boolean
   readonly items: (context: DisplayContext, depth: number) => Array<string>
 }
@@ -923,20 +922,12 @@ const isSurrogatePair = (text: string, index: number): boolean => {
   return next >= 0xdc00 && next <= 0xdfff
 }
 
-/** The quote `inspect` picks: single, else double, else a backtick. */
-const quoteFor = (text: string): number => {
-  if (!text.includes("'")) return 39
-  if (!text.includes('"')) return 34
-  if (!text.includes("`") && !text.includes("${")) return 96
-  return 39
-}
-
-const escapeText = (text: string, quote: number): string => {
+const escapeText = (text: string): string => {
   let out = ""
   let last = 0
   for (let index = 0; index < text.length; index++) {
     const code = text.charCodeAt(index)
-    if (code === quote || code === 92 || code < 32 || (code > 126 && code < 160)) {
+    if (code === 39 || code === 92 || code < 32 || (code > 126 && code < 160)) {
       out += text.slice(last, index) + escapeCode(code)
       last = index + 1
     } else if (code >= 0xd800 && code <= 0xdfff) {
@@ -951,39 +942,17 @@ const escapeText = (text: string, quote: number): string => {
   return out + text.slice(last)
 }
 
-const quoteMark = (quote: number): string => {
-  if (quote === 34) return '"'
-  if (quote === 96) return "`"
-  return "'"
-}
+/** A string in single quotes, escaped. */
+const quoteText = (text: string): string => `'${escapeText(text)}'`
 
-const quoteText = (text: string): string => {
-  const quote = quoteFor(text)
-  const mark = quoteMark(quote)
-  return mark + escapeText(text, quote) + mark
-}
-
-/** Lines that each keep their trailing newline. */
-const splitAfterNewlines = (text: string): Array<string> =>
-  text.split(/(?<=\n)/).filter((line) => line.length > 0)
-
-const formatString = (context: DisplayContext, value: string): string => {
-  let text = value
-  let trailer = ""
-  if (text.length > displayStringLength) {
-    const remaining = text.length - displayStringLength
-    text = text.slice(0, displayStringLength)
-    trailer = `... ${remaining} more ${plural(remaining, "character", "characters")}`
-  }
-  if (text.length > minimumSplitLength && text.length > breakLength - context.indentation - 4) {
-    const quoted = splitAfterNewlines(text).map(quoteText)
-    return quoted.join(` +\n${" ".repeat(context.indentation + 2)}`) + trailer
-  }
-  return quoteText(text) + trailer
+const formatString = (value: string): string => {
+  if (value.length <= displayStringLength) return quoteText(value)
+  const remaining = value.length - displayStringLength
+  return `${quoteText(value.slice(0, displayStringLength))}... ${remaining} more ${plural(remaining, "character", "characters")}`
 }
 
 const formatPrimitive = (context: DisplayContext, value: unknown): string => {
-  if (Predicate.isString(value)) return formatString(context, value)
+  if (Predicate.isString(value)) return formatString(value)
   if (Predicate.isNumber(value)) return formatNumber(value)
   if (Predicate.isBigInt(value)) return `${String(value)}n`
   if (Predicate.isSymbol(value) || Predicate.isBoolean(value)) return String(value)
@@ -1489,71 +1458,26 @@ const isBelowBreakLength = (
   return base === "" || !base.includes("\n")
 }
 
-/** Whether every listed item of an array-like value is a number or a bigint: they align right. */
-const numericItems = (value: object, count: number): boolean => {
-  for (let index = 0; index < count; index++) {
-    const descriptor = ownDescriptor(value, index)
-    if (Predicate.isUndefined(descriptor) || !hasOwn(descriptor, "value")) return false
-    const item: unknown = descriptor.value
-    if (!Predicate.isNumber(item) && !Predicate.isBigInt(item)) return false
-  }
-  return true
-}
-
-const columnCount = (
-  context: DisplayContext,
-  lengths: ReadonlyArray<number>,
-  totalLength: number,
-  maxLength: number,
-  outputLength: number,
-): number => {
-  const actualMax = maxLength + 2
-  if (actualMax * 3 + context.indentation >= breakLength) return 1
-  if (!(totalLength / actualMax > 5 || maxLength <= 6)) return 1
-  const averageBias = Math.sqrt(actualMax - totalLength / lengths.length)
-  const biasedMax = Math.max(actualMax - 3 - averageBias, 1)
-  return Math.min(
-    Math.round(Math.sqrt(2.5 * biasedMax * outputLength) / biasedMax),
-    Math.floor((breakLength - context.indentation) / actualMax),
-    compactLevels * 4,
-    15,
-  )
-}
-
-/** More than six array items in aligned columns, as `inspect` groups them. */
-const groupArrayElements = (
+/** A list's items packed onto lines that fit the break length; one per line when any spans lines. */
+const packLines = (
   context: DisplayContext,
   output: ReadonlyArray<string>,
-  value: object,
 ): ReadonlyArray<string> => {
-  let outputLength = output.length
-  if (displayListLength < output.length) outputLength--
-  const lengths = output.slice(0, outputLength).map((item) => item.length)
-  const totalLength = lengths.reduce((sum, length) => sum + length + 2, 0)
-  const maxLength = Math.max(0, ...lengths)
-  const columns = columnCount(context, lengths, totalLength, maxLength, outputLength)
-  if (columns <= 1) return output
-  const widths = Array.from(
-    { length: columns },
-    (_, column) => Math.max(0, ...lengths.filter((_, index) => index % columns === column)) + 2,
-  )
-  const alignRight = numericItems(value, output.length)
-  const grouped: Array<string> = []
-  for (let row = 0; row < outputLength; row += columns) {
-    const end = Math.min(row + columns, outputLength)
-    let line = ""
-    let index = row
-    for (; index < end - 1; index++) {
-      const cell = `${output[index]}, `
-      if (alignRight) line += cell.padStart(widths[index - row] ?? 0)
-      else line += cell.padEnd(widths[index - row] ?? 0)
+  if (output.some((item) => item.includes("\n"))) return output
+  // Two spaces of indentation before a line, a comma after it.
+  const width = breakLength - context.indentation - 3
+  const lines: Array<string> = []
+  let line = ""
+  for (const item of output) {
+    if (line === "") line = item
+    else if (line.length + 2 + item.length <= width) line += `, ${item}`
+    else {
+      lines.push(line)
+      line = item
     }
-    if (alignRight) line += (output[index] ?? "").padStart((widths[index - row] ?? 0) - 2)
-    else line += output[index]
-    grouped.push(line)
   }
-  if (displayListLength < output.length) grouped.push(output[outputLength] ?? "")
-  return grouped
+  if (line !== "") lines.push(line)
+  return lines
 }
 
 const reduceToSingleString = (
@@ -1561,20 +1485,19 @@ const reduceToSingleString = (
   output: ReadonlyArray<string>,
   view: Layout,
   depth: number,
-  value: object,
 ): string => {
   const base = view.base
-  let lines = output
-  if (view.list && output.length > 6) lines = groupArrayElements(context, output, value)
   let lead = ""
   if (base !== "") lead = `${base} `
-  if (context.currentDepth - depth < compactLevels && output.length === lines.length) {
-    const start = lines.length + context.indentation + view.open.length + base.length + 10
-    if (isBelowBreakLength(lines, start, base)) {
-      const joined = lines.join(", ")
+  if (context.currentDepth - depth < compactLevels) {
+    const start = output.length + context.indentation + view.open.length + base.length + 10
+    if (isBelowBreakLength(output, start, base)) {
+      const joined = output.join(", ")
       if (!joined.includes("\n")) return `${lead}${view.open} ${joined} ${view.close}`
     }
   }
+  let lines = output
+  if (view.list) lines = packLines(context, output)
   const indentation = `\n${" ".repeat(context.indentation)}`
   return `${lead}${view.open}${indentation}  ${lines.join(`,${indentation}  `)}${indentation}${view.close}`
 }
@@ -1609,7 +1532,7 @@ const formatRaw = (context: DisplayContext, value: object, depth: number): strin
     if (base === "") base = marker
     else base = `${marker} ${base}`
   }
-  return reduceToSingleString(context, output, { ...view, base }, next, value)
+  return reduceToSingleString(context, output, { ...view, base }, next)
 }
 
 const formatValue = (context: DisplayContext, value: unknown, depth: number): string => {

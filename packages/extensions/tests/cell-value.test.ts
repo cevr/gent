@@ -56,8 +56,6 @@ const ordinaryValues = Schema.decodeUnknownSync(
       ["NaN", NaN],
       ["a bigint", 10n],
       ["a string", "text"],
-      ["a string with a single quote", "it's"],
-      ["a string with both quotes", "it's \\"so\\""],
       ["a string with every quote", "it's \\"so\\" \`x\`"],
       ["control characters", "a\\tb\\u0001c\\u007f"],
       ["a lone surrogate and a pair", "x\\ud800y\\ud83d\\ude00"],
@@ -65,13 +63,9 @@ const ordinaryValues = Schema.decodeUnknownSync(
       ["undefined", undefined],
       ["null", null],
       ["a boolean", true],
-      ["nested arrays", [1, "two", [3, [4, [5, [6]]]]]],
       ["an empty array", []],
       ["a sparse array", [1, , 3]],
       ["a long sparse array", Object.assign([1, 2, 3, 4, 5], { length: 300 })],
-      ["a long array", Array.from({ length: 120 }, (_, index) => index)],
-      ["a numeric array", Array.from({ length: 27 }, (_, index) => index + 1)],
-      ["a string array", ["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta"]],
       ["an array with an extra key", Object.assign([1, 2], { note: "extra" })],
       ["a deep object", { a: 1, b: "x", c: { d: { e: { f: { g: 1 } } } } }],
       ["an empty object", {}],
@@ -99,7 +93,6 @@ const ordinaryValues = Schema.decodeUnknownSync(
       ["a buffer", Buffer.from([1, 2])],
       ["a float array", new Float64Array([1.5])],
       ["a bigint array", new BigInt64Array([1n])],
-      ["a long typed array", new Uint8Array(150)],
       ["a cycle", cyclic],
       ["a resolved promise", Promise.resolve(1)],
       ["a pending promise", new Promise(() => {})],
@@ -116,6 +109,32 @@ const ordinaryValues = Schema.decodeUnknownSync(
       ["an arguments object", argumentsOf(1, 2)],
     ]
   })()`),
+)
+
+/**
+ * Values the display lays out more plainly than `inspect`: strings always take
+ * single quotes, and a list packs its items onto lines instead of aligned columns.
+ */
+const plainLayoutValues = Schema.decodeUnknownSync(
+  Schema.Array(Schema.Tuple([Schema.String, Schema.Unknown, Schema.String])),
+)(
+  runInThisContext(`[
+    ["a string with a single quote", "it's", "'it\\\\'s'"],
+    ["a string with both quotes", "it's \\"so\\"", "'it\\\\'s \\"so\\"'"],
+    ["nested arrays", [1, "two", [3, [4, [5, [6]]]]], "[\\n  1,\\n  'two',\\n  [\\n    3, [ 4, [ 5, [ 6 ] ] ]\\n  ]\\n]"],
+    ["a numeric array", Array.from({ length: 27 }, (_, index) => index + 1), "[\\n  1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,\\n  23, 24, 25, 26, 27\\n]"],
+    ["a string array", ["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta"], "[\\n  'alpha', 'beta', 'gamma', 'delta', 'epsilon', 'zeta', 'eta', 'theta'\\n]"],
+  ]`),
+)
+
+/** Long lists show their first hundred items, then a count of the rest. */
+const longLists = Schema.decodeUnknownSync(
+  Schema.Array(Schema.Tuple([Schema.String, Schema.Unknown, Schema.String, Schema.String])),
+)(
+  runInThisContext(`[
+    ["a long array", Array.from({ length: 120 }, (_, index) => index), "[\\n  0, 1, 2, 3,", "98, 99, ... 20 more items\\n]"],
+    ["a long typed array", new Uint8Array(150), "Uint8Array(150) [\\n  0, 0,", " ... 50 more items\\n]"],
+  ]`),
 )
 
 /** What the display shows where `inspect` would run cell code or print more than a model needs. */
@@ -150,6 +169,19 @@ describe("cell value display", () => {
   for (const [name, value] of ordinaryValues)
     test(`${name} shows as inspect shows it`, () => {
       expect(shown(value)).toBe(inspected(value))
+    })
+
+  for (const [name, value, expected] of plainLayoutValues)
+    test(`${name} shows in the plain layout`, () => {
+      expect(shown(value)).toBe(expected)
+    })
+
+  for (const [name, value, head, tail] of longLists)
+    test(`${name} shows its first hundred items on packed lines`, () => {
+      const display = shown(value)
+      expect(display.startsWith(head)).toBe(true)
+      expect(display.endsWith(tail)).toBe(true)
+      for (const line of display.split("\n")) expect(line.length).toBeLessThanOrEqual(80)
     })
 
   for (const [name, value, expected] of differentValues)
