@@ -82,14 +82,14 @@ describe("E2E: Auth", () => {
     () =>
       Effect.gen(function* () {
         const ctx = yield* acquireTestContext(spawnNoAuth)
-        yield* ptyWaitFor(ctx, "API Keys", { timeout: 10_000 })
+        yield* ptyWaitFor(ctx, "Sign in", { timeout: 10_000 })
         // The boot gate opens on the first *required* provider, and the
         // default agent's model is a Claude one, so the picker it opens is
         // anthropic's. This waited for "ChatGPT Pro/Plus", a label only
         // openai offers, which this flow therefore never shows.
         yield* ptyWaitFor(ctx, "Claude Code", { timeout: 10_000 })
         yield* waitForOutput(ctx, "Manually enter API key", 10_000)
-        expect(ctx.output).toContain("API Keys")
+        expect(ctx.output).toContain("· method")
       }),
     TEST_TIMEOUT,
   )
@@ -99,12 +99,12 @@ describe("E2E: Auth", () => {
     () =>
       Effect.gen(function* () {
         const ctx = yield* acquireTestContext(spawnNoAuth)
-        yield* ptyWaitFor(ctx, "API Keys", { timeout: 10_000 })
+        yield* ptyWaitFor(ctx, "Sign in", { timeout: 10_000 })
         yield* ptyWaitFor(ctx, "Manually enter API key", { timeout: 10_000 })
         ctx.pty.write(UP)
         yield* shortPause(200)
         ctx.pty.write(ENTER)
-        yield* ptyWaitFor(ctx, "(type key)", { timeout: 5_000 })
+        yield* ptyWaitFor(ctx, "API key ›", { timeout: 5_000 })
       }),
     TEST_TIMEOUT,
   )
