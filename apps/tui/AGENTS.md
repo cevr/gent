@@ -123,8 +123,9 @@ in the detail's place: a pane with a detail line keeps the row while the
 detail is `None`, so it does not jump when the text arrives. The pane is
 then the one box that gives way, in whole rows (`PickerFrame` sets a
 `flexBasis`, not a `height`: OpenTUI turns shrinking off on a box whose
-height is set); squeezed, it drops its key hint, then its title, before its
-body's last row. Inside the body the order goes on: the note row gives way
+height is set); squeezed, it drops its key hint, then its title, before a
+row its body requires (a list's cursor row; the sign-in OAuth screen's URL
+and code, which also outrank its optional code line). Inside the body the order goes on: the note row gives way
 first, then the `SelectList` headings, then its filter row, and one row stays
 for the cursor (the list reads its rows from the frame). Under three rows
 the frame drops its rules and note row too, so its one or two rows go to

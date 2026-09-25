@@ -466,13 +466,16 @@ export function PickerHost(props: { children: (hosting: () => boolean) => JSX.El
  * per row, headings included, and `query` is the filter or query row above
  * them (1 or 0). `dressed` is the least the list draws before it drops an
  * optional line: the cursor row, with the filter row and one heading above it
- * when the list has them. The frame sizes itself from these, so a list pane
- * never counts its own lines.
+ * when the list has them. `required` is the rows the body needs before the
+ * frame's title keeps its row: a list's cursor row (1); every row the sign-in
+ * OAuth screen must show (its URL and code). The frame sizes itself from
+ * these, so a list pane never counts its own lines.
  */
 interface PickerBodyLines {
   readonly rows: number
   readonly query: number
   readonly dressed: number
+  readonly required: number
 }
 
 /** Every line the list draws: its query row and each row. */
@@ -497,9 +500,8 @@ const PickerBodyContext = createContext<PickerBody>({
 /**
  * A frame body reports the lines it draws and reads back the rows the frame
  * gives it (`None` outside a frame or before it is measured). `SelectList`
- * does this; so does a body that is not a list but must fit its rows (the
- * sign-in OAuth screen), which hides a whole box rather than let a 0-row
- * node draw over its neighbour.
+ * does this; so does a body that is not a list but must order its rows (the
+ * sign-in OAuth screen, whose optional code line gives way before its URL).
  */
 export const usePickerBody = (lines: () => PickerBodyLines): (() => Option.Option<number>) => {
   const body = useContext(PickerBodyContext)
@@ -510,8 +512,8 @@ export const usePickerBody = (lines: () => PickerBodyLines): (() => Option.Optio
 
 /** Two rules and one body row: below this the rules give way. */
 const PICKER_ROWS_RULED = 3
-/** Two rules, the title and one body row: below this the title gives way. */
-const PICKER_ROWS_WITH_TITLE = 4
+/** Two rules and the title: the title keeps its row only past these and the body's required rows. */
+const PICKER_CHROME_WITH_TITLE = 3
 
 /**
  * How many rows a frame asks for. A frame over a `SelectList` passes nothing:
@@ -605,7 +607,12 @@ export function PickerFrame(
     if (bare()) return false
     return ["top", "bottom"]
   }
-  const titled = () => !Option.exists(measured(), (rows) => rows < PICKER_ROWS_WITH_TITLE)
+  // The title gives way before a row the body requires (a list's cursor row,
+  // the OAuth URL and code): it keeps its row only past them.
+  const required = () =>
+    Option.match(list(), { onNone: () => 1, onSome: (lines) => lines.required })
+  const titled = () =>
+    !Option.exists(measured(), (rows) => rows < PICKER_CHROME_WITH_TITLE + required())
   const bodyRows = () =>
     Option.map(measured(), (rows) => {
       if (bare()) return rows
@@ -1151,6 +1158,7 @@ export function SelectList<A>(props: SelectListProps<A>) {
     rows: drawnRows(),
     query: inputLines(),
     dressed: 1 + inputLines() + headingLines(),
+    required: 1,
   })
   const bodyRows = usePickerBody(lines)
   const fits = (needed: number) =>

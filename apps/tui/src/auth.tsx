@@ -752,40 +752,47 @@ export function Auth(props: AuthProps) {
 
   /**
    * The OAuth screen inside its frame: the instructions and the URL, then the
-   * code line. It reports every row as needed, so the note row gives way
-   * first. The newest rows matter: a squeezed body drops its top lines and
-   * keeps the URL above the code line. Under two rows the code line keeps the
-   * one row and the URL box hides whole, since a 0-row box draws over its
-   * neighbour.
+   * code line. The rows go in order of need. The note row gives way first,
+   * then the title (the body requires its rows before the title keeps one),
+   * then, while the flow waits, the optional code line. Last, a squeezed body
+   * drops its top lines and keeps the URL and the user code above it. A flow
+   * that does not wait needs its code line, which keeps its row. The code
+   * line hides without leaving the keyboard scope, so Esc and a paste still
+   * reach it.
    */
   const OAuthBody = (bodyProps: { readonly current: () => OAuthScreen }) => {
-    const needed = () => oauthBodyRows(bodyProps.current()) + 1
-    const rows = usePickerBody(() => ({ rows: needed(), query: 0, dressed: needed() }))
-    const urlShown = () => !Option.exists(rows(), (available) => available < 2)
+    const bodyRows = () => oauthBodyRows(bodyProps.current())
+    const codeLineNeeded = () => !bodyProps.current().waiting
+    const rows = usePickerBody(() => {
+      let required = bodyRows()
+      if (codeLineNeeded()) required += 1
+      return { rows: bodyRows() + 1, query: 0, dressed: bodyRows() + 1, required }
+    })
+    const codeLineShown = () =>
+      codeLineNeeded() || !Option.exists(rows(), (available) => available < bodyRows() + 1)
     return (
       <>
-        <Show when={urlShown()}>
-          <ChromePanel.Body stickToBottom>
-            <Show when={bodyProps.current().browserUnavailable}>
-              <text wrapMode="none" truncate style={{ fg: theme.textMuted }}>
-                Could not open a browser; open the URL yourself.
-              </text>
-            </Show>
-            <For each={instructionLines(bodyProps.current())}>
-              {(line) => (
-                <text wrapMode="none" truncate style={{ fg: theme.textMuted }}>
-                  {line}
-                </text>
-              )}
-            </For>
-            <text wrapMode="char" style={{ fg: theme.text }}>
-              {bodyProps.current().authorization.url}
+        <ChromePanel.Body stickToBottom>
+          <Show when={bodyProps.current().browserUnavailable}>
+            <text wrapMode="none" truncate style={{ fg: theme.textMuted }}>
+              Could not open a browser; open the URL yourself.
             </text>
-          </ChromePanel.Body>
-        </Show>
+          </Show>
+          <For each={instructionLines(bodyProps.current())}>
+            {(line) => (
+              <text wrapMode="none" truncate style={{ fg: theme.textMuted }}>
+                {line}
+              </text>
+            )}
+          </For>
+          <text wrapMode="char" style={{ fg: theme.text }}>
+            {bodyProps.current().authorization.url}
+          </text>
+        </ChromePanel.Body>
         <AuthTextLine
           label={codeLabel(bodyProps.current().authorization.method)}
           text={bodyProps.current().code}
+          shown={codeLineShown()}
           caret={!bodyProps.current().waiting}
           onEvent={send}
           onSubmit={() => submitOauth(bodyProps.current())}
@@ -888,13 +895,16 @@ export function Auth(props: AuthProps) {
  * The key line and the code line: one row that takes typed and pasted text.
  * The composer keeps the terminal's focus, so the line reads its keys through
  * the keyboard scope, as btw's ask line does. It sits inside its frame, so a
- * frame with no row takes none of them (`KeyboardGate`). Text longer than
- * the row shows its tail, so the caret stays on screen.
+ * frame with no row takes none of them (`KeyboardGate`). A line the pane
+ * hides (`shown` false, an optional code line on a short terminal) keeps its
+ * scope. Text longer than the row shows its tail, so the caret stays on
+ * screen.
  */
 function AuthTextLine(props: {
   readonly label: string
   readonly text: string
   readonly caret: boolean
+  readonly shown?: boolean
   readonly onEvent: (event: AuthEvent) => void
   readonly onSubmit: () => void
   readonly onCancel: () => void
@@ -944,14 +954,16 @@ function AuthTextLine(props: {
     },
   )
   return (
-    <ChromePanel.Section>
-      <text wrapMode="none" style={{ fg: theme.text }}>
-        <span style={{ fg: theme.textMuted }}>{props.label} </span>
-        {visibleText()}
-        <Show when={props.caret}>
-          <span style={{ fg: theme.primary }}>│</span>
-        </Show>
-      </text>
-    </ChromePanel.Section>
+    <Show when={props.shown !== false}>
+      <ChromePanel.Section>
+        <text wrapMode="none" style={{ fg: theme.text }}>
+          <span style={{ fg: theme.textMuted }}>{props.label} </span>
+          {visibleText()}
+          <Show when={props.caret}>
+            <span style={{ fg: theme.primary }}>│</span>
+          </Show>
+        </text>
+      </ChromePanel.Section>
+    </Show>
   )
 }
