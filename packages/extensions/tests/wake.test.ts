@@ -64,6 +64,7 @@ import { BranchId, MessageId, SessionId, ToolCallId, SteerCommand } from "@gent/
 import {
   RequestId,
   ExtensionContext,
+  ExtensionServiceError,
   type ExtensionContextService,
 } from "@gent/core/extensions/api"
 
@@ -1559,6 +1560,48 @@ describe("wake store", () => {
         Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
         Effect.timeout("8 seconds"),
       ),
+  )
+
+  // A full follow-up queue refuses the wake line (the exec-tools test fills a
+  // real one); the fire must not be lost, so it waits as a notice.
+  it.scopedLive("a wake fire the follow-up queue refused is kept as a notice", () =>
+    Effect.gen(function* () {
+      const home = yield* makeTempDirectoryScoped("wake-refused-")
+      const base = contextWith(home, yield* Ref.make<ReadonlyArray<string>>([]))
+      const ctx = {
+        ...base,
+        Session: {
+          ...base.Session,
+          send: () =>
+            Effect.fail(
+              new ExtensionServiceError({
+                service: "Session",
+                operation: "send",
+                message: "Follow-up queue full (max 10)",
+              }),
+            ),
+        },
+      }
+      const handle = yield* runToolWithCtx(
+        WakeTool,
+        { afterSeconds: 1, note: "check the deploy" },
+        ctx,
+      )
+      const alarms = yield* WakeAlarms
+      yield* TestClock.adjust("1 second")
+      yield* settled(alarms.pending)
+      const entries = yield* readFile(home).pipe(
+        Effect.flatMap(Schema.decodeEffect(Schema.fromJsonString(Schema.Array(WakeEntry)))),
+        Effect.orDie,
+      )
+      expect(entries.map((entry) => entry._tag)).toEqual(["notice"])
+      const [notice] = entries
+      expect(notice?.wakeId).toBe(handle.wakeId)
+      if (notice?._tag === "notice") expect(notice.content).toContain("check the deploy")
+    }).pipe(
+      Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
+      Effect.timeout("8 seconds"),
+    ),
   )
 
   it.scopedLive("a repeating notify alarm keeps one alarm row and adds one notice per tick", () =>

@@ -269,7 +269,9 @@ const dropPendingRow =
  * so a stop cannot leave a notice with its row still due. A file an older
  * binary left in that state has the notice already: an alarm's notice text
  * names its due time, so the same text under the same id is the same fire,
- * and it is not added twice.
+ * and it is not added twice. A `wake` line the session refuses (a full
+ * follow-up queue, for one) is left as a notice the same way, so the fire is
+ * not lost.
  */
 const queueWake = (
   entry: PendingWakeEntry,
@@ -279,7 +281,7 @@ const queueWake = (
 ) =>
   Effect.gen(function* () {
     const ctx = yield* ExtensionContext
-    if (modeOf(entry) === "notify") {
+    const leaveNotice = Effect.gen(function* () {
       const notice = WakeEntry.cases.notice.make({
         wakeId: entry.wakeId,
         outcome: details.outcome,
@@ -298,15 +300,25 @@ const queueWake = (
         if (seen) return settled
         return [...settled, notice]
       })
-      return yield* ctx.State.changed()
-    }
-    yield* ctx.Session.send({
+      yield* ctx.State.changed()
+    })
+    if (modeOf(entry) === "notify") return yield* leaveNotice
+    const sent = yield* ctx.Session.send({
       delivery: "queue",
       sourceId: fireKey(entry),
       content,
       metadata: { customType: WAKE_MESSAGE_TYPE, extensionId: WAKE_EXTENSION_ID, details },
       wake: true,
-    })
+    }).pipe(
+      Effect.as(true),
+      Effect.catchEager((error) =>
+        Effect.logWarning("wake.fire.refused").pipe(
+          Effect.annotateLogs({ wakeId: entry.wakeId, error: error.message }),
+          Effect.as(false),
+        ),
+      ),
+    )
+    if (!sent) return yield* leaveNotice
     yield* modifyWakeEntries(settle)
   })
 
