@@ -27,11 +27,14 @@ const program = checkLintOffs().pipe(
 )
 
 // The layer runs the check once as it is built; the scope closes after it.
+// The bound catches a hang, not a slow run: the probe lints the whole tree
+// with type-aware rules beside oxlint's own run, which takes 75-120 s on a
+// 3-thread CI runner.
 if (import.meta.main)
   BunRuntime.runMain(
     Effect.scoped(
       Layer.build(
-        Layer.effectDiscard(program.pipe(Effect.scoped, Effect.timeout("120 seconds"))).pipe(
+        Layer.effectDiscard(program.pipe(Effect.scoped, Effect.timeout("300 seconds"))).pipe(
           Layer.provide(BunServices.layer),
         ),
       ),
