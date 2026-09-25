@@ -867,8 +867,8 @@ export const builtinSkills = defineClientExtension("@gent/skills-ui", {
       // alone, because the skills popup is the only surface that knows a
       // chosen row was a skill. The write itself belongs to the store, which
       // folds the pick into what is on disk under one gate — the `/` registry
-      // records through the same function. Two writers with two strategies is
-      // exactly what used to lose picks.
+      // records through the same function, so a concurrent pick from either
+      // popup is never lost.
       onSelect: (id: string) => {
         forkStoreWrite(
           Effect.flatMap(Clock.currentTimeMillis, (now) =>

@@ -8,6 +8,7 @@ import {
   defineClientExtension,
   sessionQuery,
 } from "../../src/extensions/client-facets"
+import { BunServices } from "@effect/platform-bun"
 import { makeClientRuntime } from "../../src/extensions/host"
 import {
   makeClientTestTransport,
@@ -216,7 +217,7 @@ const session = { sessionId: SessionId.make("sess-1"), branchId: BranchId.make("
 
 describe("makeClientRuntime", () => {
   it.live("transport, workspace and cast alone resolve every client facet", () => {
-    const runtime = makeClientRuntime({
+    const runtime = makeClientRuntime(BunServices.layer, {
       transport: makeClientTestTransport({ currentSession: () => Option.some(session) }),
       workspace,
       shell: runCast,
@@ -248,7 +249,7 @@ describe("makeClientRuntime", () => {
   it.live("supplied shell, activity and lifecycle callbacks replace the no-op defaults", () => {
     const sent: Array<string> = []
     const cleanups: Array<() => void> = []
-    const runtime = makeClientRuntime({
+    const runtime = makeClientRuntime(BunServices.layer, {
       transport: makeClientTestTransport({ currentSession: () => Option.some(session) }),
       workspace,
       shell: { ...runCast, notify: (message) => sent.push(message) },

@@ -557,6 +557,69 @@ describe("Agents pane navigation", () => {
     }),
   )
 
+  it.live("a poll that lists the same sessions again leaves the cursor on the reader's row", () =>
+    Effect.gen(function* () {
+      // Every poll decodes fresh row objects. The pane opens on the session
+      // the shell is on; the reader moves off it, and the next poll must not
+      // pull the cursor back.
+      const listing = () => [
+        rowPane("agents-root", "Alpha", 0),
+        rowPane("agents-child", "Beta", 1),
+        rowPane("agents-other", "Gamma", 1),
+      ]
+      const [rows, setRows] = createSignal<ReadonlyArray<AgentRowEntry>>(listing())
+      let selected = Option.none<AgentRowEntry>()
+
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => (
+          <AgentsPane
+            open={true}
+            controller={{
+              rows,
+              current: () =>
+                Option.some({
+                  sessionId: SessionId.make("agents-root"),
+                  branchId: BranchId.make("agents-root-branch"),
+                }),
+              error: () => Option.none(),
+              loading: () => false,
+              refresh: () => {},
+              reload: () => {},
+              detail: () => Option.none(),
+              select: () => {},
+              open: () => true,
+            }}
+            onSelect={(value) => {
+              selected = Option.some(value)
+            }}
+            onToggle={() => {}}
+            onDelete={() => {}}
+            onClose={() => {}}
+          />
+        )),
+      )
+      yield* waitForFrame(setup, () => renderFrame(setup).includes("Gamma"), "agents pane open")
+
+      setup.mockInput.pressArrow("down")
+      setup.mockInput.pressArrow("down")
+      yield* Effect.promise(() => setup.renderOnce())
+      setRows(listing())
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      expect(Option.map(selected, (row) => row.sessionId)).toEqual(
+        Option.some(SessionId.make("agents-other")),
+      )
+
+      // A poll that no longer lists the reader's row keeps the cursor in the list.
+      setRows(listing().slice(0, 2))
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      expect(Option.map(selected, (row) => row.sessionId)).toEqual(
+        Option.some(SessionId.make("agents-child")),
+      )
+    }),
+  )
+
   it.live("asks for detail about the row under the cursor and renders it", () =>
     Effect.gen(function* () {
       const parent = rowPane("detail-root", "Alpha", 0)

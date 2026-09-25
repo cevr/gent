@@ -2,7 +2,6 @@ import { createContext, createSignal, type JSX, onCleanup, onMount } from "solid
 import { useRequiredContext } from "./utils"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { type Cause, Context, Effect, Fiber, FileSystem, Option, Stream } from "effect"
-import { BunFileSystem } from "@effect/platform-bun"
 
 // ── environment provider ────────────────────────────────────────────────────
 
@@ -211,8 +210,10 @@ export function WorkspaceProvider(props: WorkspaceProviderProps) {
       )
     }
 
+    // The watch reads `FileSystem` from the services the root provides
+    // (`uiServices` in `main.tsx`); without it the poll stands in.
     const watchProgram = Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
+      const fs = yield* Effect.fromOption(Context.getOption(services, FileSystem.FileSystem))
       yield* fs.watch(gitDir).pipe(
         Stream.runForEach((event) => {
           const name = Option.getOrElse(Option.fromNullishOr(event.path.split("/").pop()), () => "")
@@ -223,8 +224,6 @@ export function WorkspaceProvider(props: WorkspaceProviderProps) {
         }),
       )
     }).pipe(
-      // @effect-diagnostics-next-line strictEffectProvide:off solid mount edge — isolated FS effect
-      Effect.provide(BunFileSystem.layer),
       Effect.catchCause((cause) =>
         Effect.sync(() => {
           startPollingFallback(cause)
