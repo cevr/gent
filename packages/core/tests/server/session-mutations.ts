@@ -18,10 +18,9 @@ import {
   type BranchStorageService,
   SessionStorage,
   type SessionStorageService,
-  SqliteStorage,
   StorageError,
 } from "../../src/storage/storage"
-import { createE2ELayer, createRpcClient } from "../../src/test-utils/harness"
+import { createE2ELayer, createRpcClient, testSqliteStorage } from "../../src/test-utils/harness"
 import { e2ePreset } from "../helpers/test-preset"
 
 export const FIXED_NOW = dateFromMillis(1_767_225_600_000)
@@ -112,9 +111,7 @@ export const sessionRuntimeLayer = (
   )
 
 const buildFailingSessionMutationsLayer = () => {
-  const storageLayer = SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(
-    Layer.provide(GentPlatform.Test()),
-  )
+  const storageLayer = testSqliteStorage(() => Layer.empty, {})
   const deps = Layer.mergeAll(
     storageLayer,
     sessionRuntimeLayer(),
@@ -163,9 +160,7 @@ export const createActiveSessionFixture = Effect.fn("createActiveSessionFixture"
 )
 
 const buildSessionMutationsLayer = () => {
-  const storageLayer = SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(
-    Layer.provide(GentPlatform.Test()),
-  )
+  const storageLayer = testSqliteStorage(() => Layer.empty, {})
   const deps = Layer.mergeAll(
     storageLayer,
     sessionRuntimeLayer(),
@@ -209,9 +204,7 @@ export const sessionMutationsLayerWithMachineProbe = (
   runtimeTerminated?: Array<SessionId>,
   runtimeRestored?: Array<SessionId>,
 ) => {
-  const storageLayer = SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(
-    Layer.provide(GentPlatform.Test()),
-  )
+  const storageLayer = testSqliteStorage(() => Layer.empty, {})
   let runtimeLayer = sessionRuntimeLayer()
   if (!Predicate.isUndefined(runtimeTerminated)) {
     runtimeLayer = sessionRuntimeProbeLayer(runtimeTerminated)
@@ -234,9 +227,7 @@ export const failingDeleteSessionMutationsLayerWithMachineProbe = (
   runtimeTerminated: Array<SessionId>,
   runtimeRestored: Array<SessionId>,
 ) => {
-  const storageLayer = SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(
-    Layer.provide(GentPlatform.Test()),
-  )
+  const storageLayer = testSqliteStorage(() => Layer.empty, {})
   const failingSessionStorageLayer = Layer.effect(
     SessionStorage,
     Effect.gen(function* () {
@@ -273,9 +264,7 @@ export const racySessionMutationsLayer = (params: {
   readonly runtimeTerminated: Array<SessionId>
   readonly lateChild: { sessionId: SessionId; branchId: BranchId }
 }) => {
-  const storageLayer = SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(
-    Layer.provide(GentPlatform.Test()),
-  )
+  const storageLayer = testSqliteStorage(() => Layer.empty, {})
   const racingSessionStorageLayer = Layer.effect(
     SessionStorage,
     Effect.gen(function* () {
@@ -336,9 +325,7 @@ export const interleavedSessionMutationsLayer = (params: {
   readonly sessionId: SessionId
   readonly racingWrite: (sql: SqlClient.SqlClient) => Effect.Effect<unknown, SqlError.SqlError>
 }) => {
-  const storageLayer = SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(
-    Layer.provide(GentPlatform.Test()),
-  )
+  const storageLayer = testSqliteStorage(() => Layer.empty, {})
   const interleavedSessionStorageLayer = Layer.effect(
     SessionStorage,
     Effect.gen(function* () {

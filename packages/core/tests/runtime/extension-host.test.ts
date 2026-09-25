@@ -35,6 +35,7 @@ import {
   testHostFacts,
   testToolContext,
   ensureStorageParents,
+  testSqliteStorage,
 } from "../../src/test-utils/harness"
 import { BunChildProcessSpawner, BunCrypto, BunFileSystem, BunServices } from "@effect/platform-bun"
 import { BunGentPlatformLive, BunPlatformLive } from "../../src/runtime/gent-platform-bun"
@@ -264,7 +265,7 @@ describe("ambient extension host context", () => {
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
-          SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
+          testSqliteStorage(noBranchTools.storage, noBranchTools.migrations),
           EventStore.Memory,
         ),
       ),
@@ -300,9 +301,7 @@ describe("ambient extension host context", () => {
         Effect.provideService(CurrentWorkspaceId, otherWorkspace),
       )
       expect(found?.name).toBe("pinned")
-    }).pipe(
-      Effect.provide(SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations)),
-    ),
+    }).pipe(Effect.provide(testSqliteStorage(noBranchTools.storage, noBranchTools.migrations))),
   )
 
   it.scopedLive(
@@ -340,7 +339,7 @@ describe("ambient extension host context", () => {
         Effect.provide(
           Layer.provideMerge(
             EventStoreLive,
-            SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
+            testSqliteStorage(noBranchTools.storage, noBranchTools.migrations),
           ),
         ),
       ),
@@ -384,7 +383,7 @@ describe("ambient extension host context", () => {
       Effect.provide(
         Layer.provideMerge(
           EventStoreLive,
-          SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
+          testSqliteStorage(noBranchTools.storage, noBranchTools.migrations),
         ),
       ),
     ),
@@ -1375,7 +1374,7 @@ describe("resolveTurnProfile", () => {
         baseSections: [{ id: "default", content: "Default", priority: 1 }],
       }
       const testLayer = Layer.mergeAll(
-        SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(Layer.provide(GentPlatform.Test())),
+        testSqliteStorage(() => Layer.empty, {}),
         emptyRegistryLayer,
         runtimeEnvironmentLayer,
       )
@@ -1404,7 +1403,7 @@ describe("resolveTurnProfile", () => {
         home: "/tmp/runtime-context-home",
       })
       const testLayer = Layer.mergeAll(
-        SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(Layer.provide(GentPlatform.Test())),
+        testSqliteStorage(() => Layer.empty, {}),
         emptyRegistryLayer,
         runtimeEnvironmentLayer,
       )
@@ -1456,7 +1455,7 @@ describe("resolveTurnProfile", () => {
         home: "/tmp/runtime-context-home",
       })
       const testLayer = Layer.mergeAll(
-        SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(Layer.provide(GentPlatform.Test())),
+        testSqliteStorage(() => Layer.empty, {}),
         emptyRegistryLayer,
         runtimeEnvironmentLayer,
       )
@@ -3010,7 +3009,7 @@ describe("host session facet", () => {
     }).pipe(
       Effect.provide(
         Layer.merge(
-          SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
+          testSqliteStorage(noBranchTools.storage, noBranchTools.migrations),
           RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
         ),
       ),
@@ -3089,7 +3088,7 @@ describe("client request origin", () => {
       Effect.timeout("5 seconds"),
       Effect.provide(
         Layer.merge(
-          SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
+          testSqliteStorage(noBranchTools.storage, noBranchTools.migrations),
           RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
         ),
       ),
@@ -4787,7 +4786,7 @@ const makeMutationsLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageMod
   const resolvedExtensions = makeTestExtensions()
   const recorderLayer = SequenceRecorder.Live
   const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
-  const storageLayer = SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations)
+  const storageLayer = testSqliteStorage(noBranchTools.storage, noBranchTools.migrations)
   const clusterRunnerLayer = Layer.provide(
     SingleRunner.layer({ runnerStorage: "memory" }),
     Layer.merge(storageLayer, BunCrypto.layer),
@@ -5299,7 +5298,7 @@ describe("turn projection hooks", () => {
 const sharedLayer = Layer.mergeAll(
   fsLayer,
   ConfigService.Test(),
-  SqliteStorage.TestWithSql(() => Layer.empty, {}),
+  testSqliteStorage(() => Layer.empty, {}),
 )
 
 // Build a fresh production cache in the test's owning scope.

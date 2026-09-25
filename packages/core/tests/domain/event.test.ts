@@ -20,8 +20,8 @@ import { BranchId, SessionId, ToolCallId } from "../../src/domain/ids"
 import { describe, expect, it, test } from "effect-bun-test"
 import { Branch, dateFromMillis, Session } from "../../src/domain/message"
 import { EventStoreLive } from "../../src/runtime/session"
-import { GentPlatform } from "../../src/runtime/gent-platform"
-import { BranchStorage, SessionStorage, SqliteStorage } from "../../src/storage/storage"
+import { BranchStorage, SessionStorage } from "../../src/storage/storage"
+import { testSqliteStorage } from "../../src/test-utils/harness"
 
 const session = SessionId.make("session-1")
 const branch = BranchId.make("branch-1")
@@ -292,9 +292,7 @@ const range = (from: number, to: number) =>
   Array.from({ length: to - from + 1 }, (_, index) => from + index)
 
 const durableLayer = EventStoreLive.pipe(
-  Layer.provideMerge(
-    SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(Layer.provide(GentPlatform.Test())),
-  ),
+  Layer.provideMerge(testSqliteStorage(() => Layer.empty, {})),
 )
 
 /** The durable store validates the session and branch rows before it appends. */
