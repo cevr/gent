@@ -19,14 +19,15 @@ import {
   findPlatformDuplicationViolations,
   findReadersWithoutWriters,
   findRetiredSurfaces,
-  findSafetyBlockDrift,
   findSteeringFilePaths,
   findSuppressionInventoryFindings,
   findTuiSessionIdentityReads,
   findUnadaptedSeams,
   findUnconsumedExports,
   findUnenabledPluginRules,
+  findUnmatchedIgnoreRows,
   findUnmatchedOverrideGlobs,
+  findUnmatchedTsconfigOverrides,
   findUnusedSuppressionApprovals,
   HOOK_FILE,
   isSteeringFile,
@@ -40,6 +41,7 @@ import {
   type PackageJson,
   PackageJsonSchema,
   type TsConfigJson,
+  TsConfigPluginsSchema,
   TsConfigSchema,
   workspaceManifests,
   workspaceTsconfigs,
@@ -93,18 +95,27 @@ const readJsonc = Effect.fn("Tooling.readJsonc")(function* <
 })
 
 const OXLINT_CONFIG = ".oxlintrc.json"
+const OXLINT_IGNORE = ".oxlintignore"
+const ROOT_TSCONFIG = "tsconfig.json"
 const LINT_PLUGIN = "packages/tooling/src/gent-rules.ts"
 
-/** The two findings that read the lint config rather than one source file. */
+/** The findings that read the lint and compiler configs rather than one source file. */
 const lintConfigFindings = Effect.fn("Tooling.lintConfigFindings")(function* (
   trackedFiles: ReadonlyArray<string>,
   sourceTexts: ReadonlyMap<string, string>,
 ) {
   const { text: configText, value: config } = yield* readJsonc(OXLINT_CONFIG, OxlintConfigSchema)
+  const tsconfig = yield* readJsonc(ROOT_TSCONFIG, TsConfigPluginsSchema)
+  const ignoreText = Option.match(yield* readTrackedFile(OXLINT_IGNORE), {
+    onNone: () => "",
+    onSome: (read) => read.text,
+  })
   const rootRules = new Set(Object.keys(config.rules ?? {}))
   const pluginText = Option.getOrElse(Option.fromNullishOr(sourceTexts.get(LINT_PLUGIN)), () => "")
   return [
     ...findUnmatchedOverrideGlobs(OXLINT_CONFIG, configText, config, trackedFiles),
+    ...findUnmatchedIgnoreRows(OXLINT_IGNORE, ignoreText, trackedFiles),
+    ...findUnmatchedTsconfigOverrides(ROOT_TSCONFIG, tsconfig.text, tsconfig.value, trackedFiles),
     ...findUnenabledPluginRules(LINT_PLUGIN, pluginText, Object.keys(gentRules.rules), rootRules),
   ]
 })
@@ -305,8 +316,6 @@ export const scanTrackedTexts = (
   const adaptedSeams = new Set<string>()
   // A package script is a writer of the variables it sets.
   const manifestTexts = new Map<string, string>()
-  // The loop prompts share one SAFETY block.
-  const steeringTexts = new Map<string, string>()
 
   /**
    * Facts the cross-file scans need, gathered in the single pass over the
@@ -323,7 +332,6 @@ export const scanTrackedTexts = (
     for (const finder of ANY_FILE_FINDERS) findings.push(...finder(file, text))
     findings.push(...findSteeringFilePaths(file, text, trackedFiles))
     if (isManifest(file)) manifestTexts.set(file, text)
-    if (isSteeringFile(file)) steeringTexts.set(file, text)
     if (!isSourceFile(file)) continue
     for (const finder of SOURCE_FILE_FINDERS) findings.push(...finder(file, text))
     collectWholeTreeFacts(file, text)
@@ -335,7 +343,6 @@ export const scanTrackedTexts = (
     ...findUnadaptedSeams(sourceTexts, adaptedSeams),
     // A GENT_* variable whose writer left: its reader is a branch nothing takes.
     ...findReadersWithoutWriters(new Map([...sourceTexts, ...manifestTexts])),
-    ...findSafetyBlockDrift(steeringTexts),
   )
   return { findings, sourceTexts }
 }

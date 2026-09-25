@@ -17,18 +17,21 @@ import {
   findPlatformDuplicationViolations,
   findReadersWithoutWriters,
   findRetiredSurfaces,
-  findSafetyBlockDrift,
   findSteeringFilePaths,
   findSuppressionInventoryFindings,
   findTuiSessionIdentityReads,
   findUnadaptedSeams,
   findUnconsumedExports,
   findUnenabledPluginRules,
+  findUnmatchedIgnoreRows,
   findUnmatchedOverrideGlobs,
+  findUnmatchedTsconfigOverrides,
   findUnneededOffs,
   findUnusedCatalogEntries,
   findUnusedDependencies,
   findUnusedSuppressionApprovals,
+  guideCodeBlocks,
+  guideDiagnosticLine,
   HOOK_FILE,
   type DependencyScope,
   type InstalledPackage,
@@ -604,6 +607,30 @@ describe("repo temp directory guard", () => {
     ).toEqual([[1], [1], [1], [4]])
   })
 
+  test("a temp directory rooted in the working directory is reported", () => {
+    const sources = [
+      'const dir = mkdtempSync(join(process.cwd(), "tmp-"))',
+      "const dir = yield* fs.makeTempDirectoryScoped({ directory: process.cwd() })",
+      'const dir = yield* fs.makeTempDirectoryScoped({ directory: path.resolve("out") })',
+      'const dir = yield* fs.makeTempDirectoryScoped({ directory: "./scratch" })',
+      'const dir = mkdtempSync("case-")',
+      ["const here = process.cwd()", 'const dir = mkdtempSync(join(here, "case-"))'].join("\n"),
+    ]
+    expect(
+      sources.map((source) => findRepoTempDirectories(testFile, source).map((f) => f.line)),
+    ).toEqual([[1], [1], [1], [1], [1], [2]])
+  })
+
+  test("an absolute prefix and a helper that takes a prefix pass", () => {
+    const source = [
+      'const a = mkdtempSync("/tmp/gent-case-")',
+      "const b = mkdtempSync(`${tmpdir()}/gent-case-`)",
+      'const c = yield* fs.makeTempDirectoryScoped({ directory: "/nonexistent/gent-probe-x" })',
+      'const d = yield* makeTempDirectoryScoped("gent-case-")',
+    ].join("\n")
+    expect(findRepoTempDirectories(testFile, source)).toEqual([])
+  })
+
   test("a system temp directory and a read of the source tree pass", () => {
     const source = [
       'const root = yield* fs.makeTempDirectoryScoped({ prefix: "gent-x-" })',
@@ -618,84 +645,6 @@ describe("repo temp directory guard", () => {
   test("product source is out of scope", () => {
     const source = 'const dir = { directory: path.resolve(import.meta.dir, "..") }'
     expect(findRepoTempDirectories("packages/core/src/runtime/x.ts", source)).toEqual([])
-  })
-})
-
-// ── loop prompt SAFETY block ────────────────────────────────────────────────
-
-describe("loop prompt SAFETY block guard", () => {
-  const APPLY = ".claude/skills/architecture-loop/prompts/apply.md"
-  const SWEEP = ".claude/skills/architecture-loop/prompts/sweep.md"
-  const prompt = (...rules: ReadonlyArray<string>) =>
-    [
-      "```",
-      "Work rules:",
-      "- one",
-      "",
-      "SAFETY (mandatory):",
-      ...rules,
-      "",
-      "Report: x",
-      "```",
-    ].join("\n")
-
-  test("two identical blocks pass", () => {
-    const texts = new Map([
-      [APPLY, prompt("- a", "- b")],
-      [SWEEP, prompt("- a", "- b")],
-    ])
-    expect(findSafetyBlockDrift(texts)).toEqual([])
-  })
-
-  test("a rule in one block only is reported at the other block", () => {
-    const texts = new Map([
-      [APPLY, prompt("- a", "- b")],
-      [SWEEP, prompt("- a")],
-    ])
-    expect(findSafetyBlockDrift(texts)).toEqual([
-      {
-        file: SWEEP,
-        line: 5,
-        message: expect.stringContaining(`differs from the one in ${APPLY}`),
-      },
-    ])
-  })
-
-  test("a prompt without the block is reported", () => {
-    const texts = new Map([
-      [APPLY, prompt("- a")],
-      [SWEEP, "no block"],
-    ])
-    expect(findSafetyBlockDrift(texts).map((finding) => finding.file)).toEqual([SWEEP])
-  })
-
-  test("a SAFETY block outside the fenced prompt is reported", () => {
-    const outside = ["```", "Work rules:", "- one", "```", "", "SAFETY (mandatory):", "- a"].join(
-      "\n",
-    )
-    const texts = new Map([
-      [APPLY, prompt("- a")],
-      [SWEEP, outside],
-    ])
-    expect(findSafetyBlockDrift(texts)).toEqual([
-      { file: SWEEP, line: 6, message: expect.stringContaining("outside the fenced prompt") },
-    ])
-  })
-
-  test("a rule added after a blank line in one block is reported", () => {
-    const texts = new Map([
-      [APPLY, prompt("- a")],
-      [SWEEP, prompt("- a", "", "- b")],
-    ])
-    expect(findSafetyBlockDrift(texts).map((finding) => finding.file)).toEqual([SWEEP])
-  })
-
-  test("trailing whitespace alone is no drift", () => {
-    const texts = new Map([
-      [APPLY, prompt("- a", "- b")],
-      [SWEEP, prompt("- a  ", "- b\t")],
-    ])
-    expect(findSafetyBlockDrift(texts)).toEqual([])
   })
 })
 
@@ -808,6 +757,53 @@ describe("an override must match a tracked file", () => {
       ["apps/tui/tests/deep/case.test.ts", "apps/tui/src/app.tsx"],
     )
     expect(findings).toEqual([])
+  })
+})
+
+describe("an ignore row must match a file oxlint would lint", () => {
+  const tracked = [
+    "packages/extensions/src/skills/markdown.d.ts",
+    "packages/tooling/fixtures/case.ts",
+    "packages/core/src/index.ts",
+  ]
+
+  test("a row that takes out a file is silent, in each gitignore form", () => {
+    const text = [
+      "# comment",
+      "",
+      "**/*.d.ts",
+      "packages/tooling/fixtures/",
+      "/packages/core",
+      "index.ts",
+      "!packages/keep.ts",
+    ].join("\n")
+    expect(findUnmatchedIgnoreRows(".oxlintignore", text, tracked)).toEqual([])
+  })
+
+  test("a row for build output git already ignores is reported at its line", () => {
+    const text = ["**/*.d.ts", "**/dist/", ".tmp-*"].join("\n")
+    expect(
+      findUnmatchedIgnoreRows(".oxlintignore", text, tracked).map((finding) => finding.line),
+    ).toEqual([2, 3])
+  })
+})
+
+describe("a tsconfig plugin override must match a tracked file", () => {
+  const config = (include: ReadonlyArray<string>) => ({
+    compilerOptions: { plugins: [{ overrides: [{ include }] }] },
+  })
+
+  test("an include glob that matches is silent, a dead one is reported at its line", () => {
+    const text = `{\n  "include": ["**/tests/**/*.ts",\n  "testbeds/gone/gone.ts"]\n}`
+    const findings = findUnmatchedTsconfigOverrides(
+      "tsconfig.json",
+      text,
+      config(["**/tests/**/*.ts", "testbeds/gone/gone.ts"]),
+      ["packages/core/tests/a.test.ts"],
+    )
+    expect(findings.map((finding) => [finding.line, finding.message])).toEqual([
+      [3, expect.stringContaining('`include: "testbeds/gone/gone.ts"` matches no tracked file')],
+    ])
   })
 })
 
@@ -1407,6 +1403,27 @@ describe("platform duplication guards", () => {
     ])
   })
 
+  test("a destructured or optional layer access is reported", () => {
+    const text = [
+      'import { BunCrypto, BunPath } from "@effect/platform-bun"',
+      'import * as PlatformBun from "@effect/platform-bun"',
+      "const { layer } = BunCrypto",
+      "const { layer: pathLayer, make } = BunPath",
+      "const { BunServices } = PlatformBun",
+      "const a = BunCrypto?.layer",
+      "const b = PlatformBun?.BunFileSystem?.layer",
+      "const c = BunServices.layer",
+      "const { make: makePath } = BunPath",
+    ].join("\n")
+    expect(provisionLines("packages/extensions/src/probe.ts", text)).toEqual([
+      [3, expect.stringContaining("`{ layer } = BunCrypto`")],
+      [4, expect.stringContaining("`{ layer: pathLayer, make } = BunPath`")],
+      [6, expect.stringContaining("`BunCrypto?.layer`")],
+      [7, expect.stringContaining("`PlatformBun?.BunFileSystem?.layer`")],
+      [8, expect.stringContaining("`BunServices.layer`")],
+    ])
+  })
+
   test("a layer access split across lines is reported at its first line", () => {
     const text = [
       'import { BunServices } from "@effect/platform-bun"',
@@ -1798,8 +1815,13 @@ describe("steering file paths", () => {
     expect(messagesOfSteeringPath(text)).toEqual([])
   })
 
-  test("ignores a path outside the five source roots", () => {
-    expect(messagesOfSteeringPath("see `docs/gone.md` and `scripts/gone.ts`")).toEqual([])
+  test("ignores a path outside the eight tree roots", () => {
+    expect(messagesOfSteeringPath("see `scripts/gone.ts` and `gone.md`")).toEqual([])
+  })
+
+  test("reports a missing docs, patches or skill file", () => {
+    const text = "see `docs/gone.md`, `patches/gone.patch` and `.claude/skills/x/safety.md`"
+    expect(messagesOfSteeringPath(text)).toHaveLength(3)
   })
 
   test("reads a path only when it sits in backticks", () => {
@@ -1819,6 +1841,7 @@ describe("steering file paths", () => {
       "docs/extensions.md",
       "testbeds/gamut/README.md",
       ".claude/skills/architecture-loop/prior-art.md",
+      "patches/README.md",
     ]) {
       expect(isSteeringFile(file)).toBe(true)
       expect(messagesOfSteeringPath(text, file)).toHaveLength(1)
@@ -1832,6 +1855,44 @@ describe("steering file paths", () => {
       expect(isSteeringFile(file)).toBe(false)
       expect(messagesOfSteeringPath(text, file)).toEqual([])
     }
+  })
+})
+
+// ── the extension guide's code compiles ─────────────────────────────────────
+
+describe("extension guide code blocks", () => {
+  const guide = [
+    "# Guide",
+    "```ts",
+    "const a = 1",
+    "const b = 2",
+    "```",
+    "```json",
+    '{ "x": 1 }',
+    "```",
+    "```ts",
+    "const c = 3",
+    "```",
+  ].join("\n")
+
+  test("each ts block is read with the guide line of its first code line", () => {
+    expect(guideCodeBlocks(guide)).toEqual([
+      { line: 3, code: "const a = 1\nconst b = 2" },
+      { line: 10, code: "const c = 3" },
+    ])
+  })
+
+  test("a diagnostic is reported at its line in the guide", () => {
+    const blocks = guideCodeBlocks(guide)
+    expect(guideDiagnosticLine("b1.ts(2,7): error TS1: x", blocks)).toBe(
+      "docs/extensions.md:4:7: error TS1: x",
+    )
+    expect(
+      guideDiagnosticLine("/tmp/gent-guide-code-x/b2.ts(1,1): suggestion TS2: y", blocks),
+    ).toBe("docs/extensions.md:10:1: suggestion TS2: y")
+    expect(guideDiagnosticLine("error TS2688: no bun types", blocks)).toBe(
+      "error TS2688: no bun types",
+    )
   })
 })
 

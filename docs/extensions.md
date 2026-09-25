@@ -155,11 +155,18 @@ its scope closes, so a timer that holds for its whole life releases the loop
 when it fires or is cancelled:
 
 ```ts
-const timer = ctx.Session.holdResident.pipe(
-  Effect.andThen(Effect.sleep("5 minutes")),
-  Effect.andThen(fire),
-  Effect.scoped,
-)
+import { ExtensionContext } from "@gent/core/extensions/api"
+import { Effect } from "effect"
+
+export const timer = Effect.gen(function* () {
+  const ctx = yield* ExtensionContext
+  const fire = Effect.log("timer fired")
+  yield* ctx.Session.holdResident.pipe(
+    Effect.andThen(Effect.sleep("5 minutes")),
+    Effect.andThen(fire),
+    Effect.scoped,
+  )
+})
 ```
 
 Outside a loop there is nothing to hold, and the verb does nothing.
@@ -265,7 +272,7 @@ const SetStatus = request({
   id: "set-status",
   input: Schema.Struct({ key: Schema.String, value: Schema.String }),
   output: Schema.Void,
-  execute: (input) => Effect.succeed(void 0),
+  execute: () => Effect.void,
 })
 
 export default defineExtension({
@@ -355,12 +362,11 @@ including `gent doctor`.
 import { defineExtension, defineResource, ExtensionHost } from "@gent/core/extensions/api"
 import { Context, Layer, Effect, Ref } from "effect"
 
-class MyService extends Context.Service<
-  MyService,
-  { readonly getData: () => Effect.Effect<string> }
->()("my-service-ext/MyService") {
+class MyService extends Context.Service<MyService, { readonly getData: Effect.Effect<string> }>()(
+  "my-service-ext/MyService",
+) {
   static Live = Layer.succeed(MyService, {
-    getData: () => Effect.succeed("data"),
+    getData: Effect.succeed("data"),
   })
 }
 
