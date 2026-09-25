@@ -1,5 +1,13 @@
-import { Effect, Layer, ManagedRuntime, Option, Scope } from "effect"
-import { BunFileSystem, BunServices } from "@effect/platform-bun"
+import {
+  Context,
+  Effect,
+  type FileSystem,
+  Layer,
+  ManagedRuntime,
+  Option,
+  type Path,
+  Scope,
+} from "effect"
 import {
   type AutocompleteContribution,
   type ClientActivitySnapshot,
@@ -43,12 +51,13 @@ import { useClient } from "../client"
 /**
  * One client `ManagedRuntime` for every surface that loads client
  * extensions: the interactive shell and tests. It adds `ClientContext` to the
- * platform services.
+ * platform services the caller's root built: the shell passes the services
+ * `main.tsx` provides, a test passes its own platform layer.
  */
-export const makeClientRuntime = (deps: ClientContextDeps): ClientRuntime =>
-  ManagedRuntime.make(
-    Layer.mergeAll(BunFileSystem.layer, BunServices.layer, makeClientContextLayer(deps)),
-  )
+export const makeClientRuntime = (
+  platform: Layer.Layer<FileSystem.FileSystem | Path.Path>,
+  deps: ClientContextDeps,
+): ClientRuntime => ManagedRuntime.make(Layer.merge(platform, makeClientContextLayer(deps)))
 
 // ── extension UI provider ───────────────────────────────────────────────────
 
@@ -149,10 +158,13 @@ export function ExtensionUIProvider(props: {
     cleanups.push(fn)
   }
 
-  // Per-provider ManagedRuntime that augments the shared platform layer
-  // (FileSystem, Path) with the `ClientContext` extensions yield.
-  // `loadTuiExtensions` runs each setup on this runtime.
-  const clientRuntime: ClientRuntime = makeClientRuntime({
+  // Per-provider ManagedRuntime that adds the `ClientContext` extensions yield
+  // to the platform services the root provides (`uiServices` in `main.tsx`,
+  // read through `ClientProvider`). `loadTuiExtensions` runs each setup on it.
+  const platform = Layer.succeedContext(
+    Context.makeUnsafe<FileSystem.FileSystem | Path.Path>(client.services.mapUnsafe),
+  )
+  const clientRuntime: ClientRuntime = makeClientRuntime(platform, {
     transport: {
       client: client.client,
       runtime: client.runtime,

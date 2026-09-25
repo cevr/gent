@@ -1367,7 +1367,7 @@ const castTestShellEffect = <A, E>(effect: Effect.Effect<A, E, never>): void => 
   Effect.runFork(effect)
 }
 
-const testRuntime = makeClientRuntime({
+const testRuntime = makeClientRuntime(BunServices.layer, {
   transport: {
     client: stubClient,
     runtime: stubRuntime,
