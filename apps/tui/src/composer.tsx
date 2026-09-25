@@ -484,13 +484,7 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
   }
 
   return (
-    <PickerFrame
-      lines={visibleItems().length}
-      queryRow
-      title={title()}
-      footer={footerHint()}
-      onSqueezeChange={props.onSqueezeChange}
-    >
+    <PickerFrame title={title()} footer={footerHint()} onSqueezeChange={props.onSqueezeChange}>
       <SelectList
         id="autocomplete"
         // The composer owns the filter; the list draws it as its query row.

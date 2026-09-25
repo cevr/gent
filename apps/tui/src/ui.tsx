@@ -449,15 +449,21 @@ export function PickerHost(props: { children: (hosting: () => boolean) => JSX.El
 }
 
 /**
- * The lines a `SelectList` draws in a `PickerFrame` body. `full` is every
- * line: the filter row and each row, headings included. `dressed` is the
- * least the list draws before it drops an optional line: the cursor row,
- * with the filter row and one heading above it when the list has them.
+ * The lines a `SelectList` draws in a `PickerFrame` body. `rows` is one line
+ * per row, headings included, and `query` is the filter or query row above
+ * them (1 or 0). `dressed` is the least the list draws before it drops an
+ * optional line: the cursor row, with the filter row and one heading above it
+ * when the list has them. The frame sizes itself from these, so a list pane
+ * never counts its own lines.
  */
 interface PickerListLines {
-  readonly full: number
+  readonly rows: number
+  readonly query: number
   readonly dressed: number
 }
+
+/** Every line the list draws: its query row and each row. */
+const fullLines = (lines: PickerListLines): number => lines.rows + lines.query
 
 /**
  * What a `PickerFrame` tells the `SelectList` in its body: the rows the list
@@ -481,16 +487,17 @@ const PICKER_ROWS_RULED = 3
 const PICKER_ROWS_WITH_TITLE = 4
 
 /**
- * How many rows a frame asks for. A list passes the `lines` its body draws,
- * one per row with headings included, and the frame adds its chrome and its
- * note row and caps the sum as every picker is capped ({@link pickerHeight}).
- * An empty list still draws one line, its empty row. A list with a filter or
- * query row above it says so (`queryRow`), and the frame counts that line too.
- * A pane that is not a list (the btw transcript) asks for a `height` outright.
+ * How many rows a frame asks for. A frame over a `SelectList` passes nothing:
+ * the list reports the lines it draws, one per row with headings included,
+ * and its filter or query row, and the frame adds its chrome and its note
+ * row and caps the sum as every picker is capped ({@link pickerHeight}; the
+ * query row sits outside the cap). An empty list still draws one line, its
+ * empty row. A pane that is not a list (the btw transcript, a sign-in field)
+ * asks for a `height` outright.
  */
-type PickerFrameSize =
-  | { readonly lines: number; readonly queryRow?: boolean }
-  | { readonly height: number }
+interface PickerFrameSize {
+  readonly height?: number
+}
 
 export function PickerFrame(
   props: PickerFrameSize & {
@@ -557,14 +564,14 @@ export function PickerFrame(
     if (Option.isSome(Option.fromUndefinedOr(props.detail)) || Option.isSome(error())) return 1
     return 0
   }
-  const height = () => {
-    if ("height" in props) return props.height
-    let queryLines = 0
-    if (props.queryRow === true) queryLines = 1
-    return pickerHeight(Math.max(props.lines, 1) + noteLines(), dimensions().height, queryLines)
-  }
-  const [measured, setMeasured] = createSignal(Option.none<number>())
   const [list, setList] = createSignal(Option.none<PickerListLines>())
+  const height = () =>
+    Option.getOrElse(Option.fromUndefinedOr(props.height), () => {
+      const rows = Option.match(list(), { onNone: () => 0, onSome: (lines) => lines.rows })
+      const query = Option.match(list(), { onNone: () => 0, onSome: (lines) => lines.query })
+      return pickerHeight(Math.max(rows, 1) + noteLines(), dimensions().height, query)
+    })
+  const [measured, setMeasured] = createSignal(Option.none<number>())
   const squeezed = () => Option.exists(measured(), (rows) => rows < height())
   createEffect(
     on(squeezed, (value) => {
@@ -602,7 +609,7 @@ export function PickerFrame(
           onSome: (rows) =>
             Option.match(list(), {
               onNone: () => rows >= 2,
-              onSome: (lines) => rows > lines.full || rows > lines.dressed,
+              onSome: (lines) => rows > fullLines(lines) || rows > lines.dressed,
             }),
         }),
     )
@@ -1118,7 +1125,8 @@ export function SelectList<A>(props: SelectListProps<A>) {
     return 0
   }
   const lines = (): PickerListLines => ({
-    full: rows().length + inputLines(),
+    rows: rows().length,
+    query: inputLines(),
     dressed: 1 + inputLines() + headingLines(),
   })
   createEffect(() => pickerBody.report(Option.some(lines())))
@@ -1126,7 +1134,7 @@ export function SelectList<A>(props: SelectListProps<A>) {
   const fits = (needed: number) =>
     Option.match(pickerBody.rows(), {
       onNone: () => true,
-      onSome: (available) => available >= lines().full || available >= needed,
+      onSome: (available) => available >= fullLines(lines()) || available >= needed,
     })
   const inputShown = () => hasQueryRow() && fits(2)
   const headingsShown = () => fits(1 + inputLines() + 1)
