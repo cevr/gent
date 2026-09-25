@@ -1601,6 +1601,9 @@ describe("classifyBashCommand", () => {
       `${u} parallel git {}`,
       `${u} xargs git`,
       `${u} xargs git checkout`,
+      // Under git, input after `--` still asks: `checkout -- <paths>`
+      // overwrites the working-tree files it names.
+      "git diff --name-only | xargs git checkout --",
       // The input may be the subcommand of any parent with a risky one.
       `${u} xargs docker volume`,
       `${u} xargs -I{} docker volume {} /nonexistent/gent-probe-x`,
@@ -2428,6 +2431,11 @@ describe("classifyBashCommand", () => {
       "terraform apply -var x=1",
       "terraform state list",
       "tofu plan",
+      // A value of a global option the table names is no subcommand.
+      'kubectl -n "$NS" get pods',
+      'kubectl --context "$CTX" get pods',
+      'docker compose -f "$F" up',
+      'docker compose -p "$P" ps',
       "docker compose up -d",
       "docker compose -f /nonexistent/gent-probe-x.yml up",
       "docker compose down",
