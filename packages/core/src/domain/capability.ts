@@ -34,8 +34,9 @@ export interface PromptSection {
  * below it are the part a session shares with its children and its sibling
  * sessions, byte for byte, so a child's first request reads that part from
  * the provider's prompt cache. A section that one agent has and another lacks
- * (the children guidance, an agent addendum) goes at or above it; so does
- * anything a `systemPrompt` hook appends.
+ * goes at or above it: whatever follows the tool set (the tool list, the tool
+ * guidelines, the cell guide), the children guidance, an agent addendum; so
+ * does anything a `systemPrompt` hook appends.
  */
 export const AGENT_PROMPT_PRIORITY = 100
 

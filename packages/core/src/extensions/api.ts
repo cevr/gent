@@ -112,6 +112,7 @@ export {
 //
 // See `domain/capability.ts` for the typed shapes.
 export {
+  AGENT_PROMPT_PRIORITY,
   getToolId,
   getToolPrompt,
   tool,

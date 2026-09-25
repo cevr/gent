@@ -20,6 +20,7 @@ import {
   Stream,
 } from "effect"
 import {
+  AGENT_PROMPT_PRIORITY,
   BranchId,
   defineExtension,
   ExtensionContext,
@@ -2926,11 +2927,15 @@ const CELL_WORK = `# Working in the cell
 - To find files, prefer tools.grep({ pattern }) over a raw directory walk: it honours .gitignore.`
 
 /**
- * The cell guide as a shared section: after the skills listing (80), before
- * the agent's own part (`AGENT_PROMPT_PRIORITY`), so a child reads it from its
- * parent's cached prefix.
+ * The cell guide, in the agent's own part after the tool list and tool
+ * guidelines: an agent denied the cell has no guide, so the part it shares
+ * with its parent cannot hold one.
  */
-const CELL_WORK_SECTION = { id: "cell-work", priority: 85, content: CELL_WORK }
+const CELL_WORK_SECTION = {
+  id: "cell-work",
+  priority: AGENT_PROMPT_PRIORITY + 6,
+  content: CELL_WORK,
+}
 
 // ── tool signatures ─────────────────────────────────────────────────────────
 

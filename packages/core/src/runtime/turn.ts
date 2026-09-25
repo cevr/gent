@@ -190,7 +190,8 @@ export const buildTurnPromptSections = (
     metadata: getToolMetadata(tool),
   }))
 
-  // Tool list — tools with promptSnippet get listed explicitly
+  // Tool list — tools with promptSnippet get listed explicitly. It follows
+  // the tool set, which differs by agent, so it is the agent's own part.
   const snippets = toolsWithMetadata
     .filter((tool) => !Predicate.isUndefined(tool.metadata.promptSnippet))
     .map((tool) => `- **${tool.id}**: ${tool.metadata.promptSnippet}`)
@@ -198,11 +199,12 @@ export const buildTurnPromptSections = (
     sections.push({
       id: "tool-list",
       content: `## Available Tools\n\n${snippets.join("\n")}`,
-      priority: 42,
+      priority: AGENT_PROMPT_PRIORITY + 2,
     })
   }
 
-  // Tool guidelines — collected from active tools + conditional rules
+  // Tool guidelines — collected from active tools + conditional rules; the
+  // agent's own part, like the tool list.
   // Every guideline comes from the tool that owns it. The loop does not know
   // tool names -- a tool that wants to steer the model toward another one says
   // so in its own `promptGuidelines`.
@@ -212,7 +214,7 @@ export const buildTurnPromptSections = (
     sections.push({
       id: "tool-guidelines",
       content: `## Tool Guidelines\n\n${deduped.map((g) => `- ${g}`).join("\n")}`,
-      priority: 44,
+      priority: AGENT_PROMPT_PRIORITY + 4,
     })
   }
 
