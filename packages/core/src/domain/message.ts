@@ -934,9 +934,26 @@ const CUT_MARKER = "…"
 /** The encoded size of one code point: once for an input field, twice for an output string (JSON in a JSON string). */
 type CodePointCost = (codePoint: string) => number
 const utf16Units: CodePointCost = (codePoint) => codePoint.length
-const encodedOnce: CodePointCost = (codePoint) => encodeJson(codePoint).length - 2
-const encodedTwice: CodePointCost = (codePoint) =>
-  encodeJson(encodeJson(codePoint).slice(1, -1)).length - 2
+/** A string as JSON writes it inside quotes: the escaped text, quotes left off. */
+const jsonStringBody = (text: string): string => encodeJson(text).slice(1, -1)
+/**
+ * The cost of one code point under `encode`, encoded once per kind, not per
+ * code point: a projection costs every code point of each operation's text.
+ * JSON escapes the ASCII controls, `"` and `\` (a table), and above ASCII only
+ * a lone surrogate (all escape to one width); every other code point is itself.
+ */
+const tabledCost = (encode: (text: string) => string): CodePointCost => {
+  const ascii = Array.from({ length: 128 }, (_, unit) => encode(String.fromCharCode(unit)).length)
+  const loneSurrogate = encode("\ud800").length
+  return (codePoint) => {
+    const unit = codePoint.charCodeAt(0)
+    if (unit < ascii.length) return ascii[unit] ?? codePoint.length
+    if (codePoint.length === 1 && unit >= 0xd800 && unit <= 0xdfff) return loneSurrogate
+    return codePoint.length
+  }
+}
+const encodedOnce: CodePointCost = tabledCost(jsonStringBody)
+const encodedTwice: CodePointCost = tabledCost((text) => jsonStringBody(jsonStringBody(text)))
 
 /** The cost of `text`, or the first cost past `limit` once it is known to exceed it. */
 const costUpTo = (text: string, cost: CodePointCost, limit: number): number => {
