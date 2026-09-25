@@ -29,7 +29,6 @@ import {
   cellResponseFd,
   decodeCellRequest,
   encodeCellResponse,
-  encodeSnapshot,
   makeBoundedOutput,
   makeCellFrameReader,
   maximumCallsPerCell,
@@ -43,6 +42,7 @@ import {
 } from "./cell-protocol.js"
 import {
   displayValue,
+  encodeSnapshot,
   errorHead,
   inheritsFrom,
   isOrdinaryArray,

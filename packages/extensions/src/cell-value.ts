@@ -1,5 +1,11 @@
 import { Option, Predicate, Result, Schema } from "effect"
 import { types } from "node:util"
+import {
+  type CellSnapshot,
+  type SnapshotBinding,
+  type SnapshotOmission,
+  snapshotTag,
+} from "./cell-protocol.js"
 
 /**
  * A cell runs in full Bun, in the same realm as the worker that reads its
@@ -179,12 +185,12 @@ const dataSlot = (value: unknown): PropertyDescriptor => {
 }
 
 /** Define an own data property; no setter along the prototype chain runs. */
-export const defineData = (target: object, key: PropertyKey, value: unknown): void => {
+const defineData = (target: object, key: PropertyKey, value: unknown): void => {
   defineOwn(target, key, dataSlot(value))
 }
 
 /** Add to the end of a list the caller owns, without `push`. */
-export const append = <A>(list: Array<A>, value: A): void => defineData(list, list.length, value)
+const append = <A>(list: Array<A>, value: A): void => defineData(list, list.length, value)
 
 /** An item of a dense list the caller owns; the fallback past its end, never a read through its prototype. */
 const itemAt = <A>(list: ReadonlyArray<A>, index: number, fallback: A): A => {
@@ -195,12 +201,12 @@ const itemAt = <A>(list: ReadonlyArray<A>, index: number, fallback: A): A => {
 }
 
 /** Remove the last item of a list the caller owns. */
-export const dropLast = (list: Array<unknown>): void => {
+const dropLast = (list: Array<unknown>): void => {
   if (list.length > 0) list.length = list.length - 1
 }
 
 /** Whether a list the caller owns holds this exact value. */
-export const holds = (list: ReadonlyArray<unknown>, value: unknown): boolean => {
+const holds = (list: ReadonlyArray<unknown>, value: unknown): boolean => {
   for (let index = 0; index < list.length; index++) if (list[index] === value) return true
   return false
 }
@@ -210,38 +216,6 @@ const positionOf = (list: ReadonlyArray<unknown>, value: unknown): number => {
   for (let index = 0; index < list.length; index++) if (list[index] === value) return index
   return -1
 }
-
-/** A primitive as text, through the abstract ToString. */
-export const primitiveText = (value: unknown): string => {
-  // ToString of an object runs its `toString` or `Symbol.toPrimitive`: cell code.
-  if (Predicate.isObjectKeyword(value)) return unreadableDisplay
-  return toText(value)
-}
-
-export const isFinite = (value: number): boolean => isFiniteNumber(value)
-
-/** JSON text through the `JSON.stringify` saved at load. */
-export const jsonText = (value: Schema.Json): string => {
-  const text: unknown = stringifyJson(value)
-  if (Predicate.isString(text)) return text
-  return ""
-}
-
-/** A value's prototype; the caller has checked it is not a Proxy. */
-export const valuePrototype = (value: object): unknown => prototypeOf(value)
-
-/** Brand checks that read internal slots, saved at load. */
-export const brands = {
-  isProxy,
-  isNativeError,
-  isDate,
-  isRegExp,
-  isMap,
-  isSet,
-  isTypedArray,
-}
-
-export const codeUnit = (text: string, index: number): number => codeAt(text, index)
 
 const codeAt = (text: string, index: number): number => {
   const code = call(charCodeAt, text, [index])
@@ -383,13 +357,13 @@ export const sameDescriptor = (left: PropertyDescriptor, right: PropertyDescript
 }
 
 /** A date's time value through the saved `getTime`, which reads the internal slot. */
-export const readDate = (value: object): Option.Option<number> => {
+const readDate = (value: object): Option.Option<number> => {
   if (!isDate(value)) return Option.none()
   return Option.liftPredicate(call(dateTime, value), Predicate.isNumber)
 }
 
 /** A regular expression's source and flags through the saved slot getters. */
-export const readRegExp = (
+const readRegExp = (
   value: object,
 ): Option.Option<{ readonly source: string; readonly flags: string }> => {
   if (!isRegExp(value)) return Option.none()
@@ -416,7 +390,7 @@ interface CollectionMember {
  * getter and `forEach`, which walk the internal table, so a subclass
  * iterator never runs.
  */
-export const readCollection = (
+const readCollection = (
   value: object,
   limit: number,
 ): Option.Option<{ readonly size: number; readonly members: ReadonlyArray<CollectionMember> }> => {
@@ -440,7 +414,7 @@ export const readCollection = (
 }
 
 /** A typed array's kind and length through the saved slot getters. */
-export const readTypedArray = (
+const readTypedArray = (
   value: object,
 ): Option.Option<{ readonly kind: string; readonly length: number }> => {
   if (!isTypedArray(value)) return Option.none()
@@ -451,7 +425,7 @@ export const readTypedArray = (
 }
 
 /** An element of a typed array: an integer index reads its buffer, never its prototype. */
-export const typedArrayItem = (value: object, index: number): unknown =>
+const typedArrayItem = (value: object, index: number): unknown =>
   Option.getOrUndefined(
     Option.map(Option.fromUndefinedOr(ownDescriptor(value, index)), (d) => d.value),
   )
@@ -475,6 +449,271 @@ export const errorHead = (error: object): string => {
       onSome: (message) => `${name}: ${message}`,
     },
   )
+}
+
+// ── namespace snapshot codec ────────────────────────────────────────────────
+
+/**
+ * The worker encodes cell bindings to tagged JSON through the value reader,
+ * so encoding runs no getter, trap or iterator. Brand checks read internal
+ * slots, so they hold for a value from any realm. The reviver in
+ * `cell-protocol.ts` decodes it in the realm that restores.
+ */
+export const maximumSnapshotBindingBytes = 256 * 1024
+const maximumSnapshotBytes = 768 * 1024
+const maximumSnapshotDepth = 64
+/** Each entry encodes to at least two bytes, so a longer collection is too large unread. */
+const maximumSnapshotEntries = maximumSnapshotBindingBytes / 2
+
+/** A value that cannot round-trip. It never enters the encoded JSON. Each is made at load. */
+class Omitted {
+  constructor(readonly reason: OmissionReason) {}
+}
+type OmissionReason = SnapshotOmission["reason"]
+type Encoded = Schema.Json | Omitted
+const isOmitted = (value: Encoded): value is Omitted => value instanceof Omitted
+const omittedFunction = new Omitted("function")
+const unsupported = new Omitted("unsupported")
+const cyclic = new Omitted("cyclic")
+const tooDeep = new Omitted("too-deep")
+const tooLarge = new Omitted("too-large")
+
+const tagged = (kind: string, value: Schema.Json): Schema.Json => ({ [snapshotTag]: kind, value })
+
+/** Plain means its prototype is null or a root Object.prototype from any realm. */
+const isPlainObject = (value: object) => {
+  const proto: unknown = prototypeOf(value)
+  if (proto === null) return true
+  if (!Predicate.isObjectKeyword(proto) || isProxy(proto)) return false
+  return prototypeOf(proto) === null
+}
+
+const typedArrayKinds: ReadonlyArray<string> = [
+  "Uint8Array",
+  "Int8Array",
+  "Uint16Array",
+  "Int16Array",
+  "Uint32Array",
+  "Int32Array",
+  "Float32Array",
+  "Float64Array",
+  "Uint8ClampedArray",
+  "BigInt64Array",
+  "BigUint64Array",
+]
+
+const encodePrimitive = (value: unknown): Encoded | undefined => {
+  if (value === null || Predicate.isString(value) || Predicate.isBoolean(value)) return value
+  if (Predicate.isUndefined(value)) return tagged("undefined", null)
+  if (Predicate.isNumber(value)) {
+    if (isFiniteNumber(value)) return value
+    return tagged("number", toText(value))
+  }
+  // The abstract ToString: a replaced `BigInt.prototype.toString` never runs.
+  if (Predicate.isBigInt(value)) return tagged("bigint", toText(value))
+  if (Predicate.isFunction(value)) return omittedFunction
+  if (!Predicate.isObjectKeyword(value)) return unsupported
+  return undefined
+}
+
+/** An array's elements through their descriptors; a hole reads as undefined. */
+const encodeArray = (array: ReadonlyArray<unknown>, inner: (item: unknown) => Encoded): Encoded => {
+  // An array's own length is a data property: no getter can stand in for it.
+  if (array.length > maximumSnapshotEntries) return tooLarge
+  const out: Schema.Json[] = []
+  for (let index = 0; index < array.length; index++) {
+    const encoded = Result.match(readProperty(array, index), {
+      onFailure: (): Encoded => unsupported,
+      onSuccess: (item) => inner(Option.getOrUndefined(item)),
+    })
+    if (isOmitted(encoded)) return encoded
+    append(out, encoded)
+  }
+  return out
+}
+
+/** A plain object's own enumerable string keys, in `Object.entries` order; any accessor is cell code. */
+const encodeRecord = (object: object, inner: (item: unknown) => Encoded): Encoded => {
+  const keys = ownKeys(object)
+  if (keys.length > maximumSnapshotEntries) return tooLarge
+  const out: Record<string, Schema.Json> = {}
+  for (let index = 0; index < keys.length; index++) {
+    const key = keys[index]
+    if (!Predicate.isString(key)) continue
+    const descriptor = ownDescriptor(object, key)
+    if (Predicate.isUndefined(descriptor) || descriptor.enumerable !== true) continue
+    if (!hasOwn(descriptor, "value")) return unsupported
+    const encoded = inner(descriptor.value)
+    if (isOmitted(encoded)) return encoded
+    // Assignment to an own `__proto__` key would set the prototype and drop the key.
+    defineData(out, key, encoded)
+  }
+  if (hasOwn(out, snapshotTag)) return tagged("object", out)
+  return out
+}
+
+/** A native error's `name`, `message` or `stack`: a primitive as text, absent as the fallback. */
+const errorText = (error: object, key: string, fallback: string): Option.Option<string> =>
+  Result.match(readProperty(error, key), {
+    onFailure: () => Option.none(),
+    onSuccess: (found) => {
+      if (Option.isNone(found)) return Option.some(fallback)
+      // String() of an object runs its toString or Symbol.toPrimitive: cell code.
+      const text = found.value
+      if (Predicate.isObjectKeyword(text)) return Option.none()
+      return Option.some(toText(text))
+    },
+  })
+
+const encodeError = (error: object): Encoded => {
+  const name = errorText(error, "name", "Error")
+  const message = errorText(error, "message", "")
+  const stack = errorText(error, "stack", "")
+  if (Option.isNone(name) || Option.isNone(message) || Option.isNone(stack)) return unsupported
+  return tagged("error", { name: name.value, message: message.value, stack: stack.value })
+}
+
+const encodeRegExp = (value: object): Encoded =>
+  Option.match(readRegExp(value), {
+    onNone: () => unsupported,
+    onSome: ({ source, flags }) => tagged("regexp", [source, flags]),
+  })
+
+/** A Map's or Set's members through the saved `size` getter and `forEach`; a Map member encodes as `[key, value]`. */
+const encodeCollection = (
+  value: object,
+  kind: "map" | "set",
+  inner: (item: unknown) => Encoded,
+): Encoded => {
+  const collection = readCollection(value, maximumSnapshotEntries)
+  if (Option.isNone(collection)) return unsupported
+  if (collection.value.size > maximumSnapshotEntries) return tooLarge
+  const members = collection.value.members
+  const out: Schema.Json[] = []
+  for (let index = 0; index < members.length; index++) {
+    const member = members[index]
+    if (Predicate.isUndefined(member)) return unsupported
+    let key: Encoded = null
+    if (kind === "map") {
+      key = inner(member.key)
+      if (isOmitted(key)) return key
+    }
+    const item = inner(member.value)
+    if (isOmitted(item)) return item
+    if (kind === "map") append(out, [key, item])
+    else append(out, item)
+  }
+  return tagged(kind, out)
+}
+
+const encodeTypedArray = (value: object): Encoded => {
+  const typed = readTypedArray(value)
+  if (Option.isNone(typed) || !holds(typedArrayKinds, typed.value.kind)) return unsupported
+  const { kind, length } = typed.value
+  if (length > maximumSnapshotEntries) return tooLarge
+  const values: Schema.Json[] = []
+  for (let index = 0; index < length; index++) {
+    const item = typedArrayItem(value, index)
+    // Bigint elements travel as strings, through the abstract ToString.
+    if (Predicate.isBigInt(item)) append(values, toText(item))
+    else if (Predicate.isNumber(item)) append(values, item)
+  }
+  return tagged(kind, values)
+}
+
+/** Built-ins by brand: a brand check reads the internal slot, and the read uses a function saved at load. */
+const encodeBuiltin = (value: object, inner: (item: unknown) => Encoded): Encoded | undefined => {
+  if (isNativeError(value)) return encodeError(value)
+  if (isDate(value))
+    return Option.match(readDate(value), {
+      onNone: () => unsupported,
+      onSome: (time) => tagged("date", time),
+    })
+  if (isRegExp(value)) return encodeRegExp(value)
+  if (isMap(value)) return encodeCollection(value, "map", inner)
+  if (isSet(value)) return encodeCollection(value, "set", inner)
+  if (isTypedArray(value)) return encodeTypedArray(value)
+  return undefined
+}
+
+const encodeValue = (value: unknown, depth: number, seen: Array<object>): Encoded => {
+  if (depth > maximumSnapshotDepth) return tooDeep
+  const primitive = encodePrimitive(value)
+  if (!Predicate.isUndefined(primitive)) return primitive
+  // Every trap of a Proxy is cell code, and no read of one is safe.
+  if (!Predicate.isObjectKeyword(value) || isProxy(value)) return unsupported
+  const object: object = value
+  if (holds(seen, object)) return cyclic
+  append(seen, object)
+  const inner = (child: unknown) => encodeValue(child, depth + 1, seen)
+  let encoded: Encoded
+  const builtin = encodeBuiltin(object, inner)
+  if (!Predicate.isUndefined(builtin)) encoded = builtin
+  else if (isOrdinaryArray(object)) encoded = encodeArray(object, inner)
+  else if (isPlainObject(object)) encoded = encodeRecord(object, inner)
+  else encoded = unsupported
+  dropLast(seen)
+  return encoded
+}
+
+/**
+ * The JSON text's UTF-8 length. The frame encoder stringifies the same JSON a
+ * moment later through the same intrinsics, so a hand-written serializer here
+ * would guard nothing. Both functions are saved at load.
+ */
+const utf8Length = (text: string): number => {
+  let bytes = 0
+  for (let index = 0; index < text.length; index++) {
+    const code = codeAt(text, index)
+    if (code < 0x80) bytes += 1
+    else if (code < 0x800) bytes += 2
+    else if (code >= 0xd800 && code <= 0xdbff && index + 1 < text.length) {
+      // Stringified JSON escapes a lone surrogate, so a high one here opens a pair.
+      bytes += 4
+      index++
+    } else bytes += 3
+  }
+  return bytes
+}
+
+const jsonBytes = (value: Schema.Json): number => {
+  const text: unknown = stringifyJson(value)
+  if (Predicate.isString(text)) return utf8Length(text)
+  return 0
+}
+
+/**
+ * One binding's encoding. Encoding runs no cell code; a host getter can still
+ * throw, and that value cannot round-trip either.
+ */
+const encodeBinding = Option.liftThrowable((value: unknown): Encoded => encodeValue(value, 0, []))
+
+/** Encode every binding. Values that cannot round-trip are named with the reason, never silently dropped. */
+export const encodeSnapshot = (namespace: ReadonlyMap<string, unknown>): CellSnapshot => {
+  const bindings: Array<SnapshotBinding> = []
+  const omitted: Array<SnapshotOmission> = []
+  let total = 0
+  // The saved `forEach` walks the namespace: a replaced Map iterator never runs.
+  const entries = readCollection(namespace, Number.MAX_SAFE_INTEGER)
+  const members = Option.match(entries, { onNone: () => [], onSome: (read) => read.members })
+  for (let index = 0; index < members.length; index++) {
+    const member = members[index]
+    if (Predicate.isUndefined(member) || !Predicate.isString(member.key)) continue
+    const name = member.key
+    const encoded = Option.getOrElse(encodeBinding(member.value), () => unsupported)
+    if (isOmitted(encoded)) {
+      append(omitted, { name, reason: encoded.reason })
+      continue
+    }
+    const size = jsonBytes(encoded)
+    if (size > maximumSnapshotBindingBytes || total + size > maximumSnapshotBytes) {
+      append(omitted, { name, reason: "too-large" })
+      continue
+    }
+    total += size
+    append(bindings, { name, value: encoded })
+  }
+  return { bindings, omitted }
 }
 
 // ── value display ───────────────────────────────────────────────────────────
