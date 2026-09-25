@@ -1,7 +1,7 @@
 import { Cause, Context, Effect, Layer, Option, Predicate, Ref, Schema } from "effect"
 import {
   type Branch,
-  type BranchId,
+  BranchId,
   defineExtension,
   defineResource,
   ExtensionContext,
@@ -193,6 +193,8 @@ export const SESSION_MESSAGE_TYPE = "session-message"
 export const SessionMessageDetails = Schema.Struct({
   from: Schema.Struct({
     sessionId: SessionId,
+    /** The branch that sent it. Rows stored before the field have none. */
+    branchId: Schema.optional(BranchId),
     name: Schema.optional(Schema.String),
     /** How the sender stands to the receiver. */
     relation: Schema.Literals(["parent", "child", "session"]),
@@ -547,6 +549,7 @@ const SendSessionTool = tool({
     const relation = relationOf(sender, receiver)
     const from = {
       sessionId: sender.id,
+      branchId: ctx.branchId,
       ...Option.match(Option.fromUndefinedOr(sender.name), {
         onNone: () => ({}),
         onSome: (name) => ({ name }),

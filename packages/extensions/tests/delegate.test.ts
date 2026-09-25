@@ -2478,7 +2478,8 @@ describe("session.send", () => {
         const childSnapshot = yield* client.session.getSnapshot(child)
         const [received] = sessionMessages(childSnapshot.messages)
         expect(received?.metadata?.details).toMatchObject({
-          from: { sessionId, relation: "parent" },
+          // The sender names its branch: the one whose interrupt stops a turn the message opens.
+          from: { sessionId, branchId, relation: "parent" },
         })
         expect(messageTexts([received!])[0]).toContain("Message from your parent")
         expect(messageTexts([received!])[0]).not.toContain("not its completion")
