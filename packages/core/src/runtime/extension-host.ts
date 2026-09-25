@@ -138,6 +138,7 @@ import {
   type Branch,
   Message,
   type MessageMetadata,
+  type RequesterBranch,
   type Session,
   turnCanAsk,
   isSpawnedSession,
@@ -149,7 +150,6 @@ import {
   type SendUserMessagePayload,
   type SessionRuntimeState,
   type SteerCommandType,
-  type StopRequester,
 } from "../domain/agent-loop.js"
 import { StorageError } from "../domain/errors.js"
 import type { AgentLoopTurnProfile } from "./turn.js"
@@ -2628,7 +2628,7 @@ interface ExtensionSessionControlService {
     readonly messageId: MessageId
     readonly requestId: RequestId
     /** The branch that asks: a take-back names what its own earlier stop already reported. */
-    readonly requester: StopRequester
+    readonly requester: RequesterBranch
   }) => Effect.Effect<boolean, Error>
   /** Holds the loop's own entity resident until the enclosing scope closes. */
   readonly holdResident: Effect.Effect<void, never, ScopeType.Scope>

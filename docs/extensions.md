@@ -161,7 +161,9 @@ no-op.
   an earlier stop already stops the turn it opened. A steer taken back
   answers `true`, unless an earlier stop from the same branch already stops
   the turn the steer waited to join: that stop answered `true`, so the
-  calling branch hears of it once.
+  calling branch hears of it once. A stop that reaches a running turn takes
+  the calling branch's own waiting `"steer"` messages back with it, so they
+  never run as the next turn, and a later stop of one answers `false`.
 
 A branch's loop that nothing holds is passivated after about a minute idle,
 and the branch scope closes with it: a fiber forked into a branch resource

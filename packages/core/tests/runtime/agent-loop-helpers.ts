@@ -9,7 +9,6 @@ import {
   type FollowUpQueueFull,
   entityIdOf,
   type SessionRuntimeState,
-  type StopRequester,
 } from "../../src/domain/agent-loop"
 import { AgentDefinition, AgentName, type Model, ModelId } from "../../src/domain/agent"
 import { AgentLoopSessionGovernance, AgentLoopTestActor } from "../../src/runtime/agent-loop"
@@ -32,6 +31,7 @@ import {
   dateFromMillis,
   Message,
   type QueueSnapshot,
+  type RequesterBranch,
   type SteerCommand,
   type SessionAdmission,
 } from "../../src/domain/message"
@@ -231,7 +231,8 @@ export const submitAgentLoop = (
       }),
     ),
   )
-export const steerAgentLoop = (command: SteerCommand) =>
+/** `sender` is the other branch an `Interject` came from; a client's steer names none. */
+export const steerAgentLoop = (command: SteerCommand, sender?: RequesterBranch) =>
   Effect.gen(function* () {
     yield* ensureAgentLoopStorageParents(command)
     const actorClientFactory = yield* AgentLoopActor.Context
@@ -243,6 +244,7 @@ export const steerAgentLoop = (command: SteerCommand) =>
         workspaceId: DefaultWorkspaceId,
         commandId: ActorCommandId.make(command.requestId),
         command,
+        sender,
       }),
     )
   })
@@ -253,7 +255,7 @@ export const stopAgentLoopMessage = (input: {
   readonly messageId: MessageId
   readonly requestId: string
   /** The asking branch; a raw client stop names none. */
-  readonly requester?: StopRequester
+  readonly requester?: RequesterBranch
 }) =>
   Effect.gen(function* () {
     yield* ensureAgentLoopStorageParents(input)

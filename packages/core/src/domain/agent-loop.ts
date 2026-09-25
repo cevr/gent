@@ -1,6 +1,12 @@
 import { type Context, DateTime, Effect, Option, Predicate, Schema } from "effect"
 import type { AgentEvent } from "./event.js"
-import { Message, MessageMetadata, QueueSnapshot, SteerCommand } from "./message.js"
+import {
+  Message,
+  MessageMetadata,
+  QueueSnapshot,
+  RequesterBranch,
+  SteerCommand,
+} from "./message.js"
 import {
   ActorCommandId,
   BranchId,
@@ -397,18 +403,13 @@ interface StopMessagePayload {
   readonly branchId: BranchId
   readonly messageId: MessageId
   readonly requestId: RequestId
-  readonly requester?: StopRequester
+  /**
+   * The branch that asks for the stop. A turn remembers the requester of the
+   * stop that first latched it, and the stop takes back the steers the same
+   * branch sent into that turn.
+   */
+  readonly requester?: RequesterBranch
 }
-
-/**
- * The branch that asks for a stop. A turn remembers the requester of the stop
- * that first latched it, so a later take-back from the same branch knows its
- * own earlier stop already ends what the steer waited to join.
- */
-export const StopRequester = Schema.Struct({ sessionId: SessionId, branchId: BranchId })
-export type StopRequester = typeof StopRequester.Type
-export const stopRequesterKey = (requester: StopRequester): string =>
-  `${requester.sessionId}/${requester.branchId}`
 
 const WorkspaceFields = {
   workspaceId: WorkspaceId,
@@ -426,10 +427,13 @@ const QueueFollowUpFields = {
   wake: Schema.optional(Schema.Boolean),
 }
 
+/** `sender` is optional: a stored command written before it decodes. */
 const SteerFields = {
   ...WorkspaceFields,
   commandId: ActorCommandId,
   command: SteerCommand,
+  /** The other branch that sent an `Interject`; a loop sets it, never a client. */
+  sender: Schema.optional(RequesterBranch),
 }
 
 const RespondInteractionFields = {
@@ -456,7 +460,7 @@ const MessageCommandFields = {
 /** `requester` is optional: a stored command written before it decodes. */
 const StopMessageFields = {
   ...MessageCommandFields,
-  requester: Schema.optional(StopRequester),
+  requester: Schema.optional(RequesterBranch),
 }
 
 const ExtensionRequestInputEnvelope = Schema.TaggedUnion({
@@ -691,11 +695,15 @@ export const submitUserMessage = Effect.fn("AgentLoop.client.submitUserMessage")
  * is the durability guarantee (Steer survives crash + redeliver) and
  * is NOT what's being relaxed here.
  */
-export const steerLoop = Effect.fn("AgentLoop.client.steer")(function* (command: SteerCommandType) {
+export const steerLoop = Effect.fn("AgentLoop.client.steer")(function* (
+  command: SteerCommandType,
+  sender?: RequesterBranch,
+) {
   const payload = {
     workspaceId: yield* CurrentWorkspaceId,
     commandId: ActorCommandId.make(command.requestId),
     command,
+    sender,
   }
   const ref = yield* loopRefFor(command.sessionId, command.branchId)
   yield* ref.send(AgentLoop.Steer.make(payload))

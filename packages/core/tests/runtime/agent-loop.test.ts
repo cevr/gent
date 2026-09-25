@@ -1027,6 +1027,85 @@ describe("continuation", () => {
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
     }).pipe(Effect.timeout("4 seconds")),
   )
+  it.live("a branch's stop takes its own waiting steers with the turn it stops", () =>
+    Effect.gen(function* () {
+      const promptTexts: Array<string> = []
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        { ...toolCallStep("echo", { text: "step 1" }), gated: true },
+        {
+          ...textStep("Answered the other sender."),
+          assertOptions: (options) => {
+            for (const message of Prompt.make(options.prompt).content) {
+              if (message.role !== "user") continue
+              for (const part of message.content) {
+                if (part.type === "text") promptTexts.push(part.text)
+              }
+            }
+          },
+        },
+      ])
+      const eventsRef = yield* Ref.make<AgentEvent[]>([])
+      yield* Effect.gen(function* () {
+        const agentLoop = yield* makeAgentLoopService
+        const messageStorage = yield* MessageStorage
+        const parent = { sessionId: SessionId.make("parent"), branchId: BranchId.make("parent") }
+        const sibling = { sessionId: SessionId.make("sibling"), branchId: BranchId.make("sibling") }
+        const message = makeContMessage("a turn the parent stops")
+        const fiber = yield* Effect.forkChild(runAgentLoop(agentLoop, message))
+        yield* controls.waitForCall(0)
+        const steer = (requestId: string, text: string, sender: typeof parent) =>
+          steerAgentLoop(
+            {
+              _tag: "Interject",
+              sessionId: contSessionId,
+              branchId: contBranchId,
+              requestId,
+              message: text,
+              wake: true,
+            },
+            sender,
+          )
+        yield* steer("req-parent-correction", "PARENT-CORRECTION", parent)
+        yield* steer("req-sibling-fact", "SIBLING-FACT", sibling)
+        const target = { sessionId: contSessionId, branchId: contBranchId }
+        expect(
+          yield* stopAgentLoopMessage({
+            ...target,
+            messageId: message.id,
+            requestId: "req-parent-stops-turn",
+            requester: parent,
+          }),
+        ).toBe(true)
+        yield* controls.emitAll(0)
+        yield* Fiber.join(fiber)
+        // The sibling's steer outlives the stopped turn and wakes the next one.
+        yield* waitFor(
+          Ref.get(eventsRef),
+          (events) => events.filter(Schema.is(TurnCompleted)).length === 2,
+          3_000,
+          "the sibling's steer ran its own turn",
+        )
+        yield* waitForPhase(agentLoop, target, "Idle")
+        // The parent's correction went with the turn: a later stop of it reaches nothing.
+        expect(
+          yield* stopAgentLoopMessage({
+            ...target,
+            messageId: interjectionMessageId(RequestId.make("req-parent-correction")),
+            requestId: "req-parent-stops-correction",
+            requester: parent,
+          }),
+        ).toBe(false)
+        expect(promptTexts).toContain("SIBLING-FACT")
+        expect(promptTexts).not.toContain("PARENT-CORRECTION")
+        const interjections = (yield* messageStorage.listMessages(contBranchId)).filter(
+          (stored) => stored._tag === "interjection",
+        )
+        expect(interjections.map((stored) => stored.id)).toEqual([
+          interjectionMessageId(RequestId.make("req-sibling-fact")),
+        ])
+      }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
+    }).pipe(Effect.timeout("4 seconds")),
+  )
   it.live("an interjection that asks to wake starts a turn on an idle branch", () =>
     Effect.gen(function* () {
       const idleSessionId = SessionId.make("cont-idle-session")

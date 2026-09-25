@@ -863,7 +863,9 @@ export interface ExtensionSessionService {
    * stops the turn it opened. A steer taken back answers true, unless an
    * earlier stop from this same branch already stops the turn the steer
    * waited to join: that stop answered true, so the branch is told once. A
-   * `requestId` makes a repeat of the same stop a no-op.
+   * stop that reaches a running turn takes this branch's own waiting steers
+   * back with it; a later stop of one of them answers false. A `requestId`
+   * makes a repeat of the same stop a no-op.
    */
   readonly stopMessage: (params: {
     readonly sessionId?: SessionId

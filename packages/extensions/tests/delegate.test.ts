@@ -2842,16 +2842,18 @@ const idle = (
 
 /**
  * Holds the end of a turn in the `held` session open until `release`. Hooks
- * run in id order, and this id sorts before every shipped extension's, so no
- * shipped hook has read the turn's end while it is held.
+ * run in id order. The default id sorts before every shipped extension's, so
+ * no shipped hook has read the turn's end while it is held; `id` places the
+ * hold between two shipped hooks instead.
  */
 const holdTurnEnd = (options: {
   readonly held: Ref.Ref<Option.Option<SessionId>>
   readonly ending: Deferred.Deferred<void>
   readonly release: Deferred.Deferred<void>
+  readonly id?: string
 }) => ({
   ...defineExtension({
-    id: "0-turn-end-hold",
+    id: options.id ?? "0-turn-end-hold",
     setup: Effect.gen(function* () {
       const host = yield* ExtensionHost
       yield* host.on("turnAfter", (input) =>
@@ -3070,6 +3072,95 @@ describe("a parent interrupt and the turns its session.send opened", () => {
         expect(next?.notices.split(child.sessionId)).toHaveLength(2)
       }).pipe(Effect.timeout("10 seconds")),
     ),
+  )
+
+  it.live(
+    "a correction waiting in a child the interrupt stopped goes with its turn however late the send stop comes",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const childStreaming = yield* Deferred.make<void>()
+          const parentStreaming = yield* Deferred.make<void>()
+          const correctionStreaming = yield* Deferred.make<void>()
+          const parentEnding = yield* Deferred.make<void>()
+          const release = yield* Deferred.make<void>()
+          const held = yield* Ref.make(Option.none<SessionId>())
+          const parentRequests: Array<{ readonly notices: string; readonly last: string }> = []
+          let correctionRuns = 0
+          let parentCalls = 0
+          const providerLayer = LanguageModelLayers.testStream((request) => {
+            const texts = promptTexts(request.prompt)
+            if (texts[0]?.endsWith(childTask) === true) {
+              if (texts.some((text) => text.includes(correction))) {
+                correctionRuns += 1
+                return Effect.succeed(stalledStream("correcting", correctionStreaming))
+              }
+              return Effect.succeed(stalledStream("working", childStreaming))
+            }
+            const last = texts.at(-1) ?? ""
+            parentRequests.push({ notices: noticeText(request.prompt), last })
+            if (last.startsWith("NEXT-")) return Effect.succeed(reply("ack"))
+            parentCalls += 1
+            if (parentCalls === 1) {
+              return Effect.succeed(toolStep("delegate.start", { todo: childTask }, "start-1"))
+            }
+            if (parentCalls === 2) {
+              const to = Option.getOrThrow(startedSessionId(request.prompt))
+              return Effect.succeed(
+                toolStep("session.send", { to, message: correction }, "send-fix"),
+              )
+            }
+            return Effect.succeed(stalledStream("waiting on the child", parentStreaming))
+          })
+          // The hold sorts after the delegate hook and before the session-tools
+          // hook: the delegate stop has reached the child, the send stop has not.
+          const harness = yield* harnessWithHome(providerLayer, {
+            fixtures: [
+              holdTurnEnd({ held, ending: parentEnding, release, id: "@gent/delegate~hold" }),
+            ],
+          })
+          const { sessionId, branchId } = harness
+          yield* Ref.set(held, Option.some(sessionId))
+          yield* sendPrompt(harness, "delegate one task")
+          yield* Deferred.await(childStreaming)
+          yield* Deferred.await(parentStreaming)
+          const child = yield* childOf(harness)
+          yield* interruptParent(harness, "interrupt-parent-before-the-send-stop")
+          yield* Deferred.await(parentEnding)
+          // The child's stopped turn ends while the send stop is held back.
+          yield* waitFor(
+            turnReceipts(harness, child),
+            (current) => current.length >= 1,
+            3_000,
+            "the delegate stop ended the child's first turn",
+          )
+          // Whatever the child does with the correction next happens before the
+          // send stop: it runs (and stalls), or it is gone and the child idles.
+          yield* Effect.raceFirst(
+            Deferred.await(correctionStreaming),
+            idle(harness, child, "the child is idle").pipe(Effect.asVoid),
+          )
+          yield* Deferred.succeed(release, void 0)
+          yield* idle(harness, child, "the child is idle")
+          yield* idle(harness, { sessionId, branchId }, "the parent is idle")
+          yield* Ref.set(held, Option.none())
+
+          yield* sendPrompt(harness, "NEXT-WHAT-IS-RUNNING")
+          yield* waitFor(
+            harness.client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              current.runtime._tag === "Idle" && messageTexts(current.messages).includes("ack"),
+            3_000,
+            "the parent answered the next prompt",
+          )
+          const next = parentRequests.find((request) => request.last === "NEXT-WHAT-IS-RUNNING")
+          expect(next?.notices).toContain("# Stopped children")
+          expect(next?.notices).not.toContain("# Stopped child turns")
+          expect(next?.notices.split(child.sessionId)).toHaveLength(2)
+          expect(correctionRuns).toBe(0)
+        }).pipe(Effect.timeout("12 seconds")),
+      ),
+    14_000,
   )
 
   it.live("a correction turn that ended before the interrupt is not named as stopped", () =>
