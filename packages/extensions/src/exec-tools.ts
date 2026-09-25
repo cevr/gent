@@ -3717,6 +3717,21 @@ const KUBECTL_OPTIONS = options(
   "namespace context kubeconfig cluster user server token as as-group request-timeout",
 )
 
+/** `docker exec` and `docker compose exec` options whose value is the next word. */
+const CONTAINER_EXEC_OPTIONS = options("euw", "env env-file user workdir detach-keys index")
+
+/** `docker run` and `docker compose run` options whose value is the next word. */
+const CONTAINER_RUN_OPTIONS = options(
+  "acehlmpuvw",
+  "attach cpu-shares env env-file hostname label memory publish user volume workdir name network entrypoint mount platform pull restart cpus add-host device dns ipc log-driver log-opt pid runtime security-opt shm-size stop-signal tmpfs ulimit cap-add cap-drop cidfile gpus",
+)
+
+/** `kubectl exec` options whose value is the next word; the global options may follow the subcommand. */
+const KUBECTL_EXEC_OPTIONS = options(
+  `${KUBECTL_OPTIONS.short ?? ""}cf`,
+  `${(KUBECTL_OPTIONS.long ?? []).join(" ")} container filename pod-running-timeout`,
+)
+
 /** `terraform apply` options whose value may be the next word (`-var x=1`). */
 const TERRAFORM_APPLY_OPTIONS: ValueOptions = {
   long: names("var var-file target replace state state-out backup lock-timeout parallelism"),
@@ -3931,6 +3946,21 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
         ),
       ),
     ),
+    // The command a container or a pod runs, after the container, service or
+    // pod word; it shares volumes, mounts and databases with the host.
+    // `kubectl exec` takes it after `--`, or after the pod in the old form.
+    ...each(
+      ["docker exec", "docker container exec", "docker compose exec", "docker-compose exec"],
+      runner(CONTAINER_EXEC_OPTIONS, { positionals: 1 }),
+    ),
+    ...each(
+      ["docker run", "docker container run", "docker compose run", "docker-compose run"],
+      runner(CONTAINER_RUN_OPTIONS, { positionals: 1 }),
+    ),
+    "kubectl exec": spec(KUBECTL_EXEC_OPTIONS, [
+      command({ after: ["--"] }),
+      command({ positionals: 1 }),
+    ]),
     kubectl: spec(KUBECTL_OPTIONS),
     ...each(
       ["kubectl delete", "kubectl drain"],

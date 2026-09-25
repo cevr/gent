@@ -2396,6 +2396,48 @@ describe("classifyBashCommand", () => {
     }
   })
 
+  // A container or pod shares volumes, databases and mounts with the host:
+  // the command it runs is read as `ssh host cmd` is.
+  test("a command run in a container or a pod is read", () => {
+    const x = "/nonexistent/gent-probe-x"
+    for (const command of [
+      "docker exec db psql -c 'DROP TABLE t'",
+      "docker exec -it db psql -U postgres -c 'DROP TABLE t'",
+      `docker exec -u root -w ${x} db sh -c 'rm -rf ${x}'`,
+      `docker container exec db rm -rf ${x}`,
+      `docker exec "$C" rm -rf ${x}`,
+      "docker compose exec db psql -c 'DROP TABLE t'",
+      `docker compose exec -T web sh -c 'rm -rf ${x}'`,
+      `docker compose -f ${x}.yml exec --user root web rm -rf ${x}`,
+      `docker-compose exec web rm -rf ${x}`,
+      `docker compose run --rm web rm -rf ${x}`,
+      `docker run --rm -v ${x}:/w alpine rm -rf /w`,
+      `docker container run -e A=1 --name probe alpine rm -rf /w`,
+      `kubectl exec pod -- rm -rf ${x}`,
+      `kubectl exec -it pod -c app -- psql -c 'DROP TABLE t'`,
+      `kubectl -n ns exec pod -- sh -c 'rm -rf ${x}'`,
+      `kubectl exec -n ns pod -- rm -rf ${x}`,
+      // Options after the pod: the command starts after `--`.
+      `kubectl exec pod -c app -- rm -rf ${x}`,
+      // The form without `--`.
+      `kubectl exec pod rm -rf ${x}`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      "docker exec db ls",
+      `docker exec -w ${x} -e X=1 db cat f`,
+      "docker exec -it db psql -c 'select 1'",
+      "docker compose exec -T web ls",
+      "docker compose run --rm web bun test",
+      `docker run --rm -v ${x}:/w -e A=1 --name probe alpine ls /w`,
+      "kubectl exec pod -- ls",
+      "kubectl exec -it pod -c app -- psql -c 'select 1'",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
   test("cluster, infrastructure and compose deletions ask; their reads do not", () => {
     for (const command of [
       "kubectl delete pod gent-probe-x",
