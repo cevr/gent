@@ -3582,6 +3582,82 @@ describe("BashTool execution", () => {
     processTestTimeout,
   )
 
+  // A build before the output file stored the whole output on the row and
+  // wrote no file until it cut a message; a replay must not lose the middle.
+  it.scopedLive(
+    "a replayed row that holds a whole long output gets its file",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const home = yield* fs.makeTempDirectoryScoped({ prefix: "gent-bg-old-row-" })
+        const sent = yield* Deferred.make<{ sourceId: string; content: string }>()
+        const toolCallId = ToolCallId.make("tc-old-row-replay")
+        const ctx = withSession(
+          { ...stubCtx, toolCallId, home },
+          {
+            ...stubCtx.Session,
+            getSession: () =>
+              Effect.succeed(
+                new Session({
+                  id: stubCtx.sessionId,
+                  activeBranchId: stubCtx.branchId,
+                  createdAt: now,
+                  updatedAt: now,
+                }),
+              ),
+            listBranches: Effect.succeed([
+              new Branch({ id: stubCtx.branchId, sessionId: stubCtx.sessionId, createdAt: now }),
+            ]),
+            send: onQueue((notice) => Deferred.succeed(sent, notice)),
+          },
+        )
+        const storageLayer = SqliteStorage.LiveWithSql(
+          `${home}/gent.db`,
+          () => Layer.empty,
+          {},
+        ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)))
+        const output = Array.from({ length: 3000 }, (_, index) => `old line ${index + 1}\n`).join(
+          "",
+        )
+        yield* Effect.gen(function* () {
+          const storage = yield* BackgroundBashStorage
+          yield* storage.claimStart({
+            sessionId: ctx.sessionId,
+            branchId: ctx.branchId,
+            toolCallId,
+            command: "seq-old",
+            cwd: Option.some(ctx.cwd),
+          })
+          yield* storage.markCompleted(
+            { sessionId: ctx.sessionId, branchId: ctx.branchId, toolCallId },
+            { exitCode: 0, message: output },
+          )
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              storageLayer,
+              BackgroundBashStorage.Live.pipe(Layer.provide(storageLayer)),
+            ),
+          ),
+        )
+
+        yield* runToolWithCtx(
+          BashTool,
+          { command: "printf should-not-run", run_in_background: true },
+          ctx,
+        ).pipe(Effect.provide(makeProcessLayer(storageLayer)))
+        const message = yield* Deferred.await(sent).pipe(Effect.timeout("2 seconds"))
+        expect(message.content.length).toBeLessThanOrEqual(maximumModelToolResultChars)
+        expect(message.content).toContain("old line 1\n")
+        expect(message.content).toContain("old line 3000\n")
+        expect(message.content).toContain(`(${output.length} characters)`)
+        const file = savedOutputFile(message.content)
+        expect(file.startsWith(`${home}/.gent/background-bash/`)).toBe(true)
+        expect(yield* fs.readFileString(file)).toBe(output)
+      }).pipe(Effect.provide(BunFileSystem.layer), withProcessTimeout),
+    processTestTimeout,
+  )
+
   it.live(
     "failed background job does not notify before failure state is durable",
     () =>
@@ -4452,6 +4528,9 @@ describe("a background job the server stopped", () => {
             expect(failed[0]).toContain(heading)
             expect(failed[0]).toContain(command)
             expect(failed[0]).toContain("start one again only when the user asks for it")
+            // The file holds only what was written before the stop, and says so.
+            expect(failed[0]).toMatch(/output up to the stop is in \S+\/background-bash\/\S+\.txt/)
+            expect(failed[0]).toContain("holds only the output written before the stop")
             const answered = yield* ask(client, systems, 2)
             expect(answered[1]).toContain(heading)
             const after = yield* ask(client, systems, 3)
