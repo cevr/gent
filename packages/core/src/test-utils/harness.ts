@@ -245,9 +245,6 @@ export const testTurnExtension = defineExtension({
   }),
 })
 
-const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
-const dieEffect = (label: string) => Effect.die(`${label} not wired in test`)
-
 /**
  * One stub that serves both halves of the boundary: a host context a runtime
  * test can provide as `CurrentExtensionHostContext`, and, through
@@ -268,27 +265,8 @@ type TestToolContextOverrides = Omit<Partial<TestToolContext>, "State"> & {
 /** Default ToolCapabilityContext for tests — overridable via spread */
 export const testToolContext = (overrides?: TestToolContextOverrides): TestToolContext => {
   const host = testExtensionHostContext().host
-  const Session: ExtensionContextService["Session"] = {
-    getSession: dieStub("session.getSession"),
-    getDetail: dieStub("session.getDetail"),
-    renameCurrent: dieStub("session.renameCurrent"),
-    create: dieStub("session.create"),
-    delete: dieStub("session.delete"),
-    send: dieStub("session.send"),
-    stop: dieStub("session.stop"),
-    stopMessage: dieStub("session.stopMessage"),
-    events: () => Stream.die("session.events"),
-    dequeueFollowUp: dieStub("session.dequeueFollowUp"),
-    listBranches: dieEffect("session.listBranches"),
-    listSessions: dieStub("session.listSessions"),
-    listActiveLoops: dieEffect("session.listActiveLoops"),
-  }
-  const Interaction: ExtensionContextService["Interaction"] = {
-    approve: dieStub("Interaction.approve"),
-    present: dieStub("Interaction.present"),
-  }
-  const resolvedSession = overrides?.Session ?? Session
-  const resolvedInteraction = overrides?.Interaction ?? Interaction
+  const resolvedSession = overrides?.Session ?? defaultSession()
+  const resolvedInteraction = overrides?.Interaction ?? defaultInteraction()
   const resolvedFileLock = overrides?.FileLock ?? testExtensionFileLock()
   const resolvedState = overrides?.State ?? testExtensionState()
   const resolvedExtensionId = overrides?.extensionId ?? ExtensionId.make("test-extension")
