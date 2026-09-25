@@ -306,7 +306,7 @@ const rowOutputLines = (call: ToolCall): number => {
   return lineCount(rowOutputText(call))
 }
 
-/** A declined command never ran and a background one has not ended: neither has lines to count. */
+/** A declined command (stored by an earlier version) never ran and a background one has not ended: neither has lines to count. */
 const hasNoOutputYet = (call: ToolCall): boolean =>
   call.toolName === "bash" &&
   Option.exists(parseBashOutput(call.output), (value) => Option.isSome(value.status))
@@ -1506,15 +1506,33 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     return Math.min(Math.max(1, liveHeight()), liveRows() - stickyRows())
   }
 
+  // A footer that takes the whole split region (a docked pane, its blank rows
+  // given way) leaves the live tail no row. The scrollbox keeps its set height
+  // and would draw its last row over the footer's first, so the tail reads its
+  // laid-out rows before each draw and, at none, draws nothing.
+  const [rowsShown, setRowsShown] = createSignal(Option.none<number>())
+  const hasRows = () => !Option.contains(rowsShown(), 0)
+
   return (
-    <box flexDirection="column" flexShrink={1} minHeight={0}>
-      <Show when={Option.getOrUndefined(stickyPrompt())}>
+    <box
+      flexDirection="column"
+      flexShrink={1}
+      minHeight={0}
+      // A basis, not the content's height: hidden rows must not end the measure.
+      flexBasis={stickyRows() + viewportHeight()}
+      renderBefore={function () {
+        const rows = Math.max(0, Math.round(this.getLayoutNode().getComputedHeight()))
+        if (!Option.contains(rowsShown(), rows)) setRowsShown(Option.some(rows))
+      }}
+    >
+      <Show when={hasRows() && Option.getOrUndefined(stickyPrompt())}>
         {(prompt) => <StickyPrompt text={prompt()} width={dimensions().width} />}
       </Show>
       <scrollbox
         ref={(value) => {
           viewport = Option.some(value)
         }}
+        visible={hasRows()}
         height={viewportHeight()}
         minHeight={0}
         overflow="hidden"
@@ -1532,7 +1550,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
           flexDirection="column"
           flexShrink={0}
           onSizeChange={function () {
-            if (props.expanded || props.overlayOpen) return
+            if (props.expanded || props.overlayOpen || !hasRows()) return
             setLiveHeight(this.height)
           }}
         >

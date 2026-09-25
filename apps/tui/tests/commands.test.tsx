@@ -232,9 +232,9 @@ describe("executeSlashCommand", () => {
     expect(failures[1]?.reason).toContain('keybind "j"')
   })
 
-  // A keybind runs before the Esc ladder: a bare escape would take the turn
-  // cancel and the quit away from Esc.
-  test("a bare escape keybind is refused, and one with ctrl stays", () => {
+  // A keybind runs before the Esc and ctrl+c ladders: a bare escape or a
+  // ctrl+c would take the turn cancel and the quit away from the key.
+  test("a bare escape or ctrl+c keybind is refused, and one with another modifier stays", () => {
     const { commands, failures } = resolveCommands([
       {
         id: "@test/keys",
@@ -244,6 +244,9 @@ describe("executeSlashCommand", () => {
           cmd({ id: "project.escape", slash: "escape", keybind: "escape" }),
           cmd({ id: "project.shift-escape", slash: "shift-escape", keybind: "shift+escape" }),
           cmd({ id: "project.ctrl-escape", slash: "ctrl-escape", keybind: "ctrl+escape" }),
+          cmd({ id: "project.ctrl-c", slash: "ctrl-c", keybind: "ctrl+c" }),
+          cmd({ id: "project.ctrl-shift-c", slash: "ctrl-shift-c", keybind: "ctrl+shift+c" }),
+          cmd({ id: "project.ctrl-meta-c", slash: "ctrl-meta-c", keybind: "ctrl+meta+c" }),
         ],
       },
     ])
@@ -257,9 +260,13 @@ describe("executeSlashCommand", () => {
       "project.escape": "none",
       "project.shift-escape": "none",
       "project.ctrl-escape": "ctrl+escape",
+      "project.ctrl-c": "none",
+      "project.ctrl-shift-c": "none",
+      "project.ctrl-meta-c": "ctrl+meta+c",
     })
-    expect(failures).toHaveLength(2)
+    expect(failures).toHaveLength(4)
     expect(failures[0]?.reason).toContain('keybind "escape"')
+    expect(failures[2]?.reason).toContain('keybind "ctrl+c"')
   })
 
   test("a slash beats another command's alias", () => {

@@ -54,6 +54,7 @@ export { type ModelContextMetrics } from "./domain/agent-loop.js"
 export {
   CONTEXT_WINDOW_MESSAGE_TYPE,
   MODEL_CHANGE_MESSAGE_TYPE,
+  modelInputCeilingTokens,
   windowDetails,
 } from "./runtime/model-context.js"
 export { GentRpcError } from "./server/rpc.js"

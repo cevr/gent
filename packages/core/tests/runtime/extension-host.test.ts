@@ -54,7 +54,7 @@ import {
 } from "@gent/core/extensions/api"
 import {
   ApprovalService,
-  buildResourceLayer,
+  buildScopeResources,
   compileExtensionHooks,
   configHealthStatuses,
   CurrentExtensionHostContext,
@@ -4392,16 +4392,27 @@ describe("defineResource", () => {
   })
 })
 
-describe("buildResourceLayer", () => {
-  it.live("returns Layer.empty when an extension has no Resources", () =>
+/** One scope's Resources built into the caller's scope, over no other services. */
+const buildProcessResources = (extensions: ReadonlyArray<LoadedExtension>) =>
+  Effect.gen(function* () {
+    return yield* buildScopeResources({
+      extensions,
+      scope: "process",
+      context: Context.makeUnsafe<unknown>(new Map()),
+      parent: yield* Effect.scope,
+      restore: (effect) => effect,
+    })
+  })
+
+describe("buildScopeResources", () => {
+  it.live("an extension with no Resources adds no service", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const ext = makeStubExtension("ext", [])
-        const layer = buildResourceLayer([ext], "process")
-        const ctx = yield* Layer.build(layer)
-        // No service tags should be present.
-        expect(Option.isNone(Context.getOption(ctx, TestServiceA))).toBe(true)
-        expect(Option.isNone(Context.getOption(ctx, TestServiceB))).toBe(true)
+        const started = yield* buildProcessResources([ext])
+        expect(started.active).toEqual([ext])
+        expect(Option.isNone(Context.getOption(started.context, TestServiceA))).toBe(true)
+        expect(Option.isNone(Context.getOption(started.context, TestServiceB))).toBe(true)
       }),
     ),
   )
@@ -4421,10 +4432,9 @@ describe("buildResourceLayer", () => {
             layer: layerB,
           }),
         ])
-        const layer = buildResourceLayer([ext], "process")
-        const ctx = yield* Layer.build(layer)
-        expect(Context.get(ctx, TestServiceA).value).toBe("A")
-        expect(Context.get(ctx, TestServiceB).value).toBe("B")
+        const started = yield* buildProcessResources([ext])
+        expect(Context.get(started.context, TestServiceA).value).toBe("A")
+        expect(Context.get(started.context, TestServiceB).value).toBe("B")
       }),
     ),
   )
@@ -4432,7 +4442,7 @@ describe("buildResourceLayer", () => {
 
 // ── resource layer lifecycle ──
 
-describe("buildResourceLayer lifecycle", () => {
+describe("buildScopeResources lifecycle", () => {
   const lifecycleLog = () => {
     const log: string[] = []
     const append = (s: string) => Effect.sync(() => log.push(s))
@@ -4461,12 +4471,12 @@ describe("buildResourceLayer lifecycle", () => {
           layer: tracked(layerB, "2"),
         }),
       ])
-      yield* Effect.scoped(Layer.build(buildResourceLayer([ext], "process")))
+      yield* Effect.scoped(buildProcessResources([ext]))
       expect(log).toEqual(["start-1", "start-2", "stop-2", "stop-1"])
     }),
   )
 
-  it.live("a failed layer fails the build and releases the layers built before it", () =>
+  it.live("a failed layer fails its extension and releases what it built before", () =>
     Effect.gen(function* () {
       const { log, tracked } = lifecycleLog()
       const ext = makeStubExtension("ext", [
@@ -4481,10 +4491,9 @@ describe("buildResourceLayer lifecycle", () => {
           layer: Layer.effect(TestServiceB, Effect.die(new Error("boom"))),
         }),
       ])
-      const exit = yield* Effect.scoped(Layer.build(buildResourceLayer([ext], "process"))).pipe(
-        Effect.exit,
-      )
-      expect(exit._tag).toBe("Failure")
+      const started = yield* Effect.scoped(buildProcessResources([ext]))
+      expect(started.active).toEqual([])
+      expect(started.failed.map(({ failure }) => failure.phase)).toEqual(["startup"])
       expect(log).toEqual(["start-good", "stop-good"])
     }),
   )

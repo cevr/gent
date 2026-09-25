@@ -868,7 +868,7 @@ const renderResumed = (opts: {
       },
     })
     const rendered = yield* Effect.promise(() =>
-      renderWithProviders(() => <App missingAuthProviders={[]} />, {
+      renderWithProviders(() => <App />, {
         client,
         runtime: createMockRuntime(),
         builtins: [opts.extension],

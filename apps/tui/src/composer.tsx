@@ -47,6 +47,7 @@ import {
   SelectList,
   type SelectListApi,
   type SelectListRow,
+  useDockSpacer,
 } from "./ui"
 import { useExtensionUI } from "./extensions/host"
 import { type SessionIdentity, useClient, useRuntime } from "./client"
@@ -238,7 +239,11 @@ export function ComposerFrame(props: ComposerFrameProps) {
 
   // The composer keeps its rows. While its autocomplete popup or command
   // palette is open, that picker is the one child that gives way on a short
-  // terminal, so the frame may shrink by the picker's rows alone.
+  // terminal, so the frame may shrink by the picker's rows alone. Its blank
+  // rows (above the input, above the status row) give way first, while a
+  // docked pane is short (`useDockSpacer`).
+  const aboveInput = useDockSpacer()
+  const aboveStatus = useDockSpacer()
   return (
     <PickerHost>
       {(hosting) => {
@@ -247,11 +252,11 @@ export function ComposerFrame(props: ComposerFrameProps) {
           return 0
         }
         return (
-          <box flexDirection="column" flexShrink={shrink()} paddingTop={1}>
+          <box flexDirection="column" flexShrink={shrink()} paddingTop={aboveInput()}>
             <box flexDirection="column" flexShrink={shrink()}>
               {props.children}
             </box>
-            <box height={1} flexShrink={0} marginTop={1} overflow="hidden">
+            <box height={1} flexShrink={0} marginTop={aboveStatus()} overflow="hidden">
               <text wrapMode="none">
                 <For each={groups().left}>
                   {(label, index) => (
@@ -321,8 +326,6 @@ interface AutocompletePopupProps {
    * for `@` — to learn something already known here.
    */
   onGhostChange: (ghost: Option.Option<string>) => void
-  /** The popup's frame has fewer rows than it asked for, or has them again. */
-  onSqueezeChange?: (squeezed: boolean) => void
 }
 
 export function AutocompletePopup(props: AutocompletePopupProps) {
@@ -484,13 +487,7 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
   }
 
   return (
-    <PickerFrame
-      lines={visibleItems().length}
-      queryRow
-      title={title()}
-      footer={footerHint()}
-      onSqueezeChange={props.onSqueezeChange}
-    >
+    <PickerFrame title={title()} footer={footerHint()}>
       <SelectList
         id="autocomplete"
         // The composer owns the filter; the list draws it as its query row.
@@ -1257,10 +1254,28 @@ interface ComposerContextValue {
   handleAutocompleteComplete: (value: string) => void
   handleAutocompleteClose: () => void
   setGhost: (ghost: Option.Option<string>) => void
-  onPopupSqueezeChange: (squeezed: boolean) => void
 }
 
 const ComposerContext = createContext<ComposerContextValue>()
+
+/**
+ * The ghost line. It offers the completion the popup's cursor row already
+ * shows, so it is a spacer to the dock: it gives way with the blank rows when
+ * the popup is short of rows, and comes back only once they all fit.
+ */
+function GhostLine(props: { completion: string }) {
+  const { theme } = useTheme()
+  const row = useDockSpacer()
+  return (
+    <Show when={row() > 0}>
+      <box flexShrink={0} height={1} paddingLeft={2} overflow="hidden">
+        <text style={{ fg: theme.textMuted }} wrapMode="none">
+          {props.completion} <span style={{ fg: theme.textMuted }}>⇥</span>
+        </text>
+      </box>
+    </Show>
+  )
+}
 
 interface ComposerProps {
   children?: JSX.Element
@@ -1296,9 +1311,6 @@ export function Composer(props: ComposerProps) {
    * the ghost is never in the buffer, so Enter can never submit it.
    */
   const [ghost, setGhost] = createSignal(Option.none<string>())
-  // A squeezed popup keeps its rows for the list: the ghost line, which
-  // offers the completion the cursor row already shows, gives way first.
-  const [popupSqueezed, setPopupSqueezed] = createSignal(false)
 
   const contextValue: ComposerContextValue = {
     autocomplete: controller.autocomplete,
@@ -1306,14 +1318,12 @@ export function Composer(props: ComposerProps) {
     handleAutocompleteComplete: controller.handleAutocompleteComplete,
     handleAutocompleteClose: controller.handleAutocompleteClose,
     setGhost,
-    onPopupSqueezeChange: setPopupSqueezed,
   }
 
   /** The ghost is only an offer while there is an open popup to complete from. */
   const visibleGhost = (): Option.Option<string> => {
     if (Option.isNone(Option.fromNullishOr(controller.autocomplete()))) return Option.none()
     if (controller.mode() !== "editing") return Option.none()
-    if (popupSqueezed()) return Option.none()
     return ghost()
   }
 
@@ -1387,13 +1397,7 @@ export function Composer(props: ComposerProps) {
 
       {/* The ghost line: what Tab would complete, muted, on a row of its own. */}
       <Show when={Option.getOrUndefined(visibleGhost())}>
-        {(completion) => (
-          <box flexShrink={0} height={1} paddingLeft={2} overflow="hidden">
-            <text style={{ fg: theme.textMuted }} wrapMode="none">
-              {completion()} <span style={{ fg: theme.textMuted }}>⇥</span>
-            </text>
-          </box>
-        )}
+        {(completion) => <GhostLine completion={completion()} />}
       </Show>
 
       <box
@@ -1424,7 +1428,6 @@ Composer.Autocomplete = function ComposerAutocomplete() {
           onComplete={ctx.handleAutocompleteComplete}
           onClose={ctx.handleAutocompleteClose}
           onGhostChange={ctx.setGhost}
-          onSqueezeChange={ctx.onPopupSqueezeChange}
         />
       )}
     </Show>

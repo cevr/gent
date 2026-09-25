@@ -32,7 +32,7 @@ import {
   type InitialState,
   resolveInitialState,
   resolveInteractiveBootstrap,
-  resolveStartupAuthState,
+  resolveHeadlessMissingProviders,
 } from "./app"
 import { TerminalDimensionsProvider } from "./terminal"
 import { ComposerMemoryProvider } from "./session"
@@ -177,7 +177,7 @@ const gentFlags = {
   ),
   approveAll: Flag.boolean("approve-all").pipe(
     Flag.withDescription(
-      "Approve every ask of the headless turn, destructive commands included (-H only; default: decline, as no user is present)",
+      "Approve every ask of the headless turn (-H only; default: decline, as no user is present)",
     ),
     Flag.withDefault(false),
   ),
@@ -307,18 +307,20 @@ const runGent = ({
         ),
       })
 
-      const startupAuth = yield* resolveStartupAuthState({ client: bundle.client, state })
-      const missingProviders = startupAuth.missingProviders
+      if (state._tag !== "headless") {
+        return yield* new CliStartupError({
+          message: "headless startup resolved an interactive state",
+        })
+      }
+
+      const missingProviders = yield* resolveHeadlessMissingProviders({
+        client: bundle.client,
+        state,
+      })
 
       if (missingProviders.length > 0 && !debug && !Option.isSome(connect)) {
         return yield* new CliStartupError({
           message: `missing required API keys: ${missingProviders.join(", ")}`,
-        })
-      }
-
-      if (state._tag !== "headless") {
-        return yield* new CliStartupError({
-          message: "headless startup resolved an interactive state",
         })
       }
 
@@ -329,7 +331,7 @@ const runGent = ({
     // Block until supervisor is ready (same as headless path)
     yield* bundle.runtime.lifecycle.waitForReady
 
-    // Resolve session + auth before rendering — eliminates the loading route
+    // Resolve the session and its agent before rendering — eliminates the loading route
     const { bootstrap, initialAgent } = yield* resolveInteractiveBootstrap({
       client: bundle.client,
       cwd,
@@ -338,8 +340,6 @@ const runGent = ({
       prompt: Option.getOrUndefined(prompt),
       debugMode: debug,
     })
-
-    const missingAuth = bootstrap.missingAuthProviders
 
     // Resolve the terminal color scheme once before render so theme detection
     // never runs in the synchronous Solid render path.
@@ -387,7 +387,6 @@ const runGent = ({
                     >
                       <App
                         debugMode={debug}
-                        missingAuthProviders={missingAuth}
                         initialBranches={bootstrap.initialBranches}
                         initialThemeMode={initialThemeMode}
                       />

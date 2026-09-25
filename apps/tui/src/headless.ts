@@ -96,11 +96,7 @@ const BashHeadlessToolRenderer: HeadlessToolRenderer = (toolCall) => {
   if (Option.isNone(parsed)) return renderGeneric(toolCall)
 
   const { stdout, stderr, exitCode } = parsed.value
-  // A declined command never ran and a background one has not ended: the
-  // tool's own words, not an exit code it never had.
-  if (Option.contains(parsed.value.status, "blocked")) {
-    return Option.some("[tool declined: bash]")
-  }
+  // A background command has not ended: it has no exit code yet.
   let exit = ` exit ${exitCode}`
   if (Option.contains(parsed.value.status, "background")) exit = " in background"
   let combined = stdout

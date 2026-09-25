@@ -438,7 +438,6 @@ export function ThreadPane(props: {
       {/* A heading opens each session, so the pane draws more lines than it
           has windows; the frame adds the detail line under them. */}
       <PickerFrame
-        lines={threadItems(windows()).length}
         title={title()}
         footer={"↑↓ move   ↵ open session   esc close"}
         detail={Option.liftPredicate(detailFor(cursor()), () => windows().length > 0)}

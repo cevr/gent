@@ -2209,12 +2209,15 @@ describe("native model compaction integration", () => {
           makeMessage(sessionId, branchId, "summarize then answer"),
           admission,
         )
-        const summary = observedHints.filter((hints) => Predicate.isNotUndefined(hints.maxTokens))
+        // A turn step asks for the output its 128k window reserves; the summary
+        // asks for its own small cap.
+        const turnOutput = 32_000
+        const summary = observedHints.filter((hints) => hints.maxTokens !== turnOutput)
         expect(summary).toHaveLength(1)
         expect(summary[0]?.reasoning).toBe("none")
         // The turn itself keeps its own effort.
         expect(
-          observedHints.filter((hints) => Predicate.isUndefined(hints.maxTokens)).at(-1)?.reasoning,
+          observedHints.filter((hints) => hints.maxTokens === turnOutput).at(-1)?.reasoning,
         ).toBe("high")
       }),
     ).pipe(Effect.provide(layer), Effect.timeout("15 seconds"))
@@ -2290,14 +2293,14 @@ describe("native model compaction integration", () => {
   it.live("a smaller agent context window hands off history the catalog window would keep", () => {
     const sessionId = SessionId.make("small-window-session")
     const branchId = BranchId.make("small-window-branch")
-    // ~3,000 tokens: far under the 128k test catalog limit, over a 6k window minus reserves.
+    // ~6,000 tokens: far under the 128k test catalog limit, over a 6k window minus reserves.
     const oldMessages = Array.from({ length: 12 }, (_, index) =>
       Message.cases.regular.make({
         id: MessageId.make(`small-old-${index + 1}`),
         sessionId,
         branchId,
         role: "assistant",
-        parts: [Prompt.textPart({ text: `small-old-${index + 1} ${"x".repeat(1_000)}` })],
+        parts: [Prompt.textPart({ text: `small-old-${index + 1} ${"x".repeat(2_000)}` })],
         createdAt: dateFromMillis(1_000 + index),
       }),
     )
@@ -2449,7 +2452,7 @@ describe("native model context projection", () => {
     }).pipe(Effect.timeout("5 seconds"))
   })
 
-  it.live("leaves the output limit to the provider and passes the stable session cache key", () => {
+  it.live("asks for the output the budget reserves and passes the stable session cache key", () => {
     const modelId = ModelId.make("context-driver/model")
     let observedMaxTokens = Option.none<number>()
     const observedCacheKeys: Array<Option.Option<string>> = []
@@ -2489,6 +2492,7 @@ describe("native model context projection", () => {
           name: "Context model",
           provider: ProviderId.make("context-driver"),
           contextLength: 128_000,
+          outputLimit: 16_000,
         }),
       ],
       resolver: modelResolver,
@@ -2506,7 +2510,8 @@ describe("native model context projection", () => {
           ),
           { runSpec: { overrides: { modelId } } },
         )
-        expect(observedMaxTokens).toEqual(Option.none())
+        // The catalog cap is under 32k, so the request asks for all of it.
+        expect(observedMaxTokens).toEqual(Option.some(16_000))
         yield* runAgentLoop(
           agentLoop,
           makeMessage(

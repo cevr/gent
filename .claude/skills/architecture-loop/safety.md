@@ -7,7 +7,6 @@ SAFETY (mandatory; on 2026-09-23 a heredoc of guard probe text ran `rm -rf ~`):
 - Create every file with the Write tool, never through a shell heredoc (`cat > f <<EOF`, quoted or not), `python3 -c`, `python3 - <<X` or `bun -e`.
 - A destructive command string (rm, git reset, git clean, git push -f, dd, mkfs, chmod -R, find -delete, kill and similar) lives only as a string literal in a .ts file created with the Write tool, run with `bun <file>`. It stays out of every shell command line, heredoc, `echo`, `python3 -c`, `bun -e`, stdin heredoc and commit message; commit with `-m "..."` or `git commit -F <file written with Write>`.
 - Probe strings target only harmless paths such as `/nonexistent/gent-probe-x`; never `~`, `$HOME`, `/`, `.` or a real repo path.
-- The classifier is a pure function: call it with the probe strings. Probe text never reaches a shell.
 - To unstage, use `git restore --staged <file>`. Delete with `trash`.
 - Live binary. This file is the one owner of the rule; prompts and work rules point here and never restate it.
   - A live gent run uses `--debug` only, with `GENT_DATA_DIR` under the scratch directory your prompt names. Never `bun run link`.

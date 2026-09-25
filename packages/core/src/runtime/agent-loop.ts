@@ -98,6 +98,7 @@ import {
   type WaitingForInteractionState,
 } from "../domain/agent-loop.js"
 import { type AgentEvent, ErrorOccurred, EventStore } from "../domain/event.js"
+import type { FailedExtension } from "../domain/extension.js"
 import { causeChainMessage } from "../domain/guards.js"
 import {
   type ActiveStreamHandle,
@@ -123,9 +124,10 @@ import type { SqlClient } from "effect/unstable/sql"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import {
   ApprovalService,
-  buildResourceLayer,
+  buildScopeResources,
   type CurrentExtensionHostContext,
   ExtensionRegistry,
+  type ExtensionRegistryService,
   makeExtensionHostContextProvider,
   makeExtensionHostPlatform,
   resolveTurnProfile as resolveSessionTurnProfile,
@@ -133,6 +135,7 @@ import {
   SessionProfileCache,
   type SessionProfileCacheService,
   sessionWorkingDirectory,
+  suspendExtensions,
 } from "./extension-host.js"
 import type { ConfigService, RuntimeEnvironment } from "./config.js"
 import type {
@@ -1686,7 +1689,7 @@ const makeAgentLoopBehavior = (
       },
     })
 
-    const resolveTurnProfile = (opener: RunOpener) =>
+    const resolveProfile = (opener: RunOpener) =>
       provideAgentLoopRuntimeContext(runtimeContext)(
         resolveSessionTurnProfile({
           opener,
@@ -1717,31 +1720,92 @@ const makeAgentLoopBehavior = (
     // request, not at open, so a control-plane write (a cancel, an answer to
     // no question) never resolves a profile.
     const branchResourceLock = yield* Semaphore.make(1)
-    const branchResources = yield* Ref.make(Option.none<typeof branchToolContext>())
-    const branchContext = Effect.gen(function* () {
+    interface BranchResources {
+      readonly context: typeof branchToolContext
+      /** The extensions this loop suspends: their branch Resources failed. */
+      readonly suspended: ReadonlyArray<FailedExtension>
+    }
+    const branchResources = yield* Ref.make(Option.none<BranchResources>())
+    const buildBranchResources = Effect.gen(function* () {
       const built = yield* Ref.get(branchResources)
       if (Option.isSome(built)) return built.value
       // The branch's Resources are built over this profile's services, so
       // the loop holds its lease until the branch closes. No turn's origin
       // reaches them.
-      const profile = yield* resolveTurnProfile(
+      const profile = yield* resolveProfile(
         RunOpener.cases.Turn.make({ openedByClient: true }),
       ).pipe(Scope.provide(loopScope))
+      // Each extension's branch Resources build on their own, as its process
+      // Resources do. One that fails, or that needs a service a failed one
+      // would have built, is named once in the log and in the transcript and
+      // is suspended for this loop, as a failed process Resource suspends its
+      // extension for the profile; every other extension and the branch's
+      // turns go on.
       return yield* Effect.uninterruptible(
-        Layer.build(
-          buildResourceLayer(profile.turnExtensionRegistry.getResolved().extensions, "branch"),
-        ).pipe(
-          Effect.provideContext(
-            Option.getOrElse(Option.fromUndefinedOr(profile.turnCapabilityContext), Context.empty),
-          ),
-          Scope.provide(loopScope),
-          Effect.map((resources): typeof branchToolContext =>
-            Context.merge(branchToolContext, resources),
-          ),
-          Effect.tap((context) => Ref.set(branchResources, Option.some(context))),
-        ),
+        Effect.gen(function* () {
+          const started = yield* buildScopeResources({
+            extensions: profile.turnExtensionRegistry.getResolved().extensions,
+            scope: "branch",
+            context: Context.merge(
+              Context.makeUnsafe<unknown>(new Map()),
+              Option.getOrElse(
+                Option.fromUndefinedOr(profile.turnCapabilityContext),
+                Context.empty,
+              ),
+            ),
+            parent: loopScope,
+            restore: (effect) => effect,
+          })
+          yield* Effect.forEach(
+            started.failed,
+            ({ failure, message }) =>
+              publishEvent(
+                ErrorOccurred.make({
+                  sessionId,
+                  branchId,
+                  error: `Extension "${failure.manifest.id}" branch resource failed to start: ${message}`,
+                  notice: true,
+                }),
+              ).pipe(
+                Effect.catchEager((error) =>
+                  Effect.logWarning("failed to publish ErrorOccurred").pipe(
+                    Effect.annotateLogs({ error: String(error) }),
+                  ),
+                ),
+              ),
+            { discard: true },
+          )
+          const resources: BranchResources = {
+            context: Context.merge(branchToolContext, started.context),
+            suspended: started.failed.map(({ failure }) => failure),
+          }
+          yield* Ref.set(branchResources, Option.some(resources))
+          return resources
+        }),
       )
     }).pipe(branchResourceLock.withPermits(1))
+    const branchContext = Effect.map(buildBranchResources, ({ context }) => context)
+    // A turn, a request and a hook read the registry with the loop's
+    // suspended extensions left out, so none of their tools, requests or
+    // hooks is offered or dispatched. One registry per profile: a profile
+    // resolves to the same registry until a config edit replaces it.
+    const suspendedRegistries = new WeakMap<ExtensionRegistryService, ExtensionRegistryService>()
+    const resolveTurnProfile = (opener: RunOpener) =>
+      Effect.gen(function* () {
+        const profile = yield* resolveProfile(opener)
+        const { suspended } = yield* buildBranchResources
+        if (suspended.length === 0) return profile
+        const registry = profile.turnExtensionRegistry
+        const narrowed = Option.getOrElse(
+          Option.fromUndefinedOr(suspendedRegistries.get(registry)),
+          () => {
+            const resolved = suspendExtensions(registry.getResolved(), suspended)
+            return ExtensionRegistry.of({ getResolved: () => resolved })
+          },
+        )
+        suspendedRegistries.set(registry, narrowed)
+        return { ...profile, turnExtensionRegistry: narrowed }
+      })
     const turnWorkerQueue = yield* TxQueue.unbounded<RunningState>()
     const activeStreamRef = yield* Ref.make<Option.Option<ActiveStreamHandle>>(Option.none())
     const turnLedger = yield* makeTurnLedger

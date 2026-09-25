@@ -31,6 +31,7 @@ export {
 } from "./harness.js"
 export {
   type CapturedRequest,
+  captureProviderStopReason,
   createWorkerEnv,
   fakeFetchLayer,
   type FakeFetchState,

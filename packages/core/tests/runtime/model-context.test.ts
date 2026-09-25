@@ -27,7 +27,8 @@ import {
   maximumModelToolResultChars,
   messagesInCurrentWindow,
   modelChangeNotice,
-  MODEL_OUTPUT_RESERVE_TOKENS,
+  modelInputCeilingTokens,
+  outputReserveTokens,
   ModelCompactionError,
   ModelContextBudget,
   ModelContextCompactor,
@@ -706,6 +707,18 @@ const overflowStep: SequenceStep = {
   ],
 }
 
+/**
+ * How Anthropic ends a reply the window cut off (Sonnet 4.5 and later): a
+ * normal finish whose raw stop reason Effect AI maps to `"unknown"`.
+ */
+const windowFullStep: SequenceStep = {
+  parts: [
+    textDeltaPart("the first half of the"),
+    finishPart({ finishReason: "unknown", usage: { inputTokens: 1_000, outputTokens: 10 } }),
+  ],
+  stopReason: "model_context_window_exceeded",
+}
+
 const stubCompactor = Layer.succeed(
   ModelContextCompactor,
   ModelContextCompactor.of({
@@ -731,7 +744,7 @@ const runOverflowTurn = (params: {
     const requests: Array<string> = []
     const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence(
       params.steps.map((step) => ({
-        parts: step.parts,
+        ...step,
         assertOptions: (options) => {
           requests.push(encodeJson(options.prompt.content))
         },
@@ -781,6 +794,45 @@ const streamFailed = (events: ReadonlyArray<AgentEvent>) =>
   Option.fromUndefinedOr(events.findLast((event) => event._tag === "TurnCompleted")).pipe(
     Option.map((receipt) => receipt._tag === "TurnCompleted" && receipt.streamFailed === true),
   )
+
+describe("output reserve", () => {
+  test("is the model's output cap up to 32k", () => {
+    const reserve = (outputLimit: Option.Option<number>) =>
+      outputReserveTokens({ contextLimitTokens: 200_000, outputLimitTokens: outputLimit })
+    expect(reserve(Option.none())).toBe(32_000)
+    expect(reserve(Option.some(8_192))).toBe(8_192)
+    expect(reserve(Option.some(128_000))).toBe(32_000)
+    // A catalog value that is no count is ignored.
+    expect(reserve(Option.some(0))).toBe(32_000)
+  })
+
+  test("takes at most a quarter of a small window", () => {
+    expect(
+      outputReserveTokens({ contextLimitTokens: 32_768, outputLimitTokens: Option.none() }),
+    ).toBe(8_192)
+    expect(
+      outputReserveTokens({ contextLimitTokens: 128_000, outputLimitTokens: Option.none() }),
+    ).toBe(32_000)
+  })
+
+  test("the input ceiling is the window less the reserve, never past the input cap", () => {
+    const ceiling = (params: {
+      readonly window: number
+      readonly input?: number
+      readonly output?: number
+    }) =>
+      modelInputCeilingTokens({
+        contextLimitTokens: params.window,
+        inputLimitTokens: Option.fromUndefinedOr(params.input),
+        outputLimitTokens: Option.fromUndefinedOr(params.output),
+      })
+    expect(ceiling({ window: 200_000 })).toBe(168_000)
+    expect(ceiling({ window: 200_000, output: 8_000 })).toBe(192_000)
+    expect(ceiling({ window: 32_768 })).toBe(24_576)
+    // GPT-5: the input cap binds below the window less the reserve.
+    expect(ceiling({ window: 400_000, input: 272_000, output: 128_000 })).toBe(272_000)
+  })
+})
 
 describe("provider overflow recovery", () => {
   it.live("a request refused as too long hands the window off once and the step runs again", () =>
@@ -844,6 +896,42 @@ describe("provider overflow recovery", () => {
     }),
   )
 
+  it.live("a reply the full window cut off hands the window off and continues", () =>
+    Effect.gen(function* () {
+      const result = yield* runOverflowTurn({
+        steps: [windowFullStep, textStep("the rest of the reply")],
+        model: wideModel,
+        extraLayers: [stubCompactor],
+      })
+
+      expect(result.calls).toBe(2)
+      // The cut reply stays, the continuation asks for the rest, and the
+      // retry carries the summary instead of the old history.
+      expect(result.requests[1]).toContain("the first half of the")
+      expect(result.requests[1]).toContain("full context window")
+      expect(result.requests[1]).not.toContain(OLD_HISTORY_MARK)
+      expect(result.requests[1]).toContain("summary of the earlier work")
+      expect(result.events.filter((event) => event._tag === "ErrorOccurred")).toEqual([
+        expect.objectContaining({ notice: true }),
+      ])
+      expect(streamFailed(result.events)).toEqual(Option.some(false))
+      expect(result.durable.at(-1)?.role).toBe("assistant")
+    }),
+  )
+
+  it.live("an unknown finish with no raw reason is a finished answer", () =>
+    Effect.gen(function* () {
+      const result = yield* runOverflowTurn({
+        steps: [{ parts: windowFullStep.parts }],
+        model: wideModel,
+        extraLayers: [stubCompactor],
+      })
+
+      expect(result.calls).toBe(1)
+      expect(result.events.some((event) => event._tag === "ErrorOccurred")).toBe(false)
+    }),
+  )
+
   it.live("a model whose input cap is below its window is budgeted against the cap", () =>
     Effect.gen(function* () {
       const capped = new Model({
@@ -863,6 +951,36 @@ describe("provider overflow recovery", () => {
         projected?._tag === "ModelContextProjected" && projected.availableInputTokens
       expect(available).toBeLessThanOrEqual(272_000)
       expect(available).toBeGreaterThan(260_000)
+    }),
+  )
+
+  it.live("the budget keeps free the output the request asks for", () =>
+    Effect.gen(function* () {
+      const claude = new Model({
+        id: wideModelId,
+        name: "Claude shaped",
+        provider: ProviderId.make("test"),
+        contextLength: 200_000,
+        outputLimit: 64_000,
+      })
+      const asked: Array<Option.Option<number>> = []
+      const result = yield* runOverflowTurn({
+        steps: [
+          {
+            ...textStep("reply"),
+            assertRequest: (request) => asked.push(Option.fromUndefinedOr(request.maxTokens)),
+          },
+        ],
+        model: claude,
+        extraLayers: [],
+      })
+      const projected = result.events.find((event) => event._tag === "ModelContextProjected")
+      const available =
+        projected?._tag === "ModelContextProjected" && projected.availableInputTokens
+      // 32k of output is reserved and asked for: input plus reply fit the window.
+      expect(asked).toEqual([Option.some(32_000)])
+      expect(available).toBeLessThanOrEqual(200_000 - 32_000)
+      expect(available).toBeGreaterThan(160_000)
     }),
   )
 
@@ -1452,7 +1570,7 @@ describe("turn window projection", () => {
         contextLimitTokens: 6_000,
         reservedSystemTokens: 0,
         reservedToolTokens: 0,
-        reservedOutputTokens: MODEL_OUTPUT_RESERVE_TOKENS,
+        reservedOutputTokens: 4_096,
       })
       const requests: Array<CompactionRequest> = []
       const compactor = Layer.succeed(
@@ -1547,7 +1665,7 @@ describe("turn window projection", () => {
           contextLimitTokens: 40_000,
           reservedSystemTokens: 0,
           reservedToolTokens: 0,
-          reservedOutputTokens: MODEL_OUTPUT_RESERVE_TOKENS,
+          reservedOutputTokens: 4_096,
         })
         const requests: Array<CompactionRequest> = []
         const compactor = Layer.succeed(
@@ -1619,7 +1737,7 @@ describe("turn window projection", () => {
         contextLimitTokens: 40_000,
         reservedSystemTokens: 0,
         reservedToolTokens: 0,
-        reservedOutputTokens: MODEL_OUTPUT_RESERVE_TOKENS,
+        reservedOutputTokens: 4_096,
       })
       /** A compactor whose summary model is down; the seam contract says the turn degrades. */
       const failingCompactor = Layer.succeed(
