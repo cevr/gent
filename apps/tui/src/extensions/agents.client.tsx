@@ -38,7 +38,7 @@ import {
 } from "@gent/tui/extensions"
 import { ref } from "@gent/core/extensions/api"
 
-// ── builtins/agents-tray.client ─────────────────────────────────────────────
+// ── agents tray ─────────────────────────────────────────────────────────────
 
 /**
  * Subagent tray — one line above the composer.
@@ -177,7 +177,7 @@ export function SubagentTray(props: { controller: AgentsController }) {
   )
 }
 
-// ── builtins/agents-view.client ─────────────────────────────────────────────
+// ── agents pane ─────────────────────────────────────────────────────────────
 
 /**
  * Agents view — the client half.
@@ -717,7 +717,7 @@ export function AgentsPane(props: {
       })
     })
 
-  /** Open on the loop the shell is already on, the way the session tree did. */
+  /** Open on the loop the shell is already on. */
   const sticky = (values: ReadonlyArray<AgentRowEntry>): Option.Option<number> =>
     Option.some(Math.max(0, values.findIndex(isCurrent)))
 

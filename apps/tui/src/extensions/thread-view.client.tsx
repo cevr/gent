@@ -30,7 +30,7 @@ import {
 } from "@gent/tui/extensions"
 import { childTaskBody } from "@gent/extensions/client"
 
-// ── builtins/thread-view.client ─────────────────────────────────────────────
+// ── thread pane ─────────────────────────────────────────────────────────────
 
 /**
  * Thread view — one docked pane over the chain of sessions and the context

@@ -15,7 +15,7 @@ import {
   statusLabelContribution,
 } from "@gent/tui/extensions"
 
-// ── builtins/cache.client ───────────────────────────────────────────────────
+// ── cache-miss notices ──────────────────────────────────────────────────────
 
 /**
  * Prompt-cache misses, as transcript notices.

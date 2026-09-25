@@ -515,11 +515,8 @@ describe("Agents pane refresh while open", () => {
 // ── agents pane ─────────────────────────────────────────────────────────────
 
 /**
- * Keyboard navigation for the agents overlay.
- *
- * Migrated from the session-tree test this view replaced: same three
- * behaviors (arrow selects, Enter fires onSelect, Escape closes), now against
- * the overlay that owns them.
+ * Keyboard navigation for the agents pane: an arrow selects, Enter fires
+ * onSelect, Escape clears a typed filter and then closes.
  */
 
 const rowPane = (id: string, name: string, depth: number): AgentRowEntry => ({
