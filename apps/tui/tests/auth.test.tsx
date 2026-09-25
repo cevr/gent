@@ -878,6 +878,89 @@ describe("Auth route", () => {
     }).pipe(Effect.timeout("8 seconds")),
   )
 
+  // A reconnect refetches the session snapshot, and the snapshot names the
+  // agent the pane already loaded for. The catalog follows the agent's name,
+  // so that snapshot leaves an open sign-in alone: the code stays on screen
+  // and the device poll still finishes the flow.
+  it.scopedLive(
+    "a reconnect snapshot keeps a device-code flow on screen and its poll running",
+    () =>
+      Effect.gen(function* () {
+        let ctx = Option.none<ClientContextValue>()
+        const signedIn = yield* Deferred.make<void>()
+        const callbackCalls: Array<{ provider: string; authorizationId: string }> = []
+        let providerLoads = 0
+        const client = createMockClient({
+          auth: {
+            listProviders: () =>
+              Effect.sync(() => {
+                providerLoads += 1
+                return openaiOnly
+              }),
+            listMethods: () =>
+              Effect.succeed({
+                openai: [{ label: "ChatGPT Pro/Plus (device code)", type: "oauth" }],
+              }),
+            authorize: () =>
+              Effect.succeed({
+                authorizationId: "auth-device",
+                url: "https://auth.openai.com/codex/device",
+                method: "auto",
+                instructions: "Open the URL and enter this code:\nWXYZ-1234",
+              }),
+            // The device poll ends when the user enters the code.
+            callback: (input: { provider: string; authorizationId: string }) =>
+              Effect.sync(() => callbackCalls.push(input)).pipe(
+                Effect.andThen(Deferred.await(signedIn)),
+              ),
+          },
+        })
+        const services = yield* servicesWithLinkOpener(noBrowser)
+        const setup = yield* Effect.promise(() =>
+          renderWithProviders(
+            () => (
+              <>
+                <ClientProbe onReady={(c) => (ctx = Option.some(c))} />
+                <Auth sessionId={activeSessionId} />
+              </>
+            ),
+            {
+              client,
+              runtime: createMockRuntime(),
+              services,
+              initialAgent: AgentName.make("cowork"),
+            },
+          ),
+        )
+        yield* waitForFrame(setup, (frame) => frame.includes("openai"))
+        setup.mockInput.pressEnter()
+        yield* Effect.promise(() => setup.renderOnce())
+        setup.mockInput.pressEnter()
+        yield* waitForFrame(
+          setup,
+          (next) => next.includes("WXYZ-1234") && callbackCalls.length === 1,
+          "device flow waits for the poll",
+        )
+
+        applySnapshotAgent(yield* requireClient(ctx), AgentName.make("cowork"))
+        yield* Effect.yieldNow
+        const reconnected = yield* waitForFrame(setup, () => true)
+        expect(reconnected).toContain("Authorize openai")
+        expect(reconnected).toContain("WXYZ-1234")
+        expect(panelText(reconnected)).toContain("https://auth.openai.com/codex/device")
+        expect(providerLoads).toBe(1)
+
+        yield* Deferred.succeed(signedIn, void 0)
+        yield* waitForFrame(
+          setup,
+          (next) => next.includes("Authenticated openai via OAuth"),
+          "the device poll finishes the flow",
+        )
+        expect(callbackCalls).toHaveLength(1)
+        setup.renderer.destroy()
+      }).pipe(Effect.timeout("8 seconds")),
+  )
+
   it.scopedLive("a browser flow without a browser shows its whole url to copy", () =>
     Effect.gen(function* () {
       const longUrl = `https://claude.ai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&response_type=code&redirect_uri=https%3A%2F%2Fconsole.anthropic.com%2Foauth%2Fcode%2Fcallback&scope=org%3Acreate_api_key+user%3Aprofile&state=${"s".repeat(43)}`

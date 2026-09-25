@@ -1,21 +1,78 @@
 /**
  * Server lifecycle integration tests.
- * Tests the identity route, a signal stop, and reconnects.
+ * Tests the identity route, the ready bound, a signal stop, and reconnects.
  */
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Exit, Random, Scope } from "effect"
+import { Effect, Exit, Option, Random, Schedule, Scope } from "effect"
 import { Gent } from "@gent/sdk"
 import { makeTempDirectoryScoped } from "@gent/core/test-utils"
 import {
   killProcess,
   spawnServer,
+  stopProcess,
   waitForProcessExit,
   waitUntil,
 } from "../src/server-process-fixture"
 
 const randomLifecyclePort = Random.nextIntBetween(19_000, 20_000)
 
+/** Whether a server answers the identity route on `port` within `within`. */
+const answersWithin = (port: number, within: `${number} seconds`) =>
+  Effect.tryPromise(() => Bun.fetch(`http://localhost:${port}/_gent/identity`)).pipe(
+    Effect.map((response) => response.ok),
+    Effect.orElseSucceed(() => false),
+    Effect.repeat({ schedule: Schedule.spaced("200 millis"), until: (ok) => ok }),
+    Effect.timeoutOption(within),
+    Effect.map(Option.isSome),
+  )
+
 describe("server lifecycle", () => {
+  it.live(
+    "a server that misses its ready bound is stopped",
+    () =>
+      Effect.gen(function* () {
+        const port = yield* randomLifecyclePort
+        const spawned = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const dataDir = yield* makeTempDirectoryScoped("gent-lifecycle-")
+            return yield* Effect.exit(spawnServer({ dataDir, port, readyWithin: "1 millis" }))
+          }),
+        )
+        expect(Exit.isFailure(spawned)).toBe(true)
+        // An orphaned server would come up on the port within this window.
+        expect(yield* answersWithin(port, "8 seconds")).toBe(false)
+      }).pipe(Effect.timeout("12 seconds")),
+    15_000,
+  )
+
+  it.live(
+    "a process that ignores SIGTERM is stopped with SIGKILL after the grace period",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          // `exec` keeps the ignored SIGTERM, so the pid that prints "ready" ignores it.
+          const proc = yield* Effect.acquireRelease(
+            Effect.sync(() =>
+              // oxlint-disable-next-line effect/noGlobals -- stopProcess takes the Bun.Subprocess spawnServer makes.
+              Bun.spawn(["sh", "-c", 'trap "" TERM; echo ready; exec sleep 30'], {
+                stdout: "pipe",
+                stderr: "ignore",
+              }),
+            ),
+            // Test cleanup when the stop under test failed to end it.
+            (child) => killProcess(child, "SIGKILL"),
+          )
+          const reader = proc.stdout.getReader()
+          const first = yield* Effect.promise(() => reader.read())
+          expect(new TextDecoder().decode(first.value)).toContain("ready")
+          reader.releaseLock()
+          yield* stopProcess(proc, 300)
+          expect(yield* waitForProcessExit(proc.pid, 2_000)).toBe(true)
+        }),
+      ).pipe(Effect.timeout("8 seconds")),
+    10_000,
+  )
+
   it.live(
     "identity route returns server identity",
     () =>
@@ -23,10 +80,7 @@ describe("server lifecycle", () => {
         Effect.gen(function* () {
           const dataDir = yield* makeTempDirectoryScoped("gent-lifecycle-")
           const port = yield* randomLifecyclePort
-          const { url, proc } = yield* Effect.acquireRelease(
-            spawnServer({ dataDir, port }),
-            ({ proc }) => killProcess(proc),
-          )
+          const { url, proc } = yield* spawnServer({ dataDir, port })
 
           const baseUrl = url.replace("/rpc", "")
           const response = yield* Effect.promise(() => Bun.fetch(`${baseUrl}/_gent/identity`))
@@ -40,7 +94,7 @@ describe("server lifecycle", () => {
           expect(identity.buildFingerprint).toBeTruthy()
           expect(identity.buildFingerprint).not.toBe("unknown")
         }),
-      ),
+      ).pipe(Effect.timeout("12 seconds")),
     15_000,
   )
 
@@ -51,15 +105,12 @@ describe("server lifecycle", () => {
         Effect.gen(function* () {
           const dataDir = yield* makeTempDirectoryScoped("gent-lifecycle-")
           const port = yield* randomLifecyclePort
-          const { proc } = yield* Effect.acquireRelease(
-            spawnServer({ dataDir, port }),
-            ({ proc }) => killProcess(proc),
-          )
+          const { proc } = yield* spawnServer({ dataDir, port })
           yield* killProcess(proc, "SIGTERM")
           const exited = yield* waitForProcessExit(proc.pid, 5_000)
           expect(exited).toBe(true)
         }),
-      ),
+      ).pipe(Effect.timeout("12 seconds")),
     15_000,
   )
 
@@ -70,13 +121,10 @@ describe("server lifecycle", () => {
         Effect.gen(function* () {
           const dataDir = yield* makeTempDirectoryScoped("gent-lifecycle-")
           const port = yield* randomLifecyclePort
-          const serverRef = yield* Effect.acquireRelease(
-            spawnServer({ dataDir, port }).pipe(Effect.map((server) => ({ current: server }))),
-            (ref) => killProcess(ref.current.proc),
-          )
+          const first = yield* spawnServer({ dataDir, port })
 
           const clientScope = yield* Scope.make()
-          const bundle = yield* Gent.client(serverRef.current.url).pipe(
+          const bundle = yield* Gent.client(first.url).pipe(
             Effect.provideService(Scope.Scope, clientScope),
           )
           yield* bundle.runtime.lifecycle.waitForReady
@@ -89,13 +137,13 @@ describe("server lifecycle", () => {
           yield* bundle.client.session.list()
           expect(states).toContain("Connected")
 
-          serverRef.current.proc.kill("SIGKILL")
-          yield* Effect.promise(() => serverRef.current.proc.exited)
+          first.proc.kill("SIGKILL")
+          yield* Effect.promise(() => first.proc.exited)
 
           const sawReconnecting = yield* waitUntil(() => states.includes("Reconnecting"), 5_000)
           expect(sawReconnecting).toBe(true)
 
-          serverRef.current = yield* spawnServer({ dataDir, port })
+          yield* spawnServer({ dataDir, port })
 
           const reconnected = yield* waitUntil(
             () => bundle.runtime.lifecycle.getState()._tag === "Connected",
@@ -106,9 +154,8 @@ describe("server lifecycle", () => {
           yield* bundle.client.session.list()
 
           yield* Scope.close(clientScope, Exit.void)
-          yield* killProcess(serverRef.current.proc)
         }),
-      ),
+      ).pipe(Effect.timeout("25 seconds")),
     30_000,
   )
 })

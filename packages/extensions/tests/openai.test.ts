@@ -23,6 +23,7 @@ import {
   type OpenAICredentialIO,
   type OpenAICredentials,
   makeOpenAICredentialCache,
+  OAuthRedirectPort,
 } from "../src/openai.js"
 import { type CredentialCacheCell, EMPTY_CREDENTIAL_CELL } from "../src/providers.js"
 import {
@@ -2523,25 +2524,37 @@ describe("buildOpenAIModelDriver — OAuth login lifetime", () => {
     }),
   )
 
+  /**
+   * A listener on a port the OS picks, held until the scope closes. The
+   * browser-login tests run on such a port, never on the registered 1455, so
+   * two test processes do not contend for it.
+   */
+  const heldPort = Effect.acquireRelease(
+    Effect.sync(() =>
+      // oxlint-disable-next-line effect/noGlobals -- Plays a foreign process that already holds the port.
+      Bun.serve({ port: 0, fetch: () => new Response("busy") }),
+    ),
+    (held) => Effect.promise(() => held.stop(true)),
+  )
+
+  /** A port no listener holds: the OS picks it for a listener that stops at once. */
+  const freePort = Effect.scoped(heldPort.pipe(Effect.map((held) => held.port)))
+
+  it.live("the browser login listens on the port OpenAI registers", () =>
+    Effect.gen(function* () {
+      expect(yield* OAuthRedirectPort).toBe(1455)
+    }),
+  )
+
   it.scopedLive("a redirect server that cannot bind fails the waiting callback", () =>
     Effect.gen(function* () {
       // Hold the redirect port so the login's own server cannot bind it.
-      yield* Effect.acquireRelease(
-        Effect.sync(() =>
-          Option.liftThrowable(() =>
-            // oxlint-disable-next-line effect/noGlobals -- Plays a foreign process that already holds the port.
-            Bun.serve({ port: 1455, fetch: () => new Response("busy") }),
-          )(),
-        ),
-        (server) =>
-          Option.match(server, {
-            onNone: () => Effect.void,
-            onSome: (held) => Effect.promise(() => held.stop(true)),
-          }),
-      )
+      const held = yield* heldPort
       const pending: PendingCallbacks = new Map()
       const { authorize, callback } = yield* makeDriver(pending)
-      yield* authorize(authContext(0, "blocked"))
+      yield* authorize(authContext(0, "blocked")).pipe(
+        Effect.provideService(OAuthRedirectPort, held.port),
+      )
       const exit = yield* Effect.exit(callback({ ...authContext(0, "blocked") })).pipe(
         Effect.timeout("3 seconds"),
       )
@@ -2552,9 +2565,12 @@ describe("buildOpenAIModelDriver — OAuth login lifetime", () => {
 
   it.live("escapes the provider's error text on the redirect page", () =>
     Effect.gen(function* () {
+      const port = yield* freePort
       const pending: PendingCallbacks = new Map()
       const { authorize, callback } = yield* makeDriver(pending)
-      const authorization = yield* authorize(authContext(0, "escaped"))
+      const authorization = yield* authorize(authContext(0, "escaped")).pipe(
+        Effect.provideService(OAuthRedirectPort, port),
+      )
       if (Option.isNone(authorization)) return yield* Effect.die(new Error("no authorization"))
       const state = new URL(authorization.value.url).searchParams.get("state") ?? ""
       const query = new URLSearchParams({
@@ -2564,7 +2580,7 @@ describe("buildOpenAIModelDriver — OAuth login lifetime", () => {
       })
       // The redirect server starts on its own fiber; retry until it listens.
       const page = yield* waitFor(
-        HttpClient.get(`http://localhost:1455/auth/callback?${query.toString()}`).pipe(
+        HttpClient.get(`http://localhost:${port}/auth/callback?${query.toString()}`).pipe(
           Effect.flatMap((response) => response.text),
           Effect.provide(FetchHttpClient.layer),
         ),

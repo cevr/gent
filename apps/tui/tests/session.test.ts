@@ -1,5 +1,6 @@
 import { describe, expect, it, test } from "effect-bun-test"
-import { Effect, FileSystem, Option } from "effect"
+import { Clock, Deferred, Effect, Fiber, FileSystem, Option } from "effect"
+import { TestClock } from "effect/testing"
 import {
   beginAuthCheck,
   buildContextLabels,
@@ -26,6 +27,7 @@ import {
   writeEntries,
   mergeRefused,
   noticeRowItems,
+  runWithReconnect,
 } from "../src/session"
 import type { AutocompleteContribution, NoticeRow } from "../src/extensions/client-facets"
 import {
@@ -1093,4 +1095,36 @@ describe("prompt search overlay", () => {
     expect(cancelled.state.overlay).toEqual({ _tag: "none" })
     expect(cancelled.effects).toEqual([{ _tag: "RestoreComposer", text: "draft" }])
   })
+})
+
+// ── reconnect ───────────────────────────────────────────────────────────────
+
+describe("reconnect", () => {
+  const silentLog = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} }
+
+  it.live("a stream that became ready starts a fresh backoff when it ends", () =>
+    Effect.gen(function* () {
+      const starts: Array<number> = []
+      const sixthStarted = yield* Deferred.make<void>()
+      const loop = yield* runWithReconnect(
+        (ready) =>
+          Effect.gen(function* () {
+            starts.push(yield* Clock.currentTimeMillis)
+            // Four attempts end before they serve; the fifth serves, then drops.
+            if (starts.length === 5) yield* ready
+            if (starts.length === 6) {
+              yield* Deferred.succeed(sixthStarted, void 0)
+              return yield* Effect.never
+            }
+          }),
+        { log: silentLog, waitForRetry: () => Effect.void },
+      ).pipe(Effect.forkChild)
+      yield* TestClock.adjust("2 minutes")
+      yield* Deferred.await(sixthStarted)
+      yield* Fiber.interrupt(loop)
+      // The unserved attempts back off 1 s, 2 s, 4 s, 8 s; the drop of a
+      // served stream retries after 1 s again, not after the grown delay.
+      expect(starts).toEqual([0, 1_000, 3_000, 7_000, 15_000, 16_000])
+    }).pipe(Effect.provide(TestClock.layer()), Effect.timeout("4 seconds")),
+  )
 })
