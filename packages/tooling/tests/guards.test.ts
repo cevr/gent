@@ -9,6 +9,7 @@ import {
   findCoreFeatureIndependenceFindings,
   findCoreVendorModelPins,
   findE2eFixtureImportFindings,
+  findEffectVersionDrift,
   findRepoTempDirectories,
   findHookWithoutGuards,
   findIdentityEncodes,
@@ -3428,6 +3429,82 @@ describe("a catalog entry must be taken", () => {
         file: "package.json",
         line: 5,
         message: 'catalog["effect-machine"]: no manifest takes it with "catalog:"; drop it',
+      },
+    ])
+  })
+})
+
+describe("the Effect packages share one version", () => {
+  const rootText = [
+    "{",
+    '  "devDependencies": { "effect": "catalog:", "@effect/tsgo": "0.41.0" },',
+    '  "overrides": {',
+    '    "effect": "4.1",',
+    '    "@effect/ai-openai": "4.0"',
+    "  },",
+    '  "catalog": {',
+    '    "effect": "4.1",',
+    '    "@effect/platform-bun": "4.1",',
+    '    "picomatch": "^4"',
+    "  },",
+    '  "patchedDependencies": {',
+    '    "@opentui/core@0.5.11": "patches/a.patch",',
+    '    "@effect/ai-anthropic@4.0": "patches/b.patch"',
+    "  }",
+    "}",
+  ].join("\n")
+  const root = {
+    manifest: "package.json",
+    text: rootText,
+    packageJson: {
+      devDependencies: { effect: "catalog:", "@effect/tsgo": "0.41.0" },
+      overrides: { effect: "4.1", "@effect/ai-openai": "4.0" },
+      catalog: { effect: "4.1", "@effect/platform-bun": "4.1", picomatch: "^4" },
+      patchedDependencies: {
+        "@opentui/core@0.5.11": "patches/a.patch",
+        "@effect/ai-anthropic@4.0": "patches/b.patch",
+      },
+    },
+  }
+
+  test("an override and a patch behind catalog.effect are reported at their lines", () => {
+    const findings = findEffectVersionDrift(root, [])
+    expect(findings.map((finding) => [finding.line, finding.message])).toEqual([
+      [5, expect.stringContaining('overrides["@effect/ai-openai"] pins 4.0')],
+      [14, expect.stringContaining('patchedDependencies["@effect/ai-anthropic"] pins 4.0')],
+    ])
+  })
+
+  test("a workspace that names an Effect package with a literal version is reported", () => {
+    const sdkText = [
+      "{",
+      '  "dependencies": {',
+      '    "@effect/opentelemetry": "4.1"',
+      "  }",
+      "}",
+    ].join("\n")
+    const agreeing = {
+      ...root,
+      packageJson: {
+        ...root.packageJson,
+        overrides: { effect: "4.1" },
+        patchedDependencies: { "@effect/ai-anthropic@4.1": "patches/b.patch" },
+      },
+    }
+    const findings = findEffectVersionDrift(agreeing, [
+      {
+        manifest: "packages/sdk/package.json",
+        text: sdkText,
+        packageJson: { dependencies: { "@effect/opentelemetry": "4.1" } },
+      },
+    ])
+    expect(findings).toEqual([
+      {
+        file: "packages/sdk/package.json",
+        line: 3,
+        message: expect.stringContaining(
+          'dependencies["@effect/opentelemetry"] is the literal "4.1"',
+        ),
       },
     ])
   })

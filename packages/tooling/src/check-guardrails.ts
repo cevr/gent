@@ -11,6 +11,7 @@ import {
   findCoreFeatureIndependenceFindings,
   findCoreVendorModelPins,
   findE2eFixtureImportFindings,
+  findEffectVersionDrift,
   findRepoTempDirectories,
   findHookWithoutGuards,
   findIdentityEncodes,
@@ -263,6 +264,14 @@ const packageSurfaceFindings = Effect.fn("Tooling.packageSurfaceFindings")(funct
     ...findUnusedCatalogEntries(
       { manifest: ROOT_MANIFEST, text: root.text, packageJson: root.value },
       [...manifests.values()].map((read) => read.value),
+    ),
+    ...findEffectVersionDrift(
+      { manifest: ROOT_MANIFEST, text: root.text, packageJson: root.value },
+      [...manifests].map(([manifest, read]) => ({
+        manifest,
+        text: read.text,
+        packageJson: read.value,
+      })),
     ),
   ]
 })

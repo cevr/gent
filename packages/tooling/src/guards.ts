@@ -3176,6 +3176,10 @@ export const PackageJsonSchema = Schema.Struct({
   peerDependencies: Schema.optional(DependencyMap),
   /** The root's shared versions; a manifest takes one with `"catalog:"`. */
   catalog: Schema.optional(DependencyMap),
+  /** The root's forced versions for transitive installs. */
+  overrides: Schema.optional(DependencyMap),
+  /** The root's patches, keyed `name@version`. */
+  patchedDependencies: Schema.optional(DependencyMap),
 })
 export type PackageJson = typeof PackageJsonSchema.Type
 
@@ -3640,4 +3644,114 @@ export const findUnusedCatalogEntries = (
         message: `catalog["${name}"]: no manifest takes it with "catalog:"; drop it`,
       }
     })
+}
+
+/**
+ * The Effect packages release together: `effect` and every `@effect/*` package
+ * with the same version. Three root blocks pin them (`catalog`, `overrides`
+ * and the `patchedDependencies` keys), and a manifest that names one with a
+ * literal version is a fourth. A bump that misses one installs two copies of
+ * `effect`, whose Tags and Schema classes do not match, or leaves a patch
+ * that no longer applies. Every pin must equal `catalog.effect`, and every
+ * manifest takes an Effect package with `"catalog:"`. The packages listed in
+ * `EFFECT_OWN_VERSIONS` follow their own release line.
+ */
+const EFFECT_OWN_VERSIONS: ReadonlySet<string> = new Set([
+  "@effect/tsgo",
+  "@effect/language-service",
+])
+
+const isEffectPackage = (name: string): boolean =>
+  (name === "effect" || name.startsWith("@effect/")) && !EFFECT_OWN_VERSIONS.has(name)
+
+/** A patch key's package name and the one version it patches. */
+interface PatchKey {
+  readonly name: string
+  readonly version: string
+}
+
+/** A `name@version` patch key as its parts; the name may itself start with `@`. */
+const patchKeyParts = (key: string): PatchKey => {
+  const at = key.lastIndexOf("@")
+  if (at <= 0) return { name: key, version: "" }
+  return { name: key.slice(0, at), version: key.slice(at + 1) }
+}
+
+/** The line of `needle` inside the block that opens with `"<block>": {`, or 1. */
+const lineInBlock = (text: string, block: string, needle: string): number => {
+  const lines = text.split("\n")
+  const start = lines.findIndex((line) => line.includes(`"${block}": {`))
+  return lines.findIndex((line, at) => at > start && line.includes(needle)) + 1 || 1
+}
+
+interface ManifestText {
+  readonly manifest: string
+  readonly text: string
+  readonly packageJson: PackageJson
+}
+
+/** The root blocks that map a package name to a version. */
+const PIN_BLOCKS: ReadonlyArray<"catalog" | "overrides"> = ["catalog", "overrides"]
+
+/** One version pin in a root block, with the text that places its line. */
+interface EffectPin {
+  readonly block: string
+  readonly name: string
+  readonly pinned: string
+  readonly needle: string
+}
+
+export const findEffectVersionDrift = (
+  root: ManifestText,
+  manifests: ReadonlyArray<ManifestText>,
+): ReadonlyArray<Finding> => {
+  const expected = Option.fromNullishOr(root.packageJson.catalog?.["effect"])
+  if (Option.isNone(expected)) {
+    return [
+      {
+        file: root.manifest,
+        line: 1,
+        message: `catalog["effect"] is missing; the Effect pins have no version to agree on`,
+      },
+    ]
+  }
+  const version = expected.value
+  const pins: ReadonlyArray<EffectPin> = [
+    ...PIN_BLOCKS.flatMap((block) =>
+      Object.entries(root.packageJson[block] ?? {}).map(([name, pinned]) => ({
+        block,
+        name,
+        pinned,
+        needle: `"${name}":`,
+      })),
+    ),
+    ...Object.keys(root.packageJson.patchedDependencies ?? {}).map((key) => {
+      const parts = patchKeyParts(key)
+      return {
+        block: "patchedDependencies",
+        name: parts.name,
+        pinned: parts.version,
+        needle: `"${key}":`,
+      }
+    }),
+  ]
+  const drift = pins
+    .filter((pin) => isEffectPackage(pin.name) && pin.pinned !== version)
+    .map((pin) => ({
+      file: root.manifest,
+      line: lineInBlock(root.text, pin.block, pin.needle),
+      message: `${pin.block}["${pin.name}"] pins ${pin.pinned}, but catalog["effect"] is ${version}; the Effect packages release together, so pin every one at ${version}`,
+    }))
+  const literals = [root, ...manifests].flatMap((read) =>
+    DEPENDENCY_FIELDS.flatMap((field) =>
+      Object.entries(read.packageJson[field] ?? {})
+        .filter(([name, spec]) => isEffectPackage(name) && !spec.startsWith("catalog:"))
+        .map(([name, spec]) => ({
+          file: read.manifest,
+          line: lineInBlock(read.text, field, `"${name}":`),
+          message: `${field}["${name}"] is the literal "${spec}"; take it with "catalog:" so the Effect version has one owner`,
+        })),
+    ),
+  )
+  return [...drift, ...literals]
 }
