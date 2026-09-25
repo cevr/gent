@@ -1,4 +1,5 @@
 import { describe, expect, it, test } from "effect-bun-test"
+import type { Duration } from "effect"
 import {
   Cause,
   Clock,
@@ -455,9 +456,14 @@ describe("wake", () => {
         const wokenTurn = yield* turnsCompleted(2)
         yield* client.message.send({ sessionId, branchId, content: "check the build tonight" })
         yield* Fiber.join(firstTurn)
-        // Idle past the entity idle limit, then past the alarm.
-        yield* TestClock.adjust("10 seconds")
-        yield* TestClock.adjust("6 minutes")
+        // Idle past the entity idle limit, then past the alarm. Steps, not one jump:
+        // a sleep that starts after a jump would never see the clock move.
+        yield* advanceUntil(
+          Effect.sync(() => Option.fromUndefinedOr(wokenTurn.pollUnsafe())),
+          Option.isSome,
+          "the alarm woke the branch",
+          "10 seconds",
+        )
         yield* Fiber.join(wokenTurn)
         expect(yield* controls.callCount).toBe(3)
         const snapshot = yield* client.session.getSnapshot({ sessionId, branchId })
@@ -1286,12 +1292,17 @@ const eventually = <A>(read: Effect.Effect<A>, done: (value: A) => boolean, labe
  * two leaves the sleep one whole delay past the new time, and it never wakes.
  * Stepping reaches that timer too. Exhaustion fails loudly.
  */
-const advanceUntil = <A>(read: Effect.Effect<A>, done: (value: A) => boolean, label: string) =>
+const advanceUntil = <A>(
+  read: Effect.Effect<A>,
+  done: (value: A) => boolean,
+  label: string,
+  step: Duration.Input = "100 millis",
+) =>
   Effect.gen(function* () {
     const deadline = wallClock.currentTimeMillisUnsafe() + 5_000
     while (wallClock.currentTimeMillisUnsafe() < deadline) {
       if (done(yield* read)) return
-      yield* TestClock.adjust("100 millis")
+      yield* TestClock.adjust(step)
       // gent/no-sleep: allow the wait is for real file I/O, which only the wall clock paces
       yield* Effect.sleep("2 millis").pipe(Effect.provideService(Clock.Clock, wallClock))
     }
