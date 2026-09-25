@@ -4,6 +4,7 @@ import {
   FileSystem,
   Option,
   Path,
+  type PlatformError,
   Result,
   Schema,
   type Scope,
@@ -587,36 +588,62 @@ const UTF16BE_BOM = [0xfe, 0xff]
 const startsWith = (bytes: Uint8Array, mark: ReadonlyArray<number>) =>
   mark.every((byte, index) => bytes[index] === byte)
 
-/** Decode the bytes after a byte order mark; the mark is not part of the text. */
-const decodeAfter = (label: string, bytes: Uint8Array, mark: ReadonlyArray<number>) =>
-  new TextDecoder(label, { ignoreBOM: true }).decode(bytes.subarray(mark.length))
+/** A strict decode: it throws on a bad sequence where the replacing decoder writes U+FFFD. */
+const strictDecode = Option.liftThrowable((label: string, bytes: Uint8Array) =>
+  new TextDecoder(label, { fatal: true, ignoreBOM: true }).decode(bytes),
+)
+
+/**
+ * Bytes in one encoding, decoded once. The strict decode fails exactly when
+ * the bytes are not valid in that encoding (an invalid UTF-8 sequence, an odd
+ * trailing byte or an unpaired surrogate in UTF-16), and that is exactly when
+ * encoding the text again would not give the same bytes. Only then does the
+ * replacing decode run, and the text is lossy.
+ */
+const decodeBytes = (
+  label: string,
+  bytes: Uint8Array,
+): { readonly text: string; readonly lossy: boolean } =>
+  Option.match(strictDecode(label, bytes), {
+    onSome: (text) => ({ text, lossy: false }),
+    onNone: () => ({
+      text: new TextDecoder(label, { ignoreBOM: true }).decode(bytes),
+      lossy: true,
+    }),
+  })
+
+/**
+ * How a file's first bytes spell it: an encoding and the length of its byte
+ * order mark, or `None` for a binary file. A UTF-16 file starts with a byte
+ * order mark and holds NUL bytes, so it is known before the NUL probe, as
+ * ripgrep transcodes it.
+ */
+const detectEncoding = (
+  head: Uint8Array,
+): Option.Option<{
+  readonly encoding: TextEncoding
+  readonly label: string
+  readonly mark: number
+}> => {
+  if (startsWith(head, UTF16LE_BOM))
+    return Option.some({ encoding: "utf-16le", label: "utf-16le", mark: 2 })
+  if (startsWith(head, UTF16BE_BOM))
+    return Option.some({ encoding: "utf-16be", label: "utf-16be", mark: 2 })
+  if (head.subarray(0, BINARY_PROBE_BYTES).includes(0)) return Option.none()
+  if (startsWith(head, UTF8_BOM))
+    return Option.some({ encoding: "utf-8-bom", label: "utf-8", mark: 3 })
+  return Option.some({ encoding: "utf-8", label: "utf-8", mark: 0 })
+}
 
 /**
  * The text of a file, or `None` for a binary one. read, write, edit and grep
- * all read through `decodeText`; grep skips the lossy check. A UTF-16 file starts with a byte order mark and
- * holds NUL bytes, so it is decoded before the NUL probe, as ripgrep
- * transcodes it. The decoder replaces a bad sequence silently; encoding the
- * text again is the one check that the bytes and the text hold the same file.
+ * all read through `decodeFileText`; grep ignores `lossy`.
  */
 const decodeFileText = (bytes: Uint8Array): Option.Option<FileText> =>
-  Option.map(decodeText(bytes), (decoded) => ({
-    ...decoded,
-    lossy: !Buffer.from(encodeFileText(decoded)).equals(bytes),
+  Option.map(detectEncoding(bytes), ({ encoding, label, mark }) => ({
+    encoding,
+    ...decodeBytes(label, bytes.subarray(mark)),
   }))
-
-const decodeText = (bytes: Uint8Array): Option.Option<Omit<FileText, "lossy">> => {
-  if (startsWith(bytes, UTF16LE_BOM)) {
-    return Option.some({ encoding: "utf-16le", text: decodeAfter("utf-16le", bytes, UTF16LE_BOM) })
-  }
-  if (startsWith(bytes, UTF16BE_BOM)) {
-    return Option.some({ encoding: "utf-16be", text: decodeAfter("utf-16be", bytes, UTF16BE_BOM) })
-  }
-  if (bytes.subarray(0, BINARY_PROBE_BYTES).includes(0)) return Option.none()
-  if (startsWith(bytes, UTF8_BOM)) {
-    return Option.some({ encoding: "utf-8-bom", text: decodeAfter("utf-8", bytes, UTF8_BOM) })
-  }
-  return Option.some({ encoding: "utf-8", text: decodeAfter("utf-8", bytes, []) })
-}
 
 /** Why a file that does not decode exactly is not rewritten. */
 const lossyWriteMessage = (verb: string, file: FileText) =>
@@ -696,9 +723,184 @@ const ReadResult = Schema.Struct({
   truncated: Schema.Boolean,
   /** The 1-indexed line to pass as `offset` to continue. Absent when the read reached the end. */
   nextOffset: Schema.optional(Schema.Finite),
-  /** Present when the file holds invalid bytes, shown as U+FFFD; edit and write refuse such a file. */
+  /**
+   * Present when the bytes read are not valid text, shown as U+FFFD; edit and
+   * write refuse such a file. A file over the stream threshold is checked only
+   * in the lines shown.
+   */
   lossy: Schema.optional(Schema.Literal(true)),
 })
+
+// Read Tool Pages
+
+/**
+ * A UTF-8 file larger than this is read in chunks: every line is counted, and
+ * only the lines shown are decoded. A UTF-16 file is always read whole.
+ */
+const STREAM_READ_BYTES = 4 * 1024 * 1024
+const READ_CHUNK_BYTES = 1024 * 1024
+/** A read line longer than this many characters is cut, with a marker that counts what it lost. */
+const MAX_READ_LINE_LENGTH = 2000
+/** A UTF-8 character takes at most 3 bytes per UTF-16 unit, so this many bytes hold every character a cut line keeps. */
+const MAX_READ_LINE_BYTES = MAX_READ_LINE_LENGTH * 3 + 4
+
+/** The lines a read shows, cut, with the file's line count by the `splitLines` rule. */
+interface ReadPage {
+  readonly lines: ReadonlyArray<string>
+  readonly lineCount: number
+  /** The bytes the read decoded are not valid text. */
+  readonly lossy: boolean
+}
+
+/** The 0-based lines `[start, end)` a read shows. */
+interface ReadWindow {
+  readonly start: number
+  readonly end: number
+}
+
+/** A line cut to `MAX_READ_LINE_LENGTH` characters; `beyond` counts characters already dropped unread. */
+const cutReadLine = (line: string, beyond: number): string => {
+  let end = Math.min(line.length, MAX_READ_LINE_LENGTH)
+  // A lone half of a surrogate pair is not valid text, and the API refuses it.
+  if (end < line.length && splitsSurrogatePair(line, end)) end--
+  const lost = line.length - end + beyond
+  if (lost === 0) return line
+  return `${line.slice(0, end)} [${lost} chars cut]`
+}
+
+/** A file read whole: small, or UTF-16. */
+const memoryPage = (bytes: Uint8Array, window: ReadWindow): Option.Option<ReadPage> =>
+  Option.map(decodeFileText(bytes), (file) => {
+    const lines = splitLines(file.text)
+    return {
+      lines: lines.slice(window.start, window.end).map((line) => cutReadLine(line, 0)),
+      lineCount: lines.length,
+      lossy: file.lossy,
+    }
+  })
+
+/** A UTF-8 character's UTF-16 units, from its lead byte: 2 for a 4-byte sequence, 0 for a continuation byte. */
+const unitsOfByte = (byte: number): number => {
+  if ((byte & 0xc0) === 0x80) return 0
+  if (byte >= 0xf0) return 2
+  return 1
+}
+
+/** A UTF-8 sequence's length from its lead byte. */
+const sequenceLength = (lead: number): number => {
+  if (lead >= 0xf0) return 4
+  if (lead >= 0xe0) return 3
+  if (lead >= 0xc0) return 2
+  return 1
+}
+
+/**
+ * The lines of a UTF-8 file fed in chunks. It counts every newline byte and
+ * keeps at most `MAX_READ_LINE_BYTES` of each line in the window; past that it
+ * only counts the UTF-16 units it drops, so memory stays bounded by the window.
+ */
+class LineWindow {
+  private closed = 0
+  private last = 10
+  private head: Array<Uint8Array> = []
+  private kept = 0
+  private dropped = 0
+  private readonly shown: Array<string> = []
+  private lossy = false
+
+  constructor(private readonly window: ReadWindow) {}
+
+  add(chunk: Uint8Array): void {
+    let from = 0
+    while (from < chunk.length) {
+      const newline = chunk.indexOf(10, from)
+      let stop = newline
+      if (newline < 0) stop = chunk.length
+      if (this.closed >= this.window.start && this.closed < this.window.end)
+        this.keep(chunk.subarray(from, stop))
+      if (newline < 0) break
+      this.close()
+      from = newline + 1
+    }
+    if (chunk.length > 0) this.last = chunk[chunk.length - 1] ?? 10
+  }
+
+  /** The page once every chunk is in; a last line with no newline still counts. */
+  finish(): ReadPage {
+    if (this.last !== 10) this.close()
+    return { lines: this.shown, lineCount: this.closed, lossy: this.lossy }
+  }
+
+  private keep(part: Uint8Array): void {
+    const room = Math.max(0, MAX_READ_LINE_BYTES - this.kept)
+    if (room > 0) {
+      const taken = part.subarray(0, room)
+      // A chunk is read once, so its bytes are copied out: the window keeps no whole chunk alive.
+      this.head.push(taken.slice())
+      this.kept += taken.length
+    }
+    for (let index = room; index < part.length; index++)
+      this.dropped += unitsOfByte(part[index] ?? 0)
+  }
+
+  private close(): void {
+    if (this.closed >= this.window.start && this.closed < this.window.end)
+      this.shown.push(this.lineText())
+    this.closed++
+    this.head = []
+    this.kept = 0
+    this.dropped = 0
+  }
+
+  /** The kept bytes decoded; a character the byte cap split moves whole to the dropped count. */
+  private lineText(): string {
+    const bytes = Buffer.concat(this.head)
+    let end = bytes.length
+    if (this.dropped > 0 || end === MAX_READ_LINE_BYTES) {
+      let lead = end - 1
+      while (lead > 0 && ((bytes[lead] ?? 0) & 0xc0) === 0x80) lead--
+      if (lead >= 0 && lead + sequenceLength(bytes[lead] ?? 0) > end) {
+        this.dropped += unitsOfByte(bytes[lead] ?? 0)
+        end = lead
+      }
+    }
+    const decoded = decodeBytes("utf-8", bytes.subarray(0, end))
+    if (decoded.lossy) this.lossy = true
+    return cutReadLine(decoded.text, this.dropped)
+  }
+}
+
+/** The first bytes of a file, enough for the encoding and the binary probe. */
+const readHead = (filePath: string) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const file = yield* fs.open(filePath, { flag: "r" })
+      const head = yield* file.readAlloc(BINARY_PROBE_BYTES)
+      return Option.getOrElse(head, () => new Uint8Array(0))
+    }),
+  )
+
+/**
+ * A large file's page. A UTF-8 file streams through a `LineWindow`, so the
+ * read holds one chunk and the window, never the whole file; `lossy` covers
+ * the lines shown. A UTF-16 file is read whole.
+ */
+const streamPage = (
+  filePath: string,
+  window: ReadWindow,
+): Effect.Effect<Option.Option<ReadPage>, PlatformError.PlatformError, FileSystem.FileSystem> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const encoding = detectEncoding(yield* readHead(filePath))
+    if (Option.isNone(encoding)) return Option.none()
+    if (encoding.value.label !== "utf-8") return memoryPage(yield* fs.readFile(filePath), window)
+    const lines = new LineWindow(window)
+    yield* fs
+      .stream(filePath, { offset: encoding.value.mark, chunkSize: READ_CHUNK_BYTES })
+      .pipe(Stream.runForEach((chunk) => Effect.sync(() => lines.add(chunk))))
+    return Option.some(lines.finish())
+  })
 
 /** `1 line`, `3 lines`: the counted noun of a one-line tool summary. */
 export const countOf = (count: number, noun: string, plural = `${noun}s`): string => {
@@ -712,7 +914,7 @@ export const ReadTool = tool({
   id: "read",
   readonly: true,
   description:
-    "Read file contents. Returns numbered lines. Use offset/limit for large files. A truncated result carries nextOffset — pass it back as offset to continue from the next unread line. A file with bytes that are not valid text shows them as U+FFFD and reports lossy; edit and write refuse that file.",
+    "Read file contents. Returns numbered lines. Use offset/limit for large files. A truncated result carries nextOffset — pass it back as offset to continue from the next unread line. A line longer than 2000 characters is cut, with a marker that counts what it lost. A file with bytes that are not valid text shows them as U+FFFD and reports lossy; edit and write refuse that file.",
   promptSnippet: "Read file contents with line numbers",
   params: ReadParams,
   output: ReadResult,
@@ -747,50 +949,43 @@ export const ReadTool = tool({
       })
     }
 
-    const bytes = yield* fs.readFile(filePath).pipe(
-      Effect.mapError(
-        (e) =>
-          new ReadError({
-            message: `Failed to read file: ${e.message}`,
-            path: filePath,
-            cause: e,
-          }),
-      ),
-    )
-    const decoded = decodeFileText(bytes)
-    if (Option.isNone(decoded)) {
+    const startIndex = (params.offset ?? 1) - 1
+    const window = { start: startIndex, end: startIndex + (params.limit ?? 2000) }
+    const readFailed = (e: PlatformError.PlatformError) =>
+      new ReadError({ message: `Failed to read file: ${e.message}`, path: filePath, cause: e })
+    let page: Option.Option<ReadPage>
+    if (stat.size > BigInt(STREAM_READ_BYTES)) {
+      page = yield* streamPage(filePath, window).pipe(Effect.mapError(readFailed))
+    } else {
+      const bytes = yield* fs.readFile(filePath).pipe(Effect.mapError(readFailed))
+      page = memoryPage(bytes, window)
+    }
+    if (Option.isNone(page)) {
       return yield* new ReadError({ message: "Cannot read a binary file.", path: filePath })
     }
+    const { lines, lineCount, lossy } = page.value
 
-    const lines = splitLines(decoded.value.text)
-    const totalLines = lines.length
-    const offset = params.offset ?? 1
-    const limit = params.limit ?? 2000
-
-    const startIndex = Math.max(0, offset - 1)
-    const endIndex = Math.min(lines.length, startIndex + limit)
-    const selectedLines = lines.slice(startIndex, endIndex)
-
+    const endIndex = startIndex + lines.length
     // Format with line numbers
     const maxLineNumWidth = String(endIndex).length
-    const numberedContent = selectedLines
+    const numberedContent = lines
       .map((line, i) => {
         const lineNum = String(startIndex + i + 1).padStart(maxLineNumWidth)
         return `${lineNum}\t${line}`
       })
       .join("\n")
 
-    const truncated = endIndex < lines.length
+    const truncated = endIndex < lineCount
 
     return {
       content: numberedContent,
       path: filePath,
-      lineCount: totalLines,
+      lineCount,
       truncated,
       // A truncated read names the next unread line so the caller continues
       // without a gap; a complete read leaves the key out entirely.
       ...(truncated && { nextOffset: endIndex + 1 }),
-      ...(decoded.value.lossy && { lossy: true }),
+      ...(lossy && { lossy: true }),
     }
   }),
 })
@@ -1570,8 +1765,8 @@ const searchFile = (
     if (Option.isNone(info)) return none
     if (info.value.size > BigInt(MAX_SEARCH_FILE_BYTES)) return { ...none, oversized: true }
     const bytes = yield* fs.readFile(filePath).pipe(Effect.option)
-    // grep only reads: it skips the lossy check that guards a rewrite.
-    const decoded = Option.flatMap(bytes, decodeText)
+    // grep only reads: it ignores the lossy mark that guards a rewrite.
+    const decoded = Option.flatMap(bytes, decodeFileText)
     if (Option.isNone(decoded)) return none
 
     const text = decoded.value.text

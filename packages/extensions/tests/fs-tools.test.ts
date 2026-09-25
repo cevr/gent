@@ -1,5 +1,17 @@
 import { describe, expect, it, test } from "effect-bun-test"
-import { Cause, Clock, Effect, Exit, Fiber, FileSystem, Layer, Option, Path, Schema } from "effect"
+import {
+  Cause,
+  Clock,
+  Duration,
+  Effect,
+  Exit,
+  Fiber,
+  FileSystem,
+  Layer,
+  Option,
+  Path,
+  Schema,
+} from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { TestClock } from "effect/testing"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
@@ -189,6 +201,84 @@ describe("ReadTool", () => {
       expect(empty.content).toBe("")
       expect(empty.truncated).toBe(false)
     }),
+  )
+
+  // Lines the read cuts, from bytes: one past the byte cap, one whose cap splits an emoji, one invalid byte.
+  const cutLines = [
+    Buffer.from("plain"),
+    Buffer.from("é".repeat(5000)),
+    Buffer.from(`a${"😀".repeat(2000)}`),
+    Buffer.concat([Buffer.from("bad "), Buffer.from([0xff]), Buffer.from(" byte")]),
+    Buffer.from("after"),
+  ]
+  const cutContent = (first: number) =>
+    [
+      `${first}\tplain`,
+      `${first + 1}\t${"é".repeat(2000)} [3000 chars cut]`,
+      // The cut moves off the emoji pair it would split.
+      `${first + 2}\ta${"😀".repeat(999)} [2002 chars cut]`,
+      `${first + 3}\tbad � byte`,
+      `${first + 4}\tafter`,
+    ].join("\n")
+
+  readTest("a long line is cut, with a marker that counts what it lost", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const tmpDir = yield* fs.makeTempDirectoryScoped()
+      const testFile = `${tmpDir}/cut.txt`
+      yield* fs.writeFile(
+        testFile,
+        Buffer.concat(cutLines.flatMap((line) => [line, Buffer.from("\n")])),
+      )
+
+      const result = yield* runToolWithCtx(ReadTool, { path: testFile }, ctx)
+      expect(result.content).toBe(cutContent(1))
+      expect(result.lineCount).toBe(5)
+      expect(result.lossy).toBe(true)
+    }),
+  )
+
+  // A large file streams: every line is counted, and only the lines shown are decoded and checked.
+  readTest("a large file reads its window, cut, without decoding the rest", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const tmpDir = yield* fs.makeTempDirectoryScoped()
+      const testFile = `${tmpDir}/large.txt`
+      const filler = (from: number, count: number) =>
+        Buffer.from(
+          Array.from({ length: count }, (_, index) => `line ${from + index} `.padEnd(99, "x")).join(
+            "\n",
+          ),
+        )
+      // 250,000 lines of 100 bytes, about 25 MB; the last line has no newline.
+      yield* fs.writeFile(
+        testFile,
+        Buffer.concat([
+          filler(1, 100_000),
+          Buffer.from("\n"),
+          ...cutLines.flatMap((line) => [line, Buffer.from("\n")]),
+          filler(100_006, 149_995),
+        ]),
+      )
+
+      const [elapsed, result] = yield* Effect.timed(
+        runToolWithCtx(ReadTool, { path: testFile, offset: 100_001, limit: 5 }, ctx),
+      )
+      expect(result.content).toBe(cutContent(100_001))
+      expect(result.lineCount).toBe(250_000)
+      expect(result.truncated).toBe(true)
+      expect(result.nextOffset).toBe(100_006)
+      expect(result.lossy).toBe(true)
+      expect(Duration.toMillis(elapsed)).toBeLessThan(5000)
+
+      // The invalid byte lies outside this window, and the last line has no newline.
+      const tail = yield* runToolWithCtx(ReadTool, { path: testFile, offset: 249_999 }, ctx)
+      expect(tail.content).toBe(
+        `249999\t${"line 249999 ".padEnd(99, "x")}\n250000\t${"line 250000 ".padEnd(99, "x")}`,
+      )
+      expect(tail.truncated).toBe(false)
+      expect(tail.lossy).toBeUndefined()
+    }).pipe(Effect.timeout("30 seconds")),
   )
 
   readTest("returns error for directory", () =>
