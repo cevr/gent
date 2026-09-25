@@ -3295,10 +3295,20 @@ export function createSessionController(props: {
     paste: disarmInterruptQuit,
   })
 
+  // A bare keybind (`left` opens the agents pane) fires only here: an empty
+  // editing draft, and no overlay, pane, interaction or full transcript that
+  // reads the key first or hides the composer.
+  const composerIdle = (): boolean =>
+    interactionState().draft.length === 0 &&
+    interactionState().mode === "editing" &&
+    uiState().overlay._tag === "none" &&
+    !uiState().transcriptExpanded &&
+    composerState()._tag !== "interaction"
+
   useScopedKeyboard((event) => {
     const interrupt = event.ctrl === true && event.name === "c"
     // A keybind between two escapes is a different gesture, so it disarms the quit.
-    if (command.handleKeybind(event, ext.commands())) {
+    if (command.handleKeybind(event, ext.commands(), composerIdle())) {
       disarmQuit()
       return true
     }

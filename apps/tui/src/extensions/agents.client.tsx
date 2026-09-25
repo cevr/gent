@@ -663,7 +663,7 @@ export function AgentsPane(props: {
       <PickerFrame
         height={paneHeight()}
         title={`Agents · ${countsLabel(visible())}`}
-        footer={"↑↓ move   ↵ open   ^x delete   esc close   ^t hide"}
+        footer={"↑↓ move   ↵ → open   ← esc close   ^x delete   ^t hide"}
         detail={Option.liftPredicate(
           detailLabel(props.controller.detail()),
           () => visible().length > 0,
@@ -686,6 +686,16 @@ export function AgentsPane(props: {
             }
             if (event.ctrl === true && event.name === "x") return armOrDelete(selected)
             setArmed(Option.none())
+            // The arrows the palette uses between levels: ← leaves the pane for
+            // the composer, → opens the agent under the cursor as ↵ does.
+            if (event.name === "left") {
+              props.onClose()
+              return true
+            }
+            if (event.name === "right") {
+              Option.match(selected, { onNone: () => {}, onSome: props.onSelect })
+              return true
+            }
             return false
           }}
           empty={() => (
@@ -733,6 +743,9 @@ export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
         category: "Session",
         slash: "sessions",
         aliases: ["agents", "tree"],
+        // A bare key: the host fires it only while the composer is empty and
+        // nothing else is open, so ← in a draft still moves the text cursor.
+        keybind: "left",
         onSelect: () => {
           shell.pane.open(AGENTS_PANE)
           controller.refresh("")

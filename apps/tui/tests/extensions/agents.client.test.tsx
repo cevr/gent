@@ -976,7 +976,7 @@ describe("Agents pane framing", () => {
 
       // One muted footer line, immediately under the bottom rule.
       const bottom = lines.findLastIndex((line) => line.startsWith("────"))
-      expect(lines[bottom + 1]).toContain("↑↓ move   ↵ open   ^x delete   esc close   ^t hide")
+      expect(lines[bottom + 1]).toContain("↑↓ move   ↵ → open   ← esc close   ^x delete   ^t hide")
 
       // Every capability the pane had inside the bordered box still draws:
       // the section heading, the row, and the detail line, each on its own
