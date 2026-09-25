@@ -155,11 +155,18 @@ its scope closes, so a timer that holds for its whole life releases the loop
 when it fires or is cancelled:
 
 ```ts
-const timer = ctx.Session.holdResident.pipe(
-  Effect.andThen(Effect.sleep("5 minutes")),
-  Effect.andThen(fire),
-  Effect.scoped,
-)
+import { ExtensionContext } from "@gent/core/extensions/api"
+import { Effect } from "effect"
+
+export const timer = Effect.gen(function* () {
+  const ctx = yield* ExtensionContext
+  const fire = Effect.log("timer fired")
+  yield* ctx.Session.holdResident.pipe(
+    Effect.andThen(Effect.sleep("5 minutes")),
+    Effect.andThen(fire),
+    Effect.scoped,
+  )
+})
 ```
 
 Outside a loop there is nothing to hold, and the verb does nothing.
