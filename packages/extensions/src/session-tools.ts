@@ -382,12 +382,21 @@ const recordSentTurn = (turn: SentTurn) =>
     })),
   )
 
-/** A turn ended somewhere. When a send opened it, the record drops it. */
-const onSentTurnEnd = (input: Pick<TurnAfterInput, "sessionId" | "messageId">) =>
+/**
+ * A turn ended somewhere. When a send opened it, or a step joined a send into
+ * it, the record drops that send: a joined send has no turn end of its own.
+ */
+const onSentTurnEnd = (
+  input: Pick<TurnAfterInput, "sessionId" | "messageId" | "joinedMessageIds">,
+) =>
   Effect.flatMap(SentTurns, (state) =>
     Ref.update(state, (current) => ({
       ...current,
-      sent: current.sent.filter(Predicate.not(sameSent(input))),
+      sent: current.sent.filter(
+        (turn) =>
+          turn.sessionId !== input.sessionId ||
+          (turn.messageId !== input.messageId && !input.joinedMessageIds.has(turn.messageId)),
+      ),
     })),
   )
 
@@ -441,8 +450,11 @@ const stopSentTurns = Effect.fn("SessionTools.stopSentTurns")(function* () {
 
 /**
  * A sender turn that was not interrupted drops the notices its answer read,
- * and every record whose sender or child session no longer exists: nothing
- * can stop or read those. A session that cannot be read now is kept.
+ * and its own records whose child session no longer exists: nothing can stop
+ * those. Only this sender's children are read; the sender exists, since its
+ * turn just ended. A session that cannot be read now is kept. A sender deleted
+ * with its children keeps its records until the process ends; they name
+ * nothing that runs.
  */
 const settleSentTurns = Effect.fn("SessionTools.settleSentTurns")(function* (
   readNotices: ReadonlySet<string>,
@@ -451,11 +463,9 @@ const settleSentTurns = Effect.fn("SessionTools.settleSentTurns")(function* (
   const state = yield* SentTurns
   const mine = sentBy(ctx)
   const current = yield* Ref.get(state)
-  if (current.sent.length === 0 && current.stopped.length === 0) return
-  const named = new Set<SessionId>([
-    ...current.sent.flatMap((turn) => [turn.senderSessionId, turn.sessionId]),
-    ...current.stopped.map((turn) => turn.senderSessionId),
-  ])
+  const ownSent = current.sent.filter(mine)
+  if (ownSent.length === 0 && !current.stopped.some(mine)) return
+  const named = new Set<SessionId>(ownSent.map((turn) => turn.sessionId))
   const gone = new Set<SessionId>()
   yield* Effect.forEach(
     named,
@@ -474,10 +484,8 @@ const settleSentTurns = Effect.fn("SessionTools.settleSentTurns")(function* (
   )
   const read = (turn: StoppedTurn) => mine(turn) && readNotices.has(turn.messageId)
   yield* Ref.update(state, (latest) => ({
-    sent: latest.sent.filter(
-      (turn) => !gone.has(turn.senderSessionId) && !gone.has(turn.sessionId),
-    ),
-    stopped: latest.stopped.filter((turn) => !read(turn) && !gone.has(turn.senderSessionId)),
+    sent: latest.sent.filter((turn) => !mine(turn) || !gone.has(turn.sessionId)),
+    stopped: latest.stopped.filter((turn) => !read(turn)),
   }))
 })
 

@@ -663,6 +663,10 @@ interface TurnLedger {
   readonly noteNotices: (notices: ReadonlyArray<ExtensionTurnNotice>) => Effect.Effect<void>
   /** The keys of every notice a step of this turn carried, by the extension that showed it. */
   readonly shownNotices: Effect.Effect<ReadonlyMap<ExtensionId, ReadonlySet<string>>>
+  /** A step joined this steering message into the turn. */
+  readonly noteJoined: (messageId: MessageId) => Effect.Effect<void>
+  /** The steering messages this process saw a step of this turn join. */
+  readonly joined: Effect.Effect<ReadonlySet<MessageId>>
 }
 
 /** A cache count the receipt records: zero is left out, as the steps leave it out. */
@@ -675,6 +679,7 @@ const addCost = (total: Option.Option<number>, cost: Option.Option<number>) =>
 export const makeTurnLedger: Effect.Effect<TurnLedger> = Effect.gen(function* () {
   const metrics = yield* Ref.make(emptyTurnMetrics())
   const shown = yield* Ref.make<ReadonlyMap<ExtensionId, ReadonlySet<string>>>(new Map())
+  const joined = yield* Ref.make<ReadonlySet<MessageId>>(new Set())
   return {
     beginTurn: (messageId) =>
       Ref.modify(metrics, (m): readonly [boolean, TurnMetrics] => {
@@ -683,7 +688,7 @@ export const makeTurnLedger: Effect.Effect<TurnLedger> = Effect.gen(function* ()
       }).pipe(
         Effect.flatMap((fresh) => {
           if (!fresh) return Effect.void
-          return Ref.set(shown, new Map())
+          return Ref.set(shown, new Map()).pipe(Effect.andThen(Ref.set(joined, new Set())))
         }),
       ),
     noteUnseenSteps: Ref.update(metrics, (m) => {
@@ -755,6 +760,8 @@ export const makeTurnLedger: Effect.Effect<TurnLedger> = Effect.gen(function* ()
         return next
       }),
     shownNotices: Ref.get(shown),
+    noteJoined: (messageId) => Ref.update(joined, (current) => new Set([...current, messageId])),
+    joined: Ref.get(joined),
   }
 })
 
@@ -2549,6 +2556,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           branchId: scope.branchId,
           durationMs: params.durationMs,
           messageId: params.messageId,
+          joinedMessageIds: yield* scope.turnLedger.joined,
           agentName: params.agentName,
           interrupted: params.turnInterrupted,
           streamFailed: params.streamFailed,
@@ -3021,6 +3029,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
                 metadata: { ...item.message.metadata, joinedTurn: true },
               },
             })
+            yield* scope.turnLedger.noteJoined(item.message.id)
           }),
       })
 

@@ -3195,6 +3195,71 @@ const brokenAfterPartialOutput = (calls: Ref.Ref<number>) =>
     }),
   )
 
+describe("a turn's joined steers", () => {
+  it.scopedLive("turnAfter names the steer a step joined into the turn", () =>
+    Effect.gen(function* () {
+      const inputs = yield* Ref.make<ReadonlyArray<TurnAfterInput>>([])
+      const watch = defineExtension({
+        id: "@gent/test-turn-after-joined",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.on("turnAfter", (input: TurnAfterInput) =>
+            Ref.update(inputs, (all) => [...all, input]),
+          )
+        }),
+      })
+      const streaming = yield* Deferred.make<void>()
+      const steered = yield* Deferred.make<void>()
+      const calls = yield* Ref.make(0)
+      // Step one is cut off, so the turn takes another step; the steer
+      // admitted while it ran joins at the boundary between them.
+      const providerLayer = LanguageModelLayers.testStream(() =>
+        Effect.gen(function* () {
+          const call = yield* Ref.updateAndGet(calls, (n) => n + 1)
+          if (call > 1) {
+            return Stream.fromIterable([
+              textDeltaPart("answered"),
+              finishPart({ finishReason: "stop" }),
+            ] satisfies LanguageModelStreamPart[])
+          }
+          yield* Deferred.succeed(streaming, void 0)
+          yield* Deferred.await(steered)
+          return Stream.fromIterable([
+            textDeltaPart("part one"),
+            finishPart({ finishReason: "length" }),
+          ] satisfies LanguageModelStreamPart[])
+        }),
+      )
+      const { client, sessionId, branchId } = yield* createRpcHarness({
+        ...e2ePreset,
+        providerLayer,
+        extensionInputs: [...e2ePreset.extensionInputs, watch],
+      })
+      yield* client.message.send({ sessionId, branchId, content: "answer me" })
+      yield* Deferred.await(streaming)
+      const requestId = RequestId.make("req-joined-steer")
+      yield* client.steer.command({
+        command: {
+          _tag: "Interject",
+          sessionId,
+          branchId,
+          requestId,
+          message: "steer now",
+        } satisfies SteerCommand,
+      })
+      yield* Deferred.succeed(steered, void 0)
+      const [ended] = yield* waitFor(
+        Ref.get(inputs),
+        (all) => all.length === 1,
+        5_000,
+        "turnAfter fired",
+      )
+      expect([...(ended?.joinedMessageIds ?? [])]).toEqual([interjectionMessageId(requestId)])
+      expect(ended?.messageId).not.toBe(interjectionMessageId(requestId))
+    }).pipe(Effect.timeout("8 seconds")),
+  )
+})
+
 describe("a step that does not settle", () => {
   // Each `StreamEnded` names the model the step ran on, so a usage row is
   // never modelless: the step spent tokens on that model whether or not it

@@ -353,6 +353,12 @@ export interface TurnAfterInput {
   readonly branchId: BranchId
   /** The user message that opened the turn; `TurnCompleted.messageId` carries the same id. */
   readonly messageId: MessageId
+  /**
+   * The `steer` messages a step joined into this turn. Each ends with this
+   * turn and has no turn end of its own. Only joins this process saw: a turn
+   * resumed after a restart names none from before it.
+   */
+  readonly joinedMessageIds: ReadonlySet<MessageId>
   readonly durationMs: number
   readonly agentName: AgentName
   readonly interrupted: boolean
