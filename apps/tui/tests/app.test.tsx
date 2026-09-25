@@ -1448,6 +1448,9 @@ describe("App auth gate", () => {
       )
       yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
       yield* Effect.promise(() => setup.mockInput.typeText("/btw"))
+      // The session view shows before the client extensions load; `/btw` is
+      // a command once the popup lists it.
+      yield* waitForFrame(setup, (frame) => frame.includes("parallel session"), "btw command")
       setup.mockInput.pressEnter()
       yield* waitForFrame(setup, (frame) => frame.includes("btw · fork"), "btw pane")
       const destroy = setup.renderer.destroy.bind(setup.renderer)
