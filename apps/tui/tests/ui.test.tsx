@@ -606,9 +606,11 @@ const wideModel = new Model({
 })
 
 describe("picker height rule", () => {
-  it.live("six body lines is the cap, plus the frame's own five lines of chrome", () => {
-    expect(pickerHeight(2, 40)).toBe(7)
-    expect(pickerHeight(20, 40)).toBe(11)
+  it.live("six body lines is the cap, plus the frame's own four lines of chrome", () => {
+    expect(pickerHeight(2, 40)).toBe(6)
+    expect(pickerHeight(20, 40)).toBe(10)
+    // A query row above the list sits outside the cap: six rows still show.
+    expect(pickerHeight(20, 40, 1)).toBe(11)
     // Never more than half the terminal.
     expect(pickerHeight(20, 12)).toBe(7)
     return Effect.void
@@ -743,6 +745,32 @@ describe("docked panes", () => {
       )
       yield* waitForFrame(setup, (frame) => frame.includes("side-quest"), "branch pane")
       expect(renderedFrameRows(renderFrame(setup))).toBe(pickerHeight(2, 40))
+    }),
+  )
+
+  // The frame asks for its chrome as it draws it: two rules, the title and
+  // the key hint. A flat list of three draws no blank row under its last row.
+  it.live("a flat list closes on its rule under its last row", () =>
+    Effect.gen(function* () {
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <BranchPicker
+              open={true}
+              sessionId={sessionId}
+              sessionName="Test Session"
+              branches={[branch("b1", "main"), branch("b2", "side-quest"), branch("b3", "third")]}
+              onSelect={() => {}}
+              onClose={() => {}}
+            />
+          ),
+          { width: 80, height: 40 },
+        ),
+      )
+      const frame = yield* waitForFrame(setup, (current) => current.includes("third"), "pane")
+      const lines = frame.split("\n")
+      const bottom = lines.findLastIndex((line) => line.startsWith("────"))
+      expect(lines[bottom - 1]).toContain("third")
     }),
   )
 })

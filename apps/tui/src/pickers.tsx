@@ -216,8 +216,9 @@ export function PromptSearchPalette(props: PromptSearchPaletteProps) {
 
         return (
           <PickerFrame
-            // The query row draws above the list: one line more than it has rows.
-            lines={items().length + 1}
+            // The query row draws above the list, and the frame counts it.
+            lines={items().length}
+            queryRow
             title={`Prompt search · ${items().length}`}
             footer={"type to filter · ↑↓ move · ↵ accept · esc cancel"}
           >
@@ -563,8 +564,9 @@ export function SettingsPicker(props: SettingsPickerProps) {
   return (
     <Show when={props.open}>
       <PickerFrame
-        // The query row draws above the list: one line more than it has rows.
-        lines={visible().length + 1}
+        // The query row draws above the list, and the frame counts it.
+        lines={visible().length}
+        queryRow
         title={`${props.title} · ${visible().length}`}
         footer={"type to filter · ↑↓ move · ↵ select · esc close"}
       >

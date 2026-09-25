@@ -353,11 +353,16 @@ export const ChromePanel = {
 
 /**
  * Rows the frame occupies: the lines its body draws, capped at six, plus its
- * own chrome, and never more than half the terminal. A picker that grew with
- * its list would push the transcript off a short screen.
+ * `fixedLines` (a query row above the list), plus the four it draws itself
+ * (two rules, the title, the key hint), and never more than half the
+ * terminal. A picker that grew with its list would push the transcript off a
+ * short screen.
  */
-export const pickerHeight = (bodyLines: number, terminalRows: number): number =>
-  Math.min(Math.min(Math.max(bodyLines, 1), 6) + 5, Math.max(6, Math.floor(terminalRows / 2) + 1))
+export const pickerHeight = (bodyLines: number, terminalRows: number, fixedLines = 0): number =>
+  Math.min(
+    Math.min(Math.max(bodyLines, 1), 6) + fixedLines + 4,
+    Math.max(6, Math.floor(terminalRows / 2) + 1),
+  )
 
 /**
  * The columns a picker row may use.
@@ -479,9 +484,13 @@ const PICKER_ROWS_WITH_TITLE = 4
  * How many rows a frame asks for. A list passes the `lines` its body draws,
  * one per row with headings included, and the frame adds its chrome and its
  * note row and caps the sum as every picker is capped ({@link pickerHeight}).
+ * An empty list still draws one line, its empty row. A list with a filter or
+ * query row above it says so (`queryRow`), and the frame counts that line too.
  * A pane that is not a list (the btw transcript) asks for a `height` outright.
  */
-type PickerFrameSize = { readonly lines: number } | { readonly height: number }
+type PickerFrameSize =
+  | { readonly lines: number; readonly queryRow?: boolean }
+  | { readonly height: number }
 
 export function PickerFrame(
   props: PickerFrameSize & {
@@ -550,7 +559,9 @@ export function PickerFrame(
   }
   const height = () => {
     if ("height" in props) return props.height
-    return pickerHeight(props.lines + noteLines(), dimensions().height)
+    let queryLines = 0
+    if (props.queryRow === true) queryLines = 1
+    return pickerHeight(Math.max(props.lines, 1) + noteLines(), dimensions().height, queryLines)
   }
   const [measured, setMeasured] = createSignal(Option.none<number>())
   const [list, setList] = createSignal(Option.none<PickerListLines>())

@@ -102,7 +102,9 @@ region (`maxHeight` in `app.tsx`). While a docked pane is open the trays
 hide (`TrayFrame` reads the `DockProvider` count each `PickerFrame` adds to),
 so the pane the reader opened gets the rows. A list pane passes the `lines`
 its body draws (headings included) and the frame adds its chrome and its
-note row and caps the sum (`pickerHeight`); the btw transcript asks for a
+note row and caps the sum (`pickerHeight`: four rows of chrome, six body
+lines at most). A list with a filter or query row passes `queryRow`, and
+that row sits outside the cap. The btw transcript asks for a
 `height` outright. The note row is the pane's `detail` line, or its `error`
 in the detail's place: a pane with a detail line keeps the row while the
 detail is `None`, so it does not jump when the text arrives. The pane is

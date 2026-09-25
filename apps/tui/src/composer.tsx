@@ -486,6 +486,7 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
   return (
     <PickerFrame
       lines={visibleItems().length}
+      queryRow
       title={title()}
       footer={footerHint()}
       onSqueezeChange={props.onSqueezeChange}
