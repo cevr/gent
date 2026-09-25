@@ -2185,7 +2185,7 @@ describe("thread sessions", () => {
       const branch = yield* relationships.getSessionTree(SessionId.make("delegate"))
       expect(ids(branch)).toEqual(["grandchild", "delegate"])
       expect(yield* relationships.getSessionTree(SessionId.make("missing"))).toEqual([])
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {}))),
+    }).pipe(Effect.provide(testSqliteStorage(() => Layer.empty, {}))),
   )
 
   it.live("roots a thread at a session created without one", () =>
