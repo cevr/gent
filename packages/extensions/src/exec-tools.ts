@@ -1325,12 +1325,24 @@ interface ValueOptions {
   readonly attached?: string
   /** A `-name` word is one long option, not a cluster of letters (`arch -arm64`, `-arch x`). */
   readonly singleDash?: boolean
+  /**
+   * Options known to take no value (`git -P`, `--no-pager`): the word after
+   * one is not its value, so it hides no subcommand.
+   */
+  readonly flags?: { readonly short: string; readonly long: ReadonlyArray<string> }
 }
 
 const names = (text: string) => text.split(" ").filter((name) => name.length > 0)
 
-/** Options that take a value: the letters, and the long names separated by spaces. */
-const options = (short: string, long = ""): ValueOptions => ({ short, long: names(long) })
+/**
+ * Options that take a value: the letters, and the long names separated by
+ * spaces; then the options known to take none, the same way.
+ */
+const options = (short: string, long = "", flagShort = "", flagLong = ""): ValueOptions => ({
+  short,
+  long: names(long),
+  flags: { short: flagShort, long: names(flagLong) },
+})
 
 /** Where an option's value starts: argument `word`, from character `from`. */
 interface OptionValue {
@@ -1621,8 +1633,11 @@ interface ResolvedCommand {
  * option (parallel's `--tag` is not `--tagstring`).
  */
 const isUnsure = (valued: ValueOptions, option: ParsedOption) => {
-  if (!option.long) return !`${valued.short ?? ""}${valued.attached ?? ""}`.includes(option.name)
-  if ((valued.long ?? []).includes(option.name)) return false
+  const flags = valued.flags ?? { short: "", long: [] }
+  if (!option.long) {
+    return !`${valued.short ?? ""}${valued.attached ?? ""}${flags.short}`.includes(option.name)
+  }
+  if ([...(valued.long ?? []), ...flags.long].includes(option.name)) return false
   return !Option.exists(option.value, (value) => value.word === option.at)
 }
 
@@ -1708,8 +1723,11 @@ const runTimeChild = (resolved: ResolvedCommand, next: number): Option.Option<Re
  * the subcommand (`laterCommandWords`) and names a path is a reading too
  * (`uv --cache-dir x run cmd`). An unnamed option alone adds none:
  * `git --no-pager status` has one reading. A subcommand word known only at
- * run time adds a reading that asks (`runTimeChild`) in the usual position
- * only: a later one is an operand (`git -P show "$SHA"`).
+ * run time adds a reading that asks (`runTimeChild`) in the usual position,
+ * and, after an option the table does not name, at the first later word
+ * known only at run time (`npm --omit dev "$CMD"`). After a flag the table
+ * names there are no later words: `git -P show "$SHA"` reads `$SHA` as an
+ * operand.
  */
 const readingsUnder = (resolved: ResolvedCommand): Arr.NonEmptyReadonlyArray<ResolvedCommand> => {
   if (!SPEC_PARENTS.has(resolved.path)) return [resolved]
@@ -1717,10 +1735,14 @@ const readingsUnder = (resolved: ResolvedCommand): Arr.NonEmptyReadonlyArray<Res
   const args = resolved.words.slice(1).map((word) => word.text)
   // `args[index]` is `resolved.words[index + 1]`.
   const first = subcommandAt(resolved) - 1
-  const others = laterCommandWords(args, resolved.spec.valued, from)
-    .filter((index) => index !== first)
-    .flatMap((index) => Option.toArray(childCommand(resolved, index + 1)))
-    .flatMap(readingsUnder)
+  const later = laterCommandWords(args, resolved.spec.valued, from).filter(
+    (index) => index !== first,
+  )
+  const runTime = Arr.findFirst(later, (index) => Option.isSome(runTimeChild(resolved, index + 1)))
+  const others = [
+    ...later.flatMap((index) => Option.toArray(childCommand(resolved, index + 1))),
+    ...Option.toArray(Option.flatMap(runTime, (index) => runTimeChild(resolved, index + 1))),
+  ].flatMap(readingsUnder)
   const head = Option.match(childCommand(resolved, first + 1), {
     onNone: (): Arr.NonEmptyReadonlyArray<ResolvedCommand> => [
       resolved,
@@ -3039,6 +3061,8 @@ const assignmentRuns = ({ words, assignments }: Invocation): SegmentRuns => {
 const GIT_GLOBAL_OPTIONS = options(
   "cC",
   "git-dir work-tree namespace config-env super-prefix attr-source",
+  "Pp",
+  "no-pager paginate bare no-replace-objects literal-pathspecs glob-pathspecs noglob-pathspecs icase-pathspecs no-optional-locks no-advice",
 )
 
 /** Git config keys whose value git runs as a shell command. */
@@ -3700,6 +3724,8 @@ const GH_DELETES = [
 ]
 const GH_REPO_OPTIONS = options("R", "repo")
 const PUBLISH_OPTIONS = "tag access registry otp"
+/** Package manager options that take no value. */
+const PACKAGE_FLAGS = "silent quiet verbose json"
 
 /** `git commit` options whose value is the next word. */
 const COMMIT_OPTIONS = options(
@@ -3874,12 +3900,28 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
     // `trap '<script>' SIGNAL`: the script runs when the signal (or `EXIT`) comes.
     trap: spec({}, [joined(0, 1)]),
     // Package managers and runners.
-    pnpm: spec(options("CF", `filter dir loglevel ${PUBLISH_OPTIONS}`)),
-    npm: spec(options("w", `workspace prefix userconfig cache loglevel ${PUBLISH_OPTIONS}`)),
-    yarn: spec(options("", `cwd ${PUBLISH_OPTIONS}`)),
-    bun: spec(options("F", `cwd filter config ${PUBLISH_OPTIONS}`)),
+    pnpm: spec(
+      options("CF", `filter dir loglevel ${PUBLISH_OPTIONS}`, "rs", `${PACKAGE_FLAGS} recursive`),
+    ),
+    npm: spec(
+      options(
+        "w",
+        `workspace prefix userconfig cache loglevel omit include ${PUBLISH_OPTIONS}`,
+        "gsq",
+        `${PACKAGE_FLAGS} global`,
+      ),
+    ),
+    yarn: spec(options("", `cwd ${PUBLISH_OPTIONS}`, "", PACKAGE_FLAGS)),
+    bun: spec(options("F", `cwd filter config ${PUBLISH_OPTIONS}`, "", PACKAGE_FLAGS)),
     cargo: {
-      ...spec(options("pZ", "package manifest-path registry token config index color")),
+      ...spec(
+        options(
+          "pZ",
+          "package manifest-path registry token config index color",
+          "qv",
+          "locked frozen offline quiet verbose",
+        ),
+      ),
       toolchain: true,
     },
     // `pnpm exec -c` (`--shell-mode`) runs its words as a shell script; so
@@ -3924,7 +3966,14 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
           "gh api DELETE",
         ),
     ),
-    docker: spec(options("Hcl", "host context config log-level tlscacert tlscert tlskey")),
+    docker: spec(
+      options(
+        "Hcl",
+        "host context config log-level tlscacert tlscert tlskey",
+        "D",
+        "debug tls tlsverify",
+      ),
+    ),
     ...each(["docker push", "docker image push"], risky(external("docker push"))),
     ...each(
       ["docker volume rm", "docker volume remove", "docker volume prune", "docker system prune"],

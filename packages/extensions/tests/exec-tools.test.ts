@@ -923,10 +923,11 @@ describe("classifyBashCommand", () => {
     }
   })
 
-  // Only the usual subcommand position may hold a run-time subcommand. A
-  // run-time word after a flag the table does not name and a subcommand is
-  // an operand of that subcommand.
-  test("a run-time word after a flag and a subcommand is an operand", () => {
+  // After a flag the table names, a run-time word after the subcommand is an
+  // operand of that subcommand. After an option the table does not name,
+  // the subcommand may follow that option's value: the next run-time word
+  // may be it, and asks.
+  test("a run-time word after a named flag and a subcommand is an operand", () => {
     const x = "/nonexistent/gent-probe-x"
     for (const command of [
       'git --no-pager log "$REF"',
@@ -935,8 +936,9 @@ describe("classifyBashCommand", () => {
       "git --no-pager log {main,dev}",
       'npm --silent run "$S"',
       'cargo --locked test "$T"',
+      'cargo -q build "$T"',
       'cargo +nightly --locked test "$T"',
-      'gh --verbose pr view "$N"',
+      'docker --debug ps "$F"',
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("safe")
     }
@@ -951,6 +953,10 @@ describe("classifyBashCommand", () => {
       // The table names the option that takes the word before it.
       'npm --loglevel silent "$CMD"',
       'kubectl -v 3 "$VERB" pod gent-probe-x',
+      'npm --omit dev "$CMD"',
+      // An option the table does not name may take the word after it.
+      'npm --gent-probe-unknown dev "$CMD"',
+      'kubectl --some-valued x "$VERB"',
       // A risky subcommand still reads its own run-time words.
       'git --no-pager reset "$MODE"',
     ]) {
@@ -2065,12 +2071,17 @@ describe("classifyBashCommand", () => {
       `cat ${x} | xargs npm --gent-probe-unknown silent exec --`,
       // Accepted over-ask: runners and parents share one rule, so any later
       // word after an unnamed option may be the subcommand.
-      "git --no-pager log --format=%H main stash",
+      "git --gent-probe-unknown log --format=%H main stash",
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
-    expect(classifyBashCommand("docker --debug run alpine push").level).toBe("external")
+    expect(classifyBashCommand("docker --gent-probe-unknown run alpine push").level).toBe(
+      "external",
+    )
     for (const command of [
+      // A flag the table names takes no value: the next word is the subcommand.
+      "git --no-pager log --format=%H main stash",
+      "docker --debug run alpine push",
       "git --no-pager status",
       "git --no-pager log --oneline -5",
       "git --no-pager diff main",
