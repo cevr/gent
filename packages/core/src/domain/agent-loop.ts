@@ -335,6 +335,14 @@ export const followUpMessageIdForSource = (input: {
     `follow-up:${input.workspaceId}:${input.sessionId}:${input.branchId}:${input.sourceId}`,
   )
 
+/**
+ * The interjection a steer lands, keyed by the steer's request id. A branch
+ * the steer wakes opens its turn on this message, so a stop that names it
+ * reaches that turn, or the steer while it still waits in the queue.
+ */
+export const interjectionMessageId = (requestId: RequestId | ActorCommandId) =>
+  MessageId.make(`${requestId}:interjection`)
+
 // Client payloads: what a caller outside the actor hands the loop. The
 // runtime turns each into an actor operation below.
 
@@ -381,6 +389,13 @@ const DequeueFollowUpPayload = Schema.Struct({
 })
 type DequeueFollowUpPayload = typeof DequeueFollowUpPayload.Type
 
+interface StopMessagePayload {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly messageId: MessageId
+  readonly requestId: RequestId
+}
+
 const WorkspaceFields = {
   workspaceId: WorkspaceId,
 }
@@ -418,7 +433,8 @@ const BranchCommandFields = {
   commandId: ActorCommandId,
 }
 
-const RemoveFollowUpFields = {
+/** One command about one message on a branch: remove its follow-up, stop what it opens. */
+const MessageCommandFields = {
   ...BranchCommandFields,
   messageId: MessageId,
 }
@@ -445,7 +461,8 @@ export type QueueFollowUpInput = FieldsInput<typeof QueueFollowUpFields>
 export type SteerInput = FieldsInput<typeof SteerFields>
 export type RespondInteractionInput = FieldsInput<typeof RespondInteractionFields>
 export type BranchCommandInput = FieldsInput<typeof BranchCommandFields>
-export type RemoveFollowUpInput = FieldsInput<typeof RemoveFollowUpFields>
+export type RemoveFollowUpInput = FieldsInput<typeof MessageCommandFields>
+export type StopMessageInput = FieldsInput<typeof MessageCommandFields>
 export type RequestExtensionInput = FieldsInput<typeof RequestExtensionFields>
 export type HandlerRequest<Operation> = {
   readonly operation: Operation & { readonly _tag: string }
@@ -510,7 +527,16 @@ export const AgentLoop = Actor.fromEntity(
     },
     // Removing one queued follow-up mutates the queue too; same actor route.
     RemoveFollowUp: {
-      payload: RemoveFollowUpFields,
+      payload: MessageCommandFields,
+      success: Schema.Boolean,
+      error: AgentLoopError,
+      persisted: true,
+      id: branchTarget,
+    },
+    // Stop what one message opens: take back its waiting steer, stop its
+    // running turn, or cancel a turn that has not started. True when it did.
+    StopMessage: {
+      payload: MessageCommandFields,
       success: Schema.Boolean,
       error: AgentLoopError,
       persisted: true,
@@ -713,4 +739,23 @@ export const dequeueFollowUpOn = Effect.fn("AgentLoop.client.dequeueFollowUp")(f
       }),
     )
     .pipe(asAgentLoopError(`Failed to dequeue follow-up ${input.sourceId}`))
+})
+
+/** Stop what one message opens on a branch. True when the stop reached it. */
+export const stopMessageOn = Effect.fn("AgentLoop.client.stopMessage")(function* (
+  input: StopMessagePayload,
+) {
+  const workspaceId = yield* CurrentWorkspaceId
+  const ref = yield* loopRefFor(input.sessionId, input.branchId)
+  return yield* ref
+    .execute(
+      AgentLoop.StopMessage.make({
+        workspaceId,
+        sessionId: input.sessionId,
+        branchId: input.branchId,
+        commandId: ActorCommandId.make(input.requestId),
+        messageId: input.messageId,
+      }),
+    )
+    .pipe(asAgentLoopError(`Failed to stop message ${input.messageId}`))
 })
