@@ -1044,11 +1044,16 @@ const stopNoticeKey = (row: DelegateEntry) => `${row.requestId}@${row.stopNotice
  * often it was stopped, the newest first, at most `maximumNoticeChildren`;
  * the rest are a count. Every step reads it; an answered turn clears exactly
  * the rows it showed, and a row the cap left out stays for the next turn.
+ *
+ * The read takes the registry lock. A completion delivered over a stop's
+ * claim is sent before its row is written, and the turn it wakes must not
+ * read the claim's notice from the file the writer has not replaced yet.
  */
 const stopNotices = Effect.fn("Delegate.stopNotices")(function* () {
-  const stopped = (yield* registry.read()).filter((row) =>
-    Predicate.isNotUndefined(row.stopNoticeAt),
+  const current = yield* registry.modify((entries) =>
+    Effect.succeed({ next: entries, result: entries }),
   )
+  const stopped = current.filter((row) => Predicate.isNotUndefined(row.stopNoticeAt))
   if (stopped.length === 0) return []
   const byChild = new Map<SessionId, ReadonlyArray<DelegateEntry>>()
   for (const row of stopped)

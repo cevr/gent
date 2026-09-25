@@ -1395,7 +1395,13 @@ describe("a start nobody waits for", () => {
             "the recovered child delivered its completion",
           )
           expect(completionMessages(snapshot.messages)).toHaveLength(1)
-          const [entry] = yield* harness.registryOf(branchId)
+          // The completion is sent before its row is written.
+          const [entry] = yield* waitFor(
+            harness.registryOf(branchId),
+            (entries) => entries[0]?.delivered === true,
+            3_000,
+            "the recovered child's row is written",
+          )
           expect(entry).toMatchObject({
             requestId: "crashed-start",
             submitted: true,
@@ -3270,7 +3276,13 @@ describe("a parent interrupt as a child finishes", () => {
             5_000,
             "the child's completion woke the parent and the parent read it",
           )
-          const [row] = yield* harness.registryOf(branchId)
+          // The completion is sent before its row is written.
+          const [row] = yield* waitFor(
+            harness.registryOf(branchId),
+            (entries) => Predicate.isUndefined(entries[0]?.stopNoticeAt),
+            3_000,
+            "the child's completion row is written",
+          )
           expect(row).toMatchObject({ delivered: true, completed: {} })
           expect(row?.stopNoticeAt).toBeUndefined()
           const woken = parentRequests.at(-1)
