@@ -201,42 +201,54 @@ export function ForkPane(props: {
   const fork = () => Option.getOrUndefined(props.controller.fork())
   const replying = () => Option.exists(props.controller.fork(), (view) => view.replying)
   const ready = () => Option.isNone(props.controller.pending()) && !replying()
-  useScopedKeyboard(
-    (event) => {
-      if (event.name === "escape") {
-        props.onClose()
-        return true
-      }
-      if (event.ctrl === true && event.name === "o") {
-        if (Option.isSome(props.controller.fork())) props.onOpen()
-        return true
-      }
-      if (event.name === "return") {
-        // A question typed while the fork replies waits in the draft.
-        if (!ready()) return true
-        const question = draft()
-        setDraft("")
-        props.controller.ask(question)
-        return true
-      }
-      if (event.name === "backspace") {
-        setDraft((current) => [...current].slice(0, -1).join(""))
-        return true
-      }
-      if (event.ctrl === true || event.meta === true) return false
-      const typed = typedText(Option.fromNullishOr(event.sequence))
-      if (Option.isNone(typed)) return false
-      setDraft((current) => current + typed.value)
-      return true
-    },
-    {
-      when: () => props.open,
+  // The ask line takes the pane's keys. It sits inside the frame, so a frame
+  // that draws no row takes none of them (`KeyboardGate`).
+  const AskLine = () => {
+    useScopedKeyboard(paneKey, {
       paste: (text) => {
         setDraft((current) => current + pastedText(text))
         return true
       },
-    },
-  )
+    })
+    return (
+      <ChromePanel.Section>
+        <text style={{ fg: theme.text }} wrapMode="none">
+          <span style={{ fg: theme.textMuted }}>ask › </span>
+          {draft()}
+          <Show when={ready()}>
+            <span style={{ fg: theme.primary }}>│</span>
+          </Show>
+        </text>
+      </ChromePanel.Section>
+    )
+  }
+  const paneKey = (event: Parameters<Parameters<typeof useScopedKeyboard>[0]>[0]) => {
+    if (event.name === "escape") {
+      props.onClose()
+      return true
+    }
+    if (event.ctrl === true && event.name === "o") {
+      if (Option.isSome(props.controller.fork())) props.onOpen()
+      return true
+    }
+    if (event.name === "return") {
+      // A question typed while the fork replies waits in the draft.
+      if (!ready()) return true
+      const question = draft()
+      setDraft("")
+      props.controller.ask(question)
+      return true
+    }
+    if (event.name === "backspace") {
+      setDraft((current) => [...current].slice(0, -1).join(""))
+      return true
+    }
+    if (event.ctrl === true || event.meta === true) return false
+    const typed = typedText(Option.fromNullishOr(event.sequence))
+    if (Option.isNone(typed)) return false
+    setDraft((current) => current + typed.value)
+    return true
+  }
 
   const height = () => Math.max(8, Math.floor(dimensions().height / 2))
   const title = () =>
@@ -286,15 +298,7 @@ export function ForkPane(props: {
             {(message) => <text style={{ fg: theme.error }}>{message()}</text>}
           </Show>
         </ChromePanel.Body>
-        <ChromePanel.Section>
-          <text style={{ fg: theme.text }} wrapMode="none">
-            <span style={{ fg: theme.textMuted }}>ask › </span>
-            {draft()}
-            <Show when={ready()}>
-              <span style={{ fg: theme.primary }}>│</span>
-            </Show>
-          </text>
-        </ChromePanel.Section>
+        <AskLine />
       </PickerFrame>
     </Show>
   )

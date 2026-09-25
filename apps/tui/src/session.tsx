@@ -3442,7 +3442,15 @@ export function createSessionController(props: {
       handleInterrupt()
       return true
     }
-    if (overlayHoldsComposer(uiState().overlay)) return false
+    const overlay = uiState().overlay
+    if (overlayHoldsComposer(overlay)) {
+      // A held pane takes its own Esc. One that reaches here found no row of
+      // the pane on a short terminal (`KeyboardGate`), and it closes the pane
+      // as the pane's own Esc does. The panes that hold the slot keep theirs.
+      if (event.name !== "escape" || slotHeld(overlay)) return false
+      closeOverlay()
+      return true
+    }
 
     if (event.name === "escape") {
       handleEscape()

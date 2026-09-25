@@ -16,7 +16,12 @@ import {
 import { Clock, Effect, Fiber, Match, Option, Schedule, Schema } from "effect"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { useRenderer } from "@opentui/solid"
-import { type ScopedKeyboardEvent, useScopedKeyboard, useTerminalDimensions } from "./terminal"
+import {
+  KeyboardGate,
+  type ScopedKeyboardEvent,
+  useScopedKeyboard,
+  useTerminalDimensions,
+} from "./terminal"
 import { useTheme } from "./theme"
 import { truncate } from "./utils"
 import type { MessageRowProps } from "./extensions/client-facets"
@@ -465,6 +470,8 @@ const PickerBodyContext = createContext<PickerBody>({
   report: () => {},
 })
 
+/** Two rules and one body row: below this the rules give way. */
+const PICKER_ROWS_RULED = 3
 /** Two rules, the title and one body row: below this the title gives way. */
 const PICKER_ROWS_WITH_TITLE = 4
 
@@ -556,24 +563,37 @@ export function PickerFrame(
   onCleanup(() => {
     if (props.onSqueezeChange) props.onSqueezeChange(false)
   })
+  // Under three rows the rules would take every row: the frame drops them
+  // and its note row, and its one or two rows go to the list. At none it
+  // draws nothing, and its scopes take no keys (`KeyboardGate`).
+  const bare = () => Option.exists(measured(), (rows) => rows < PICKER_ROWS_RULED)
+  const hasRows = () => !Option.exists(measured(), (rows) => rows === 0)
+  const rules = (): false | Array<"top" | "bottom"> => {
+    if (bare()) return false
+    return ["top", "bottom"]
+  }
   const titled = () => !Option.exists(measured(), (rows) => rows < PICKER_ROWS_WITH_TITLE)
   const bodyRows = () =>
     Option.map(measured(), (rows) => {
+      if (bare()) return rows
       let chrome = 2
       if (titled()) chrome += 1
       if (!squeezed()) chrome += 1
       return Math.max(0, rows - chrome)
     })
   const shownNote = () =>
-    Option.filter(note(), () =>
-      Option.match(bodyRows(), {
-        onNone: () => true,
-        onSome: (rows) =>
-          Option.match(list(), {
-            onNone: () => rows >= 2,
-            onSome: (lines) => rows > lines.full || rows > lines.dressed,
-          }),
-      }),
+    Option.filter(
+      note(),
+      () =>
+        !bare() &&
+        Option.match(bodyRows(), {
+          onNone: () => true,
+          onSome: (rows) =>
+            Option.match(list(), {
+              onNone: () => rows >= 2,
+              onSome: (lines) => rows > lines.full || rows > lines.dressed,
+            }),
+        }),
     )
   const listRows = () =>
     Option.map(bodyRows(), (rows) => {
@@ -588,15 +608,19 @@ export function PickerFrame(
       width="100%"
       // A basis, not a height: OpenTUI turns shrinking off on a box whose height is set.
       flexBasis={height()}
-      onSizeChange={function () {
-        setMeasured(Option.some(this.height))
+      // OpenTUI reports a box of no rows as one, and reports no change between
+      // them, so the frame reads its laid-out rows before each draw.
+      renderBefore={function () {
+        const rows = Math.max(0, Math.round(this.getLayoutNode().getComputedHeight()))
+        if (!Option.contains(measured(), rows)) setMeasured(Option.some(rows))
       }}
     >
       <box
         flexDirection="column"
         flexGrow={1}
-        border={["top", "bottom"]}
+        border={rules()}
         borderColor={theme.border}
+        visible={hasRows()}
       >
         <Show when={titled()}>
           <box height={1} flexShrink={0} overflow="hidden">
@@ -605,7 +629,9 @@ export function PickerFrame(
             </text>
           </box>
         </Show>
-        <PickerBodyContext.Provider value={body}>{props.children}</PickerBodyContext.Provider>
+        <PickerBodyContext.Provider value={body}>
+          <KeyboardGate open={hasRows}>{props.children}</KeyboardGate>
+        </PickerBodyContext.Provider>
         <Show when={Option.getOrUndefined(shownNote())}>
           {(shown) => {
             const color = () => {
@@ -622,7 +648,7 @@ export function PickerFrame(
           }}
         </Show>
       </box>
-      <Show when={!squeezed()}>
+      <Show when={!squeezed() && !bare()}>
         <text height={1} flexShrink={0} wrapMode="none" truncate style={{ fg: theme.textMuted }}>
           {props.footer}
         </text>

@@ -111,7 +111,14 @@ then the one box that gives way, in whole rows (`PickerFrame` sets a
 height is set); squeezed, it drops its key hint, then its title, before its
 body's last row. Inside the body the order goes on: the note row gives way
 first, then the `SelectList` headings, then its filter row, and one row stays
-for the cursor (the list reads its rows from the frame). A pane that draws
+for the cursor (the list reads its rows from the frame). Under three rows
+the frame drops its rules and note row too, so its one or two rows go to
+the list. With a turn running, a terminal under 9 rows leaves a pane no
+row: the frame then draws nothing, and a `KeyboardGate` keeps its scopes
+from taking keys (register a pane's key scope inside its frame, so the gate
+covers it). Keys go past it; over a held pane Esc still closes it. The frame
+reads its rows from the Yoga layout before each draw, because OpenTUI reports
+a 0-row box as one row and sends no size change between them. A pane that draws
 its own query line (the autocomplete popup, the command palette) passes it as
 the list's `queryRow`, so it gives way as the filter row does. The composer
 keeps its rows, but while its popup or palette is open it may shrink by that

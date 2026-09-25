@@ -57,7 +57,7 @@ import {
 import { createSignal, onMount, type Signal } from "solid-js"
 import { ProviderAuthError } from "@gent/core/extensions/api"
 import { type ClientContextValue, useClient } from "../src/client"
-import { waitForFrame, waitUntilAdvancing } from "./helpers-boundary"
+import { type RenderWaitTimeoutError, waitForFrame, waitUntilAdvancing } from "./helpers-boundary"
 import { useTerminalDimensions } from "../src/terminal"
 import { SyntaxStyle } from "@opentui/core"
 import { type Message, MessageList, type SessionItem } from "../src/message-list"
@@ -2078,6 +2078,131 @@ describe("App auth gate", () => {
       }).pipe(Effect.timeout("10 seconds")),
     )
   }
+  // Under 11 rows, with a turn running, the composer and the "Generating" row
+  // leave a pane two rows, one or none. Under three rows the frame drops its
+  // rules and note row, so its rows go to the cursor row; at none it draws
+  // nothing. Either way no row is drawn over a rule or over the status row.
+  const sendPrompts = (view: { readonly setup: TestSetup; readonly sent: Array<string> }) =>
+    Effect.gen(function* () {
+      for (const prompt of ["first prompt", "second prompt"]) {
+        yield* Effect.promise(() => view.setup.mockInput.typeText(prompt))
+        view.setup.mockInput.pressEnter()
+        yield* waitForFrame(view.setup, () => view.sent.includes(prompt), `sent ${prompt}`)
+      }
+    })
+  const shortPanes: ReadonlyArray<{
+    readonly name: string
+    readonly open: (view: {
+      readonly setup: TestSetup
+      readonly sent: Array<string>
+    }) => Effect.Effect<void, RenderWaitTimeoutError>
+    /** Drawn while the pane is open at full height. */
+    readonly shown: string
+    /** A row of the pane holds one entry, never two drawn over each other. */
+    readonly rowClean: (line: string) => boolean
+  }> = [
+    {
+      name: "reasoning picker",
+      open: (view) => typeCommand("/think")(view.setup),
+      shown: "● default",
+      rowClean: (line) => !line.includes("●") || line.includes("● default"),
+    },
+    {
+      name: "command palette",
+      open: (view) => Effect.sync(() => view.setup.mockInput.pressKey("p", { ctrl: true })),
+      shown: "Switch color theme",
+      rowClean: (line) => !line.includes("Switch") || line.trim().startsWith("Theme"),
+    },
+    {
+      name: "prompt search",
+      open: (view) =>
+        sendPrompts(view).pipe(
+          Effect.andThen(Effect.sync(() => view.setup.mockInput.pressKey("r", { ctrl: true }))),
+        ),
+      shown: "second prompt",
+      rowClean: (line) => !line.includes("prompt") || /(first|second) prompt$/.test(line.trimEnd()),
+    },
+    {
+      name: "agents pane",
+      open: (view) => Effect.sync(() => view.setup.mockInput.pressArrow("left")),
+      shown: "Agents ·",
+      rowClean: () => true,
+    },
+  ]
+  /** A rule is only rule, and no pane row is two rows drawn over each other. */
+  const overdrawsNothing = (frame: string, rowClean: (line: string) => boolean) =>
+    frame
+      .split("\n")
+      .every((line) => (!line.includes("─") || /^─+$/.test(line.trim())) && rowClean(line))
+  for (const pane of shortPanes) {
+    it.live(`the ${pane.name} overdraws nothing from 10 rows down to 6`, () =>
+      Effect.gen(function* () {
+        const view = yield* mountRunningTurn()
+        yield* pane.open(view)
+        yield* waitForFrame(view.setup, (frame) => frame.includes(pane.shown), "the pane")
+        const width = view.setup.renderer.terminalWidth
+        for (const height of [10, 9, 8, 7, 6]) {
+          view.setup.resize(width, height)
+          yield* waitForFrame(
+            view.setup,
+            (frame) =>
+              view.setup.renderer.terminalHeight === height &&
+              frame.includes("┃") &&
+              overdrawsNothing(frame, pane.rowClean),
+            `the ${pane.name} at ${height} rows`,
+          )
+        }
+      }).pipe(Effect.timeout("10 seconds")),
+    )
+  }
+  // A pane with no row on screen takes no keys: the reader cannot see what a
+  // key would do there. Typing goes past the agents pane to the composer.
+  it.live("typing reaches the composer past an agents pane that has no row", () =>
+    Effect.gen(function* () {
+      const view = yield* mountRunningTurn()
+      view.setup.mockInput.pressArrow("left")
+      yield* waitForFrame(view.setup, (frame) => frame.includes("Agents ·"), "the agents pane")
+      view.setup.resize(view.setup.renderer.terminalWidth, 6)
+      yield* waitForFrame(
+        view.setup,
+        (frame) => view.setup.renderer.terminalHeight === 6 && !frame.includes("›"),
+        "the agents pane with no row",
+      )
+      yield* Effect.promise(() => view.setup.mockInput.typeText("typed past"))
+      yield* waitForFrame(view.setup, (frame) => frame.includes("┃ typed past"), "the draft")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  // A held pane with no row takes no keys, yet Esc still closes it, as the
+  // pane's own Esc does, and the turn runs on.
+  it.live("esc closes a held pane that has no row and leaves the turn running", () =>
+    Effect.gen(function* () {
+      const view = yield* mountRunningTurn()
+      yield* typeCommand("/think")(view.setup)
+      yield* waitForFrame(view.setup, (frame) => frame.includes("● default"), "the pane")
+      const width = view.setup.renderer.terminalWidth
+      view.setup.resize(width, 6)
+      yield* waitForFrame(
+        view.setup,
+        (frame) => view.setup.renderer.terminalHeight === 6 && !frame.includes("● default"),
+        "the pane with no row",
+      )
+      view.setup.mockInput.pressEscape()
+      // gent/no-sleep: allow a lone escape byte stays in the stdin parser until its timeout flushes it as a key
+      yield* Effect.sleep("100 millis")
+      // The held pane let go of the composer: typing reaches it at 6 rows.
+      yield* Effect.promise(() => view.setup.mockInput.typeText("after"))
+      yield* waitForFrame(view.setup, (frame) => frame.includes("┃ after"), "the draft")
+      view.setup.resize(width, 24)
+      yield* waitForFrame(
+        view.setup,
+        (frame) => view.setup.renderer.terminalHeight === 24 && frame.includes("┃ after"),
+        "the full terminal",
+      )
+      expect(renderFrame(view.setup)).not.toContain("Reasoning ·")
+      expect(view.steers).toEqual([])
+      expect(view.shutdowns()).toBe(0)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   // The live run: an alarm and three working children filled the trays, and
   // the btw pane showed its question but not the fork's stored answer.
   it.live("the btw pane keeps the fork's answer in view on a short terminal with full trays", () =>
