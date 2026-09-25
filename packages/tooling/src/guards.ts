@@ -2204,6 +2204,11 @@ export const findRetiredSurfaces = (file: string, text: string): ReadonlyArray<F
  * - A path carrying a shell or URL character (a space, `$`, `:` or `#`),
  *   which marks it as a fragment of a command line rather than a filename.
  *
+ * A relative Markdown link, `[text](target)`, is a path claim too: its target
+ * resolves against the file's own directory, less any `#anchor`. A target
+ * with a scheme (`https:`) or a leading `/` or `#` is not a repo path, and a
+ * link inside backticks or a fence is code, not a link.
+ *
  * @module
  */
 
@@ -2212,12 +2217,14 @@ export const findRetiredSurfaces = (file: string, text: string): ReadonlyArray<F
  * The root `AGENTS.md`, `CLAUDE.md` and `ARCHITECTURE.md`, a package's own
  * `AGENTS.md` or `CLAUDE.md`, `docs/` but its dated research, a testbed's
  * `README.md` (the root `CLAUDE.md` sends agents to the gamut one), the
- * dependency patch notes in `patches/README.md`, and the project skills under
- * `.claude/skills/`. The path claims and the retired-surface rows both read
- * exactly this set.
+ * dependency patch notes in `patches/README.md`, the project skills under
+ * `.claude/skills/`, and the skills gent ships to its own model under
+ * `packages/extensions/src/skills/bundled/`. The path claims, the Markdown
+ * links, the retired-surface rows and the code-block compile all read exactly
+ * this set.
  */
 const STEERING_PROSE =
-  /^(?:(?:AGENTS|CLAUDE|ARCHITECTURE)\.md|(?:apps|packages)\/[^/]+\/(?:AGENTS|CLAUDE)\.md|docs\/(?!research\/).+\.md|testbeds\/[^/]+\/README\.md|patches\/README\.md|\.claude\/skills\/.+\.md)$/
+  /^(?:(?:AGENTS|CLAUDE|ARCHITECTURE)\.md|(?:apps|packages)\/[^/]+\/(?:AGENTS|CLAUDE)\.md|docs\/(?!research\/).+\.md|testbeds\/[^/]+\/README\.md|patches\/README\.md|\.claude\/skills\/.+\.md|packages\/extensions\/src\/skills\/bundled\/.+\.md)$/
 
 export const isSteeringFile = (file: string): boolean => STEERING_PROSE.test(file)
 
@@ -2270,6 +2277,41 @@ const directoryPrefixesOf = (tracked: Iterable<string>): ReadonlySet<string> => 
   return prefixes
 }
 
+/** A Markdown link's target: `(target)` after `[text]`, up to a space or the close. */
+const MARKDOWN_LINK = /\[[^\]\n]*\]\(([^)\s]+)\)/g
+
+/** A link target that is not a repo path: a URL, a root-relative path, or an anchor. */
+const NOT_REPO_TARGET = /^(?:[a-z][a-z0-9+.-]*:|\/|#)/i
+
+/** `target` resolved against `directory`, with `.` and `..` segments folded; none above the root. */
+const resolveRelative = (directory: string, target: string): Option.Option<string> => {
+  const segments: Array<string> = directory.split("/").filter((segment) => segment.length > 0)
+  for (const segment of target.split("/")) {
+    if (segment === "" || segment === ".") continue
+    if (segment !== "..") segments.push(segment)
+    else if (segments.length === 0) return Option.none()
+    else segments.pop()
+  }
+  return Option.some(segments.join("/"))
+}
+
+/** The relative link targets of a prose line that name no tracked path from `directory`. */
+const danglingLinkTargets = (
+  line: string,
+  directory: string,
+  tracked: ReadonlySet<string>,
+  prefixes: ReadonlySet<string>,
+): ReadonlyArray<string> =>
+  [...line.replace(BACKTICKED, "").matchAll(MARKDOWN_LINK)]
+    .map((match) => Option.getOrElse(Option.fromNullishOr(match[1]), () => ""))
+    .filter((target) => !NOT_REPO_TARGET.test(target))
+    .filter((target) =>
+      Option.match(resolveRelative(directory, target.replace(/#.*$/, "")), {
+        onNone: () => true,
+        onSome: (resolved) => !existsInTree(resolved, tracked, prefixes),
+      }),
+    )
+
 export const findSteeringFilePaths = (
   file: string,
   text: string,
@@ -2279,6 +2321,7 @@ export const findSteeringFilePaths = (
 
   const tracked = new Set(trackedFiles)
   const prefixes = directoryPrefixesOf(trackedFiles)
+  const directory = file.slice(0, Math.max(file.lastIndexOf("/"), 0))
   const findings: Finding[] = []
   let inFence = false
   for (const [index, line] of text.split("\n").entries()) {
@@ -2297,6 +2340,78 @@ export const findSteeringFilePaths = (
         message: `steering file names \`${claimed}\`, which no tracked file matches -- point it at the path that exists, or drop the reference`,
       })
     }
+    for (const target of danglingLinkTargets(line, directory, tracked, prefixes)) {
+      findings.push({
+        file,
+        line: index + 1,
+        message: `steering file links \`${target}\`, which resolves to no tracked file from \`${file}\` -- point the link at the file that exists, or drop it`,
+      })
+    }
+  }
+  return findings
+}
+
+// ── every bundled skill file ships ──────────────────────────────────────────
+
+/**
+ * Guard: every Markdown file under the bundled skills directory ships.
+ *
+ * The skills module imports each bundled file as text and lists it in
+ * `bundledSkillFiles` under its path in the skill tree, which is where the
+ * skill's own links find it once installed. A file added to the directory
+ * without an import is not shipped, and nothing fails: the build, the
+ * typecheck and the skill tests read only what is imported. A listed path
+ * that differs from the imported file installs the right text under the wrong
+ * name, so a `SKILL.md` link to it dangles.
+ *
+ * Read: the tracked files under `BUNDLED_SKILLS_DIRECTORY` and the text of
+ * `BUNDLED_SKILLS_MODULE`. Reported: a Markdown file with no import (at the
+ * file), and an import whose `bundledSkillFiles` row is missing or names
+ * another path (at the import).
+ */
+export const BUNDLED_SKILLS_MODULE = "packages/extensions/src/skills.ts"
+const BUNDLED_SKILLS_DIRECTORY = "packages/extensions/src/skills/bundled/"
+
+/** `import name from "./skills/bundled/<path>"`: the binding and the bundled path. */
+const BUNDLED_IMPORT = /^import\s+([A-Za-z_$][\w$]*)\s+from\s+["']\.\/skills\/bundled\/([^"']+)["']/
+
+/** A `bundledSkillFiles` row, `["<path>", name]`, across lines or on one. */
+const BUNDLED_ROW = /\[\s*["']([^"']+)["']\s*,\s*([A-Za-z_$][\w$]*)\s*,?\s*\]/g
+
+export const findUnshippedSkillFiles = (
+  moduleText: string,
+  trackedFiles: ReadonlyArray<string>,
+): ReadonlyArray<Finding> => {
+  const imported = new Map<string, { readonly path: string; readonly line: number }>()
+  for (const [index, line] of moduleText.split("\n").entries()) {
+    const match = Option.fromNullishOr(BUNDLED_IMPORT.exec(line))
+    if (Option.isSome(match))
+      imported.set(match.value[1] ?? "", { path: match.value[2] ?? "", line: index + 1 })
+  }
+  const rows = new Map<string, string>()
+  for (const match of moduleText.matchAll(BUNDLED_ROW)) rows.set(match[2] ?? "", match[1] ?? "")
+  const importedPaths = new Set([...imported.values()].map((entry) => entry.path))
+  const findings: Array<Finding> = trackedFiles
+    .filter((file) => file.startsWith(BUNDLED_SKILLS_DIRECTORY) && file.endsWith(".md"))
+    .filter((file) => !importedPaths.has(file.slice(BUNDLED_SKILLS_DIRECTORY.length)))
+    .map((file) => ({
+      file,
+      line: 1,
+      message: `a bundled skill file that \`${BUNDLED_SKILLS_MODULE}\` does not import never ships; import it as text and list it in \`bundledSkillFiles\`, or delete it`,
+    }))
+  for (const [name, entry] of imported) {
+    const listed = Option.fromNullishOr(rows.get(name))
+    if (Option.isSome(listed) && listed.value === entry.path) continue
+    findings.push({
+      file: BUNDLED_SKILLS_MODULE,
+      line: entry.line,
+      message: Option.match(listed, {
+        onNone: () =>
+          `\`${name}\` imports \`${entry.path}\`, but no \`bundledSkillFiles\` row lists it, so it never installs`,
+        onSome: (path) =>
+          `\`${name}\` imports \`${entry.path}\`, but its \`bundledSkillFiles\` row installs it as \`${path}\`, where the skill's links do not find it`,
+      }),
+    })
   }
   return findings
 }

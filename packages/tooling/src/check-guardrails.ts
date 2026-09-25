@@ -28,6 +28,8 @@ import {
   findUnmatchedIgnoreRows,
   findUnmatchedOverrideGlobs,
   findUnmatchedTsconfigOverrides,
+  findUnshippedSkillFiles,
+  BUNDLED_SKILLS_MODULE,
   findUnusedSuppressionApprovals,
   HOOK_FILE,
   isSteeringFile,
@@ -343,6 +345,8 @@ export const scanTrackedTexts = (
     ...findUnadaptedSeams(sourceTexts, adaptedSeams),
     // A GENT_* variable whose writer left: its reader is a branch nothing takes.
     ...findReadersWithoutWriters(new Map([...sourceTexts, ...manifestTexts])),
+    // A bundled skill file the skills module does not import never ships.
+    ...findUnshippedSkillFiles(sourceTexts.get(BUNDLED_SKILLS_MODULE) ?? "", trackedFiles),
   )
   return { findings, sourceTexts }
 }

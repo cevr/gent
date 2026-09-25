@@ -26,6 +26,8 @@ import {
   findUnmatchedIgnoreRows,
   findUnmatchedOverrideGlobs,
   findUnmatchedTsconfigOverrides,
+  findUnshippedSkillFiles,
+  BUNDLED_SKILLS_MODULE,
   findUnneededOffs,
   findUnusedCatalogEntries,
   findUnusedDependencies,
@@ -1844,6 +1846,8 @@ describe("steering file paths", () => {
       "testbeds/gamut/README.md",
       ".claude/skills/architecture-loop/prior-art.md",
       "patches/README.md",
+      "packages/extensions/src/skills/bundled/principles/SKILL.md",
+      "packages/extensions/src/skills/bundled/principles/references/fix-root-causes.md",
     ]) {
       expect(isSteeringFile(file)).toBe(true)
       expect(messagesOfSteeringPath(text, file)).toHaveLength(1)
@@ -1853,10 +1857,104 @@ describe("steering file paths", () => {
       "docs/research/2026-09-06-x.md",
       "README.md",
       "testbeds/gamut/fixture/README.md",
+      "packages/extensions/src/skills/bundled/principles/notes.txt",
     ]) {
       expect(isSteeringFile(file)).toBe(false)
       expect(messagesOfSteeringPath(text, file)).toEqual([])
     }
+  })
+})
+
+describe("steering file links", () => {
+  const skill = "packages/extensions/src/skills/bundled/principles/SKILL.md"
+  const tracked = [
+    skill,
+    "packages/extensions/src/skills/bundled/principles/references/fix-root-causes.md",
+    ".claude/skills/architecture-loop/safety.md",
+    "docs/extensions.md",
+  ]
+  const linkLines = (file: string, text: string): ReadonlyArray<number> =>
+    findSteeringFilePaths(file, text, tracked).map((finding) => finding.line)
+
+  test("a link resolves against the file's own directory", () => {
+    const text = [
+      "- [Fix Root Causes](references/fix-root-causes.md)",
+      "- [Gone](references/gone.md)",
+      "- [Also fixed](./references/fix-root-causes.md#why)",
+    ].join("\n")
+    expect(linkLines(skill, text)).toEqual([2])
+    expect(findSteeringFilePaths(skill, text, tracked)[0]?.message).toContain("references/gone.md")
+  })
+
+  test("a link climbs with .. and fails above the root", () => {
+    const prompt = ".claude/skills/architecture-loop/prompts/apply.md"
+    expect(linkLines(prompt, "read [safety](../safety.md) first")).toEqual([])
+    expect(linkLines(prompt, "read [safety](../../gone/safety.md) first")).toEqual([1])
+    expect(linkLines("AGENTS.md", "see [x](../outside.md)")).toEqual([1])
+  })
+
+  test("a URL, an anchor, a root path, a backticked or a fenced link is not read", () => {
+    const text = [
+      "[site](https://example.com/gone.md) and [top](#top) and [abs](/gone.md)",
+      'call `tools["gone"](input)` in the cell',
+      "```md",
+      "[gone](gone.md)",
+      "```",
+      "[guide](docs/extensions.md)",
+    ].join("\n")
+    expect(linkLines("ARCHITECTURE.md", text)).toEqual([])
+  })
+})
+
+// ── every bundled skill file ships ──────────────────────────────────────────
+
+describe("bundled skill files", () => {
+  const directory = "packages/extensions/src/skills/bundled/"
+  const moduleText = [
+    'import fixRootCauses from "./skills/bundled/principles/references/fix-root-causes.md" with { type: "text" }',
+    'import principlesSkill from "./skills/bundled/principles/SKILL.md" with { type: "text" }',
+    "",
+    "export const bundledSkillFiles = [",
+    '  ["principles/SKILL.md", principlesSkill],',
+    "  [",
+    '    "principles/references/fix-root-causes.md",',
+    "    fixRootCauses,",
+    "  ],",
+    "]",
+  ].join("\n")
+  const tracked = [
+    `${directory}principles/SKILL.md`,
+    `${directory}principles/references/fix-root-causes.md`,
+    "packages/extensions/src/skills.ts",
+  ]
+
+  test("every file imported and listed under its own path ships", () => {
+    expect(findUnshippedSkillFiles(moduleText, tracked)).toEqual([])
+  })
+
+  test("a Markdown file with no import is reported at the file", () => {
+    const added = `${directory}principles/references/new-principle.md`
+    expect(findUnshippedSkillFiles(moduleText, [...tracked, added])).toMatchObject([
+      { file: added, line: 1 },
+    ])
+  })
+
+  test("an import with no row, or a row under another path, is reported at the import", () => {
+    const noRow = moduleText.replace('  ["principles/SKILL.md", principlesSkill],\n', "")
+    expect(findUnshippedSkillFiles(noRow, tracked)).toMatchObject([
+      { file: BUNDLED_SKILLS_MODULE, line: 2 },
+    ])
+    const moved = moduleText.replace(
+      '"principles/references/fix-root-causes.md"',
+      '"principles/fix-root-causes.md"',
+    )
+    const findings = findUnshippedSkillFiles(moved, tracked)
+    expect(findings.map((finding) => finding.line)).toEqual([1])
+    expect(findings[0]?.message).toContain("principles/fix-root-causes.md")
+  })
+
+  test("a file of another kind under the directory is not a skill file", () => {
+    expect(findUnshippedSkillFiles(moduleText, [...tracked, `${directory}notes.txt`])).toEqual([])
   })
 })
 
