@@ -728,9 +728,44 @@ describe("Bun cell evaluation", () => {
       yield* kernel.evaluate("const values: number[] = [1, 2, 3]")
       const result = yield* kernel.evaluate("values.push(await tools.count({})); values")
       expect(result.display).toBe("[ 1, 2, 3, 7 ]")
-      expect(result.bindings).toEqual(["values"])
+      expect(result.bindingCount).toBe(1)
       yield* kernel.reset
       expect((yield* kernel.evaluate("typeof values")).display).toBe("undefined")
+    }),
+  )
+
+  // Every result stays in the history: a full list on each grows with cells
+  // times bindings, so a result names only what its cell bound.
+  it.scopedLive("a result names the bindings its cell added or rebound, and counts them all", () =>
+    Effect.gen(function* () {
+      const kernel = yield* makeKernel({ call: () => Effect.succeed(0) })
+      const first = yield* kernel.evaluate("let a = 1; const list = [1]; let b = 'x'")
+      expect(first.bindings).toEqual(["a", "b", "list"])
+      expect(first.bindingCount).toBe(3)
+      // A value changed in place keeps its binding; the same primitive is no change.
+      const inPlace = yield* kernel.evaluate("list.push(2); b = 'x'; list.length")
+      expect(inPlace.bindings).toEqual([])
+      expect(inPlace.bindingCount).toBe(3)
+      const rebound = yield* kernel.evaluate("a = 2; const c = a + 1; c")
+      expect(rebound.bindings).toEqual(["a", "c"])
+      expect(rebound.bindingCount).toBe(4)
+      // Restored bindings are named by the restore report, not by the next result.
+      const snapshot = yield* kernel.snapshot
+      yield* kernel.reset
+      expect([...(yield* kernel.restore(snapshot.bindings))].sort()).toEqual([
+        "a",
+        "b",
+        "c",
+        "list",
+      ])
+      const afterRestore = yield* kernel.evaluate("const d = 4; d")
+      expect(afterRestore.bindings).toEqual(["d"])
+      expect(afterRestore.bindingCount).toBe(5)
+      // A reset forgets them: the next binding is new again.
+      yield* kernel.reset
+      const afterReset = yield* kernel.evaluate("const a = 9; a")
+      expect(afterReset.bindings).toEqual(["a"])
+      expect(afterReset.bindingCount).toBe(1)
     }),
   )
 

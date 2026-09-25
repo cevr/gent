@@ -532,7 +532,24 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
     }
     return bindings
   }
-  const bindingNames = () => bindingKeys().sort().slice(0, maximumCellBindings)
+  /**
+   * The value each binding held when a result last reported the namespace. A
+   * result names only the bindings its cell added or bound to another value,
+   * with the count of all: every result stays in the history, so a full list
+   * on each would grow with cells times bindings. A value changed in place
+   * keeps its binding and is not named.
+   */
+  let reported = new Map<string, unknown>()
+  const reportBindings = () => {
+    const current = namespace()
+    const changed = [...current.entries()]
+      .filter(([name, value]) => !reported.has(name) || !Object.is(reported.get(name), value))
+      .map(([name]) => name)
+      .sort()
+      .slice(0, maximumCellBindings)
+    reported = current
+    return { bindings: changed, bindingCount: current.size }
+  }
   const installConsole = (value: typeof hostConsole) =>
     Effect.sync(() => {
       Object.defineProperty(globalThis, "console", { value, writable: true, configurable: true })
@@ -617,7 +634,7 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
     }
     return CellEvaluation.make({
       display: rendered(),
-      bindings: bindingNames(),
+      ...reportBindings(),
       truncated: output.truncated(),
     })
   })
@@ -648,6 +665,8 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
           })
           names.push(binding.name)
         }
+        // The restore report names these; the next result names only what its cell binds.
+        reported = namespace()
         return names
       },
       catch: (cause) => failure("execute", cause),
@@ -666,6 +685,7 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
       permit,
       Effect.sync(() => {
         for (const name of bindingKeys()) Reflect.deleteProperty(globalThis, name)
+        reported = new Map()
       }),
     ),
   }
