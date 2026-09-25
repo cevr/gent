@@ -1,4 +1,4 @@
-import { Clock, Effect, Schema } from "effect"
+import { Clock, type Duration, Effect, Schema, type Scope } from "effect"
 import * as Option from "effect/Option"
 
 // ── wait-for-process-exit ───────────────────────────────────────────────────
@@ -50,7 +50,10 @@ class ServerProcessFixtureError extends Schema.TaggedError<ServerProcessFixtureE
   { message: Schema.String },
 ) {}
 
-const readReadyUrl = (proc: Bun.Subprocess): Effect.Effect<string, ServerProcessFixtureError> => {
+const readReadyUrl = (
+  proc: Bun.Subprocess,
+  readyWithin: Duration.Input,
+): Effect.Effect<string, ServerProcessFixtureError> => {
   const ready = Effect.callback<string, ServerProcessFixtureError>((resume) => {
     const chunks: string[] = []
     const decoder = new TextDecoder()
@@ -92,37 +95,50 @@ const readReadyUrl = (proc: Bun.Subprocess): Effect.Effect<string, ServerProcess
     }
     pump()
   })
-  // gent/no-sleep: allow real-clock timeout fence for subprocess readiness probe
-  const timeout = Effect.sleep("10 seconds").pipe(
-    Effect.andThen(
-      Effect.fail(new ServerProcessFixtureError({ message: "server did not become ready" })),
-    ),
+  return ready.pipe(
+    Effect.timeoutOrElse({
+      duration: readyWithin,
+      orElse: () =>
+        Effect.fail(new ServerProcessFixtureError({ message: "server did not become ready" })),
+    }),
   )
-  return Effect.race(ready, timeout)
 }
 
 /**
- * Spawn a standalone server subprocess on `port` and wait for its ready line.
- * It runs until a signal stops it.
+ * Spawn a standalone server subprocess on `port` and wait for its ready line,
+ * for at most `readyWithin` (10 seconds unless given). The server belongs to
+ * the caller's scope: closing it stops the server and waits for its exit,
+ * and so does a missed ready bound, so no server outlives its test.
  */
-export const spawnServer = (opts: {
-  dataDir: string
-  port: number
-}): Effect.Effect<{ url: string; proc: Bun.Subprocess }, ServerProcessFixtureError> =>
+export const spawnServer = ({
+  dataDir,
+  port,
+  readyWithin = "10 seconds",
+}: {
+  readonly dataDir: string
+  readonly port: number
+  readonly readyWithin?: Duration.Input
+}): Effect.Effect<{ url: string; proc: Bun.Subprocess }, ServerProcessFixtureError, Scope.Scope> =>
   Effect.gen(function* () {
-    const proc = Bun.spawn(["bun", serverEntry], {
-      cwd: repoRoot,
-      env: {
-        ...Bun.env,
-        GENT_PORT: String(opts.port),
-        GENT_PERSISTENCE_MODE: "memory",
-        GENT_PROVIDER_MODE: "debug-scripted",
-        GENT_DATA_DIR: opts.dataDir,
-      },
-      stdout: "pipe",
-      stderr: "pipe",
-    })
-    const url = yield* readReadyUrl(proc)
+    const proc = yield* Effect.acquireRelease(
+      Effect.sync(() =>
+        Bun.spawn(["bun", serverEntry], {
+          cwd: repoRoot,
+          env: {
+            ...Bun.env,
+            GENT_PORT: String(port),
+            GENT_PERSISTENCE_MODE: "memory",
+            GENT_PROVIDER_MODE: "debug-scripted",
+            GENT_DATA_DIR: dataDir,
+          },
+          stdout: "pipe",
+          // Nothing reads stderr; a pipe nobody drains can stall the server.
+          stderr: "ignore",
+        }),
+      ),
+      (proc) => killProcess(proc).pipe(Effect.andThen(waitForProcessExit(proc.pid, 5_000))),
+    )
+    const url = yield* readReadyUrl(proc, readyWithin)
     return { url: `${url}/rpc`, proc }
   })
 
