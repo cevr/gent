@@ -152,13 +152,23 @@ export function ExtensionUIProvider(props: {
   const [loaded, setLoaded] = createSignal(false)
   const [sessionCommands, setSessionCommands] = createSignal<ReadonlyArray<Command>>([])
   const [serverCommands, setServerCommands] = createSignal<ReadonlyArray<CommandSource>>([])
-  // The session whose server slash commands have answered, listed or failed.
-  const [serverListed, setServerListed] = createSignal<Option.Option<SessionId>>(Option.none())
+  // The session and connection whose server slash commands have answered,
+  // listed or failed. An answer settles only its own connection: the server a
+  // reconnect reaches may list other commands.
+  const [serverListed, setServerListed] = createSignal<
+    Option.Option<{ readonly sessionId: SessionId; readonly generation: number }>
+  >(Option.none())
   const commandsSettled = () =>
     loaded() &&
     Option.match(client.activeSessionId(), {
       onNone: () => true,
-      onSome: (id) => Option.contains(serverListed(), id),
+      onSome: (id) =>
+        Option.exists(
+          serverListed(),
+          (listed) =>
+            listed.sessionId === id &&
+            Option.contains(client.connectedGeneration(), listed.generation),
+        ),
     })
   const [dynamicAutocomplete, setDynamicAutocomplete] = createSignal<
     ReadonlyArray<AutocompleteContribution>
@@ -265,14 +275,16 @@ export function ExtensionUIProvider(props: {
 
   // Listed once per session and connection: a reconnect lists again, so a
   // listing a dropped connection cut short is not lost, and a command held
-  // for it waits for that answer. A refusal is an answer and settles.
+  // for it waits for that answer. A refusal is an answer and settles this
+  // connection.
   createEffect(
     on([client.activeSessionId, client.connectedGeneration], ([current, generation]) => {
       if (Option.isNone(current) || Option.isNone(generation)) return
 
       let active = true
       const listed = () => {
-        if (active) setServerListed(current)
+        if (active)
+          setServerListed(Option.some({ sessionId: current.value, generation: generation.value }))
       }
       onCleanup(() => {
         active = false

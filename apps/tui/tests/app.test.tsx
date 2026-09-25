@@ -1895,6 +1895,89 @@ describe("App auth gate", () => {
         }).pipe(Effect.timeout("10 seconds")),
     )
   }
+  // Settled means settled for this connection: a listing the last connection
+  // answered says nothing of the server the reconnect reached. A command
+  // submitted while the new listing is in flight waits for it.
+  it.live("a slash command submitted while a reconnect lists again waits for that listing", () =>
+    Effect.gen(function* () {
+      const relisted = yield* Deferred.make<void>()
+      const requests: Array<unknown> = []
+      let listings = 0
+      const lifecycle = createMutableRuntime(
+        ConnectionState.cases.Connected.make({ generation: 0 }),
+      )
+      let ext = Option.none<ReturnType<typeof useExtensionUI>>()
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <>
+              <App missingAuthProviders={[]} />
+              <ExtensionUIProbe onReady={(value) => (ext = Option.some(value))} />
+            </>
+          ),
+          {
+            client: createMockClient({
+              auth: { listProviders: () => Effect.succeed([]) },
+              branch: { getTree: () => Effect.succeed([]) },
+              extension: {
+                listSlashCommands: () =>
+                  Effect.suspend(() => {
+                    listings += 1
+                    // The first server has no /probe; the one the reconnect reaches has.
+                    if (listings === 1) return Effect.succeed([])
+                    return Deferred.await(relisted).pipe(
+                      Effect.as([
+                        {
+                          name: "probe",
+                          extensionId: "@test/server-probe",
+                          capabilityId: "probe",
+                        },
+                      ]),
+                    )
+                  }),
+                request: (input: { readonly capabilityId: string; readonly input: unknown }) =>
+                  Effect.sync(() => {
+                    if (input.capabilityId === "probe") requests.push(input.input)
+                  }),
+              },
+            }),
+            runtime: lifecycle.runtime,
+            builtins: builtinClientModules,
+            initialSession: {
+              id: SessionId.make("session-a"),
+              activeBranchId: BranchId.make("branch-a"),
+              name: "Session A",
+              createdAt: dateFromMillis(0),
+              updatedAt: dateFromMillis(0),
+            },
+          },
+        ),
+      )
+      yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
+      yield* waitForFrame(
+        setup,
+        () => Option.exists(ext, (value) => value.loaded() && value.commandsSettled()),
+        "the first listing settled",
+      )
+      lifecycle.emit(ConnectionState.cases.Reconnecting.make({ attempt: 1, generation: 1 }))
+      lifecycle.emit(ConnectionState.cases.Connected.make({ generation: 1 }))
+      yield* waitForFrame(setup, () => listings === 2, "the reconnect lists again")
+      yield* Effect.promise(() => setup.mockInput.typeText("/probe now"))
+      yield* waitForFrame(setup, (frame) => frame.includes("/probe now"), "the typed command")
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("Unknown command") || !frame.includes("/probe now"),
+        "the command sent",
+      )
+      expect(renderFrame(setup)).not.toContain("Unknown command")
+      yield* Deferred.succeed(relisted, void 0)
+      yield* waitForFrame(setup, () => requests.length === 1, "the server command ran")
+      expect(requests).toEqual(["now"])
+      expect(renderFrame(setup)).not.toContain("Unknown command")
+      setup.renderer.destroy()
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   // At 14 rows the composer takes six of the footer's twelve, and the agents
   // pane's rules and title take three more: three rows are left for the
   // filter row, the section heading and the cursor row. The trays, the key
