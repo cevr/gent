@@ -5,6 +5,7 @@ import {
   Layer,
   Option,
   Predicate,
+  Record,
   Ref,
   Result,
   Schema,
@@ -124,10 +125,69 @@ export const maximumModelToolResultChars = 8_000
 
 const encodeToolResultJson = Schema.encodeUnknownOption(Schema.fromJsonString(Schema.Json))
 
+const decodeToolResultJson = Schema.decodeUnknownOption(Schema.Json)
+
 /**
- * Bound one tool result for the model with head-plus-tail text and a
- * locator for the rest. The stored message and its events keep the full
- * result; `context.read(toolCallId, { offset, limit })` in the cell pages it.
+ * The shortest string cap a bounded result may use. Below it, most of a cut
+ * string would be its marker, so a result with that many strings is cut as
+ * JSON text instead.
+ */
+const MINIMUM_STRING_CAP = 256
+
+const isJsonArray = (value: Schema.Json): value is Schema.JsonArray => Array.isArray(value)
+const isJsonObject = (value: Schema.Json): value is Schema.JsonObject =>
+  Predicate.isObject(value) && !Array.isArray(value)
+
+/** `value` with each string longer than `cap` cut to its head and tail. */
+const capStrings = (value: Schema.Json, cap: number): Schema.Json => {
+  if (Predicate.isString(value)) return headTailChars(value, cap).text
+  if (isJsonArray(value)) return value.map((item) => capStrings(item, cap))
+  if (isJsonObject(value)) return Record.map(value, (item) => capStrings(item, cap))
+  return value
+}
+
+/** Each string of `value`, in document order. */
+const jsonStrings = (value: Schema.Json): ReadonlyArray<string> => {
+  if (Predicate.isString(value)) return [value]
+  if (isJsonArray(value)) return value.flatMap(jsonStrings)
+  if (isJsonObject(value)) return Object.values(value).flatMap(jsonStrings)
+  return []
+}
+
+/** The characters `capStrings(value, cap)` cuts out of the strings of `value`. */
+const cutStringChars = (value: Schema.Json, cap: number): number =>
+  jsonStrings(value).reduce((sum, text) => sum + headTailChars(text, cap).omittedChars, 0)
+
+/**
+ * The largest string cap that keeps the encoded `value` within `maxChars`,
+ * or none when even `MINIMUM_STRING_CAP` does not.
+ */
+const stringCapWithin = (value: Schema.Json, maxChars: number): Option.Option<number> => {
+  const fits = (cap: number) =>
+    Option.exists(encodeToolResultJson(capStrings(value, cap)), (text) => text.length <= maxChars)
+  if (!fits(MINIMUM_STRING_CAP)) return Option.none()
+  let low = MINIMUM_STRING_CAP
+  let high = maxChars
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2)
+    if (fits(mid)) low = mid
+    else high = mid - 1
+  }
+  return Option.some(low)
+}
+
+/**
+ * Bound one tool result for the model, with a locator for the rest. The
+ * stored message and its events keep the full result;
+ * `context.read(toolCallId, { offset, limit })` in the cell pages its JSON
+ * text, `totalChars` long.
+ *
+ * The bounded result keeps the result's shape in `result`, each long string
+ * cut to its head and tail, so the provider encodes the content once, as it
+ * does an unbounded result. `omittedChars` counts the string characters cut.
+ * A result whose strings cannot carry the cut (many short strings, or no
+ * strings) is cut as JSON text in `text` instead, which the provider then
+ * encodes a second time.
  */
 export const boundToolResultForModel = (
   part: Prompt.ToolResultPart,
@@ -135,19 +195,27 @@ export const boundToolResultForModel = (
 ): Prompt.ToolResultPart => {
   const encoded = encodeToolResultJson(part.result)
   if (Option.isNone(encoded) || encoded.value.length <= maxChars) return part
-  const bounded = headTailChars(encoded.value, maxChars)
+  const locator = {
+    truncated: true,
+    totalChars: encoded.value.length,
+    read: `context.read("${part.id}", { offset, limit })`,
+  }
+  const structured = Option.flatMap(decodeToolResultJson(part.result), (value) =>
+    Option.map(stringCapWithin(value, maxChars), (cap) => ({
+      ...locator,
+      omittedChars: cutStringChars(value, cap),
+      result: capStrings(value, cap),
+    })),
+  )
   return Prompt.toolResultPart({
     id: part.id,
     name: part.name,
     isFailure: part.isFailure,
     providerExecuted: part.providerExecuted,
-    result: {
-      truncated: true,
-      totalChars: bounded.totalChars,
-      omittedChars: bounded.totalChars - maxChars,
-      read: `context.read("${part.id}", { offset, limit })`,
-      text: bounded.text,
-    },
+    result: Option.getOrElse(structured, () => {
+      const bounded = headTailChars(encoded.value, maxChars)
+      return { ...locator, omittedChars: bounded.omittedChars, text: bounded.text }
+    }),
   })
 }
 

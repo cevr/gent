@@ -1219,12 +1219,24 @@ describe("turn window projection", () => {
 
 // ── ai transcript projection ────────────────────────────────────────────────
 
-const BoundedToolResult = Schema.Struct({
+const BoundedToolResultFields = {
   truncated: Schema.Boolean,
   totalChars: Schema.Finite,
+  omittedChars: Schema.Finite,
   read: Schema.String,
-  text: Schema.String,
+}
+/** A bounded result that keeps the result's shape, its long strings cut. */
+const BoundedToolResult = Schema.Struct({ ...BoundedToolResultFields, result: Schema.Json })
+/** A bounded result cut as JSON text. */
+const BoundedToolResultText = Schema.Struct({ ...BoundedToolResultFields, text: Schema.String })
+const BoundedOutput = Schema.Struct({ output: Schema.String })
+const BoundedCommand = Schema.Struct({
+  stdout: Schema.String,
+  stderr: Schema.String,
+  exitCode: Schema.Finite,
 })
+/** What a provider sends for a tool result: its value, JSON-encoded once. */
+const encodeWire = Schema.encodeSync(Schema.fromJsonString(Schema.Json))
 
 const baseMessage = (
   message: Omit<Parameters<typeof Message.cases.regular.make>[0], "createdAt">,
@@ -1243,7 +1255,7 @@ const baseInterjectionMessage = (
   })
 
 describe("AI transcript projection", () => {
-  test("oversized tool results reach the model as head-plus-tail text while the message keeps the full result", () => {
+  test("oversized tool results reach the model as head-plus-tail strings while the message keeps the full result", () => {
     const full = "x".repeat(maximumModelToolResultChars + 500)
     const part = Prompt.toolResultPart({
       id: ToolCallId.make("tc-big"),
@@ -1269,10 +1281,11 @@ describe("AI transcript projection", () => {
     const boundedResult = Schema.decodeUnknownSync(BoundedToolResult)(bounded.result)
     expect(boundedResult.truncated).toBe(true)
     expect(boundedResult.totalChars).toBe(full.length + '{"output":""}'.length)
-    expect(boundedResult.text).toContain("characters truncated")
     expect(boundedResult.read).toBe('context.read("tc-big", { offset, limit })')
     expect(maximumModelToolResultChars).toBe(8_000)
-    expect(boundedResult.text.length).toBeLessThan(full.length)
+    const { output } = Schema.decodeUnknownSync(BoundedOutput)(boundedResult.result)
+    expect(output).toContain(`[${boundedResult.omittedChars} characters truncated]`)
+    expect(encodeWire(boundedResult.result).length).toBeLessThanOrEqual(maximumModelToolResultChars)
     // The stored part is unchanged and small results pass through untouched.
     expect(message.parts[0]).toEqual(part)
     const small = Prompt.toolResultPart({ ...part, result: { output: "short" } })
@@ -1294,9 +1307,59 @@ describe("AI transcript projection", () => {
     const boundedResult = Schema.decodeUnknownSync(BoundedToolResult)(bounded.result)
     expect(boundedResult.truncated).toBe(true)
     expect(boundedResult.read).toBe('context.read("tc-bash", { offset, limit })')
-    expect(boundedResult.text.length).toBeLessThan(stdout.length)
-    expect(boundedResult.text).toContain('{"stdout":"line 1\\nline 2')
-    expect(boundedResult.text).toContain(`line ${lineCount}`)
+    const command = Schema.decodeUnknownSync(BoundedCommand)(boundedResult.result)
+    expect(command.stdout.startsWith("line 1\nline 2\n")).toBe(true)
+    expect(command.stdout.endsWith(`line ${lineCount}`)).toBe(true)
+    expect(command).toMatchObject({ stderr: "", exitCode: 0 })
+  })
+
+  test("a bounded result's text is encoded once on the wire, as an unbounded one is", () => {
+    // Newlines, quotes and backslashes: each costs one escape per encoding.
+    const line = 'const path = "C:\\\\gent"; // a "quoted" name\n'
+    const stdout = line.repeat(Math.ceil((maximumModelToolResultChars * 2) / line.length))
+    const part = Prompt.toolResultPart({
+      id: ToolCallId.make("tc-escapes"),
+      name: "bash",
+      isFailure: false,
+      providerExecuted: false,
+      result: { stdout, stderr: "", exitCode: 0 },
+    })
+    const bounded = Schema.decodeUnknownSync(BoundedToolResult)(
+      boundToolResultForModel(part).result,
+    )
+    const wire = encodeWire(bounded)
+    const kept = Schema.decodeUnknownSync(BoundedCommand)(bounded.result).stdout
+    expect(kept.length).toBeGreaterThan(maximumModelToolResultChars / 2)
+    // The wire holds the kept text as one encoding writes it, and no second
+    // encoding of it.
+    expect(wire).toContain(encodeWire(kept).slice(1, -1))
+    expect(wire).not.toContain('\\\\"')
+    expect(wire.length).toBeLessThan(maximumModelToolResultChars + 200)
+    // The locator pages the stored result's JSON text; the cut count is exact.
+    expect(bounded.totalChars).toBe(encodeWire({ stdout, stderr: "", exitCode: 0 }).length)
+    expect(bounded.omittedChars).toBe(
+      stdout.length - kept.replace(/\n\n\.\.\. \[\d+ characters truncated\] \.\.\.\n\n/, "").length,
+    )
+  })
+
+  test("a result of many short strings is cut as JSON text", () => {
+    // Too long whole, yet each name far shorter than a cut can keep.
+    const names = Array.from({ length: 600 }, (_, index) => `src/module-${index}/index.ts`)
+    const bounded = boundToolResultForModel(
+      Prompt.toolResultPart({
+        id: ToolCallId.make("tc-glob"),
+        name: "glob",
+        isFailure: false,
+        providerExecuted: false,
+        result: names,
+      }),
+    )
+    const boundedResult = Schema.decodeUnknownSync(BoundedToolResultText)(bounded.result)
+    expect(boundedResult.text.startsWith('["src/module-0/index.ts","src/module-1/index.ts"')).toBe(
+      true,
+    )
+    expect(boundedResult.text).toContain(`[${boundedResult.omittedChars} characters truncated]`)
+    expect(boundedResult.text.length).toBeLessThanOrEqual(maximumModelToolResultChars)
   })
 
   test("converts visible Gent messages to Effect Prompt messages without Gent metadata", () => {

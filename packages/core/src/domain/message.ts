@@ -22,6 +22,8 @@ interface HeadTailCharsResult {
   readonly text: string
   readonly truncated: boolean
   readonly totalChars: number
+  /** The characters of `text`'s source the cut left out; 0 when uncut. */
+  readonly omittedChars: number
 }
 
 /**
@@ -68,20 +70,23 @@ export function formatHeadTail(
 export function headTailChars(text: string, maxChars: number = 64_000): HeadTailCharsResult {
   const total = text.length
   if (total <= maxChars) {
-    return { text, truncated: false, totalChars: total }
+    return { text, truncated: false, totalChars: total, omittedChars: 0 }
   }
   const marker = (cut: number) => `\n\n... [${cut} characters truncated] ...\n\n`
   // The widest marker this text can need; a smaller count only shortens it.
   const room = maxChars - marker(total).length
   if (room < 0) {
-    return { text: headWithin(text, maxChars, utf16Units), truncated: true, totalChars: total }
+    const head = headWithin(text, maxChars, utf16Units)
+    return { text: head, truncated: true, totalChars: total, omittedChars: total - head.length }
   }
   const head = headWithin(text, Math.floor(room / 2), utf16Units)
   const tail = tailWithin(text, room - head.length, utf16Units)
+  const omittedChars = total - head.length - tail.length
   return {
-    text: `${head}${marker(total - head.length - tail.length)}${tail}`,
+    text: `${head}${marker(omittedChars)}${tail}`,
     truncated: true,
     totalChars: total,
+    omittedChars,
   }
 }
 

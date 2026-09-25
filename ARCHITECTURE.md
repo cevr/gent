@@ -524,8 +524,10 @@ Shape:
 - Tool-result spill: the model sees at most 8,000 characters of any tool
   result (head plus tail); the stored message and its events keep the full
   result, and the bounded result carries a `read` locator for
-  `context.read(toolCallId, { offset, limit })`. Context pressure drops before
-  compaction ever runs.
+  `context.read(toolCallId, { offset, limit })`. The bounded result keeps the
+  result's shape with each long string cut, so the provider encodes the text
+  once; only a result of many short strings is cut as JSON text.
+  Context pressure drops before compaction ever runs.
 - The cell subsumes host tools the Bun runtime already provides: `fetch` for
   network reads and `bun:sqlite` on the data directory's `data.db` for past sessions. No
   `webfetch` or `search_sessions` tool ships; `read_session` stays as the
