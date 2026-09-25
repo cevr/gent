@@ -44,7 +44,7 @@ updates this list in the same commit.
    tool result from `tool_call_bindings`; it never re-runs the tool.
    Receipts: `packages/core/src/storage/storage.ts`,
    `packages/core/src/runtime/tools.ts`.
-7. **Approvals are one-shot and fail closed.** A guarded call asks once
+7. **Approvals are one-shot and fail closed.** A call that asks asks once
    through the durable interaction request; nothing is saved; no answerer
    means no. Core has no rule schema, rule storage, or `permission.*` RPC.
    Receipts: `packages/core/src/runtime/extension-host.ts`,
@@ -708,10 +708,10 @@ before the stamp existed has no origin, so its turn declines on recovery. A
 declined turn's `approve` answers at once, and the tools that ask the user are
 withheld. The loop reads the fact from the turn's opening message and the
 stored session, so it survives a restart. The decline's notes say to report
-the command the way the turn reports its result (a child's task turn: its
-reply, which its completion carries; a later turn: `session.send`), and that
-no message can grant it: the reader runs the command, or a user prompts the
-session directly. The bash and monitor blocks carry those notes.
+what the call asked for the way the turn reports its result (a child's task
+turn: its reply, which its completion carries; a later turn: `session.send`),
+and that no message can grant it: the reader acts on the report, or a user
+prompts the session directly.
 
 An inner call of a dispatching tool (a cell) is the exception: its dispatcher
 cannot replay its source, so the call waits for its answer in place through the
@@ -795,7 +795,7 @@ Key properties:
   reading an assistant-message binding row. Native replay uses this same check.
   Inner-operation storage can use it without synthetic transcript tool calls.
   Its caller must verify receipt ownership.
-- **No permission rules.** A tool that guards a call asks once through the durable approval request (`ApprovalService`); the answer is not saved, and a request with no answerer fails closed. Core has no rule schema, no rule storage, and no `permission.*` RPC.
+- **No permission rules.** A tool call that asks the user asks once through the durable approval request (`ApprovalService`); the answer is not saved, and a request with no answerer fails closed. Core has no rule schema, no rule storage, and no `permission.*` RPC.
 
 Files: `domain/interaction.ts` (InteractionPendingError, makeInteractionService), `runtime/extension-host.ts` (ApprovalService), `storage/storage.ts` (InteractionStorage, the pending read seam), `domain/agent-loop.ts` (WaitingForInteraction), `runtime/agent-loop.ts` (respond orchestration).
 
@@ -1495,7 +1495,7 @@ One test file per source file. No god tests. Names match source owners.
 
 `@gent/interaction-tools` — `ask_user` and `prompt` tools.
 
-The TUI renders interactions from the typed event feed (`InteractionPresented` etc.) routed by `metadata.type`. Pending interaction storage remains the durable source of truth for crash-safe resume. A branch has at most one open request. A second guarded call in the same step parks on the open one; when the step runs again, it waits until the first call takes its answer (matched by the encoded request), then asks its own question.
+The TUI renders interactions from the typed event feed (`InteractionPresented` etc.) routed by `metadata.type`. Pending interaction storage remains the durable source of truth for crash-safe resume. A branch has at most one open request. A second call that asks in the same step parks on the open one; when the step runs again, it waits until the first call takes its answer (matched by the encoded request), then asks its own question.
 
 ## Workflow Results
 
