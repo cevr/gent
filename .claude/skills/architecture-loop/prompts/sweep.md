@@ -17,11 +17,11 @@ Pass <N-1> changed <stat of `git diff --stat <prev base>..HEAD`>. Weigh every ad
 In flight, do not report: <batch: items>.
 
 Known open items; report again only with new evidence:
-<the ledger's open items, accepted over-asks, known flakes>
+<the ledger's open items, known flakes>
 
 New evidence to check (from live runs): <questions>
 
-Owner rules (propose nothing against them): children wake, never block; the cell runs in full Bun, with no sandbox; effect-wide-event stays; no persisted-format change unless it is additive and optional; docked panes, not modal overlays; a shipped extension is never more privileged than a user extension; personal library, no shims.
+Owner rules (propose nothing against them): children wake, never block; the cell runs in full Bun, with no sandbox; effect-wide-event stays; no persisted-format change unless it is additive and optional; docked panes, not modal overlays; a shipped extension is never more privileged than a user extension; bash and monitor run each command as given, with no classifier or ask in front; personal library, no shims.
 
 Vocabulary, used exactly: module, interface, depth, seam, adapter, leverage, locality, deletion test. A candidate is: a shallow module, a pass-through, one concept with two owners, a one-adapter seam with no guard, a single-caller export, dead code, a guard gap (a directory or file kind no `packages/tooling/src/` guard scans), a comment that tells history, a concern spread over `x-part.ts` fragment files. In the TUI also: state that follows the session identity but reads the session record, and one-shot state held in a component instance.
 
