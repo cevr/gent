@@ -3,42 +3,28 @@
  * overrides, suppresses a diagnostic.
  *
  * `bun run lint` runs it beside oxlint, so the gate and the pre-commit hook
- * fail on an "off" that suppresses nothing. It lints the whole tree once with
- * the probe copy of the config (`lintWithoutOffs`), then gives the report to
- * `findUnneededOffs`.
+ * fail on an "off" that suppresses nothing. `checkLintOffs` lints the whole
+ * tree once with the probe copy of the config and fails closed on a probe
+ * run that did not finish with a whole report.
  *
  * @module
  */
 
 import { BunRuntime, BunServices } from "@effect/platform-bun"
 import { Console, Effect, Layer } from "effect"
-import { labeledDiagnostics, lintWithoutOffs } from "./fixture-runner"
-import { findUnneededOffs } from "./guards"
+import { checkLintOffs } from "./fixture-runner"
 
-/** A run that lints fewer files than this read the wrong tree or no tree. */
-const MIN_LINTED_FILES = 100
-
-const program = Effect.gen(function* () {
-  const { configText, config, run } = yield* lintWithoutOffs()
-  const { labeled, unlabeled } = labeledDiagnostics(run.report)
-  // A run that lints nothing, or a report whose diagnostics name no rule,
-  // would make every "off" look unneeded.
-  const failures = [
-    ...[run.report.number_of_files]
-      .filter((files) => files <= MIN_LINTED_FILES)
-      .map((files) => `the probe run linted ${files} files\nstderr:\n${run.stderr}`),
-    ...unlabeled.map(
-      (diagnostic) => `a diagnostic with no file or no rule id: ${diagnostic.message}`,
-    ),
-    ...findUnneededOffs(".oxlintrc.json", configText, config, labeled).map(
-      (finding) => `${finding.file}:${finding.line}: ${finding.message}`,
-    ),
-  ]
-  if (failures.length === 0) return
-  yield* Console.error("Lint config offs failed:")
-  yield* Effect.forEach(failures, (failure) => Console.error(`  ${failure}`), { discard: true })
-  return yield* Effect.fail("Lint config offs failed")
-})
+const program = checkLintOffs().pipe(
+  Effect.catchTag("LintOffsError", (error) =>
+    Effect.gen(function* () {
+      yield* Console.error("Lint config offs failed:")
+      yield* Effect.forEach(error.failures, (failure) => Console.error(`  ${failure}`), {
+        discard: true,
+      })
+      return yield* Effect.fail("Lint config offs failed")
+    }),
+  ),
+)
 
 // The layer runs the check once as it is built; the scope closes after it.
 if (import.meta.main)
