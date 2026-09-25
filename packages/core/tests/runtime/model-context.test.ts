@@ -706,6 +706,18 @@ const overflowStep: SequenceStep = {
   ],
 }
 
+/**
+ * How Anthropic ends a reply the window cut off (Sonnet 4.5 and later): a
+ * normal finish whose raw stop reason Effect AI maps to `"unknown"`.
+ */
+const windowFullStep: SequenceStep = {
+  parts: [
+    textDeltaPart("the first half of the"),
+    finishPart({ finishReason: "unknown", usage: { inputTokens: 1_000, outputTokens: 10 } }),
+  ],
+  stopReason: "model_context_window_exceeded",
+}
+
 const stubCompactor = Layer.succeed(
   ModelContextCompactor,
   ModelContextCompactor.of({
@@ -731,7 +743,7 @@ const runOverflowTurn = (params: {
     const requests: Array<string> = []
     const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence(
       params.steps.map((step) => ({
-        parts: step.parts,
+        ...step,
         assertOptions: (options) => {
           requests.push(encodeJson(options.prompt.content))
         },
@@ -841,6 +853,42 @@ describe("provider overflow recovery", () => {
         expect.objectContaining({ notice: true }),
         expect.not.objectContaining({ notice: true }),
       ])
+    }),
+  )
+
+  it.live("a reply the full window cut off hands the window off and continues", () =>
+    Effect.gen(function* () {
+      const result = yield* runOverflowTurn({
+        steps: [windowFullStep, textStep("the rest of the reply")],
+        model: wideModel,
+        extraLayers: [stubCompactor],
+      })
+
+      expect(result.calls).toBe(2)
+      // The cut reply stays, the continuation asks for the rest, and the
+      // retry carries the summary instead of the old history.
+      expect(result.requests[1]).toContain("the first half of the")
+      expect(result.requests[1]).toContain("full context window")
+      expect(result.requests[1]).not.toContain(OLD_HISTORY_MARK)
+      expect(result.requests[1]).toContain("summary of the earlier work")
+      expect(result.events.filter((event) => event._tag === "ErrorOccurred")).toEqual([
+        expect.objectContaining({ notice: true }),
+      ])
+      expect(streamFailed(result.events)).toEqual(Option.some(false))
+      expect(result.durable.at(-1)?.role).toBe("assistant")
+    }),
+  )
+
+  it.live("an unknown finish with no raw reason is a finished answer", () =>
+    Effect.gen(function* () {
+      const result = yield* runOverflowTurn({
+        steps: [{ parts: windowFullStep.parts }],
+        model: wideModel,
+        extraLayers: [stubCompactor],
+      })
+
+      expect(result.calls).toBe(1)
+      expect(result.events.some((event) => event._tag === "ErrorOccurred")).toBe(false)
     }),
   )
 

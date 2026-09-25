@@ -124,7 +124,13 @@ updates this list in the same commit.
     `request_too_large` is not an overflow) hands the window off once and runs
     the step again. The step drops the history, or the summary of an earlier
     handoff when nothing else is left. A second refusal fails the turn with an
-    error that says so.
+    error that says so. A reply the provider stops because the window filled
+    (Anthropic's `model_context_window_exceeded`) is cut and a refusal both:
+    its text stays, a continuation asks for the rest, and that step hands the
+    window off first. Effect AI maps that stop reason to `"unknown"` and keeps
+    no copy, so the driver reports the raw word through `ProviderStopReason`,
+    which the loop provides to each step's stream. An `"unknown"` finish alone
+    is a finished answer.
     Receipts: `packages/core/src/runtime/model-context.ts`,
     `packages/core/src/runtime/turn.ts`,
     `packages/extensions/src/compaction.ts`.

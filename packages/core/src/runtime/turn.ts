@@ -76,7 +76,12 @@ import {
   RunOpener,
 } from "./extension-host.js"
 import type * as Response from "effect/unstable/ai/Response"
-import { credentialFailureMessage, type ProviderAuthError } from "../domain/driver.js"
+import {
+  credentialFailureMessage,
+  isWindowFullStopReason,
+  type ProviderAuthError,
+  ProviderStopReason,
+} from "../domain/driver.js"
 import {
   type AgentEvent,
   ErrorOccurred,
@@ -421,8 +426,18 @@ export interface CollectedTurnResponse {
   readonly messageProjection: TurnResponseMessages
   readonly interrupted: boolean
   readonly streamFailed: boolean
-  /** The provider refused the request as too long, before any output, and the turn may recover. */
+  /**
+   * The provider refused the request as too long before any output, or the
+   * window filled while the model wrote (`windowFull`), and the turn may
+   * recover: the next step hands the window off first.
+   */
   readonly contextOverflow: boolean
+  /**
+   * The provider stopped the reply because the context window filled
+   * (`isWindowFullStopReason`): the reply is cut, whether or not the turn may
+   * still hand off.
+   */
+  readonly windowFull: boolean
 }
 
 const publishEventOrDie = (event: AgentEvent) =>
@@ -454,6 +469,7 @@ export const collectNormalizedResponse = (params: {
     interrupted: params.interrupted,
     streamFailed: params.streamFailed,
     contextOverflow: false,
+    windowFull: false,
   }
 }
 
@@ -481,6 +497,10 @@ const isObservableModelOutputPart = (part: Response.AnyPart): boolean => {
 /** What the user reads after a refusal the turn recovers from. */
 const CONTEXT_OVERFLOW_RECOVERY =
   "the provider refused the context as too long; handing the window off and running the step again"
+
+/** What the user reads when the window filled mid-reply and the turn hands it off. */
+const CONTEXT_WINDOW_FULL_RECOVERY =
+  "the context window filled before the reply finished; handing the window off and continuing"
 
 /** What the user reads when the handed-off window is refused as well; the turn ends. */
 const CONTEXT_OVERFLOW_AGAIN =
@@ -1698,11 +1718,45 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       }),
     ),
   )
+  // The raw stop reason the driver reports for this attempt's stream
+  // (`ProviderStopReason`); a retried attempt starts with none.
+  const stopReason = yield* Ref.make(Option.none<string>())
+  const reportedStream = Stream.unwrap(
+    Ref.set(stopReason, Option.none()).pipe(Effect.as(rawStream)),
+  ).pipe(
+    Stream.provideService(
+      ProviderStopReason,
+      ProviderStopReason.of({ report: (reason) => Ref.set(stopReason, Option.some(reason)) }),
+    ),
+  )
+  /**
+   * A settled reply the provider stopped because the window filled is cut
+   * (`windowFull`). It hands the window off as a refusal does, once per
+   * refusal and never on the last step of the budget.
+   */
+  const withStopReason = (collected: CollectedTurnResponse) =>
+    Effect.gen(function* () {
+      if (collected.streamFailed || collected.interrupted) return collected
+      const windowFull = Option.exists(yield* Ref.get(stopReason), isWindowFullStopReason)
+      if (!windowFull) return collected
+      const contextOverflow = !params.overflowed && !params.finalStep
+      if (contextOverflow) {
+        yield* publishEventOrDie(
+          ErrorOccurred.make({
+            sessionId: params.sessionId,
+            branchId: params.branchId,
+            error: CONTEXT_WINDOW_FULL_RECOVERY,
+            notice: true,
+          }),
+        )
+      }
+      return { ...collected, windowFull, contextOverflow }
+    })
 
   return {
     compaction,
     overheadTokens: budget.reservedSystemTokens + budget.reservedToolTokens,
-    stream: rawStream.pipe(
+    stream: reportedStream.pipe(
       Stream.mapError(
         // oxlint-disable-next-line effect/noUnknownParameters -- Model streams expose provider-specific error values.
         (error: unknown) =>
@@ -1758,6 +1812,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
             refusedAgain: params.overflowed && retryPolicy.contextOverflow(streamError.cause),
           }),
         ),
+        Effect.flatMap(withStopReason),
         Effect.tap((collected) => {
           const usage = Option.getOrElse(
             Option.fromUndefinedOr(collected.messageProjection.usage),
@@ -1816,10 +1871,22 @@ const StepOutcome = Schema.TaggedUnion({
    * and the turn may hand off and retry.
    */
   Failed: { partialOutput: Schema.Boolean, contextOverflow: Schema.Boolean },
-  /** The model asked for tools; the response parts carry them. */
-  ToolCalls: { count: Schema.Int },
-  /** No tool calls: an answer, nothing at all, or output cut off at the limit. */
-  Answered: { empty: Schema.Boolean, truncated: Schema.Boolean },
+  /**
+   * The model asked for tools; the response parts carry them.
+   * `contextOverflow`: the window filled while it wrote, and the step after
+   * the tools hands the window off first.
+   */
+  ToolCalls: { count: Schema.Int, contextOverflow: Schema.Boolean },
+  /**
+   * No tool calls: an answer, nothing at all, or output cut off at the output
+   * limit or by a full window. `contextOverflow`: the window filled, and the
+   * continuation hands the window off first.
+   */
+  Answered: {
+    empty: Schema.Boolean,
+    truncated: Schema.Boolean,
+    contextOverflow: Schema.Boolean,
+  },
 })
 type StepOutcome = Schema.Schema.Type<typeof StepOutcome>
 
@@ -1833,12 +1900,16 @@ export const classifyStep = (collected: CollectedTurnResponse): StepOutcome => {
     })
   }
   const count = toolCallsFromResponseParts(collected.responseParts).length
-  if (count > 0) return StepOutcome.cases.ToolCalls.make({ count })
+  const { contextOverflow } = collected
+  if (count > 0) return StepOutcome.cases.ToolCalls.make({ count, contextOverflow })
+  // An `"unknown"` finish alone is not a cut: some drivers report it on a
+  // normal end. Only the output limit and a full window are.
   return StepOutcome.cases.Answered.make({
     empty: !observable,
-    truncated: collected.responseParts.some(
-      (part) => part.type === "finish" && part.reason === "length",
-    ),
+    truncated:
+      collected.windowFull ||
+      collected.responseParts.some((part) => part.type === "finish" && part.reason === "length"),
+    contextOverflow,
   })
 }
 
@@ -1862,7 +1933,7 @@ const MAX_STEPS_INSTRUCTION =
   "You have reached the maximum number of steps for this turn, so tools are now disabled. Do not attempt another tool call. Reply with text only: say that the step limit stopped you, summarise what you established, and name what is still unfinished."
 
 const TRUNCATED_RESPONSE_INSTRUCTION =
-  "Your previous step hit the output limit before it finished. Text it wrote is saved above; a tool call it was writing was discarded. Continue in smaller steps: resume the text where it stopped without repeating it, or make one shorter tool call now and continue after its result."
+  "Your previous step was cut off by the output limit or a full context window before it finished. Text it wrote is saved above; a tool call it was writing was discarded. Continue in smaller steps: resume the text where it stopped without repeating it, or make one shorter tool call now and continue after its result."
 
 export const TurnOutcome = Schema.TaggedUnion({
   Done: {},
@@ -1893,7 +1964,10 @@ const StepResult = Schema.TaggedUnion({
     unanswered: Schema.Boolean,
   },
   Interaction: { outcome: TurnOutcome },
-  /** The provider refused the request as too long: the next step hands the window off first. */
+  /**
+   * The provider refused the request as too long, or the window filled while
+   * the model wrote: the next step hands the window off first.
+   */
   HandOff: { currentTurnAgent: AgentName },
 })
 type StepResult = Schema.Schema.Type<typeof StepResult>
@@ -3362,6 +3436,20 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         yield* deliverSteeringAtStepBoundary({ finalStep: false })
         return proceed
       })
+      // The window filled while the model wrote: a step that would go on
+      // hands the window off first, as after a refusal.
+      const handOffWhen = <E, R>(
+        contextOverflow: boolean,
+        next: Effect.Effect<StepResult, E, R>,
+      ): Effect.Effect<StepResult, E, R> => {
+        if (!contextOverflow) return next
+        return next.pipe(
+          Effect.map((result) => {
+            if (result._tag !== "Continue") return result
+            return StepResult.cases.HandOff.make({ currentTurnAgent })
+          }),
+        )
+      }
 
       return yield* Match.type<StepOutcome>().pipe(
         Match.tagsExhaustive({
@@ -3376,9 +3464,11 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             return continueOr(CONTINUATION_INSTRUCTION, stop({ streamFailed: true }))
           },
           // A step with nothing observable answered nothing; one cut off at the
-          // output limit lost what it was writing. Re-prompt rather than report
-          // the fragment as the reply; once continuations are spent, say so.
-          Answered: ({ empty, truncated }) => {
+          // output limit or by a full window lost what it was writing.
+          // Re-prompt rather than report the fragment as the reply; once
+          // continuations are spent, say so. A full window has no room for
+          // the continuation, so the step that runs it hands the window off.
+          Answered: ({ empty, truncated, contextOverflow }) => {
             if (!empty && !truncated) {
               // Steering that arrived while the answer streamed joins this
               // turn. Left for the next one, it would be answered in a turn
@@ -3396,13 +3486,16 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             }
             let instruction = EMPTY_RESPONSE_INSTRUCTION
             if (truncated) instruction = TRUNCATED_RESPONSE_INSTRUCTION
-            return continueOr(instruction, stop({ unanswered: empty }))
+            return handOffWhen(
+              contextOverflow,
+              continueOr(instruction, stop({ unanswered: empty })),
+            )
           },
           // The last budgeted step ran with `toolChoice: "none"`; a call made
           // anyway is refused, not run. No step follows to read its result, and
           // a tool with side effects would act after the budget said stop.
-          ToolCalls: () => {
-            if (!finalStep) return runTools
+          ToolCalls: ({ contextOverflow }) => {
+            if (!finalStep) return handOffWhen(contextOverflow, runTools)
             return refuseToolsAtStepLimit.pipe(Effect.as(stop({ unanswered: true })))
           },
         }),
@@ -3443,7 +3536,8 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
        * A step the provider refused as too long is run again after a handoff
        * (`HandOff`); the step after it that settles clears the mark, so each
        * refusal gets one recovery and a refusal of the handed-off window ends
-       * the turn.
+       * the turn. A reply the window cut off hands off the same way before
+       * its continuation step; a cut in the handed-off window only continues.
        */
       const runSteps = Effect.fn("AgentLoop.runSteps")(function* (from: number) {
         let step = from

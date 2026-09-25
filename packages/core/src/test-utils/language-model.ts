@@ -25,6 +25,7 @@ import * as path from "node:path"
 import type { ProviderOptions } from "effect/unstable/ai/LanguageModel"
 import type * as AiError from "effect/unstable/ai/AiError"
 import type * as Prompt from "effect/unstable/ai/Prompt"
+import { ProviderStopReason, reportProviderStopReason } from "../domain/driver.js"
 import { ToolCallId } from "../domain/ids.js"
 import { ProviderError } from "../domain/errors.js"
 import {
@@ -194,6 +195,24 @@ export const oneGenerate = (
     Effect.catchCause((cause) => Effect.die(cause)),
   )
 
+/**
+ * Run `effect` as a loop step does, listening for the raw stop reason a
+ * driver reports (`ProviderStopReason`); returns the last one reported.
+ */
+export const captureProviderStopReason = <A, E, R>(
+  effect: Effect.Effect<A, E, R>,
+): Effect.Effect<Option.Option<string>, E, Exclude<R, ProviderStopReason>> =>
+  Effect.gen(function* () {
+    const reported = yield* Ref.make(Option.none<string>())
+    yield* effect.pipe(
+      Effect.provideService(
+        ProviderStopReason,
+        ProviderStopReason.of({ report: (reason) => Ref.set(reported, Option.some(reason)) }),
+      ),
+    )
+    return yield* Ref.get(reported)
+  })
+
 // ── fixtures ────────────────────────────────────────────────────────────────
 
 /** Shared test fixtures for integration tests across packages. */
@@ -316,6 +335,13 @@ export interface SequenceStep {
   }) => void
   readonly assertOptions?: (options: ProviderOptions) => void
   readonly gated?: boolean
+  /**
+   * The provider's raw stop reason, which the step reports through
+   * `ProviderStopReason` as a driver that reads the wire does. The finish
+   * part still carries Effect AI's mapped reason (`"unknown"` for a reason
+   * its map lacks).
+   */
+  readonly stopReason?: string
 }
 
 interface SequenceLanguageModelControls {
@@ -441,6 +467,10 @@ const sequence = (steps: ReadonlyArray<SequenceStep>) =>
                   `Sequence language model: assertOptions failed at step ${idx}: ${e}`,
                 ),
             })
+          }
+
+          if (Predicate.isNotUndefined(step?.stopReason)) {
+            yield* reportProviderStopReason(step.stopReason)
           }
 
           if (!Predicate.isUndefined(gate)) {
