@@ -431,6 +431,30 @@ export function DockProvider(props: { children: JSX.Element }) {
 }
 
 /**
+ * A box that holds pickers among rows that must not give way: the composer,
+ * whose autocomplete popup and command palette dock inside it. The box may
+ * shrink only while a picker is open in it, so the picker, the one child
+ * that gives way, takes the squeeze; with none open the box keeps its rows.
+ */
+const PickerHostContext = createContext<Option.Option<DockState>>(Option.none())
+
+export function PickerHost(props: { children: (hosting: () => boolean) => JSX.Element }) {
+  const [pickers, setPickers] = createSignal(0)
+  const host: DockState = {
+    paneOpen: () => pickers() > 0,
+    open: () => {
+      setPickers((count) => count + 1)
+      return () => setPickers((count) => count - 1)
+    },
+  }
+  return (
+    <PickerHostContext.Provider value={Option.some(host)}>
+      {props.children(host.paneOpen)}
+    </PickerHostContext.Provider>
+  )
+}
+
+/**
  * The lines a `SelectList` draws in a `PickerFrame` body. `full` is every
  * line: the filter row and each row, headings included. `dressed` is the
  * least the list draws before it drops an optional line: the cursor row,
@@ -471,11 +495,19 @@ export function PickerFrame(props: {
    * first line to give way on a short terminal. `None` draws no line.
    */
   detail?: Option.Option<string>
+  /**
+   * Told when the frame starts or stops getting fewer rows than it asked for,
+   * and told `false` when it unmounts. A host whose own chrome can give way
+   * for the frame's rows listens here.
+   */
+  onSqueezeChange?: (squeezed: boolean) => void
 }) {
   const { theme } = useTheme()
   const { sectionWidth } = usePickerGeometry()
   const dock = useContext(DockContext)
   if (Option.isSome(dock)) onCleanup(dock.value.open())
+  const pickerHost = useContext(PickerHostContext)
+  if (Option.isSome(pickerHost)) onCleanup(pickerHost.value.open())
   // The height is what the frame asks for. When the footer it docks in runs
   // out of rows, the trays are already hidden (`TrayFrame`) and the frame is
   // the one box that gives way, in whole rows. Squeezed, it drops its key
@@ -488,6 +520,14 @@ export function PickerFrame(props: {
   const [measured, setMeasured] = createSignal(Option.none<number>())
   const [list, setList] = createSignal(Option.none<PickerListLines>())
   const squeezed = () => Option.exists(measured(), (rows) => rows < props.height)
+  createEffect(
+    on(squeezed, (value) => {
+      if (props.onSqueezeChange) props.onSqueezeChange(value)
+    }),
+  )
+  onCleanup(() => {
+    if (props.onSqueezeChange) props.onSqueezeChange(false)
+  })
   const titled = () => !Option.exists(measured(), (rows) => rows < PICKER_ROWS_WITH_TITLE)
   const bodyRows = () =>
     Option.map(measured(), (rows) => {
@@ -792,6 +832,13 @@ interface SelectListProps<A> {
   readonly onCursor?: (selected: Option.Option<A>) => void
   /** Handed the list's {@link SelectListApi} once, on mount. */
   readonly api?: (api: SelectListApi) => void
+  /**
+   * A query line the pane draws itself (the composer's filter, the palette's
+   * breadcrumb and query), in place of the list's own `› query│` row. The
+   * list draws it above the rows and budgets it as its filter row, so on a
+   * short terminal it gives way before the cursor row does.
+   */
+  readonly queryRow?: () => JSX.Element
 }
 
 /**
@@ -995,8 +1042,9 @@ export function SelectList<A>(props: SelectListProps<A>) {
   // list drops its headings, then its filter row, and one row stays for the
   // cursor. An unmeasured frame, no frame, and a list that fits draw it all.
   const pickerBody = useContext(PickerBodyContext)
+  const hasQueryRow = () => showInput() || Option.isSome(Option.fromUndefinedOr(props.queryRow))
   const inputLines = () => {
-    if (showInput()) return 1
+    if (hasQueryRow()) return 1
     return 0
   }
   const headingLines = () => {
@@ -1014,7 +1062,7 @@ export function SelectList<A>(props: SelectListProps<A>) {
       onNone: () => true,
       onSome: (available) => available >= lines().full || available >= needed,
     })
-  const inputShown = () => showInput() && fits(2)
+  const inputShown = () => hasQueryRow() && fits(2)
   const headingsShown = () => fits(1 + inputLines() + 1)
 
   // Values are indexed independently of rows, so the row loop counts its own.
@@ -1032,11 +1080,16 @@ export function SelectList<A>(props: SelectListProps<A>) {
     <>
       <Show when={inputShown()}>
         <ChromePanel.Section>
-          <text style={{ fg: theme.text }}>
-            <span style={{ fg: theme.textMuted }}>› </span>
-            {state().query}
-            <span style={{ fg: theme.primary }}>│</span>
-          </text>
+          {Option.match(Option.fromUndefinedOr(props.queryRow), {
+            onSome: (queryRow) => queryRow(),
+            onNone: () => (
+              <text style={{ fg: theme.text }}>
+                <span style={{ fg: theme.textMuted }}>› </span>
+                {state().query}
+                <span style={{ fg: theme.primary }}>│</span>
+              </text>
+            ),
+          })}
         </ChromePanel.Section>
       </Show>
 

@@ -1602,6 +1602,50 @@ describe("App auth gate", () => {
         }).pipe(Effect.timeout("10 seconds")),
     )
   }
+  // The autocomplete popup and the command palette draw their query line above
+  // the list, inside the composer: it gives way like a filter row, and the
+  // cursor row stays between two clean rules.
+  const expectPopupFits = (frame: string, cursorText: string) => {
+    const drawn = frame.split("\n").filter((line) => line.trim().length > 0)
+    const ruled = drawn
+      .map((line, index) => ({ line, index }))
+      .filter(({ line }) => line.startsWith("─"))
+      .map(({ index }) => index)
+    expect(ruled.length).toBeGreaterThanOrEqual(2)
+    const top = ruled.at(-2) ?? 0
+    const bottom = ruled.at(-1) ?? 0
+    for (const index of [top, bottom]) expect(drawn[index]?.trim()).toMatch(/^─+$/)
+    const inside = drawn.slice(top + 1, bottom)
+    expect(inside.filter((line) => line.includes(cursorText))).toHaveLength(1)
+  }
+  for (const height of [13, 12, 11]) {
+    it.live(`the autocomplete popup at ${height} rows keeps its cursor row`, () =>
+      Effect.gen(function* () {
+        const setup = yield* mountShortTerminalWithTrays(height)
+        yield* Effect.promise(() => setup.mockInput.typeText("/thre"))
+        const frame = yield* waitForFrame(
+          setup,
+          (current) => !current.includes("alarm in now") && current.includes("/thread"),
+          `the cursor row at ${height} rows`,
+        )
+        expectPopupFits(frame, "/thread")
+      }).pipe(Effect.timeout("10 seconds")),
+    )
+    it.live(`the command palette at ${height} rows keeps its cursor row`, () =>
+      Effect.gen(function* () {
+        const setup = yield* mountShortTerminalWithTrays(height)
+        setup.mockInput.pressKey("p", { ctrl: true })
+        yield* waitForFrame(setup, (current) => !current.includes("alarm in now"), "the palette")
+        yield* Effect.promise(() => setup.mockInput.typeText("thread"))
+        const frame = yield* waitForFrame(
+          setup,
+          (current) => current.includes("Thread"),
+          `the cursor row at ${height} rows`,
+        )
+        expectPopupFits(frame, "Thread")
+      }).pipe(Effect.timeout("10 seconds")),
+    )
+  }
   // The live run: an alarm and three working children filled the trays, and
   // the btw pane showed its question but not the fork's stored answer.
   it.live("the btw pane keeps the fork's answer in view on a short terminal with full trays", () =>

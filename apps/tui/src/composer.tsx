@@ -40,9 +40,9 @@ import {
   useRequiredContext,
 } from "./utils"
 import {
-  ChromePanel,
   PickerFrame,
   pickerHeight,
+  PickerHost,
   selectable,
   SelectList,
   type SelectListRow,
@@ -235,37 +235,52 @@ export function ComposerFrame(props: ComposerFrameProps) {
     return { left: left.shown, right: right.shown, gap }
   })
 
+  // The composer keeps its rows. While its autocomplete popup or command
+  // palette is open, that picker is the one child that gives way on a short
+  // terminal, so the frame may shrink by the picker's rows alone.
   return (
-    <box flexDirection="column" flexShrink={0} paddingTop={1}>
-      <box flexDirection="column">{props.children}</box>
-      <box height={1} flexShrink={0} marginTop={1} overflow="hidden">
-        <text wrapMode="none">
-          <For each={groups().left}>
-            {(label, index) => (
-              <>
-                <Show when={index() > 0}>
-                  <span style={{ fg: theme.textMuted }}> · </span>
+    <PickerHost>
+      {(hosting) => {
+        const shrink = () => {
+          if (hosting()) return 1
+          return 0
+        }
+        return (
+          <box flexDirection="column" flexShrink={shrink()} paddingTop={1}>
+            <box flexDirection="column" flexShrink={shrink()}>
+              {props.children}
+            </box>
+            <box height={1} flexShrink={0} marginTop={1} overflow="hidden">
+              <text wrapMode="none">
+                <For each={groups().left}>
+                  {(label, index) => (
+                    <>
+                      <Show when={index() > 0}>
+                        <span style={{ fg: theme.textMuted }}> · </span>
+                      </Show>
+                      <span style={{ fg: label.color }}>{label.text}</span>
+                    </>
+                  )}
+                </For>
+                <Show when={groups().right.length > 0}>
+                  <span>{" ".repeat(groups().gap)}</span>
                 </Show>
-                <span style={{ fg: label.color }}>{label.text}</span>
-              </>
-            )}
-          </For>
-          <Show when={groups().right.length > 0}>
-            <span>{" ".repeat(groups().gap)}</span>
-          </Show>
-          <For each={groups().right}>
-            {(label, index) => (
-              <>
-                <Show when={index() > 0}>
-                  <span style={{ fg: theme.textMuted }}> · </span>
-                </Show>
-                <span style={{ fg: label.color }}>{label.text}</span>
-              </>
-            )}
-          </For>
-        </text>
-      </box>
-    </box>
+                <For each={groups().right}>
+                  {(label, index) => (
+                    <>
+                      <Show when={index() > 0}>
+                        <span style={{ fg: theme.textMuted }}> · </span>
+                      </Show>
+                      <span style={{ fg: label.color }}>{label.text}</span>
+                    </>
+                  )}
+                </For>
+              </text>
+            </box>
+          </box>
+        )
+      }}
+    </PickerHost>
   )
 }
 
@@ -305,6 +320,8 @@ interface AutocompletePopupProps {
    * for `@` — to learn something already known here.
    */
   onGhostChange: (ghost: Option.Option<string>) => void
+  /** The popup's frame has fewer rows than it asked for, or has them again. */
+  onSqueezeChange?: (squeezed: boolean) => void
 }
 
 export function AutocompletePopup(props: AutocompletePopupProps) {
@@ -456,18 +473,22 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
   }
 
   return (
-    <PickerFrame height={popupHeight()} title={title()} footer={footerHint()}>
-      {/* Filter display */}
-      <ChromePanel.Section>
-        <text style={{ fg: theme.textMuted }}>
-          <Show when={props.state.filter.length > 0}>
-            › <span style={{ fg: theme.text }}>{props.state.filter}</span>
-          </Show>
-        </text>
-      </ChromePanel.Section>
-
+    <PickerFrame
+      height={popupHeight()}
+      title={title()}
+      footer={footerHint()}
+      onSqueezeChange={props.onSqueezeChange}
+    >
       <SelectList
         id="autocomplete"
+        // The composer owns the filter; the list draws it as its query row.
+        queryRow={() => (
+          <text style={{ fg: theme.textMuted }}>
+            <Show when={props.state.filter.length > 0}>
+              › <span style={{ fg: theme.text }}>{props.state.filter}</span>
+            </Show>
+          </text>
+        )}
         open={hasItems()}
         rows={rows}
         rowKey={(item) => item.id}
@@ -1206,6 +1227,7 @@ interface ComposerContextValue {
   handleAutocompleteComplete: (value: string) => void
   handleAutocompleteClose: () => void
   setGhost: (ghost: Option.Option<string>) => void
+  onPopupSqueezeChange: (squeezed: boolean) => void
 }
 
 const ComposerContext = createContext<ComposerContextValue>()
@@ -1244,6 +1266,9 @@ export function Composer(props: ComposerProps) {
    * the ghost is never in the buffer, so Enter can never submit it.
    */
   const [ghost, setGhost] = createSignal(Option.none<string>())
+  // A squeezed popup keeps its rows for the list: the ghost line, which
+  // offers the completion the cursor row already shows, gives way first.
+  const [popupSqueezed, setPopupSqueezed] = createSignal(false)
 
   const contextValue: ComposerContextValue = {
     autocomplete: controller.autocomplete,
@@ -1251,12 +1276,14 @@ export function Composer(props: ComposerProps) {
     handleAutocompleteComplete: controller.handleAutocompleteComplete,
     handleAutocompleteClose: controller.handleAutocompleteClose,
     setGhost,
+    onPopupSqueezeChange: setPopupSqueezed,
   }
 
   /** The ghost is only an offer while there is an open popup to complete from. */
   const visibleGhost = (): Option.Option<string> => {
     if (Option.isNone(Option.fromNullishOr(controller.autocomplete()))) return Option.none()
     if (controller.mode() !== "editing") return Option.none()
+    if (popupSqueezed()) return Option.none()
     return ghost()
   }
 
@@ -1341,7 +1368,7 @@ export function Composer(props: ComposerProps) {
 
       <box
         flexDirection="column"
-        flexShrink={0}
+        flexShrink={1}
         onSizeChange={function () {
           setPickerHeight(this.height)
         }}
@@ -1367,6 +1394,7 @@ Composer.Autocomplete = function ComposerAutocomplete() {
           onComplete={ctx.handleAutocompleteComplete}
           onClose={ctx.handleAutocompleteClose}
           onGhostChange={ctx.setGhost}
+          onSqueezeChange={ctx.onPopupSqueezeChange}
         />
       )}
     </Show>

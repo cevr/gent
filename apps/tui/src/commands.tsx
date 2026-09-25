@@ -15,7 +15,6 @@ import { useTerminalDimensions } from "./terminal"
 import { matchSorter } from "match-sorter"
 import { useClient } from "./client"
 import {
-  ChromePanel,
   PickerFrame,
   pickerHeight,
   selectable,
@@ -686,18 +685,17 @@ export function CommandPalette() {
   return (
     <Show when={command.paletteOpen()}>
       <PickerFrame height={paletteHeight()} title={paletteTitle()} footer={footerHint()}>
-        <ChromePanel.Section>
-          <text height={1} wrapMode="none" truncate style={{ fg: theme.text }}>
-            <span style={{ fg: theme.textMuted }}>{queryPrefix()}</span>
-            <Show when={searchQuery().length > 0}>
-              {visibleQuery()}
-              <span style={{ fg: theme.primary }}>│</span>
-            </Show>
-          </text>
-        </ChromePanel.Section>
-
         <SelectList
           id="command-palette"
+          queryRow={() => (
+            <text height={1} wrapMode="none" truncate style={{ fg: theme.text }}>
+              <span style={{ fg: theme.textMuted }}>{queryPrefix()}</span>
+              <Show when={searchQuery().length > 0}>
+                {visibleQuery()}
+                <span style={{ fg: theme.primary }}>│</span>
+              </Show>
+            </text>
+          )}
           open={command.paletteOpen()}
           rows={rows}
           rowKey={(item) => item.id}

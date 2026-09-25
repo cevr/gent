@@ -105,7 +105,12 @@ that gives way, in whole rows (`PickerFrame` sets a `flexBasis`, not a
 squeezed, it drops its key hint, then its title, before its body's last row.
 Inside the body the order goes on: the frame's `detail` line gives way
 first, then the `SelectList` headings, then its filter row, and one row stays
-for the cursor (the list reads its rows from the frame). Yoga does not
+for the cursor (the list reads its rows from the frame). A pane that draws
+its own query line (the autocomplete popup, the command palette) passes it as
+the list's `queryRow`, so it gives way as the filter row does. The composer
+keeps its rows, but while its popup or palette is open it may shrink by that
+picker's rows (`PickerHost`), and the ghost line gives way while the popup is
+squeezed. Yoga does not
 keep a nested minimum here, and OpenTUI draws a 0-row node as one row, so
 the order is set by hiding whole boxes, not by shrink weights. A pane whose newest row matters
 passes `stickToBottom` to `ChromePanel.Body` and puts its gaps above a row,
