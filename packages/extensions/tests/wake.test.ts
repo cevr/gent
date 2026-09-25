@@ -1633,7 +1633,7 @@ describe("wake store", () => {
       const alarms = entries.filter((entry) => entry._tag === "alarm")
       const notices = entries.filter((entry) => entry._tag === "notice")
       expect(alarms.map((entry) => entry.wakeId)).toEqual([handle.wakeId])
-      // The prompt section lists each notice row, so the model reads both ticks.
+      // The turn notice lists each notice row, so the model reads both ticks.
       expect(notices.length).toBe(2)
       for (const notice of notices) {
         expect(notice.wakeId).toBe(handle.wakeId)

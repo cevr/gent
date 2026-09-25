@@ -124,14 +124,16 @@ export type WakeDetails = typeof WakeDetails.Type
  * user-role `wake` message on the same branch and wakes the loop, so the
  * next turn starts with the note the model left itself. Timers live in a
  * branch-scoped resource; the entries themselves live in one file per branch
- * under `~/.gent/wakes`, so the branch's loop, when it opens after a restart,
- * re-arms what is still pending and fires at once what came due while the
- * process was down.
+ * under `<data dir>/wakes` (`resolveDataDir`: `GENT_DATA_DIR`, else
+ * `~/.gent`), so the branch's loop, when it opens after a restart, re-arms
+ * what is still pending and fires at once what came due while the process
+ * was down.
  * A repeating alarm advances its stored due time on every fire; ticks missed
  * while the process was down collapse into one fire. In `notify` mode a fire
  * starts no turn: it leaves a `notice` entry in the same file, the tray shows
- * it at once, every step of the next turns reads every notice into a prompt
- * section, and a turn that answered clears the notices it showed.
+ * it at once, every step of the next turns reads every notice into a turn
+ * notice, and a turn that answered clears the notices it showed. A `wake`
+ * line the session refuses is left as a notice the same way.
  */
 
 const MAXIMUM_WAKE_DELAY_MS = 24 * 60 * 60 * 1000
