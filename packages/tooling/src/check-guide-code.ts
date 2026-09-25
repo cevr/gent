@@ -48,20 +48,34 @@ const run = Effect.fn("Tooling.run")(function* (
   return { exitCode: Number(exitCode), output }
 })
 
-/** The steering files git knows, tracked or new, each once by its real path. */
-const steeringFiles = Effect.fn("Tooling.steeringFiles")(function* (repoRoot: string) {
+/**
+ * The steering files among `listed` (repo paths), each once by its real path.
+ * A listed file missing on disk (trashed, its removal not staged yet) is
+ * skipped: there is no text to compile.
+ */
+export const steeringFilesAmong = Effect.fn("Tooling.steeringFilesAmong")(function* (
+  repoRoot: string,
+  listed: ReadonlyArray<string>,
+) {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
+  const files = yield* Effect.filter(listed.filter(isSteeringFile), (file) =>
+    fs.exists(path.join(repoRoot, file)),
+  )
+  const real = yield* Effect.forEach(files, (file) => fs.realPath(path.join(repoRoot, file)), {
+    concurrency: 16,
+  })
+  return files.filter((file, index) => path.join(repoRoot, file) === real[index])
+})
+
+/** The steering files git knows, tracked or new, each once by its real path. */
+const steeringFiles = Effect.fn("Tooling.steeringFiles")(function* (repoRoot: string) {
   const listed = yield* run(
     "git",
     ["ls-files", "--cached", "--others", "--exclude-standard"],
     repoRoot,
   )
-  const files = listed.output.split("\n").filter(isSteeringFile)
-  const real = yield* Effect.forEach(files, (file) => fs.realPath(path.join(repoRoot, file)), {
-    concurrency: 16,
-  })
-  return files.filter((file, index) => path.join(repoRoot, file) === real[index])
+  return yield* steeringFilesAmong(repoRoot, listed.output.split("\n"))
 })
 
 /**
