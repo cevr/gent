@@ -2056,6 +2056,27 @@ describe("classifyBashCommand", () => {
     }
   })
 
+  // As getopt_long reads them: `docker --tls` is the flag, not a prefix of `--tlscacert`.
+  test("a long option written in full is that option before it is a prefix of another", () => {
+    const x = "/nonexistent/gent-probe-x"
+    for (const command of [
+      "docker --tls volume rm gent-probe-x",
+      `docker --tls exec c rm -rf ${x}`,
+      `docker --tls run -v ${x}:/w alpine rm -rf /w`,
+      "docker --tls system prune -af",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      "docker --tls push gent-probe-x",
+      "docker --tlscert x push gent-probe-x",
+      "docker --tlsc x push gent-probe-x",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("external")
+    }
+    expect(classifyBashCommand("docker --tls ps").level).toBe("safe")
+  })
+
   test("after a parent option its table does not name, the subcommand may follow its value", () => {
     const x = "/nonexistent/gent-probe-x"
     const r = `rm -rf ${x}`
@@ -2533,6 +2554,184 @@ describe("classifyBashCommand", () => {
       `docker run --rm -v ${x}:/w -e A=1 --name probe alpine ls /w`,
       "kubectl exec pod -- ls",
       "kubectl exec -it pod -c app -- psql -c 'select 1'",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  test("an entrypoint is read past an option the table does not name; an empty one runs the words after the image", () => {
+    const x = "/nonexistent/gent-probe-x"
+    for (const command of [
+      // Docker clears the entrypoint for an empty value.
+      `docker run --entrypoint '' alpine rm -rf ${x}`,
+      `docker run --entrypoint= alpine rm -rf ${x}`,
+      `docker run --entrypoint "" -v ${x}:/w alpine rm -rf /w`,
+      // An unnamed option before `--entrypoint` may take a value.
+      "docker run --group-add g --entrypoint git alpine reset --hard",
+      `docker run --expose 80 --entrypoint sh alpine -c 'rm -rf ${x}'`,
+      `docker run --volumes-from c --entrypoint sh alpine -c 'rm -rf ${x}'`,
+      // Compose splits the entrypoint into words: with the words after the
+      // service, it is one script.
+      `docker compose run --entrypoint 'rm -rf ${x}' web`,
+      `docker compose run --entrypoint "sh -c 'rm -rf ${x}'" web`,
+      `docker-compose run --entrypoint 'rm -rf ${x}' web`,
+      "docker compose run --entrypoint 'git reset' web --hard",
+      `docker compose run --entrypoint sh web -c 'rm -rf ${x}'`,
+      `docker service create --entrypoint 'rm -rf' alpine ${x}`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      "docker run --rm --entrypoint '' alpine ls",
+      "docker run --group-add g --entrypoint ls alpine -la",
+      "docker compose run --entrypoint 'ls -la' web /tmp",
+      "docker compose run --rm --entrypoint sh web -c 'ls -la'",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  test("docker create, podman, nerdctl, docker service create and oc read the command a container runs", () => {
+    const x = "/nonexistent/gent-probe-x"
+    for (const command of [
+      `docker create --name p -v ${x}:/w alpine rm -rf /w`,
+      `docker create --name p -v ${x}:/w alpine rm -rf /w && docker start -a p`,
+      `docker container create alpine rm -rf ${x}`,
+      `docker service create --name s alpine rm -rf ${x}`,
+      `podman exec c rm -rf ${x}`,
+      `podman run -v ${x}:/w alpine rm -rf /w`,
+      `podman compose exec web rm -rf ${x}`,
+      "podman volume rm gent-probe-x",
+      "podman system prune -af",
+      `nerdctl run -v ${x}:/w alpine rm -rf /w`,
+      `nerdctl exec c rm -rf ${x}`,
+      `oc exec pod -- rm -rf ${x}`,
+      `oc -n ns exec pod -- sh -c 'rm -rf ${x}'`,
+      `oc rsh pod rm -rf ${x}`,
+      `oc rsh -c app pod sh -c 'rm -rf ${x}'`,
+      "oc delete pod gent-probe-x",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    expect(classifyBashCommand("podman push gent-probe-x").level).toBe("external")
+    for (const command of [
+      "docker create alpine ls",
+      "podman ps",
+      "podman run --rm alpine ls",
+      "nerdctl images",
+      "oc get pods",
+      "oc rsh pod",
+      "oc rsh -t pod ls",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  // After a flag a table names, the next word is no option value: no later
+  // word may be the command word.
+  test("a flag of a container, pod or runner table hides no command word", () => {
+    const x = "/nonexistent/gent-probe-x"
+    for (const command of [
+      'docker run --rm -v "$PWD":/w -w /w node:20 npm test',
+      'docker run --rm alpine echo "$MSG"',
+      'docker exec -it c ls "$DIR"',
+      'docker compose exec -T web ls "$DIR"',
+      'docker compose run --rm web npm test -- "$T"',
+      'kubectl exec -it pod -- ls "$DIR"',
+      'docker run -d --name "$NAME" img',
+      'docker run --init -v "$PWD":/w img npm test',
+      'uv run --frozen pytest "$T"',
+      'timeout --preserve-status 5 ls "$D"',
+      'env -i ls "$D"',
+      'npx --yes prettier "$F"',
+      'bunx --bun vitest "$F"',
+      'strace -f ls "$D"',
+      'op run --no-masking -- npm test "$T"',
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+    for (const command of [
+      `docker run --rm alpine rm -rf ${x}`,
+      `docker exec -it c rm -rf ${x}`,
+      `kubectl exec -it pod -- rm -rf ${x}`,
+      'docker run --rm alpine "$CMD"',
+      `uv run --frozen rm -rf ${x}`,
+      `env -i rm -rf ${x}`,
+      `strace -f rm -rf ${x}`,
+      `op run --no-masking -- rm -rf ${x}`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+  })
+
+  test("a run-time word after the command sudo runs belongs to that command", () => {
+    for (const command of ['sudo -n ls "$D"', 'sudo -E ls "$D"', 'sudo systemctl restart "$SVC"']) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+    for (const command of [
+      'sudo "$CMD"',
+      'sudo "$CMD" x',
+      "sudo $OPTS ls",
+      'sudo rm "$F"',
+      'sudo -u "$U" rm x',
+      'doas "$CMD"',
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+  })
+
+  test("tmux, screen, sshpass, xvfb-run, hyperfine, watchexec, at, nsenter, gosu and fakeroot run what they are given", () => {
+    const x = "/nonexistent/gent-probe-x"
+    const r = `rm -rf ${x}`
+    for (const command of [
+      `tmux new -d '${r}'`,
+      `tmux new-session -d -s s '${r}'`,
+      `tmux new -d sh -c '${r}'`,
+      `tmux new-window '${r}'`,
+      `tmux split-window -h ${r}`,
+      `tmux send-keys -t s '${r}' Enter`,
+      `tmux run-shell '${r}'`,
+      `tmux -c '${r}'`,
+      `screen -dm sh -c '${r}'`,
+      `screen -dmS s ${r}`,
+      `screen -S s -X stuff '${r}\\n'`,
+      `sshpass -p x ssh h ${r}`,
+      `sshpass -e ssh h '${r}'`,
+      `xvfb-run ${r}`,
+      `xvfb-run -a -s '-screen 0 1x1x8' ${r}`,
+      `hyperfine '${r}'`,
+      `hyperfine -w 3 'ls' '${r}'`,
+      `hyperfine --prepare '${r}' 'ls'`,
+      `watchexec -- ${r}`,
+      `watchexec -e ts ${r}`,
+      `watchexec -- sh -c '${r}'`,
+      `at now <<< '${r}'`,
+      `echo '${r}' | at now`,
+      `nsenter -t 1 -m ${r}`,
+      `nsenter --target 1 --mount -- ${r}`,
+      `gosu root ${r}`,
+      `su-exec root ${r}`,
+      `fakeroot ${r}`,
+      `fakeroot -- ${r}`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      "tmux ls",
+      "tmux new -d 'npm run dev'",
+      "tmux kill-session -t s",
+      "screen -ls",
+      "screen -dmS s npm run dev",
+      "hyperfine 'ls' 'ls -la'",
+      "watchexec -e ts npm test",
+      "xvfb-run npm test",
+      "fakeroot dpkg-deb --build x",
+      "gosu app ls",
+      "nsenter -t 1 -m ls",
+      "sshpass -p x ssh h ls",
+      "echo ls | at now",
+      // The script file is not read, as a `source`d file is not.
+      `at -f ${x} now`,
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("safe")
     }

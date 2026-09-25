@@ -1434,6 +1434,8 @@ interface ParsedArguments {
   readonly options: ReadonlyArray<ParsedOption>
   /** Operands before `--`; for a leading read, every word from the first operand on. */
   readonly operands: ReadonlyArray<string>
+  /** The index in the arguments of each of `operands`. */
+  readonly operandsAt: ReadonlyArray<number>
   /** Operands after `--`. */
   readonly pathspecs: ReadonlyArray<string>
   /** The index of the first operand, or of the word after `--`. */
@@ -1464,7 +1466,12 @@ interface OptionsRead {
   readonly options: Array<ParsedOption>
 }
 
-/** Read the long option word at `index`: `--name`, `--name=value`, `--name value`. */
+/**
+ * Read the long option word at `index`: `--name`, `--name=value`, `--name
+ * value`. As getopt_long does, a name written in full is that option before
+ * it is a prefix of a longer one: `docker --tls` is the flag, not
+ * `--tlscacert`.
+ */
 const readLongOption = (
   arg: string,
   index: number,
@@ -1476,11 +1483,15 @@ const readLongOption = (
   const [name = ""] = arg.slice(dashes).split("=", 1)
   into.longs.push(name)
   const equals = arg.indexOf("=")
+  const long = valued.long ?? []
   let value = Option.none<OptionValue>()
   let next = index + 1
   if (equals !== -1) {
     value = Option.some({ word: index, from: equals + 1 })
-  } else if ((valued.long ?? []).some((option) => abbreviates(name, option))) {
+  } else if (
+    long.includes(name) ||
+    (!(valued.flags?.long ?? []).includes(name) && long.some((option) => abbreviates(name, option)))
+  ) {
     value = Option.some({ word: index + 1, from: 0 })
     next = index + 2
   }
@@ -1544,6 +1555,7 @@ const parseArguments = (
 ): ParsedArguments => {
   const into: OptionsRead = { shorts: new Set(), longs: [], options: [] }
   const operands: Array<string> = []
+  const operandsAt: Array<number> = []
   let index = 0
   while (index < args.length) {
     const arg = args[index] ?? ""
@@ -1551,6 +1563,7 @@ const parseArguments = (
       return {
         ...into,
         operands,
+        operandsAt,
         pathspecs: args.slice(index + 1),
         end: index + 1,
         separated: true,
@@ -1559,13 +1572,21 @@ const parseArguments = (
     if (isOptionWord(arg, valued)) {
       index = readOption(args, index, valued, into)
     } else if (order === "leading") {
-      return { ...into, operands: args.slice(index), pathspecs: [], end: index, separated: false }
+      return {
+        ...into,
+        operands: args.slice(index),
+        operandsAt: args.map((_, at) => at).slice(index),
+        pathspecs: [],
+        end: index,
+        separated: false,
+      }
     } else {
       operands.push(arg)
+      operandsAt.push(index)
       index++
     }
   }
-  return { ...into, operands, pathspecs: [], end: args.length, separated: false }
+  return { ...into, operands, operandsAt, pathspecs: [], end: args.length, separated: false }
 }
 
 /** Whether `option` is named by a letter in `letters` or a long name in `names`. */
@@ -1626,9 +1647,13 @@ const valueWord = (words: ReadonlyArray<ShellWord>, value: OptionValue): Option.
  *   or after the first of `after` (`nix develop .#x -c cmd`). `head` is the
  *   command it is a subcommand of (`yarn workspace x npm publish`). The
  *   value of an `entry` option is the command word, and those words are its
- *   arguments (`docker run --entrypoint rm image -rf x`).
+ *   arguments (`docker run --entrypoint rm image -rf x`). With
+ *   `entryScript`, the value is split into words (`docker compose run
+ *   --entrypoint 'rm -rf' web x`): it and those words are one script.
  * - `Joined`: the words after the options and `positionals`, `take` of them,
  *   joined into one script (`eval`, `ssh host cmd`, `trap 'cmd' EXIT`).
+ * - `Operands`: each operand, with options anywhere, is a script of its own
+ *   (`hyperfine 'cmd' 'cmd'`).
  * - `OptionScript`: the values of these options are scripts (`su -c`,
  *   `git rebase -x`). With `rest`, the value and the words after it are one
  *   script, and only leading options count (`env -S`).
@@ -1647,8 +1672,10 @@ const Run = Schema.TaggedUnion({
     named: Schema.Boolean,
     head: Schema.String,
     entry: Schema.Array(Schema.String),
+    entryScript: Schema.Boolean,
   },
   Joined: { positionals: Schema.Int, take: Schema.Int },
+  Operands: {},
   OptionScript: { short: Schema.String, long: Schema.Array(Schema.String), rest: Schema.Boolean },
   Stdin: {},
   FindExec: { actions: Schema.Array(Schema.String) },
@@ -1664,6 +1691,7 @@ const command = (fields: CommandFields = {}): Run =>
     named: false,
     head: "",
     entry: [],
+    entryScript: false,
     ...fields,
   })
 
@@ -1895,10 +1923,7 @@ const runCommands = (
   run: Run,
   readings: "every" | "first" = "every",
 ): ReadonlyArray<ReadonlyArray<ShellWord>> => {
-  const {
-    words,
-    spec: { valued },
-  } = resolved
+  const { words } = resolved
   if (run._tag === "Stdin") {
     let starts = wrapperStarts(resolved)
     if (readings === "first") starts = starts.slice(0, 1)
@@ -1914,19 +1939,87 @@ const runCommands = (
     })
   }
   if (run._tag !== "Command") return []
+  return commandReadings(resolved, run, readings).flatMap(({ entry, rest }) => {
+    if (Option.isSome(entry)) {
+      // The script `entryScriptRuns` reads.
+      if (run.entryScript) return []
+      return [[entry.value, ...rest]]
+    }
+    if (run.head === "") return [rest]
+    return [[derivedWord(run.head, false), ...rest]]
+  })
+}
+
+/** One reading of a `Command` run: the value of its `entry` option, and the words after the command word or the image. */
+interface CommandReading {
+  readonly entry: Option.Option<ShellWord>
+  readonly rest: ReadonlyArray<ShellWord>
+}
+
+/**
+ * The readings of a `Command` run, one per start (`commandStarts`). The
+ * value of the last `entry` option before a start is read with the options
+ * anywhere, past an option the table does not name (`docker run --group-add
+ * g --entrypoint sh img -c …`). An empty value that is not expanded clears
+ * the entry (`--entrypoint ''`). With an entry, the word at a later start is
+ * the image, and the words after it are the entry's arguments.
+ */
+const commandReadings = (
+  { words, spec: { valued } }: ResolvedCommand,
+  run: typeof Run.cases.Command.Type,
+  readings: "every" | "first" = "every",
+): ReadonlyArray<CommandReading> => {
   let starts = commandStarts(words, valued, run)
   if (readings === "first") starts = starts.slice(0, 1)
-  const entry = Arr.last(
-    optionValues(parseWords(words, valued, "leading"), "", run.entry).flatMap((value) =>
-      Option.toArray(valueWord(words, value)),
+  return starts.map((start, index) => {
+    const before = words.slice(0, start)
+    const entry = Option.filter(
+      Arr.last(
+        optionValues(parseWords(before, valued, "anywhere"), "", run.entry).flatMap((value) =>
+          Option.toArray(valueWord(before, value)),
+        ),
+      ),
+      (word) => word.text !== "" || word.dynamic,
+    )
+    if (index === 0 || Option.isNone(entry)) return { entry, rest: words.slice(start) }
+    return { entry, rest: words.slice(start + 1) }
+  })
+}
+
+/**
+ * The script of an `entryScript` run with an entry: the entry's words, then
+ * the words after the image or the service, each quoted as it is.
+ */
+const entryScriptRuns = (
+  resolved: ResolvedCommand,
+  run: typeof Run.cases.Command.Type,
+): SegmentRuns => {
+  if (!run.entryScript) return NO_RUNS
+  return mergeRuns(
+    commandReadings(resolved, run).flatMap(({ entry, rest }) =>
+      Option.toArray(entry).map((word) =>
+        joinedRuns(resolved.path, [
+          word,
+          ...rest.map((arg) => derivedWord(shellQuote(arg.text), arg.dynamic)),
+        ]),
+      ),
     ),
   )
-  return starts.map((start) => {
-    const rest = words.slice(start)
-    if (Option.isSome(entry)) return [entry.value, ...rest]
-    if (run.head === "") return rest
-    return [derivedWord(run.head, false), ...rest]
-  })
+}
+
+/** The operands of `words` after its command word, with options anywhere, and every word after `--`. */
+const operandWords = (
+  words: ReadonlyArray<ShellWord>,
+  valued: ValueOptions,
+): ReadonlyArray<ShellWord> => {
+  const parsed = parseWords(words, valued, "anywhere")
+  let after: ReadonlyArray<ShellWord> = []
+  // `end` is the index in the arguments of the word after `--`.
+  if (parsed.separated) after = words.slice(parsed.end + 1)
+  const operands = parsed.operandsAt.flatMap((at) =>
+    Option.toArray(Option.fromUndefinedOr(words[at + 1])),
+  )
+  return [...operands, ...after]
 }
 
 /** The scripts the option values of an `OptionScript` run are. */
@@ -1991,9 +2084,13 @@ const inputShellStarts = (
   })
 }
 
-/** What a `Joined`, `OptionScript`, `Stdin` or `InputShell` run runs beyond the commands it starts. */
+/** What a run runs beyond the commands it starts: its scripts, and its input. */
 const specRuns = (invocation: Invocation, resolved: ResolvedCommand, run: Run): SegmentRuns => {
   const { path, words, spec } = resolved
+  if (run._tag === "Command") return entryScriptRuns(resolved, run)
+  if (run._tag === "Operands") {
+    return mergeRuns(operandWords(words, spec.valued).map((word) => joinedRuns(path, [word])))
+  }
   if (run._tag === "OptionScript") return optionScriptRuns(resolved, run)
   if (run._tag === "Stdin") return inputWrapperRuns(invocation, resolved)
   if (run._tag === "InputShell") return inputShellRuns(invocation, resolved, run)
@@ -2969,11 +3066,12 @@ const inputWrapperReading = (
 }
 
 /**
- * Whether the input fills the script a `Joined`, `OptionScript` or
- * `InputShell` run runs: its script is missing or holds the placeholder, or
- * the appended input joins it (`ssh host ls`, `env -S`), or it starts a
- * shell whose options the appended input gives (`su`). A `FindExec` run
- * takes its actions from the appended input.
+ * Whether the input fills the script a `Joined`, `OptionScript`,
+ * `Operands`, `InputShell` or entry-script run runs: its script is missing
+ * or holds the placeholder, or the appended input joins it (`ssh host ls`,
+ * `env -S`) or is a script of its own (`hyperfine`), or it starts a shell
+ * whose options the appended input gives (`su`). A `FindExec` run takes its
+ * actions from the appended input.
  */
 const inputFillsScript = (
   resolved: ResolvedCommand,
@@ -2982,6 +3080,19 @@ const inputFillsScript = (
   appends: boolean,
 ): boolean => {
   const { words, spec } = resolved
+  if (run._tag === "Command") {
+    return (
+      run.entryScript &&
+      commandReadings(resolved, run).some(
+        ({ entry, rest }) =>
+          Option.isSome(entry) &&
+          (appends || [entry.value, ...rest].some((word) => isMarked(word.text))),
+      )
+    )
+  }
+  if (run._tag === "Operands") {
+    return appends || operandWords(words, spec.valued).some((word) => isMarked(word.text))
+  }
   if (run._tag === "Joined") {
     return commandStarts(words, spec.valued, run).some((start) => {
       const script = words.slice(start, start + run.take)
@@ -3797,6 +3908,20 @@ const risky = (...risks: ReadonlyArray<CommandRisk>) => spec({}, [], ...risks)
 const each = (paths: ReadonlyArray<string>, value: CommandSpec) =>
   Object.fromEntries(paths.map((path) => [path, value]))
 
+/** `rows` under each of `tools`: the key `""` is the tool itself, any other a path under it. */
+const under = (
+  tools: ReadonlyArray<string>,
+  rows: Readonly<Record<string, CommandSpec>>,
+): Record<string, CommandSpec> =>
+  Object.fromEntries(
+    tools.flatMap((tool) =>
+      Object.entries(rows).map(([path, value]) => [
+        [tool, path].filter((part) => part !== "").join(" "),
+        value,
+      ]),
+    ),
+  )
+
 const PUBLISH = risky(external("publishes a package"))
 
 /** `gh` groups whose `delete` removes something on the remote. */
@@ -3830,32 +3955,91 @@ const KUBECTL_OPTIONS = options(
   "namespace context kubeconfig cluster user server token as as-group request-timeout v",
 )
 
-/** `docker exec` and `docker compose exec` options whose value is the next word. */
-const CONTAINER_EXEC_OPTIONS = options("euw", "env env-file user workdir detach-keys index")
+/** `docker exec` and `docker compose exec` options whose value is the next word, then those that take none. */
+const CONTAINER_EXEC_OPTIONS = options(
+  "euw",
+  "env env-file user workdir detach-keys index",
+  "ditT",
+  "detach interactive tty privileged no-tty",
+)
 
-/** `docker run` and `docker compose run` options whose value is the next word. */
+/**
+ * `docker run`, `docker create` and `docker compose run` options whose
+ * value is the next word, then those that take none.
+ */
 const CONTAINER_RUN_OPTIONS = options(
   "acehlmpuvw",
   "attach cpu-shares env env-file hostname label memory publish user volume workdir name network entrypoint mount platform pull restart cpus add-host device dns ipc log-driver log-opt pid runtime security-opt shm-size stop-signal tmpfs ulimit cap-add cap-drop cidfile gpus",
+  "diPqtT",
+  "rm detach interactive tty privileged init read-only publish-all quiet no-deps service-ports use-aliases build remove-orphans quiet-pull no-tty",
+)
+
+/** `docker service create` options whose value is the next word, then those that take none. */
+const SERVICE_CREATE_OPTIONS = options(
+  "elpuw",
+  "cap-add cap-drop config constraint container-label credential-spec dns dns-option dns-search endpoint-mode entrypoint env env-file generic-resource group health-cmd health-interval health-retries health-start-period health-timeout host hostname isolation label limit-cpu limit-memory limit-pids log-driver log-opt mode mount name network placement-pref publish replicas replicas-max-per-node reserve-cpu reserve-memory restart-condition restart-delay restart-max-attempts restart-window secret stop-grace-period stop-signal sysctl ulimit user workdir",
+  "dqt",
+  "detach init no-healthcheck no-resolve-image quiet tty read-only with-registry-auth",
 )
 
 /** `kubectl exec` options whose value is the next word; the global options may follow the subcommand. */
 const KUBECTL_EXEC_OPTIONS = options(
   `${KUBECTL_OPTIONS.short ?? ""}cf`,
   `${(KUBECTL_OPTIONS.long ?? []).join(" ")} container filename pod-running-timeout`,
+  "itq",
+  "stdin tty quiet",
 )
 
-/** `kubectl debug` options whose value is the next word. */
-const KUBECTL_DEBUG_OPTIONS = options(
+/** `oc rsh` options whose value is the next word, as `kubectl exec`'s, then those that take none. */
+const OC_RSH_OPTIONS = options(
   `${KUBECTL_OPTIONS.short ?? ""}cf`,
-  `${(KUBECTL_OPTIONS.long ?? []).join(" ")} container filename image target profile copy-to env set-image custom`,
+  `${(KUBECTL_OPTIONS.long ?? []).join(" ")} container filename shell timeout`,
+  "tT",
+  "tty no-tty",
 )
+
+/**
+ * The command a container runs, after the container, service or image word;
+ * it shares volumes, mounts and databases with the host. `run --entrypoint
+ * cmd` runs `cmd` with the words after the image.
+ */
+const CONTAINER_EXEC = runner(CONTAINER_EXEC_OPTIONS, { positionals: 1 })
+const CONTAINER_RUN = runner(CONTAINER_RUN_OPTIONS, { positionals: 1, entry: ["entrypoint"] })
+
+/**
+ * The paths under `docker compose` and `docker-compose`: `down -v` deletes
+ * the named volumes, `rm -f` removes stopped containers without asking.
+ * `run --entrypoint` splits its value into words, as a shell does.
+ */
+const COMPOSE_ROWS = {
+  "": spec(COMPOSE_OPTIONS),
+  down: risky(({ parsed, resolved }) =>
+    destructiveWhen(
+      hasShort(parsed, "v") || hasLong(parsed, "volumes"),
+      `${resolved.path} -v (deletes volumes)`,
+    ),
+  ),
+  rm: risky(({ parsed, resolved }) =>
+    destructiveWhen(
+      hasShort(parsed, "f") || hasLong(parsed, "force"),
+      `${resolved.path} -f (removes containers)`,
+    ),
+  ),
+  exec: CONTAINER_EXEC,
+  run: runner(CONTAINER_RUN_OPTIONS, { positionals: 1, entry: ["entrypoint"], entryScript: true }),
+}
 
 /** `terraform apply` options whose value may be the next word (`-var x=1`). */
 const TERRAFORM_APPLY_OPTIONS: ValueOptions = {
   long: names("var var-file target replace state state-out backup lock-timeout parallelism"),
   singleDash: true,
 }
+
+/**
+ * A command given as one word is a shell script, as more words a command
+ * and its arguments (tmux, screen, watchexec): each reading is read.
+ */
+const COMMAND_OR_SCRIPT: ReadonlyArray<Run> = [command(), joined()]
 
 /** find primaries that write their output over the file they name. */
 const FIND_OUTPUTS = ["fprint", "fprint0", "fprintf", "fls"]
@@ -3882,16 +4066,18 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
       options(
         "cCDghpRrTtUu",
         "user group close-from chdir host prompt role type command-timeout other-user chroot",
+        "AbBEeHiKklnPSsVv",
+        "askpass background bell preserve-env edit set-home login remove-timestamp reset-timestamp list non-interactive preserve-groups stdin shell validate",
       ),
       [command(), inputShell("si", ["shell", "login"])],
       rootRmRisk,
     ),
-    doas: spec(options("uC"), [command(), inputShell("s")], rootRmRisk),
+    doas: spec(options("uC", "", "Lns"), [command(), inputShell("s")], rootRmRisk),
     // `-S` splits its value into the command it runs.
-    env: spec(options("aCLPSUu", "argv0 unset chdir split-string"), [
-      command(),
-      optionScript("S", ["split-string"], true),
-    ]),
+    env: spec(
+      options("aCLPSUu", "argv0 unset chdir split-string", "0iv", "ignore-environment null debug"),
+      [command(), optionScript("S", ["split-string"], true)],
+    ),
     exec: runner(options("a")),
     pkexec: runner(options("", "user")),
     // macOS `arch -arm64 cmd`, `arch -arch x86_64 -e VAR=v cmd`.
@@ -3916,7 +4102,9 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
     ionice: runner(options("cnpPu", "class classdata pid pgid uid")),
     ...each(
       ["timeout", "gtimeout"],
-      runner(options("sk", "signal kill-after"), { positionals: 1 }),
+      runner(options("sk", "signal kill-after", "v", "preserve-status foreground verbose"), {
+        positionals: 1,
+      }),
     ),
     stdbuf: runner(options("ioe", "input output error")),
     caffeinate: runner(options("tw")),
@@ -3924,7 +4112,14 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
       command({ positionals: 1 }),
       optionScript("c", ["command"]),
     ]),
-    strace: runner(options("abeEIoOpPsSuX", "output attach user env")),
+    strace: runner(
+      options(
+        "abeEIoOpPsSuX",
+        "output attach user env",
+        "cCdDfFhiknqrtTvVwxyzZ",
+        "follow-forks output-separately summary-only summary",
+      ),
+    ),
     ltrace: runner(options("aeFnopsu", "output")),
     chroot: runner(options("", "userspec groups"), { positionals: 1 }),
     taskset: runner({}, { positionals: 1 }),
@@ -3944,6 +4139,83 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
     ]),
     "nix-shell": spec(options("AIp", "run command attr"), [optionScript("", ["run", "command"])]),
     dotenv: runner(options("ecpv")),
+    // A command as another user, in another process's namespaces, under a
+    // fake root or display, or with a password typed for it.
+    ...each(["gosu", "su-exec"], runner({}, { positionals: 1 })),
+    // `-m`, `-u`, … take a namespace file only attached (`-m/proc/1/ns/mnt`).
+    nsenter: runner({
+      ...options(
+        "tSG",
+        "target setuid setgid",
+        "aFZe",
+        "all no-fork follow-context preserve-credentials env mount uts ipc net pid user cgroup time root wd",
+      ),
+      attached: "muinpUCTrw",
+    }),
+    fakeroot: runner(options("lisb", "lib faked fd-base", "uhv", "unknown-is-real help version")),
+    sshpass: runner({ ...options("fdpP", "", "hvV"), attached: "e" }),
+    "xvfb-run": runner(
+      options(
+        "efnpsw",
+        "error-file auth-file server-num xauth-protocol server-args wait",
+        "al",
+        "auto-servernum listen-tcp help",
+      ),
+    ),
+    // watchexec runs its words through a shell, or as they are (`-n`).
+    watchexec: spec(
+      options(
+        "efiwWdsE",
+        "exts filter ignore watch watch-non-recursive debounce signal shell stop-signal stop-timeout delay-run on-busy-update env project-origin workdir filter-file ignore-file emit-events-to wrap-process",
+        "crnpNqv",
+        "restart postpone notify no-vcs-ignore no-project-ignore no-global-ignore no-default-ignore no-discover-ignore no-meta no-environment quiet verbose",
+      ),
+      COMMAND_OR_SCRIPT,
+    ),
+    // screen runs the command after its options. `-X` sends a screen
+    // command: its words (`stuff` text, typed into a shell) are one script.
+    screen: spec(options("cehpSsTtX", "", "aAdDfilLmOqrRUvwx"), COMMAND_OR_SCRIPT),
+    // `at` runs its input as a shell script later.
+    at: spec(options("fqt", "", "bcdlmMrvV"), [inputShell("")]),
+    // hyperfine runs each operand, and its `--prepare`, `--setup`,
+    // `--cleanup`, `--conclude` and `--reference` values, in a shell.
+    hyperfine: spec(
+      options(
+        "wmMrpscSunPLD",
+        "warmup min-runs max-runs runs prepare setup cleanup conclude reference shell time-unit command-name parameter-scan parameter-list parameter-step-size style sort export-asciidoc export-csv export-json export-markdown export-orgmode output input",
+        "hiNV",
+        "ignore-failure show-output help version",
+      ),
+      [
+        Run.cases.Operands.make({}),
+        optionScript("psc", ["prepare", "setup", "cleanup", "conclude", "reference"]),
+      ],
+    ),
+    // tmux runs a shell command in a new session, window, pane or popup;
+    // `run-shell` and `if-shell` run a script, `send-keys` types its keys
+    // into a pane, `pipe-pane` pipes a pane into a script, and `-c` runs a
+    // script in tmux's shell.
+    tmux: spec(options("cfLST", "", "2CDlNuVv"), [optionScript("c")]),
+    ...under(["tmux"], {
+      ...each(["new-session", "new"], spec(options("cefFnstxy", "", "AdDEPX"), COMMAND_OR_SCRIPT)),
+      ...each(["new-window", "neww"], spec(options("ceFnt", "", "abdkPS"), COMMAND_OR_SCRIPT)),
+      ...each(
+        ["split-window", "splitw"],
+        spec(options("celtF", "", "bdfhIvPZ"), COMMAND_OR_SCRIPT),
+      ),
+      ...each(
+        ["respawn-pane", "respawnp", "respawn-window", "respawnw"],
+        spec(options("cet", "", "k"), COMMAND_OR_SCRIPT),
+      ),
+      ...each(
+        ["display-popup", "popup"],
+        spec(options("bcdehsStTwxy", "", "BCEkN"), COMMAND_OR_SCRIPT),
+      ),
+      ...each(["run-shell", "run"], spec(options("cdt", "", "bC"), [joined()])),
+      ...each(["if-shell", "if"], spec(options("t", "", "bF"), [joined()])),
+      ...each(["send-keys", "send"], spec(options("cNt", "", "FHKlMRX"), [joined()])),
+      ...each(["pipe-pane", "pipep"], spec(options("t", "", "IOo"), [joined()])),
+    }),
     // `-e`, `-i` and `-l` take only an attached value; so do `--max-lines`,
     // `--replace` and `--eof`, after `=`.
     xargs: spec(
@@ -4022,9 +4294,20 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
     // `npx -c '<script>'` runs a shell script.
     ...each(
       ["npm exec", "npm x", "npx"],
-      spec(options("pcw", "package call workspace"), [command(), optionScript("c", ["call"])]),
+      spec(
+        options(
+          "pcw",
+          "package call workspace",
+          "y",
+          "yes no workspaces include-workspace-root quiet silent",
+        ),
+        [command(), optionScript("c", ["call"])],
+      ),
     ),
-    ...each(["bunx", "bun x"], runner(options("p", "package"))),
+    ...each(
+      ["bunx", "bun x"],
+      runner(options("p", "package", "", "bun no-install verbose silent")),
+    ),
     ...each(
       ["pnpm publish", "npm publish", "yarn publish", "yarn npm publish", "bun publish"],
       PUBLISH,
@@ -4054,68 +4337,59 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
           "gh api DELETE",
         ),
     ),
-    docker: spec(
-      options(
-        "Hcl",
-        "host context config log-level tlscacert tlscert tlskey",
-        "D",
-        "debug tls tlsverify",
-      ),
-    ),
-    ...each(["docker push", "docker image push"], risky(external("docker push"))),
-    ...each(
-      ["docker volume rm", "docker volume remove", "docker volume prune", "docker system prune"],
-      risky(({ resolved }) => destructive(`${resolved.path} (deletes volumes or containers)`)),
-    ),
-    // Compose: `down -v` deletes the named volumes, `rm -f` removes stopped
-    // containers without asking.
-    ...each(["docker compose", "docker-compose"], spec(COMPOSE_OPTIONS)),
-    ...each(
-      ["docker compose down", "docker-compose down"],
-      risky(({ parsed, resolved }) =>
-        destructiveWhen(
-          hasShort(parsed, "v") || hasLong(parsed, "volumes"),
-          `${resolved.path} -v (deletes volumes)`,
+    // Docker, and podman and nerdctl, which take its command lines.
+    ...under(["docker", "podman", "nerdctl"], {
+      "": spec(
+        options(
+          "Hcl",
+          "host context config log-level tlscacert tlscert tlskey",
+          "D",
+          "debug tls tlsverify",
         ),
       ),
-    ),
-    ...each(
-      ["docker compose rm", "docker-compose rm"],
-      risky(({ parsed, resolved }) =>
-        destructiveWhen(
-          hasShort(parsed, "f") || hasLong(parsed, "force"),
-          `${resolved.path} -f (removes containers)`,
+      ...each(
+        ["push", "image push"],
+        risky(({ resolved }) =>
+          Option.some<BashRisk>({ level: "external", reason: resolved.path }),
         ),
       ),
-    ),
-    // The command a container or a pod runs, after the container, service or
-    // pod word; it shares volumes, mounts and databases with the host.
-    // `run --entrypoint cmd` runs `cmd` with the words after the image.
-    // `kubectl exec` takes it after `--`, or after the pod in the old form;
-    // `kubectl debug` after `--`.
-    ...each(
-      ["docker exec", "docker container exec", "docker compose exec", "docker-compose exec"],
-      runner(CONTAINER_EXEC_OPTIONS, { positionals: 1 }),
-    ),
-    ...each(
-      ["docker run", "docker container run", "docker compose run", "docker-compose run"],
-      runner(CONTAINER_RUN_OPTIONS, { positionals: 1, entry: ["entrypoint"] }),
-    ),
-    "kubectl exec": spec(KUBECTL_EXEC_OPTIONS, [
-      command({ after: ["--"] }),
-      command({ positionals: 1 }),
-    ]),
-    "kubectl debug": runner(KUBECTL_DEBUG_OPTIONS, { after: ["--"] }),
-    kubectl: spec(KUBECTL_OPTIONS),
-    ...each(
-      ["kubectl delete", "kubectl drain"],
-      spec(options("fl", "filename selector"), [], ({ resolved }) =>
-        destructive(`${resolved.path} (deletes or evicts cluster resources)`),
+      ...each(
+        ["volume rm", "volume remove", "volume prune", "system prune"],
+        risky(({ resolved }) => destructive(`${resolved.path} (deletes volumes or containers)`)),
       ),
-    ),
-    "kubectl replace": spec(options("f", "filename"), [], ({ parsed }) =>
-      destructiveWhen(hasLong(parsed, "force"), "kubectl replace --force (deletes and recreates)"),
-    ),
+      ...under(["compose"], COMPOSE_ROWS),
+      ...each(["exec", "container exec"], CONTAINER_EXEC),
+      // `create` stores the command; `start` runs it.
+      ...each(["run", "container run", "create", "container create"], CONTAINER_RUN),
+      "service create": runner(SERVICE_CREATE_OPTIONS, {
+        positionals: 1,
+        entry: ["entrypoint"],
+        entryScript: true,
+      }),
+    }),
+    ...under(["docker-compose"], COMPOSE_ROWS),
+    // Kubernetes, and OpenShift's `oc`, which takes kubectl's command lines.
+    // `oc rsh` runs a command in a pod, after the pod word.
+    ...under(["kubectl", "oc"], {
+      "": spec(KUBECTL_OPTIONS),
+      // `kubectl exec` takes the command after `--`, or after the pod in
+      // the old form; `kubectl debug` after `--`.
+      exec: spec(KUBECTL_EXEC_OPTIONS, [command({ after: ["--"] }), command({ positionals: 1 })]),
+      debug: runner({}, { after: ["--"] }),
+      ...each(
+        ["delete", "drain"],
+        spec(options("fl", "filename selector"), [], ({ resolved }) =>
+          destructive(`${resolved.path} (deletes or evicts cluster resources)`),
+        ),
+      ),
+      replace: spec(options("f", "filename"), [], ({ parsed, resolved }) =>
+        destructiveWhen(
+          hasLong(parsed, "force"),
+          `${resolved.path} --force (deletes and recreates)`,
+        ),
+      ),
+    }),
+    "oc rsh": runner(OC_RSH_OPTIONS, { positionals: 1 }),
     // Terraform and OpenTofu: `destroy`, `apply` that does not stop to ask
     // (`-auto-approve`, or a saved plan file), and `state rm`.
     ...each(["terraform", "tofu"], spec({ long: ["chdir"], singleDash: true })),
@@ -4132,14 +4406,20 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
         ),
       ),
     ),
-    ...each(["terraform state", "tofu state"], spec({ singleDash: true })),
     ...each(
       ["terraform state rm", "tofu state rm"],
       risky(({ resolved }) => destructive(`${resolved.path} (forgets managed resources)`)),
     ),
     uv: spec(options("", "directory project")),
-    "uv run": runner(options("", "with python package env-file extra group")),
-    "op run": runner(options("", "env-file")),
+    "uv run": runner(
+      options(
+        "",
+        "with python package env-file extra group",
+        "qv",
+        "frozen locked no-sync isolated no-project no-dev all-extras all-packages exact offline quiet verbose",
+      ),
+    ),
+    "op run": runner(options("", "env-file", "", "no-masking")),
     ...each(["mise exec", "mise x"], runner({}, { after: ["--"] })),
     "direnv exec": runner({}, { positionals: 1 }),
     ...each(["nix develop", "nix shell"], runner({}, { after: ["-c", "--command"] })),
@@ -4449,7 +4729,10 @@ const receivedCommand = (resolved: ResolvedCommand): ResolvedCommand => {
  * (`receivedTexts`). A glob matches only names of files (`rm *.log`). Only
  * the value of an option the
  * table names (`cp -t "$d"`, `psql -d "$DB"`) is no flag, and only when it
- * does not split.
+ * does not split. A path that runs a command (`sudo`) reads only the words
+ * before the first start of that command: the words from it on are the
+ * command's, read where it is classified (`sudo ls "$D"` is safe, `sudo
+ * "$CMD"` asks for its computed command word).
  */
 const runTimeOptions = (
   resolved: ResolvedCommand,
@@ -4458,6 +4741,12 @@ const runTimeOptions = (
   const args = resolved.words.slice(1)
   let end = args.findIndex((word) => word.text === "--")
   if (end === -1) end = args.length
+  for (const run of resolved.spec.runs) {
+    if (run._tag !== "Command") continue
+    // `args[index]` is `resolved.words[index + 1]`.
+    const starts = commandStarts(resolved.words, resolved.spec.valued, run)
+    end = Math.min(end, ...starts.map((start) => start - 1))
+  }
   const values = new Set(
     parsed.options.flatMap((option) =>
       Option.toArray(option.value).flatMap((value) => {
