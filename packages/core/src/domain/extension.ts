@@ -360,7 +360,12 @@ export interface TurnAfterInput {
    * resumed after a restart names none from before it.
    */
   readonly joinedMessageIds: ReadonlySet<MessageId>
-  /** When the turn started, in epoch milliseconds; a turn resumed after a park or a restart keeps its start. */
+  /**
+   * When the turn started, in epoch milliseconds. A turn resumed after it
+   * parked on an interaction keeps its start. A turn recovered after a
+   * restart starts again at the recovery: the stored queue holds no start
+   * time, so `startedAtMs` and `durationMs` count from the recovery.
+   */
   readonly startedAtMs: number
   readonly durationMs: number
   readonly agentName: AgentName
