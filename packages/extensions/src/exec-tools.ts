@@ -1946,6 +1946,8 @@ const runCommands = (
       return [[entry.value, ...rest]]
     }
     if (run.head === "") return [rest]
+    // No words, no subcommand: the head alone would read this command again.
+    if (rest.length === 0) return []
     return [[derivedWord(run.head, false), ...rest]]
   })
 }
@@ -3509,7 +3511,7 @@ const CONTAINER_EXEC_OPTIONS = options(
  */
 const CONTAINER_RUN_OPTIONS = options(
   "acehlmpuvw",
-  "attach cpu-shares env env-file hostname label memory publish user volume workdir name network entrypoint mount platform pull restart cpus add-host device dns ipc log-driver log-opt pid runtime security-opt shm-size stop-signal tmpfs ulimit cap-add cap-drop cidfile gpus",
+  "attach cpu-shares env env-file hostname label memory publish user volume workdir name network entrypoint mount platform pull restart cpus add-host device dns ipc log-driver log-opt pid runtime security-opt shm-size stop-signal tmpfs ulimit cap-add cap-drop cidfile gpus health-cmd health-interval health-retries health-start-period health-start-interval health-timeout",
   "diPqtT",
   "rm detach interactive tty privileged init read-only publish-all quiet no-deps service-ports use-aliases build remove-orphans quiet-pull no-tty",
 )
@@ -3541,13 +3543,18 @@ const OC_RSH_OPTIONS = options(
 /**
  * The command a container runs, after the container, service or image word;
  * it shares volumes, mounts and databases with the host. `run --entrypoint
- * cmd` runs `cmd` with the words after the image.
+ * cmd` runs `cmd` with the words after the image. The container runs its
+ * `--health-cmd` value in a shell, again and again.
  */
+const HEALTH_CMD = optionScript("", ["health-cmd"])
 const CONTAINER_EXEC = runner(CONTAINER_EXEC_OPTIONS, { positionals: 1 })
-const CONTAINER_RUN = runner(CONTAINER_RUN_OPTIONS, { positionals: 1, entry: ["entrypoint"] })
+const CONTAINER_RUN = spec(CONTAINER_RUN_OPTIONS, [
+  command({ positionals: 1, entry: ["entrypoint"] }),
+  HEALTH_CMD,
+])
 
 /**
- * The paths under `docker compose` and `docker-compose`: `down -v` deletes
+ * The paths under `docker compose`, `docker-compose` and `podman-compose`: `down -v` deletes
  * the named volumes, `rm -f` removes stopped containers without asking.
  * `run --entrypoint` splits its value into words, as a shell does.
  */
@@ -3580,6 +3587,13 @@ const TERRAFORM_APPLY_OPTIONS: ValueOptions = {
  * and its arguments (tmux, screen, watchexec): each reading is read.
  */
 const COMMAND_OR_SCRIPT: ReadonlyArray<Run> = [command(), joined()]
+
+/** A `;` word (`\;`, `';'`) ends a tmux command: the words after it are another. */
+const TMUX_NEXT = command({ after: [";"], head: "tmux" })
+
+/** A tmux subcommand's options and runs, and the tmux command after a `;` word. */
+const tmuxRow = (short: string, flags: string, runs: ReadonlyArray<Run>) =>
+  spec(options(short, "", flags), [...runs, TMUX_NEXT])
 
 /** find primaries that write their output over the file they name. */
 const FIND_OUTPUTS = ["fprint", "fprint0", "fprintf", "fls"]
@@ -3715,8 +3729,9 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
     // screen runs the command after its options. `-X` sends a screen
     // command: its words (`stuff` text, typed into a shell) are one script.
     screen: spec(options("cehpSsTtX", "", "aAdDfilLmOqrRUvwx"), COMMAND_OR_SCRIPT),
-    // `at` runs its input as a shell script later.
-    at: spec(options("fqt", "", "bcdlmMrvV"), [inputShell("")]),
+    // `at`, and `batch`, which is `at -b`, run their input as a shell
+    // script later.
+    ...each(["at", "batch"], spec(options("fqt", "", "bcdlmMrvV"), [inputShell("")])),
     // hyperfine runs each operand, and its `--prepare`, `--setup`,
     // `--cleanup`, `--conclude` and `--reference` values, in a shell.
     hyperfine: spec(
@@ -3734,27 +3749,22 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
     // tmux runs a shell command in a new session, window, pane or popup;
     // `run-shell` and `if-shell` run a script, `send-keys` types its keys
     // into a pane, `pipe-pane` pipes a pane into a script, and `-c` runs a
-    // script in tmux's shell.
-    tmux: spec(options("cfLST", "", "2CDlNuVv"), [optionScript("c")]),
+    // script in tmux's shell. A `;` word starts the next tmux command
+    // (`tmux new -d \; split-window cmd`).
+    tmux: spec(options("cfLST", "", "2CDlNuVv"), [optionScript("c"), TMUX_NEXT]),
     ...under(["tmux"], {
-      ...each(["new-session", "new"], spec(options("cefFnstxy", "", "AdDEPX"), COMMAND_OR_SCRIPT)),
-      ...each(["new-window", "neww"], spec(options("ceFnt", "", "abdkPS"), COMMAND_OR_SCRIPT)),
-      ...each(
-        ["split-window", "splitw"],
-        spec(options("celtF", "", "bdfhIvPZ"), COMMAND_OR_SCRIPT),
-      ),
+      ...each(["new-session", "new"], tmuxRow("cefFnstxy", "AdDEPX", COMMAND_OR_SCRIPT)),
+      ...each(["new-window", "neww"], tmuxRow("ceFnt", "abdkPS", COMMAND_OR_SCRIPT)),
+      ...each(["split-window", "splitw"], tmuxRow("celtF", "bdfhIvPZ", COMMAND_OR_SCRIPT)),
       ...each(
         ["respawn-pane", "respawnp", "respawn-window", "respawnw"],
-        spec(options("cet", "", "k"), COMMAND_OR_SCRIPT),
+        tmuxRow("cet", "k", COMMAND_OR_SCRIPT),
       ),
-      ...each(
-        ["display-popup", "popup"],
-        spec(options("bcdehsStTwxy", "", "BCEkN"), COMMAND_OR_SCRIPT),
-      ),
-      ...each(["run-shell", "run"], spec(options("cdt", "", "bC"), [joined()])),
-      ...each(["if-shell", "if"], spec(options("t", "", "bF"), [joined()])),
-      ...each(["send-keys", "send"], spec(options("cNt", "", "FHKlMRX"), [joined()])),
-      ...each(["pipe-pane", "pipep"], spec(options("t", "", "IOo"), [joined()])),
+      ...each(["display-popup", "popup"], tmuxRow("bcdehsStTwxy", "BCEkN", COMMAND_OR_SCRIPT)),
+      ...each(["run-shell", "run"], tmuxRow("cdt", "bC", [joined()])),
+      ...each(["if-shell", "if"], tmuxRow("t", "bF", [joined()])),
+      ...each(["send-keys", "send"], tmuxRow("cNt", "FHKlMRX", [joined()])),
+      ...each(["pipe-pane", "pipep"], tmuxRow("t", "IOo", [joined()])),
     }),
     // `-e`, `-i` and `-l` take only an attached value; so do `--max-lines`,
     // `--replace` and `--eof`, after `=`.
@@ -3903,21 +3913,20 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
       ...each(["exec", "container exec"], CONTAINER_EXEC),
       // `create` stores the command; `start` runs it.
       ...each(["run", "container run", "create", "container create"], CONTAINER_RUN),
-      "service create": runner(SERVICE_CREATE_OPTIONS, {
-        positionals: 1,
-        entry: ["entrypoint"],
-        entryScript: true,
-      }),
+      "service create": spec(SERVICE_CREATE_OPTIONS, [
+        command({ positionals: 1, entry: ["entrypoint"], entryScript: true }),
+        HEALTH_CMD,
+      ]),
     }),
-    ...under(["docker-compose"], COMPOSE_ROWS),
+    ...under(["docker-compose", "podman-compose"], COMPOSE_ROWS),
     // Kubernetes, and OpenShift's `oc`, which takes kubectl's command lines.
     // `oc rsh` runs a command in a pod, after the pod word.
     ...under(["kubectl", "oc"], {
       "": spec(KUBECTL_OPTIONS),
       // `kubectl exec` takes the command after `--`, or after the pod in
-      // the old form; `kubectl debug` after `--`.
+      // the old form; `kubectl debug` and `kubectl run` after `--`.
       exec: spec(KUBECTL_EXEC_OPTIONS, [command({ after: ["--"] }), command({ positionals: 1 })]),
-      debug: runner({}, { after: ["--"] }),
+      ...each(["debug", "run"], runner({}, { after: ["--"] })),
       ...each(
         ["delete", "drain"],
         spec(options("fl", "filename selector"), [], ({ resolved }) =>

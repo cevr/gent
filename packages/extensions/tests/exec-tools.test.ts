@@ -2583,6 +2583,15 @@ describe("classifyBashCommand", () => {
       `oc rsh pod rm -rf ${x}`,
       `oc rsh -c app pod sh -c 'rm -rf ${x}'`,
       "oc delete pod gent-probe-x",
+      // `run` starts a pod with the command after `--`.
+      `kubectl run p --image=alpine -- rm -rf ${x}`,
+      `oc run p --image=alpine -- sh -c 'rm -rf ${x}'`,
+      `podman-compose exec web rm -rf ${x}`,
+      `podman-compose run web rm -rf ${x}`,
+      // A health check is a shell script the container runs.
+      `docker run --health-cmd 'rm -rf ${x}' alpine`,
+      `docker run --health-cmd='rm -rf ${x}' --health-interval 5s alpine ls`,
+      `docker service create --health-cmd 'rm -rf ${x}' alpine`,
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
@@ -2595,6 +2604,10 @@ describe("classifyBashCommand", () => {
       "oc get pods",
       "oc rsh pod",
       "oc rsh -t pod ls",
+      "kubectl run p --image=alpine",
+      "oc run p --image=alpine -- ls",
+      "podman-compose ps",
+      "docker run --health-cmd 'curl -f localhost' --health-interval 5s alpine ls",
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("safe")
     }
@@ -2665,6 +2678,10 @@ describe("classifyBashCommand", () => {
       `tmux send-keys -t s '${r}' Enter`,
       `tmux run-shell '${r}'`,
       `tmux -c '${r}'`,
+      // `;` ends one tmux command and starts the next.
+      `tmux new -d \\; split-window '${r}'`,
+      `tmux kill-server \\; new -d '${r}'`,
+      `tmux new -d ';' send-keys '${r}' Enter`,
       `screen -dm sh -c '${r}'`,
       `screen -dmS s ${r}`,
       `screen -S s -X stuff '${r}\\n'`,
@@ -2680,6 +2697,8 @@ describe("classifyBashCommand", () => {
       `watchexec -- sh -c '${r}'`,
       `at now <<< '${r}'`,
       `echo '${r}' | at now`,
+      `echo '${r}' | batch`,
+      `batch <<< '${r}'`,
       `nsenter -t 1 -m ${r}`,
       `nsenter --target 1 --mount -- ${r}`,
       `gosu root ${r}`,
@@ -2703,6 +2722,8 @@ describe("classifyBashCommand", () => {
       "nsenter -t 1 -m ls",
       "sshpass -p x ssh h ls",
       "echo ls | at now",
+      "echo ls | batch",
+      "tmux new -d \\; split-window 'npm test'",
       // The script file is not read, as a `source`d file is not.
       `at -f ${x} now`,
     ]) {
@@ -2730,6 +2751,8 @@ describe("classifyBashCommand", () => {
       "docker compose -f /nonexistent/gent-probe-x.yml down --volumes",
       "docker compose rm -f",
       "docker-compose down -v",
+      "podman-compose down -v",
+      "podman-compose rm -f",
       'docker compose "$CMD"',
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
