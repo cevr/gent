@@ -45,7 +45,8 @@ import {
   type InitialState,
   QueueWidget,
   resolveInitialState,
-  resolveStartupAuthState,
+  resolveHeadlessMissingProviders,
+  resolveStartupAgent,
 } from "../src/app"
 import {
   createMockClient,
@@ -100,8 +101,8 @@ const expectAppBootstrapFailure = (
     return reason.value.error
   })
 
-describe("resolveStartupAuthState", () => {
-  it.live("uses the session snapshot agent for interactive startup", () =>
+describe("startup agent and headless auth", () => {
+  it.live("interactive startup uses the session snapshot agent and lists no providers", () =>
     Effect.gen(function* () {
       const calls: Array<{
         agentName?: AgentName
@@ -158,15 +159,10 @@ describe("resolveStartupAuthState", () => {
           parentBranchId: absent,
         },
       }
-      const auth = yield* resolveStartupAuthState({
-        client,
-        state,
-      })
-      expect(auth.initialAgent).toBe(AgentName.make("deepwork"))
-      expect(auth.missingProviders).toEqual([ProviderId.make("openai")])
-      expect(calls).toEqual([
-        { agentName: AgentName.make("deepwork"), sessionId: SessionId.make("session-a") },
-      ])
+      const agent = yield* resolveStartupAgent({ client, state })
+      expect(agent).toEqual(Option.some(AgentName.make("deepwork")))
+      // The session view's auth gate checks the providers itself, once mounted.
+      expect(calls).toEqual([])
     }),
   )
   it.live("a headless session checks auth for the agent it was created with", () =>
@@ -200,7 +196,15 @@ describe("resolveStartupAuthState", () => {
         auth: {
           listProviders: (input: { agentName?: AgentName; sessionId?: string }) => {
             calls.push(input)
-            return Effect.succeed([])
+            return Effect.succeed([
+              {
+                provider: "openai",
+                hasKey: false,
+                required: true,
+                source: noAuthSource,
+                authType: absent,
+              },
+            ])
           },
         },
       })
@@ -219,17 +223,14 @@ describe("resolveStartupAuthState", () => {
         },
         prompt: "hi",
       }
-      const auth = yield* resolveStartupAuthState({
-        client,
-        state,
-      })
-      expect(auth.initialAgent).toBeUndefined()
+      const missing = yield* resolveHeadlessMissingProviders({ client, state })
+      expect(missing).toEqual([ProviderId.make("openai")])
       expect(calls).toEqual([
         { agentName: AgentName.make("deepwork"), sessionId: SessionId.make("session-a") },
       ])
     }),
   )
-  it.live("a session with no branch yet checks auth for the default agent", () =>
+  it.live("a session with no branch yet starts as the default agent", () =>
     Effect.gen(function* () {
       const calls: Array<{
         agentName?: AgentName
@@ -256,17 +257,12 @@ describe("resolveStartupAuthState", () => {
           parentBranchId: absent,
         },
       }
-      const auth = yield* resolveStartupAuthState({
-        client,
-        state,
-      })
-      expect(auth.initialAgent).toBe(DEFAULT_AGENT_NAME)
-      expect(calls).toEqual([
-        { agentName: DEFAULT_AGENT_NAME, sessionId: SessionId.make("session-a") },
-      ])
+      const agent = yield* resolveStartupAgent({ client, state })
+      expect(agent).toEqual(Option.some(DEFAULT_AGENT_NAME))
+      expect(calls).toEqual([])
     }),
   )
-  it.live("skips pre-auth gating while the user is choosing a branch", () =>
+  it.live("names no agent while the user is choosing a branch", () =>
     Effect.gen(function* () {
       const calls: Array<{
         agentName?: AgentName
@@ -307,12 +303,8 @@ describe("resolveStartupAuthState", () => {
           },
         ],
       }
-      const auth = yield* resolveStartupAuthState({
-        client,
-        state,
-      })
-      expect(auth.initialAgent).toBeUndefined()
-      expect(auth.missingProviders).toEqual([])
+      const agent = yield* resolveStartupAgent({ client, state })
+      expect(agent).toEqual(Option.none())
       expect(calls).toEqual([])
     }),
   )
@@ -544,7 +536,7 @@ const mountRunningTurn = (height = 24, extensions: ReadonlyArray<AnyExtensionCli
       renderWithProviders(
         () => (
           <>
-            <App missingAuthProviders={[]} />
+            <App />
             <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
           </>
         ),
@@ -699,7 +691,7 @@ const mountShortTerminalWithTrays = (
       renderWithProviders(
         () => (
           <>
-            <App missingAuthProviders={[]} />
+            <App />
             <ClientProbe onReady={options.onClient ?? (() => {})} />
           </>
         ),
@@ -804,7 +796,7 @@ const mountNoticeSources = (ids: ReadonlyArray<string>) =>
       renderWithProviders(
         () => (
           <>
-            <App missingAuthProviders={[]} />
+            <App />
             <ExtensionUIProbe onReady={(value) => (ext = Option.some(value))} />
           </>
         ),
@@ -902,7 +894,7 @@ describe("App auth gate", () => {
         renderWithProviders(
           () => (
             <>
-              <App missingAuthProviders={[]} />
+              <App />
               <TerminalDimensionsProbe />
             </>
           ),
@@ -963,7 +955,7 @@ describe("App auth gate", () => {
         renderWithProviders(
           () => (
             <>
-              <App missingAuthProviders={[]} />
+              <App />
               <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
             </>
           ),
@@ -1023,7 +1015,7 @@ describe("App auth gate", () => {
       })
       const runtime = createMockRuntime()
       const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <App missingAuthProviders={["openai"]} />, {
+        renderWithProviders(() => <App />, {
           client,
           runtime,
           initialAgent: AgentName.make("deepwork"),
@@ -1098,7 +1090,7 @@ describe("App auth gate", () => {
         renderWithProviders(
           () => (
             <>
-              <App missingAuthProviders={[]} />
+              <App />
               <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
             </>
           ),
@@ -1179,7 +1171,7 @@ describe("App auth gate", () => {
         renderWithProviders(
           () => (
             <>
-              <App missingAuthProviders={[]} />
+              <App />
               <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
             </>
           ),
@@ -1226,7 +1218,7 @@ describe("App auth gate", () => {
         branch: { getTree: () => Effect.succeed([]) },
       })
       const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <App missingAuthProviders={[]} />, {
+        renderWithProviders(() => <App />, {
           client,
           runtime: createMockRuntime(),
           initialSession: {
@@ -1552,7 +1544,7 @@ describe("App auth gate", () => {
         renderWithProviders(
           () => (
             <>
-              <App missingAuthProviders={[]} />
+              <App />
               <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
             </>
           ),
@@ -1593,7 +1585,7 @@ describe("App auth gate", () => {
         branch: { getTree: () => Effect.succeed([]) },
       })
       const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <App missingAuthProviders={[]} />, {
+        renderWithProviders(() => <App />, {
           client,
           runtime: createMockRuntime(),
           builtins: builtinClientModules,
@@ -1631,7 +1623,7 @@ describe("App auth gate", () => {
         renderWithProviders(
           () => (
             <>
-              <App missingAuthProviders={[]} />
+              <App />
               <ExtensionUIProbe onReady={(value) => (ext = Option.some(value))} />
             </>
           ),
@@ -1686,7 +1678,7 @@ describe("App auth gate", () => {
   it.live("a pane that opens over a previewing prompt search gives the draft back", () =>
     Effect.gen(function* () {
       const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <App missingAuthProviders={[]} />, {
+        renderWithProviders(() => <App />, {
           client: createMockClient({
             auth: { listProviders: () => Effect.succeed([]) },
             branch: { getTree: () => Effect.succeed([]) },
@@ -1723,7 +1715,7 @@ describe("App auth gate", () => {
   it.live("an unknown slash command comes back to the draft with its reason", () =>
     Effect.gen(function* () {
       const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <App missingAuthProviders={[]} />, {
+        renderWithProviders(() => <App />, {
           client: createMockClient({
             auth: { listProviders: () => Effect.succeed([]) },
             branch: { getTree: () => Effect.succeed([]) },
@@ -1765,7 +1757,7 @@ describe("App auth gate", () => {
         renderWithProviders(
           () => (
             <>
-              <App missingAuthProviders={[]} />
+              <App />
               <ExtensionUIProbe onReady={(value) => (ext = Option.some(value))} />
             </>
           ),
@@ -1847,7 +1839,7 @@ describe("App auth gate", () => {
             renderWithProviders(
               () => (
                 <>
-                  <App missingAuthProviders={[]} />
+                  <App />
                   <ExtensionUIProbe onReady={(value) => (ext = Option.some(value))} />
                 </>
               ),
@@ -1943,7 +1935,7 @@ describe("App auth gate", () => {
         renderWithProviders(
           () => (
             <>
-              <App missingAuthProviders={[]} />
+              <App />
               <ExtensionUIProbe onReady={(value) => (ext = Option.some(value))} />
             </>
           ),
@@ -2420,7 +2412,6 @@ describe("App auth gate", () => {
       renderWithProviders(
         () => (
           <App
-            missingAuthProviders={[]}
             initialBranches={Option.some([
               {
                 id: BranchId.make("branch-a"),
@@ -2535,7 +2526,6 @@ describe("App auth gate", () => {
         renderWithProviders(
           () => (
             <App
-              missingAuthProviders={[]}
               initialBranches={Option.some([
                 {
                   id: BranchId.make("branch-a"),
@@ -2609,7 +2599,7 @@ describe("App auth gate", () => {
       })
       const runtime = createMockRuntime()
       const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <App missingAuthProviders={["openai"]} />, {
+        renderWithProviders(() => <App />, {
           client,
           runtime,
           initialAgent: AgentName.make("cowork"),
@@ -2669,7 +2659,7 @@ describe("App auth gate", () => {
         },
       })
       const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <App missingAuthProviders={["openai"]} />, {
+        renderWithProviders(() => <App />, {
           client,
           runtime: createMockRuntime(),
           initialAgent: AgentName.make("cowork"),
@@ -2723,7 +2713,7 @@ describe("App auth gate", () => {
       })
       const runtime = createMockRuntime()
       const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <App missingAuthProviders={[]} />, {
+        renderWithProviders(() => <App />, {
           client,
           runtime,
           initialAgent: AgentName.make("cowork"),
@@ -2779,7 +2769,7 @@ describe("App auth gate", () => {
       })
       const runtime = createMockRuntime()
       const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <App missingAuthProviders={[]} />, {
+        renderWithProviders(() => <App />, {
           client,
           runtime,
           initialAgent: AgentName.make("cowork"),
@@ -2827,7 +2817,7 @@ describe("App auth gate", () => {
       })
       const runtime = createMockRuntime()
       const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <App missingAuthProviders={[]} />, {
+        renderWithProviders(() => <App />, {
           client,
           runtime,
           initialAgent: AgentName.make("cowork"),
@@ -2962,7 +2952,6 @@ describe("App auth gate", () => {
           () => (
             <>
               <App
-                missingAuthProviders={[]}
                 initialBranches={Option.some([
                   {
                     id: alphaBranchId,
@@ -3137,7 +3126,7 @@ describe("App auth gate", () => {
         renderWithProviders(
           () => (
             <>
-              <App missingAuthProviders={["openai"]} />
+              <App />
               <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
             </>
           ),
@@ -3213,7 +3202,7 @@ describe("App auth gate", () => {
         renderWithProviders(
           () => (
             <>
-              <App missingAuthProviders={[]} />
+              <App />
               <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
             </>
           ),
@@ -3275,7 +3264,7 @@ describe("App auth gate", () => {
         renderWithProviders(
           () => (
             <>
-              <App missingAuthProviders={[]} />
+              <App />
               <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
             </>
           ),
@@ -3335,7 +3324,7 @@ describe("App auth gate", () => {
           },
         })
         const setup = yield* Effect.promise(() =>
-          renderWithProviders(() => <App missingAuthProviders={[]} />, {
+          renderWithProviders(() => <App />, {
             client,
             runtime: createMockRuntime(),
             initialAgent: AgentName.make("cowork"),
@@ -3381,7 +3370,7 @@ describe("App auth gate", () => {
         renderWithProviders(
           () => (
             <>
-              <App missingAuthProviders={[]} />
+              <App />
               <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
             </>
           ),
@@ -4021,7 +4010,7 @@ describe("debug playground", () => {
           const [session] = yield* client.session.list()
           const initialSession = yield* Effect.fromNullishOr(session)
           const setup = yield* Effect.promise(() =>
-            renderWithProviders(() => <App missingAuthProviders={[]} />, {
+            renderWithProviders(() => <App />, {
               client,
               runtime,
               initialSession,
@@ -4064,7 +4053,7 @@ describe("client extension status", () => {
         renderWithProviders(
           () => (
             <>
-              <App missingAuthProviders={[]} />
+              <App />
               <ExtensionUIProbe onReady={(value) => (ext = Option.some(value))} />
             </>
           ),
