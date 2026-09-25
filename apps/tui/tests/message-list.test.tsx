@@ -9,6 +9,7 @@ import {
   type Message as ListMessage,
   MessageList,
   NativeTranscript,
+  promptOnScreen,
   reasoningMarkdown,
   type SessionEvent,
   type SessionItem,
@@ -3269,4 +3270,186 @@ describe("native transcript commit handover", () => {
       }).pipe(Effect.timeout("10 seconds")),
     15_000,
   )
+})
+
+// ── sticky last prompt ──────────────────────────────────────────────────────
+
+describe("sticky last prompt", () => {
+  const prompt = (id: string, text: string): ListMessage => ({
+    ...userMessage("regular-message", id, text, "queued"),
+    pendingMode: absent,
+  })
+  const reply = (id: string, lines: number): ListMessage => {
+    const text = Array.from({ length: lines }, (_, index) => `${id} line ${index + 1}`).join("\n\n")
+    return {
+      _tag: "regular-message",
+      id,
+      role: "assistant",
+      content: text,
+      reasoning: "",
+      images: [],
+      createdAt: 0,
+      toolCalls: absent,
+      segments: [{ _tag: "text", content: text }],
+    }
+  }
+  const count = (frame: string, text: string) => frame.split(text).length - 1
+
+  /** The transcript over `items` with a three-row footer, as the session view mounts it. */
+  const mountTranscript = (
+    items: () => SessionItem[],
+    options: { readonly streaming?: boolean; readonly height?: number; readonly footer?: number },
+  ) =>
+    Effect.gen(function* () {
+      let extensionsLoaded = () => false
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => {
+            extensionsLoaded = useExtensionUI().loaded
+            return (
+              <NativeTranscript
+                items={items()}
+                settled
+                streaming={options.streaming === true}
+                footerHeight={options.footer ?? 3}
+                expanded={false}
+                disclosure="collapsed"
+                displayRevision={0}
+                overlayOpen={false}
+                renderItems={(visible, streaming) => (
+                  <MessageList
+                    items={visible}
+                    disclosure="collapsed"
+                    syntaxStyle={syntaxStyle}
+                    streaming={streaming}
+                  />
+                )}
+              >
+                <box />
+              </NativeTranscript>
+            )
+          },
+          { width: 50, height: options.height ?? 16 },
+        ),
+      )
+      yield* Effect.promise(() => setup.flush()).pipe(
+        Effect.repeat({ until: () => extensionsLoaded() }),
+        Effect.timeout("5 seconds"),
+      )
+      for (let pass = 0; pass < 6; pass++) yield* Effect.promise(() => setup.flush())
+      return setup
+    })
+
+  it.live("no pinned row while the prompt is on screen", () =>
+    Effect.gen(function* () {
+      const setup = yield* mountTranscript(() => [prompt("p1", "ASK-ONE"), reply("r1", 1)], {})
+      expect(count(renderFrame(setup), "ASK-ONE")).toBe(1)
+      expect(renderFrame(setup)).not.toContain("↑ ASK-ONE")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.live("a streaming reply that pushes the prompt out above pins it in one row", () =>
+    Effect.gen(function* () {
+      const setup = yield* mountTranscript(() => [prompt("p1", "ASK-ONE"), reply("r1", 20)], {
+        streaming: true,
+      })
+      const frame = yield* waitForFrame(setup, (next) => next.includes("↑ ASK-ONE"), "pinned")
+      // The original is scrolled out, so the reader sees it once, pinned.
+      expect(count(frame, "ASK-ONE")).toBe(1)
+      const pinned = frame.split("\n").filter((line) => line.includes("↑ ASK-ONE"))
+      expect(pinned).toHaveLength(1)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.live("a prompt committed far into native history stays pinned, cut to the width", () =>
+    Effect.gen(function* () {
+      const long = `ASK-LONG ${"word ".repeat(40)}`
+      const setup = yield* mountTranscript(() => [prompt("p1", long), reply("r1", 20)], {})
+      const frame = yield* waitForFrame(setup, (next) => next.includes("↑ ASK-LONG"), "pinned")
+      const pinned = frame.split("\n").find((line) => line.includes("↑ ASK-LONG")) ?? ""
+      expect(pinned.trimEnd()).toMatch(/…$/)
+      expect(pinned.trimEnd().length).toBeLessThanOrEqual(50)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.live("the pinned row follows the branch in view, and a queued follow-up is not posted", () =>
+    Effect.gen(function* () {
+      const [items, setItems] = createSignal<SessionItem[]>([
+        prompt("p1", "ASK-ONE"),
+        reply("r1", 20),
+        // Waiting in the queue: the reader has not seen it run.
+        userMessage("regular-message", "q1", "QUEUED-ASK", "queued"),
+      ])
+      const setup = yield* mountTranscript(items, { streaming: true })
+      const frame = yield* waitForFrame(setup, (next) => next.includes("↑ ASK-ONE"), "pinned")
+      expect(frame).not.toContain("↑ QUEUED-ASK")
+      // Another branch: its own last prompt, derived from its own messages.
+      setItems([prompt("p2", "ASK-TWO"), reply("r2", 20)])
+      yield* waitForFrame(
+        setup,
+        (next) => next.includes("↑ ASK-TWO") && !next.includes("ASK-ONE"),
+        "pinned on the other branch",
+      )
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.live("a terminal too short for the row keeps the live tail and pins nothing", () =>
+    Effect.gen(function* () {
+      // Two rows left for the transcript: the live tail keeps them both.
+      const setup = yield* mountTranscript(() => [prompt("p1", "ASK-ONE"), reply("r1", 20)], {
+        streaming: true,
+        height: 12,
+        footer: 9,
+      })
+      expect(renderFrame(setup)).not.toContain("↑ ASK-ONE")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+})
+
+describe("promptOnScreen", () => {
+  const known = (rows: ReadonlyArray<number>) => rows.map((row) => Option.some(row))
+
+  test("a live prompt is on screen while its first row is at or below the viewport's top", () => {
+    // Live content of 10 rows in a viewport of 6 (7 rows less the pinned one): rows 0-3 are cut.
+    const at = (heights: ReadonlyArray<number>) =>
+      promptOnScreen({
+        heights: known(heights),
+        index: 1,
+        committed: 0,
+        liveHeight: 10,
+        liveRows: 7,
+        scrollbackRows: 0,
+      })
+    // The prompt's text starts one row into its item, under the row's top margin.
+    expect(at([3, 2, 5])).toBe(true)
+    expect(at([2, 2, 6])).toBe(false)
+  })
+
+  test("a committed prompt is on screen while the history rows after it fit above the region", () => {
+    const committed = (scrollbackRows: number) =>
+      promptOnScreen({
+        heights: known([2, 5, 4]),
+        index: 0,
+        committed: 2,
+        liveHeight: 4,
+        liveRows: 10,
+        scrollbackRows,
+      })
+    // Its text row and the reply under it: 1 + 5 rows of history.
+    expect(committed(6)).toBe(true)
+    expect(committed(5)).toBe(false)
+  })
+
+  test("an unmeasured row counts as on screen, so nothing is pinned on a guess", () => {
+    expect(
+      promptOnScreen({
+        heights: [Option.none(), Option.some(2)],
+        index: 1,
+        committed: 0,
+        liveHeight: 40,
+        liveRows: 5,
+        scrollbackRows: 0,
+      }),
+    ).toBe(true)
+  })
 })

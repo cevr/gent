@@ -117,6 +117,17 @@ the order is set by hiding whole boxes, not by shrink weights. A pane whose newe
 passes `stickToBottom` to `ChromePanel.Body` and puts its gaps above a row,
 not under it.
 
+The transcript pins the last posted prompt in one row (`↑ <first line>`) above
+the live tail while that prompt's own row is off screen: cut off the top of the
+live viewport, or deep enough in native history that the terminal no longer
+shows it (`promptOnScreen` in `message-list.tsx`, reckoned as if the row were
+drawn so it never flickers). It is derived from the displayed items, so it
+follows the branch and session in view; a queued or steering message, a
+custom-type row and a hidden message are not prompts. It is the first row a
+short terminal gives up: it shows only while the live tail keeps a row beside
+it. The expanded transcript and overlays pin nothing, and the terminal owns
+scrollback, so there is no jump back to the original.
+
 ## Compound Components
 
 StatusBar uses compound pattern - compose what you need:
