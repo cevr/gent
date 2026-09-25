@@ -2,6 +2,7 @@
 import {
   type Accessor,
   createContext,
+  createMemo,
   createEffect,
   createRoot,
   createSignal,
@@ -876,13 +877,13 @@ export function SelectList<A>(props: SelectListProps<A>) {
     setState(SelectListState.initial(index))
     if (props.filter) props.filter.onQueryChange("")
   }
+  // A memo, so only a change of `open` resets: a pane that derives `open`
+  // from its rows would otherwise reset on every arrival of them.
+  const opened = createMemo(() => props.open)
   createEffect(
-    on(
-      () => props.open,
-      (open) => {
-        if (open) reset()
-      },
-    ),
+    on(opened, (open) => {
+      if (open) reset()
+    }),
   )
 
   if (props.api) {

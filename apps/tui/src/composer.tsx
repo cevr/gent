@@ -12,6 +12,7 @@ import {
   createSignal,
   For,
   type JSX,
+  on,
   onCleanup,
   onMount,
   Show,
@@ -45,6 +46,7 @@ import {
   PickerHost,
   selectable,
   SelectList,
+  type SelectListApi,
   type SelectListRow,
 } from "./ui"
 import { useExtensionUI } from "./extensions/host"
@@ -393,6 +395,18 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
     props.onGhostChange(Option.none())
   })
 
+  // The composer owns the query, so the list never sees it typed. A new
+  // query is a new list: the cursor goes back to the top match, as a query
+  // typed into the list itself does.
+  let list = Option.none<SelectListApi>()
+  createEffect(
+    on(
+      () => props.state.filter,
+      () => Option.map(list, (api) => api.reset()),
+      { defer: true },
+    ),
+  )
+
   // The list binds escape only while it has rows; the popup closes on it always.
   useScopedKeyboard((e) => {
     if (e.name !== "escape") return false
@@ -493,6 +507,7 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
         rows={rows}
         rowKey={(item) => item.id}
         sticky={() => Option.some(0)}
+        api={(api) => (list = Option.some(api))}
         empty={emptyRow}
         onCursor={setCursor}
         extraKeys={(event, selected) => {
