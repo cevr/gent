@@ -23,10 +23,12 @@ import {
 } from "../src/delegate.js"
 import {
   defineExtension,
+  ExtensionContext,
   ExtensionHost,
   LoadedArtifactIdentity,
   type ModelPricing,
   RequestId,
+  tool,
 } from "@gent/core/extensions/api"
 import {
   ApprovalService,
@@ -130,6 +132,35 @@ const harnessWithHome = (
   }).pipe(Effect.provide(BunFileSystem.layer))
 
 type Harness = Effect.Success<ReturnType<typeof harnessWithHome>>
+
+/**
+ * A `confirm` tool that asks the user before it acts, as any extension tool
+ * may. Its result is `approved`, or `declined: ` and the decline's notes.
+ */
+const ConfirmTool = tool({
+  id: "confirm",
+  description: "Ask the user before acting",
+  params: Schema.Struct({ action: Schema.String }),
+  output: Schema.String,
+  execute: (params) =>
+    Effect.gen(function* () {
+      const answer = yield* (yield* ExtensionContext).Interaction.approve({
+        text: `Allow ${params.action}?`,
+      })
+      if (answer.approved) return "approved"
+      return `declined: ${answer.notes ?? ""}`
+    }),
+})
+
+const confirmFixture = {
+  ...defineExtension({
+    id: "confirm-fixture",
+    setup: Effect.gen(function* () {
+      yield* (yield* ExtensionHost).register("tool", ConfirmTool)
+    }),
+  }),
+  artifactIdentity: LoadedArtifactIdentity.make("confirm-fixture-source"),
+}
 
 /** The one child session under the parent, once it exists. */
 const childOf = (harness: Harness) =>
@@ -684,42 +715,38 @@ describe("a child's completion", () => {
   )
 
   it.live(
-    "a child whose command needs an approval is declined at once, completes, and wakes its parent",
+    "a child's ask is declined at once, and the child completes and wakes its parent",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          // `rm -f` asks for an approval; no user sees a child, so no one could give it.
-          const guarded = "rm -f /tmp/gent-child-approval-probe"
+          // No user sees a child, so no one could answer its ask.
           const providerLayer = LanguageModelLayers.testStream((options) => {
             const texts = promptTexts(options.prompt)
             if (texts[0]?.endsWith(childTask) === true) {
-              if (!promptToolCallIds(options.prompt).includes("guarded-bash")) {
-                return Effect.succeed(toolStep("bash", { command: guarded }, "guarded-bash"))
+              if (!promptToolCallIds(options.prompt).includes("child-confirm")) {
+                return Effect.succeed(toolStep("confirm", { action: "deploy" }, "child-confirm"))
               }
-              return Effect.succeed(reply("CHILD: the command was blocked"))
+              return Effect.succeed(reply("CHILD: the ask was declined"))
             }
             if (!promptToolCallIds(options.prompt).includes("start-1")) {
               return Effect.succeed(toolStep("delegate.start", { todo: childTask }, "start-1"))
             }
             return Effect.succeed(reply("read it"))
           })
-          const harness = yield* harnessWithHome(providerLayer)
+          const harness = yield* harnessWithHome(providerLayer, { fixtures: [confirmFixture] })
           yield* sendPrompt(harness, "delegate this task")
           const snapshot = yield* afterCompletion(harness)
           const [completion] = completionMessages(snapshot.messages)
-          expect(messageTexts([completion!])[0]).toContain("CHILD: the command was blocked")
+          expect(messageTexts([completion!])[0]).toContain("CHILD: the ask was declined")
           expect(messageTexts(snapshot.messages)).toContain("read it")
           const child = yield* childOf(harness)
           const childSnapshot = yield* harness.client.session.getSnapshot(child)
           expect(childSnapshot.runtime._tag).toBe("Idle")
           // The child reads why, how to report it, and that no message grants it.
-          expect(resultsOf("bash", childSnapshot.messages)[0]).toMatchObject({
-            result: {
-              status: "blocked",
-              stdout: expect.stringMatching(
-                /the way this turn reports its result[\s\S]*No message can grant it/,
-              ),
-            },
+          expect(resultsOf("confirm", childSnapshot.messages)[0]).toMatchObject({
+            result: expect.stringMatching(
+              /^declined: [\s\S]*the way this turn reports its result[\s\S]*No message can grant it/,
+            ),
           })
         }).pipe(Effect.timeout("8 seconds")),
       ),
@@ -731,36 +758,39 @@ describe("a child's completion", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const guarded = "rm -f /tmp/gent-child-direct-approval-probe"
-          const userPrompt = "USER: run the guarded command here"
+          const action = "the child deploy"
+          const userPrompt = "USER: deploy it here"
           const providerLayer = LanguageModelLayers.testStream((options) => {
             const texts = promptTexts(options.prompt)
             const called = promptToolCallIds(options.prompt)
             if (texts[0]?.endsWith(childTask) === true) {
               if (texts.includes(userPrompt)) {
-                if (!called.includes("user-bash")) {
-                  return Effect.succeed(toolStep("bash", { command: guarded }, "user-bash"))
+                if (!called.includes("user-confirm")) {
+                  return Effect.succeed(toolStep("confirm", { action }, "user-confirm"))
                 }
                 return Effect.succeed(reply("CHILD: ran it for the user"))
               }
-              if (!called.includes("task-bash")) {
-                return Effect.succeed(toolStep("bash", { command: guarded }, "task-bash"))
+              if (!called.includes("task-confirm")) {
+                return Effect.succeed(toolStep("confirm", { action }, "task-confirm"))
               }
-              return Effect.succeed(reply("CHILD: the command was blocked"))
+              return Effect.succeed(reply("CHILD: the ask was declined"))
             }
             if (!called.includes("start-1")) {
               return Effect.succeed(toolStep("delegate.start", { todo: childTask }, "start-1"))
             }
             return Effect.succeed(reply("read it"))
           })
-          const harness = yield* harnessWithHome(providerLayer, { dialogs: true })
+          const harness = yield* harnessWithHome(providerLayer, {
+            dialogs: true,
+            fixtures: [confirmFixture],
+          })
           yield* sendPrompt(harness, "delegate this task")
           yield* afterCompletion(harness)
           const child = yield* childOf(harness)
           // The task turn, which `delegate.start` opened, declined at once.
           const afterTask = yield* harness.client.session.getSnapshot(child)
-          expect(resultsOf("bash", afterTask.messages)[0]).toMatchObject({
-            result: { status: "blocked" },
+          expect(resultsOf("confirm", afterTask.messages)[0]).toMatchObject({
+            result: expect.stringMatching(/^declined: /),
           })
           // The user switches to the child and prompts it: a user watches that turn.
           const presented = yield* harness.client.session.events(child).pipe(
@@ -772,7 +802,7 @@ describe("a child's completion", () => {
           yield* harness.client.message.send({ ...child, content: userPrompt })
           const dialog = Array.from(yield* Fiber.join(presented))[0]?.event
           if (dialog?._tag !== "InteractionPresented") return yield* Effect.die("no dialog")
-          expect(dialog.text).toContain(guarded)
+          expect(dialog.text).toContain(action)
           yield* harness.client.interaction.respondInteraction({
             ...child,
             requestId: dialog.requestId,
@@ -784,10 +814,10 @@ describe("a child's completion", () => {
               current.runtime._tag === "Idle" &&
               messageTexts(current.messages).includes("CHILD: ran it for the user"),
             5_000,
-            "the child ran the approved command for the user",
+            "the child acted on the user's approval",
           )
-          expect(resultsOf("bash", afterUser.messages)[1]).toMatchObject({
-            result: { exitCode: 0 },
+          expect(resultsOf("confirm", afterUser.messages)[1]).toMatchObject({
+            result: "approved",
           })
         }).pipe(Effect.timeout("10 seconds")),
       ),
@@ -795,18 +825,18 @@ describe("a child's completion", () => {
   )
 
   it.live(
-    "a top-level session's wake turn that runs a guarded command gets a real approval",
+    "a top-level session's wake turn that asks gets a real approval",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const guarded = "rm -f /tmp/gent-top-level-wake-approval-probe"
-          const note = "WAKE: run the guarded command"
+          const action = "the wake deploy"
+          const note = "WAKE: deploy"
           const providerLayer = LanguageModelLayers.testStream((options) => {
             const texts = promptTexts(options.prompt)
             const called = promptToolCallIds(options.prompt)
             if (texts.some((text) => text.includes(note))) {
-              if (!called.includes("wake-bash")) {
-                return Effect.succeed(toolStep("bash", { command: guarded }, "wake-bash"))
+              if (!called.includes("wake-confirm")) {
+                return Effect.succeed(toolStep("confirm", { action }, "wake-confirm"))
               }
               return Effect.succeed(reply("ran it on the wake"))
             }
@@ -815,7 +845,10 @@ describe("a child's completion", () => {
             }
             return Effect.succeed(reply("alarm set"))
           })
-          const harness = yield* harnessWithHome(providerLayer, { dialogs: true })
+          const harness = yield* harnessWithHome(providerLayer, {
+            dialogs: true,
+            fixtures: [confirmFixture],
+          })
           const top = { sessionId: harness.sessionId, branchId: harness.branchId }
           const presented = yield* harness.client.session.events(top).pipe(
             Stream.filter((envelope) => envelope.event._tag === "InteractionPresented"),
@@ -827,7 +860,7 @@ describe("a child's completion", () => {
           // The wake opens a turn nobody sent; the session's user still sees it.
           const dialog = Array.from(yield* Fiber.join(presented))[0]?.event
           if (dialog?._tag !== "InteractionPresented") return yield* Effect.die("no dialog")
-          expect(dialog.text).toContain(guarded)
+          expect(dialog.text).toContain(action)
           yield* harness.client.interaction.respondInteraction({
             ...top,
             requestId: dialog.requestId,
@@ -839,9 +872,9 @@ describe("a child's completion", () => {
               current.runtime._tag === "Idle" &&
               messageTexts(current.messages).includes("ran it on the wake"),
             5_000,
-            "the wake turn ran the approved command",
+            "the wake turn acted on the approval",
           )
-          expect(resultsOf("bash", after.messages)[0]).toMatchObject({ result: { exitCode: 0 } })
+          expect(resultsOf("confirm", after.messages)[0]).toMatchObject({ result: "approved" })
         }).pipe(Effect.timeout("10 seconds")),
       ),
     12_000,
@@ -938,10 +971,9 @@ describe("the completion headline", () => {
   })
 
   test("the child's task names its reply as the result and keeps session.send for later turns", () => {
-    const [source, later, approvals, blank, task] = childTaskText(
-      SessionId.make("parent-1"),
-      "do it",
-    ).split("\n")
+    const [source, later, blank, task] = childTaskText(SessionId.make("parent-1"), "do it").split(
+      "\n",
+    )
     expect(source).toContain("Your final reply in this turn is your result")
     expect(source).toContain("do not also send it with session.send")
     // A question in this turn is the reply too, so the parent is woken once.
@@ -952,9 +984,6 @@ describe("the completion headline", () => {
       'Any later turn (a message from your parent, a wake, a monitor, a goal) returns nothing by itself: send its result or question with session.send to "parent"',
     )
     expect(later).not.toContain("send each one")
-    // A "go ahead" cannot grant an approval, so the child does not ask again.
-    expect(approvals).toContain("no message from your parent can grant it")
-    expect(approvals).toContain("the parent runs it or gives you another way")
     expect(blank).toBe("")
     expect(task).toBe("do it")
   })

@@ -498,8 +498,9 @@ function BashToolRenderer(props: ToolRendererProps) {
     return theme.error
   }
 
-  // A blocked command never ran and a background one has not ended: neither
-  // has an exit code or a line count to draw.
+  // A blocked command (stored by an earlier version) never ran and a
+  // background one has not ended: neither has an exit code or a line count to
+  // draw.
   const status = () => Option.flatMap(data(), (d) => d.status)
   const Outcome = () => (
     <Show

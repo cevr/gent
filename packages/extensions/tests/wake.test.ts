@@ -1116,7 +1116,7 @@ describe("notices", () => {
   )
 
   it.live(
-    "a blocked notice shows in the turn that made it, and an answered turn clears it",
+    "a blocked notice an earlier version stored shows in the next turn, and an answered turn clears it",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -1140,11 +1140,11 @@ describe("notices", () => {
             file,
             encodeAlarms([
               {
-                _tag: "monitor",
-                wakeId: "old-risky",
-                command: "rm -rf /nonexistent/gent-probe-x",
-                everySeconds: 1,
-                deadline: 60_000,
+                _tag: "notice",
+                wakeId: "old-blocked",
+                outcome: "blocked",
+                firedAt: 1_000,
+                content: "Monitor old-blocked was not re-armed: it was never approved. check",
                 note: "check",
               },
             ]),
@@ -1163,15 +1163,6 @@ describe("notices", () => {
                   ),
                 ),
               )
-          // Opening the loop re-arms, and the re-arm blocks the monitor. The
-          // hooks run beside turns, so the test waits for the notice.
-          yield* client.session.getSnapshot({ sessionId, branchId })
-          yield* waitFor(
-            readStoredFile(file),
-            (text) => text.includes("never approved"),
-            5_000,
-            "the re-arm blocked the monitor",
-          )
           yield* answer("I'm back", "reply 1")
           expect(requests[0]?.notices).toContain("never approved")
           // The answered turn cleared the last entry, and the file with it.
@@ -1319,7 +1310,7 @@ const wakeFileExists = (home: string) =>
     return yield* fs.exists(`${home}/.gent/wakes/${branchId}.json`)
   }).pipe(Effect.provide(BunServices.layer))
 
-describe("monitor guardrail", () => {
+describe("wake tool claims", () => {
   test("monitor runs shell commands, so it does not claim to be readonly", () => {
     expect(MonitorTool.readonly).toBe(false)
   })
@@ -1328,91 +1319,6 @@ describe("monitor guardrail", () => {
     expect(WakeTool.readonly).toBe(false)
     expect(CancelTool.readonly).toBe(false)
   })
-
-  it.scopedLive("a flagged command asks once; a denial stores no monitor", () =>
-    Effect.gen(function* () {
-      const home = yield* makeTempDirectoryScoped("wake-monitor-guard-")
-      const queued = yield* Ref.make<ReadonlyArray<string>>([])
-      const asked = yield* Ref.make<ReadonlyArray<string>>([])
-      const base = contextWith(home, queued)
-      const ctx = {
-        ...base,
-        Interaction: {
-          ...base.Interaction,
-          approve: ({ text }: { readonly text: string }) =>
-            Ref.update(asked, (all) => [...all, text]).pipe(Effect.as({ approved: false })),
-        },
-      }
-      const exit = yield* Effect.exit(
-        runToolWithCtx(MonitorTool, { command: "rm -rf build && ls build", note: "gone" }, ctx),
-      )
-      expect(Exit.isFailure(exit)).toBe(true)
-      const prompts = yield* Ref.get(asked)
-      expect(prompts.length).toBe(1)
-      expect(prompts[0]).toContain("rm -rf")
-      const fs = yield* FileSystem.FileSystem
-      expect(yield* fs.exists(`${home}/.gent/wakes/${branchId}.json`)).toBe(false)
-    }).pipe(
-      Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
-      Effect.timeout("8 seconds"),
-    ),
-  )
-
-  it.scopedLive("a decline's notes reach the model with the block", () =>
-    Effect.gen(function* () {
-      const home = yield* makeTempDirectoryScoped("wake-monitor-notes-")
-      const base = contextWith(home, yield* Ref.make<ReadonlyArray<string>>([]))
-      const notes = "Ask your parent with session.send"
-      const ctx = {
-        ...base,
-        Interaction: {
-          ...base.Interaction,
-          approve: () => Effect.succeed({ approved: false, notes }),
-        },
-      }
-      const error = yield* Effect.flip(
-        runToolWithCtx(MonitorTool, { command: "rm -rf build", note: "gone" }, ctx),
-      )
-      expect(error.message).toContain("Command blocked")
-      expect(error.message).toContain(notes)
-    }).pipe(
-      Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
-      Effect.timeout("8 seconds"),
-    ),
-  )
-
-  it.scopedLive("the question names a cwd outside the session, and only then", () =>
-    Effect.gen(function* () {
-      const home = yield* makeTempDirectoryScoped("wake-monitor-cwd-")
-      const asked = yield* Ref.make<ReadonlyArray<string>>([])
-      const base = contextWith(home, yield* Ref.make<ReadonlyArray<string>>([]))
-      const ctx = {
-        ...base,
-        Interaction: {
-          ...base.Interaction,
-          approve: ({ text }: { readonly text: string }) =>
-            Ref.update(asked, (all) => [...all, text]).pipe(Effect.as({ approved: false })),
-        },
-      }
-      const command = "rm -rf /nonexistent/gent-probe-x/build"
-      yield* Effect.exit(
-        runToolWithCtx(
-          MonitorTool,
-          { command, cwd: "/nonexistent/gent-probe-x", note: "gone" },
-          ctx,
-        ),
-      )
-      yield* Effect.exit(runToolWithCtx(MonitorTool, { command, cwd: ".", note: "gone" }, ctx))
-      const prompts = yield* Ref.get(asked)
-      expect(prompts[0]).toContain(
-        "This monitor command (in `/nonexistent/gent-probe-x`) is classified as destructive",
-      )
-      expect(prompts[1]).toContain("This monitor command is classified as destructive")
-    }).pipe(
-      Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
-      Effect.timeout("8 seconds"),
-    ),
-  )
 })
 
 describe("monitor command", () => {
@@ -1510,7 +1416,6 @@ describe("monitor recovery and deadline", () => {
               everySeconds: 1,
               deadline: 60_000,
               note: "where",
-              cleared: true,
             },
           ]),
         )
@@ -1932,10 +1837,10 @@ describe("wake store", () => {
   )
 
   it.scopedLive(
-    "a stored risky monitor that was never approved is blocked on re-arm, never run",
+    "a monitor row an earlier version stored with a cleared key decodes and re-arms",
     () =>
       Effect.gen(function* () {
-        const home = yield* makeTempDirectoryScoped("wake-uncleared-")
+        const home = yield* makeTempDirectoryScoped("wake-old-cleared-")
         const queued = yield* Ref.make<ReadonlyArray<string>>([])
         const ran = yield* Ref.make<ReadonlyArray<string>>([])
         const ctx: ExtensionContextService = testLeafContext(contextWith(home, queued))
@@ -1966,42 +1871,27 @@ describe("wake store", () => {
         )
         const fs = yield* FileSystem.FileSystem
         yield* fs.makeDirectory(`${home}/.gent/wakes`, { recursive: true })
-        const monitor = { everySeconds: 1, deadline: 60_000, note: "check" }
+        // The schema no longer names `cleared`, so the rows are written as the
+        // raw text an earlier version stored.
+        const monitor = `"_tag":"monitor","everySeconds":1,"deadline":60000,"note":"check"`
         yield* fs.writeFileString(
           `${home}/.gent/wakes/${branchId}.json`,
-          encodeAlarms([
-            { _tag: "monitor", wakeId: "old-risky", command: "rm -rf build", ...monitor },
-            { _tag: "monitor", wakeId: "old-safe", command: "ls build", ...monitor },
-            {
-              _tag: "monitor",
-              wakeId: "approved",
-              command: "rm -rf dist",
-              cleared: true,
-              ...monitor,
-            },
-          ]),
+          `[{${monitor},"wakeId":"old-cleared","command":"ls build","cleared":true},` +
+            `{${monitor},"wakeId":"old-uncleared","command":"ls dist","cleared":false}]`,
         )
         yield* rearm
         const alarms = yield* WakeAlarms
-        expect([...(yield* alarms.pending)].sort()).toEqual(["approved", "old-safe"])
+        expect([...(yield* alarms.pending)].sort()).toEqual(["old-cleared", "old-uncleared"])
         yield* eventually(
           Ref.get(ran),
           (all) => all.length >= 2,
           "the armed monitors ran their first check",
         )
-        expect(yield* Ref.get(ran)).not.toContain("-c rm -rf build")
+        expect(yield* Ref.get(ran)).toContain("-c ls dist")
         const stored = yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Array(WakeEntry)))(
           yield* readFile(home),
         )
-        const blocked = stored.find((entry) => entry.wakeId === "old-risky")
-        expect(blocked?._tag).toBe("notice")
-        if (blocked?._tag === "notice") {
-          expect(blocked.outcome).toBe("blocked")
-          expect(blocked.content).toContain("never approved")
-        }
-        // Blocked stays blocked: a second re-arm neither runs nor re-notices it.
-        yield* rearm
-        expect(yield* Ref.get(ran)).not.toContain("-c rm -rf build")
+        expect(stored.map((entry) => entry._tag)).toEqual(["monitor", "monitor"])
       }).pipe(
         Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
         Effect.timeout("8 seconds"),
