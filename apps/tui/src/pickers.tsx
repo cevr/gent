@@ -6,7 +6,6 @@ import { useTerminalDimensions } from "./terminal"
 import {
   ChromePanel,
   PickerFrame,
-  pickerHeight,
   selectable,
   SelectList,
   type SelectListRow,
@@ -325,7 +324,6 @@ const collectCounts = (nodes: readonly BranchTreeNode[]): Map<string, number> =>
 export function BranchPicker(props: BranchPickerProps) {
   const { theme } = useTheme()
   const client = useClient()
-  const dimensions = useTerminalDimensions()
   const { cast } = useRuntime()
 
   const [messageCounts, setMessageCounts] = createSignal(new Map<string, number>())
@@ -347,10 +345,6 @@ export function BranchPicker(props: BranchPickerProps) {
   })
 
   const { rowWidth } = usePickerGeometry()
-
-  // One line per branch: no heading opens a group and no detail line follows
-  // the list, so the pane draws exactly the items it holds.
-  const paneHeight = () => pickerHeight(props.branches.length, dimensions().height)
 
   const rows = (): ReadonlyArray<SelectListRow<Branch>> =>
     props.branches.map((branch) =>
@@ -381,10 +375,13 @@ export function BranchPicker(props: BranchPickerProps) {
 
   return (
     <Show when={props.open}>
+      {/* One line per branch: no heading opens a group and no detail line
+          follows the list. */}
       <PickerFrame
-        height={paneHeight()}
+        lines={props.branches.length}
         title={`Resume: ${props.sessionName}`}
         footer={"↑↓ move   ↵ resume branch   esc close"}
+        error={error()}
       >
         <SelectList
           id="branch-picker"
@@ -394,8 +391,6 @@ export function BranchPicker(props: BranchPickerProps) {
           onSelect={(branch) => props.onSelect(branch.id)}
           onDismiss={props.onClose}
         />
-
-        <ChromePanel.Error error={Option.getOrUndefined(error())} />
       </PickerFrame>
     </Show>
   )
@@ -550,11 +545,6 @@ export function SettingsPicker(props: SettingsPickerProps) {
   const visible = () => filterRows(props.rows, query())
 
   const { rowWidth } = usePickerGeometry()
-  const dimensions = useTerminalDimensions()
-
-  // The query row draws above the list, so the pane spends one line more than
-  // it has rows; `pickerHeight` budgets one body row per item.
-  const paneHeight = () => pickerHeight(visible().length + 1, dimensions().height)
 
   const rows = (): ReadonlyArray<SelectListRow<PickerRow>> =>
     visible().map((row) =>
@@ -594,7 +584,8 @@ export function SettingsPicker(props: SettingsPickerProps) {
   return (
     <Show when={props.open}>
       <PickerFrame
-        height={paneHeight()}
+        // The query row draws above the list: one line more than it has rows.
+        lines={visible().length + 1}
         title={`${props.title} · ${visible().length}`}
         footer={"type to filter · ↑↓ move · ↵ select · esc close"}
       >

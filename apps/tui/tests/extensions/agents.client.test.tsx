@@ -595,6 +595,44 @@ describe("Agents pane navigation", () => {
     }),
   )
 
+  it.live("Escape clears a typed filter first, then closes the pane", () =>
+    Effect.gen(function* () {
+      const queries: Array<string> = []
+      const [open, setOpen] = createSignal(true)
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => (
+          <AgentsPane
+            open={open()}
+            controller={{
+              rows: () => [rowPane("agents-root", "Alpha", 0)],
+              current: () => Option.none(),
+              error: () => Option.none(),
+              loading: () => false,
+              refresh: (query) => queries.push(query),
+              reload: () => {},
+              detail: () => Option.none(),
+              select: () => {},
+              open: () => true,
+            }}
+            onSelect={() => {}}
+            onToggle={() => {}}
+            onDelete={() => {}}
+            onClose={() => setOpen(false)}
+          />
+        )),
+      )
+      yield* waitForFrame(setup, (frame) => frame.includes("Alpha"), "agents pane")
+      setup.mockInput.pressKey("a")
+      yield* waitForFrame(setup, (frame) => frame.includes("› a"), "typed filter")
+      setup.mockInput.pressEscape()
+      yield* waitForFrame(setup, (frame) => !frame.includes("› a"), "filter cleared")
+      expect(open()).toBe(true)
+      expect(queries.at(-1)).toBe("")
+      setup.mockInput.pressEscape()
+      yield* waitForFrame(setup, () => !open(), "agents pane closed")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
   it.live("a poll that lists the same sessions again leaves the cursor on the reader's row", () =>
     Effect.gen(function* () {
       // Every poll decodes fresh row objects. The pane opens on the session
@@ -1557,7 +1595,7 @@ describe("Subagent tray", () => {
               }}
             />
             <Show when={open()}>
-              <PickerFrame height={3} title="PANE" footer="">
+              <PickerFrame lines={1} title="PANE" footer="">
                 <box />
               </PickerFrame>
             </Show>

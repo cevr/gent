@@ -9,7 +9,6 @@ import {
 } from "@gent/extensions/client"
 import {
   type ActiveExtensionSession,
-  ChromePanel,
   clientCommandContribution,
   ClientContext,
   clientContributions,
@@ -21,10 +20,9 @@ import {
   formatAge,
   formatDuration,
   PickerFrame,
-  pickerHeight,
-  pickerLines,
   selectable,
   SelectList,
+  type SelectListApi,
   type SelectListRow,
   sessionQuery,
   textWidth,
@@ -573,6 +571,9 @@ export function AgentsPane(props: {
   // Filtering is the server's job — it owns the same search the projection
   // tests cover — so typing refetches rather than filtering a local copy.
   const visible = () => props.controller.rows()
+  // Esc clears a typed query before it closes the pane, as the palette does.
+  const [query, setQuery] = createSignal("")
+  let list = Option.none<SelectListApi>()
 
   // The toggle binds whether or not the pane is showing, so it can open as well
   // as close. Registered separately from the pane's own keys, which the list
@@ -587,7 +588,6 @@ export function AgentsPane(props: {
   // under the composer, so the columns come from the picker's budget rather
   // than a bordered pane's.
   const { rowWidth } = usePickerGeometry()
-  const dimensions = useTerminalDimensions()
 
   const tick = useSpinnerClock()
   // The running pulse animates; idle and inactive share a dot and differ by colour.
@@ -721,28 +721,32 @@ export function AgentsPane(props: {
   const sticky = (values: ReadonlyArray<AgentRowEntry>): Option.Option<number> =>
     Option.some(Math.max(0, values.findIndex(isCurrent)))
 
-  // A heading opens each section and a detail line sits under the list, so the
-  // pane draws more lines than it has rows.
-  const paneHeight = () =>
-    pickerHeight(pickerLines(paneItems(visible()).length, 1), dimensions().height)
-
   return (
     <Show when={props.open}>
+      {/* A heading opens each section, so the pane draws more lines than it
+          has rows; the frame adds the detail line under them. */}
       <PickerFrame
-        height={paneHeight()}
+        lines={paneItems(visible()).length}
         title={`Agents · ${countsLabel(visible())}`}
         footer={"↑↓ move   ↵ → open   ← esc close   ^x delete   ^t hide"}
         detail={Option.liftPredicate(
           detailLabel(props.controller.detail()),
           () => visible().length > 0,
         )}
+        error={props.controller.error()}
       >
         <SelectList
           id="agents"
           open={props.open}
           rows={rows}
           rowKey={(row) => `${row.sessionId}/${row.branchId}`}
-          filter={{ onQueryChange: (query) => props.controller.refresh(query) }}
+          filter={{
+            onQueryChange: (next) => {
+              setQuery(next)
+              props.controller.refresh(next)
+            },
+          }}
+          api={(api) => (list = Option.some(api))}
           sticky={sticky}
           // One detail read per selection, not per keystroke batch: the
           // controller ignores a repeat of the row it is already fetching.
@@ -750,6 +754,10 @@ export function AgentsPane(props: {
           extraKeys={(event, selected) => {
             if (event.name === "escape" && Option.isSome(armed())) {
               setArmed(Option.none())
+              return true
+            }
+            if (event.name === "escape" && query().length > 0) {
+              Option.map(list, (api) => api.reset())
               return true
             }
             if (event.ctrl === true && event.name === "x") return armOrDelete(selected)
@@ -772,8 +780,6 @@ export function AgentsPane(props: {
           onSelect={props.onSelect}
           onDismiss={props.onClose}
         />
-
-        <ChromePanel.Error error={Option.getOrUndefined(props.controller.error())} />
       </PickerFrame>
     </Show>
   )

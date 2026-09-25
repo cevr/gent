@@ -42,7 +42,6 @@ import {
 } from "./utils"
 import {
   PickerFrame,
-  pickerHeight,
   PickerHost,
   selectable,
   SelectList,
@@ -416,8 +415,6 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
 
   const dimensions = useTerminalDimensions()
 
-  const popupHeight = () => pickerHeight(visibleItems().length, dimensions().height)
-
   // Title from the first matching contribution
   const title = () =>
     Option.getOrElse(Option.fromNullishOr(contributions()[0]), () => ({ title: props.state.type }))
@@ -488,7 +485,7 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
 
   return (
     <PickerFrame
-      height={popupHeight()}
+      lines={visibleItems().length}
       title={title()}
       footer={footerHint()}
       onSqueezeChange={props.onSqueezeChange}

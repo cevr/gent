@@ -14,14 +14,7 @@ import { shortId, truncate, truncateStart, useRequiredContext } from "./utils"
 import { useTerminalDimensions } from "./terminal"
 import { matchSorter } from "match-sorter"
 import { useClient } from "./client"
-import {
-  PickerFrame,
-  pickerHeight,
-  selectable,
-  SelectList,
-  type SelectListApi,
-  type SelectListRow,
-} from "./ui"
+import { PickerFrame, selectable, SelectList, type SelectListApi, type SelectListRow } from "./ui"
 import { textWidth } from "./text-width-adapter"
 import { useTheme } from "./theme"
 import { useExtensionUI } from "./extensions/host"
@@ -603,8 +596,6 @@ export function CommandPalette() {
     }
   })
 
-  const paletteHeight = () => pickerHeight(filteredItems().length, dimensions().height)
-
   const hasDetails = () =>
     filteredItems().some((item) => Boolean(item.description?.trim() || item.shortcut))
   const labelWidth = () => {
@@ -700,7 +691,7 @@ export function CommandPalette() {
 
   return (
     <Show when={command.paletteOpen()}>
-      <PickerFrame height={paletteHeight()} title={paletteTitle()} footer={footerHint()}>
+      <PickerFrame lines={filteredItems().length} title={paletteTitle()} footer={footerHint()}>
         <SelectList
           id="command-palette"
           queryRow={() => (
@@ -715,7 +706,7 @@ export function CommandPalette() {
           open={command.paletteOpen()}
           rows={rows}
           rowKey={(item) => item.id}
-          filter={{ onQueryChange: setSearchQuery, showInput: false }}
+          filter={{ onQueryChange: setSearchQuery }}
           empty={emptyRow}
           api={(api) => (list = Option.some(api))}
           extraKeys={(event, selected) => {

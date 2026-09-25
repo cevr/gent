@@ -346,29 +346,12 @@ export const ChromePanel = {
  */
 
 /**
- * Rows the frame occupies: the items it shows, capped at six, plus its own
- * chrome, and never more than half the terminal. A picker that grew with its
- * list would push the transcript off a short screen.
+ * Rows the frame occupies: the lines its body draws, capped at six, plus its
+ * own chrome, and never more than half the terminal. A picker that grew with
+ * its list would push the transcript off a short screen.
  */
-export const pickerHeight = (itemCount: number, terminalRows: number): number =>
-  Math.min(Math.min(Math.max(itemCount, 1), 6) + 5, Math.max(6, Math.floor(terminalRows / 2) + 1))
-
-/**
- * The rule counted in lines a pane actually draws, not items it holds.
- *
- * {@link pickerHeight} budgets one body line per item, which is right for a
- * flat list. A pane that opens each group with a heading, or draws a detail
- * line under the list, spends more lines than it has items: counting items
- * alone starves the body, so the last rows fall past the rule and the detail
- * line overprints them.
- *
- * `extraLines` is what the pane draws beyond its selectable rows — headings
- * already counted among `drawnItems`, plus any trailing chrome.
- */
-export const pickerLines = (drawnItems: number, extraLines: number): number => {
-  if (drawnItems === 0) return 0
-  return drawnItems + extraLines
-}
+export const pickerHeight = (bodyLines: number, terminalRows: number): number =>
+  Math.min(Math.min(Math.max(bodyLines, 1), 6) + 5, Math.max(6, Math.floor(terminalRows / 2) + 1))
 
 /**
  * The columns a picker row may use.
@@ -416,19 +399,25 @@ interface DockState {
   readonly open: () => () => void
 }
 
+/** A count of the frames mounted under one owner: the dock, or a picker host. */
+const countedDock = (): DockState => {
+  const [count, setCount] = createSignal(0)
+  return {
+    paneOpen: () => count() > 0,
+    open: () => {
+      setCount((current) => current + 1)
+      return () => setCount((current) => current - 1)
+    },
+  }
+}
+
 const DockContext = createContext<Option.Option<DockState>>(Option.none())
 
 /** The app's dock: the panes the reader opened win the footer's rows over the trays. */
 export function DockProvider(props: { children: JSX.Element }) {
-  const [panes, setPanes] = createSignal(0)
-  const dock: DockState = {
-    paneOpen: () => panes() > 0,
-    open: () => {
-      setPanes((count) => count + 1)
-      return () => setPanes((count) => count - 1)
-    },
-  }
-  return <DockContext.Provider value={Option.some(dock)}>{props.children}</DockContext.Provider>
+  return (
+    <DockContext.Provider value={Option.some(countedDock())}>{props.children}</DockContext.Provider>
+  )
 }
 
 /**
@@ -440,14 +429,7 @@ export function DockProvider(props: { children: JSX.Element }) {
 const PickerHostContext = createContext<Option.Option<DockState>>(Option.none())
 
 export function PickerHost(props: { children: (hosting: () => boolean) => JSX.Element }) {
-  const [pickers, setPickers] = createSignal(0)
-  const host: DockState = {
-    paneOpen: () => pickers() > 0,
-    open: () => {
-      setPickers((count) => count + 1)
-      return () => setPickers((count) => count - 1)
-    },
-  }
+  const host = countedDock()
   return (
     <PickerHostContext.Provider value={Option.some(host)}>
       {props.children(host.paneOpen)}
@@ -485,26 +467,44 @@ const PickerBodyContext = createContext<PickerBody>({
 /** Two rules, the title and one body row: below this the title gives way. */
 const PICKER_ROWS_WITH_TITLE = 4
 
-export function PickerFrame(props: {
-  height: number
-  /** The muted heading row. A picker that carries counts puts them in here. */
-  title: string
-  children: JSX.Element
-  footer: JSX.Element
-  /**
-   * One muted line under the list about the row under the cursor. It is the
-   * first line to give way on a short terminal. `None` draws no line.
-   */
-  detail?: Option.Option<string>
-  /**
-   * Told when the frame starts or stops getting fewer rows than it asked for,
-   * and told `false` when it unmounts. A host whose own chrome can give way
-   * for the frame's rows listens here.
-   */
-  onSqueezeChange?: (squeezed: boolean) => void
-}) {
+/**
+ * How many rows a frame asks for. A list passes the `lines` its body draws,
+ * one per row with headings included, and the frame adds its chrome and its
+ * note row and caps the sum as every picker is capped ({@link pickerHeight}).
+ * A pane that is not a list (the btw transcript) asks for a `height` outright.
+ */
+type PickerFrameSize = { readonly lines: number } | { readonly height: number }
+
+export function PickerFrame(
+  props: PickerFrameSize & {
+    /** The muted heading row. A picker that carries counts puts them in here. */
+    title: string
+    children: JSX.Element
+    footer: JSX.Element
+    /**
+     * One muted line under the list about the row under the cursor. A pane
+     * that has one passes it always, `None` while it has nothing to say: the
+     * frame keeps the row in its height, so the pane does not jump when the
+     * text arrives, and gives the row to the list while it is `None` or empty.
+     * It is the first line to give way on a short terminal.
+     */
+    detail?: Option.Option<string>
+    /**
+     * The pane's error. It draws in the note row, in place of the detail line,
+     * and a pane without a detail line gets the row while the error shows.
+     */
+    error?: Option.Option<string>
+    /**
+     * Told when the frame starts or stops getting fewer rows than it asked for,
+     * and told `false` when it unmounts. A host whose own chrome can give way
+     * for the frame's rows listens here.
+     */
+    onSqueezeChange?: (squeezed: boolean) => void
+  },
+) {
   const { theme } = useTheme()
   const { sectionWidth } = usePickerGeometry()
+  const dimensions = useTerminalDimensions()
   const dock = useContext(DockContext)
   if (Option.isSome(dock)) onCleanup(dock.value.open())
   const pickerHost = useContext(PickerHostContext)
@@ -514,13 +514,39 @@ export function PickerFrame(props: {
   // the one box that gives way, in whole rows. Squeezed, it drops its key
   // hint, then its title, before its body's last row: the rows the reader
   // opened it for win. A change of either the measured or the requested
-  // height re-decides it. Inside the body the same order holds: the detail
-  // line gives way first, then the list's headings, then its filter row
+  // height re-decides it. Inside the body the same order holds: the note row
+  // (detail or error) gives way first, then the list's headings, then its filter row
   // (`SelectList` reads its rows from the frame), and one row stays for the
   // cursor.
+  const error = () =>
+    Option.filter(
+      Option.getOrElse(Option.fromUndefinedOr(props.error), () => Option.none<string>()),
+      (text) => text.length > 0,
+    )
+  // The note row: the error while there is one, else the detail line.
+  const note = (): Option.Option<{ readonly text: string; readonly error: boolean }> =>
+    Option.orElse(
+      Option.map(error(), (text) => ({ text, error: true })),
+      () =>
+        Option.map(
+          Option.filter(
+            Option.getOrElse(Option.fromUndefinedOr(props.detail), () => Option.none<string>()),
+            (text) => text.length > 0,
+          ),
+          (text) => ({ text, error: false }),
+        ),
+    )
+  const noteLines = () => {
+    if (Option.isSome(Option.fromUndefinedOr(props.detail)) || Option.isSome(error())) return 1
+    return 0
+  }
+  const height = () => {
+    if ("height" in props) return props.height
+    return pickerHeight(props.lines + noteLines(), dimensions().height)
+  }
   const [measured, setMeasured] = createSignal(Option.none<number>())
   const [list, setList] = createSignal(Option.none<PickerListLines>())
-  const squeezed = () => Option.exists(measured(), (rows) => rows < props.height)
+  const squeezed = () => Option.exists(measured(), (rows) => rows < height())
   createEffect(
     on(squeezed, (value) => {
       if (props.onSqueezeChange) props.onSqueezeChange(value)
@@ -537,22 +563,20 @@ export function PickerFrame(props: {
       if (!squeezed()) chrome += 1
       return Math.max(0, rows - chrome)
     })
-  const detail = (): Option.Option<string> =>
-    Option.filter(
-      Option.getOrElse(Option.fromUndefinedOr(props.detail), () => Option.none<string>()),
-      () =>
-        Option.match(bodyRows(), {
-          onNone: () => true,
-          onSome: (rows) =>
-            Option.match(list(), {
-              onNone: () => rows >= 2,
-              onSome: (lines) => rows > lines.full || rows > lines.dressed,
-            }),
-        }),
+  const shownNote = () =>
+    Option.filter(note(), () =>
+      Option.match(bodyRows(), {
+        onNone: () => true,
+        onSome: (rows) =>
+          Option.match(list(), {
+            onNone: () => rows >= 2,
+            onSome: (lines) => rows > lines.full || rows > lines.dressed,
+          }),
+      }),
     )
   const listRows = () =>
     Option.map(bodyRows(), (rows) => {
-      if (Option.isSome(detail())) return rows - 1
+      if (Option.isSome(shownNote())) return rows - 1
       return rows
     })
   const body: PickerBody = { rows: listRows, report: setList }
@@ -562,7 +586,7 @@ export function PickerFrame(props: {
       flexShrink={1}
       width="100%"
       // A basis, not a height: OpenTUI turns shrinking off on a box whose height is set.
-      flexBasis={props.height}
+      flexBasis={height()}
       onSizeChange={function () {
         setMeasured(Option.some(this.height))
       }}
@@ -581,12 +605,20 @@ export function PickerFrame(props: {
           </box>
         </Show>
         <PickerBodyContext.Provider value={body}>{props.children}</PickerBodyContext.Provider>
-        <Show when={Option.getOrUndefined(detail())}>
-          {(text) => (
-            <ChromePanel.Section>
-              <text style={{ fg: theme.textMuted }}>{truncate(text(), sectionWidth())}</text>
-            </ChromePanel.Section>
-          )}
+        <Show when={Option.getOrUndefined(shownNote())}>
+          {(shown) => {
+            const color = () => {
+              if (shown().error) return theme.error
+              return theme.textMuted
+            }
+            return (
+              <ChromePanel.Section>
+                <text wrapMode="none" style={{ fg: color() }}>
+                  {truncate(shown().text, sectionWidth())}
+                </text>
+              </ChromePanel.Section>
+            )
+          }}
         </Show>
       </box>
       <Show when={!squeezed()}>
@@ -637,8 +669,9 @@ export function TrayFrame(props: { children: JSX.Element }) {
  * The component draws rows only. Its chrome — the border, the title, the
  * detail line, the footer — stays with the pane and its `PickerFrame`,
  * because no two panes agree on it. Inside a frame the list fits the rows it
- * is given: its headings, then its filter row, give way on a short terminal. What they do agree on is the interaction, and that is what lives
- * here.
+ * is given: its headings, then its filter row, give way on a short
+ * terminal. What the panes do agree on is the interaction, and that is what
+ * lives here.
  *
  * @module
  */
@@ -792,8 +825,6 @@ interface SelectListFilter {
    * refetches here.
    */
   readonly onQueryChange: (query: string) => void
-  /** Draw the `› query│` row above the list. Defaults to true. */
-  readonly showInput?: boolean
 }
 
 interface SelectListProps<A> {
@@ -1032,18 +1063,14 @@ export function SelectList<A>(props: SelectListProps<A>) {
     { when: () => props.open },
   )
 
-  const showInput = () =>
-    Option.match(Option.fromNullishOr(props.filter), {
-      onNone: () => false,
-      onSome: (filter) => filter.showInput !== false,
-    })
-
   // Inside a `PickerFrame` the list fits the rows the frame gives it. It
-  // reports what it draws, so the frame drops its detail line first; then the
+  // reports what it draws, so the frame drops its note row first; then the
   // list drops its headings, then its filter row, and one row stays for the
   // cursor. An unmeasured frame, no frame, and a list that fits draw it all.
   const pickerBody = useContext(PickerBodyContext)
-  const hasQueryRow = () => showInput() || Option.isSome(Option.fromUndefinedOr(props.queryRow))
+  const hasQueryRow = () =>
+    Option.isSome(Option.fromUndefinedOr(props.filter)) ||
+    Option.isSome(Option.fromUndefinedOr(props.queryRow))
   const inputLines = () => {
     if (hasQueryRow()) return 1
     return 0
