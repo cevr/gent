@@ -335,6 +335,14 @@ export const followUpMessageIdForSource = (input: {
     `follow-up:${input.workspaceId}:${input.sessionId}:${input.branchId}:${input.sourceId}`,
   )
 
+/**
+ * The interjection a steer lands, keyed by the steer's request id. A branch
+ * the steer wakes opens its turn on this message, so a stop that names it
+ * reaches that turn, or the steer while it still waits in the queue.
+ */
+export const interjectionMessageId = (requestId: RequestId | ActorCommandId) =>
+  MessageId.make(`${requestId}:interjection`)
+
 // Client payloads: what a caller outside the actor hands the loop. The
 // runtime turns each into an actor operation below.
 

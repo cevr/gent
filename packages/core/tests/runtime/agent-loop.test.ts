@@ -205,6 +205,7 @@ import {
   buildRunningState,
   entityIdOf,
   type FollowUpQueueFull,
+  interjectionMessageId,
   type LoopState,
   type RunningState,
   toWaitingForInteractionState,
@@ -867,6 +868,64 @@ describe("continuation", () => {
         // The turn it joined answered it, so a restart must not answer it again.
         expect(Predicate.isNotUndefined(joined) && isRuntimeUserMessage(joined)).toBe(true)
       }).pipe(Effect.provide(makeLayer(providerLayer, [echoTool])))
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+  // A sender that takes its message back (its own turn was interrupted) must
+  // not have it read by the turn the receiver is running.
+  it.live("a stop that names a waiting interjection takes it back before the turn reads it", () =>
+    Effect.gen(function* () {
+      const requestId = RequestId.make("req-interject-taken-back")
+      const promptTexts: Array<string> = []
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        { ...toolCallStep("echo", { text: "step 1" }), gated: true },
+        {
+          ...textStep("Done without the message."),
+          assertOptions: (options) => {
+            for (const message of Prompt.make(options.prompt).content) {
+              if (message.role !== "user") continue
+              for (const part of message.content) {
+                if (part.type === "text") promptTexts.push(part.text)
+              }
+            }
+          },
+        },
+      ])
+      const eventsRef = yield* Ref.make<AgentEvent[]>([])
+      yield* Effect.gen(function* () {
+        const agentLoop = yield* makeAgentLoopService
+        const messageStorage = yield* MessageStorage
+        const fiber = yield* Effect.forkChild(
+          runAgentLoop(agentLoop, makeContMessage("a turn the sender does not own")),
+        )
+        yield* controls.waitForCall(0)
+        yield* steerAgentLoop({
+          _tag: "Interject",
+          sessionId: contSessionId,
+          branchId: contBranchId,
+          requestId,
+          message: "TAKEN-BACK",
+          wake: true,
+        })
+        yield* steerAgentLoop({
+          _tag: "Cancel",
+          sessionId: contSessionId,
+          branchId: contBranchId,
+          requestId: RequestId.make("req-take-back-interjection"),
+          messageId: interjectionMessageId(requestId),
+        })
+        yield* controls.emitAll(0)
+        yield* Fiber.join(fiber)
+        // The running turn is not the one the stop named: it runs to its end.
+        expect(yield* controls.callCount).toBe(2)
+        const completed = (yield* Ref.get(eventsRef)).filter(Schema.is(TurnCompleted))
+        expect(completed).toHaveLength(1)
+        expect(completed[0]?.interrupted).not.toBe(true)
+        expect(promptTexts).not.toContain("TAKEN-BACK")
+        const messages = yield* messageStorage.listMessages(contBranchId)
+        expect(messages.filter((message) => message._tag === "interjection")).toHaveLength(0)
+        yield* waitForPhase(agentLoop, { sessionId: contSessionId, branchId: contBranchId }, "Idle")
+        expect(yield* controls.callCount).toBe(2)
+      }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
     }).pipe(Effect.timeout("4 seconds")),
   )
   it.live("an interjection that asks to wake starts a turn on an idle branch", () =>

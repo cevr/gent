@@ -737,7 +737,10 @@ export const mapExtensionServiceError = <A, E, R>(
  *   a no-op and `dequeueFollowUp` can take it back. `wake` starts a turn even
  *   on a branch with no prior history.
  * - `steer` joins the running turn at its next step. An idle branch parks it
- *   unless `wake` asks for a turn now. A `requestId` makes a repeat a no-op.
+ *   unless `wake` asks for a turn now. A `requestId` makes a repeat a no-op,
+ *   and names the message: `interjectionMessageId(requestId)`. A `stop` with
+ *   that `messageId` takes the steer back while it waits, and stops the turn
+ *   it opened.
  *
  * `queue` and `steer` target the current branch when no target is named.
  *
@@ -826,8 +829,9 @@ export interface ExtensionSessionService {
   readonly send: (params: SessionSendParams) => Effect.Effect<void, ExtensionServiceError>
   /**
    * Stop a branch's running turn; the current branch when no target is named.
-   * A `messageId` stops only the turn for that message. A `requestId` makes a
-   * repeat of the same stop a no-op.
+   * A `messageId` stops only the turn for that message: one running now, one
+   * that has not started yet, or a `steer` with that id that no step has read.
+   * A `requestId` makes a repeat of the same stop a no-op.
    */
   readonly stop: (params: {
     readonly sessionId?: SessionId

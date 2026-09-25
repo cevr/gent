@@ -70,6 +70,7 @@ import {
   buildIdleState,
   buildRunningState,
   followUpMessageIdForSource,
+  interjectionMessageId,
   FollowUpQueueFull,
   type HandlerRequest,
   type LoopState,
@@ -97,7 +98,6 @@ import { causeChainMessage } from "../domain/guards.js"
 import {
   type ActiveStreamHandle,
   type AgentLoopTurnProfile,
-  interjectionMessageIdForCommand,
   makeAgentLoopTurnExecution,
   makeTurnLedger,
   runAgentLoopTurnProfile,
@@ -231,6 +231,7 @@ export class AgentLoopSessionGovernance extends Context.Service<
  * | `steer`                 | Where a steering item goes, and the phase a caller must test to wake  |
  * | `deliverSteering`       | What a step may take, and the final-step hold                         |
  * | `withdraw`              | That only a queued follow-up goes; an in-flight item is a turn        |
+ * | `withdrawSteering`      | That a joined or taken steering item stays; only a waiting one goes   |
  * | `drain`                 | That the in-flight item survives a drain; the snapshot the TUI reads  |
  * | `holds`                 | The five places one message can sit                                   |
  * | `moveToPhase`           | That a phase move is a memory write, and spends the reservation       |
@@ -630,6 +631,11 @@ export type LoopInbox = {
   readonly drain: Effect.Effect<QueueSnapshot, AgentLoopError>
   /** True when a queued follow-up was removed; false when absent or already in flight. */
   readonly withdraw: (messageId: MessageId) => Effect.Effect<boolean, AgentLoopError>
+  /**
+   * Take back a steering item that still waits. One a step already joined is
+   * in the transcript, and one a turn took is that turn; both stay.
+   */
+  readonly withdrawSteering: (messageId: MessageId) => Effect.Effect<void, AgentLoopError>
   /** Does the loop still own this message, anywhere? */
   readonly holds: (state: AgentLoopState, messageId: MessageId) => boolean
   readonly moveToPhase: (next: LoopState) => Effect.Effect<void>
@@ -852,6 +858,24 @@ export const makeLoopInbox = (
       }))
     }, scope.queuePersistenceSemaphore.withPermits(1))
 
+    // Under the same permit as `steer`: an item is either still queued or stored.
+    const withdrawSteering = Effect.fn("LoopInbox.withdrawSteering")(function* (
+      messageId: MessageId,
+    ) {
+      if (yield* scope.messageStored(messageId)) return
+      yield* commitQueueTransactionHeld("withdrew steering", (s) => {
+        const kept = s.queue.steering.filter((item) => item.message.id !== messageId)
+        if (kept.length === s.queue.steering.length) {
+          return { value: void 0, next: s, persist: false }
+        }
+        return {
+          value: void 0,
+          next: { ...s, queue: { ...s.queue, steering: kept } },
+          persist: true,
+        }
+      })
+    }, scope.queuePersistenceSemaphore.withPermits(1))
+
     const dropSteeringDelivered = (delivered: ReadonlyArray<QueuedTurnItem>) => {
       if (delivered.length === 0) return Effect.void
       const deliveredIds = new Set<string>(delivered.map((item) => item.message.id))
@@ -915,6 +939,7 @@ export const makeLoopInbox = (
       deliverSteering,
       drain,
       withdraw,
+      withdrawSteering,
       holds: loopHoldsMessage,
       moveToPhase,
     } satisfies LoopInbox
@@ -2640,7 +2665,7 @@ const buildAgentLoopActorHandlers = (config: {
       command: InterjectCommand,
     ) {
       const message = Message.cases.interjection.make({
-        id: interjectionMessageIdForCommand(commandId),
+        id: interjectionMessageId(commandId),
         sessionId: command.sessionId,
         branchId: command.branchId,
         role: "user",
@@ -2722,6 +2747,11 @@ const buildAgentLoopActorHandlers = (config: {
       switch (command._tag) {
         case "Cancel":
         case "Interrupt":
+          // A steer the stop names and no step has read yet never reaches a
+          // turn; the recorded cancellation covers one a turn already took.
+          if (Predicate.isNotUndefined(command.messageId)) {
+            yield* handle.inbox.withdrawSteering(command.messageId)
+          }
           if (isActiveLoopState(yield* handle.inbox.phase)) {
             yield* handle.interrupt(command.messageId).pipe(orCleanup(handle))
           }

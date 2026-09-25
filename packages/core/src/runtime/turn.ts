@@ -37,7 +37,6 @@ import {
   openedByClient,
 } from "../domain/message.js"
 import {
-  type ActorCommandId,
   type BranchId,
   type ExtensionId,
   InteractionRequestId,
@@ -254,9 +253,6 @@ const continuationMessageIdForTurn = (messageId: MessageId, step: number): Messa
  */
 const finalStepMessageIdForTurn = (messageId: MessageId): MessageId =>
   MessageId.make(`${messageId}:final-step`)
-
-export const interjectionMessageIdForCommand = (commandId: ActorCommandId) =>
-  MessageId.make(`${commandId}:interjection`)
 
 const toolCallsFromMessage = (message: Message) => messagePartsToolCallParts(message.parts)
 
