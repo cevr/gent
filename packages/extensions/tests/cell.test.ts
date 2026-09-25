@@ -53,6 +53,7 @@ import {
   WorkspaceId,
   createRpcClient,
   toolResultMessageIdForTurn,
+  testSqliteStorage,
 } from "@gent/core/test-utils"
 import { BunServices } from "@effect/platform-bun"
 import * as Prompt from "effect/unstable/ai/Prompt"
@@ -3275,7 +3276,7 @@ const decodeReply = Schema.decodeUnknownSync(
 )
 
 const layer = Layer.mergeAll(
-  SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations),
+  testSqliteStorage(CellBranchTools.storage, CellBranchTools.migrations),
   GentPlatform.Test(),
   ModelContextLedger.Branch,
 )
@@ -4823,9 +4824,7 @@ it.live("admits a cell once under concurrent claims and retains its first result
       .pipe(Effect.flip)
     expect(conflict.message).toBe("Cell result is immutable")
     expect(yield* storage.claim(address)).toEqual({ _tag: "Completed", result })
-  }).pipe(
-    Effect.provide(SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations)),
-  ),
+  }).pipe(Effect.provide(testSqliteStorage(CellBranchTools.storage, CellBranchTools.migrations))),
 )
 
 it.live("denies cross-workspace and cross-branch claims and completions", () =>
@@ -4870,9 +4869,7 @@ it.live("denies cross-workspace and cross-branch claims and completions", () =>
       ).toBe(true)
     }
     expect((yield* storage.claim(address))._tag).toBe("Incomplete")
-  }).pipe(
-    Effect.provide(SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations)),
-  ),
+  }).pipe(Effect.provide(testSqliteStorage(CellBranchTools.storage, CellBranchTools.migrations))),
 )
 
 it.live("rejects unclaimed and mismatched results and removes receipts with the message", () =>
@@ -4907,9 +4904,7 @@ it.live("rejects unclaimed and mismatched results and removes receipts with the 
       readonly count: number
     }>`SELECT COUNT(*) AS count FROM cell_executions`
     expect(rows[0]?.count).toBe(0)
-  }).pipe(
-    Effect.provide(SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations)),
-  ),
+  }).pipe(Effect.provide(testSqliteStorage(CellBranchTools.storage, CellBranchTools.migrations))),
 )
 
 it.live("rejects admission inside a caller transaction before granting execution", () =>
@@ -4920,9 +4915,7 @@ it.live("rejects admission inside a caller transaction before granting execution
     const rejected = yield* storage.claim(address).pipe(sql.withTransaction, Effect.flip)
     expect(Schema.is(StorageError)(rejected)).toBe(true)
     expect(yield* storage.claim(address)).toEqual({ _tag: "Claimed", code })
-  }).pipe(
-    Effect.provide(SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations)),
-  ),
+  }).pipe(Effect.provide(testSqliteStorage(CellBranchTools.storage, CellBranchTools.migrations))),
 )
 
 it.scopedLive(
@@ -5081,9 +5074,7 @@ it.live("admits an operation once and preserves its original input, binding, and
           .pipe(Effect.flip),
       ),
     ).toBe(true)
-  }).pipe(
-    Effect.provide(SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations)),
-  ),
+  }).pipe(Effect.provide(testSqliteStorage(CellBranchTools.storage, CellBranchTools.migrations))),
 )
 
 it.scopedLive(
@@ -5188,9 +5179,7 @@ it.live("never leaves an approval behind when its operation link fails", () =>
     yield* storage.suspend(key, requestOperationStorage)
     expect(yield* interactions.listOpen(cellOperationStorage)).toEqual([requestOperationStorage])
     expect((yield* storage.get(key)).state).toEqual({ _tag: "Waiting", requestId })
-  }).pipe(
-    Effect.provide(SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations)),
-  ),
+  }).pipe(Effect.provide(testSqliteStorage(CellBranchTools.storage, CellBranchTools.migrations))),
 )
 
 it.live(
@@ -5243,11 +5232,7 @@ it.live(
         "Started",
       ])
       expect((yield* storage.admit(params)).admitted).toBe(false)
-    }).pipe(
-      Effect.provide(
-        SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations),
-      ),
-    ),
+    }).pipe(Effect.provide(testSqliteStorage(CellBranchTools.storage, CellBranchTools.migrations))),
 )
 
 it.live("binds a decision to one waiting operation and grants one resume attempt", () =>
@@ -5283,9 +5268,7 @@ it.live("binds a decision to one waiting operation and grants one resume attempt
     )
     expect((yield* storage.admit(params)).admitted).toBe(false)
     expect((yield* storage.get(key)).state._tag).toBe("Resuming")
-  }).pipe(
-    Effect.provide(SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations)),
-  ),
+  }).pipe(Effect.provide(testSqliteStorage(CellBranchTools.storage, CellBranchTools.migrations))),
 )
 
 it.live("a stored decision that does not decode grants no resume", () =>
@@ -5301,9 +5284,7 @@ it.live("a stored decision that does not decode grants no resume", () =>
       true,
     )
     expect((yield* storage.get(key)).state._tag).toBe("Waiting")
-  }).pipe(
-    Effect.provide(SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations)),
-  ),
+  }).pipe(Effect.provide(testSqliteStorage(CellBranchTools.storage, CellBranchTools.migrations))),
 )
 
 it.live(
@@ -5335,11 +5316,7 @@ it.live(
         readonly count: number
       }>`SELECT COUNT(*) AS count FROM cell_tool_operations`
       expect(rows[0]?.count).toBe(0)
-    }).pipe(
-      Effect.provide(
-        SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations),
-      ),
-    ),
+    }).pipe(Effect.provide(testSqliteStorage(CellBranchTools.storage, CellBranchTools.migrations))),
 )
 
 it.live("does not admit external work inside a caller transaction or after cell completion", () =>
@@ -5379,9 +5356,7 @@ it.live("does not admit external work inside a caller transaction or after cell 
         yield* storage.admit({ ...params, operationId: "2" }).pipe(Effect.flip),
       ),
     ).toBe(true)
-  }).pipe(
-    Effect.provide(SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations)),
-  ),
+  }).pipe(Effect.provide(testSqliteStorage(CellBranchTools.storage, CellBranchTools.migrations))),
 )
 
 it.scopedLive("retains approval ownership and prevents a second resume after database reopen", () =>

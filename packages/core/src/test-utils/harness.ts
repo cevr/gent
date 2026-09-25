@@ -98,8 +98,10 @@ import {
   AgentLoopQueueStorage,
   BranchStorage,
   EventStorage,
+  type ExtraRepositories,
   InteractionStorage,
   SessionStorage,
+  SqliteStorage,
   ToolCallBindingStorage,
 } from "../storage/storage.js"
 import {
@@ -111,7 +113,9 @@ import {
   matchesEventFilter,
 } from "../domain/event.js"
 import { type LanguageModel, Model as AiModel } from "effect/unstable/ai"
-import type { GentPlatform } from "../runtime/gent-platform.js"
+import { GentPlatform } from "../runtime/gent-platform.js"
+import { BunCrypto } from "@effect/platform-bun"
+import type { FeatureMigrations } from "../storage/schema.js"
 import { BunPlatformLive } from "../runtime/gent-platform-bun.js"
 
 // ── extension-host-context ──────────────────────────────────────────────────
@@ -483,6 +487,20 @@ export const collectTestContributions = <E, R>(
     yield* setup.pipe(Effect.provideService(ExtensionHost, collector.service))
     return yield* collector.seal
   })
+
+/**
+ * In-memory SQLite storage with its platform closed: deterministic ids from
+ * `GentPlatform.Test()` and the Bun `Crypto` the host would provide. Storage
+ * tests yield it without wiring a platform layer; product callers use
+ * `SqliteStorage.LiveWithSql` / `MemoryWithSql` under the host's platform.
+ */
+export const testSqliteStorage = <A>(
+  extra: ExtraRepositories<A, StorageError, never>,
+  featureMigrations: FeatureMigrations,
+) =>
+  SqliteStorage.MemoryWithSql(extra, featureMigrations).pipe(
+    Layer.provide(Layer.merge(GentPlatform.Test(), BunCrypto.layer)),
+  )
 
 // Mock Helpers
 

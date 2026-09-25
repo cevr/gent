@@ -24,6 +24,7 @@ export {
   testAgent,
   testHostFacts,
   testLeafContext,
+  testSqliteStorage,
   testToolContext,
   type TestToolContext,
   testTurnExtension,

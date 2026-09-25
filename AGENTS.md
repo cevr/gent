@@ -110,7 +110,7 @@ Test files mirror `packages/core/src/` structure: `tests/domain/`, `tests/runtim
 
 ### Test philosophy
 
-- **Default is integration**: use `createRpcHarness` for extension RPC acceptance, `baseLocalLayer` for runtime integration, or `SqliteStorage.TestWithSql()` for focused storage behavior. Drop to raw `createE2ELayer` only for advanced host/profile wiring.
+- **Default is integration**: use `createRpcHarness` for extension RPC acceptance, `baseLocalLayer` for runtime integration, or `testSqliteStorage()` from the test utilities for focused storage behavior. Drop to raw `createE2ELayer` only for advanced host/profile wiring.
 - **Pure unit tests only for pure functions**: reducers, formatters, schema transforms, context-estimation math.
 - **Mock at system boundaries**: only the LLM via `LanguageModelLayers.sequence(...)`, `LanguageModelLayers.signal(...)`, or `LanguageModelLayers.debug()`. Use real services inside the boundary.
 - **`Provider.Test()` / provider wrapper statics and `EventStore.Test()` are deleted** — use `LanguageModelLayers.sequence([...])` or `LanguageModelLayers.debug()` for model mocking, `EventStore.Memory` for in-memory event stores. `LanguageModelLayers` and the step builders (`textStep`, `toolCallStep`, `textThenToolCallStep`, `multiToolCallStep`) live in `packages/core/src/test-utils/language-model.ts`. The stream-part helpers (`textDeltaPart`, `toolCallPart`, `reasoningDeltaPart`, `finishPart`) and the scripted model behind `LanguageModelLayers.debug()` and `Gent.provider.mock()` (`ScriptedLanguageModel`) live in `packages/core/src/runtime/provider.ts`. Tests outside core import them from `@gent/core/test-utils`.

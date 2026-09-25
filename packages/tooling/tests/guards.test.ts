@@ -1298,7 +1298,9 @@ describe("platform duplication guards", () => {
       {
         file: "packages/extensions/src/anthropic.ts",
         line: 1,
-        message: "Bun platform layers may only be provided by platform roots",
+        message: expect.stringContaining(
+          "`BunGentPlatformLive` provides a Bun platform layer outside the platform roots",
+        ),
       },
     ])
   })
@@ -1322,7 +1324,9 @@ describe("platform duplication guards", () => {
       {
         file: "packages/core/src/server/server.ts",
         line: 1,
-        message: "Bun platform layers may only be provided by platform roots",
+        message: expect.stringContaining(
+          "`BunPlatformLive` provides a Bun platform layer outside the platform roots",
+        ),
       },
     ])
 
@@ -1332,6 +1336,120 @@ describe("platform duplication guards", () => {
         "const PlatformLayer = Layer.mergeAll(BunGentPlatformLive)",
       ),
     ).toEqual([])
+  })
+
+  const provisionLines = (file: string, text: string) =>
+    findPlatformDuplicationViolations(file, text).map((finding) => [finding.line, finding.message])
+
+  test("every @effect/platform-bun layer outside a root is reported, however it is imported", () => {
+    const text = [
+      'import { BunCrypto, BunHttpServer as Http } from "@effect/platform-bun"',
+      'import * as PlatformBun from "@effect/platform-bun"',
+      'import * as BunPathModule from "@effect/platform-bun/BunPath"',
+      "import {",
+      "  layer as cryptoLayer,",
+      "  make as makeCrypto,",
+      '} from "@effect/platform-bun/BunCrypto"',
+      "const a = Layer.provide(BunCrypto.layer)",
+      "const b = Http.layerServer({ port: 1 })",
+      "const c = PlatformBun.BunServices.layer",
+      "const d = BunPathModule.layer",
+      "const e = Layer.merge(base, cryptoLayer)",
+      "const f = Http.layer({ port: 2 })",
+    ].join("\n")
+    expect(provisionLines("packages/core/src/storage/storage.ts", text)).toEqual([
+      [8, expect.stringContaining("`BunCrypto.layer`")],
+      [9, expect.stringContaining("`Http.layerServer`")],
+      [10, expect.stringContaining("`PlatformBun.BunServices.layer`")],
+      [11, expect.stringContaining("`BunPathModule.layer`")],
+      [12, expect.stringContaining("`cryptoLayer`")],
+      [13, expect.stringContaining("`Http.layer`")],
+    ])
+  })
+
+  test("a constructor, a runner or a comment is no layer provision", () => {
+    const text = [
+      'import { BunRuntime, BunSocket } from "@effect/platform-bun"',
+      "const socket = yield* BunSocket.makeNet({ path })",
+      "BunRuntime.runMain(program)",
+      "// BunCrypto.layer is what the host provides",
+      "/**",
+      " * `BunServices.layer` bundles the file system",
+      " */",
+      "const next = 1 /* BunCrypto.layer */ + 2",
+    ].join("\n")
+    expect(provisionLines("apps/tui/src/extensions/builtins.tsx", text)).toEqual([])
+  })
+
+  test("a local name that only looks like a Bun module is no provision", () => {
+    const text = [
+      "const BunWidget = { layer: Layer.empty }",
+      "const provided = Layer.provide(BunWidget.layer)",
+    ].join("\n")
+    expect(provisionLines("packages/core/src/runtime/widget.ts", text)).toEqual([])
+  })
+
+  test("a layer reached through a dynamic import is reported", () => {
+    const text = [
+      'const BunCrypto = await import("@effect/platform-bun/BunCrypto")',
+      'const { layer: cryptoLayer } = await import("@effect/platform-bun/BunCrypto")',
+      'const PlatformBun = await import("@effect/platform-bun")',
+      "Layer.provide(BunCrypto.layer)",
+      "Layer.provide(cryptoLayer)",
+      "Layer.provide(PlatformBun.BunServices.layer)",
+      'Layer.provide((await import("@effect/platform-bun/BunPath")).layer)',
+    ].join("\n")
+    expect(provisionLines("packages/core/src/runtime/dynamic.ts", text)).toEqual([
+      [4, expect.stringContaining("`BunCrypto.layer`")],
+      [5, expect.stringContaining("`cryptoLayer`")],
+      [6, expect.stringContaining("`PlatformBun.BunServices.layer`")],
+      [7, expect.stringContaining('`(await import("@effect/platform-bun/BunPath")).layer`')],
+    ])
+  })
+
+  test("a layer access split across lines is reported at its first line", () => {
+    const text = [
+      'import { BunServices } from "@effect/platform-bun"',
+      "const platform = BunServices.",
+      "  layer",
+      "const other = BunServices",
+      "  .layerTest",
+    ].join("\n")
+    expect(provisionLines("packages/core/src/runtime/split.ts", text)).toEqual([
+      [2, expect.stringContaining("`BunServices.layer`")],
+      [4, expect.stringContaining("`BunServices.layerTest`")],
+    ])
+  })
+
+  test("a module that re-exports @effect/platform-bun is reported at the re-export", () => {
+    const text = [
+      'export { BunCrypto } from "@effect/platform-bun"',
+      'export * from "@effect/platform-bun/BunPath"',
+      'export * as PlatformBun from "@effect/platform-bun"',
+      'export { layer as cryptoLayer } from "@effect/platform-bun/BunCrypto"',
+      'import { BunServices } from "@effect/platform-bun"',
+      "export { BunServices }",
+      "export const Services = BunServices",
+    ].join("\n")
+    expect(provisionLines("packages/core/src/runtime/reexport.ts", text)).toEqual(
+      [1, 2, 3, 4, 6, 7].map((line) => [line, expect.stringContaining("re-exports")]),
+    )
+  })
+
+  test("a root provides any layer; a justified entry allows only its own layer", () => {
+    expect(provisionLines("apps/tui/scripts/build.ts", "Layer.provide(BunServices.layer)")).toEqual(
+      [],
+    )
+    expect(
+      provisionLines(
+        "packages/extensions/src/openai.ts",
+        [
+          'import { BunCrypto, BunHttpServer } from "@effect/platform-bun"',
+          "Layer.provide(BunHttpServer.layerServer({ port: OAUTH_PORT }))",
+          "Effect.provide(BunCrypto.layer)",
+        ].join("\n"),
+      ),
+    ).toEqual([[3, expect.stringContaining("`BunCrypto.layer`")]])
   })
 })
 

@@ -63,6 +63,7 @@ import {
   ensureStorageParents,
   RecordingEventStore,
   SequenceRecorder,
+  testSqliteStorage,
 } from "../../src/test-utils/harness"
 import {
   finishPart,
@@ -124,7 +125,6 @@ import {
   type RelationshipStorage,
   SessionOperationStorage,
   SessionStorage,
-  SqliteStorage,
   ToolCallBindingStorage,
 } from "../../src/storage/storage"
 import {
@@ -3878,10 +3878,7 @@ describe("agent-loop recovery race", () => {
           ),
         )
 
-        const baseStorage = SqliteStorage.TestWithSql(
-          noBranchTools.storage,
-          noBranchTools.migrations,
-        )
+        const baseStorage = testSqliteStorage(noBranchTools.storage, noBranchTools.migrations)
         const wrappedQueueStorage = gatedQueueStorageLayer(
           reopenGate,
           reopenEntered,
@@ -5202,7 +5199,7 @@ const makeTestExtensions = (
   ])
 }
 
-const makeClusterRunnerLayer = <A>(storageLayer: ReturnType<typeof SqliteStorage.TestWithSql<A>>) =>
+const makeClusterRunnerLayer = <A>(storageLayer: ReturnType<typeof testSqliteStorage<A>>) =>
   Layer.provide(
     SingleRunner.layer({ runnerStorage: "memory" }),
     Layer.merge(storageLayer, BunCrypto.layer),
@@ -5216,7 +5213,7 @@ const makeRuntimeLayer = (
   const resolvedExtensions = makeTestExtensions(tools, requests)
   const recorderLayer = SequenceRecorder.Live
   const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
-  const storageLayer = SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations)
+  const storageLayer = testSqliteStorage(noBranchTools.storage, noBranchTools.migrations)
   let toolRunnerLayer = ToolRunner.Test()
   if (tools.length > 0) toolRunnerLayer = ToolRunner.Live
   const baseDeps = Layer.mergeAll(
@@ -6526,10 +6523,7 @@ describe("queue drain regression", () => {
         // already holds the interjection at that instant says which of the two
         // writes went first, without failing either.
         const transcriptHeldAtDrop = yield* Ref.make(Option.none<boolean>())
-        const storageLayer = SqliteStorage.TestWithSql(
-          noBranchTools.storage,
-          noBranchTools.migrations,
-        )
+        const storageLayer = testSqliteStorage(noBranchTools.storage, noBranchTools.migrations)
         const queueStorageLayer = Layer.provide(
           Layer.effect(
             AgentLoopQueueStorage,
@@ -7905,10 +7899,7 @@ describe("streaming", () => {
           Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
         )
       })
-      const baseStorageLayer = SqliteStorage.TestWithSql(
-        noBranchTools.storage,
-        noBranchTools.migrations,
-      )
+      const baseStorageLayer = testSqliteStorage(noBranchTools.storage, noBranchTools.migrations)
       const layer = actorTestRoot({ provider: providerLayer, storage: baseStorageLayer })
       yield* Effect.scoped(
         Effect.gen(function* () {
@@ -8612,7 +8603,7 @@ describe("streaming", () => {
           Effect.gen(function* () {
             // One database outlives both processes.
             const storage = yield* Layer.build(
-              SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
+              testSqliteStorage(noBranchTools.storage, noBranchTools.migrations),
             )
             const processLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) =>
               actorTestRoot({ provider: providerLayer, storage: Layer.succeedContext(storage) })
@@ -9684,7 +9675,7 @@ describe("tool binding replay", () => {
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
-          SqliteStorage.TestWithSql(() => Layer.empty, {}),
+          testSqliteStorage(() => Layer.empty, {}),
           EventStore.Memory,
         ),
       ),
@@ -9757,7 +9748,7 @@ describe("tool binding replay", () => {
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
-          SqliteStorage.TestWithSql(() => Layer.empty, {}),
+          testSqliteStorage(() => Layer.empty, {}),
           EventStore.Memory,
         ),
       ),
@@ -9798,7 +9789,7 @@ describe("tool binding replay", () => {
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
-          SqliteStorage.TestWithSql(() => Layer.empty, {}),
+          testSqliteStorage(() => Layer.empty, {}),
           EventStore.Memory,
         ),
       ),
@@ -9871,7 +9862,7 @@ describe("tool binding replay", () => {
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
-          SqliteStorage.TestWithSql(() => Layer.empty, {}),
+          testSqliteStorage(() => Layer.empty, {}),
           EventStore.Memory,
         ),
       ),
@@ -9935,7 +9926,7 @@ describe("tool binding replay", () => {
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
-          SqliteStorage.TestWithSql(() => Layer.empty, {}),
+          testSqliteStorage(() => Layer.empty, {}),
           EventStore.Memory,
         ),
       ),
@@ -10012,7 +10003,7 @@ describe("tool binding replay", () => {
 })
 
 describe("session depth guard", () => {
-  const depthStorage = SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations)
+  const depthStorage = testSqliteStorage(noBranchTools.storage, noBranchTools.migrations)
   const run = <A, E>(
     effect: Effect.Effect<
       A,

@@ -42,7 +42,7 @@ import {
   textStep,
   waitFor,
 } from "../../src/test-utils/language-model"
-import { createE2ELayer, createRpcClient } from "../../src/test-utils/harness"
+import { createE2ELayer, createRpcClient, testSqliteStorage } from "../../src/test-utils/harness"
 import {
   messagePartsText,
   Branch,
@@ -453,7 +453,7 @@ const collectRuntime = <A, E>(stream: Stream.Stream<A, E>) =>
   })
 
 const sessionQueriesActorFailureLayer = Layer.mergeAll(
-  SqliteStorage.TestWithSql(() => Layer.empty, {}),
+  testSqliteStorage(() => Layer.empty, {}),
   GentPlatform.Test(),
   ConfigService.Test(),
   ExtensionRegistry.Test(),
@@ -2082,9 +2082,7 @@ describe("requestId idempotency", () => {
         // One database; the process that retries no longer loads the agent.
         const shared = yield* Layer.build(
           Layer.mergeAll(
-            SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(
-              Layer.provide(GentPlatform.Test()),
-            ),
+            testSqliteStorage(() => Layer.empty, {}),
             sessionRuntimeLayer(),
             EventStore.Memory,
             EventStore.Memory,
@@ -2146,9 +2144,7 @@ describe("requestId idempotency", () => {
           SessionProfileCache.of({ resolve: () => Effect.succeed(profile) }),
         )
         const deps = Layer.mergeAll(
-          SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(
-            Layer.provide(GentPlatform.Test()),
-          ),
+          testSqliteStorage(() => Layer.empty, {}),
           sessionRuntimeLayer(),
           EventStore.Memory,
           EventStore.Memory,

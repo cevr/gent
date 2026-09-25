@@ -1,4 +1,4 @@
-import { type FileSystem, Option, type Path, Result, Schema } from "effect"
+import { type Crypto, type FileSystem, Option, type Path, Result, Schema } from "effect"
 import {
   type ExtensionHost,
   type GentExtension,
@@ -69,7 +69,9 @@ const BuiltinArtifactIdentity: Option.Option<LoadedArtifactIdentity> = Option.ma
 export { CellBranchTools }
 
 export const BuiltinExtensions: ReadonlyArray<
-  GentExtension<ChildProcessSpawner | ExtensionHost | FileSystem.FileSystem | Path.Path>
+  GentExtension<
+    ChildProcessSpawner | Crypto.Crypto | ExtensionHost | FileSystem.FileSystem | Path.Path
+  >
 > = [
   CellExtension,
   CompactionExtension,
