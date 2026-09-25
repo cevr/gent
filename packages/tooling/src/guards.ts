@@ -2209,11 +2209,6 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
   {
     file: "packages/extensions/src/openai.ts",
     scope: "next-line",
-    text: "strictEffectProvide:off OAuth authorization owns its crypto layer at the extension boundary",
-  },
-  {
-    file: "packages/extensions/src/openai.ts",
-    scope: "next-line",
     text: "strictEffectProvide:off device endpoints at extension boundary",
   },
   {

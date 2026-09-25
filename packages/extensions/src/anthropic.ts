@@ -58,7 +58,6 @@ import {
 import { ChildProcessSpawner } from "effect/unstable/process"
 import { FetchHttpClient, Headers, HttpClient, HttpClientRequest } from "effect/unstable/http"
 import { AnthropicClient, AnthropicLanguageModel, Generated } from "@effect/ai-anthropic"
-import { BunCrypto } from "@effect/platform-bun"
 import { type AiError, Model as AiModel } from "effect/unstable/ai"
 
 // Test seam: only tests read these exports. The model table and its lookups
@@ -1066,11 +1065,11 @@ const realIO: AnthropicCredentialIO = {
 }
 
 /**
- * What the driver runs on: the host's files, paths and processes, captured
+ * What the driver runs on: the host's files, paths, processes and crypto, captured
  * once at setup, plus the Claude Code platform facts. The driver provides no
  * platform of its own, so a test host's services reach the keychain reads.
  */
-type AnthropicDriverServices = Context.Context<AnthropicCredentialIORequirements>
+type AnthropicDriverServices = Context.Context<AnthropicCredentialIORequirements | Crypto.Crypto>
 
 /** The production credential cache over the Claude Code keychain and the host's platform. */
 const buildLiveCredentialCache = (
@@ -2197,11 +2196,7 @@ const makeOauthAnthropicLayer = (
     claudeCodeClientPath(creds),
     (rewriteBody) =>
       AnthropicClient.layer({ transformClient: (client) => keychain(rewriteBody(client)) }),
-  ).pipe(
-    Layer.provide(FetchHttpClient.layer),
-    Layer.provide(BunCrypto.layer),
-    Layer.provide(Layer.succeedContext(services)),
-  )
+  ).pipe(Layer.provide(FetchHttpClient.layer), Layer.provide(Layer.succeedContext(services)))
   return AnthropicLanguageModel.layer({ model: modelName, config: request.config }).pipe(
     Layer.provide(wrappedClient),
   )
@@ -2336,6 +2331,7 @@ export const AnthropicExtension = defineExtension({
       yield* FileSystem.FileSystem,
     ).pipe(
       Context.add(Path.Path, yield* Path.Path),
+      Context.add(Crypto.Crypto, yield* Crypto.Crypto),
       Context.add(
         ChildProcessSpawner.ChildProcessSpawner,
         yield* ChildProcessSpawner.ChildProcessSpawner,

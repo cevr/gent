@@ -30,7 +30,7 @@ import {
   HttpServerRequest,
   HttpServerResponse,
 } from "effect/unstable/http"
-import { BunCrypto, BunHttpServer } from "@effect/platform-bun"
+import { BunHttpServer } from "@effect/platform-bun"
 import {
   AuthMethod,
   DEFAULT_RETRY_POLICY,
@@ -520,70 +520,71 @@ const tokensToRefreshResult = (tokens: TokenResponse, now: number): OpenAIRefres
  * `buildOpenAIModelDriver`'s `authorize` closes the flow's scope, which stops
  * the redirect server.
  */
-const authorizeOpenAI: Effect.Effect<OpenAIAuthorizationFlow, OAuthError, Scope.Scope> = Effect.gen(
-  function* () {
-    const pkce = yield* generatePKCE
-    const crypto = yield* Crypto.Crypto
-    const stateBytes = yield* crypto.randomBytes(32).pipe(
-      Effect.mapError(
-        (error) =>
-          new OAuthError({
-            reason: "pkce-failed",
-            message: `OAuth state generation failed: ${error.message}`,
-          }),
-      ),
-    )
-    const state = Encoding.encodeBase64Url(stateBytes)
-    const redirectUri = `http://localhost:${OAUTH_PORT}/auth/callback`
-    const authUrl = buildAuthorizeUrl(redirectUri, pkce, state)
-    const deferred = yield* Deferred.make<PendingCallbackPayload, OAuthError>()
+const authorizeOpenAI: Effect.Effect<
+  OpenAIAuthorizationFlow,
+  OAuthError,
+  Scope.Scope | Crypto.Crypto
+> = Effect.gen(function* () {
+  const pkce = yield* generatePKCE
+  const crypto = yield* Crypto.Crypto
+  const stateBytes = yield* crypto.randomBytes(32).pipe(
+    Effect.mapError(
+      (error) =>
+        new OAuthError({
+          reason: "pkce-failed",
+          message: `OAuth state generation failed: ${error.message}`,
+        }),
+    ),
+  )
+  const state = Encoding.encodeBase64Url(stateBytes)
+  const redirectUri = `http://localhost:${OAUTH_PORT}/auth/callback`
+  const authUrl = buildAuthorizeUrl(redirectUri, pkce, state)
+  const deferred = yield* Deferred.make<PendingCallbackPayload, OAuthError>()
 
-    // Nothing joins the server fiber, so a failed start (port 1455 in use,
-    // for example) fails the deferred; otherwise `callback()` waits forever.
-    yield* startRedirectServer(state, deferred).pipe(
-      Effect.tapError((error) => Deferred.fail(deferred, error)),
-      Effect.forkScoped,
-    )
+  // Nothing joins the server fiber, so a failed start (port 1455 in use,
+  // for example) fails the deferred; otherwise `callback()` waits forever.
+  yield* startRedirectServer(state, deferred).pipe(
+    Effect.tapError((error) => Deferred.fail(deferred, error)),
+    Effect.forkScoped,
+  )
 
-    const callback = (manualInput?: string): Effect.Effect<OpenAIOAuthTokens, OAuthError> =>
-      Effect.gen(function* () {
-        let code: string
-        if (manualInput && manualInput.trim().length > 0) {
-          const parsed = parseAuthorizationInput(manualInput)
-          if (Option.isSome(parsed.state) && parsed.state.value !== state) {
-            return yield* new OAuthError({
-              reason: "state-mismatch",
-              message: "State mismatch",
-            })
-          }
-          if (Option.isNone(parsed.code) || parsed.code.value.length === 0) {
-            return yield* new OAuthError({
-              reason: "missing-code",
-              message: "Missing authorization code",
-            })
-          }
-          code = parsed.code.value
-        } else {
-          const payload = yield* Deferred.await(deferred)
-          code = payload.code
+  const callback = (manualInput?: string): Effect.Effect<OpenAIOAuthTokens, OAuthError> =>
+    Effect.gen(function* () {
+      let code: string
+      if (manualInput && manualInput.trim().length > 0) {
+        const parsed = parseAuthorizationInput(manualInput)
+        if (Option.isSome(parsed.state) && parsed.state.value !== state) {
+          return yield* new OAuthError({
+            reason: "state-mismatch",
+            message: "State mismatch",
+          })
         }
+        if (Option.isNone(parsed.code) || parsed.code.value.length === 0) {
+          return yield* new OAuthError({
+            reason: "missing-code",
+            message: "Missing authorization code",
+          })
+        }
+        code = parsed.code.value
+      } else {
+        const payload = yield* Deferred.await(deferred)
+        code = payload.code
+      }
 
-        const tokens = yield* exchangeCodeWithFetch(code, redirectUri, pkce.verifier)
-        const now = yield* Clock.currentTimeMillis
-        return tokensToOAuthResult(tokens, now)
-      })
+      const tokens = yield* exchangeCodeWithFetch(code, redirectUri, pkce.verifier)
+      const now = yield* Clock.currentTimeMillis
+      return tokensToOAuthResult(tokens, now)
+    })
 
-    return {
-      authorization: {
-        url: authUrl,
-        method: "auto",
-        instructions: "Complete authorization in your browser. Paste the code if needed.",
-      },
-      callback,
-    } satisfies OpenAIAuthorizationFlow
-  },
-  // @effect-diagnostics-next-line strictEffectProvide:off OAuth authorization owns its crypto layer at the extension boundary
-).pipe(Effect.provide(BunCrypto.layer))
+  return {
+    authorization: {
+      url: authUrl,
+      method: "auto",
+      instructions: "Complete authorization in your browser. Paste the code if needed.",
+    },
+    callback,
+  } satisfies OpenAIAuthorizationFlow
+})
 
 /**
  * Refresh an OpenAI OAuth credential against the token endpoint.
@@ -816,7 +817,8 @@ const allocateOpenAIAuthorization: Effect.Effect<
     readonly flow: OpenAIAuthorizationFlow
     readonly close: Effect.Effect<void>
   },
-  OAuthError
+  OAuthError,
+  Crypto.Crypto
 > = Effect.gen(function* () {
   const scope = yield* Scope.make()
   const flow = yield* authorizeOpenAI.pipe(
@@ -1656,13 +1658,15 @@ const explainedClientLayer = (
  * Build the model-driver contribution given a pre-allocated credential
  * cache cell. Extracted from the inline `modelDrivers` factory so
  * tests can inject their own cell and assert that two `resolveModel`
- * calls share the same closure-owned cell.
+ * calls share the same closure-owned cell. `crypto` is the host's Crypto,
+ * captured at setup; the browser OAuth flow draws its PKCE and state from it.
  */
 export const buildOpenAIModelDriver = (
   credentialCellRef: CredentialCacheCellRef<OpenAICredentials>,
   pendingCallbacks: Map<string, PendingCallbackEntry>,
   envApiKey: Option.Option<string>,
   catalog: CatalogSource,
+  crypto: Crypto.Crypto,
 ): ModelDriverContribution => {
   // The keys whose organization OpenAI refused a reasoning summary.
   const refusedKeys: RefusedKeys = Ref.makeUnsafe(HashSet.empty())
@@ -1758,6 +1762,7 @@ export const buildOpenAIModelDriver = (
           const allocate = Option.fromNullishOr(OAUTH_ALLOCATORS[ctx.methodIndex])
           if (Option.isNone(allocate)) return Option.none()
           const { flow, close } = yield* allocate.value.pipe(
+            Effect.provideService(Crypto.Crypto, crypto),
             Effect.mapError(
               (e) =>
                 new ProviderAuthError({
@@ -1843,10 +1848,13 @@ export const OpenAIExtension = defineExtension({
 
     const envApiKey = yield* readOptionalEnv("OPENAI_API_KEY")
     const catalog = yield* catalogSource(host.home)
+    // The host's Crypto, not one of the driver's own: a shipped provider is
+    // never more privileged than a user extension.
+    const crypto = yield* Crypto.Crypto
 
     yield* host.register(
       "modelDriver",
-      buildOpenAIModelDriver(credentialCellRef, pendingCallbacks, envApiKey, catalog),
+      buildOpenAIModelDriver(credentialCellRef, pendingCallbacks, envApiKey, catalog, crypto),
     )
   }),
 })
