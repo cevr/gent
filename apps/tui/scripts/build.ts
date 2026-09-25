@@ -42,7 +42,6 @@ const build = Effect.gen(function* () {
         __GENT_BUILTIN_ARTIFACT_ID__: `"build:${artifactId}"`,
       },
       compile: {
-        target: "bun-darwin-arm64",
         outfile,
         autoloadBunfig: false,
         // An extension resolves only the entries the loaders bind. Without this,
