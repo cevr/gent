@@ -18,6 +18,7 @@ import {
   Clock,
   Context,
   Effect,
+  Exit,
   Layer,
   Option,
   type PlatformError,
@@ -502,6 +503,16 @@ const settled = (entry: DelegateEntry, outcome: ChildOutcome): DelegateEntry => 
   delivered: true,
 })
 
+/** A row a parent's interrupt settled as stopped, whose notice no turn has read yet. */
+const claimedByStop = (row: DelegateEntry) =>
+  Predicate.isNotUndefined(row.stopNoticeAt) && row.completed?.interrupted === true
+
+/** The row as it was before a stop claimed it: running, with no stop notice. */
+const unclaimed = (row: DelegateEntry): DelegateEntry => ({
+  ...Struct.omit(row, ["completed", "stopNoticeAt"]),
+  delivered: false,
+})
+
 /**
  * Queue the completion on the parent branch and return the marked entry.
  * Runs under the parent registry's lock; `delivered` is the idempotency key,
@@ -644,7 +655,26 @@ const reconcile = Effect.fn("Delegate.reconcile")(function* (options: {
           next = next.filter((current) => current.requestId !== entry.requestId)
           continue
         }
-        if (entry.delivered) continue
+        if (entry.delivered) {
+          // A stop's claim over a turn that completed on its own, whose hook
+          // never delivered: the completion lands now.
+          if (!claimedByStop(entry)) continue
+          const own = Option.filter(
+            yield* turnEnd({ ...entry, messageId: startMessageId(entry.requestId) }),
+            (end) => end.receipt.interrupted !== true,
+          )
+          if (Option.isNone(own)) continue
+          const { receipt, error } = own.value
+          const delivered = yield* deliverCompletion(
+            parent,
+            unclaimed(entry),
+            outcomeOf(receipt),
+            usageOf(receiptTotal(receipt)),
+            error,
+          )
+          next = replaceEntry(next, delivered)
+          continue
+        }
         const current = yield* settleIfGone(entry)
         if (current.delivered) {
           next = replaceEntry(next, current)
@@ -849,36 +879,57 @@ const admitChild = Effect.fn("Delegate.admit")(function* (params: AdmitParams) {
 // ── stopping ────────────────────────────────────────────────────────────────
 
 /**
- * Settle a running child's row as interrupted, then stop it. The row is
- * settled first so the child's own receipt finds it delivered and sends no
- * message: a parent that stopped its children is not woken by them. The row
- * keeps a stop notice instead, which the parent's next turn reads.
+ * Stop a running child for the parent's interrupt.
+ *
+ * The row is claimed first: settled as interrupted with a stop notice, so the
+ * child's own hook, when its turn ends interrupted, finds it delivered and
+ * sends no message. A parent that stopped its children is not woken by them;
+ * its next turn reads the notice instead. The stop runs outside the registry
+ * lock, because the child's own hook takes that lock.
+ *
+ * A turn that completed before the stop reached it still holds its loop while
+ * its hooks run, so the stop's answer is true for it too. Its own hook tells
+ * the two apart: a turn that ended without an interrupt delivers its
+ * completion over the claim (`onChildTurnAfter`). A stop that fails hands the
+ * row back and fails: the child runs on and reports itself.
  */
-const stopChild = (entry: DelegateEntry) =>
-  Effect.gen(function* () {
-    const ctx = yield* ExtensionContext
-    const now = yield* Clock.currentTimeMillis
-    yield* registry
-      .at(ctx.branchId)
-      .update((entries) => {
-        const current = entries.find((row) => row.requestId === entry.requestId)
-        if (Predicate.isUndefined(current) || current.delivered) return entries
-        return replaceEntry(entries, {
-          ...settled(current, { interrupted: true }),
-          stopNoticeAt: now,
-        })
-      })
-      .pipe(Effect.ignore)
-    yield* ctx.Session.stop({
+const stopChild = Effect.fn("Delegate.stopChild")(function* (entry: DelegateEntry) {
+  const ctx = yield* ExtensionContext
+  const branchRegistry = registry.at(ctx.branchId)
+  const stoppedAt = yield* Clock.currentTimeMillis
+  const claim = yield* branchRegistry.modify((entries) =>
+    Effect.sync(() => {
+      const current = entries.find((row) => row.requestId === entry.requestId)
+      if (Predicate.isUndefined(current) || current.delivered) {
+        return { next: entries, result: false }
+      }
+      const stopped = { ...settled(current, { interrupted: true }), stopNoticeAt: stoppedAt }
+      return { next: replaceEntry(entries, stopped), result: true }
+    }),
+  )
+  if (!claim) return
+  const answer = yield* Effect.exit(
+    ctx.Session.stopMessage({
       sessionId: entry.sessionId,
       branchId: entry.branchId,
-      requestId: RequestId.make(`delegate-stop:${entry.sessionId}`),
-    }).pipe(Effect.ignore)
-  })
+      messageId: startMessageId(entry.requestId),
+    }),
+  )
+  if (Exit.isSuccess(answer)) return
+  yield* branchRegistry.update((entries) =>
+    entries.map((row) => {
+      if (row.requestId !== entry.requestId || row.stopNoticeAt !== stoppedAt) return row
+      return unclaimed(row)
+    }),
+  )
+  return yield* Effect.failCause(answer.cause)
+})
 
 /**
  * The child's own turn receipt, seen from its branch. The registry lives with
- * the parent, so the hook looks the parent up and writes there.
+ * the parent, so the hook looks the parent up and writes there. A turn that
+ * ended without an interrupt delivers even over a stop's claim: it completed
+ * before the parent's stop reached it.
  */
 const onChildTurnAfter = Effect.fn("Delegate.turnAfter")(function* (input: {
   readonly sessionId: SessionId
@@ -897,14 +948,15 @@ const onChildTurnAfter = Effect.fn("Delegate.turnAfter")(function* (input: {
   const parent = { sessionId: parentSessionId, branchId: parentBranchId }
   const delivered = yield* registry.at(parentBranchId).modify((entries) =>
     Effect.gen(function* () {
-      const entry = entries.find(
+      const found = entries.find(
         (row) =>
-          !row.delivered &&
+          (!row.delivered || (!input.interrupted && claimedByStop(row))) &&
           !row.private &&
           row.sessionId === input.sessionId &&
           startMessageId(row.requestId) === input.messageId,
       )
-      if (Predicate.isUndefined(entry)) return { next: entries, result: false }
+      if (Predicate.isUndefined(found)) return { next: entries, result: false }
+      const entry = unclaimed(found)
       const outcome = outcomeOf(input)
       // The hook runs after the receipt is stored, so the turn's error is in
       // the child's events; a turn that completed has none to read.
@@ -950,7 +1002,23 @@ const onParentTurnAfter = Effect.fn("Delegate.parentTurnAfter")(function* (input
     (row) => !row.delivered && Predicate.isUndefined(row.completed),
   )
   if (running.length === 0) return
-  yield* Effect.forEach(running, stopChild, { discard: true })
+  // One child's failed stop leaves the others to be stopped. The failed
+  // child's hook may have skipped its claimed row, so the next turn reconciles.
+  yield* Effect.forEach(
+    running,
+    (entry) =>
+      stopChild(entry).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("delegate.stop.failed").pipe(
+            Effect.annotateLogs({ requestId: entry.requestId, cause: Cause.pretty(cause) }),
+            Effect.andThen(
+              Effect.flatMap(ReconciledBranches, (reconciled) => reconciled.invalidate),
+            ),
+          ),
+        ),
+      ),
+    { discard: true },
+  )
   yield* ctx.State.changed().pipe(Effect.ignore)
 })
 
@@ -1218,6 +1286,24 @@ const childrenSection = (agent: AgentDefinition) => {
   return [CHILDREN_SECTION]
 }
 
+/** A hook step that fails logs and ends; with `reconcile`, the next turn repairs what it left. */
+const logFailure =
+  (event: string, reconcile: boolean) =>
+  <E, R>(step: Effect.Effect<void, E, R>) =>
+    step.pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning(event).pipe(
+          Effect.annotateLogs({ cause: Cause.pretty(cause) }),
+          Effect.andThen(
+            Effect.flatMap(ReconciledBranches, (reconciled) => {
+              if (!reconcile) return Effect.void
+              return reconciled.invalidate
+            }),
+          ),
+        ),
+      ),
+    )
+
 /** Child admission and control: start, cancel, and list. */
 export const DelegateExtension = defineExtension({
   id: DELEGATE_EXTENSION_ID,
@@ -1229,19 +1315,19 @@ export const DelegateExtension = defineExtension({
     // Every turn end is read three times: as a child's receipt for its
     // parent, as a parent's interrupt for its children, and as a parent's
     // answer that read its stop notices.
+    // Each read fails alone: a session that is both a child and a parent
+    // still stops its own children when its parent's registry is unreadable.
     yield* host.on("turnAfter", (input) =>
-      onChildTurnAfter(input).pipe(
-        Effect.andThen(onParentTurnAfter(input)),
-        Effect.andThen(clearReadStopNotices(input)),
-        Effect.catchCause((cause) =>
-          Effect.logWarning("delegate.completion.failed").pipe(
-            Effect.annotateLogs({ cause: Cause.pretty(cause) }),
-            // A completion must not be lost: the parent's next turn reconciles again.
-            Effect.andThen(
-              Effect.flatMap(ReconciledBranches, (reconciled) => reconciled.invalidate),
-            ),
-          ),
-        ),
+      Effect.all(
+        [
+          // A completion must not be lost: the parent's next turn reconciles again.
+          onChildTurnAfter(input).pipe(logFailure("delegate.completion.failed", true)),
+          // A failed stop leaves its row running: the next turn reconciles it.
+          onParentTurnAfter(input).pipe(logFailure("delegate.cascade.failed", true)),
+          // A notice left in place shows once more.
+          clearReadStopNotices(input).pipe(logFailure("delegate.stop-notices.clear.failed", false)),
+        ],
+        { discard: true },
       ),
     )
     // A crash leaves children mid-turn or an undelivered entry. The parent's

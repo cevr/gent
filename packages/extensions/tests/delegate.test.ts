@@ -3155,6 +3155,137 @@ describe("a parent interrupt and the turns its session.send opened", () => {
   )
 })
 
+// ── a parent interrupt as a child finishes ──────────────────────────────────
+
+describe("a parent interrupt as a child finishes", () => {
+  it.live(
+    "a child whose turn completed before the stop reached it keeps its completion",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const childGo = yield* Deferred.make<void>()
+          const parentStreaming = yield* Deferred.make<void>()
+          const childEnding = yield* Deferred.make<void>()
+          const release = yield* Deferred.make<void>()
+          const held = yield* Ref.make(Option.none<SessionId>())
+          const parentRequests: Array<{ readonly notices: string; readonly last: string }> = []
+          const providerLayer = LanguageModelLayers.testStream((request) => {
+            const texts = promptTexts(request.prompt)
+            if (texts[0]?.endsWith(childTask) === true) {
+              return Deferred.await(childGo).pipe(Effect.as(reply("pong")))
+            }
+            parentRequests.push({ notices: noticeText(request.prompt), last: texts.at(-1) ?? "" })
+            if (parentRequests.length === 1) {
+              return Effect.succeed(toolStep("delegate.start", { todo: childTask }, "start-1"))
+            }
+            if (parentRequests.length === 2) {
+              return Effect.succeed(stalledStream("waiting on the child", parentStreaming))
+            }
+            return Effect.succeed(reply("ack"))
+          })
+          const harness = yield* harnessWithHome(providerLayer, {
+            fixtures: [holdTurnEnd({ held, ending: childEnding, release })],
+          })
+          const { client, sessionId, branchId } = harness
+          yield* sendPrompt(harness, "delegate one task")
+          yield* Deferred.await(parentStreaming)
+          const child = yield* childOf(harness)
+          yield* Ref.set(held, Option.some(child.sessionId))
+          yield* Deferred.succeed(childGo, void 0)
+          // The child's turn completed and its receipt is stored; its end is
+          // held open before the delegate hook reads it.
+          yield* Deferred.await(childEnding)
+          yield* interruptParent(harness, "interrupt-parent-as-child-finishes")
+          // The parent's interrupt has run its cascade: the parent is idle, or
+          // the child's completion already woke it.
+          yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              current.runtime._tag === "Idle" || completionMessages(current.messages).length > 0,
+            3_000,
+            "the parent's interrupt ran its cascade",
+          )
+          yield* Deferred.succeed(release, void 0)
+          yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              current.runtime._tag === "Idle" &&
+              completionMessages(current.messages).length === 1 &&
+              messageTexts(current.messages).includes("ack"),
+            5_000,
+            "the child's completion woke the parent and the parent read it",
+          )
+          const [row] = yield* harness.registryOf(branchId)
+          expect(row).toMatchObject({ delivered: true, completed: {} })
+          expect(row?.stopNoticeAt).toBeUndefined()
+          const woken = parentRequests.at(-1)
+          expect(woken?.last).toContain("pong")
+          expect(woken?.notices ?? "").not.toContain("# Stopped children")
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
+  )
+
+  it.live(
+    "a session whose parent's registry cannot be read still stops its own children",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const grandchildStreaming = yield* Deferred.make<void>()
+          const middleStreaming = yield* Deferred.make<void>()
+          const providerLayer = LanguageModelLayers.testStream((request) => {
+            const texts = promptTexts(request.prompt)
+            if (texts[0]?.endsWith(childTask) === true) {
+              return Effect.succeed(stalledStream("working", grandchildStreaming))
+            }
+            if (!promptToolCallIds(request.prompt).includes("start-g")) {
+              return Effect.succeed(toolStep("delegate.start", { todo: childTask }, "start-g"))
+            }
+            return Effect.succeed(stalledStream("waiting on the child", middleStreaming))
+          })
+          const harness = yield* harnessWithHome(providerLayer)
+          const { client, sessionId, branchId } = harness
+          // The middle session is a child of the harness session, and its
+          // parent's registry is unreadable, so its turn end fails as a child.
+          const middle = yield* client.session.create({
+            cwd: "/tmp",
+            parentSessionId: sessionId,
+            parentBranchId: branchId,
+          })
+          const fs = yield* FileSystem.FileSystem
+          yield* fs.makeDirectory(`${harness.home}/.gent/delegates`, { recursive: true })
+          yield* fs.writeFileString(`${harness.home}/.gent/delegates/${branchId}.json`, "not json")
+          yield* client.message.send({ ...middle, content: "MIDDLE-PROMPT" })
+          yield* Deferred.await(grandchildStreaming)
+          yield* Deferred.await(middleStreaming)
+          const sessions = yield* client.session.list()
+          const grandchild = sessions.find(
+            (session) => session.parentSessionId === middle.sessionId,
+          )
+          if (Predicate.isUndefined(grandchild?.activeBranchId)) {
+            return yield* Effect.die("no grandchild session")
+          }
+          const target = { sessionId: grandchild.id, branchId: grandchild.activeBranchId }
+          yield* client.steer.command({
+            command: SteerCommand.make({
+              _tag: "Cancel",
+              ...middle,
+              requestId: RequestId.make("interrupt-middle"),
+            }),
+          })
+          const receipts = yield* waitFor(
+            turnReceipts(harness, target),
+            (current) => current.length === 1,
+            3_000,
+            "the middle session's interrupt stopped its child",
+          )
+          expect(receipts[0]).toMatchObject({ interrupted: true })
+        }).pipe(Effect.provide(BunFileSystem.layer), Effect.timeout("10 seconds")),
+      ),
+    12_000,
+  )
+})
+
 // ── child later turns ───────────────────────────────────────────────────────
 
 /**
