@@ -575,11 +575,42 @@ describe("repo temp directory guard", () => {
     expect(findRepoTempDirectories(testFile, source)).toHaveLength(1)
   })
 
+  test("a tmp path of any spelling joined to a repo path is reported", () => {
+    const sources = [
+      'const dir = join(import.meta.dir, ".tmp")',
+      'const dir = join(__dirname, "tmp", "case")',
+      'const dir = path.resolve(import.meta.dirname, "../temp-fixtures")',
+    ]
+    expect(sources.map((source) => findRepoTempDirectories(testFile, source).length)).toEqual([
+      1, 1, 1,
+    ])
+  })
+
+  test("a temp directory call rooted in the repo is reported, whatever its prefix", () => {
+    const sources = [
+      'const dir = mkdtempSync(join(__dirname, "fixture-"))',
+      'const dir = mkdtempSync(path.join("packages/core/tests", "case-"))',
+      'const dir = yield* fs.makeTempDirectory({ directory: resolve("./apps/tui") })',
+      [
+        "const packageRoot = path.resolve(__dirname, '..')",
+        "const dir = yield* fs.makeTempDirectoryScoped({",
+        '  prefix: "case-",',
+        "  directory: packageRoot,",
+        "})",
+      ].join("\n"),
+    ]
+    expect(
+      sources.map((source) => findRepoTempDirectories(testFile, source).map((f) => f.line)),
+    ).toEqual([[1], [1], [1], [4]])
+  })
+
   test("a system temp directory and a read of the source tree pass", () => {
     const source = [
       'const root = yield* fs.makeTempDirectoryScoped({ prefix: "gent-x-" })',
       'const dir = path.resolve(import.meta.dir, "../../src/extensions")',
       "const other = yield* fs.makeTempDirectoryScoped({ directory: root })",
+      'const sys = mkdtempSync(join(tmpdir(), "gent-case-"))',
+      'const template = path.join(import.meta.dir, "templates", "prompt.md")',
     ].join("\n")
     expect(findRepoTempDirectories(testFile, source)).toEqual([])
   })

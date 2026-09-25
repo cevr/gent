@@ -811,40 +811,65 @@ export const findE2eFixtureImportFindings = (
  * loaders bind `effect` and the public entries, so an extension file resolves
  * them from anywhere; no test needs `node_modules` above its fixture.
  *
- * Two spellings are reported in test code outside the tooling package: a
- * `directory:` option that names `import.meta` or a name bound from it, and a
- * `.tmp-` path on a line that names `import.meta`.
+ * A repo path is `import.meta.dir`, `import.meta.dirname`, `__dirname`, a
+ * `join`/`resolve` whose first argument is a relative path literal, or a name
+ * bound from one of these. Two shapes are reported in test code outside the
+ * tooling package, whatever the directory's name or prefix: a temp directory
+ * call (`mkdtemp`, `mkdtempSync`, `makeTempDirectory`,
+ * `makeTempDirectoryScoped`) whose arguments name a repo path, and a repo path
+ * joined to a `tmp` or `temp` segment (`.tmp`, `tmp-x`, `temp`).
  */
-const IMPORT_META_DIR = /\bimport\.meta\.dir(?:name)?\b/
-const IMPORT_META_BINDING =
-  /\b(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=.*\bimport\.meta\.dir(?:name)?\b/
-const DIRECTORY_OPTION = /\bdirectory:\s*(.+)$/
-const TMP_PATH_LITERAL = /["'`][^"'`]*\.tmp-/
+const REPO_PATH =
+  /\bimport\.meta\.dir(?:name)?\b|\b__dirname\b|\b(?:join|resolve)\(\s*["'`](?:\.{1,2}(?:\/|["'`])|(?:packages|apps|examples|testbeds)\/)/
+const BINDING = /\b(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=(.*)$/
+const TEMP_CALL = /\b(?:mkdtempSync|mkdtemp|makeTempDirectoryScoped|makeTempDirectory)\s*\(/g
+const TMP_SEGMENT = /["'`](?:[^"'`]*\/)?\.?(?:tmp|temp)(?:[-_.][^"'`/]*)?(?:\/[^"'`]*)?["'`]/i
 
 const TEMP_IN_REPO_MESSAGE =
   "a test temp directory under the repo is linted when a killed test leaves it behind; use `makeTempDirectoryScoped` without `directory` (the loaders bind `effect` and the public entries, so no node_modules is needed above it)"
 
+/** The text from `open` (an opening paren) to its matching close, or to the end. */
+const callArguments = (text: string, open: number): string => {
+  let depth = 0
+  for (let at = open; at < text.length; at++) {
+    if (text[at] === "(") depth++
+    if (text[at] === ")") depth--
+    if (depth === 0) return text.slice(open, at + 1)
+  }
+  return text.slice(open)
+}
+
 export const findRepoTempDirectories = (file: string, text: string): ReadonlyArray<Finding> => {
   // The guard's own tests spell the reported shapes as probe text.
   if (!isTestCode(file) || file.startsWith("packages/tooling/")) return []
-  const lines = withoutComments(text).split("\n")
-  const bound = lines.flatMap((line) =>
-    Option.match(Option.fromNullishOr(IMPORT_META_BINDING.exec(line)), {
-      onNone: () => [],
-      onSome: (match) => [match[1] ?? ""],
-    }),
-  )
-  const namesRepo = (value: string): boolean =>
-    IMPORT_META_DIR.test(value) || bound.some((name) => value.split(/[^\w$]+/).includes(name))
-  return lines.flatMap((line, index) => {
-    const intoRepo = Option.match(Option.fromNullishOr(DIRECTORY_OPTION.exec(line)), {
-      onNone: () => false,
-      onSome: (match) => namesRepo(match[1] ?? ""),
-    })
-    const tmpBesideMeta = IMPORT_META_DIR.test(line) && TMP_PATH_LITERAL.test(line)
-    if (!intoRepo && !tmpBesideMeta) return []
-    return [{ file, line: index + 1, message: TEMP_IN_REPO_MESSAGE }]
-  })
+  const code = withoutComments(text)
+  const lines = code.split("\n")
+  // A name bound from a repo path, or from another such name, is a repo path.
+  const bound = new Set<string>()
+  const namesBound = (value: string): boolean =>
+    value.split(/[^\w$]+/).some((word) => bound.has(word))
+  const namesRepo = (value: string): boolean => REPO_PATH.test(value) || namesBound(value)
+  for (const line of lines) {
+    const binding = Option.fromNullishOr(BINDING.exec(line))
+    if (Option.isSome(binding) && namesRepo(binding.value[2] ?? ""))
+      bound.add(binding.value[1] ?? "")
+  }
+  const reported = new Set<number>()
+  // A temp directory call: report the first line of its arguments that names a repo path.
+  for (const call of code.matchAll(TEMP_CALL)) {
+    const open = call.index + call[0].length - 1
+    const first = code.slice(0, open).split("\n").length - 1
+    const argumentLines = callArguments(code, open).split("\n")
+    const hit = argumentLines.findIndex(namesRepo)
+    if (hit !== -1) reported.add(first + hit)
+  }
+  // A tmp segment joined to a repo path on one line.
+  for (const [index, line] of lines.entries()) {
+    if (REPO_PATH.test(line) && TMP_SEGMENT.test(line)) reported.add(index)
+  }
+  return [...reported]
+    .sort((a, b) => a - b)
+    .map((index) => ({ file, line: index + 1, message: TEMP_IN_REPO_MESSAGE }))
 }
 
 // ── the loop prompts carry one SAFETY block ─────────────────────────────────
@@ -852,8 +877,9 @@ export const findRepoTempDirectories = (file: string, text: string): ReadonlyArr
 /**
  * Guard: the sweep and apply prompts of the architecture loop carry the same
  * SAFETY block. Each agent reads only its own prompt, so a rule added to one
- * copy leaves the other agents without it. The block is the `SAFETY` line and
- * the `- ` lines that follow it.
+ * copy leaves the other agents without it. The block must sit inside the
+ * fenced prompt template, which is the text an agent receives (`safetyBlock`
+ * reads its extent).
  */
 const SAFETY_PROMPTS: ReadonlyArray<string> = [
   ".claude/skills/architecture-loop/prompts/apply.md",
