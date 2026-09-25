@@ -3850,7 +3850,7 @@ describe("cell context host", () => {
       const ledger = yield* ModelContextLedger
       yield* ledger.recordProjection({
         estimatedTokens: 42,
-        availableInputTokens: 58,
+        availableInputTokens: 84,
         contextLimitTokens: 100,
         omittedMessages: 3,
       })
@@ -3862,7 +3862,8 @@ describe("cell context host", () => {
         }),
       )
       expect(after.projected).toBe(true)
-      expect(after.percent).toBe(42)
+      // The share of the input the messages may take, not of the window.
+      expect(after.percent).toBe(50)
     }).pipe(Effect.provide(layer)),
   )
 

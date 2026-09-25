@@ -39,6 +39,12 @@ export class Model extends Schema.Class<Model>("Model")({
    * Absent when input may fill the window less the output.
    */
   inputLimit: Schema.optional(Schema.Finite),
+  /**
+   * The most output tokens one reply may carry, as the catalog says. The
+   * output reserve is this up to 32k (`outputReserveTokens`); absent when the
+   * catalog does not say.
+   */
+  outputLimit: Schema.optional(Schema.Finite),
   pricing: Schema.optional(ModelPricing),
   /** When the driver released the model; an ISO-8601 prefix: `2026-02-17` or `2025-04`. */
   releaseDate: Schema.optional(Schema.String),

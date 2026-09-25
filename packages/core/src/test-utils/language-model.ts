@@ -25,6 +25,8 @@ import * as path from "node:path"
 import type { ProviderOptions } from "effect/unstable/ai/LanguageModel"
 import type * as AiError from "effect/unstable/ai/AiError"
 import type * as Prompt from "effect/unstable/ai/Prompt"
+import { ProviderStopReason, reportProviderStopReason } from "../domain/driver.js"
+import { omitUndefined } from "../domain/guards.js"
 import { ToolCallId } from "../domain/ids.js"
 import { ProviderError } from "../domain/errors.js"
 import {
@@ -194,6 +196,24 @@ export const oneGenerate = (
     Effect.catchCause((cause) => Effect.die(cause)),
   )
 
+/**
+ * Run `effect` as a loop step does, listening for the raw stop reason a
+ * driver reports (`ProviderStopReason`); returns the last one reported.
+ */
+export const captureProviderStopReason = <A, E, R>(
+  effect: Effect.Effect<A, E, R>,
+): Effect.Effect<Option.Option<string>, E, Exclude<R, ProviderStopReason>> =>
+  Effect.gen(function* () {
+    const reported = yield* Ref.make(Option.none<string>())
+    yield* effect.pipe(
+      Effect.provideService(
+        ProviderStopReason,
+        ProviderStopReason.of({ report: (reason) => Ref.set(reported, Option.some(reason)) }),
+      ),
+    )
+    return yield* Ref.get(reported)
+  })
+
 // ── fixtures ────────────────────────────────────────────────────────────────
 
 /** Shared test fixtures for integration tests across packages. */
@@ -313,9 +333,18 @@ export interface SequenceStep {
   readonly assertRequest?: (request: {
     readonly model: string
     readonly reasoning?: string
+    /** The output cap the request asks the driver for. */
+    readonly maxTokens?: number
   }) => void
   readonly assertOptions?: (options: ProviderOptions) => void
   readonly gated?: boolean
+  /**
+   * The provider's raw stop reason, which the step reports through
+   * `ProviderStopReason` as a driver that reads the wire does. The finish
+   * part still carries Effect AI's mapped reason (`"unknown"` for a reason
+   * its map lacks).
+   */
+  readonly stopReason?: string
 }
 
 interface SequenceLanguageModelControls {
@@ -443,6 +472,10 @@ const sequence = (steps: ReadonlyArray<SequenceStep>) =>
             })
           }
 
+          if (Predicate.isNotUndefined(step?.stopReason)) {
+            yield* reportProviderStopReason(step.stopReason)
+          }
+
           if (!Predicate.isUndefined(gate)) {
             return Stream.fromEffect(Deferred.await(gate)).pipe(
               Stream.flatMap(() => Stream.fromIterable(step?.parts ?? [])),
@@ -460,13 +493,14 @@ const sequence = (steps: ReadonlyArray<SequenceStep>) =>
           const step = steps[idx] ?? steps[0]
           if (Predicate.isUndefined(step?.assertRequest)) return
           yield* Effect.try({
-            try: () => {
-              const model = String(request.modelId)
-              if (!Predicate.isUndefined(request.hints?.reasoning)) {
-                return step.assertRequest?.({ model, reasoning: request.hints.reasoning })
-              }
-              return step.assertRequest?.({ model })
-            },
+            try: () =>
+              step.assertRequest?.({
+                model: String(request.modelId),
+                ...omitUndefined({
+                  reasoning: request.hints?.reasoning,
+                  maxTokens: request.hints?.maxTokens,
+                }),
+              }),
             catch: (e) =>
               new ProviderError({
                 message: `Sequence language model: assertRequest failed at step ${idx}: ${e}`,

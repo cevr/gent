@@ -287,7 +287,7 @@ const remotePayload = {
       "gpt-5.4": {
         name: "GPT-5.4",
         cost: { input: 1.25, output: 10 },
-        limit: { context: 400_000, input: 272_000 },
+        limit: { context: 400_000, input: 272_000, output: 128_000 },
         release_date: "2026-07-24",
         tool_call: true,
         reasoning: true,
@@ -687,6 +687,22 @@ describe("models.dev catalog", () => {
       // A model the catalog names no cap for has none.
       const opus = models.find((model) => model.id === "anthropic/claude-opus-5")
       expect(opus?.inputLimit).toBeUndefined()
+    }).pipe(Effect.provide(platformLayer)),
+  )
+
+  it.scopedLive("carries the output cap onto the parsed model", () =>
+    Effect.gen(function* () {
+      const home = yield* freshHome("output-cap")
+      const calls = yield* Ref.make(0)
+
+      const models = yield* modelsDevCatalog(home).pipe(
+        Effect.provide(countingHttpLayer(calls, encodeAnyJson(remotePayload))),
+      )
+
+      const gpt = models.find((model) => model.id === "openai/gpt-5.4")
+      expect(gpt?.outputLimit).toBe(128_000)
+      const opus = models.find((model) => model.id === "anthropic/claude-opus-5")
+      expect(opus?.outputLimit).toBeUndefined()
     }).pipe(Effect.provide(platformLayer)),
   )
 

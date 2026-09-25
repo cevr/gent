@@ -1620,8 +1620,10 @@ export const handleContextCall = Effect.fn("CellContextHost.call")(function* (pa
           tokens: value.estimatedTokens,
           limit: value.contextLimitTokens,
           available: value.availableInputTokens,
+          // The messages' share of the input they may take: 100 is where the
+          // window hands off, also on a model whose input cap is below its window.
           percent: Math.round(
-            (value.estimatedTokens / Math.max(1, value.contextLimitTokens)) * 100,
+            (value.estimatedTokens / Math.max(1, value.availableInputTokens)) * 100,
           ),
           omittedMessages: value.omittedMessages,
           handoffMessageId: value.handoffMessageId ?? "",

@@ -1086,7 +1086,7 @@ describe("session metrics", () => {
       return yield* Effect.gen(function* () {
         const { client } = yield* createRpcClient(layer)
         const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
-        for (const content of [`first ${"a".repeat(16_000)}`, `second ${"b".repeat(16_000)}`]) {
+        for (const content of [`first ${"a".repeat(20_000)}`, `second ${"b".repeat(20_000)}`]) {
           yield* client.message.send({ sessionId, branchId, content })
           yield* waitFor(
             client.session.getSnapshot({ sessionId, branchId }),
