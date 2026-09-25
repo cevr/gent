@@ -1508,10 +1508,13 @@ class AgentLoopFollowUp extends Context.Service<AgentLoopFollowUp, AgentLoopFoll
  * Keeps one branch's cluster entity resident while anything holds it.
  *
  * The cluster reaper passivates an entity that is idle past its limit (one
- * minute), and a passivated entity closes its runtime-state stream. Two
- * things hold a loop resident: a running turn, and a client that watches the
- * loop's runtime state. A watch that held nothing would end a minute into an
- * idle stretch, and the client would reconnect and rebuild the loop each time.
+ * minute), and a passivated entity closes its runtime-state stream and its
+ * branch scope. Three things hold a loop resident: a running turn, a client
+ * that watches the loop's runtime state, and an extension hold
+ * (`Session.holdResident`, which a pending wake timer takes). A watch that
+ * held nothing would end a minute into an idle stretch, and the client would
+ * reconnect and rebuild the loop each time; a timer that held nothing would
+ * stop with the branch scope and never fire.
  *
  * The holds are counted, because the entity has one keep-alive switch: the
  * first hold turns it on and the last release turns it off. An entity with
@@ -1527,13 +1530,32 @@ class AgentLoopResidency extends Context.Service<AgentLoopResidency, AgentLoopRe
   "@gent/core/src/runtime/agent-loop/AgentLoopResidency",
 ) {}
 
+/**
+ * Counts holds on one switch: the first hold switches it on, the last
+ * release switches it off. A hold whose switch-on failed installs no release,
+ * so it takes its count back: the next hold switches on again.
+ */
+export const makeHoldCount = (switchTo: (enabled: boolean) => Effect.Effect<void>) =>
+  Effect.gen(function* () {
+    const holds = yield* Ref.make(0)
+    const permit = yield* Semaphore.make(1)
+    const acquire = Effect.gen(function* () {
+      const previous = yield* Ref.getAndUpdate(holds, (count) => count + 1)
+      if (previous !== 0) return
+      yield* switchTo(true).pipe(Effect.onError(() => Ref.update(holds, (count) => count - 1)))
+    }).pipe(permit.withPermits(1))
+    const release = Effect.gen(function* () {
+      const remaining = yield* Ref.updateAndGet(holds, (count) => count - 1)
+      if (remaining === 0) yield* switchTo(false)
+    }).pipe(permit.withPermits(1))
+    return AgentLoopResidency.of({ held: Effect.acquireRelease(acquire, () => release) })
+  })
+
 /** One residency per entity; built in the entity's own context. */
 const makeAgentLoopResidency = Effect.gen(function* () {
   const entityContext = yield* Effect.context<Entity.CurrentAddress>()
   const sharding = yield* Effect.serviceOption(Sharding.Sharding)
-  const holds = yield* Ref.make(0)
-  const permit = yield* Semaphore.make(1)
-  const keepAlive = (enabled: boolean) =>
+  return yield* makeHoldCount((enabled) =>
     Option.match(sharding, {
       onNone: () => Effect.void,
       onSome: (service) =>
@@ -1541,16 +1563,8 @@ const makeAgentLoopResidency = Effect.gen(function* () {
           Effect.provideService(Sharding.Sharding, service),
           Effect.provideContext(entityContext),
         ),
-    })
-  const acquire = Effect.gen(function* () {
-    const previous = yield* Ref.getAndUpdate(holds, (count) => count + 1)
-    if (previous === 0) yield* keepAlive(true)
-  }).pipe(permit.withPermits(1))
-  const release = Effect.gen(function* () {
-    const remaining = yield* Ref.updateAndGet(holds, (count) => count - 1)
-    if (remaining === 0) yield* keepAlive(false)
-  }).pipe(permit.withPermits(1))
-  return AgentLoopResidency.of({ held: Effect.acquireRelease(acquire, () => release) })
+    }),
+  )
 })
 
 /**
@@ -1662,6 +1676,7 @@ const makeAgentLoopBehavior = (
           return steerLoop(command).pipe(provideLoopClient)
         },
         stopMessage: (input) => stopMessageOn(input).pipe(provideLoopClient),
+        holdResident: residency.held,
       },
     })
 

@@ -41,6 +41,7 @@ import {
   canStartTurnNow,
   emptyAdmissionGate,
   makeAgentLoopWorker,
+  makeHoldCount,
   makeLoopInbox,
   wantsWakeOnRecovery,
 } from "../../src/runtime/agent-loop"
@@ -609,6 +610,27 @@ describe("turn lifetime", () => {
         ).toBe(true)
       }).pipe(Effect.provide(TestClock.layer()), Effect.timeout("8 seconds")),
     10_000,
+  )
+
+  it.live("a hold whose switch-on failed is not counted, so the next hold switches on", () =>
+    Effect.gen(function* () {
+      const switched: Array<boolean> = []
+      let failNext = true
+      const residency = yield* makeHoldCount((enabled) =>
+        Effect.suspend(() => {
+          switched.push(enabled)
+          if (enabled && failNext) {
+            failNext = false
+            return Effect.die(new Error("keep-alive refused"))
+          }
+          return Effect.void
+        }),
+      )
+      const first = yield* Effect.exit(Effect.scoped(residency.held))
+      expect(Exit.isFailure(first)).toBe(true)
+      yield* Effect.scoped(residency.held)
+      expect(switched).toEqual([true, true, false])
+    }),
   )
 
   it.scopedLive(

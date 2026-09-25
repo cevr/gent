@@ -421,6 +421,44 @@ describe("wake", () => {
     15_000,
   )
 
+  // No client watches this branch, so nothing but the alarm keeps its loop
+  // resident. The cluster passivates a loop idle for a minute, and its branch
+  // scope, where the timer runs, closes with it.
+  it.scopedLive(
+    "an alarm on an idle branch no client watches fires past the idle limit",
+    () =>
+      Effect.gen(function* () {
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          toolCallStep("wake", { afterSeconds: 300, note: "check the nightly build" }),
+          textStep("alarm set, going idle"),
+          textStep("woke up and checked the build"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+        })
+        const turnsCompleted = (count: number) =>
+          client.session.events({ sessionId, branchId }).pipe(
+            Stream.filter(({ event }) => event._tag === "TurnCompleted"),
+            Stream.take(count),
+            Stream.runDrain,
+            Effect.forkScoped,
+          )
+        const firstTurn = yield* turnsCompleted(1)
+        const wokenTurn = yield* turnsCompleted(2)
+        yield* client.message.send({ sessionId, branchId, content: "check the build tonight" })
+        yield* Fiber.join(firstTurn)
+        // Idle past the entity idle limit, then past the alarm.
+        yield* TestClock.adjust("10 seconds")
+        yield* TestClock.adjust("6 minutes")
+        yield* Fiber.join(wokenTurn)
+        expect(yield* controls.callCount).toBe(3)
+        const snapshot = yield* client.session.getSnapshot({ sessionId, branchId })
+        expect(textOf(wakeOf(snapshot.messages)).endsWith("check the nightly build")).toBe(true)
+      }).pipe(Effect.provide(TestClock.layer()), Effect.timeout("10 seconds")),
+    12_000,
+  )
+
   it.live(
     "a past-due alarm left on disk fires on the first turn after a restart",
     () =>

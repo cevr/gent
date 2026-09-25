@@ -2824,6 +2824,7 @@ const stubCtx = testToolContext({
     renameCurrent: dieStub("renameCurrent"),
     listBranches: Effect.die("listBranches not wired in test"),
     dequeueFollowUp: dieStub("dequeueFollowUp"),
+    holdResident: Effect.die("holdResident not wired in test"),
     create: dieStub("create"),
     delete: dieStub("delete"),
     send: dieStub("send"),
