@@ -131,7 +131,9 @@ question). A message another agent or an extension sent (a parent's
 and a row stored before the client origin existed are not. It is the first row a
 short terminal gives up: it shows only while the live tail keeps a row beside
 it. The expanded transcript and overlays pin nothing, and the terminal owns
-scrollback, so there is no jump back to the original.
+scrollback, so there is no jump back to the original. The prompt is a memo of
+the displayed items; a measurement only looks heights up by index and stops
+summing once the answer is known, so per-frame work never grows with history.
 
 ## Compound Components
 

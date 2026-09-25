@@ -998,8 +998,8 @@ const PROMPT_TEXT_ROW = 1
 
 /** Where the transcript stands, in rows, as `promptOnScreen` reads it. */
 interface PromptGeometry {
-  /** Each displayed item's measured height, in display order. */
-  readonly heights: ReadonlyArray<Option.Option<number>>
+  /** A displayed item's measured height, by its display index. */
+  readonly heightAt: (index: number) => Option.Option<number>
   /** The prompt's item. */
   readonly index: number
   /** How many leading items native history holds. */
@@ -1021,24 +1021,36 @@ interface PromptGeometry {
  * the viewport sticks to the bottom, so a live tail taller than it cuts rows
  * off the top. A committed prompt is on screen while it and the history rows
  * after it fit in the rows the terminal shows above the app. An unmeasured
- * height counts as on screen, so nothing is pinned on a guess.
+ * height met before the answer is known counts as on screen, so nothing is
+ * pinned on a guess.
+ *
+ * The sums stop once they pass what decides the answer, so the work is
+ * bounded by the rows on screen, never by how much history lies beyond them.
  */
 export const promptOnScreen = (geometry: PromptGeometry): boolean => {
-  const sum = (from: number, to: number): Option.Option<number> =>
-    Option.all(geometry.heights.slice(from, to)).pipe(
-      Option.map((rows) => rows.reduce((total, row) => total + row, 0)),
-    )
+  /** Rows of items `from` up to `to`, or `past` itself once they exceed it. */
+  const rowsUpTo = (from: number, to: number, past: number): Option.Option<number> => {
+    let total = 0
+    for (let index = from; index < to && total <= past; index++) {
+      const height = geometry.heightAt(index)
+      if (Option.isNone(height)) return Option.none()
+      total += height.value
+    }
+    return Option.some(total)
+  }
   if (geometry.index < geometry.committed) {
-    return Option.match(sum(geometry.index, geometry.committed), {
+    const past = geometry.scrollbackRows + PROMPT_TEXT_ROW
+    return Option.match(rowsUpTo(geometry.index, geometry.committed, past), {
       onNone: () => true,
-      onSome: (rows) => rows - PROMPT_TEXT_ROW <= geometry.scrollbackRows,
+      onSome: (rows) => rows <= past,
     })
   }
   const viewport = Math.min(Math.max(1, geometry.liveHeight), geometry.liveRows - 1)
   const scrollTop = Math.max(0, geometry.liveHeight - viewport)
-  return Option.match(sum(geometry.committed, geometry.index), {
+  const past = scrollTop - PROMPT_TEXT_ROW
+  return Option.match(rowsUpTo(geometry.committed, geometry.index, past), {
     onNone: () => true,
-    onSome: (above) => above + PROMPT_TEXT_ROW >= scrollTop,
+    onSome: (above) => above >= past,
   })
 }
 
@@ -1443,19 +1455,37 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     Option.flatMap(Option.fromUndefinedOr(ext.messageRenderers().get(customType)), (renderer) =>
       Option.fromUndefinedOr(renderer.prompt),
     )
+  /**
+   * The reader's last prompt and its display index. A memo of the displayed
+   * items alone: a measurement never re-runs it, and it scans back from the
+   * end only as far as that prompt.
+   */
+  const lastPrompt = createMemo(
+    (): Option.Option<{ readonly index: number; readonly text: string }> => {
+      const items = displayedItems()
+      for (let index = items.length - 1; index >= 0; index--) {
+        const text = Option.flatMap(Option.fromUndefinedOr(items[index]), (item) =>
+          readerPrompt(item, promptOf),
+        )
+        if (Option.isSome(text)) return Option.some({ index, text: text.value })
+      }
+      return Option.none()
+    },
+  )
+  /** Per measurement: a height lookup by index and sums bounded by the screen. */
   const stickyPrompt = createMemo((): Option.Option<string> => {
     if (props.expanded || props.overlayOpen || liveRows() < 2) return Option.none()
-    const items = displayedItems()
-    const index = items.findLastIndex((item) => Option.isSome(readerPrompt(item, promptOf)))
-    const prompt = Option.flatMap(Option.fromUndefinedOr(items[index]), (item) =>
-      readerPrompt(item, promptOf),
-    )
+    const prompt = lastPrompt()
     if (Option.isNone(prompt)) return Option.none()
     measurementVersion()
+    const items = displayedItems()
     const height = dimensions().height
     const onScreen = promptOnScreen({
-      heights: items.map((item) => Option.fromUndefinedOr(itemHeights.get(item))),
-      index,
+      heightAt: (index) =>
+        Option.flatMap(Option.fromUndefinedOr(items[index]), (item) =>
+          Option.fromUndefinedOr(itemHeights.get(item)),
+        ),
+      index: prompt.value.index,
       committed: committedCount(),
       liveHeight: liveHeight(),
       liveRows: liveRows(),
@@ -1463,7 +1493,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
         height - splitFooterHeight(height, props.footerHeight + 1 + Math.max(1, liveHeight())),
     })
     if (onScreen) return Option.none()
-    return prompt
+    return Option.some(prompt.value.text)
   })
   const stickyRows = () => {
     if (Option.isSome(stickyPrompt())) return 1

@@ -3451,6 +3451,74 @@ describe("sticky last prompt", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
 
+  it.live(
+    "a streaming reply's growth reads no history item: the pin work per frame is flat in history length",
+    () =>
+      Effect.gen(function* () {
+        const HISTORY = 2_000
+        let roleReads = 0
+        /** An assistant row that counts every read of its role: a scan of history reads it. */
+        const counted = (id: string): SessionItem => {
+          const item = reply(id, 1)
+          const { role } = item
+          Object.defineProperty(item, "role", {
+            get: () => {
+              roleReads++
+              return role
+            },
+          })
+          return item
+        }
+        const history: SessionItem[] = [
+          prompt("p0", "ASK-ONE"),
+          ...Array.from({ length: HISTORY }, (_, index) => counted(`h${index}`)),
+        ]
+        const tail = history.at(-1)
+        const [grown, setGrown] = createSignal(1)
+        let extensionsLoaded = () => false
+        const setup = yield* Effect.promise(() =>
+          renderWithProviders(
+            () => {
+              extensionsLoaded = useExtensionUI().loaded
+              return (
+                <NativeTranscript
+                  items={history}
+                  settled
+                  streaming
+                  footerHeight={3}
+                  expanded={false}
+                  disclosure="collapsed"
+                  displayRevision={0}
+                  overlayOpen={false}
+                  renderItems={(visible) => (
+                    <Show when={visible[0] === tail} fallback={<text>row</text>}>
+                      <text>{Array.from({ length: grown() }, () => "GROW").join("\n")}</text>
+                    </Show>
+                  )}
+                >
+                  <box />
+                </NativeTranscript>
+              )
+            },
+            { width: 50, height: 16 },
+          ),
+        )
+        yield* Effect.promise(() => setup.flush()).pipe(
+          Effect.repeat({ until: () => extensionsLoaded() }),
+          Effect.timeout("5 seconds"),
+        )
+        yield* waitForFrame(setup, (next) => next.includes("↑ ASK-ONE"), "pinned")
+        const before = roleReads
+        for (let step = 2; step < 42; step++) {
+          setGrown(step)
+          yield* Effect.promise(() => setup.flush())
+        }
+        // Each growth step is a new measurement; none of them scans history.
+        expect(roleReads - before).toBe(0)
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
+  )
+
   it.live("a terminal too short for the row keeps the live tail and pins nothing", () =>
     Effect.gen(function* () {
       // Two rows left for the transcript: the live tail keeps them both.
@@ -3513,13 +3581,16 @@ describe("readerPrompt", () => {
 })
 
 describe("promptOnScreen", () => {
-  const known = (rows: ReadonlyArray<number>) => rows.map((row) => Option.some(row))
+  const known =
+    (rows: ReadonlyArray<number>) =>
+    (index: number): Option.Option<number> =>
+      Option.fromUndefinedOr(rows[index])
 
   test("a live prompt is on screen while its first row is at or below the viewport's top", () => {
     // Live content of 10 rows in a viewport of 6 (7 rows less the pinned one): rows 0-3 are cut.
     const at = (heights: ReadonlyArray<number>) =>
       promptOnScreen({
-        heights: known(heights),
+        heightAt: known(heights),
         index: 1,
         committed: 0,
         liveHeight: 10,
@@ -3534,7 +3605,7 @@ describe("promptOnScreen", () => {
   test("a committed prompt is on screen while the history rows after it fit above the region", () => {
     const committed = (scrollbackRows: number) =>
       promptOnScreen({
-        heights: known([2, 5, 4]),
+        heightAt: known([2, 5, 4]),
         index: 0,
         committed: 2,
         liveHeight: 4,
@@ -3549,7 +3620,7 @@ describe("promptOnScreen", () => {
   test("an unmeasured row counts as on screen, so nothing is pinned on a guess", () => {
     expect(
       promptOnScreen({
-        heights: [Option.none(), Option.some(2)],
+        heightAt: (index) => Option.liftPredicate(2, () => index === 1),
         index: 1,
         committed: 0,
         liveHeight: 40,
@@ -3557,5 +3628,22 @@ describe("promptOnScreen", () => {
         scrollbackRows: 0,
       }),
     ).toBe(true)
+  })
+
+  test("a prompt deep in history reads only the rows on screen, not the history after it", () => {
+    let reads = 0
+    const onScreen = promptOnScreen({
+      heightAt: () => {
+        reads++
+        return Option.some(2)
+      },
+      index: 0,
+      committed: 2_000,
+      liveHeight: 4,
+      liveRows: 10,
+      scrollbackRows: 12,
+    })
+    expect(onScreen).toBe(false)
+    expect(reads).toBeLessThanOrEqual(8)
   })
 })
