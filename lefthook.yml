@@ -15,13 +15,19 @@ pre-commit:
     - name: lint+fmt
       run: bun run lint:fix && bun run fmt
       stage_fixed: true
-    # After the fixes: every "off" in `.oxlintrc.json` still suppresses a
-    # diagnostic in the tree as it will be committed.
-    - name: lint-offs
-      run: bun run lint:offs
     - name: typecheck
       run: bun run typecheck
     - name: build
       run: bun run build
-    - name: test
-      run: bun run test
+    # After every job that writes: the offs check and the tests only read the
+    # tree, so they run side by side. The offs check lints the tree as it will
+    # be committed: every "off" in `.oxlintrc.json` still suppresses a
+    # diagnostic.
+    - name: read-only checks
+      group:
+        parallel: true
+        jobs:
+          - name: lint-offs
+            run: bun run lint:offs
+          - name: test
+            run: bun run test
