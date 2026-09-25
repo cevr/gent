@@ -1225,6 +1225,8 @@ const contextWith = (
     branchId,
     toolCallId: ToolCallId.make("tc-wake"),
     home,
+    // A monitor runs its command here: a real directory, the test's own.
+    cwd: home,
     Session: {
       ...testToolContext().Session,
       // Recording the line and opening the latch in one step lets a test join the
@@ -1429,7 +1431,7 @@ describe("monitor command", () => {
         yield* fs.makeDirectory(`${home}/sub`)
         const queued = yield* Ref.make<ReadonlyArray<string>>([])
         const fired = yield* Deferred.make<boolean>()
-        const ctx = { ...contextWith(home, queued, Option.some(fired)), cwd: home }
+        const ctx = contextWith(home, queued, Option.some(fired))
         yield* runToolWithCtx(
           MonitorTool,
           { command: "pwd", cwd: "sub", everySeconds: 1, timeoutSeconds: 5, note: "where" },
@@ -1462,8 +1464,10 @@ describe("monitor command", () => {
         yield* TestClock.adjust("1 second")
         yield* Deferred.await(fired)
         const [message] = yield* Ref.get(queued)
-        expect(message).toContain("timed out after")
+        // One check: the first `sleep 30` is cut at the deadline, not refused at spawn.
+        expect(message).toContain("timed out after 1 checks")
         expect(message).toContain("never returns")
+        expect(message).toContain("check still running at deadline")
       }).pipe(
         Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
         Effect.timeout("8 seconds"),
@@ -1520,7 +1524,7 @@ describe("monitor recovery and deadline", () => {
         )
         const queued = yield* Ref.make<ReadonlyArray<string>>([])
         const fired = yield* Deferred.make<boolean>()
-        const ctx = testLeafContext({ ...contextWith(home, queued, Option.some(fired)), cwd: home })
+        const ctx = testLeafContext(contextWith(home, queued, Option.some(fired)))
         yield* rearmPendingAlarms().pipe(Effect.provideService(ExtensionContext, ctx))
         yield* Deferred.await(fired)
         const [message] = yield* Ref.get(queued)
@@ -1540,7 +1544,7 @@ describe("monitor recovery and deadline", () => {
         const home = yield* makeTempDirectoryScoped("wake-monitor-hang-until-")
         const queued = yield* Ref.make<ReadonlyArray<string>>([])
         const fired = yield* Deferred.make<boolean>()
-        const ctx = { ...contextWith(home, queued, Option.some(fired)), cwd: home }
+        const ctx = contextWith(home, queued, Option.some(fired))
         yield* runToolWithCtx(
           MonitorTool,
           {
