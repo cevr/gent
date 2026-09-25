@@ -249,6 +249,29 @@ export const steerAgentLoop = (command: SteerCommand) =>
       }),
     )
   })
+/** Stop what one message opens; true when the stop reached it. */
+export const stopAgentLoopMessage = (input: {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly messageId: MessageId
+  readonly requestId: string
+}) =>
+  Effect.gen(function* () {
+    yield* ensureAgentLoopStorageParents(input)
+    const actorClientFactory = yield* AgentLoopActor.Context
+    const ref = yield* actorClientFactory(
+      entityIdOf(DefaultWorkspaceId, input.sessionId, input.branchId),
+    )
+    return yield* ref.execute(
+      AgentLoopActor.StopMessage.make({
+        workspaceId: DefaultWorkspaceId,
+        sessionId: input.sessionId,
+        branchId: input.branchId,
+        commandId: ActorCommandId.make(input.requestId),
+        messageId: input.messageId,
+      }),
+    )
+  })
 export const respondAgentLoopInteraction = (input: {
   readonly sessionId: SessionId
   readonly branchId: BranchId

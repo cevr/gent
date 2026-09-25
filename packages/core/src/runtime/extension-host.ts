@@ -2529,6 +2529,13 @@ interface ExtensionSessionControlService {
     command: SteerCommandType,
     clientRequest?: ClientRequestGrant,
   ) => Effect.Effect<void, Error>
+  /** Stop what one message opens on a branch; true when the stop reached it. */
+  readonly stopMessage: (input: {
+    readonly sessionId: SessionId
+    readonly branchId: BranchId
+    readonly messageId: MessageId
+    readonly requestId: RequestId
+  }) => Effect.Effect<boolean, Error>
 }
 
 /** Decoding entity ids is cheap; bound it so a large registry does not stall a listing. */
@@ -2867,14 +2874,18 @@ export const makeExtensionHostContextProvider = (
             const target = targetIn(runInfo, params)
             yield* requireTarget("stop", target)
             const requestId = params.requestId ?? RequestId.make(yield* host.randomId)
-            yield* control((loop) =>
-              loop.steer({
-                _tag: "Cancel",
-                ...target,
-                requestId,
-                messageId: params.messageId,
-              }),
-            ).pipe(Effect.mapError(sessionError("stop")))
+            yield* control((loop) => loop.steer({ _tag: "Cancel", ...target, requestId })).pipe(
+              Effect.mapError(sessionError("stop")),
+            )
+          }).pipe(inWorkspace),
+        stopMessage: (params) =>
+          Effect.gen(function* () {
+            const target = targetIn(runInfo, params)
+            yield* requireTarget("stopMessage", target)
+            const requestId = params.requestId ?? RequestId.make(yield* host.randomId)
+            return yield* control((loop) =>
+              loop.stopMessage({ ...target, messageId: params.messageId, requestId }),
+            ).pipe(Effect.mapError(sessionError("stopMessage")))
           }).pipe(inWorkspace),
         // The subscription does its reads at pull time, so the workspace is
         // pinned on the stream, not on the effect that builds it.
