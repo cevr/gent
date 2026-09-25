@@ -382,7 +382,7 @@ export function ThreadPane(props: {
   // The same framing the slash-command popup and the agents pane use: ruled
   // off top and bottom under the composer, so a row budgets the picker's
   // columns rather than a bordered pane's.
-  const { rowWidth, sectionWidth } = usePickerGeometry()
+  const { rowWidth } = usePickerGeometry()
   const dimensions = useTerminalDimensions()
 
   const marker = (window: ThreadWindow): string => {
@@ -447,6 +447,7 @@ export function ThreadPane(props: {
         height={paneHeight()}
         title={title()}
         footer={"↑↓ move   ↵ open session   esc close"}
+        detail={Option.liftPredicate(detailFor(cursor()), () => windows().length > 0)}
       >
         <SelectList
           id="thread"
@@ -463,14 +464,6 @@ export function ThreadPane(props: {
           onSelect={props.onSelect}
           onDismiss={props.onClose}
         />
-
-        <Show when={windows().length > 0}>
-          <ChromePanel.Section>
-            <text style={{ fg: theme.textMuted }}>
-              {truncate(detailFor(cursor()), sectionWidth())}
-            </text>
-          </ChromePanel.Section>
-        </Show>
 
         <ChromePanel.Error error={Option.getOrUndefined(props.controller.error())} />
       </PickerFrame>

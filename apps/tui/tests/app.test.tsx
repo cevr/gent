@@ -18,6 +18,7 @@ import {
 import { TestClock } from "effect/testing"
 import { RpcClientError } from "effect/unstable/rpc/RpcClientError"
 import { SocketCloseError } from "effect/unstable/socket/Socket"
+import * as Prompt from "effect/unstable/ai/Prompt"
 import {
   AgentName,
   BranchId,
@@ -27,6 +28,7 @@ import {
   MessageId,
   ModelId,
   ProviderId,
+  Message as StoredMessage,
   Session,
   SessionId,
   ConnectionState,
@@ -583,9 +585,10 @@ const mountRunningTurnWithError = Effect.gen(function* () {
 /**
  * A running session on a short terminal whose trays are full: four working
  * children and an alarm. The btw requests answer with a fork whose reply ends
- * in ANSWER-TAIL.
+ * in ANSWER-TAIL. `messages` is what the branch stores, the one read `/thread`
+ * draws its windows from.
  */
-const mountShortTerminalWithTrays = (height: number) =>
+const mountShortTerminalWithTrays = (height: number, messages: ReadonlyArray<StoredMessage> = []) =>
   Effect.gen(function* () {
     const sessionId = SessionId.make("session-btw")
     const branchId = BranchId.make("branch-btw")
@@ -620,7 +623,18 @@ const mountShortTerminalWithTrays = (height: number) =>
             metrics: { turns: 1, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
           }),
         watchRuntime: () => Stream.concat(Stream.make(running), Stream.never),
+        thread: () =>
+          Effect.succeed([
+            new Session({
+              id: sessionId,
+              name: "Session BTW",
+              activeBranchId: branchId,
+              createdAt: dateFromMillis(0),
+              updatedAt: dateFromMillis(0),
+            }),
+          ]),
       },
+      message: { list: () => Effect.succeed(messages) },
       extension: {
         request: (input: { capabilityId: string }) =>
           Effect.sync(() => {
@@ -1515,6 +1529,74 @@ describe("App auth gate", () => {
         // The pane closes inside the terminal: its bottom rule is the last row drawn.
         expect(pane.at(-1)?.startsWith("─")).toBe(true)
       }).pipe(Effect.timeout("10 seconds")),
+    )
+  }
+  // The thread pane and the filtered settings pickers keep the same order on
+  // a short terminal: the detail line, the headings and the filter row give
+  // way, one row stays for the cursor, and nothing draws over a rule.
+  const threadMessages: ReadonlyArray<StoredMessage> = [
+    StoredMessage.cases.regular.make({
+      id: MessageId.make("u1"),
+      sessionId: SessionId.make("session-btw"),
+      branchId: BranchId.make("branch-btw"),
+      role: "user",
+      parts: [Prompt.textPart({ text: "first ask" })],
+      createdAt: dateFromMillis(1_000),
+    }),
+    StoredMessage.cases.regular.make({
+      id: MessageId.make("a1"),
+      sessionId: SessionId.make("session-btw"),
+      branchId: BranchId.make("branch-btw"),
+      role: "assistant",
+      parts: [Prompt.textPart({ text: "an answer" })],
+      createdAt: dateFromMillis(2_000),
+    }),
+  ]
+  /** The docked pane is the frame's last two rules and the rows between them. */
+  const expectPaneFits = (frame: string, cursorText: string, notOnCursor: string) => {
+    const drawn = frame.split("\n").filter((line) => line.trim().length > 0)
+    const ruled = drawn
+      .map((line, index) => ({ line, index }))
+      .filter(({ line }) => line.startsWith("─"))
+      .map(({ index }) => index)
+    const pane = drawn.slice(ruled.at(-2))
+    const rules = pane.filter((line) => line.startsWith("─"))
+    expect(rules).toHaveLength(2)
+    for (const rule of rules) expect(rule.trim()).toMatch(/^─+$/)
+    const cursor = pane.filter((line) => line.includes(cursorText))
+    expect(cursor).toHaveLength(1)
+    expect(cursor[0]).not.toContain(notOnCursor)
+    expect(pane.at(-1)?.startsWith("─")).toBe(true)
+  }
+  for (const height of [13, 12, 11]) {
+    it.live(`the thread pane at ${height} rows keeps its cursor row and overdraws nothing`, () =>
+      Effect.gen(function* () {
+        const setup = yield* mountShortTerminalWithTrays(height, threadMessages)
+        yield* Effect.promise(() => setup.mockInput.typeText("/thread"))
+        setup.mockInput.pressEnter()
+        yield* waitForFrame(setup, (frame) => !frame.includes("alarm in now"), "the thread pane")
+        const frame = yield* waitForFrame(
+          setup,
+          (current) => current.includes("window 1"),
+          `the cursor row at ${height} rows`,
+        )
+        expectPaneFits(frame, "window 1", "u1 … a1")
+      }).pipe(Effect.timeout("10 seconds")),
+    )
+    it.live(
+      `the reasoning picker at ${height} rows keeps its cursor row and overdraws nothing`,
+      () =>
+        Effect.gen(function* () {
+          const setup = yield* mountShortTerminalWithTrays(height)
+          yield* Effect.promise(() => setup.mockInput.typeText("/think"))
+          setup.mockInput.pressEnter()
+          const frame = yield* waitForFrame(
+            setup,
+            (current) => !current.includes("alarm in now") && current.includes("● default"),
+            `the cursor row at ${height} rows`,
+          )
+          expectPaneFits(frame, "● default", "›")
+        }).pipe(Effect.timeout("10 seconds")),
     )
   }
   // The live run: an alarm and three working children filled the trays, and

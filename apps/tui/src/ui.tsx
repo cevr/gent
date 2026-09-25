@@ -17,6 +17,7 @@ import type { ScrollBoxRenderable } from "@opentui/core"
 import { useRenderer } from "@opentui/solid"
 import { type ScopedKeyboardEvent, useScopedKeyboard, useTerminalDimensions } from "./terminal"
 import { useTheme } from "./theme"
+import { truncate } from "./utils"
 import type { MessageRowProps } from "./extensions/client-facets"
 
 // ── spinner clock ───────────────────────────────────────────────────────────
@@ -430,14 +431,31 @@ export function DockProvider(props: { children: JSX.Element }) {
 }
 
 /**
- * The rows a `PickerFrame` body has between its title and its bottom rule,
- * once the frame is measured. A pane whose fixed lines can outnumber them
- * drops its optional lines against this count.
+ * The lines a `SelectList` draws in a `PickerFrame` body. `full` is every
+ * line: the filter row and each row, headings included. `dressed` is the
+ * least the list draws before it drops an optional line: the cursor row,
+ * with the filter row and one heading above it when the list has them.
  */
-const PickerBodyRowsContext = createContext<() => Option.Option<number>>(() => Option.none())
+interface PickerListLines {
+  readonly full: number
+  readonly dressed: number
+}
 
-export const usePickerBodyRows = (): (() => Option.Option<number>) =>
-  useContext(PickerBodyRowsContext)
+/**
+ * What a `PickerFrame` tells the `SelectList` in its body: the rows the list
+ * has once the frame is measured, after the frame's own detail line (`None`
+ * outside a frame or before it is measured). The list reports its lines
+ * back, so the frame gives the detail line only rows the list does not need.
+ */
+interface PickerBody {
+  readonly rows: () => Option.Option<number>
+  readonly report: (lines: Option.Option<PickerListLines>) => void
+}
+
+const PickerBodyContext = createContext<PickerBody>({
+  rows: () => Option.none(),
+  report: () => {},
+})
 
 /** Two rules, the title and one body row: below this the title gives way. */
 const PICKER_ROWS_WITH_TITLE = 4
@@ -448,8 +466,14 @@ export function PickerFrame(props: {
   title: string
   children: JSX.Element
   footer: JSX.Element
+  /**
+   * One muted line under the list about the row under the cursor. It is the
+   * first line to give way on a short terminal. `None` draws no line.
+   */
+  detail?: Option.Option<string>
 }) {
   const { theme } = useTheme()
+  const { sectionWidth } = usePickerGeometry()
   const dock = useContext(DockContext)
   if (Option.isSome(dock)) onCleanup(dock.value.open())
   // The height is what the frame asks for. When the footer it docks in runs
@@ -457,9 +481,12 @@ export function PickerFrame(props: {
   // the one box that gives way, in whole rows. Squeezed, it drops its key
   // hint, then its title, before its body's last row: the rows the reader
   // opened it for win. A change of either the measured or the requested
-  // height re-decides it. The body reads the rows it has from
-  // `usePickerBodyRows`, so a pane can drop its own optional lines to fit.
+  // height re-decides it. Inside the body the same order holds: the detail
+  // line gives way first, then the list's headings, then its filter row
+  // (`SelectList` reads its rows from the frame), and one row stays for the
+  // cursor.
   const [measured, setMeasured] = createSignal(Option.none<number>())
+  const [list, setList] = createSignal(Option.none<PickerListLines>())
   const squeezed = () => Option.exists(measured(), (rows) => rows < props.height)
   const titled = () => !Option.exists(measured(), (rows) => rows < PICKER_ROWS_WITH_TITLE)
   const bodyRows = () =>
@@ -469,6 +496,25 @@ export function PickerFrame(props: {
       if (!squeezed()) chrome += 1
       return Math.max(0, rows - chrome)
     })
+  const detail = (): Option.Option<string> =>
+    Option.filter(
+      Option.getOrElse(Option.fromUndefinedOr(props.detail), () => Option.none<string>()),
+      () =>
+        Option.match(bodyRows(), {
+          onNone: () => true,
+          onSome: (rows) =>
+            Option.match(list(), {
+              onNone: () => rows >= 2,
+              onSome: (lines) => rows > lines.full || rows > lines.dressed,
+            }),
+        }),
+    )
+  const listRows = () =>
+    Option.map(bodyRows(), (rows) => {
+      if (Option.isSome(detail())) return rows - 1
+      return rows
+    })
+  const body: PickerBody = { rows: listRows, report: setList }
   return (
     <box
       flexDirection="column"
@@ -493,9 +539,14 @@ export function PickerFrame(props: {
             </text>
           </box>
         </Show>
-        <PickerBodyRowsContext.Provider value={bodyRows}>
-          {props.children}
-        </PickerBodyRowsContext.Provider>
+        <PickerBodyContext.Provider value={body}>{props.children}</PickerBodyContext.Provider>
+        <Show when={Option.getOrUndefined(detail())}>
+          {(text) => (
+            <ChromePanel.Section>
+              <text style={{ fg: theme.textMuted }}>{truncate(text(), sectionWidth())}</text>
+            </ChromePanel.Section>
+          )}
+        </Show>
       </box>
       <Show when={!squeezed()}>
         <text height={1} flexShrink={0} wrapMode="none" truncate style={{ fg: theme.textMuted }}>
@@ -543,8 +594,9 @@ export function TrayFrame(props: { children: JSX.Element }) {
  * everything else is hidden.
  *
  * The component draws rows only. Its chrome — the border, the title, the
- * detail line, the footer — stays with the pane, because no two panes agree
- * on it. What they do agree on is the interaction, and that is what lives
+ * detail line, the footer — stays with the pane and its `PickerFrame`,
+ * because no two panes agree on it. Inside a frame the list fits the rows it
+ * is given: its headings, then its filter row, give way on a short terminal. What they do agree on is the interaction, and that is what lives
  * here.
  *
  * @module
@@ -933,6 +985,33 @@ export function SelectList<A>(props: SelectListProps<A>) {
       onSome: (filter) => filter.showInput !== false,
     })
 
+  // Inside a `PickerFrame` the list fits the rows the frame gives it. It
+  // reports what it draws, so the frame drops its detail line first; then the
+  // list drops its headings, then its filter row, and one row stays for the
+  // cursor. An unmeasured frame, no frame, and a list that fits draw it all.
+  const pickerBody = useContext(PickerBodyContext)
+  const inputLines = () => {
+    if (showInput()) return 1
+    return 0
+  }
+  const headingLines = () => {
+    if (rows().length > values().length) return 1
+    return 0
+  }
+  const lines = (): PickerListLines => ({
+    full: rows().length + inputLines(),
+    dressed: 1 + inputLines() + headingLines(),
+  })
+  createEffect(() => pickerBody.report(Option.some(lines())))
+  onCleanup(() => pickerBody.report(Option.none()))
+  const fits = (needed: number) =>
+    Option.match(pickerBody.rows(), {
+      onNone: () => true,
+      onSome: (available) => available >= lines().full || available >= needed,
+    })
+  const inputShown = () => showInput() && fits(2)
+  const headingsShown = () => fits(1 + inputLines() + 1)
+
   // Values are indexed independently of rows, so the row loop counts its own.
   const indexed = () => {
     let cursor = 0
@@ -946,7 +1025,7 @@ export function SelectList<A>(props: SelectListProps<A>) {
 
   return (
     <>
-      <Show when={showInput()}>
+      <Show when={inputShown()}>
         <ChromePanel.Section>
           <text style={{ fg: theme.text }}>
             <span style={{ fg: theme.textMuted }}>› </span>
@@ -961,7 +1040,11 @@ export function SelectList<A>(props: SelectListProps<A>) {
           <For each={indexed()}>
             {(entry) =>
               Option.match(entry.index, {
-                onNone: () => entry.row.render(() => false, ""),
+                // A heading that gives way draws nothing but stays a row, so
+                // the values, and with them the cursor, do not change with it.
+                onNone: () => (
+                  <Show when={headingsShown()}>{entry.row.render(() => false, "")}</Show>
+                ),
                 onSome: (index) =>
                   entry.row.render(
                     () => state().selectedIndex === index,
