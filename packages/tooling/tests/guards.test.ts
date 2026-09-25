@@ -668,6 +668,35 @@ describe("loop prompt SAFETY block guard", () => {
     ])
     expect(findSafetyBlockDrift(texts).map((finding) => finding.file)).toEqual([SWEEP])
   })
+
+  test("a SAFETY block outside the fenced prompt is reported", () => {
+    const outside = ["```", "Work rules:", "- one", "```", "", "SAFETY (mandatory):", "- a"].join(
+      "\n",
+    )
+    const texts = new Map([
+      [APPLY, prompt("- a")],
+      [SWEEP, outside],
+    ])
+    expect(findSafetyBlockDrift(texts)).toEqual([
+      { file: SWEEP, line: 6, message: expect.stringContaining("outside the fenced prompt") },
+    ])
+  })
+
+  test("a rule added after a blank line in one block is reported", () => {
+    const texts = new Map([
+      [APPLY, prompt("- a")],
+      [SWEEP, prompt("- a", "", "- b")],
+    ])
+    expect(findSafetyBlockDrift(texts).map((finding) => finding.file)).toEqual([SWEEP])
+  })
+
+  test("trailing whitespace alone is no drift", () => {
+    const texts = new Map([
+      [APPLY, prompt("- a", "- b")],
+      [SWEEP, prompt("- a  ", "- b\t")],
+    ])
+    expect(findSafetyBlockDrift(texts)).toEqual([])
+  })
 })
 
 // ── hook runs guards ────────────────────────────────────────────────────────

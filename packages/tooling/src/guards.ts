@@ -886,16 +886,34 @@ const SAFETY_PROMPTS: ReadonlyArray<string> = [
   ".claude/skills/architecture-loop/prompts/sweep.md",
 ]
 
-const safetyBlock = (text: string): Option.Option<{ line: number; block: string }> => {
+const PROMPT_FENCE = /^\s*```/
+
+/** One prompt's SAFETY block: where it starts, its text, and whether the fenced prompt holds it. */
+interface SafetyBlock {
+  readonly line: number
+  readonly block: string
+  readonly fenced: boolean
+}
+
+/**
+ * The `SAFETY` line and what follows it, through blank lines and rule lines,
+ * up to the next heading (a line that is neither blank, a `- ` rule nor an
+ * indented continuation) or the closing fence. Trailing whitespace and
+ * trailing blank lines are not part of the block.
+ */
+const safetyBlock = (text: string): Option.Option<SafetyBlock> => {
   const lines = text.split("\n")
   const start = lines.findIndex((line) => line.startsWith("SAFETY"))
   if (start === -1) return Option.none()
-  const block: Array<string> = [lines[start] ?? ""]
+  const fences = lines.slice(0, start).filter((line) => PROMPT_FENCE.test(line)).length
+  const block: Array<string> = [(lines[start] ?? "").trimEnd()]
   for (const line of lines.slice(start + 1)) {
-    if (!line.startsWith("- ")) break
-    block.push(line)
+    const heading = line.trim().length > 0 && !line.startsWith("- ") && !/^\s/.test(line)
+    if (PROMPT_FENCE.test(line) || heading) break
+    block.push(line.trimEnd())
   }
-  return Option.some({ line: start + 1, block: block.join("\n") })
+  while (block.at(-1) === "") block.pop()
+  return Option.some({ line: start + 1, block: block.join("\n"), fenced: fences % 2 === 1 })
 }
 
 export const findSafetyBlockDrift = (
@@ -918,6 +936,14 @@ export const findSafetyBlockDrift = (
   const present = blocks.flatMap(({ file, found }) =>
     Option.match(found, { onNone: () => [], onSome: (value) => [{ file, ...value }] }),
   )
+  for (const outside of present.filter((block) => !block.fenced)) {
+    findings.push({
+      file: outside.file,
+      line: outside.line,
+      message:
+        "the SAFETY block sits outside the fenced prompt, so the agent never receives it; move it inside the fence",
+    })
+  }
   const [first, ...others] = present
   for (const other of others) {
     if (other.block === first?.block) continue
