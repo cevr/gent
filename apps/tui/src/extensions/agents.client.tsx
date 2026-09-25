@@ -415,19 +415,57 @@ const countsLabel = (rows: ReadonlyArray<AgentRowEntry>): string => {
 /** Tree prefix from depth. The server already ordered parents before children. */
 const indentFor = (depth: number): string => "  ".repeat(Math.max(0, depth))
 
-/** What the selected row is doing, from its detail read; other rows carry nothing. */
-const activityFor = (detail: Option.Option<ExtensionAgentDetail>): string =>
-  Option.match(detail, {
-    onNone: () => "",
-    onSome: (value) => value.status.toLowerCase(),
-  })
+/**
+ * What a row's agent is doing now: the server's activity line (its running
+ * tool, else its last streamed line). A row without one says only when it is
+ * selected, with the status its detail read names.
+ */
+const activityFor = (
+  row: AgentRowEntry,
+  selected: boolean,
+  detail: Option.Option<ExtensionAgentDetail>,
+): string =>
+  Option.fromUndefinedOr(row.activity).pipe(
+    Option.orElse(() =>
+      Option.map(
+        Option.filter(detail, () => selected),
+        (value) => value.status.toLowerCase(),
+      ),
+    ),
+    Option.getOrElse(() => ""),
+  )
 
-/** Right-aligned age from the row's last update; blank when the row never ran. */
+/** Age from the row's last update; blank when the row never ran. */
 const ageFor = (row: AgentRowEntry, now: number): string =>
   Option.match(Option.fromUndefinedOr(row.updatedAt), {
     onNone: () => "",
     onSome: (updatedAt) => formatAge(now - updatedAt),
   })
+
+/**
+ * The right column's time. A running agent shows how long it has run since
+ * its session started (`1m 12s`), which for a delegate child is its task's
+ * run time; every other row shows the age of its last step (`3m`).
+ */
+const timeFor = (row: AgentRowEntry, now: number): string => {
+  if (row.section !== "running") return ageFor(row, now)
+  return Option.match(Option.fromUndefinedOr(row.createdAt), {
+    onNone: () => ageFor(row, now),
+    onSome: (createdAt) => formatDuration(now - createdAt, "compact"),
+  })
+}
+
+/**
+ * `<head><name> · <doing>` in `width` columns. The activity keeps up to half
+ * the row and the name is cut to what is left, so a long task never pushes
+ * what the agent is doing off the row.
+ */
+const rowLabel = (head: string, name: string, doing: string, width: number): string => {
+  if (doing.length === 0) return `${head}${name}`
+  const shown = truncate(doing, Math.floor(width / 2))
+  const nameWidth = Math.max(1, width - textWidth(head) - textWidth(" · ") - textWidth(shown))
+  return `${head}${truncate(name, nameWidth)} · ${shown}`
+}
 
 /**
  * Marks a session spawned beside its parent's work (a delegate child or a
@@ -438,9 +476,14 @@ const sideThreadMark = (row: AgentRowEntry): string => {
   return ""
 }
 
-/** One pane row: the left text, padded, and the right column drawn muted. */
+/**
+ * One pane row: the left text, padded, and the right column drawn muted. The
+ * status glyph is the column at `glyphAt` in `left`, drawn in its own colour;
+ * `None` when the row draws no glyph.
+ */
 interface RowLine {
   readonly left: string
+  readonly glyphAt: Option.Option<number>
   readonly right: string
 }
 
@@ -584,23 +627,47 @@ export function AgentsPane(props: {
   }
 
   /**
-   * `<marker><indent><glyph> name  ·  activity` on the left, padded so the
-   * right column (the side-thread mark, then the age) sits on the right edge.
+   * `<marker><indent><glyph> task · activity` on the left, padded so the
+   * right column (the side-thread mark, then the run time or age) sits on
+   * the right edge.
    */
   const rowLine = (row: AgentRowEntry, selected: boolean): RowLine => {
     if (Option.contains(armed(), row.sessionId)) {
-      return { left: "^x again to delete this session and its children", right: "" }
+      return {
+        left: "^x again to delete this session and its children",
+        glyphAt: Option.none(),
+        right: "",
+      }
     }
-    const right = [sideThreadMark(row), ageFor(row, DateTime.toEpochMillis(DateTime.nowUnsafe()))]
+    const right = [sideThreadMark(row), timeFor(row, DateTime.toEpochMillis(DateTime.nowUnsafe()))]
       .filter((part) => part.length > 0)
       .join("  ")
-    let activity = ""
-    if (selected) activity = activityFor(props.controller.detail())
-    let left = `${currentMarker(isCurrent(row))}${indentFor(row.depth)}${glyphFor(row.section)} ${nameFor(row)}`
-    if (activity.length > 0) left = `${left}  ·  ${activity}`
-    const width = Math.max(0, rowWidth() - right.length - 2)
-    return { left: `${truncate(left, width).padEnd(width)}  `, right }
+    const width = Math.max(0, rowWidth() - textWidth(right) - 2)
+    const lead = `${currentMarker(isCurrent(row))}${indentFor(row.depth)}`
+    const label = rowLabel(
+      `${lead}${glyphFor(row.section)} `,
+      nameFor(row),
+      activityFor(row, selected, props.controller.detail()),
+      width,
+    )
+    const left = truncate(label, width).padEnd(width)
+    return {
+      left: `${left}  `,
+      glyphAt: Option.liftPredicate(lead.length, (at) => at < left.length),
+      right,
+    }
   }
+
+  /** The row's left text in three runs: before the glyph, the glyph, after it. */
+  const leftRuns = (line: RowLine) =>
+    Option.match(line.glyphAt, {
+      onNone: () => ({ before: line.left, glyph: "", after: "" }),
+      onSome: (at) => ({
+        before: line.left.slice(0, at),
+        glyph: line.left.slice(at, at + 1),
+        after: line.left.slice(at + 1),
+      }),
+    })
 
   const rightColor = (row: AgentRowEntry, selected: boolean) => {
     if (selected || Option.contains(armed(), row.sessionId))
@@ -626,9 +693,10 @@ export function AgentsPane(props: {
           return "transparent"
         }
         const section = () => item.row.section
+        const line = () => rowLine(item.row, selected())
         return (
           <box id={id} backgroundColor={background()} paddingLeft={1}>
-            {/* One row, one line: the age is right-aligned into the budget, so
+            {/* One row, one line: the time is right-aligned into the budget, so
                 an overflowing label is cut rather than wrapped under it, the
                 way the autocomplete popup and the thread rows clamp theirs. */}
             <text
@@ -636,13 +704,12 @@ export function AgentsPane(props: {
               truncate
               style={{ fg: lineColor(item.row, section(), selected()) }}
             >
+              {leftRuns(line()).before}
               <span style={{ fg: glyphColorFor(section(), selected()) }}>
-                {rowLine(item.row, selected()).left.slice(0, 1)}
+                {leftRuns(line()).glyph}
               </span>
-              {rowLine(item.row, selected()).left.slice(1)}
-              <span style={{ fg: rightColor(item.row, selected()) }}>
-                {rowLine(item.row, selected()).right}
-              </span>
+              {leftRuns(line()).after}
+              <span style={{ fg: rightColor(item.row, selected()) }}>{line().right}</span>
             </text>
           </box>
         )

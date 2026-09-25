@@ -760,7 +760,7 @@ describe("Agents pane navigation", () => {
 
       const frame = renderFrame(setup)
       expect(frame).toContain("Idle (1)")
-      expect(frame).toContain("Alpha  ·  running")
+      expect(frame).toContain("Alpha · running")
     }),
   )
 
@@ -1241,6 +1241,99 @@ const rows = [
   root("other-root", "running"),
   child("other-child", "running", "other-root"),
 ]
+
+describe("agents pane rows", () => {
+  /** The pane over `listed`, in the order the server sent them, at `width` columns. */
+  const paneOver = (listed: ReadonlyArray<AgentRowEntry>, width: number) =>
+    Effect.promise(() =>
+      renderWithProviders(
+        () => (
+          <AgentsPane
+            open={true}
+            controller={{
+              rows: () => listed,
+              current: () => Option.none(),
+              error: () => Option.none(),
+              loading: () => false,
+              refresh: () => {},
+              reload: () => {},
+              detail: () => Option.none(),
+              select: () => {},
+              open: () => true,
+            }}
+            onSelect={() => {}}
+            onToggle={() => {}}
+            onDelete={() => {}}
+            onClose={() => {}}
+          />
+        ),
+        { width, height: 24 },
+      ),
+    )
+
+  it.live(
+    "each agent is one line with its glyph, task, what it does now and its time, running first, at 43 columns",
+    () =>
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis
+        const listed: ReadonlyArray<AgentRowEntry> = [
+          {
+            ...child("worker", "running", "root"),
+            name: "delegate: fix the loader",
+            createdAt: now - 72_000,
+            updatedAt: now - 1_000,
+            activity: "running bash bun test",
+          },
+          { ...child("waiting", "idle", "root"), updatedAt: now - 180_000 },
+          { ...child("stored", "inactive", "root"), updatedAt: now - 2 * 3_600_000 },
+        ]
+        const setup = yield* paneOver(listed, 43)
+        const frame = yield* waitForFrame(setup, (next) => next.includes("Agents"), "pane")
+        const lines = frame.split("\n")
+        const rule = lines.find((line) => line.startsWith("────")) ?? ""
+        const lineOf = (text: string) => lines.findIndex((line) => line.includes(text))
+
+        // The running agent: spinner, task, its current activity and how long it has run.
+        const worker = lines[lineOf("· running bash")] ?? ""
+        expect(worker).toMatch(/[◇◈◆] delegate.* · running bash/)
+        expect(worker.trimEnd()).toMatch(/1m 1\ds$/)
+        // The others: a still dot and the age of their last step.
+        expect(lines[lineOf("waiting task")]).toContain("• delegate: waiting task")
+        expect(lines[lineOf("waiting task")]?.trimEnd()).toMatch(/3m$/)
+        expect(lines[lineOf("stored task")]?.trimEnd()).toMatch(/2h$/)
+        // Running first, in the order the server sent.
+        expect(lineOf("· running bash")).toBeLessThan(lineOf("waiting task"))
+        expect(lineOf("waiting task")).toBeLessThan(lineOf("stored task"))
+        // Each row fits inside the rule, with nothing wrapped onto a line of its own.
+        for (const text of ["· running bash", "waiting task", "stored task"]) {
+          expect(lines.filter((line) => line.includes(text))).toHaveLength(1)
+          expect(lines[lineOf(text)]?.trimEnd().length ?? 0).toBeLessThanOrEqual(
+            rule.trimEnd().length,
+          )
+        }
+      }),
+  )
+
+  it.live("a long task name leaves room for what the agent is doing", () =>
+    Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis
+      const listed: ReadonlyArray<AgentRowEntry> = [
+        {
+          ...child("worker", "running", "root"),
+          name: `delegate: ${"x".repeat(120)}`,
+          createdAt: now - 5_000,
+          activity: "running read src/loader.ts",
+        },
+      ]
+      const setup = yield* paneOver(listed, 43)
+      const frame = yield* waitForFrame(setup, (next) => next.includes("delegate:"), "pane")
+      const row = frame.split("\n").find((line) => line.includes("delegate:")) ?? ""
+      expect(row).toContain("…")
+      expect(row).toContain("· running")
+      expect(row.trimEnd()).toMatch(/\ds$/)
+    }),
+  )
+})
 
 describe("agents pane counts and detail", () => {
   it.live("a working loop names the turn it is on, not finished turns and time", () =>

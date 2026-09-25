@@ -601,17 +601,22 @@ const mountShortTerminalWithTrays = (
     const branchId = BranchId.make("branch-btw")
     const answer =
       "**Task 5** looks hardest: adding the API integration test requires starting and stopping the HTTP server, importing the CSV fixture over HTTP, managing temporary database state, and verifying the monthly report response. The other tasks are isolated logic fixes or a small query refactor. ANSWER-TAIL"
-    const child = (n: number) => ({
-      sessionId: SessionId.make(`child-${n}`),
-      branchId: BranchId.make(`child-${n}-branch`),
-      section: "running" satisfies "running",
-      name: `delegate: task ${n}`,
-      live: true,
-      depth: 1,
-      parentSessionId: sessionId,
-      sideThread: false,
-      activity: "bash",
-    })
+    const child = (n: number) => {
+      const row = {
+        sessionId: SessionId.make(`child-${n}`),
+        branchId: BranchId.make(`child-${n}-branch`),
+        section: "running" satisfies "running",
+        name: `delegate: task ${n}`,
+        live: true,
+        depth: 1,
+        parentSessionId: sessionId,
+        sideThread: false,
+      }
+      // Tasks 3 and 4 report no activity line: their row names the detail
+      // status only while the cursor is on it, which marks the cursor row.
+      if (n <= 4) return row
+      return { ...row, activity: "bash" }
+    }
     const running = { _tag: "Running" satisfies "Running", queue: emptyQueueSnapshot() }
     const client = createMockClient({
       auth: { listProviders: () => Effect.succeed([]) },
@@ -1550,7 +1555,7 @@ describe("App auth gate", () => {
       setup.mockInput.pressKey("t", { ctrl: true })
       yield* waitForFrame(
         setup,
-        (frame) => frame.includes("Agents ·") && frame.includes("delegate: task 3  ·  running"),
+        (frame) => frame.includes("Agents ·") && frame.includes("delegate: task 3 · running"),
         "the agents pane with its cursor row",
       )
       const opened = renderFrame(setup)
@@ -1563,7 +1568,7 @@ describe("App auth gate", () => {
       yield* waitForFrame(
         setup,
         (frame) =>
-          frame.includes("delegate: task 4") && !frame.includes("delegate: task 3  ·  running"),
+          frame.includes("delegate: task 4") && !frame.includes("delegate: task 3 · running"),
         "the cursor row after one move down",
       )
       setup.mockInput.pressEscape()
@@ -1588,7 +1593,7 @@ describe("App auth gate", () => {
         yield* waitForFrame(setup, (frame) => !frame.includes("alarm in now"), "the agents pane")
         const frame = yield* waitForFrame(
           setup,
-          (current) => current.includes("delegate: task 3  ·  running"),
+          (current) => current.includes("delegate: task 3 · running"),
           `the cursor row at ${height} rows`,
         )
         const drawn = frame.split("\n").filter((line) => line.trim().length > 0)
