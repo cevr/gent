@@ -447,15 +447,14 @@ const buildCallbackRoutes = (
       const errorDescription = url.searchParams.get("error_description")
 
       // The state is checked first: a request that does not carry this
-      // flow's state is not the provider's redirect, so its error text is
-      // not trusted.
+      // flow's state is not the provider's redirect (a stale tab, another
+      // login), so its error text is not trusted and it leaves the wait
+      // running.
       if (stateParam !== expectedState) {
-        const errorMsg = "Invalid state"
-        yield* Deferred.fail(
-          deferred,
-          new OAuthError({ reason: "state-mismatch", message: errorMsg }),
+        return HttpServerResponse.setStatus(
+          HttpServerResponse.html(HTML_ERROR("Invalid state")),
+          400,
         )
-        return HttpServerResponse.setStatus(HttpServerResponse.html(HTML_ERROR(errorMsg)), 400)
       }
       if (Option.isSome(error)) {
         const errorMsg = errorDescription ?? error.value
@@ -559,6 +558,14 @@ const authorizeOpenAI: Effect.Effect<
   yield* startRedirectServer(port, state, deferred).pipe(
     Effect.tapError((error) => Deferred.fail(deferred, error)),
     Effect.forkScoped,
+  )
+  // Closing the flow (a pasted code finished it, or the abandoned-login
+  // timer fired) ends a browser wait still in flight.
+  yield* Effect.addFinalizer(() =>
+    Deferred.fail(
+      deferred,
+      new OAuthError({ reason: "callback-timeout", message: "The browser login closed" }),
+    ),
   )
 
   const callback = (manualInput?: string): Effect.Effect<OpenAIOAuthTokens, OAuthError> =>
@@ -1686,6 +1693,37 @@ export const buildOpenAIModelDriver = (
   const refusedKeys: RefusedKeys = Ref.makeUnsafe(HashSet.empty())
   // The reasoning items the API could not decrypt for this driver's account.
   const rejectedReasoning: RejectedReasoning = Ref.makeUnsafe(HashSet.empty())
+  /**
+   * Hold a pending login under a 5-minute abandoned-login timer. The timer
+   * clears the entry and closes the login's scope (the redirect listener).
+   * It is detached: `authorize` returns at once, and a child fiber would
+   * stop with it.
+   */
+  const holdLogin = (
+    authorizationId: string,
+    flow: OpenAIAuthorizationFlow,
+    close: Effect.Effect<void>,
+  ) =>
+    Effect.gen(function* () {
+      const timeoutFiber = yield* Effect.sleep(Duration.minutes(5)).pipe(
+        Effect.flatMap(() =>
+          Effect.gen(function* () {
+            pendingCallbacks.delete(authorizationId)
+            yield* close
+          }),
+        ),
+        Effect.forkDetach,
+      )
+      pendingCallbacks.set(authorizationId, { flow, close, timeoutFiber })
+    })
+  /** Finish a login: stop its timer, drop it and close its scope. */
+  const finishLogin = (authorizationId: string, close: Effect.Effect<void>) =>
+    Effect.gen(function* () {
+      const held = Option.fromNullishOr(pendingCallbacks.get(authorizationId))
+      pendingCallbacks.delete(authorizationId)
+      if (Option.isSome(held)) yield* Fiber.interrupt(held.value.timeoutFiber)
+      yield* close
+    })
   return {
     id: "openai",
     name: "OpenAI",
@@ -1785,40 +1823,22 @@ export const buildOpenAIModelDriver = (
                 }),
             ),
           )
-          // 5-minute TTL on abandoned auth attempts. Without this an
-          // abandoned flow leaves the redirect HTTP server resident
-          // until extension teardown. The fiber both clears the map
-          // entry and closes the OAuth scope (tears down the listener).
-          // It is detached: `authorize` returns at once, and a child fiber
-          // would stop with it. `callback` interrupts it.
-          const timeoutFiber = yield* Effect.sleep(Duration.minutes(5)).pipe(
-            Effect.flatMap(() =>
-              Effect.gen(function* () {
-                pendingCallbacks.delete(ctx.authorizationId)
-                yield* close
-              }),
-            ),
-            Effect.forkDetach,
-          )
-          pendingCallbacks.set(ctx.authorizationId, {
-            flow,
-            close,
-            timeoutFiber,
-          })
+          yield* holdLogin(ctx.authorizationId, flow, close)
           return Option.some(flow.authorization)
         }),
       callback: (ctx) =>
         Effect.gen(function* () {
-          const entry = pendingCallbacks.get(ctx.authorizationId)
-          pendingCallbacks.delete(ctx.authorizationId)
-          const pendingEntry = Option.fromNullishOr(entry)
+          const pendingEntry = Option.fromNullishOr(pendingCallbacks.get(ctx.authorizationId))
           if (Option.isNone(pendingEntry)) {
             return yield* new ProviderAuthError({
               message: "OpenAI OAuth callback state is missing or expired",
             })
           }
-          yield* Fiber.interrupt(pendingEntry.value.timeoutFiber)
-          const result = yield* pendingEntry.value.flow.callback(ctx.code).pipe(
+          const entry = pendingEntry.value
+          // A device poll can outlast the timer, so the timer stops while
+          // the callback runs and a failed callback arms a new one.
+          const result = yield* Fiber.interrupt(entry.timeoutFiber).pipe(
+            Effect.andThen(entry.flow.callback(ctx.code)),
             Effect.mapError(
               (e) =>
                 new ProviderAuthError({
@@ -1826,8 +1846,19 @@ export const buildOpenAIModelDriver = (
                   cause: e,
                 }),
             ),
-            Effect.ensuring(pendingEntry.value.close),
+            // The login stays pending after a failure or an interrupt: a
+            // failed browser wait (the port taken) still leaves the pasted
+            // code to finish it. Only the first of two concurrent failures
+            // re-arms the timer, and a login a concurrent callback finished
+            // stays gone.
+            Effect.onError(() =>
+              Effect.suspend(() => {
+                if (pendingCallbacks.get(ctx.authorizationId) !== entry) return Effect.void
+                return holdLogin(ctx.authorizationId, entry.flow, entry.close)
+              }),
+            ),
           )
+          yield* finishLogin(ctx.authorizationId, entry.close)
           const signedIn: OpenAICredentials = {
             access: result.access,
             refresh: result.refresh,
