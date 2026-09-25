@@ -483,13 +483,13 @@ describe("cell worker", () => {
       const split = yield* failed("split", "const = 1")
       expect(split).toMatch(/^AggregateError: /)
       expect(split).toMatch(/\n {2}BuildMessage: .+\n {4}at line 1, column \d+/)
-      // A cause that cannot be read leaves the error's own line.
+      // A cause whose getter throws shows the getter unrun; one behind a Proxy cannot be read.
       expect(
         yield* failed(
           "tag",
           "throw new Error('outer', { cause: { get [Symbol.toStringTag]() { throw new Error('tag') } } })",
         ),
-      ).toBe("Error: outer\ncaused by (a value that cannot be read)")
+      ).toBe("Error: outer\ncaused by { Symbol(Symbol.toStringTag): [Getter] }")
       expect(
         yield* failed(
           "trapped",

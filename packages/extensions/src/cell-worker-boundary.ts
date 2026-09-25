@@ -14,7 +14,7 @@ import {
 } from "effect"
 import { AsyncLocalStorage } from "node:async_hooks"
 import { createRequire } from "node:module"
-import { inspect, types } from "node:util"
+import { types } from "node:util"
 import {
   type CellCatalogEntry,
   reservedToolSegments,
@@ -30,8 +30,6 @@ import {
   decodeCellRequest,
   encodeCellResponse,
   encodeSnapshot,
-  inheritsFrom,
-  isOrdinaryArray,
   makeBoundedOutput,
   makeCellFrameReader,
   maximumCallsPerCell,
@@ -40,11 +38,19 @@ import {
   maximumCellDisplayLength,
   maximumCellSourceLength,
   maximumPendingCellCalls,
-  readDataProperty,
-  readProperty,
   type SnapshotBinding,
   snapshotReviverSource,
 } from "./cell-protocol.js"
+import {
+  displayValue,
+  errorHead,
+  inheritsFrom,
+  isOrdinaryArray,
+  type PromiseState,
+  readDataProperty,
+  readProperty,
+  sameDescriptor,
+} from "./cell-value.js"
 
 /** Uncaught errors kept for the next cell; later ones between two cells are dropped. */
 const maximumStrayErrors = 20
@@ -285,16 +291,45 @@ const errorValue = (value: unknown) => inheritsFrom(value, errorPrototype)
 const errorProperty = (target: object, key: string): Option.Option<unknown> =>
   Result.getOrElse(readProperty(target, key), () => Option.none())
 
-/** `name: message`, each read only when its value is a string. */
-// oxlint-disable-next-line effect/noObjectParameters -- a thrown value has any JavaScript shape
-const errorLine = (error: object) => {
-  const name = Option.getOrElse(
-    Option.filter(errorProperty(error, "name"), Predicate.isString),
-    () => "Error",
+/**
+ * A promise's state through `Bun.peek`, which reads the internal slot and
+ * never runs `then`. Taken when the worker loads: a cell may replace `Bun`.
+ */
+// oxlint-disable-next-line gent/no-bun-outside-adapter -- This worker boundary owns Bun's promise peek.
+const peekPromise = Bun.peek
+const peekStatus = peekPromise.status
+// oxlint-disable-next-line effect/noObjectParameters -- a promise the cell made has any JavaScript shape
+const promiseState = (promise: object): Option.Option<PromiseState> => {
+  const status = peekStatus(promise)
+  if (status === "pending") return Option.some({ status, value: promise })
+  return Option.some({ status, value: peekPromise(promise) })
+}
+
+/** The namespaces `tools` and `context` read: the latest evaluator's. */
+const hostNamespaces = new Map<string, unknown>()
+/**
+ * Install a host namespace once per realm, as an accessor that is not
+ * configurable and whose setter throws. A cell that declares or assigns
+ * `tools` or `context` fails with this message; one that deletes or
+ * redefines it fails, or is refused. So no cell can make either namespace
+ * unrecoverable, and no reset needs to put one back.
+ */
+// oxlint-disable-next-line effect/noUnknownParameters -- a namespace is whatever the evaluator built
+const installHostNamespace = (name: "tools" | "context", value: unknown) => {
+  hostNamespaces.set(name, value)
+  const installed = Option.exists(
+    Option.fromUndefinedOr(Object.getOwnPropertyDescriptor(globalThis, name)),
+    (descriptor) => descriptor.configurable === false,
   )
-  return Option.match(Option.filter(errorProperty(error, "message"), Predicate.isString), {
-    onNone: () => name,
-    onSome: (message) => `${name}: ${message}`,
+  if (installed) return
+  Object.defineProperty(globalThis, name, {
+    get: () => hostNamespaces.get(name),
+    set: () => {
+      // oxlint-disable-next-line effect/noThrowStatement, effect/noNewError -- a JavaScript setter refuses an assignment only by throwing
+      throw new TypeError(`${name} is the host ${name} namespace; choose another name`)
+    },
+    enumerable: false,
+    configurable: false,
   })
 }
 
@@ -349,8 +384,8 @@ const aggregateDetail = (inner: ReadonlyArray<unknown>): ReadonlyArray<string> =
           onSuccess: (isError) => {
             if (!isError) return "  (an inner value that is not an error)"
             return Option.match(positionDetail(each), {
-              onNone: () => `  ${errorLine(each)}`,
-              onSome: (position) => `  ${errorLine(each)}\n  ${position}`,
+              onNone: () => `  ${errorHead(each)}`,
+              onSome: (position) => `  ${errorHead(each)}\n  ${position}`,
             })
           },
         })
@@ -401,34 +436,6 @@ const errorDetail = (error: object): ReadonlyArray<string> => {
   return systemErrorFields(error)
 }
 
-/** The namespaces `tools` and `context` read: the latest evaluator's. */
-const hostNamespaces = new Map<string, unknown>()
-/**
- * Install a host namespace once per realm, as an accessor that is not
- * configurable and whose setter throws. A cell that declares or assigns
- * `tools` or `context` fails with this message; one that deletes or
- * redefines it fails, or is refused. So no cell can make either namespace
- * unrecoverable, and no reset needs to put one back.
- */
-// oxlint-disable-next-line effect/noUnknownParameters -- a namespace is whatever the evaluator built
-const installHostNamespace = (name: "tools" | "context", value: unknown) => {
-  hostNamespaces.set(name, value)
-  const installed = Option.exists(
-    Option.fromUndefinedOr(Object.getOwnPropertyDescriptor(globalThis, name)),
-    (descriptor) => descriptor.configurable === false,
-  )
-  if (installed) return
-  Object.defineProperty(globalThis, name, {
-    get: () => hostNamespaces.get(name),
-    set: () => {
-      // oxlint-disable-next-line effect/noThrowStatement, effect/noNewError -- a JavaScript setter refuses an assignment only by throwing
-      throw new TypeError(`${name} is the host ${name} namespace; choose another name`)
-    },
-    enumerable: false,
-    configurable: false,
-  })
-}
-
 export const makeBunCellEvaluator = Effect.gen(function* () {
   const host = yield* CellHost
   const environment = yield* CellWorkerEnvironment
@@ -445,21 +452,15 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
   })
   const append = output.append
   const rendered = output.read
-  // `inspect` shows no getter, but it reads `Symbol.toStringTag` with a plain
-  // get and walks the prototype chain, so a getter or trap the cell wrote there
-  // can run. The value reader covers error fields and the snapshot, not this.
-  // oxlint-disable-next-line effect/noUnknownParameters -- VM values can have any JavaScript shape; inspect produces bounded display text.
+  // A logged or returned value, a thrown non-Error and a cause show through
+  // the value reader's display, which follows `inspect` and runs no cell code:
+  // no getter, trap, `Symbol.toStringTag` or replaced prototype method.
+  // oxlint-disable-next-line effect/noUnknownParameters -- VM values can have any JavaScript shape; the display is bounded text.
   const display = (value: unknown): string => {
     if (Predicate.isString(value)) return value
     // A caught error the cell logs or returns reads as it does uncaught: no worker stack.
     if (Result.getOrElse(errorValue(value), () => false)) return errorText(value)
-    return inspect(value, {
-      depth: 4,
-      maxArrayLength: 100,
-      maxStringLength: 8192,
-      customInspect: false,
-      getters: false,
-    })
+    return displayValue(value, { promiseState })
   }
   const write = (...values: ReadonlyArray<unknown>) => {
     append(values.map(display).join(" "))
@@ -481,8 +482,8 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
   // host's message.
   // A value whose prototype chain holds a Proxy cannot be read: its traps are
   // cell code. Each part of an error reads on its own, so a part that throws
-  // (a host getter, or `inspect` running a cell's `Symbol.toStringTag` getter)
-  // leaves its fallback in its place and the other parts stand.
+  // (a host getter can throw) leaves its fallback in its place and the other
+  // parts stand.
   const part = (
     render: () => ReadonlyArray<string>,
     fallback: ReadonlyArray<string>,
@@ -493,7 +494,7 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
       onFailure: () => UNREADABLE_CAUSE_LINE,
       onSuccess: (isError) => {
         // An Error cause stops at its own line: never recurse, so a looped or deep chain cannot overflow.
-        if (isError && Predicate.isObjectKeyword(inner)) return `caused by ${errorLine(inner)}`
+        if (isError && Predicate.isObjectKeyword(inner)) return `caused by ${errorHead(inner)}`
         return `caused by ${display(inner)}`
       },
     })
@@ -503,7 +504,7 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
       onSuccess: (isError) => {
         if (!isError || !Predicate.isObjectKeyword(cause)) return display(cause)
         return [
-          ...part(() => [errorLine(cause)], [UNREADABLE_ERROR_TEXT]),
+          ...part(() => [errorHead(cause)], [UNREADABLE_ERROR_TEXT]),
           ...part(() => errorDetail(cause), []),
           ...part(
             () =>
@@ -610,11 +611,6 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
    * in one. They are never a binding and a reset never touches them.
    */
   const hostGlobals = new Set(["~effect/Fiber/currentFiber"])
-  const descriptorFields = ["value", "get", "set", "writable", "enumerable", "configurable"]
-  const sameDescriptor = (left: PropertyDescriptor, right: PropertyDescriptor) =>
-    descriptorFields.every((field) =>
-      Object.is(Reflect.get(left, field), Reflect.get(right, field)),
-    )
   /**
    * Whether a cell added, rebound, redefined or deleted this global since the
    * evaluator started. A changed flag counts: a global made read-only is not

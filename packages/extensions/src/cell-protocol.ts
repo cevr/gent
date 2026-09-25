@@ -1,185 +1,34 @@
 import { Effect, Option, Predicate, Result, Schema } from "effect"
-import { types } from "node:util"
-
-// ── value reader ────────────────────────────────────────────────────────────
-
-/**
- * A cell runs in full Bun, in the same realm as the worker that reads its
- * values. A getter, a Proxy trap, `toString` or `Symbol.toPrimitive` that a
- * read reaches is cell code, and cell code may loop or throw. This reader
- * reads a value without running any of it:
- *
- * - It reads properties through their descriptors: a data value, or a host
- *   getter from `hostGetters`, compared by identity.
- * - It never touches a Proxy. Bun's `util.types.isProxy` reads the engine's
- *   own proxy mark; no trap runs, so no Proxy can fake the answer.
- * - It checks a built-in's brand with `util.types`, which reads the internal
- *   slot, and reads the value through the prototype functions this module
- *   saves when it loads, before any cell runs. Each one reads that slot, so a
- *   subclass getter or a replaced prototype method is never called.
- *
- * The snapshot codec and the worker's error renderer read through it.
- */
-const isProxy = types.isProxy
-const isNativeError = types.isNativeError
-const isRegExp = types.isRegExp
-const isDate = types.isDate
-const isMap = types.isMap
-const isSet = types.isSet
-const isTypedArray = types.isTypedArray
-const ownDescriptor = Object.getOwnPropertyDescriptor
-const prototypeOf = Object.getPrototypeOf
-const ownKeys = Reflect.ownKeys
-const hasOwn = Object.hasOwn
-const apply = Reflect.apply
-const isArray = Array.isArray
-
-/** The getter a descriptor holds; none for a data property. */
-const descriptorGetter = (descriptor: PropertyDescriptor) =>
-  Option.liftPredicate(Reflect.get(descriptor, "get"), Predicate.isFunction)
-
-/** An intrinsic accessor's getter, taken now. */
-// oxlint-disable-next-line effect/noObjectParameters -- intrinsic prototypes are saved as plain objects when the module loads
-const intrinsicGetter = (prototype: object, key: PropertyKey) =>
-  Option.flatMap(Option.fromUndefinedOr(ownDescriptor(prototype, key)), descriptorGetter)
-
-/** An intrinsic method, taken now. */
-// oxlint-disable-next-line effect/noObjectParameters -- intrinsic prototypes are saved as plain objects when the module loads
-const intrinsicMethod = (prototype: object, key: PropertyKey) =>
-  Option.flatMap(Option.fromUndefinedOr(ownDescriptor(prototype, key)), (descriptor) =>
-    Option.liftPredicate(Reflect.get(descriptor, "value"), Predicate.isFunction),
-  )
-
-const typedArrayPrototype: object = prototypeOf(Uint8Array.prototype)
-const dateTime = intrinsicMethod(Date.prototype, "getTime")
-const mapForEach = intrinsicMethod(Map.prototype, "forEach")
-const setForEach = intrinsicMethod(Set.prototype, "forEach")
-const mapSize = intrinsicGetter(Map.prototype, "size")
-const setSize = intrinsicGetter(Set.prototype, "size")
-const typedArrayKind = intrinsicGetter(typedArrayPrototype, Symbol.toStringTag)
-const typedArrayLength = intrinsicGetter(typedArrayPrototype, "length")
-const regExpSource = intrinsicGetter(RegExp.prototype, "source")
-/**
- * `RegExp.prototype.flags` reads `this.global` and the other flag getters by
- * name, so a subclass getter runs; each flag getter reads the internal slot.
- * Spec order, and only the flags this Bun knows.
- */
-const regExpFlagKeys: ReadonlyArray<readonly [string, string]> = [
-  ["d", "hasIndices"],
-  ["g", "global"],
-  ["i", "ignoreCase"],
-  ["m", "multiline"],
-  ["s", "dotAll"],
-  ["u", "unicode"],
-  ["v", "unicodeSets"],
-  ["y", "sticky"],
-]
-const regExpFlags = regExpFlagKeys.flatMap(([flag, key]) =>
-  Option.toArray(Option.map(intrinsicGetter(RegExp.prototype, key), (get) => ({ flag, get }))),
-)
-
-/**
- * The host getters a property read runs: those on the prototype of every
- * error type the realm defines as a global, `Error` included. Bun keeps a
- * `DOMException`'s name and message, and a `BuildMessage`'s position, behind
- * such getters. Taken when the module loads, before any cell runs, from data
- * globals only. A closed set compared by identity: a cell's own getter, a
- * bound one that prints as native code included, is never in it.
- */
-const errorPrototype: object = Error.prototype
-const hostGetters: ReadonlySet<unknown> = new Set(
-  Object.getOwnPropertyNames(globalThis)
-    .flatMap((name) =>
-      Option.toArray(
-        Option.fromUndefinedOr(ownDescriptor(globalThis, name)).pipe(
-          Option.flatMap((descriptor) =>
-            Option.liftPredicate(Reflect.get(descriptor, "value"), Predicate.isFunction),
-          ),
-          Option.flatMap((type) =>
-            Option.liftPredicate(Reflect.get(type, "prototype"), Predicate.isObjectKeyword),
-          ),
-          Option.filter(
-            (prototype) =>
-              prototype === errorPrototype ||
-              Object.prototype.isPrototypeOf.call(errorPrototype, prototype),
-          ),
-        ),
-      ),
-    )
-    .flatMap((prototype) =>
-      Object.values(Object.getOwnPropertyDescriptors(prototype)).flatMap((descriptor) =>
-        Option.toArray(descriptorGetter(descriptor)),
-      ),
-    ),
-)
-
-/** Prototype links a read follows before it gives up. */
-const PROTOTYPE_DEPTH_LIMIT = 32
-
-/** A read that would run cell code: a Proxy on the path, or a getter the cell wrote. */
-class UnreadableValue extends Schema.TaggedError<UnreadableValue>()("UnreadableValue", {}) {}
-/** A read the reader made, or `UnreadableValue` where making it would run cell code. */
-type ValueRead<A> = Result.Result<A, UnreadableValue>
-const unreadable: ValueRead<never> = Result.fail(new UnreadableValue())
-
-/** A property found along the prototype chain, running only the getters in `getters`. */
-const readThrough =
-  (getters: ReadonlySet<unknown>) =>
-  // oxlint-disable-next-line effect/noObjectParameters -- a cell value has any JavaScript shape; descriptors read it without running its getters
-  (target: object, key: string): ValueRead<Option.Option<unknown>> => {
-    let holder: unknown = target
-    for (let depth = 0; depth < PROTOTYPE_DEPTH_LIMIT; depth++) {
-      if (!Predicate.isObjectKeyword(holder)) return Result.succeed(Option.none())
-      if (isProxy(holder)) return unreadable
-      const descriptor = ownDescriptor(holder, key)
-      if (Predicate.isNotUndefined(descriptor)) {
-        if (hasOwn(descriptor, "value")) return Result.succeed(Option.some(descriptor.value))
-        const get = descriptorGetter(descriptor)
-        if (Option.isSome(get) && getters.has(get.value))
-          return Result.succeed(Option.some(apply(get.value, target, [])))
-        return unreadable
-      }
-      holder = prototypeOf(holder)
-    }
-    return unreadable
-  }
-
-/**
- * A property found along the prototype chain; none when absent. A getter
- * runs only when the host provides it, and a host getter can still throw.
- */
-export const readProperty = readThrough(hostGetters)
-
-/** A property held as data along the prototype chain; no getter runs, a host one included. */
-export const readDataProperty = readThrough(new Set())
-
-/** Whether `prototype` is on a value's prototype chain, as `instanceof` asks, with no trap run. */
-// oxlint-disable-next-line effect/noUnknownParameters, effect/noObjectParameters -- a cell value has any JavaScript shape; the chain is walked without running its traps
-export const inheritsFrom = (value: unknown, prototype: object): ValueRead<boolean> => {
-  if (!Predicate.isObjectKeyword(value)) return Result.succeed(false)
-  let holder: unknown = value
-  for (let depth = 0; depth < PROTOTYPE_DEPTH_LIMIT; depth++) {
-    if (!Predicate.isObjectKeyword(holder)) return Result.succeed(false)
-    if (isProxy(holder)) return unreadable
-    holder = prototypeOf(holder)
-    if (holder === prototype) return Result.succeed(true)
-  }
-  return unreadable
-}
-
-/** An array that is not a Proxy: its length and elements read without traps. */
-// oxlint-disable-next-line effect/noUnknownParameters -- a cell value has any JavaScript shape
-export const isOrdinaryArray = (value: unknown): value is ReadonlyArray<unknown> =>
-  !isProxy(value) && isArray(value)
+import {
+  append,
+  brands,
+  codeUnit,
+  defineData,
+  dropLast,
+  holds,
+  isFinite,
+  isOrdinaryArray,
+  jsonText,
+  primitiveText,
+  readCollection,
+  readDate,
+  readProperty,
+  readRegExp,
+  readTypedArray,
+  typedArrayItem,
+  valuePrototype,
+} from "./cell-value.js"
 
 // ── namespace snapshot codec ────────────────────────────────────────────────
 
 /**
  * Namespace snapshots move cell bindings between a worker and the host as
- * tagged JSON. The worker encodes in its own realm through the value reader,
- * so encoding never runs cell code; brand checks read internal slots, so they
- * hold for a value from any realm. The reviver runs inside the realm that
- * restores, so restored dates, maps, sets, and errors carry its intrinsics.
+ * tagged JSON. The worker encodes in its own realm through the value reader
+ * (`cell-value.ts`), so encoding never runs cell code: no getter, no trap, no
+ * iterator and no prototype method a cell can replace. Brand checks read
+ * internal slots, so they hold for a value from any realm. The reviver runs
+ * inside the realm that restores, so restored dates, maps, sets, and errors
+ * carry its intrinsics.
  */
 export const maximumSnapshotBindingBytes = 256 * 1024
 const maximumSnapshotBytes = 768 * 1024
@@ -205,32 +54,32 @@ export type CellSnapshot = typeof CellSnapshot.Type
 
 const TAG = "$gent"
 
-/** A value that cannot round-trip. It never enters the encoded JSON. */
+/** A value that cannot round-trip. It never enters the encoded JSON. Each is made at load. */
 class Omitted {
   constructor(readonly reason: OmissionReason) {}
 }
 type Encoded = Schema.Json | Omitted
 const isOmitted = (value: Encoded): value is Omitted => value instanceof Omitted
+const omittedFunction = new Omitted("function")
 const unsupported = new Omitted("unsupported")
+const cyclic = new Omitted("cyclic")
+const tooDeep = new Omitted("too-deep")
 const tooLarge = new Omitted("too-large")
-/** Unreadable is unsupported: the value cannot be read without running cell code. */
-const whenRead = <A>(read: ValueRead<A>, encode: (value: A) => Encoded): Encoded =>
-  Result.match(read, { onFailure: () => unsupported, onSuccess: encode })
 
 const tagged = (kind: string, value: Schema.Json): Schema.Json => ({ [TAG]: kind, value })
 
 /** Plain means its prototype is null or a root Object.prototype from any realm. */
 // oxlint-disable-next-line effect/noObjectParameters -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
 const isPlainObject = (value: object) => {
-  const proto: unknown = prototypeOf(value)
+  const proto: unknown = valuePrototype(value)
   // oxlint-disable-next-line effect/noNullish -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
   if (proto === null) return true
-  if (!Predicate.isObjectKeyword(proto) || isProxy(proto)) return false
+  if (!Predicate.isObjectKeyword(proto) || brands.isProxy(proto)) return false
   // oxlint-disable-next-line effect/noNullish -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
-  return prototypeOf(proto) === null
+  return valuePrototype(proto) === null
 }
 
-const typedArrayKinds = new Set([
+const typedArrayKinds: ReadonlyArray<string> = [
   "Uint8Array",
   "Int8Array",
   "Uint16Array",
@@ -242,7 +91,7 @@ const typedArrayKinds = new Set([
   "Uint8ClampedArray",
   "BigInt64Array",
   "BigUint64Array",
-])
+]
 
 // oxlint-disable-next-line effect/noNullish, effect/noUnknownParameters -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
 const encodePrimitive = (value: unknown): Encoded | undefined => {
@@ -251,33 +100,16 @@ const encodePrimitive = (value: unknown): Encoded | undefined => {
   // oxlint-disable-next-line effect/noNullish -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
   if (Predicate.isUndefined(value)) return tagged("undefined", null)
   if (Predicate.isNumber(value)) {
-    if (Number.isFinite(value)) return value
-    return tagged("number", String(value))
+    if (isFinite(value)) return value
+    return tagged("number", primitiveText(value))
   }
-  if (Predicate.isBigInt(value)) return tagged("bigint", value.toString())
-  if (Predicate.isFunction(value)) return new Omitted("function")
+  // The abstract ToString: a replaced `BigInt.prototype.toString` never runs.
+  if (Predicate.isBigInt(value)) return tagged("bigint", primitiveText(value))
+  if (Predicate.isFunction(value)) return omittedFunction
   if (!Predicate.isObjectKeyword(value)) return unsupported
   // oxlint-disable-next-line effect/noNullish -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
   return undefined
 }
-
-// oxlint-disable-next-line effect/noUnknownParameters -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
-const encodeList = (items: ReadonlyArray<unknown>, inner: (item: unknown) => Encoded): Encoded => {
-  const out: Schema.Json[] = []
-  for (const item of items) {
-    const encoded = inner(item)
-    if (isOmitted(encoded)) return encoded
-    out.push(encoded)
-  }
-  return out
-}
-
-const ownProperty = (value: Schema.Json): PropertyDescriptor => ({
-  value,
-  writable: true,
-  enumerable: true,
-  configurable: true,
-})
 
 /** An array's elements through their descriptors; a hole reads as undefined. */
 // oxlint-disable-next-line effect/noUnknownParameters -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
@@ -286,11 +118,12 @@ const encodeArray = (array: ReadonlyArray<unknown>, inner: (item: unknown) => En
   if (array.length > maximumSnapshotEntries) return tooLarge
   const out: Schema.Json[] = []
   for (let index = 0; index < array.length; index++) {
-    const encoded = whenRead(readProperty(array, String(index)), (item) =>
-      inner(Option.getOrUndefined(item)),
-    )
+    const encoded = Result.match(readProperty(array, index), {
+      onFailure: (): Encoded => unsupported,
+      onSuccess: (item) => inner(Option.getOrUndefined(item)),
+    })
     if (isOmitted(encoded)) return encoded
-    out.push(encoded)
+    append(out, encoded)
   }
   return out
 }
@@ -298,110 +131,103 @@ const encodeArray = (array: ReadonlyArray<unknown>, inner: (item: unknown) => En
 /** A plain object's own enumerable string keys, in `Object.entries` order; any accessor is cell code. */
 // oxlint-disable-next-line effect/noUnknownParameters, effect/noObjectParameters -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
 const encodeRecord = (object: object, inner: (item: unknown) => Encoded): Encoded => {
-  const keys = ownKeys(object)
+  const keys = Reflect.ownKeys(object)
   if (keys.length > maximumSnapshotEntries) return tooLarge
   const out: Record<string, Schema.Json> = {}
-  for (const key of keys) {
+  for (let index = 0; index < keys.length; index++) {
+    const key = keys[index]
     if (!Predicate.isString(key)) continue
-    const descriptor = ownDescriptor(object, key)
+    const descriptor = Object.getOwnPropertyDescriptor(object, key)
     if (Predicate.isUndefined(descriptor) || descriptor.enumerable !== true) continue
-    if (!hasOwn(descriptor, "value")) return unsupported
+    if (!Object.hasOwn(descriptor, "value")) return unsupported
     const encoded = inner(descriptor.value)
     if (isOmitted(encoded)) return encoded
     // Assignment to an own `__proto__` key would set the prototype and drop the key.
-    Object.defineProperty(out, key, ownProperty(encoded))
+    defineData(out, key, encoded)
   }
-  if (hasOwn(out, TAG)) return tagged("object", out)
+  if (Object.hasOwn(out, TAG)) return tagged("object", out)
   return out
 }
 
 /** A native error's `name`, `message` or `stack`: a primitive as text, absent as the fallback. */
 // oxlint-disable-next-line effect/noObjectParameters -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
-const errorText = (error: object, key: string, fallback: string): ValueRead<string> =>
-  Result.flatMap(readProperty(error, key), (found) => {
-    if (Option.isNone(found)) return Result.succeed(fallback)
-    // String() of an object runs its toString or Symbol.toPrimitive: cell code.
-    if (Predicate.isObjectKeyword(found.value)) return unreadable
-    return Result.succeed(String(found.value))
+const errorText = (error: object, key: string, fallback: string): Option.Option<string> =>
+  Result.match(readProperty(error, key), {
+    onFailure: () => Option.none(),
+    onSuccess: (found) => {
+      if (Option.isNone(found)) return Option.some(fallback)
+      // String() of an object runs its toString or Symbol.toPrimitive: cell code.
+      const text = found.value
+      if (Predicate.isObjectKeyword(text)) return Option.none()
+      return Option.some(primitiveText(text))
+    },
   })
 
 // oxlint-disable-next-line effect/noObjectParameters -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
-const encodeError = (error: object): Encoded =>
-  whenRead(errorText(error, "name", "Error"), (name) =>
-    whenRead(errorText(error, "message", ""), (message) =>
-      whenRead(errorText(error, "stack", ""), (stack) => tagged("error", { name, message, stack })),
-    ),
-  )
-
-/** A saved intrinsic called on a value; none when this Bun lacks it. */
-const intrinsic = (
-  fn: Option.Option<Function>,
-  // oxlint-disable-next-line effect/noObjectParameters -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
-  target: object,
-  args: ReadonlyArray<unknown> = [],
-): Option.Option<unknown> => Option.map(fn, (call) => apply(call, target, args))
-
-// oxlint-disable-next-line effect/noObjectParameters -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
-const encodeRegExp = (value: object): Encoded => {
-  const source = Option.filter(intrinsic(regExpSource, value), Predicate.isString)
-  if (Option.isNone(source)) return unsupported
-  const flags = regExpFlags
-    .filter(({ get }) => apply(get, value, []) === true)
-    .map(({ flag }) => flag)
-    .join("")
-  return tagged("regexp", [source.value, flags])
+const encodeError = (error: object): Encoded => {
+  const name = errorText(error, "name", "Error")
+  const message = errorText(error, "message", "")
+  const stack = errorText(error, "stack", "")
+  if (Option.isNone(name) || Option.isNone(message) || Option.isNone(stack)) return unsupported
+  return tagged("error", { name: name.value, message: message.value, stack: stack.value })
 }
 
+// oxlint-disable-next-line effect/noObjectParameters -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
+const encodeRegExp = (value: object): Encoded =>
+  Option.match(readRegExp(value), {
+    onNone: () => unsupported,
+    onSome: ({ source, flags }) => tagged("regexp", [source, flags]),
+  })
+
 /**
- * A Map's or Set's members through its saved `size` getter and `forEach`,
- * which walk the internal table, so a subclass iterator never runs.
+ * A Map's or Set's members through the saved `size` getter and `forEach`,
+ * which walk the internal table, so a subclass iterator never runs. A Map
+ * member encodes as `[key, value]`.
  */
 const encodeCollection = (
   // oxlint-disable-next-line effect/noObjectParameters -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
   value: object,
-  collection: {
-    readonly size: Option.Option<Function>
-    readonly forEach: Option.Option<Function>
-  },
+  kind: "map" | "set",
   // oxlint-disable-next-line effect/noUnknownParameters -- collection members have any JavaScript shape
-  encodeMember: (item: unknown, key: unknown) => Encoded,
+  inner: (item: unknown) => Encoded,
 ): Encoded => {
-  const size = Option.filter(intrinsic(collection.size, value), Predicate.isNumber)
-  if (Option.isNone(size)) return unsupported
-  if (size.value > maximumSnapshotEntries) return tooLarge
-  const members: Array<readonly [unknown, unknown]> = []
-  const walked = intrinsic(collection.forEach, value, [
-    // oxlint-disable-next-line effect/noUnknownParameters -- collection members have any JavaScript shape
-    (item: unknown, key: unknown) => members.push([item, key]),
-  ])
-  if (Option.isNone(walked)) return unsupported
-  return encodeList(members, (member) => {
-    if (!isOrdinaryArray(member)) return unsupported
-    return encodeMember(member[0], member[1])
-  })
-}
-
-const encodeTypedArray = (value: NodeJS.TypedArray): Encoded => {
-  const kind = Option.filter(intrinsic(typedArrayKind, value), Predicate.isString)
-  const length = Option.filter(intrinsic(typedArrayLength, value), Predicate.isNumber)
-  if (Option.isNone(kind) || Option.isNone(length) || !typedArrayKinds.has(kind.value))
-    return unsupported
-  if (length.value > maximumSnapshotEntries) return tooLarge
-  // An integer index on a typed array reads its buffer and never its prototype.
-  const values: Schema.Json[] = []
-  for (let index = 0; index < length.value; index++) {
-    const item = value[index]
-    // Bigint elements travel as strings.
-    if (Predicate.isBigInt(item)) values.push(item.toString())
-    else if (Predicate.isNumber(item)) values.push(item)
+  const collection = readCollection(value, maximumSnapshotEntries)
+  if (Option.isNone(collection)) return unsupported
+  if (collection.value.size > maximumSnapshotEntries) return tooLarge
+  const members = collection.value.members
+  const out: Schema.Json[] = []
+  for (let index = 0; index < members.length; index++) {
+    const member = members[index]
+    if (Predicate.isUndefined(member)) return unsupported
+    // A Map member encodes its key first, as `[key, value]`.
+    // oxlint-disable-next-line effect/noNullish -- a Set member has no key
+    let key: Encoded = null
+    if (kind === "map") {
+      key = inner(member.key)
+      if (isOmitted(key)) return key
+    }
+    const item = inner(member.value)
+    if (isOmitted(item)) return item
+    if (kind === "map") append(out, [key, item])
+    else append(out, item)
   }
-  return tagged(kind.value, values)
+  return tagged(kind, out)
 }
 
-/** Wrap a member list under its tag; an omitted member omits the whole value. */
-const taggedList = (kind: string, encoded: Encoded): Encoded => {
-  if (isOmitted(encoded)) return encoded
-  return tagged(kind, encoded)
+// oxlint-disable-next-line effect/noObjectParameters -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
+const encodeTypedArray = (value: object): Encoded => {
+  const typed = readTypedArray(value)
+  if (Option.isNone(typed) || !holds(typedArrayKinds, typed.value.kind)) return unsupported
+  const { kind, length } = typed.value
+  if (length > maximumSnapshotEntries) return tooLarge
+  const values: Schema.Json[] = []
+  for (let index = 0; index < length; index++) {
+    const item = typedArrayItem(value, index)
+    // Bigint elements travel as strings, through the abstract ToString.
+    if (Predicate.isBigInt(item)) append(values, primitiveText(item))
+    else if (Predicate.isNumber(item)) append(values, item)
+  }
+  return tagged(kind, values)
 }
 
 /**
@@ -410,54 +236,62 @@ const taggedList = (kind: string, encoded: Encoded): Encoded => {
  */
 // oxlint-disable-next-line effect/noNullish, effect/noUnknownParameters, effect/noObjectParameters -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
 const encodeBuiltin = (value: object, inner: (item: unknown) => Encoded): Encoded | undefined => {
-  if (isNativeError(value)) return encodeError(value)
-  if (isDate(value))
-    return Option.match(Option.filter(intrinsic(dateTime, value), Predicate.isNumber), {
+  if (brands.isNativeError(value)) return encodeError(value)
+  if (brands.isDate(value))
+    return Option.match(readDate(value), {
       onNone: () => unsupported,
       onSome: (time) => tagged("date", time),
     })
-  if (isRegExp(value)) return encodeRegExp(value)
-  if (isMap(value))
-    return taggedList(
-      "map",
-      encodeCollection(value, { size: mapSize, forEach: mapForEach }, (item, key) =>
-        encodeList([key, item], inner),
-      ),
-    )
-  if (isSet(value))
-    return taggedList(
-      "set",
-      encodeCollection(value, { size: setSize, forEach: setForEach }, (item) => inner(item)),
-    )
-  if (isTypedArray(value)) return encodeTypedArray(value)
+  if (brands.isRegExp(value)) return encodeRegExp(value)
+  if (brands.isMap(value)) return encodeCollection(value, "map", inner)
+  if (brands.isSet(value)) return encodeCollection(value, "set", inner)
+  if (brands.isTypedArray(value)) return encodeTypedArray(value)
   // oxlint-disable-next-line effect/noNullish -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
   return undefined
 }
 
 // oxlint-disable-next-line effect/noUnknownParameters -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
-const encodeValue = (value: unknown, depth: number, seen: Set<object>): Encoded => {
-  if (depth > maximumSnapshotDepth) return new Omitted("too-deep")
+const encodeValue = (value: unknown, depth: number, seen: Array<object>): Encoded => {
+  if (depth > maximumSnapshotDepth) return tooDeep
   const primitive = encodePrimitive(value)
   if (!Predicate.isUndefined(primitive)) return primitive
   // Every trap of a Proxy is cell code, and no read of one is safe.
-  if (!Predicate.isObjectKeyword(value) || isProxy(value)) return unsupported
+  if (!Predicate.isObjectKeyword(value) || brands.isProxy(value)) return unsupported
   const object: object = value
-  if (seen.has(object)) return new Omitted("cyclic")
-  seen.add(object)
+  if (holds(seen, object)) return cyclic
+  append(seen, object)
   // oxlint-disable-next-line effect/noUnknownParameters -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
   const inner = (child: unknown) => encodeValue(child, depth + 1, seen)
   let encoded: Encoded
   const builtin = encodeBuiltin(object, inner)
   if (!Predicate.isUndefined(builtin)) encoded = builtin
-  else if (isArray(object)) encoded = encodeArray(object, inner)
+  else if (isOrdinaryArray(object)) encoded = encodeArray(object, inner)
   else if (isPlainObject(object)) encoded = encodeRecord(object, inner)
   else encoded = unsupported
-  seen.delete(object)
+  dropLast(seen)
   return encoded
 }
 
-// oxlint-disable-next-line effect/noGlobals -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
-const jsonBytes = (value: Schema.Json) => new TextEncoder().encode(JSON.stringify(value)).byteLength
+/**
+ * The JSON text's UTF-8 length. The frame encoder stringifies the same JSON a
+ * moment later through the same intrinsics, so a hand-written serializer here
+ * would guard nothing. Both functions are saved at load.
+ */
+const utf8Length = (text: string): number => {
+  let bytes = 0
+  for (let index = 0; index < text.length; index++) {
+    const code = codeUnit(text, index)
+    if (code < 0x80) bytes += 1
+    else if (code < 0x800) bytes += 2
+    else if (code >= 0xd800 && code <= 0xdbff && index + 1 < text.length) {
+      // Stringified JSON escapes a lone surrogate, so a high one here opens a pair.
+      bytes += 4
+      index++
+    } else bytes += 3
+  }
+  return bytes
+}
+const jsonBytes = (value: Schema.Json) => utf8Length(jsonText(value))
 
 /**
  * One binding's encoding. Encoding runs no cell code; a host getter can still
@@ -465,7 +299,7 @@ const jsonBytes = (value: Schema.Json) => new TextEncoder().encode(JSON.stringif
  */
 const encodeBinding = Option.liftThrowable(
   // oxlint-disable-next-line effect/noUnknownParameters -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
-  (value: unknown): Encoded => encodeValue(value, 0, new Set()),
+  (value: unknown): Encoded => encodeValue(value, 0, []),
 )
 
 /** Encode every binding. Values that cannot round-trip are named with the reason, never silently dropped. */
@@ -473,19 +307,25 @@ export const encodeSnapshot = (namespace: ReadonlyMap<string, unknown>): CellSna
   const bindings: SnapshotBinding[] = []
   const omitted: SnapshotOmission[] = []
   let total = 0
-  for (const [name, value] of namespace) {
-    const encoded = Option.getOrElse(encodeBinding(value), () => unsupported)
+  // The saved `forEach` walks the namespace: a replaced Map iterator never runs.
+  const entries = readCollection(namespace, Number.MAX_SAFE_INTEGER)
+  const members = Option.match(entries, { onNone: () => [], onSome: (read) => read.members })
+  for (let index = 0; index < members.length; index++) {
+    const member = members[index]
+    if (Predicate.isUndefined(member) || !Predicate.isString(member.key)) continue
+    const name = member.key
+    const encoded = Option.getOrElse(encodeBinding(member.value), () => unsupported)
     if (isOmitted(encoded)) {
-      omitted.push({ name, reason: encoded.reason })
+      append(omitted, { name, reason: encoded.reason })
       continue
     }
     const size = jsonBytes(encoded)
     if (size > maximumSnapshotBindingBytes || total + size > maximumSnapshotBytes) {
-      omitted.push({ name, reason: "too-large" })
+      append(omitted, { name, reason: "too-large" })
       continue
     }
     total += size
-    bindings.push({ name, value: encoded })
+    append(bindings, { name, value: encoded })
   }
   return { bindings, omitted }
 }

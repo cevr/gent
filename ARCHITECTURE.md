@@ -933,16 +933,22 @@ put back, such as one a cell made not configurable, and the kernel then
 replaces the worker, so a reset never leaves a global behind.
 The worker reads each binding from its property descriptor, so a snapshot
 never calls a global accessor (it is omitted as a function). The snapshot
-encoder and the error renderer share one value reader in `cell-protocol.ts`
-that never runs cell code: it reads data descriptors, runs only host getters
-(those of every global error type, taken at load, compared by identity),
-never touches a Proxy (Bun's `util.types.isProxy`), and reads built-ins by
-brand (`util.types`) through prototype functions saved at load, so a subclass
-override never runs. A value it cannot read that way (a cell getter, a Proxy,
-an object where a string belongs) is omitted as `unsupported`; the worker and
-the rest of the namespace stay. Only the reader holds saved intrinsics: a cell
-that rewrites a shared one such as `Array.prototype[Symbol.iterator]` changes
-the rest of the worker's code too.
+encoder, the error renderer and the value display share one value reader in
+`cell-value.ts` that never runs cell code: it reads data descriptors, runs
+only host getters (those of every global error type, taken at load, compared
+by identity), never touches a Proxy (Bun's `util.types.isProxy`), and reads
+built-ins by brand (`util.types`). Every function it calls is saved at load
+and called with the saved `Reflect.apply`: no method through a value or a
+prototype at call time, no iterator, spread or `push` (lists grow through the
+saved `Reflect.defineProperty` with a descriptor that has no prototype), and
+a bigint or number becomes text through the abstract `String`. A value it
+cannot read that way (a cell getter, a Proxy, an object where a string
+belongs) is omitted as `unsupported`; the worker and the rest of the namespace
+stay. Out of the reader's reach: Effect builds its `Option` and `Result` data
+by assignment, and the worker's Effect runtime, error renderer string work and
+JSON frames use the shared intrinsics; a cell that plants a setter on
+`Object.prototype` or rewrites those stalls the worker, and the host replaces
+a worker that stops answering.
 A result's `bindings` names only the bindings its cell added or bound to
 another value (compared by `Object.is`), and `bindingCount` (additive,
 optional) counts the whole namespace: every result stays in the history, so a
@@ -952,8 +958,14 @@ reader, one part at a time: its name and message, its detail (each inner
 `BuildMessage` of a split syntax error keeps its position), and its cause. A
 part that cannot be read gives a fixed text in its place and the other parts
 stand; a thrown value whose prototype chain holds a Proxy gives one fixed
-text. `display` (a logged or returned value) uses `inspect`, which reads
-`Symbol.toStringTag` with a plain get, so the reader does not cover it.
+text. The display of a logged or returned value, a thrown non-Error, a cause
+and an uncaught report (`displayValue`) follows `util.inspect` (`depth: 4`, 100
+items, 8192 characters, no custom inspection) through the reader. Where
+`inspect` would run cell code it shows a marker instead: `[Proxy]` for a
+Proxy, `[Object: unreadable prototype]` for a Proxy on the prototype chain,
+`[Getter]` for an accessor, and it never reads a `Symbol.toStringTag` getter.
+A nested error shows as `[Name: message]` without its stack; an object lists
+at most 100 properties, and one display formats at most 20 000 values.
 The first kernel start of a branch with no saved namespace fixes its starting
 namespace in its own row. For the opening branch (the oldest) of a handoff
 session (a parent, not spawned: `isSpawnedSession`), that is a copy of the one
