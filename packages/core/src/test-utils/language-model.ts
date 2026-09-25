@@ -273,8 +273,9 @@ export const waitFor = <A, R = never>(
 
 /**
  * A step's request as the runtime builds it: the system prompt it opens
- * with, and the turn notices it places after the conversation (empty when
- * the step carries none).
+ * with (its cache blocks, and the blocks joined as the one prompt text), and
+ * the turn notices it places after the conversation (empty when the step
+ * carries none).
  */
 export const turnRequestText = (prompt: Prompt.Prompt) => {
   const systemAt = (index: number) =>
@@ -284,11 +285,17 @@ export const turnRequestText = (prompt: Prompt.Prompt) => {
         return Option.some(message.content)
       }),
     )
-  const systemPrompt = systemAt(0)
+  let leading = prompt.content.findIndex((message) => message.role !== "system")
+  if (leading < 0) leading = prompt.content.length
+  const systemBlocks = prompt.content.slice(0, leading).flatMap((message) => {
+    if (message.role !== "system") return []
+    return [message.content]
+  })
   const lastIndex = prompt.content.length - 1
-  const notices = Option.filter(systemAt(lastIndex), () => lastIndex > 0)
+  const notices = Option.filter(systemAt(lastIndex), () => lastIndex >= systemBlocks.length)
   return {
-    systemPrompt: Option.getOrElse(systemPrompt, () => ""),
+    systemBlocks,
+    systemPrompt: systemBlocks.join("\n\n"),
     notices: Option.getOrElse(notices, () => ""),
   }
 }

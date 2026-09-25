@@ -1197,11 +1197,13 @@ export const DELEGATE_EXTENSION_ID = ExtensionId.make("@gent/delegate")
 /**
  * How to work with children. A section, not tool guidelines: in a cell turn
  * the model sees only the cell tool, so tool guidelines stay behind
- * `tools(id)`. A child cannot delegate, so its turns do not get it.
+ * `tools(id)`. A child cannot delegate, so its turns do not get it: the
+ * section is in the agent's own part of the prompt (priority 100 and up, core's
+ * `AGENT_PROMPT_PRIORITY`), after the part a child shares with its parent.
  */
 const CHILDREN_SECTION = {
   id: "children",
-  priority: 12,
+  priority: 112,
   content: `# Children
 
 - Delegate independent, self-contained work to children: start each with delegate.start, from one cell when you work in one, then end your turn. Each child's result arrives as a message that wakes you.

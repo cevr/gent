@@ -2653,10 +2653,16 @@ const ReadTool = Tool.make("read", {
   parameters: Schema.Struct({ path: Schema.String }),
   success: Schema.String,
 })
-/** One request with a tool list and a tool round trip; `options` go on each user-side part. */
-const cachingConversation = (options: Prompt.ProviderOptions) =>
-  Prompt.make([
-    { role: "system", content: "Stable instructions." },
+/**
+ * One request with a tool list and a tool round trip; `options` go on each
+ * user-side part. `system` is the system prompt's blocks, one message each.
+ */
+const cachingConversation = (
+  options: Prompt.ProviderOptions,
+  system: ReadonlyArray<string> = ["Stable instructions."],
+) => [
+  ...system.map((content) => Prompt.makeMessage("system", { content })),
+  ...Prompt.make([
     { role: "user", content: [{ type: "text", text: "Read a.txt.", options }] },
     {
       role: "assistant",
@@ -2683,16 +2689,18 @@ const cachingConversation = (options: Prompt.ProviderOptions) =>
       ],
     },
     { role: "user", content: [{ type: "text", text: "Now summarize it." }] },
-  ])
+  ]).content,
+]
 const runCachingRequest = (
   model: Layer.Layer<LanguageModel.LanguageModel>,
   state: FakeFetchState,
   options: Prompt.ProviderOptions,
   /** Messages the runtime sends after the conversation. */
   after: ReadonlyArray<Prompt.Message> = [],
+  system?: ReadonlyArray<string>,
 ) =>
   LanguageModel.generateText({
-    prompt: Prompt.fromMessages([...cachingConversation(options).content, ...after]),
+    prompt: Prompt.fromMessages([...cachingConversation(options, system), ...after]),
     toolkit: Toolkit.make(ReadTool),
     disableToolCallResolution: true,
   }).pipe(
@@ -2726,6 +2734,7 @@ describe("buildAnthropicModelDriver — prompt caching", () => {
     authInfo: ProviderAuthInfo,
     options: Prompt.ProviderOptions = {},
     after: ReadonlyArray<Prompt.Message> = [],
+    system?: ReadonlyArray<string>,
   ) =>
     Effect.gen(function* () {
       const credentialCellRef = yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(
@@ -2739,7 +2748,7 @@ describe("buildAnthropicModelDriver — prompt caching", () => {
       const driver = yield* buildAnthropicModelDriver(credentialCellRef, Option.none())
       const model = yield* driver.resolveModel("claude-sonnet-4-6", authInfo)
       const state = makeFakeFetchState()
-      yield* runCachingRequest(model, state, options, after)
+      yield* runCachingRequest(model, state, options, after, system)
       return yield* Schema.decodeEffect(CachedRequest)(
         Option.getOrThrow(Option.fromUndefinedOr(state.captured.at(-1)?.body)),
       )
@@ -2809,6 +2818,57 @@ describe("buildAnthropicModelDriver — prompt caching", () => {
       for (const authInfo of [makeApiAuthInfo("sk-test"), makeOAuthInfo()]) {
         expect(markerCount(yield* sentFor(authInfo, callerMarker))).toBe(4)
       }
+    }),
+  )
+
+  // The runtime sends the prompt as the part a session shares with its
+  // children, then the agent's own part; a fresh child reads the shared part
+  // back from its parent's entry at that block.
+  const sharedPart = `# Shared\n\n${"Instructions every agent reads. ".repeat(160)}`
+  const agentPart = "# Children\n\n- Delegate independent work."
+
+  it.live("an API-key request also marks the end of the shared part of the system prompt", () =>
+    Effect.gen(function* () {
+      const request = yield* sentFor(makeApiAuthInfo("sk-test"), {}, [], [sharedPart, agentPart])
+      const system = request.system ?? []
+      expect(system.map((block) => block.text)).toEqual([sharedPart, agentPart])
+      expect(system.map(isMarked)).toEqual([true, true])
+      // The existing markers stay: the system prompt's end and the conversation tail.
+      expect(lastMarked(request.messages.at(-1)?.content ?? [])).toBe(true)
+      expect(markerCount(request)).toBe(3)
+    }),
+  )
+
+  it.live("a shared part below the minimum cacheable length takes no marker", () =>
+    Effect.gen(function* () {
+      const request = yield* sentFor(makeApiAuthInfo("sk-test"), {}, [], ["# Shared", agentPart])
+      expect((request.system ?? []).map(isMarked)).toEqual([false, true])
+      expect(markerCount(request)).toBe(2)
+    }),
+  )
+
+  it.live("the shared part's marker comes last, within the limit of four", () =>
+    Effect.gen(function* () {
+      const request = yield* sentFor(
+        makeApiAuthInfo("sk-test"),
+        callerMarker,
+        [],
+        [sharedPart, agentPart],
+      )
+      expect((request.system ?? []).map(isMarked)).toEqual([false, true])
+      expect(markerCount(request)).toBe(4)
+    }),
+  )
+
+  // The Claude Code path joins the blocks into the one relocated block.
+  it.live("a Claude Code request keeps one relocated system block and its two markers", () =>
+    Effect.gen(function* () {
+      const request = yield* sentFor(makeOAuthInfo(), {}, [], [sharedPart, agentPart])
+      const first = request.messages[0]?.content ?? []
+      expect(first.filter(isMarked).map((block) => block.text)).toEqual([
+        `${sharedPart}\n\n${agentPart}`,
+      ])
+      expect(markerCount(request)).toBe(2)
     }),
   )
 })

@@ -33,7 +33,11 @@ import type { EventStorageError } from "../storage/storage.js"
 // ── ai-transcript ───────────────────────────────────────────────────────────
 
 interface PromptTranscriptOptions {
-  readonly systemPrompt?: string
+  /**
+   * The system prompt in cache blocks, one leading system message each: a
+   * driver can end a cached prefix at a block (see `systemPromptBlocks`).
+   */
+  readonly systemPrompt?: ReadonlyArray<string>
   readonly includeHidden?: boolean
   /** The turn's notices, placed after the conversation; see `turnNoticesText`. */
   readonly notices?: ReadonlyArray<TurnNotice>
@@ -213,8 +217,9 @@ export const turnNoticesText = (notices: ReadonlyArray<TurnNotice>): Option.Opti
   )
 
 /**
- * The request a step sends: the system prompt, the conversation, then the
- * turn's notices as one system message after the last message.
+ * The request a step sends: the system prompt (a system message per cache
+ * block), the conversation, then the turn's notices as one system message
+ * after the last message.
  *
  * The notices change from turn to turn and the rest does not, so they go
  * last: the system prompt and the conversation stay one cacheable prefix
@@ -230,11 +235,11 @@ export const toPrompt = (
   messages: ReadonlyArray<Message>,
   options?: PromptTranscriptOptions,
 ): Prompt.Prompt => {
-  const promptMessages = [...toPromptMessages(messages, options)]
-  const systemPrompt = options?.systemPrompt
-  if (!Predicate.isUndefined(systemPrompt) && systemPrompt !== "") {
-    promptMessages.unshift(Prompt.systemMessage({ content: systemPrompt }))
-  }
+  const systemBlocks = (options?.systemPrompt ?? []).filter((block) => block !== "")
+  const promptMessages = [
+    ...systemBlocks.map((block) => Prompt.systemMessage({ content: block })),
+    ...toPromptMessages(messages, options),
+  ]
   const notices = turnNoticesText(options?.notices ?? [])
   if (Option.isSome(notices)) promptMessages.push(Prompt.systemMessage({ content: notices.value }))
 

@@ -230,7 +230,7 @@ const summarize = Effect.fn("ModelCompaction.summarize")(function* (params: {
   yield* Effect.scoped(
     Stream.runForEach(
       params.model.streamText({
-        prompt: toPrompt([input], { systemPrompt: summarySystemPrompt(params.instructions) }),
+        prompt: toPrompt([input], { systemPrompt: [summarySystemPrompt(params.instructions)] }),
       }),
       (part: Response.AnyPart) => {
         if (part.type === "finish") {

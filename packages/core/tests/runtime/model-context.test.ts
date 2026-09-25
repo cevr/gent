@@ -1364,7 +1364,7 @@ describe("AI transcript projection", () => {
           ],
         }),
       ],
-      { systemPrompt: "Global policy." },
+      { systemPrompt: ["Global policy."] },
     )
 
     expect(prompt.content.map((message) => message.role)).toEqual([

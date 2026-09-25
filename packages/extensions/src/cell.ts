@@ -2886,8 +2886,12 @@ export const CellExtension = defineExtension({
       if (agent.deniedTools?.includes("cell") === true) {
         return Effect.succeed({})
       }
-      return Effect.succeed({ toolPolicy: { include: ["cell"], modelSet: ["cell"] } })
+      return Effect.succeed({
+        toolPolicy: { include: ["cell"], modelSet: ["cell"] },
+        promptSections: [CELL_WORK_SECTION],
+      })
     })
+    // The host tool list differs by agent, so it follows the shared prompt.
     yield* host.on("systemPrompt", (input) =>
       Effect.gen(function* () {
         if (input.tools?.length !== 1 || !input.tools.some((tool) => getToolId(tool) === "cell")) {
@@ -2899,9 +2903,9 @@ export const CellExtension = defineExtension({
             .toSorted((left, right) => getToolId(left).localeCompare(getToolId(right))),
           renderToolSignature,
         )
-        if (entries.length === 0) return `${input.basePrompt}\n\n${CELL_WORK}`
+        if (entries.length === 0) return input.basePrompt
         const catalog = `## Host Tools\n\nInside \`cell\`, each host tool id is a function path under \`tools\`: id \`a.b\` is \`await tools.a.b(input)\`. \`tools(id)\` returns the tool with its full input schema (\`parameters\`) and \`guidelines\`, and reaches an id with a JavaScript built-in segment such as \`then\` or \`name\`.\n\n${entries.join("\n")}`
-        return `${input.basePrompt}\n\n${CELL_WORK}\n\n${catalog}`
+        return `${input.basePrompt}\n\n${catalog}`
       }),
     )
   }),
@@ -2920,6 +2924,13 @@ const CELL_WORK = `# Working in the cell
 - You solve tasks by writing and running TypeScript in the cell, observing results, and iterating. Batch independent work inside one cell; iterate between cells.
 - Example: \`const run = await tools.bash({ command: "bun test", timeout: 600000 }); const lines = (run.stdout + run.stderr).split("\\n"); const failing = lines.filter((l) => l.includes("(fail)")); ({ exit: run.exitCode, total: failing.length, sample: failing.slice(0, 5) })\` returns the outcome and a sample; lines stays bound for the next cell.
 - To find files, prefer tools.grep({ pattern }) over a raw directory walk: it honours .gitignore.`
+
+/**
+ * The cell guide as a shared section: after the skills listing (80), before
+ * the agent's own part (`AGENT_PROMPT_PRIORITY`), so a child reads it from its
+ * parent's cached prefix.
+ */
+const CELL_WORK_SECTION = { id: "cell-work", priority: 85, content: CELL_WORK }
 
 // ── tool signatures ─────────────────────────────────────────────────────────
 

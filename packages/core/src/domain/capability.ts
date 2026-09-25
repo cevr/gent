@@ -21,15 +21,47 @@ import { clipSummary, summarizeOutput } from "./message.js"
 export interface PromptSection {
   readonly id: string
   readonly content: string
-  /** Lower = earlier in the prompt. Default sections use 0-80 range. */
+  /**
+   * Lower = earlier in the prompt. Sections every agent of a workspace reads
+   * the same (persona, environment, project instructions, skills) sit below
+   * `AGENT_PROMPT_PRIORITY`; a section that differs by agent sits at or above it.
+   */
   readonly priority: number
 }
+
+/**
+ * The first priority of the agent's own part of the prompt. The sections
+ * below it are the part a session shares with its children and its sibling
+ * sessions, byte for byte, so a child's first request reads that part from
+ * the provider's prompt cache. A section that one agent has and another lacks
+ * (the children guidance, an agent addendum) goes at or above it; so does
+ * anything a `systemPrompt` hook appends.
+ */
+export const AGENT_PROMPT_PRIORITY = 100
+
+const PROMPT_SECTION_SEPARATOR = "\n\n"
 
 export const compileSystemPrompt = (sections: ReadonlyArray<PromptSection>): string =>
   [...sections]
     .sort((a, b) => a.priority - b.priority)
     .map((s) => s.content)
-    .join("\n\n")
+    .join(PROMPT_SECTION_SEPARATOR)
+
+/** The prompt of the shared sections: every section below `AGENT_PROMPT_PRIORITY`. */
+export const compileSharedSystemPrompt = (sections: ReadonlyArray<PromptSection>): string =>
+  compileSystemPrompt(sections.filter((section) => section.priority < AGENT_PROMPT_PRIORITY))
+
+/**
+ * The system prompt as the blocks a driver caches: the shared part, then the
+ * agent's own part; joined by a blank line they are `prompt` again. One block
+ * when nothing follows the shared part, or when a `systemPrompt` hook rewrote it.
+ */
+export const systemPromptBlocks = (prompt: string, shared: string): ReadonlyArray<string> => {
+  const head = `${shared}${PROMPT_SECTION_SEPARATOR}`
+  if (prompt === "") return []
+  if (shared === "" || !prompt.startsWith(head) || prompt.length === head.length) return [prompt]
+  return [shared, prompt.slice(head.length)]
+}
 
 /**
  * The section core writes once per profile: where the loop is running.
