@@ -824,26 +824,24 @@ export function Session(props: SessionProps) {
               />
             )
           })()}
+          <MessagePicker
+            open={controller.uiState().overlay._tag === "fork"}
+            messages={controller.forkMessages()}
+            onSelect={controller.onForkSelect}
+            onClose={controller.closeOverlay}
+          />
+          <PromptSearchPalette
+            state={controller.promptSearch.state()}
+            entries={controller.promptSearch.entries()}
+            onEvent={controller.promptSearch.onEvent}
+          />
           <ExtensionWidgets slot="below-input" />
         </box>
-
-        <MessagePicker
-          open={controller.uiState().overlay._tag === "fork"}
-          messages={controller.forkMessages()}
-          onSelect={controller.onForkSelect}
-          onClose={controller.closeOverlay}
-        />
 
         <MermaidViewer
           open={controller.uiState().overlay._tag === "mermaid"}
           diagrams={mermaidDiagrams()}
           onClose={controller.closeOverlay}
-        />
-
-        <PromptSearchPalette
-          state={controller.promptSearch.state()}
-          entries={controller.promptSearch.entries()}
-          onEvent={controller.promptSearch.onEvent}
         />
 
         {(() => {

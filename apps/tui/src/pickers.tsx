@@ -2,15 +2,7 @@
 import { Effect, Match, Option, Schema } from "effect"
 import { matchSorter } from "match-sorter"
 import { createEffect, createMemo, createSignal, Show } from "solid-js"
-import { useTerminalDimensions } from "./terminal"
-import {
-  ChromePanel,
-  PickerFrame,
-  selectable,
-  SelectList,
-  type SelectListRow,
-  usePickerGeometry,
-} from "./ui"
+import { PickerFrame, selectable, SelectList, type SelectListRow, usePickerGeometry } from "./ui"
 import { useTheme } from "./theme"
 import { formatError, shortId, truncate } from "./utils"
 import { useClient, useRuntime } from "./client"
@@ -167,6 +159,9 @@ export function transitionPromptSearch(
 /**
  * Prompt search palette — the `ctrl+r` list over prompt history.
  *
+ * A docked pane in the session's pane slot, drawn in the `PickerFrame` every
+ * pane draws, so a short terminal takes its rows as it takes any pane's.
+ *
  * The list owns the query and the cursor and reports the entry under the
  * cursor; the palette turns those reports into the events the session's
  * prompt-search state understands. The composer previews the highlighted
@@ -182,12 +177,7 @@ interface PromptSearchPaletteProps {
 
 export function PromptSearchPalette(props: PromptSearchPaletteProps) {
   const { theme } = useTheme()
-  const dimensions = useTerminalDimensions()
-
-  const panelWidth = () => Math.min(80, dimensions().width - 6)
-  const panelHeight = () => Math.min(16, dimensions().height - 6)
-  const left = () => Math.floor((dimensions().width - panelWidth()) / 2)
-  const top = () => Math.floor((dimensions().height - panelHeight()) / 2)
+  const { rowWidth } = usePickerGeometry()
 
   const emptyRow = () => (
     <box paddingLeft={1}>
@@ -216,8 +206,8 @@ export function PromptSearchPalette(props: PromptSearchPaletteProps) {
               }
               return (
                 <box id={id} backgroundColor={backgroundColor()} paddingLeft={1}>
-                  <text style={{ fg: textColor() }}>
-                    {truncate(entry.text.replace(/\s+/g, " "), panelWidth() - 4)}
+                  <text wrapMode="none" style={{ fg: textColor() }}>
+                    {truncate(entry.text.replace(/\s+/g, " "), rowWidth())}
                   </text>
                 </box>
               )
@@ -225,12 +215,11 @@ export function PromptSearchPalette(props: PromptSearchPaletteProps) {
           )
 
         return (
-          <ChromePanel.Root
-            title="Prompt Search"
-            width={panelWidth()}
-            height={panelHeight()}
-            left={left()}
-            top={top()}
+          <PickerFrame
+            // The query row draws above the list: one line more than it has rows.
+            lines={items().length + 1}
+            title={`Prompt search · ${items().length}`}
+            footer={"type to filter · ↑↓ move · ↵ accept · esc cancel"}
           >
             <SelectList
               id="prompt-search"
@@ -260,9 +249,7 @@ export function PromptSearchPalette(props: PromptSearchPaletteProps) {
               onSelect={() => props.onEvent(PromptSearchEvent.cases.Accept.make({}))}
               onDismiss={() => props.onEvent(PromptSearchEvent.cases.Cancel.make({}))}
             />
-
-            <ChromePanel.Footer>Type | Up/Down | Enter | Esc</ChromePanel.Footer>
-          </ChromePanel.Root>
+          </PickerFrame>
         )
       }}
     </Show>
@@ -427,17 +414,17 @@ const buildItems = (messages: readonly Message[]): PickerItem[] =>
     }
   })
 
+/**
+ * The `/fork` message picker: a docked pane in the session's pane slot, in
+ * the `PickerFrame` every pane draws. One line per message.
+ */
 export function MessagePicker(props: MessagePickerProps) {
   const { theme } = useTheme()
-  const dimensions = useTerminalDimensions()
+  const { rowWidth } = usePickerGeometry()
 
-  const panelWidth = () => Math.min(70, dimensions().width - 6)
-  const panelHeight = () => Math.min(16, dimensions().height - 6)
-  const left = () => Math.floor((dimensions().width - panelWidth()) / 2)
-  const top = () => Math.floor((dimensions().height - panelHeight()) / 2)
-
+  const items = () => buildItems(props.messages)
   const rows = (): ReadonlyArray<SelectListRow<PickerItem>> =>
-    buildItems(props.messages).map((item) =>
+    items().map((item) =>
       selectable(item, (isSelected, id) => {
         const backgroundColor = () => {
           if (isSelected()) return theme.primary
@@ -449,12 +436,8 @@ export function MessagePicker(props: MessagePickerProps) {
         }
         return (
           <box id={id} backgroundColor={backgroundColor()} paddingLeft={1}>
-            <text
-              style={{
-                fg: textColor(),
-              }}
-            >
-              {truncate(item.label, panelWidth() - 4)}
+            <text wrapMode="none" style={{ fg: textColor() }}>
+              {truncate(item.label, rowWidth())}
             </text>
           </box>
         )
@@ -463,12 +446,10 @@ export function MessagePicker(props: MessagePickerProps) {
 
   return (
     <Show when={props.open}>
-      <ChromePanel.Root
-        title="Fork From Message"
-        width={panelWidth()}
-        height={panelHeight()}
-        left={left()}
-        top={top()}
+      <PickerFrame
+        lines={items().length}
+        title={`Fork from message · ${items().length}`}
+        footer={"↑↓ move · ↵ fork here · esc close"}
       >
         <SelectList
           id="message-picker"
@@ -479,9 +460,7 @@ export function MessagePicker(props: MessagePickerProps) {
           onSelect={(item) => props.onSelect(MessageId.make(item.id))}
           onDismiss={props.onClose}
         />
-
-        <ChromePanel.Footer>Up/Down | Enter | Esc</ChromePanel.Footer>
-      </ChromePanel.Root>
+      </PickerFrame>
     </Show>
   )
 }

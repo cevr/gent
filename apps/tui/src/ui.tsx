@@ -150,9 +150,10 @@ function useScrollSync(selectedId: Accessor<string>, options: ScrollSyncOptions)
 /**
  * ChromePanel — compound component for overlay panels with rounded chrome borders.
  *
- * `Root` floats at a position and size the caller gives it. The rows inside —
- * `Body`, `Section`, `Error`, `Footer` — are shared with the ruled
- * `PickerFrame` the docked panes draw.
+ * `Root` floats at a position and size the caller gives it; the sign-in view
+ * is the one panel that still floats. The rows inside — `Body`, `Section`,
+ * `Error`, `Footer` — are shared with the ruled `PickerFrame` the docked
+ * panes draw.
  *
  * Usage:
  *   <ChromePanel.Root title="Commands" width={50} height={14} left={10} top={5}>

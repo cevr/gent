@@ -2352,13 +2352,13 @@ describe("App auth gate", () => {
       setup.mockInput.pressKey("r", { ctrl: true })
       yield* waitForFrame(
         setup,
-        (frame) => frame.includes("Prompt Search") && frame.includes(historyPrompt),
+        (frame) => frame.includes("Prompt search") && frame.includes(historyPrompt),
         "prompt search history",
       )
       setup.mockInput.pressEscape()
       yield* waitForFrame(
         setup,
-        (frame) => !frame.includes("Prompt Search"),
+        (frame) => !frame.includes("Prompt search"),
         "prompt search closed",
       )
       setup.renderer.destroy()

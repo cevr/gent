@@ -32,12 +32,11 @@ import { waitForFrame } from "./helpers-boundary"
 // ── pickers ─────────────────────────────────────────────────────────────────
 
 /**
- * The two centred pickers: fork-from-message and resume-branch.
- *
- * The message picker is `SelectList` in `ChromePanel` chrome; the branch
- * picker is a docked pane and draws `PickerFrame`. Escape is the interesting
- * key: the message picker closes itself, while the branch picker leaves the
- * route, so it has to claim escape before the list treats it as a dismissal.
+ * The session's own docked pickers: fork-from-message, resume-branch,
+ * settings and prompt search, each drawn in `PickerFrame`. Escape is the
+ * interesting key: the message picker closes itself, while the branch picker
+ * leaves the route, so it has to claim escape before the list treats it as a
+ * dismissal.
  */
 
 const sessionId = SessionId.make("session-test")
@@ -105,7 +104,7 @@ describe("Message picker", () => {
       yield* waitForFrame(setup, () => renderFrame(setup).includes("only ask"), "open")
       setup.mockInput.pressEscape()
       yield* waitForFrame(setup, () => !open(), "closed")
-      expect(renderFrame(setup)).not.toContain("Fork From Message")
+      expect(renderFrame(setup)).not.toContain("Fork from message")
     }),
   )
 })
@@ -450,10 +449,10 @@ describe("PromptSearchPalette renderer", () => {
       setup.mockInput.pressArrow("down")
       yield* Effect.promise(() => setup.renderOnce())
       const frame = renderFrame(setup)
-      expect(frame).toContain("Prompt Search")
+      expect(frame).toContain("Prompt search · 2")
       expect(frame).toContain("› fix")
       expect(frame).toContain("fix prompt search enter behavior")
-      expect(frame).toContain("Type | Up/Down | Enter | Esc")
+      expect(frame).toContain("type to filter · ↑↓ move · ↵ accept · esc cancel")
       // Typing and moving both report the entry under the cursor; the last
       // report is the second match in rank order.
       expect(events.at(-1)).toEqual({
@@ -510,4 +509,51 @@ describe("PromptSearchPalette renderer", () => {
       yield* waitForFrame(setup, () => events.at(-1)?._tag === "Cancel", "cancelled")
     }),
   )
+})
+
+describe("prompt search and the fork picker on a short terminal", () => {
+  // Docked panes give way in whole rows: the key hint and the title go
+  // before the rows the reader opened the pane for.
+  for (const height of [12, 9, 8, 7, 6]) {
+    it.live(`prompt search keeps its top entry at ${height} rows`, () =>
+      Effect.gen(function* () {
+        const setup = yield* Effect.promise(() =>
+          renderWithProviders(
+            () => (
+              <PromptSearchPalette
+                state={PromptSearchState.open("draft")}
+                entries={["ENTRY-ONE", "ENTRY-TWO", "ENTRY-THREE"]}
+                onEvent={() => {}}
+              />
+            ),
+            { width: 60, height },
+          ),
+        )
+        yield* waitForFrame(setup, (frame) => frame.includes("ENTRY-ONE"), "top entry")
+      }).pipe(Effect.timeout("5 seconds")),
+    )
+
+    it.live(`the fork picker keeps its top message at ${height} rows`, () =>
+      Effect.gen(function* () {
+        const setup = yield* Effect.promise(() =>
+          renderWithProviders(
+            () => (
+              <MessagePicker
+                open={true}
+                messages={[
+                  message("m1", "user", "FIRST-ASK"),
+                  message("m2", "assistant", "FIRST-REPLY"),
+                  message("m3", "user", "SECOND-ASK"),
+                ]}
+                onSelect={() => {}}
+                onClose={() => {}}
+              />
+            ),
+            { width: 60, height },
+          ),
+        )
+        yield* waitForFrame(setup, (frame) => frame.includes("FIRST-ASK"), "top message")
+      }).pipe(Effect.timeout("5 seconds")),
+    )
+  }
 })
