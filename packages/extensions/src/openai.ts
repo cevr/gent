@@ -1747,8 +1747,10 @@ export const buildOpenAIModelDriver = (
   /**
    * Arm the 5-minute abandoned-login timer. A timer that fires takes the
    * login from the map, closes its scope (the redirect listener) and fails
-   * `finished`. It is detached: `authorize` returns at once, and a child
-   * fiber would stop with it.
+   * `finished`, with no interrupt between: a caller that enters the login
+   * stops the timer only while it sleeps, so a login it took is always
+   * failed. It is detached: `authorize` returns at once, and a child fiber
+   * would stop with it.
    */
   const armTimer = (authorizationId: string, entry: PendingCallbackEntry) =>
     Effect.gen(function* () {
@@ -1764,7 +1766,7 @@ export const buildOpenAIModelDriver = (
                 message: "OpenAI login expired: nothing finished it in five minutes",
               }),
             )
-          }),
+          }).pipe(Effect.uninterruptible),
         ),
         Effect.forkDetach,
       )
@@ -1788,12 +1790,14 @@ export const buildOpenAIModelDriver = (
   const callbackFailed = (e: OAuthError) =>
     new ProviderAuthError({ message: `OpenAI OAuth callback failed: ${e.message}`, cause: e })
   /**
-   * Finish a login. A caller whose grant fails reports its own error, unless
-   * the login already finished: then it takes that outcome (a pasted code's
-   * store closes the browser wait, for one). A caller with a grant exchanges
-   * it under `exchanging`; a caller that waited there behind a completed
-   * login takes that outcome and never trades its spent code. A failed
-   * exchange leaves the login pending for the next code.
+   * Finish a login. A caller's grant stops when the login finishes: that
+   * caller takes the outcome (a device poll still pending, or a browser wait
+   * after a pasted code's store). A caller whose grant fails reports its own
+   * error, unless the login already finished: then it takes that outcome. A
+   * caller with a grant exchanges it under `exchanging`; a caller that
+   * waited there behind a completed login takes that outcome and never
+   * trades its spent code. A failed exchange leaves the login pending for
+   * the next code.
    */
   const completeLogin = (
     authorizationId: string,
@@ -1801,8 +1805,13 @@ export const buildOpenAIModelDriver = (
     ctx: LoginCallbackContext,
   ) =>
     Effect.gen(function* () {
-      const grant = yield* Effect.exit(entry.flow.grant(ctx.code))
-      if (!isPending(authorizationId, entry)) return yield* Deferred.await(entry.finished)
+      const granted = yield* Effect.raceFirst(
+        Effect.exit(entry.flow.grant(ctx.code)).pipe(Effect.asSome),
+        Effect.exit(Deferred.await(entry.finished)).pipe(Effect.as(Option.none())),
+      )
+      if (Option.isNone(granted) || !isPending(authorizationId, entry))
+        return yield* Deferred.await(entry.finished)
+      const grant = granted.value
       if (Exit.isFailure(grant)) {
         return yield* Effect.failCause(Cause.map(grant.cause, callbackFailed))
       }

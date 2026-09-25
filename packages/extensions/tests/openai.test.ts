@@ -2843,6 +2843,46 @@ describe("buildOpenAIModelDriver — OAuth login lifetime", () => {
     }),
   )
 
+  // A second device caller polled on after the first finished the login,
+  // up to the device deadline.
+  it.live("a device caller still polling stops when another caller finishes the login", () =>
+    Effect.gen(function* () {
+      const pending: PendingCallbacks = new Map()
+      const { authorize, callback } = yield* makeDriver(pending)
+      const fetchState = makeFakeFetchState()
+      const endpoints = fakeFetchLayer(
+        fetchState,
+        deviceEndpoints((call) => {
+          if (call === 0) return deviceDone
+          return { status: 403, body: "{}" }
+        }, tokenReply),
+      )
+      const persisted = yield* Ref.make(0)
+      const context = {
+        ...authContext(1, "finished-elsewhere"),
+        persist: () => Ref.update(persisted, (n) => n + 1),
+      }
+      const polls = () =>
+        fetchState.captured.filter((request) => request.url.endsWith("/deviceauth/token")).length
+      yield* runWithTestClock(
+        Effect.gen(function* () {
+          yield* authorize(authContext(1, "finished-elsewhere"))
+          const first = yield* Effect.forkChild(Effect.exit(callback(context)))
+          const second = yield* Effect.forkChild(Effect.exit(callback(context)))
+          yield* TestClock.adjust("1 second")
+          // No more time passes: the caller still polling ends with the login.
+          const exits = yield* Effect.all([Fiber.join(first), Fiber.join(second)])
+          expect(exits.map((exit) => Exit.isSuccess(exit))).toEqual([true, true])
+          const polled = polls()
+          yield* TestClock.adjust("1 minute")
+          expect(polls()).toBe(polled)
+          expect(yield* Ref.get(persisted)).toBe(1)
+          expect(pending.has("finished-elsewhere")).toBe(false)
+        }).pipe(Effect.provide(endpoints)),
+      ).pipe(Effect.timeout("3 seconds"))
+    }),
+  )
+
   const newSignInTokens = {
     type: "oauth",
     access: "a",
@@ -2894,6 +2934,54 @@ describe("buildOpenAIModelDriver — OAuth login lifetime", () => {
       const exit = yield* Fiber.join(waiter).pipe(Effect.timeout("3 seconds"))
       expect(Exit.isFailure(exit)).toBe(true)
       expect(String(exit)).toContain("stopped before it stored")
+    }),
+  )
+
+  // A caller entering the login interrupts its timer. The timer once took
+  // the login and could then be stopped before it failed `finished`.
+  it.live("a timer stopped after it took the login still fails the login", () =>
+    Effect.gen(function* () {
+      const pending: PendingCallbacks = new Map()
+      const { callback } = yield* makeDriver(pending)
+      const closing = yield* Deferred.make<void>()
+      const releaseClose = yield* Deferred.make<void>()
+      const finished = yield* Deferred.make<void, ProviderAuthError>()
+      const entry: Parameters<PendingCallbacks["set"]>[1] = {
+        flow: {
+          authorization: {
+            url: "https://auth.openai.com",
+            method: "auto",
+            instructions: "",
+          },
+          grant: () => Effect.die(new Error("the grant failed")),
+          exchange: () => Effect.succeed({ ...newSignInTokens }),
+        },
+        // Closing the login's scope waits, so the timer is stopped inside it.
+        close: Deferred.succeed(closing, void 0).pipe(Effect.andThen(Deferred.await(releaseClose))),
+        finished,
+        exchanging: yield* Semaphore.make(1),
+        inFlight: 0,
+        timer: Option.none<Fiber.Fiber<void>>(),
+      }
+      pending.set("expiring", entry)
+      yield* runWithTestClock(
+        Effect.gen(function* () {
+          // The failed caller is the last to leave: it arms the timer.
+          yield* Effect.exit(callback(authContext(1, "expiring")))
+          const timer = entry.timer
+          if (Option.isNone(timer)) return yield* Effect.die(new Error("no timer armed"))
+          yield* TestClock.adjust("5 minutes")
+          yield* Deferred.await(closing)
+          expect(pending.has("expiring")).toBe(false)
+          const stopping = yield* Effect.forkChild(Fiber.interrupt(timer.value))
+          yield* Effect.yieldNow.pipe(Effect.repeat({ times: 50 }))
+          yield* Deferred.succeed(releaseClose, void 0)
+          yield* Fiber.join(stopping)
+          expect(yield* Deferred.isDone(finished)).toBe(true)
+          const outcome = yield* Effect.exit(Deferred.await(finished))
+          expect(String(outcome)).toContain("OpenAI login expired")
+        }),
+      ).pipe(Effect.timeout("3 seconds"))
     }),
   )
 })
