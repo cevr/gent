@@ -542,8 +542,34 @@ export const currentHandoffId = (window: ReadonlyArray<Message>): Option.Option<
 
 // ── model-context ───────────────────────────────────────────────────────────
 
-/** Input tokens the context projection keeps free for the reply. The request itself carries no output cap: each provider uses the model's own limit. */
-export const MODEL_OUTPUT_RESERVE_TOKENS = 4_096
+/** A catalog token limit a budget can use: a positive safe integer. */
+export const isTokenLimit = (limit: number): boolean => Number.isSafeInteger(limit) && limit > 0
+
+/** The most output one request reserves and asks for. Prior art: opencode's `OUTPUT_TOKEN_MAX`. */
+const MAX_OUTPUT_RESERVE_TOKENS = 32_000
+
+/** The share of the window the output may take: the input keeps at least three quarters. */
+const OUTPUT_RESERVE_WINDOW_DIVISOR = 4
+
+/**
+ * The tokens one request keeps free for the reply, and the output cap it
+ * sends (`ProviderHints.maxTokens`): one number, so input within the budget
+ * plus the output the request asks for never passes the window. It is the
+ * model's own output cap (`Model.outputLimit`) up to 32k, and at most a
+ * quarter of the window. The quarter binds only below a 128k window: a 32k
+ * local model keeps 8k for output and 24k for input.
+ */
+export const outputReserveTokens = (params: {
+  readonly contextLimitTokens: number
+  readonly outputLimitTokens: Option.Option<number>
+}): number => {
+  const outputLimit = Option.filter(params.outputLimitTokens, isTokenLimit)
+  return Math.min(
+    Option.getOrElse(outputLimit, () => MAX_OUTPUT_RESERVE_TOKENS),
+    MAX_OUTPUT_RESERVE_TOKENS,
+    Math.floor(params.contextLimitTokens / OUTPUT_RESERVE_WINDOW_DIVISOR),
+  )
+}
 
 /** ~4 chars per token, the estimate every budget in the projection shares. */
 export const estimateTextTokens = (text: string): number => Math.ceil(text.length / 4)
@@ -606,11 +632,43 @@ export type ModelContextBudget = typeof ModelContextBudget.Type
  * never past the model's input cap. Prior art: opencode's `promptCeiling`
  * (`session/compaction.ts`).
  */
-const inputCeiling = (budget: ModelContextBudget): number =>
+const inputCeilingOf = (params: {
+  readonly contextLimitTokens: number
+  readonly reservedOutputTokens: number
+  readonly inputLimitTokens: Option.Option<number>
+}): number =>
   Math.min(
-    budget.contextLimitTokens - budget.reservedOutputTokens,
-    budget.inputLimitTokens ?? Number.POSITIVE_INFINITY,
+    params.contextLimitTokens - params.reservedOutputTokens,
+    Option.getOrElse(params.inputLimitTokens, () => Number.POSITIVE_INFINITY),
   )
+
+const inputCeiling = (budget: ModelContextBudget): number =>
+  inputCeilingOf({
+    contextLimitTokens: budget.contextLimitTokens,
+    reservedOutputTokens: budget.reservedOutputTokens,
+    inputLimitTokens: Option.fromUndefinedOr(budget.inputLimitTokens),
+  })
+
+/**
+ * The input one request to this model may carry, from its catalog limits
+ * alone: the window less the output reserve (`outputReserveTokens`), never
+ * past the input cap. The turn's budget uses the same ceiling; a reader that
+ * has no projection (a session from before projections) measures against
+ * this, so its gauge reads full where the turn hands off.
+ */
+export const modelInputCeilingTokens = (params: {
+  readonly contextLimitTokens: number
+  readonly inputLimitTokens: Option.Option<number>
+  readonly outputLimitTokens: Option.Option<number>
+}): number =>
+  inputCeilingOf({
+    contextLimitTokens: params.contextLimitTokens,
+    reservedOutputTokens: outputReserveTokens({
+      contextLimitTokens: params.contextLimitTokens,
+      outputLimitTokens: params.outputLimitTokens,
+    }),
+    inputLimitTokens: Option.filter(params.inputLimitTokens, isTokenLimit),
+  })
 
 /** What the messages may take once the system prompt and tool definitions are in. */
 const messageBudget = (budget: ModelContextBudget): number =>

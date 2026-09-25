@@ -30,6 +30,7 @@ import {
   ProviderAuthError,
   type ProviderAuthorizationResult,
   type ProviderHints,
+  reportProviderStopReason,
   runProcess,
 } from "@gent/core/extensions/api"
 import {
@@ -1700,6 +1701,19 @@ type SdkClientLayer = (
 const decodeJsonBody = Schema.decodeUnknownOption(Schema.fromJsonString(JsonRecordSchema))
 
 /**
+ * The raw `stop_reason` goes to the loop (`ProviderStopReason`). The SDK maps
+ * a reason its table lacks to `"unknown"` and keeps no copy, and
+ * `model_context_window_exceeded` (Sonnet 4.5 and later, when the window
+ * fills mid-reply) is one of them.
+ */
+const reportStopReason = (event: AnthropicClient.MessageStreamEvent): Effect.Effect<void> => {
+  if (event.type !== "message_delta" || Predicate.isNull(event.delta.stop_reason)) {
+    return Effect.void
+  }
+  return reportProviderStopReason(event.delta.stop_reason)
+}
+
+/**
  * Builds the AnthropicClient for one auth path. The request plan (effort and
  * thinking) and the path's payload rewrite are applied to the JSON body of
  * every outgoing request, so both `createMessage` and `createMessageStream`
@@ -1740,7 +1754,17 @@ const anthropicClientLayer = <R>(
             createMessage: (request) =>
               path.message(inner.createMessage(request), requestToolIds(request.payload)),
             createMessageStream: (request) =>
-              path.stream(inner.createMessageStream(request), requestToolIds(request.payload)),
+              path
+                .stream(inner.createMessageStream(request), requestToolIds(request.payload))
+                .pipe(
+                  Effect.map(
+                    ([response, stream]) =>
+                      [
+                        response,
+                        stream.pipe(Stream.tap(reportStopReason)),
+                      ] satisfies CreateMessageStreamReply,
+                  ),
+                ),
           })
         }),
       )

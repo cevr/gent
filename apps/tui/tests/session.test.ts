@@ -676,10 +676,11 @@ const contextLabels = (
   // eslint-disable-next-line effect/noNullish -- mirrors the optional client snapshot field.
   contextLength: number | undefined,
   context?: ModelContextMetrics,
+  limits: { readonly inputLimit?: number; readonly outputLimit?: number } = {},
 ) =>
   buildContextLabels({
     metrics: { latestInputTokens, context: Option.fromNullishOr(context) },
-    contextLength,
+    model: Option.some({ contextLength, ...limits }),
     theme,
   })
 
@@ -725,52 +726,68 @@ describe("buildModelLabels", () => {
 })
 
 describe("buildContextLabels", () => {
-  test("shows context utilization", () => {
-    const labels = contextLabels(50_000, 200_000, absent)
+  test("shows context utilization against the input one request may carry", () => {
+    // A 200k window keeps 32k for the reply: 168k of input.
+    const labels = contextLabels(42_000, 200_000, absent)
     expect(labels.length).toBe(1)
-    expect(labels[0]!.text).toBe("50k (25%)")
+    expect(labels[0]!.text).toBe("42k (25%)")
     expect(labels[0]!.color).toBe(theme.textMuted)
   })
 
+  test("with no projection a full input ceiling reads full before the handoff", () => {
+    const labels = contextLabels(168_000, 200_000, absent)
+    expect(labels[0]!.text).toBe("168k (100%)")
+    expect(labels[0]!.color).toBe(theme.error)
+  })
+
+  test("with no projection the reserve follows the model's own output cap", () => {
+    // An 8k output cap leaves 192k of the 200k window for input.
+    const labels = contextLabels(96_000, 200_000, absent, { outputLimit: 8_000 })
+    expect(labels[0]!.text).toBe("96k (50%)")
+  })
+
   test("context at 70% uses warning color", () => {
-    const labels = contextLabels(70_000, 100_000, absent)
+    // A 100k window keeps a quarter, 25k, for the reply.
+    const labels = contextLabels(55_000, 100_000, absent)
     expect(labels[0]!.color).toBe(theme.warning)
   })
 
   test("context at 90% uses error color", () => {
-    const labels = contextLabels(95_000, 100_000, absent)
+    const labels = contextLabels(70_000, 100_000, absent)
     expect(labels[0]!.color).toBe(theme.error)
   })
 
-  test("a projection's gauge counts the provider's input of the last step, prompt and tools included", () => {
-    // The estimate counts messages only; the provider counted 50k in all.
-    const labels = contextLabels(50_000, 200_000, {
-      estimatedTokens: 1_500,
-      availableInputTokens: 190_000,
-      contextLimitTokens: 200_000,
+  test("a model with an input cap below its window reads full one step before the handoff", () => {
+    // GPT-5: a 400k window and a 272k input cap. The messages take 250k of
+    // the 252k left after the system prompt and tools; the provider counted
+    // 270k in all.
+    const labels = contextLabels(270_000, 400_000, {
+      estimatedTokens: 250_000,
+      availableInputTokens: 252_000,
+      contextLimitTokens: 400_000,
       omittedMessages: 3,
       compactions: 2,
       handoffMessageId: MessageId.make("context-handoff:b:m"),
     })
     expect(labels.length).toBe(1)
-    expect(labels[0]!.text).toBe("ctx 25%")
-    expect(labels[0]!.color).toBe(theme.textMuted)
+    expect(labels[0]!.text).toBe("ctx 99%")
+    expect(labels[0]!.color).toBe(theme.error)
   })
 
-  test("before any step reports its input, the projection's estimate stands", () => {
+  test("the projection's estimate reads against the input the messages may take", () => {
     const labels = contextLabels(0, 200_000, {
       estimatedTokens: 84_000,
-      availableInputTokens: 190_000,
+      availableInputTokens: 168_000,
       contextLimitTokens: 200_000,
       omittedMessages: 3,
       compactions: 2,
     })
-    expect(labels[0]!.text).toBe("ctx 42%")
+    expect(labels[0]!.text).toBe("ctx 50%")
   })
 
   test("a projection with nothing dropped shows only the percent", () => {
     const labels = contextLabels(0, absent, {
-      estimatedTokens: 180_000,
+      estimatedTokens: 171_000,
       availableInputTokens: 190_000,
       contextLimitTokens: 200_000,
       omittedMessages: 0,
@@ -778,6 +795,11 @@ describe("buildContextLabels", () => {
     })
     expect(labels[0]!.text).toBe("ctx 90%")
     expect(labels[0]!.color).toBe(theme.error)
+  })
+
+  test("with no projection the provider's count reads against the input cap", () => {
+    const labels = contextLabels(136_000, 400_000, absent, { inputLimit: 272_000 })
+    expect(labels[0]!.text).toBe("136k (50%)")
   })
 
   test("a summary-free projection does not label the old compaction count", () => {
@@ -865,7 +887,7 @@ const contextLabelsOrder = (
 ) =>
   buildContextLabels({
     metrics: { latestInputTokens, context: Option.fromNullishOr(context) },
-    contextLength,
+    model: Option.some({ contextLength }),
     theme: themeOrder,
   })
 
@@ -896,11 +918,12 @@ describe("effort sits with the model and the gauge anchors right", () => {
       omittedMessages: 0,
       compactions: 0,
     })
-    expect(texts(labels)).toEqual(["ctx 20%"])
+    expect(texts(labels)).toEqual(["ctx 25%"])
   })
 
   test("falls back to a usage-derived percentage", () => {
-    const labels = contextLabelsOrder(5_000, 10_000, NO_CONTEXT)
+    // A 10k window keeps a quarter for the reply: 7.5k of input.
+    const labels = contextLabelsOrder(3_750, 10_000, NO_CONTEXT)
     expect(texts(labels)[0]).toContain("50%")
   })
 

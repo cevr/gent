@@ -46,6 +46,7 @@ import { BunCrypto, BunServices } from "@effect/platform-bun"
 import { TestClock } from "effect/testing"
 import type { ChildProcessSpawner } from "effect/unstable/process"
 import {
+  captureProviderStopReason,
   testHostFacts,
   fakeFetchLayer,
   type FakeFetchState,
@@ -1767,7 +1768,8 @@ const runOne = (layer: Parameters<typeof oneGenerate>[0], state: FakeFetchState)
   oneGenerate(layer, state, () => anthropicHappyResponse()).pipe(Effect.orDie)
 
 const ContextMode = Schema.Literals(["text", "object", "stream"])
-const contextStreamResponse = () => {
+/** A streamed reply that ends with `stopReason`, as the wire names it. */
+const streamReplyEnding = (stopReason: string) => {
   const events = [
     {
       type: "message_start",
@@ -1795,7 +1797,7 @@ const contextStreamResponse = () => {
     { type: "content_block_stop", index: 0 },
     {
       type: "message_delta",
-      delta: { stop_reason: "end_turn", stop_sequence: externalWireNull },
+      delta: { stop_reason: stopReason, stop_sequence: externalWireNull },
       usage: {
         output_tokens: 1,
         input_tokens: 1,
@@ -1813,6 +1815,39 @@ const contextStreamResponse = () => {
       .join(""),
   }
 }
+const contextStreamResponse = () => streamReplyEnding("end_turn")
+
+describe("Anthropic stop reason", () => {
+  it.live("a reply the full window cut off reports its raw stop reason to the loop", () =>
+    Effect.gen(function* () {
+      const credentialCellRef =
+        yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
+      const driver = yield* buildAnthropicModelDriver(credentialCellRef, Option.none())
+      const model = yield* driver.resolveModel("claude-sonnet-4-5", makeApiAuthInfo("test-key"))
+      const state = makeFakeFetchState()
+      const finishes: Array<string> = []
+      const reported = yield* captureProviderStopReason(
+        LanguageModel.streamText({ prompt: "hi" }).pipe(
+          Stream.runForEach((part) =>
+            Effect.sync(() => {
+              if (part.type === "finish") finishes.push(part.reason)
+            }),
+          ),
+          Effect.provide(
+            Layer.provideMerge(
+              model,
+              fakeFetchLayer(state, () => streamReplyEnding("model_context_window_exceeded")),
+            ),
+          ),
+          Effect.scoped,
+        ),
+      )
+      // Effect AI's map lacks the reason, so the finish part alone cannot tell.
+      expect(finishes).toEqual(["unknown"])
+      expect(reported).toEqual(Option.some("model_context_window_exceeded"))
+    }),
+  )
+})
 
 const runContextRequest = (
   layer: Parameters<typeof oneGenerate>[0],

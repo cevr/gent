@@ -12,7 +12,7 @@
  *
  * @module
  */
-import { Option, Predicate, Schema, type Effect, type Layer } from "effect"
+import { Context, Effect, Option, Predicate, Schema, type Layer } from "effect"
 import { AiError, type LanguageModel, type Model as AiModel } from "effect/unstable/ai"
 import type { Model } from "./agent.js"
 import type { AuthAuthorizationMethod, AuthMethod } from "../runtime/provider.js"
@@ -222,6 +222,7 @@ const CONTEXT_OVERFLOW_PATTERNS: ReadonlyArray<RegExp> = [
   /exceeded model token limit/i, // Kimi
   /prompt too long; exceeded (?:max )?context length/i, // Ollama
   /context[_ ]length[_ ]exceeded/i, // OpenAI stream event code, and generic
+  /model_context_window_exceeded/i, // Anthropic's stop reason, sent as an error code by some gateways
 ]
 
 /** Rate limits can mention tokens too; they are never an overflow. */
@@ -244,6 +245,43 @@ export const isContextOverflow = (cause: unknown): boolean => {
   if (NOT_OVERFLOW_PATTERNS.some((pattern) => pattern.test(text))) return false
   return CONTEXT_OVERFLOW_PATTERNS.some((pattern) => pattern.test(text))
 }
+
+// ── Provider stop reason ──
+
+/**
+ * The provider's own word for why a step's stream stopped. Effect AI maps
+ * that word to a `FinishReason` and keeps no copy of it, and a word its map
+ * lacks becomes `"unknown"`: Anthropic's `model_context_window_exceeded`
+ * does (`@effect/ai-anthropic` `internal/utilities.ts`). The loop provides
+ * this service to each step's model stream. A driver that reads the wire
+ * reports the word here, and the loop reads it when the step settles.
+ */
+export class ProviderStopReason extends Context.Service<
+  ProviderStopReason,
+  { readonly report: (reason: string) => Effect.Effect<void> }
+>()("@gent/core/src/domain/driver/ProviderStopReason") {}
+
+/** A driver reports the stream's raw stop reason; nothing listens outside a loop step. */
+export const reportProviderStopReason = (reason: string): Effect.Effect<void> =>
+  Effect.serviceOption(ProviderStopReason).pipe(
+    Effect.flatMap(
+      Option.match({
+        onNone: () => Effect.void,
+        onSome: (listener) => listener.report(reason),
+      }),
+    ),
+  )
+
+/**
+ * Stop reasons that say the context window filled while the model wrote:
+ * the reply is cut, and the same window has no room to continue it.
+ * Anthropic accepts a request whose input plus `max_tokens` passes the
+ * window (Sonnet 4.5 and later) and ends the reply with this reason.
+ */
+const WINDOW_FULL_STOP_REASONS: ReadonlySet<string> = new Set(["model_context_window_exceeded"])
+
+export const isWindowFullStopReason = (reason: string): boolean =>
+  WINDOW_FULL_STOP_REASONS.has(reason)
 
 /** Bounded backoff with no transient stream events; drivers spread and refine it. */
 export const DEFAULT_RETRY_POLICY: RetryPolicy = {
