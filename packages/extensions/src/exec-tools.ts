@@ -35,7 +35,6 @@ import {
   tool,
   ToolCallId,
   type TurnAfterInput,
-  writeFileAtomic,
 } from "@gent/core/extensions/api"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 
@@ -346,7 +345,7 @@ export class BackgroundBashStorage extends Context.Service<
                 UPDATE background_bash_jobs
                 SET status = 'interrupted',
                     completed_at = ${completedAt},
-                    message = 'Background command did not finish: the server stopped'
+                    message = 'Background command stopped before it finished (a server restart or a reload)'
                 WHERE session_id = ${key.sessionId}
                   AND branch_id = ${key.branchId}
                   AND tool_call_id = ${key.toolCallId}
@@ -5481,7 +5480,7 @@ const maximumFollowUpCommandChars = 1_000
 const queueTerminalFollowUp = (
   target: BackgroundBashTarget,
   state: BackgroundBashTerminalState,
-  output: (maxChars: number) => Effect.Effect<string, never, FileSystem.FileSystem | Path.Path>,
+  output: (maxChars: number) => string,
 ) =>
   Effect.gen(function* () {
     // An interrupted job wakes nobody: the next turn reads it as a notice.
@@ -5494,69 +5493,23 @@ const queueTerminalFollowUp = (
       sourceId = `bash:${target.toolCallId}:complete`
     }
     const frame = (text: string) => `${header}\n\`\`\`\n$ ${command}\n${text}\n\`\`\``
-    const message = yield* output(maximumModelToolResultChars - frame("").length)
+    const message = output(maximumModelToolResultChars - frame("").length)
     return yield* queueBackgroundFollowUp({ target, sourceId, content: frame(message) })
   })
 
-/** The job's file, written from `message` when missing; none when the write failed. */
-const saveStoredOutput = Effect.fn("ExecTools.saveStoredOutput")(function* (
-  file: string,
-  message: string,
-) {
-  const fs = yield* FileSystem.FileSystem
-  const path = yield* Path.Path
-  return yield* fs.exists(file).pipe(
-    Effect.flatMap((exists) => {
-      if (exists) return Effect.void
-      return fs
-        .makeDirectory(path.dirname(file), { recursive: true })
-        .pipe(Effect.andThen(writeFileAtomic(file, message)))
-    }),
-    Effect.as(Option.some(file)),
-    Effect.catchCause((cause) =>
-      Effect.logWarning("exec-tools.background.output.save.failed").pipe(
-        Effect.annotateLogs({ file, cause: Cause.pretty(cause) }),
-        Effect.as(Option.none<string>()),
-      ),
-    ),
-  )
-})
-
 /**
- * A stored row's message within `maxChars`. A completed row holds the
- * output already cut to the notice bound, its file line included. A longer
- * completed message comes from a build that stored the whole output on the
- * row and wrote the file only when it cut a message: it goes to the job's
- * file when the file is missing, and the cut message names it. A failure's
- * text is cut to its head and tail.
+ * A stored row's message within `maxChars`, cut to its head and tail. A
+ * completed row holds the output already cut to the notice bound, its file
+ * line included; a failure's text is its own.
  */
-const storedJobOutput =
-  (message: string, file: Option.Option<string>) =>
-  (maxChars: number): Effect.Effect<string, never, FileSystem.FileSystem | Path.Path> =>
-    Effect.gen(function* () {
-      if (message.length <= maxChars || Option.isNone(file)) {
-        return headTailChars(message, maxChars).text
-      }
-      const saved = yield* saveStoredOutput(file.value, message)
-      // The whole message is in memory already: one end holds all of it.
-      return jobOutputText(
-        { head: message, tail: "", totalChars: message.length, file: saved },
-        maxChars,
-      )
-    })
-
-/** The file of a completed job's stored output; a failure's text has none. */
-const storedOutputFile = (
-  path: Path.Path,
-  dataDir: string,
-  key: BackgroundBashJobKeyFields,
-  state: BackgroundBashTerminalState,
-) => Option.liftPredicate(jobOutputFile(path, dataDir, key), () => state.status === "completed")
+const storedJobOutput = (message: string) => (maxChars: number) =>
+  headTailChars(message, maxChars).text
 
 // ── job notices ──
 //
-// A job the server stopped has no end to report, and its file holds only the
-// output written before the stop. Opening its
+// A job that stopped before it finished (a server restart, or a reload that
+// closed the resource that ran it) has no end to report, and its file holds
+// only the output written before the stop. Opening its
 // session must not spend a turn with no user present, so the job wakes
 // nobody: every step of the branch's next turn shows it as a turn notice,
 // and the turn that answered with it shown marks it read on its row. A job
@@ -5599,6 +5552,16 @@ const jobNotice = <J extends { readonly toolCallId: ToolCallId }>(
   ]
 }
 
+/** Where a stopped job's output is: its file when the file holds output. */
+const savedOutput = (file: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const info = yield* fs.stat(file).pipe(Effect.option)
+    if (Option.isNone(info)) return "no output was saved"
+    if (info.value.size === FileSystem.Size(0)) return "it wrote no output before the stop"
+    return `output up to the stop is in ${file}`
+  })
+
 /**
  * The branch's unread interrupted jobs as one turn notice, and its unread
  * undelivered jobs as another, each the oldest first and at most
@@ -5611,24 +5574,30 @@ const jobNotices = Effect.fn("ExecTools.jobNotices")(function* () {
   const branch = { sessionId: ctx.sessionId, branchId: ctx.branchId }
   const path = yield* Path.Path
   const dataDir = yield* resolveDataDir(ctx.home)
-  const interrupted = jobNotice(yield* storage.interruptedJobs(branch), {
+  const stopped = yield* storage.interruptedJobs(branch)
+  const saved = new Map(
+    yield* Effect.forEach(stopped.slice(0, maximumNoticeJobs), (job) =>
+      savedOutput(jobOutputFile(path, dataDir, { ...branch, toolCallId: job.toolCallId })).pipe(
+        Effect.map((where): readonly [ToolCallId, string] => [job.toolCallId, where]),
+      ),
+    ),
+  )
+  const interrupted = jobNotice(stopped, {
     id: "exec-tools-interrupted",
     intro:
-      "# Interrupted background commands\n\nThe previous server stopped before these background commands finished. They are not running. Each file named below holds only the output written before the stop; output after that, and output the stop cut off, is lost. Tell the user which commands did not finish; start one again only when the user asks for it.",
+      "# Interrupted background commands\n\nThese background commands stopped before they finished (a server restart or a reload). They are not running. A file named below holds only the output written before the stop; output after that is lost. Tell the user which commands did not finish; start one again only when the user asks for it.",
     line: (job) =>
-      `- \`${noticeCommand(job.command)}\` · call ${job.toolCallId} · output up to the stop is in ${jobOutputFile(path, dataDir, { ...branch, toolCallId: job.toolCallId })}`,
+      `- \`${noticeCommand(job.command)}\` · call ${job.toolCallId} · ${saved.get(job.toolCallId) ?? "no output was saved"}`,
     rest: "interrupted commands",
   })
   const finished = yield* storage.undeliveredJobs(branch)
   const outputs = new Map(
-    yield* Effect.forEach(finished.slice(0, maximumNoticeJobs), (job) =>
-      storedJobOutput(
-        job.state.message ?? "",
-        storedOutputFile(path, dataDir, { ...branch, toolCallId: job.toolCallId }, job.state),
-      )(maximumNoticeOutputChars).pipe(
-        Effect.map((output): readonly [ToolCallId, string] => [job.toolCallId, output]),
-      ),
-    ),
+    finished
+      .slice(0, maximumNoticeJobs)
+      .map((job): readonly [ToolCallId, string] => [
+        job.toolCallId,
+        storedJobOutput(job.state.message ?? "")(maximumNoticeOutputChars),
+      ]),
   )
   const undelivered = jobNotice(finished, {
     id: "exec-tools-undelivered",
@@ -5723,9 +5692,7 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
         exitCode,
         message: state.message ?? "",
       })
-      yield* deliverTerminal(target, state, (maxChars) =>
-        Effect.succeed(jobOutputText(output, maxChars)),
-      )
+      yield* deliverTerminal(target, state, (maxChars) => jobOutputText(output, maxChars))
     })
 
     /**
@@ -5737,14 +5704,10 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
     const deliverTerminal = (
       target: BackgroundBashTarget,
       state: BackgroundBashTerminalState,
-      output?: (maxChars: number) => Effect.Effect<string>,
+      output?: (maxChars: number) => string,
     ) =>
       Effect.gen(function* () {
-        const path = yield* Path.Path
-        const stored = storedJobOutput(
-          state.message ?? "",
-          storedOutputFile(path, target.dataDir, target, state),
-        )
+        const stored = storedJobOutput(state.message ?? "")
         const delivered = yield* queueTerminalFollowUp(target, state, output ?? stored)
         return yield* storage.recordDelivery(backgroundJobKeyFields(target), delivered)
       })
