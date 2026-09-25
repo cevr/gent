@@ -3009,6 +3009,7 @@ describe("client request origin", () => {
           queueFollowUp: hold,
           dequeueFollowUp: () => Effect.succeed(false),
           send: () => Effect.void,
+          stopMessage: () => Effect.succeed(false),
           steer: (command, clientRequest) => {
             if (command._tag !== "Interject") return Effect.void
             return hold(omitUndefined({ metadata: command.metadata, clientRequest }))

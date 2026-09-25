@@ -1149,12 +1149,12 @@ export const CancelChild = tool({
     const ctx = yield* ExtensionContext
     const entry = yield* ownedChild(params.requestId)
     if (Predicate.isUndefined(entry.completed)) {
-      yield* ctx.Session.stop({
+      yield* ctx.Session.stopMessage({
         sessionId: entry.sessionId,
         branchId: entry.branchId,
         requestId: RequestId.make(`delegate-cancel:${params.requestId}`),
         messageId: startMessageId(params.requestId),
-      }).pipe(asDelegateError("Cannot submit child cancellation"))
+      }).pipe(Effect.asVoid, asDelegateError("Cannot submit child cancellation"))
     }
     return observationOf(entry)
   }),

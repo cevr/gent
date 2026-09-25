@@ -417,7 +417,7 @@ const stopSentTurns = Effect.fn("SessionTools.stopSentTurns")(function* () {
   yield* Effect.forEach(
     stopping,
     (turn) =>
-      ctx.Session.stop({
+      ctx.Session.stopMessage({
         sessionId: turn.sessionId,
         branchId: turn.branchId,
         messageId: turn.messageId,

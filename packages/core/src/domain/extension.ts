@@ -738,7 +738,7 @@ export const mapExtensionServiceError = <A, E, R>(
  *   on a branch with no prior history.
  * - `steer` joins the running turn at its next step. An idle branch parks it
  *   unless `wake` asks for a turn now. A `requestId` makes a repeat a no-op,
- *   and names the message: `interjectionMessageId(requestId)`. A `stop` with
+ *   and names the message: `interjectionMessageId(requestId)`. A `stopMessage` with
  *   that `messageId` takes the steer back while it waits, and stops the turn
  *   it opened.
  *
@@ -828,17 +828,30 @@ export interface ExtensionSessionService {
    */
   readonly send: (params: SessionSendParams) => Effect.Effect<void, ExtensionServiceError>
   /**
-   * Stop a branch's running turn; the current branch when no target is named.
-   * A `messageId` stops only the turn for that message: one running now, one
-   * that has not started yet, or a `steer` with that id that no step has read.
-   * A `requestId` makes a repeat of the same stop a no-op.
+   * Stop a branch's running turn, whichever message opened it; the current
+   * branch when no target is named. A `requestId` makes a repeat of the same
+   * stop a no-op.
    */
   readonly stop: (params: {
     readonly sessionId?: SessionId
     readonly branchId?: BranchId
-    readonly messageId?: MessageId
     readonly requestId?: RequestId
   }) => Effect.Effect<void, ExtensionServiceError>
+  /**
+   * Stop only what one message opens on a branch: its turn running now, its
+   * turn that has not started yet, or a `steer` with that id that no step
+   * has read (the steer is taken back). Waits for the branch's loop and
+   * returns true when the stop reached the message there; false when the
+   * loop no longer holds it (its turn ended, or a step joined it into a turn
+   * another message opened, which runs on). A `requestId` makes a repeat of
+   * the same stop a no-op.
+   */
+  readonly stopMessage: (params: {
+    readonly sessionId?: SessionId
+    readonly branchId?: BranchId
+    readonly messageId: MessageId
+    readonly requestId?: RequestId
+  }) => Effect.Effect<boolean, ExtensionServiceError>
   /**
    * A branch's events: the durable history first, one `StreamSynchronized`
    * marker, then live delivery. Take until the marker for a bounded read.

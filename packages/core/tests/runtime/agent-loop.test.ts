@@ -144,6 +144,7 @@ import {
   runAgentLoop,
   scriptedProvider,
   steerAgentLoop,
+  stopAgentLoopMessage,
   submitAgentLoop,
   waitFor as waitForOption,
   waitForPhase,
@@ -906,15 +907,19 @@ describe("continuation", () => {
           message: "TAKEN-BACK",
           wake: true,
         })
-        yield* steerAgentLoop({
-          _tag: "Cancel",
+        const stop = {
           sessionId: contSessionId,
           branchId: contBranchId,
-          requestId: RequestId.make("req-take-back-interjection"),
           messageId: interjectionMessageId(requestId),
-        })
+        }
+        // The stop reports that it reached the message: it took the steer back.
+        expect(yield* stopAgentLoopMessage({ ...stop, requestId: "req-take-back" })).toBe(true)
         yield* controls.emitAll(0)
         yield* Fiber.join(fiber)
+        // Once taken back, the loop holds nothing of it: a later stop reaches nothing.
+        expect(yield* stopAgentLoopMessage({ ...stop, requestId: "req-take-back-again" })).toBe(
+          false,
+        )
         // The running turn is not the one the stop named: it runs to its end.
         expect(yield* controls.callCount).toBe(2)
         const completed = (yield* Ref.get(eventsRef)).filter(Schema.is(TurnCompleted))
@@ -925,6 +930,30 @@ describe("continuation", () => {
         expect(messages.filter((message) => message._tag === "interjection")).toHaveLength(0)
         yield* waitForPhase(agentLoop, { sessionId: contSessionId, branchId: contBranchId }, "Idle")
         expect(yield* controls.callCount).toBe(2)
+      }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+  it.live("a stop that names the running turn's message reports that it stopped the turn", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        { ...toolCallStep("echo", { text: "step 1" }), gated: true },
+        textStep("Never reached."),
+      ])
+      const eventsRef = yield* Ref.make<AgentEvent[]>([])
+      yield* Effect.gen(function* () {
+        const agentLoop = yield* makeAgentLoopService
+        const message = makeContMessage("a turn a stop names")
+        const fiber = yield* Effect.forkChild(runAgentLoop(agentLoop, message))
+        yield* controls.waitForCall(0)
+        const stop = { sessionId: contSessionId, branchId: contBranchId, messageId: message.id }
+        expect(yield* stopAgentLoopMessage({ ...stop, requestId: "req-stop-running" })).toBe(true)
+        yield* controls.emitAll(0)
+        yield* Fiber.join(fiber)
+        const completed = (yield* Ref.get(eventsRef)).filter(Schema.is(TurnCompleted))
+        expect(completed.map((event) => event.interrupted)).toEqual([true])
+        yield* waitForPhase(agentLoop, { sessionId: contSessionId, branchId: contBranchId }, "Idle")
+        // The turn ended: a later stop of the same message reaches nothing.
+        expect(yield* stopAgentLoopMessage({ ...stop, requestId: "req-stop-ended" })).toBe(false)
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
     }).pipe(Effect.timeout("4 seconds")),
   )
@@ -5799,6 +5828,8 @@ describe("wake admission", () => {
         item: QueuedTurnItem,
       ) => Effect.Effect<unknown, AgentLoopError | FollowUpQueueFull>
       readonly queue: Effect.Effect<LoopQueueStateType>
+      readonly inbox: Effect.Success<ReturnType<typeof makeLoopInbox>>
+      readonly loopRef: TxSubscriptionRef.TxSubscriptionRef<AgentLoopState>
     }) => Effect.Effect<A, AgentLoopError | FollowUpQueueFull>,
   ) =>
     Effect.gen(function* () {
@@ -5819,7 +5850,8 @@ describe("wake admission", () => {
         }),
         startedRef: yield* Ref.make(true),
         turnSettled: (messageId) => Effect.succeed(messageId === MessageId.make("settled")),
-        messageStored: () => Effect.succeed(false),
+        // The running turn opened on "busy", so its message is stored.
+        messageStored: (messageId) => Effect.succeed(messageId === MessageId.make("busy")),
       }).pipe(
         Effect.provideService(AgentLoopQueueStorage, {
           getQueueState: () => Ref.get(rows),
@@ -5829,8 +5861,57 @@ describe("wake admission", () => {
       return yield* body({
         admit: (item) => inbox.admit(item, { queueOnly: true }),
         queue: TxSubscriptionRef.get(loopRef).pipe(Effect.map((s) => s.queue)),
+        inbox,
+        loopRef,
       })
     })
+
+  // A stop's take-back and a step's join decide over the same queue: the
+  // message is either taken back and never joined, or joined and not taken.
+  it.live("a take-back that arrives while a step joins the steer does not also take it", () =>
+    withInbox(({ inbox }) =>
+      Effect.gen(function* () {
+        const steer = queuedMessage("steer-racing-a-join", "CORRECTION")
+        yield* inbox.steer({ message: steer })
+        const joining = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        const joined: Array<string> = []
+        const delivery = yield* inbox
+          .deliverSteering({
+            finalStep: false,
+            join: (item) =>
+              Deferred.succeed(joining, void 0).pipe(
+                Effect.andThen(Deferred.await(release)),
+                Effect.andThen(Effect.sync(() => joined.push(String(item.message.id)))),
+              ),
+          })
+          .pipe(Effect.forkChild)
+        yield* Deferred.await(joining)
+        const takeBack = yield* inbox.withdrawSteering(steer.id).pipe(Effect.forkChild)
+        // The take-back runs its course before the join finishes, if nothing orders them.
+        yield* Effect.yieldNow.pipe(Effect.repeat({ times: 20 }))
+        yield* Deferred.succeed(release, void 0)
+        yield* Fiber.join(delivery)
+        const takenBack = yield* Fiber.join(takeBack)
+        expect(joined).toEqual([String(steer.id)])
+        expect(takenBack).toBe(false)
+      }).pipe(Effect.timeout("2 seconds"), Effect.orDie),
+    ),
+  )
+
+  it.effect("a take-back removes a queued copy of the steer whose turn is running", () =>
+    withInbox(({ inbox, loopRef }) =>
+      Effect.gen(function* () {
+        const copy: QueuedTurnItem = { message: queuedMessage("busy", "busy (steer copy)") }
+        yield* TxSubscriptionRef.update(loopRef, (s) => ({
+          ...s,
+          queue: { ...s.queue, steering: [copy] },
+        }))
+        expect(yield* inbox.withdrawSteering(copy.message.id)).toBe(true)
+        expect((yield* TxSubscriptionRef.get(loopRef)).queue.steering).toEqual([])
+      }),
+    ),
+  )
 
   it.effect("a queued follow-up that asks to wake makes the stored queue wake", () =>
     withInbox((inbox) =>

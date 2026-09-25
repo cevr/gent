@@ -80,6 +80,8 @@ import {
   dequeueFollowUpOn,
   queueFollowUpOn,
   type RemoveFollowUpInput,
+  type StopMessageInput,
+  stopMessageOn,
   type RequestExtensionInput,
   type RespondInteractionInput,
   type RunningState,
@@ -632,10 +634,12 @@ export type LoopInbox = {
   /** True when a queued follow-up was removed; false when absent or already in flight. */
   readonly withdraw: (messageId: MessageId) => Effect.Effect<boolean, AgentLoopError>
   /**
-   * Take back a steering item that still waits. One a step already joined is
-   * in the transcript, and one a turn took is that turn; both stay.
+   * Take back a steering item that still waits; true when one was taken. One a
+   * step already joined is in the transcript, and one a turn took is that
+   * turn; both stay. A step's join and a take-back hold the same permit, so
+   * each sees what the other decided.
    */
-  readonly withdrawSteering: (messageId: MessageId) => Effect.Effect<void, AgentLoopError>
+  readonly withdrawSteering: (messageId: MessageId) => Effect.Effect<boolean, AgentLoopError>
   /** Does the loop still own this message, anywhere? */
   readonly holds: (state: AgentLoopState, messageId: MessageId) => boolean
   readonly moveToPhase: (next: LoopState) => Effect.Effect<void>
@@ -858,28 +862,25 @@ export const makeLoopInbox = (
       }))
     }, scope.queuePersistenceSemaphore.withPermits(1))
 
-    // Under the same permit as `steer`: an item is either still queued or stored.
-    const withdrawSteering = Effect.fn("LoopInbox.withdrawSteering")(function* (
-      messageId: MessageId,
-    ) {
-      if (yield* scope.messageStored(messageId)) return
-      yield* commitQueueTransactionHeld("withdrew steering", (s) => {
+    // A queued copy goes even when the message is stored: a turn that id
+    // opened may run while a repeat of its steer still waits.
+    const withdrawSteering = (messageId: MessageId) =>
+      commitQueueTransaction("withdrew steering", (s) => {
         const kept = s.queue.steering.filter((item) => item.message.id !== messageId)
         if (kept.length === s.queue.steering.length) {
-          return { value: void 0, next: s, persist: false }
+          return { value: false, next: s, persist: false }
         }
         return {
-          value: void 0,
+          value: true,
           next: { ...s, queue: { ...s.queue, steering: kept } },
           persist: true,
         }
-      })
-    }, scope.queuePersistenceSemaphore.withPermits(1))
+      }).pipe(Effect.withSpan("LoopInbox.withdrawSteering"))
 
     const dropSteeringDelivered = (delivered: ReadonlyArray<QueuedTurnItem>) => {
       if (delivered.length === 0) return Effect.void
       const deliveredIds = new Set<string>(delivered.map((item) => item.message.id))
-      return commitQueueTransaction("dropped delivered steering", (s) => {
+      return commitQueueTransactionHeld("dropped delivered steering", (s) => {
         const kept = s.queue.steering.filter((item) => !deliveredIds.has(item.message.id))
         if (kept.length === s.queue.steering.length) {
           return { value: void 0, next: s, persist: false }
@@ -892,19 +893,27 @@ export const makeLoopInbox = (
       })
     }
 
-    const deliverSteering = Effect.fn("LoopInbox.deliverSteering")(function* <E, R>(params: {
-      readonly finalStep: boolean
-      readonly join: (item: QueuedTurnItem) => Effect.Effect<void, E, R>
-    }) {
-      if (params.finalStep) return false
+    // The read, the joins and the drop hold the queue permit as one decision:
+    // a take-back (`withdrawSteering`) waits for it, then finds the item gone,
+    // and a take-back that came first leaves nothing here to join.
+    const joinSteering = Effect.fn("LoopInbox.deliverSteering")(function* <E, R>(
+      join: (item: QueuedTurnItem) => Effect.Effect<void, E, R>,
+    ) {
       const state = yield* TxSubscriptionRef.get(scope.loopRef)
       const items = state.queue.steering
       for (const item of items) {
-        yield* params.join(item)
+        yield* join(item)
       }
       yield* dropSteeringDelivered(items)
       return items.length > 0
     })
+    const deliverSteering = <E, R>(params: {
+      readonly finalStep: boolean
+      readonly join: (item: QueuedTurnItem) => Effect.Effect<void, E, R>
+    }): Effect.Effect<boolean, AgentLoopError | E, R> => {
+      if (params.finalStep) return Effect.succeed(false)
+      return joinSteering(params.join).pipe(scope.queuePersistenceSemaphore.withPermits(1))
+    }
 
     const drain = commitQueueTransaction("drained queue", (s) => ({
       value: queueSnapshotFromQueueState(s.queue),
@@ -1188,20 +1197,23 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
     Effect.ignore,
   )
 
+  /** True when a turn (the one `messageId` names, if given) was running and is now stopping. */
   const interrupt = Effect.fn("AgentLoop.interrupt")(function* (messageId?: MessageId) {
-    const waiting = yield* Effect.gen(function* () {
+    const reached = yield* Effect.gen(function* () {
       const snap = yield* scope.inbox.phase
-      if (snap._tag === "Idle") return false
-      if (Predicate.isNotUndefined(messageId) && snap.message.id !== messageId) return false
+      if (snap._tag === "Idle") return { latched: false, waiting: false }
+      if (Predicate.isNotUndefined(messageId) && snap.message.id !== messageId) {
+        return { latched: false, waiting: false }
+      }
       // The latch is set before anything can resume the parked turn, so an
       // answer that wins the resume still runs a turn that stops at once.
       yield* scope.turnInterruption.interrupt
-      if (snap._tag === "WaitingForInteraction") return true
+      if (snap._tag === "WaitingForInteraction") return { latched: true, waiting: true }
       yield* interruptActiveStream(scope.activeStreamRef)
       yield* scope.interruptToolWork
-      return false
+      return { latched: true, waiting: false }
     }).pipe(scope.interruptSemaphore.withPermits(1))
-    if (!waiting) return
+    if (!reached.waiting) return reached.latched
     // Resume the parked turn so it ends as interrupted, unless something
     // else resumes it first; then the latch already stops it, and the
     // interrupt does not wait for the permit that turn holds.
@@ -1217,6 +1229,7 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
       Effect.asVoid,
     )
     yield* Effect.raceFirst(resume, resumedElsewhere)
+    return true
   })
 
   /**
@@ -1413,7 +1426,7 @@ type AgentLoopBehavior = {
     item: QueuedTurnItem,
     options: { readonly queueOnly: boolean },
   ) => Effect.Effect<Option.Option<RunningState>, AgentLoopError | FollowUpQueueFull>
-  interrupt: (messageId?: MessageId) => Effect.Effect<void, AgentLoopError>
+  interrupt: (messageId?: MessageId) => Effect.Effect<boolean, AgentLoopError>
   respondInteraction: (requestId: InteractionRequestId) => Effect.Effect<void, AgentLoopError>
   withSideMutation: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
   /** Mark the per-entity behavior ready to accept state mutations. */
@@ -1595,6 +1608,7 @@ const makeAgentLoopBehavior = (
           }
           return steerLoop(command).pipe(provideLoopClient)
         },
+        stopMessage: (input) => stopMessageOn(input).pipe(provideLoopClient),
       },
     })
 
@@ -2731,6 +2745,26 @@ const buildAgentLoopActorHandlers = (config: {
       )
     })
 
+    /**
+     * Stop what one message opens. The recorded cancellation stops a turn
+     * that has not started yet when it starts; a steer no step has read yet
+     * is taken back; a running turn the message opened is interrupted.
+     * True when the stop reached the message in one of these places. False
+     * when the loop no longer holds it: its turn ended, or a step already
+     * joined it into a turn that another message opened.
+     */
+    const stopMessage = Effect.fn("AgentLoopActor.stopMessage")(function* (messageId: MessageId) {
+      yield* operations
+        .cancelTurn({ sessionId, branchId, messageId })
+        .pipe(asAgentLoopError("Cannot record targeted cancellation"))
+      const handle = yield* ensureStarted
+      const takenBack = yield* handle.inbox.withdrawSteering(messageId)
+      // An idle loop has no turn to interrupt: the interrupt reports false.
+      const interrupted = yield* handle.interrupt(messageId).pipe(orCleanup(handle))
+      const held = handle.inbox.holds(yield* handle.inbox.read, messageId)
+      return takenBack || interrupted || held
+    })
+
     const applySteer = Effect.fn("AgentLoopActor.applySteer")(function* (
       commandId: ActorCommandId,
       command: SteerCommandType,
@@ -2738,20 +2772,14 @@ const buildAgentLoopActorHandlers = (config: {
       yield* ensureTarget(command)
       yield* markWrite
       if (isCancellation(command) && Predicate.isNotUndefined(command.messageId)) {
-        yield* operations
-          .cancelTurn({ sessionId, branchId, messageId: command.messageId })
-          .pipe(asAgentLoopError("Cannot record targeted cancellation"))
+        yield* stopMessage(command.messageId)
+        return
       }
       const handle = yield* ensureStarted
 
       switch (command._tag) {
         case "Cancel":
         case "Interrupt":
-          // A steer the stop names and no step has read yet never reaches a
-          // turn; the recorded cancellation covers one a turn already took.
-          if (Predicate.isNotUndefined(command.messageId)) {
-            yield* handle.inbox.withdrawSteering(command.messageId)
-          }
           if (isActiveLoopState(yield* handle.inbox.phase)) {
             yield* handle.interrupt(command.messageId).pipe(orCleanup(handle))
           }
@@ -2817,6 +2845,10 @@ const buildAgentLoopActorHandlers = (config: {
           branchCommand(operation, markWrite, (handle) =>
             handle.withdrawFollowUp(operation.messageId),
           ),
+      ),
+      StopMessage: Effect.fn("AgentLoop.StopMessage")(
+        ({ operation }: HandlerRequest<StopMessageInput>) =>
+          branchCommand(operation, markWrite, () => stopMessage(operation.messageId)),
       ),
       GetQueue: Effect.fn("AgentLoop.GetQueue")(
         ({ operation }: HandlerRequest<BranchCommandInput>) =>
