@@ -1003,11 +1003,14 @@ const isSystemChatMessage = Schema.is(
 )
 
 /**
- * The request with the system messages after the last conversation message
- * sent as a host context update. Mistral rejects a request whose last message
- * is not user or tool, and `toPrompt` puts the turn notices there. A system
- * message inside the conversation keeps its role: the rule is about the
- * last message only, so the trailing run is all that needs a new role.
+ * The request in the shape a chat-completions API expects of the system
+ * messages. The leading run (the system prompt, one message per cache block
+ * from `toPrompt`) goes as one message, joined as the blocks join: only the
+ * Anthropic marker reads the blocks, and these APIs cache prefixes on their
+ * own. The system messages after the last conversation message go as a host
+ * context update: Mistral rejects a request whose last message is not user or
+ * tool, and `toPrompt` puts the turn notices there. A system message inside
+ * the conversation keeps its role: the rule is about the last message only.
  */
 const withHostContextUpdates = (
   request: HttpClientRequest.HttpClientRequest,
@@ -1017,13 +1020,25 @@ const withHostContextUpdates = (
   if (Option.isNone(body)) return request
   const messages = body.value["messages"]
   if (!isChatMessages(messages)) return request
+  const start = messages.findIndex((message) => !isSystemChatMessage(message))
   const end = messages.findLastIndex((message) => !isSystemChatMessage(message))
-  if (end < 0 || end === messages.length - 1) return request
-  const next = messages.map((message, index) => {
-    if (index <= end || !isSystemChatMessage(message)) return message
+  if (start < 0) return request
+  const leading = messages.slice(0, start).filter(isSystemChatMessage)
+  if (leading.length <= 1 && end === messages.length - 1) return request
+  const head = Option.match(Option.fromUndefinedOr(leading[0]), {
+    onNone: () => [],
+    onSome: (first) => [
+      { ...first, content: leading.map((message) => message.content).join("\n\n") },
+    ],
+  })
+  const trailing = messages.slice(end + 1).map((message) => {
+    if (!isSystemChatMessage(message)) return message
     return { role: "user", content: hostContextUpdateText(message.content) }
   })
-  return HttpClientRequest.bodyJsonUnsafe(request, { ...body.value, messages: next })
+  return HttpClientRequest.bodyJsonUnsafe(request, {
+    ...body.value,
+    messages: [...head, ...messages.slice(start, end + 1), ...trailing],
+  })
 }
 
 const makeApiKeyCompatDriver = (params: {
