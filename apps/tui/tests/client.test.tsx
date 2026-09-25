@@ -708,7 +708,7 @@ describe("ClientProvider session lifecycle", () => {
         ...snapshotOf(FIRST, { costUsd: 1.5, lastInputTokens: 9_000, context: busyContext }),
         modelId: model,
         reasoningLevel: "high",
-        runtime: { _tag: "Running", queue: emptyQueueSnapshot() },
+        runtime: { _tag: "Running", queue: emptyQueueSnapshot(), startedAtMs: 0 },
       })
       client.switchSession(FIRST.sessionId, FIRST.branchId, "First")
       const state = client.sessionState()
@@ -743,7 +743,7 @@ describe("ClientProvider session lifecycle", () => {
         const client = yield* requireClientSessionState(ctx)
         client.applySessionSnapshot({
           ...snapshotOf(FIRST, { costUsd: 1.5, lastInputTokens: 9_000, context: busyContext }),
-          runtime: { _tag: "Running", queue: emptyQueueSnapshot() },
+          runtime: { _tag: "Running", queue: emptyQueueSnapshot(), startedAtMs: 0 },
         })
         const nextBranch = BranchId.make("branch-metrics-next")
         // The feed's order: the event goes to the client, then the feed routes.
@@ -823,7 +823,7 @@ describe("ClientProvider session lifecycle", () => {
         reasoningLevel: absent,
         resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
         agent: AgentName.make("main"),
-        runtime: { _tag: "Running", queue: emptyQueueSnapshot() },
+        runtime: { _tag: "Running", queue: emptyQueueSnapshot(), startedAtMs: 0 },
         metrics: {
           turns: 1,
           durationMs: 0,
@@ -883,7 +883,7 @@ describe("ClientProvider session lifecycle", () => {
         reasoningLevel: absent,
         resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
         agent: AgentName.make("main"),
-        runtime: { _tag: "Running", queue: emptyQueueSnapshot() },
+        runtime: { _tag: "Running", queue: emptyQueueSnapshot(), startedAtMs: 0 },
         metrics: { turns: 1, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
       })
       yield* notify("Usage: /driver <agent> <driver-id|default>")
@@ -1139,6 +1139,7 @@ describe("ClientProvider session lifecycle", () => {
         runtime: {
           _tag: "Running",
           queue: emptyQueueSnapshot(),
+          startedAtMs: 0,
         },
         metrics: {
           turns: 9,
@@ -1205,6 +1206,7 @@ describe("ClientProvider session lifecycle", () => {
         runtime: {
           _tag: "Running",
           queue: emptyQueueSnapshot(),
+          startedAtMs: 0,
         },
         metrics: {
           turns: 1,
@@ -1634,7 +1636,11 @@ describe("ClientProvider errors", () => {
       client.applySessionSnapshot(idle)
       client.setErrorIn(FIRST, "send refused")
       // The connection drops; a queued message starts the next turn meanwhile.
-      const running: SessionSnapshot["runtime"] = { _tag: "Running", queue: emptyQueueSnapshot() }
+      const running: SessionSnapshot["runtime"] = {
+        _tag: "Running",
+        queue: emptyQueueSnapshot(),
+        startedAtMs: 0,
+      }
       client.applySessionSnapshot({ ...idle, runtime: running })
       expect(client.isStreaming()).toBe(true)
       expect(client.error()).toBeNull()
@@ -1656,7 +1662,11 @@ describe("ClientProvider errors", () => {
         }),
       )
       const client = yield* requireClient(ctx)
-      const running: SessionSnapshot["runtime"] = { _tag: "Running", queue: emptyQueueSnapshot() }
+      const running: SessionSnapshot["runtime"] = {
+        _tag: "Running",
+        queue: emptyQueueSnapshot(),
+        startedAtMs: 0,
+      }
       const midTurn = { ...snapshotOf(FIRST, { costUsd: 0, lastInputTokens: 0 }), runtime: running }
       client.applySessionSnapshot(midTurn)
       client.setErrorIn(FIRST, "interject refused")
@@ -1688,7 +1698,11 @@ describe("ClientProvider errors", () => {
         }),
       )
       const client = yield* requireClient(ctx)
-      const running: SessionSnapshot["runtime"] = { _tag: "Running", queue: emptyQueueSnapshot() }
+      const running: SessionSnapshot["runtime"] = {
+        _tag: "Running",
+        queue: emptyQueueSnapshot(),
+        startedAtMs: 0,
+      }
       client.applySessionRuntime({ ...FIRST, runtime: running })
       client.setError('No model matches "typo"')
       expect(client.isStreaming()).toBe(true)

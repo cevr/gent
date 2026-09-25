@@ -444,15 +444,15 @@ const ageFor = (row: AgentRowEntry, now: number): string =>
   })
 
 /**
- * The right column's time. A running agent shows how long it has run since
- * its session started (`1m 12s`), which for a delegate child is its task's
- * run time; every other row shows the age of its last step (`3m`).
+ * The right column's time. A running agent shows how long its current turn
+ * has run (`1m 12s`), so a child woken by a correction reads its new run, not
+ * its age; every other row shows the age of its last step (`3m`).
  */
 const timeFor = (row: AgentRowEntry, now: number): string => {
   if (row.section !== "running") return ageFor(row, now)
-  return Option.match(Option.fromUndefinedOr(row.createdAt), {
+  return Option.match(Option.fromUndefinedOr(row.runningSince), {
     onNone: () => ageFor(row, now),
-    onSome: (createdAt) => formatDuration(now - createdAt, "compact"),
+    onSome: (runningSince) => formatDuration(now - runningSince, "compact"),
   })
 }
 

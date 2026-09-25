@@ -1280,7 +1280,7 @@ describe("agents pane rows", () => {
           {
             ...child("worker", "running", "root"),
             name: "delegate: fix the loader",
-            createdAt: now - 72_000,
+            runningSince: now - 72_000,
             updatedAt: now - 1_000,
             activity: "running bash bun test",
           },
@@ -1321,7 +1321,7 @@ describe("agents pane rows", () => {
         {
           ...child("worker", "running", "root"),
           name: `delegate: ${"x".repeat(120)}`,
-          createdAt: now - 5_000,
+          runningSince: now - 5_000,
           activity: "running read src/loader.ts",
         },
       ]
@@ -1331,6 +1331,26 @@ describe("agents pane rows", () => {
       expect(row).toContain("…")
       expect(row).toContain("· running")
       expect(row.trimEnd()).toMatch(/\ds$/)
+    }),
+  )
+
+  it.live("a child woken after it settled shows its current run time, not its age", () =>
+    Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis
+      const listed: ReadonlyArray<AgentRowEntry> = [
+        {
+          ...child("woken", "running", "root"),
+          createdAt: now - 2 * 3_600_000,
+          updatedAt: now - 1_000,
+          runningSince: now - 5_000,
+          activity: "running bash bun test",
+        },
+      ]
+      const setup = yield* paneOver(listed, 43)
+      const frame = yield* waitForFrame(setup, (next) => next.includes("· running"), "pane")
+      const row = frame.split("\n").find((line) => line.includes("· running")) ?? ""
+      expect(row.trimEnd()).toMatch(/ [56]s$/)
+      expect(row).not.toContain("2h")
     }),
   )
 

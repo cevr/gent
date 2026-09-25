@@ -893,6 +893,8 @@ export interface ExtensionSessionService {
       readonly branchId: BranchId
       /** Runtime state tag such as `Idle` or `Running`; `None` when the read failed. */
       readonly status: Option.Option<string>
+      /** When the current turn began (epoch ms); `None` when no turn runs or the read failed. */
+      readonly runningSince: Option.Option<number>
     }>,
     ExtensionServiceError
   >

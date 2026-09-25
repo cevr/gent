@@ -65,6 +65,8 @@ export interface LiveAgentRow {
    * loop counts as idle rather than running.
    */
   readonly status: Option.Option<string>
+  /** When the current turn began; `None` while idle or when the state read failed. */
+  readonly runningSince: Option.Option<number>
 }
 
 /** A stored session branch, from session storage. Survives restarts. */
@@ -91,6 +93,8 @@ export interface AgentRow {
   /** When the session was created: a stable order for rows that change on every read. */
   readonly createdAt: Option.Option<number>
   readonly updatedAt: Option.Option<number>
+  /** When the live loop's current turn began: a woken child's run time, not its age. */
+  readonly runningSince: Option.Option<number>
   readonly parent: Option.Option<AgentRowKey>
   /** True when the loop is materialized right now. */
   readonly live: boolean
@@ -169,6 +173,7 @@ export const reconcileAgentRows = (params: {
       cwd: Option.flatMap(durable, (row) => row.cwd),
       createdAt: Option.map(durable, (row) => row.createdAt),
       updatedAt: Option.map(durable, (row) => row.updatedAt),
+      runningSince: Option.flatMap(live, (row) => row.runningSince),
       parent: Option.flatMap(durable, (row) => row.parent),
       live: Option.isSome(live),
       depth: 0,
@@ -470,6 +475,8 @@ export const AgentRowEntry = Schema.Struct({
   cwd: Schema.optional(Schema.String),
   createdAt: Schema.optional(Schema.Finite),
   updatedAt: Schema.optional(Schema.Finite),
+  /** When a running loop's current turn began (epoch ms). Absent while idle. */
+  runningSince: Schema.optional(Schema.Finite),
   live: Schema.Boolean,
   depth: Schema.Finite,
   /** The session this loop was delegated from; absent at a tree root. */
@@ -531,6 +538,7 @@ const collectRows = Effect.fn("AgentsView.collectRows")(function* (root: Option.
       sessionId: loop.sessionId,
       branchId: loop.branchId,
       status: loop.status,
+      runningSince: loop.runningSince,
     }))
 
   // The durable half. One row per session, keyed to its active branch — a
@@ -598,6 +606,7 @@ export const AgentsViewRpc = defineRequests(AGENTS_VIEW_EXTENSION_ID, {
           cwd: Option.getOrUndefined(row.cwd),
           createdAt: Option.getOrUndefined(row.createdAt),
           updatedAt: Option.getOrUndefined(row.updatedAt),
+          runningSince: Option.getOrUndefined(row.runningSince),
           live: row.live,
           depth: row.depth,
           parentSessionId: Option.getOrUndefined(
