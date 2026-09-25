@@ -82,6 +82,20 @@ describe("project instructions", () => {
     }).pipe(Effect.provide(BunServices.layer)),
   )
 
+  // Launched from home, the project's `.gent` is the user's: one file, read once.
+  it.scopedLive("a session started in home reads ~/.gent/AGENTS.md once", () =>
+    Effect.gen(function* () {
+      const home = yield* makeTempDirectoryScoped("instructions-home-")
+      const fs = yield* FileSystem.FileSystem
+      yield* writeFile(`${home}/.gent/AGENTS.md`, "home rules")
+      expect(yield* instructionsIn(home, home)).toBe("home rules")
+      // A link to home is home too.
+      const link = `${yield* makeTempDirectoryScoped("instructions-link-")}/home`
+      yield* fs.symlink(home, link)
+      expect(yield* instructionsIn(home, link)).toBe("home rules")
+    }).pipe(Effect.provide(BunServices.layer)),
+  )
+
   it.scopedLive("an empty AGENTS.md defers to CLAUDE.md beside it", () =>
     Effect.gen(function* () {
       const home = yield* makeTempDirectoryScoped("instructions-home-")

@@ -17,6 +17,7 @@ import type { ScrollBoxRenderable } from "@opentui/core"
 import { useRenderer } from "@opentui/solid"
 import { type ScopedKeyboardEvent, useScopedKeyboard, useTerminalDimensions } from "./terminal"
 import { useTheme } from "./theme"
+import { truncate } from "./utils"
 import type { MessageRowProps } from "./extensions/client-facets"
 
 // ── spinner clock ───────────────────────────────────────────────────────────
@@ -430,14 +431,55 @@ export function DockProvider(props: { children: JSX.Element }) {
 }
 
 /**
- * The rows a `PickerFrame` body has between its title and its bottom rule,
- * once the frame is measured. A pane whose fixed lines can outnumber them
- * drops its optional lines against this count.
+ * A box that holds pickers among rows that must not give way: the composer,
+ * whose autocomplete popup and command palette dock inside it. The box may
+ * shrink only while a picker is open in it, so the picker, the one child
+ * that gives way, takes the squeeze; with none open the box keeps its rows.
  */
-const PickerBodyRowsContext = createContext<() => Option.Option<number>>(() => Option.none())
+const PickerHostContext = createContext<Option.Option<DockState>>(Option.none())
 
-export const usePickerBodyRows = (): (() => Option.Option<number>) =>
-  useContext(PickerBodyRowsContext)
+export function PickerHost(props: { children: (hosting: () => boolean) => JSX.Element }) {
+  const [pickers, setPickers] = createSignal(0)
+  const host: DockState = {
+    paneOpen: () => pickers() > 0,
+    open: () => {
+      setPickers((count) => count + 1)
+      return () => setPickers((count) => count - 1)
+    },
+  }
+  return (
+    <PickerHostContext.Provider value={Option.some(host)}>
+      {props.children(host.paneOpen)}
+    </PickerHostContext.Provider>
+  )
+}
+
+/**
+ * The lines a `SelectList` draws in a `PickerFrame` body. `full` is every
+ * line: the filter row and each row, headings included. `dressed` is the
+ * least the list draws before it drops an optional line: the cursor row,
+ * with the filter row and one heading above it when the list has them.
+ */
+interface PickerListLines {
+  readonly full: number
+  readonly dressed: number
+}
+
+/**
+ * What a `PickerFrame` tells the `SelectList` in its body: the rows the list
+ * has once the frame is measured, after the frame's own detail line (`None`
+ * outside a frame or before it is measured). The list reports its lines
+ * back, so the frame gives the detail line only rows the list does not need.
+ */
+interface PickerBody {
+  readonly rows: () => Option.Option<number>
+  readonly report: (lines: Option.Option<PickerListLines>) => void
+}
+
+const PickerBodyContext = createContext<PickerBody>({
+  rows: () => Option.none(),
+  report: () => {},
+})
 
 /** Two rules, the title and one body row: below this the title gives way. */
 const PICKER_ROWS_WITH_TITLE = 4
@@ -448,19 +490,44 @@ export function PickerFrame(props: {
   title: string
   children: JSX.Element
   footer: JSX.Element
+  /**
+   * One muted line under the list about the row under the cursor. It is the
+   * first line to give way on a short terminal. `None` draws no line.
+   */
+  detail?: Option.Option<string>
+  /**
+   * Told when the frame starts or stops getting fewer rows than it asked for,
+   * and told `false` when it unmounts. A host whose own chrome can give way
+   * for the frame's rows listens here.
+   */
+  onSqueezeChange?: (squeezed: boolean) => void
 }) {
   const { theme } = useTheme()
+  const { sectionWidth } = usePickerGeometry()
   const dock = useContext(DockContext)
   if (Option.isSome(dock)) onCleanup(dock.value.open())
+  const pickerHost = useContext(PickerHostContext)
+  if (Option.isSome(pickerHost)) onCleanup(pickerHost.value.open())
   // The height is what the frame asks for. When the footer it docks in runs
   // out of rows, the trays are already hidden (`TrayFrame`) and the frame is
   // the one box that gives way, in whole rows. Squeezed, it drops its key
   // hint, then its title, before its body's last row: the rows the reader
   // opened it for win. A change of either the measured or the requested
-  // height re-decides it. The body reads the rows it has from
-  // `usePickerBodyRows`, so a pane can drop its own optional lines to fit.
+  // height re-decides it. Inside the body the same order holds: the detail
+  // line gives way first, then the list's headings, then its filter row
+  // (`SelectList` reads its rows from the frame), and one row stays for the
+  // cursor.
   const [measured, setMeasured] = createSignal(Option.none<number>())
+  const [list, setList] = createSignal(Option.none<PickerListLines>())
   const squeezed = () => Option.exists(measured(), (rows) => rows < props.height)
+  createEffect(
+    on(squeezed, (value) => {
+      if (props.onSqueezeChange) props.onSqueezeChange(value)
+    }),
+  )
+  onCleanup(() => {
+    if (props.onSqueezeChange) props.onSqueezeChange(false)
+  })
   const titled = () => !Option.exists(measured(), (rows) => rows < PICKER_ROWS_WITH_TITLE)
   const bodyRows = () =>
     Option.map(measured(), (rows) => {
@@ -469,6 +536,25 @@ export function PickerFrame(props: {
       if (!squeezed()) chrome += 1
       return Math.max(0, rows - chrome)
     })
+  const detail = (): Option.Option<string> =>
+    Option.filter(
+      Option.getOrElse(Option.fromUndefinedOr(props.detail), () => Option.none<string>()),
+      () =>
+        Option.match(bodyRows(), {
+          onNone: () => true,
+          onSome: (rows) =>
+            Option.match(list(), {
+              onNone: () => rows >= 2,
+              onSome: (lines) => rows > lines.full || rows > lines.dressed,
+            }),
+        }),
+    )
+  const listRows = () =>
+    Option.map(bodyRows(), (rows) => {
+      if (Option.isSome(detail())) return rows - 1
+      return rows
+    })
+  const body: PickerBody = { rows: listRows, report: setList }
   return (
     <box
       flexDirection="column"
@@ -493,9 +579,14 @@ export function PickerFrame(props: {
             </text>
           </box>
         </Show>
-        <PickerBodyRowsContext.Provider value={bodyRows}>
-          {props.children}
-        </PickerBodyRowsContext.Provider>
+        <PickerBodyContext.Provider value={body}>{props.children}</PickerBodyContext.Provider>
+        <Show when={Option.getOrUndefined(detail())}>
+          {(text) => (
+            <ChromePanel.Section>
+              <text style={{ fg: theme.textMuted }}>{truncate(text(), sectionWidth())}</text>
+            </ChromePanel.Section>
+          )}
+        </Show>
       </box>
       <Show when={!squeezed()}>
         <text height={1} flexShrink={0} wrapMode="none" truncate style={{ fg: theme.textMuted }}>
@@ -531,19 +622,21 @@ export function TrayFrame(props: { children: JSX.Element }) {
  * SelectList — the one selectable list in the TUI.
  *
  * Every pane that lets a reader move a cursor down rows and press enter is
- * this component. It owns the whole block those panes used to hand-write:
+ * this component. It owns the whole block of list behavior:
  * the selection index and its wrap-around, the query string, the key table
  * (up/down, ^p/^n, enter, escape, backspace, printable characters), the
  * scroll sync that keeps the cursor row in view, the sticky selection that
- * re-anchors when the data arrives, and the empty fallback.
+ * re-anchors when the data arrives, the moved cursor that follows its entry
+ * by key when the rows arrive again, and the empty fallback.
  *
  * A caller supplies four things: the rows, how to draw one, what to do with
  * the chosen row, and what to do on escape. Everything else is optional and
  * everything else is hidden.
  *
  * The component draws rows only. Its chrome — the border, the title, the
- * detail line, the footer — stays with the pane, because no two panes agree
- * on it. What they do agree on is the interaction, and that is what lives
+ * detail line, the footer — stays with the pane and its `PickerFrame`,
+ * because no two panes agree on it. Inside a frame the list fits the rows it
+ * is given: its headings, then its filter row, give way on a short terminal. What they do agree on is the interaction, and that is what lives
  * here.
  *
  * @module
@@ -557,12 +650,19 @@ export function TrayFrame(props: { children: JSX.Element }) {
 export interface SelectListState {
   readonly query: string
   readonly selectedIndex: number
+  /**
+   * The reader moved the cursor since the list opened or the query changed.
+   * Rows that change under a moved cursor keep it on the same entry; an
+   * unmoved cursor stays where the pane's sticky rule or the query puts it.
+   */
+  readonly moved: boolean
 }
 
 export const SelectListState = {
   initial: (selectedIndex = 0): SelectListState => ({
     query: "",
     selectedIndex,
+    moved: false,
   }),
 }
 
@@ -601,19 +701,22 @@ export function transitionSelectList(
         Anchor: (event) => ({ ...state, selectedIndex: event.selectedIndex }),
         Backspace: () => {
           if (state.query.length === 0) return state
-          return { query: state.query.slice(0, -1), selectedIndex: 0 }
+          return { query: state.query.slice(0, -1), selectedIndex: 0, moved: false }
         },
         MoveUp: (event) => ({
           ...state,
           selectedIndex: wrapIndex(state.selectedIndex, event.itemCount, -1),
+          moved: true,
         }),
         MoveDown: (event) => ({
           ...state,
           selectedIndex: wrapIndex(state.selectedIndex, event.itemCount, 1),
+          moved: true,
         }),
         TypeChar: (event) => ({
           query: state.query + event.char,
           selectedIndex: 0,
+          moved: false,
         }),
         Clamp: (event) => {
           if (event.itemCount <= 0) return { ...state, selectedIndex: 0 }
@@ -698,13 +801,20 @@ interface SelectListProps<A> {
   /** Mount but hide when false; keys stay unbound. */
   readonly open: boolean
   readonly rows: () => ReadonlyArray<SelectListRow<A>>
+  /**
+   * The entry's identity across two arrivals of the rows. A pane that reads
+   * its rows again (a poll, a reply) builds new values; the cursor the
+   * reader moved follows this key, not the index or the object.
+   */
+  readonly rowKey: (value: A) => string
   readonly onSelect: (value: A) => void
   readonly onDismiss: () => void
   readonly filter?: SelectListFilter
   /**
    * The row to sit on when the pane opens or its data arrives. Returning
-   * `None` keeps the first row. Re-runs whenever the rows change, so a pane
-   * whose fetch resolves after it mounts still lands on the right row.
+   * `None` keeps the first row. Re-runs whenever the rows change until the
+   * reader moves the cursor or types, so a pane whose fetch resolves after it
+   * mounts still lands on the right row.
    */
   readonly sticky?: (values: ReadonlyArray<A>) => Option.Option<number>
   /** Drawn in place of the list when it holds nothing selectable. */
@@ -722,6 +832,13 @@ interface SelectListProps<A> {
   readonly onCursor?: (selected: Option.Option<A>) => void
   /** Handed the list's {@link SelectListApi} once, on mount. */
   readonly api?: (api: SelectListApi) => void
+  /**
+   * A query line the pane draws itself (the composer's filter, the palette's
+   * breadcrumb and query), in place of the list's own `› query│` row. The
+   * list draws it above the rows and budgets it as its filter row, so on a
+   * short terminal it gives way before the cursor row does.
+   */
+  readonly queryRow?: () => JSX.Element
 }
 
 /**
@@ -789,31 +906,52 @@ export function SelectList<A>(props: SelectListProps<A>) {
     if (props.onCursor) props.onCursor(Option.none())
   })
 
-  // A pane whose fetch resolves after it opens re-anchors when the rows land.
-  // Typing ends that: once the reader has a query, the rows change because they
-  // asked them to, and moving their cursor for them would fight the filter. A
-  // pane with no sticky rule still clamps, so a list that shrinks cannot leave
-  // the cursor past its end.
+  // Where the cursor goes when the rows change under it. A cursor the reader
+  // moved stays on its entry, found by key in the new rows; an entry that is
+  // gone leaves the cursor where it was, clamped into the list. An unmoved
+  // cursor re-anchors on the sticky rule, so a pane whose fetch resolves after
+  // it opens lands on the right row. Typing ends that: once the reader has a
+  // query, the rows change because they asked them to, and the cursor stays on
+  // the top match. A pane with no sticky rule clamps.
+  const follow = (
+    current: SelectListState,
+    entries: ReadonlyArray<A>,
+    previous: ReadonlyArray<A>,
+  ): Option.Option<number> => {
+    if (current.moved) {
+      return Option.flatMap(Option.fromNullishOr(previous[current.selectedIndex]), (value) => {
+        const key = props.rowKey(value)
+        // A key two rows share (a prompt typed twice) resolves to the match
+        // nearest where the cursor was.
+        return entries.reduce<Option.Option<number>>((best, entry, index) => {
+          if (props.rowKey(entry) !== key) return best
+          const distance = Math.abs(index - current.selectedIndex)
+          if (Option.exists(best, (kept) => Math.abs(kept - current.selectedIndex) <= distance))
+            return best
+          return Option.some(index)
+        }, Option.none())
+      })
+    }
+    if (current.query.length > 0) return Option.none()
+    return anchor(entries)
+  }
   createEffect(
-    on(values, (entries) => {
+    on(values, (entries, previous) => {
       if (!props.open) return
-      const typed = state().query.length > 0
+      const before = Option.getOrElse(Option.fromNullishOr(previous), (): ReadonlyArray<A> => [])
       setState((current) =>
-        Option.match(
-          Option.filter(anchor(entries), () => !typed),
-          {
-            onNone: () =>
-              transitionSelectList(
-                current,
-                SelectListEvent.cases.Clamp.make({ itemCount: entries.length }),
-              ),
-            onSome: (index) =>
-              transitionSelectList(
-                current,
-                SelectListEvent.cases.Anchor.make({ selectedIndex: index }),
-              ),
-          },
-        ),
+        Option.match(follow(current, entries, before), {
+          onNone: () =>
+            transitionSelectList(
+              current,
+              SelectListEvent.cases.Clamp.make({ itemCount: entries.length }),
+            ),
+          onSome: (index) =>
+            transitionSelectList(
+              current,
+              SelectListEvent.cases.Anchor.make({ selectedIndex: index }),
+            ),
+        }),
       )
     }),
   )
@@ -899,6 +1037,34 @@ export function SelectList<A>(props: SelectListProps<A>) {
       onSome: (filter) => filter.showInput !== false,
     })
 
+  // Inside a `PickerFrame` the list fits the rows the frame gives it. It
+  // reports what it draws, so the frame drops its detail line first; then the
+  // list drops its headings, then its filter row, and one row stays for the
+  // cursor. An unmeasured frame, no frame, and a list that fits draw it all.
+  const pickerBody = useContext(PickerBodyContext)
+  const hasQueryRow = () => showInput() || Option.isSome(Option.fromUndefinedOr(props.queryRow))
+  const inputLines = () => {
+    if (hasQueryRow()) return 1
+    return 0
+  }
+  const headingLines = () => {
+    if (rows().length > values().length) return 1
+    return 0
+  }
+  const lines = (): PickerListLines => ({
+    full: rows().length + inputLines(),
+    dressed: 1 + inputLines() + headingLines(),
+  })
+  createEffect(() => pickerBody.report(Option.some(lines())))
+  onCleanup(() => pickerBody.report(Option.none()))
+  const fits = (needed: number) =>
+    Option.match(pickerBody.rows(), {
+      onNone: () => true,
+      onSome: (available) => available >= lines().full || available >= needed,
+    })
+  const inputShown = () => hasQueryRow() && fits(2)
+  const headingsShown = () => fits(1 + inputLines() + 1)
+
   // Values are indexed independently of rows, so the row loop counts its own.
   const indexed = () => {
     let cursor = 0
@@ -912,13 +1078,18 @@ export function SelectList<A>(props: SelectListProps<A>) {
 
   return (
     <>
-      <Show when={showInput()}>
+      <Show when={inputShown()}>
         <ChromePanel.Section>
-          <text style={{ fg: theme.text }}>
-            <span style={{ fg: theme.textMuted }}>› </span>
-            {state().query}
-            <span style={{ fg: theme.primary }}>│</span>
-          </text>
+          {Option.match(Option.fromUndefinedOr(props.queryRow), {
+            onSome: (queryRow) => queryRow(),
+            onNone: () => (
+              <text style={{ fg: theme.text }}>
+                <span style={{ fg: theme.textMuted }}>› </span>
+                {state().query}
+                <span style={{ fg: theme.primary }}>│</span>
+              </text>
+            ),
+          })}
         </ChromePanel.Section>
       </Show>
 
@@ -927,7 +1098,11 @@ export function SelectList<A>(props: SelectListProps<A>) {
           <For each={indexed()}>
             {(entry) =>
               Option.match(entry.index, {
-                onNone: () => entry.row.render(() => false, ""),
+                // A heading that gives way draws nothing but stays a row, so
+                // the values, and with them the cursor, do not change with it.
+                onNone: () => (
+                  <Show when={headingsShown()}>{entry.row.render(() => false, "")}</Show>
+                ),
                 onSome: (index) =>
                   entry.row.render(
                     () => state().selectedIndex === index,

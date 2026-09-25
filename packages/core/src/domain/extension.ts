@@ -1,5 +1,6 @@
 import {
   Context,
+  type Crypto,
   Effect,
   type FileSystem,
   HashMap,
@@ -527,6 +528,7 @@ export type ExtensionLoaderServices =
   | FileSystem.FileSystem
   | Path.Path
   | ChildProcessSpawner
+  | Crypto.Crypto
   | GentPlatform
 
 /** Services available to every `setup` Effect: the loader platform plus the registration host. */

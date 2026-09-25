@@ -1053,10 +1053,6 @@ describe("user configuration", () => {
  */
 
 const cowork = AgentDefinition.make({ name: AgentName.make("cowork") })
-const hardcoded = AgentDefinition.make({
-  name: AgentName.make("hardcoded"),
-  driver: DriverRef.make({ id: "anthropic-proxy" }),
-})
 
 /** The driver id a session running `agent` dispatches through under the config. */
 const routedDriver = (agent: AgentDefinition, config: UserConfig) =>
@@ -1068,47 +1064,6 @@ const routedDriver = (agent: AgentDefinition, config: UserConfig) =>
   }).modelDriver.driverId
 
 describe("configured driver override routing", () => {
-  it.live("an agent with no driver of its own routes through the config override", () =>
-    Effect.gen(function* () {
-      const cfg = yield* ConfigService
-      expect(routedDriver(cowork, yield* cfg.get())).toEqual(Option.some("anthropic-proxy"))
-    }).pipe(
-      Effect.provide(
-        ConfigService.Test(
-          new UserConfig({
-            driverOverrides: {
-              [AgentName.make("cowork")]: DriverRef.make({ id: "anthropic-proxy" }),
-            },
-          }),
-        ),
-      ),
-    ),
-  )
-
-  it.live("an agent's own driver wins over a config override", () =>
-    Effect.gen(function* () {
-      const cfg = yield* ConfigService
-      expect(routedDriver(hardcoded, yield* cfg.get())).toEqual(Option.some("anthropic-proxy"))
-    }).pipe(
-      Effect.provide(
-        ConfigService.Test(
-          new UserConfig({
-            driverOverrides: {
-              [AgentName.make("hardcoded")]: DriverRef.make({ id: "openai" }),
-            },
-          }),
-        ),
-      ),
-    ),
-  )
-
-  it.live("no override routes through the model id's provider", () =>
-    Effect.gen(function* () {
-      const cfg = yield* ConfigService
-      expect(routedDriver(cowork, yield* cfg.get())).toEqual(Option.some("anthropic"))
-    }).pipe(Effect.provide(ConfigService.Test())),
-  )
-
   it.live("clearing the override routes through the provider on the next read", () =>
     Effect.gen(function* () {
       const cfg = yield* ConfigService

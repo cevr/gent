@@ -81,11 +81,38 @@ interface PromptSearchTransitionResult {
   readonly effects: readonly PromptSearchEffect[]
 }
 
+/** One history entry as the search lists it, with a key no other row shares. */
+interface PromptSearchItem {
+  readonly text: string
+  readonly key: string
+}
+
+/**
+ * The history as search rows. History is newest first and dedupes only the
+ * newest entry, so a text can repeat. A key counts the entry among the older
+ * entries with its text, so a newer write never moves a key to another row.
+ */
+export const promptSearchItems = (entries: readonly string[]): readonly PromptSearchItem[] => {
+  const seen = new Map<string, number>()
+  const items: PromptSearchItem[] = []
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const text = entries[index] ?? ""
+    const count = seen.get(text) ?? 0
+    seen.set(text, count + 1)
+    items.push({ text, key: `${count}:${text}` })
+  }
+  return items.reverse()
+}
+
 /** The history entries a query keeps, best match first; all of them for no query. */
-const filterPromptEntries = (entries: readonly string[], query: string): readonly string[] => {
+const filterPromptEntries = (
+  entries: readonly string[],
+  query: string,
+): readonly PromptSearchItem[] => {
+  const items = promptSearchItems(entries)
   const needle = query.trim()
-  if (needle.length === 0) return entries
-  return matchSorter(entries, needle)
+  if (needle.length === 0) return items
+  return matchSorter(items, needle, { keys: ["text"] })
 }
 
 /** What the composer shows for an open palette: the highlighted entry, else the draft. */
@@ -177,7 +204,7 @@ export function PromptSearchPalette(props: PromptSearchPaletteProps) {
         let touched = false
         const items = createMemo(() => filterPromptEntries(props.entries, query()))
 
-        const rows = (): ReadonlyArray<SelectListRow<string>> =>
+        const rows = (): ReadonlyArray<SelectListRow<PromptSearchItem>> =>
           items().map((entry) =>
             selectable(entry, (isSelected, id) => {
               const backgroundColor = () => {
@@ -191,7 +218,7 @@ export function PromptSearchPalette(props: PromptSearchPaletteProps) {
               return (
                 <box id={id} backgroundColor={backgroundColor()} paddingLeft={1}>
                   <text style={{ fg: textColor() }}>
-                    {truncate(entry.replace(/\s+/g, " "), panelWidth() - 4)}
+                    {truncate(entry.text.replace(/\s+/g, " "), panelWidth() - 4)}
                   </text>
                 </box>
               )
@@ -210,6 +237,7 @@ export function PromptSearchPalette(props: PromptSearchPaletteProps) {
               id="prompt-search"
               open={true}
               rows={rows}
+              rowKey={(entry) => entry.key}
               filter={{ onQueryChange: setQuery }}
               empty={emptyRow}
               extraKeys={(event) => {
@@ -224,7 +252,11 @@ export function PromptSearchPalette(props: PromptSearchPaletteProps) {
               }}
               onCursor={(entry) => {
                 if (!touched) return
-                props.onEvent(PromptSearchEvent.cases.Highlight.make({ entry }))
+                props.onEvent(
+                  PromptSearchEvent.cases.Highlight.make({
+                    entry: Option.map(entry, (item) => item.text),
+                  }),
+                )
               }}
               onSelect={() => props.onEvent(PromptSearchEvent.cases.Accept.make({}))}
               onDismiss={() => props.onEvent(PromptSearchEvent.cases.Cancel.make({}))}
@@ -358,6 +390,7 @@ export function BranchPicker(props: BranchPickerProps) {
           id="branch-picker"
           open={props.open}
           rows={rows}
+          rowKey={(branch) => branch.id}
           onSelect={(branch) => props.onSelect(branch.id)}
           onDismiss={props.onClose}
         />
@@ -446,6 +479,7 @@ export function MessagePicker(props: MessagePickerProps) {
           id="message-picker"
           open={props.open}
           rows={rows}
+          rowKey={(item) => item.id}
           // SAFETY: PickerItem.id originates from domain Message.id which is a MessageId
           onSelect={(item) => props.onSelect(MessageId.make(item.id))}
           onDismiss={props.onClose}
@@ -568,6 +602,7 @@ export function SettingsPicker(props: SettingsPickerProps) {
           id="settings-picker"
           open={props.open}
           rows={rows}
+          rowKey={(row) => row.id}
           filter={{ onQueryChange: setQuery }}
           sticky={sticky}
           empty={() => <text style={{ fg: theme.textMuted }}> nothing matches</text>}

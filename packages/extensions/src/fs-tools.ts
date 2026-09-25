@@ -275,76 +275,74 @@ const walkFiles = (params: {
         Effect.orElseSucceed((): Array<IgnoreRule> => []),
       )
 
-    {
-      const { cwd } = params
-      let root = params.root
-      let fromRoot = path.relative(root, cwd)
-      if (leavesBase(path, fromRoot)) {
-        root = cwd
-        fromRoot = ""
-      }
-      let rules = yield* loadRules(root, "")
-      let base = ""
-      for (const part of fromRoot.split(path.sep).filter((segment) => segment.length > 0)) {
-        base = joinRelative(base, part)
-        if (isGitignored(base, true, rules)) {
-          fromRoot = ""
-          rules = yield* loadRules(cwd, "")
-          break
-        }
-        rules = [...rules, ...(yield* loadRules(path.join(root, base), base))]
-      }
-
-      const files: ListedFile[] = []
-      const scanDir: (
-        absoluteDir: string,
-        relativeDir: string,
-        inherited: ReadonlyArray<IgnoreRule>,
-      ) => Effect.Effect<void, FileListingError> = (absoluteDir, relativeDir, inherited) =>
-        Effect.gen(function* () {
-          let dirRules = inherited
-          if (relativeDir.length > 0) {
-            const dirBase = joinRelative(fromRoot, relativeDir)
-            dirRules = [...inherited, ...(yield* loadRules(absoluteDir, dirBase))]
-          }
-
-          const entries = yield* fs
-            .readDirectory(absoluteDir)
-            .pipe(
-              Effect.mapError(
-                (cause) =>
-                  new FileListingError({ message: `directory scan failed: ${cause.message}`, cwd }),
-              ),
-            )
-
-          for (const entry of entries) {
-            if (entry === ".git") continue
-            const relativePath = joinRelative(relativeDir, entry)
-            const absPath = path.join(absoluteDir, entry)
-            const kind = yield* entryKind(absPath).pipe(
-              Effect.provideService(FileSystem.FileSystem, fs),
-            )
-            if (kind === "skip") continue
-            const isDirectory = kind === "directory"
-            if (isGitignored(joinRelative(fromRoot, relativePath), isDirectory, dirRules)) continue
-
-            if (isDirectory) {
-              yield* scanDir(absPath, relativePath, dirRules)
-              continue
-            }
-
-            if (files.length >= FALLBACK_MAX_FILES) {
-              return yield* tooManyFiles(cwd)
-            }
-            files.push({ path: absPath, relativePath })
-          }
-        })
-
-      yield* scanDir(cwd, "", rules)
-
-      // A directory entry is a decoded string: the walk never holds an unreadable name.
-      return { files, unreadable: 0 }
+    const { cwd } = params
+    let root = params.root
+    let fromRoot = path.relative(root, cwd)
+    if (leavesBase(path, fromRoot)) {
+      root = cwd
+      fromRoot = ""
     }
+    let rules = yield* loadRules(root, "")
+    let base = ""
+    for (const part of fromRoot.split(path.sep).filter((segment) => segment.length > 0)) {
+      base = joinRelative(base, part)
+      if (isGitignored(base, true, rules)) {
+        fromRoot = ""
+        rules = yield* loadRules(cwd, "")
+        break
+      }
+      rules = [...rules, ...(yield* loadRules(path.join(root, base), base))]
+    }
+
+    const files: ListedFile[] = []
+    const scanDir: (
+      absoluteDir: string,
+      relativeDir: string,
+      inherited: ReadonlyArray<IgnoreRule>,
+    ) => Effect.Effect<void, FileListingError> = (absoluteDir, relativeDir, inherited) =>
+      Effect.gen(function* () {
+        let dirRules = inherited
+        if (relativeDir.length > 0) {
+          const dirBase = joinRelative(fromRoot, relativeDir)
+          dirRules = [...inherited, ...(yield* loadRules(absoluteDir, dirBase))]
+        }
+
+        const entries = yield* fs
+          .readDirectory(absoluteDir)
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new FileListingError({ message: `directory scan failed: ${cause.message}`, cwd }),
+            ),
+          )
+
+        for (const entry of entries) {
+          if (entry === ".git") continue
+          const relativePath = joinRelative(relativeDir, entry)
+          const absPath = path.join(absoluteDir, entry)
+          const kind = yield* entryKind(absPath).pipe(
+            Effect.provideService(FileSystem.FileSystem, fs),
+          )
+          if (kind === "skip") continue
+          const isDirectory = kind === "directory"
+          if (isGitignored(joinRelative(fromRoot, relativePath), isDirectory, dirRules)) continue
+
+          if (isDirectory) {
+            yield* scanDir(absPath, relativePath, dirRules)
+            continue
+          }
+
+          if (files.length >= FALLBACK_MAX_FILES) {
+            return yield* tooManyFiles(cwd)
+          }
+          files.push({ path: absPath, relativePath })
+        }
+      })
+
+    yield* scanDir(cwd, "", rules)
+
+    // A directory entry is a decoded string: the walk never holds an unreadable name.
+    return { files, unreadable: 0 }
   })
 
 // ── Inside a git work tree: git decides the listing ──

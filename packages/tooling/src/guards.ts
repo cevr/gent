@@ -801,6 +801,161 @@ export const findE2eFixtureImportFindings = (
   ]
 }
 
+// ── a test writes its temp files outside the repo ───────────────────────────
+
+/**
+ * Guard: a test's temp directory lives in the system temp directory.
+ *
+ * A temp directory under the repo that a killed test leaves behind is linted,
+ * formatted and scanned by these guards as if it were source. The extension
+ * loaders bind `effect` and the public entries, so an extension file resolves
+ * them from anywhere; no test needs `node_modules` above its fixture.
+ *
+ * A repo path is `import.meta.dir`, `import.meta.dirname`, `__dirname`, a
+ * `join`/`resolve` whose first argument is a relative path literal, or a name
+ * bound from one of these. Two shapes are reported in test code outside the
+ * tooling package, whatever the directory's name or prefix: a temp directory
+ * call (`mkdtemp`, `mkdtempSync`, `makeTempDirectory`,
+ * `makeTempDirectoryScoped`) whose arguments name a repo path, and a repo path
+ * joined to a `tmp` or `temp` segment (`.tmp`, `tmp-x`, `temp`).
+ */
+const REPO_PATH =
+  /\bimport\.meta\.dir(?:name)?\b|\b__dirname\b|\b(?:join|resolve)\(\s*["'`](?:\.{1,2}(?:\/|["'`])|(?:packages|apps|examples|testbeds)\/)/
+const BINDING = /\b(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=(.*)$/
+const TEMP_CALL = /\b(?:mkdtempSync|mkdtemp|makeTempDirectoryScoped|makeTempDirectory)\s*\(/g
+const TMP_SEGMENT = /["'`](?:[^"'`]*\/)?\.?(?:tmp|temp)(?:[-_.][^"'`/]*)?(?:\/[^"'`]*)?["'`]/i
+
+const TEMP_IN_REPO_MESSAGE =
+  "a test temp directory under the repo is linted when a killed test leaves it behind; use `makeTempDirectoryScoped` without `directory` (the loaders bind `effect` and the public entries, so no node_modules is needed above it)"
+
+/** The text from `open` (an opening paren) to its matching close, or to the end. */
+const callArguments = (text: string, open: number): string => {
+  let depth = 0
+  for (let at = open; at < text.length; at++) {
+    if (text[at] === "(") depth++
+    if (text[at] === ")") depth--
+    if (depth === 0) return text.slice(open, at + 1)
+  }
+  return text.slice(open)
+}
+
+export const findRepoTempDirectories = (file: string, text: string): ReadonlyArray<Finding> => {
+  // The guard's own tests spell the reported shapes as probe text.
+  if (!isTestCode(file) || file.startsWith("packages/tooling/")) return []
+  const code = withoutComments(text)
+  const lines = code.split("\n")
+  // A name bound from a repo path, or from another such name, is a repo path.
+  const bound = new Set<string>()
+  const namesBound = (value: string): boolean =>
+    value.split(/[^\w$]+/).some((word) => bound.has(word))
+  const namesRepo = (value: string): boolean => REPO_PATH.test(value) || namesBound(value)
+  for (const line of lines) {
+    const binding = Option.fromNullishOr(BINDING.exec(line))
+    if (Option.isSome(binding) && namesRepo(binding.value[2] ?? ""))
+      bound.add(binding.value[1] ?? "")
+  }
+  const reported = new Set<number>()
+  // A temp directory call: report the first line of its arguments that names a repo path.
+  for (const call of code.matchAll(TEMP_CALL)) {
+    const open = call.index + call[0].length - 1
+    const first = code.slice(0, open).split("\n").length - 1
+    const argumentLines = callArguments(code, open).split("\n")
+    const hit = argumentLines.findIndex(namesRepo)
+    if (hit !== -1) reported.add(first + hit)
+  }
+  // A tmp segment joined to a repo path on one line.
+  for (const [index, line] of lines.entries()) {
+    if (REPO_PATH.test(line) && TMP_SEGMENT.test(line)) reported.add(index)
+  }
+  return [...reported]
+    .sort((a, b) => a - b)
+    .map((index) => ({ file, line: index + 1, message: TEMP_IN_REPO_MESSAGE }))
+}
+
+// ── the loop prompts carry one SAFETY block ─────────────────────────────────
+
+/**
+ * Guard: the sweep and apply prompts of the architecture loop carry the same
+ * SAFETY block. Each agent reads only its own prompt, so a rule added to one
+ * copy leaves the other agents without it. The block must sit inside the
+ * fenced prompt template, which is the text an agent receives (`safetyBlock`
+ * reads its extent).
+ */
+const SAFETY_PROMPTS: ReadonlyArray<string> = [
+  ".claude/skills/architecture-loop/prompts/apply.md",
+  ".claude/skills/architecture-loop/prompts/sweep.md",
+]
+
+const PROMPT_FENCE = /^\s*```/
+
+/** One prompt's SAFETY block: where it starts, its text, and whether the fenced prompt holds it. */
+interface SafetyBlock {
+  readonly line: number
+  readonly block: string
+  readonly fenced: boolean
+}
+
+/**
+ * The `SAFETY` line and what follows it, through blank lines and rule lines,
+ * up to the next heading (a line that is neither blank, a `- ` rule nor an
+ * indented continuation) or the closing fence. Trailing whitespace and
+ * trailing blank lines are not part of the block.
+ */
+const safetyBlock = (text: string): Option.Option<SafetyBlock> => {
+  const lines = text.split("\n")
+  const start = lines.findIndex((line) => line.startsWith("SAFETY"))
+  if (start === -1) return Option.none()
+  const fences = lines.slice(0, start).filter((line) => PROMPT_FENCE.test(line)).length
+  const block: Array<string> = [(lines[start] ?? "").trimEnd()]
+  for (const line of lines.slice(start + 1)) {
+    const heading = line.trim().length > 0 && !line.startsWith("- ") && !/^\s/.test(line)
+    if (PROMPT_FENCE.test(line) || heading) break
+    block.push(line.trimEnd())
+  }
+  while (block.at(-1) === "") block.pop()
+  return Option.some({ line: start + 1, block: block.join("\n"), fenced: fences % 2 === 1 })
+}
+
+export const findSafetyBlockDrift = (
+  texts: ReadonlyMap<string, string>,
+): ReadonlyArray<Finding> => {
+  const blocks = SAFETY_PROMPTS.map((file) => ({
+    file,
+    found: Option.flatMap(Option.fromNullishOr(texts.get(file)), safetyBlock),
+  }))
+  const findings: Array<Finding> = []
+  for (const { file, found } of blocks) {
+    if (Option.isNone(found)) {
+      findings.push({
+        file,
+        line: 1,
+        message: "the loop prompt has no SAFETY block; copy it from the other prompt",
+      })
+    }
+  }
+  const present = blocks.flatMap(({ file, found }) =>
+    Option.match(found, { onNone: () => [], onSome: (value) => [{ file, ...value }] }),
+  )
+  for (const outside of present.filter((block) => !block.fenced)) {
+    findings.push({
+      file: outside.file,
+      line: outside.line,
+      message:
+        "the SAFETY block sits outside the fenced prompt, so the agent never receives it; move it inside the fence",
+    })
+  }
+  const [first, ...others] = present
+  for (const other of others) {
+    if (other.block === first?.block) continue
+    findings.push({
+      file: other.file,
+      line: other.line,
+      message: `the SAFETY block differs from the one in ${first?.file}; edit both together`,
+    })
+  }
+  return findings
+}
+
 // ── the pre-commit hook runs the guards ─────────────────────────────────────
 
 /**
@@ -971,7 +1126,7 @@ export const findUnmatchedOverrideGlobs = (
 }
 
 // ---------------------------------------------------------------------------
-// (a2) An override "off" that suppresses nothing
+// (a2) An "off" that suppresses nothing
 // ---------------------------------------------------------------------------
 
 /** One diagnostic of a lint run: the file it names and its `plugin(rule)` code. */
@@ -989,13 +1144,27 @@ const diagnosticCode = (rule: string): string => {
 
 const isOff = Schema.is(Schema.Literals(["off", 0]))
 
+const offsIn = (entries: ReadonlyArray<readonly [string, unknown]>): ReadonlyArray<string> =>
+  entries.filter(([, severity]) => isOff(severity)).map(([rule]) => rule)
+
+/** Each rule the root `rules` block turns off. */
+export const rootOffs = (config: OxlintConfig): ReadonlyArray<string> =>
+  offsIn(Object.entries(config.rules ?? {}))
+
 /** Each rule an override turns off, keyed by the override's index. */
 export const overrideOffs = (config: OxlintConfig): ReadonlyArray<ReadonlyArray<string>> =>
-  (config.overrides ?? []).map((override) =>
-    Object.entries(override.rules ?? {})
-      .filter(([, severity]) => isOff(severity))
-      .map(([rule]) => rule),
+  (config.overrides ?? []).map((override) => offsIn(Object.entries(override.rules ?? {})))
+
+/** The line of `rule`'s key in the root `rules` block, which precedes the overrides. */
+const lineOfRootRule = (configText: string, rule: string): number => {
+  const lines = configText.split("\n")
+  const start = Math.max(
+    lines.findIndex((line) => line.includes('"rules":')),
+    0,
   )
+  const offset = lines.slice(start).findIndex((line) => line.includes(`"${rule}":`))
+  return start + Math.max(offset, 0) + 1
+}
 
 /** The line of `rule`'s key inside the override whose first glob is `glob`. */
 const lineOfOverrideRule = (configText: string, glob: string, rule: string): number => {
@@ -1006,15 +1175,16 @@ const lineOfOverrideRule = (configText: string, glob: string, rule: string): num
 }
 
 /**
- * An override "off" is a suppression: it must hide at least one diagnostic.
- * `diagnostics` come from a run of the same config with every override "off"
- * removed. Such a diagnostic belongs to an override when the override's
- * globs match its file and no other override turns the same rule off for
- * that file: removing that override alone would bring it back. An "off" that
- * owns no diagnostic suppresses nothing today, and it would hide the next
- * real hit without review.
+ * An "off" is a suppression: it must hide at least one diagnostic.
+ * `diagnostics` come from a run of the same config with every "off" removed,
+ * root and override. A diagnostic belongs to an override "off" when the
+ * override's globs match its file and no other override turns the same rule
+ * off for that file: removing that override alone would bring it back. It
+ * belongs to a root "off" when no override sets the rule for its file. An
+ * "off" that owns no diagnostic suppresses nothing today, and it would hide
+ * the next real hit without review.
  */
-export const findUnneededOverrideOffs = (
+export const findUnneededOffs = (
   configFile: string,
   configText: string,
   config: OxlintConfig,
@@ -1024,6 +1194,7 @@ export const findUnneededOverrideOffs = (
     globs: override.files ?? [],
     matchers: (override.files ?? []).map(globMatcher),
     offs: new Set(overrideOffs(config)[index] ?? []),
+    named: new Set(Object.keys(override.rules ?? {})),
   }))
   const matches = (matchers: ReadonlyArray<RegExp>, file: string): boolean =>
     matchers.some((matcher) => matcher.test(file))
@@ -1050,6 +1221,22 @@ export const findUnneededOverrideOffs = (
         message: `oxlint override for "${firstGlob}" turns off \`${rule}\`, which reports nothing in its files; delete the "off"`,
       })
     }
+  }
+  for (const rule of rootOffs(config)) {
+    const code = diagnosticCode(rule)
+    const owned = diagnostics.some(
+      (diagnostic) =>
+        diagnostic.code === code &&
+        !overrides.some(
+          (override) => override.named.has(rule) && matches(override.matchers, diagnostic.file),
+        ),
+    )
+    if (owned) continue
+    findings.push({
+      file: configFile,
+      line: lineOfRootRule(configText, rule),
+      message: `oxlint root config turns off \`${rule}\`, which reports nothing; delete the "off"`,
+    })
   }
   return findings
 }
@@ -1937,11 +2124,6 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     text: "globalTimersInEffect:off -- process lifetime handle: OpenTUI render resolves after mount and suspended Effect fibers do not keep Bun alive",
   },
   {
-    file: "apps/tui/src/workspace.tsx",
-    scope: "next-line",
-    text: "strictEffectProvide:off solid mount edge — isolated FS effect",
-  },
-  {
     file: "apps/tui/src/client.tsx",
     scope: "next-line",
     text: "nodeBuiltinImport:off",
@@ -2362,6 +2544,17 @@ const SCANNED_SURFACES: ReadonlyArray<ScannedSurface> = [
     ownFileCounts: false,
     specifier: Option.none(),
     leafOf: "apps/server/",
+  },
+  {
+    // An example extension is a leaf too: the loader reads its default
+    // export, and its own tests may read a named one. A name nothing else
+    // reads drops the `export` keyword.
+    prefix: "examples/",
+    outsideOf: [],
+    testsCount: true,
+    ownFileCounts: false,
+    specifier: Option.none(),
+    leafOf: "examples/",
   },
 ]
 
@@ -3030,6 +3223,10 @@ export const PackageJsonSchema = Schema.Struct({
   peerDependencies: Schema.optional(DependencyMap),
   /** The root's shared versions; a manifest takes one with `"catalog:"`. */
   catalog: Schema.optional(DependencyMap),
+  /** The root's forced versions for transitive installs. */
+  overrides: Schema.optional(DependencyMap),
+  /** The root's patches, keyed `name@version`. */
+  patchedDependencies: Schema.optional(DependencyMap),
 })
 export type PackageJson = typeof PackageJsonSchema.Type
 
@@ -3494,4 +3691,126 @@ export const findUnusedCatalogEntries = (
         message: `catalog["${name}"]: no manifest takes it with "catalog:"; drop it`,
       }
     })
+}
+
+/**
+ * The Effect packages release together: `effect` and every `@effect/*` package
+ * with the same version. Three root blocks pin them (`catalog`, `overrides`
+ * and the `patchedDependencies` keys), and a manifest that names one with a
+ * literal version is a fourth. A bump that misses one installs two copies of
+ * `effect`, whose Tags and Schema classes do not match, or leaves a patch
+ * that no longer applies. Every pin must equal `catalog.effect`, and every
+ * manifest takes an Effect package with `"catalog:"`. The packages listed in
+ * `EFFECT_OWN_VERSIONS` follow their own release line.
+ */
+const EFFECT_OWN_VERSIONS: ReadonlySet<string> = new Set([
+  "@effect/tsgo",
+  "@effect/language-service",
+])
+
+const isEffectPackage = (name: string): boolean =>
+  (name === "effect" || name.startsWith("@effect/")) && !EFFECT_OWN_VERSIONS.has(name)
+
+/** A patch key's package name and the one version it patches. */
+interface PatchKey {
+  readonly name: string
+  readonly version: string
+}
+
+/** A `name@version` patch key as its parts; the name may itself start with `@`. */
+const patchKeyParts = (key: string): PatchKey => {
+  const at = key.lastIndexOf("@")
+  if (at <= 0) return { name: key, version: "" }
+  return { name: key.slice(0, at), version: key.slice(at + 1) }
+}
+
+/** The line of `needle` inside the block that opens with `"<block>": {`, or 1. */
+const lineInBlock = (text: string, block: string, needle: string): number => {
+  const lines = text.split("\n")
+  const start = lines.findIndex((line) => line.includes(`"${block}": {`))
+  return lines.findIndex((line, at) => at > start && line.includes(needle)) + 1 || 1
+}
+
+interface ManifestText {
+  readonly manifest: string
+  readonly text: string
+  readonly packageJson: PackageJson
+}
+
+/** One exact semver version, with optional prerelease and build parts. */
+const EXACT_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/
+
+/** The root blocks that map a package name to a version. */
+const PIN_BLOCKS: ReadonlyArray<"catalog" | "overrides"> = ["catalog", "overrides"]
+
+/** One version pin in a root block, with the text that places its line. */
+interface EffectPin {
+  readonly block: string
+  readonly name: string
+  readonly pinned: string
+  readonly needle: string
+}
+
+export const findEffectVersionDrift = (
+  root: ManifestText,
+  manifests: ReadonlyArray<ManifestText>,
+): ReadonlyArray<Finding> => {
+  const expected = Option.fromNullishOr(root.packageJson.catalog?.["effect"])
+  if (Option.isNone(expected)) {
+    return [
+      {
+        file: root.manifest,
+        line: 1,
+        message: `catalog["effect"] is missing; the Effect pins have no version to agree on`,
+      },
+    ]
+  }
+  const version = expected.value
+  if (!EXACT_VERSION.test(version)) {
+    return [
+      {
+        file: root.manifest,
+        line: lineInBlock(root.text, "catalog", '"effect":'),
+        message: `catalog["effect"] is "${version}", not an exact version; a range, tag or catalog reference lets the install pick a version the patches and pins do not name`,
+      },
+    ]
+  }
+  const pins: ReadonlyArray<EffectPin> = [
+    ...PIN_BLOCKS.flatMap((block) =>
+      Object.entries(root.packageJson[block] ?? {}).map(([name, pinned]) => ({
+        block,
+        name,
+        pinned,
+        needle: `"${name}":`,
+      })),
+    ),
+    ...Object.keys(root.packageJson.patchedDependencies ?? {}).map((key) => {
+      const parts = patchKeyParts(key)
+      return {
+        block: "patchedDependencies",
+        name: parts.name,
+        pinned: parts.version,
+        needle: `"${key}":`,
+      }
+    }),
+  ]
+  const drift = pins
+    .filter((pin) => isEffectPackage(pin.name) && pin.pinned !== version)
+    .map((pin) => ({
+      file: root.manifest,
+      line: lineInBlock(root.text, pin.block, pin.needle),
+      message: `${pin.block}["${pin.name}"] pins ${pin.pinned}, but catalog["effect"] is ${version}; the Effect packages release together, so pin every one at ${version}`,
+    }))
+  const literals = [root, ...manifests].flatMap((read) =>
+    DEPENDENCY_FIELDS.flatMap((field) =>
+      Object.entries(read.packageJson[field] ?? {})
+        .filter(([name, spec]) => isEffectPackage(name) && !spec.startsWith("catalog:"))
+        .map(([name, spec]) => ({
+          file: read.manifest,
+          line: lineInBlock(read.text, field, `"${name}":`),
+          message: `${field}["${name}"] is the literal "${spec}"; take it with "catalog:" so the Effect version has one owner`,
+        })),
+    ),
+  )
+  return [...drift, ...literals]
 }

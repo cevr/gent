@@ -11,6 +11,7 @@ import type {
   ClientShellTransport,
   PaneOwner,
 } from "../src/extensions/client-facets"
+import { BunServices } from "@effect/platform-bun"
 import { makeClientRuntime } from "../src/extensions/host"
 import { createMockClient, createMockRuntime } from "./render-harness-boundary"
 
@@ -91,7 +92,7 @@ export const makeClientTestTransport = (
 export const makeClientExtensionRuntime = (
   opts: ClientExtensionHarnessOptions = {},
 ): ClientRuntime =>
-  makeClientRuntime({
+  makeClientRuntime(BunServices.layer, {
     transport: Option.getOrElse(Option.fromUndefinedOr(opts.transport), () =>
       makeClientTestTransport(opts),
     ),

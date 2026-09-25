@@ -119,7 +119,7 @@
       "name": "@gent/sdk",
       "version": "0.0.0",
       "dependencies": {
-        "@effect/opentelemetry": "4.0.0-rc.112",
+        "@effect/opentelemetry": "catalog:",
         "@effect/platform-bun": "catalog:",
         "@gent/core": "workspace:*",
         "@gent/extensions": "workspace:*",
@@ -155,6 +155,7 @@
     "@effect/ai-anthropic": "4.0.0-rc.112",
     "@effect/ai-openai": "4.0.0-rc.112",
     "@effect/ai-openai-compat": "4.0.0-rc.112",
+    "@effect/opentelemetry": "4.0.0-rc.112",
     "@effect/platform-bun": "4.0.0-rc.112",
     "@effect/sql-sqlite-bun": "4.0.0-rc.112",
     "@ff-labs/fff-bun": "0.10.6",

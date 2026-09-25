@@ -41,6 +41,7 @@ import {
   LanguageModelLayers,
   textDeltaPart,
   textStep,
+  toolCallPart,
   toolCallStep,
   waitFor,
   createE2ELayer,
@@ -56,7 +57,7 @@ import { shippedPreset } from "./helpers/test-preset.js"
 import { toolResultSummary } from "@gent/core/extensions/branch-tools"
 import { BunChildProcessSpawner, BunFileSystem, BunServices } from "@effect/platform-bun"
 import { BunPlatformLive } from "@gent/core/host"
-import { maximumModelToolResultChars } from "@gent/core/extensions/api"
+import { ExtensionServiceError, maximumModelToolResultChars } from "@gent/core/extensions/api"
 import { e2ePreset } from "./helpers/test-preset"
 import { SqlClient } from "effect/unstable/sql"
 import { isToolResultFor } from "./helpers/tool-event.js"
@@ -764,6 +765,10 @@ describe("classifyBashCommand", () => {
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
+    // The reason names the alias where it is used.
+    expect(classifyBashCommand(`shopt -s expand_aliases\nalias w=rm\nw -rf ${x}`).reason).toBe(
+      "alias w: rm with options known only at run time: the words after w",
+    )
     for (const command of [
       "alias ll='ls -la'",
       "alias gs='git status'",
@@ -919,6 +924,47 @@ describe("classifyBashCommand", () => {
     }
   })
 
+  // After a flag the table names, a run-time word after the subcommand is an
+  // operand of that subcommand. After an option the table does not name,
+  // the subcommand may follow that option's value: the next run-time word
+  // may be it, and asks.
+  test("a run-time word after a named flag and a subcommand is an operand", () => {
+    const x = "/nonexistent/gent-probe-x"
+    for (const command of [
+      'git --no-pager log "$REF"',
+      'git -P show "$SHA"',
+      "git --no-pager diff $REF",
+      "git --no-pager log {main,dev}",
+      'npm --silent run "$S"',
+      'cargo --locked test "$T"',
+      'cargo -q build "$T"',
+      'cargo +nightly --locked test "$T"',
+      'docker --debug ps "$F"',
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+    for (const command of [
+      'git "$CMD"',
+      'git --no-pager "$CMD"',
+      'git -P "$CMD" --hard',
+      `git -C ${x} "$CMD"`,
+      "git --no-pager {reset,status} --hard",
+      'npm --silent "$CMD"',
+      'cargo --locked "$CMD"',
+      // The table names the option that takes the word before it.
+      'npm --loglevel silent "$CMD"',
+      'kubectl -v 3 "$VERB" pod gent-probe-x',
+      'npm --omit dev "$CMD"',
+      // An option the table does not name may take the word after it.
+      'npm --gent-probe-unknown dev "$CMD"',
+      'kubectl --some-valued x "$VERB"',
+      // A risky subcommand still reads its own run-time words.
+      'git --no-pager reset "$MODE"',
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+  })
+
   // A risk reads the flags as written. A word known only at run time may be
   // one: an unquoted expansion splits into more words, `"$@"` passes on a
   // function's or `set --`'s arguments, and a quoted `"$F"` stays one word
@@ -945,6 +991,9 @@ describe("classifyBashCommand", () => {
       `rm {-r,-f} ${x}`,
       "git reset {--hard,}",
       "git reset --{hard,}",
+      `rm ${x} {,-rf}`,
+      `rm {{-rf,x},y} ${x}`,
+      `rm ""{-rf,x} ${x}`,
       // An unquoted option value still splits.
       `cp -t $D ${x}`,
       // `"$@"` as a named option's value is that value and every word after it.
@@ -975,6 +1024,14 @@ describe("classifyBashCommand", () => {
       // A glob matches names of files; a brace after `--` makes operands.
       "rm *.log",
       "rm -- {a,b}.log",
+      // Each word of a brace that starts with neither `-` nor `{` starts
+      // with the same text, so none is a flag.
+      "cp package.json{,.bak}",
+      "mv src/{old,new}.ts",
+      `rm ${x}/{a,b}.log`,
+      `rm ${x}/a{,-rf}`,
+      `cp -t ${x} a{,.bak}`,
+      "git rm --cached src/{a,b}.ts",
       // A quoted brace is text, beside an unquoted glob too.
       "rm *'{a,b}'",
       `rm *"{-rf,x}" ${x}`,
@@ -990,6 +1047,33 @@ describe("classifyBashCommand", () => {
     }
     // A named option value is still a path the secret-file check reads.
     expect(classifyBashCommand(`cp -t ${x}/.ssh ${x}`).level).toBe("sensitive")
+  })
+
+  // A brace after other text makes no flag, but it makes words: the risks
+  // read the words the command receives.
+  test("the risks read the words a brace makes", () => {
+    const x = "/nonexistent/gent-probe-x"
+    for (const command of [
+      // Two paths: checkout discards their changes.
+      "git checkout src/{a,b}.ts",
+      "git checkout src/f{1..2}.ts",
+      `dd if=/dev/zero o{f=${x},}`,
+      "gh api -X DEL{ETE,} repos/o/r",
+      `git worktree re{move,} -f ${x}`,
+      'psql x{a,b} -c "$SQL"',
+      // Too many words to read.
+      `rm ${x}/f{1..1000}`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      "git checkout src/{a}.ts",
+      `rm ${x}/f{a..c} ${x}/g{01..10..3}`,
+      `rm ${x}/{{a,b},c}`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+    expect(classifyBashCommand(`cp ${x}/.env{,.bak}`).level).toBe("sensitive")
   })
 
   // find's primaries that take a value are its options that take one: a
@@ -1601,6 +1685,9 @@ describe("classifyBashCommand", () => {
       `${u} parallel git {}`,
       `${u} xargs git`,
       `${u} xargs git checkout`,
+      // Under git, input after `--` still asks: `checkout -- <paths>`
+      // overwrites the working-tree files it names.
+      "git diff --name-only | xargs git checkout --",
       // The input may be the subcommand of any parent with a risky one.
       `${u} xargs docker volume`,
       `${u} xargs -I{} docker volume {} /nonexistent/gent-probe-x`,
@@ -1973,8 +2060,8 @@ describe("classifyBashCommand", () => {
     const x = "/nonexistent/gent-probe-x"
     const r = `rm -rf ${x}`
     for (const command of [
-      `npm --loglevel silent exec -- ${r}`,
-      `npm --loglevel silent x -- ${r}`,
+      `npm --gent-probe-unknown silent exec -- ${r}`,
+      `npm --gent-probe-unknown silent x -- ${r}`,
       `uv --cache-dir ${x} run ${r}`,
       `uv --cache-dir ${x} --offline run ${r}`,
       `pnpm --gent-probe-unknown ${x} exec ${r}`,
@@ -1982,15 +2069,20 @@ describe("classifyBashCommand", () => {
       `gh --gent-probe-unknown ${x} repo delete o/r --yes`,
       `pnpm --gent-probe-unknown ${x} exec -c '${r}'`,
       // Input the guard cannot read names the command npm runs.
-      `cat ${x} | xargs npm --loglevel silent exec --`,
+      `cat ${x} | xargs npm --gent-probe-unknown silent exec --`,
       // Accepted over-ask: runners and parents share one rule, so any later
       // word after an unnamed option may be the subcommand.
-      "git --no-pager log --format=%H main stash",
+      "git --gent-probe-unknown log --format=%H main stash",
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
-    expect(classifyBashCommand("docker --debug run alpine push").level).toBe("external")
+    expect(classifyBashCommand("docker --gent-probe-unknown run alpine push").level).toBe(
+      "external",
+    )
     for (const command of [
+      // A flag the table names takes no value: the next word is the subcommand.
+      "git --no-pager log --format=%H main stash",
+      "docker --debug run alpine push",
       "git --no-pager status",
       "git --no-pager log --oneline -5",
       "git --no-pager diff main",
@@ -2393,6 +2485,59 @@ describe("classifyBashCommand", () => {
     }
   })
 
+  // A container or pod shares volumes, databases and mounts with the host:
+  // the command it runs is read as `ssh host cmd` is.
+  test("a command run in a container or a pod is read", () => {
+    const x = "/nonexistent/gent-probe-x"
+    for (const command of [
+      "docker exec db psql -c 'DROP TABLE t'",
+      "docker exec -it db psql -U postgres -c 'DROP TABLE t'",
+      `docker exec -u root -w ${x} db sh -c 'rm -rf ${x}'`,
+      `docker container exec db rm -rf ${x}`,
+      `docker exec "$C" rm -rf ${x}`,
+      "docker compose exec db psql -c 'DROP TABLE t'",
+      `docker compose exec -T web sh -c 'rm -rf ${x}'`,
+      `docker compose -f ${x}.yml exec --user root web rm -rf ${x}`,
+      `docker-compose exec web rm -rf ${x}`,
+      `docker compose run --rm web rm -rf ${x}`,
+      `docker run --rm -v ${x}:/w alpine rm -rf /w`,
+      `docker container run -e A=1 --name probe alpine rm -rf /w`,
+      `kubectl exec pod -- rm -rf ${x}`,
+      `kubectl exec -it pod -c app -- psql -c 'DROP TABLE t'`,
+      `kubectl -n ns exec pod -- sh -c 'rm -rf ${x}'`,
+      `kubectl exec -n ns pod -- rm -rf ${x}`,
+      // Options after the pod: the command starts after `--`.
+      `kubectl exec pod -c app -- rm -rf ${x}`,
+      // The form without `--`.
+      `kubectl exec pod rm -rf ${x}`,
+      // `--entrypoint` names the command; the words after the image are its arguments.
+      `docker run --entrypoint rm alpine -rf ${x}`,
+      `docker run --entrypoint=rm alpine -rf ${x}`,
+      `docker run --rm --entrypoint sh -v ${x}:/w alpine -c 'rm -rf /w'`,
+      `docker compose run --entrypoint rm web -rf ${x}`,
+      `docker run --entrypoint "$E" alpine`,
+      // `kubectl debug` runs its command after `--`.
+      `kubectl debug node/n -it --image=busybox -- rm -rf ${x}`,
+      `kubectl debug pod -c dbg --image busybox -- sh -c 'rm -rf ${x}'`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      `docker run --entrypoint ls alpine -la ${x}`,
+      "kubectl debug pod -it --image=busybox -- ls",
+      "docker exec db ls",
+      `docker exec -w ${x} -e X=1 db cat f`,
+      "docker exec -it db psql -c 'select 1'",
+      "docker compose exec -T web ls",
+      "docker compose run --rm web bun test",
+      `docker run --rm -v ${x}:/w -e A=1 --name probe alpine ls /w`,
+      "kubectl exec pod -- ls",
+      "kubectl exec -it pod -c app -- psql -c 'select 1'",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
   test("cluster, infrastructure and compose deletions ask; their reads do not", () => {
     for (const command of [
       "kubectl delete pod gent-probe-x",
@@ -2428,6 +2573,11 @@ describe("classifyBashCommand", () => {
       "terraform apply -var x=1",
       "terraform state list",
       "tofu plan",
+      // A value of a global option the table names is no subcommand.
+      'kubectl -n "$NS" get pods',
+      'kubectl --context "$CTX" get pods',
+      'docker compose -f "$F" up',
+      'docker compose -p "$P" ps',
       "docker compose up -d",
       "docker compose -f /nonexistent/gent-probe-x.yml up",
       "docker compose down",
@@ -2697,7 +2847,12 @@ const withSession = (
 })
 /** A fake `Session.send` that records the background notice, a `queue` delivery. */
 const onQueue =
-  (record: (notice: { sourceId: string; content: string }) => Effect.Effect<unknown>) =>
+  (
+    record: (notice: {
+      sourceId: string
+      content: string
+    }) => Effect.Effect<unknown, ExtensionServiceError>,
+  ) =>
   (params: Parameters<TestToolContext["Session"]["send"]>[0]) => {
     if (params.delivery !== "queue") return Effect.die(`unexpected ${params.delivery} delivery`)
     return record({ sourceId: params.sourceId, content: params.content }).pipe(Effect.asVoid)
@@ -3465,6 +3620,77 @@ describe("BashTool execution", () => {
       }).pipe(withProcessTimeout),
     processTestTimeout,
   )
+
+  it.live(
+    "a refused completion a later replay delivers is not also kept as a notice",
+    () =>
+      Effect.gen(function* () {
+        const toolCallId = ToolCallId.make("tc-refused-replay")
+        const branch = { sessionId: stubCtx.sessionId, branchId: stubCtx.branchId }
+        const delivered = yield* Ref.make<ReadonlyArray<string>>([])
+        const refusing = yield* Ref.make(true)
+        const ctx = withSession(
+          { ...stubCtx, toolCallId },
+          {
+            ...stubCtx.Session,
+            getSession: () =>
+              Effect.succeed(
+                new Session({
+                  id: stubCtx.sessionId,
+                  activeBranchId: stubCtx.branchId,
+                  createdAt: now,
+                  updatedAt: now,
+                }),
+              ),
+            listBranches: Effect.succeed([
+              new Branch({ id: stubCtx.branchId, sessionId: stubCtx.sessionId, createdAt: now }),
+            ]),
+            send: onQueue((notice) =>
+              Effect.gen(function* () {
+                if (yield* Ref.get(refusing)) {
+                  return yield* new ExtensionServiceError({
+                    service: "Session",
+                    operation: "send",
+                    message: "Follow-up queue full (max 10)",
+                  })
+                }
+                yield* Ref.update(delivered, (all) => [...all, notice.sourceId])
+              }),
+            ),
+          },
+        )
+        const millis = yield* Clock.currentTimeMillis
+        const storageLayer = SqliteStorage.LiveWithSql(
+          `/tmp/gent-background-bash-refused-replay-${millis}.db`,
+          () => Layer.empty,
+          {},
+        ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)))
+        const undelivered = BackgroundBashStorage.pipe(
+          Effect.flatMap((storage) => storage.undeliveredJobs(branch)),
+        )
+        const params = { command: "printf refused-output", run_in_background: true }
+
+        // The first server's send is refused: the row keeps the completion.
+        const scope = yield* Scope.make()
+        const firstProfile = yield* Layer.buildWithScope(makeProcessLayer(storageLayer), scope)
+        yield* Effect.gen(function* () {
+          yield* runToolWithCtx(BashTool, params, ctx)
+          yield* waitFor(undelivered, (jobs) => jobs.length === 1, 2_000, "the refused completion")
+        }).pipe(Effect.provideContext(firstProfile))
+        yield* Scope.close(scope, Exit.void)
+
+        // A later server replays the Terminal claim, and its send is accepted.
+        yield* Ref.set(refusing, false)
+        const after = yield* Effect.gen(function* () {
+          yield* runToolWithCtx(BashTool, params, ctx)
+          return yield* undelivered
+        }).pipe(Effect.provide(makeProcessLayer(storageLayer)))
+
+        expect(yield* Ref.get(delivered)).toEqual(["bash:tc-refused-replay:complete"])
+        expect(after).toEqual([])
+      }).pipe(withProcessTimeout),
+    processTestTimeout,
+  )
 })
 
 // ── exec tools rpc ──────────────────────────────────────────────────────────
@@ -3563,6 +3789,119 @@ describe("background bash after session deletion", () => {
         expect(answered._tag).toBe("Failure")
       }).pipe(Effect.timeout("8 seconds")),
     10_000,
+  )
+})
+
+describe("a background completion the full follow-up queue refused", () => {
+  it.scopedLive.layer(BunFileSystem.layer)(
+    "the next turn reads it as a notice until a turn answers",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-bg-queue-full-" })
+        const storagePath = `${directory}/gent.db`
+        const release = `${directory}/release`
+        const command = `while ! test -f ${release}; do sleep 0.02; done; printf queue-full-output`
+        const holding = yield* Deferred.make<void>()
+        const releaseHold = yield* Deferred.make<void>()
+        const notices = yield* Ref.make<ReadonlyArray<string>>([])
+        const providerLayer = LanguageModelLayers.testStream((options) =>
+          Effect.gen(function* () {
+            const call = (yield* Ref.updateAndGet(notices, (all) => [
+              ...all,
+              turnRequestText(options.prompt).notices,
+            ])).length
+            if (call === 1) {
+              return Stream.fromIterable([
+                toolCallPart("bash", { command, run_in_background: true }),
+                finishPart({ finishReason: "tool-calls" }),
+              ])
+            }
+            // The third call holds its turn, so every later send waits in the queue.
+            if (call === 3) {
+              yield* Deferred.succeed(holding, void 0)
+              yield* Deferred.await(releaseHold)
+            }
+            return Stream.fromIterable([
+              textDeltaPart(`reply ${call}`),
+              finishPart({ finishReason: "stop" }),
+            ])
+          }),
+        )
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+          storagePath,
+          cwd: directory,
+        })
+        const idle = (label: string) =>
+          waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (snapshot) => snapshot.runtime._tag === "Idle",
+            10_000,
+            label,
+          )
+        yield* client.message.send({ sessionId, branchId, content: "start the job" })
+        yield* waitFor(
+          client.session.getSnapshot({ sessionId, branchId }),
+          (snapshot) =>
+            snapshot.runtime._tag === "Idle" &&
+            snapshot.messages.some((message) => message.role === "tool"),
+          10_000,
+          "the job started and the turn ended",
+        )
+        yield* client.message.send({ sessionId, branchId, content: "hold" })
+        yield* Deferred.await(holding)
+        for (let i = 1; i <= 10; i++) {
+          yield* client.message.send({ sessionId, branchId, content: `queued ${i}` })
+        }
+        yield* fs.writeFileString(release, "go")
+        // The job ends while the queue is full: the refused completion is kept on its row.
+        yield* Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          yield* waitFor(
+            sql<{ readonly n: number }>`
+              SELECT COUNT(*) AS n FROM background_bash_jobs WHERE undelivered_at IS NOT NULL
+            `.pipe(
+              Effect.map((rows) => rows[0]?.n ?? 0),
+              // A table without the column reads as nothing recorded.
+              Effect.orElseSucceed(() => 0),
+            ),
+            (count) => count === 1,
+            5_000,
+            "the refused completion is recorded",
+          )
+        }).pipe(
+          Effect.provide(
+            SqliteStorage.LiveWithSql(storagePath, () => Layer.empty, {}).pipe(
+              Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)),
+            ),
+          ),
+        )
+        yield* Deferred.succeed(releaseHold, void 0)
+        yield* idle("the queued turns ran")
+        const heading = "# Background commands finished"
+        const shown = (yield* Ref.get(notices)).filter((text) => text.includes(heading))
+        expect(shown.length).toBeGreaterThan(0)
+        expect(shown[0]).toContain(command)
+        expect(shown[0]).toContain("queue-full-output")
+        // No message carries the completion: it lived in the notices only.
+        const snapshot = yield* client.session.getSnapshot({ sessionId, branchId })
+        const texts = snapshot.messages.flatMap((message) =>
+          message.parts.flatMap((part) => {
+            if (part.type === "text") return [part.text]
+            return []
+          }),
+        )
+        expect(texts.some((text) => text.includes("queue-full-output"))).toBe(false)
+        // A turn answered with it shown: the next turn reads nothing.
+        const before = (yield* Ref.get(notices)).length
+        yield* client.message.send({ sessionId, branchId, content: "anything else?" })
+        yield* waitFor(Ref.get(notices), (all) => all.length > before, 5_000, "the next model call")
+        yield* idle("the last turn ended")
+        expect((yield* Ref.get(notices)).slice(before).join("")).not.toContain(heading)
+      }).pipe(Effect.timeout("25 seconds")),
+    30_000,
   )
 })
 

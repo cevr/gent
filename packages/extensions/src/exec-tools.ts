@@ -128,7 +128,24 @@ interface BackgroundBashStorageService {
     ReadonlyArray<{ readonly toolCallId: ToolCallId; readonly command: string }>,
     BackgroundBashStorageError
   >
-  /** Marks these interrupted jobs' notices read: an answered turn showed them. */
+  /**
+   * Records whether a settled job's follow-up message was sent. A refused
+   * send (a full follow-up queue, for one) marks the job, and the branch's
+   * next turn reads it as a notice; a later accepted send, a replay after a
+   * restart for one, clears the mark, so the model does not get it twice.
+   */
+  readonly recordDelivery: (
+    key: BackgroundBashJobKeyFields,
+    delivered: boolean,
+  ) => Effect.Effect<void, BackgroundBashStorageError>
+  /** The branch's settled jobs whose follow-up was refused and no answered turn has read, oldest first. */
+  readonly undeliveredJobs: (
+    branch: BackgroundBashBranch,
+  ) => Effect.Effect<
+    ReadonlyArray<{ readonly toolCallId: ToolCallId; readonly state: BackgroundBashTerminalState }>,
+    BackgroundBashStorageError
+  >
+  /** Marks these interrupted or undelivered jobs' notices read: an answered turn showed them. */
   readonly markNoticesRead: (
     branch: BackgroundBashBranch,
     toolCallIds: ReadonlyArray<ToolCallId>,
@@ -212,6 +229,7 @@ export class BackgroundBashStorage extends Context.Service<
               message TEXT,
               owner_generation TEXT,
               notice_read_at INTEGER,
+              undelivered_at INTEGER,
               PRIMARY KEY (session_id, branch_id, tool_call_id)
             )
           `,
@@ -221,9 +239,11 @@ export class BackgroundBashStorage extends Context.Service<
         // NULL. One from before `notice_read_at` gets it too, and its
         // interrupted jobs stay unread: the earlier code told a branch only
         // when its loop opened, so a job is shown once more at worst, never lost.
+        // One from before `undelivered_at` gets it with NULL: no old job is owed a notice.
         const columns = yield* backgroundBashColumns
         yield* addBackgroundBashColumn(columns, "owner_generation", "TEXT")
         yield* addBackgroundBashColumn(columns, "notice_read_at", "INTEGER")
+        yield* addBackgroundBashColumn(columns, "undelivered_at", "INTEGER")
         // The server process that owns the jobs this layer starts: every
         // profile in one process shares it, a restarted server has another.
         const generation = yield* Effect.sync(() => String(performance.timeOrigin))
@@ -353,6 +373,52 @@ export class BackgroundBashStorage extends Context.Service<
             Effect.mapError(mapError("Failed to read interrupted background bash jobs")),
           ),
 
+          recordDelivery: Effect.fn("BackgroundBashStorage.recordDelivery")(
+            function* (key, delivered) {
+              if (delivered) {
+                yield* sql`
+                  UPDATE background_bash_jobs
+                  SET undelivered_at = NULL
+                  WHERE session_id = ${key.sessionId}
+                    AND branch_id = ${key.branchId}
+                    AND tool_call_id = ${key.toolCallId}
+                    AND undelivered_at IS NOT NULL
+                `
+                return
+              }
+              const undeliveredAt = (yield* DateTime.nowAsDate).getTime()
+              yield* sql`
+                UPDATE background_bash_jobs
+                SET undelivered_at = ${undeliveredAt}
+                WHERE session_id = ${key.sessionId}
+                  AND branch_id = ${key.branchId}
+                  AND tool_call_id = ${key.toolCallId}
+                  AND status IN ('completed', 'failed')
+                  AND undelivered_at IS NULL
+              `
+            },
+            Effect.mapError(mapError("Failed to record background bash job delivery")),
+          ),
+
+          undeliveredJobs: Effect.fn("BackgroundBashStorage.undeliveredJobs")(
+            function* (branch) {
+              const rows = yield* sql<BackgroundBashJobRow & { readonly tool_call_id: string }>`
+                SELECT tool_call_id, command, status, exit_code, message
+                FROM background_bash_jobs
+                WHERE session_id = ${branch.sessionId}
+                  AND branch_id = ${branch.branchId}
+                  AND undelivered_at IS NOT NULL
+                  AND notice_read_at IS NULL
+                ORDER BY completed_at, tool_call_id
+              `
+              return rows.map((row) => ({
+                toolCallId: ToolCallId.make(row.tool_call_id),
+                state: terminalState(row),
+              }))
+            },
+            Effect.mapError(mapError("Failed to read undelivered background bash jobs")),
+          ),
+
           markNoticesRead: Effect.fn("BackgroundBashStorage.markNoticesRead")(
             function* (branch, toolCallIds) {
               if (toolCallIds.length === 0) return
@@ -363,7 +429,7 @@ export class BackgroundBashStorage extends Context.Service<
                 WHERE session_id = ${branch.sessionId}
                   AND branch_id = ${branch.branchId}
                   AND tool_call_id IN ${sql.in(toolCallIds)}
-                  AND status = 'interrupted'
+                  AND (status = 'interrupted' OR undelivered_at IS NOT NULL)
                   AND notice_read_at IS NULL
               `
             },
@@ -1325,12 +1391,24 @@ interface ValueOptions {
   readonly attached?: string
   /** A `-name` word is one long option, not a cluster of letters (`arch -arm64`, `-arch x`). */
   readonly singleDash?: boolean
+  /**
+   * Options known to take no value (`git -P`, `--no-pager`): the word after
+   * one is not its value, so it hides no subcommand.
+   */
+  readonly flags?: { readonly short: string; readonly long: ReadonlyArray<string> }
 }
 
 const names = (text: string) => text.split(" ").filter((name) => name.length > 0)
 
-/** Options that take a value: the letters, and the long names separated by spaces. */
-const options = (short: string, long = ""): ValueOptions => ({ short, long: names(long) })
+/**
+ * Options that take a value: the letters, and the long names separated by
+ * spaces; then the options known to take none, the same way.
+ */
+const options = (short: string, long = "", flagShort = "", flagLong = ""): ValueOptions => ({
+  short,
+  long: names(long),
+  flags: { short: flagShort, long: names(flagLong) },
+})
 
 /** Where an option's value starts: argument `word`, from character `from`. */
 interface OptionValue {
@@ -1546,7 +1624,9 @@ const valueWord = (words: ReadonlyArray<ShellWord>, value: OptionValue): Option.
  * - `Command`: the command after the options and `positionals` more words
  *   (`timeout 5 cmd`), after a `named` word before `{` (`coproc NAME { … }`),
  *   or after the first of `after` (`nix develop .#x -c cmd`). `head` is the
- *   command it is a subcommand of (`yarn workspace x npm publish`).
+ *   command it is a subcommand of (`yarn workspace x npm publish`). The
+ *   value of an `entry` option is the command word, and those words are its
+ *   arguments (`docker run --entrypoint rm image -rf x`).
  * - `Joined`: the words after the options and `positionals`, `take` of them,
  *   joined into one script (`eval`, `ssh host cmd`, `trap 'cmd' EXIT`).
  * - `OptionScript`: the values of these options are scripts (`su -c`,
@@ -1566,6 +1646,7 @@ const Run = Schema.TaggedUnion({
     after: Schema.Array(Schema.String),
     named: Schema.Boolean,
     head: Schema.String,
+    entry: Schema.Array(Schema.String),
   },
   Joined: { positionals: Schema.Int, take: Schema.Int },
   OptionScript: { short: Schema.String, long: Schema.Array(Schema.String), rest: Schema.Boolean },
@@ -1577,7 +1658,14 @@ type Run = typeof Run.Type
 type CommandFields = Partial<Omit<typeof Run.cases.Command.Type, "_tag">>
 
 const command = (fields: CommandFields = {}): Run =>
-  Run.cases.Command.make({ positionals: 0, after: [], named: false, head: "", ...fields })
+  Run.cases.Command.make({
+    positionals: 0,
+    after: [],
+    named: false,
+    head: "",
+    entry: [],
+    ...fields,
+  })
 
 const joined = (positionals = 0, take = Number.MAX_SAFE_INTEGER): Run =>
   Run.cases.Joined.make({ positionals, take })
@@ -1621,8 +1709,11 @@ interface ResolvedCommand {
  * option (parallel's `--tag` is not `--tagstring`).
  */
 const isUnsure = (valued: ValueOptions, option: ParsedOption) => {
-  if (!option.long) return !`${valued.short ?? ""}${valued.attached ?? ""}`.includes(option.name)
-  if ((valued.long ?? []).includes(option.name)) return false
+  const flags = valued.flags ?? { short: "", long: [] }
+  if (!option.long) {
+    return !`${valued.short ?? ""}${valued.attached ?? ""}${flags.short}`.includes(option.name)
+  }
+  if ([...(valued.long ?? []), ...flags.long].includes(option.name)) return false
   return !Option.exists(option.value, (value) => value.word === option.at)
 }
 
@@ -1701,21 +1792,18 @@ const runTimeChild = (resolved: ResolvedCommand, next: number): Option.Option<Re
     }),
   )
 
-/** The readings when `words[next]` of `resolved` is its subcommand word; none when it names no path. */
-const readingsAt = (resolved: ResolvedCommand, next: number): ReadonlyArray<ResolvedCommand> =>
-  Option.match(childCommand(resolved, next), {
-    onNone: () => Option.toArray(runTimeChild(resolved, next)),
-    onSome: readingsUnder,
-  })
-
 /**
  * The readings of the command path under `resolved`. The first takes every
  * option the parent's table does not name to have no value, and stops at
  * the parent when the next word names no path. Each later word that may be
  * the subcommand (`laterCommandWords`) and names a path is a reading too
- * (`npm --loglevel silent exec -- cmd`). An unnamed option alone adds none:
+ * (`uv --cache-dir x run cmd`). An unnamed option alone adds none:
  * `git --no-pager status` has one reading. A subcommand word known only at
- * run time adds a reading that asks (`runTimeChild`).
+ * run time adds a reading that asks (`runTimeChild`) in the usual position,
+ * and, after an option the table does not name, at the first later word
+ * known only at run time (`npm --omit dev "$CMD"`). After a flag the table
+ * names there are no later words: `git -P show "$SHA"` reads `$SHA` as an
+ * operand.
  */
 const readingsUnder = (resolved: ResolvedCommand): Arr.NonEmptyReadonlyArray<ResolvedCommand> => {
   if (!SPEC_PARENTS.has(resolved.path)) return [resolved]
@@ -1723,9 +1811,14 @@ const readingsUnder = (resolved: ResolvedCommand): Arr.NonEmptyReadonlyArray<Res
   const args = resolved.words.slice(1).map((word) => word.text)
   // `args[index]` is `resolved.words[index + 1]`.
   const first = subcommandAt(resolved) - 1
-  const others = laterCommandWords(args, resolved.spec.valued, from)
-    .filter((index) => index !== first)
-    .flatMap((index) => readingsAt(resolved, index + 1))
+  const later = laterCommandWords(args, resolved.spec.valued, from).filter(
+    (index) => index !== first,
+  )
+  const runTime = Arr.findFirst(later, (index) => Option.isSome(runTimeChild(resolved, index + 1)))
+  const others = [
+    ...later.flatMap((index) => Option.toArray(childCommand(resolved, index + 1))),
+    ...Option.toArray(Option.flatMap(runTime, (index) => runTimeChild(resolved, index + 1))),
+  ].flatMap(readingsUnder)
   const head = Option.match(childCommand(resolved, first + 1), {
     onNone: (): Arr.NonEmptyReadonlyArray<ResolvedCommand> => [
       resolved,
@@ -1823,8 +1916,14 @@ const runCommands = (
   if (run._tag !== "Command") return []
   let starts = commandStarts(words, valued, run)
   if (readings === "first") starts = starts.slice(0, 1)
+  const entry = Arr.last(
+    optionValues(parseWords(words, valued, "leading"), "", run.entry).flatMap((value) =>
+      Option.toArray(valueWord(words, value)),
+    ),
+  )
   return starts.map((start) => {
     const rest = words.slice(start)
+    if (Option.isSome(entry)) return [entry.value, ...rest]
     if (run.head === "") return rest
     return [derivedWord(run.head, false), ...rest]
   })
@@ -3044,6 +3143,8 @@ const assignmentRuns = ({ words, assignments }: Invocation): SegmentRuns => {
 const GIT_GLOBAL_OPTIONS = options(
   "cC",
   "git-dir work-tree namespace config-env super-prefix attr-source",
+  "Pp",
+  "no-pager paginate bare no-replace-objects literal-pathspecs glob-pathspecs noglob-pathspecs icase-pathspecs no-optional-locks no-advice",
 )
 
 /** Git config keys whose value git runs as a shell command. */
@@ -3241,9 +3342,11 @@ const viewCommand = (
  * the name appended. The value is read there as `value "$@"`, so those
  * words are run-time words and a risky command asks. A name matches in any
  * order in the command line. A derived word has no insertion point, so no
- * git trailer is written into an alias use.
+ * git trailer is written into an alias use. One view per name used.
  */
-const aliasUseView = (view: CommandView): CommandView => {
+const aliasUseViews = (
+  view: CommandView,
+): ReadonlyArray<{ readonly name: string; readonly view: CommandView }> => {
   const values = new Map<string, Array<ShellWord>>()
   for (const invocation of view.invocations) {
     if (invocationName(invocation) !== "alias") continue
@@ -3251,21 +3354,29 @@ const aliasUseView = (view: CommandView): CommandView => {
       values.set(name, [...(values.get(name) ?? []), value])
     }
   }
-  const scripts = new Map<string, ShellWord>()
-  for (const invocation of view.invocations) {
-    for (const value of values.get(invocation.words[0]?.text ?? "") ?? []) {
-      const script = derivedWord(`${value.text} "$@"`, value.dynamic)
-      scripts.set(script.text, script)
-    }
-  }
-  const views = [...scripts.values()].map((script) =>
-    viewCommand(parseShell(script, Option.none()), MAX_NESTED_COMMAND_DEPTH - 1),
-  )
-  return {
-    invocations: views.flatMap((used) => used.invocations),
-    writes: views.flatMap((used) => used.writes),
-    unreadable: views.flatMap((used) => used.unreadable),
-  }
+  const used = new Set(view.invocations.map((invocation) => invocation.words[0]?.text ?? ""))
+  return [...values].flatMap(([name, definitions]) => {
+    if (!used.has(name)) return []
+    const scripts = new Map(
+      definitions.map((value): readonly [string, ShellWord] => {
+        const script = derivedWord(`${value.text} "$@"`, value.dynamic)
+        return [script.text, script]
+      }),
+    )
+    const views = [...scripts.values()].map((script) =>
+      viewCommand(parseShell(script, Option.none()), MAX_NESTED_COMMAND_DEPTH - 1),
+    )
+    return [
+      {
+        name,
+        view: {
+          invocations: views.flatMap((read) => read.invocations),
+          writes: views.flatMap((read) => read.writes),
+          unreadable: views.flatMap((read) => read.unreadable),
+        },
+      },
+    ]
+  })
 }
 
 // ── command classification ──
@@ -3695,6 +3806,8 @@ const GH_DELETES = [
 ]
 const GH_REPO_OPTIONS = options("R", "repo")
 const PUBLISH_OPTIONS = "tag access registry otp"
+/** Package manager options that take no value. */
+const PACKAGE_FLAGS = "silent quiet verbose json"
 
 /** `git commit` options whose value is the next word. */
 const COMMIT_OPTIONS = options(
@@ -3713,8 +3826,29 @@ const COMPOSE_OPTIONS = options(
 
 /** kubectl global options whose value is the next word. */
 const KUBECTL_OPTIONS = options(
-  "ns",
-  "namespace context kubeconfig cluster user server token as as-group request-timeout",
+  "nsv",
+  "namespace context kubeconfig cluster user server token as as-group request-timeout v",
+)
+
+/** `docker exec` and `docker compose exec` options whose value is the next word. */
+const CONTAINER_EXEC_OPTIONS = options("euw", "env env-file user workdir detach-keys index")
+
+/** `docker run` and `docker compose run` options whose value is the next word. */
+const CONTAINER_RUN_OPTIONS = options(
+  "acehlmpuvw",
+  "attach cpu-shares env env-file hostname label memory publish user volume workdir name network entrypoint mount platform pull restart cpus add-host device dns ipc log-driver log-opt pid runtime security-opt shm-size stop-signal tmpfs ulimit cap-add cap-drop cidfile gpus",
+)
+
+/** `kubectl exec` options whose value is the next word; the global options may follow the subcommand. */
+const KUBECTL_EXEC_OPTIONS = options(
+  `${KUBECTL_OPTIONS.short ?? ""}cf`,
+  `${(KUBECTL_OPTIONS.long ?? []).join(" ")} container filename pod-running-timeout`,
+)
+
+/** `kubectl debug` options whose value is the next word. */
+const KUBECTL_DEBUG_OPTIONS = options(
+  `${KUBECTL_OPTIONS.short ?? ""}cf`,
+  `${(KUBECTL_OPTIONS.long ?? []).join(" ")} container filename image target profile copy-to env set-image custom`,
 )
 
 /** `terraform apply` options whose value may be the next word (`-var x=1`). */
@@ -3854,12 +3988,28 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
     // `trap '<script>' SIGNAL`: the script runs when the signal (or `EXIT`) comes.
     trap: spec({}, [joined(0, 1)]),
     // Package managers and runners.
-    pnpm: spec(options("CF", `filter dir ${PUBLISH_OPTIONS}`)),
-    npm: spec(options("w", `workspace prefix userconfig cache ${PUBLISH_OPTIONS}`)),
-    yarn: spec(options("", `cwd ${PUBLISH_OPTIONS}`)),
-    bun: spec(options("F", `cwd filter config ${PUBLISH_OPTIONS}`)),
+    pnpm: spec(
+      options("CF", `filter dir loglevel ${PUBLISH_OPTIONS}`, "rs", `${PACKAGE_FLAGS} recursive`),
+    ),
+    npm: spec(
+      options(
+        "w",
+        `workspace prefix userconfig cache loglevel omit include ${PUBLISH_OPTIONS}`,
+        "gsq",
+        `${PACKAGE_FLAGS} global`,
+      ),
+    ),
+    yarn: spec(options("", `cwd ${PUBLISH_OPTIONS}`, "", PACKAGE_FLAGS)),
+    bun: spec(options("F", `cwd filter config ${PUBLISH_OPTIONS}`, "", PACKAGE_FLAGS)),
     cargo: {
-      ...spec(options("pZ", "package manifest-path registry token config index color")),
+      ...spec(
+        options(
+          "pZ",
+          "package manifest-path registry token config index color",
+          "qv",
+          "locked frozen offline quiet verbose",
+        ),
+      ),
       toolchain: true,
     },
     // `pnpm exec -c` (`--shell-mode`) runs its words as a shell script; so
@@ -3904,7 +4054,14 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
           "gh api DELETE",
         ),
     ),
-    docker: spec(options("Hcl", "host context config log-level tlscacert tlscert tlskey")),
+    docker: spec(
+      options(
+        "Hcl",
+        "host context config log-level tlscacert tlscert tlskey",
+        "D",
+        "debug tls tlsverify",
+      ),
+    ),
     ...each(["docker push", "docker image push"], risky(external("docker push"))),
     ...each(
       ["docker volume rm", "docker volume remove", "docker volume prune", "docker system prune"],
@@ -3931,6 +4088,24 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
         ),
       ),
     ),
+    // The command a container or a pod runs, after the container, service or
+    // pod word; it shares volumes, mounts and databases with the host.
+    // `run --entrypoint cmd` runs `cmd` with the words after the image.
+    // `kubectl exec` takes it after `--`, or after the pod in the old form;
+    // `kubectl debug` after `--`.
+    ...each(
+      ["docker exec", "docker container exec", "docker compose exec", "docker-compose exec"],
+      runner(CONTAINER_EXEC_OPTIONS, { positionals: 1 }),
+    ),
+    ...each(
+      ["docker run", "docker container run", "docker compose run", "docker-compose run"],
+      runner(CONTAINER_RUN_OPTIONS, { positionals: 1, entry: ["entrypoint"] }),
+    ),
+    "kubectl exec": spec(KUBECTL_EXEC_OPTIONS, [
+      command({ after: ["--"] }),
+      command({ positionals: 1 }),
+    ]),
+    "kubectl debug": runner(KUBECTL_DEBUG_OPTIONS, { after: ["--"] }),
     kubectl: spec(KUBECTL_OPTIONS),
     ...each(
       ["kubectl delete", "kubectl drain"],
@@ -4131,15 +4306,150 @@ const RISKY_PARENTS: ReadonlySet<string> = new Set(
 /** `"$@"`, `$*`, `"${a[@]}"`: the positional parameters or the array elements, each a word of its own. */
 const EXPANDS_TO_WORDS = /^\$(?:[@*]|\{[@*]\}|\{\w+\[[@*]\]\})$/
 
+/** A brace word that makes more words than this is read as words known only at run time. */
+const MAX_BRACE_WORDS = 256
+
+/** bash's sequence expression: `{1..10}`, `{01..10..2}`, `{a..e}`. */
+const BRACE_SEQUENCE = /^(?:(-?\d+)\.\.(-?\d+)|([^{}])\.\.([^{}]))(?:\.\.(-?\d+))?$/
+
+/** The words of a sequence expression, at most one more than `MAX_BRACE_WORDS`. */
+const sequenceWords = (body: string): Option.Option<ReadonlyArray<string>> =>
+  Option.map(Option.fromNullishOr(BRACE_SEQUENCE.exec(body)), (match) => {
+    const step = Math.max(1, Math.abs(Number(match[5] ?? "1")))
+    const numeric = /^-?\d+\.\.-?\d+(?:\.\.|$)/.test(body)
+    let from = (match[3] ?? "").codePointAt(0) ?? 0
+    let to = (match[4] ?? "").codePointAt(0) ?? 0
+    let width = 0
+    if (numeric) {
+      from = Number(match[1])
+      to = Number(match[2])
+      // `{01..10}`: a leading zero pads every number to the wider end.
+      const ends = [match[1] ?? "", match[2] ?? ""]
+      if (ends.some((end) => /^-?0\d/.test(end))) {
+        width = Math.max(...ends.map((end) => end.length))
+      }
+    }
+    const direction = Math.sign(to - from) || 1
+    const words: Array<string> = []
+    for (
+      let at = from;
+      direction * (to - at) >= 0 && words.length <= MAX_BRACE_WORDS;
+      at += direction * step
+    ) {
+      if (numeric) words.push(String(at).padStart(width, "0"))
+      else words.push(String.fromCodePoint(at))
+    }
+    return words
+  })
+
+/** The parts of a brace body split at its top-level commas. */
+const braceParts = (body: string): ReadonlyArray<string> => {
+  const parts: Array<string> = []
+  let depth = 0
+  let start = 0
+  for (let at = 0; at < body.length; at++) {
+    const char = body.charAt(at)
+    if (char === "{") depth++
+    if (char === "}") depth--
+    if (char === "," && depth === 0) {
+      parts.push(body.slice(start, at))
+      start = at + 1
+    }
+  }
+  parts.push(body.slice(start))
+  return parts
+}
+
+/** The index of the `}` that closes the `{` at `open`. */
+const braceClose = (text: string, open: number): Option.Option<number> => {
+  let depth = 0
+  for (let at = open; at < text.length; at++) {
+    if (text.charAt(at) === "{") depth++
+    if (text.charAt(at) === "}") depth--
+    if (depth === 0) return Option.some(at)
+  }
+  return Option.none()
+}
+
+/** The words the first brace expansion in `text` makes; none when it has none. */
+const firstBraceWords = (text: string): Option.Option<ReadonlyArray<string>> => {
+  for (let open = text.indexOf("{"); open !== -1; open = text.indexOf("{", open + 1)) {
+    const expanded = Option.flatMap(braceClose(text, open), (close) => {
+      const body = text.slice(open + 1, close)
+      const parts = braceParts(body)
+      const alternatives = Option.orElse(
+        Option.liftPredicate(parts, (found) => found.length > 1),
+        () => sequenceWords(body),
+      )
+      return Option.map(alternatives, (words) =>
+        words.map((word) => `${text.slice(0, open)}${word}${text.slice(close + 1)}`),
+      )
+    })
+    if (Option.isSome(expanded)) return expanded
+  }
+  return Option.none()
+}
+
+/**
+ * The words the shell makes of a brace word, as the command receives them
+ * (`f{,.bak}` is `f f.bak`); none when there are more than
+ * `MAX_BRACE_WORDS`. The text is read as unquoted, so a quoted brace
+ * beside an unquoted one expands too, and makes more words.
+ */
+const braceWords = (text: string): Option.Option<ReadonlyArray<string>> => {
+  let words: ReadonlyArray<string> = [text]
+  let expanding = true
+  while (expanding) {
+    expanding = false
+    const next: Array<string> = []
+    for (const word of words) {
+      const expanded = firstBraceWords(word)
+      if (Option.isSome(expanded)) expanding = true
+      next.push(...Option.getOrElse(expanded, () => [word]))
+      if (next.length > MAX_BRACE_WORDS) return Option.none()
+    }
+    words = next
+  }
+  // An unquoted word that expands to nothing is no word.
+  return Option.some(words.filter((word) => word.length > 0))
+}
+
+/**
+ * The command path as the command receives its words: each brace word
+ * after the path's last word is the words it makes, each as dynamic as the
+ * brace word.
+ */
+const receivedCommand = (resolved: ResolvedCommand): ResolvedCommand => {
+  const args = resolved.words.slice(1)
+  if (!args.some((word) => word.braces)) return resolved
+  const received = args.flatMap((word): ReadonlyArray<ShellWord> => {
+    if (!word.braces) return [word]
+    return Option.match(braceWords(word.text), {
+      onNone: () => [word],
+      onSome: (texts) =>
+        texts.map((text) => ({
+          ...derivedWord(text, word.dynamic),
+          splits: word.splits,
+          pattern: word.pattern,
+        })),
+    })
+  })
+  return { ...resolved, words: [...resolved.words.slice(0, 1), ...received] }
+}
+
 /**
  * A word before `--` known only at run time, where the command may read it
  * as a flag a risk reads (`-rf`, `--hard`): an unquoted expansion splits
  * (`rm $F`), `"$@"` passes on the words of a function's caller or of `set
  * --`, and a quoted `"$F"` stays one word that may still be `-rf`. A brace
- * expansion (`rm {-rf,x}`, `git reset --{hard,}`) also makes the words at
- * run time; a glob does not, since it matches only names of files (`rm
- * *.log`). Only the value of an option the table names (`cp -t "$d"`,
- * `psql -d "$DB"`) is no flag, and only when it does not split.
+ * expansion that starts the word (`rm {-rf,x}`) or follows a `-` (`git
+ * reset --{hard,}`) also makes the words at run time, as does one that makes
+ * too many words to read; after other text (`cp f{,.bak}`) each word starts
+ * with that text and is no flag, and the risks read the words it makes
+ * (`receivedTexts`). A glob matches only names of files (`rm *.log`). Only
+ * the value of an option the
+ * table names (`cp -t "$d"`, `psql -d "$DB"`) is no flag, and only when it
+ * does not split.
  */
 const runTimeOptions = (
   resolved: ResolvedCommand,
@@ -4163,7 +4473,7 @@ const runTimeOptions = (
       (word, index) =>
         word.splits ||
         EXPANDS_TO_WORDS.test(word.text) ||
-        word.braces ||
+        (word.braces && (/^[-{]/.test(word.text) || Option.isNone(braceWords(word.text)))) ||
         (word.dynamic && !values.has(index)),
     ),
     (word): BashRisk => ({
@@ -4176,16 +4486,22 @@ const runTimeOptions = (
 const invocationRisks = (invocation: Invocation): Array<BashRisk> =>
   resolveReadings(invocation.words).flatMap((resolved) => {
     if (resolved.spec.risks.length === 0) return []
-    const texts = resolved.words.slice(1).map((word) => word.text)
-    const args: CommandArgs = {
-      texts,
-      parsed: parseArguments(texts, resolved.spec.valued),
-      resolved,
-      invocation,
+    const argsOf = (command: ResolvedCommand): CommandArgs => {
+      const texts = command.words.slice(1).map((word) => word.text)
+      return {
+        texts,
+        parsed: parseArguments(texts, command.spec.valued),
+        resolved: command,
+        invocation,
+      }
     }
+    const written = argsOf(resolved)
+    const received = receivedCommand(resolved)
+    let args = written
+    if (received !== resolved) args = argsOf(received)
     return [
       ...resolved.spec.risks.flatMap((risk) => Option.toArray(risk(args))),
-      ...Option.toArray(runTimeOptions(resolved, args)),
+      ...Option.toArray(runTimeOptions(resolved, written)),
     ]
   })
 
@@ -4196,6 +4512,16 @@ const RISK_RANK = {
   destructive: 3,
 } satisfies Record<BashRiskLevel, number>
 
+/** The risks of the commands of `view`, of the files they write, and of what could not be read. */
+const viewRisks = (view: CommandView): ReadonlyArray<BashRisk> => [
+  ...view.invocations.flatMap(invocationRisks),
+  ...view.writes.flatMap((word) => Option.toArray(sensitiveFile(word.text))),
+  ...view.unreadable.map((reason): BashRisk => ({
+    level: "destructive",
+    reason: `runs a script the guard cannot read: ${reason}`,
+  })),
+]
+
 /**
  * The strongest risk of every command in `command` and in every script it
  * runs (`bash -c '...'`, `eval "..."`, `$(...)`, a heredoc fed to a shell, a
@@ -4205,16 +4531,15 @@ const RISK_RANK = {
  */
 export function classifyBashCommand(command: string): BashRisk {
   const direct = viewCommand(parseCommand(command), MAX_NESTED_COMMAND_DEPTH)
-  const aliased = aliasUseView(direct)
   const risks: Array<BashRisk> = [
-    ...[...direct.invocations, ...aliased.invocations].flatMap(invocationRisks),
-    ...[...direct.writes, ...aliased.writes].flatMap((word) =>
-      Option.toArray(sensitiveFile(word.text)),
+    ...viewRisks(direct),
+    // The reason names the alias; `"$@"` stands for the words after its name.
+    ...aliasUseViews(direct).flatMap(({ name, view }) =>
+      viewRisks(view).map((risk) => ({
+        ...risk,
+        reason: `alias ${name}: ${risk.reason.replaceAll("$@", `the words after ${name}`)}`,
+      })),
     ),
-    ...[...direct.unreadable, ...aliased.unreadable].map((reason): BashRisk => ({
-      level: "destructive",
-      reason: `runs a script the guard cannot read: ${reason}`,
-    })),
   ]
   let strongest = SAFE_RISK
   for (const risk of risks) {
@@ -4442,18 +4767,31 @@ const targetStillExists = (target: BackgroundBashTarget) =>
     return branches.some((branch) => branch.id === target.branchId)
   })
 
+/**
+ * Queues a settled job's message; false when the send was refused (a full
+ * follow-up queue, for one), so the caller keeps the result for a notice. A
+ * deleted session or branch is owed nothing.
+ */
 const queueBackgroundFollowUp = (params: {
   readonly target: BackgroundBashTarget
   readonly sourceId: string
   readonly content: string
 }) =>
   Effect.gen(function* () {
-    if (!(yield* targetStillExists(params.target))) return
-    yield* params.target.Session.send({
+    if (!(yield* targetStillExists(params.target))) return true
+    return yield* params.target.Session.send({
       delivery: "queue",
       sourceId: params.sourceId,
       content: params.content,
-    }).pipe(Effect.catchEager(() => Effect.void))
+    }).pipe(
+      Effect.as(true),
+      Effect.catchEager((error) =>
+        Effect.logWarning("exec-tools.background.follow-up.refused").pipe(
+          Effect.annotateLogs({ toolCallId: params.target.toolCallId, error: error.message }),
+          Effect.as(false),
+        ),
+      ),
+    )
   })
 
 /**
@@ -4469,37 +4807,40 @@ const boundedNotice = (toolCallId: ToolCallId, message: string): string => {
   return `${bounded.text}\n\n[${omitted} of ${bounded.totalChars} characters omitted; read the rest with context.read("${toolCallId}", { offset, limit })]`
 }
 
+/** Queues the settled job's message; false when the send was refused. */
 const queueTerminalFollowUp = (target: BackgroundBashTarget, state: BackgroundBashTerminalState) =>
   Effect.gen(function* () {
     const command = state.command
     const message = boundedNotice(target.toolCallId, state.message ?? "")
     if (state.status === "completed") {
       const exitCode = state.exitCode ?? 0
-      yield* queueBackgroundFollowUp({
+      return yield* queueBackgroundFollowUp({
         target,
         sourceId: `bash:${target.toolCallId}:complete`,
         content: `Background command completed (exit code ${exitCode}):\n\`\`\`\n$ ${command}\n${message}\n\`\`\``,
       })
-      return
     }
     // An interrupted job wakes nobody: the next turn reads it as a notice.
-    if (state.status === "interrupted") return
-    yield* queueBackgroundFollowUp({
+    if (state.status === "interrupted") return true
+    return yield* queueBackgroundFollowUp({
       target,
       sourceId: `bash:${target.toolCallId}:failure`,
       content: `Background command failed:\n\`\`\`\n$ ${command}\n${message}\n\`\`\``,
     })
   })
 
-// ── interrupted job notices ──
+// ── job notices ──
 //
 // A job the server stopped has no output and no end to report. Opening its
 // session must not spend a turn with no user present, so the job wakes
 // nobody: every step of the branch's next turn shows it as a turn notice,
-// and the turn that answered with it shown marks it read on its row.
+// and the turn that answered with it shown marks it read on its row. A job
+// whose message the follow-up queue refused is shown the same way, with its
+// outcome, so no finished job goes unreported.
 
 const maximumNoticeJobs = 10
 const maximumNoticeCommandChars = 200
+const maximumNoticeOutputChars = 2_000
 
 const noticeCommand = (command: string) => {
   const line = command.replace(/\s+/g, " ").trim()
@@ -4508,38 +4849,69 @@ const noticeCommand = (command: string) => {
   return `${chars.slice(0, maximumNoticeCommandChars - 1).join("")}…`
 }
 
+/** One notice naming at most `maximumNoticeJobs` jobs, the rest a count; none for no jobs. */
+const jobNotice = <J extends { readonly toolCallId: ToolCallId }>(
+  jobs: ReadonlyArray<J>,
+  params: {
+    readonly id: string
+    readonly intro: string
+    readonly line: (job: J) => string
+    readonly rest: string
+  },
+) => {
+  if (jobs.length === 0) return []
+  const named = jobs.slice(0, maximumNoticeJobs)
+  const lines = named.map(params.line)
+  const unnamed = jobs.length - named.length
+  if (unnamed > 0)
+    lines.push(`- and ${unnamed} more ${params.rest}, named once you have read these.`)
+  return [
+    {
+      id: params.id,
+      keys: named.map((job) => job.toolCallId),
+      content: `${params.intro}\n\n${lines.join("\n")}`,
+    },
+  ]
+}
+
 /**
- * The branch's unread interrupted jobs as one turn notice, the oldest first,
- * at most `maximumNoticeJobs`; the rest are a count. Its keys are the tool
- * call ids it names, so an answered turn clears exactly those.
+ * The branch's unread interrupted jobs as one turn notice, and its unread
+ * undelivered jobs as another, each the oldest first and at most
+ * `maximumNoticeJobs`; the rest are a count. The keys are the tool call ids a
+ * notice names, so an answered turn clears exactly those.
  */
-const interruptedJobNotices = Effect.fn("ExecTools.interruptedJobNotices")(function* () {
+const jobNotices = Effect.fn("ExecTools.jobNotices")(function* () {
   const ctx = yield* ExtensionContext
   const storage = yield* BackgroundBashStorage
   const branch = { sessionId: ctx.sessionId, branchId: ctx.branchId }
-  const jobs = yield* storage.interruptedJobs(branch)
-  if (jobs.length === 0) return []
-  const named = jobs.slice(0, maximumNoticeJobs)
-  const lines = named.map((job) => `- \`${noticeCommand(job.command)}\` · call ${job.toolCallId}`)
-  const unnamed = jobs.length - named.length
-  if (unnamed > 0) {
-    lines.push(`- and ${unnamed} more interrupted commands, named once you have read these.`)
-  }
-  return [
-    {
-      id: "exec-tools-interrupted",
-      keys: named.map((job) => job.toolCallId),
-      content: `# Interrupted background commands\n\nThe previous server stopped before these background commands finished. They are not running, and no output was captured. Tell the user which commands did not finish; start one again only when the user asks for it.\n\n${lines.join("\n")}`,
+  const interrupted = jobNotice(yield* storage.interruptedJobs(branch), {
+    id: "exec-tools-interrupted",
+    intro:
+      "# Interrupted background commands\n\nThe previous server stopped before these background commands finished. They are not running, and no output was captured. Tell the user which commands did not finish; start one again only when the user asks for it.",
+    line: (job) => `- \`${noticeCommand(job.command)}\` · call ${job.toolCallId}`,
+    rest: "interrupted commands",
+  })
+  const undelivered = jobNotice(yield* storage.undeliveredJobs(branch), {
+    id: "exec-tools-undelivered",
+    intro:
+      "# Background commands finished\n\nThese background commands finished while the follow-up queue was full, so no message reported them. Tell the user what they returned.",
+    line: (job) => {
+      let outcome = "failed"
+      if (job.state.status === "completed") outcome = `exit code ${job.state.exitCode ?? 0}`
+      const output = headTailChars(job.state.message ?? "", maximumNoticeOutputChars).text
+      return `- \`${noticeCommand(job.state.command)}\` · ${outcome} · call ${job.toolCallId}\n\`\`\`\n${output}\n\`\`\``
     },
-  ]
+    rest: "finished commands",
+  })
+  return [...interrupted, ...undelivered]
 })
 
 /**
- * Marks read the interrupted jobs the turn read. The runtime hands back only
- * what an answered turn showed: an interrupted, failed or unanswered turn
- * keeps them, and so does every job the turn did not show.
+ * Marks read the interrupted and undelivered jobs the turn read. The runtime
+ * hands back only what an answered turn showed: an interrupted, failed or
+ * unanswered turn keeps them, and so does every job the turn did not show.
  */
-const markReadInterruptedJobs = Effect.fn("ExecTools.markInterruptedJobsRead")(function* (
+const markReadJobNotices = Effect.fn("ExecTools.markJobNoticesRead")(function* (
   input: TurnAfterInput,
 ) {
   if (input.readNotices.size === 0) return
@@ -4606,7 +4978,7 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
         exitCode: bgResult.exitCode,
         message: outputText,
       })
-      yield* queueTerminalFollowUp(target, {
+      yield* deliverTerminal(target, {
         status: "completed",
         command: job.command,
         exitCode: bgResult.exitCode,
@@ -4614,12 +4986,25 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
       })
     })
 
+    /**
+     * Queues the settled job's message and records the outcome, the one
+     * writer of the row's delivery mark: a refused send marks the row, and
+     * the branch's next turn reads the job as a notice; an accepted send (a
+     * replay of a refused one, for one) clears it.
+     */
+    const deliverTerminal = (target: BackgroundBashTarget, state: BackgroundBashTerminalState) =>
+      queueTerminalFollowUp(target, state).pipe(
+        Effect.flatMap((delivered) =>
+          storage.recordDelivery(backgroundJobKeyFields(target), delivered),
+        ),
+      )
+
     const queueFailure = (job: BackgroundBashJob, target: BackgroundBashTarget, message: string) =>
       Effect.gen(function* () {
         const keyFields = backgroundJobKeyFields(target)
         yield* storage.markFailed(keyFields, message).pipe(
           Effect.andThen(
-            queueTerminalFollowUp(target, { status: "failed", command: job.command, message }),
+            deliverTerminal(target, { status: "failed", command: job.command, message }),
           ),
           Effect.catchTag("BackgroundBashStorageError", () => Effect.void),
         )
@@ -4649,7 +5034,7 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
         })
         if (claim._tag === "AlreadyRunning") return
         if (claim._tag === "Terminal") {
-          yield* queueTerminalFollowUp(target, claim.state)
+          yield* deliverTerminal(target, claim.state)
           yield* rememberCompleted(key)
           return
         }
@@ -4838,9 +5223,9 @@ export const ExecToolsExtension = defineExtension({
       }),
     )
     yield* host.on("turnProjection", () =>
-      interruptedJobNotices().pipe(
+      jobNotices().pipe(
         Effect.catchCause((cause) =>
-          Effect.logWarning("exec-tools.interrupted-notice.read.failed").pipe(
+          Effect.logWarning("exec-tools.job-notice.read.failed").pipe(
             Effect.annotateLogs({ cause: Cause.pretty(cause) }),
             Effect.as([]),
           ),
@@ -4849,9 +5234,9 @@ export const ExecToolsExtension = defineExtension({
       ),
     )
     yield* host.on("turnAfter", (input) =>
-      markReadInterruptedJobs(input).pipe(
+      markReadJobNotices(input).pipe(
         Effect.catchCause((cause) =>
-          Effect.logWarning("exec-tools.interrupted-notice.clear.failed").pipe(
+          Effect.logWarning("exec-tools.job-notice.clear.failed").pipe(
             Effect.annotateLogs({ cause: Cause.pretty(cause) }),
           ),
         ),

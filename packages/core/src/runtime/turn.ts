@@ -1163,7 +1163,11 @@ interface SessionSettingsSource {
 interface SessionRoute {
   /** The agent the session names; the default one when it names none. */
   readonly name: AgentNameType
-  /** That agent as the turn dispatches it; none when no loaded agent has the name. */
+  /**
+   * That agent with config `agents[name]` and the run's overrides applied;
+   * none when no loaded agent has the name. Its `driver` is its own: a config
+   * `driverOverrides` entry reaches `modelDriver` only.
+   */
   readonly definition: Option.Option<AgentDefinition>
   readonly modelId: ModelId
   readonly reasoningLevel: Option.Option<ReasoningEffort>

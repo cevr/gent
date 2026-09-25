@@ -1,5 +1,5 @@
 import { Effect, FileSystem, Option, Path, Schema } from "effect"
-import { type LintDiagnostic, overrideOffs } from "./guards"
+import { type LintDiagnostic, overrideOffs, rootOffs } from "./guards"
 
 const DiagnosticSchema = Schema.Struct({
   code: Schema.optional(Schema.String),
@@ -91,6 +91,7 @@ const UnknownRecord = Schema.Record(Schema.String, Schema.Unknown)
 const ProbedConfigSchema = Schema.StructWithRest(
   Schema.Struct({
     jsPlugins: Schema.Array(Schema.String),
+    rules: UnknownRecord,
     overrides: Schema.Array(
       Schema.StructWithRest(
         Schema.Struct({
@@ -105,10 +106,17 @@ const ProbedConfigSchema = Schema.StructWithRest(
 )
 type ProbedConfig = typeof ProbedConfigSchema.Type
 
+const withoutRules = (
+  rules: ProbedConfig["rules"],
+  removed: ReadonlyArray<string>,
+): ProbedConfig["rules"] =>
+  Object.fromEntries(Object.entries(rules).filter(([rule]) => !removed.includes(rule)))
+
 /**
- * The root config minus every override "off", for a copy that lives outside
- * the repo: relative plugin paths and override globs become absolute under
- * `root`, and a package plugin is resolved from it.
+ * The root config minus every "off", in the root `rules` block and in each
+ * override, for a copy that lives outside the repo: relative plugin paths and
+ * override globs become absolute under `root`, and a package plugin is
+ * resolved from it.
  */
 export const probeConfig = (
   config: ProbedConfig,
@@ -122,12 +130,11 @@ export const probeConfig = (
       if (plugin.startsWith("./")) return `${root}/${plugin.slice(2)}`
       return resolvePlugin(plugin)
     }),
+    rules: withoutRules(config.rules, rootOffs(config)),
     overrides: config.overrides.map((override, index) => ({
       ...override,
       files: override.files.map((glob) => `${root}/${glob}`),
-      rules: Object.fromEntries(
-        Object.entries(override.rules).filter(([rule]) => !(offs[index] ?? []).includes(rule)),
-      ),
+      rules: withoutRules(override.rules, offs[index] ?? []),
     })),
   }
 }
@@ -192,17 +199,17 @@ const spawnOxlintInterruptibly = Effect.fn("Tooling.spawnOxlintInterruptibly")(f
 /**
  * Lint the whole tree with `probeConfig`'s copy of the root config, from a
  * scoped temporary directory. The result is what each "off" would let
- * through; `findUnneededOverrideOffs` reads it. The caller bounds the run
+ * through; `findUnneededOffs` reads it. The caller bounds the run
  * with `Effect.timeout`; the process is killed when it fires.
  */
-export const lintWithoutOverrideOffs = Effect.fn("Tooling.lintWithoutOverrideOffs")(function* () {
+export const lintWithoutOffs = Effect.fn("Tooling.lintWithoutOffs")(function* () {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
   const configText = yield* fs.readFileString(path.join(REPO_ROOT, ".oxlintrc.json"))
   const raw: unknown = Bun.JSONC.parse(configText)
   const config = yield* Schema.decodeUnknownEffect(ProbedConfigSchema)(raw)
   const variant = probeConfig(config, REPO_ROOT, (plugin) => Bun.resolveSync(plugin, REPO_ROOT))
-  const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-override-offs-" })
+  const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-lint-offs-" })
   const variantPath = path.join(directory, "oxlintrc.json")
   yield* fs.writeFileString(
     variantPath,

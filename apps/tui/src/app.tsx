@@ -624,8 +624,7 @@ export function Session(props: SessionProps) {
   /**
    * The running total, rendered last of everything.
    *
-   * Cost used to sit in the connection group, which put it between the
-   * connection state and the model. It is the one number a reader glances at
+   * Cost is the one number a reader glances at
    * without reading the rest of the row, so it belongs at the far end where
    * its position is fixed and nothing before it can shift it.
    */

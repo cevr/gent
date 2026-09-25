@@ -47,6 +47,7 @@ import {
   explainCredentialFailure,
   authorizedClient,
   freshEnoughAt,
+  isHostContextUpdateText,
   isTransientTokenStatus,
   makeCredentialCache,
   postOAuthForm,
@@ -1493,21 +1494,13 @@ const CACHEABLE_BLOCK_TYPES: ReadonlySet<unknown> = new Set([
 
 const hasCacheMarker = (block: JsonRecord): boolean => isRecord(block["cache_control"])
 
-/** How the SDK opens a later system message's text: see `prepareMessages` in `@effect/ai-anthropic`. */
-const HOST_CONTEXT_UPDATE_OPEN = "<host-context-update>\n"
-
 /** A user message the SDK built from a later system message, not from the conversation. */
 const isHostContextUpdate = (message: JsonRecord): boolean => {
   const content = message["content"]
   if (message["role"] !== "user" || !isRecordArray(content) || content.length === 0) return false
-  return content.every((block) => {
-    const text = block["text"]
-    return (
-      block["type"] === "text" &&
-      Predicate.isString(text) &&
-      text.startsWith(HOST_CONTEXT_UPDATE_OPEN)
-    )
-  })
+  return content.every(
+    (block) => block["type"] === "text" && isHostContextUpdateText(block["text"]),
+  )
 }
 
 const isCacheableBlock = (block: JsonRecord): boolean =>

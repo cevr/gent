@@ -232,7 +232,10 @@ export const resolveAgentModel = (agent: AgentDefinition): ModelId =>
 
 /** The model driver a turn dispatches through, and the catalog id of the model it reaches. */
 export interface EffectiveModelDriver {
-  /** The agent's model driver when it names one, else the provider segment of the model id. */
+  /**
+   * The driver `resolveSessionRoute` picked (the agent's own, else config
+   * `driverOverrides[name]`), else the provider segment of the model id.
+   */
   readonly driverId: Option.Option<string>
   /** `driver/model` as the model catalog sees it: a driver override replaces the provider segment. */
   readonly contextModelId: ModelId

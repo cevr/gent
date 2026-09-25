@@ -124,14 +124,16 @@ export type WakeDetails = typeof WakeDetails.Type
  * user-role `wake` message on the same branch and wakes the loop, so the
  * next turn starts with the note the model left itself. Timers live in a
  * branch-scoped resource; the entries themselves live in one file per branch
- * under `~/.gent/wakes`, so the branch's loop, when it opens after a restart,
- * re-arms what is still pending and fires at once what came due while the
- * process was down.
+ * under `<data dir>/wakes` (`resolveDataDir`: `GENT_DATA_DIR`, else
+ * `~/.gent`), so the branch's loop, when it opens after a restart, re-arms
+ * what is still pending and fires at once what came due while the process
+ * was down.
  * A repeating alarm advances its stored due time on every fire; ticks missed
  * while the process was down collapse into one fire. In `notify` mode a fire
  * starts no turn: it leaves a `notice` entry in the same file, the tray shows
- * it at once, every step of the next turns reads every notice into a prompt
- * section, and a turn that answered clears the notices it showed.
+ * it at once, every step of the next turns reads every notice into a turn
+ * notice, and a turn that answered clears the notices it showed. A `wake`
+ * line the session refuses is left as a notice the same way.
  */
 
 const MAXIMUM_WAKE_DELAY_MS = 24 * 60 * 60 * 1000
@@ -269,7 +271,9 @@ const dropPendingRow =
  * so a stop cannot leave a notice with its row still due. A file an older
  * binary left in that state has the notice already: an alarm's notice text
  * names its due time, so the same text under the same id is the same fire,
- * and it is not added twice.
+ * and it is not added twice. A `wake` line the session refuses (a full
+ * follow-up queue, for one) is left as a notice the same way, so the fire is
+ * not lost.
  */
 const queueWake = (
   entry: PendingWakeEntry,
@@ -279,7 +283,7 @@ const queueWake = (
 ) =>
   Effect.gen(function* () {
     const ctx = yield* ExtensionContext
-    if (modeOf(entry) === "notify") {
+    const leaveNotice = Effect.gen(function* () {
       const notice = WakeEntry.cases.notice.make({
         wakeId: entry.wakeId,
         outcome: details.outcome,
@@ -298,15 +302,25 @@ const queueWake = (
         if (seen) return settled
         return [...settled, notice]
       })
-      return yield* ctx.State.changed()
-    }
-    yield* ctx.Session.send({
+      yield* ctx.State.changed()
+    })
+    if (modeOf(entry) === "notify") return yield* leaveNotice
+    const sent = yield* ctx.Session.send({
       delivery: "queue",
       sourceId: fireKey(entry),
       content,
       metadata: { customType: WAKE_MESSAGE_TYPE, extensionId: WAKE_EXTENSION_ID, details },
       wake: true,
-    })
+    }).pipe(
+      Effect.as(true),
+      Effect.catchEager((error) =>
+        Effect.logWarning("wake.fire.refused").pipe(
+          Effect.annotateLogs({ wakeId: entry.wakeId, error: error.message }),
+          Effect.as(false),
+        ),
+      ),
+    )
+    if (!sent) return yield* leaveNotice
     yield* modifyWakeEntries(settle)
   })
 

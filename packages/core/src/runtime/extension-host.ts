@@ -1782,11 +1782,7 @@ interface RuntimeProfileDeclarations {
 export const loadRuntimeProfileDeclarations = (
   inputs: RuntimeProfileInputs,
   scan: ExtensionScan,
-): Effect.Effect<
-  RuntimeProfileDeclarations,
-  never,
-  FileSystem.FileSystem | Path.Path | ChildProcessSpawner | GentPlatform
-> =>
+): Effect.Effect<RuntimeProfileDeclarations, never, ExtensionLoaderServices> =>
   Effect.gen(function* () {
     const path = yield* Path.Path
     const fs = yield* FileSystem.FileSystem

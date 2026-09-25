@@ -200,13 +200,22 @@ const encodeValue = (value: unknown, depth: number, seen: Set<object>): Encoded 
 // oxlint-disable-next-line effect/noGlobals -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
 const jsonBytes = (value: Schema.Json) => new TextEncoder().encode(JSON.stringify(value)).byteLength
 
+/**
+ * One binding's encoding. Encoding reads the value, so a throwing getter or a
+ * trapping Proxy throws here; that value cannot round-trip either.
+ */
+const encodeBinding = Option.liftThrowable(
+  // oxlint-disable-next-line effect/noUnknownParameters -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
+  (value: unknown): Encoded => encodeValue(value, 0, new Set()),
+)
+
 /** Encode every binding. Values that cannot round-trip are named with the reason, never silently dropped. */
 export const encodeSnapshot = (namespace: ReadonlyMap<string, unknown>): CellSnapshot => {
   const bindings: SnapshotBinding[] = []
   const omitted: SnapshotOmission[] = []
   let total = 0
   for (const [name, value] of namespace) {
-    const encoded = encodeValue(value, 0, new Set())
+    const encoded = Option.getOrElse(encodeBinding(value), () => new Omitted("unsupported"))
     if (isOmitted(encoded)) {
       omitted.push({ name, reason: encoded.reason })
       continue
