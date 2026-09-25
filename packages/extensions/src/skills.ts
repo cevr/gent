@@ -172,11 +172,7 @@ export class Skills extends Context.Service<Skills, SkillsService>()(
   static Live = (options: {
     cwd: string
     home: string
-  }): Layer.Layer<
-    Skills,
-    PlatformError.PlatformError,
-    FileSystem.FileSystem | Path.Path | Crypto.Crypto
-  > =>
+  }): Layer.Layer<Skills, never, FileSystem.FileSystem | Path.Path | Crypto.Crypto> =>
     Layer.effect(
       Skills,
       Effect.gen(function* () {
@@ -185,14 +181,16 @@ export class Skills extends Context.Service<Skills, SkillsService>()(
 
         // A skills dir is user-owned and shared across workspaces: one
         // dangling link or unreadable file must not fail the branch loop.
-        // Each failing path is skipped with a warning.
+        // Neither does an unwritable bundle cache or an unreadable ancestor
+        // of the working directory. Each failing path is skipped with a
+        // warning.
         const skipOnError =
           (target: string) =>
-          <A>(effect: Effect.Effect<A, PlatformError.PlatformError>) =>
+          <A, R>(effect: Effect.Effect<A, PlatformError.PlatformError, R>) =>
             effect.pipe(
               Effect.asSome,
               Effect.catch((error) =>
-                Effect.logWarning("skills: skipped unreadable path").pipe(
+                Effect.logWarning("skills: skipped a failing path").pipe(
                   Effect.annotateLogs({ path: target, error: String(error) }),
                   Effect.as(Option.none<A>()),
                 ),
@@ -234,7 +232,7 @@ export class Skills extends Context.Service<Skills, SkillsService>()(
             return result
           })
 
-        // Find git root by walking up from cwd
+        // Find git root by walking up from cwd; a failed walk stops at cwd.
         const findGitRoot = Effect.gen(function* () {
           let dir = options.cwd
           while (true) {
@@ -266,15 +264,21 @@ export class Skills extends Context.Service<Skills, SkillsService>()(
 
         const loadAllSkills = Effect.gen(function* () {
           // ── Global sources ──
+          const bundled = yield* installBundledSkills(options.home).pipe(
+            skipOnError(path.join(options.home, ".cache", "gent", "skills")),
+          )
           const globalDirs = [
             ...SKILL_DIRS.map((d) => path.join(options.home, d)),
-            yield* installBundledSkills(options.home),
+            ...Option.toArray(bundled),
           ]
 
           // ── Local sources ──
           // Walk from cwd up to git root, collecting skill dirs at each ancestor.
           // Closest to cwd wins dedup within local level.
-          const gitRoot = yield* findGitRoot
+          const gitRoot = yield* findGitRoot.pipe(
+            skipOnError(options.cwd),
+            Effect.map(Option.flatten),
+          )
           const stopAt = Option.getOrElse(gitRoot, () => options.cwd)
 
           // A local dir that is also a global dir (a session in the home
