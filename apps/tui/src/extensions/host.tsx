@@ -45,6 +45,7 @@ import {
 } from "./loader-boundary"
 import { useWorkspace } from "../workspace"
 import { useClient } from "../client"
+import type { SessionId } from "@gent/core/protocol"
 
 // ── per-provider client runtime ─────────────────────────────────────────────
 
@@ -81,6 +82,12 @@ interface ExtensionUIContextValue {
    * waits for it: a row committed before its renderer exists stays plain.
    */
   readonly loaded: Accessor<boolean>
+  /**
+   * True once every command source has answered: the client extensions have
+   * loaded and the session's server slash commands have listed (or failed).
+   * Until then an unresolved slash command may still be one of theirs.
+   */
+  readonly commandsSettled: Accessor<boolean>
   readonly setActivityProvider: (provider: () => ClientActivitySnapshot) => void
   /**
    * The session view installs its overlay as the pane owner while it is
@@ -144,6 +151,14 @@ export function ExtensionUIProvider(props: {
   const [loaded, setLoaded] = createSignal(false)
   const [sessionCommands, setSessionCommands] = createSignal<ReadonlyArray<Command>>([])
   const [serverCommands, setServerCommands] = createSignal<ReadonlyArray<CommandSource>>([])
+  // The session whose server slash commands have answered, listed or failed.
+  const [serverListed, setServerListed] = createSignal<Option.Option<SessionId>>(Option.none())
+  const commandsSettled = () =>
+    loaded() &&
+    Option.match(client.activeSessionId(), {
+      onNone: () => true,
+      onSome: (id) => Option.contains(serverListed(), id),
+    })
   const [dynamicAutocomplete, setDynamicAutocomplete] = createSignal<
     ReadonlyArray<AutocompleteContribution>
   >([])
@@ -247,8 +262,12 @@ export function ExtensionUIProvider(props: {
       return
     }
     setServerCommands([])
+    setServerListed(Option.none())
 
     let active = true
+    const listed = () => {
+      if (active) setServerListed(current)
+    }
     onCleanup(() => {
       active = false
     })
@@ -315,11 +334,13 @@ export function ExtensionUIProvider(props: {
                 commands,
               })),
             )
+            listed()
           }),
         ),
         Effect.catchEager(() =>
           Effect.sync(() => {
             if (active) setServerCommands([])
+            listed()
           }),
         ),
       ),
@@ -345,6 +366,7 @@ export function ExtensionUIProvider(props: {
     <ExtensionUIContext.Provider
       value={{
         loaded,
+        commandsSettled,
         messageRenderers: () => resolved().messageRenderers,
         widgets: () => resolved().widgets,
         commands: () => resolvedCommands().commands,

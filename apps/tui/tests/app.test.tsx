@@ -1544,6 +1544,111 @@ describe("App auth gate", () => {
       setup.renderer.destroy()
     }).pipe(Effect.timeout("10 seconds")),
   )
+  it.live("an unknown slash command comes back to the draft with its reason", () =>
+    Effect.gen(function* () {
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <App missingAuthProviders={[]} />, {
+          client: createMockClient({
+            auth: { listProviders: () => Effect.succeed([]) },
+            branch: { getTree: () => Effect.succeed([]) },
+          }),
+          runtime: createMockRuntime(),
+          builtins: builtinClientModules,
+          initialSession: {
+            id: SessionId.make("session-a"),
+            activeBranchId: BranchId.make("branch-a"),
+            name: "Session A",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        }),
+      )
+      yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
+      yield* Effect.promise(() => setup.mockInput.typeText("/modle sonnet"))
+      yield* waitForFrame(setup, (frame) => frame.includes("/modle sonnet"), "the typed command")
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("Unknown command: /modle"),
+        "the command refused",
+      )
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("┃ /modle sonnet"),
+        "the command back in the draft",
+      )
+      setup.renderer.destroy()
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  it.live("a slash command typed before the session's server commands list waits for them", () =>
+    Effect.gen(function* () {
+      const listed = yield* Deferred.make<void>()
+      const requests: Array<unknown> = []
+      let ext = Option.none<ReturnType<typeof useExtensionUI>>()
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <>
+              <App missingAuthProviders={[]} />
+              <ExtensionUIProbe onReady={(value) => (ext = Option.some(value))} />
+            </>
+          ),
+          {
+            client: createMockClient({
+              auth: { listProviders: () => Effect.succeed([]) },
+              branch: { getTree: () => Effect.succeed([]) },
+              extension: {
+                listSlashCommands: () =>
+                  Deferred.await(listed).pipe(
+                    Effect.as([
+                      {
+                        name: "probe",
+                        extensionId: "@test/server-probe",
+                        capabilityId: "probe",
+                      },
+                    ]),
+                  ),
+                request: (input: { readonly capabilityId: string; readonly input: unknown }) =>
+                  Effect.sync(() => {
+                    if (input.capabilityId === "probe") requests.push(input.input)
+                  }),
+              },
+            }),
+            runtime: createMockRuntime(),
+            builtins: builtinClientModules,
+            initialSession: {
+              id: SessionId.make("session-a"),
+              activeBranchId: BranchId.make("branch-a"),
+              name: "Session A",
+              createdAt: dateFromMillis(0),
+              updatedAt: dateFromMillis(0),
+            },
+          },
+        ),
+      )
+      yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
+      yield* waitForFrame(
+        setup,
+        () => Option.exists(ext, (value) => value.loaded()),
+        "client extensions loaded",
+      )
+      yield* Effect.promise(() => setup.mockInput.typeText("/probe now"))
+      yield* waitForFrame(setup, (frame) => frame.includes("/probe now"), "the typed command")
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("Unknown command") || !frame.includes("/probe now"),
+        "the command sent",
+      )
+      expect(renderFrame(setup)).not.toContain("Unknown command")
+      expect(requests).toHaveLength(0)
+      yield* Deferred.complete(listed, Effect.void)
+      yield* waitForFrame(setup, () => requests.length === 1, "the server command ran")
+      expect(requests).toEqual(["now"])
+      expect(renderFrame(setup)).not.toContain("Unknown command")
+      setup.renderer.destroy()
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   // At 14 rows the composer takes six of the footer's twelve, and the agents
   // pane's rules and title take three more: three rows are left for the
   // filter row, the section heading and the cursor row. The trays, the key

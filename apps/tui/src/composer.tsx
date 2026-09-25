@@ -908,9 +908,19 @@ function useComposerController(): ComposerController {
 
     const [cmd, args] = parsed.value
     client.log.info("slash-command", { cmd })
+    const order = refusals.nextOrder()
+    const drafted = draftedIn()
+    Option.map(drafted, (target) => refusals.submitted(target.branchId, text))
     clearInput()
 
-    cast(client.surfaceError(sc.onSlashCommand(cmd, args)))
+    // A command nothing runs comes back to the draft it was written in.
+    const refuseCommand = (reason: string) =>
+      Option.match(drafted, {
+        onNone: () => client.setError(reason),
+        onSome: (target) =>
+          refuse(target, { order, text, shell: false, requestId: Option.none() }, reason),
+      })
+    cast(client.surfaceError(sc.onSlashCommand(cmd, args, refuseCommand)))
     return true
   }
 

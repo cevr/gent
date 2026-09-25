@@ -209,7 +209,7 @@ Special prefixes at input start trigger different modes:
 
 ### Refused submissions
 
-- A submit leaves the composer before it is sent. A send the server refuses, or a `!cmd` that cannot spawn, comes back to the draft of the branch it was sent from, with its reason (`ComposerRefusals` in `session.tsx`)
+- A submit leaves the composer before it is sent. A send the server refuses, a `!cmd` that cannot spawn, or a `/command` no command source names, comes back to the draft of the branch it was sent from, with its reason (`ComposerRefusals` in `session.tsx`)
 - A `!cmd` that ran but whose output the server refused comes back as that output, a plain message, and the reason says the command ran. Enter sends the output; it never runs the command again. Once back it is an ordinary draft: an `@path` in it expands on that send, as in any draft
 - A refused message as large as a paste (`isLargePaste`) comes back into the composer on screen as a paste placeholder; a kept draft of a branch the reader left holds the text itself, and a kept block that joins a composer on screen is written the same way. A refused command always comes back as its text, so the reader sees the command Enter would run
 - A lost connection is not a refusal: the send may have landed. It retries four times under its first request id (`SEND_RETRY` in `utils.ts`, shared with the startup prompt and the headless send's predicate), and the text comes back only after the last try. That text keeps the request id: Enter on it unchanged sends it under the same id, so the server's dedup runs it once. An edited text, a draft that joins several refused texts, or a text the server answered goes under a new id. The `-p` startup prompt is a submission too: it is sent once, and a failed send comes back to the draft of its branch with its reason
@@ -236,6 +236,12 @@ at 2000 lines or 50 KB of UTF-8, counted by the core line rule.
 | `/fork`            | Fork from a message                                              |
 | `/thread`          | Thread pane: the sessions and windows this one runs on           |
 | `/btw`, `/side`    | Fork pane: ask a parallel session on the side                    |
+
+A command sent before every command source has answered (the client
+extensions' load and the session's server slash list, `commandsSettled` in
+`extensions/host.tsx`) waits for them, then resolves. Only then does an
+unresolved command come back to its draft with `Unknown command: /x`. A
+command still waiting when the session view goes comes back to its draft too.
 
 ## Extensions
 
