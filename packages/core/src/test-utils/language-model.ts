@@ -26,6 +26,7 @@ import type { ProviderOptions } from "effect/unstable/ai/LanguageModel"
 import type * as AiError from "effect/unstable/ai/AiError"
 import type * as Prompt from "effect/unstable/ai/Prompt"
 import { ProviderStopReason, reportProviderStopReason } from "../domain/driver.js"
+import { omitUndefined } from "../domain/guards.js"
 import { ToolCallId } from "../domain/ids.js"
 import { ProviderError } from "../domain/errors.js"
 import {
@@ -332,6 +333,8 @@ export interface SequenceStep {
   readonly assertRequest?: (request: {
     readonly model: string
     readonly reasoning?: string
+    /** The output cap the request asks the driver for. */
+    readonly maxTokens?: number
   }) => void
   readonly assertOptions?: (options: ProviderOptions) => void
   readonly gated?: boolean
@@ -490,13 +493,14 @@ const sequence = (steps: ReadonlyArray<SequenceStep>) =>
           const step = steps[idx] ?? steps[0]
           if (Predicate.isUndefined(step?.assertRequest)) return
           yield* Effect.try({
-            try: () => {
-              const model = String(request.modelId)
-              if (!Predicate.isUndefined(request.hints?.reasoning)) {
-                return step.assertRequest?.({ model, reasoning: request.hints.reasoning })
-              }
-              return step.assertRequest?.({ model })
-            },
+            try: () =>
+              step.assertRequest?.({
+                model: String(request.modelId),
+                ...omitUndefined({
+                  reasoning: request.hints?.reasoning,
+                  maxTokens: request.hints?.maxTokens,
+                }),
+              }),
             catch: (e) =>
               new ProviderError({
                 message: `Sequence language model: assertRequest failed at step ${idx}: ${e}`,

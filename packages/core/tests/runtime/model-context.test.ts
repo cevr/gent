@@ -27,7 +27,7 @@ import {
   maximumModelToolResultChars,
   messagesInCurrentWindow,
   modelChangeNotice,
-  MODEL_OUTPUT_RESERVE_TOKENS,
+  outputReserveTokens,
   ModelCompactionError,
   ModelContextBudget,
   ModelContextCompactor,
@@ -794,6 +794,27 @@ const streamFailed = (events: ReadonlyArray<AgentEvent>) =>
     Option.map((receipt) => receipt._tag === "TurnCompleted" && receipt.streamFailed === true),
   )
 
+describe("output reserve", () => {
+  test("is the model's output cap up to 32k", () => {
+    const reserve = (outputLimit: Option.Option<number>) =>
+      outputReserveTokens({ contextLimitTokens: 200_000, outputLimitTokens: outputLimit })
+    expect(reserve(Option.none())).toBe(32_000)
+    expect(reserve(Option.some(8_192))).toBe(8_192)
+    expect(reserve(Option.some(128_000))).toBe(32_000)
+    // A catalog value that is no count is ignored.
+    expect(reserve(Option.some(0))).toBe(32_000)
+  })
+
+  test("takes at most a quarter of a small window", () => {
+    expect(
+      outputReserveTokens({ contextLimitTokens: 32_768, outputLimitTokens: Option.none() }),
+    ).toBe(8_192)
+    expect(
+      outputReserveTokens({ contextLimitTokens: 128_000, outputLimitTokens: Option.none() }),
+    ).toBe(32_000)
+  })
+})
+
 describe("provider overflow recovery", () => {
   it.live("a request refused as too long hands the window off once and the step runs again", () =>
     Effect.gen(function* () {
@@ -911,6 +932,36 @@ describe("provider overflow recovery", () => {
         projected?._tag === "ModelContextProjected" && projected.availableInputTokens
       expect(available).toBeLessThanOrEqual(272_000)
       expect(available).toBeGreaterThan(260_000)
+    }),
+  )
+
+  it.live("the budget keeps free the output the request asks for", () =>
+    Effect.gen(function* () {
+      const claude = new Model({
+        id: wideModelId,
+        name: "Claude shaped",
+        provider: ProviderId.make("test"),
+        contextLength: 200_000,
+        outputLimit: 64_000,
+      })
+      const asked: Array<Option.Option<number>> = []
+      const result = yield* runOverflowTurn({
+        steps: [
+          {
+            ...textStep("reply"),
+            assertRequest: (request) => asked.push(Option.fromUndefinedOr(request.maxTokens)),
+          },
+        ],
+        model: claude,
+        extraLayers: [],
+      })
+      const projected = result.events.find((event) => event._tag === "ModelContextProjected")
+      const available =
+        projected?._tag === "ModelContextProjected" && projected.availableInputTokens
+      // 32k of output is reserved and asked for: input plus reply fit the window.
+      expect(asked).toEqual([Option.some(32_000)])
+      expect(available).toBeLessThanOrEqual(200_000 - 32_000)
+      expect(available).toBeGreaterThan(160_000)
     }),
   )
 
@@ -1500,7 +1551,7 @@ describe("turn window projection", () => {
         contextLimitTokens: 6_000,
         reservedSystemTokens: 0,
         reservedToolTokens: 0,
-        reservedOutputTokens: MODEL_OUTPUT_RESERVE_TOKENS,
+        reservedOutputTokens: 4_096,
       })
       const requests: Array<CompactionRequest> = []
       const compactor = Layer.succeed(
@@ -1595,7 +1646,7 @@ describe("turn window projection", () => {
           contextLimitTokens: 40_000,
           reservedSystemTokens: 0,
           reservedToolTokens: 0,
-          reservedOutputTokens: MODEL_OUTPUT_RESERVE_TOKENS,
+          reservedOutputTokens: 4_096,
         })
         const requests: Array<CompactionRequest> = []
         const compactor = Layer.succeed(
@@ -1667,7 +1718,7 @@ describe("turn window projection", () => {
         contextLimitTokens: 40_000,
         reservedSystemTokens: 0,
         reservedToolTokens: 0,
-        reservedOutputTokens: MODEL_OUTPUT_RESERVE_TOKENS,
+        reservedOutputTokens: 4_096,
       })
       /** A compactor whose summary model is down; the seam contract says the turn degrades. */
       const failingCompactor = Layer.succeed(

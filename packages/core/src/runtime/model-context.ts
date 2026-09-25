@@ -542,8 +542,34 @@ export const currentHandoffId = (window: ReadonlyArray<Message>): Option.Option<
 
 // ── model-context ───────────────────────────────────────────────────────────
 
-/** Input tokens the context projection keeps free for the reply. The request itself carries no output cap: each provider uses the model's own limit. */
-export const MODEL_OUTPUT_RESERVE_TOKENS = 4_096
+/** The most output one request reserves and asks for. Prior art: opencode's `OUTPUT_TOKEN_MAX`. */
+const MAX_OUTPUT_RESERVE_TOKENS = 32_000
+
+/** The share of the window the output may take: the input keeps at least three quarters. */
+const OUTPUT_RESERVE_WINDOW_DIVISOR = 4
+
+/**
+ * The tokens one request keeps free for the reply, and the output cap it
+ * sends (`ProviderHints.maxTokens`): one number, so input within the budget
+ * plus the output the request asks for never passes the window. It is the
+ * model's own output cap (`Model.outputLimit`) up to 32k, and at most a
+ * quarter of the window. The quarter binds only below a 128k window: a 32k
+ * local model keeps 8k for output and 24k for input.
+ */
+export const outputReserveTokens = (params: {
+  readonly contextLimitTokens: number
+  readonly outputLimitTokens: Option.Option<number>
+}): number => {
+  const outputLimit = Option.filter(
+    params.outputLimitTokens,
+    (limit) => Number.isSafeInteger(limit) && limit > 0,
+  )
+  return Math.min(
+    Option.getOrElse(outputLimit, () => MAX_OUTPUT_RESERVE_TOKENS),
+    MAX_OUTPUT_RESERVE_TOKENS,
+    Math.floor(params.contextLimitTokens / OUTPUT_RESERVE_WINDOW_DIVISOR),
+  )
+}
 
 /** ~4 chars per token, the estimate every budget in the projection shares. */
 export const estimateTextTokens = (text: string): number => Math.ceil(text.length / 4)

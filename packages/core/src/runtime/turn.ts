@@ -147,7 +147,7 @@ import {
   estimateTextTokens,
   estimateToolSchemaTokens,
   messagesInCurrentWindow,
-  MODEL_OUTPUT_RESERVE_TOKENS,
+  outputReserveTokens,
   ModelContextBudget,
   ModelContextCapabilityError,
   ModelContextCapabilityFailure,
@@ -1555,17 +1555,6 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       }),
     })
   }
-  const modelRequest: ResolveModelRequest = {
-    modelId: resolved.modelId,
-    hints: {
-      temperature: resolved.temperature,
-      reasoning: resolved.reasoning,
-      cacheKey: params.sessionId,
-      // The driver reads the catalog's word on reasoning, not the model name.
-      supportsReasoning: modelOption.value.reasoning,
-    },
-    driverId: Option.getOrUndefined(driverId),
-  }
   // The agent's own window wins over the catalog: config or a run override can shrink it.
   const contextLimit = Option.getOrUndefined(
     Option.orElse(Option.fromUndefinedOr(resolved.agent.contextLength), () =>
@@ -1592,6 +1581,10 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   const inputLimit = Option.fromUndefinedOr(modelOption.value.inputLimit).pipe(
     Option.filter((limit) => Number.isSafeInteger(limit) && limit > 0),
   )
+  const reservedOutputTokens = outputReserveTokens({
+    contextLimitTokens: contextLimit,
+    outputLimitTokens: Option.fromUndefinedOr(modelOption.value.outputLimit),
+  })
   const budget = ModelContextBudget.make({
     contextLimitTokens: contextLimit,
     ...omitUndefined({ inputLimitTokens: Option.getOrUndefined(inputLimit) }),
@@ -1602,8 +1595,22 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
         onSome: estimateTextTokens,
       }),
     reservedToolTokens: estimateToolSchemaTokens(resolved.tools),
-    reservedOutputTokens: MODEL_OUTPUT_RESERVE_TOKENS,
+    reservedOutputTokens,
   })
+  const modelRequest: ResolveModelRequest = {
+    modelId: resolved.modelId,
+    hints: {
+      temperature: resolved.temperature,
+      reasoning: resolved.reasoning,
+      cacheKey: params.sessionId,
+      // The driver reads the catalog's word on reasoning, not the model name.
+      supportsReasoning: modelOption.value.reasoning,
+      // The request asks for no more output than the budget keeps free, so
+      // input within the budget plus the reply never passes the window.
+      maxTokens: reservedOutputTokens,
+    },
+    driverId: Option.getOrUndefined(driverId),
+  }
   const eventStore = yield* EventStore
   // Summaries and window markers persist the same way every durable message
   // does: once, with a delivered event.

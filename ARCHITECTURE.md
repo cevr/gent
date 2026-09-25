@@ -114,7 +114,12 @@ updates this list in the same commit.
     A summary that cannot be produced degrades to truncation with a visible
     notice. The budget is the smaller of the model's input cap
     (`Model.inputLimit`, from models.dev `limit.input`) and its window less
-    the output reserve. The estimate is chars/4. When the last step's reply is
+    the output reserve. The reserve is the model's output cap
+    (`Model.outputLimit`, from models.dev `limit.output`) up to 32k, and at
+    most a quarter of the window (`outputReserveTokens`). The same number is
+    the output cap each step's request asks for (`ProviderHints.maxTokens`),
+    so input within the budget plus the reply never passes the window. The
+    estimate is chars/4. When the last step's reply is
     still in the window, the messages before that reply count at least as much
     as that step's reported input, less the system and tool size its own
     request carried (`StreamEnded.requestOverheadTokens`). Its output never
