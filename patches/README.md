@@ -35,9 +35,10 @@ and lose their place in the conversation.
 The patch keeps the first system group in `system` and sends a later one,
 in place, as a user message whose text blocks read
 `<host-context-update>\n…\n</host-context-update>`, with `&`, `<` and `>`
-escaped so the text cannot close the wrapper. The Anthropic extension
-(`packages/extensions/src/anthropic.ts`, `HOST_CONTEXT_UPDATE_OPEN`) reads
-that opening to keep the cache marker off these blocks.
+escaped so the text cannot close the wrapper. The opening is
+`HOST_CONTEXT_UPDATE_OPEN` in `packages/extensions/src/providers.ts`. The
+Anthropic extension (`packages/extensions/src/anthropic.ts`) reads it through
+`isHostContextUpdateText` to keep the cache marker off these blocks.
 
 Remove this patch when the SDK keeps a later system message in place.
 

@@ -1745,6 +1745,7 @@ describe("steering file paths", () => {
       "docs/extensions.md",
       "testbeds/gamut/README.md",
       ".claude/skills/architecture-loop/prior-art.md",
+      "patches/README.md",
     ]) {
       expect(isSteeringFile(file)).toBe(true)
       expect(messagesOfSteeringPath(text, file)).toHaveLength(1)
