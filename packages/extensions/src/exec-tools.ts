@@ -3236,9 +3236,11 @@ const viewCommand = (
  * the name appended. The value is read there as `value "$@"`, so those
  * words are run-time words and a risky command asks. A name matches in any
  * order in the command line. A derived word has no insertion point, so no
- * git trailer is written into an alias use.
+ * git trailer is written into an alias use. One view per name used.
  */
-const aliasUseView = (view: CommandView): CommandView => {
+const aliasUseViews = (
+  view: CommandView,
+): ReadonlyArray<{ readonly name: string; readonly view: CommandView }> => {
   const values = new Map<string, Array<ShellWord>>()
   for (const invocation of view.invocations) {
     if (invocationName(invocation) !== "alias") continue
@@ -3246,21 +3248,29 @@ const aliasUseView = (view: CommandView): CommandView => {
       values.set(name, [...(values.get(name) ?? []), value])
     }
   }
-  const scripts = new Map<string, ShellWord>()
-  for (const invocation of view.invocations) {
-    for (const value of values.get(invocation.words[0]?.text ?? "") ?? []) {
-      const script = derivedWord(`${value.text} "$@"`, value.dynamic)
-      scripts.set(script.text, script)
-    }
-  }
-  const views = [...scripts.values()].map((script) =>
-    viewCommand(parseShell(script, Option.none()), MAX_NESTED_COMMAND_DEPTH - 1),
-  )
-  return {
-    invocations: views.flatMap((used) => used.invocations),
-    writes: views.flatMap((used) => used.writes),
-    unreadable: views.flatMap((used) => used.unreadable),
-  }
+  const used = new Set(view.invocations.map((invocation) => invocation.words[0]?.text ?? ""))
+  return [...values].flatMap(([name, definitions]) => {
+    if (!used.has(name)) return []
+    const scripts = new Map(
+      definitions.map((value): readonly [string, ShellWord] => {
+        const script = derivedWord(`${value.text} "$@"`, value.dynamic)
+        return [script.text, script]
+      }),
+    )
+    const views = [...scripts.values()].map((script) =>
+      viewCommand(parseShell(script, Option.none()), MAX_NESTED_COMMAND_DEPTH - 1),
+    )
+    return [
+      {
+        name,
+        view: {
+          invocations: views.flatMap((read) => read.invocations),
+          writes: views.flatMap((read) => read.writes),
+          unreadable: views.flatMap((read) => read.unreadable),
+        },
+      },
+    ]
+  })
 }
 
 // ── command classification ──
@@ -4362,6 +4372,16 @@ const RISK_RANK = {
   destructive: 3,
 } satisfies Record<BashRiskLevel, number>
 
+/** The risks of the commands of `view`, of the files they write, and of what could not be read. */
+const viewRisks = (view: CommandView): ReadonlyArray<BashRisk> => [
+  ...view.invocations.flatMap(invocationRisks),
+  ...view.writes.flatMap((word) => Option.toArray(sensitiveFile(word.text))),
+  ...view.unreadable.map((reason): BashRisk => ({
+    level: "destructive",
+    reason: `runs a script the guard cannot read: ${reason}`,
+  })),
+]
+
 /**
  * The strongest risk of every command in `command` and in every script it
  * runs (`bash -c '...'`, `eval "..."`, `$(...)`, a heredoc fed to a shell, a
@@ -4371,16 +4391,15 @@ const RISK_RANK = {
  */
 export function classifyBashCommand(command: string): BashRisk {
   const direct = viewCommand(parseCommand(command), MAX_NESTED_COMMAND_DEPTH)
-  const aliased = aliasUseView(direct)
   const risks: Array<BashRisk> = [
-    ...[...direct.invocations, ...aliased.invocations].flatMap(invocationRisks),
-    ...[...direct.writes, ...aliased.writes].flatMap((word) =>
-      Option.toArray(sensitiveFile(word.text)),
+    ...viewRisks(direct),
+    // The reason names the alias; `"$@"` stands for the words after its name.
+    ...aliasUseViews(direct).flatMap(({ name, view }) =>
+      viewRisks(view).map((risk) => ({
+        ...risk,
+        reason: `alias ${name}: ${risk.reason.replaceAll("$@", `the words after ${name}`)}`,
+      })),
     ),
-    ...[...direct.unreadable, ...aliased.unreadable].map((reason): BashRisk => ({
-      level: "destructive",
-      reason: `runs a script the guard cannot read: ${reason}`,
-    })),
   ]
   let strongest = SAFE_RISK
   for (const risk of risks) {

@@ -764,6 +764,10 @@ describe("classifyBashCommand", () => {
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
+    // The reason names the alias where it is used.
+    expect(classifyBashCommand(`shopt -s expand_aliases\nalias w=rm\nw -rf ${x}`).reason).toBe(
+      "alias w: rm with options known only at run time: the words after w",
+    )
     for (const command of [
       "alias ll='ls -la'",
       "alias gs='git status'",
