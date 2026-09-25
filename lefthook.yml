@@ -9,11 +9,16 @@ pre-commit:
     # has been rewritten under them.
     - name: guards
       run: bun run guards
-    # `lint:fix` is oxlint alone; the guards above are the other half of
-    # `bun run lint`, which the gate runs as one command.
+    # `lint:fix` is oxlint alone; the guards above and the offs check below
+    # are the other parts of `bun run lint`, which the gate runs as one
+    # command.
     - name: lint+fmt
       run: bun run lint:fix && bun run fmt
       stage_fixed: true
+    # After the fixes: every "off" in `.oxlintrc.json` still suppresses a
+    # diagnostic in the tree as it will be committed.
+    - name: lint-offs
+      run: bun run lint:offs
     - name: typecheck
       run: bun run typecheck
     - name: build

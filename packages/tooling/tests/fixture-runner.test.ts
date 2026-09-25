@@ -3,8 +3,9 @@
  *
  * For each custom oxlint rule in `../src/gent-rules.ts`, runs `oxlint` against
  * a positive fixture (must error) and a negative fixture (must pass). Verifies
- * each rule actually fires on the cases its docstring claims. The root config
- * is checked too: every "off", root and override, must suppress a diagnostic.
+ * each rule actually fires on the cases its docstring claims. The probe that
+ * checks every "off" in the root config runs in `bun run lint`
+ * (`../src/check-lint-offs.ts`); its pure parts are tested here.
  *
  * Fixtures + their dedicated `.oxlintrc.json` live in `../fixtures/`. The
  * fixtures-local config enables every rule under test as `error` so the test
@@ -25,14 +26,12 @@ import { Effect, Exit, FileSystem, Option, Path, Schema } from "effect"
 import { describe as effectDescribe, it } from "effect-bun-test"
 import {
   labeledDiagnostics,
-  lintWithoutOffs,
   probeConfig,
   runOxlint,
   type Diagnostic,
   type OxlintReport,
   type OxlintRun,
 } from "../src/fixture-runner"
-import { findUnneededOffs } from "../src/guards"
 import gentRules, {
   isTest,
   isTestCode,
@@ -447,25 +446,6 @@ effectDescribe("custom lint rules", () => {
 
       expect(oxlintConfig).not.toContain("gent/all-errors-are-tagged")
     }).pipe(Effect.provide(BunServices.layer)),
-  )
-
-  it.live(
-    'every "off" in the root config, root block and overrides, suppresses a diagnostic',
-    () =>
-      Effect.gen(function* () {
-        const { configText, config, run } = yield* lintWithoutOffs()
-        const { labeled, unlabeled } = labeledDiagnostics(run.report)
-        // A run that lints nothing, or a report whose diagnostics name no rule,
-        // would make every "off" look unneeded.
-        expect(run.report.number_of_files, run.stderr).toBeGreaterThan(100)
-        expect(unlabeled, "diagnostics with no file or no rule id").toEqual([])
-        expect(
-          findUnneededOffs(".oxlintrc.json", configText, config, labeled).map(
-            (finding) => `${finding.file}:${finding.line}: ${finding.message}`,
-          ),
-        ).toEqual([])
-      }).pipe(Effect.scoped, Effect.timeout("60 seconds"), Effect.provide(BunServices.layer)),
-    70_000,
   )
 })
 
