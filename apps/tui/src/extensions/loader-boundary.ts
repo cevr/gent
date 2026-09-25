@@ -335,13 +335,22 @@ export function parseKeybind(config: string): Option.Option<Keybind> {
   return Option.some(keybind)
 }
 
+// Grapheme breaks do not depend on the locale.
+const graphemes = new Intl.Segmenter("en", { granularity: "grapheme" })
+
 /**
- * A keybind with no ctrl or meta whose key types a character (`j`, `?`,
- * `shift+j`, `space`). It would take that character as the first one of every
- * message, so no command may hold it.
+ * Whether `key` is one glyph (`j`, `é`, `🙂`). A named key (`left`, `f1`,
+ * `tab`) is several; a glyph counts as one whatever its UTF-16 length.
+ */
+const isOneGlyph = (key: string): boolean => [...graphemes.segment(key)].length === 1
+
+/**
+ * A keybind with no ctrl or meta whose key types a character (`j`, `?`, `é`,
+ * `🙂`, `shift+j`, `space`). It would take that character as the first one of
+ * every message, so no command may hold it.
  */
 const typesACharacter = (keybind: Keybind): boolean =>
-  !keybind.ctrl && !keybind.meta && (keybind.key.length === 1 || keybind.key === "space")
+  !keybind.ctrl && !keybind.meta && (isOneGlyph(keybind.key) || keybind.key === "space")
 
 /** Strip every keybind that types a character, and list each with the failures. */
 const withoutTypingKeybinds = (

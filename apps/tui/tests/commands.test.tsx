@@ -197,6 +197,10 @@ describe("executeSlashCommand", () => {
           cmd({ id: "project.j", slash: "j", keybind: "j" }),
           cmd({ id: "project.space", slash: "space", keybind: "space" }),
           cmd({ id: "project.ctrl-j", slash: "ctrl-j", keybind: "ctrl+j" }),
+          cmd({ id: "project.emoji", slash: "emoji", keybind: "🙂" }),
+          cmd({ id: "project.accent", slash: "accent", keybind: "é" }),
+          cmd({ id: "project.f1", slash: "f1", keybind: "f1" }),
+          cmd({ id: "project.tab", slash: "tab", keybind: "tab" }),
         ],
       },
     ])
@@ -212,10 +216,16 @@ describe("executeSlashCommand", () => {
       "project.j": "none",
       "project.space": "none",
       "project.ctrl-j": "ctrl+j",
+      "project.emoji": "none",
+      "project.accent": "none",
+      "project.f1": "f1",
+      "project.tab": "tab",
     })
     expect(commands.find((command) => command.id === "session.help")?.slash).toBe("help")
     expect(failures.map((failure) => failure.id)).toEqual([
       "@gent/session",
+      "@test/keys",
+      "@test/keys",
       "@test/keys",
       "@test/keys",
     ])
