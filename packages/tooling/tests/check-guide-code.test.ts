@@ -50,6 +50,20 @@ describe("the steering files the check reads", () => {
     }),
   )
 
+  contextTest("a repo reached through a symlinked root still reads its files", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const parent = yield* fs.makeTempDirectoryScoped({ prefix: "gent-guide-root-" })
+      yield* fs.makeDirectory(path.join(parent, "repo"))
+      yield* fs.writeFileString(path.join(parent, "repo", "AGENTS.md"), "# Agents\n")
+      // macOS temp roots live under `/var`, a link to `/private/var`.
+      yield* fs.symlink("repo", path.join(parent, "linked"))
+      const repoRoot = path.join(parent, "linked")
+      expect(yield* steeringFilesAmong(repoRoot, ["AGENTS.md"])).toEqual(["AGENTS.md"])
+    }),
+  )
+
   contextTest("the check reads the staged steering files, not an untracked one", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem

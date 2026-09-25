@@ -65,10 +65,12 @@ export const steeringFilesAmong = Effect.fn("Tooling.steeringFilesAmong")(functi
   const files = yield* Effect.filter(listed.filter(isSteeringFile), (file) =>
     fs.exists(path.join(repoRoot, file)),
   )
+  // The root's own real path: a root under a symlink (macOS `/var`) is not a link inside the repo.
+  const realRoot = yield* fs.realPath(repoRoot)
   const real = yield* Effect.forEach(files, (file) => fs.realPath(path.join(repoRoot, file)), {
     concurrency: 16,
   })
-  return files.filter((file, index) => path.join(repoRoot, file) === real[index])
+  return files.filter((file, index) => path.join(realRoot, file) === real[index])
 })
 
 /**
