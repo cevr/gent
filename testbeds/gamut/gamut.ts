@@ -6,6 +6,7 @@
  *   bun run gamut send "<text>"
  *   bun run gamut interrupt
  *   bun run gamut read [lines]
+ *   bun run gamut wait [seconds]
  *   bun run gamut status
  *   bun run gamut restart
  *   bun run gamut down
@@ -16,10 +17,9 @@
  * `apps/tui/bin/gent` in a herdr pane, and records the run in a state file.
  * Nothing it does reaches the real `~/.gent/data.db`.
  *
- * A plain Bun script, like `apps/tui/scripts/build.ts`: it is a driver for a
- * terminal program, not part of the shipped runtime, and it runs before any
- * Effect layer exists. The pure parts it exports are covered by
- * `testbeds/gamut/tests/gamut.test.ts`.
+ * A plain Bun script: it is a driver for a terminal program, not part of the
+ * shipped runtime, and it builds no Effect layer. The pure parts it exports
+ * are covered by `testbeds/gamut/tests/gamut.test.ts`.
  *
  * @module
  */

@@ -179,10 +179,12 @@
       }
     },
     {
-      // The gamut driver is a plain Bun script too: it drives herdr, git and
-      // SQLite with async shell calls, and its polls wait one step at a time.
-      // Its tests read it as such. Type assertions stay banned: it decodes
-      // the SQLite rows it reads.
+      // The gamut driver is a plain Bun script, not an Effect program: it
+      // drives herdr, git and SQLite with async shell calls, and its polls
+      // wait one step at a time. Its tests read it as such and build tuples
+      // with `as const`. Unsafe type assertions stay banned in the driver
+      // (`typescript/no-unsafe-type-assertion`): it decodes the SQLite rows
+      // it reads.
       "files": ["testbeds/gamut/gamut.ts", "testbeds/gamut/tests/**"],
       "rules": {
         "effect/noAs": "off",
