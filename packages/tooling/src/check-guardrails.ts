@@ -13,6 +13,7 @@ import {
   findE2eFixtureImportFindings,
   findEffectVersionDrift,
   findRepoTempDirectories,
+  findSharedTestHomes,
   findHookWithoutGuards,
   findIdentityEncodes,
   findPackageSurfaceFindings,
@@ -28,6 +29,9 @@ import {
   findUnmatchedIgnoreRows,
   findUnmatchedOverrideGlobs,
   findUnmatchedTsconfigOverrides,
+  findUnhashedSteeringFiles,
+  findUnshippedSkillFiles,
+  BUNDLED_SKILLS_MODULE,
   findUnusedSuppressionApprovals,
   HOOK_FILE,
   isSteeringFile,
@@ -43,14 +47,41 @@ import {
   type TsConfigJson,
   TsConfigPluginsSchema,
   TsConfigSchema,
+  TurboTypecheckInputsSchema,
   workspaceManifests,
   workspaceTsconfigs,
 } from "./guards"
 import gentRules from "./gent-rules"
 
+const fileNames = (output: string): ReadonlyArray<string> =>
+  output.split("\n").filter((file) => file.length > 0)
+
+/** Every file the scan reads: tracked, and new files git does not ignore. */
 const trackedFileNames = Effect.promise(() =>
   Bun.$`git ls-files --cached --others --exclude-standard`.text(),
-).pipe(Effect.map((output) => output.split("\n").filter((file) => file.length > 0)))
+).pipe(Effect.map(fileNames))
+
+/**
+ * The git command that lists the files CI will check out. In a pre-commit
+ * hook git sets `GIT_INDEX_FILE` (`hookIndex`) to the index the commit is made from (a
+ * temporary one for `git commit -- <path>`), so the index is exactly the
+ * commit being made. Outside a hook the index also holds staged additions
+ * that are not committed yet, so the `HEAD` tree is what a clean clone holds.
+ */
+export const committedFilesCommand = (hookIndex: Option.Option<string>): ReadonlyArray<string> => {
+  if (Option.isSome(hookIndex)) return ["ls-files", "--cached"]
+  return ["ls-tree", "-r", "--name-only", "HEAD"]
+}
+
+/**
+ * The files a clean clone holds (see `committedFilesCommand`). A config row
+ * matched only by a local file (a scratch file, an unstaged draft, a staged
+ * addition outside a commit) passes locally and fails in CI, so the config
+ * checks match against this set.
+ */
+const committedFileNames = Effect.promise(() =>
+  Bun.$`git ${committedFilesCommand(Option.fromNullishOr(Bun.env["GIT_INDEX_FILE"]))}`.text(),
+).pipe(Effect.map(fileNames))
 
 /**
  * Tracked symlinks (git mode 120000). A symlink is not a second file: its
@@ -101,7 +132,7 @@ const LINT_PLUGIN = "packages/tooling/src/gent-rules.ts"
 
 /** The findings that read the lint and compiler configs rather than one source file. */
 const lintConfigFindings = Effect.fn("Tooling.lintConfigFindings")(function* (
-  trackedFiles: ReadonlyArray<string>,
+  committedFiles: ReadonlyArray<string>,
   sourceTexts: ReadonlyMap<string, string>,
 ) {
   const { text: configText, value: config } = yield* readJsonc(OXLINT_CONFIG, OxlintConfigSchema)
@@ -113,11 +144,22 @@ const lintConfigFindings = Effect.fn("Tooling.lintConfigFindings")(function* (
   const rootRules = new Set(Object.keys(config.rules ?? {}))
   const pluginText = Option.getOrElse(Option.fromNullishOr(sourceTexts.get(LINT_PLUGIN)), () => "")
   return [
-    ...findUnmatchedOverrideGlobs(OXLINT_CONFIG, configText, config, trackedFiles),
-    ...findUnmatchedIgnoreRows(OXLINT_IGNORE, ignoreText, trackedFiles),
-    ...findUnmatchedTsconfigOverrides(ROOT_TSCONFIG, tsconfig.text, tsconfig.value, trackedFiles),
+    ...findUnmatchedOverrideGlobs(OXLINT_CONFIG, configText, config, committedFiles),
+    ...findUnmatchedIgnoreRows(OXLINT_IGNORE, ignoreText, committedFiles),
+    ...findUnmatchedTsconfigOverrides(ROOT_TSCONFIG, tsconfig.text, tsconfig.value, committedFiles),
     ...findUnenabledPluginRules(LINT_PLUGIN, pluginText, Object.keys(gentRules.rules), rootRules),
   ]
+})
+
+/** The package whose typecheck runs the guide check (`check-guide-code.ts`). */
+const GUIDE_CHECK_TURBO = "examples/turbo.json"
+
+/** The guide check's cache key against the steering files, new ones included. */
+const guideInputFindings = Effect.fn("Tooling.guideInputFindings")(function* (
+  trackedFiles: ReadonlyArray<string>,
+) {
+  const { value } = yield* readJsonc(GUIDE_CHECK_TURBO, TurboTypecheckInputsSchema)
+  return findUnhashedSteeringFiles(GUIDE_CHECK_TURBO, value.tasks.typecheck.inputs, trackedFiles)
 })
 
 type FileFinder = (file: string, text: string) => ReadonlyArray<Finding>
@@ -139,6 +181,7 @@ const SOURCE_FILE_FINDERS: ReadonlyArray<FileFinder> = [
   findAliasTestLayers,
   findE2eFixtureImportFindings,
   findRepoTempDirectories,
+  findSharedTestHomes,
   findIdentityEncodes,
   findTuiSessionIdentityReads,
 ]
@@ -343,6 +386,8 @@ export const scanTrackedTexts = (
     ...findUnadaptedSeams(sourceTexts, adaptedSeams),
     // A GENT_* variable whose writer left: its reader is a branch nothing takes.
     ...findReadersWithoutWriters(new Map([...sourceTexts, ...manifestTexts])),
+    // A bundled skill file the skills module does not import never ships.
+    ...findUnshippedSkillFiles(sourceTexts.get(BUNDLED_SKILLS_MODULE) ?? "", trackedFiles),
   )
   return { findings, sourceTexts }
 }
@@ -370,8 +415,9 @@ const program = Effect.gen(function* () {
   const findings: Array<Finding> = [
     ...treeFindings,
     // The lint config must not name a file or a rule that is gone.
-    ...(yield* lintConfigFindings(trackedFiles, sourceTexts)),
+    ...(yield* lintConfigFindings(yield* committedFileNames, sourceTexts)),
     ...(yield* packageSurfaceFindings(trackedFiles)),
+    ...(yield* guideInputFindings(trackedFiles)),
   ]
 
   // Two finders may report one line with one message; say it once.

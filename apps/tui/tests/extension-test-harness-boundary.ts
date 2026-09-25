@@ -98,7 +98,7 @@ export const makeClientExtensionRuntime = (
     ),
     workspace: Option.getOrElse(Option.fromUndefinedOr(opts.workspace), () => ({
       cwd: "/tmp/test-cwd",
-      home: "/tmp/test-home",
+      home: "/nonexistent/test-home",
     })),
     shell: {
       cast: <A, E>(effect: Effect.Effect<A, E, never>) => {

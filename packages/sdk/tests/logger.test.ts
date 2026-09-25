@@ -37,8 +37,8 @@ const logDirFor = (env: Record<string, string>) =>
 describe("resolveLogDir", () => {
   it.effect("a run with its own data directory keeps its logs there", () =>
     Effect.gen(function* () {
-      expect(yield* logDirFor({ GENT_DATA_DIR: "/tmp/gent-scratch" })).toBe(
-        "/tmp/gent-scratch/logs",
+      expect(yield* logDirFor({ GENT_DATA_DIR: "/nonexistent/gent-scratch" })).toBe(
+        "/nonexistent/gent-scratch/logs",
       )
     }),
   )

@@ -1368,7 +1368,7 @@ const testRuntime = makeClientRuntime(BunServices.layer, {
     onSessionEvent: () => () => {},
     modelCatalog: () => Option.none(),
   },
-  workspace: { cwd: "/tmp/test-cwd", home: "/tmp/test-home" },
+  workspace: { cwd: "/tmp/test-cwd", home: "/nonexistent/test-home" },
   shell: { cast: castTestShellEffect, pane: makePaneSlot() },
 })
 /** Run the loader on a client runtime, the stub one unless the test gives its own. */
@@ -1775,7 +1775,7 @@ describe("tool renderer reach", () => {
       for (const extension of BuiltinExtensions) {
         const contributions = yield* collectTestContributions(extension.setup, {
           cwd: "/tmp",
-          home: "/tmp",
+          home: "/nonexistent/gent-test-home",
         })
         for (const tool of contributions.tools ?? []) toolIds.add(tool.id)
       }

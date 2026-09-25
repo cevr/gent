@@ -31,14 +31,14 @@ const ctx = testToolContext({
   branchId: BranchId.make("test-branch"),
   toolCallId: ToolCallId.make("test-call"),
   cwd: "/tmp",
-  home: "/tmp",
+  home: "/nonexistent/gent-test-home",
 })
 
 const PlatformLayer = Layer.merge(
   BunServices.layer,
   RuntimeEnvironment.Live({
     cwd: process.cwd(),
-    home: "/tmp/test-home",
+    home: "/nonexistent/test-home",
   }),
 )
 const ToolLayer = PlatformLayer
