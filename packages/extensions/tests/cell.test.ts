@@ -1100,6 +1100,211 @@ describe("recorded cell execution", () => {
     )
   }
 
+  // The worker's own runtime calls some built-ins between the cell's return
+  // and the put-back: a promise's `then`, and Array `push` and `pop`. The
+  // put-back once ran after that code, so a cell that replaced one of them
+  // held the worker to the deadline or lost its result.
+  const runtimeBuiltins: ReadonlyArray<{
+    readonly name: string
+    readonly source: string
+    /** The result field: `display` for a good cell, `output` for a failed one. */
+    readonly reply: "display" | "output"
+    readonly shown: string
+  }> = [
+    {
+      name: "Promise.prototype.then before an await",
+      source: "Promise.prototype.then = function () {}; await null; 2",
+      reply: "display",
+      shown: "2\nPut back built-ins the cell changed: Promise.prototype.then",
+    },
+    {
+      name: "Array.prototype.pop",
+      source: "Array.prototype.pop = function () { return undefined }; 2",
+      reply: "display",
+      shown: "2\nPut back built-ins the cell changed: Array.prototype.pop",
+    },
+    {
+      name: "Array.prototype.push",
+      source: "Array.prototype.push = function () { return 0 }; 2",
+      reply: "display",
+      shown: "2\nPut back built-ins the cell changed: Array.prototype.push",
+    },
+    {
+      name: "Array.prototype.push after an await",
+      source: "await null; Array.prototype.push = function () { throw new Error('push') }; 2",
+      reply: "display",
+      shown: "2\nPut back built-ins the cell changed: Array.prototype.push",
+    },
+    {
+      name: "Array.prototype.pop and then throws",
+      source: "Array.prototype.pop = function () { return undefined }; throw new Error('boom')",
+      reply: "output",
+      shown: "Put back built-ins the cell changed: Array.prototype.pop",
+    },
+    {
+      name: "Array.prototype.pop after an await and then throws",
+      source:
+        "await null; Array.prototype.pop = function () { return undefined }; throw new Error('boom')",
+      reply: "output",
+      shown: "Put back built-ins the cell changed: Array.prototype.pop",
+    },
+  ]
+  for (const builtin of runtimeBuiltins) {
+    it.scopedLive(
+      `a cell that replaces ${builtin.name} shows its result; the worker lives`,
+      () =>
+        Effect.gen(function* () {
+          const worker = yield* buildCellWorker
+          const [define, change, after] = yield* setupCalls([
+            "var kept = 7",
+            builtin.source,
+            "kept",
+          ])
+          if (!define || !change || !after) return yield* Effect.die("Missing test cells")
+          const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
+          const cells = Context.get(
+            yield* Layer.build(
+              CellExecution.Live({
+                worker,
+                cwd: packageDirectory,
+                sessionId,
+                branchId,
+                evaluationTimeoutMs: 3000,
+              }),
+            ),
+            CellExecution,
+          )
+          const run = (call: typeof define) =>
+            cells.run(call).pipe(Effect.provideService(CellOperationHost, host))
+          yield* run(define)
+          expect((yield* run(change)).result).toHaveProperty(
+            builtin.reply,
+            expect.stringContaining(builtin.shown),
+          )
+          const next = (yield* run(after)).result
+          expect(next).toMatchObject({ display: "7" })
+          expect(next).not.toHaveProperty("restored")
+        }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
+      10000,
+    )
+  }
+
+  // A `then` the realm refuses to put back is still in place when the worker
+  // waits for the cell's promise; the worker waits through the `then` it
+  // saved when it loaded, and the host then replaces it.
+  it.scopedLive(
+    "a cell that makes Promise.prototype.then stuck shows its result; the next cell restores",
+    () =>
+      Effect.gen(function* () {
+        const worker = yield* buildCellWorker
+        const [define, change, after] = yield* setupCalls([
+          "var kept = 7",
+          "Object.defineProperty(Promise.prototype, 'then', { value: function () {}, writable: false, configurable: false }); await null; 2",
+          "[kept, typeof Promise.prototype.then].join(',')",
+        ])
+        if (!define || !change || !after) return yield* Effect.die("Missing test cells")
+        const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
+        const cells = Context.get(
+          yield* Layer.build(
+            CellExecution.Live({
+              worker,
+              cwd: packageDirectory,
+              sessionId,
+              branchId,
+              evaluationTimeoutMs: 3000,
+            }),
+          ),
+          CellExecution,
+        )
+        const run = (call: typeof define) =>
+          cells.run(call).pipe(Effect.provideService(CellOperationHost, host))
+        yield* run(define)
+        const changed = (yield* run(change)).result
+        expect(changed).toHaveProperty(
+          "display",
+          expect.stringContaining(
+            "2\nBuilt-ins the cell changed that cannot be put back: Promise.prototype.then",
+          ),
+        )
+        expect((yield* run(after)).result).toMatchObject({
+          display: "7,function",
+          restored: { restored: ["kept"], omitted: [] },
+        })
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
+    10000,
+  )
+
+  // A timer's error is rendered after the put-back: the text of a stray error
+  // once called the built-ins the timer had just replaced.
+  it.scopedLive(
+    "a timer's uncaught error is shown without the built-ins the timer replaced",
+    () =>
+      Effect.gen(function* () {
+        const worker = yield* buildCellWorker
+        const [start, wait, after] = yield* setupCalls([
+          "setTimeout(() => { const join = Array.prototype.join; const push = Array.prototype.push; Array.prototype.join = function (...parts) { globalThis.ran = true; return join.apply(this, parts) }; Array.prototype.push = function (...items) { globalThis.ran = true; return push.apply(this, items) }; throw new Error('late') }, 5); 1",
+          "await Bun.sleep(100); String(globalThis.ran)",
+          "String(globalThis.ran)",
+        ])
+        if (!start || !wait || !after) return yield* Effect.die("Missing test cells")
+        const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
+        const cells = Context.get(
+          yield* Layer.build(
+            CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }),
+          ),
+          CellExecution,
+        )
+        const DisplayText = Schema.Struct({ display: Schema.String })
+        const display = (call: typeof start) =>
+          cells.run(call).pipe(
+            Effect.provideService(CellOperationHost, host),
+            Effect.map((result) => Schema.decodeUnknownSync(DisplayText)(result.result).display),
+          )
+        yield* display(start)
+        const waited = yield* display(wait)
+        const shown = `${waited}\n${yield* display(after)}`
+        expect(waited.endsWith("undefined")).toBe(true)
+        expect(shown.endsWith("undefined")).toBe(true)
+        expect(shown).toContain("Uncaught (from cell 1): Error: late")
+        expect(shown).toContain("Array.prototype.join")
+        expect(shown).toContain("Array.prototype.push")
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
+    10000,
+  )
+
+  // A change the snapshot finds, made after the cell's own check, retires the
+  // worker. Its note once went only to a worker the host then discarded.
+  it.scopedLive(
+    "a built-in stuck after the cell's check is named in that cell's result",
+    () =>
+      Effect.gen(function* () {
+        const worker = yield* buildCellWorker
+        const [define, change, after] = yield* setupCalls([
+          "var kept = 7",
+          "setTimeout(() => Object.defineProperty(Map.prototype, 'late', { value: 1 }), 0); var lost = 1; 2",
+          "[kept, typeof lost, typeof Map.prototype.late].join(',')",
+        ])
+        if (!define || !change || !after) return yield* Effect.die("Missing test cells")
+        const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
+        const cells = Context.get(
+          yield* Layer.build(
+            CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }),
+          ),
+          CellExecution,
+        )
+        const run = (call: typeof define) =>
+          cells.run(call).pipe(Effect.provideService(CellOperationHost, host))
+        yield* run(define)
+        const changed = (yield* run(change)).result
+        expect(changed).toHaveProperty("display", expect.stringContaining("Map.prototype.late"))
+        expect((yield* run(after)).result).toMatchObject({
+          display: "7,undefined,undefined",
+          restored: { restored: ["kept"], omitted: [] },
+        })
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
+    10000,
+  )
+
   // Display once went through `inspect`, which reads `Symbol.toStringTag` with
   // a plain get and walks the prototype chain: a looping getter or trap held
   // the worker until the deadline, for a logged, returned, thrown or uncaught value.

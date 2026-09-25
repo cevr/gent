@@ -978,15 +978,24 @@ prototype). The worker does not defend each call against that. At load it
 takes a baseline of the built-ins' descriptors: the ECMAScript constructors
 and namespaces on `globalThis` with `TextEncoder` and `TextDecoder`, their
 prototypes, and the intrinsics only syntax reaches (%TypedArray%, the iterator
-prototypes, the generator prototypes). After each cell, before the display
-and the snapshot, `putBackBuiltins` compares every descriptor, prototype and
-extensibility with that baseline and puts back what changed; the cell's
-result names what it put back. A change the realm refuses to undo (a built-in
-a cell made not configurable, an object it froze) goes back as
-`unrestored` (additive, optional, on the Evaluated, Failed, Snapshot and Reset
-frames): the kernel then replaces the worker, and the next cell restores the
-namespace saved before it. A snapshot that fails for any reason marks the
-kernel for that same recovery (`recoveryPending`). The encoder stops a
+prototypes, the generator prototypes). `putBackBuiltins` compares every
+descriptor, prototype and extensibility with that baseline and puts back what
+changed. The Effect runtime calls a promise's `then` and Array `push` and
+`pop` as soon as cell code returns, so the put-back runs in the same turn as
+the cell's return or throw, inside the evaluation thunk. A cell's promise is
+awaited only when `util.types.isPromise` says the realm made it, through the
+`then` saved at load (`whenSettled`), and its callbacks put back before the
+fiber resumes. The put-back runs again before the display and the snapshot,
+as a timer the cell left can change a built-in between cells, and in the
+process's uncaught handler and the report, before an error is queued and
+rendered. The cell's result names what was put back. A change the realm
+refuses to undo (a built-in a cell made not configurable, an object it froze)
+goes back as `unrestored` (additive, optional, on the Evaluated, Failed,
+Snapshot and Reset frames): the kernel then replaces the worker, and the next
+cell restores the namespace saved before it. A snapshot that fails for any
+reason marks the kernel for that same recovery (`recoveryPending`), and the
+host adds that failure to the cell's display: what the cell bound is not
+kept. The encoder stops a
 binding at a running UTF-8 byte budget: each value charges at least its
 encoded size, a string longer than the budget is refused uncounted, and the
 exact size comes from `Buffer.byteLength` saved at load, so a 5 MB string or

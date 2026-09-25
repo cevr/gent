@@ -44,13 +44,16 @@ import {
   displayValue,
   encodeSnapshot,
   errorHead,
+  type BuiltinRepair,
   inheritsFrom,
+  isNativePromise,
   isOrdinaryArray,
   type PromiseState,
   putBackBuiltins,
   readDataProperty,
   readProperty,
   sameDescriptor,
+  whenSettled,
 } from "./cell-value.js"
 
 /** Uncaught errors kept for the next cell; later ones between two cells are dropped. */
@@ -224,17 +227,26 @@ export class CellWorkerEnvironment extends Context.Service<
  */
 const cellOrigin = new AsyncLocalStorage<number>()
 
-/** An error cell code raised outside any awaited path, with the cell that raised it when known. */
+/**
+ * An error cell code raised outside any awaited path, with the cell that
+ * raised it when known, and the built-ins put back before the worker's own
+ * code handled it.
+ */
 interface UncaughtError {
   readonly cause: unknown
   readonly origin: Option.Option<number>
+  readonly repair: BuiltinRepair
 }
 
-/** Read in the process's uncaught handler, while the throwing callback's context is still current. */
-const uncaughtError = (cause: unknown): UncaughtError => ({
-  cause,
-  origin: Option.fromUndefinedOr(cellOrigin.getStore()),
-})
+/**
+ * Made in the process's uncaught handler, while the throwing callback's
+ * context is still current. The code that threw may have replaced a built-in
+ * the queue or the error text calls, so the built-ins are put back first.
+ */
+const uncaughtError = (cause: unknown): UncaughtError => {
+  const repair = putBackBuiltins()
+  return { cause, origin: Option.fromUndefinedOr(cellOrigin.getStore()), repair }
+}
 
 /** The worker transport supplies this proxy. It never supplies Gent host services. */
 export class CellHost extends Context.Service<
@@ -698,24 +710,6 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
   let cellNumber = 0
   let running = Option.none<number>()
   let strays: Array<string> = []
-  const reportUncaught = (error: UncaughtError) =>
-    Effect.gen(function* () {
-      const text = errorText(error.cause)
-      if (Option.isNone(error.origin) && cellNumber === 0) {
-        return yield* new CellProtocolError({
-          message: `Worker fault before any cell ran: ${text}`,
-        })
-      }
-      if (Option.isSome(error.origin) && Option.contains(running, error.origin.value)) {
-        return append(`Uncaught: ${text}`)
-      }
-      if (strays.length >= maximumStrayErrors) return
-      if (Option.isSome(error.origin)) {
-        strays.push(`Uncaught (from cell ${error.origin.value}): ${text}`)
-        return
-      }
-      strays.push(`Uncaught (origin unknown: an unawaited promise or microtask): ${text}`)
-    })
 
   /**
    * Built-ins a check could not put back. Once any is named, this worker's
@@ -723,13 +717,8 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
    * and no snapshot reads its namespace.
    */
   let unrestoredBuiltins: ReadonlyArray<string> = []
-  /**
-   * Put the built-ins back as the worker loaded them, and say which were
-   * changed. It runs after each cell, before the display and the snapshot:
-   * a timer the cell left can change one between cells.
-   */
-  const repairBuiltins = (changed: string): ReadonlyArray<string> => {
-    const repair = putBackBuiltins()
+  /** The notes for a put-back already done; a built-in it could not put back retires the worker. */
+  const repairNotes = (changed: string, repair: BuiltinRepair): ReadonlyArray<string> => {
     const notes: Array<string> = []
     if (repair.restored.length > 0)
       notes.push(`Put back built-ins ${changed}: ${repair.restored.join(", ")}`)
@@ -741,6 +730,40 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
     }
     return notes
   }
+  /**
+   * Put the built-ins back as the worker loaded them, and say which were
+   * changed. The worker's own code calls built-ins as soon as cell code
+   * returns, so this runs in the same turn as the cell's return or throw,
+   * and when its promise settles, before the worker goes on. It runs again
+   * before the display and the snapshot, as a timer the cell left can change
+   * one between cells, and before an uncaught error is rendered.
+   */
+  const repairBuiltins = (changed: string): ReadonlyArray<string> =>
+    repairNotes(changed, putBackBuiltins())
+
+  const reportUncaught = (error: UncaughtError) =>
+    Effect.gen(function* () {
+      const notes = [
+        ...repairNotes("changed before an uncaught error", error.repair),
+        ...repairBuiltins("changed before an uncaught error"),
+      ]
+      const text = errorText(error.cause)
+      if (Option.isNone(error.origin) && cellNumber === 0) {
+        return yield* new CellProtocolError({
+          message: `Worker fault before any cell ran: ${text}`,
+        })
+      }
+      if (Option.isSome(error.origin) && Option.contains(running, error.origin.value)) {
+        append(`Uncaught: ${text}`)
+        for (const note of notes) append(note)
+        return
+      }
+      if (strays.length >= maximumStrayErrors) return
+      if (Option.isSome(error.origin))
+        strays.push(`Uncaught (from cell ${error.origin.value}): ${text}`)
+      else strays.push(`Uncaught (origin unknown: an unawaited promise or microtask): ${text}`)
+      strays.push(...notes)
+    })
 
   const evaluate = Effect.fn("BunCellEvaluator.evaluate")(function* (source: string) {
     output.reset()
@@ -755,16 +778,40 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
     })
     const origin = ++cellNumber
     running = Option.some(origin)
+    const notes: Array<string> = []
+    // Called first in each callback below, before any worker code runs.
+    const putBack = () => {
+      // `notes.push` is read only after the put-back: a call reads its callee before its arguments.
+      const found = repairBuiltins("the cell changed")
+      notes.push(...found)
+    }
     const outcome = yield* Effect.gen(function* () {
       const started = yield* Effect.try({
         // Timers and continuations the cell starts keep its number.
-        try: (): unknown => cellOrigin.run(origin, () => evaluateInRealm(compiled)),
-        catch: (cause) => new CellThrow({ cause }),
+        try: (): unknown => {
+          const value = cellOrigin.run(origin, () => evaluateInRealm(compiled))
+          putBack()
+          return value
+        },
+        catch: (cause) => {
+          putBack()
+          return new CellThrow({ cause })
+        },
       })
-      if (!Predicate.isPromiseLike(started)) return started
-      return yield* Effect.tryPromise({
-        try: () => started,
-        catch: (cause) => new CellThrow({ cause }),
+      // A thenable a cell wrote is its value; only the realm's own promise is awaited.
+      if (!isNativePromise(started)) return started
+      return yield* Effect.callback<unknown, CellThrow>((resume) => {
+        whenSettled(
+          started,
+          (value) => {
+            putBack()
+            resume(Effect.succeed(value))
+          },
+          (cause) => {
+            putBack()
+            resume(Effect.fail(new CellThrow({ cause })))
+          },
+        )
       })
     }).pipe(
       captureConsole,
@@ -775,8 +822,9 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
       ),
       Effect.result,
     )
-    // The error text and the display run on the built-ins: put them back first.
-    const notes = repairBuiltins("the cell changed")
+    // The error text and the display run on the built-ins: a microtask the
+    // cell queued may have changed one since.
+    putBack()
     if (Result.isFailure(outcome)) {
       for (const note of notes) append(note)
       return yield* failure("execute", outcome.failure.cause)

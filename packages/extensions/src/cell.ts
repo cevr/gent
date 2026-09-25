@@ -2330,19 +2330,25 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
         /**
          * Keep the namespace after each good cell. A snapshot that fails lost
          * the worker, so the next cell replaces it and restores the last
-         * namespace saved; a failed store only loses recency.
+         * namespace saved; a failed store only loses recency. The cell's
+         * result names a failed snapshot: what it bound is not kept.
          */
         const saveNamespace = Effect.fn("CellExecution.saveNamespace")(function* (current: Kernel) {
-          yield* current.snapshot.pipe(
-            Effect.tapError(() =>
+          return yield* current.snapshot.pipe(
+            Effect.flatMap((snapshot) => namespaces.set(namespaceAddress, snapshot)),
+            Effect.as(Option.none<string>()),
+            Effect.catchTag("CellKernelError", (error) =>
               Effect.sync(() => {
                 recoveryPending = true
+                return Option.some(
+                  `The namespace after this cell was not saved: ${error.message}. The next cell runs on a new worker with the namespace saved before this cell.`,
+                )
               }),
             ),
-            Effect.flatMap((snapshot) => namespaces.set(namespaceAddress, snapshot)),
             Effect.catch((error) =>
               Effect.logWarning("Cell namespace snapshot failed").pipe(
                 Effect.annotateLogs({ error: String(error) }),
+                Effect.as(Option.none<string>()),
               ),
             ),
           )
@@ -2405,6 +2411,12 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
           // Cleared only after the restore: a failed one is tried again next cell.
           recoveryPending = false
         })
+        /** The display ends with a note the host adds after the worker answered. */
+        const withNote = (value: CellEvaluation, note: Option.Option<string>): CellEvaluation => {
+          if (Option.isNone(note)) return value
+          if (value.display === "") return { ...value, display: note.value }
+          return { ...value, display: `${value.display}\n${note.value}` }
+        }
         const evaluated = (value: CellEvaluation): CellEvaluation => {
           if (Option.isNone(restoreReport)) return value
           const report = restoreReport.value
@@ -2455,8 +2467,8 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
               Effect.gen(function* () {
                 yield* prepare(current, admission.reset === true)
                 const value = yield* current.evaluate(admission.code)
-                yield* saveNamespace(current)
-                return evaluated(value)
+                const lost = yield* saveNamespace(current)
+                return evaluated(withNote(value, lost))
               }),
             ),
             Effect.raceFirst(Deferred.await(signal)),

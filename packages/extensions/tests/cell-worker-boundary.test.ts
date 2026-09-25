@@ -23,6 +23,13 @@ const catalogOf = (...names: ReadonlyArray<string>) => ({
   tools: names.map((name) => ({ name, description: name, guidelines: [], parameters: {} })),
 })
 
+/** An uncaught error with no known origin, raised when no built-in was changed. */
+const strayError = (cause: unknown) => ({
+  cause,
+  origin: Option.none<number>(),
+  repair: { restored: [], unrestored: [] },
+})
+
 /** A worker fed from queues; `uncaught` stands in for the process's uncaught handlers. */
 const makeHarnessWith = (uncaught: (typeof CellWorkerEnvironment.Service)["uncaught"]) =>
   Effect.gen(function* () {
@@ -57,7 +64,7 @@ describe("cell worker", () => {
         yield* Queue.unbounded<Stream.Success<(typeof CellWorkerEnvironment.Service)["uncaught"]>>()
       const worker = yield* makeHarnessWith(Stream.fromQueue(uncaught))
       // No cell code exists in this worker yet: the fault is the worker's own.
-      yield* Queue.offer(uncaught, { cause: "worker bug", origin: Option.none() })
+      yield* Queue.offer(uncaught, strayError("worker bug"))
       const ended = yield* Effect.exit(Fiber.join(worker.fiber))
       expect(ended._tag).toBe("Failure")
       if (ended._tag === "Failure")
@@ -85,13 +92,47 @@ describe("cell worker", () => {
         })
       expect(yield* evaluate("1")).toBe("1")
       // A timer or promise of that cell may raise it: it is not the worker's own.
-      yield* Queue.offer(uncaught, { cause: "late rejection", origin: Option.none() })
+      yield* Queue.offer(uncaught, strayError("late rejection"))
       // The report runs on its own fiber; each cell gives it a turn.
       const display = yield* evaluate("2").pipe(
         Effect.repeat({ until: (text) => text.includes("late rejection"), times: 20 }),
       )
       expect(display).toContain("Uncaught (origin unknown")
       expect(display).toContain("late rejection")
+    }).pipe(Effect.timeout("3 seconds")),
+  )
+
+  // The process handler puts the built-ins back before it queues the error.
+  // A built-in changed after that, before the report renders the error, is
+  // put back by the report itself, and named with the error.
+  it.scopedLive("an uncaught error's report puts back the built-ins before its text", () =>
+    Effect.gen(function* () {
+      const uncaught =
+        yield* Queue.unbounded<Stream.Success<(typeof CellWorkerEnvironment.Service)["uncaught"]>>()
+      const worker = yield* makeHarnessWith(Stream.fromQueue(uncaught))
+      let cells = 0
+      const evaluate = (source: string) =>
+        Effect.gen(function* () {
+          cells += 1
+          const cellId = `cell-${cells}`
+          yield* worker.send(
+            CellRequest.cases.Evaluate.make({ cellId, outputToken: `${cellId}-token`, source }),
+          )
+          const result = yield* worker.next
+          if (result._tag !== "Evaluated")
+            return yield* new CellProtocolError({ message: `Expected result, got ${result._tag}` })
+          return result.result.display
+        })
+      expect(yield* evaluate("1")).toBe("1")
+      // Stands in for a timer that adds a built-in property after the handler ran.
+      Reflect.defineProperty(Array.prototype, "probeAdded", { value: 1, configurable: true })
+      yield* Queue.offer(uncaught, strayError("late rejection"))
+      const display = yield* evaluate("2").pipe(
+        Effect.repeat({ until: (text) => text.includes("late rejection"), times: 20 }),
+      )
+      expect(display).toContain(
+        "Put back built-ins changed before an uncaught error: Array.prototype.probeAdded",
+      )
     }).pipe(Effect.timeout("3 seconds")),
   )
 
@@ -532,7 +573,7 @@ describe("cell worker", () => {
             throw new Error("m")
           },
         })
-        yield* Queue.offer(uncaught, { cause: unreadable, origin: Option.none() })
+        yield* Queue.offer(uncaught, strayError(unreadable))
         // The report runs on its own fiber; each cell gives it a turn.
         const display = yield* evaluate("kept").pipe(
           Effect.repeat({ until: (text) => text.includes("Uncaught"), times: 20 }),
@@ -548,7 +589,7 @@ describe("cell worker", () => {
           getPrototypeOf: trap,
           getOwnPropertyDescriptor: trap,
         })
-        yield* Queue.offer(uncaught, { cause: trapped, origin: Option.none() })
+        yield* Queue.offer(uncaught, strayError(trapped))
         const trappedDisplay = yield* evaluate("kept").pipe(
           Effect.repeat({ until: (text) => text.includes("Uncaught"), times: 20 }),
         )

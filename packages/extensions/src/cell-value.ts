@@ -223,7 +223,7 @@ const propertyPath = (path: string, key: string | symbol): string => {
 }
 
 /** The built-ins a check found changed: put back, or refused by the realm. */
-interface BuiltinRepair {
+export interface BuiltinRepair {
   readonly restored: ReadonlyArray<string>
   readonly unrestored: ReadonlyArray<string>
 }
@@ -334,6 +334,28 @@ const intrinsic = (prototype: object, key: PropertyKey, field: "get" | "value"):
 /** A built-in's slot reader called on a value, never through the value. */
 const readSlot = (reader: Function, value: object, args: ReadonlyArray<unknown> = []): unknown =>
   Reflect.apply(reader, value, args)
+
+// ── promise settlement ──────────────────────────────────────────────────────
+
+const applySaved = Reflect.apply
+const promiseThen = intrinsic(Promise.prototype, "then", "value")
+
+/** True for a promise the realm made; a thenable a cell wrote is a plain value. */
+export const isNativePromise = (value: unknown): value is Promise<unknown> => isPromise(value)
+
+/**
+ * Wait for a promise through the `then` this module saved when it loaded, not
+ * the one the promise holds now: a cell may replace `Promise.prototype.then`
+ * before it awaits. The realm's `then` still reads the promise's
+ * `constructor` to make its result promise.
+ */
+export const whenSettled = (
+  promise: Promise<unknown>,
+  onFulfilled: (value: unknown) => void,
+  onRejected: (cause: unknown) => void,
+): void => {
+  applySaved(promiseThen, promise, [onFulfilled, onRejected])
+}
 
 const typedArrayPrototype: object = Object.getPrototypeOf(Uint8Array.prototype)
 const functionSource = intrinsic(Function.prototype, "toString", "value")
