@@ -2089,10 +2089,18 @@ describe("App auth gate", () => {
       setup.renderer.destroy()
     }).pipe(Effect.timeout("10 seconds")),
   )
-  // At 14 rows the composer takes six of the footer's twelve, and the agents
-  // pane's rules and title take three more: three rows are left for the
-  // filter row, the section heading and the cursor row. The trays, the key
-  // hint and the detail line give way for them.
+  /**
+   * The docked pane closes inside the terminal: its bottom rule is the last
+   * row drawn, or the key hint under it is.
+   */
+  const closesInside = (drawn: ReadonlyArray<string>) => {
+    const rule = drawn.findLastIndex((line) => line.startsWith("─"))
+    return rule >= 0 && drawn.length - 1 - rule <= 1
+  }
+  // At 14 rows the composer takes four of the footer's twelve once its blank
+  // rows give way, and the agents pane's rules and title take three more: the
+  // filter row, the section heading and the cursor row fit. The trays, the
+  // blank rows and the detail line give way for them.
   it.live("the agents pane keeps its cursor row in view at the smallest height that holds it", () =>
     Effect.gen(function* () {
       const setup = yield* mountShortTerminalWithTrays(14)
@@ -2106,9 +2114,8 @@ describe("App auth gate", () => {
       const opened = renderFrame(setup)
       expect(opened).toContain("┃")
       expect(opened).not.toContain("alarm in now")
-      // The pane closes inside the terminal: its bottom rule is the last row drawn.
       const drawn = opened.split("\n").filter((line) => line.trim().length > 0)
-      expect(drawn.at(-1)?.startsWith("─")).toBe(true)
+      expect(closesInside(drawn)).toBe(true)
       setup.mockInput.pressArrow("down")
       yield* waitForFrame(
         setup,
@@ -2155,8 +2162,7 @@ describe("App auth gate", () => {
         const cursor = pane.filter((line) => line.includes("delegate: task 3"))
         expect(cursor).toHaveLength(1)
         expect(cursor[0]).not.toContain("turn ")
-        // The pane closes inside the terminal: its bottom rule is the last row drawn.
-        expect(pane.at(-1)?.startsWith("─")).toBe(true)
+        expect(closesInside(pane)).toBe(true)
       }).pipe(Effect.timeout("10 seconds")),
     )
   }
@@ -2195,7 +2201,7 @@ describe("App auth gate", () => {
     const cursor = pane.filter((line) => line.includes(cursorText))
     expect(cursor).toHaveLength(1)
     expect(cursor[0]).not.toContain(notOnCursor)
-    expect(pane.at(-1)?.startsWith("─")).toBe(true)
+    expect(closesInside(pane)).toBe(true)
   }
   for (const height of [13, 12, 11]) {
     it.live(`the thread pane at ${height} rows keeps its cursor row and overdraws nothing`, () =>
@@ -2272,10 +2278,11 @@ describe("App auth gate", () => {
       }).pipe(Effect.timeout("10 seconds")),
     )
   }
-  // Under 11 rows, with a turn running, the composer and the "Generating" row
-  // leave a pane two rows, one or none. Under three rows the frame drops its
-  // rules and note row, so its rows go to the cursor row; at none it draws
-  // nothing. Either way no row is drawn over a rule or over the status row.
+  // Under 9 rows, with a turn running and the blank footer rows given way,
+  // the "Generating" row, the input and the status row leave a pane two rows,
+  // one or none (8 rows: 3, 7: 2, 6: 1, 5: none). Under three rows the frame
+  // drops its rules and note row, so its rows go to the cursor row; at none it
+  // draws nothing. Either way no row is drawn over a rule or over the status row.
   const sendPrompts = (view: { readonly setup: TestSetup; readonly sent: Array<string> }) =>
     Effect.gen(function* () {
       for (const prompt of ["first prompt", "second prompt"]) {
@@ -2329,13 +2336,13 @@ describe("App auth gate", () => {
       .split("\n")
       .every((line) => (!line.includes("─") || /^─+$/.test(line.trim())) && rowClean(line))
   for (const pane of shortPanes) {
-    it.live(`the ${pane.name} overdraws nothing from 10 rows down to 6`, () =>
+    it.live(`the ${pane.name} overdraws nothing from 10 rows down to 5`, () =>
       Effect.gen(function* () {
         const view = yield* mountRunningTurn()
         yield* pane.open(view)
         yield* waitForFrame(view.setup, (frame) => frame.includes(pane.shown), "the pane")
         const width = view.setup.renderer.terminalWidth
-        for (const height of [10, 9, 8, 7, 6]) {
+        for (const height of [10, 9, 8, 7, 6, 5]) {
           view.setup.resize(width, height)
           yield* waitForFrame(
             view.setup,
@@ -2349,6 +2356,112 @@ describe("App auth gate", () => {
       }).pipe(Effect.timeout("10 seconds")),
     )
   }
+  // With a turn running, the footer's three blank rows (above the activity
+  // row, above the input, above the status row) give way before a pane loses
+  // its cursor row: the reasoning picker keeps "● default" down to 6 rows.
+  it.live("the blank footer rows give way so a pane keeps its cursor row down to 6 rows", () =>
+    Effect.gen(function* () {
+      const view = yield* mountRunningTurn()
+      yield* typeCommand("/think")(view.setup)
+      yield* waitForFrame(view.setup, (frame) => frame.includes("● default"), "the pane")
+      const width = view.setup.renderer.terminalWidth
+      for (const height of [8, 7, 6]) {
+        view.setup.resize(width, height)
+        yield* waitForFrame(
+          view.setup,
+          (frame) =>
+            view.setup.renderer.terminalHeight === height &&
+            frame.includes("● default") &&
+            frame.includes("┃") &&
+            // The activity row is whole: the transcript tail, left no row,
+            // draws nothing over it.
+            frame.split("\n").some((line) => line.startsWith("  Generating")),
+          `the cursor row at ${height} rows`,
+        )
+      }
+      // Grown back, the blank rows return: a blank row sits above the input.
+      view.setup.resize(width, 24)
+      yield* waitForFrame(
+        view.setup,
+        (current) => {
+          const lines = current.split("\n")
+          const input = lines.findIndex((line) => line.startsWith("┃"))
+          return (
+            view.setup.renderer.terminalHeight === 24 &&
+            current.includes("● default") &&
+            input > 0 &&
+            lines[input - 1]?.trim() === ""
+          )
+        },
+        "the blank rows back on the full terminal",
+      )
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  // The give-way is reckoned as if the blank rows were drawn, so a pane that
+  // fits once they give way does not bring them back and lose its rows again:
+  // at 10-12 rows (a squeezed reasoning picker) the blank rows stay given and
+  // the frame holds still across draws.
+  const withoutClock = (frame: string) => frame.replace(/\(\d+s\)/g, "")
+  const blankRowsGiven = (frame: string) => {
+    const lines = frame.split("\n")
+    const generating = lines.findIndex((line) => line.includes("Generating"))
+    return generating >= 0 && lines[generating + 1]?.startsWith("┃") === true
+  }
+  for (const height of [12, 11, 10]) {
+    it.live(`the footer holds still at ${height} rows with a pane open`, () =>
+      Effect.gen(function* () {
+        const view = yield* mountRunningTurn()
+        yield* typeCommand("/think")(view.setup)
+        yield* waitForFrame(view.setup, (frame) => frame.includes("● default"), "the pane")
+        view.setup.resize(view.setup.renderer.terminalWidth, height)
+        yield* waitForFrame(
+          view.setup,
+          (frame) =>
+            view.setup.renderer.terminalHeight === height &&
+            frame.includes("● default") &&
+            blankRowsGiven(frame),
+          `the pane at ${height} rows, its blank rows given`,
+        )
+        // The pane reads its new rows one draw after the layout gives them.
+        for (let draw = 0; draw < 4; draw++) yield* Effect.promise(() => view.setup.renderOnce())
+        const seen = new Set<string>()
+        for (let draw = 0; draw < 6; draw++) {
+          yield* Effect.promise(() => view.setup.renderOnce())
+          seen.add(withoutClock(renderFrame(view.setup)))
+        }
+        expect(seen.size).toBe(1)
+        expect(blankRowsGiven(renderFrame(view.setup))).toBe(true)
+      }).pipe(Effect.timeout("10 seconds")),
+    )
+  }
+  // The ghost line offers what the popup's cursor row already shows, so it
+  // gives way with the blank rows: at 11 rows the popup keeps its key hint,
+  // no ghost line draws, and the frame holds still across draws.
+  it.live("the ghost line gives way with the blank rows for a squeezed popup", () =>
+    Effect.gen(function* () {
+      const view = yield* mountRunningTurn()
+      view.setup.resize(view.setup.renderer.terminalWidth, 11)
+      yield* Effect.promise(() => view.setup.mockInput.typeText("/thre"))
+      yield* waitForFrame(
+        view.setup,
+        (frame) =>
+          view.setup.renderer.terminalHeight === 11 &&
+          frame.includes("/thread") &&
+          blankRowsGiven(frame),
+        "the popup at 11 rows, its blank rows given",
+      )
+      for (let draw = 0; draw < 4; draw++) yield* Effect.promise(() => view.setup.renderOnce())
+      const seen = new Set<string>()
+      for (let draw = 0; draw < 6; draw++) {
+        yield* Effect.promise(() => view.setup.renderOnce())
+        seen.add(withoutClock(renderFrame(view.setup)))
+      }
+      expect(seen.size).toBe(1)
+      const frame = renderFrame(view.setup)
+      expect(frame).not.toContain("⇥")
+      expect(frame).toContain("Tab Complete")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   // A pane with no row on screen takes no keys: the reader cannot see what a
   // key would do there. Typing goes past the agents pane to the composer.
   it.live("typing reaches the composer past an agents pane that has no row", () =>
@@ -2356,10 +2469,10 @@ describe("App auth gate", () => {
       const view = yield* mountRunningTurn()
       view.setup.mockInput.pressArrow("left")
       yield* waitForFrame(view.setup, (frame) => frame.includes("Agents ·"), "the agents pane")
-      view.setup.resize(view.setup.renderer.terminalWidth, 6)
+      view.setup.resize(view.setup.renderer.terminalWidth, 5)
       yield* waitForFrame(
         view.setup,
-        (frame) => view.setup.renderer.terminalHeight === 6 && !frame.includes("›"),
+        (frame) => view.setup.renderer.terminalHeight === 5 && !frame.includes("›"),
         "the agents pane with no row",
       )
       yield* Effect.promise(() => view.setup.mockInput.typeText("typed past"))
@@ -2374,18 +2487,19 @@ describe("App auth gate", () => {
       yield* typeCommand("/think")(view.setup)
       yield* waitForFrame(view.setup, (frame) => frame.includes("● default"), "the pane")
       const width = view.setup.renderer.terminalWidth
-      view.setup.resize(width, 6)
+      view.setup.resize(width, 5)
       yield* waitForFrame(
         view.setup,
-        (frame) => view.setup.renderer.terminalHeight === 6 && !frame.includes("● default"),
+        (frame) => view.setup.renderer.terminalHeight === 5 && !frame.includes("● default"),
         "the pane with no row",
       )
       view.setup.mockInput.pressEscape()
       // gent/no-sleep: allow a lone escape byte stays in the stdin parser until its timeout flushes it as a key
       yield* Effect.sleep("100 millis")
-      // The held pane let go of the composer: typing reaches it at 6 rows.
+      // The held pane let go of the composer: typing at 5 rows reaches it. With
+      // no pane open the blank rows are back, so the draft shows once the
+      // terminal grows.
       yield* Effect.promise(() => view.setup.mockInput.typeText("after"))
-      yield* waitForFrame(view.setup, (frame) => frame.includes("┃ after"), "the draft")
       view.setup.resize(width, 24)
       yield* waitForFrame(
         view.setup,
@@ -2405,10 +2519,10 @@ describe("App auth gate", () => {
       view.setup.mockInput.pressArrow("left")
       yield* waitForFrame(view.setup, (frame) => frame.includes("Agents ·"), "the agents pane")
       const width = view.setup.renderer.terminalWidth
-      view.setup.resize(width, 6)
+      view.setup.resize(width, 5)
       yield* waitForFrame(
         view.setup,
-        (frame) => view.setup.renderer.terminalHeight === 6 && !frame.includes("Agents ·"),
+        (frame) => view.setup.renderer.terminalHeight === 5 && !frame.includes("Agents ·"),
         "the agents pane with no row",
       )
       view.setup.mockInput.pressEscape()
@@ -2452,11 +2566,12 @@ describe("App auth gate", () => {
       expect(frame).not.toContain("+1 more working")
     }).pipe(Effect.timeout("10 seconds")),
   )
-  // At 13 rows the btw pane has one body row: it holds the answer's last line,
-  // not the blank row between turns, and the pane still closes on its rule.
+  // At 10 rows (the blank footer rows given way) the btw pane has one body
+  // row: it holds the answer's last line, not the blank row between turns,
+  // and the pane still closes on its rule.
   it.live("the btw pane holds the answer's last line in a one-row body", () =>
     Effect.gen(function* () {
-      const setup = yield* mountShortTerminalWithTrays(13)
+      const setup = yield* mountShortTerminalWithTrays(10)
       yield* Effect.promise(() => setup.mockInput.typeText("/btw which task is hardest?"))
       setup.mockInput.pressEnter()
       yield* waitForFrame(

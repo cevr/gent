@@ -16,13 +16,13 @@ import {
 } from "@gent/core/protocol"
 import { type Session as ClientSession, useClient } from "./client"
 import { formatDuration, randomId, truncate } from "./utils"
-import { createMemo, createSignal, ErrorBoundary, For, Show } from "solid-js"
+import { createMemo, createSignal, ErrorBoundary, For, type JSX, Show } from "solid-js"
 import { buildSyntaxStyle, resolveThemeColor, ThemeProvider, useTheme } from "./theme"
 import { KeyboardScopeProvider, useScopedKeyboard, useTerminalDimensions } from "./terminal"
 import type { RGBA } from "@opentui/core"
 import { MessageList, NativeTranscript, splitFooterHeight } from "./message-list"
 import { Composer, ComposerFrame } from "./composer"
-import { DockProvider } from "./ui"
+import { DockFooter, DockProvider, useDockSpacer } from "./ui"
 import { CommandPalette, CommandProvider, useCommand } from "./commands"
 import {
   BranchPicker,
@@ -553,6 +553,16 @@ function ExtensionWidgets(props: { slot: WidgetSlot }) {
   )
 }
 
+/** The "Generating" row. Its blank row above gives way while a docked pane is short. */
+function ActivityRow(props: { children: JSX.Element }) {
+  const spacer = useDockSpacer()
+  return (
+    <box height={1} flexShrink={0} paddingLeft={2} marginTop={spacer()} overflow="hidden">
+      {props.children}
+    </box>
+  )
+}
+
 /** A reasoning row id; `default` decodes to `None` and clears the override. */
 const parseReasoningRow = Schema.decodeUnknownOption(ReasoningEffort)
 
@@ -733,20 +743,17 @@ export function Session(props: SessionProps) {
         {/* The footer never outgrows the split-footer region: past it, the
             last rows (a docked pane's newest lines, its ask line) fall below
             the terminal. While a docked pane is open the trays hide
-            (`TrayFrame`), and the pane gives way in whole rows (`PickerFrame`);
-            the composer keeps its rows. */}
-        <box
-          flexDirection="column"
-          flexShrink={0}
+            (`TrayFrame`), the blank rows give way (`useDockSpacer`), and the
+            pane gives way in whole rows (`PickerFrame`); the composer keeps
+            its rows. */}
+        <DockFooter
           maxHeight={splitFooterHeight(dimensions().height, dimensions().height)}
-          onSizeChange={function () {
-            setFooterHeight(this.height)
-          }}
+          onSizeChange={setFooterHeight}
         >
           <ExtensionWidgets slot="above-input" />
 
           <Show when={controller.activity().phase !== "idle"}>
-            <box height={1} flexShrink={0} paddingLeft={2} marginTop={1} overflow="hidden">
+            <ActivityRow>
               <text wrapMode="none" style={{ fg: theme.textMuted }}>
                 {(() => {
                   let label = "Generating"
@@ -756,7 +763,7 @@ export function Session(props: SessionProps) {
                   return truncate(label, Math.max(1, dimensions().width - 2))
                 })()}
               </text>
-            </box>
+            </ActivityRow>
           </Show>
 
           <ComposerFrame
@@ -831,7 +838,7 @@ export function Session(props: SessionProps) {
             )}
           </Show>
           <ExtensionWidgets slot="below-input" />
-        </box>
+        </DockFooter>
 
         <MermaidViewer
           open={controller.uiState().overlay._tag === "mermaid"}

@@ -105,9 +105,14 @@ has more than one branch; escape quits, because no branch was chosen yet. The
 command palette's "Branches" level switches branches after that.
 
 The footer (composer, trays, docked panes) never outgrows the split-footer
-region (`maxHeight` in `app.tsx`). While a docked pane is open the trays
-hide (`TrayFrame` reads the `DockProvider` count each `PickerFrame` adds to),
-so the pane the reader opened gets the rows. A list pane passes no size: its
+region (`DockFooter`'s `maxHeight` in `app.tsx`). While a docked pane is open
+the trays hide (`TrayFrame` reads the `DockProvider` count each `PickerFrame`
+adds to), so the pane the reader opened gets the rows. The footer's blank
+rows (above the activity row, above the input, above the status row) and the
+composer's ghost line are dock spacers (`useDockSpacer`): they give way when a
+docked frame is squeezed, and come back only once the footer's free rows
+(`DockFooter` reports them) hold them all, so the give-way never flickers.
+With no pane open they never give way. A list pane passes no size: its
 `SelectList` reports the lines it draws (headings included) and its filter or
 query row, and the frame adds its chrome and its note row and caps the sum
 (`pickerHeight`: four rows of chrome, six body lines at most; the query row
@@ -123,8 +128,8 @@ body's last row. Inside the body the order goes on: the note row gives way
 first, then the `SelectList` headings, then its filter row, and one row stays
 for the cursor (the list reads its rows from the frame). Under three rows
 the frame drops its rules and note row too, so its one or two rows go to
-the list. With a turn running, a terminal under 9 rows leaves a pane no
-row: the frame then draws nothing, and a `KeyboardGate` keeps its scopes
+the list. With a turn running, a terminal under 6 rows leaves a pane no
+row (8 rows leave it 3, 7 leave 2, 6 leave 1): the frame then draws nothing, and a `KeyboardGate` keeps its scopes
 from taking keys (register a pane's key scope inside its frame, so the gate
 covers it). Keys go past it; Esc still closes it, an extension pane included, and never cancels the turn behind it (the boot branch picker and an enforced sign-in keep their Esc). The frame
 reads its rows from the Yoga layout before each draw, because OpenTUI reports
@@ -132,8 +137,9 @@ a 0-row box as one row and sends no size change between them. A pane that draws
 its own query line (the autocomplete popup, the command palette) passes it as
 the list's `queryRow`, so it gives way as the filter row does. The composer
 keeps its rows, but while its popup or palette is open it may shrink by that
-picker's rows (`PickerHost`), and the ghost line gives way while the popup is
-squeezed. Yoga does not
+picker's rows (`PickerHost`). The live transcript tail, left no row by a
+full footer, hides whole (`NativeTranscript` reads its rows as the frame
+does), so it never draws over the footer's first row. Yoga does not
 keep a nested minimum here, and OpenTUI draws a 0-row node as one row, so
 the order is set by hiding whole boxes, not by shrink weights. A pane whose newest row matters
 passes `stickToBottom` to `ChromePanel.Body` and puts its gaps above a row,

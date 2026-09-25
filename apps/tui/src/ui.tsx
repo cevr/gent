@@ -300,13 +300,128 @@ const countedDock = (): DockState => {
   }
 }
 
-const DockContext = createContext<Option.Option<DockState>>(Option.none())
+/**
+ * The app's dock: the open-pane count, plus the footer's blank spacer rows.
+ * The spacers give way when a docked frame gets fewer rows than it asks for,
+ * so a pane keeps its rows before the footer keeps its spacing. They come
+ * back only once the footer has room for them again, reckoned as if they
+ * were drawn (the footer's free rows cover them), so giving way never ends
+ * the need for it and nothing flickers. With no pane open they never give way.
+ */
+interface Dock extends DockState {
+  /** True while the spacers are drawn as no rows. */
+  readonly givingWay: () => boolean
+  /** Registers a spacer's rows for the owner's life. */
+  readonly spacer: (rows: () => number) => void
+  /** Counts the owner's frame as squeezed while `squeezed` holds, for the owner's life. */
+  readonly trackSqueezed: (squeezed: () => boolean) => void
+  /** Tells the dock the footer's free rows under its cap, after a draw laid them out. */
+  readonly reportFooterRoom: (rows: number) => void
+}
 
-/** The app's dock: the panes the reader opened win the footer's rows over the trays. */
+const dockWithSpacers = (): Dock => {
+  const panes = countedDock()
+  const [spacers, setSpacers] = createSignal<ReadonlyArray<() => number>>([])
+  const [squeezedFrames, setSqueezedFrames] = createSignal(0)
+  const [footerRoom, setFooterRoom] = createSignal(Option.none<number>())
+  const [giving, setGiving] = createSignal(false)
+  const spacerRows = () => spacers().reduce((sum, rows) => sum + rows(), 0)
+  // The footer holds the spacers. Read from its last draw, so the two
+  // transitions below never both hold: a squeeze left over from a smaller
+  // terminal, measured before the footer grew, does not start a give-way the
+  // footer's room would end at once.
+  const spacersFit = () => Option.exists(footerRoom(), (room) => room >= spacerRows())
+  createEffect(() => {
+    if (!panes.paneOpen()) return setGiving(false)
+    if (!giving()) {
+      if (squeezedFrames() > 0 && !spacersFit()) setGiving(true)
+      return
+    }
+    if (spacersFit()) setGiving(false)
+  })
+  return {
+    ...panes,
+    givingWay: giving,
+    spacer: (rows) => {
+      setSpacers((current) => [...current, rows])
+      onCleanup(() => setSpacers((current) => current.filter((entry) => entry !== rows)))
+    },
+    trackSqueezed: (squeezed) => {
+      const [counted, setCounted] = createSignal(false)
+      createEffect(
+        on(squeezed, (value) => {
+          if (value === counted()) return
+          setCounted(value)
+          let step = -1
+          if (value) step = 1
+          setSqueezedFrames((current) => current + step)
+        }),
+      )
+      onCleanup(() => {
+        if (counted()) setSqueezedFrames((current) => current - 1)
+      })
+    },
+    reportFooterRoom: (rows) => {
+      if (!Option.contains(footerRoom(), rows)) setFooterRoom(Option.some(rows))
+    },
+  }
+}
+
+const DockContext = createContext<Option.Option<Dock>>(Option.none())
+
+/** The app's dock: the panes the reader opened win the footer's rows over the trays and the spacing. */
 export function DockProvider(props: { children: JSX.Element }) {
   return (
-    <DockContext.Provider value={Option.some(countedDock())}>{props.children}</DockContext.Provider>
+    <DockContext.Provider value={Option.some(dockWithSpacers())}>
+      {props.children}
+    </DockContext.Provider>
   )
+}
+
+/**
+ * The footer column the panes dock in: at most `maxHeight` rows, never
+ * shrunk. It reads its laid-out rows before each draw and tells the dock the
+ * rows left under its cap, which is when the spacers come back.
+ */
+export function DockFooter(props: {
+  maxHeight: number
+  /** Told the footer's rows each time its layout changes them. */
+  onSizeChange?: (rows: number) => void
+  children: JSX.Element
+}) {
+  const dock = useContext(DockContext)
+  return (
+    <box
+      flexDirection="column"
+      flexShrink={0}
+      maxHeight={props.maxHeight}
+      onSizeChange={function () {
+        if (props.onSizeChange) props.onSizeChange(this.height)
+      }}
+      renderBefore={function () {
+        const rows = Math.max(0, Math.round(this.getLayoutNode().getComputedHeight()))
+        if (Option.isSome(dock)) dock.value.reportFooterRoom(props.maxHeight - rows)
+      }}
+    >
+      {props.children}
+    </box>
+  )
+}
+
+/**
+ * A blank footer row (a margin or padding) that gives way while a docked pane
+ * needs the row. Returns the rows to draw: `rows` normally, 0 while giving
+ * way. Outside a dock it always draws its rows.
+ */
+export const useDockSpacer = (rows = 1): (() => number) => {
+  const dock = useContext(DockContext)
+  if (Option.isNone(dock)) return () => rows
+  const current = dock.value
+  current.spacer(() => rows)
+  return () => {
+    if (current.givingWay()) return 0
+    return rows
+  }
 }
 
 /**
@@ -410,12 +525,6 @@ export function PickerFrame(
      * and a pane without a detail line gets the row while the error shows.
      */
     error?: Option.Option<string>
-    /**
-     * Told when the frame starts or stops getting fewer rows than it asked for,
-     * and told `false` when it unmounts. A host whose own chrome can give way
-     * for the frame's rows listens here.
-     */
-    onSqueezeChange?: (squeezed: boolean) => void
   },
 ) {
   const { theme } = useTheme()
@@ -465,14 +574,8 @@ export function PickerFrame(
     })
   const [measured, setMeasured] = createSignal(Option.none<number>())
   const squeezed = () => Option.exists(measured(), (rows) => rows < height())
-  createEffect(
-    on(squeezed, (value) => {
-      if (props.onSqueezeChange) props.onSqueezeChange(value)
-    }),
-  )
-  onCleanup(() => {
-    if (props.onSqueezeChange) props.onSqueezeChange(false)
-  })
+  // A squeezed frame makes the dock's blank rows give way (`useDockSpacer`).
+  if (Option.isSome(dock)) dock.value.trackSqueezed(squeezed)
   // Under three rows the rules would take every row: the frame drops them
   // and its note row, and its one or two rows go to the list. At none it
   // draws nothing, and its scopes take no keys (`KeyboardGate`).
@@ -1016,11 +1119,16 @@ export function SelectList<A>(props: SelectListProps<A>) {
     return 0
   }
   const headingLines = () => {
-    if (rows().length > values().length) return 1
+    if (values().length > 0 && rows().length > values().length) return 1
     return 0
   }
+  // An empty list draws one line, its empty row, and no headings.
+  const drawnRows = () => {
+    if (values().length === 0) return 1
+    return rows().length
+  }
   const lines = (): PickerBodyLines => ({
-    rows: rows().length,
+    rows: drawnRows(),
     query: inputLines(),
     dressed: 1 + inputLines() + headingLines(),
   })
