@@ -1544,6 +1544,43 @@ describe("App auth gate", () => {
       setup.renderer.destroy()
     }).pipe(Effect.timeout("10 seconds")),
   )
+  it.live("a pane that opens over a previewing prompt search gives the draft back", () =>
+    Effect.gen(function* () {
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <App missingAuthProviders={[]} />, {
+          client: createMockClient({
+            auth: { listProviders: () => Effect.succeed([]) },
+            branch: { getTree: () => Effect.succeed([]) },
+          }),
+          runtime: createMockRuntime(),
+          builtins: builtinClientModules,
+          initialSession: {
+            id: SessionId.make("session-a"),
+            activeBranchId: BranchId.make("branch-a"),
+            name: "Session A",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        }),
+      )
+      yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
+      yield* Effect.promise(() => setup.mockInput.typeText("older prompt"))
+      yield* waitForFrame(setup, (frame) => frame.includes("┃ older prompt"), "typed prompt")
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, (frame) => !frame.includes("┃ older prompt"), "prompt sent")
+      yield* Effect.promise(() => setup.mockInput.typeText("mine"))
+      yield* waitForFrame(setup, (frame) => frame.includes("┃ mine"), "the draft")
+      setup.mockInput.pressKey("r", { ctrl: true })
+      yield* waitForFrame(setup, (frame) => frame.includes("Prompt search"), "prompt search")
+      setup.mockInput.pressArrow("down")
+      setup.mockInput.pressArrow("up")
+      yield* waitForFrame(setup, (frame) => frame.includes("┃ older prompt"), "the preview")
+      setup.mockInput.pressKey("t", { ctrl: true })
+      yield* waitForFrame(setup, (frame) => !frame.includes("Prompt search"), "search replaced")
+      yield* waitForFrame(setup, (frame) => frame.includes("┃ mine"), "the draft back")
+      setup.renderer.destroy()
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   it.live("an unknown slash command comes back to the draft with its reason", () =>
     Effect.gen(function* () {
       const setup = yield* Effect.promise(() =>

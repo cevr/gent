@@ -1065,6 +1065,43 @@ describe("prompt search overlay", () => {
     expect(accepted.effects).toEqual([{ _tag: "RestoreComposer", text: "second" }])
   })
 
+  test("an overlay that replaces a previewing search gives the draft back, and a late event is ignored", () => {
+    const opened = transitionSessionUi(SessionUiState.initial(), {
+      _tag: "PromptSearch",
+      event: { _tag: "Open", draftBeforeOpen: "mine" },
+    })
+    const previewing = transitionSessionUi(opened.state, {
+      _tag: "PromptSearch",
+      event: { _tag: "Highlight", entry: Option.some("older prompt") },
+    }).state
+    const replacers: ReadonlyArray<Parameters<typeof transitionSessionUi>[1]> = [
+      { _tag: "OpenPane", id: "agents.pane" },
+      { _tag: "OpenFork", messages: [] },
+      { _tag: "OpenMermaid" },
+      { _tag: "OpenAuth", enforceAuth: false },
+      { _tag: "OpenSettingsPicker", picker: "model" },
+      { _tag: "OpenBranches", branches: [] },
+      { _tag: "CloseOverlay" },
+    ]
+    for (const event of replacers) {
+      const replaced = transitionSessionUi(previewing, event)
+      expect(replaced.state.overlay._tag).not.toBe("prompt-search")
+      expect(replaced.effects).toEqual([{ _tag: "RestoreComposer", text: "mine" }])
+    }
+    // The list's cleanup runs after the pane took the slot: it changes nothing.
+    const pane = transitionSessionUi(previewing, { _tag: "OpenPane", id: "agents.pane" }).state
+    const lates: ReadonlyArray<Parameters<typeof transitionSessionUi>[1]> = [
+      { _tag: "PromptSearch", event: { _tag: "Highlight", entry: Option.none() } },
+      { _tag: "PromptSearch", event: { _tag: "Cancel" } },
+      { _tag: "PromptSearch", event: { _tag: "Accept" } },
+    ]
+    for (const late of lates) {
+      const after = transitionSessionUi(pane, late)
+      expect(after.state).toBe(pane)
+      expect(after.effects).toEqual([])
+    }
+  })
+
   test("a list that emptied previews the draft, and accepting before a move keeps it", () => {
     const opened = transitionSessionUi(SessionUiState.initial(), {
       _tag: "PromptSearch",

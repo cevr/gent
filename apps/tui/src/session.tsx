@@ -800,11 +800,39 @@ const SLOT_OPENERS: ReadonlySet<SessionUiEvent["_tag"]> = new Set([
 const slotHeld = (overlay: SessionOverlayState): boolean =>
   overlay._tag === "branches" || (overlay._tag === "auth" && overlay.enforceAuth)
 
+/** Only a preview reaches the composer; the palette closes through the overlay. */
+const composerEffects = (
+  effects: ReturnType<typeof transitionPromptSearch>["effects"],
+): readonly SessionUiEffect[] =>
+  effects
+    .filter((effect) => effect._tag === "Preview")
+    .map((effect): SessionUiEffect => ({ _tag: "RestoreComposer", text: effect.text }))
+
+/**
+ * What an overlay leaves behind when something else takes its slot: its own
+ * cancel. Prompt search gives the composer back the draft it opened over; the
+ * other overlays hold nothing outside the slot.
+ */
+const cancelOverlay = (overlay: SessionOverlayState): readonly SessionUiEffect[] => {
+  if (overlay._tag !== "prompt-search") return []
+  return composerEffects(
+    transitionPromptSearch(overlay.state, PromptSearchEventSchema.cases.Cancel.make({})).effects,
+  )
+}
+
 export function transitionSessionUi(
   state: SessionUiState,
   event: SessionUiEvent,
 ): SessionUiTransitionResult {
   if (slotHeld(state.overlay) && SLOT_OPENERS.has(event._tag)) return { state, effects: [] }
+  const result = transitionSlot(state, event)
+  // Prompt search events move their own overlay; any other event that takes
+  // the slot from an overlay runs that overlay's cancel first.
+  if (event._tag === "PromptSearch" || result.state.overlay === state.overlay) return result
+  return { state: result.state, effects: [...cancelOverlay(state.overlay), ...result.effects] }
+}
+
+function transitionSlot(state: SessionUiState, event: SessionUiEvent): SessionUiTransitionResult {
   return Match.value(event).pipe(
     Match.tagsExhaustive({
       ClearDisplay: (): SessionUiTransitionResult => ({
@@ -876,13 +904,15 @@ export function transitionSessionUi(
         effects: [],
       }),
       PromptSearch: (event): SessionUiTransitionResult => {
+        // A late event from a palette that lost the slot (its list's cleanup,
+        // say) acts on nothing: the overlay in the slot now is not its own.
+        if (state.overlay._tag !== "prompt-search" && event.event._tag !== "Open") {
+          return { state, effects: [] }
+        }
         let promptState = PromptSearchStateFactory.closed()
         if (state.overlay._tag === "prompt-search") promptState = state.overlay.state
         const result = transitionPromptSearch(promptState, event.event)
-        // Only a preview reaches the composer; the palette closes through the overlay.
-        const effects = result.effects
-          .filter((effect) => effect._tag === "Preview")
-          .map((effect): SessionUiEffect => ({ _tag: "RestoreComposer", text: effect.text }))
+        const effects = composerEffects(result.effects)
         let nextOverlay: SessionOverlayState = { _tag: "none" }
         if (result.state._tag === "open") {
           nextOverlay = { _tag: "prompt-search", state: result.state }
