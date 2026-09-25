@@ -231,9 +231,26 @@ export const boundToolResultForModel = (
   })
 }
 
+/**
+ * Each stored part's bound at `maximumModelToolResultChars`, by the part
+ * object. A step reads its messages once, then its budget estimate and its
+ * prompt both bound every tool result: the second reads the first's bound. A
+ * stored result never changes, and the entry goes when the step drops the part.
+ */
+const modelToolResults = new WeakMap<Prompt.ToolResultPart, Prompt.ToolResultPart>()
+
+/** `boundToolResultForModel` at the default bound, once per part object. */
+const modelToolResult = (part: Prompt.ToolResultPart): Prompt.ToolResultPart => {
+  const known = modelToolResults.get(part)
+  if (Predicate.isNotUndefined(known)) return known
+  const bounded = boundToolResultForModel(part)
+  modelToolResults.set(part, bounded)
+  return bounded
+}
+
 const toToolMessage = (message: Message): Option.Option<Prompt.ToolMessage> => {
   const content = message.parts.flatMap((part): ReadonlyArray<Prompt.ToolMessagePart> => {
-    if (part.type === "tool-result") return [boundToolResultForModel(part)]
+    if (part.type === "tool-result") return [modelToolResult(part)]
     if (part.type !== "tool-approval-response") return []
     return [part]
   })
@@ -540,7 +557,7 @@ export const estimateTokens = (messages: ReadonlyArray<Message>): number => {
           break
         case "tool-result":
           // The model sees the bounded result, so the budget counts that, not the stored one.
-          chars += encodeToolOutput(boundToolResultForModel(part).result).length
+          chars += encodeToolOutput(modelToolResult(part).result).length
           break
         case "file":
           chars += 1000 // ~250 tokens estimate for image references
@@ -1082,14 +1099,16 @@ const projectUnits = (
   ]
   const selectedMessages = selectedUnits.flatMap((unit) => unit.messages)
   const omittedMessageIds = messageIds(earlier.filter((unit) => !isWindowMarkerUnit(unit)))
-  return Result.succeed(
-    ModelContextProjection.make({
-      messages: [...selectedMessages],
-      estimatedTokens: selected.success.estimatedTokens,
-      availableInputTokens,
-      omittedMessageIds: [...omittedMessageIds],
-    }),
-  )
+  // The stored message objects, not copies: `make` would decode each message
+  // again, and the prompt reads the tool-result bounds the estimate took by
+  // part object (`modelToolResult`).
+  const projection: ModelContextProjection = {
+    messages: selectedMessages,
+    estimatedTokens: selected.success.estimatedTokens,
+    availableInputTokens,
+    omittedMessageIds,
+  }
+  return Result.succeed(projection)
 }
 
 /**
