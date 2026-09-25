@@ -2301,56 +2301,116 @@ export const findSteeringFilePaths = (
   return findings
 }
 
-// ── the extension guide's code compiles ─────────────────────────────────────
+// ── the steering prose's code compiles ──────────────────────────────────────
 
 /**
- * Guard: the ```ts blocks of the extension guide compile with the repo's
- * compiler options and Effect diagnostics.
+ * Guard: every ```ts, ```typescript and ```tsx block of the steering prose
+ * (`STEERING_PROSE`) compiles with the repo's compiler options and Effect
+ * diagnostics.
  *
- * An extension author copies these blocks, so a block that no longer
- * compiles, or that the repo's own diagnostics reject, teaches the wrong
- * code. `check-guide-code.ts` writes each block to a scoped temp directory as
- * its own module, runs `tsc` over them with the root tsconfig, and reports
- * each diagnostic at its line in the guide.
+ * An agent or an extension author copies these blocks, so a block that no
+ * longer compiles, or that the repo's own diagnostics reject, teaches the
+ * wrong code. `check-guide-code.ts` writes each block to a scoped temp
+ * directory as its own module, runs `tsc` once per compile context, and
+ * reports each diagnostic at its line in the file that holds the block.
+ *
+ * A block compiles in the context of its file: a block under `apps/tui/`
+ * with the TUI tsconfig and the TUI's dependencies (Solid JSX from
+ * `@opentui/solid`), every other block with the root tsconfig and the
+ * examples package's dependencies (`effect`, `@gent/core` and its entries),
+ * the way an extension resolves them.
+ *
+ * A block that cannot compile on its own is marked by the line
+ * `<!-- illustrative: <why> -->` directly above its fence and is skipped. The
+ * reason is required: a mark without one marks nothing, and the block
+ * compiles.
  */
-export const GUIDE_FILE = "docs/extensions.md"
 
-/** One ```ts block: its code and the guide line of its first code line. */
-export interface GuideBlock {
-  readonly line: number
-  readonly code: string
+/** Where a block compiles: the tsconfig it extends and the `node_modules` it resolves from. */
+export interface GuideCodeContext {
+  readonly name: string
+  readonly tsconfig: string
+  readonly modules: string
 }
 
-const TS_FENCE_OPEN = /^```ts\s*$/
-const FENCE_CLOSE = /^```\s*$/
+const EXTENSION_CONTEXT: GuideCodeContext = {
+  name: "extension",
+  tsconfig: "tsconfig.json",
+  modules: "examples/node_modules",
+}
 
-export const guideCodeBlocks = (text: string): ReadonlyArray<GuideBlock> => {
+const TUI_CONTEXT: GuideCodeContext = {
+  name: "tui",
+  tsconfig: "apps/tui/tsconfig.json",
+  modules: "apps/tui/node_modules",
+}
+
+export const guideCodeContextOf = (file: string): GuideCodeContext => {
+  if (file.startsWith("apps/tui/")) return TUI_CONTEXT
+  return EXTENSION_CONTEXT
+}
+
+/** One code block: its file, the file line of its first code line, and its code. */
+interface GuideBlock {
+  readonly file: string
+  readonly line: number
+  readonly code: string
+  readonly extension: "ts" | "tsx"
+}
+
+/** The fence languages that compile, and the module extension each is written with. */
+const BLOCK_EXTENSION = new Map<string, GuideBlock["extension"]>([
+  ["ts", "ts"],
+  ["typescript", "ts"],
+  ["tsx", "tsx"],
+])
+const FENCE_OPEN = /^```\S*\s*$/
+const FENCE_CLOSE = /^```\s*$/
+const ILLUSTRATIVE_MARK = /^<!--\s*illustrative:\s*\S.*-->\s*$/
+
+/** Whether the line above the fence at `fence` marks its block illustrative. */
+const markedIllustrative = (lines: ReadonlyArray<string>, fence: number): boolean =>
+  fence > 0 && ILLUSTRATIVE_MARK.test(lines[fence - 1] ?? "")
+
+export const guideCodeBlocks = (file: string, text: string): ReadonlyArray<GuideBlock> => {
   const blocks: Array<GuideBlock> = []
-  let start = -1
   const lines = text.split("\n")
+  let open = Option.none<{ readonly start: number; readonly language: string }>()
   for (const [index, line] of lines.entries()) {
-    if (start === -1 && TS_FENCE_OPEN.test(line)) start = index + 1
-    else if (start !== -1 && FENCE_CLOSE.test(line)) {
-      blocks.push({ line: start + 1, code: lines.slice(start, index).join("\n") })
-      start = -1
+    if (Option.isNone(open)) {
+      if (!FENCE_OPEN.test(line)) continue
+      open = Option.some({ start: index + 1, language: line.slice(3).trim() })
+      continue
     }
+    if (!FENCE_CLOSE.test(line)) continue
+    const { start, language } = open.value
+    open = Option.none()
+    const extension = Option.fromNullishOr(BLOCK_EXTENSION.get(language))
+    if (Option.isNone(extension) || markedIllustrative(lines, start - 1)) continue
+    blocks.push({
+      file,
+      line: start + 1,
+      code: lines.slice(start, index).join("\n"),
+      extension: extension.value,
+    })
   }
   return blocks
 }
 
-/** The module file a block is written to: `b1.ts` for the first. */
-export const guideBlockFile = (index: number): string => `b${index + 1}.ts`
+/** The module file a block is written to: `b1.ts` for the first, `b2.tsx` for a TSX second. */
+export const guideBlockFile = (index: number, block: GuideBlock): string =>
+  `b${index + 1}.${block.extension}`
 
-const BLOCK_DIAGNOSTIC = /(?:^|[/\\])b(\d+)\.ts\((\d+),(\d+)\)/
+const BLOCK_DIAGNOSTIC = /(?:^|[/\\])b(\d+)\.tsx?\((\d+),(\d+)\)/
 
-/** A `tsc` output line with its block position replaced by the guide position. */
+/** A `tsc` output line with its block position replaced by the position in the block's file. */
 export const guideDiagnosticLine = (line: string, blocks: ReadonlyArray<GuideBlock>): string =>
   Option.fromNullishOr(BLOCK_DIAGNOSTIC.exec(line)).pipe(
     Option.flatMap((match) =>
       Option.fromNullishOr(blocks.at(Number(match[1]) - 1)).pipe(
         Option.map(
           (block) =>
-            `${GUIDE_FILE}:${block.line + Number(match[2]) - 1}:${match[3]}${line.slice(match.index + match[0].length)}`,
+            `${block.file}:${block.line + Number(match[2]) - 1}:${match[3]}${line.slice(match.index + match[0].length)}`,
         ),
       ),
     ),

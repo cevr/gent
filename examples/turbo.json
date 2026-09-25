@@ -7,7 +7,15 @@
         "tests/**/*.ts",
         "tsconfig.json",
         "package.json",
-        "../docs/extensions.md",
+        "../*.md",
+        "../apps/*/AGENTS.md",
+        "../packages/*/AGENTS.md",
+        "../docs/*.md",
+        "../testbeds/*/README.md",
+        "../patches/README.md",
+        "../.claude/skills/**/*.md",
+        "../packages/extensions/src/skills/bundled/**/*.md",
+        "../apps/tui/tsconfig.json",
         "../packages/tooling/src/check-guide-code.ts",
         "../packages/tooling/src/guards.ts"
       ]

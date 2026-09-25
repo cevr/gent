@@ -30,7 +30,9 @@ import {
   findUnusedCatalogEntries,
   findUnusedDependencies,
   findUnusedSuppressionApprovals,
+  guideBlockFile,
   guideCodeBlocks,
+  guideCodeContextOf,
   guideDiagnosticLine,
   HOOK_FILE,
   type DependencyScope,
@@ -1858,9 +1860,9 @@ describe("steering file paths", () => {
   })
 })
 
-// ── the extension guide's code compiles ─────────────────────────────────────
+// ── the steering prose's code compiles ──────────────────────────────────────
 
-describe("extension guide code blocks", () => {
+describe("steering prose code blocks", () => {
   const guide = [
     "# Guide",
     "```ts",
@@ -1870,26 +1872,55 @@ describe("extension guide code blocks", () => {
     "```json",
     '{ "x": 1 }',
     "```",
-    "```ts",
+    "```typescript",
     "const c = 3",
     "```",
   ].join("\n")
 
-  test("each ts block is read with the guide line of its first code line", () => {
-    expect(guideCodeBlocks(guide)).toEqual([
-      { line: 3, code: "const a = 1\nconst b = 2" },
-      { line: 10, code: "const c = 3" },
+  test("each ts and typescript block is read with the file line of its first code line", () => {
+    expect(guideCodeBlocks("docs/extensions.md", guide)).toEqual([
+      { file: "docs/extensions.md", line: 3, code: "const a = 1\nconst b = 2", extension: "ts" },
+      { file: "docs/extensions.md", line: 10, code: "const c = 3", extension: "ts" },
     ])
   })
 
-  test("a diagnostic is reported at its line in the guide", () => {
-    const blocks = guideCodeBlocks(guide)
+  test("a tsx block is written as a tsx module and compiles in the context of its file", () => {
+    const blocks = guideCodeBlocks("apps/tui/AGENTS.md", ["```tsx", "<box />", "```"].join("\n"))
+    expect(blocks).toEqual([
+      { file: "apps/tui/AGENTS.md", line: 2, code: "<box />", extension: "tsx" },
+    ])
+    expect(blocks.map((block, index) => guideBlockFile(index, block))).toEqual(["b1.tsx"])
+    expect(guideCodeContextOf("apps/tui/AGENTS.md").tsconfig).toBe("apps/tui/tsconfig.json")
+    expect(guideCodeContextOf("AGENTS.md").modules).toBe("examples/node_modules")
+  })
+
+  test("a ts fence quoted inside a fence of another language is not a block", () => {
+    expect(guideCodeBlocks("docs/x.md", ["```text", "```ts", "```"].join("\n"))).toEqual([])
+  })
+
+  test("a block marked illustrative with a reason is skipped; a mark without one is not", () => {
+    const marked = ["<!-- illustrative: elides the layer -->", "```ts", "x ...", "```"]
+    const bare = ["<!-- illustrative: -->", "```ts", "const y = 1", "```"]
+    expect(guideCodeBlocks("docs/x.md", marked.join("\n"))).toEqual([])
+    expect(guideCodeBlocks("docs/x.md", bare.join("\n")).map((block) => block.code)).toEqual([
+      "const y = 1",
+    ])
+  })
+
+  test("a diagnostic is reported at its line in the file that holds the block", () => {
+    const blocks = [
+      ...guideCodeBlocks("docs/extensions.md", guide),
+      ...guideCodeBlocks("apps/tui/AGENTS.md", ["", "```tsx", "<box />", "```"].join("\n")),
+    ]
     expect(guideDiagnosticLine("b1.ts(2,7): error TS1: x", blocks)).toBe(
       "docs/extensions.md:4:7: error TS1: x",
     )
     expect(
-      guideDiagnosticLine("/tmp/gent-guide-code-x/b2.ts(1,1): suggestion TS2: y", blocks),
+      guideDiagnosticLine("/tmp/gent-guide-code-x/extension/b2.ts(1,1): suggestion TS2: y", blocks),
     ).toBe("docs/extensions.md:10:1: suggestion TS2: y")
+    expect(guideDiagnosticLine("tui/b3.tsx(1,2): error TS3: z", blocks)).toBe(
+      "apps/tui/AGENTS.md:3:2: error TS3: z",
+    )
     expect(guideDiagnosticLine("error TS2688: no bun types", blocks)).toBe(
       "error TS2688: no bun types",
     )
