@@ -352,18 +352,37 @@ const isOneGlyph = (key: string): boolean => [...graphemes.segment(key)].length 
 const typesACharacter = (keybind: Keybind): boolean =>
   !keybind.ctrl && !keybind.meta && (isOneGlyph(keybind.key) || keybind.key === "space")
 
-/** Strip every keybind that types a character, and list each with the failures. */
-const withoutTypingKeybinds = (
+/**
+ * A keybind with no ctrl or meta on Esc. Keybinds run before the Esc ladder,
+ * so it would take the turn cancel and the quit away from Esc.
+ */
+const holdsEscape = (keybind: Keybind): boolean =>
+  !keybind.ctrl && !keybind.meta && keybind.key === "escape"
+
+/** Why a command may not hold `keybind`, or `None` when it may. */
+const refusedKeybind = (keybind: Keybind): Option.Option<string> => {
+  if (typesACharacter(keybind))
+    return Option.some(
+      "types a character; a bare keybind needs a key that types nothing (an arrow, a function key) or ctrl/meta",
+    )
+  if (holdsEscape(keybind))
+    return Option.some("takes Esc, which cancels a turn and quits; add ctrl or meta")
+  return Option.none()
+}
+
+/** Strip every keybind a command may not hold, and list each with the failures. */
+const withoutRefusedKeybinds = (
   source: CommandSource,
   failures: Array<ClientExtensionFailure>,
 ): CommandSource => ({
   ...source,
   commands: source.commands.map((entry) => {
     const keybind = Option.fromNullishOr(entry.keybind)
-    if (!Option.exists(Option.flatMap(keybind, parseKeybind), typesACharacter)) return entry
+    const refusal = Option.flatMap(Option.flatMap(keybind, parseKeybind), refusedKeybind)
+    if (Option.isNone(refusal)) return entry
     failures.push({
       id: source.id,
-      reason: `keybind "${Option.getOrElse(keybind, () => "")}" of command "${entry.id}" types a character; a bare keybind needs a key that types nothing (an arrow, a function key) or ctrl/meta`,
+      reason: `keybind "${Option.getOrElse(keybind, () => "")}" of command "${entry.id}" ${refusal.value}`,
     })
     return { ...entry, keybind: Option.getOrUndefined(Option.none<string>()) }
   }),
@@ -425,14 +444,14 @@ const takeAffordance = (
  * same-scope claim of a held id, keybind or slash drops the later command.
  * A command is all-or-nothing: every collision it has is checked before it
  * takes any keybind or slash, so a dropped command strips nothing.
- * A keybind that types a character is refused first, in every scope: the
+ * A keybind that types a character or takes a bare Esc is refused first, in every scope: the
  * command keeps its slash and palette row, and the keybind is listed with the
  * failures.
  */
 export const resolveCommands = (sources: ReadonlyArray<CommandSource>): ResolvedCommands => {
   const failures: Array<ClientExtensionFailure> = []
   const ordered = sources
-    .map((source) => withoutTypingKeybinds(source, failures))
+    .map((source) => withoutRefusedKeybinds(source, failures))
     .sort((a, b) => SCOPE_PRECEDENCE[a.scope] - SCOPE_PRECEDENCE[b.scope])
   const winners = new Map<string, Command>()
   const idClaims = new Map<string, Claim>()
