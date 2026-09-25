@@ -738,8 +738,8 @@ export default tui.defineClientExtension("@user/client-entries", {
       const ext: ExtensionClientModule = { id: "@test/effect", setup: fxSetup }
       const result = yield* loadTuiExtensions({
         builtins: [ext],
-        userDir: "/tmp/u-c9-1-fx",
-        projectDir: "/tmp/p-c9-1-fx",
+        userDir: "/nonexistent/gent-test-u-c9-1-fx",
+        projectDir: "/nonexistent/gent-test-p-c9-1-fx",
         runtime,
       })
       expect(result.autocompleteItems.map((c) => c.prefix)).toContain("!")
@@ -763,8 +763,8 @@ export default tui.defineClientExtension("@user/client-entries", {
       }
       const result = yield* loadTuiExtensions({
         builtins: [good, broken],
-        userDir: "/tmp/u-c9-1-fx-failure",
-        projectDir: "/tmp/p-c9-1-fx-failure",
+        userDir: "/nonexistent/gent-test-u-c9-1-fx-failure",
+        projectDir: "/nonexistent/gent-test-p-c9-1-fx-failure",
         runtime,
       })
       expect(result.autocompleteItems.map((c) => c.prefix)).toContain("!")
@@ -786,8 +786,8 @@ export default tui.defineClientExtension("@user/client-entries", {
       const hung: ExtensionClientModule = { id: "@test/hung", setup: Effect.never }
       const result = yield* loadTuiExtensions({
         builtins: [good, hung],
-        userDir: "/tmp/u-hung-setup",
-        projectDir: "/tmp/p-hung-setup",
+        userDir: "/nonexistent/gent-test-u-hung-setup",
+        projectDir: "/nonexistent/gent-test-p-hung-setup",
         loadTimeout: "50 millis",
         runtime,
       })
@@ -1368,7 +1368,7 @@ const testRuntime = makeClientRuntime(BunServices.layer, {
     onSessionEvent: () => () => {},
     modelCatalog: () => Option.none(),
   },
-  workspace: { cwd: "/tmp/test-cwd", home: "/nonexistent/test-home" },
+  workspace: { cwd: "/nonexistent/test-cwd", home: "/nonexistent/test-home" },
   shell: { cast: castTestShellEffect, pane: makePaneSlot() },
 })
 /** Run the loader on a client runtime, the stub one unless the test gives its own. */
@@ -1768,13 +1768,13 @@ describe("tool renderer reach", () => {
       // is a real tool id.
       const loaded = yield* loadTuiExtensions({
         builtins: builtinClientModules,
-        userDir: "/tmp/u-renderer-reach",
-        projectDir: "/tmp/p-renderer-reach",
+        userDir: "/nonexistent/gent-test-u-renderer-reach",
+        projectDir: "/nonexistent/gent-test-p-renderer-reach",
       })
       const toolIds = new Set<string>()
       for (const extension of BuiltinExtensions) {
         const contributions = yield* collectTestContributions(extension.setup, {
-          cwd: "/tmp",
+          cwd: "/nonexistent/gent-test-cwd",
           home: "/nonexistent/gent-test-home",
         })
         for (const tool of contributions.tools ?? []) toolIds.add(tool.id)

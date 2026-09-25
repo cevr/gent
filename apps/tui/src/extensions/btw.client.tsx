@@ -17,8 +17,10 @@ import {
   clientContributions,
   defineClientExtension,
   messageRendererContribution,
+  pastedLine,
   PickerFrame,
   sessionQuery,
+  typedText,
   UserRow,
   useScopedKeyboard,
   useTerminalDimensions,
@@ -164,17 +166,6 @@ export const makeForkPane = (
     return { fork: view.value, pending, error: view.error, ask, refresh: view.refresh }
   })
 
-/** Text a key types into the draft: printable, never a control sequence. */
-const typedText = (sequence: Option.Option<string>): Option.Option<string> =>
-  Option.filter(
-    sequence,
-    (text) => text.length > 0 && [...text].every((char) => char >= " " && char !== "\u007f"),
-  )
-
-/** The ask line is one line: a pasted line break becomes a space, other control bytes drop. */
-const pastedText = (text: string): string =>
-  [...text.replace(/\r?\n/g, " ")].filter((char) => char >= " " && char !== "\u007f").join("")
-
 /**
  * One blank row between turns, none above the first. The gap sits above a turn,
  * not under it, so a squeezed body that holds its last row shows text.
@@ -206,7 +197,8 @@ export function ForkPane(props: {
   const AskLine = () => {
     useScopedKeyboard(paneKey, {
       paste: (text) => {
-        setDraft((current) => current + pastedText(text))
+        // The ask line is one line: a pasted line break becomes a space.
+        setDraft((current) => current + pastedLine(text, " "))
         return true
       },
     })

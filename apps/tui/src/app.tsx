@@ -16,13 +16,13 @@ import {
 } from "@gent/core/protocol"
 import { type Session as ClientSession, useClient } from "./client"
 import { formatDuration, randomId, truncate } from "./utils"
-import { createMemo, createSignal, ErrorBoundary, For, Show } from "solid-js"
+import { createMemo, createSignal, ErrorBoundary, For, type JSX, Show } from "solid-js"
 import { buildSyntaxStyle, resolveThemeColor, ThemeProvider, useTheme } from "./theme"
 import { KeyboardScopeProvider, useScopedKeyboard, useTerminalDimensions } from "./terminal"
 import type { RGBA } from "@opentui/core"
 import { MessageList, NativeTranscript, splitFooterHeight } from "./message-list"
 import { Composer, ComposerFrame } from "./composer"
-import { DockProvider } from "./ui"
+import { DockFooter, DockProvider, useDockSpacer } from "./ui"
 import { CommandPalette, CommandProvider, useCommand } from "./commands"
 import {
   BranchPicker,
@@ -109,14 +109,6 @@ interface AppBootstrap {
    */
   readonly initialBranches: Option.Option<readonly Branch[]>
   readonly debugMode: boolean
-  // eslint-disable-next-line effect/noNullish -- bootstrap API uses absence when all providers are configured.
-  readonly missingAuthProviders: readonly ProviderId[] | undefined
-}
-
-interface StartupAuthState {
-  // eslint-disable-next-line effect/noNullish -- auth API uses absence when no agent override is needed.
-  readonly initialAgent: AgentName | undefined
-  readonly missingProviders: readonly ProviderId[]
 }
 
 interface InteractiveBootstrapResult {
@@ -165,16 +157,10 @@ const createAndLoadSession = (input: {
 const resolveAppBootstrap = (
   state: Exclude<InitialState, { _tag: "headless" }>,
   options: {
-    missingProviders: readonly ProviderId[]
     debugMode: boolean
   },
-): AppBootstrap => {
-  let missingAuthProviders = Option.none<readonly ProviderId[]>()
-  if (options.missingProviders.length > 0) {
-    missingAuthProviders = Option.some(options.missingProviders)
-  }
-
-  return Match.value(state).pipe(
+): AppBootstrap =>
+  Match.value(state).pipe(
     Match.tagsExhaustive({
       session: (state) => {
         // activeBranchId is always present for sessions created by resolveInitialState.
@@ -189,7 +175,6 @@ const resolveAppBootstrap = (
           initialPrompt: Option.fromNullishOr(state.prompt),
           initialBranches: Option.none<readonly Branch[]>(),
           debugMode: options.debugMode,
-          missingAuthProviders: Option.getOrUndefined(missingAuthProviders),
         }
       },
       branchPicker: (state) => {
@@ -205,15 +190,13 @@ const resolveAppBootstrap = (
           initialPrompt: Option.fromNullishOr(state.prompt),
           initialBranches: Option.some(state.branches),
           debugMode: options.debugMode,
-          missingAuthProviders: Option.getOrUndefined(missingAuthProviders),
         }
       },
     }),
   )
-}
 
 export const resolveInteractiveBootstrap = (input: {
-  client: Pick<GentNamespacedClient, "auth" | "branch" | "session">
+  client: Pick<GentNamespacedClient, "branch" | "session">
   cwd: string
   sessionId?: string
   continue_: boolean
@@ -235,17 +218,11 @@ export const resolveInteractiveBootstrap = (input: {
       return yield* new AppBootstrapError({ reason: "interactive-headless-state" })
     }
 
-    const startupAuth = yield* resolveStartupAuthState({
-      client: input.client,
-      state,
-    })
+    const initialAgent = yield* resolveStartupAgent({ client: input.client, state })
 
     return {
-      bootstrap: resolveAppBootstrap(state, {
-        missingProviders: startupAuth.missingProviders,
-        debugMode: input.debugMode,
-      }),
-      initialAgent: startupAuth.initialAgent,
+      bootstrap: resolveAppBootstrap(state, { debugMode: input.debugMode }),
+      initialAgent: Option.getOrUndefined(initialAgent),
     }
   })
 
@@ -263,44 +240,46 @@ const resolveSessionRuntimeAgent = (
     .pipe(Effect.map((snapshot) => Option.some(snapshot.agent)))
 }
 
-export const resolveStartupAuthState = (input: {
+/** A session runs as its own agent, which its snapshot names; one with no branch yet runs the default. */
+const sessionAgent = (
+  client: Pick<GentNamespacedClient, "session">,
+  session: DomainSession,
+): Effect.Effect<AgentName, GentClientRpcError> =>
+  resolveSessionRuntimeAgent(client, session).pipe(
+    Effect.map(Option.getOrElse(() => DEFAULT_AGENT_NAME)),
+  )
+
+/**
+ * The agent the interactive client starts as: the resumed session's own. The
+ * boot branch picker names none, because the reader has not chosen a branch.
+ * The session view's auth gate checks that agent's providers itself.
+ */
+export const resolveStartupAgent = (input: {
+  client: Pick<GentNamespacedClient, "session">
+  state: Exclude<InitialState, { _tag: "headless" }>
+}): Effect.Effect<Option.Option<AgentName>, GentClientRpcError> => {
+  if (input.state._tag === "branchPicker") return Effect.succeedNone
+  return sessionAgent(input.client, input.state.session).pipe(Effect.asSome)
+}
+
+/**
+ * The required providers the headless run's agent has no credential for. A
+ * headless run has no reader to sign in, so it stops before its turn.
+ */
+export const resolveHeadlessMissingProviders = (input: {
   client: Pick<GentNamespacedClient, "auth" | "session">
-  state: InitialState
-}): Effect.Effect<StartupAuthState, GentClientRpcError> =>
+  state: Extract<InitialState, { _tag: "headless" }>
+}): Effect.Effect<readonly ProviderId[], GentClientRpcError> =>
   Effect.gen(function* () {
-    if (input.state._tag === "branchPicker") {
-      return {
-        initialAgent: Option.getOrUndefined(Option.none<AgentName>()),
-        missingProviders: [],
-      }
-    }
-
-    const hasSession = Predicate.or(Predicate.isTagged("session"), Predicate.isTagged("headless"))
-    let sessionAgent = Option.none<AgentName>()
-    if (hasSession(input.state)) {
-      sessionAgent = yield* resolveSessionRuntimeAgent(input.client, input.state.session)
-    }
-
-    // A session runs as its own agent, which its snapshot names.
-    const authAgent = Option.getOrElse(sessionAgent, () => DEFAULT_AGENT_NAME)
-
-    // Thread sessionId so per-session cwd resolves project-level
-    // driverOverrides (counsel HIGH #2). Branch-picker has no session.
-    let sessionIdForAuth = Option.none<SessionId>()
-    if (hasSession(input.state)) sessionIdForAuth = Option.some(input.state.session.id)
+    const agent = yield* sessionAgent(input.client, input.state.session)
+    // The session id lets its cwd resolve project-level driver overrides.
     const providers = yield* input.client.auth.listProviders({
-      agentName: authAgent,
-      sessionId: Option.getOrUndefined(sessionIdForAuth),
+      agentName: agent,
+      sessionId: input.state.session.id,
     })
-
-    let initialAgent = Option.some(authAgent)
-    if (input.state._tag === "headless") initialAgent = Option.none()
-    return {
-      initialAgent: Option.getOrUndefined(initialAgent),
-      missingProviders: providers
-        .filter((provider) => provider.required && !provider.hasKey)
-        .map((provider) => provider.provider),
-    }
+    return providers
+      .filter((provider) => provider.required && !provider.hasKey)
+      .map((provider) => provider.provider)
   })
 
 export const resolveInitialState = (input: {
@@ -558,7 +537,6 @@ interface SessionProps {
   /** Branches to dock the picker over at boot; `None` resumes straight in. */
   initialBranches: Option.Option<readonly Branch[]>
   debugMode?: boolean
-  missingAuthProviders?: readonly string[]
 }
 
 function ExtensionWidgets(props: { slot: WidgetSlot }) {
@@ -572,6 +550,16 @@ function ExtensionWidgets(props: { slot: WidgetSlot }) {
         return <Widget />
       }}
     </For>
+  )
+}
+
+/** The "Generating" row. Its blank row above gives way while a docked pane is short. */
+function ActivityRow(props: { children: JSX.Element }) {
+  const spacer = useDockSpacer()
+  return (
+    <box height={1} flexShrink={0} paddingLeft={2} marginTop={spacer()} overflow="hidden">
+      {props.children}
+    </box>
   )
 }
 
@@ -589,6 +577,13 @@ export function Session(props: SessionProps) {
 
   const syntaxStyle = createMemo(() => buildSyntaxStyle(theme))
   const [footerHeight, setFooterHeight] = createSignal(4)
+  // The sign-in docks in the footer like every pane. It stays mounted while
+  // its overlay is open, so the flow it is in survives other UI updates.
+  const authOverlay = () => {
+    const overlay = controller.uiState().overlay
+    if (overlay._tag === "auth") return Option.some(overlay)
+    return Option.none()
+  }
   const mermaidDiagrams = createMemo(() => {
     if (controller.uiState().overlay._tag === "mermaid") {
       return collectDiagrams(controller.messages(), dimensions().width)
@@ -748,20 +743,17 @@ export function Session(props: SessionProps) {
         {/* The footer never outgrows the split-footer region: past it, the
             last rows (a docked pane's newest lines, its ask line) fall below
             the terminal. While a docked pane is open the trays hide
-            (`TrayFrame`), and the pane gives way in whole rows (`PickerFrame`);
-            the composer keeps its rows. */}
-        <box
-          flexDirection="column"
-          flexShrink={0}
+            (`TrayFrame`), the blank rows give way (`useDockSpacer`), and the
+            pane gives way in whole rows (`PickerFrame`); the composer keeps
+            its rows. */}
+        <DockFooter
           maxHeight={splitFooterHeight(dimensions().height, dimensions().height)}
-          onSizeChange={function () {
-            setFooterHeight(this.height)
-          }}
+          onSizeChange={setFooterHeight}
         >
           <ExtensionWidgets slot="above-input" />
 
           <Show when={controller.activity().phase !== "idle"}>
-            <box height={1} flexShrink={0} paddingLeft={2} marginTop={1} overflow="hidden">
+            <ActivityRow>
               <text wrapMode="none" style={{ fg: theme.textMuted }}>
                 {(() => {
                   let label = "Generating"
@@ -771,7 +763,7 @@ export function Session(props: SessionProps) {
                   return truncate(label, Math.max(1, dimensions().width - 2))
                 })()}
               </text>
-            </box>
+            </ActivityRow>
           </Show>
 
           <ComposerFrame
@@ -835,27 +827,24 @@ export function Session(props: SessionProps) {
             entries={controller.promptSearch.entries()}
             onEvent={controller.promptSearch.onEvent}
           />
+          <Show when={Option.getOrUndefined(authOverlay())}>
+            {(overlay) => (
+              <Auth
+                sessionId={props.sessionId}
+                enforceAuth={overlay().enforceAuth}
+                onResolved={controller.resolveAuthGate}
+                onClose={controller.closeOverlay}
+              />
+            )}
+          </Show>
           <ExtensionWidgets slot="below-input" />
-        </box>
+        </DockFooter>
 
         <MermaidViewer
           open={controller.uiState().overlay._tag === "mermaid"}
           diagrams={mermaidDiagrams()}
           onClose={controller.closeOverlay}
         />
-
-        {(() => {
-          const overlay = controller.uiState().overlay
-          if (overlay._tag !== "auth") return <></>
-          return (
-            <Auth
-              sessionId={props.sessionId}
-              enforceAuth={overlay.enforceAuth}
-              onResolved={controller.resolveAuthGate}
-              onClose={controller.closeOverlay}
-            />
-          )
-        })()}
       </box>
     </SessionControllerContext.Provider>
   )
@@ -864,7 +853,6 @@ export function Session(props: SessionProps) {
 // ── app shell ───────────────────────────────────────────────────────────────
 
 interface AppProps {
-  missingAuthProviders?: readonly string[]
   debugMode?: boolean
   initialThemeMode?: "dark" | "light"
   /**
@@ -919,7 +907,6 @@ function AppContent(props: AppProps) {
               branchId={session.branchId}
               initialBranches={branches}
               debugMode={props.debugMode}
-              missingAuthProviders={props.missingAuthProviders}
             />
           )
         }}

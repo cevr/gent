@@ -3075,7 +3075,7 @@ describe("cell approvals", () => {
                 ].join("\n"),
               }),
             ])
-            const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+            const { sessionId, branchId } = yield* client.session.create({})
             yield* client.message.send({ sessionId, branchId, content: "Run a cell" })
             const presented = Array.from(
               yield* client.session.events({ sessionId, branchId }).pipe(
@@ -5115,7 +5115,7 @@ const delegateToolContext = Effect.fn("test.delegateToolContext")(function* (par
   // Outside a loop the facade has no session control, so the cancellation the
   // tool steers would die. The runtime is the same door the loop opens.
   return {
-    ...(yield* runtimeHostContext({ ...parent, sessionCwd: "/tmp" })),
+    ...(yield* runtimeHostContext(parent)),
     extensionId: ExtensionId.make("cell-recovery"),
     toolCallId: ToolCallId.make("delegate-cancel-call"),
   }
@@ -5254,7 +5254,7 @@ it.scopedLive(
           }),
         )
         const { client } = yield* createRpcClient(Layer.succeedContext(context))
-        const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+        const { sessionId, branchId } = yield* client.session.create({})
         const workspaceId = yield* Effect.gen(function* () {
           const sql = yield* SqlClient.SqlClient
           const rows = yield* sql<{
@@ -5331,7 +5331,6 @@ it.scopedLive(
             })
             const toolCallId = admitted.operation.toolCallId
             const child = yield* client.session.create({
-              cwd: "/tmp",
               parentSessionId: sessionId,
               parentBranchId: branchId,
             })

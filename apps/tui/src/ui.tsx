@@ -153,74 +153,12 @@ function useScrollSync(selectedId: Accessor<string>, options: ScrollSyncOptions)
 // ── chrome panel ────────────────────────────────────────────────────────────
 
 /**
- * ChromePanel — compound component for overlay panels with rounded chrome borders.
+ * ChromePanel — the rows a docked pane draws inside its `PickerFrame`.
  *
- * `Root` floats at a position and size the caller gives it; the sign-in view
- * is the one panel that still floats. The rows inside — `Body`, `Section`,
- * `Error`, `Footer` — are shared with the ruled `PickerFrame` the docked
- * panes draw.
- *
- * Usage:
- *   <ChromePanel.Root title="Commands" width={50} height={14} left={10} top={5}>
- *     <ChromePanel.Body>
- *       {scrollable content}
- *     </ChromePanel.Body>
- *     <ChromePanel.Footer>
- *       ↑↓ navigate · enter select · esc close
- *     </ChromePanel.Footer>
- *   </ChromePanel.Root>
- *
- * Root renders the positioned box with rounded borders, backdrop, and title.
- * Body is a flexGrow scrollbox for the main content.
- * Footer is a flexShrink text row at the bottom.
+ * `Body` is the flexGrow scrollbox for the pane's main content; `Section`
+ * is a padded row outside it (a text line, the note row). The frame draws the
+ * rules, the title and the key hint.
  */
-
-// ── Root ──────────────────────────────────────────────────────────
-
-interface ChromePanelRootProps {
-  title?: string
-  width: number
-  height: number
-  left: number
-  top?: number
-  children: JSX.Element
-}
-
-function ChromePanelRoot(props: ChromePanelRootProps) {
-  const { theme } = useTheme()
-  const dimensions = useTerminalDimensions()
-
-  return (
-    <>
-      {/* Transparent backdrop */}
-      <box
-        position="absolute"
-        left={0}
-        top={0}
-        width={dimensions().width}
-        height={dimensions().height}
-        backgroundColor="transparent"
-      />
-
-      {/* Panel */}
-      <box
-        position="absolute"
-        left={props.left}
-        top={props.top}
-        width={props.width}
-        height={props.height}
-        backgroundColor={theme.backgroundMenu}
-        border
-        borderStyle="rounded"
-        borderColor={theme.borderSubtle}
-        flexDirection="column"
-        title={props.title}
-      >
-        {props.children}
-      </box>
-    </>
-  )
-}
 
 // ── Body ──────────────────────────────────────────────────────────
 
@@ -236,9 +174,29 @@ interface ChromePanelBodyProps {
 function ChromePanelBody(props: ChromePanelBodyProps) {
   const sticky = () => props.stickToBottom === true
   const stickyStart = () => Option.filter(Option.some<"bottom">("bottom"), sticky)
+  // A squeezed body can get no row, and OpenTUI draws a 0-row scrollbox as
+  // one row, over the row below it (the btw ask line, the sign-in code line).
+  // The body reads its laid-out rows before each draw and, at none, hides its
+  // content whole. The scrollbox itself stays laid out, so it reads its rows
+  // again when they come back, and its rows stay its direct children.
+  const [rows, setRows] = createSignal(Option.none<number>())
+  const [scroll, setScroll] = createSignal(Option.none<ScrollBoxRenderable>())
+  createEffect(() => {
+    const shown = !Option.contains(rows(), 0)
+    Option.map(scroll(), (box) => {
+      box.content.visible = shown
+    })
+  })
   return (
     <scrollbox
-      ref={props.ref}
+      ref={(value) => {
+        setScroll(Option.some(value))
+        if (props.ref) props.ref(value)
+      }}
+      renderBefore={function () {
+        const laidOut = Math.max(0, Math.round(this.getLayoutNode().getComputedHeight()))
+        if (!Option.contains(rows(), laidOut)) setRows(Option.some(laidOut))
+      }}
       flexGrow={1}
       stickyScroll={sticky()}
       stickyStart={Option.getOrUndefined(stickyStart())}
@@ -249,22 +207,6 @@ function ChromePanelBody(props: ChromePanelBodyProps) {
     >
       {props.children}
     </scrollbox>
-  )
-}
-
-// ── Footer ────────────────────────────────────────────────────────
-
-interface ChromePanelFooterProps {
-  children: JSX.Element
-}
-
-function ChromePanelFooter(props: ChromePanelFooterProps) {
-  const { theme } = useTheme()
-
-  return (
-    <box flexShrink={0} paddingLeft={1}>
-      <text style={{ fg: theme.textMuted }}>{props.children}</text>
-    </box>
   )
 }
 
@@ -282,55 +224,11 @@ function ChromePanelSection(props: ChromePanelSectionProps) {
   )
 }
 
-// ── Error ─────────────────────────────────────────────────────────
-
-interface ChromePanelErrorProps {
-  error?: string
-}
-
-function ChromePanelError(props: ChromePanelErrorProps) {
-  const { theme } = useTheme()
-
-  return (
-    <Show when={props.error}>
-      {(error) => (
-        <box paddingLeft={1} paddingRight={1} flexShrink={0}>
-          <text style={{ fg: theme.error }}>{error()}</text>
-        </box>
-      )}
-    </Show>
-  )
-}
-
-// ── Success ───────────────────────────────────────────────────────
-
-interface ChromePanelSuccessProps {
-  message?: string
-}
-
-function ChromePanelSuccess(props: ChromePanelSuccessProps) {
-  const { theme } = useTheme()
-
-  return (
-    <Show when={props.message}>
-      {(message) => (
-        <box paddingLeft={1} paddingRight={1} flexShrink={0}>
-          <text style={{ fg: theme.primary }}>✓ {message()}</text>
-        </box>
-      )}
-    </Show>
-  )
-}
-
 // ── Compound export ───────────────────────────────────────────────
 
 export const ChromePanel = {
-  Root: ChromePanelRoot,
   Body: ChromePanelBody,
   Section: ChromePanelSection,
-  Footer: ChromePanelFooter,
-  Error: ChromePanelError,
-  Success: ChromePanelSuccess,
 }
 
 // ── picker frame ────────────────────────────────────────────────────────────
@@ -422,13 +320,128 @@ const countedDock = (): DockState => {
   }
 }
 
-const DockContext = createContext<Option.Option<DockState>>(Option.none())
+/**
+ * The app's dock: the open-pane count, plus the footer's blank spacer rows.
+ * The spacers give way when a docked frame gets fewer rows than it asks for,
+ * so a pane keeps its rows before the footer keeps its spacing. They come
+ * back only once the footer has room for them again, reckoned as if they
+ * were drawn (the footer's free rows cover them), so giving way never ends
+ * the need for it and nothing flickers. With no pane open they never give way.
+ */
+interface Dock extends DockState {
+  /** True while the spacers are drawn as no rows. */
+  readonly givingWay: () => boolean
+  /** Registers a spacer's rows for the owner's life. */
+  readonly spacer: (rows: () => number) => void
+  /** Counts the owner's frame as squeezed while `squeezed` holds, for the owner's life. */
+  readonly trackSqueezed: (squeezed: () => boolean) => void
+  /** Tells the dock the footer's free rows under its cap, after a draw laid them out. */
+  readonly reportFooterRoom: (rows: number) => void
+}
 
-/** The app's dock: the panes the reader opened win the footer's rows over the trays. */
+const dockWithSpacers = (): Dock => {
+  const panes = countedDock()
+  const [spacers, setSpacers] = createSignal<ReadonlyArray<() => number>>([])
+  const [squeezedFrames, setSqueezedFrames] = createSignal(0)
+  const [footerRoom, setFooterRoom] = createSignal(Option.none<number>())
+  const [giving, setGiving] = createSignal(false)
+  const spacerRows = () => spacers().reduce((sum, rows) => sum + rows(), 0)
+  // The footer holds the spacers. Read from its last draw, so the two
+  // transitions below never both hold: a squeeze left over from a smaller
+  // terminal, measured before the footer grew, does not start a give-way the
+  // footer's room would end at once.
+  const spacersFit = () => Option.exists(footerRoom(), (room) => room >= spacerRows())
+  createEffect(() => {
+    if (!panes.paneOpen()) return setGiving(false)
+    if (!giving()) {
+      if (squeezedFrames() > 0 && !spacersFit()) setGiving(true)
+      return
+    }
+    if (spacersFit()) setGiving(false)
+  })
+  return {
+    ...panes,
+    givingWay: giving,
+    spacer: (rows) => {
+      setSpacers((current) => [...current, rows])
+      onCleanup(() => setSpacers((current) => current.filter((entry) => entry !== rows)))
+    },
+    trackSqueezed: (squeezed) => {
+      const [counted, setCounted] = createSignal(false)
+      createEffect(
+        on(squeezed, (value) => {
+          if (value === counted()) return
+          setCounted(value)
+          let step = -1
+          if (value) step = 1
+          setSqueezedFrames((current) => current + step)
+        }),
+      )
+      onCleanup(() => {
+        if (counted()) setSqueezedFrames((current) => current - 1)
+      })
+    },
+    reportFooterRoom: (rows) => {
+      if (!Option.contains(footerRoom(), rows)) setFooterRoom(Option.some(rows))
+    },
+  }
+}
+
+const DockContext = createContext<Option.Option<Dock>>(Option.none())
+
+/** The app's dock: the panes the reader opened win the footer's rows over the trays and the spacing. */
 export function DockProvider(props: { children: JSX.Element }) {
   return (
-    <DockContext.Provider value={Option.some(countedDock())}>{props.children}</DockContext.Provider>
+    <DockContext.Provider value={Option.some(dockWithSpacers())}>
+      {props.children}
+    </DockContext.Provider>
   )
+}
+
+/**
+ * The footer column the panes dock in: at most `maxHeight` rows, never
+ * shrunk. It reads its laid-out rows before each draw and tells the dock the
+ * rows left under its cap, which is when the spacers come back.
+ */
+export function DockFooter(props: {
+  maxHeight: number
+  /** Told the footer's rows each time its layout changes them. */
+  onSizeChange?: (rows: number) => void
+  children: JSX.Element
+}) {
+  const dock = useContext(DockContext)
+  return (
+    <box
+      flexDirection="column"
+      flexShrink={0}
+      maxHeight={props.maxHeight}
+      onSizeChange={function () {
+        if (props.onSizeChange) props.onSizeChange(this.height)
+      }}
+      renderBefore={function () {
+        const rows = Math.max(0, Math.round(this.getLayoutNode().getComputedHeight()))
+        if (Option.isSome(dock)) dock.value.reportFooterRoom(props.maxHeight - rows)
+      }}
+    >
+      {props.children}
+    </box>
+  )
+}
+
+/**
+ * A blank footer row (a margin or padding) that gives way while a docked pane
+ * needs the row. Returns the rows to draw: `rows` normally, 0 while giving
+ * way. Outside a dock it always draws its rows.
+ */
+export const useDockSpacer = (rows = 1): (() => number) => {
+  const dock = useContext(DockContext)
+  if (Option.isNone(dock)) return () => rows
+  const current = dock.value
+  current.spacer(() => rows)
+  return () => {
+    if (current.givingWay()) return 0
+    return rows
+  }
 }
 
 /**
@@ -449,15 +462,24 @@ export function PickerHost(props: { children: (hosting: () => boolean) => JSX.El
 }
 
 /**
- * The lines a `SelectList` draws in a `PickerFrame` body. `full` is every
- * line: the filter row and each row, headings included. `dressed` is the
- * least the list draws before it drops an optional line: the cursor row,
- * with the filter row and one heading above it when the list has them.
+ * The lines a `PickerFrame` body draws (a `SelectList`). `rows` is one line
+ * per row, headings included, and `query` is the filter or query row above
+ * them (1 or 0). `dressed` is the least the list draws before it drops an
+ * optional line: the cursor row, with the filter row and one heading above it
+ * when the list has them. `required` is the rows the body needs before the
+ * frame's title keeps its row: a list's cursor row (1); every row the sign-in
+ * OAuth screen must show (its URL and code). The frame sizes itself from
+ * these, so a list pane never counts its own lines.
  */
-interface PickerListLines {
-  readonly full: number
+interface PickerBodyLines {
+  readonly rows: number
+  readonly query: number
   readonly dressed: number
+  readonly required: number
 }
+
+/** Every line the list draws: its query row and each row. */
+const fullLines = (lines: PickerBodyLines): number => lines.rows + lines.query
 
 /**
  * What a `PickerFrame` tells the `SelectList` in its body: the rows the list
@@ -467,7 +489,7 @@ interface PickerListLines {
  */
 interface PickerBody {
   readonly rows: () => Option.Option<number>
-  readonly report: (lines: Option.Option<PickerListLines>) => void
+  readonly report: (lines: Option.Option<PickerBodyLines>) => void
 }
 
 const PickerBodyContext = createContext<PickerBody>({
@@ -475,22 +497,36 @@ const PickerBodyContext = createContext<PickerBody>({
   report: () => {},
 })
 
+/**
+ * A frame body reports the lines it draws and reads back the rows the frame
+ * gives it (`None` outside a frame or before it is measured). `SelectList`
+ * does this; so does a body that is not a list but must order its rows (the
+ * sign-in OAuth screen, whose optional code line gives way before its URL).
+ */
+export const usePickerBody = (lines: () => PickerBodyLines): (() => Option.Option<number>) => {
+  const body = useContext(PickerBodyContext)
+  createEffect(() => body.report(Option.some(lines())))
+  onCleanup(() => body.report(Option.none()))
+  return body.rows
+}
+
 /** Two rules and one body row: below this the rules give way. */
 const PICKER_ROWS_RULED = 3
-/** Two rules, the title and one body row: below this the title gives way. */
-const PICKER_ROWS_WITH_TITLE = 4
+/** Two rules and the title: the title keeps its row only past these and the body's required rows. */
+const PICKER_CHROME_WITH_TITLE = 3
 
 /**
- * How many rows a frame asks for. A list passes the `lines` its body draws,
- * one per row with headings included, and the frame adds its chrome and its
- * note row and caps the sum as every picker is capped ({@link pickerHeight}).
- * An empty list still draws one line, its empty row. A list with a filter or
- * query row above it says so (`queryRow`), and the frame counts that line too.
- * A pane that is not a list (the btw transcript) asks for a `height` outright.
+ * How many rows a frame asks for. A frame over a `SelectList` passes nothing:
+ * the list reports the lines it draws, one per row with headings included,
+ * and its filter or query row, and the frame adds its chrome and its note
+ * row and caps the sum as every picker is capped ({@link pickerHeight}; the
+ * query row sits outside the cap). An empty list still draws one line, its
+ * empty row. A pane that is not a list (the btw transcript, a sign-in field)
+ * asks for a `height` outright.
  */
-type PickerFrameSize =
-  | { readonly lines: number; readonly queryRow?: boolean }
-  | { readonly height: number }
+interface PickerFrameSize {
+  readonly height?: number
+}
 
 export function PickerFrame(
   props: PickerFrameSize & {
@@ -511,12 +547,6 @@ export function PickerFrame(
      * and a pane without a detail line gets the row while the error shows.
      */
     error?: Option.Option<string>
-    /**
-     * Told when the frame starts or stops getting fewer rows than it asked for,
-     * and told `false` when it unmounts. A host whose own chrome can give way
-     * for the frame's rows listens here.
-     */
-    onSqueezeChange?: (squeezed: boolean) => void
   },
 ) {
   const { theme } = useTheme()
@@ -557,23 +587,17 @@ export function PickerFrame(
     if (Option.isSome(Option.fromUndefinedOr(props.detail)) || Option.isSome(error())) return 1
     return 0
   }
-  const height = () => {
-    if ("height" in props) return props.height
-    let queryLines = 0
-    if (props.queryRow === true) queryLines = 1
-    return pickerHeight(Math.max(props.lines, 1) + noteLines(), dimensions().height, queryLines)
-  }
+  const [list, setList] = createSignal(Option.none<PickerBodyLines>())
+  const height = () =>
+    Option.getOrElse(Option.fromUndefinedOr(props.height), () => {
+      const rows = Option.match(list(), { onNone: () => 0, onSome: (lines) => lines.rows })
+      const query = Option.match(list(), { onNone: () => 0, onSome: (lines) => lines.query })
+      return pickerHeight(Math.max(rows, 1) + noteLines(), dimensions().height, query)
+    })
   const [measured, setMeasured] = createSignal(Option.none<number>())
-  const [list, setList] = createSignal(Option.none<PickerListLines>())
   const squeezed = () => Option.exists(measured(), (rows) => rows < height())
-  createEffect(
-    on(squeezed, (value) => {
-      if (props.onSqueezeChange) props.onSqueezeChange(value)
-    }),
-  )
-  onCleanup(() => {
-    if (props.onSqueezeChange) props.onSqueezeChange(false)
-  })
+  // A squeezed frame makes the dock's blank rows give way (`useDockSpacer`).
+  if (Option.isSome(dock)) dock.value.trackSqueezed(squeezed)
   // Under three rows the rules would take every row: the frame drops them
   // and its note row, and its one or two rows go to the list. At none it
   // draws nothing, and its scopes take no keys (`KeyboardGate`).
@@ -583,7 +607,12 @@ export function PickerFrame(
     if (bare()) return false
     return ["top", "bottom"]
   }
-  const titled = () => !Option.exists(measured(), (rows) => rows < PICKER_ROWS_WITH_TITLE)
+  // The title gives way before a row the body requires (a list's cursor row,
+  // the OAuth URL and code): it keeps its row only past them.
+  const required = () =>
+    Option.match(list(), { onNone: () => 1, onSome: (lines) => lines.required })
+  const titled = () =>
+    !Option.exists(measured(), (rows) => rows < PICKER_CHROME_WITH_TITLE + required())
   const bodyRows = () =>
     Option.map(measured(), (rows) => {
       if (bare()) return rows
@@ -602,7 +631,7 @@ export function PickerFrame(
           onSome: (rows) =>
             Option.match(list(), {
               onNone: () => rows >= 2,
-              onSome: (lines) => rows > lines.full || rows > lines.dressed,
+              onSome: (lines) => rows > fullLines(lines) || rows > lines.dressed,
             }),
         }),
     )
@@ -868,7 +897,11 @@ interface SelectListFilter {
 interface SelectListProps<A> {
   /** Unique among mounted lists: it keys the scroll-sync row ids. */
   readonly id: string
-  /** Mount but hide when false; keys stay unbound. */
+  /**
+   * Whether the list takes its keys. It draws its rows either way: a pane that
+   * closes unmounts its list (the autocomplete popup keeps its list mounted
+   * and binds its keys only while it has rows).
+   */
   readonly open: boolean
   readonly rows: () => ReadonlyArray<SelectListRow<A>>
   /**
@@ -913,7 +946,7 @@ interface SelectListProps<A> {
 
 /**
  * The list body, plus the query row when a filter is configured. A pane wraps
- * this in its own `ChromePanel` chrome.
+ * this in its `PickerFrame`.
  */
 export function SelectList<A>(props: SelectListProps<A>) {
   const { theme } = useTheme()
@@ -1105,7 +1138,6 @@ export function SelectList<A>(props: SelectListProps<A>) {
   // reports what it draws, so the frame drops its note row first; then the
   // list drops its headings, then its filter row, and one row stays for the
   // cursor. An unmeasured frame, no frame, and a list that fits draw it all.
-  const pickerBody = useContext(PickerBodyContext)
   const hasQueryRow = () =>
     Option.isSome(Option.fromUndefinedOr(props.filter)) ||
     Option.isSome(Option.fromUndefinedOr(props.queryRow))
@@ -1114,19 +1146,25 @@ export function SelectList<A>(props: SelectListProps<A>) {
     return 0
   }
   const headingLines = () => {
-    if (rows().length > values().length) return 1
+    if (values().length > 0 && rows().length > values().length) return 1
     return 0
   }
-  const lines = (): PickerListLines => ({
-    full: rows().length + inputLines(),
+  // An empty list draws one line, its empty row, and no headings.
+  const drawnRows = () => {
+    if (values().length === 0) return 1
+    return rows().length
+  }
+  const lines = (): PickerBodyLines => ({
+    rows: drawnRows(),
+    query: inputLines(),
     dressed: 1 + inputLines() + headingLines(),
+    required: 1,
   })
-  createEffect(() => pickerBody.report(Option.some(lines())))
-  onCleanup(() => pickerBody.report(Option.none()))
+  const bodyRows = usePickerBody(lines)
   const fits = (needed: number) =>
-    Option.match(pickerBody.rows(), {
+    Option.match(bodyRows(), {
       onNone: () => true,
-      onSome: (available) => available >= lines().full || available >= needed,
+      onSome: (available) => available >= fullLines(lines()) || available >= needed,
     })
   const inputShown = () => hasQueryRow() && fits(2)
   const headingsShown = () => fits(1 + inputLines() + 1)

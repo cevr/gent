@@ -112,7 +112,10 @@ describe("tool execution", () => {
         ),
         EventStore.Memory,
         ApprovalService.Test(),
-        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/nonexistent/gent-test-home" }),
+        RuntimeEnvironment.Live({
+          cwd: "/nonexistent/gent-test-cwd",
+          home: "/nonexistent/gent-test-home",
+        }),
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -181,7 +184,10 @@ describe("tool execution", () => {
         registryLayer,
         EventStore.Memory,
         ApprovalService.Test(),
-        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/nonexistent/gent-test-home" }),
+        RuntimeEnvironment.Live({
+          cwd: "/nonexistent/gent-test-cwd",
+          home: "/nonexistent/gent-test-home",
+        }),
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -288,7 +294,10 @@ describe("tool execution", () => {
         ),
         EventStore.Memory,
         ApprovalService.Test(),
-        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/nonexistent/gent-test-home" }),
+        RuntimeEnvironment.Live({
+          cwd: "/nonexistent/gent-test-cwd",
+          home: "/nonexistent/gent-test-home",
+        }),
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -342,7 +351,10 @@ describe("tool execution", () => {
         ),
         EventStore.Memory,
         ApprovalService.Test(),
-        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/nonexistent/gent-test-home" }),
+        RuntimeEnvironment.Live({
+          cwd: "/nonexistent/gent-test-cwd",
+          home: "/nonexistent/gent-test-home",
+        }),
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -393,7 +405,10 @@ describe("tool execution", () => {
         ),
         EventStore.Memory,
         ApprovalService.Test(),
-        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/nonexistent/gent-test-home" }),
+        RuntimeEnvironment.Live({
+          cwd: "/nonexistent/gent-test-cwd",
+          home: "/nonexistent/gent-test-home",
+        }),
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -522,7 +537,10 @@ describe("tool execution", () => {
         ),
         EventStore.Memory,
         ApprovalService.Test(),
-        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/nonexistent/gent-test-home" }),
+        RuntimeEnvironment.Live({
+          cwd: "/nonexistent/gent-test-cwd",
+          home: "/nonexistent/gent-test-home",
+        }),
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -590,7 +608,10 @@ describe("tool execution", () => {
         ),
         EventStore.Memory,
         ApprovalService.Test(),
-        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/nonexistent/gent-test-home" }),
+        RuntimeEnvironment.Live({
+          cwd: "/nonexistent/gent-test-cwd",
+          home: "/nonexistent/gent-test-home",
+        }),
         Layer.succeed(ToolWriteToken, ToolWriteToken.of({ write: Effect.succeed("outer-write") })),
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
@@ -667,7 +688,10 @@ describe("tool execution", () => {
         ),
         EventStore.Memory,
         ApprovalService.Test(),
-        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/nonexistent/gent-test-home" }),
+        RuntimeEnvironment.Live({
+          cwd: "/nonexistent/gent-test-cwd",
+          home: "/nonexistent/gent-test-home",
+        }),
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -745,7 +769,10 @@ describe("tool execution", () => {
         ),
         eventStoreLayer,
         ApprovalService.Test(),
-        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/nonexistent/gent-test-home" }),
+        RuntimeEnvironment.Live({
+          cwd: "/nonexistent/gent-test-cwd",
+          home: "/nonexistent/gent-test-home",
+        }),
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -829,7 +856,10 @@ describe("tool execution", () => {
         ),
         eventStoreLayer,
         ApprovalService.Test(),
-        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/nonexistent/gent-test-home" }),
+        RuntimeEnvironment.Live({
+          cwd: "/nonexistent/gent-test-cwd",
+          home: "/nonexistent/gent-test-home",
+        }),
       )
       const layer = Layer.mergeAll(deps, ToolRunner.Live.pipe(Layer.provide(deps)))
       const toolCallId = ToolCallId.make(`tc-${params.toolName}`)

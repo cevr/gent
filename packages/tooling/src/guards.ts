@@ -883,15 +883,19 @@ export const findRepoTempDirectories = (file: string, text: string): ReadonlyArr
 }
 
 /**
- * Guard: a test's home or data directory is its own.
+ * Guard: a test's home, data directory and working directory are its own.
  *
  * A fixed path under the shared temp root (`/tmp`, `/var/tmp`,
- * `/private/tmp`, `/dev/shm`, or `tmpdir()` itself) given as a test's home or
- * data directory is shared by every run and every parallel gate: what one
- * test writes there (prompt history, goal and wake files, a skills cache),
- * the next one reads, so a result depends on run order. Reported in test code
- * outside the tooling package, at a `home`, `HOME`, `homeDir`,
- * `homeDirectory`, `dataDir` or `GENT_DATA_DIR` name given a value with `:` or
+ * `/private/tmp`, `/dev/shm`, or `tmpdir()` itself) given as a test's home,
+ * data directory, working directory or extension directory is shared by every
+ * run and every parallel gate: what one test writes there (prompt history,
+ * goal and wake files, a skills cache, `<cwd>/.gent/prompts`), the next one
+ * reads (`<cwd>/.gent/extensions`, `<cwd>/AGENTS.md`), so a result depends on
+ * run order. Reported in test code, and in the test layers of product and example
+ * source (`GentPlatform.Test`; see `sharedHomeScanCode`), all outside the tooling
+ * package, at a `home`, `HOME`, `homeDir`, `homeDirectory`, `dataDir`,
+ * `GENT_DATA_DIR`, `cwd` (or a `…Cwd` name such as `sessionCwd`), `userDir`
+ * or `projectDir` name given a value with `:` or
  * `=`. The value is read as an expression, not as the rest of the line: it
  * may start on the next line, and it ends at a `,`, `;`, closing bracket or
  * line end outside its own brackets, strings and template interpolations, so
@@ -903,11 +907,12 @@ export const findRepoTempDirectories = (file: string, text: string): ReadonlyArr
  * a binding, a parameter default (`home: string = "/tmp"`), a fallback
  * (`home: overrides ?? "/tmp"`) and a wrapped value
  * (`homeDirectory: Effect.succeed("/tmp")`) alike. A test that writes there
- * takes `makeTempDirectoryScoped`; a test that only names a home takes a path
- * no test can create, such as `/nonexistent/<name>`.
+ * takes `makeTempDirectoryScoped`; a test that only names a directory (a
+ * workspace label, a profile key) takes a path no test can create, such as
+ * `/nonexistent/<name>`.
  */
 const SHARED_HOME_KEY =
-  /\b(?:home|HOME|homeDir|homeDirectory|dataDir|GENT_DATA_DIR)\b\s*(?::|=(?![=>]))/g
+  /\b(?:home|HOME|homeDir|homeDirectory|dataDir|GENT_DATA_DIR|cwd|[a-z]\w*Cwd|userDir|projectDir)\b\s*(?::|=(?![=>]))/g
 
 const SHARED_TEMP_ROOT = /["'`](?:(?:\/private)?(?:\/var)?\/tmp|\/dev\/shm)(?=[/"'`$])/
 
@@ -916,7 +921,7 @@ const TEMP_ROOT_CALL = /\btmpdir\(\)/
 const UNIQUE_TEMP_CALL = /\b(?:mkdtemp|makeTempDirectory)/
 
 const SHARED_TEMP_HOME_MESSAGE =
-  "a test home or data directory under the shared temp root is shared by every run and parallel gate; use `makeTempDirectoryScoped` when the test writes there, or a `/nonexistent/<name>` path when it only names one"
+  "a test home, data directory or working directory under the shared temp root is shared by every run and parallel gate; use `makeTempDirectoryScoped` (or the harness default cwd) when the test reads or writes there, or a `/nonexistent/<name>` path when it only names one"
 
 /**
  * One step over a value expression: past a string or a one-line template (a
@@ -948,10 +953,68 @@ const valueEnd = (text: string, start: number): number => {
 const isSharedTempValue = (value: string): boolean =>
   (SHARED_TEMP_ROOT.test(value) || TEMP_ROOT_CALL.test(value)) && !UNIQUE_TEMP_CALL.test(value)
 
+/**
+ * A test-layer declaration in product source: a `static` or `static readonly`
+ * member, a binding, or an object key (`Test:`) whose name is a test layer's.
+ * A test layer's name is `Test`, a PascalCase name ending in `Test`,
+ * `TestLayer` or `TestActor` (`LinkOpenerTest`, `AgentLoopTestActor`), or any
+ * name ending in `TestLayer` (`makeTestLayer`). A name with a `Test` word part
+ * that names no layer (`runTestTool`, `isTestMode`, `TestModeLabel`) is
+ * product code: its body is not read.
+ */
+const TEST_LAYER_DECLARATION =
+  /^\s*(?:(?:static\s+(?:readonly\s+)?|(?:export\s+)?(?:const|let|function)\s+)(?:(?:[A-Z]\w*)?Test(?:Layers?|Actor)?|\w*TestLayers?)\b|(?:readonly\s+)?(?:[A-Z]\w*)?Test(?:Layers?|Actor)?\s*:)/
+
+/**
+ * `code` with every line blanked but the test layers', so line numbers hold.
+ * A test layer is its declaration line and the lines after it that are blank,
+ * indented deeper, or close a bracket at its own indent; the formatter keeps
+ * that shape. The product code around it (a `Live` layer, an operator
+ * default) is not a test home and is not read.
+ */
+const testLayerLines = (code: string): string => {
+  const lines = code.split("\n")
+  const kept = lines.map(() => "")
+  for (const [index, line] of lines.entries()) {
+    if (!TEST_LAYER_DECLARATION.test(line)) continue
+    const indent = line.length - line.trimStart().length
+    kept[index] = line
+    for (let next = index + 1; next < lines.length; next += 1) {
+      const body = lines[next] ?? ""
+      const bodyIndent = body.length - body.trimStart().length
+      const inside =
+        body.trim().length === 0 ||
+        bodyIndent > indent ||
+        (bodyIndent === indent && /^[)\]}]/.test(body.trimStart()))
+      if (!inside) break
+      kept[next] = body
+    }
+  }
+  return kept.join("\n")
+}
+
+/** An example extension's source: code an author copies, so its test layers are read too. */
+const isExampleSource = (file: string): boolean =>
+  /^examples\/.+\.[cm]?[jt]sx?$/.test(file) && !isTestSupport(file)
+
+/**
+ * The code the shared-home scan reads: all of a test file, and the test
+ * layers of a product or example file (`GentPlatform.Test`). The guard's own
+ * tests spell the reported shapes as probe text, so the tooling package is out.
+ */
+const sharedHomeScanCode = (file: string, text: string): Option.Option<string> => {
+  if (file.startsWith("packages/tooling/")) return Option.none()
+  if (isTestCode(file)) return Option.some(withoutComments(text))
+  if (isShippedSource(file) || isExampleSource(file)) {
+    return Option.some(testLayerLines(withoutComments(text)))
+  }
+  return Option.none()
+}
+
 export const findSharedTestHomes = (file: string, text: string): ReadonlyArray<Finding> => {
-  // The guard's own tests spell the reported shapes as probe text.
-  if (!isTestCode(file) || file.startsWith("packages/tooling/")) return []
-  const code = withoutComments(text)
+  const scanned = sharedHomeScanCode(file, text)
+  if (Option.isNone(scanned)) return []
+  const code = scanned.value
   const reported = new Set<number>()
   for (const key of code.matchAll(SHARED_HOME_KEY)) {
     const afterKey = key.index + key[0].length
@@ -1130,7 +1193,7 @@ export const findUnmatchedOverrideGlobs = (
       findings.push({
         file: configFile,
         line: lineOfGlob(configText, glob),
-        message: `oxlint override \`files: "${glob}"\` matches no tracked file; delete the override, or fix the glob`,
+        message: `oxlint override \`files: "${glob}"\` matches no staged or committed file; delete the override, or fix the glob`,
       })
     }
   }
@@ -1139,9 +1202,9 @@ export const findUnmatchedOverrideGlobs = (
 
 /**
  * An `.oxlintignore` row that matches no file oxlint would walk in a clean
- * clone. oxlint also honors `.gitignore`, so `trackedFiles` is the committed
- * set (`committedFilesCommand`): a row that only a local file matches
- * passes here and fails in CI. A row follows gitignore form: a trailing `/`
+ * clone. oxlint also honors `.gitignore`, so `trackedFiles` is the git index
+ * (`indexFileNames`): a row that only an untracked local file matches is
+ * reported here, as CI would report it. A row follows gitignore form: a trailing `/`
  * names a directory, a row with no inner `/` matches at any depth, a leading
  * `/` anchors at the root. Comment, blank and `!` rows are skipped.
  */
@@ -1162,7 +1225,7 @@ export const findUnmatchedIgnoreRows = (
       {
         file: ignoreFile,
         line: index + 1,
-        message: `ignore row \`${row}\` matches no committed file oxlint would lint (git-ignored files are skipped already); delete the row, or fix it`,
+        message: `ignore row \`${row}\` matches no staged or committed file oxlint would lint (git-ignored files are skipped already); delete the row, or fix it`,
       },
     ]
   })
@@ -1203,7 +1266,7 @@ export const findUnmatchedTsconfigOverrides = (
         {
           file: configFile,
           line: lineOfGlob(configText, glob),
-          message: `tsconfig plugin override \`include: "${glob}"\` matches no tracked file; delete it, or fix the glob`,
+          message: `tsconfig plugin override \`include: "${glob}"\` matches no staged or committed file; delete it, or fix the glob`,
         },
       ]
     })
@@ -2421,14 +2484,14 @@ export const findSteeringFilePaths = (
       findings.push({
         file,
         line: index + 1,
-        message: `steering file names \`${claimed}\`, which no tracked file matches -- point it at the path that exists, or drop the reference`,
+        message: `steering file names \`${claimed}\`, which no staged or committed file matches -- point it at the path that exists, or drop the reference`,
       })
     }
     for (const target of danglingLinkTargets(line, directory, tracked, prefixes)) {
       findings.push({
         file,
         line: index + 1,
-        message: `steering file links \`${target}\`, which resolves to no tracked file from \`${file}\` -- point the link at the file that exists, or drop it`,
+        message: `steering file links \`${target}\`, which resolves to no staged or committed file from \`${file}\` -- point the link at the file that exists, or drop it`,
       })
     }
   }
@@ -2510,7 +2573,7 @@ export const findUnshippedSkillFiles = (
  * list that misses a steering file (`../docs/*.md` against
  * `docs/topic/guide.md`) replays a pass after that file alone changes; one
  * that reads a Markdown file outside the set reruns the check for nothing. So
- * over the tracked and new files, the `.md` files the inputs match must be the
+ * over the git index, the `.md` files the inputs match must be the
  * files `isSteeringFile` accepts. Turbo globs are relative to the package, so
  * `../x` names the repo path `x`, and a `!` input subtracts.
  */

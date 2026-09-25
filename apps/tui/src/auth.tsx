@@ -6,15 +6,23 @@ import {
   AuthProviderInfo,
   type SessionId,
 } from "@gent/core/protocol"
-import { createEffect, createSignal, on, Show } from "solid-js"
-import { usePaste } from "@opentui/solid"
+import { createEffect, createSignal, For, Match as SolidMatch, on, Show, Switch } from "solid-js"
 import { omitUndefined } from "@gent/core/extensions/api"
 import { LinkOpener } from "./os"
 import { useTheme } from "./theme"
 import { useClient, useRuntime } from "./client"
-import { ChromePanel, selectable, SelectList, type SelectListRow } from "./ui"
-import { formatError, type UiError } from "./utils"
-import { type ScopedKeyboardEvent, useScopedKeyboard, useTerminalDimensions } from "./terminal"
+import {
+  ChromePanel,
+  PickerFrame,
+  pickerHeight,
+  selectable,
+  SelectList,
+  type SelectListRow,
+  usePickerBody,
+  usePickerGeometry,
+} from "./ui"
+import { formatError, plural, type UiError } from "./utils"
+import { pastedLine, typedText, useScopedKeyboard, useTerminalDimensions } from "./terminal"
 
 // ── auth state ──────────────────────────────────────────────────────────────
 
@@ -77,6 +85,8 @@ const AuthScreen = Schema.TaggedUnion({
   },
 })
 type AuthScreen = Schema.Schema.Type<typeof AuthScreen>
+/** The OAuth screen: an authorization the reader completes. */
+type OAuthScreen = Extract<AuthScreen, { readonly _tag: "OAuth" }>
 
 export interface AuthState {
   /**
@@ -240,10 +250,10 @@ export const missingRequired = (catalog: AuthCatalog): ReadonlyArray<AuthProvide
 /**
  * Auth pane — the ops-time screen for giving gent a provider credential.
  *
- * Four screens in one panel: the provider list, the method list for one
- * provider, an API-key field, and an OAuth wait. It opens by itself when a
- * required provider has no credential, and closes by itself the moment the
- * server says every required provider has one.
+ * Four screens, each a pane docked under the composer: the provider list, the
+ * method list for one provider, an API-key field, and an OAuth wait. It opens
+ * by itself when a required provider has no credential, and closes by itself
+ * the moment the server says every required provider has one.
  *
  * What this file does *not* do is decide anything about a credential. The
  * server owns the whole of that: which providers exist, which are required,
@@ -270,16 +280,11 @@ interface AuthProps {
   onClose?: () => void
 }
 
-/** A single character with no modifier is text; anything else is a key. */
-const typedChar = (event: ScopedKeyboardEvent): Option.Option<string> => {
-  if (event.ctrl === true || event.meta === true) return Option.none()
-  return Option.filter(Option.fromNullishOr(event.sequence), (sequence) => sequence.length === 1)
-}
-
 export function Auth(props: AuthProps) {
   const { theme } = useTheme()
   const clientCtx = useClient()
   const dimensions = useTerminalDimensions()
+  const { sectionWidth } = usePickerGeometry()
   const { cast } = useRuntime()
 
   const [state, setState] = createSignal(AuthState.initial())
@@ -549,7 +554,7 @@ export function Auth(props: AuthProps) {
     )
   }
 
-  const submitOauth = (screen: Extract<ReturnType<typeof state>["screen"], { _tag: "OAuth" }>) => {
+  const submitOauth = (screen: OAuthScreen) => {
     if (screen.waiting) return
     const trimmed = screen.code.trim()
     // A "code" flow has nothing to send without one; "auto" may be retried bare.
@@ -618,55 +623,9 @@ export function Auth(props: AuthProps) {
     return Option.none()
   }
 
-  const listOpen = () => screen()._tag === "List"
-  const methodOpen = () => screen()._tag === "Method"
-
   /** The provider the open method screen is about, if the catalog still has it. */
   const methodProvider = () =>
     Option.flatMap(methodScreen(), (current) => providerFor(catalog(), current.provider))
-
-  // ── Text entry ────────────────────────────────────────────────────
-  //
-  // The key field and the OAuth code field take the same keys, so one
-  // handler serves both; each screen's submit is what differs.
-
-  const submitText = () => {
-    Option.map(keyScreen(), (current) => submitKey(current.provider, current.value))
-    Option.map(oauthScreen(), submitOauth)
-  }
-  const textOpen = () => screen()._tag === "Key" || screen()._tag === "OAuth"
-
-  useScopedKeyboard(
-    (event) => {
-      if (event.name === "escape") {
-        close()
-        return true
-      }
-      if (event.name === "return") {
-        submitText()
-        return true
-      }
-      if (event.name === "backspace") {
-        send(AuthEvent.cases.Backspace.make({}))
-        return true
-      }
-      return Option.match(typedChar(event), {
-        onNone: () => false,
-        onSome: (text) => {
-          send(AuthEvent.cases.Type.make({ text }))
-          return true
-        },
-      })
-    },
-    { when: textOpen },
-  )
-
-  usePaste((event) => {
-    if (!textOpen()) return
-    const text = new TextDecoder().decode(event.bytes).replace(/\r?\n/g, "").trim()
-    if (text.length === 0) return
-    send(AuthEvent.cases.Type.make({ text }))
-  })
 
   // ── Rows ──────────────────────────────────────────────────────────
 
@@ -740,139 +699,271 @@ export function Auth(props: AuthProps) {
         ),
     })
 
-  // ── Layout ────────────────────────────────────────────────────────
+  // ── Frames ────────────────────────────────────────────────────────
+  //
+  // Each screen is its own docked pane: a `PickerFrame` under the composer,
+  // mounted while its screen shows, so a screen never draws another's rows.
+  // The list screens size themselves from their `SelectList`; the key and
+  // OAuth screens ask for the rows they draw.
 
-  const panelWidth = () => Math.min(70, dimensions().width - 6)
-  const panelHeight = () => Math.min(16, dimensions().height - 6)
-  const left = () => Math.floor((dimensions().width - panelWidth()) / 2)
-  const top = () => Math.floor((dimensions().height - panelHeight()) / 2)
-
-  const keyMask = (value: string) => {
-    if (value.length > 0) return "*".repeat(value.length)
-    return "(type key)"
+  const listFooter = () => {
+    if (Option.isSome(state().error)) return "r retry · esc close"
+    return "↑↓ move · ↵ choose · d delete · esc close"
   }
-  const codePrompt = (screen: { readonly code: string; readonly waiting: boolean }) => {
-    if (screen.code.length > 0) return screen.code
-    if (screen.waiting) return "(waiting for sign-in...)"
-    return "(type code)"
-  }
+  const emptyList = () => (
+    <text style={{ fg: theme.textMuted }}>
+      <Show when={Option.isSome(state().error)} fallback=" Loading providers...">
+        {" Press r to retry."}
+      </Show>
+    </text>
+  )
+  const keyMask = (value: string) => "*".repeat(value.length)
   const codeLabel = (method: string) => {
     if (method === "code") return "Paste code:"
     return "Paste code (optional):"
   }
-  const listFooter = () => {
-    if (Option.isSome(state().error)) return "r=retry | Esc"
-    return "Up/Down | Enter=select | d=delete | Esc"
+  const waitingNote = (current: { readonly waiting: boolean }) =>
+    Option.liftPredicate(
+      "Waiting for sign-in to finish. Paste a code if it fails.",
+      () => current.waiting,
+    )
+  const instructionLines = (current: { readonly authorization: AuthAuthorization }) =>
+    Option.getOrElse(
+      Option.fromNullishOr(current.authorization.instructions),
+      () => "Open the URL below:",
+    ).split("\n")
+  /**
+   * The OAuth body's rows: the no-browser line, one per instruction line
+   * (each cut to one row), and the URL wrapped at the body's width. The key
+   * line and the note row sit under it; the frame adds its chrome.
+   */
+  const oauthBodyRows = (current: {
+    readonly authorization: AuthAuthorization
+    readonly browserUnavailable: boolean
+  }) => {
+    const width = Math.max(1, sectionWidth())
+    let unavailable = 0
+    if (current.browserUnavailable) unavailable = 1
+    const urlRows = Math.max(1, Math.ceil(current.authorization.url.length / width))
+    return unavailable + instructionLines(current).length + urlRows
   }
-  const emptyList = () => (
-    <text style={{ fg: theme.textMuted }}>
-      <Show when={Option.isSome(state().error)} fallback="Loading providers...">
-        Press r to retry.
-      </Show>
-    </text>
-  )
+  /** Two rules, the title and the key hint, then the text line and the note row. */
+  const OAUTH_CHROME_ROWS = 6
 
-  // ── Render ────────────────────────────────────────────────────────
+  /**
+   * The OAuth screen inside its frame: the instructions and the URL, then the
+   * code line. The rows go in order of need. The note row gives way first,
+   * then the title (the body requires its rows before the title keeps one),
+   * then, while the flow waits, the optional code line. Last, a squeezed body
+   * drops its top lines and keeps the URL and the user code above it. A flow
+   * that does not wait needs its code line, which keeps its row. The code
+   * line hides without leaving the keyboard scope, so Esc and a paste still
+   * reach it.
+   */
+  const OAuthBody = (bodyProps: { readonly current: () => OAuthScreen }) => {
+    const bodyRows = () => oauthBodyRows(bodyProps.current())
+    const codeLineNeeded = () => !bodyProps.current().waiting
+    const rows = usePickerBody(() => {
+      let required = bodyRows()
+      if (codeLineNeeded()) required += 1
+      return { rows: bodyRows() + 1, query: 0, dressed: bodyRows() + 1, required }
+    })
+    const codeLineShown = () =>
+      codeLineNeeded() || !Option.exists(rows(), (available) => available < bodyRows() + 1)
+    return (
+      <>
+        <ChromePanel.Body stickToBottom>
+          <Show when={bodyProps.current().browserUnavailable}>
+            <text wrapMode="none" truncate style={{ fg: theme.textMuted }}>
+              Could not open a browser; open the URL yourself.
+            </text>
+          </Show>
+          <For each={instructionLines(bodyProps.current())}>
+            {(line) => (
+              <text wrapMode="none" truncate style={{ fg: theme.textMuted }}>
+                {line}
+              </text>
+            )}
+          </For>
+          <text wrapMode="char" style={{ fg: theme.text }}>
+            {bodyProps.current().authorization.url}
+          </text>
+        </ChromePanel.Body>
+        <AuthTextLine
+          label={codeLabel(bodyProps.current().authorization.method)}
+          text={bodyProps.current().code}
+          shown={codeLineShown()}
+          caret={!bodyProps.current().waiting}
+          onEvent={send}
+          onSubmit={() => submitOauth(bodyProps.current())}
+          onCancel={close}
+        />
+      </>
+    )
+  }
 
   return (
-    <box position="absolute" top={0} left={0} flexDirection="column" width="100%" height="100%">
-      <ChromePanel.Root
-        title="API Keys"
-        width={panelWidth()}
-        height={panelHeight()}
-        left={left()}
-        top={top()}
-      >
-        <ChromePanel.Error error={Option.getOrUndefined(state().error)} />
-        <ChromePanel.Success message={Option.getOrUndefined(successMessage())} />
-
-        <SelectList
-          id="auth-provider"
-          open={listOpen()}
-          rows={providerRows}
-          rowKey={(provider) => provider.provider}
-          onSelect={(provider) =>
-            send(AuthEvent.cases.OpenMethod.make({ provider: provider.provider }))
-          }
-          onDismiss={() => Option.map(Option.fromNullishOr(props.onClose), (close) => close())}
-          empty={emptyList}
-          extraKeys={(event, selected) => {
-            if (event.name === "r" && Option.isSome(state().error)) {
-              loadAuth(begin())
-              return true
+    <Switch>
+      <SolidMatch when={screen()._tag === "List"}>
+        <PickerFrame
+          title={`Sign in · ${plural(catalog().providers.length, "provider")}`}
+          footer={listFooter()}
+          error={state().error}
+          detail={Option.map(successMessage(), (message) => `✓ ${message}`)}
+        >
+          <SelectList
+            id="auth-provider"
+            open={true}
+            rows={providerRows}
+            rowKey={(provider) => provider.provider}
+            onSelect={(provider) =>
+              send(AuthEvent.cases.OpenMethod.make({ provider: provider.provider }))
             }
-            if (event.name === "d") {
-              Option.map(selected, deleteProvider)
-              return true
-            }
-            return false
-          }}
-        />
+            onDismiss={() => Option.map(Option.fromNullishOr(props.onClose), (close) => close())}
+            empty={emptyList}
+            extraKeys={(event, selected) => {
+              if (event.name === "r" && Option.isSome(state().error)) {
+                loadAuth(begin())
+                return true
+              }
+              if (event.name === "d") {
+                Option.map(selected, deleteProvider)
+                return true
+              }
+              return false
+            }}
+          />
+        </PickerFrame>
+      </SolidMatch>
+      <SolidMatch when={Option.getOrUndefined(methodScreen())}>
+        {(current) => (
+          <PickerFrame
+            title={`Sign in · ${current().provider} · method`}
+            footer="↑↓ move · ↵ choose · esc back"
+          >
+            <SelectList
+              id="auth-method"
+              open={true}
+              rows={methodRows}
+              rowKey={(choice) => String(choice.index)}
+              onSelect={(choice) =>
+                Option.map(methodProvider(), (provider) =>
+                  startMethod(provider.provider, choice.index, choice.method),
+                )
+              }
+              onDismiss={close}
+            />
+          </PickerFrame>
+        )}
+      </SolidMatch>
+      <SolidMatch when={Option.getOrUndefined(keyScreen())}>
+        {(current) => (
+          <PickerFrame
+            height={pickerHeight(1, dimensions().height)}
+            title={`Sign in · ${current().provider} · API key`}
+            footer="type or paste · ↵ save · esc back"
+          >
+            <AuthTextLine
+              label="API key ›"
+              text={keyMask(current().value)}
+              caret={true}
+              onEvent={send}
+              onSubmit={() => submitKey(current().provider, current().value)}
+              onCancel={close}
+            />
+          </PickerFrame>
+        )}
+      </SolidMatch>
+      <SolidMatch when={Option.getOrUndefined(oauthScreen())}>
+        {(current) => (
+          <PickerFrame
+            height={oauthBodyRows(current()) + OAUTH_CHROME_ROWS}
+            title={`Sign in · ${current().provider} · ${current().method.label}`}
+            footer="↵ continue · esc back"
+            error={state().error}
+            detail={waitingNote(current())}
+          >
+            <OAuthBody current={current} />
+          </PickerFrame>
+        )}
+      </SolidMatch>
+    </Switch>
+  )
+}
 
-        <SelectList
-          id="auth-method"
-          open={methodOpen()}
-          rows={methodRows}
-          rowKey={(choice) => String(choice.index)}
-          onSelect={(choice) =>
-            Option.map(methodProvider(), (provider) =>
-              startMethod(provider.provider, choice.index, choice.method),
-            )
-          }
-          onDismiss={close}
-        />
-
-        <Show when={Option.getOrUndefined(keyScreen())}>
-          {(current) => (
-            <ChromePanel.Section>
-              <box flexDirection="column">
-                <text style={{ fg: theme.text }}>Enter API key for {current().provider}:</text>
-                <text style={{ fg: theme.text }}>{keyMask(current().value)}</text>
-              </box>
-            </ChromePanel.Section>
-          )}
-        </Show>
-
-        <Show when={Option.getOrUndefined(oauthScreen())}>
-          {(current) => (
-            <ChromePanel.Section>
-              <box flexDirection="column">
-                <text style={{ fg: theme.text }}>
-                  Authorize {current().provider} ({current().method.label})
-                </text>
-                <text style={{ fg: theme.textMuted }}>
-                  {Option.getOrElse(
-                    Option.fromNullishOr(current().authorization.instructions),
-                    () => "Open the URL below:",
-                  )}
-                </text>
-                <text wrapMode="char" style={{ fg: theme.text }}>
-                  {current().authorization.url}
-                </text>
-                <Show when={current().browserUnavailable}>
-                  <text style={{ fg: theme.textMuted }}>
-                    Could not open a browser; open the URL yourself.
-                  </text>
-                </Show>
-                <text style={{ fg: theme.text }}>{codeLabel(current().authorization.method)}</text>
-                <text style={{ fg: theme.text }}>{codePrompt(current())}</text>
-                <Show when={current().waiting}>
-                  <text style={{ fg: theme.textMuted }}>
-                    Waiting for sign-in to finish. Paste a code if it fails.
-                  </text>
-                </Show>
-              </box>
-            </ChromePanel.Section>
-          )}
-        </Show>
-
-        <ChromePanel.Footer>
-          <Show when={listOpen()}>{listFooter()}</Show>
-          <Show when={methodOpen()}>Up/Down | Enter=choose | Esc</Show>
-          <Show when={screen()._tag === "Key"}>Enter=save | Esc=cancel</Show>
-          <Show when={screen()._tag === "OAuth"}>Enter=continue | Esc=cancel</Show>
-        </ChromePanel.Footer>
-      </ChromePanel.Root>
-    </box>
+/**
+ * The key line and the code line: one row that takes typed and pasted text.
+ * The composer keeps the terminal's focus, so the line reads its keys through
+ * the keyboard scope, as btw's ask line does. It sits inside its frame, so a
+ * frame with no row takes none of them (`KeyboardGate`). A line the pane
+ * hides (`shown` false, an optional code line on a short terminal) keeps its
+ * scope. Text longer than the row shows its tail, so the caret stays on
+ * screen.
+ */
+function AuthTextLine(props: {
+  readonly label: string
+  readonly text: string
+  readonly caret: boolean
+  readonly shown?: boolean
+  readonly onEvent: (event: AuthEvent) => void
+  readonly onSubmit: () => void
+  readonly onCancel: () => void
+}) {
+  const { theme } = useTheme()
+  const { sectionWidth } = usePickerGeometry()
+  /** The text that fits after the label and before the caret: its tail, cut with an ellipsis. */
+  const visibleText = () => {
+    let caretWidth = 0
+    if (props.caret) caretWidth = 1
+    const room = Math.max(1, sectionWidth() - props.label.length - 1 - caretWidth)
+    const chars = [...props.text]
+    if (chars.length <= room) return props.text
+    return "…" + chars.slice(chars.length - (room - 1)).join("")
+  }
+  useScopedKeyboard(
+    (event) => {
+      if (event.name === "escape") {
+        props.onCancel()
+        return true
+      }
+      if (event.name === "return") {
+        props.onSubmit()
+        return true
+      }
+      if (event.name === "backspace") {
+        props.onEvent(AuthEvent.cases.Backspace.make({}))
+        return true
+      }
+      if (event.ctrl === true || event.meta === true) return false
+      return Option.match(typedText(Option.fromNullishOr(event.sequence)), {
+        onNone: () => false,
+        onSome: (text) => {
+          props.onEvent(AuthEvent.cases.Type.make({ text }))
+          return true
+        },
+      })
+    },
+    {
+      paste: (text) => {
+        // A key or a code is one line: a pasted line break drops, and so
+        // does the edge whitespace.
+        const line = pastedLine(text, "").trim()
+        if (line.length > 0) props.onEvent(AuthEvent.cases.Type.make({ text: line }))
+        return true
+      },
+    },
+  )
+  return (
+    <Show when={props.shown !== false}>
+      <ChromePanel.Section>
+        <text wrapMode="none" style={{ fg: theme.text }}>
+          <span style={{ fg: theme.textMuted }}>{props.label} </span>
+          {visibleText()}
+          <Show when={props.caret}>
+            <span style={{ fg: theme.primary }}>│</span>
+          </Show>
+        </text>
+      </ChromePanel.Section>
+    </Show>
   )
 }

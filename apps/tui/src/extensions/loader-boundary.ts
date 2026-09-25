@@ -353,22 +353,36 @@ const typesACharacter = (keybind: Keybind): boolean =>
   !keybind.ctrl && !keybind.meta && (isOneGlyph(keybind.key) || keybind.key === "space")
 
 /**
- * A keybind with no ctrl or meta on Esc. Keybinds run before the Esc ladder,
- * so it would take the turn cancel and the quit away from Esc.
+ * The keys no command may hold, each with why. Keybinds run before the
+ * session's Esc and ctrl+c ladders, so a keybind on either key would take the
+ * pane close, the turn cancel and the quit away from it. Shift does not
+ * change the key: the ladders read Esc and ctrl+c with or without it.
  */
-const holdsEscape = (keybind: Keybind): boolean =>
-  !keybind.ctrl && !keybind.meta && keybind.key === "escape"
+const REFUSED_KEYBINDS: ReadonlyArray<{
+  readonly holds: (keybind: Keybind) => boolean
+  readonly reason: string
+}> = [
+  {
+    holds: typesACharacter,
+    reason:
+      "types a character; a bare keybind needs a key that types nothing (an arrow, a function key) or ctrl/meta",
+  },
+  {
+    holds: (keybind) => !keybind.ctrl && !keybind.meta && keybind.key === "escape",
+    reason: "takes Esc, which cancels a turn and quits; add ctrl or meta",
+  },
+  {
+    holds: (keybind) => keybind.ctrl && !keybind.meta && keybind.key === "c",
+    reason: "takes ctrl+c, which closes a pane, cancels a turn and quits",
+  },
+]
 
 /** Why a command may not hold `keybind`, or `None` when it may. */
-const refusedKeybind = (keybind: Keybind): Option.Option<string> => {
-  if (typesACharacter(keybind))
-    return Option.some(
-      "types a character; a bare keybind needs a key that types nothing (an arrow, a function key) or ctrl/meta",
-    )
-  if (holdsEscape(keybind))
-    return Option.some("takes Esc, which cancels a turn and quits; add ctrl or meta")
-  return Option.none()
-}
+const refusedKeybind = (keybind: Keybind): Option.Option<string> =>
+  Option.map(
+    Option.fromNullishOr(REFUSED_KEYBINDS.find((refused) => refused.holds(keybind))),
+    (refused) => refused.reason,
+  )
 
 /** Strip every keybind a command may not hold, and list each with the failures. */
 const withoutRefusedKeybinds = (
@@ -444,7 +458,7 @@ const takeAffordance = (
  * same-scope claim of a held id, keybind or slash drops the later command.
  * A command is all-or-nothing: every collision it has is checked before it
  * takes any keybind or slash, so a dropped command strips nothing.
- * A keybind that types a character or takes a bare Esc is refused first, in every scope: the
+ * A keybind that types a character, takes a bare Esc or takes ctrl+c is refused first, in every scope: the
  * command keeps its slash and palette row, and the keybind is listed with the
  * failures.
  */

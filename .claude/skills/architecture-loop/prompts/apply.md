@@ -24,7 +24,7 @@ Work rules:
 - Decide by the principles in ~/Developer/personal/dotfiles/principles/ and write "decided by <principle>"; the batch runs without check-ins. Owner rules: children wake, never block; the cell runs in full Bun; docked panes; a shipped extension is never more privileged than a user extension; personal library, no shims.
 - Gate: `bun run typecheck`, `bun run lint`, focused `bun test`, then commit through the hook, which runs the full gate, with output to a log: `git commit -qm "..." > <scratchpad>/commit.log 2>&1; echo EXIT $?`, then grep the log for ` error `, `(fail)`. A test that fails once under load and passes on one retry is a flake: retry once, name it, and keep its assertions.
 - Commits: Conventional Commits, one logical unit each, staged by exact path. Deletes use `trash`. No push, no rift creation or removal, no edits under `plans/`.
-- Live binary: only through `bun run gamut` or `--debug` runs with `GENT_DATA_DIR` under <scratchpad>; never `bun run link`, never a paid model.
+- Live binary: as `safety.md` says, with <scratchpad> as the scratch directory.
 - Before the report: merge main into the rift, resolve conflicts there, run `bun run gate` into a log and read `GATE EXIT`.
 - Finish in one run: no timers or monitors left behind. A file that does not fit the description: stop and report.
 

@@ -10,8 +10,10 @@
  * the way the code it teaches does. A `tsc` exit other than 0 fails the
  * check, with each diagnostic at its line in the file that holds the block.
  *
- * The steering files are read by their real path, so `CLAUDE.md`, a symlink
- * to `AGENTS.md`, is read once.
+ * The steering files come from the guards' one file set, the git index
+ * (`fileSet` in `check-guardrails.ts`), and each is read by its real path, so
+ * `CLAUDE.md`, a symlink to `AGENTS.md`, is read once. In a pre-commit hook
+ * the text is the staged text: the check compiles the commit being made.
  *
  * @module
  */
@@ -27,6 +29,7 @@ import {
   guideDiagnosticLine,
   isSteeringFile,
 } from "./guards"
+import { type FileSet, processFileSet } from "./check-guardrails"
 
 class GuideCodeError extends Schema.TaggedError<GuideCodeError>()("GuideCodeError", {
   message: Schema.String,
@@ -48,20 +51,36 @@ const run = Effect.fn("Tooling.run")(function* (
   return { exitCode: Number(exitCode), output }
 })
 
-/** The steering files git knows, tracked or new, each once by its real path. */
-const steeringFiles = Effect.fn("Tooling.steeringFiles")(function* (repoRoot: string) {
+/**
+ * The steering files among `listed` (repo paths), each once by its real path.
+ * A listed file missing on disk (trashed, its removal not staged yet) is
+ * skipped: there is no text to compile.
+ */
+export const steeringFilesAmong = Effect.fn("Tooling.steeringFilesAmong")(function* (
+  repoRoot: string,
+  listed: ReadonlyArray<string>,
+) {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
-  const listed = yield* run(
-    "git",
-    ["ls-files", "--cached", "--others", "--exclude-standard"],
-    repoRoot,
+  const files = yield* Effect.filter(listed.filter(isSteeringFile), (file) =>
+    fs.exists(path.join(repoRoot, file)),
   )
-  const files = listed.output.split("\n").filter(isSteeringFile)
   const real = yield* Effect.forEach(files, (file) => fs.realPath(path.join(repoRoot, file)), {
     concurrency: 16,
   })
   return files.filter((file, index) => path.join(repoRoot, file) === real[index])
+})
+
+/**
+ * The steering files of the guards' one file set (`fileSet`: the git index),
+ * each once by its real path. An untracked file is not read: a clean clone
+ * would not hold it.
+ */
+export const steeringFiles = Effect.fn("Tooling.steeringFiles")(function* (
+  repoRoot: string,
+  set: FileSet,
+) {
+  return yield* steeringFilesAmong(repoRoot, yield* set.files)
 })
 
 /**
@@ -113,9 +132,10 @@ const checkGuideCode = Effect.fn("Tooling.checkGuideCode")(function* () {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
   const repoRoot = path.resolve(import.meta.dirname, "..", "..", "..")
-  const files = yield* steeringFiles(repoRoot)
-  const texts = yield* Effect.forEach(files, (file) => fs.readFileString(path.join(repoRoot, file)))
-  const blocks = files.flatMap((file, index) => guideCodeBlocks(file, texts[index] ?? ""))
+  const set = processFileSet(repoRoot)
+  // In a hook, the staged text: the check compiles the commit being made.
+  const texts = yield* set.texts(yield* steeringFiles(repoRoot, set))
+  const blocks = texts.flatMap(({ file, text }) => guideCodeBlocks(file, text))
   if (blocks.length === 0) {
     return yield* new GuideCodeError({ message: "  the steering prose has no ```ts block" })
   }

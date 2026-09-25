@@ -141,6 +141,18 @@
                 "nodeBuiltinImport": "off"
               }
             }
+          },
+          {
+            "include": [".claude/skills/architecture-loop/fetch-capture.ts"],
+            "options": {
+              "diagnosticSeverity": {
+                "asyncFunction": "off",
+                "globalDate": "off",
+                "globalFetch": "off",
+                "nodeBuiltinImport": "off",
+                "processEnv": "off"
+              }
+            }
           }
         ]
       }

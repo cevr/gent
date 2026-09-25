@@ -1592,7 +1592,7 @@ describe("Subagent tray", () => {
               }}
             />
             <Show when={open()}>
-              <PickerFrame lines={1} title="PANE" footer="">
+              <PickerFrame title="PANE" footer="">
                 <box />
               </PickerFrame>
             </Show>

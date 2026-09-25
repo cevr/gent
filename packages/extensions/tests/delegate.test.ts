@@ -95,11 +95,12 @@ const harnessWithHome = (
 ) =>
   Effect.gen(function* () {
     const home = yield* makeTempDirectoryScoped("delegate-")
+    const cwd = yield* makeTempDirectoryScoped("gent-test-cwd-")
     const harness = yield* createRpcHarness({
       ...e2ePreset,
       extensionInputs: [...e2ePreset.extensionInputs, ...(options.fixtures ?? [])],
       providerLayer,
-      extraLayers: [RuntimeEnvironment.Live({ cwd: "/tmp", home })],
+      extraLayers: [RuntimeEnvironment.Live({ cwd, home })],
       ...Record.filter(
         {
           modelPricing: options.modelPricing,
@@ -1398,7 +1399,6 @@ describe("a start nobody waits for", () => {
           const { client, sessionId, branchId } = harness
           // A process that died between admitting the child and sending its prompt.
           const child = yield* client.session.create({
-            cwd: "/tmp",
             parentSessionId: sessionId,
             parentBranchId: branchId,
           })
@@ -1458,7 +1458,6 @@ describe("a start nobody waits for", () => {
           const runSpec = { overrides: { modelId: ModelId.make("test/override-model") } }
           // The child session carries its admission from creation, as `admitChild` makes it.
           const child = yield* client.session.create({
-            cwd: "/tmp",
             parentSessionId: sessionId,
             parentBranchId: branchId,
             admission: { agent: DELEGATE_AGENT_NAME, runSpec },
@@ -1558,7 +1557,6 @@ describe("a start nobody waits for", () => {
           // The row an older binary wrote for a `read_session` child whose waiter
           // died after its answer; this process reads it on its first turn.
           const child = yield* client.session.create({
-            cwd: "/tmp",
             parentSessionId: sessionId,
             parentBranchId: branchId,
           })
@@ -1782,7 +1780,6 @@ describe("starts over the pending cap", () => {
           const harness = yield* harnessWithHome(providerLayer)
           const { client, sessionId, branchId } = harness
           const child = yield* client.session.create({
-            cwd: "/tmp",
             parentSessionId: sessionId,
             parentBranchId: branchId,
           })
@@ -1881,7 +1878,6 @@ describe("turn-time reconcile", () => {
           yield* idleAfter("first")
           // A row that only a crash leaves, planted after this process reconciled the branch.
           const child = yield* client.session.create({
-            cwd: "/tmp",
             parentSessionId: sessionId,
             parentBranchId: branchId,
           })
@@ -1937,7 +1933,6 @@ describe("turn-time reconcile", () => {
           // A child whose start was sent and has no receipt: it runs. Its
           // start is planted as sent with no message, so a re-send shows.
           const child = yield* client.session.create({
-            cwd: "/tmp",
             parentSessionId: sessionId,
             parentBranchId: branchId,
           })
@@ -2564,7 +2559,6 @@ describe("session.send", () => {
           const { client, sessionId, branchId } = harness
           yield* Deferred.succeed(parentId, address(sessionId))
           const child = yield* client.session.create({
-            cwd: "/tmp",
             parentSessionId: sessionId,
             parentBranchId: branchId,
           })
@@ -3423,7 +3417,6 @@ describe("a parent interrupt as a child finishes", () => {
           // The middle session is a child of the harness session, and its
           // parent's registry is unreadable, so its turn end fails as a child.
           const middle = yield* client.session.create({
-            cwd: "/tmp",
             parentSessionId: sessionId,
             parentBranchId: branchId,
           })
@@ -3655,13 +3648,14 @@ describe("a child's start turn with runtime lines", () => {
  */
 const restartableHome = Effect.gen(function* () {
   const home = yield* makeTempDirectoryScoped("delegate-restart-")
+  const cwd = yield* makeTempDirectoryScoped("gent-test-cwd-")
   const fs = yield* FileSystem.FileSystem
   const layerFor = (providerLayer: Parameters<typeof createRpcHarness>[0]["providerLayer"]) =>
     createE2ELayer({
       ...e2ePreset,
       providerLayer,
       storagePath: `${home}/gent.db`,
-      extraLayers: [RuntimeEnvironment.Live({ cwd: "/tmp", home })],
+      extraLayers: [RuntimeEnvironment.Live({ cwd, home })],
     })
   const registryOf = (branchId: BranchId) =>
     storedRegistry(`${home}/.gent/delegates/${branchId}.json`).pipe(
@@ -3709,7 +3703,7 @@ const stopWithRunningChildren = (home: RestartableHome, todos: ReadonlyArray<str
         )
       })
       const { client } = yield* createRpcClient(home.layerFor(providerLayer))
-      const created = yield* client.session.create({ cwd: "/tmp" })
+      const created = yield* client.session.create({})
       const parent = { sessionId: created.sessionId, branchId: created.branchId }
       yield* client.message.send({ ...parent, content: "delegate these" })
       yield* Deferred.await(running)
@@ -3835,7 +3829,7 @@ describe("a child running when the server stopped", () => {
                 return Effect.succeed(toolStep("delegate.start", { todo: childTask }, "start-1"))
               })
               const { client } = yield* createRpcClient(home.layerFor(providerLayer))
-              const created = yield* client.session.create({ cwd: "/tmp" })
+              const created = yield* client.session.create({})
               const parent = { sessionId: created.sessionId, branchId: created.branchId }
               yield* client.message.send({ ...parent, content: "delegate this" })
               yield* Deferred.await(childCalled)

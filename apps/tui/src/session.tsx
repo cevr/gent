@@ -959,22 +959,15 @@ interface SessionControllerState {
 
 const emptyQueueState = (): QueueState => ({ steering: [], followUp: [] })
 
+/**
+ * The gate starts closed: the session's first auth check runs at mount and
+ * holds the startup prompt while it checks.
+ */
 export const initialSessionControllerState = (input: {
-  readonly debugMode?: boolean
-  readonly missingAuthProviders?: readonly string[]
   readonly agent?: string
 }): SessionControllerState => {
-  const missingProviders = Option.fromNullishOr(input.missingAuthProviders)
-  let authGate: AuthGateState = "closed"
-  if (
-    input.debugMode !== true &&
-    Option.isSome(missingProviders) &&
-    missingProviders.value.length > 0
-  ) {
-    authGate = "open"
-  }
   const state: SessionControllerState = {
-    authGate,
+    authGate: "closed",
     authCheckVersion: 0,
     queue: emptyQueueState(),
     elapsed: 0,
@@ -2736,7 +2729,6 @@ export function createSessionController(props: {
    */
   initialBranches: Option.Option<readonly Branch[]>
   debugMode?: boolean
-  missingAuthProviders?: readonly string[]
 }): SessionController {
   const client = useClient()
   const command = useCommand()
@@ -2824,8 +2816,6 @@ export function createSessionController(props: {
   // ── Auth gate ──
   const [controllerState, setControllerState] = createSignal(
     initialSessionControllerState({
-      debugMode: props.debugMode,
-      missingAuthProviders: props.missingAuthProviders,
       agent: client.agent(),
     }),
   )
@@ -3453,14 +3443,21 @@ export function createSessionController(props: {
       return true
     }
     const overlay = uiState().overlay
-    if (overlayHoldsComposer(overlay)) {
-      // A held pane takes its own Esc. One that reaches here found no row of
-      // the pane on a short terminal (`KeyboardGate`), and it closes the pane
-      // as the pane's own Esc does. The panes that hold the slot keep theirs.
-      if (event.name !== "escape" || slotHeld(overlay)) return false
-      closeOverlay()
+    // An open pane takes its own Esc. One that reaches here found no row of
+    // the pane on a short terminal (`KeyboardGate`), and it closes the pane as
+    // the pane's own Esc does, held or not, so it never cancels the turn
+    // behind it. The panes that hold the slot keep theirs.
+    if (event.name === "escape" && overlay._tag !== "none") {
+      if (slotHeld(overlay)) return false
+      if (overlay._tag === "pane") {
+        dispatchSessionUi(SessionUiEvent.cases.ClosePane.make({ id: overlay.id }))
+      } else {
+        closeOverlay()
+      }
+      disarmQuit()
       return true
     }
+    if (overlayHoldsComposer(overlay)) return false
 
     if (event.name === "escape") {
       handleEscape()

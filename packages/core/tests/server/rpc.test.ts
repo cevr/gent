@@ -1184,7 +1184,7 @@ describe("interaction.respondInteraction", () => {
                 storagePath: dbPath,
               }),
             )
-            const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+            const { sessionId, branchId } = yield* client.session.create({})
             const interactionFiber = yield* client.session.events({ sessionId, branchId }).pipe(
               Stream.filter((envelope) => envelope.event._tag === "InteractionPresented"),
               Stream.take(1),
@@ -1315,7 +1315,7 @@ describe("interaction.respondInteraction", () => {
                 storagePath: dbPath,
               }),
             )
-            const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+            const { sessionId, branchId } = yield* client.session.create({})
             const interactionFiber = yield* client.session.events({ sessionId, branchId }).pipe(
               Stream.filter((envelope) => envelope.event._tag === "InteractionPresented"),
               Stream.take(1),
@@ -1424,7 +1424,7 @@ describe("interaction.respondInteraction", () => {
               approvalLayer: ApprovalService.Live,
             }),
           )
-          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+          const { sessionId, branchId } = yield* client.session.create({})
           const interactionFiber = yield* client.session.events({ sessionId, branchId }).pipe(
             Stream.filter((envelope) => envelope.event._tag === "InteractionPresented"),
             Stream.take(1),
@@ -1531,9 +1531,8 @@ describe("interaction.respondInteraction", () => {
             }),
           )
           const origin = originClient(client)
-          const top = yield* client.session.create({ cwd: "/tmp" })
+          const top = yield* client.session.create({})
           const child = yield* client.session.create({
-            cwd: "/tmp",
             parentSessionId: top.sessionId,
             parentBranchId: top.branchId,
           })
@@ -1649,9 +1648,8 @@ describe("interaction.respondInteraction", () => {
             }),
           )
           const origin = originClient(client)
-          const top = yield* client.session.create({ cwd: "/tmp" })
+          const top = yield* client.session.create({})
           const child = yield* client.session.create({
-            cwd: "/tmp",
             parentSessionId: top.sessionId,
             parentBranchId: top.branchId,
           })
@@ -1735,9 +1733,8 @@ describe("interaction.respondInteraction", () => {
             }),
           )
           const origin = originClient(client)
-          const top = yield* client.session.create({ cwd: "/tmp" })
+          const top = yield* client.session.create({})
           const handoff = yield* client.session.create({
-            cwd: "/tmp",
             parentSessionId: top.sessionId,
             parentBranchId: top.branchId,
             continueThread: true,
@@ -1759,7 +1756,6 @@ describe("interaction.respondInteraction", () => {
           )
           // A handoff of a handoff is still the user's own conversation.
           const second = yield* client.session.create({
-            cwd: "/tmp",
             parentSessionId: handoff.sessionId,
             parentBranchId: handoff.branchId,
             continueThread: true,
@@ -1789,7 +1785,7 @@ describe("interaction.respondInteraction", () => {
             createE2ELayer({ ...e2ePreset, providerLayer, extensions: [makeOriginProbe()] }),
           )
           const origin = originClient(client)
-          const top = yield* client.session.create({ cwd: "/tmp" })
+          const top = yield* client.session.create({})
           const stored = (label: string) =>
             client.session
               .getSnapshot(top)
@@ -1856,9 +1852,8 @@ describe("interaction.respondInteraction", () => {
             }),
           )
           const { client } = yield* createRpcClient(Layer.succeedContext(context))
-          const top = yield* client.session.create({ cwd: "/tmp" })
+          const top = yield* client.session.create({})
           const child = yield* client.session.create({
-            cwd: "/tmp",
             parentSessionId: top.sessionId,
             parentBranchId: top.branchId,
           })
@@ -1928,7 +1923,7 @@ describe("interaction.respondInteraction", () => {
               approvalLayer: ApprovalService.Live,
             }),
           )
-          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+          const { sessionId, branchId } = yield* client.session.create({})
           const presented = yield* client.session.events({ sessionId, branchId }).pipe(
             Stream.filter((envelope) => envelope.event._tag === "InteractionPresented"),
             Stream.take(1),
@@ -1959,7 +1954,7 @@ describe("interaction.respondInteraction", () => {
           )
           expect(changed._tag).toBe("InteractionDecisionConflictError")
           // The same reply named on another branch is not a retry: that branch never asked.
-          const other = yield* client.session.create({ cwd: "/tmp" })
+          const other = yield* client.session.create({})
           const misaddressed = yield* Effect.flip(
             client.interaction.respondInteraction({ ...reply, ...other }),
           )
@@ -2008,7 +2003,7 @@ describe("interaction.respondInteraction", () => {
               approvalLayer: failAfterFirstStore,
             }),
           )
-          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+          const { sessionId, branchId } = yield* client.session.create({})
           const isDialogEvent = Predicate.or(
             Predicate.isTagged("InteractionPresented"),
             Predicate.isTagged("InteractionResolved"),
@@ -2094,7 +2089,7 @@ describe("interaction.respondInteraction", () => {
               approvalLayer: ApprovalService.Live,
             }),
           )
-          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+          const { sessionId, branchId } = yield* client.session.create({})
           const presentedFiber = yield* client.session.events({ sessionId, branchId }).pipe(
             Stream.filterMap((envelope) => {
               if (envelope.event._tag === "InteractionPresented")
@@ -2184,7 +2179,7 @@ describe("interaction.respondInteraction", () => {
               approvalLayer: ApprovalService.Live,
             }),
           )
-          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+          const { sessionId, branchId } = yield* client.session.create({})
           const answered = yield* answerInOrder({
             client,
             sessionId,
@@ -2244,7 +2239,7 @@ describe("interaction.respondInteraction", () => {
               approvalLayer: ApprovalService.Live,
             }),
           )
-          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+          const { sessionId, branchId } = yield* client.session.create({})
           const answered = yield* answerInOrder({
             client,
             sessionId,
@@ -2296,7 +2291,7 @@ describe("interaction.respondInteraction", () => {
               approvalLayer: ApprovalService.Live,
             }),
           )
-          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+          const { sessionId, branchId } = yield* client.session.create({})
           const answered = yield* answerInOrder({
             client,
             sessionId,
@@ -2357,7 +2352,7 @@ describe("interaction.respondInteraction", () => {
                 storagePath: dbPath,
               }),
             )
-            const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+            const { sessionId, branchId } = yield* client.session.create({})
             const presentedFiber = yield* client.session.events({ sessionId, branchId }).pipe(
               Stream.filterMap((envelope) => {
                 if (envelope.event._tag === "InteractionPresented")
@@ -2482,7 +2477,7 @@ describe("interaction.respondInteraction", () => {
               approvalLayer: ApprovalService.Live,
             }),
           )
-          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+          const { sessionId, branchId } = yield* client.session.create({})
           const answered = yield* answerInOrder({
             client,
             sessionId,
@@ -2537,7 +2532,7 @@ describe("interaction.respondInteraction", () => {
                 storagePath: dbPath,
               }),
             )
-            const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+            const { sessionId, branchId } = yield* client.session.create({})
             const answered = yield* answerInOrder({
               client,
               sessionId,
@@ -2601,7 +2596,7 @@ describe("interaction.respondInteraction", () => {
                 storagePath: dbPath,
               }),
             )
-            const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+            const { sessionId, branchId } = yield* client.session.create({})
             const presentedFiber = yield* client.session.events({ sessionId, branchId }).pipe(
               Stream.filter((envelope) => envelope.event._tag === "InteractionPresented"),
               Stream.take(1),
@@ -2690,7 +2685,7 @@ describe("interaction.respondInteraction", () => {
               approvalLayer: ApprovalService.Live,
             }),
           )
-          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+          const { sessionId, branchId } = yield* client.session.create({})
           // Answer the moment the dialog shows, before the branch parks.
           yield* client.session.events({ sessionId, branchId }).pipe(
             Stream.filterMap((envelope) => {
@@ -2755,7 +2750,7 @@ describe("interaction.respondInteraction", () => {
               approvalLayer: ApprovalService.Live,
             }),
           )
-          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+          const { sessionId, branchId } = yield* client.session.create({})
           const presented = yield* client.session.events({ sessionId, branchId }).pipe(
             Stream.filterMap((envelope) => {
               if (envelope.event._tag === "InteractionPresented")
@@ -2840,7 +2835,7 @@ describe("interaction.respondInteraction", () => {
               approvalLayer: ApprovalService.Live,
             }),
           )
-          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+          const { sessionId, branchId } = yield* client.session.create({})
           // Answer each dialog the moment it shows, without waiting for a park.
           const answers = new Map([
             ["First?", "one"],
@@ -2907,7 +2902,7 @@ describe("interaction.respondInteraction", () => {
               approvalLayer: ApprovalService.Live,
             }),
           )
-          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+          const { sessionId, branchId } = yield* client.session.create({})
           const answering = yield* answerInOrder({
             client,
             sessionId,
@@ -2949,7 +2944,7 @@ describe("interaction.respondInteraction", () => {
               approvalLayer: ApprovalService.Live,
             }),
           )
-          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+          const { sessionId, branchId } = yield* client.session.create({})
           const seen = MutableRef.make<
             ReadonlyArray<{ kind: string; text: string; id: InteractionRequestId }>
           >([])
@@ -3091,7 +3086,7 @@ describe("interaction.respondInteraction", () => {
               storagePath: dbPath,
             }),
           )
-          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+          const { sessionId, branchId } = yield* client.session.create({})
           const presented = yield* Deferred.make<void>()
           const answered = yield* answerInOrder({
             client,
@@ -3359,7 +3354,7 @@ describe("extension command RPCs", () => {
             ...e2ePreset,
             providerLayer,
             extensionInputs: [TestCommandsExtension],
-            cwd: "/tmp/gent-extension-request-session",
+            cwd: "/nonexistent/gent-extension-request-session",
             extraLayers: [WideEventLogger.Capture(wideEvents), minimumLogLevel],
           })
           createdSessionId = sessionId
@@ -3416,7 +3411,7 @@ describe("extension command RPCs", () => {
         {
           args: "rpc-world",
           sessionId: createdSessionId,
-          cwd: "/tmp/gent-extension-request-session",
+          cwd: "/nonexistent/gent-extension-request-session",
         },
       ])
     }),
@@ -3463,7 +3458,7 @@ describe("extension command RPCs", () => {
             ...e2ePreset,
             providerLayer,
             extensions: [ext],
-            cwd: "/tmp/gent-extension-queue-follow-up",
+            cwd: "/nonexistent/gent-extension-queue-follow-up",
           })
           yield* client.extension.request({
             sessionId,
@@ -3496,7 +3491,7 @@ describe("extension command RPCs", () => {
           ...e2ePreset,
           providerLayer,
           extensionInputs: [],
-          cwd: "/tmp/gent-settings-wide-event",
+          cwd: "/nonexistent/gent-settings-wide-event",
           extraLayers: [WideEventLogger.Capture(wideEvents), minimumLogLevel],
         })
         yield* client.session.updateSettings({
@@ -3531,7 +3526,7 @@ describe("extension command RPCs", () => {
         const { client, sessionId, branchId } = yield* createRpcHarness({
           ...e2ePreset,
           providerLayer,
-          cwd: "/tmp/gent-turn-wide-event",
+          cwd: "/nonexistent/gent-turn-wide-event",
           extraLayers: [WideEventLogger.Capture(wideEvents), minimumLogLevel],
         })
         yield* client.message.send({ sessionId, branchId, content: "trace me" })
@@ -3567,7 +3562,7 @@ describe("extension command RPCs", () => {
           ...e2ePreset,
           providerLayer,
           extensions: [],
-          cwd: "/tmp/gent-extension-stream-synchronized",
+          cwd: "/nonexistent/gent-extension-stream-synchronized",
         })
         const untilMarker = (after: number) =>
           client.session.events({ sessionId, branchId, after }).pipe(
@@ -3647,7 +3642,7 @@ describe("extension command RPCs", () => {
             ...e2ePreset,
             providerLayer,
             extensions: [ext],
-            cwd: "/tmp/gent-child-thread",
+            cwd: "/nonexistent/gent-child-thread",
           })
           const childId = yield* client.extension.request({
             sessionId,
@@ -3674,7 +3669,7 @@ describe("extension command RPCs", () => {
         const { client, sessionId, branchId } = yield* createRpcHarness({
           ...e2ePreset,
           providerLayer,
-          cwd: "/tmp/gent-handoff-thread",
+          cwd: "/nonexistent/gent-handoff-thread",
         })
         const handoff = yield* client.session.create({
           parentSessionId: sessionId,
@@ -3738,7 +3733,7 @@ describe("extension command RPCs", () => {
             ...e2ePreset,
             providerLayer,
             extensions: [ext],
-            cwd: "/tmp/gent-extension-queue-follow-up-warm",
+            cwd: "/nonexistent/gent-extension-queue-follow-up-warm",
           })
           const assistantReplies = (
             messages: ReadonlyArray<{ role: string; parts: Message["parts"] }>,
@@ -3829,7 +3824,7 @@ describe("extension command RPCs", () => {
             ...e2ePreset,
             providerLayer,
             extensions: [ext],
-            cwd: "/tmp/gent-extension-queue-follow-up-slash",
+            cwd: "/nonexistent/gent-extension-queue-follow-up-slash",
           })
           const commands = yield* client.extension.listSlashCommands({ sessionId })
           expect(commands.map((command) => command.name)).toEqual(["queue-follow-up"])
@@ -3893,7 +3888,7 @@ describe("extension command RPCs", () => {
             ...e2ePreset,
             providerLayer,
             extensionInputs: [TestCommandsExtension],
-            cwd: "/tmp/gent-extension-request-missing-branch",
+            cwd: "/nonexistent/gent-extension-request-missing-branch",
           })
           const result = yield* Effect.exit(
             client.extension.request({
@@ -3926,11 +3921,11 @@ describe("extension command RPCs", () => {
             ...e2ePreset,
             providerLayer,
             extensionInputs: [TestCommandsExtension],
-            cwd: "/tmp/gent-extension-request-first",
+            cwd: "/nonexistent/gent-extension-request-first",
           })
           const first = { sessionId, branchId }
           const second = yield* client.session.create({
-            cwd: "/tmp/gent-extension-request-second",
+            cwd: "/nonexistent/gent-extension-request-second",
           })
           const result = yield* Effect.exit(
             client.extension.request({
@@ -3980,8 +3975,8 @@ describe("extension command RPCs", () => {
   it.live("a handoff to a project without the parent's agent fails before it is stored", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const projectCwd = "/tmp/gent-handoff-agent-project"
-        const otherCwd = "/tmp/gent-handoff-agent-other"
+        const projectCwd = "/nonexistent/gent-handoff-agent-project"
+        const otherCwd = "/nonexistent/gent-handoff-agent-other"
         const profiles = yield* reviewerProfiles(projectCwd)
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
         const { client } = yield* createRpcHarness({
@@ -4017,7 +4012,7 @@ describe("extension command RPCs", () => {
 
   it.live("RPC request provides profile resource services to public capabilities", () =>
     Effect.gen(function* () {
-      const profileCwd = "/tmp/gent-extension-request-profile-service"
+      const profileCwd = "/nonexistent/gent-extension-request-profile-service"
       const ext: LoadedExtension = {
         manifest: { id: ExtensionId.make("@test/profile-service-request") },
         scope: "builtin",
@@ -4467,7 +4462,6 @@ export default defineExtension({
             ...e2ePreset,
             providerLayer,
             extensionInputs: [failingExtension],
-            cwd: "/tmp",
           })
         }).pipe(Effect.timeout("4 seconds")),
       ).pipe(Effect.exit)
@@ -4499,7 +4493,6 @@ export default defineExtension({
             extensionInputs: [failingExtension],
             // This test is about the failure report, so the load must survive it.
             allowFailedExtensions: true,
-            cwd: "/tmp",
           })
           const status = yield* client.extension.listStatus({ sessionId })
           expect(status._tag).toBe("Degraded")
@@ -4692,7 +4685,6 @@ export default defineExtension({
             ...e2ePreset,
             providerLayer,
             extensions: [ext],
-            cwd: "/tmp",
           })
           const commands = yield* client.extension.listSlashCommands({ sessionId })
           expect(commands.map((command) => command.name)).toEqual(["visible"])
@@ -4742,7 +4734,6 @@ export default defineExtension({
             ...e2ePreset,
             providerLayer,
             extensionInputs: [...e2ePreset.extensionInputs, ext],
-            cwd: "/tmp",
           })
           const result = yield* client.extension.request({
             sessionId,
@@ -4788,7 +4779,6 @@ export default defineExtension({
             ...e2ePreset,
             providerLayer,
             extensions: [projectExt],
-            cwd: "/tmp",
           })
           const commands = yield* client.extension.listSlashCommands({ sessionId })
           expect(commands.map((command) => command.name)).toEqual(["shadowed"])
@@ -4841,15 +4831,20 @@ export default defineExtension({
       yield* Effect.scoped(
         Effect.gen(function* () {
           // The harness loads every input as builtin, so the two scopes go in through a profile.
-          const profile = yield* makeProfile("/tmp", [builtinExt, projectExt])
+          const profile = yield* makeProfile("/nonexistent/gent-test-profile-cwd", [
+            builtinExt,
+            projectExt,
+          ])
           expect(profile.resolved.failedExtensions).toEqual([])
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
           const { client, sessionId, branchId } = yield* createRpcHarness({
             ...e2ePreset,
             providerLayer,
             extensions: [],
-            sessionProfileCacheLayer: SessionProfileCache.Test(new Map([["/tmp", profile]])),
-            cwd: "/tmp",
+            sessionProfileCacheLayer: SessionProfileCache.Test(
+              new Map([["/nonexistent/gent-test-profile-cwd", profile]]),
+            ),
+            cwd: "/nonexistent/gent-test-profile-cwd",
           })
           const commands = yield* client.extension.listSlashCommands({ sessionId })
           expect(commands.map((command) => command.name)).toEqual([])
@@ -4904,15 +4899,20 @@ export default defineExtension({
       yield* Effect.scoped(
         Effect.gen(function* () {
           // The harness loads every input as builtin, so the two scopes go in through a profile.
-          const profile = yield* makeProfile("/tmp", [builtinExt, projectExt])
+          const profile = yield* makeProfile("/nonexistent/gent-test-profile-cwd", [
+            builtinExt,
+            projectExt,
+          ])
           expect(profile.resolved.failedExtensions).toEqual([])
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
           const { client, sessionId } = yield* createRpcHarness({
             ...e2ePreset,
             providerLayer,
             extensions: [],
-            sessionProfileCacheLayer: SessionProfileCache.Test(new Map([["/tmp", profile]])),
-            cwd: "/tmp",
+            sessionProfileCacheLayer: SessionProfileCache.Test(
+              new Map([["/nonexistent/gent-test-profile-cwd", profile]]),
+            ),
+            cwd: "/nonexistent/gent-test-profile-cwd",
           })
           const commands = yield* client.extension.listSlashCommands({ sessionId })
           expect(commands.map((command) => command.name)).toEqual([])
@@ -4922,8 +4922,8 @@ export default defineExtension({
   )
   it.live("RPC listSlashCommands resolves commands from the requested session profile", () =>
     Effect.gen(function* () {
-      const alphaCwd = "/tmp/gent-alpha-profile"
-      const betaCwd = "/tmp/gent-beta-profile"
+      const alphaCwd = "/nonexistent/gent-alpha-profile"
+      const betaCwd = "/nonexistent/gent-beta-profile"
       const alphaExt = makeCommandExtension("@test/alpha-profile", "alpha")
       const betaExt = makeCommandExtension("@test/beta-profile", "beta")
       yield* Effect.scoped(
@@ -5093,7 +5093,7 @@ describe("a resumed call that had taken its answer", () => {
         const target = yield* Effect.scoped(
           Effect.gen(function* () {
             const { client } = yield* createRpcClient(layerFor(firstProvider.layer))
-            const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+            const { sessionId, branchId } = yield* client.session.create({})
             const presented = yield* client.session.events({ sessionId, branchId }).pipe(
               Stream.filterMap((envelope) => {
                 if (envelope.event._tag === "InteractionPresented")
@@ -5217,7 +5217,7 @@ describe("a call answered while a sibling call still ran", () => {
         const target = yield* Effect.scoped(
           Effect.gen(function* () {
             const { client } = yield* createRpcClient(layerFor(firstProvider.layer))
-            const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+            const { sessionId, branchId } = yield* client.session.create({})
             const presented = yield* client.session.events({ sessionId, branchId }).pipe(
               Stream.filterMap((envelope) => {
                 if (envelope.event._tag === "InteractionPresented")
