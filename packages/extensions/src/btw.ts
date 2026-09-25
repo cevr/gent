@@ -15,6 +15,7 @@ import {
 } from "effect"
 import {
   type AgentEvent,
+  assistantMessageIdForTurn,
   BranchId,
   defineExtension,
   defineRequests,
@@ -23,6 +24,7 @@ import {
   ExtensionHost,
   ExtensionId,
   type Message,
+  type MessageId,
   request,
   SessionId,
 } from "@gent/core/extensions/api"
@@ -141,7 +143,10 @@ interface OpenFork {
   readonly name: string
   /** Messages the fork copied in; the pane shows what came after. */
   readonly inherited: number
+  /** The text of the step the fork streams now, until its message is stored. */
   readonly partial: string
+  /** The message that step stores. */
+  readonly partialMessage: Option.Option<MessageId>
   readonly replying: boolean
   readonly error: Option.Option<string>
   /** Follows the fork's stream; ends with the fork it follows. */
@@ -241,8 +246,21 @@ const isAskedTurn = (message: Message): boolean => {
   return Predicate.isUndefined(customType) || customType === BTW_QUESTION_TYPE
 }
 
-/** Pairs each asked question with the assistant text that followed it. */
-const forkTurns = (messages: ReadonlyArray<Message>, partial: string): ReadonlyArray<ForkTurn> => {
+/** Step texts of one answer, a blank line between them. */
+const joinSteps = (answer: string, step: string): string => {
+  if (step.length === 0) return answer
+  if (answer.length === 0) return step
+  return `${answer}\n\n${step}`
+}
+
+/**
+ * Pairs each asked question with the assistant text that followed it: the
+ * stored steps, then the step the fork streams now, until its message is stored.
+ */
+const forkTurns = (
+  messages: ReadonlyArray<Message>,
+  fork: Pick<OpenFork, "partial" | "partialMessage">,
+): ReadonlyArray<ForkTurn> => {
   const turns: Array<ForkTurn> = []
   for (const message of messages) {
     if (isAskedTurn(message)) {
@@ -254,11 +272,14 @@ const forkTurns = (messages: ReadonlyArray<Message>, partial: string): ReadonlyA
     }
     const last = turns.at(-1)
     if (message.role !== "assistant" || Predicate.isUndefined(last)) continue
-    turns[turns.length - 1] = { ...last, answer: last.answer + textOf(message) }
+    turns[turns.length - 1] = { ...last, answer: joinSteps(last.answer, textOf(message)) }
   }
   const last = turns.at(-1)
-  if (partial.length > 0 && Predicate.isNotUndefined(last) && last.answer.length === 0) {
-    turns[turns.length - 1] = { ...last, answer: partial }
+  const stored = Option.exists(fork.partialMessage, (id) =>
+    messages.some((message) => message.id === id),
+  )
+  if (!stored && Predicate.isNotUndefined(last)) {
+    turns[turns.length - 1] = { ...last, answer: joinSteps(last.answer, fork.partial) }
   }
   return turns
 }
@@ -285,20 +306,37 @@ const checkQuestion = (raw: string) =>
  * The fork's live state after one of its events. A notice is an error the
  * turn goes on past; the fork still replies, so it is not the fork's error.
  */
-export const foldForkEvent = <Fork extends Pick<OpenFork, "partial" | "replying" | "error">>(
+export const foldForkEvent = <
+  Fork extends Pick<OpenFork, "partial" | "partialMessage" | "replying" | "error">,
+>(
   current: Fork,
   event: AgentEvent,
 ): Fork => {
   switch (event._tag) {
+    // Each step streams its own text into its own message.
     case "StreamStarted":
-      return { ...current, replying: true, error: Option.none() }
+      return {
+        ...current,
+        partial: "",
+        partialMessage: Option.fromUndefinedOr(event.messageId).pipe(
+          Option.map((turn) => assistantMessageIdForTurn(turn, event.step)),
+        ),
+        replying: true,
+        error: Option.none(),
+      }
     case "StreamChunk":
       return { ...current, partial: current.partial + event.chunk }
     case "TurnCompleted":
-      return { ...current, partial: "", replying: false }
+      return { ...current, partial: "", partialMessage: Option.none(), replying: false }
     case "ErrorOccurred":
       if (event.notice === true) return current
-      return { ...current, partial: "", replying: false, error: Option.some(event.error) }
+      return {
+        ...current,
+        partial: "",
+        partialMessage: Option.none(),
+        replying: false,
+        error: Option.some(event.error),
+      }
     default:
       return current
   }
@@ -456,6 +494,7 @@ export const BtwRpc = defineRequests(BTW_EXTENSION_ID, {
         name: forkName(question),
         inherited,
         partial: "",
+        partialMessage: Option.none(),
         replying: false,
         error: Option.none(),
         follower: Option.none(),
@@ -523,7 +562,7 @@ export const BtwRpc = defineRequests(BTW_EXTENSION_ID, {
         sessionId: fork.value.sessionId,
         branchId: fork.value.branchId,
         name: fork.value.name,
-        turns: forkTurns(messages, fork.value.partial),
+        turns: forkTurns(messages, fork.value),
         replying: fork.value.replying,
         ...Option.match(fork.value.error, {
           onNone: () => ({}),
