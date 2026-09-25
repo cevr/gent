@@ -400,6 +400,119 @@ describe("cell worker", () => {
       expect(next.result.display).toBe("42")
     }).pipe(Effect.timeout("3 seconds")),
   )
+
+  // Rendering a thrown value once ran its getters and traps outside any
+  // catch: a throw there ended the worker, and the restart lost the bindings.
+  it.scopedLive("a thrown value that cannot be read fails its cell; the worker lives", () =>
+    Effect.gen(function* () {
+      const worker = yield* makeHarness
+      const evaluate = (cellId: string, source: string) =>
+        Effect.gen(function* () {
+          yield* worker.send(
+            CellRequest.cases.Evaluate.make({ cellId, outputToken: `${cellId}-token`, source }),
+          )
+          return yield* worker.next
+        })
+      const failed = (cellId: string, source: string) =>
+        Effect.gen(function* () {
+          const result = yield* evaluate(cellId, source)
+          if (result._tag !== "Failed")
+            return yield* new CellProtocolError({ message: `Expected failure, got ${result._tag}` })
+          return result.error.message
+        })
+      const kept = (cellId: string) =>
+        Effect.gen(function* () {
+          const result = yield* evaluate(cellId, "kept")
+          if (result._tag !== "Evaluated")
+            return yield* new CellProtocolError({ message: `Expected result, got ${result._tag}` })
+          return result.result.display
+        })
+      expect((yield* evaluate("define", "let kept = 7"))._tag).toBe("Evaluated")
+      const throwing = (key: string) =>
+        `const e = new Error('x'); Object.defineProperty(e, '${key}', { get() { throw new Error('${key}') } }); throw e`
+      // A getter the cell defined never runs: the error shows what its data holds.
+      expect(yield* failed("message", throwing("message"))).toBe("Error")
+      expect(yield* kept("after-message")).toBe("7")
+      expect(yield* failed("cause", throwing("cause"))).toBe("Error: x")
+      expect(yield* kept("after-cause")).toBe("7")
+      expect(yield* failed("code", throwing("code"))).toBe("Error: x")
+      expect(yield* kept("after-code")).toBe("7")
+      // A trap that throws on any read leaves one fixed text.
+      expect(
+        yield* failed(
+          "proxy",
+          "const trap = () => { throw new Error('trap') }; throw new Proxy(new Error('x'), { getPrototypeOf: trap, get: trap, getOwnPropertyDescriptor: trap, ownKeys: trap, has: trap })",
+        ),
+      ).toBe("A thrown value that cannot be read")
+      expect(yield* kept("after-proxy")).toBe("7")
+      expect(
+        (yield* evaluate(
+          "primitive",
+          "throw { [Symbol.toPrimitive]() { throw new Error('p') }, toString() { throw new Error('s') } }",
+        ))._tag,
+      ).toBe("Failed")
+      expect(yield* kept("after-primitive")).toBe("7")
+    }).pipe(Effect.timeout("3 seconds")),
+  )
+
+  it.scopedLive(
+    "an uncaught value that cannot be read reaches the next cell; the worker lives",
+    () =>
+      Effect.gen(function* () {
+        const uncaught =
+          yield* Queue.unbounded<
+            Stream.Success<(typeof CellWorkerEnvironment.Service)["uncaught"]>
+          >()
+        const worker = yield* makeHarnessWith(Stream.fromQueue(uncaught))
+        let cells = 0
+        const evaluate = (source: string) =>
+          Effect.gen(function* () {
+            cells += 1
+            const cellId = `cell-${cells}`
+            yield* worker.send(
+              CellRequest.cases.Evaluate.make({ cellId, outputToken: `${cellId}-token`, source }),
+            )
+            const result = yield* worker.next
+            if (result._tag !== "Evaluated")
+              return yield* new CellProtocolError({
+                message: `Expected result, got ${result._tag}`,
+              })
+            return result.result.display
+          })
+        expect(yield* evaluate("let kept = 7; kept")).toBe("7")
+        // oxlint-disable-next-line effect/noNewError -- the value under test is a thrown Error whose message getter throws
+        const unreadable = new Error("x")
+        Object.defineProperty(unreadable, "message", {
+          get() {
+            // oxlint-disable-next-line effect/noThrowStatement, effect/noNewError -- the getter under test throws
+            throw new Error("m")
+          },
+        })
+        yield* Queue.offer(uncaught, { cause: unreadable, origin: Option.none() })
+        // The report runs on its own fiber; each cell gives it a turn.
+        const display = yield* evaluate("kept").pipe(
+          Effect.repeat({ until: (text) => text.includes("Uncaught"), times: 20 }),
+        )
+        expect(display).toBe(
+          "Uncaught (origin unknown: an unawaited promise or microtask): Error\n7",
+        )
+        const trap = () => {
+          // oxlint-disable-next-line effect/noThrowStatement, effect/noNewError -- the trap under test throws on every read
+          throw new Error("trap")
+        }
+        const trapped = new Proxy(unreadable, {
+          getPrototypeOf: trap,
+          getOwnPropertyDescriptor: trap,
+        })
+        yield* Queue.offer(uncaught, { cause: trapped, origin: Option.none() })
+        const trappedDisplay = yield* evaluate("kept").pipe(
+          Effect.repeat({ until: (text) => text.includes("Uncaught"), times: 20 }),
+        )
+        expect(trappedDisplay).toBe(
+          "Uncaught (origin unknown: an unawaited promise or microtask): A thrown value that cannot be read\n7",
+        )
+      }).pipe(Effect.timeout("3 seconds")),
+  )
 })
 
 // ── bun cell evaluator ──────────────────────────────────────────────────────
@@ -615,9 +728,44 @@ describe("Bun cell evaluation", () => {
       yield* kernel.evaluate("const values: number[] = [1, 2, 3]")
       const result = yield* kernel.evaluate("values.push(await tools.count({})); values")
       expect(result.display).toBe("[ 1, 2, 3, 7 ]")
-      expect(result.bindings).toEqual(["values"])
+      expect(result.bindingCount).toBe(1)
       yield* kernel.reset
       expect((yield* kernel.evaluate("typeof values")).display).toBe("undefined")
+    }),
+  )
+
+  // Every result stays in the history: a full list on each grows with cells
+  // times bindings, so a result names only what its cell bound.
+  it.scopedLive("a result names the bindings its cell added or rebound, and counts them all", () =>
+    Effect.gen(function* () {
+      const kernel = yield* makeKernel({ call: () => Effect.succeed(0) })
+      const first = yield* kernel.evaluate("let a = 1; const list = [1]; let b = 'x'")
+      expect(first.bindings).toEqual(["a", "b", "list"])
+      expect(first.bindingCount).toBe(3)
+      // A value changed in place keeps its binding; the same primitive is no change.
+      const inPlace = yield* kernel.evaluate("list.push(2); b = 'x'; list.length")
+      expect(inPlace.bindings).toEqual([])
+      expect(inPlace.bindingCount).toBe(3)
+      const rebound = yield* kernel.evaluate("a = 2; const c = a + 1; c")
+      expect(rebound.bindings).toEqual(["a", "c"])
+      expect(rebound.bindingCount).toBe(4)
+      // Restored bindings are named by the restore report, not by the next result.
+      const snapshot = yield* kernel.snapshot
+      yield* kernel.reset
+      expect([...(yield* kernel.restore(snapshot.bindings))].sort()).toEqual([
+        "a",
+        "b",
+        "c",
+        "list",
+      ])
+      const afterRestore = yield* kernel.evaluate("const d = 4; d")
+      expect(afterRestore.bindings).toEqual(["d"])
+      expect(afterRestore.bindingCount).toBe(5)
+      // A reset forgets them: the next binding is new again.
+      yield* kernel.reset
+      const afterReset = yield* kernel.evaluate("const a = 9; a")
+      expect(afterReset.bindings).toEqual(["a"])
+      expect(afterReset.bindingCount).toBe(1)
     }),
   )
 

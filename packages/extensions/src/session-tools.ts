@@ -1,5 +1,6 @@
 import { Cause, Context, Effect, Layer, Option, Predicate, Ref, Schema } from "effect"
 import {
+  AGENT_PROMPT_PRIORITY,
   type Branch,
   BranchId,
   defineExtension,
@@ -606,10 +607,15 @@ const SendSessionTool = tool({
 
 // ── extension ───────────────────────────────────────────────────────────────
 
-/** `session.send` is how sessions talk; the section is its owner's, shown wherever the tool may run. */
+/**
+ * `session.send` is how sessions talk; the section is its owner's, shown
+ * wherever the tool may run. An agent that denies the tool lacks it, so it
+ * sits in the agent's own part of the prompt, after the part a child shares
+ * with its parent (core's `AGENT_PROMPT_PRIORITY`).
+ */
 const SESSIONS_SECTION = {
   id: "sessions",
-  priority: 14,
+  priority: AGENT_PROMPT_PRIORITY + 10,
   content: `# Sessions
 
 - Sessions talk with session.send: correct a running child, answer a child's question, or ask the session that spawned you when you are blocked on a decision in a turn whose reply does not return to it (a child's task turn returns its reply as its completion). A message wakes an idle session.`,

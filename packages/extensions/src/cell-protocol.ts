@@ -363,7 +363,13 @@ export type CellRestoreReport = typeof CellRestoreReport.Type
 
 export const CellEvaluation = Schema.Struct({
   display: Schema.String,
+  /**
+   * The bindings the cell added or bound to another value. A result stored
+   * before `bindingCount` existed lists every binding.
+   */
   bindings: Schema.Array(Schema.String),
+  /** How many bindings the namespace holds after the cell; absent on older results. */
+  bindingCount: Schema.optional(Schema.Natural),
   truncated: Schema.Boolean,
   /** Present on the first evaluation after a worker was restored from a snapshot. */
   restored: Schema.optional(CellRestoreReport),

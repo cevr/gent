@@ -181,6 +181,42 @@ describe("projectModelContext", () => {
     expect(ids(first)).toEqual(firstIds)
   })
 
+  test("the prompt reuses the estimate's bound: a projection keeps the stored message objects", () => {
+    const call = ToolCallId.make("big")
+    const messages = [
+      message("user", "user", [text("go")]),
+      message("call", "assistant", [
+        Prompt.toolCallPart({ id: call, name: "t", params: {}, providerExecuted: false }),
+      ]),
+      message("result", "tool", [
+        Prompt.toolResultPart({
+          id: call,
+          name: "t",
+          isFailure: false,
+          providerExecuted: false,
+          result: { stdout: "x".repeat(maximumModelToolResultChars * 4) },
+        }),
+      ]),
+    ]
+    const projection = success(projectModelContext(messages, budget(1_000_000)))
+    // The bound is memoized by part object, so a copy would bound it again.
+    expect(projection.messages.map((each, index) => each === messages[index])).toEqual([
+      true,
+      true,
+      true,
+    ])
+    const encode = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
+    const sizes = toPrompt(projection.messages).content.flatMap((each) => {
+      if (each.role !== "tool") return []
+      return each.content.flatMap((part) => {
+        if (part.type !== "tool-result") return []
+        return [encode(part.result).length]
+      })
+    })
+    expect(sizes).toHaveLength(1)
+    expect(sizes[0]).toBeLessThanOrEqual(maximumModelToolResultChars)
+  })
+
   test("keeps a complete single tool group indivisible", () => {
     const user = message("user", "user", [text("user")])
     const assistant = message("call", "assistant", [call("call-1")])

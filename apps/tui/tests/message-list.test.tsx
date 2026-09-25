@@ -567,6 +567,26 @@ const cellMessage = (id: string, display = "hello from a.txt"): ListMessage =>
     }),
   })
 
+/** A cell result that names the bindings it bound and counts the whole namespace. */
+const cellBindingsMessage = (
+  id: string,
+  bindings: ReadonlyArray<string>,
+  bindingCount: number,
+): ListMessage =>
+  assistantToolMessage("assistant-cell", {
+    id,
+    toolName: "cell",
+    status: "completed",
+    input: { code: "let note = 1" },
+    summary: absent,
+    output: encodeJson({
+      display: `${id} done`,
+      bindings: [...bindings],
+      bindingCount,
+      truncated: false,
+    }),
+  })
+
 const bashMessage = (id: string, lines: number): ListMessage =>
   assistantToolMessage("assistant-bash", {
     id,
@@ -1904,7 +1924,36 @@ describe("FX transcript treatment", () => {
       expect(frame).toContain("✕ write denied")
       expect(frame).toContain("hello from a.txt")
       expect(frame).toContain("note.content")
+      // A result stored before counts existed listed the whole namespace.
       expect(frame).toContain("bindings: note")
+      expect(frame).not.toContain("in all")
+    }),
+  )
+
+  it.live("a cell result names the bindings it bound and counts them all", () =>
+    Effect.gen(function* () {
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <RegisteredToolMessageLists
+              items={[
+                cellBindingsMessage("call-cell-bound", ["note"], 3),
+                cellBindingsMessage("call-cell-kept", [], 1),
+              ]}
+              fullDetail
+            />
+          ),
+          { width: 100, height: 40 },
+        ),
+      )
+      const frame = yield* waitForFrame(
+        setup,
+        (next) => next.includes("call-cell-bound done") && next.includes("call-cell-kept done"),
+        "cell bindings",
+      )
+      expect(frame).toContain("bound: note · 3 bindings in all")
+      expect(frame).toContain("bound: none · 1 binding in all")
+      expect(frame).not.toContain("bindings: note")
     }),
   )
 

@@ -30,10 +30,12 @@ import {
   headTailChars,
   lineCount,
   maximumModelToolResultChars,
+  resolveDataDir,
   type SessionId,
   tool,
   ToolCallId,
   type TurnAfterInput,
+  writeFileAtomic,
 } from "@gent/core/extensions/api"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 
@@ -4471,6 +4473,8 @@ interface BackgroundBashTarget {
   readonly branchId: ExtensionContextService["branchId"]
   readonly toolCallId: ToolCallId
   readonly Session: Pick<ExtensionContextService["Session"], "getSession" | "listBranches" | "send">
+  /** The gent data directory, resolved at start: the job fiber has no ExtensionContext. */
+  readonly dataDir: string
 }
 
 /** Characters that make bash expand a directory word (`~`, `$VAR`, backticks, globs). */
@@ -4634,39 +4638,102 @@ const queueBackgroundFollowUp = (params: {
     )
   })
 
-/**
- * The completion notice is a user-role message, and core bounds only tool
- * results, so this bounds it here at the same budget. The full output stays in
- * the stored tool result, which the notice points at: the cell pages the rest
- * with `context.read(toolCallId, { offset, limit })`.
- */
-const boundedNotice = (toolCallId: ToolCallId, message: string): string => {
-  const bounded = headTailChars(message, maximumModelToolResultChars)
-  if (!bounded.truncated) return bounded.text
-  const omitted = bounded.totalChars - maximumModelToolResultChars
-  return `${bounded.text}\n\n[${omitted} of ${bounded.totalChars} characters omitted; read the rest with context.read("${toolCallId}", { offset, limit })]`
-}
+// ── job output files ──
+//
+// A notice cuts a long output to its head and tail. The whole output goes to
+// a file under the data directory, and the notice names that file, so the
+// read tool (`tools.read` in a cell) pages the cut middle. A file, not a
+// reader behind `context.read`: every agent has the read tool, and no other
+// module learns how a job keeps its output. A settled job's output never
+// changes, so a file already written stays as it is.
 
-/** Queues the settled job's message; false when the send was refused. */
+/**
+ * `<data dir>/background-bash/<sessionId>/<branchId>/<toolCallId>.txt`: one
+ * file per job key. The path is absolute: a relative `GENT_DATA_DIR` resolves
+ * against the server's cwd, as the database does, and the read tool resolves
+ * a relative path against the session cwd instead.
+ */
+const jobOutputFile = (path: Path.Path, dataDir: string, key: BackgroundBashJobKeyFields) =>
+  path.resolve(
+    dataDir,
+    "background-bash",
+    key.sessionId,
+    key.branchId,
+    `${key.toolCallId.replace(/[^\w.:-]/g, "_")}.txt`,
+  )
+
+/** The job's file, written when missing; none when the write failed. */
+const saveJobOutput = Effect.fn("ExecTools.saveJobOutput")(function* (
+  file: string,
+  message: string,
+) {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  return yield* fs.exists(file).pipe(
+    Effect.flatMap((exists) => {
+      if (exists) return Effect.void
+      return fs
+        .makeDirectory(path.dirname(file), { recursive: true })
+        .pipe(Effect.andThen(writeFileAtomic(file, message)))
+    }),
+    Effect.as(Option.some(file)),
+    Effect.catchCause((cause) =>
+      Effect.logWarning("exec-tools.background.output.save.failed").pipe(
+        Effect.annotateLogs({ file, cause: Cause.pretty(cause) }),
+        Effect.as(Option.none<string>()),
+      ),
+    ),
+  )
+})
+
+/**
+ * `message` within `maxChars`, the file line included. A cut output keeps its
+ * head and tail and names the file that holds all of it; the cut marker
+ * states the one omitted count.
+ */
+const boundedJobOutput = Effect.fn("ExecTools.boundedJobOutput")(function* (
+  file: string,
+  message: string,
+  maxChars: number,
+) {
+  if (message.length <= maxChars) return message
+  const where = Option.match(yield* saveJobOutput(file, message), {
+    onNone: () => "[The whole output could not be saved.]",
+    onSome: (saved) =>
+      `[The whole output is in ${saved} (${message.length} characters); page it with the read tool's offset and limit.]`,
+  })
+  const cut = headTailChars(message, Math.max(0, maxChars - where.length - 2)).text
+  // A file line longer than the whole budget is cut too.
+  return headTailChars(`${cut}\n\n${where}`, maxChars).text
+})
+
+/** The longest command a follow-up notice repeats; the rest is cut from its middle. */
+const maximumFollowUpCommandChars = 1_000
+
+/**
+ * Queues the settled job's message; false when the send was refused. The
+ * notice is a user-role message, and core bounds only tool results, so the
+ * whole notice, its frame included, is bounded here at the same budget.
+ */
 const queueTerminalFollowUp = (target: BackgroundBashTarget, state: BackgroundBashTerminalState) =>
   Effect.gen(function* () {
-    const command = state.command
-    const message = boundedNotice(target.toolCallId, state.message ?? "")
-    if (state.status === "completed") {
-      const exitCode = state.exitCode ?? 0
-      return yield* queueBackgroundFollowUp({
-        target,
-        sourceId: `bash:${target.toolCallId}:complete`,
-        content: `Background command completed (exit code ${exitCode}):\n\`\`\`\n$ ${command}\n${message}\n\`\`\``,
-      })
-    }
     // An interrupted job wakes nobody: the next turn reads it as a notice.
     if (state.status === "interrupted") return true
-    return yield* queueBackgroundFollowUp({
-      target,
-      sourceId: `bash:${target.toolCallId}:failure`,
-      content: `Background command failed:\n\`\`\`\n$ ${command}\n${message}\n\`\`\``,
-    })
+    const command = headTailChars(state.command, maximumFollowUpCommandChars).text
+    let header = "Background command failed:"
+    let sourceId = `bash:${target.toolCallId}:failure`
+    if (state.status === "completed") {
+      header = `Background command completed (exit code ${state.exitCode ?? 0}):`
+      sourceId = `bash:${target.toolCallId}:complete`
+    }
+    const frame = (output: string) => `${header}\n\`\`\`\n$ ${command}\n${output}\n\`\`\``
+    const path = yield* Path.Path
+    const message = yield* boundedJobOutput(
+      jobOutputFile(path, target.dataDir, target),
+      state.message ?? "",
+      maximumModelToolResultChars - frame("").length,
+    )
+    return yield* queueBackgroundFollowUp({ target, sourceId, content: frame(message) })
   })
 
 // ── job notices ──
@@ -4731,14 +4798,26 @@ const jobNotices = Effect.fn("ExecTools.jobNotices")(function* () {
     line: (job) => `- \`${noticeCommand(job.command)}\` · call ${job.toolCallId}`,
     rest: "interrupted commands",
   })
-  const undelivered = jobNotice(yield* storage.undeliveredJobs(branch), {
+  const path = yield* Path.Path
+  const dataDir = yield* resolveDataDir(ctx.home)
+  const finished = yield* storage.undeliveredJobs(branch)
+  const outputs = new Map(
+    yield* Effect.forEach(finished.slice(0, maximumNoticeJobs), (job) =>
+      boundedJobOutput(
+        jobOutputFile(path, dataDir, { ...branch, toolCallId: job.toolCallId }),
+        job.state.message ?? "",
+        maximumNoticeOutputChars,
+      ).pipe(Effect.map((output): readonly [ToolCallId, string] => [job.toolCallId, output])),
+    ),
+  )
+  const undelivered = jobNotice(finished, {
     id: "exec-tools-undelivered",
     intro:
       "# Background commands finished\n\nThese background commands finished while the follow-up queue was full, so no message reported them. Tell the user what they returned.",
     line: (job) => {
       let outcome = "failed"
       if (job.state.status === "completed") outcome = `exit code ${job.state.exitCode ?? 0}`
-      const output = headTailChars(job.state.message ?? "", maximumNoticeOutputChars).text
+      const output = outputs.get(job.toolCallId) ?? ""
       return `- \`${noticeCommand(job.state.command)}\` · ${outcome} · call ${job.toolCallId}\n\`\`\`\n${output}\n\`\`\``
     },
     rest: "finished commands",
@@ -4863,6 +4942,7 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
           branchId: ctx.branchId,
           toolCallId: ctx.toolCallId,
           Session: ctx.Session,
+          dataDir: yield* resolveDataDir(ctx.home),
         }
         const key = backgroundJobKey(target)
         const keyFields = backgroundJobKeyFields(target)
