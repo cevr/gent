@@ -1298,7 +1298,9 @@ describe("platform duplication guards", () => {
       {
         file: "packages/extensions/src/anthropic.ts",
         line: 1,
-        message: "Bun platform layers may only be provided by platform roots",
+        message: expect.stringContaining(
+          "`BunGentPlatformLive` provides a Bun platform layer outside the platform roots",
+        ),
       },
     ])
   })
@@ -1322,7 +1324,9 @@ describe("platform duplication guards", () => {
       {
         file: "packages/core/src/server/server.ts",
         line: 1,
-        message: "Bun platform layers may only be provided by platform roots",
+        message: expect.stringContaining(
+          "`BunPlatformLive` provides a Bun platform layer outside the platform roots",
+        ),
       },
     ])
 
@@ -1332,6 +1336,61 @@ describe("platform duplication guards", () => {
         "const PlatformLayer = Layer.mergeAll(BunGentPlatformLive)",
       ),
     ).toEqual([])
+  })
+
+  const provisionLines = (file: string, text: string) =>
+    findPlatformDuplicationViolations(file, text).map((finding) => [finding.line, finding.message])
+
+  test("every @effect/platform-bun layer outside a root is reported, however it is imported", () => {
+    const text = [
+      'import { BunCrypto, BunHttpServer as Http } from "@effect/platform-bun"',
+      'import * as PlatformBun from "@effect/platform-bun"',
+      'import * as BunPathModule from "@effect/platform-bun/BunPath"',
+      "import {",
+      "  layer as cryptoLayer,",
+      "  make as makeCrypto,",
+      '} from "@effect/platform-bun/BunCrypto"',
+      "const a = Layer.provide(BunCrypto.layer)",
+      "const b = Http.layerServer({ port: 1 })",
+      "const c = PlatformBun.BunServices.layer",
+      "const d = BunPathModule.layer",
+      "const e = Layer.merge(base, cryptoLayer)",
+      "const f = BunHttpServer.layer({ port: 2 })",
+    ].join("\n")
+    expect(provisionLines("packages/core/src/storage/storage.ts", text)).toEqual([
+      [8, expect.stringContaining("`BunCrypto.layer`")],
+      [9, expect.stringContaining("`Http.layerServer`")],
+      [10, expect.stringContaining("`PlatformBun.BunServices.layer`")],
+      [11, expect.stringContaining("`BunPathModule.layer`")],
+      [12, expect.stringContaining("`cryptoLayer`")],
+      [13, expect.stringContaining("`BunHttpServer.layer`")],
+    ])
+  })
+
+  test("a constructor, a runner or a comment is no layer provision", () => {
+    const text = [
+      'import { BunRuntime, BunSocket } from "@effect/platform-bun"',
+      "const socket = yield* BunSocket.makeNet({ path })",
+      "BunRuntime.runMain(program)",
+      "// BunCrypto.layer is what the host provides",
+      " * `BunServices.layer` bundles the file system",
+    ].join("\n")
+    expect(provisionLines("apps/tui/src/extensions/builtins.tsx", text)).toEqual([])
+  })
+
+  test("a root provides any layer; a justified entry allows only its own layer", () => {
+    expect(provisionLines("apps/tui/scripts/build.ts", "Layer.provide(BunServices.layer)")).toEqual(
+      [],
+    )
+    expect(
+      provisionLines(
+        "packages/extensions/src/openai.ts",
+        [
+          "Layer.provide(BunHttpServer.layerServer({ port: OAUTH_PORT }))",
+          "Effect.provide(BunCrypto.layer)",
+        ].join("\n"),
+      ),
+    ).toEqual([[2, expect.stringContaining("`BunCrypto.layer`")]])
   })
 })
 

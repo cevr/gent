@@ -1448,36 +1448,149 @@ export const findReadersWithoutWriters = (
 
 // ── no code duplicates an Effect platform service ───────────────────────────
 
-const PLATFORM_LAYER = /\b(?:BunPlatformLive|BunGentPlatformLive)\b/
-
-const platformProviderRootFiles = new Set([
-  "packages/core/src/runtime/gent-platform.ts",
-  "packages/core/src/runtime/gent-platform-bun.ts",
-  // The host entry is the door hosts take to the platform roots.
-  "packages/core/src/host.ts",
-  "apps/tui/src/main.tsx",
-  "packages/sdk/src/server.ts",
+/** A file that provides Bun platform layers, and why it may. */
+const platformProviderRoots: ReadonlyMap<string, string> = new Map([
+  ["packages/core/src/runtime/gent-platform.ts", "it defines the platform service"],
+  ["packages/core/src/runtime/gent-platform-bun.ts", "it builds the Bun platform layer"],
+  ["packages/core/src/host.ts", "the host entry is the door hosts take to the platform roots"],
+  ["apps/tui/src/main.tsx", "the TUI process entry provides the platform once"],
+  ["packages/sdk/src/server.ts", "the SDK server entry provides the platform and its listener"],
+  ["apps/tui/scripts/build.ts", "the build script is its own process entry, outside any host"],
 ])
 
 /**
- * Bun platform layers are provided by the platform roots alone. What a
- * launcher or a reference extension may import is its manifest's business:
- * the `gent/declared-workspace-imports` lint rule reads it.
+ * One layer a file outside the roots may provide. The reason says why no
+ * root can provide it; a shipped extension gets no layer a user extension
+ * could not provide the same way.
+ */
+interface PlatformLayerAllowance {
+  readonly file: string
+  readonly layer: string
+  readonly reason: string
+}
+
+const platformLayerAllowances: ReadonlyArray<PlatformLayerAllowance> = [
+  {
+    file: "packages/extensions/src/openai.ts",
+    layer: "BunHttpServer.layerServer",
+    reason:
+      "the OAuth redirect listener binds the fixed port OpenAI registers, for one sign-in; no root provides an HTTP server, and a user extension may start its own listener",
+  },
+]
+
+/** The gent-owned names of the Bun platform layer. */
+const GENT_PLATFORM_LAYER = /\b(?:BunPlatformLive|BunGentPlatformLive)\b/g
+
+/** `import { A, B as C } from "@effect/platform-bun"`: each name is a module. */
+const PLATFORM_BUN_MODULES_IMPORT =
+  /import\s+(?:type\s+)?\{([^}]*)\}\s*from\s*["']@effect\/platform-bun["']/g
+/** `import { layer as l } from "@effect/platform-bun/BunCrypto"`: names from one module. */
+const PLATFORM_BUN_MEMBERS_IMPORT =
+  /import\s+(?:type\s+)?\{([^}]*)\}\s*from\s*["']@effect\/platform-bun\/\w+["']/g
+/** `import * as PlatformBun from "@effect/platform-bun"`: the package namespace. */
+const PLATFORM_BUN_PACKAGE_NAMESPACE =
+  /import\s+\*\s+as\s+([A-Za-z_$][\w$]*)\s+from\s*["']@effect\/platform-bun["']/g
+/** `import * as BunPath from "@effect/platform-bun/BunPath"`: one module. */
+const PLATFORM_BUN_MODULE_NAMESPACE =
+  /import\s+\*\s+as\s+([A-Za-z_$][\w$]*)\s+from\s*["']@effect\/platform-bun\/\w+["']/g
+const IMPORT_SPECIFIER = /^\s*(?:type\s+)?([\w$]+)(?:\s+as\s+([\w$]+))?\s*$/
+const IMPORT_STATEMENT = /^\s*import\b[^;]*?\bfrom\s*["'][^"']*["']/gm
+const COMMENT_LINE = /^\s*(?:\/\/|\/\*|\*)/
+
+const escapeRegExp = (text: string): string => text.replace(/[$.*+?^()[\]{}|\\]/g, "\\$&")
+
+/** The first capture of each match of `pattern` in `text`. */
+const firstCaptures = (text: string, pattern: RegExp): ReadonlyArray<string> =>
+  Array.from(text.matchAll(pattern)).flatMap((match) =>
+    Option.toArray(Option.fromNullishOr(match[1])),
+  )
+
+interface ImportedName {
+  readonly imported: string
+  readonly local: string
+}
+
+/** The names a `{ ... }` import list binds, with the local name of each. */
+const importSpecifiers = (list: string): ReadonlyArray<ImportedName> =>
+  list.split(",").flatMap((specifier) =>
+    Option.toArray(Option.fromNullishOr(IMPORT_SPECIFIER.exec(specifier))).flatMap((parts) =>
+      Option.toArray(Option.fromNullishOr(parts[1])).map((imported) => ({
+        imported,
+        local: Option.getOrElse(Option.fromNullishOr(parts[2]), () => imported),
+      })),
+    ),
+  )
+
+/**
+ * The pattern of a layer provision from `@effect/platform-bun` as this file
+ * imports it: `BunCrypto.layer` and `Http.layerServer` through a module
+ * binding, `PlatformBun.BunServices.layer` through the package namespace,
+ * and a `layer` export imported under its own name. Constructors such as
+ * `BunSocket.makeNet` and runners such as `BunRuntime.runMain` are not
+ * provisions.
+ */
+const platformBunLayerPattern = (text: string): RegExp => {
+  const modules = [
+    "Bun[A-Z]\\w*",
+    ...firstCaptures(text, PLATFORM_BUN_MODULES_IMPORT).flatMap((list) =>
+      importSpecifiers(list).map((name) => escapeRegExp(name.local)),
+    ),
+    ...firstCaptures(text, PLATFORM_BUN_PACKAGE_NAMESPACE).map(
+      (local) => `${escapeRegExp(local)}\\.\\w+`,
+    ),
+    ...firstCaptures(text, PLATFORM_BUN_MODULE_NAMESPACE).map(escapeRegExp),
+  ]
+  const layers = firstCaptures(text, PLATFORM_BUN_MEMBERS_IMPORT).flatMap((list) =>
+    importSpecifiers(list)
+      .filter((name) => /^layer\w*$/.test(name.imported))
+      .map((name) => escapeRegExp(name.local)),
+  )
+  const provisions = [`(?:${modules.join("|")})\\.layer\\w*`, ...layers]
+  return new RegExp(`(?<![\\w$.])(?:${provisions.join("|")})(?![\\w$])`, "g")
+}
+
+/** The 0-based lines an import statement covers. */
+const importLines = (text: string): ReadonlySet<number> => {
+  const lines = new Set<number>()
+  for (const match of text.matchAll(IMPORT_STATEMENT)) {
+    const first = text.slice(0, match.index).split("\n").length - 1
+    const count = match[0].split("\n").length
+    for (let at = first; at < first + count; at++) lines.add(at)
+  }
+  return lines
+}
+
+/**
+ * Every Bun platform layer is provided by a platform root. A file outside
+ * the roots yields the service the root provides (`FileSystem`, `Path`,
+ * `ChildProcessSpawner`, `Crypto`, ...) instead of providing its own, so a
+ * test host's services reach it and a shipped extension is never more
+ * privileged than a user extension. A layer no root can provide takes a
+ * `platformLayerAllowances` entry with its reason. What a launcher or a
+ * reference extension may import is its manifest's business: the
+ * `gent/declared-workspace-imports` lint rule reads it.
  */
 export const findPlatformDuplicationViolations = (
   file: string,
   text: string,
 ): ReadonlyArray<Finding> => {
-  if (!isShippedSource(file) || platformProviderRootFiles.has(file)) return []
+  if (!isShippedSource(file) || platformProviderRoots.has(file)) return []
+  const allowed = new Set(
+    platformLayerAllowances.filter((entry) => entry.file === file).map((entry) => entry.layer),
+  )
+  const layerPattern = platformBunLayerPattern(text)
+  const imports = importLines(text)
   return text.split("\n").flatMap((line, index) => {
-    if (!PLATFORM_LAYER.test(line)) return []
-    return [
-      {
-        file,
-        line: index + 1,
-        message: "Bun platform layers may only be provided by platform roots",
-      },
-    ]
+    if (COMMENT_LINE.test(line)) return []
+    const layerMatches = Array.from(line.matchAll(layerPattern)).filter(() => !imports.has(index))
+    const provisions = [...line.matchAll(GENT_PLATFORM_LAYER), ...layerMatches]
+      .map((match) => match[0])
+      .filter((name) => !allowed.has(name))
+    return provisions.map((name) => ({
+      file,
+      line: index + 1,
+      message: `\`${name}\` provides a Bun platform layer outside the platform roots; yield the service the root provides, or record why no root can provide it in platformLayerAllowances`,
+    }))
   })
 }
 
