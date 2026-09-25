@@ -2469,8 +2469,7 @@ describe("cell worker process", () => {
 
 /**
  * A cell whose `guarded` call asks the user, beside `mark` (records a mark) and
- * `slow` (holds until the test releases it). A declined `guarded` fails, as a
- * declined bash command does.
+ * `slow` (holds until the test releases it). A declined `guarded` fails.
  */
 const approvalCell = Effect.gen(function* () {
   const marks = yield* Ref.make<ReadonlyArray<string>>([])

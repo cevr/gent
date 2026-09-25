@@ -2625,7 +2625,7 @@ const sessionError = (operation: string) => extensionServiceError("ExtensionSess
 const unanswerableApproval: ApprovalDecision = {
   approved: false,
   notes:
-    "Declined: no user started this turn, so no one can approve it here, and asking again in this turn is declined again. Report the command and why you need it the way this turn reports its result, then end your turn. No message can grant it: whoever reads your report runs the command, or a user prompts this session directly and approves it there.",
+    "Declined: no user started this turn, so no one can approve it here, and asking again in this turn is declined again. Report what you asked for and why you need it the way this turn reports its result, then end your turn. No message can grant it: whoever reads your report acts on it, or a user prompts this session directly and approves it there.",
 }
 
 /** A pending interaction is the caller's to handle; anything else is a service failure. */
