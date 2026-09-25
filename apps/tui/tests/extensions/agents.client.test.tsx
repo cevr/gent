@@ -1333,6 +1333,39 @@ describe("agents pane rows", () => {
       expect(row.trimEnd()).toMatch(/\ds$/)
     }),
   )
+
+  it.live("a wide-character task name keeps the time on the row at 43 columns", () =>
+    Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis
+      const listed: ReadonlyArray<AgentRowEntry> = [
+        {
+          ...child("cjk", "idle", "root"),
+          name: "delegate: 修复加载器的所有问题并重新运行全部测试然后提交",
+          updatedAt: now - 180_000,
+        },
+        {
+          ...child("emoji", "inactive", "root"),
+          name: "delegate: 🚀 ship 🧪 tests 👩‍💻 review 🔥🔥🔥🔥🔥🔥🔥🔥🔥",
+          updatedAt: now - 2 * 3_600_000,
+        },
+        { ...child("waiting", "idle", "root"), updatedAt: now - 180_000 },
+      ]
+      const setup = yield* paneOver(listed, 43)
+      const frame = yield* waitForFrame(setup, (next) => next.includes("delegate:"), "pane")
+      const lines = frame.split("\n")
+      const cjk = lines.find((line) => line.includes("修复")) ?? ""
+      const emoji = lines.find((line) => line.includes("ship")) ?? ""
+      const plain = lines.find((line) => line.includes("waiting task")) ?? ""
+      // The name is cut once, by the row, not clipped again by the renderer.
+      expect(cjk).toMatch(/delegate: 修复加载器.*…\s+3m/)
+      expect(cjk).not.toContain("...")
+      expect(emoji.trimEnd()).toMatch(/…\s+2h$/)
+      // The time column ends on the same display column as a plain-text row.
+      const edge = (row: string) => Bun.stringWidth(row.trimEnd())
+      expect(edge(cjk)).toBe(edge(plain))
+      expect(edge(emoji)).toBe(edge(plain))
+    }),
+  )
 })
 
 describe("agents pane counts and detail", () => {

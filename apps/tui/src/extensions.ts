@@ -75,6 +75,7 @@ export { useTheme } from "./theme"
 export { useScopedKeyboard, useTerminalDimensions } from "./terminal"
 export { textWidth } from "./text-width-adapter"
 export {
+  fitWidth,
   formatAge,
   formatDuration,
   formatFileRef,

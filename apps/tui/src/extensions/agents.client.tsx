@@ -17,6 +17,7 @@ import {
   decoration,
   defineClientExtension,
   type ExtensionAgentDetail,
+  fitWidth,
   formatAge,
   formatDuration,
   PickerFrame,
@@ -650,7 +651,7 @@ export function AgentsPane(props: {
       activityFor(row, selected, props.controller.detail()),
       width,
     )
-    const left = truncate(label, width).padEnd(width)
+    const left = fitWidth(label, width)
     return {
       left: `${left}  `,
       glyphAt: Option.liftPredicate(lead.length, (at) => at < left.length),
