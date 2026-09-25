@@ -1122,8 +1122,17 @@ function useComposerController(): ComposerController {
     return true
   }
 
+  /**
+   * A session pane (a picker, prompt search) holds the composer: no composer
+   * key acts behind it, and Enter does not submit.
+   */
+  const holdsComposer = () => overlayHoldsComposer(sc.uiState().overlay)
+
+  const inputFocused = () =>
+    !command.paletteOpen() && effectiveMode() !== "interaction" && !holdsComposer()
+
   useScopedKeyboard((event) => {
-    if (sc.promptSearch.isOpen()) return false
+    if (holdsComposer()) return false
 
     if (handleExternalEditorKey(event)) return true
 
@@ -1147,7 +1156,7 @@ function useComposerController(): ComposerController {
    * can act on.
    */
   const handleSubmitFromTextarea = () => {
-    if (sc.promptSearch.isOpen() || effectiveMode() === "interaction") return
+    if (holdsComposer() || effectiveMode() === "interaction") return
     submitMode = "queue"
     handleSubmit()
   }
@@ -1169,7 +1178,7 @@ function useComposerController(): ComposerController {
     const isEnterKey = event.name === "return" || event.name === "linefeed"
     if (!isEnterKey) return
 
-    if (sc.promptSearch.isOpen() || effectiveMode() === "interaction") {
+    if (holdsComposer() || effectiveMode() === "interaction") {
       event.preventDefault()
       return
     }
@@ -1195,7 +1204,9 @@ function useComposerController(): ComposerController {
     inputRef.value.replaceText(draft)
     inputRef.value.cursorOffset = draft.length
     clearAutocomplete()
-    focusTextarea()
+    // A prompt-search preview writes the draft while the palette holds the
+    // composer: focus stays with the palette, or a paste would land here.
+    if (inputFocused()) focusTextarea()
   })
 
   onMount(() => {
@@ -1212,11 +1223,7 @@ function useComposerController(): ComposerController {
   return {
     autocomplete,
     mode: effectiveMode,
-    inputFocused: () =>
-      !command.paletteOpen() &&
-      !sc.promptSearch.isOpen() &&
-      effectiveMode() !== "interaction" &&
-      !overlayHoldsComposer(sc.uiState().overlay),
+    inputFocused,
     attachTextarea: (renderable) => {
       inputRef = Option.fromNullishOr(renderable)
       if (Option.isSome(inputRef)) {

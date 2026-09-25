@@ -1368,6 +1368,34 @@ describe("App auth gate", () => {
   }
   // Each render has its own home: no prompt an earlier test or run sent is
   // in its history.
+  // Prompt search holds the composer: a paste while it previews an entry
+  // does not land in the draft behind it.
+  it.live("a paste during prompt search does not reach the composer", () =>
+    Effect.gen(function* () {
+      const view = yield* mountRunningTurn()
+      for (const prompt of ["first prompt", "second prompt"]) {
+        yield* Effect.promise(() => view.setup.mockInput.typeText(prompt))
+        view.setup.mockInput.pressEnter()
+        yield* waitForFrame(view.setup, () => view.sent.includes(prompt), `sent ${prompt}`)
+      }
+      view.setup.mockInput.pressKey("r", { ctrl: true })
+      yield* waitForFrame(view.setup, (frame) => frame.includes("Prompt search · 2"), "search")
+      view.setup.mockInput.pressArrow("down")
+      yield* Effect.promise(() => view.setup.renderOnce())
+      yield* Effect.promise(() => view.setup.mockInput.pasteBracketedText("PASTED-ZQ"))
+      yield* waitForFrame(view.setup, () => true, "the paste taken")
+      yield* waitForFrame(view.setup, () => true, "the paste taken")
+      expect(renderFrame(view.setup)).not.toContain("PASTED-ZQ")
+      view.setup.mockInput.pressEnter()
+      const frame = yield* waitForFrame(
+        view.setup,
+        (next) => !next.includes("Prompt search"),
+        "the entry accepted",
+      )
+      expect(frame).toContain("┃ first prompt")
+      expect(frame).not.toContain("PASTED-ZQ")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   it.live("a render starts with an empty prompt history", () =>
     Effect.gen(function* () {
       const view = yield* mountRunningTurn()
@@ -2114,6 +2142,67 @@ describe("App auth gate", () => {
       { name: "escape", press: (setup) => setup.mockInput.pressEscape() },
       { name: "ctrl+c", press: (setup) => setup.mockInput.pressKey("c", { ctrl: true }) },
     ]
+  /** A resumed session with two branches: the boot branch picker is open over it. */
+  const mountBootBranchPicker = Effect.gen(function* () {
+    const client = createMockClient({
+      auth: { listProviders: () => Effect.succeed([]) },
+      branch: { getTree: () => Effect.succeed([]) },
+    })
+    const setup = yield* Effect.promise(() =>
+      renderWithProviders(
+        () => (
+          <App
+            missingAuthProviders={[]}
+            initialBranches={Option.some([
+              {
+                id: BranchId.make("branch-a"),
+                sessionId: SessionId.make("session-a"),
+                name: "main",
+                createdAt: dateFromMillis(0),
+              },
+              {
+                id: BranchId.make("branch-b"),
+                sessionId: SessionId.make("session-a"),
+                name: "side",
+                createdAt: dateFromMillis(1),
+              },
+            ])}
+          />
+        ),
+        {
+          client,
+          runtime: createMockRuntime(),
+          initialSession: {
+            id: SessionId.make("session-a"),
+            activeBranchId: BranchId.make("branch-a"),
+            name: "Session A",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        },
+      ),
+    )
+    yield* waitForFrame(setup, (frame) => frame.includes("Resume: Session A"), "picker")
+    return setup
+  })
+  // A key the picker's list declines does not reach the composer behind it:
+  // `!` does not turn the composer to shell mode.
+  it.live("a key the boot branch picker declines leaves the composer alone", () =>
+    Effect.gen(function* () {
+      const setup = yield* mountBootBranchPicker
+      yield* Effect.promise(() => setup.mockInput.typeText("!"))
+      yield* waitForFrame(setup, () => true, "the key taken")
+      yield* waitForFrame(setup, () => true, "the key taken")
+      setup.mockInput.pressEnter()
+      const frame = yield* waitForFrame(
+        setup,
+        (next) => !next.includes("Resume: Session A"),
+        "the branch chosen",
+      )
+      expect(frame).not.toContain("$")
+      expect(frame).toContain("┃")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   for (const key of quitKeys)
     it.live(`${key.name} in the boot branch picker quits, because no branch was chosen`, () =>
       Effect.gen(function* () {
@@ -2121,45 +2210,7 @@ describe("App auth gate", () => {
         // branch chosen there is nothing behind it to fall back to, so escape
         // has to leave the program, not just close the pane.
         let shutdowns = 0
-        const client = createMockClient({
-          auth: { listProviders: () => Effect.succeed([]) },
-          branch: { getTree: () => Effect.succeed([]) },
-        })
-        const setup = yield* Effect.promise(() =>
-          renderWithProviders(
-            () => (
-              <App
-                missingAuthProviders={[]}
-                initialBranches={Option.some([
-                  {
-                    id: BranchId.make("branch-a"),
-                    sessionId: SessionId.make("session-a"),
-                    name: "main",
-                    createdAt: dateFromMillis(0),
-                  },
-                  {
-                    id: BranchId.make("branch-b"),
-                    sessionId: SessionId.make("session-a"),
-                    name: "side",
-                    createdAt: dateFromMillis(1),
-                  },
-                ])}
-              />
-            ),
-            {
-              client,
-              runtime: createMockRuntime(),
-              initialSession: {
-                id: SessionId.make("session-a"),
-                activeBranchId: BranchId.make("branch-a"),
-                name: "Session A",
-                createdAt: dateFromMillis(0),
-                updatedAt: dateFromMillis(0),
-              },
-            },
-          ),
-        )
-        yield* waitForFrame(setup, (frame) => frame.includes("Resume: Session A"), "picker")
+        const setup = yield* mountBootBranchPicker
         // `useEnv().shutdown` is a no-op in the harness, so observe the renderer
         // teardown the controller performs alongside it.
         const destroy = setup.renderer.destroy.bind(setup.renderer)
