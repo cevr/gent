@@ -93,7 +93,8 @@ export {
 export { interjectionMessageId } from "../domain/agent-loop.js"
 export { Model, ModelId, type ModelPricing, ProviderId } from "../domain/agent.js"
 export { AuthMethod } from "../runtime/provider.js"
-export { type Message, type Branch } from "../domain/message.js"
+// The assistant message a turn's step stores; `StreamStarted` names the turn and step.
+export { type Message, type Branch, assistantMessageIdForTurn } from "../domain/message.js"
 export type { AgentEvent, Question } from "../domain/event.js"
 export {
   isRuntimeUserMessage,

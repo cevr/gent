@@ -5360,7 +5360,7 @@ const makeRuntimeLayer = (
     eventStoreLayer,
     recorderLayer,
     toolRunnerLayer,
-    RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
+    RuntimeEnvironment.Live({ cwd: "/tmp", home: "/nonexistent/gent-test-home" }),
     ConfigService.Test(),
     BunServices.layer,
     ModelRegistry.Test(),

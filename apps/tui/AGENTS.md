@@ -12,16 +12,23 @@
 - **File naming** - All files kebab-case: `message-list.tsx`, `workspace.tsx`.
 - **Error boundaries** - Always wrap potentially failing operations in try/catch or Effect.tryPromise to prevent TUI crashes.
 - **Exit pattern** - Use `renderer.destroy()` then `useEnv().shutdown()` for clean exit. Never `process.exit()` — it bypasses Effect scope finalizers (server lock cleanup, SQLite WAL checkpoint).
-- **Solid underscores** - Multi-word components use underscores: `scroll_box`, `tab_select`.
+- **Intrinsic names** - Take the names from the opentui catalogue: some multi-word intrinsics use underscores (`tab_select`, `ascii_font`), `scrollbox` is one word.
 - **Use `<For>`** - Never `.map()` for JSX lists; use `<For each={items}>{item => ...}</For>`.
 
 ## Components
 
+`<box>` is the flexbox container. `<text>` holds text, with `<b>` and `<span style={{ fg }}>` inside. `<scrollbox>` scrolls; `stickyScroll stickyStart="bottom"` keeps it at the end. `<input>` takes keys only with its `focused` prop.
+
 ```tsx
-<box>           # Flexbox container
-<text>          # Text with <b>, <span style={{fg: "color"}}>
-<scrollbox>     # Scrollable, use stickyScroll stickyStart="bottom"
-<input>         # Text input, needs focused prop
+<box flexDirection="column" border>
+  <text>
+    Plain, <b>bold</b> and <span style={{ fg: "#ff8800" }}>colored</span> text
+  </text>
+  <scrollbox stickyScroll stickyStart="bottom">
+    <text>A line that scrolls</text>
+  </scrollbox>
+  <input focused placeholder="Type here" />
+</box>
 ```
 
 ## Hooks
@@ -148,22 +155,6 @@ it. The expanded transcript and overlays pin nothing, and the terminal owns
 scrollback, so there is no jump back to the original. The prompt is a memo of
 the displayed items; a measurement only looks heights up by index and stops
 summing once the answer is known, so per-frame work never grows with history.
-
-## Compound Components
-
-StatusBar uses compound pattern - compose what you need:
-
-```tsx
-<StatusBar.Root>
-  <StatusBar.Row>
-    <StatusBar.Mode />
-    <StatusBar.Separator />
-    <StatusBar.Model />
-  </StatusBar.Row>
-</StatusBar.Root>
-```
-
-Components derive state from providers, not props. Add/remove rows per view.
 
 ## CLI Flags
 

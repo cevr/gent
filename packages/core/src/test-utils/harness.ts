@@ -66,7 +66,7 @@ import {
   resolveExtensions,
   SessionProfileCache,
 } from "../runtime/extension-host.js"
-import { ConfigService } from "../runtime/config.js"
+import { ConfigService, RuntimeEnvironment } from "../runtime/config.js"
 import { omitUndefined } from "../domain/guards.js"
 import {
   type BranchToolFeature,
@@ -84,7 +84,7 @@ import {
   queueFollowUpOn,
 } from "../domain/agent-loop.js"
 import { type ApprovalDecision, encodeInteractionDecision } from "../domain/interaction.js"
-import { LanguageModelLayers } from "./language-model.js"
+import { LanguageModelLayers, makeTempDirectoryScoped } from "./language-model.js"
 import {
   createDependencies,
   makeInProcessClient,
@@ -155,7 +155,9 @@ const defaultInteraction = (): ExtensionInteractionService => ({
 })
 
 /** The one host platform stub: a darwin box. */
-const testExtensionHostPlatform = (home: string = "/tmp"): ExtensionHostPlatform => ({
+const testExtensionHostPlatform = (
+  home: string = "/nonexistent/gent-test-home",
+): ExtensionHostPlatform => ({
   osInfo: {
     platform: "darwin",
     arch: "arm64",
@@ -181,7 +183,7 @@ export const testExtensionHostContext = (
   sessionId: overrides.sessionId ?? SessionId.make("test-session"),
   branchId: overrides.branchId ?? BranchId.make("test-branch"),
   cwd: overrides.cwd ?? "/tmp",
-  home: overrides.home ?? "/tmp",
+  home: overrides.home ?? "/nonexistent/gent-test-home",
   host: overrides.host ?? testExtensionHostPlatform(overrides.home),
   agentName: overrides.agentName,
   Session: { ...defaultSession(), ...overrides.Session },
@@ -193,13 +195,13 @@ export const testExtensionHostContext = (
 // ── test-root ───────────────────────────────────────────────────────────────
 
 /**
- * What the test composition root shares with its presets: a `/tmp`
- * environment, a deterministic server identity, and an agents extension.
- * `createE2ELayer` is the one root; the in-process layer and the RPC harness
- * are presets over it.
+ * What the test composition root shares with its presets: a `/tmp` working
+ * directory, a home of its own (see `createE2ELayer`), a deterministic server
+ * identity, and an agents extension. `createE2ELayer` is the one root; the
+ * in-process layer and the RPC harness are presets over it.
  */
 
-const testEnvironment = { cwd: "/tmp", home: "/tmp", platform: "test" }
+const testEnvironment = { cwd: "/tmp", platform: "test" }
 
 const testAgentsExtension = (agents: ReadonlyArray<AgentDefinition>) =>
   defineExtension({
@@ -279,7 +281,7 @@ export const testToolContext = (overrides?: TestToolContextOverrides): TestToolC
     branchId: BranchId.make("test-branch"),
     toolCallId: ToolCallId.make("test-call"),
     cwd: "/tmp",
-    home: "/tmp",
+    home: "/nonexistent/gent-test-home",
     host,
     Session: resolvedSession,
     Interaction: resolvedInteraction,
@@ -450,7 +452,7 @@ export const testHostFacts = (
   overrides?: Partial<Pick<TestExtensionHostFacts, "cwd" | "home">>,
 ): TestExtensionHostFacts => ({
   cwd: overrides?.cwd ?? "/tmp",
-  home: overrides?.home ?? "/tmp",
+  home: overrides?.home ?? "/nonexistent/gent-test-home",
   host: testExtensionHostPlatform(overrides?.home),
 })
 
@@ -581,7 +583,10 @@ const hostRun = (run: HarnessRun) => ({
  */
 export const captureTurnTools = Effect.fn("test.captureTurnTools")(function* (run: HarnessRun) {
   const profile = yield* (yield* SessionProfileCache).resolve(run.sessionCwd ?? "/tmp")
-  const hostProvider = yield* makeExtensionHostContextProvider({ host: testHostFacts().host })
+  const environment = yield* RuntimeEnvironment
+  const hostProvider = yield* makeExtensionHostContextProvider({
+    host: testHostFacts({ cwd: environment.cwd, home: environment.home }).host,
+  })
   const turnProfile: AgentLoopTurnProfile = {
     turnGenerationId: profile.generationId,
     turnExtensionRegistry: profile.registryService,
@@ -608,8 +613,9 @@ export const captureTurnTools = Effect.fn("test.captureTurnTools")(function* (ru
 export const runtimeHostContext = Effect.fn("test.runtimeHostContext")(function* (run: HarnessRun) {
   const runtime = yield* SessionRuntime
   const loopClient = yield* Effect.context<AgentLoopClientServices>()
+  const environment = yield* RuntimeEnvironment
   const provider = yield* makeExtensionHostContextProvider({
-    host: testHostFacts().host,
+    host: testHostFacts({ cwd: environment.cwd, home: environment.home }).host,
     sessionControl: {
       queueFollowUp: (input) => queueFollowUpOn(input).pipe(Effect.provideContext(loopClient)),
       dequeueFollowUp: (input) => dequeueFollowUpOn(input).pipe(Effect.provideContext(loopClient)),
@@ -796,7 +802,10 @@ const wrapExtensionInput = (
   manifest: extension.manifest,
   artifactIdentity: extension.artifactIdentity,
   setup: Effect.gen(function* () {
-    const collector = makeCollectingExtensionHost(testHostFacts())
+    const loader = yield* ExtensionHost
+    const collector = makeCollectingExtensionHost(
+      testHostFacts({ cwd: loader.cwd, home: loader.home }),
+    )
     yield* extension.setup.pipe(Effect.provideService(ExtensionHost, collector.service))
     const contributions = yield* collector.seal
     yield* registerContributions(
@@ -839,13 +848,30 @@ const approvalOverrideForConfig = (config: E2ELayerConfig) => {
  * The harness is a production-root preset: extension setup, resource startup,
  * event publishing, interaction recovery, and session runtime wiring flow
  * through `createDependencies`, the root the SDK builds.
+ *
+ * Each layer gets its own temp home, removed when the layer's scope closes:
+ * the extensions write goal, wake and delegate files under it, and a
+ * shared home would hand one test's files to the next.
  */
 export const createE2ELayer = (config: E2ELayerConfig) => {
   let toolRunnerLayer = Option.none<Layer.Layer<ToolRunner>>()
   if (config.toolRunner === "test") toolRunnerLayer = Option.some(ToolRunner.Test())
 
-  return createDependencies({
+  return Layer.unwrap(
+    Effect.map(makeTempDirectoryScoped("gent-test-home-"), (home) =>
+      e2eDependencies(config, home, toolRunnerLayer),
+    ),
+  ).pipe(Layer.provide(BunPlatformLive))
+}
+
+const e2eDependencies = (
+  config: E2ELayerConfig,
+  home: string,
+  toolRunnerLayer: Option.Option<Layer.Layer<ToolRunner>>,
+) =>
+  createDependencies({
     ...testEnvironment,
+    home,
     state: Option.match(Option.fromUndefinedOr(config.storagePath), {
       onNone: () => StateLocation.cases.Memory.make({}),
       onSome: (dbPath) => StateLocation.cases.Disk.make({ dbPath }),
@@ -866,8 +892,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
       toolRunnerLayer: Option.getOrUndefined(toolRunnerLayer),
       extraLayers: config.extraLayers,
     },
-  }).pipe(Layer.provide(BunPlatformLive))
-}
+  })
 
 // ── in-process-layer ────────────────────────────────────────────────────────
 

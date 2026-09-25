@@ -28,8 +28,6 @@ import {
  * functions over plain data, so the reconciliation can be tested without a
  * terminal or a runtime. The `AgentActivity` service and the `ListAgents`
  * request later in this file feed it.
- * This follows Prime's state layer, which is the half of its agents view worth
- * copying; its 2,124-line view class is not.
  *
  * The load-bearing piece is {@link reconcileAgentRows}. Rows come from two
  * catalogs that disagree by design:
@@ -625,8 +623,8 @@ export const AgentsViewRpc = defineRequests(AGENTS_VIEW_EXTENSION_ID, {
 /**
  * Agents view — the server half.
  *
- * Per the third rule, the view is an extension of the loop, not core code and
- * not app code. This half contributes one `request` capability returning the
+ * The view is an extension of the loop, not core code and not app code.
+ * This half contributes one `request` capability returning the
  * reconciled agent rows; the client half renders them.
  *
  * The wire contract and the reconciliation above are pure, so their

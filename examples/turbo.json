@@ -7,9 +7,23 @@
         "tests/**/*.ts",
         "tsconfig.json",
         "package.json",
-        "../docs/extensions.md",
+        "../AGENTS.md",
+        "../CLAUDE.md",
+        "../ARCHITECTURE.md",
+        "../apps/*/AGENTS.md",
+        "../apps/*/CLAUDE.md",
+        "../packages/*/AGENTS.md",
+        "../packages/*/CLAUDE.md",
+        "../docs/**/*.md",
+        "!../docs/research/**",
+        "../testbeds/*/README.md",
+        "../patches/README.md",
+        "../.claude/skills/**/*.md",
+        "../packages/extensions/src/skills/bundled/**/*.md",
+        "../apps/tui/tsconfig.json",
         "../packages/tooling/src/check-guide-code.ts",
-        "../packages/tooling/src/guards.ts"
+        "../packages/tooling/src/guards.ts",
+        "../packages/tooling/src/gent-rules.ts"
       ]
     }
   }
