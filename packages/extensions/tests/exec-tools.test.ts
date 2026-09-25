@@ -980,6 +980,9 @@ describe("classifyBashCommand", () => {
       `rm {-r,-f} ${x}`,
       "git reset {--hard,}",
       "git reset --{hard,}",
+      `rm ${x} {,-rf}`,
+      `rm {{-rf,x},y} ${x}`,
+      `rm ""{-rf,x} ${x}`,
       // An unquoted option value still splits.
       `cp -t $D ${x}`,
       // `"$@"` as a named option's value is that value and every word after it.
@@ -1010,6 +1013,14 @@ describe("classifyBashCommand", () => {
       // A glob matches names of files; a brace after `--` makes operands.
       "rm *.log",
       "rm -- {a,b}.log",
+      // Each word of a brace that starts with neither `-` nor `{` starts
+      // with the same text, so none is a flag.
+      "cp package.json{,.bak}",
+      "mv src/{old,new}.ts",
+      `rm ${x}/{a,b}.log`,
+      `rm ${x}/a{,-rf}`,
+      `cp -t ${x} a{,.bak}`,
+      "git rm --cached src/{a,b}.ts",
       // A quoted brace is text, beside an unquoted glob too.
       "rm *'{a,b}'",
       `rm *"{-rf,x}" ${x}`,
@@ -1025,6 +1036,33 @@ describe("classifyBashCommand", () => {
     }
     // A named option value is still a path the secret-file check reads.
     expect(classifyBashCommand(`cp -t ${x}/.ssh ${x}`).level).toBe("sensitive")
+  })
+
+  // A brace after other text makes no flag, but it makes words: the risks
+  // read the words the command receives.
+  test("the risks read the words a brace makes", () => {
+    const x = "/nonexistent/gent-probe-x"
+    for (const command of [
+      // Two paths: checkout discards their changes.
+      "git checkout src/{a,b}.ts",
+      "git checkout src/f{1..2}.ts",
+      `dd if=/dev/zero o{f=${x},}`,
+      "gh api -X DEL{ETE,} repos/o/r",
+      `git worktree re{move,} -f ${x}`,
+      'psql x{a,b} -c "$SQL"',
+      // Too many words to read.
+      `rm ${x}/f{1..1000}`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      "git checkout src/{a}.ts",
+      `rm ${x}/f{a..c} ${x}/g{01..10..3}`,
+      `rm ${x}/{{a,b},c}`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+    expect(classifyBashCommand(`cp ${x}/.env{,.bak}`).level).toBe("sensitive")
   })
 
   // find's primaries that take a value are its options that take one: a

@@ -4156,15 +4156,150 @@ const RISKY_PARENTS: ReadonlySet<string> = new Set(
 /** `"$@"`, `$*`, `"${a[@]}"`: the positional parameters or the array elements, each a word of its own. */
 const EXPANDS_TO_WORDS = /^\$(?:[@*]|\{[@*]\}|\{\w+\[[@*]\]\})$/
 
+/** A brace word that makes more words than this is read as words known only at run time. */
+const MAX_BRACE_WORDS = 256
+
+/** bash's sequence expression: `{1..10}`, `{01..10..2}`, `{a..e}`. */
+const BRACE_SEQUENCE = /^(?:(-?\d+)\.\.(-?\d+)|([^{}])\.\.([^{}]))(?:\.\.(-?\d+))?$/
+
+/** The words of a sequence expression, at most one more than `MAX_BRACE_WORDS`. */
+const sequenceWords = (body: string): Option.Option<ReadonlyArray<string>> =>
+  Option.map(Option.fromNullishOr(BRACE_SEQUENCE.exec(body)), (match) => {
+    const step = Math.max(1, Math.abs(Number(match[5] ?? "1")))
+    const numeric = /^-?\d+\.\.-?\d+(?:\.\.|$)/.test(body)
+    let from = (match[3] ?? "").codePointAt(0) ?? 0
+    let to = (match[4] ?? "").codePointAt(0) ?? 0
+    let width = 0
+    if (numeric) {
+      from = Number(match[1])
+      to = Number(match[2])
+      // `{01..10}`: a leading zero pads every number to the wider end.
+      const ends = [match[1] ?? "", match[2] ?? ""]
+      if (ends.some((end) => /^-?0\d/.test(end))) {
+        width = Math.max(...ends.map((end) => end.length))
+      }
+    }
+    const direction = Math.sign(to - from) || 1
+    const words: Array<string> = []
+    for (
+      let at = from;
+      direction * (to - at) >= 0 && words.length <= MAX_BRACE_WORDS;
+      at += direction * step
+    ) {
+      if (numeric) words.push(String(at).padStart(width, "0"))
+      else words.push(String.fromCodePoint(at))
+    }
+    return words
+  })
+
+/** The parts of a brace body split at its top-level commas. */
+const braceParts = (body: string): ReadonlyArray<string> => {
+  const parts: Array<string> = []
+  let depth = 0
+  let start = 0
+  for (let at = 0; at < body.length; at++) {
+    const char = body.charAt(at)
+    if (char === "{") depth++
+    if (char === "}") depth--
+    if (char === "," && depth === 0) {
+      parts.push(body.slice(start, at))
+      start = at + 1
+    }
+  }
+  parts.push(body.slice(start))
+  return parts
+}
+
+/** The index of the `}` that closes the `{` at `open`. */
+const braceClose = (text: string, open: number): Option.Option<number> => {
+  let depth = 0
+  for (let at = open; at < text.length; at++) {
+    if (text.charAt(at) === "{") depth++
+    if (text.charAt(at) === "}") depth--
+    if (depth === 0) return Option.some(at)
+  }
+  return Option.none()
+}
+
+/** The words the first brace expansion in `text` makes; none when it has none. */
+const firstBraceWords = (text: string): Option.Option<ReadonlyArray<string>> => {
+  for (let open = text.indexOf("{"); open !== -1; open = text.indexOf("{", open + 1)) {
+    const expanded = Option.flatMap(braceClose(text, open), (close) => {
+      const body = text.slice(open + 1, close)
+      const parts = braceParts(body)
+      const alternatives = Option.orElse(
+        Option.liftPredicate(parts, (found) => found.length > 1),
+        () => sequenceWords(body),
+      )
+      return Option.map(alternatives, (words) =>
+        words.map((word) => `${text.slice(0, open)}${word}${text.slice(close + 1)}`),
+      )
+    })
+    if (Option.isSome(expanded)) return expanded
+  }
+  return Option.none()
+}
+
+/**
+ * The words the shell makes of a brace word, as the command receives them
+ * (`f{,.bak}` is `f f.bak`); none when there are more than
+ * `MAX_BRACE_WORDS`. The text is read as unquoted, so a quoted brace
+ * beside an unquoted one expands too, and makes more words.
+ */
+const braceWords = (text: string): Option.Option<ReadonlyArray<string>> => {
+  let words: ReadonlyArray<string> = [text]
+  let expanding = true
+  while (expanding) {
+    expanding = false
+    const next: Array<string> = []
+    for (const word of words) {
+      const expanded = firstBraceWords(word)
+      if (Option.isSome(expanded)) expanding = true
+      next.push(...Option.getOrElse(expanded, () => [word]))
+      if (next.length > MAX_BRACE_WORDS) return Option.none()
+    }
+    words = next
+  }
+  // An unquoted word that expands to nothing is no word.
+  return Option.some(words.filter((word) => word.length > 0))
+}
+
+/**
+ * The command path as the command receives its words: each brace word
+ * after the path's last word is the words it makes, each as dynamic as the
+ * brace word.
+ */
+const receivedCommand = (resolved: ResolvedCommand): ResolvedCommand => {
+  const args = resolved.words.slice(1)
+  if (!args.some((word) => word.braces)) return resolved
+  const received = args.flatMap((word): ReadonlyArray<ShellWord> => {
+    if (!word.braces) return [word]
+    return Option.match(braceWords(word.text), {
+      onNone: () => [word],
+      onSome: (texts) =>
+        texts.map((text) => ({
+          ...derivedWord(text, word.dynamic),
+          splits: word.splits,
+          pattern: word.pattern,
+        })),
+    })
+  })
+  return { ...resolved, words: [...resolved.words.slice(0, 1), ...received] }
+}
+
 /**
  * A word before `--` known only at run time, where the command may read it
  * as a flag a risk reads (`-rf`, `--hard`): an unquoted expansion splits
  * (`rm $F`), `"$@"` passes on the words of a function's caller or of `set
  * --`, and a quoted `"$F"` stays one word that may still be `-rf`. A brace
- * expansion (`rm {-rf,x}`, `git reset --{hard,}`) also makes the words at
- * run time; a glob does not, since it matches only names of files (`rm
- * *.log`). Only the value of an option the table names (`cp -t "$d"`,
- * `psql -d "$DB"`) is no flag, and only when it does not split.
+ * expansion that starts the word (`rm {-rf,x}`) or follows a `-` (`git
+ * reset --{hard,}`) also makes the words at run time, as does one that makes
+ * too many words to read; after other text (`cp f{,.bak}`) each word starts
+ * with that text and is no flag, and the risks read the words it makes
+ * (`receivedTexts`). A glob matches only names of files (`rm *.log`). Only
+ * the value of an option the
+ * table names (`cp -t "$d"`, `psql -d "$DB"`) is no flag, and only when it
+ * does not split.
  */
 const runTimeOptions = (
   resolved: ResolvedCommand,
@@ -4188,7 +4323,7 @@ const runTimeOptions = (
       (word, index) =>
         word.splits ||
         EXPANDS_TO_WORDS.test(word.text) ||
-        word.braces ||
+        (word.braces && (/^[-{]/.test(word.text) || Option.isNone(braceWords(word.text)))) ||
         (word.dynamic && !values.has(index)),
     ),
     (word): BashRisk => ({
@@ -4201,16 +4336,22 @@ const runTimeOptions = (
 const invocationRisks = (invocation: Invocation): Array<BashRisk> =>
   resolveReadings(invocation.words).flatMap((resolved) => {
     if (resolved.spec.risks.length === 0) return []
-    const texts = resolved.words.slice(1).map((word) => word.text)
-    const args: CommandArgs = {
-      texts,
-      parsed: parseArguments(texts, resolved.spec.valued),
-      resolved,
-      invocation,
+    const argsOf = (command: ResolvedCommand): CommandArgs => {
+      const texts = command.words.slice(1).map((word) => word.text)
+      return {
+        texts,
+        parsed: parseArguments(texts, command.spec.valued),
+        resolved: command,
+        invocation,
+      }
     }
+    const written = argsOf(resolved)
+    const received = receivedCommand(resolved)
+    let args = written
+    if (received !== resolved) args = argsOf(received)
     return [
       ...resolved.spec.risks.flatMap((risk) => Option.toArray(risk(args))),
-      ...Option.toArray(runTimeOptions(resolved, args)),
+      ...Option.toArray(runTimeOptions(resolved, written)),
     ]
   })
 
