@@ -947,6 +947,29 @@ export const driverListModels =
       Effect.provideContext(source.platform),
     )
 
+// ── host context update ─────────────────────────────────────────────────────
+
+/**
+ * A system message after the conversation (the runtime's turn notices) is
+ * the host speaking, not the user. An API that takes no system message after
+ * the conversation gets it as a user message in this wrap: the Anthropic SDK
+ * builds this text from a later system message (`prepareMessages` in
+ * `@effect/ai-anthropic`), and the OpenAI-compatible drivers build it here.
+ * The Anthropic driver reads the wrap to keep its cache marker off the update.
+ * The content is escaped, so a notice cannot close the wrap.
+ */
+const HOST_CONTEXT_UPDATE_OPEN = "<host-context-update>\n"
+const HOST_CONTEXT_UPDATE_CLOSE = "\n</host-context-update>"
+
+/** The user-message text that carries a later system message. */
+export const hostContextUpdateText = (content: string): string =>
+  `${HOST_CONTEXT_UPDATE_OPEN}${content.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")}${HOST_CONTEXT_UPDATE_CLOSE}`
+
+/** True for a text block that carries a later system message. */
+export const isHostContextUpdateText = Schema.is(
+  Schema.String.check(Schema.isStartsWith(HOST_CONTEXT_UPDATE_OPEN)),
+)
+
 // ── openai-compatible driver ────────────────────────────────────────────────
 
 const GOOGLE_COMPAT_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
@@ -969,6 +992,39 @@ export const apiKeyFrom = (
     }),
     Option.orElse(() => envApiKey),
   )
+
+const ChatBodyJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown))
+const decodeChatBody = Schema.decodeUnknownOption(ChatBodyJson)
+const ChatMessages = Schema.Array(Schema.Unknown)
+const isChatMessages = Schema.is(ChatMessages)
+/** A system message as the SDK encodes it; it names `developer` for some model ids. */
+const isSystemChatMessage = Schema.is(
+  Schema.Struct({ role: Schema.Literals(["system", "developer"]), content: Schema.String }),
+)
+
+/**
+ * The request with the system messages after the last conversation message
+ * sent as a host context update. Mistral rejects a request whose last message
+ * is not user or tool, and `toPrompt` puts the turn notices there. A system
+ * message inside the conversation keeps its role: the rule is about the
+ * last message only, so the trailing run is all that needs a new role.
+ */
+const withHostContextUpdates = (
+  request: HttpClientRequest.HttpClientRequest,
+): HttpClientRequest.HttpClientRequest => {
+  if (request.body._tag !== "Uint8Array") return request
+  const body = decodeChatBody(new TextDecoder().decode(request.body.body))
+  if (Option.isNone(body)) return request
+  const messages = body.value["messages"]
+  if (!isChatMessages(messages)) return request
+  const end = messages.findLastIndex((message) => !isSystemChatMessage(message))
+  if (end < 0 || end === messages.length - 1) return request
+  const next = messages.map((message, index) => {
+    if (index <= end || !isSystemChatMessage(message)) return message
+    return { role: "user", content: hostContextUpdateText(message.content) }
+  })
+  return HttpClientRequest.bodyJsonUnsafe(request, { ...body.value, messages: next })
+}
 
 const makeApiKeyCompatDriver = (params: {
   readonly id: string
@@ -1007,6 +1063,7 @@ const makeApiKeyCompatDriver = (params: {
       const clientLayer = OpenAiClient.layer({
         apiKey: Redacted.make(apiKey.value),
         apiUrl: params.apiUrl,
+        transformClient: HttpClient.mapRequest(withHostContextUpdates),
       }).pipe(Layer.provide(FetchHttpClient.layer))
       const modelLayer = OpenAiLanguageModel.layer({ model: modelName, config }).pipe(
         Layer.provide(clientLayer),

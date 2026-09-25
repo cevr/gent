@@ -5,6 +5,7 @@ import {
   defineExtension,
   ExtensionContext,
   ExtensionHost,
+  hasProjectScope,
 } from "@gent/core/extensions/api"
 
 // Test seam: only tests read these exports. main is the agent the test roots
@@ -65,13 +66,18 @@ const SEPARATOR = "\n---\n"
  * Project instruction locations in the order they appear in the prompt. Each
  * location reads `AGENTS.md`, or `CLAUDE.md` when `AGENTS.md` is missing or
  * empty. When no location has content, the Claude user file stands in.
+ * Launched from home (or a link to it), the project's `.gent` is the user's,
+ * so it is read once, as the user's.
  */
 const locations = Effect.fn("Agents.locations")(function* () {
   const { cwd, home } = yield* ExtensionContext
   const path = yield* Path.Path
+  const user = [path.join(home, ".gent", "AGENTS.md"), path.join(home, ".gent", "CLAUDE.md")]
+  const project = [path.join(cwd, "AGENTS.md"), path.join(cwd, "CLAUDE.md")]
+  if (!(yield* hasProjectScope({ user: home, project: cwd }))) return [user, project]
   return [
-    [path.join(home, ".gent", "AGENTS.md"), path.join(home, ".gent", "CLAUDE.md")],
-    [path.join(cwd, "AGENTS.md"), path.join(cwd, "CLAUDE.md")],
+    user,
+    project,
     [path.join(cwd, ".gent", "AGENTS.md"), path.join(cwd, ".gent", "CLAUDE.md")],
   ]
 })

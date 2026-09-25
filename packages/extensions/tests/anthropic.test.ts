@@ -59,6 +59,7 @@ import {
   type CredentialFailure,
   CredentialRefreshUnavailable,
   EMPTY_CREDENTIAL_CELL,
+  hostContextUpdateText,
 } from "../src/providers.js"
 import {
   type ExtensionHostService,
@@ -2780,16 +2781,18 @@ describe("buildAnthropicModelDriver — prompt caching", () => {
       Effect.gen(function* () {
         const notice = Prompt.makeMessage("system", {
           content: Option.getOrThrow(
-            turnNoticesText([{ id: "stopped", content: "# Stopped children\n\n- one", keys: [] }]),
+            turnNoticesText([
+              { id: "stopped", content: "# Stopped <children>\n\n- one", keys: [] },
+            ]),
           ),
         })
         for (const authInfo of [makeApiAuthInfo("sk-test"), makeOAuthInfo()]) {
           const plain = yield* sentFor(authInfo)
           const noticed = yield* sentFor(authInfo, {}, [notice])
           const update = noticed.messages.at(-1)?.content ?? []
-          expect(update.map((block) => block.text)).toEqual([
-            "<host-context-update>\nHost status for this turn, not a message from the user.\n\n# Stopped children\n\n- one\n</host-context-update>",
-          ])
+          // The SDK's wrap is the one the compatible drivers build.
+          expect(update.map((block) => block.text)).toEqual([hostContextUpdateText(notice.content)])
+          expect(update[0]?.text).toContain("# Stopped &lt;children&gt;")
           expect(update.some(isMarked)).toBe(false)
           // The last stored message carries the tail marker, as without the notice.
           expect(lastMarked(noticed.messages.at(-2)?.content ?? [])).toBe(true)

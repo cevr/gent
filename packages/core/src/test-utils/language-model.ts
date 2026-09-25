@@ -56,9 +56,8 @@ import {
  *   3. Inspect captured request URL / method / headers / body to assert
  *      on the production wiring (auth headers, system blocks, betas, etc).
  *
- * See `tests/extensions/anthropic-extension-driver.test.ts` for the
- * reference consumer. The pattern matches the precedent at
- * `packages/extensions/src/openai.ts` (`makeOauthOpenAILayer`).
+ * The driver tests in `packages/extensions/tests/` (`anthropic.test.ts`,
+ * `openai.test.ts`, `providers.test.ts`) are its consumers.
  */
 
 export interface CapturedRequest {
@@ -185,7 +184,7 @@ export const oneGenerate = (
     headers?: Record<string, string>
     body: string
   },
-  prompt: string = "hi",
+  prompt: Prompt.RawInput = "hi",
 ): Effect.Effect<void> =>
   LanguageModel.generateText({ prompt }).pipe(
     Effect.asVoid,

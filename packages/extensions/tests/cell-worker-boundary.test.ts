@@ -149,6 +149,50 @@ describe("cell worker", () => {
     }).pipe(Effect.timeout("3 seconds")),
   )
 
+  // The snapshot reads every binding after a cell. A read that throws once
+  // ended the worker: the next cell failed and the restart lost the namespace.
+  it.scopedLive("a binding that throws when read is named as not saved; the worker lives", () =>
+    Effect.gen(function* () {
+      const worker = yield* makeHarness
+      const evaluate = (cellId: string, source: string) =>
+        Effect.gen(function* () {
+          yield* worker.send(
+            CellRequest.cases.Evaluate.make({ cellId, outputToken: `${cellId}-token`, source }),
+          )
+          const result = yield* worker.next
+          if (result._tag !== "Evaluated")
+            return yield* new CellProtocolError({ message: `Expected result, got ${result._tag}` })
+          return result.result
+        })
+      const defined = yield* evaluate(
+        "define",
+        [
+          "const kept = [1]",
+          "const getter = { get bad() { throw new Error('getter') } }",
+          "const trap = () => { throw new Error('trap') }",
+          "const trapped = new Proxy({}, { get: trap, getPrototypeOf: trap, ownKeys: trap })",
+          "Object.defineProperty(globalThis, 'accessor', { get: trap, enumerable: true, configurable: true })",
+        ].join("\n"),
+      )
+      expect(defined.bindings).toEqual(["accessor", "getter", "kept", "trap", "trapped"])
+      yield* worker.send(CellRequest.cases.Snapshot.make({ requestId: "save" }))
+      const saved = yield* worker.next
+      if (saved._tag !== "Snapshot")
+        return yield* new CellProtocolError({ message: `Expected snapshot, got ${saved._tag}` })
+      expect(saved.snapshot.bindings.map((binding) => binding.name)).toEqual(["kept"])
+      expect(saved.snapshot.omitted).toEqual([
+        { name: "getter", reason: "unsupported" },
+        { name: "trap", reason: "function" },
+        { name: "trapped", reason: "unsupported" },
+        // An accessor is saved as its getter, never called.
+        { name: "accessor", reason: "function" },
+      ])
+      expect((yield* evaluate("after", "kept.length")).display).toBe("1")
+      yield* worker.send(CellRequest.cases.Reset.make({ requestId: "reset" }))
+      expect((yield* worker.next)._tag).toBe("Reset")
+    }).pipe(Effect.timeout("3 seconds")),
+  )
+
   it.scopedLive("keeps the shipped catalog for later cells that carry none", () =>
     Effect.gen(function* () {
       const worker = yield* makeHarness

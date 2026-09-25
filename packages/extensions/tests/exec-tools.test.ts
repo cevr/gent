@@ -41,6 +41,7 @@ import {
   LanguageModelLayers,
   textDeltaPart,
   textStep,
+  toolCallPart,
   toolCallStep,
   waitFor,
   createE2ELayer,
@@ -56,7 +57,7 @@ import { shippedPreset } from "./helpers/test-preset.js"
 import { toolResultSummary } from "@gent/core/extensions/branch-tools"
 import { BunChildProcessSpawner, BunFileSystem, BunServices } from "@effect/platform-bun"
 import { BunPlatformLive } from "@gent/core/host"
-import { maximumModelToolResultChars } from "@gent/core/extensions/api"
+import { ExtensionServiceError, maximumModelToolResultChars } from "@gent/core/extensions/api"
 import { e2ePreset } from "./helpers/test-preset"
 import { SqlClient } from "effect/unstable/sql"
 import { isToolResultFor } from "./helpers/tool-event.js"
@@ -2845,7 +2846,12 @@ const withSession = (
 })
 /** A fake `Session.send` that records the background notice, a `queue` delivery. */
 const onQueue =
-  (record: (notice: { sourceId: string; content: string }) => Effect.Effect<unknown>) =>
+  (
+    record: (notice: {
+      sourceId: string
+      content: string
+    }) => Effect.Effect<unknown, ExtensionServiceError>,
+  ) =>
   (params: Parameters<TestToolContext["Session"]["send"]>[0]) => {
     if (params.delivery !== "queue") return Effect.die(`unexpected ${params.delivery} delivery`)
     return record({ sourceId: params.sourceId, content: params.content }).pipe(Effect.asVoid)
@@ -3613,6 +3619,77 @@ describe("BashTool execution", () => {
       }).pipe(withProcessTimeout),
     processTestTimeout,
   )
+
+  it.live(
+    "a refused completion a later replay delivers is not also kept as a notice",
+    () =>
+      Effect.gen(function* () {
+        const toolCallId = ToolCallId.make("tc-refused-replay")
+        const branch = { sessionId: stubCtx.sessionId, branchId: stubCtx.branchId }
+        const delivered = yield* Ref.make<ReadonlyArray<string>>([])
+        const refusing = yield* Ref.make(true)
+        const ctx = withSession(
+          { ...stubCtx, toolCallId },
+          {
+            ...stubCtx.Session,
+            getSession: () =>
+              Effect.succeed(
+                new Session({
+                  id: stubCtx.sessionId,
+                  activeBranchId: stubCtx.branchId,
+                  createdAt: now,
+                  updatedAt: now,
+                }),
+              ),
+            listBranches: Effect.succeed([
+              new Branch({ id: stubCtx.branchId, sessionId: stubCtx.sessionId, createdAt: now }),
+            ]),
+            send: onQueue((notice) =>
+              Effect.gen(function* () {
+                if (yield* Ref.get(refusing)) {
+                  return yield* new ExtensionServiceError({
+                    service: "Session",
+                    operation: "send",
+                    message: "Follow-up queue full (max 10)",
+                  })
+                }
+                yield* Ref.update(delivered, (all) => [...all, notice.sourceId])
+              }),
+            ),
+          },
+        )
+        const millis = yield* Clock.currentTimeMillis
+        const storageLayer = SqliteStorage.LiveWithSql(
+          `/tmp/gent-background-bash-refused-replay-${millis}.db`,
+          () => Layer.empty,
+          {},
+        ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)))
+        const undelivered = BackgroundBashStorage.pipe(
+          Effect.flatMap((storage) => storage.undeliveredJobs(branch)),
+        )
+        const params = { command: "printf refused-output", run_in_background: true }
+
+        // The first server's send is refused: the row keeps the completion.
+        const scope = yield* Scope.make()
+        const firstProfile = yield* Layer.buildWithScope(makeProcessLayer(storageLayer), scope)
+        yield* Effect.gen(function* () {
+          yield* runToolWithCtx(BashTool, params, ctx)
+          yield* waitFor(undelivered, (jobs) => jobs.length === 1, 2_000, "the refused completion")
+        }).pipe(Effect.provideContext(firstProfile))
+        yield* Scope.close(scope, Exit.void)
+
+        // A later server replays the Terminal claim, and its send is accepted.
+        yield* Ref.set(refusing, false)
+        const after = yield* Effect.gen(function* () {
+          yield* runToolWithCtx(BashTool, params, ctx)
+          return yield* undelivered
+        }).pipe(Effect.provide(makeProcessLayer(storageLayer)))
+
+        expect(yield* Ref.get(delivered)).toEqual(["bash:tc-refused-replay:complete"])
+        expect(after).toEqual([])
+      }).pipe(withProcessTimeout),
+    processTestTimeout,
+  )
 })
 
 // ── exec tools rpc ──────────────────────────────────────────────────────────
@@ -3711,6 +3788,119 @@ describe("background bash after session deletion", () => {
         expect(answered._tag).toBe("Failure")
       }).pipe(Effect.timeout("8 seconds")),
     10_000,
+  )
+})
+
+describe("a background completion the full follow-up queue refused", () => {
+  it.scopedLive.layer(BunFileSystem.layer)(
+    "the next turn reads it as a notice until a turn answers",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-bg-queue-full-" })
+        const storagePath = `${directory}/gent.db`
+        const release = `${directory}/release`
+        const command = `while ! test -f ${release}; do sleep 0.02; done; printf queue-full-output`
+        const holding = yield* Deferred.make<void>()
+        const releaseHold = yield* Deferred.make<void>()
+        const notices = yield* Ref.make<ReadonlyArray<string>>([])
+        const providerLayer = LanguageModelLayers.testStream((options) =>
+          Effect.gen(function* () {
+            const call = (yield* Ref.updateAndGet(notices, (all) => [
+              ...all,
+              turnRequestText(options.prompt).notices,
+            ])).length
+            if (call === 1) {
+              return Stream.fromIterable([
+                toolCallPart("bash", { command, run_in_background: true }),
+                finishPart({ finishReason: "tool-calls" }),
+              ])
+            }
+            // The third call holds its turn, so every later send waits in the queue.
+            if (call === 3) {
+              yield* Deferred.succeed(holding, void 0)
+              yield* Deferred.await(releaseHold)
+            }
+            return Stream.fromIterable([
+              textDeltaPart(`reply ${call}`),
+              finishPart({ finishReason: "stop" }),
+            ])
+          }),
+        )
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+          storagePath,
+          cwd: directory,
+        })
+        const idle = (label: string) =>
+          waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (snapshot) => snapshot.runtime._tag === "Idle",
+            10_000,
+            label,
+          )
+        yield* client.message.send({ sessionId, branchId, content: "start the job" })
+        yield* waitFor(
+          client.session.getSnapshot({ sessionId, branchId }),
+          (snapshot) =>
+            snapshot.runtime._tag === "Idle" &&
+            snapshot.messages.some((message) => message.role === "tool"),
+          10_000,
+          "the job started and the turn ended",
+        )
+        yield* client.message.send({ sessionId, branchId, content: "hold" })
+        yield* Deferred.await(holding)
+        for (let i = 1; i <= 10; i++) {
+          yield* client.message.send({ sessionId, branchId, content: `queued ${i}` })
+        }
+        yield* fs.writeFileString(release, "go")
+        // The job ends while the queue is full: the refused completion is kept on its row.
+        yield* Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          yield* waitFor(
+            sql<{ readonly n: number }>`
+              SELECT COUNT(*) AS n FROM background_bash_jobs WHERE undelivered_at IS NOT NULL
+            `.pipe(
+              Effect.map((rows) => rows[0]?.n ?? 0),
+              // A table without the column reads as nothing recorded.
+              Effect.orElseSucceed(() => 0),
+            ),
+            (count) => count === 1,
+            5_000,
+            "the refused completion is recorded",
+          )
+        }).pipe(
+          Effect.provide(
+            SqliteStorage.LiveWithSql(storagePath, () => Layer.empty, {}).pipe(
+              Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)),
+            ),
+          ),
+        )
+        yield* Deferred.succeed(releaseHold, void 0)
+        yield* idle("the queued turns ran")
+        const heading = "# Background commands finished"
+        const shown = (yield* Ref.get(notices)).filter((text) => text.includes(heading))
+        expect(shown.length).toBeGreaterThan(0)
+        expect(shown[0]).toContain(command)
+        expect(shown[0]).toContain("queue-full-output")
+        // No message carries the completion: it lived in the notices only.
+        const snapshot = yield* client.session.getSnapshot({ sessionId, branchId })
+        const texts = snapshot.messages.flatMap((message) =>
+          message.parts.flatMap((part) => {
+            if (part.type === "text") return [part.text]
+            return []
+          }),
+        )
+        expect(texts.some((text) => text.includes("queue-full-output"))).toBe(false)
+        // A turn answered with it shown: the next turn reads nothing.
+        const before = (yield* Ref.get(notices)).length
+        yield* client.message.send({ sessionId, branchId, content: "anything else?" })
+        yield* waitFor(Ref.get(notices), (all) => all.length > before, 5_000, "the next model call")
+        yield* idle("the last turn ended")
+        expect((yield* Ref.get(notices)).slice(before).join("")).not.toContain(heading)
+      }).pipe(Effect.timeout("25 seconds")),
+    30_000,
   )
 })
 

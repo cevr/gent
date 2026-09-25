@@ -141,6 +141,8 @@ export {
 } from "../runtime/gent-platform.js"
 export { headTailChars, lineCount, splitLines } from "../domain/message.js"
 export { maximumModelToolResultChars } from "../runtime/model-context.js"
+// Launched from home, the project's `.gent` is the user's; every reader of project files asks this.
+export { hasProjectScope } from "../runtime/config.js"
 // ── Public API ──
 
 export { ExtensionHost, type ExtensionHostService } from "../domain/extension.js"

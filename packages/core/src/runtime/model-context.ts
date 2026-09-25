@@ -220,10 +220,11 @@ export const turnNoticesText = (notices: ReadonlyArray<TurnNotice>): Option.Opti
  * last: the system prompt and the conversation stay one cacheable prefix
  * whether a notice comes or goes. A later system message is the host
  * speaking, not the user: a driver sends it as a context update after the
- * conversation (the Anthropic driver as a `<host-context-update>` block,
- * which takes no cache marker; the OpenAI driver as a developer message).
- * Both roles rank below the system prompt, so a user instruction wins over a
- * notice, and `TURN_NOTICES_HEADING` says the text is the host's.
+ * conversation (the Anthropic and OpenAI-compatible drivers as a
+ * `<host-context-update>` user message, which takes no cache marker; the
+ * OpenAI driver as a developer message). Both rank below the system prompt,
+ * so a user instruction wins over a notice, and `TURN_NOTICES_HEADING` says
+ * the text is the host's.
  */
 export const toPrompt = (
   messages: ReadonlyArray<Message>,
