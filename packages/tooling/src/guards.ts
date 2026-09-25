@@ -882,6 +882,38 @@ export const findRepoTempDirectories = (file: string, text: string): ReadonlyArr
     .map((index) => ({ file, line: index + 1, message: TEMP_IN_REPO_MESSAGE }))
 }
 
+/**
+ * Guard: a test's home or data directory is its own.
+ *
+ * A fixed path under the shared temp root (`/tmp`, `/var/tmp`,
+ * `/private/tmp`, `/dev/shm`, or `tmpdir()` itself) given as a test's home or
+ * data directory is shared by every run and every parallel gate: what one
+ * test writes there (prompt history, goal and wake files, a skills cache),
+ * the next one reads, so a result depends on run order. Reported in test code
+ * outside the tooling package: a `home`, `HOME`, `homeDir`, `homeDirectory`,
+ * `dataDir` or `GENT_DATA_DIR` name followed on its line by such a path, with
+ * no other string, comma or semicolon between them. That reads a property, a
+ * JSX attribute, a binding, a parameter default (`home: string = "/tmp"`), a
+ * fallback (`home ?? "/tmp"`) and a wrapped value
+ * (`homeDirectory: Effect.succeed("/tmp")`) alike. A test that writes there
+ * takes `makeTempDirectoryScoped`; a test that only names a home takes a path
+ * no test can create, such as `/nonexistent/<name>`.
+ */
+const SHARED_TEMP_HOME =
+  /\b(?:home|HOME|homeDir|homeDirectory|dataDir|GENT_DATA_DIR)\b(?:[^"'`\n,;]*?["'`](?:(?:\/private)?(?:\/var)?\/tmp|\/dev\/shm)(?:\/[^"'`]*)?["'`]|\s*[:=]\s*\{?\s*(?:os\.)?tmpdir\(\)\s*(?:[,;})]|$))/
+
+const SHARED_TEMP_HOME_MESSAGE =
+  "a test home or data directory under the shared temp root is shared by every run and parallel gate; use `makeTempDirectoryScoped` when the test writes there, or a `/nonexistent/<name>` path when it only names one"
+
+export const findSharedTestHomes = (file: string, text: string): ReadonlyArray<Finding> => {
+  // The guard's own tests spell the reported shapes as probe text.
+  if (!isTestCode(file) || file.startsWith("packages/tooling/")) return []
+  const lines = withoutComments(text).split("\n")
+  return [...lines.keys()]
+    .filter((index) => SHARED_TEMP_HOME.test(lines[index] ?? ""))
+    .map((index) => ({ file, line: index + 1, message: SHARED_TEMP_HOME_MESSAGE }))
+}
+
 // ── the pre-commit hook runs the guards ─────────────────────────────────────
 
 /**

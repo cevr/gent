@@ -11,6 +11,7 @@ import {
   findE2eFixtureImportFindings,
   findEffectVersionDrift,
   findRepoTempDirectories,
+  findSharedTestHomes,
   findHookWithoutGuards,
   findIdentityEncodes,
   findPackageSurfaceFindings,
@@ -649,6 +650,49 @@ describe("repo temp directory guard", () => {
   test("product source is out of scope", () => {
     const source = 'const dir = { directory: path.resolve(import.meta.dir, "..") }'
     expect(findRepoTempDirectories("packages/core/src/runtime/x.ts", source)).toEqual([])
+  })
+})
+
+// ── a test's home is its own ────────────────────────────────────────────────
+
+describe("shared test home checker", () => {
+  const testFile = "apps/tui/tests/render-harness-boundary.tsx"
+  const lines = (source: string, file = testFile) =>
+    findSharedTestHomes(file, source).map((finding) => finding.line)
+
+  test("a home or data directory under the shared temp root is reported, in every shape", () => {
+    const source = [
+      '<WorkspaceProvider cwd={cwd} home="/tmp" services={services}>',
+      'const env = { cwd: "/tmp", home: "/tmp" }',
+      'RuntimeEnvironment.Live({ home: "/tmp/test-home", cwd: "/tmp" })',
+      'const logs = logDirFor({ GENT_DATA_DIR: "/var/tmp/gent-scratch" })',
+      'const platform = (home: string = "/private/tmp") => home',
+      'home: overrides?.home ?? "/tmp",',
+      'homeDirectory: Effect.succeed("/dev/shm/x"),',
+      "const facts = { home: tmpdir() }",
+      'process.env.HOME = "/tmp"',
+    ].join("\n")
+    expect(lines(source)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9])
+  })
+
+  test("a scoped temp home, a path no test can create, or a cwd alone is not reported", () => {
+    const source = [
+      'const home = yield* fs.makeTempDirectoryScoped({ prefix: "gent-home-" })',
+      'const env = { cwd: "/tmp", home: "/nonexistent/gent-test-home" }',
+      'RuntimeEnvironment.Live({ home, cwd: "/tmp" })',
+      'RuntimeEnvironment.Live({ home: root, cwd: "/tmp" })',
+      'const home = mkdtempSync(join(tmpdir(), "gent-home-"))',
+      'const homePage = "/tmp/page"',
+      '// home: "/tmp" in a comment',
+    ].join("\n")
+    expect(lines(source)).toEqual([])
+  })
+
+  test("product source and the tooling package are out of scope", () => {
+    const source = 'homeDirectory: Effect.succeed("/tmp"),'
+    expect(lines(source, "packages/core/src/runtime/gent-platform.ts")).toEqual([])
+    expect(lines(source, "packages/tooling/tests/guards.test.ts")).toEqual([])
+    expect(lines(source, "packages/core/src/test-utils/harness.ts")).toEqual([1])
   })
 })
 

@@ -13,6 +13,7 @@ import {
   findE2eFixtureImportFindings,
   findEffectVersionDrift,
   findRepoTempDirectories,
+  findSharedTestHomes,
   findHookWithoutGuards,
   findIdentityEncodes,
   findPackageSurfaceFindings,
@@ -141,6 +142,7 @@ const SOURCE_FILE_FINDERS: ReadonlyArray<FileFinder> = [
   findAliasTestLayers,
   findE2eFixtureImportFindings,
   findRepoTempDirectories,
+  findSharedTestHomes,
   findIdentityEncodes,
   findTuiSessionIdentityReads,
 ]
