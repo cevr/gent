@@ -888,7 +888,8 @@ export function Auth(props: AuthProps) {
  * The key line and the code line: one row that takes typed and pasted text.
  * The composer keeps the terminal's focus, so the line reads its keys through
  * the keyboard scope, as btw's ask line does. It sits inside its frame, so a
- * frame with no row takes none of them (`KeyboardGate`).
+ * frame with no row takes none of them (`KeyboardGate`). Text longer than
+ * the row shows its tail, so the caret stays on screen.
  */
 function AuthTextLine(props: {
   readonly label: string
@@ -899,6 +900,16 @@ function AuthTextLine(props: {
   readonly onCancel: () => void
 }) {
   const { theme } = useTheme()
+  const { sectionWidth } = usePickerGeometry()
+  /** The text that fits after the label and before the caret: its tail, cut with an ellipsis. */
+  const visibleText = () => {
+    let caretWidth = 0
+    if (props.caret) caretWidth = 1
+    const room = Math.max(1, sectionWidth() - props.label.length - 1 - caretWidth)
+    const chars = [...props.text]
+    if (chars.length <= room) return props.text
+    return "…" + chars.slice(chars.length - (room - 1)).join("")
+  }
   useScopedKeyboard(
     (event) => {
       if (event.name === "escape") {
@@ -936,7 +947,7 @@ function AuthTextLine(props: {
     <ChromePanel.Section>
       <text wrapMode="none" style={{ fg: theme.text }}>
         <span style={{ fg: theme.textMuted }}>{props.label} </span>
-        {props.text}
+        {visibleText()}
         <Show when={props.caret}>
           <span style={{ fg: theme.primary }}>│</span>
         </Show>

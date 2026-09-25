@@ -1161,6 +1161,25 @@ describe("App auth gate", () => {
       setup.renderer.destroy()
     }).pipe(Effect.timeout("10 seconds")),
   )
+  // A key longer than the row shows the tail of its mask, so the caret the
+  // reader types at stays on screen.
+  it.live("a long key keeps the caret on screen", () =>
+    Effect.gen(function* () {
+      const setup = yield* mountSignIn()
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, (frame) => frame.includes("API key ›"), "key line")
+      yield* Effect.promise(() => setup.mockInput.pasteBracketedText("sk-" + "x".repeat(200)))
+      const frame = yield* waitForFrame(
+        setup,
+        (current) => current.includes("API key › …*"),
+        "the mask's tail",
+      )
+      const line = frame.split("\n").find((row) => row.includes("API key ›")) ?? ""
+      expect(line.trimEnd().endsWith("*│")).toBe(true)
+      expect(line.length).toBeLessThanOrEqual(setup.renderer.terminalWidth)
+      setup.renderer.destroy()
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   it.live("a send refused after a switch waits in its own session, draft and reason both", () =>
     Effect.gen(function* () {
       // The reader sends in A and moves to B before A's server answers. The
