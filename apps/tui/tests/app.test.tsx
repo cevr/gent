@@ -1054,10 +1054,14 @@ describe("App auth gate", () => {
    * has no key, zzprovider is optional. The gate opens the pane on openai's
    * sign-in methods.
    */
-  const mountSignIn = (height = 24) =>
+  const mountSignIn = (height = 24, savedKeys: Array<string> = []) =>
     Effect.gen(function* () {
       const client = createMockClient({
         auth: {
+          setKey: (input: { readonly provider: string; readonly key: string }) =>
+            Effect.sync(() => {
+              savedKeys.push(input.key)
+            }),
           listProviders: () =>
             Effect.succeed([
               {
@@ -1133,6 +1137,27 @@ describe("App auth gate", () => {
       yield* waitForFrame(setup, (frame) => frame.includes("API key ›"), "key line")
       yield* Effect.promise(() => setup.mockInput.pasteBracketedText("sk-abc\n"))
       yield* waitForFrame(setup, (frame) => frame.includes("API key › ******"), "masked key")
+      setup.renderer.destroy()
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  // A paste can carry terminal escape sequences (a colour code copied out of
+  // another terminal) and C1 controls. The key keeps only its text: whole
+  // sequences drop, not just their escape byte.
+  it.live("a pasted key drops whole escape sequences and C1 controls", () =>
+    Effect.gen(function* () {
+      const saved: Array<string> = []
+      const setup = yield* mountSignIn(24, saved)
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, (frame) => frame.includes("API key ›"), "key line")
+      yield* Effect.promise(() =>
+        setup.mockInput.pasteBracketedText(
+          "sk-a\u001b[31mb\u001b[0m\u0085c\u001b]0;title\u0007d\u009b1me",
+        ),
+      )
+      yield* waitForFrame(setup, (frame) => frame.includes("API key › *"), "masked key")
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, () => saved.length === 1, "the key saved")
+      expect(saved).toEqual(["sk-abcde"])
       setup.renderer.destroy()
     }).pipe(Effect.timeout("10 seconds")),
   )

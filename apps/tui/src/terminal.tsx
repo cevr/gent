@@ -189,3 +189,93 @@ export function useInputWatch(watch: InputWatch) {
     onCleanup(context.watch(watch))
   })
 }
+
+// ── typed and pasted text ───────────────────────────────────────────────────
+
+const ESC = "\u001b"
+const BEL = "\u0007"
+/** 8-bit CSI, OSC and ST: C1 controls that open or end a sequence. */
+const CSI_8BIT = "\u009b"
+const OSC_8BIT = "\u009d"
+const ST_8BIT = "\u009c"
+
+/** A C0 or C1 control, or DEL: never text a line keeps. */
+const isControl = (char: string): boolean => {
+  const code = char.codePointAt(0) ?? 0
+  return code < 0x20 || (code >= 0x7f && code <= 0x9f)
+}
+
+/** A CSI final byte (`@` through `~`) ends the sequence. */
+const isFinalByte = (char: string): boolean => char >= "@" && char <= "~"
+
+/**
+ * Text a key types into a one-line field: printable, never a control
+ * sequence. A key that sends a control byte (Tab, Esc, a C1 control) types
+ * nothing.
+ */
+export const typedText = (sequence: Option.Option<string>): Option.Option<string> =>
+  Option.filter(sequence, (text) => text.length > 0 && ![...text].some(isControl))
+
+/** The index after a string sequence's end: BEL, ESC then backslash, or 8-bit ST. */
+const skipString = (chars: ReadonlyArray<string>, from: number): number => {
+  let at = from
+  while (at < chars.length) {
+    const char = chars[at]
+    if (char === BEL || char === ST_8BIT) return at + 1
+    if (char === ESC && chars[at + 1] === "\\") return at + 2
+    at += 1
+  }
+  return at
+}
+
+/** The index after a CSI's parameters, intermediates and final byte. */
+const skipCsi = (chars: ReadonlyArray<string>, from: number): number => {
+  let at = from
+  while (at < chars.length && !isFinalByte(chars[at] ?? "")) at += 1
+  return at + 1
+}
+
+/** ESC opens a CSI (`[`), a string sequence (OSC, DCS, SOS, PM, APC), or a two-character pair. */
+const STRING_OPENERS = new Set(["]", "P", "X", "^", "_"])
+
+/** The index after the 7-bit sequence that starts at the ESC at `at`. */
+const skipEscape = (chars: ReadonlyArray<string>, at: number): number => {
+  const next = chars[at + 1] ?? ""
+  if (next === "[") return skipCsi(chars, at + 2)
+  if (STRING_OPENERS.has(next)) return skipString(chars, at + 2)
+  return at + 2
+}
+
+/** One step of a paste: the index after what starts at `at`, and the text it adds. */
+const pasteStep = (
+  chars: ReadonlyArray<string>,
+  at: number,
+  lineBreak: string,
+): readonly [number, string] => {
+  const char = chars[at] ?? ""
+  if (char === "\r" && chars[at + 1] === "\n") return [at + 2, lineBreak]
+  if (char === "\n" || char === "\r") return [at + 1, lineBreak]
+  if (char === ESC) return [skipEscape(chars, at), ""]
+  if (char === CSI_8BIT) return [skipCsi(chars, at + 1), ""]
+  if (char === OSC_8BIT) return [skipString(chars, at + 1), ""]
+  if (isControl(char)) return [at + 1, ""]
+  return [at + 1, char]
+}
+
+/**
+ * A paste into a one-line field, as text. Line breaks become `lineBreak`;
+ * whole escape sequences drop (CSI, OSC and the other string sequences, in
+ * their 7-bit and 8-bit forms), and so does every other C0 or C1 control. A
+ * pasted colour code never reaches a key or a question as residue.
+ */
+export const pastedLine = (text: string, lineBreak: string): string => {
+  const chars = [...text]
+  let line = ""
+  let index = 0
+  while (index < chars.length) {
+    const [next, added] = pasteStep(chars, index, lineBreak)
+    line += added
+    index = next
+  }
+  return line
+}

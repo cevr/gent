@@ -22,7 +22,7 @@ import {
   usePickerGeometry,
 } from "./ui"
 import { formatError, plural, type UiError } from "./utils"
-import { useScopedKeyboard, useTerminalDimensions } from "./terminal"
+import { pastedLine, typedText, useScopedKeyboard, useTerminalDimensions } from "./terminal"
 
 // ── auth state ──────────────────────────────────────────────────────────────
 
@@ -884,20 +884,6 @@ export function Auth(props: AuthProps) {
   )
 }
 
-/** Text a key types: printable, never a control sequence. */
-const typedText = (sequence: Option.Option<string>): Option.Option<string> =>
-  Option.filter(
-    sequence,
-    (text) => text.length > 0 && [...text].every((char) => char >= " " && char !== "\u007f"),
-  )
-
-/** A key or a code is one line: a pasted line break and other control bytes drop, and so does the edge whitespace. */
-const pastedText = (text: string): string =>
-  [...text.replace(/\r?\n/g, "")]
-    .filter((char) => char >= " " && char !== "\u007f")
-    .join("")
-    .trim()
-
 /**
  * The key line and the code line: one row that takes typed and pasted text.
  * The composer keeps the terminal's focus, so the line reads its keys through
@@ -938,7 +924,9 @@ function AuthTextLine(props: {
     },
     {
       paste: (text) => {
-        const line = pastedText(text)
+        // A key or a code is one line: a pasted line break drops, and so
+        // does the edge whitespace.
+        const line = pastedLine(text, "").trim()
         if (line.length > 0) props.onEvent(AuthEvent.cases.Type.make({ text: line }))
         return true
       },
