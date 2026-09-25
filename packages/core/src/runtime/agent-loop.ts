@@ -123,7 +123,7 @@ import type { SqlClient } from "effect/unstable/sql"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import {
   ApprovalService,
-  buildResourceLayer,
+  buildScopeResources,
   type CurrentExtensionHostContext,
   ExtensionRegistry,
   makeExtensionHostContextProvider,
@@ -1727,19 +1727,51 @@ const makeAgentLoopBehavior = (
       const profile = yield* resolveTurnProfile(
         RunOpener.cases.Turn.make({ openedByClient: true }),
       ).pipe(Scope.provide(loopScope))
+      // Each extension's branch Resources build on their own, as its process
+      // Resources do: one that fails is named once in the log and in the
+      // transcript, its services stay absent, and every other extension's
+      // Resources and the branch's turns go on.
       return yield* Effect.uninterruptible(
-        Layer.build(
-          buildResourceLayer(profile.turnExtensionRegistry.getResolved().extensions, "branch"),
-        ).pipe(
-          Effect.provideContext(
-            Option.getOrElse(Option.fromUndefinedOr(profile.turnCapabilityContext), Context.empty),
-          ),
-          Scope.provide(loopScope),
-          Effect.map((resources): typeof branchToolContext =>
-            Context.merge(branchToolContext, resources),
-          ),
-          Effect.tap((context) => Ref.set(branchResources, Option.some(context))),
-        ),
+        Effect.gen(function* () {
+          const started = yield* buildScopeResources({
+            extensions: profile.turnExtensionRegistry.getResolved().extensions,
+            scope: "branch",
+            context: Context.merge(
+              Context.makeUnsafe<unknown>(new Map()),
+              Option.getOrElse(
+                Option.fromUndefinedOr(profile.turnCapabilityContext),
+                Context.empty,
+              ),
+            ),
+            parent: loopScope,
+            restore: (effect) => effect,
+          })
+          yield* Effect.forEach(
+            started.failed,
+            ({ extension, message }) =>
+              publishEvent(
+                ErrorOccurred.make({
+                  sessionId,
+                  branchId,
+                  error: `Extension "${extension.manifest.id}" branch resource failed to start: ${message}`,
+                  notice: true,
+                }),
+              ).pipe(
+                Effect.catchEager((error) =>
+                  Effect.logWarning("failed to publish ErrorOccurred").pipe(
+                    Effect.annotateLogs({ error: String(error) }),
+                  ),
+                ),
+              ),
+            { discard: true },
+          )
+          const context: typeof branchToolContext = Context.merge(
+            branchToolContext,
+            started.context,
+          )
+          yield* Ref.set(branchResources, Option.some(context))
+          return context
+        }),
       )
     }).pipe(branchResourceLock.withPermits(1))
     const turnWorkerQueue = yield* TxQueue.unbounded<RunningState>()

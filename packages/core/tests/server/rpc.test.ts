@@ -62,8 +62,13 @@ import {
   ModelId,
   ProviderId,
 } from "../../src/domain/agent"
-import { createE2ELayer, createRpcClient, createRpcHarness } from "../../src/test-utils/harness"
-import { e2ePreset } from "../helpers/test-preset"
+import {
+  createE2ELayer,
+  createRpcClient,
+  createRpcHarness,
+  testTurnExtension,
+} from "../../src/test-utils/harness"
+import { e2ePreset, testAgent } from "../helpers/test-preset"
 import {
   BranchId,
   ExtensionId,
@@ -4228,6 +4233,153 @@ describe("extension command RPCs", () => {
         }).pipe(Effect.timeout("4 seconds")),
       )
     }).pipe(Effect.provide(BunPlatformLive)),
+  )
+  it.scopedLive(
+    "a user extension whose branch resource fails leaves the others and the turn running",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const home = yield* fs.makeTempDirectoryScoped()
+        const profileCwd = yield* fs.makeTempDirectoryScoped()
+        const userDir = path.join(home, ".gent", "extensions")
+        yield* fs.makeDirectory(userDir, { recursive: true })
+        yield* fs.writeFileString(
+          path.join(userDir, "broken-branch.ts"),
+          `import { Context, Effect, Layer } from "effect";
+import { defineExtension, defineResource, ExtensionHost } from "@gent/core/extensions/api";
+class Broken extends Context.Service<Broken, { readonly value: string }>()(
+  "@gent/core/tests/server/rpc.test/BrokenBranchResource",
+) {}
+export default defineExtension({
+  id: "@test/broken-branch-resource",
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost;
+    yield* host.register("resource", defineResource({
+      id: "test/broken-branch-resource/resource",
+      scope: "branch",
+      layer: Layer.effect(Broken, Effect.die("branch resource boom")),
+    }));
+  }),
+});
+`,
+        )
+        const working: GentExtension = {
+          manifest: { id: ExtensionId.make("@test/working-branch-resource") },
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register(
+              "resource",
+              defineResource({
+                id: "test/working-branch-resource/token",
+                scope: "branch",
+                layer: Layer.succeed(
+                  ProfileToken,
+                  ProfileToken.of({ read: Effect.succeed("working branch resource") }),
+                ),
+              }),
+            )
+            yield* host.register(
+              "request",
+              request({
+                id: "read-working-branch-token",
+                input: Schema.String,
+                output: Schema.String,
+                execute: () =>
+                  Effect.gen(function* () {
+                    const token = yield* ProfileToken
+                    return yield* token.read
+                  }),
+              }),
+            )
+          }),
+        }
+        // The profile runs the turn: it needs the agent and the driver too.
+        const agents: GentExtension = {
+          manifest: { id: ExtensionId.make("@test/branch-resource-agents") },
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register("agent", testAgent)
+          }),
+        }
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const sessionProfileCacheLayer = Layer.unwrap(
+              Effect.map(Effect.scope, (scope) =>
+                SessionProfileCache.Live({
+                  home,
+                  failOnExtensionFailure: true,
+                  platform: "test",
+                  extensions: [agents, testTurnExtension, working],
+                }).pipe(
+                  Layer.provide(
+                    Layer.mergeAll(
+                      BunPlatformLive,
+                      ConfigService.Test(),
+                      SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(
+                        Layer.provide(BunPlatformLive),
+                      ),
+                    ),
+                  ),
+                  Layer.orDie,
+                  Layer.provide(Layer.succeed(Scope.Scope, scope)),
+                ),
+              ),
+            )
+            const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+              textStep("the turn ran"),
+            ])
+            const { client, sessionId, branchId } = yield* createRpcHarness({
+              ...e2ePreset,
+              providerLayer,
+              extensions: [],
+              sessionProfileCacheLayer,
+              cwd: profileCwd,
+            })
+            yield* client.message.send({ sessionId, branchId, content: "run a turn" })
+            yield* waitFor(
+              client.session.getSnapshot({ sessionId, branchId }),
+              (snapshot) =>
+                snapshot.runtime._tag === "Idle" &&
+                snapshot.messages.some(
+                  (message) =>
+                    message.role === "assistant" &&
+                    message.parts.some(
+                      (part) => part.type === "text" && part.text === "the turn ran",
+                    ),
+                ),
+              5_000,
+              "the turn replied",
+            )
+            // The other extension's branch resource is live on the same branch.
+            const token = yield* client.extension.request({
+              sessionId,
+              extensionId: ExtensionId.make("@test/working-branch-resource"),
+              capabilityId: "read-working-branch-token",
+              input: "token",
+              branchId,
+            })
+            expect(token).toBe("working branch resource")
+            // The failure names its extension once, as a notice.
+            const events = yield* client.session.events({ sessionId, branchId }).pipe(
+              Stream.takeUntil(({ event }) => event._tag === "StreamSynchronized"),
+              Stream.map(({ event }) => event),
+              Stream.runCollect,
+              Effect.map((all) => Array.from(all)),
+            )
+            const notices = events.filter(
+              (event) =>
+                event._tag === "ErrorOccurred" &&
+                event.error.includes("@test/broken-branch-resource"),
+            )
+            expect(notices).toHaveLength(1)
+            expect(notices[0]).toMatchObject({ notice: true })
+            expect(notices[0]?._tag === "ErrorOccurred" && notices[0].error).toContain(
+              "branch resource boom",
+            )
+          }).pipe(Effect.timeout("8 seconds")),
+        )
+      }).pipe(Effect.provide(BunPlatformLive)),
   )
   it.live("a test root stops at a failed extension and names it", () =>
     Effect.gen(function* () {
