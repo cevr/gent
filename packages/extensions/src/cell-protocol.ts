@@ -1,16 +1,40 @@
-import { Effect, Option, Predicate, Schema } from "effect"
+import { Effect, Option, Predicate, Result, Schema } from "effect"
+import {
+  append,
+  brands,
+  codeUnit,
+  defineData,
+  dropLast,
+  holds,
+  isFinite,
+  isOrdinaryArray,
+  jsonText,
+  primitiveText,
+  readCollection,
+  readDate,
+  readProperty,
+  readRegExp,
+  readTypedArray,
+  typedArrayItem,
+  valuePrototype,
+} from "./cell-value.js"
 
 // ── namespace snapshot codec ────────────────────────────────────────────────
 
 /**
  * Namespace snapshots move cell bindings between a worker and the host as
- * tagged JSON. The worker encodes in its own realm with realm-agnostic checks;
- * the vm context decodes with a reviver that runs inside the context, so
- * restored dates, maps, sets, and errors carry the context's own intrinsics.
+ * tagged JSON. The worker encodes in its own realm through the value reader
+ * (`cell-value.ts`), so encoding never runs cell code: no getter, no trap, no
+ * iterator and no prototype method a cell can replace. Brand checks read
+ * internal slots, so they hold for a value from any realm. The reviver runs
+ * inside the realm that restores, so restored dates, maps, sets, and errors
+ * carry its intrinsics.
  */
 export const maximumSnapshotBindingBytes = 256 * 1024
 const maximumSnapshotBytes = 768 * 1024
 const maximumSnapshotDepth = 64
+/** Each entry encodes to at least two bytes, so a longer collection is too large unread. */
+const maximumSnapshotEntries = maximumSnapshotBindingBytes / 2
 
 const SnapshotOmission = Schema.Struct({
   name: Schema.String,
@@ -30,48 +54,32 @@ export type CellSnapshot = typeof CellSnapshot.Type
 
 const TAG = "$gent"
 
-/** A value that cannot round-trip. It never enters the encoded JSON. */
+/** A value that cannot round-trip. It never enters the encoded JSON. Each is made at load. */
 class Omitted {
   constructor(readonly reason: OmissionReason) {}
 }
 type Encoded = Schema.Json | Omitted
 const isOmitted = (value: Encoded): value is Omitted => value instanceof Omitted
+const omittedFunction = new Omitted("function")
+const unsupported = new Omitted("unsupported")
+const cyclic = new Omitted("cyclic")
+const tooDeep = new Omitted("too-deep")
+const tooLarge = new Omitted("too-large")
 
 const tagged = (kind: string, value: Schema.Json): Schema.Json => ({ [TAG]: kind, value })
-/** Effect's isObject excludes arrays; snapshots treat both as references. */
-// oxlint-disable-next-line effect/noUnknownParameters -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
-const isReference = (value: unknown): value is object =>
-  Predicate.isObject(value) || Array.isArray(value)
-// oxlint-disable-next-line effect/noUnknownParameters -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
-const tagOf = (value: unknown) => Object.prototype.toString.call(value).slice(8, -1)
 
 /** Plain means its prototype is null or a root Object.prototype from any realm. */
 // oxlint-disable-next-line effect/noObjectParameters -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
 const isPlainObject = (value: object) => {
-  const proto: unknown = Object.getPrototypeOf(value)
+  const proto: unknown = valuePrototype(value)
   // oxlint-disable-next-line effect/noNullish -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
-  return proto === null || Object.getPrototypeOf(proto) === null
+  if (proto === null) return true
+  if (!Predicate.isObjectKeyword(proto) || brands.isProxy(proto)) return false
+  // oxlint-disable-next-line effect/noNullish -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
+  return valuePrototype(proto) === null
 }
 
-interface ElementView extends ArrayBufferView {
-  readonly length: number
-  readonly [index: number]: number | bigint
-}
-const isElementView = (view: ArrayBufferView): view is ElementView =>
-  Predicate.hasProperty(view, "length") && Predicate.isNumber(view.length)
-
-/** Typed arrays travel as element lists; bigint elements travel as strings. */
-const elements = (view: ElementView): Schema.Json => {
-  const values: Schema.Json[] = []
-  for (let index = 0; index < view.length; index++) {
-    const item = view[index]
-    if (Predicate.isBigInt(item)) values.push(item.toString())
-    else if (Predicate.isNumber(item)) values.push(item)
-  }
-  return values
-}
-
-const typedArrayKinds = new Set([
+const typedArrayKinds: ReadonlyArray<string> = [
   "Uint8Array",
   "Int8Array",
   "Uint16Array",
@@ -83,7 +91,7 @@ const typedArrayKinds = new Set([
   "Uint8ClampedArray",
   "BigInt64Array",
   "BigUint64Array",
-])
+]
 
 // oxlint-disable-next-line effect/noNullish, effect/noUnknownParameters -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
 const encodePrimitive = (value: unknown): Encoded | undefined => {
@@ -92,121 +100,206 @@ const encodePrimitive = (value: unknown): Encoded | undefined => {
   // oxlint-disable-next-line effect/noNullish -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
   if (Predicate.isUndefined(value)) return tagged("undefined", null)
   if (Predicate.isNumber(value)) {
-    if (Number.isFinite(value)) return value
-    return tagged("number", String(value))
+    if (isFinite(value)) return value
+    return tagged("number", primitiveText(value))
   }
-  if (Predicate.isBigInt(value)) return tagged("bigint", value.toString())
-  if (Predicate.isFunction(value)) return new Omitted("function")
-  if (!isReference(value)) return new Omitted("unsupported")
+  // The abstract ToString: a replaced `BigInt.prototype.toString` never runs.
+  if (Predicate.isBigInt(value)) return tagged("bigint", primitiveText(value))
+  if (Predicate.isFunction(value)) return omittedFunction
+  if (!Predicate.isObjectKeyword(value)) return unsupported
   // oxlint-disable-next-line effect/noNullish -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
   return undefined
 }
 
+/** An array's elements through their descriptors; a hole reads as undefined. */
 // oxlint-disable-next-line effect/noUnknownParameters -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
-const encodeList = (items: ReadonlyArray<unknown>, inner: (item: unknown) => Encoded): Encoded => {
+const encodeArray = (array: ReadonlyArray<unknown>, inner: (item: unknown) => Encoded): Encoded => {
+  // An array's own length is a data property: no getter can stand in for it.
+  if (array.length > maximumSnapshotEntries) return tooLarge
   const out: Schema.Json[] = []
-  for (const item of items) {
-    const encoded = inner(item)
+  for (let index = 0; index < array.length; index++) {
+    const encoded = Result.match(readProperty(array, index), {
+      onFailure: (): Encoded => unsupported,
+      onSuccess: (item) => inner(Option.getOrUndefined(item)),
+    })
     if (isOmitted(encoded)) return encoded
-    out.push(encoded)
+    append(out, encoded)
   }
   return out
 }
 
-const ownProperty = (value: Schema.Json): PropertyDescriptor => ({
-  value,
-  writable: true,
-  enumerable: true,
-  configurable: true,
-})
-
-const encodeRecord = (
-  entries: ReadonlyArray<readonly [string, unknown]>,
-  // oxlint-disable-next-line effect/noUnknownParameters -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
-  inner: (item: unknown) => Encoded,
-): Encoded => {
+/** A plain object's own enumerable string keys, in `Object.entries` order; any accessor is cell code. */
+// oxlint-disable-next-line effect/noUnknownParameters, effect/noObjectParameters -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
+const encodeRecord = (object: object, inner: (item: unknown) => Encoded): Encoded => {
+  const keys = Reflect.ownKeys(object)
+  if (keys.length > maximumSnapshotEntries) return tooLarge
   const out: Record<string, Schema.Json> = {}
-  for (const [key, item] of entries) {
-    const encoded = inner(item)
+  for (let index = 0; index < keys.length; index++) {
+    const key = keys[index]
+    if (!Predicate.isString(key)) continue
+    const descriptor = Object.getOwnPropertyDescriptor(object, key)
+    if (Predicate.isUndefined(descriptor) || descriptor.enumerable !== true) continue
+    if (!Object.hasOwn(descriptor, "value")) return unsupported
+    const encoded = inner(descriptor.value)
     if (isOmitted(encoded)) return encoded
     // Assignment to an own `__proto__` key would set the prototype and drop the key.
-    Object.defineProperty(out, key, ownProperty(encoded))
+    defineData(out, key, encoded)
   }
-  if (Predicate.hasProperty(out, TAG)) return tagged("object", out)
+  if (Object.hasOwn(out, TAG)) return tagged("object", out)
   return out
 }
 
+/** A native error's `name`, `message` or `stack`: a primitive as text, absent as the fallback. */
+// oxlint-disable-next-line effect/noObjectParameters -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
+const errorText = (error: object, key: string, fallback: string): Option.Option<string> =>
+  Result.match(readProperty(error, key), {
+    onFailure: () => Option.none(),
+    onSuccess: (found) => {
+      if (Option.isNone(found)) return Option.some(fallback)
+      // String() of an object runs its toString or Symbol.toPrimitive: cell code.
+      const text = found.value
+      if (Predicate.isObjectKeyword(text)) return Option.none()
+      return Option.some(primitiveText(text))
+    },
+  })
+
+// oxlint-disable-next-line effect/noObjectParameters -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
+const encodeError = (error: object): Encoded => {
+  const name = errorText(error, "name", "Error")
+  const message = errorText(error, "message", "")
+  const stack = errorText(error, "stack", "")
+  if (Option.isNone(name) || Option.isNone(message) || Option.isNone(stack)) return unsupported
+  return tagged("error", { name: name.value, message: message.value, stack: stack.value })
+}
+
+// oxlint-disable-next-line effect/noObjectParameters -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
+const encodeRegExp = (value: object): Encoded =>
+  Option.match(readRegExp(value), {
+    onNone: () => unsupported,
+    onSome: ({ source, flags }) => tagged("regexp", [source, flags]),
+  })
+
+/**
+ * A Map's or Set's members through the saved `size` getter and `forEach`,
+ * which walk the internal table, so a subclass iterator never runs. A Map
+ * member encodes as `[key, value]`.
+ */
+const encodeCollection = (
+  // oxlint-disable-next-line effect/noObjectParameters -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
+  value: object,
+  kind: "map" | "set",
+  // oxlint-disable-next-line effect/noUnknownParameters -- collection members have any JavaScript shape
+  inner: (item: unknown) => Encoded,
+): Encoded => {
+  const collection = readCollection(value, maximumSnapshotEntries)
+  if (Option.isNone(collection)) return unsupported
+  if (collection.value.size > maximumSnapshotEntries) return tooLarge
+  const members = collection.value.members
+  const out: Schema.Json[] = []
+  for (let index = 0; index < members.length; index++) {
+    const member = members[index]
+    if (Predicate.isUndefined(member)) return unsupported
+    // A Map member encodes its key first, as `[key, value]`.
+    // oxlint-disable-next-line effect/noNullish -- a Set member has no key
+    let key: Encoded = null
+    if (kind === "map") {
+      key = inner(member.key)
+      if (isOmitted(key)) return key
+    }
+    const item = inner(member.value)
+    if (isOmitted(item)) return item
+    if (kind === "map") append(out, [key, item])
+    else append(out, item)
+  }
+  return tagged(kind, out)
+}
+
+// oxlint-disable-next-line effect/noObjectParameters -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
+const encodeTypedArray = (value: object): Encoded => {
+  const typed = readTypedArray(value)
+  if (Option.isNone(typed) || !holds(typedArrayKinds, typed.value.kind)) return unsupported
+  const { kind, length } = typed.value
+  if (length > maximumSnapshotEntries) return tooLarge
+  const values: Schema.Json[] = []
+  for (let index = 0; index < length; index++) {
+    const item = typedArrayItem(value, index)
+    // Bigint elements travel as strings, through the abstract ToString.
+    if (Predicate.isBigInt(item)) append(values, primitiveText(item))
+    else if (Predicate.isNumber(item)) append(values, item)
+  }
+  return tagged(kind, values)
+}
+
+/**
+ * Built-ins by brand. A brand check reads the internal slot, and the read
+ * uses a prototype function saved at load, so a subclass override never runs.
+ */
 // oxlint-disable-next-line effect/noNullish, effect/noUnknownParameters, effect/noObjectParameters -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
 const encodeBuiltin = (value: object, inner: (item: unknown) => Encoded): Encoded | undefined => {
-  const kind = tagOf(value)
-  if (kind === "Date") return tagged("date", Date.prototype.getTime.call(value))
-  if (
-    kind === "RegExp" &&
-    Predicate.hasProperty(value, "source") &&
-    Predicate.hasProperty(value, "flags")
-  )
-    return tagged("regexp", [String(value.source), String(value.flags)])
-  if (kind === "Error" && Predicate.hasProperty(value, "message")) {
-    let name = "Error"
-    if (Predicate.hasProperty(value, "name")) name = String(value.name)
-    let stack = ""
-    if (Predicate.hasProperty(value, "stack")) stack = String(value.stack)
-    return tagged("error", { name, message: String(value.message), stack })
-  }
-  if (kind === "Map") {
-    const entries: Iterable<[unknown, unknown]> = Map.prototype.entries.call(value)
-    const pairs = encodeList([...entries], (pair) => {
-      if (!Array.isArray(pair)) return new Omitted("unsupported")
-      return encodeList(pair, inner)
+  if (brands.isNativeError(value)) return encodeError(value)
+  if (brands.isDate(value))
+    return Option.match(readDate(value), {
+      onNone: () => unsupported,
+      onSome: (time) => tagged("date", time),
     })
-    if (isOmitted(pairs)) return pairs
-    return tagged("map", pairs)
-  }
-  if (kind === "Set") {
-    const values: Iterable<unknown> = Set.prototype.values.call(value)
-    const list = encodeList([...values], inner)
-    if (isOmitted(list)) return list
-    return tagged("set", list)
-  }
-  if (ArrayBuffer.isView(value)) {
-    if (!typedArrayKinds.has(kind) || !isElementView(value)) return new Omitted("unsupported")
-    return tagged(kind, elements(value))
-  }
+  if (brands.isRegExp(value)) return encodeRegExp(value)
+  if (brands.isMap(value)) return encodeCollection(value, "map", inner)
+  if (brands.isSet(value)) return encodeCollection(value, "set", inner)
+  if (brands.isTypedArray(value)) return encodeTypedArray(value)
   // oxlint-disable-next-line effect/noNullish -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
   return undefined
 }
 
 // oxlint-disable-next-line effect/noUnknownParameters -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
-const encodeValue = (value: unknown, depth: number, seen: Set<object>): Encoded => {
-  if (depth > maximumSnapshotDepth) return new Omitted("too-deep")
+const encodeValue = (value: unknown, depth: number, seen: Array<object>): Encoded => {
+  if (depth > maximumSnapshotDepth) return tooDeep
   const primitive = encodePrimitive(value)
   if (!Predicate.isUndefined(primitive)) return primitive
-  if (!isReference(value)) return new Omitted("unsupported")
+  // Every trap of a Proxy is cell code, and no read of one is safe.
+  if (!Predicate.isObjectKeyword(value) || brands.isProxy(value)) return unsupported
   const object: object = value
-  if (seen.has(object)) return new Omitted("cyclic")
-  seen.add(object)
+  if (holds(seen, object)) return cyclic
+  append(seen, object)
   // oxlint-disable-next-line effect/noUnknownParameters -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
   const inner = (child: unknown) => encodeValue(child, depth + 1, seen)
   let encoded: Encoded
   const builtin = encodeBuiltin(object, inner)
   if (!Predicate.isUndefined(builtin)) encoded = builtin
-  else if (Array.isArray(object)) encoded = encodeList(object, inner)
-  else if (isPlainObject(object)) encoded = encodeRecord(Object.entries(object), inner)
-  else encoded = new Omitted("unsupported")
-  seen.delete(object)
+  else if (isOrdinaryArray(object)) encoded = encodeArray(object, inner)
+  else if (isPlainObject(object)) encoded = encodeRecord(object, inner)
+  else encoded = unsupported
+  dropLast(seen)
   return encoded
 }
 
-// oxlint-disable-next-line effect/noGlobals -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
-const jsonBytes = (value: Schema.Json) => new TextEncoder().encode(JSON.stringify(value)).byteLength
+/**
+ * The JSON text's UTF-8 length. The frame encoder stringifies the same JSON a
+ * moment later through the same intrinsics, so a hand-written serializer here
+ * would guard nothing. Both functions are saved at load.
+ */
+const utf8Length = (text: string): number => {
+  let bytes = 0
+  for (let index = 0; index < text.length; index++) {
+    const code = codeUnit(text, index)
+    if (code < 0x80) bytes += 1
+    else if (code < 0x800) bytes += 2
+    else if (code >= 0xd800 && code <= 0xdbff && index + 1 < text.length) {
+      // Stringified JSON escapes a lone surrogate, so a high one here opens a pair.
+      bytes += 4
+      index++
+    } else bytes += 3
+  }
+  return bytes
+}
+const jsonBytes = (value: Schema.Json) => utf8Length(jsonText(value))
 
 /**
- * One binding's encoding. Encoding reads the value, so a throwing getter or a
- * trapping Proxy throws here; that value cannot round-trip either.
+ * One binding's encoding. Encoding runs no cell code; a host getter can still
+ * throw, and that value cannot round-trip either.
  */
 const encodeBinding = Option.liftThrowable(
   // oxlint-disable-next-line effect/noUnknownParameters -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
-  (value: unknown): Encoded => encodeValue(value, 0, new Set()),
+  (value: unknown): Encoded => encodeValue(value, 0, []),
 )
 
 /** Encode every binding. Values that cannot round-trip are named with the reason, never silently dropped. */
@@ -214,19 +307,25 @@ export const encodeSnapshot = (namespace: ReadonlyMap<string, unknown>): CellSna
   const bindings: SnapshotBinding[] = []
   const omitted: SnapshotOmission[] = []
   let total = 0
-  for (const [name, value] of namespace) {
-    const encoded = Option.getOrElse(encodeBinding(value), () => new Omitted("unsupported"))
+  // The saved `forEach` walks the namespace: a replaced Map iterator never runs.
+  const entries = readCollection(namespace, Number.MAX_SAFE_INTEGER)
+  const members = Option.match(entries, { onNone: () => [], onSome: (read) => read.members })
+  for (let index = 0; index < members.length; index++) {
+    const member = members[index]
+    if (Predicate.isUndefined(member) || !Predicate.isString(member.key)) continue
+    const name = member.key
+    const encoded = Option.getOrElse(encodeBinding(member.value), () => unsupported)
     if (isOmitted(encoded)) {
-      omitted.push({ name, reason: encoded.reason })
+      append(omitted, { name, reason: encoded.reason })
       continue
     }
     const size = jsonBytes(encoded)
     if (size > maximumSnapshotBindingBytes || total + size > maximumSnapshotBytes) {
-      omitted.push({ name, reason: "too-large" })
+      append(omitted, { name, reason: "too-large" })
       continue
     }
     total += size
-    bindings.push({ name, value: encoded })
+    append(bindings, { name, value: encoded })
   }
   return { bindings, omitted }
 }
@@ -235,8 +334,8 @@ export const encodeSnapshot = (namespace: ReadonlyMap<string, unknown>): CellSna
 const TAG_LITERAL = JSON.stringify(TAG)
 
 /**
- * Source for a reviver that runs inside the vm context. It returns a function
- * from encoded JSON text to a value built from the context's own intrinsics.
+ * Source for a reviver that runs inside the realm that evaluates it. It returns a function
+ * from encoded JSON text to a value built from that realm's own intrinsics.
  */
 export const snapshotReviverSource = `(function () {
   var TAG = ${TAG_LITERAL};
@@ -399,7 +498,11 @@ export const CellResponse = Schema.TaggedUnion({
   Ready: { version: Schema.Literal(1) },
   Evaluated: { cellId: CorrelationId, result: CellEvaluation },
   Failed: { cellId: CorrelationId, error: CellEvaluationError },
-  Reset: { requestId: CorrelationId },
+  Reset: {
+    requestId: CorrelationId,
+    /** Globals the worker could not put back; the host replaces a worker that names any. */
+    unrestored: Schema.optional(Schema.Array(Schema.String)),
+  },
   Snapshot: { requestId: CorrelationId, snapshot: CellSnapshot },
   Restored: { requestId: CorrelationId, bindings: Schema.Array(Schema.String) },
   HostCall: {

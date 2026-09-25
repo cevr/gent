@@ -455,6 +455,50 @@ describe("cell worker", () => {
     }).pipe(Effect.timeout("3 seconds")),
   )
 
+  it.scopedLive("an error shows every part that can be read, each in its place", () =>
+    Effect.gen(function* () {
+      const worker = yield* makeHarness
+      const failed = (cellId: string, source: string) =>
+        Effect.gen(function* () {
+          yield* worker.send(
+            CellRequest.cases.Evaluate.make({ cellId, outputToken: `${cellId}-token`, source }),
+          )
+          const result = yield* worker.next
+          if (result._tag !== "Failed")
+            return yield* new CellProtocolError({ message: `Expected failure, got ${result._tag}` })
+          return result.error.message
+        })
+      // A DOMException keeps its name and message behind host getters on its prototype.
+      expect(
+        yield* failed("dom", "throw new DOMException('The operation timed out.', 'TimeoutError')"),
+      ).toBe("TimeoutError: The operation timed out.")
+      expect(
+        yield* failed(
+          "abort",
+          "const signal = AbortSignal.timeout(1); await new Promise((resolve) => setTimeout(resolve, 20)); throw signal.reason",
+        ),
+      ).toBe("TimeoutError: The operation timed out.")
+      expect(yield* failed("clone", "structuredClone(() => 1)")).toMatch(/^DataCloneError: \S/)
+      // Bun splits one syntax error into several messages; each keeps its position.
+      const split = yield* failed("split", "const = 1")
+      expect(split).toMatch(/^AggregateError: /)
+      expect(split).toMatch(/\n {2}BuildMessage: .+\n {4}at line 1, column \d+/)
+      // A cause whose getter throws shows the getter unrun; one behind a Proxy cannot be read.
+      expect(
+        yield* failed(
+          "tag",
+          "throw new Error('outer', { cause: { get [Symbol.toStringTag]() { throw new Error('tag') } } })",
+        ),
+      ).toBe("Error: outer\ncaused by { Symbol(Symbol.toStringTag): [Getter] }")
+      expect(
+        yield* failed(
+          "trapped",
+          "throw new Error('outer', { cause: new Proxy({}, { getPrototypeOf() { throw 2 } }) })",
+        ),
+      ).toBe("Error: outer\ncaused by (a value that cannot be read)")
+    }).pipe(Effect.timeout("3 seconds")),
+  )
+
   it.scopedLive(
     "an uncaught value that cannot be read reaches the next cell; the worker lives",
     () =>

@@ -933,18 +933,52 @@ Inner operation bindings and durable approvals use the stores described below.
 The namespace section of `cell.ts` keeps the top-level bindings of the last good
 cell per branch (`cell_namespaces`) and restores them into a replacement worker;
 the first result after a restore names what came back and what was omitted.
+A binding is a global the cell added, or a worker global it rebound, deleted or
+redefined with other flags (the worker keeps each global's starting descriptor
+and compares value, accessors and flags), so `prompt` or `performance` declared
+by a cell is saved, reported and reset like a new name. `tools` and `context`
+are the host's: the worker installs them once per realm as accessors that are
+not configurable, with a setter that throws, so a cell that declares, assigns,
+deletes or redefines either fails or is refused, and neither can be lost. A
+reset puts every global back as the worker found it; the Reset reply names
+(additive, optional `unrestored`) any global the realm refused to remove or
+put back, such as one a cell made not configurable, and the kernel then
+replaces the worker, so a reset never leaves a global behind.
 The worker reads each binding from its property descriptor, so a snapshot
-never calls a global accessor (it is omitted as a function), and a value whose
-encoding throws (a throwing getter, a trapping Proxy) is omitted as
-`unsupported`; the worker and the rest of the namespace stay.
+never calls a global accessor (it is omitted as a function). The snapshot
+encoder, the error renderer and the value display share one value reader in
+`cell-value.ts` that never runs cell code: it reads data descriptors, runs
+only host getters (those of every global error type, taken at load, compared
+by identity), never touches a Proxy (Bun's `util.types.isProxy`), and reads
+built-ins by brand (`util.types`). Every function it calls is saved at load
+and called with the saved `Reflect.apply`: no method through a value or a
+prototype at call time, no iterator, spread or `push` (lists grow through the
+saved `Reflect.defineProperty` with a descriptor that has no prototype), and
+a bigint or number becomes text through the abstract `String`. A value it
+cannot read that way (a cell getter, a Proxy, an object where a string
+belongs) is omitted as `unsupported`; the worker and the rest of the namespace
+stay. Out of the reader's reach: Effect builds its `Option` and `Result` data
+by assignment, and the worker's Effect runtime, error renderer string work and
+JSON frames use the shared intrinsics; a cell that plants a setter on
+`Object.prototype` or rewrites those stalls the worker, and the host replaces
+a worker that stops answering.
 A result's `bindings` names only the bindings its cell added or bound to
 another value (compared by `Object.is`), and `bindingCount` (additive,
 optional) counts the whole namespace: every result stays in the history, so a
 full list on each would grow with cells times bindings. A result stored before
-`bindingCount` lists every binding. A thrown value renders through one total
-renderer: its name, message, cause and detail are read from property
-descriptors (a getter the cell wrote never runs), and a read that still throws
-(a trapping Proxy) gives one fixed text, never a worker death.
+`bindingCount` lists every binding. A thrown value renders through the same
+reader, one part at a time: its name and message, its detail (each inner
+`BuildMessage` of a split syntax error keeps its position), and its cause. A
+part that cannot be read gives a fixed text in its place and the other parts
+stand; a thrown value whose prototype chain holds a Proxy gives one fixed
+text. The display of a logged or returned value, a thrown non-Error, a cause
+and an uncaught report (`displayValue`) follows `util.inspect` (`depth: 4`, 100
+items, 8192 characters, no custom inspection) through the reader. Where
+`inspect` would run cell code it shows a marker instead: `[Proxy]` for a
+Proxy, `[Object: unreadable prototype]` for a Proxy on the prototype chain,
+`[Getter]` for an accessor, and it never reads a `Symbol.toStringTag` getter.
+A nested error shows as `[Name: message]` without its stack; an object lists
+at most 100 properties, and one display formats at most 20 000 values.
 The first kernel start of a branch with no saved namespace fixes its starting
 namespace in its own row. For the opening branch (the oldest) of a handoff
 session (a parent, not spawned: `isSpawnedSession`), that is a copy of the one
