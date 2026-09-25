@@ -976,6 +976,38 @@ describe("one pane slot", () => {
     expect(closed.state.overlay).toEqual({ _tag: "none" })
   })
 
+  test("the boot branch picker and an enforced sign-in keep the slot until they close", () => {
+    const opens: ReadonlyArray<Parameters<typeof transitionSessionUi>[1]> = [
+      { _tag: "OpenPane", id: "agents.pane" },
+      { _tag: "OpenFork", messages: [] },
+      { _tag: "OpenMermaid" },
+      { _tag: "OpenAuth", enforceAuth: false },
+      { _tag: "OpenSettingsPicker", picker: "model" },
+      { _tag: "OpenBranches", branches: [] },
+      { _tag: "PromptSearch", event: { _tag: "Open", draftBeforeOpen: "draft" } },
+      { _tag: "PromptSearch", event: { _tag: "Cancel" } },
+    ]
+    const branches = SessionUiState.initial(Option.some([]))
+    const signIn = transitionSessionUi(SessionUiState.initial(), {
+      _tag: "OpenAuth",
+      enforceAuth: true,
+    }).state
+    for (const held of [branches, signIn]) {
+      const kept = opens.filter((event) => transitionSessionUi(held, event).state === held)
+      expect(kept).toEqual([...opens])
+      expect(transitionSessionUi(held, { _tag: "CloseOverlay" }).state.overlay).toEqual({
+        _tag: "none",
+      })
+    }
+    // A sign-in the reader opened is theirs to leave for another pane.
+    const optional = transitionSessionUi(SessionUiState.initial(), {
+      _tag: "OpenAuth",
+      enforceAuth: false,
+    }).state
+    const pane = transitionSessionUi(optional, { _tag: "OpenPane", id: "agents.pane" })
+    expect(pane.state.overlay).toEqual({ _tag: "pane", id: "agents.pane" })
+  })
+
   test("a pane leaves the composer and the session keys live; a picker holds them", () => {
     expect(overlayHoldsComposer(open("agents.pane").overlay)).toBe(false)
     expect(overlayHoldsComposer({ _tag: "model" })).toBe(true)

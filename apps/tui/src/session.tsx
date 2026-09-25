@@ -781,10 +781,30 @@ interface SessionUiTransitionResult {
   readonly effects: readonly SessionUiEffect[]
 }
 
+/**
+ * Events that put something in the one slot. The boot branch picker and an
+ * enforced sign-in hold the slot until they close: the startup prompt and the
+ * auth gate wait on them, so a pane opened over them would let the prompt
+ * send into a branch the reader never chose.
+ */
+const SLOT_OPENERS: ReadonlySet<SessionUiEvent["_tag"]> = new Set([
+  "OpenFork",
+  "OpenMermaid",
+  "OpenAuth",
+  "OpenSettingsPicker",
+  "OpenBranches",
+  "OpenPane",
+  "PromptSearch",
+])
+
+const slotHeld = (overlay: SessionOverlayState): boolean =>
+  overlay._tag === "branches" || (overlay._tag === "auth" && overlay.enforceAuth)
+
 export function transitionSessionUi(
   state: SessionUiState,
   event: SessionUiEvent,
 ): SessionUiTransitionResult {
+  if (slotHeld(state.overlay) && SLOT_OPENERS.has(event._tag)) return { state, effects: [] }
   return Match.value(event).pipe(
     Match.tagsExhaustive({
       ClearDisplay: (): SessionUiTransitionResult => ({
