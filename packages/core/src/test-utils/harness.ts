@@ -143,7 +143,7 @@ const defaultSession = (): ExtensionSessionService => ({
   events: () => Stream.die("Session.events"),
   dequeueFollowUp: () => die("Session.dequeueFollowUp"),
   listBranches: die("Session.listBranches"),
-  listSessions: die("Session.listSessions"),
+  listSessions: () => die("Session.listSessions"),
   listActiveLoops: die("Session.listActiveLoops"),
 })
 
@@ -280,7 +280,7 @@ export const testToolContext = (overrides?: TestToolContextOverrides): TestToolC
     events: () => Stream.die("session.events"),
     dequeueFollowUp: dieStub("session.dequeueFollowUp"),
     listBranches: dieEffect("session.listBranches"),
-    listSessions: dieEffect("session.listSessions"),
+    listSessions: dieStub("session.listSessions"),
     listActiveLoops: dieEffect("session.listActiveLoops"),
   }
   const Interaction: ExtensionContextService["Interaction"] = {

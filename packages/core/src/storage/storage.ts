@@ -914,6 +914,16 @@ interface RelationshipStorageService {
   ) => Effect.Effect<ReadonlyArray<Session>, StorageError>
 
   /**
+   * The session and every session below it by parent link, at any depth:
+   * delegate children, `/btw` forks and handoffs alike. One indexed recursive
+   * read, so its cost follows the subtree, not the workspace. A parent cycle
+   * ends the walk. Empty when the session is not in the workspace.
+   */
+  readonly getSessionTree: (
+    sessionId: SessionId,
+  ) => Effect.Effect<ReadonlyArray<Session>, StorageError>
+
+  /**
    * Every session in one thread, oldest first.
    *
    * A thread is the work itself, not one session's parent line: a session that
@@ -988,6 +998,30 @@ export class RelationshipStorage extends Context.Service<
             return yield* Effect.forEach(chain, sessionFromRow)
           },
           Effect.mapError(storageError("Failed to get session ancestors")),
+        ),
+
+        getSessionTree: Effect.fn("RelationshipStorage.getSessionTree")(
+          function* (sessionId) {
+            const workspaceId = yield* CurrentWorkspaceId
+            // `UNION` over ids alone ends on a cycle: a repeated id adds no row.
+            // The unary `+` keeps the planner off the workspace index, which
+            // would scan every session in the workspace at each step: each
+            // step walks `idx_sessions_parent` and the result reads by id.
+            const rows = yield* sql<SessionRow>`WITH RECURSIVE tree(id) AS (
+            SELECT id FROM sessions WHERE id = ${sessionId} AND workspace_id = ${workspaceId}
+            UNION
+            SELECT s.id
+            FROM tree t
+            JOIN sessions s ON s.parent_session_id = t.id
+            WHERE +s.workspace_id = ${workspaceId}
+          )
+          SELECT ${sql.literal(SESSION_COLUMNS)}
+          FROM sessions
+          WHERE id IN (SELECT id FROM tree) AND +workspace_id = ${workspaceId}
+          ORDER BY updated_at DESC`
+            return yield* Effect.forEach(rows, sessionFromRow)
+          },
+          Effect.mapError(storageError("Failed to get session tree")),
         ),
 
         getThreadSessions: Effect.fn("RelationshipStorage.getThreadSessions")(

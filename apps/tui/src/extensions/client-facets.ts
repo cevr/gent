@@ -719,10 +719,21 @@ interface RendererContribution {
   readonly component: ToolRenderer
 }
 
-interface MessageRendererContribution {
+/** A message row renderer as the host resolves it, keyed by its custom type. */
+export interface MessageRendererEntry {
+  readonly component: MessageRenderer
+  /**
+   * Present when a user message of this type is a prompt the reader asked,
+   * though an extension sent it (a `/btw` fork's question): the text the
+   * reader wrote, from the message content. The transcript pins it as the
+   * reader's last prompt.
+   */
+  readonly prompt?: (content: string) => string
+}
+
+interface MessageRendererContribution extends MessageRendererEntry {
   /** Matches `metadata.customType` exactly. */
   readonly customType: string
-  readonly component: MessageRenderer
 }
 
 interface WidgetContribution {
@@ -892,7 +903,8 @@ export const rendererContribution = (
 export const messageRendererContribution = (
   customType: string,
   component: MessageRenderer,
-): ClientContributions => ({ messageRenderers: [{ customType, component }] })
+  options: { readonly prompt?: (content: string) => string } = {},
+): ClientContributions => ({ messageRenderers: [{ customType, component, ...options }] })
 
 export const widgetContribution = (opts: {
   readonly id: string

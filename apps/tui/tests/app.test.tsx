@@ -588,23 +588,35 @@ const mountRunningTurnWithError = Effect.gen(function* () {
  * in ANSWER-TAIL. `messages` is what the branch stores, the one read `/thread`
  * draws its windows from.
  */
-const mountShortTerminalWithTrays = (height: number, messages: ReadonlyArray<StoredMessage> = []) =>
+const mountShortTerminalWithTrays = (
+  height: number,
+  messages: ReadonlyArray<StoredMessage> = [],
+  options: {
+    readonly width?: number
+    readonly onClient?: (client: ClientContextValue) => void
+  } = {},
+) =>
   Effect.gen(function* () {
     const sessionId = SessionId.make("session-btw")
     const branchId = BranchId.make("branch-btw")
     const answer =
       "**Task 5** looks hardest: adding the API integration test requires starting and stopping the HTTP server, importing the CSV fixture over HTTP, managing temporary database state, and verifying the monthly report response. The other tasks are isolated logic fixes or a small query refactor. ANSWER-TAIL"
-    const child = (n: number) => ({
-      sessionId: SessionId.make(`child-${n}`),
-      branchId: BranchId.make(`child-${n}-branch`),
-      section: "running" satisfies "running",
-      name: `delegate: task ${n}`,
-      live: true,
-      depth: 1,
-      parentSessionId: sessionId,
-      sideThread: false,
-      activity: "bash",
-    })
+    const child = (n: number) => {
+      const row = {
+        sessionId: SessionId.make(`child-${n}`),
+        branchId: BranchId.make(`child-${n}-branch`),
+        section: "running" satisfies "running",
+        name: `delegate: task ${n}`,
+        live: true,
+        depth: 1,
+        parentSessionId: sessionId,
+        sideThread: false,
+      }
+      // Tasks 3 and 4 report no activity line: their row names the detail
+      // status only while the cursor is on it, which marks the cursor row.
+      if (n <= 4) return row
+      return { ...row, activity: "bash" }
+    }
     const running = { _tag: "Running" satisfies "Running", queue: emptyQueueSnapshot() }
     const client = createMockClient({
       auth: { listProviders: () => Effect.succeed([]) },
@@ -665,19 +677,28 @@ const mountShortTerminalWithTrays = (height: number, messages: ReadonlyArray<Sto
       },
     })
     const setup = yield* Effect.promise(() =>
-      renderWithProviders(() => <App missingAuthProviders={[]} />, {
-        client,
-        runtime: createMockRuntime(),
-        builtins: builtinClientModules,
-        height,
-        initialSession: {
-          id: sessionId,
-          activeBranchId: branchId,
-          name: "Session BTW",
-          createdAt: dateFromMillis(0),
-          updatedAt: dateFromMillis(0),
+      renderWithProviders(
+        () => (
+          <>
+            <App missingAuthProviders={[]} />
+            <ClientProbe onReady={options.onClient ?? (() => {})} />
+          </>
+        ),
+        {
+          client,
+          runtime: createMockRuntime(),
+          builtins: builtinClientModules,
+          height,
+          width: options.width,
+          initialSession: {
+            id: sessionId,
+            activeBranchId: branchId,
+            name: "Session BTW",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
         },
-      }),
+      ),
     )
     yield* waitForFrame(
       setup,
@@ -1534,7 +1555,7 @@ describe("App auth gate", () => {
       setup.mockInput.pressKey("t", { ctrl: true })
       yield* waitForFrame(
         setup,
-        (frame) => frame.includes("Agents ·") && frame.includes("delegate: task 3  ·  running"),
+        (frame) => frame.includes("Agents ·") && frame.includes("delegate: task 3 · running"),
         "the agents pane with its cursor row",
       )
       const opened = renderFrame(setup)
@@ -1547,7 +1568,7 @@ describe("App auth gate", () => {
       yield* waitForFrame(
         setup,
         (frame) =>
-          frame.includes("delegate: task 4") && !frame.includes("delegate: task 3  ·  running"),
+          frame.includes("delegate: task 4") && !frame.includes("delegate: task 3 · running"),
         "the cursor row after one move down",
       )
       setup.mockInput.pressEscape()
@@ -1572,7 +1593,7 @@ describe("App auth gate", () => {
         yield* waitForFrame(setup, (frame) => !frame.includes("alarm in now"), "the agents pane")
         const frame = yield* waitForFrame(
           setup,
-          (current) => current.includes("delegate: task 3  ·  running"),
+          (current) => current.includes("delegate: task 3 · running"),
           `the cursor row at ${height} rows`,
         )
         const drawn = frame.split("\n").filter((line) => line.trim().length > 0)
@@ -2799,6 +2820,88 @@ const createMutableRuntime = (initialState: ConnectionState) => {
     },
   }
 }
+
+// ── agents view on the left arrow ───────────────────────────────────────────
+
+describe("agents view on the left arrow", () => {
+  const paneOpen = (frame: string) => frame.includes("Agents ·")
+
+  it.live("← on an empty composer opens the agents pane; ← again and Esc close it", () =>
+    Effect.gen(function* () {
+      const setup = yield* mountShortTerminalWithTrays(30)
+      setup.mockInput.pressArrow("left")
+      yield* waitForFrame(setup, paneOpen, "the agents pane opened by ←")
+      setup.mockInput.pressArrow("left")
+      yield* waitForFrame(setup, (frame) => !paneOpen(frame), "the pane closed by ←")
+      setup.mockInput.pressArrow("left")
+      yield* waitForFrame(setup, paneOpen, "the pane opened again")
+      setup.mockInput.pressEscape()
+      yield* waitForFrame(setup, (frame) => !paneOpen(frame), "the pane closed by Esc")
+      // The composer has the keys back.
+      yield* Effect.promise(() => setup.mockInput.typeText("hi"))
+      yield* waitForFrame(setup, (frame) => frame.includes("┃ hi"), "typed text in the composer")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.live("← with a draft moves the text cursor and opens nothing", () =>
+    Effect.gen(function* () {
+      const setup = yield* mountShortTerminalWithTrays(30)
+      yield* Effect.promise(() => setup.mockInput.typeText("ac"))
+      setup.mockInput.pressArrow("left")
+      yield* Effect.promise(() => setup.mockInput.typeText("b"))
+      const frame = yield* waitForFrame(setup, (current) => current.includes("┃ abc"), "abc")
+      expect(paneOpen(frame)).toBe(false)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.live("← in shell mode opens nothing", () =>
+    Effect.gen(function* () {
+      const setup = yield* mountShortTerminalWithTrays(30)
+      yield* Effect.promise(() => setup.mockInput.typeText("!"))
+      yield* waitForFrame(setup, (frame) => frame.includes("$"), "shell mode")
+      setup.mockInput.pressArrow("left")
+      yield* Effect.promise(() => setup.renderOnce())
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(paneOpen(renderFrame(setup))).toBe(false)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.live("← in the command palette pops a level and opens no pane", () =>
+    Effect.gen(function* () {
+      const setup = yield* mountShortTerminalWithTrays(30)
+      setup.mockInput.pressKey("p", { ctrl: true })
+      yield* waitForFrame(setup, (frame) => frame.includes("Esc Close"), "the palette root")
+      // Theme is the first row.
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, (frame) => frame.includes("Esc Back"), "the theme level")
+      setup.mockInput.pressArrow("left")
+      const frame = yield* waitForFrame(
+        setup,
+        (current) => current.includes("Esc Close"),
+        "the palette root again",
+      )
+      expect(paneOpen(frame)).toBe(false)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.live("→ on a row switches to that agent and closes the pane", () =>
+    Effect.gen(function* () {
+      let ctx = Option.none<ClientContextValue>()
+      const setup = yield* mountShortTerminalWithTrays(30, [], {
+        onClient: (value) => (ctx = Option.some(value)),
+      })
+      setup.mockInput.pressArrow("left")
+      yield* waitForFrame(setup, paneOpen, "the agents pane")
+      setup.mockInput.pressArrow("down")
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressArrow("right")
+      yield* waitForFrame(setup, (frame) => !paneOpen(frame), "the pane closed")
+      const client = yield* requireClient(ctx)
+      expect(client.session()?.sessionId).toBe(SessionId.make("child-4"))
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+})
+
 describe("TUI renderer surfaces", () => {
   it.live("MessageList renders user labels and assistant reasoning", () =>
     Effect.gen(function* () {

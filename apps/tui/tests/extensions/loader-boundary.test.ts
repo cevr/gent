@@ -270,7 +270,7 @@ describe("resolveTuiExtensions", () => {
     ])
 
     const goal = Option.fromNullishOr(resolved.messageRenderers.get("goal-context"))
-    expect(Option.map(goal, (render) => render(rowProps))).toEqual(Option.some("user"))
+    expect(Option.map(goal, (entry) => entry.component(rowProps))).toEqual(Option.some("user"))
     expect(resolved.messageRenderers.has("Goal-Context")).toBe(false)
     expect([...resolved.messageRenderers.keys()]).toEqual(["goal-context", "wake"])
     expect(resolved.failures).toEqual([

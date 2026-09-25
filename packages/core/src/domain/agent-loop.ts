@@ -86,11 +86,14 @@ export const SessionRuntimeStateSchema = Schema.TaggedUnion({
   Idle: {
     queue: QueueSnapshot,
   },
+  /** `startedAtMs`: when the current turn began, so a woken loop reads its run time, not its age. */
   Running: {
     queue: QueueSnapshot,
+    startedAtMs: Schema.Finite,
   },
   WaitingForInteraction: {
     queue: QueueSnapshot,
+    startedAtMs: Schema.Finite,
   },
 })
 export type SessionRuntimeState = Schema.Schema.Type<typeof SessionRuntimeStateSchema>
