@@ -1197,6 +1197,13 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
     Effect.ignore,
   )
 
+  /** True when the turn `messageId` opened runs and an interrupt already stops it. */
+  const stopping = Effect.fn("AgentLoop.stopping")(function* (messageId: MessageId) {
+    const snap = yield* scope.inbox.phase
+    if (snap._tag === "Idle" || snap.message.id !== messageId) return false
+    return yield* scope.turnInterruption.interrupted
+  })
+
   /** True when a turn (the one `messageId` names, if given) was running and is now stopping. */
   const interrupt = Effect.fn("AgentLoop.interrupt")(function* (messageId?: MessageId) {
     const reached = yield* Effect.gen(function* () {
@@ -1347,6 +1354,7 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
     admitAndStart,
     interruptActiveStream: interruptActiveStream(scope.activeStreamRef),
     interrupt,
+    stopping,
     respondInteraction,
     withdrawAdmittedTurn,
     withSideMutation: <A, E, R2>(effect: Effect.Effect<A, E, R2>): Effect.Effect<A, E, R2> =>
@@ -1427,6 +1435,8 @@ type AgentLoopBehavior = {
     options: { readonly queueOnly: boolean },
   ) => Effect.Effect<Option.Option<RunningState>, AgentLoopError | FollowUpQueueFull>
   interrupt: (messageId?: MessageId) => Effect.Effect<boolean, AgentLoopError>
+  /** True when the turn `messageId` opened runs and an interrupt already stops it. */
+  stopping: (messageId: MessageId) => Effect.Effect<boolean>
   respondInteraction: (requestId: InteractionRequestId) => Effect.Effect<void, AgentLoopError>
   withSideMutation: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
   /** Mark the per-entity behavior ready to accept state mutations. */
@@ -1928,6 +1938,7 @@ const makeAgentLoopBehavior = (
       startNextIfIdle: worker.startNextIfIdle,
       admitAndStart: worker.admitAndStart,
       interrupt: worker.interrupt,
+      stopping: worker.stopping,
       respondInteraction: worker.respondInteraction,
       withSideMutation: worker.withSideMutation,
       start,
@@ -2749,11 +2760,18 @@ const buildAgentLoopActorHandlers = (config: {
      * Stop what one message opens. The recorded cancellation stops a turn
      * that has not started yet when it starts; a steer no step has read yet
      * is taken back; a running turn the message opened is interrupted.
-     * True when the stop reached the message in one of these places. False
-     * when the loop no longer holds it: its turn ended, or a step already
-     * joined it into a turn that another message opened.
+     * True when this stop reached the message in one of these places. False
+     * when the loop no longer holds it (its turn ended, or a step already
+     * joined it into a turn that another message opened), or when an earlier
+     * interrupt already stops its turn: that stop is not this one's doing.
      */
     const stopMessage = Effect.fn("AgentLoopActor.stopMessage")(function* (messageId: MessageId) {
+      // Read before the cancellation is recorded: a turn that starts after
+      // the record latches itself, and that latch is this stop's.
+      const alreadyStopping = yield* Option.match(lifecycleHandle(yield* Ref.get(lifecycleRef)), {
+        onNone: () => Effect.succeed(false),
+        onSome: (open) => open.stopping(messageId),
+      })
       yield* operations
         .cancelTurn({ sessionId, branchId, messageId })
         .pipe(asAgentLoopError("Cannot record targeted cancellation"))
@@ -2762,7 +2780,7 @@ const buildAgentLoopActorHandlers = (config: {
       // An idle loop has no turn to interrupt: the interrupt reports false.
       const interrupted = yield* handle.interrupt(messageId).pipe(orCleanup(handle))
       const held = handle.inbox.holds(yield* handle.inbox.read, messageId)
-      return takenBack || interrupted || held
+      return takenBack || (!alreadyStopping && (interrupted || held))
     })
 
     const applySteer = Effect.fn("AgentLoopActor.applySteer")(function* (

@@ -316,12 +316,17 @@ export const sessionMessageBody = (from: SessionMessageSender, content: string):
  * as the delegate registry's does for a child's first turn, never up to a
  * parent or across to a sibling.
  *
- * The record lives in memory. It drops a turn when the child's turn ends,
- * and at the sender's next turn that is not interrupted it drops every turn
- * whose child no longer runs (the message joined a running turn, or was taken
- * back). A notice lives until an answered turn of the sender reads it. A
- * restart forgets both: a child turn the restart resumes is not stopped by
- * the sender's next interrupt.
+ * The record lives in memory, keyed by the child session and the message.
+ * A send that fails keeps its record: the message may still have landed.
+ * The record drops a message when the turn it opened ends, when the sender's
+ * interrupt stops it or finds nothing left to stop, and when the sender or
+ * the child session no longer exists. A message a step joined into a turn
+ * another message opened stays until one of those. Only a stop that reports
+ * it reached the message (`Session.stopMessage`) becomes a notice; a stop
+ * that fails is logged, and the record stays for the next interrupt. A
+ * notice lives until an answered turn of the sender reads it. A restart
+ * forgets both: a child turn the restart resumes is not stopped by the
+ * sender's next interrupt.
  */
 
 interface SentTurn {
@@ -332,8 +337,6 @@ interface SentTurn {
   readonly name: Option.Option<string>
   /** The message the send landed; the turn it opens carries the same id. */
   readonly messageId: MessageId
-  /** The sender's interrupt stopped it; its end, if it ends interrupted, is a notice. */
-  readonly stopping: boolean
 }
 
 /** A child turn the sender's interrupt stopped, until a sender turn reads it. */
@@ -365,79 +368,81 @@ const sentBy =
   (turn: { readonly senderSessionId: SessionId; readonly senderBranchId: BranchId }) =>
     turn.senderSessionId === sender.sessionId && turn.senderBranchId === sender.branchId
 
+/** One message in one child session: the record's key. */
+const sameSent =
+  (key: { readonly sessionId: SessionId; readonly messageId: MessageId }) =>
+  (turn: { readonly sessionId: SessionId; readonly messageId: MessageId }) =>
+    turn.sessionId === key.sessionId && turn.messageId === key.messageId
+
 const recordSentTurn = (turn: SentTurn) =>
   Effect.flatMap(SentTurns, (state) =>
     Ref.update(state, (current) => ({
       ...current,
-      sent: [...current.sent.filter((sent) => sent.messageId !== turn.messageId), turn],
+      sent: [...current.sent.filter(Predicate.not(sameSent(turn))), turn],
     })),
   )
 
-const forgetSentTurn = (messageId: MessageId) =>
+/** A turn ended somewhere. When a send opened it, the record drops it. */
+const onSentTurnEnd = (input: Pick<TurnAfterInput, "sessionId" | "messageId">) =>
   Effect.flatMap(SentTurns, (state) =>
     Ref.update(state, (current) => ({
       ...current,
-      sent: current.sent.filter((sent) => sent.messageId !== messageId),
+      sent: current.sent.filter(Predicate.not(sameSent(input))),
     })),
   )
 
 /**
- * A turn ended somewhere. When it is one a send opened, the record drops it,
- * and a turn the sender's interrupt stopped that ended interrupted becomes a
- * notice: the stop took effect. A turn that ended on its own before the stop
- * reached it is no news.
+ * The stop's own answer settles the record: a stop that reached the message
+ * (stopped its turn, or took it back before a step read it) is a notice; a
+ * stop that found nothing is no news. Either way nothing is left to stop.
  */
-const onSentTurnEnd = (input: Pick<TurnAfterInput, "sessionId" | "messageId" | "interrupted">) =>
+const settleStop = (turn: SentTurn, reached: boolean) =>
   Effect.flatMap(SentTurns, (state) =>
     Ref.update(state, (current) => {
-      const ended = current.sent.find(
-        (sent) => sent.sessionId === input.sessionId && sent.messageId === input.messageId,
-      )
-      if (Predicate.isUndefined(ended)) return current
-      const sent = current.sent.filter((turn) => turn !== ended)
-      if (!ended.stopping || !input.interrupted) return { ...current, sent }
-      return { sent, stopped: [...current.stopped, ended] }
+      const sent = current.sent.filter(Predicate.not(sameSent(turn)))
+      if (!reached || current.stopped.some(sameSent(turn))) return { ...current, sent }
+      return { sent, stopped: [...current.stopped, turn] }
     }),
   )
 
-/** The sender's interrupted turn stops every turn its sends opened that still runs or waits. */
+/** A child that does not answer a stop in time holds its sender's interrupt no longer than this. */
+const STOP_TIMEOUT = "10 seconds"
+/** Stops for one interrupt run side by side, a few at a time. */
+const STOP_CONCURRENCY = 8
+
+/**
+ * The sender's interrupted turn stops every message its sends landed that
+ * the record still holds. Each stop carries a fresh request id, so a later
+ * interrupt retries a stop that failed instead of replaying its failure.
+ */
 const stopSentTurns = Effect.fn("SessionTools.stopSentTurns")(function* () {
   const ctx = yield* ExtensionContext
-  const state = yield* SentTurns
-  const mine = sentBy(ctx)
-  const stopping = yield* Ref.modify(state, (current) => {
-    const marked = current.sent.filter((sent) => mine(sent) && !sent.stopping)
-    if (marked.length === 0) return [marked, current]
-    const sent = current.sent.map((turn) => {
-      if (!marked.includes(turn)) return turn
-      return { ...turn, stopping: true }
-    })
-    return [marked, { ...current, sent }]
-  })
+  const mine = (yield* Ref.get(yield* SentTurns)).sent.filter(sentBy(ctx))
   yield* Effect.forEach(
-    stopping,
+    mine,
     (turn) =>
       ctx.Session.stopMessage({
         sessionId: turn.sessionId,
         branchId: turn.branchId,
         messageId: turn.messageId,
-        requestId: RequestId.make(`session-send-stop:${turn.messageId}`),
       }).pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning("session-send.stop.failed").pipe(
-            Effect.annotateLogs({ messageId: turn.messageId, cause: Cause.pretty(cause) }),
-          ),
-        ),
+        Effect.timeout(STOP_TIMEOUT),
+        Effect.matchCauseEffect({
+          onSuccess: (reached) => settleStop(turn, reached),
+          onFailure: (cause) =>
+            Effect.logWarning("session-send.stop.failed").pipe(
+              Effect.annotateLogs({ messageId: turn.messageId, cause: Cause.pretty(cause) }),
+            ),
+        }),
       ),
-    { discard: true },
+    { concurrency: STOP_CONCURRENCY, discard: true },
   )
 })
 
 /**
- * A sender turn that was not interrupted drops what its answer read and every
- * sent turn whose child no longer runs: a message that joined a running
- * turn, or one a stop took back, never ends a turn of its own. A turn whose
- * child still runs stays; its end drops it.
+ * A sender turn that was not interrupted drops the notices its answer read,
+ * and every record whose sender or child session no longer exists: nothing
+ * can stop or read those. A session that cannot be read now is kept.
  */
 const settleSentTurns = Effect.fn("SessionTools.settleSentTurns")(function* (
   readNotices: ReadonlySet<string>,
@@ -446,29 +451,37 @@ const settleSentTurns = Effect.fn("SessionTools.settleSentTurns")(function* (
   const state = yield* SentTurns
   const mine = sentBy(ctx)
   const current = yield* Ref.get(state)
+  if (current.sent.length === 0 && current.stopped.length === 0) return
+  const named = new Set<SessionId>([
+    ...current.sent.flatMap((turn) => [turn.senderSessionId, turn.sessionId]),
+    ...current.stopped.map((turn) => turn.senderSessionId),
+  ])
+  const gone = new Set<SessionId>()
+  yield* Effect.forEach(
+    named,
+    (sessionId) =>
+      ctx.Session.getSession(sessionId).pipe(
+        Effect.map((session) => {
+          if (Predicate.isUndefined(session)) gone.add(sessionId)
+        }),
+        Effect.catchCause((cause) =>
+          Effect.logWarning("session-send.settle.read-failed").pipe(
+            Effect.annotateLogs({ sessionId, cause: Cause.pretty(cause) }),
+          ),
+        ),
+      ),
+    { concurrency: 4, discard: true },
+  )
   const read = (turn: StoppedTurn) => mine(turn) && readNotices.has(turn.messageId)
-  const waiting = current.sent.filter(mine)
-  if (waiting.length === 0 && !current.stopped.some(read)) return
-  let settled = new Set<MessageId>()
-  if (waiting.length > 0) {
-    const live = new Set(
-      (yield* ctx.Session.listActiveLoops)
-        .filter((loop) => Option.exists(loop.status, (status) => status !== "Idle"))
-        .map((loop) => `${loop.sessionId}:${loop.branchId}`),
-    )
-    settled = new Set(
-      waiting
-        .filter((turn) => !live.has(`${turn.sessionId}:${turn.branchId}`))
-        .map((turn) => turn.messageId),
-    )
-  }
   yield* Ref.update(state, (latest) => ({
-    sent: latest.sent.filter((turn) => !(mine(turn) && settled.has(turn.messageId))),
-    stopped: latest.stopped.filter((turn) => !read(turn)),
+    sent: latest.sent.filter(
+      (turn) => !gone.has(turn.senderSessionId) && !gone.has(turn.sessionId),
+    ),
+    stopped: latest.stopped.filter((turn) => !read(turn) && !gone.has(turn.senderSessionId)),
   }))
 })
 
-/** The sender's own turn end: an interrupt stops what its sends opened; any other end settles. */
+/** The sender's own turn end: an interrupt stops what its sends landed; any other end settles. */
 const afterSenderTurn = (input: Pick<TurnAfterInput, "interrupted" | "readNotices">) => {
   if (input.interrupted) return stopSentTurns()
   return settleSentTurns(input.readNotices)
@@ -490,7 +503,7 @@ const stoppedTurnNotices = Effect.fn("SessionTools.stoppedTurnNotices")(function
     {
       id: "session-send-stopped",
       keys: stopped.map((turn) => turn.messageId),
-      content: `# Stopped child turns\n\nThe user interrupted your turn, and that stopped the turns your session.send messages had started in these children. Those turns are not running, and no answer will come from them. Tell the user which children stopped; send to them again only when the user asks for it.\n\n${[...new Set(lines)].join("\n")}`,
+      content: `# Stopped child turns\n\nThe user interrupted your turn, and that stopped what your session.send messages had started in these children: a turn a message opened was stopped, or a message no step had read yet was taken back. Nothing runs from them, and no answer will come from them. Tell the user which children stopped; send to them again only when the user asks for it.\n\n${[...new Set(lines)].join("\n")}`,
     },
   ]
 })
@@ -559,7 +572,8 @@ const SendSessionTool = tool({
     const details: SessionMessageDetails = { from }
     const requestId = RequestId.make(`session-send:${ctx.toolCallId}`)
     const messageId = interjectionMessageId(requestId)
-    // Recorded before the send: a turn the send opens can end before the send returns.
+    // Recorded before the send: a turn the send opens can end before the send
+    // returns. A failed send keeps it: the message may still have landed.
     if (relation === "child") {
       yield* recordSentTurn({
         senderSessionId: ctx.sessionId,
@@ -568,7 +582,6 @@ const SendSessionTool = tool({
         branchId,
         name: Option.fromUndefinedOr(receiver.name),
         messageId,
-        stopping: false,
       })
     }
     yield* ctx.Session.send({
@@ -585,7 +598,6 @@ const SendSessionTool = tool({
       // The receiver may be idle; a parked message nobody reads is a lost question.
       wake: true,
     }).pipe(
-      Effect.tapError(() => forgetSentTurn(messageId)),
       Effect.mapError((e) => new SendSessionError({ message: `Cannot deliver: ${e.message}` })),
     )
     return { sessionId: receiver.id, relation }

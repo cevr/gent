@@ -7,6 +7,7 @@ import {
   Option,
   Predicate,
   Record,
+  Ref,
   Schema,
   Stream,
   Struct,
@@ -20,7 +21,13 @@ import {
   readChildCompletionHeadline,
   StartChild,
 } from "../src/delegate.js"
-import { type ModelPricing, RequestId } from "@gent/core/extensions/api"
+import {
+  defineExtension,
+  ExtensionHost,
+  LoadedArtifactIdentity,
+  type ModelPricing,
+  RequestId,
+} from "@gent/core/extensions/api"
 import {
   ApprovalService,
   createE2ELayer,
@@ -80,12 +87,15 @@ const harnessWithHome = (
     readonly config?: UserConfig
     readonly dialogs?: boolean
     readonly modelPricing?: ModelPricing
+    /** Fixture extensions loaded beside the shipped ones. */
+    readonly fixtures?: ReadonlyArray<(typeof e2ePreset.extensionInputs)[number]>
   } = {},
 ) =>
   Effect.gen(function* () {
     const home = yield* makeTempDirectoryScoped("delegate-")
     const harness = yield* createRpcHarness({
       ...e2ePreset,
+      extensionInputs: [...e2ePreset.extensionInputs, ...(options.fixtures ?? [])],
       providerLayer,
       extraLayers: [RuntimeEnvironment.Live({ cwd: "/tmp", home })],
       ...Record.filter(
@@ -2674,6 +2684,32 @@ const idle = (
     label,
   )
 
+/**
+ * Holds the end of a turn in the `held` session open until `release`. Hooks
+ * run in id order, and this id sorts before every shipped extension's, so no
+ * shipped hook has read the turn's end while it is held.
+ */
+const holdTurnEnd = (options: {
+  readonly held: Ref.Ref<Option.Option<SessionId>>
+  readonly ending: Deferred.Deferred<void>
+  readonly release: Deferred.Deferred<void>
+}) => ({
+  ...defineExtension({
+    id: "0-turn-end-hold",
+    setup: Effect.gen(function* () {
+      const host = yield* ExtensionHost
+      yield* host.on("turnAfter", (input) =>
+        Effect.gen(function* () {
+          if (!Option.contains(yield* Ref.get(options.held), input.sessionId)) return
+          yield* Deferred.succeed(options.ending, void 0)
+          yield* Deferred.await(options.release)
+        }),
+      )
+    }),
+  }),
+  artifactIdentity: LoadedArtifactIdentity.make("turn-end-hold-source"),
+})
+
 /** One model request's answer, as `LanguageModelLayers.testStream` takes it. */
 type ModelReply = ReturnType<Parameters<typeof LanguageModelLayers.testStream>[0]>
 
@@ -2868,6 +2904,69 @@ describe("a parent interrupt and the turns its session.send opened", () => {
         expect(yield* turnReceipts(harness, child)).toHaveLength(2)
       }).pipe(Effect.timeout("10 seconds")),
     ),
+  )
+
+  it.live(
+    "a correction turn the user already stopped is not named as stopped by the parent",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const childCorrecting = yield* Deferred.make<void>()
+          const parentStreaming = yield* Deferred.make<void>()
+          const childEnding = yield* Deferred.make<void>()
+          const release = yield* Deferred.make<void>()
+          const held = yield* Ref.make(Option.none<SessionId>())
+          const parentRequests: Array<{ readonly notices: string; readonly last: string }> = []
+          const providerLayer = correctFinishedChild({
+            parentStreaming,
+            parentRequests,
+            child: (texts) => {
+              if (texts.some((text) => text.includes(correction))) {
+                return Effect.succeed(stalledStream("correcting", childCorrecting))
+              }
+              return Effect.succeed(reply("pong"))
+            },
+          })
+          const harness = yield* harnessWithHome(providerLayer, {
+            fixtures: [holdTurnEnd({ held, ending: childEnding, release })],
+          })
+          const { sessionId, branchId } = harness
+          yield* sendPrompt(harness, "split the work")
+          yield* Deferred.await(childCorrecting)
+          yield* Deferred.await(parentStreaming)
+          const child = yield* childOf(harness)
+          yield* Ref.set(held, Option.some(child.sessionId))
+          // The user stops the child's correction turn first; its end is held
+          // open while the parent is interrupted.
+          yield* harness.client.steer.command({
+            command: SteerCommand.make({
+              _tag: "Cancel",
+              ...child,
+              requestId: RequestId.make("interrupt-child-before-parent"),
+            }),
+          })
+          yield* Deferred.await(childEnding)
+          yield* interruptParent(harness, "interrupt-parent-after-user-stopped-child")
+          yield* idle(harness, { sessionId, branchId }, "the parent is idle")
+          yield* Deferred.succeed(release, void 0)
+          yield* idle(harness, child, "the child is idle")
+          const receipts = yield* turnReceipts(harness, child)
+          expect(receipts[1]).toMatchObject({ interrupted: true })
+
+          yield* sendPrompt(harness, "NEXT-WHAT-IS-RUNNING")
+          yield* waitFor(
+            harness.client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              current.runtime._tag === "Idle" && messageTexts(current.messages).includes("ack"),
+            3_000,
+            "the parent answered the next prompt",
+          )
+          const next = parentRequests.find((request) => request.last === "NEXT-WHAT-IS-RUNNING")
+          expect(next).toBeDefined()
+          expect(next?.notices ?? "").not.toContain(child.sessionId)
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
   )
 
   it.live(
