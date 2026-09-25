@@ -2,18 +2,7 @@
 
 import { afterEach } from "bun:test"
 import { BunServices } from "@effect/platform-bun"
-import {
-  Config,
-  Context,
-  Effect,
-  Exit,
-  FileSystem,
-  Layer,
-  Option,
-  Path,
-  Scope,
-  Stream,
-} from "effect"
+import { Config, Context, Effect, FileSystem, Layer, Option, Path, Scope, Stream } from "effect"
 import { render } from "@opentui/solid"
 import { createTestRenderer } from "@opentui/core/testing"
 import type { JSX } from "solid-js"
@@ -55,24 +44,21 @@ let currentSetup: Option.Option<TestRenderSetup> = Option.none()
 
 /**
  * Each render gets its own home, so prompt history, frecency and caches never
- * reach another test or another run. The homes live under one root per test
- * process: prompt-history writes queue behind one process-wide gate, so a
- * write a test did not wait for can land after the test and make its removed
- * home again. The root holds those. It is made on first use inside the
- * process's own `HOME`: the temp home the shared test preload makes, and
- * removes in a global `afterAll` after the process's last test. So each
- * process removes its own root and never reads another's.
+ * reach another test or another run. A render's home is not removed when its
+ * test ends: the app casts writes into it (prompt history, frecency) that the
+ * test does not wait for, and a recursive remove that races such a write
+ * fails the test with `NotFound`. The homes live under one root inside the
+ * test file's own `HOME`: the temp home the shared test preload makes, and
+ * removes in a global `afterAll` after the file's last test. So every home is
+ * removed once, when no test of the file runs, and no process reads another's.
  */
 const makeRenderHome = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
   const root = path.join(yield* Config.string("HOME"), "render-homes")
   yield* fs.makeDirectory(root, { recursive: true })
-  return yield* fs.makeTempDirectoryScoped({ directory: root, prefix: "home-" })
+  return yield* fs.makeTempDirectory({ directory: root, prefix: "home-" })
 }).pipe(Effect.provide(BunServices.layer), Effect.orDie)
-
-/** The scopes that own each render's home; closed after the test. */
-let renderScopes: Array<Scope.Closeable> = []
 
 let sharedServices: Option.Option<Context.Context<unknown>> = Option.none()
 const defaultWorkspaceCwd = new URL("../../..", import.meta.url).pathname
@@ -305,9 +291,7 @@ export const renderWithProviders = (
       const runtime = Option.getOrElse(Option.fromNullishOr(options?.runtime), createMockRuntime)
       // Each render gets its own home: prompt history, frecency and caches
       // written under it never reach another test or another run.
-      const homeScope = yield* Scope.make()
-      renderScopes.push(homeScope)
-      const home = yield* makeRenderHome.pipe(Scope.provide(homeScope))
+      const home = yield* makeRenderHome
 
       const setup = yield* Effect.promise(() =>
         createTestRenderer({
@@ -385,13 +369,10 @@ export const destroyRenderSetup = (setup: TestRenderSetup) => {
   setup.renderer.destroy()
 }
 
-// eslint-disable-next-line effect/noTestLifecycleHooks -- OpenTUI renderers require synchronous per-test teardown at this shared test boundary; the renders' homes are removed after it.
+// eslint-disable-next-line effect/noTestLifecycleHooks -- OpenTUI renderers require synchronous per-test teardown at this shared test boundary.
 afterEach(() => {
   if (Option.isSome(currentSetup)) destroyRenderSetup(currentSetup.value)
   currentSetup = Option.none()
-  const scopes = renderScopes
-  renderScopes = []
-  return Effect.runPromise(Effect.forEach(scopes, (scope) => Scope.close(scope, Exit.void)))
 })
 
 /**
