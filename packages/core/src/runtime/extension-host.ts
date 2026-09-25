@@ -2536,6 +2536,8 @@ interface ExtensionSessionControlService {
     readonly messageId: MessageId
     readonly requestId: RequestId
   }) => Effect.Effect<boolean, Error>
+  /** Holds the loop's own entity resident until the enclosing scope closes. */
+  readonly holdResident: Effect.Effect<void, never, ScopeType.Scope>
 }
 
 /** Decoding entity ids is cheap; bound it so a large registry does not stall a listing. */
@@ -2923,6 +2925,11 @@ export const makeExtensionHostContextProvider = (
             inWorkspace,
           )
         },
+        // A run outside a loop has no entity to hold.
+        holdResident: Option.match(Option.fromUndefinedOr(input.sessionControl), {
+          onNone: () => Effect.void,
+          onSome: (loop) => loop.holdResident,
+        }),
         listBranches: branches((storage) => storage.listBranches(runInfo.sessionId)).pipe(
           Effect.mapError(sessionError("listBranches")),
           inWorkspace,

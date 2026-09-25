@@ -2,6 +2,7 @@ import {
   Array as Arr,
   Clock,
   Crypto,
+  Context,
   Deferred,
   Duration,
   Effect,
@@ -79,7 +80,8 @@ import { Model as AiModel } from "effect/unstable/ai"
 // OpenAICredentials, OpenAICredentialIO and makeOpenAICredentialCache let a test
 // run the device login and the credential cache against fake I/O;
 // buildCodexTransformClient and buildOpenAIModelDriver let it run the wire
-// against a fake HTTP client.
+// against a fake HTTP client; OAuthRedirectPort lets it run the browser login
+// on a free port.
 
 // ── oauth ───────────────────────────────────────────────────────────────────
 
@@ -165,7 +167,16 @@ const isOpenAIOAuthModel = (modelName: string): boolean =>
 
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 const ISSUER = "https://auth.openai.com"
-const OAUTH_PORT = 1455
+/**
+ * The port of the browser login's redirect listener. OpenAI registers
+ * `http://localhost:1455/auth/callback` for this client id, so product code
+ * never provides it. A test provides a free port, so two test processes do
+ * not contend for 1455.
+ */
+export const OAuthRedirectPort = Context.Reference<number>(
+  "@gent/extensions/src/openai/OAuthRedirectPort",
+  { defaultValue: () => 1455 },
+)
 const DEVICE_REDIRECT_URI = `${ISSUER}/deviceauth/callback`
 const DEVICE_VERIFY_URL = `${ISSUER}/codex/device`
 const DEVICE_POLL_DEFAULT = Duration.seconds(5)
@@ -429,7 +440,7 @@ const buildCallbackRoutes = (
     "/auth/callback",
     Effect.gen(function* () {
       const request = yield* HttpServerRequest.HttpServerRequest
-      const url = new URL(request.url, `http://localhost:${OAUTH_PORT}`)
+      const url = new URL(request.url, "http://localhost")
       const code = url.searchParams.get("code") ?? ""
       const stateParam = url.searchParams.get("state") ?? ""
       const error = Option.fromNullishOr(url.searchParams.get("error"))
@@ -469,11 +480,12 @@ const buildCallbackRoutes = (
   )
 
 const startRedirectServer = (
+  port: number,
   expectedState: string,
   deferred: Deferred.Deferred<PendingCallbackPayload, OAuthError>,
 ): Effect.Effect<void, OAuthError, Scope.Scope> => {
   const HttpLive = HttpRouter.serve(buildCallbackRoutes(expectedState, deferred)).pipe(
-    Layer.provide(BunHttpServer.layerServer({ port: OAUTH_PORT })),
+    Layer.provide(BunHttpServer.layerServer({ port })),
   )
   return Layer.launch(HttpLive).pipe(
     Effect.catchCause((cause) =>
@@ -537,13 +549,14 @@ const authorizeOpenAI: Effect.Effect<
     ),
   )
   const state = Encoding.encodeBase64Url(stateBytes)
-  const redirectUri = `http://localhost:${OAUTH_PORT}/auth/callback`
+  const port = yield* OAuthRedirectPort
+  const redirectUri = `http://localhost:${port}/auth/callback`
   const authUrl = buildAuthorizeUrl(redirectUri, pkce, state)
   const deferred = yield* Deferred.make<PendingCallbackPayload, OAuthError>()
 
-  // Nothing joins the server fiber, so a failed start (port 1455 in use,
+  // Nothing joins the server fiber, so a failed start (the port in use,
   // for example) fails the deferred; otherwise `callback()` waits forever.
-  yield* startRedirectServer(state, deferred).pipe(
+  yield* startRedirectServer(port, state, deferred).pipe(
     Effect.tapError((error) => Deferred.fail(deferred, error)),
     Effect.forkScoped,
   )

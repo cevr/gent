@@ -10,6 +10,7 @@ import {
   Path,
   Predicate,
   Schema,
+  type Scope,
   type Stream,
   TxRef,
   TxSemaphore,
@@ -880,6 +881,14 @@ export interface ExtensionSessionService {
     readonly sessionId?: SessionId
     readonly branchId?: BranchId
   }) => Effect.Effect<boolean, ExtensionServiceError>
+  /**
+   * Keeps the current branch's loop resident until the enclosing scope
+   * closes. A loop that nothing holds is passivated after about a minute
+   * idle, and its branch scope closes with it, so work forked into that
+   * scope that must outlive an idle stretch (a pending timer) holds the loop
+   * for as long as it is pending. Outside a loop there is nothing to hold.
+   */
+  readonly holdResident: Effect.Effect<void, never, Scope.Scope>
   readonly listBranches: Effect.Effect<ReadonlyArray<Branch>, ExtensionServiceError>
   /**
    * Every session in the workspace, or with a `root` only that session and

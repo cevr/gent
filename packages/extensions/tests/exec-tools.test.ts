@@ -794,10 +794,12 @@ describe("classifyBashCommand", () => {
       'sh -c "$CMD"',
       'bash -c "$(cat script.sh)"',
       "xargs -a cmds.txt -I{} sh -c '{}'",
+      // The input fills the script: xargs input is not read as a script.
+      "echo 'git status' | xargs -I{} sh -c '{}'",
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
-    expect(classifyBashCommand("echo 'git status' | xargs -I{} sh -c '{}'").level).toBe("safe")
+    expect(classifyBashCommand("echo 'git status' | sh").level).toBe("safe")
   })
 
   // Delegate children share one working tree: a stash hides or rewrites a sibling's edits.
@@ -1604,34 +1606,37 @@ describe("classifyBashCommand", () => {
     }
   })
 
-  test("readable xargs input is classified as arguments of any checked command", () => {
+  // xargs and parallel input is never rebuilt into the commands the wrapper
+  // makes, even when it is literal: input that may name what runs, or its
+  // flags, asks.
+  test("literal xargs input fed to a checked command asks where it may be its flags", () => {
     for (const command of [
       "echo -rf x | xargs rm",
       "xargs rm <<< '-rf x'",
       "echo x -9 | xargs kill",
+      "echo .env | xargs rm",
+      "echo a b | xargs rm",
+      "echo 123 | xargs kill",
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
-    expect(classifyBashCommand("echo .env | xargs rm").level).toBe("sensitive")
-    for (const command of [
-      "find . -name '*.tmp' | xargs rm --",
-      "echo a b | xargs rm",
-      "echo 123 | xargs kill",
-      "echo a | xargs wc -l",
-    ]) {
+    for (const command of ["find . -name '*.tmp' | xargs rm --", "echo a | xargs wc -l"]) {
       expect(classifyBashCommand(command).level, command).toBe("safe")
     }
   })
 
-  test("readable xargs input is read through a runner, and supplies a git subcommand", () => {
+  test("xargs input that reaches a command through a runner, or a git subcommand, asks", () => {
     for (const command of [
       "echo 'rm -rf /nonexistent/gent-probe-x' | xargs env",
       "echo 'rm -rf /nonexistent/gent-probe-x' | xargs nohup",
       "echo 'rm -rf /nonexistent/gent-probe-x' | xargs timeout 5",
       "echo 'rm -rf /nonexistent/gent-probe-x' | xargs -I{} env sh -c {}",
+      "echo 'rm -rf /nonexistent/gent-probe-x' | xargs -I{} env {}",
       "echo 'rm -rf /nonexistent/gent-probe-x' | parallel env sh -c",
+      "echo 'rm -rf /nonexistent/gent-probe-x' | parallel env",
       "echo 'reset --hard' | xargs git",
       "printf 'push --force' | xargs git",
+      "echo status | xargs git",
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
@@ -1653,18 +1658,13 @@ describe("classifyBashCommand", () => {
       "echo 'rm -rf /nonexistent/gent-probe-x' | xargs -i% sh -c %",
       "echo 'rm -rf /nonexistent/gent-probe-x' | xargs --replace sh -c {}",
       "cat /nonexistent/gent-probe-x | xargs -I % sh -c %",
+      "echo 'reset --hard' | xargs -I % git %",
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
     for (const command of [
       "echo a | xargs -I % echo %",
       "echo 'rm -rf /nonexistent/gent-probe-x' | xargs -I % echo {}",
-      // `-I` passes each line as one argument: git has no `reset --hard` command.
-      "echo 'reset --hard' | xargs -I % git %",
-      "echo 'rm -rf /nonexistent/gent-probe-x' | xargs -I{} env {}",
-      // parallel quotes each line it passes: `env` gets one argument.
-      "echo 'rm -rf /nonexistent/gent-probe-x' | parallel env",
-      "printf 'a b\\n' | xargs -I{} git checkout {}",
       // Without a replace option, `{}` is text xargs passes as it is.
       "echo 'rm -rf /nonexistent/gent-probe-x' | xargs sh -c {}",
     ]) {
@@ -1720,85 +1720,60 @@ describe("classifyBashCommand", () => {
     }
   })
 
-  test("xargs with one word or line per command classifies each command alone", () => {
+  test("literal input fed to a risky command asks however xargs or parallel divides it", () => {
+    const db = "sqlite3 /nonexistent/gent-probe-x/db.sqlite"
     for (const command of [
+      "echo 'a b' | xargs git checkout",
       "echo 'a b' | xargs -n1 git checkout",
-      "echo 'a b' | xargs -n 1 git checkout",
-      "echo 'a b' | xargs --max-args=1 git checkout",
-      "printf 'a\\nb\\n' | xargs -L1 git checkout",
+      "echo 'a b' | xargs -n2 git checkout",
+      "echo 'a b' | xargs -L1 git checkout",
       "printf 'a\\nb\\n' | xargs -I{} git checkout {}",
       "printf 'a\\nb\\n' | parallel git checkout",
       "parallel git checkout ::: a b",
-    ]) {
-      expect(classifyBashCommand(command).level, command).toBe("safe")
-    }
-    for (const command of [
-      "echo 'a b' | xargs git checkout",
-      "echo 'a b' | xargs -n2 git checkout",
-      "echo 'a b' | xargs -L1 git checkout",
       "printf 'x\\n-rf /nonexistent/gent-probe-x\\n' | xargs -L1 rm",
       // `--max-lines` takes its value only after `=`: `rm` is the command.
       "xargs --max-lines rm -rf /nonexistent/gent-probe-x",
-    ]) {
-      expect(classifyBashCommand(command).level, command).toBe("destructive")
-    }
-  })
-
-  test("xargs input is divided as xargs divides it: quotes, escapes, lines, delimiters", () => {
-    const db = "sqlite3 /nonexistent/gent-probe-x/db.sqlite"
-    for (const command of [
       `echo "'DROP TABLE t'" | xargs -n1 ${db}`,
-      `echo '"DROP TABLE t"' | xargs -n1 ${db}`,
       `echo 'DROP\\ TABLE\\ t' | xargs -n1 ${db}`,
       `echo "x 'DROP TABLE t'" | xargs -L1 ${db}`,
-      `echo "'DROP TABLE t'" | xargs ${db}`,
-      "echo \"'rm -rf /nonexistent/gent-probe-x'\" | xargs -n1 sh -c",
-      "echo \"  'rm -rf /nonexistent/gent-probe-x'\" | xargs -I % sh -c %",
       "echo \"'-rf' /nonexistent/gent-probe-x\" | xargs -L1 rm",
-      "printf 'rm -rf /nonexistent/gent-probe-x\\nls' | xargs -0 sh -c",
-      "echo 'ls,rm -rf /nonexistent/gent-probe-x' | xargs -d , -n1 sh -c",
-      // Quoting or a delimiter the guard cannot rebuild asks.
-      'echo "\'a" | xargs -n1 git checkout',
-      "echo a | xargs -d '\\x2c' -n1 git checkout",
-    ]) {
-      expect(classifyBashCommand(command).level, command).toBe("destructive")
-    }
-    for (const command of [
-      "echo \"'a b'\" | xargs -n1 git checkout",
-      "echo 'a\\ b' | xargs -n1 git checkout",
       "echo 'a,b' | xargs -d , -n1 git checkout",
-      "printf 'a b\\n' | xargs -0 git checkout",
-      // xargs runs no shell: `;` in its input is an argument.
-      "echo 'a; rm -rf /nonexistent/gent-probe-x' | xargs echo",
-    ]) {
-      expect(classifyBashCommand(command).level, command).toBe("safe")
-    }
-  })
-
-  test("a count above one builds one command per group of that many arguments or lines", () => {
-    for (const command of [
+      "echo a | xargs -d '\\x2c' -n1 git checkout",
       "echo 'status x reset --hard' | xargs -n 2 git",
-      "echo 'status x reset --hard' | xargs -n2 git",
-      "echo 'status x reset --hard' | xargs --max-args=2 git",
-      "echo 'status x y reset --hard z' | xargs -n 3 git",
-      "printf 'status\\nx\\nreset\\n--hard\\n' | xargs -L 2 git",
-      // A line that ends in a blank goes on into the next one.
-      "printf 'status x\\nreset \\n--hard\\n' | xargs -L1 git",
+      "printf 'status\\nreset\\n--hard\\n' | xargs -L 2 git",
       "printf 'status\\nx\\nreset\\n--hard\\n' | parallel -N 2 git",
-      "printf 'status\\nx\\nreset\\n--hard\\n' | parallel -n 2 git",
       "parallel -N 2 git ::: status x reset --hard",
-      // `-m` and `-X` divide the input among the job slots: the groups are not known.
       "printf 'status\\nreset\\n' | parallel -m git",
-      // GNU and BSD xargs read `-I` with a count differently.
       "echo status | xargs -I{} -n 1 git {}",
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
     for (const command of [
-      "echo 'status x reset --hard' | xargs -n 3 git",
-      "printf 'status\\nreset\\n--hard\\n' | xargs -L 2 git",
-      "printf 'status\\nx\\nreset\\n' | parallel -N 2 git",
+      // xargs runs no shell: `;` in its input is an argument.
+      "echo 'a; rm -rf /nonexistent/gent-probe-x' | xargs echo",
       "printf 'a\\n' | parallel -m wc -l",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  // A shell whose script is missing, or holds the input, runs the input.
+  test("a shell under xargs or parallel whose script the input gives asks", () => {
+    for (const command of [
+      "echo \"'rm -rf /nonexistent/gent-probe-x'\" | xargs -n1 sh -c",
+      "echo \"  'rm -rf /nonexistent/gent-probe-x'\" | xargs -I % sh -c %",
+      "printf 'rm -rf /nonexistent/gent-probe-x\\nls' | xargs -0 sh -c",
+      "echo 'ls,rm -rf /nonexistent/gent-probe-x' | xargs -d , -n1 sh -c",
+      "echo \"-c 'rm -rf /nonexistent/gent-probe-x'\" | xargs bash",
+      "echo 'rm -rf /nonexistent/gent-probe-x' | parallel env bash -c",
+      "echo 'Remove-Item x' | xargs pwsh -Command",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      "find . -name '*.sh' | xargs sh -c 'wc -l \"$@\"' _",
+      "echo a | xargs -I{} sh -c 'ls' {}",
+      "find . -name x | xargs bash ./lint.sh",
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("safe")
     }
@@ -1815,12 +1790,9 @@ describe("classifyBashCommand", () => {
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
-    for (const command of [
-      "echo x | xargs -a /nonexistent/gent-probe-x wc -l",
-      "echo status | xargs -a /dev/stdin git",
-    ]) {
-      expect(classifyBashCommand(command).level, command).toBe("safe")
-    }
+    expect(classifyBashCommand("echo x | xargs -a /nonexistent/gent-probe-x wc -l").level).toBe(
+      "safe",
+    )
   })
 
   test("a < file redirect replaces the pipe as the input of xargs or parallel", () => {
@@ -1838,29 +1810,30 @@ describe("classifyBashCommand", () => {
     )
   })
 
-  test("parallel combines its input sources and reads its replacement strings", () => {
+  test("parallel input that may name a git subcommand asks, from any source or replacement string", () => {
     for (const command of [
       "parallel git ::: reset ::: --hard",
       "parallel git {1} {2} ::: reset ::: --hard",
       "parallel git {2} {1} ::: --hard ::: reset",
       "parallel git ::: reset :::+ --hard",
       "parallel ::: git ::: reset ::: --hard",
+      "parallel git ::: status ::: x",
       "echo reset | parallel git {1} --hard",
       "echo reset.txt | parallel git {.} --hard",
       "echo /nonexistent/gent-probe-x/reset | parallel git {/} --hard",
       "cat /nonexistent/gent-probe-x | parallel git {1}",
       "cat /nonexistent/gent-probe-x | parallel sh -c {1}",
-      // A perl expression or `--plus` makes text the guard does not rebuild.
       "echo reset | parallel git '{= s/x// =}' --hard",
       "echo x | parallel --plus git {..} --hard",
-      // `--colsep` divides a line into arguments at a pattern.
       "printf 'reset,--hard\\n' | parallel --colsep , git",
+      // `--plus` and `--rpl` make replacement strings the guard does not
+      // know: any word may hold the input.
+      "echo x | parallel --plus sh -c {..}",
+      "echo x | parallel --rpl '{Z} s/x/y/' {Z}",
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
     for (const command of [
-      "parallel git ::: status ::: x",
-      "parallel git {2} {1} ::: x ::: status",
       "echo a.txt | parallel wc -l {.}.md",
       "parallel echo {#} {} ::: a b",
       "parallel -I @ echo {} @ ::: reset",
@@ -1874,10 +1847,13 @@ describe("classifyBashCommand", () => {
       "echo 'reset --hard' | xargs -J % git",
       "echo 'reset --hard' | xargs -J % git --no-pager",
       "echo '--hard' | xargs -J % git reset x%y",
+      "cat /nonexistent/gent-probe-x | xargs -J % rm x%y",
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
-    expect(classifyBashCommand("echo status | xargs -J % git % --short").level).toBe("safe")
+    expect(classifyBashCommand("cat /nonexistent/gent-probe-x | xargs -J % rm -- %").level).toBe(
+      "safe",
+    )
   })
 
   test("unreadable input that fills a runner's environment or script asks", () => {
@@ -1992,8 +1968,8 @@ describe("classifyBashCommand", () => {
       `/usr/bin/time -o ${x} ${r}`,
       `command time -f %e ${r}`,
       `env --argv0 x ${r}`,
-      // An abbreviated name may be another option: `--tag` is not `--tagstring`.
-      `parallel --tag ${r} ::: a`,
+      // An abbreviated name may be another option: `--ta` may be `--tag`, not `--tagstring`.
+      `parallel --ta ${r} ::: a`,
       // The unnamed option may take the word after it, or more.
       `nohup --gent-probe-unknown ${x} ${r}`,
       `timeout --gent-probe-unknown 5 ${x} ${r}`,
@@ -2056,6 +2032,27 @@ describe("classifyBashCommand", () => {
     }
   })
 
+  // As getopt_long reads them: `docker --tls` is the flag, not a prefix of `--tlscacert`.
+  test("a long option written in full is that option before it is a prefix of another", () => {
+    const x = "/nonexistent/gent-probe-x"
+    for (const command of [
+      "docker --tls volume rm gent-probe-x",
+      `docker --tls exec c rm -rf ${x}`,
+      `docker --tls run -v ${x}:/w alpine rm -rf /w`,
+      "docker --tls system prune -af",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      "docker --tls push gent-probe-x",
+      "docker --tlscert x push gent-probe-x",
+      "docker --tlsc x push gent-probe-x",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("external")
+    }
+    expect(classifyBashCommand("docker --tls ps").level).toBe("safe")
+  })
+
   test("after a parent option its table does not name, the subcommand may follow its value", () => {
     const x = "/nonexistent/gent-probe-x"
     const r = `rm -rf ${x}`
@@ -2110,15 +2107,12 @@ describe("classifyBashCommand", () => {
 
   // Read once each, these take milliseconds; read once per reading, minutes.
   test(
-    "the scripts nested runners' readings build are read once each",
+    "the scripts and inputs nested runners' readings reach are read once each",
     () => {
-      for (const command of [
-        `echo a | ${"xargs -0 ".repeat(20)}ls`,
-        `${"ssh -X h ".repeat(40)}ls`,
-      ]) {
-        // Past the nesting limit a script asks.
-        expect(classifyBashCommand(command).level, command).toBe("destructive")
-      }
+      // Past the nesting limit a script asks.
+      expect(classifyBashCommand(`${"ssh -X h ".repeat(40)}ls`).level).toBe("destructive")
+      expect(classifyBashCommand(`echo a | ${"xargs -0 ".repeat(20)}ls`).level).toBe("safe")
+      expect(classifyBashCommand(`echo a | ${"xargs -0 ".repeat(20)}rm`).level).toBe("destructive")
     },
     { timeout: 2_000 },
   )
@@ -2538,6 +2532,205 @@ describe("classifyBashCommand", () => {
     }
   })
 
+  test("an entrypoint is read past an option the table does not name; an empty one runs the words after the image", () => {
+    const x = "/nonexistent/gent-probe-x"
+    for (const command of [
+      // Docker clears the entrypoint for an empty value.
+      `docker run --entrypoint '' alpine rm -rf ${x}`,
+      `docker run --entrypoint= alpine rm -rf ${x}`,
+      `docker run --entrypoint "" -v ${x}:/w alpine rm -rf /w`,
+      // An unnamed option before `--entrypoint` may take a value.
+      "docker run --group-add g --entrypoint git alpine reset --hard",
+      `docker run --expose 80 --entrypoint sh alpine -c 'rm -rf ${x}'`,
+      `docker run --volumes-from c --entrypoint sh alpine -c 'rm -rf ${x}'`,
+      // Compose splits the entrypoint into words: with the words after the
+      // service, it is one script.
+      `docker compose run --entrypoint 'rm -rf ${x}' web`,
+      `docker compose run --entrypoint "sh -c 'rm -rf ${x}'" web`,
+      `docker-compose run --entrypoint 'rm -rf ${x}' web`,
+      "docker compose run --entrypoint 'git reset' web --hard",
+      `docker compose run --entrypoint sh web -c 'rm -rf ${x}'`,
+      `docker service create --entrypoint 'rm -rf' alpine ${x}`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      "docker run --rm --entrypoint '' alpine ls",
+      "docker run --group-add g --entrypoint ls alpine -la",
+      "docker compose run --entrypoint 'ls -la' web /tmp",
+      "docker compose run --rm --entrypoint sh web -c 'ls -la'",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  test("docker create, podman, nerdctl, docker service create and oc read the command a container runs", () => {
+    const x = "/nonexistent/gent-probe-x"
+    for (const command of [
+      `docker create --name p -v ${x}:/w alpine rm -rf /w`,
+      `docker create --name p -v ${x}:/w alpine rm -rf /w && docker start -a p`,
+      `docker container create alpine rm -rf ${x}`,
+      `docker service create --name s alpine rm -rf ${x}`,
+      `podman exec c rm -rf ${x}`,
+      `podman run -v ${x}:/w alpine rm -rf /w`,
+      `podman compose exec web rm -rf ${x}`,
+      "podman volume rm gent-probe-x",
+      "podman system prune -af",
+      `nerdctl run -v ${x}:/w alpine rm -rf /w`,
+      `nerdctl exec c rm -rf ${x}`,
+      `oc exec pod -- rm -rf ${x}`,
+      `oc -n ns exec pod -- sh -c 'rm -rf ${x}'`,
+      `oc rsh pod rm -rf ${x}`,
+      `oc rsh -c app pod sh -c 'rm -rf ${x}'`,
+      "oc delete pod gent-probe-x",
+      // `run` starts a pod with the command after `--`.
+      `kubectl run p --image=alpine -- rm -rf ${x}`,
+      `oc run p --image=alpine -- sh -c 'rm -rf ${x}'`,
+      `podman-compose exec web rm -rf ${x}`,
+      `podman-compose run web rm -rf ${x}`,
+      // A health check is a shell script the container runs.
+      `docker run --health-cmd 'rm -rf ${x}' alpine`,
+      `docker run --health-cmd='rm -rf ${x}' --health-interval 5s alpine ls`,
+      `docker service create --health-cmd 'rm -rf ${x}' alpine`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    expect(classifyBashCommand("podman push gent-probe-x").level).toBe("external")
+    for (const command of [
+      "docker create alpine ls",
+      "podman ps",
+      "podman run --rm alpine ls",
+      "nerdctl images",
+      "oc get pods",
+      "oc rsh pod",
+      "oc rsh -t pod ls",
+      "kubectl run p --image=alpine",
+      "oc run p --image=alpine -- ls",
+      "podman-compose ps",
+      "docker run --health-cmd 'curl -f localhost' --health-interval 5s alpine ls",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  // After a flag a table names, the next word is no option value: no later
+  // word may be the command word.
+  test("a flag of a container, pod or runner table hides no command word", () => {
+    const x = "/nonexistent/gent-probe-x"
+    for (const command of [
+      'docker run --rm -v "$PWD":/w -w /w node:20 npm test',
+      'docker run --rm alpine echo "$MSG"',
+      'docker exec -it c ls "$DIR"',
+      'docker compose exec -T web ls "$DIR"',
+      'docker compose run --rm web npm test -- "$T"',
+      'kubectl exec -it pod -- ls "$DIR"',
+      'docker run -d --name "$NAME" img',
+      'docker run --init -v "$PWD":/w img npm test',
+      'uv run --frozen pytest "$T"',
+      'timeout --preserve-status 5 ls "$D"',
+      'env -i ls "$D"',
+      'npx --yes prettier "$F"',
+      'bunx --bun vitest "$F"',
+      'strace -f ls "$D"',
+      'op run --no-masking -- npm test "$T"',
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+    for (const command of [
+      `docker run --rm alpine rm -rf ${x}`,
+      `docker exec -it c rm -rf ${x}`,
+      `kubectl exec -it pod -- rm -rf ${x}`,
+      'docker run --rm alpine "$CMD"',
+      `uv run --frozen rm -rf ${x}`,
+      `env -i rm -rf ${x}`,
+      `strace -f rm -rf ${x}`,
+      `op run --no-masking -- rm -rf ${x}`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+  })
+
+  test("a run-time word after the command sudo runs belongs to that command", () => {
+    for (const command of ['sudo -n ls "$D"', 'sudo -E ls "$D"', 'sudo systemctl restart "$SVC"']) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+    for (const command of [
+      'sudo "$CMD"',
+      'sudo "$CMD" x',
+      "sudo $OPTS ls",
+      'sudo rm "$F"',
+      'sudo -u "$U" rm x',
+      'doas "$CMD"',
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+  })
+
+  test("tmux, screen, sshpass, xvfb-run, hyperfine, watchexec, at, nsenter, gosu and fakeroot run what they are given", () => {
+    const x = "/nonexistent/gent-probe-x"
+    const r = `rm -rf ${x}`
+    for (const command of [
+      `tmux new -d '${r}'`,
+      `tmux new-session -d -s s '${r}'`,
+      `tmux new -d sh -c '${r}'`,
+      `tmux new-window '${r}'`,
+      `tmux split-window -h ${r}`,
+      `tmux send-keys -t s '${r}' Enter`,
+      `tmux run-shell '${r}'`,
+      `tmux -c '${r}'`,
+      // `;` ends one tmux command and starts the next.
+      `tmux new -d \\; split-window '${r}'`,
+      `tmux kill-server \\; new -d '${r}'`,
+      `tmux new -d ';' send-keys '${r}' Enter`,
+      `screen -dm sh -c '${r}'`,
+      `screen -dmS s ${r}`,
+      `screen -S s -X stuff '${r}\\n'`,
+      `sshpass -p x ssh h ${r}`,
+      `sshpass -e ssh h '${r}'`,
+      `xvfb-run ${r}`,
+      `xvfb-run -a -s '-screen 0 1x1x8' ${r}`,
+      `hyperfine '${r}'`,
+      `hyperfine -w 3 'ls' '${r}'`,
+      `hyperfine --prepare '${r}' 'ls'`,
+      `watchexec -- ${r}`,
+      `watchexec -e ts ${r}`,
+      `watchexec -- sh -c '${r}'`,
+      `at now <<< '${r}'`,
+      `echo '${r}' | at now`,
+      `echo '${r}' | batch`,
+      `batch <<< '${r}'`,
+      `nsenter -t 1 -m ${r}`,
+      `nsenter --target 1 --mount -- ${r}`,
+      `gosu root ${r}`,
+      `su-exec root ${r}`,
+      `fakeroot ${r}`,
+      `fakeroot -- ${r}`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      "tmux ls",
+      "tmux new -d 'npm run dev'",
+      "tmux kill-session -t s",
+      "screen -ls",
+      "screen -dmS s npm run dev",
+      "hyperfine 'ls' 'ls -la'",
+      "watchexec -e ts npm test",
+      "xvfb-run npm test",
+      "fakeroot dpkg-deb --build x",
+      "gosu app ls",
+      "nsenter -t 1 -m ls",
+      "sshpass -p x ssh h ls",
+      "echo ls | at now",
+      "echo ls | batch",
+      "tmux new -d \\; split-window 'npm test'",
+      // The script file is not read, as a `source`d file is not.
+      `at -f ${x} now`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
   test("cluster, infrastructure and compose deletions ask; their reads do not", () => {
     for (const command of [
       "kubectl delete pod gent-probe-x",
@@ -2558,6 +2751,8 @@ describe("classifyBashCommand", () => {
       "docker compose -f /nonexistent/gent-probe-x.yml down --volumes",
       "docker compose rm -f",
       "docker-compose down -v",
+      "podman-compose down -v",
+      "podman-compose rm -f",
       'docker compose "$CMD"',
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
@@ -2824,6 +3019,7 @@ const stubCtx = testToolContext({
     renameCurrent: dieStub("renameCurrent"),
     listBranches: Effect.die("listBranches not wired in test"),
     dequeueFollowUp: dieStub("dequeueFollowUp"),
+    holdResident: Effect.die("holdResident not wired in test"),
     create: dieStub("create"),
     delete: dieStub("delete"),
     send: dieStub("send"),

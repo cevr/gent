@@ -1541,22 +1541,36 @@ interface ReconnectOptions<E> {
   readonly waitForRetry: () => Effect.Effect<void>
 }
 
+const reconnectBase = Duration.seconds(1)
+
 const reconnectBackoff = Schedule.min([
-  Schedule.exponential("1 second", 2),
+  Schedule.exponential(reconnectBase, 2),
   Schedule.spaced("30 seconds"),
 ])
 
-const runWithReconnect = <E, R>(
-  effectFactory: () => Effect.Effect<void, E, R>,
+/**
+ * Runs a stream and runs it again whenever it ends. `effectFactory` gets the
+ * `ready` effect and runs it once its stream is open and serving.
+ *
+ * Attempts that end before they serve back off from one second up to thirty.
+ * A stream that served starts a fresh sequence when it drops: after a long
+ * healthy connection the next attempt comes a second later, not at the cap.
+ */
+export const runWithReconnect = <E, R>(
+  effectFactory: (ready: Effect.Effect<void>) => Effect.Effect<void, E, R>,
   options: ReconnectOptions<E>,
 ): Effect.Effect<never, never, R> => {
   let attempt = 0
   const label = Option.getOrElse(Option.fromNullishOr(options.label), () => "unknown")
   const log = options.log
-  return Effect.gen(function* () {
+  const attemptOnce = Effect.gen(function* () {
     attempt++
+    let served = false
     log.info("reconnect.attempt", { label, attempt })
-    yield* effectFactory().pipe(
+    const ready = Effect.sync(() => {
+      served = true
+    })
+    yield* effectFactory(ready).pipe(
       Effect.catchEager((error) =>
         Effect.sync(() => {
           log.warn("reconnect.error", { label, attempt, error: String(error) })
@@ -1569,7 +1583,13 @@ const runWithReconnect = <E, R>(
     log.info("reconnect.wait-for-ready", { label, attempt })
     yield* options.waitForRetry()
     log.info("reconnect.ready", { label, attempt })
-  }).pipe(Effect.repeat(reconnectBackoff), Effect.andThen(Effect.never))
+    return served
+  })
+  // One connection: attempts back off until one serves and then ends.
+  const connection = attemptOnce.pipe(
+    Effect.repeat({ schedule: reconnectBackoff, until: (served) => served }),
+  )
+  return connection.pipe(Effect.andThen(Effect.sleep(reconnectBase)), Effect.forever)
 }
 
 // ── Types ──
@@ -2337,7 +2357,7 @@ export function useSessionFeed(
       const streamFiber = client.runtime.fork(
         Effect.scoped(
           runWithReconnect(
-            () =>
+            (ready) =>
               Effect.gen(function* () {
                 client.log.info("feed.snapshot.fetch", { key })
                 const snapshot = yield* client.client.session.getSnapshot({
@@ -2415,6 +2435,7 @@ export function useSessionFeed(
                   if (Option.isNone(currentKey) || currentKey.value !== key) return
                   setStreamReadyKey(Option.some(key))
                 })
+                yield* ready
 
                 return yield* Effect.raceFirst(Fiber.join(eventsFiber), Fiber.join(runtimeFiber))
               }),

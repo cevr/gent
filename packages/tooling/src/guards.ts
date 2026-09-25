@@ -811,16 +811,22 @@ export const findE2eFixtureImportFindings = (
  * loaders bind `effect` and the public entries, so an extension file resolves
  * them from anywhere; no test needs `node_modules` above its fixture.
  *
- * A repo path is `import.meta.dir`, `import.meta.dirname`, `__dirname`, a
- * `join`/`resolve` whose first argument is a relative path literal, or a name
- * bound from one of these. Two shapes are reported in test code outside the
- * tooling package, whatever the directory's name or prefix: a temp directory
- * call (`mkdtemp`, `mkdtempSync`, `makeTempDirectory`,
- * `makeTempDirectoryScoped`) whose arguments name a repo path, and a repo path
- * joined to a `tmp` or `temp` segment (`.tmp`, `tmp-x`, `temp`).
+ * A repo path is `import.meta.dir`, `import.meta.dirname`, `__dirname`,
+ * `process.cwd()` (every `bun test` script runs in its package directory), a
+ * `join`/`resolve` whose first argument is a relative path literal, a
+ * `directory:` option that is a relative path literal, or a name bound from
+ * one of these. Three shapes are reported in test code outside the tooling
+ * package, whatever the directory's name or prefix: a temp directory call
+ * (`mkdtemp`, `mkdtempSync`, `makeTempDirectory`, `makeTempDirectoryScoped`)
+ * whose arguments name a repo path, a node `mkdtemp` whose prefix is a relative
+ * literal (`mkdtempSync("case-")` creates the directory in the working directory),
+ * and a repo path joined to a `tmp` or `temp` segment (`.tmp`, `tmp-x`,
+ * `temp`). A literal is relative when it starts with none of `/`, `$` or `~`.
  */
 const REPO_PATH =
-  /\bimport\.meta\.dir(?:name)?\b|\b__dirname\b|\b(?:join|resolve)\(\s*["'`](?:\.{1,2}(?:\/|["'`])|(?:packages|apps|examples|testbeds)\/)/
+  /\bimport\.meta\.dir(?:name)?\b|\b__dirname\b|\bprocess\.cwd\(\)|\b(?:join|resolve)\(\s*["'`](?![/$~])|\bdirectory:\s*["'`](?![/$~])/
+/** A node `mkdtemp` whose prefix is a relative literal: the directory lands in the working directory. */
+const RELATIVE_MKDTEMP = /^mkdtemp(?:Sync)?\s*\(\s*["'`](?![/$~])/
 const BINDING = /\b(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=(.*)$/
 const TEMP_CALL = /\b(?:mkdtempSync|mkdtemp|makeTempDirectoryScoped|makeTempDirectory)\s*\(/g
 const TMP_SEGMENT = /["'`](?:[^"'`]*\/)?\.?(?:tmp|temp)(?:[-_.][^"'`/]*)?(?:\/[^"'`]*)?["'`]/i
@@ -859,8 +865,12 @@ export const findRepoTempDirectories = (file: string, text: string): ReadonlyArr
   for (const call of code.matchAll(TEMP_CALL)) {
     const open = call.index + call[0].length - 1
     const first = code.slice(0, open).split("\n").length - 1
-    const argumentLines = callArguments(code, open).split("\n")
-    const hit = argumentLines.findIndex(namesRepo)
+    const argumentText = callArguments(code, open)
+    if (RELATIVE_MKDTEMP.test(call[0] + argumentText.slice(1))) {
+      reported.add(first)
+      continue
+    }
+    const hit = argumentText.split("\n").findIndex(namesRepo)
     if (hit !== -1) reported.add(first + hit)
   }
   // A tmp segment joined to a repo path on one line.
@@ -870,90 +880,6 @@ export const findRepoTempDirectories = (file: string, text: string): ReadonlyArr
   return [...reported]
     .sort((a, b) => a - b)
     .map((index) => ({ file, line: index + 1, message: TEMP_IN_REPO_MESSAGE }))
-}
-
-// ── the loop prompts carry one SAFETY block ─────────────────────────────────
-
-/**
- * Guard: the sweep and apply prompts of the architecture loop carry the same
- * SAFETY block. Each agent reads only its own prompt, so a rule added to one
- * copy leaves the other agents without it. The block must sit inside the
- * fenced prompt template, which is the text an agent receives (`safetyBlock`
- * reads its extent).
- */
-const SAFETY_PROMPTS: ReadonlyArray<string> = [
-  ".claude/skills/architecture-loop/prompts/apply.md",
-  ".claude/skills/architecture-loop/prompts/sweep.md",
-]
-
-const PROMPT_FENCE = /^\s*```/
-
-/** One prompt's SAFETY block: where it starts, its text, and whether the fenced prompt holds it. */
-interface SafetyBlock {
-  readonly line: number
-  readonly block: string
-  readonly fenced: boolean
-}
-
-/**
- * The `SAFETY` line and what follows it, through blank lines and rule lines,
- * up to the next heading (a line that is neither blank, a `- ` rule nor an
- * indented continuation) or the closing fence. Trailing whitespace and
- * trailing blank lines are not part of the block.
- */
-const safetyBlock = (text: string): Option.Option<SafetyBlock> => {
-  const lines = text.split("\n")
-  const start = lines.findIndex((line) => line.startsWith("SAFETY"))
-  if (start === -1) return Option.none()
-  const fences = lines.slice(0, start).filter((line) => PROMPT_FENCE.test(line)).length
-  const block: Array<string> = [(lines[start] ?? "").trimEnd()]
-  for (const line of lines.slice(start + 1)) {
-    const heading = line.trim().length > 0 && !line.startsWith("- ") && !/^\s/.test(line)
-    if (PROMPT_FENCE.test(line) || heading) break
-    block.push(line.trimEnd())
-  }
-  while (block.at(-1) === "") block.pop()
-  return Option.some({ line: start + 1, block: block.join("\n"), fenced: fences % 2 === 1 })
-}
-
-export const findSafetyBlockDrift = (
-  texts: ReadonlyMap<string, string>,
-): ReadonlyArray<Finding> => {
-  const blocks = SAFETY_PROMPTS.map((file) => ({
-    file,
-    found: Option.flatMap(Option.fromNullishOr(texts.get(file)), safetyBlock),
-  }))
-  const findings: Array<Finding> = []
-  for (const { file, found } of blocks) {
-    if (Option.isNone(found)) {
-      findings.push({
-        file,
-        line: 1,
-        message: "the loop prompt has no SAFETY block; copy it from the other prompt",
-      })
-    }
-  }
-  const present = blocks.flatMap(({ file, found }) =>
-    Option.match(found, { onNone: () => [], onSome: (value) => [{ file, ...value }] }),
-  )
-  for (const outside of present.filter((block) => !block.fenced)) {
-    findings.push({
-      file: outside.file,
-      line: outside.line,
-      message:
-        "the SAFETY block sits outside the fenced prompt, so the agent never receives it; move it inside the fence",
-    })
-  }
-  const [first, ...others] = present
-  for (const other of others) {
-    if (other.block === first?.block) continue
-    findings.push({
-      file: other.file,
-      line: other.line,
-      message: `the SAFETY block differs from the one in ${first?.file}; edit both together`,
-    })
-  }
-  return findings
 }
 
 // ── the pre-commit hook runs the guards ─────────────────────────────────────
@@ -1032,7 +958,9 @@ export const findHookWithoutGuards = (file: string, text: string): ReadonlyArray
  *
  * - An `.oxlintrc.json` override whose `files` glob matches no tracked file.
  *   The override for `packages/sdk/src/supervisor.ts` outlived that file and
- *   kept turning a rule off for nothing.
+ *   kept turning a rule off for nothing. The same holds for an `.oxlintignore`
+ *   row (a dead `.tmp-*` row sat there) and for an `include` glob of an Effect
+ *   language-service override in the root tsconfig.
  * - A rule defined in `gent-rules.ts` that the root config never enables. Five such
  *   rules accumulated; one of them (`no-make-unsafe`) could not be enabled at
  *   all, because shipped code would have failed it.
@@ -1124,6 +1052,77 @@ export const findUnmatchedOverrideGlobs = (
   }
   return findings
 }
+
+/**
+ * An `.oxlintignore` row that matches no file oxlint would walk. oxlint also
+ * honors `.gitignore`, so `trackedFiles` (tracked and untracked, minus what
+ * git ignores) is the set a row can still take out. A row follows gitignore
+ * form: a trailing `/` names a directory, a row with no inner `/` matches at
+ * any depth, a leading `/` anchors at the root. Comment, blank and `!` rows
+ * are skipped.
+ */
+export const findUnmatchedIgnoreRows = (
+  ignoreFile: string,
+  text: string,
+  trackedFiles: ReadonlyArray<string>,
+): ReadonlyArray<Finding> =>
+  text.split("\n").flatMap((raw, index) => {
+    const row = raw.trim()
+    if (row.length === 0 || row.startsWith("#") || row.startsWith("!")) return []
+    const bare = row.replace(/\/+$/, "").replace(/^\//, "")
+    let glob = bare
+    if (!row.startsWith("/") && !bare.includes("/")) glob = `**/${bare}`
+    const matchers = [globMatcher(glob), globMatcher(`${glob}/**`)]
+    if (trackedFiles.some((file) => matchers.some((matcher) => matcher.test(file)))) return []
+    return [
+      {
+        file: ignoreFile,
+        line: index + 1,
+        message: `ignore row \`${row}\` matches no file oxlint would lint (git-ignored files are skipped already); delete the row, or fix it`,
+      },
+    ]
+  })
+
+/** The root tsconfig's Effect language-service overrides: the part this guard reads. */
+export const TsConfigPluginsSchema = Schema.Struct({
+  compilerOptions: Schema.optional(
+    Schema.Struct({
+      plugins: Schema.optional(
+        Schema.Array(
+          Schema.Struct({
+            overrides: Schema.optional(
+              Schema.Array(
+                Schema.Struct({ include: Schema.optional(Schema.Array(Schema.String)) }),
+              ),
+            ),
+          }),
+        ),
+      ),
+    }),
+  ),
+})
+
+/** An `include` glob of a tsconfig plugin override that matches no tracked file. */
+export const findUnmatchedTsconfigOverrides = (
+  configFile: string,
+  configText: string,
+  config: typeof TsConfigPluginsSchema.Type,
+  trackedFiles: ReadonlyArray<string>,
+): ReadonlyArray<Finding> =>
+  (config.compilerOptions?.plugins ?? [])
+    .flatMap((plugin) => plugin.overrides ?? [])
+    .flatMap((override) => override.include ?? [])
+    .flatMap((glob) => {
+      const matcher = globMatcher(glob)
+      if (trackedFiles.some((file) => matcher.test(file))) return []
+      return [
+        {
+          file: configFile,
+          line: lineOfGlob(configText, glob),
+          message: `tsconfig plugin override \`include: "${glob}"\` matches no tracked file; delete it, or fix the glob`,
+        },
+      ]
+    })
 
 // ---------------------------------------------------------------------------
 // (a2) An "off" that suppresses nothing
@@ -1605,17 +1604,32 @@ interface PlatformBunBindings {
 const alternation = (names: ReadonlyArray<string>): ReadonlyArray<string> =>
   [names].filter((list) => list.length > 0).map((list) => list.map(escapeRegExp).join("|"))
 
-/** One pass of `const X = <module>` and `const X = <namespace>.<Module>` aliases. */
-const aliasedModules = (code: string, bindings: PlatformBunBindings): ReadonlyArray<string> =>
-  [
+/** A member access, plain or optional: `BunCrypto.layer` and `BunCrypto?.layer` read the same member. */
+const MEMBER = String.raw`\s*\??\.\s*`
+
+/**
+ * One pass of `const X = <module>`, `const X = <namespace>.<Module>` and
+ * `const { <Module> } = <namespace>` aliases.
+ */
+const aliasedModules = (code: string, bindings: PlatformBunBindings): ReadonlyArray<string> => [
+  ...[
     ...alternation(bindings.modules),
-    ...alternation(bindings.namespaces).map((names) => String.raw`(?:${names})\s*\.\s*\w+`),
+    ...alternation(bindings.namespaces).map((names) => String.raw`(?:${names})${MEMBER}\w+`),
   ].flatMap((source) =>
     firstCaptures(
       code,
       new RegExp(String.raw`${DECLARE}\s+(${BINDING_NAME})\s*=\s*(?:${source})${ALIAS_END}`, "g"),
     ),
-  )
+  ),
+  ...alternation(bindings.namespaces).flatMap((names) =>
+    boundNames(
+      code,
+      new RegExp(String.raw`${DECLARE}\s*\{([^}]*)\}\s*=\s*(?:${names})${ALIAS_END}`, "g"),
+      DESTRUCTURE_SPECIFIER,
+      anyExport,
+    ),
+  ),
+]
 
 const platformBunBindings = (code: string): PlatformBunBindings => {
   const imported: PlatformBunBindings = {
@@ -1649,20 +1663,26 @@ const platformBunBindings = (code: string): PlatformBunBindings => {
 
 /**
  * The pattern of a layer provision: a module's `.layer*`, a namespace's
- * `.<Module>.layer*`, a layer binding, or `.layer*` on an inline
- * `await import(...)`. Whitespace may sit around each `.`, so an access split
- * across lines still matches. Constructors such as `BunSocket.makeNet` and
- * runners such as `BunRuntime.runMain` are not provisions.
+ * `.<Module>.layer*`, a layer binding, `.layer*` on an inline
+ * `await import(...)`, or a destructure that takes `layer*` from a module
+ * (`const { layer } = BunCrypto`, reported where it takes the layer). Each
+ * access may be optional (`?.`), and whitespace may sit around it, so an
+ * access split across lines still matches. Constructors such as
+ * `BunSocket.makeNet` and runners such as `BunRuntime.runMain` are not
+ * provisions.
  */
 const platformBunLayerPattern = (bindings: PlatformBunBindings): RegExp => {
   const provisions = [
-    ...alternation(bindings.modules).map((names) => String.raw`(?:${names})\s*\.\s*layer\w*`),
+    ...alternation(bindings.modules).map((names) => String.raw`(?:${names})${MEMBER}layer\w*`),
+    ...alternation(bindings.modules).map(
+      (names) => String.raw`\{[^}]*(?<![\w$])layer\w*[^}]*\}\s*=\s*(?:${names})${ALIAS_END}`,
+    ),
     ...alternation(bindings.namespaces).map(
-      (names) => String.raw`(?:${names})\s*\.\s*\w+\s*\.\s*layer\w*`,
+      (names) => String.raw`(?:${names})${MEMBER}\w+${MEMBER}layer\w*`,
     ),
     ...alternation(bindings.layers),
-    String.raw`\(\s*${dynamicImport(PLATFORM_BUN_MODULE)}\s*\)\s*\.\s*layer\w*`,
-    String.raw`\(\s*${dynamicImport(PLATFORM_BUN_PACKAGE)}\s*\)\s*\.\s*\w+\s*\.\s*layer\w*`,
+    String.raw`\(\s*${dynamicImport(PLATFORM_BUN_MODULE)}\s*\)${MEMBER}layer\w*`,
+    String.raw`\(\s*${dynamicImport(PLATFORM_BUN_PACKAGE)}\s*\)${MEMBER}\w+${MEMBER}layer\w*`,
   ]
   return new RegExp(String.raw`(?<![\w$.])(?:${provisions.join("|")})(?![\w$])`, "g")
 }
@@ -2163,9 +2183,9 @@ export const findRetiredSurfaces = (file: string, text: string): ReadonlyArray<F
  * the document is read once, and a `CLAUDE.md` that becomes a file of its own
  * is read as one.
  *
- * What is read: text in backticks that starts with one of the five source
- * roots — `packages/`, `apps/`, `plans/`, `testbeds/`, `examples/`. Backticks
- * are what makes the reference a claim about a path; prose naming a file
+ * What is read: text in backticks that starts with one of the eight tree
+ * roots: `packages/`, `apps/`, `plans/`, `testbeds/`, `examples/`, `docs/`,
+ * `patches/`, `.claude/`. Backticks are what makes the reference a claim about a path; prose naming a file
  * without them is left alone. A path is satisfied when `git ls-files` lists
  * it, or lists anything under it, which lets a directory reference such as
  * `packages/core/src/` stand on the files it contains.
@@ -2191,17 +2211,18 @@ export const findRetiredSurfaces = (file: string, text: string): ReadonlyArray<F
  * Steering prose: what an agent is told to read before it changes the code.
  * The root `AGENTS.md`, `CLAUDE.md` and `ARCHITECTURE.md`, a package's own
  * `AGENTS.md` or `CLAUDE.md`, `docs/` but its dated research, a testbed's
- * `README.md` (the root `CLAUDE.md` sends agents to the gamut one), and the
- * project skills under `.claude/skills/`. The path claims and the
- * retired-surface rows both read exactly this set.
+ * `README.md` (the root `CLAUDE.md` sends agents to the gamut one), the
+ * dependency patch notes in `patches/README.md`, and the project skills under
+ * `.claude/skills/`. The path claims and the retired-surface rows both read
+ * exactly this set.
  */
 const STEERING_PROSE =
-  /^(?:(?:AGENTS|CLAUDE|ARCHITECTURE)\.md|(?:apps|packages)\/[^/]+\/(?:AGENTS|CLAUDE)\.md|docs\/(?!research\/).+\.md|testbeds\/[^/]+\/README\.md|\.claude\/skills\/.+\.md)$/
+  /^(?:(?:AGENTS|CLAUDE|ARCHITECTURE)\.md|(?:apps|packages)\/[^/]+\/(?:AGENTS|CLAUDE)\.md|docs\/(?!research\/).+\.md|testbeds\/[^/]+\/README\.md|patches\/README\.md|\.claude\/skills\/.+\.md)$/
 
 export const isSteeringFile = (file: string): boolean => STEERING_PROSE.test(file)
 
-/** The five roots under which a backticked path is a claim about the tree. */
-const SOURCE_ROOT = /^(?:packages|apps|plans|testbeds|examples)\//
+/** The eight roots under which a backticked path is a claim about the tree. */
+const SOURCE_ROOT = /^(?:packages|apps|plans|testbeds|examples|docs|patches|\.claude)\//
 
 /** Text between backticks, which is what marks a reference as a path. */
 const BACKTICKED = /`([^`\n]+)`/g
@@ -2279,6 +2300,62 @@ export const findSteeringFilePaths = (
   }
   return findings
 }
+
+// ── the extension guide's code compiles ─────────────────────────────────────
+
+/**
+ * Guard: the ```ts blocks of the extension guide compile with the repo's
+ * compiler options and Effect diagnostics.
+ *
+ * An extension author copies these blocks, so a block that no longer
+ * compiles, or that the repo's own diagnostics reject, teaches the wrong
+ * code. `check-guide-code.ts` writes each block to a scoped temp directory as
+ * its own module, runs `tsc` over them with the root tsconfig, and reports
+ * each diagnostic at its line in the guide.
+ */
+export const GUIDE_FILE = "docs/extensions.md"
+
+/** One ```ts block: its code and the guide line of its first code line. */
+export interface GuideBlock {
+  readonly line: number
+  readonly code: string
+}
+
+const TS_FENCE_OPEN = /^```ts\s*$/
+const FENCE_CLOSE = /^```\s*$/
+
+export const guideCodeBlocks = (text: string): ReadonlyArray<GuideBlock> => {
+  const blocks: Array<GuideBlock> = []
+  let start = -1
+  const lines = text.split("\n")
+  for (const [index, line] of lines.entries()) {
+    if (start === -1 && TS_FENCE_OPEN.test(line)) start = index + 1
+    else if (start !== -1 && FENCE_CLOSE.test(line)) {
+      blocks.push({ line: start + 1, code: lines.slice(start, index).join("\n") })
+      start = -1
+    }
+  }
+  return blocks
+}
+
+/** The module file a block is written to: `b1.ts` for the first. */
+export const guideBlockFile = (index: number): string => `b${index + 1}.ts`
+
+const BLOCK_DIAGNOSTIC = /(?:^|[/\\])b(\d+)\.ts\((\d+),(\d+)\)/
+
+/** A `tsc` output line with its block position replaced by the guide position. */
+export const guideDiagnosticLine = (line: string, blocks: ReadonlyArray<GuideBlock>): string =>
+  Option.fromNullishOr(BLOCK_DIAGNOSTIC.exec(line)).pipe(
+    Option.flatMap((match) =>
+      Option.fromNullishOr(blocks.at(Number(match[1]) - 1)).pipe(
+        Option.map(
+          (block) =>
+            `${GUIDE_FILE}:${block.line + Number(match[2]) - 1}:${match[3]}${line.slice(match.index + match[0].length)}`,
+        ),
+      ),
+    ),
+    Option.getOrElse(() => line),
+  )
 
 // ── an effect tracks no whole session record ────────────────────────────────
 

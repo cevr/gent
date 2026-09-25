@@ -1494,6 +1494,71 @@ class AgentLoopFollowUp extends Context.Service<AgentLoopFollowUp, AgentLoopFoll
   "@gent/core/src/runtime/agent-loop/AgentLoopFollowUp",
 ) {}
 
+// ── residency ───────────────────────────────────────────────────────────────
+
+/**
+ * Keeps one branch's cluster entity resident while anything holds it.
+ *
+ * The cluster reaper passivates an entity that is idle past its limit (one
+ * minute), and a passivated entity closes its runtime-state stream and its
+ * branch scope. Three things hold a loop resident: a running turn, a client
+ * that watches the loop's runtime state, and an extension hold
+ * (`Session.holdResident`, which a pending wake timer takes). A watch that
+ * held nothing would end a minute into an idle stretch, and the client would
+ * reconnect and rebuild the loop each time; a timer that held nothing would
+ * stop with the branch scope and never fire.
+ *
+ * The holds are counted, because the entity has one keep-alive switch: the
+ * first hold turns it on and the last release turns it off. An entity with
+ * no hold passivates as before. The local test actor has no cluster and no
+ * reaper, so there a hold does nothing.
+ */
+interface AgentLoopResidencyService {
+  /** Holds the entity resident until the enclosing scope closes. */
+  readonly held: Effect.Effect<void, never, Scope.Scope>
+}
+
+class AgentLoopResidency extends Context.Service<AgentLoopResidency, AgentLoopResidencyService>()(
+  "@gent/core/src/runtime/agent-loop/AgentLoopResidency",
+) {}
+
+/**
+ * Counts holds on one switch: the first hold switches it on, the last
+ * release switches it off. A hold whose switch-on failed installs no release,
+ * so it takes its count back: the next hold switches on again.
+ */
+export const makeHoldCount = (switchTo: (enabled: boolean) => Effect.Effect<void>) =>
+  Effect.gen(function* () {
+    const holds = yield* Ref.make(0)
+    const permit = yield* Semaphore.make(1)
+    const acquire = Effect.gen(function* () {
+      const previous = yield* Ref.getAndUpdate(holds, (count) => count + 1)
+      if (previous !== 0) return
+      yield* switchTo(true).pipe(Effect.onError(() => Ref.update(holds, (count) => count - 1)))
+    }).pipe(permit.withPermits(1))
+    const release = Effect.gen(function* () {
+      const remaining = yield* Ref.updateAndGet(holds, (count) => count - 1)
+      if (remaining === 0) yield* switchTo(false)
+    }).pipe(permit.withPermits(1))
+    return AgentLoopResidency.of({ held: Effect.acquireRelease(acquire, () => release) })
+  })
+
+/** One residency per entity; built in the entity's own context. */
+const makeAgentLoopResidency = Effect.gen(function* () {
+  const entityContext = yield* Effect.context<Entity.CurrentAddress>()
+  const sharding = yield* Effect.serviceOption(Sharding.Sharding)
+  return yield* makeHoldCount((enabled) =>
+    Option.match(sharding, {
+      onNone: () => Effect.void,
+      onSome: (service) =>
+        Entity.keepAlive(enabled).pipe(
+          Effect.provideService(Sharding.Sharding, service),
+          Effect.provideContext(entityContext),
+        ),
+    }),
+  )
+})
+
 /**
  * Per-(sessionId, branchId) loop behavior factory.
  *
@@ -1530,6 +1595,7 @@ const makeAgentLoopBehavior = (
   | ToolRunner
   | ProcessLocalToolReplay
   | AgentLoopFollowUp
+  | AgentLoopResidency
   | ConfigService
   | ModelRegistry
   | ChildProcessSpawner
@@ -1551,19 +1617,9 @@ const makeAgentLoopBehavior = (
     const recoveryEvents = yield* EventStorage
     const host = yield* makeExtensionHostPlatform
     const runtimeContext = yield* captureAgentLoopRuntimeContext
-    const entityContext = yield* Effect.context<Entity.CurrentAddress>()
-    const sharding = yield* Effect.serviceOption(Sharding.Sharding)
-    // The local test actor has no cluster or idle reaper. Production actors
-    // hold the cluster entity while their detached turn worker is active.
-    const keepAlive = (enabled: boolean) =>
-      Option.match(sharding, {
-        onNone: () => Effect.void,
-        onSome: (service) =>
-          Entity.keepAlive(enabled).pipe(
-            Effect.provideService(Sharding.Sharding, service),
-            Effect.provideContext(entityContext),
-          ),
-      })
+    // A running turn holds the entity resident: its worker is detached from
+    // the request that started it.
+    const residency = yield* AgentLoopResidency
 
     const publishEvent = (event: AgentEvent) =>
       eventStore.publish(event).pipe(asAgentLoopError(`Failed to publish ${event._tag}`))
@@ -1612,6 +1668,7 @@ const makeAgentLoopBehavior = (
           return steerLoop(command).pipe(provideLoopClient)
         },
         stopMessage: (input) => stopMessageOn(input).pipe(provideLoopClient),
+        holdResident: residency.held,
       },
     })
 
@@ -1764,16 +1821,13 @@ const makeAgentLoopBehavior = (
         ),
       interactionAnswered: approval.answered,
       runTurn: (state) =>
-        Effect.acquireUseRelease(
-          keepAlive(true),
-          () =>
-            branchContext.pipe(
-              // The turn's profile lease ends with the turn.
-              Effect.flatMap((context) =>
-                turnExecution.runTurn(state).pipe(Effect.provideContext(context), Effect.scoped),
-              ),
-            ),
-          () => keepAlive(false),
+        residency.held.pipe(
+          Effect.andThen(branchContext),
+          // The turn's profile lease ends with the turn.
+          Effect.flatMap((context) =>
+            turnExecution.runTurn(state).pipe(Effect.provideContext(context), Effect.scoped),
+          ),
+          Effect.scoped,
         ),
       sessionAgent: sessionAgentName(sessionId),
       loopScope,
@@ -2157,6 +2211,7 @@ const buildAgentLoopActorHandlers = (config: {
     // closed loop and race into `openLoop`, leaking the first behavior's
     // fibers and leaving `lifecycleRef` holding a state the other built.
     const startupSemaphore = yield* Semaphore.make(1)
+    const residency = yield* makeAgentLoopResidency
     const sessionGovernance = yield* AgentLoopSessionGovernance
     const platform = yield* GentPlatform
     const fileSystem = yield* FileSystem.FileSystem
@@ -2504,6 +2559,7 @@ const buildAgentLoopActorHandlers = (config: {
             initialQueue,
             Option.getOrUndefined(sessionProfileCacheOption),
           ).pipe(
+            Effect.provideService(AgentLoopResidency, residency),
             Effect.provideService(AgentLoopFollowUp, {
               enqueue: (input) =>
                 reentrantHandle.pipe(Effect.flatMap((h) => admitFollowUp(h, input))),
@@ -2629,9 +2685,12 @@ const buildAgentLoopActorHandlers = (config: {
       return yield* handle.inbox.runtimeState
     })
 
+    // A watcher holds the entity resident for as long as it watches: a
+    // passivated entity would end the stream under an idle client.
     const registeredStateChanges = Stream.unwrap(
       Effect.gen(function* () {
         yield* rejectIfTerminated
+        yield* residency.held
         const handle = yield* ensureStarted
         return handle.inbox.runtimeChanges.pipe(Stream.interruptWhen(handle.awaitExit))
       }),

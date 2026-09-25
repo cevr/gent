@@ -6,8 +6,8 @@ Building gent - minimal, opinionated agent harness (built with Effect).
 
 ```bash
 bun install
-bun run typecheck  # patched TypeScript 7 + Effect diagnostics, must pass clean
-bun run lint       # oxlint (gent custom rules + oxlint-tsgolint type-aware lints)
+bun run typecheck  # patched TypeScript 7 + Effect diagnostics, must pass clean; also compiles the docs/extensions.md code blocks
+bun run lint       # oxlint (gent rules + type-aware lints), the guards (`bun run guards`), and the lint-offs probe (`bun run lint:offs`)
 bun run test       # Gate tests. NOT bare `bun test` (picks up flaky e2e)
 bun run smoke      # Headless mode smoke test
 bun run link       # Build, then point ~/.bun/bin/gent at this checkout (uncached)

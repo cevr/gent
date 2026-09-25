@@ -41,6 +41,7 @@ import {
   canStartTurnNow,
   emptyAdmissionGate,
   makeAgentLoopWorker,
+  makeHoldCount,
   makeLoopInbox,
   wantsWakeOnRecovery,
 } from "../../src/runtime/agent-loop"
@@ -607,6 +608,75 @@ describe("turn lifetime", () => {
             ),
           ),
         ).toBe(true)
+      }).pipe(Effect.provide(TestClock.layer()), Effect.timeout("8 seconds")),
+    10_000,
+  )
+
+  it.live("a hold whose switch-on failed is not counted, so the next hold switches on", () =>
+    Effect.gen(function* () {
+      const switched: Array<boolean> = []
+      let failNext = true
+      const residency = yield* makeHoldCount((enabled) =>
+        Effect.suspend(() => {
+          switched.push(enabled)
+          if (enabled && failNext) {
+            failNext = false
+            return Effect.die(new Error("keep-alive refused"))
+          }
+          return Effect.void
+        }),
+      )
+      const first = yield* Effect.exit(Effect.scoped(residency.held))
+      expect(Exit.isFailure(first)).toBe(true)
+      yield* Effect.scoped(residency.held)
+      expect(switched).toEqual([true, true, false])
+    }),
+  )
+
+  it.scopedLive(
+    "an idle loop stays resident while a client watches its runtime",
+    () =>
+      Effect.gen(function* () {
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          { ...textStep("AFTER-IDLE"), gated: true },
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          providerLayer,
+          extensions: [],
+          extensionInputs: [],
+          agents: [new AgentDefinition({ name: DEFAULT_AGENT_NAME })],
+        })
+        const seen: Array<string> = []
+        const watching = yield* Deferred.make<void>()
+        const watch = yield* client.session.watchRuntime({ sessionId, branchId }).pipe(
+          Stream.tap((state) =>
+            Effect.sync(() => seen.push(state._tag)).pipe(
+              Effect.andThen(Deferred.succeed(watching, void 0)),
+            ),
+          ),
+          Stream.takeUntil((state) => state._tag === "Running"),
+          Stream.runDrain,
+          Effect.forkScoped,
+        )
+        yield* Deferred.await(watching)
+        // Idle past the entity idle limit (one minute) and the reaper's tick.
+        yield* TestClock.adjust("10 seconds")
+        yield* TestClock.adjust("2 minutes")
+        const completed = yield* client.session.events({ sessionId, branchId }).pipe(
+          Stream.filter(({ event }) => event._tag === "TurnCompleted"),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkScoped,
+        )
+        yield* client.message.send({ sessionId, branchId, content: "Still watching?" })
+        yield* controls.waitForCall(0)
+        // The watch that opened before the idle stretch sees the new turn:
+        // it did not end when the loop went idle.
+        yield* Fiber.join(watch)
+        expect(seen[0]).toBe("Idle")
+        expect(seen.at(-1)).toBe("Running")
+        yield* controls.emitAll(0)
+        yield* Fiber.join(completed)
       }).pipe(Effect.provide(TestClock.layer()), Effect.timeout("8 seconds")),
     10_000,
   )

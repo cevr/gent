@@ -12,6 +12,8 @@ The ledger is `plans/architecture-loop-<date>.md`. It is the single source of tr
 
 Decide by the principles in `~/Developer/personal/dotfiles/principles/` and write "decided by <principle>" in the ledger; the loop runs without owner check-ins.
 
+The SAFETY rules live once, in `.claude/skills/architecture-loop/safety.md` ([`safety.md`](safety.md)). Every prompt the loop writes (the sweep brief and area prompts, apply, counsel, the live-check task file) starts by telling the agent to read that file in full before any action. Edit the rules there, never in a prompt.
+
 ## Steps
 
 1. **Open the ledger.** Copy the section layout of the newest `plans/architecture-loop-*.md`. Record the HEAD hash and the baseline table (TypeScript source lines and files per package):
@@ -35,7 +37,7 @@ Decide by the principles in `~/Developer/personal/dotfiles/principles/` and writ
 
 8. **Merge.** Per batch, in its rift: merge main, resolve conflicts there, run `bun run gate` into a log and read `GATE EXIT`. Then from the warm source: `git fetch <rift path> HEAD:refs/heads/p<N>-<batch>`, `git merge --no-edit p<N>-<batch>`, gate into a log, read `GATE EXIT`. Write the batch's ledger row (`done <hash> … <hash>, merged <hash>`, decisions, counsel result, open items), add re-proposable rejections to [`rejected.md`](rejected.md), and remove the rift by its full path. Push only when asked. Done when the gate on main is green, the row is written and the rift is gone.
 
-9. **Live check.** After each merge, or a small batch of merges, run the gamut through the herdr CLI (`herdr pane`, never `herdr agent`). Write a prompt file whose task drives every ability the batches changed (each apply report names them), and drive TUI keys the prompt cannot reach (`/btw`, `/model`, queued follow-ups, Esc, `!cmd`, `gamut restart` for resume) with `herdr pane send-text`. `bun run gamut up <preset> --prompt <file>`, `wait`, `read`, then `bun run gamut status`. `status` prints the stored user messages and the session tree: the pane shows what rendered, `status` shows what happened. A defect found here becomes a live-fix batch (step 6). Done when `status` matches the intent, the ledger has a live-check row, and `bun run gamut down` ran.
+9. **Live check.** After each merge, or a small batch of merges, run the gamut through the herdr CLI (`herdr pane`, never `herdr agent`). Write a prompt file whose first line sends the agent to read `<warm source>/.claude/skills/architecture-loop/safety.md` in full before any action, and whose task drives every ability the batches changed (each apply report names them), and drive TUI keys the prompt cannot reach (`/btw`, `/model`, queued follow-ups, Esc, `!cmd`, `gamut restart` for resume) with `herdr pane send-text`. `bun run gamut up <preset> --prompt <file>`, `wait`, `read`, then `bun run gamut status`. `status` prints the stored user messages and the session tree: the pane shows what rendered, `status` shows what happened. A defect found here becomes a live-fix batch (step 6). Done when `status` matches the intent, the ledger has a live-check row, and `bun run gamut down` ran.
 
 ## Close rule
 
