@@ -907,6 +907,14 @@ The worker reads each binding from its property descriptor, so a snapshot
 never calls a global accessor (it is omitted as a function), and a value whose
 encoding throws (a throwing getter, a trapping Proxy) is omitted as
 `unsupported`; the worker and the rest of the namespace stay.
+A result's `bindings` names only the bindings its cell added or bound to
+another value (compared by `Object.is`), and `bindingCount` (additive,
+optional) counts the whole namespace: every result stays in the history, so a
+full list on each would grow with cells times bindings. A result stored before
+`bindingCount` lists every binding. A thrown value renders through one total
+renderer: its name, message, cause and detail are read from property
+descriptors (a getter the cell wrote never runs), and a read that still throws
+(a trapping Proxy) gives one fixed text, never a worker death.
 The first kernel start of a branch with no saved namespace fixes its starting
 namespace in its own row. For the opening branch (the oldest) of a handoff
 session (a parent, not spawned: `isSpawnedSession`), that is a copy of the one
