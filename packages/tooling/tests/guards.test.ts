@@ -603,6 +603,30 @@ describe("repo temp directory guard", () => {
     ).toEqual([[1], [1], [1], [4]])
   })
 
+  test("a temp directory rooted in the working directory is reported", () => {
+    const sources = [
+      'const dir = mkdtempSync(join(process.cwd(), "tmp-"))',
+      "const dir = yield* fs.makeTempDirectoryScoped({ directory: process.cwd() })",
+      'const dir = yield* fs.makeTempDirectoryScoped({ directory: path.resolve("out") })',
+      'const dir = yield* fs.makeTempDirectoryScoped({ directory: "./scratch" })',
+      'const dir = mkdtempSync("case-")',
+      ["const here = process.cwd()", 'const dir = mkdtempSync(join(here, "case-"))'].join("\n"),
+    ]
+    expect(
+      sources.map((source) => findRepoTempDirectories(testFile, source).map((f) => f.line)),
+    ).toEqual([[1], [1], [1], [1], [1], [2]])
+  })
+
+  test("an absolute prefix and a helper that takes a prefix pass", () => {
+    const source = [
+      'const a = mkdtempSync("/tmp/gent-case-")',
+      "const b = mkdtempSync(`${tmpdir()}/gent-case-`)",
+      'const c = yield* fs.makeTempDirectoryScoped({ directory: "/nonexistent/gent-probe-x" })',
+      'const d = yield* makeTempDirectoryScoped("gent-case-")',
+    ].join("\n")
+    expect(findRepoTempDirectories(testFile, source)).toEqual([])
+  })
+
   test("a system temp directory and a read of the source tree pass", () => {
     const source = [
       'const root = yield* fs.makeTempDirectoryScoped({ prefix: "gent-x-" })',

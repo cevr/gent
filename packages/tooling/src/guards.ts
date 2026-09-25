@@ -811,16 +811,22 @@ export const findE2eFixtureImportFindings = (
  * loaders bind `effect` and the public entries, so an extension file resolves
  * them from anywhere; no test needs `node_modules` above its fixture.
  *
- * A repo path is `import.meta.dir`, `import.meta.dirname`, `__dirname`, a
- * `join`/`resolve` whose first argument is a relative path literal, or a name
- * bound from one of these. Two shapes are reported in test code outside the
- * tooling package, whatever the directory's name or prefix: a temp directory
- * call (`mkdtemp`, `mkdtempSync`, `makeTempDirectory`,
- * `makeTempDirectoryScoped`) whose arguments name a repo path, and a repo path
- * joined to a `tmp` or `temp` segment (`.tmp`, `tmp-x`, `temp`).
+ * A repo path is `import.meta.dir`, `import.meta.dirname`, `__dirname`,
+ * `process.cwd()` (every `bun test` script runs in its package directory), a
+ * `join`/`resolve` whose first argument is a relative path literal, a
+ * `directory:` option that is a relative path literal, or a name bound from
+ * one of these. Three shapes are reported in test code outside the tooling
+ * package, whatever the directory's name or prefix: a temp directory call
+ * (`mkdtemp`, `mkdtempSync`, `makeTempDirectory`, `makeTempDirectoryScoped`)
+ * whose arguments name a repo path, a node `mkdtemp` whose prefix is a relative
+ * literal (`mkdtempSync("case-")` creates the directory in the working directory),
+ * and a repo path joined to a `tmp` or `temp` segment (`.tmp`, `tmp-x`,
+ * `temp`). A literal is relative when it starts with none of `/`, `$` or `~`.
  */
 const REPO_PATH =
-  /\bimport\.meta\.dir(?:name)?\b|\b__dirname\b|\b(?:join|resolve)\(\s*["'`](?:\.{1,2}(?:\/|["'`])|(?:packages|apps|examples|testbeds)\/)/
+  /\bimport\.meta\.dir(?:name)?\b|\b__dirname\b|\bprocess\.cwd\(\)|\b(?:join|resolve)\(\s*["'`](?![/$~])|\bdirectory:\s*["'`](?![/$~])/
+/** A node `mkdtemp` whose prefix is a relative literal: the directory lands in the working directory. */
+const RELATIVE_MKDTEMP = /^mkdtemp(?:Sync)?\s*\(\s*["'`](?![/$~])/
 const BINDING = /\b(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=(.*)$/
 const TEMP_CALL = /\b(?:mkdtempSync|mkdtemp|makeTempDirectoryScoped|makeTempDirectory)\s*\(/g
 const TMP_SEGMENT = /["'`](?:[^"'`]*\/)?\.?(?:tmp|temp)(?:[-_.][^"'`/]*)?(?:\/[^"'`]*)?["'`]/i
@@ -859,8 +865,12 @@ export const findRepoTempDirectories = (file: string, text: string): ReadonlyArr
   for (const call of code.matchAll(TEMP_CALL)) {
     const open = call.index + call[0].length - 1
     const first = code.slice(0, open).split("\n").length - 1
-    const argumentLines = callArguments(code, open).split("\n")
-    const hit = argumentLines.findIndex(namesRepo)
+    const argumentText = callArguments(code, open)
+    if (RELATIVE_MKDTEMP.test(call[0] + argumentText.slice(1))) {
+      reported.add(first)
+      continue
+    }
+    const hit = argumentText.split("\n").findIndex(namesRepo)
     if (hit !== -1) reported.add(first + hit)
   }
   // A tmp segment joined to a repo path on one line.
