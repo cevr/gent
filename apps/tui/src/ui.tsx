@@ -874,10 +874,15 @@ export function SelectList<A>(props: SelectListProps<A>) {
     if (current.moved) {
       return Option.flatMap(Option.fromNullishOr(previous[current.selectedIndex]), (value) => {
         const key = props.rowKey(value)
-        return Option.liftPredicate(
-          entries.findIndex((entry) => props.rowKey(entry) === key),
-          (index) => index >= 0,
-        )
+        // A key two rows share (a prompt typed twice) resolves to the match
+        // nearest where the cursor was.
+        return entries.reduce<Option.Option<number>>((best, entry, index) => {
+          if (props.rowKey(entry) !== key) return best
+          const distance = Math.abs(index - current.selectedIndex)
+          if (Option.exists(best, (kept) => Math.abs(kept - current.selectedIndex) <= distance))
+            return best
+          return Option.some(index)
+        }, Option.none())
       })
     }
     if (current.query.length > 0) return Option.none()

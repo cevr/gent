@@ -20,6 +20,7 @@ import {
   MessagePicker,
   modelRows,
   type PromptSearchEvent,
+  promptSearchItems,
   PromptSearchPalette,
   PromptSearchState,
   reasoningRows,
@@ -416,6 +417,22 @@ const openPalette = (entries: readonly string[], onEvent: (event: PromptSearchEv
       { width: 90, height: 28 },
     ),
   )
+
+describe("prompt search row keys", () => {
+  it.effect("a prompt typed twice keeps one key per entry across a newer write", () =>
+    Effect.sync(() => {
+      // History is newest first and dedupes only the newest, so a text can
+      // repeat. A newer write, even of the same text, must not move an older
+      // entry's key onto another row.
+      const before = promptSearchItems(["A", "B", "A"])
+      const olderA = before[2]?.key
+      expect(new Set(before.map((item) => item.key)).size).toBe(3)
+      const after = promptSearchItems(["A", "C", "A", "B", "A"])
+      expect(after.findIndex((item) => item.key === olderA)).toBe(4)
+      expect(after.findIndex((item) => item.key === before[0]?.key)).toBe(2)
+    }),
+  )
+})
 
 describe("PromptSearchPalette renderer", () => {
   it.live("renders matching prompts with selection and footer", () =>

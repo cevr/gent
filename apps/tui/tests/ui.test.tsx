@@ -386,6 +386,46 @@ describe("select list sticky selection", () => {
     }),
   )
 
+  it.live("a key two rows share keeps the cursor on the one nearest where it was", () =>
+    Effect.gen(function* () {
+      // Two entries share a key; the reader sits on the second. A new entry
+      // lands on top, and the cursor must stay on the second, not jump to
+      // the first match of its key.
+      const older: Fruit = { id: "apple", name: "Older apple" }
+      const [rows, setRows] = createSignal<ReadonlyArray<Fruit>>([
+        { id: "apple", name: "Newer apple" },
+        { id: "banana", name: "Banana" },
+        { id: "kiwi", name: "Kiwi" },
+        older,
+      ])
+      const picked: Array<string> = []
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => (
+          <SelectList
+            id="fruit"
+            open={true}
+            rows={() => plainRows(rows())}
+            rowKey={(fruit) => fruit.id}
+            onSelect={(fruit) => picked.push(fruit.name)}
+            onDismiss={() => {}}
+          />
+        )),
+      )
+      yield* waitForFrame(setup, () => renderFrame(setup).includes("> Newer apple"), "open")
+      setup.mockInput.pressArrow("up")
+      yield* waitForFrame(setup, () => renderFrame(setup).includes("> Older apple"), "moved")
+
+      setRows([
+        { id: "cherry", name: "Cherry" },
+        { id: "apple", name: "Newer apple" },
+        ...rows().slice(1),
+      ])
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      expect(picked).toEqual(["Older apple"])
+    }),
+  )
+
   it.live("keeps the cursor on the reader's row when the rows arrive again reordered", () =>
     Effect.gen(function* () {
       // A pane that polls hands the list fresh objects, in a new order. The
