@@ -2039,13 +2039,12 @@ const makeAgentLoopBehavior = (
  * embedded payload IS the authority. Ops with no embedded payload
  * (`RespondInteraction` and the branch commands) carry explicit target fields.
  *
- * **Execution id key** per op:
- * - `Submit` — `message.id` (live-only)
- * - `SubmitAndWait` — `message.id` (live-only; the reply waits for the turn)
- * - `SubmitDurable` — `message.id` (persisted; actor owns request idempotency)
- * - `QueueFollowUp` — `message.id` (live-only)
- * - `Steer` — `commandId` (persisted; actor owns request idempotency)
- * - `RespondInteraction` — `requestId` (persisted)
+ * **Execution id key** per op: the `AgentLoop` entity in
+ * `domain/agent-loop.ts` names each op's key and whether it is persisted.
+ * A message-carrying op (`Submit`, `SubmitAndWait`, `SubmitDurable`,
+ * `QueueFollowUp`) keys by `message.id` through `messageTarget`. Every
+ * branch command keys by `commandId` through `branchTarget`; `Steer` keys
+ * by `commandId` too, and `RespondInteraction` by `requestId`.
  *
  * Schemas reuse gent's existing domain (`Message`, `RunSpec`,
  * `SteerCommand`) rather than introducing a parallel envelope shape.
@@ -2057,18 +2056,6 @@ const isActiveLoopState = Predicate.or(
   Predicate.isTagged("Running"),
   Predicate.isTagged("WaitingForInteraction"),
 )
-
-/**
- * When a turn is finished, told from the outside.
- *
- * A turn is over when the loop no longer holds its message: not starting it,
- * not running it, not waiting on it, and not keeping it queued. That is read
- * off the loop's own state, so no event subscription can miss it. Failure is
- * a monotonic counter (`turnFailure.epoch`); a caller records where it stood
- * before starting the turn (`waitBaseline`). A later mark that names
- * the caller's message is this turn's failure; a mark for another message is
- * not.
- */
 
 const BehaviorHandle = Schema.declare<AgentLoopBehavior>((value): value is AgentLoopBehavior =>
   Predicate.hasProperty(value, "awaitExit"),
@@ -2179,6 +2166,13 @@ const waitBaseline = (behavior: AgentLoopBehavior): Effect.Effect<WaitBaseline> 
 
 /**
  * Wait until the loop has released `messageId`, started after `baseline`.
+ *
+ * A turn is over when the loop no longer holds its message: not starting it,
+ * not running it, not waiting on it, and not keeping it queued. That is read
+ * off the loop's own state, so no event subscription can miss it. Failure is
+ * a monotonic counter (`turnFailure.epoch`); a caller records where it stood
+ * before starting the turn (`waitBaseline`). A later mark that names the
+ * caller's message is this turn's failure; a mark for another message is not.
  *
  * It ends three ways, and all three end the wait: the loop lets the message
  * go (its own turn ran, or it left the queue unrun), the turn fails, or
