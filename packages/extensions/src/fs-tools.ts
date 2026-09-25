@@ -706,8 +706,7 @@ export const countOf = (count: number, noun: string, plural = `${noun}s`): strin
   return `${count} ${plural}`
 }
 
-// Read Tool — authored through the typed `tool(...)` factory, which lowers
-// directly to a Capability.
+// Read Tool
 
 export const ReadTool = tool({
   id: "read",

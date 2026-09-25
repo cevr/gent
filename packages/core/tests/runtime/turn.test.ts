@@ -185,6 +185,7 @@ describe("agent turn response collectors", () => {
         branchId,
         activeStream,
         formatStreamError: (error) => error.message,
+        contextOverflow: false,
       }).pipe(Effect.provide(layer))
 
       expect(collected.interrupted).toBe(true)
@@ -266,12 +267,15 @@ describe("session route driver", () => {
 
 const collected = (
   responseParts: ReadonlyArray<Response.AnyPart>,
-  flags: Partial<Pick<CollectedTurnResponse, "interrupted" | "streamFailed">> = {},
+  flags: Partial<
+    Pick<CollectedTurnResponse, "interrupted" | "streamFailed" | "contextOverflow">
+  > = {},
 ): CollectedTurnResponse => ({
   responseParts,
   messageProjection: { assistant: [], tool: [] },
   interrupted: false,
   streamFailed: false,
+  contextOverflow: false,
   ...flags,
 })
 
@@ -287,10 +291,17 @@ describe("classifyStep", () => {
     expect(classifyStep(collected([], { streamFailed: true }))).toEqual({
       _tag: "Failed",
       partialOutput: false,
+      contextOverflow: false,
     })
     expect(classifyStep(collected([textDeltaPart("some")], { streamFailed: true }))).toEqual({
       _tag: "Failed",
       partialOutput: true,
+      contextOverflow: false,
+    })
+    expect(classifyStep(collected([], { streamFailed: true, contextOverflow: true }))).toEqual({
+      _tag: "Failed",
+      partialOutput: false,
+      contextOverflow: true,
     })
   })
 

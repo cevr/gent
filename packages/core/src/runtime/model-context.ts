@@ -480,6 +480,8 @@ export const latestUserMessageId = (messages: ReadonlyArray<Message>): Option.Op
 /**
  * Applies the newest valid window marker: the marker leads, then every message from
  * the anchor onward. A marker whose anchor is missing is ignored so nothing is lost.
+ * An older marker stored after the anchor (one the newest replaced at the same
+ * message) is left out: only the newest marker speaks for the history.
  */
 export const messagesInCurrentWindow = (
   messages: ReadonlyArray<Message>,
@@ -491,7 +493,10 @@ export const messagesInCurrentWindow = (
     if (Option.isNone(details)) continue
     const anchor = messages.findIndex((message) => message.id === details.value.keepFromMessageId)
     if (anchor < 0) continue
-    return [marker, ...messages.slice(anchor).filter((message) => message.id !== marker.id)]
+    return [
+      marker,
+      ...messages.slice(anchor).filter((message) => Option.isNone(windowDetails(message))),
+    ]
   }
   return messages
 }
@@ -588,11 +593,62 @@ export const estimateToolSchemaTokens = (tools: ReadonlyArray<ToolCapability>): 
 /** The separate context reservations supplied by the model host. */
 export const ModelContextBudget = Schema.Struct({
   contextLimitTokens: Schema.Natural,
+  /** The model's input cap, when it is below the window less the output (the GPT-5 family). */
+  inputLimitTokens: Schema.optional(Schema.Natural),
   reservedSystemTokens: Schema.Natural,
   reservedToolTokens: Schema.Natural,
   reservedOutputTokens: Schema.Natural,
 })
 export type ModelContextBudget = typeof ModelContextBudget.Type
+
+/**
+ * The input one request may carry: the window less the output reserve, and
+ * never past the model's input cap. Prior art: opencode's `promptCeiling`
+ * (`session/compaction.ts`).
+ */
+const inputCeiling = (budget: ModelContextBudget): number =>
+  Math.min(
+    budget.contextLimitTokens - budget.reservedOutputTokens,
+    budget.inputLimitTokens ?? Number.POSITIVE_INFINITY,
+  )
+
+/** What the messages may take once the system prompt and tool definitions are in. */
+const messageBudget = (budget: ModelContextBudget): number =>
+  inputCeiling(budget) - budget.reservedSystemTokens - budget.reservedToolTokens
+
+/**
+ * What the provider reported one step's request took, and the reply message
+ * that step stored. The request held the messages before that reply, so the
+ * next projection counts those at the measured size and estimates the reply
+ * and what came after at chars/4. The step's output is not in the measure:
+ * only its stored reply comes back as input, and that is counted as a message.
+ */
+export interface StepMeasure {
+  readonly replyId: MessageId
+  /** Input tokens of that step's request, cached ones included. */
+  readonly inputTokens: number
+  /**
+   * The chars/4 estimate of the system prompt, notices and tool definitions
+   * that request carried. The measure subtracts it, not the current one: the
+   * agent or its tools can change between steps.
+   */
+  readonly overheadTokens: number
+}
+
+/**
+ * The measure, when the window it measured is still the current one: its
+ * reply is stored after every window marker. A marker stored later replaced
+ * the history the measure counted, so the estimate falls back to chars/4.
+ */
+const measureInCurrentWindow = (
+  messages: ReadonlyArray<Message>,
+  measure: Option.Option<StepMeasure>,
+): Option.Option<StepMeasure> =>
+  Option.filter(measure, (value) => {
+    const at = messages.findIndex((message) => message.id === value.replyId)
+    if (at < 0) return false
+    return messages.slice(at + 1).every((message) => Option.isNone(windowDetails(message)))
+  })
 
 /** Schema-backed failures found before a prompt projection is returned. */
 export const ModelContextError = Schema.TaggedUnion({
@@ -674,14 +730,16 @@ export class ModelContextProjectionError extends Schema.TaggedError<ModelContext
   }
 }
 
-/** A bounded, model-only snapshot of durable messages. */
-export const ModelContextProjection = Schema.Struct({
-  messages: Schema.Array(Message),
-  estimatedTokens: Schema.Natural,
-  availableInputTokens: Schema.Natural,
-  omittedMessageIds: Schema.Array(MessageId),
-})
-export type ModelContextProjection = typeof ModelContextProjection.Type
+/**
+ * A bounded, model-only snapshot of durable messages. It never crosses a
+ * wire or a store; `ModelContextProjected` carries its numbers out.
+ */
+export interface ModelContextProjection {
+  readonly messages: ReadonlyArray<Message>
+  readonly estimatedTokens: number
+  readonly availableInputTokens: number
+  readonly omittedMessageIds: ReadonlyArray<MessageId>
+}
 
 interface ToolCallRecord {
   readonly id: ToolCallId
@@ -1077,17 +1135,16 @@ const projectUnits = (
   units: ReadonlyArray<ProjectionUnit>,
   budget: ModelContextBudget,
 ): Result.Result<ModelContextProjection, ModelContextError> => {
-  const reservedTokens = reserveTotal(budget)
-  if (reservedTokens > budget.contextLimitTokens) {
+  const availableInputTokens = messageBudget(budget)
+  if (availableInputTokens < 0) {
     return Result.fail(
       ModelContextError.cases.ReserveExhausted.make({
         contextLimitTokens: budget.contextLimitTokens,
-        reservedTokens,
+        reservedTokens: reserveTotal(budget),
       }),
     )
   }
 
-  const availableInputTokens = budget.contextLimitTokens - reservedTokens
   const latestUser = latestUserUnit(units)
   const selected = selectUnits(units, latestUser, availableInputTokens)
   if (Result.isFailure(selected)) return Result.fail(selected.failure)
@@ -1120,14 +1177,12 @@ const projectUnits = (
 const handoffAnchorWithinTurn = (
   messages: ReadonlyArray<Message>,
   budget: ModelContextBudget,
+  measure: Option.Option<StepMeasure>,
 ): Option.Option<MessageId> => {
-  const visible = visibleSnapshot(messages)
-  const records = collectToolRecords(visible)
-  if (Result.isFailure(records)) return Option.none()
-  const groups = groupToolCalls(visible, records.success)
-  if (Result.isFailure(groups)) return Option.none()
-  const units = buildUnits(visible, groups.success)
-  const target = Math.floor((budget.contextLimitTokens - reserveTotal(budget)) / 2)
+  const measured = measuredUnits(messages, measure)
+  if (Result.isFailure(measured)) return Option.none()
+  const units = measured.success
+  const target = Math.floor(messageBudget(budget) / 2)
   let start = units.length - 1
   let kept = 0
   for (let index = units.length - 1; index > 0; index -= 1) {
@@ -1154,15 +1209,51 @@ const handoffAnchorWithinTurn = (
 export const projectModelContext = (
   messages: ReadonlyArray<Message>,
   budget: ModelContextBudget,
+  measure: Option.Option<StepMeasure> = Option.none(),
 ): Result.Result<ModelContextProjection, ModelContextError> => {
+  const units = measuredUnits(messages, measure)
+  if (Result.isFailure(units)) return Result.fail(units.failure)
+  return projectUnits(units.success, budget)
+}
+
+/**
+ * The projection units of `messages`, each with its estimate. chars/4 counts
+ * low: it leaves out the wire encoding, and code and JSON tokenize denser.
+ * When the provider measured a step of this window (`measure`), the units
+ * before that step's reply (what its request held) take the measured size,
+ * spread by their chars/4 share; the reply and what came after keep chars/4.
+ * The measure only ever raises an estimate.
+ */
+const measuredUnits = (
+  messages: ReadonlyArray<Message>,
+  measure: Option.Option<StepMeasure>,
+): Result.Result<ReadonlyArray<ProjectionUnit>, ModelContextError> => {
   const visible = visibleSnapshot(messages)
   const records = collectToolRecords(visible)
   if (Result.isFailure(records)) return Result.fail(records.failure)
-
   const groups = groupToolCalls(visible, records.success)
   if (Result.isFailure(groups)) return Result.fail(groups.failure)
+  const units = buildUnits(visible, groups.success)
 
-  return projectUnits(buildUnits(visible, groups.success), budget)
+  const reply = Option.flatMap(measure, (value) => {
+    const index = visible.findIndex((message) => message.id === value.replyId)
+    if (index < 0) return Option.none()
+    return Option.some({ index, measured: value.inputTokens - value.overheadTokens })
+  })
+  if (Option.isNone(reply)) return Result.succeed(units)
+  const { index, measured } = reply.value
+  // A reply opens its own unit, so the units before it are exactly what the
+  // measured request held.
+  const inRequest = (unit: ProjectionUnit) => unit.start < index
+  const estimated = units.filter(inRequest).reduce((sum, unit) => sum + unit.estimatedTokens, 0)
+  if (estimated <= 0 || measured <= estimated) return Result.succeed(units)
+  const scale = measured / estimated
+  return Result.succeed(
+    units.map((unit) => {
+      if (!inRequest(unit)) return unit
+      return { ...unit, estimatedTokens: Math.ceil(unit.estimatedTokens * scale) }
+    }),
+  )
 }
 
 // ── model-context-compactor ─────────────────────────────────────────────────
@@ -1335,34 +1426,88 @@ type WindowProjection = {
 /**
  * Where the window hands off and whether it must. The newest user message
  * anchors it; when the newest turn alone exceeds the budget the anchor moves
- * inside the turn, to a step boundary. Any other projection failure is the
+ * inside the turn, to a step boundary. A provider that refused the last
+ * request as too long (`overflowed`) makes the window overflow whatever the
+ * estimate says; with no history before the newest user message to give up,
+ * the anchor moves inside the turn. Any other projection failure is the
  * caller's to raise.
  */
-const handoffPlan = (
-  window: ReadonlyArray<Message>,
-  budget: ModelContextBudget,
-  fit: Result.Result<ModelContextProjection, ModelContextProjectionError>,
-): Result.Result<
+const handoffPlan = (params: {
+  readonly window: ReadonlyArray<Message>
+  readonly budget: ModelContextBudget
+  readonly measure: Option.Option<StepMeasure>
+  readonly overflowed: boolean
+  readonly fit: Result.Result<ModelContextProjection, ModelContextProjectionError>
+}): Result.Result<
   { readonly anchor: Option.Option<MessageId>; readonly overflowing: boolean },
   ModelContextProjectionError
-> =>
-  Result.match(fit, {
-    onSuccess: (projection) =>
-      Result.succeed({
-        anchor: latestUserMessageId(window),
-        overflowing: projection.omittedMessageIds.length > 0,
-      }),
+> => {
+  const withinTurn = () => handoffAnchorWithinTurn(params.window, params.budget, params.measure)
+  return Result.match(params.fit, {
+    onSuccess: (projection) => {
+      const latestUser = latestUserMessageId(params.window)
+      if (!params.overflowed) {
+        return Result.succeed({
+          anchor: latestUser,
+          overflowing: projection.omittedMessageIds.length > 0,
+        })
+      }
+      const before = Option.match(latestUser, {
+        onNone: () => [],
+        onSome: (id) =>
+          params.window.slice(
+            0,
+            Math.max(
+              0,
+              params.window.findIndex((m) => m.id === id),
+            ),
+          ),
+      })
+      if (before.some((message) => Option.isNone(windowDetails(message)))) {
+        return Result.succeed({ anchor: latestUser, overflowing: true })
+      }
+      return Result.succeed({ anchor: withinTurn(), overflowing: true })
+    },
     onFailure: (error) => {
       if (error.failure._tag !== "BudgetExceeded") return Result.fail(error)
-      return Result.succeed({ anchor: handoffAnchorWithinTurn(window, budget), overflowing: true })
+      return Result.succeed({ anchor: withinTurn(), overflowing: true })
     },
   })
+}
+
+/** What the model reads at the head of a window cut after a provider refused it as too long. */
+const OVERFLOW_TRUNCATION_NOTICE =
+  "The conversation before this point was dropped: the provider refused the request as longer than the model accepts, and no summary of it is kept. If you need something from it, ask the user."
+
+/**
+ * The window of `messages` as the model sees it, bounded to `budget`. The
+ * measure counts only when the window it measured is still the current one.
+ */
+export const projectCurrentWindow = (params: {
+  readonly modelId: string
+  readonly messages: ReadonlyArray<Message>
+  readonly budget: ModelContextBudget
+  readonly measure: Option.Option<StepMeasure>
+}): Effect.Effect<ModelContextProjection, ModelContextProjectionError> => {
+  const projection = projectModelContext(
+    messagesInCurrentWindow(params.messages),
+    params.budget,
+    measureInCurrentWindow(params.messages, params.measure),
+  )
+  if (Result.isSuccess(projection)) return Effect.succeed(projection.success)
+  return Effect.fail(
+    new ModelContextProjectionError({ modelId: params.modelId, failure: projection.failure }),
+  )
+}
 
 /**
  * The window the model sees this step. A fresh window puts the issuer's notice
  * at the head; a handoff moves the history before the newest user message
  * behind one marker that summarizes it and names the ids it replaced. The
- * loop hands off when the window overflows, or when the model asked.
+ * loop hands off when the window overflows, when the model asked, or when
+ * the provider refused the last request as too long (`overflowed`). That last
+ * handoff happens even with no summary: the history is then dropped behind a
+ * marker that says so, since the same window would be refused again.
  */
 export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow")(function* <
   PersistR = never,
@@ -1372,10 +1517,11 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
   readonly modelId: ModelId
   readonly messages: ReadonlyArray<Message>
   readonly budget: ModelContextBudget
+  /** The provider's measure of the last step, if one was reported. */
+  readonly measure: Option.Option<StepMeasure>
+  /** The provider refused the last request of this turn as too long. */
+  readonly overflowed: boolean
   readonly directive: Option.Option<ContextDirective>
-  readonly project: (
-    messages: ReadonlyArray<Message>,
-  ) => Effect.Effect<ModelContextProjection, ModelContextProjectionError>
   readonly persist: (
     message: Message,
   ) => Effect.Effect<Message, StorageError | EventStoreError | EventStorageError, PersistR>
@@ -1401,8 +1547,24 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
   }
 
   const window = messagesInCurrentWindow(durableMessages)
-  const fit = yield* Effect.result(params.project(window))
-  const plan = yield* Effect.fromResult(handoffPlan(window, params.budget, fit))
+  const measure = measureInCurrentWindow(durableMessages, params.measure)
+  const fit = yield* Effect.result(
+    projectCurrentWindow({
+      modelId: params.modelId,
+      messages: durableMessages,
+      budget: params.budget,
+      measure: params.measure,
+    }),
+  )
+  const plan = yield* Effect.fromResult(
+    handoffPlan({
+      window,
+      budget: params.budget,
+      measure,
+      overflowed: params.overflowed,
+      fit,
+    }),
+  )
   const anchor = plan.anchor.pipe(
     Option.flatMap((id) => Option.fromUndefinedOr(window.find((message) => message.id === id))),
   )
@@ -1414,16 +1576,64 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
   const kept = window.slice(anchorIndex)
   const requested = params.directive.pipe(Option.exists((value) => value._tag === "Compact"))
   const overflowing = plan.overflowing
-  // Summarising is an extension's job. With no compactor installed the
-  // transcript is truncated and the omission is reported as usual.
-  const compactor = yield* Effect.serviceOption(ModelContextCompactor)
   // A history that is only an earlier marker has nothing new to summarize: a
   // second handoff to the same anchor would reuse that marker's id, spend a
   // summary call, and report a compaction that changed nothing.
   const summarizable = history.some((message) => Option.isNone(windowDetails(message)))
-  if (!(requested || overflowing) || !summarizable || Option.isNone(compactor)) {
+  // A refused window whose only history is an earlier handoff: that
+  // handoff's summary is all that is left to give up. A truncation marker at
+  // the same message replaces it, so the retry sends a smaller window. A
+  // window already cut to a bare marker has nothing left to drop.
+  const headSummary = Option.fromUndefinedOr(window[0]).pipe(
+    Option.flatMap(windowDetails),
+    Option.filter((details) => Predicate.isNotUndefined(details.summarized)),
+  )
+  if (params.overflowed && !summarizable && Option.isSome(headSummary)) {
+    const marker = yield* params.persist(
+      windowMarkerMessage({
+        sessionId: params.sessionId,
+        branchId: params.branchId,
+        keepFromMessageId: headSummary.value.keepFromMessageId,
+        notice: OVERFLOW_TRUNCATION_NOTICE,
+        createdAt: now,
+      }),
+    )
+    return {
+      durableMessages: [...durableMessages, marker],
+      compacted: true,
+      summary: Option.none(),
+    } satisfies WindowProjection
+  }
+  if (!(requested || overflowing) || !summarizable) {
     return { durableMessages, compacted: false, summary: Option.none() } satisfies WindowProjection
   }
+  // The window the provider refused is not sent again: without a summary, the
+  // history leaves behind a marker that says it was dropped.
+  const dropHistory = (summary: Option.Option<CompactionSummary>) =>
+    Effect.gen(function* () {
+      if (!params.overflowed || Option.isNone(anchor)) {
+        return { durableMessages, compacted: false, summary } satisfies WindowProjection
+      }
+      const marker = yield* params.persist(
+        windowMarkerMessage({
+          sessionId: params.sessionId,
+          branchId: params.branchId,
+          keepFromMessageId: anchor.value.id,
+          notice: OVERFLOW_TRUNCATION_NOTICE,
+          createdAt: now,
+        }),
+      )
+      return {
+        durableMessages: [...durableMessages, marker],
+        compacted: true,
+        summary,
+      } satisfies WindowProjection
+    })
+  // Summarising is an extension's job. With no compactor installed the
+  // projection truncates the transcript and reports the omission as usual;
+  // a refused window drops its history.
+  const compactor = yield* Effect.serviceOption(ModelContextCompactor)
+  if (Option.isNone(compactor)) return yield* dropHistory(Option.none())
   const summary = yield* compactor.value
     .compact({
       modelId: params.modelId,
@@ -1441,12 +1651,16 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
         // A summary that cannot be produced must not cost the turn: the window
         // is truncated instead, with a visible notice.
         Effect.gen(function* () {
-          const plain = yield* params.project(window)
+          let outcome = "the history before the kept messages is dropped"
+          if (!params.overflowed) {
+            const plain = yield* Effect.fromResult(fit)
+            outcome = `continuing with ${plain.omittedMessageIds.length} older messages omitted`
+          }
           yield* eventStore.publish(
             ErrorOccurred.make({
               sessionId: params.sessionId,
               branchId: params.branchId,
-              error: `Context compaction failed (${error.reason}); continuing with ${plain.omittedMessageIds.length} older messages omitted`,
+              error: `Context compaction failed (${error.reason}); ${outcome}`,
               notice: true,
             }),
           )
@@ -1461,8 +1675,7 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
       ),
     ),
   )
-  if (Option.isNone(handoff))
-    return { durableMessages, compacted: false, summary } satisfies WindowProjection
+  if (Option.isNone(handoff)) return yield* dropHistory(summary)
   const marker = yield* params.persist(
     windowMarkerMessage({
       sessionId: params.sessionId,

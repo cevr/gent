@@ -415,6 +415,52 @@ describe("bundled skills", () => {
     }).pipe(Effect.provide(BunServices.layer)),
   )
 
+  it.scopedLive("an unwritable bundle cache leaves out the bundled skills, not the rest", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const home = yield* fs.makeTempDirectoryScoped({ prefix: "gent-skill-home-" })
+      // `.cache` is a file, so the bundle cannot be written under it.
+      yield* fs.writeFileString(path.join(home, ".cache"), "not a dir")
+      const dir = path.join(home, ".gent", "skills", "mine")
+      yield* fs.makeDirectory(dir, { recursive: true })
+      yield* fs.writeFileString(
+        path.join(dir, "SKILL.md"),
+        "---\nname: mine\ndescription: Mine\n---\nbody",
+      )
+      const names = yield* Effect.gen(function* () {
+        const skills = yield* Skills
+        return (yield* skills.list).map((skill) => skill.name)
+      }).pipe(Effect.provide(Skills.Live({ home, cwd: home })))
+      expect(names).toEqual(["mine"])
+    }).pipe(Effect.provide(BunServices.layer)),
+  )
+
+  it.scopedLive("an unsearchable ancestor of the working directory is not fatal", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const home = yield* fs.makeTempDirectoryScoped({ prefix: "gent-skill-home-" })
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "gent-skill-walk-" })
+      const dir = path.join(home, ".gent", "skills", "mine")
+      yield* fs.makeDirectory(dir, { recursive: true })
+      yield* fs.writeFileString(
+        path.join(dir, "SKILL.md"),
+        "---\nname: mine\ndescription: Mine\n---\nbody",
+      )
+      const locked = path.join(root, "locked")
+      yield* fs.makeDirectory(path.join(locked, "project"), { recursive: true })
+      // No search permission: every path under `locked` fails to stat.
+      yield* fs.chmod(locked, 0o600)
+      yield* Effect.addFinalizer(() => fs.chmod(locked, 0o700).pipe(Effect.ignore))
+      const names = yield* Effect.gen(function* () {
+        const skills = yield* Skills
+        return (yield* skills.list).map((skill) => skill.name)
+      }).pipe(Effect.provide(Skills.Live({ home, cwd: path.join(locked, "project") })))
+      expect(names).toContain("mine")
+    }).pipe(Effect.provide(BunServices.layer)),
+  )
+
   it.scopedLive("a session in the home directory lists each skill once", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem

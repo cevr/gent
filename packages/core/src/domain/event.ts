@@ -109,6 +109,13 @@ export const AgentEvent = Schema.TaggedUnion({
     messageId: Schema.optional(MessageId),
     step: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))),
     usage: Schema.optional(UsageSchema),
+    /**
+     * The chars/4 estimate of the system prompt, notices and tool definitions
+     * this step's request carried. The next projection subtracts it from
+     * `usage.inputTokens` to learn what the messages took. Absent on rows
+     * written before it existed; such a step measures nothing.
+     */
+    requestOverheadTokens: Schema.optional(Schema.Natural),
     // `model` identifies which model produced the stream that just ended.
     model: Schema.optional(ModelId),
     // `costUsd` is computed at emit-time from `usage` × pricing snapshot for

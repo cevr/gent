@@ -21,9 +21,17 @@ import {
   LanguageModelLayers,
   textDeltaPart,
   textStep,
+  toolCallPart,
   waitFor,
 } from "@gent/core/test-utils"
-import { AgentName, BranchId, ModelId, RequestId, SessionId } from "@gent/core/extensions/api"
+import {
+  AgentName,
+  BranchId,
+  type MessageId,
+  ModelId,
+  RequestId,
+  SessionId,
+} from "@gent/core/extensions/api"
 import { e2ePreset } from "./helpers/test-preset"
 import { AgentEvent } from "@gent/core/protocol"
 import {
@@ -186,7 +194,12 @@ describe("btw forks", () => {
   test("a notice leaves the fork replying; an error the turn ends on stops it", () => {
     const sessionId = SessionId.make("btw-fold-session")
     const branchId = BranchId.make("btw-fold-branch")
-    const replying = { partial: "so far", replying: true, error: Option.none<string>() }
+    const replying = {
+      partial: "so far",
+      partialMessage: Option.none<MessageId>(),
+      replying: true,
+      error: Option.none<string>(),
+    }
     const notice = AgentEvent.cases.ErrorOccurred.make({
       sessionId,
       branchId,
@@ -201,6 +214,7 @@ describe("btw forks", () => {
     })
     expect(foldForkEvent(replying, failure)).toEqual({
       partial: "",
+      partialMessage: Option.none(),
       replying: false,
       error: Option.some("stream broke"),
     })
@@ -425,6 +439,60 @@ describe("btw forks", () => {
             (current) => current.runtime._tag === "Idle" && current.messages.length === 2,
             5_000,
             "session turn idle",
+          )
+        }).pipe(Effect.timeout("12 seconds")),
+      ),
+    15_000,
+  )
+
+  it.live(
+    "a reply in two steps shows each step, a blank line between them",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const gate = yield* Queue.unbounded<"continue">()
+          const secondStepStarted = yield* Deferred.make<void>()
+          let calls = 0
+          const providerLayer = LanguageModelLayers.testStream(() => {
+            calls += 1
+            if (calls === 1) {
+              return Effect.succeed(
+                Stream.fromIterable([
+                  textDeltaPart("Let me read the file."),
+                  toolCallPart("read", { path: "/nonexistent/gent-probe-x" }),
+                  finishPart({ finishReason: "tool-calls" }),
+                ]),
+              )
+            }
+            return Effect.succeed(
+              Stream.fromEffect(Deferred.succeed(secondStepStarted, void 0)).pipe(
+                Stream.flatMap(() =>
+                  Stream.fromIterable([
+                    textDeltaPart("The answer "),
+                    textDeltaPart("is 42."),
+                    finishPart({ finishReason: "stop" }),
+                  ]).pipe(Stream.mapEffect((part) => Queue.take(gate).pipe(Effect.as(part)))),
+                ),
+              ),
+            )
+          })
+          const harness = yield* createRpcHarness({ ...e2ePreset, providerLayer })
+          const pane = btw(harness)
+          yield* pane.fork("What does the file say?")
+          yield* Deferred.await(secondStepStarted)
+          yield* Queue.offer(gate, "continue")
+          const streaming = yield* waitFor(
+            pane.progress,
+            (current) => current.fork?.turns.at(-1)?.answer.includes("The answer") === true,
+            5_000,
+            "second step visible",
+          )
+          expect(streaming.fork?.turns.at(-1)?.answer).toBe("Let me read the file.\n\nThe answer ")
+          yield* Queue.offer(gate, "continue")
+          yield* Queue.offer(gate, "continue")
+          const finished = yield* pane.replied(1)
+          expect(Option.map(finished, (fork) => fork.turns.at(-1)?.answer)).toEqual(
+            Option.some("Let me read the file.\n\nThe answer is 42."),
           )
         }).pipe(Effect.timeout("12 seconds")),
       ),

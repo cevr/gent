@@ -225,6 +225,32 @@ describe("OpenAI-compatible provider drivers", () => {
       }
     }).pipe(Effect.provide(platformLayer)),
   )
+
+  // The SDK names `developer` for any model id that starts with `o`; the
+  // Mistral chat schema (`@mistralai/mistralai` `Roles`) has no such role.
+  it.live("a Mistral open model gets its system messages with the system role", () =>
+    Effect.gen(function* () {
+      const contributions = yield* collectTestContributions(MistralExtension.setup)
+      const driver = onlyDriver(contributions.modelDrivers ?? [])
+      const model = yield* driver.resolveModel("open-mistral-nemo", makeApiAuthInfo("key"))
+      const fetchState = makeFakeFetchState()
+      yield* oneGenerate(model, fetchState, () => chatHappyResponse("open-mistral-nemo"), [
+        { role: "system", content: "Fixed session instructions." },
+        { role: "user", content: "Start the job." },
+        { role: "system", content: "Answer in one line from now on." },
+        { role: "user", content: "What is running?" },
+      ])
+      const body = yield* Schema.decodeEffect(ChatRequestJson)(
+        Option.getOrThrow(Option.fromUndefinedOr(fetchState.captured.at(-1)?.body)),
+      )
+      expect(body.messages.map((message) => message.role)).toEqual([
+        "system",
+        "user",
+        "system",
+        "user",
+      ])
+    }).pipe(Effect.provide(platformLayer)),
+  )
 })
 
 /** The chat-completions request fields the notice test reads. */
@@ -261,7 +287,7 @@ const remotePayload = {
       "gpt-5.4": {
         name: "GPT-5.4",
         cost: { input: 1.25, output: 10 },
-        limit: { context: 400_000 },
+        limit: { context: 400_000, input: 272_000 },
         release_date: "2026-07-24",
         tool_call: true,
         reasoning: true,
@@ -643,6 +669,24 @@ describe("models.dev catalog", () => {
       expect(opus?.pricing).toEqual({ input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 })
       const gpt = models.find((model) => model.id === "openai/gpt-5.4")
       expect(gpt?.pricing).toEqual({ input: 1.25, output: 10 })
+    }).pipe(Effect.provide(platformLayer)),
+  )
+
+  it.scopedLive("carries an input cap below the window onto the parsed model", () =>
+    Effect.gen(function* () {
+      const home = yield* freshHome("input-cap")
+      const calls = yield* Ref.make(0)
+
+      const models = yield* modelsDevCatalog(home).pipe(
+        Effect.provide(countingHttpLayer(calls, encodeAnyJson(remotePayload))),
+      )
+
+      const gpt = models.find((model) => model.id === "openai/gpt-5.4")
+      expect(gpt?.contextLength).toBe(400_000)
+      expect(gpt?.inputLimit).toBe(272_000)
+      // A model the catalog names no cap for has none.
+      const opus = models.find((model) => model.id === "anthropic/claude-opus-5")
+      expect(opus?.inputLimit).toBeUndefined()
     }).pipe(Effect.provide(platformLayer)),
   )
 
