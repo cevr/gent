@@ -3350,8 +3350,16 @@ export function createSessionController(props: {
     const now = DateTime.toEpochMillis(DateTime.nowUnsafe())
     const second = quitArmedFor("interrupt", now)
     disarmQuit()
-    if (overlayHoldsComposer(uiState().overlay)) {
-      exit()
+    const overlay = uiState().overlay
+    if (overlayHoldsComposer(overlay)) {
+      // The boot branch picker and an enforced sign-in hold the slot: there
+      // is nothing behind them to fall back to, so ctrl+c quits. Any other
+      // held pane is the nearest thing, and ctrl+c closes it as Esc does.
+      if (slotHeld(overlay)) {
+        exit()
+        return
+      }
+      closeOverlay()
       return
     }
     if (uiState().transcriptExpanded) {
