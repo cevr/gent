@@ -267,6 +267,13 @@ describe("context overflow", () => {
       }),
     ).toBe(false)
     expect(isContextOverflow(refused("temperature must be at most 1"))).toBe(false)
+    // Anthropic's 413 is a byte cap: an oversized attachment, not a long history.
+    expect(
+      isContextOverflow({
+        code: "request_too_large",
+        message: "Request exceeds the maximum size",
+      }),
+    ).toBe(false)
     expect(isContextOverflow("boom")).toBe(false)
   })
 })

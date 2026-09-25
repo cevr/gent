@@ -197,10 +197,15 @@ export interface RetryPolicy {
  * driver's policy reads it unless the driver names its own. Prior art: pi's
  * `utils/overflow.ts` and opencode's `provider-error.ts`, with the example
  * each pattern matches.
+ *
+ * Anthropic's HTTP 413 `request_too_large` is left out, although pi lists
+ * it. It is a cap on the request body in bytes (32 MB; an image or document
+ * too large), not on tokens: a token overflow comes back as "prompt is too
+ * long". Handing the window off drops text history and keeps the attachment
+ * that caused it, so the request fails as any refusal does.
  */
 const CONTEXT_OVERFLOW_PATTERNS: ReadonlyArray<RegExp> = [
   /prompt is too long/i, // Anthropic: "prompt is too long: 213462 tokens > 200000 maximum"
-  /request_too_large/i, // Anthropic, HTTP 413 request byte size
   /exceed context limit/i, // Anthropic before 4.5: "input length and `max_tokens` exceed context limit: 188240 + 21333 > 200000"
   /input is too long for requested model/i, // Amazon Bedrock
   /exceeds the context window/i, // OpenAI: "Your input exceeds the context window of this model"
