@@ -3561,10 +3561,26 @@ const queueTerminalFollowUp = (
 /**
  * A stored row's message within `maxChars`, cut to its head and tail. A
  * completed row holds the output already cut to the notice bound, its file
- * line included; a failure's text is its own.
+ * line included; a failure's text is its own. A row from a build before that
+ * bound holds up to a follow-up's worth: when it is cut and the job's file
+ * exists, the cut names the file.
  */
-const storedJobOutput = (message: string) => (maxChars: number) =>
-  headTailChars(message, maxChars).text
+const storedJobOutput = (message: string, file: Option.Option<string>) => (maxChars: number) => {
+  if (message.length <= maxChars || Option.isNone(file))
+    return headTailChars(message, maxChars).text
+  // The whole message is in memory: one end holds all of it.
+  return jobOutputText({ head: message, tail: "", totalChars: message.length, file }, maxChars)
+}
+
+/** A completed job's file when it exists; a failure's text has none. Nothing is written. */
+const storedOutputFile = (file: string, state: BackgroundBashTerminalState) =>
+  Effect.gen(function* () {
+    if (state.status !== "completed") return Option.none<string>()
+    const exists = yield* (yield* FileSystem.FileSystem)
+      .exists(file)
+      .pipe(Effect.orElseSucceed(() => false))
+    return Option.liftPredicate(file, () => exists)
+  })
 
 // ── job notices ──
 //
@@ -3653,12 +3669,17 @@ const jobNotices = Effect.fn("ExecTools.jobNotices")(function* () {
   })
   const finished = yield* storage.undeliveredJobs(branch)
   const outputs = new Map(
-    finished
-      .slice(0, maximumNoticeJobs)
-      .map((job): readonly [ToolCallId, string] => [
-        job.toolCallId,
-        storedJobOutput(job.state.message ?? "")(maximumNoticeOutputChars),
-      ]),
+    yield* Effect.forEach(finished.slice(0, maximumNoticeJobs), (job) =>
+      storedOutputFile(
+        jobOutputFile(path, dataDir, { ...branch, toolCallId: job.toolCallId }),
+        job.state,
+      ).pipe(
+        Effect.map((file): readonly [ToolCallId, string] => [
+          job.toolCallId,
+          storedJobOutput(job.state.message ?? "", file)(maximumNoticeOutputChars),
+        ]),
+      ),
+    ),
   )
   const undelivered = jobNotice(finished, {
     id: "exec-tools-undelivered",
@@ -3768,8 +3789,16 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
       output?: (maxChars: number) => string,
     ) =>
       Effect.gen(function* () {
-        const stored = storedJobOutput(state.message ?? "")
-        const delivered = yield* queueTerminalFollowUp(target, state, output ?? stored)
+        // A replay has only the row: it names the job's file when the file exists.
+        const text = yield* Option.match(Option.fromUndefinedOr(output), {
+          onSome: Effect.succeed,
+          onNone: () =>
+            Effect.gen(function* () {
+              const file = jobOutputFile(yield* Path.Path, target.dataDir, target)
+              return storedJobOutput(state.message ?? "", yield* storedOutputFile(file, state))
+            }),
+        })
+        const delivered = yield* queueTerminalFollowUp(target, state, text)
         return yield* storage.recordDelivery(backgroundJobKeyFields(target), delivered)
       })
 

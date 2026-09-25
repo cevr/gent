@@ -1096,6 +1096,85 @@ describe("BashTool execution", () => {
     processTestTimeout,
   )
 
+  // A build that streamed output to the job's file also kept a follow-up's
+  // worth on the row. A replay names that file, unchanged.
+  it.scopedLive(
+    "a replayed row longer than its bound names the job's file when it exists",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const home = yield* fs.makeTempDirectoryScoped({ prefix: "gent-bg-row-file-" })
+        const sent = yield* Deferred.make<{ sourceId: string; content: string }>()
+        const toolCallId = ToolCallId.make("tc-row-file-replay")
+        const ctx = withSession(
+          { ...stubCtx, toolCallId, home },
+          {
+            ...stubCtx.Session,
+            getSession: () =>
+              Effect.succeed(
+                new Session({
+                  id: stubCtx.sessionId,
+                  activeBranchId: stubCtx.branchId,
+                  createdAt: now,
+                  updatedAt: now,
+                }),
+              ),
+            listBranches: Effect.succeed([
+              new Branch({ id: stubCtx.branchId, sessionId: stubCtx.sessionId, createdAt: now }),
+            ]),
+            send: onQueue((notice) => Deferred.succeed(sent, notice)),
+          },
+        )
+        const storageLayer = SqliteStorage.LiveWithSql(
+          `${home}/gent.db`,
+          () => Layer.empty,
+          {},
+        ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)))
+        const output = Array.from({ length: 3000 }, (_, index) => `row line ${index + 1}\n`).join(
+          "",
+        )
+        const folder = `${home}/.gent/background-bash/${ctx.sessionId}/${ctx.branchId}`
+        const file = `${folder}/${toolCallId}.txt`
+        yield* fs.makeDirectory(folder, { recursive: true })
+        yield* fs.writeFileString(file, output)
+        yield* Effect.gen(function* () {
+          const storage = yield* BackgroundBashStorage
+          yield* storage.claimStart({
+            sessionId: ctx.sessionId,
+            branchId: ctx.branchId,
+            toolCallId,
+            command: "seq-row",
+            cwd: Option.some(ctx.cwd),
+          })
+          yield* storage.markCompleted(
+            { sessionId: ctx.sessionId, branchId: ctx.branchId, toolCallId },
+            { exitCode: 0, message: output },
+          )
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              storageLayer,
+              BackgroundBashStorage.Live.pipe(Layer.provide(storageLayer)),
+            ),
+          ),
+        )
+
+        yield* runToolWithCtx(
+          BashTool,
+          { command: "printf should-not-run", run_in_background: true },
+          ctx,
+        ).pipe(Effect.provide(makeProcessLayer(storageLayer)))
+        const message = yield* Deferred.await(sent).pipe(Effect.timeout("2 seconds"))
+        expect(message.content.length).toBeLessThanOrEqual(maximumModelToolResultChars)
+        expect(message.content).toContain("row line 1\n")
+        expect(message.content).toContain(
+          `The whole output is in ${file} (${output.length} characters)`,
+        )
+        expect(yield* fs.readFileString(file)).toBe(output)
+      }).pipe(Effect.provide(BunFileSystem.layer), withProcessTimeout),
+    processTestTimeout,
+  )
+
   it.live(
     "failed background job does not notify before failure state is durable",
     () =>
@@ -1801,6 +1880,90 @@ describe("a background completion the full follow-up queue refused", () => {
         expect((yield* Ref.get(notices)).slice(before).join("")).not.toContain(heading)
       }).pipe(Effect.timeout("25 seconds")),
     30_000,
+  )
+
+  // A build before the 2,000-character row bound stored up to a follow-up's
+  // worth of output on the row, and streamed all of it to the job's file. The
+  // notice once cut that row to its bound and named no file.
+  it.scopedLive.layer(BunFileSystem.layer)(
+    "a stored row longer than the notice bound names the job's file; a missing file is named as not saved",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-bg-long-row-" })
+        const storagePath = `${directory}/gent.db`
+        const notices = yield* Ref.make<ReadonlyArray<string>>([])
+        const providerLayer = LanguageModelLayers.testStream((options) =>
+          Ref.updateAndGet(notices, (all) => [
+            ...all,
+            turnRequestText(options.prompt).notices,
+          ]).pipe(
+            Effect.map((all) =>
+              Stream.fromIterable([
+                textDeltaPart(`reply ${all.length}`),
+                finishPart({ finishReason: "stop" }),
+              ]),
+            ),
+          ),
+        )
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+          storagePath,
+          cwd: directory,
+          extraLayers: [RuntimeEnvironment.Live({ cwd: directory, home: directory })],
+        })
+        const printed = Array.from({ length: 1000 }, (_, index) => `${index + 1}\n`).join("")
+        const finished = ToolCallId.make("tc-long-row")
+        const stopped = ToolCallId.make("tc-stopped-no-file")
+        const file = `${directory}/.gent/background-bash/${sessionId}/${branchId}/${finished}.txt`
+        yield* fs.makeDirectory(`${directory}/.gent/background-bash/${sessionId}/${branchId}`, {
+          recursive: true,
+        })
+        yield* fs.writeFileString(file, printed)
+        const storageLayer = SqliteStorage.LiveWithSql(storagePath, () => Layer.empty, {}).pipe(
+          Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)),
+        )
+        yield* Effect.gen(function* () {
+          const storage = yield* BackgroundBashStorage
+          const job = (toolCallId: ToolCallId) => ({ sessionId, branchId, toolCallId })
+          yield* storage.claimStart({
+            ...job(finished),
+            command: "seq 1 1000",
+            cwd: Option.some(directory),
+          })
+          yield* storage.markCompleted(job(finished), { exitCode: 0, message: printed })
+          yield* storage.recordDelivery(job(finished), false)
+          yield* storage.claimStart({
+            ...job(stopped),
+            command: "sleep 100",
+            cwd: Option.some(directory),
+          })
+          yield* storage.markInterrupted(job(stopped))
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              storageLayer,
+              BackgroundBashStorage.Live.pipe(Layer.provide(storageLayer)),
+            ),
+          ),
+        )
+        yield* client.message.send({ sessionId, branchId, content: "what happened?" })
+        const shown = (yield* waitFor(
+          Ref.get(notices),
+          (all) => all.length > 0,
+          5_000,
+          "the first model call",
+        ))[0]
+        expect(shown).toContain("# Background commands finished")
+        expect(shown).toContain("1\n2\n3\n")
+        expect(shown).toContain("\n1000\n")
+        expect(shown).toContain(`The whole output is in ${file} (${printed.length} characters)`)
+        expect(yield* fs.readFileString(file)).toBe(printed)
+        expect(shown).toContain("# Interrupted background commands")
+        expect(shown).toContain(`\`sleep 100\` · call ${stopped} · no output was saved`)
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
   )
 })
 
