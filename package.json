@@ -46,7 +46,6 @@
   "overrides": {
     "@effect/ai-anthropic": "4.0.0-rc.112",
     "@effect/ai-openai": "4.0.0-rc.112",
-    "@effect/ai-openai-compat": "4.0.0-rc.112",
     "@effect/platform-node-shared": "4.0.0-rc.112",
     "effect": "4.0.0-rc.112"
   },
@@ -64,12 +63,10 @@
     "solid-js": "^1.9.15",
     "@effect/ai-anthropic": "4.0.0-rc.112",
     "@effect/ai-openai": "4.0.0-rc.112",
-    "@effect/ai-openai-compat": "4.0.0-rc.112",
     "@ff-labs/fff-bun": "0.10.6"
   },
   "patchedDependencies": {
     "@opentui/core@0.5.11": "patches/@opentui%2Fcore@0.5.11.patch",
-    "@effect/ai-openai-compat@4.0.0-rc.112": "patches/@effect%2Fai-openai-compat@4.0.0-rc.112.patch",
     "@effect/ai-anthropic@4.0.0-rc.112": "patches/@effect%2Fai-anthropic@4.0.0-rc.112.patch"
   }
 }

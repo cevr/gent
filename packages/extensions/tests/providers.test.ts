@@ -1,6 +1,5 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import {
-  ConfigProvider,
   Clock,
   Context,
   type Crypto,
@@ -15,21 +14,8 @@ import {
   Schema,
   SynchronizedRef,
 } from "effect"
-import {
-  Model,
-  type ModelDriverContribution,
-  ModelId,
-  ProviderAuthInfo,
-  ProviderId,
-} from "@gent/core/extensions/api"
-import {
-  collectTestContributions,
-  type FakeFetchState,
-  makeFakeFetchState,
-  makeTempDirectoryScoped,
-  oneGenerate,
-  turnNoticesText,
-} from "@gent/core/test-utils"
+import { Model, ModelId, ProviderId } from "@gent/core/extensions/api"
+import { makeTempDirectoryScoped } from "@gent/core/test-utils"
 import { HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { TestClock } from "effect/testing"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
@@ -39,226 +25,16 @@ import {
   driverCatalog,
   EMPTY_CREDENTIAL_CELL,
   freshEnoughAt,
-  GoogleExtension,
-  MistralExtension,
   modelsDevCatalog,
 } from "../src/providers.js"
-import { encodeExternalJson } from "./helpers/external-wire.js"
 import {
   AnthropicPlatform,
   buildAnthropicModelDriver,
   type ClaudeCredentials,
 } from "../src/anthropic.js"
 
-// ── openai compatible providers ─────────────────────────────────────────────
-
-const makeApiAuthInfo = (key: string): ProviderAuthInfo => ProviderAuthInfo.cases.Api.make({ key })
-
-const chatHappyResponse = (model: string) => ({
-  status: 200,
-  body: encodeExternalJson({
-    id: "chatcmpl-test-1",
-    object: "chat.completion",
-    created: 1_700_000_000,
-    model,
-    choices: [
-      {
-        index: 0,
-        message: { role: "assistant", content: "ok" },
-        finish_reason: "stop",
-      },
-    ],
-    usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-  }),
-})
-
-const onlyDriver = (drivers: ReadonlyArray<ModelDriverContribution>): ModelDriverContribution => {
-  expect(drivers).toHaveLength(1)
-  return drivers[0]!
-}
-
-const runOne = (model: Parameters<typeof oneGenerate>[0], state: FakeFetchState) =>
-  oneGenerate(model, state, () => chatHappyResponse("compat-model")).pipe(Effect.orDie)
-
-/** Extension setup reads its models.dev cache path, so it needs the platform. */
+/** The models.dev catalog reads its cache path, so it needs the platform. */
 const platformLayer = Layer.merge(BunFileSystem.layer, Path.layer)
-
-describe("OpenAI-compatible provider drivers", () => {
-  it.live("Google uses the Gemini OpenAI-compatible endpoint", () =>
-    Effect.gen(function* () {
-      const contributions = yield* collectTestContributions(GoogleExtension.setup)
-      const driver = onlyDriver(contributions.modelDrivers ?? [])
-      const model = yield* driver.resolveModel("gemini-2.5-pro", makeApiAuthInfo("google-key"), {
-        cacheKey: "session-cache-key",
-      })
-      const fetchState = makeFakeFetchState()
-      yield* runOne(model, fetchState)
-      const request = fetchState.captured.at(-1)!
-      expect(request.url).toBe(
-        "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-      )
-      expect(request.headers["authorization"]).toBe("Bearer google-key")
-      expect(request.body).not.toContain("prompt_cache_key")
-    }).pipe(Effect.provide(platformLayer)),
-  )
-
-  it.live("Mistral uses the Mistral OpenAI-compatible endpoint", () =>
-    Effect.gen(function* () {
-      const contributions = yield* collectTestContributions(MistralExtension.setup)
-      const driver = onlyDriver(contributions.modelDrivers ?? [])
-      const model = yield* driver.resolveModel(
-        "mistral-large-latest",
-        makeApiAuthInfo("mistral-key"),
-        { cacheKey: "session-cache-key" },
-      )
-      const fetchState = makeFakeFetchState()
-      yield* runOne(model, fetchState)
-      const request = fetchState.captured.at(-1)!
-      expect(request.url).toBe("https://api.mistral.ai/v1/chat/completions")
-      expect(request.headers["authorization"]).toBe("Bearer mistral-key")
-      expect(request.body).not.toContain("prompt_cache_key")
-    }).pipe(Effect.provide(platformLayer)),
-  )
-
-  // `export MISTRAL_API_KEY=` clears a key in many shells. The provider list
-  // reads it as unset, so the driver must too: no request with an empty key.
-  it.live("an empty env key is no credential", () =>
-    Effect.gen(function* () {
-      const contributions = yield* collectTestContributions(MistralExtension.setup).pipe(
-        Effect.provideService(
-          ConfigProvider.ConfigProvider,
-          ConfigProvider.fromEnv({ env: { MISTRAL_API_KEY: "" } }),
-        ),
-      )
-      const driver = onlyDriver(contributions.modelDrivers ?? [])
-      const resolved = yield* driver.resolveModel("mistral-large-latest").pipe(Effect.flip)
-      expect(resolved.message).toContain("MISTRAL_API_KEY")
-    }).pipe(Effect.provide(platformLayer)),
-  )
-
-  it.live("a set env key is the credential when nothing is stored", () =>
-    Effect.gen(function* () {
-      const contributions = yield* collectTestContributions(MistralExtension.setup).pipe(
-        Effect.provideService(
-          ConfigProvider.ConfigProvider,
-          ConfigProvider.fromEnv({ env: { MISTRAL_API_KEY: "mistral-env-key" } }),
-        ),
-      )
-      const driver = onlyDriver(contributions.modelDrivers ?? [])
-      const model = yield* driver.resolveModel("mistral-large-latest")
-      const fetchState = makeFakeFetchState()
-      yield* runOne(model, fetchState)
-      expect(fetchState.captured.at(-1)!.headers["authorization"]).toBe("Bearer mistral-env-key")
-    }).pipe(Effect.provide(platformLayer)),
-  )
-
-  // Mistral rejects a request whose last message is not user or tool, so a
-  // turn notice sent as a trailing system message failed every later turn.
-  // It goes as a `<host-context-update>` user message, as the Anthropic
-  // driver sends it; the system prompt and a system message inside the
-  // conversation stay system messages.
-  it.live("a turn notice after the conversation goes as a host context update", () =>
-    Effect.gen(function* () {
-      const notice = Option.getOrThrow(
-        turnNoticesText([{ id: "stopped", content: "# Stopped <children>\n\n- one", keys: [] }]),
-      )
-      for (const extension of [MistralExtension, GoogleExtension]) {
-        const contributions = yield* collectTestContributions(extension.setup)
-        const driver = onlyDriver(contributions.modelDrivers ?? [])
-        const model = yield* driver.resolveModel("compat-model", makeApiAuthInfo("key"))
-        const fetchState = makeFakeFetchState()
-        yield* oneGenerate(model, fetchState, () => chatHappyResponse("compat-model"), [
-          { role: "system", content: "Fixed session instructions." },
-          { role: "user", content: "Start the job." },
-          { role: "system", content: "Answer in one line from now on." },
-          { role: "user", content: "What is running?" },
-          { role: "system", content: notice },
-        ])
-        const body = yield* Schema.decodeEffect(ChatRequestJson)(
-          Option.getOrThrow(Option.fromUndefinedOr(fetchState.captured.at(-1)?.body)),
-        )
-        expect(body.messages.map((message) => message.role)).toEqual([
-          "system",
-          "user",
-          "system",
-          "user",
-          "user",
-        ])
-        expect(body.messages[0]?.content).toBe("Fixed session instructions.")
-        expect(body.messages[2]?.content).toBe("Answer in one line from now on.")
-        expect(body.messages.at(-1)?.content).toBe(
-          "<host-context-update>\nHost status for this turn, not a message from the user.\n\n# Stopped &lt;children&gt;\n\n- one\n</host-context-update>",
-        )
-      }
-    }).pipe(Effect.provide(platformLayer)),
-  )
-
-  // `toPrompt` sends the system prompt as one system message per cache block.
-  // Only the Anthropic marker reads the blocks; a chat-completions API caches
-  // prefixes on its own, so it gets the one system message it expects.
-  it.live("the system prompt blocks go as one leading system message", () =>
-    Effect.gen(function* () {
-      for (const extension of [MistralExtension, GoogleExtension]) {
-        const contributions = yield* collectTestContributions(extension.setup)
-        const driver = onlyDriver(contributions.modelDrivers ?? [])
-        const model = yield* driver.resolveModel("compat-model", makeApiAuthInfo("key"))
-        const fetchState = makeFakeFetchState()
-        yield* oneGenerate(model, fetchState, () => chatHappyResponse("compat-model"), [
-          { role: "system", content: "Shared instructions." },
-          { role: "system", content: "Agent instructions." },
-          { role: "user", content: "Start the job." },
-          { role: "system", content: "Answer in one line from now on." },
-          { role: "user", content: "What is running?" },
-        ])
-        const body = yield* Schema.decodeEffect(ChatRequestJson)(
-          Option.getOrThrow(Option.fromUndefinedOr(fetchState.captured.at(-1)?.body)),
-        )
-        expect(body.messages.map((message) => message.role)).toEqual([
-          "system",
-          "user",
-          "system",
-          "user",
-        ])
-        // Joined as the prompt's blocks join, so the text is the one-block prompt.
-        expect(body.messages[0]?.content).toBe("Shared instructions.\n\nAgent instructions.")
-        expect(body.messages[2]?.content).toBe("Answer in one line from now on.")
-      }
-    }).pipe(Effect.provide(platformLayer)),
-  )
-
-  // The SDK names `developer` for any model id that starts with `o`; the
-  // Mistral chat schema (`@mistralai/mistralai` `Roles`) has no such role.
-  it.live("a Mistral open model gets its system messages with the system role", () =>
-    Effect.gen(function* () {
-      const contributions = yield* collectTestContributions(MistralExtension.setup)
-      const driver = onlyDriver(contributions.modelDrivers ?? [])
-      const model = yield* driver.resolveModel("open-mistral-nemo", makeApiAuthInfo("key"))
-      const fetchState = makeFakeFetchState()
-      yield* oneGenerate(model, fetchState, () => chatHappyResponse("open-mistral-nemo"), [
-        { role: "system", content: "Fixed session instructions." },
-        { role: "user", content: "Start the job." },
-        { role: "system", content: "Answer in one line from now on." },
-        { role: "user", content: "What is running?" },
-      ])
-      const body = yield* Schema.decodeEffect(ChatRequestJson)(
-        Option.getOrThrow(Option.fromUndefinedOr(fetchState.captured.at(-1)?.body)),
-      )
-      expect(body.messages.map((message) => message.role)).toEqual([
-        "system",
-        "user",
-        "system",
-        "user",
-      ])
-    }).pipe(Effect.provide(platformLayer)),
-  )
-})
-
-/** The chat-completions request fields the notice test reads. */
-const ChatRequestJson = Schema.fromJsonString(
-  Schema.Struct({
-    messages: Schema.Array(Schema.Struct({ role: Schema.String, content: Schema.Unknown })),
-  }),
-)
 
 // ── models.dev catalog ──────────────────────────────────────────────────────
 

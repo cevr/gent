@@ -41,14 +41,3 @@ Anthropic extension (`packages/extensions/src/anthropic.ts`) reads it through
 `isHostContextUpdateText` to keep the cache marker off these blocks.
 
 Remove this patch when the SDK keeps a later system message in place.
-
-## `@effect/ai-openai-compat@4.0.0-rc.112`
-
-`toChatCompletionsRequest` copies the fields it knows from the Responses
-payload to the Chat Completions request, and `prompt_cache_key` is not one
-of them. The OpenAI extension (`packages/extensions/src/openai.ts`) sets the
-key to the session id, so an API-key request reaches the same prompt cache
-every step.
-
-The patch copies `prompt_cache_key` when it is set. Remove it when the SDK
-forwards the field.

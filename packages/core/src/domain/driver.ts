@@ -2,7 +2,7 @@
  * Model driver primitives. A `ModelDriverContribution` wraps an LLM provider:
  * auth, `listModels`, and `resolveModel` returning a model that provides an
  * `effect/unstable/ai` `LanguageModel`. The gent providers
- * (anthropic/openai/google/mistral) register one each.
+ * (anthropic, openai) register one each.
  *
  * An agent may name a driver with `driver: DriverRef`; otherwise the loop
  * derives the driver from the provider segment of its model id.

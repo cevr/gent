@@ -8,22 +8,15 @@ import {
   Exit,
   FileSystem,
   Hash,
-  Layer,
   Option,
   Path,
   Predicate,
-  Redacted,
   Schema,
   SynchronizedRef,
 } from "effect"
 import {
-  AuthMethod,
-  DEFAULT_RETRY_POLICY,
-  defineExtension,
-  ExtensionHost,
   isRecord,
   Model,
-  type ModelDriverContribution,
   ModelId,
   type ModelPricing,
   omitUndefined,
@@ -41,8 +34,7 @@ import {
   HttpClientResponse,
 } from "effect/unstable/http"
 import { EncodeError, HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
-import { AiError, Model as AiModel } from "effect/unstable/ai"
-import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai-compat"
+import { AiError } from "effect/unstable/ai"
 
 // Test seam: only a test reads modelsDevCatalog, the catalog loader, which it
 // runs against a scratch home.
@@ -966,8 +958,7 @@ export const driverListModels =
  * the host speaking, not the user. An API that takes no system message after
  * the conversation gets it as a user message in this wrap: the Anthropic SDK
  * builds this text from a later system message (`prepareMessages` in
- * `@effect/ai-anthropic`), and the OpenAI-compatible drivers build it here.
- * The Anthropic driver reads the wrap to keep its cache marker off the update.
+ * `@effect/ai-anthropic`, patched). The Anthropic driver reads the wrap to keep its cache marker off the update.
  * The content is escaped, so a notice cannot close the wrap.
  */
 const HOST_CONTEXT_UPDATE_OPEN = "<host-context-update>\n"
@@ -982,12 +973,7 @@ export const isHostContextUpdateText = Schema.is(
   Schema.String.check(Schema.isStartsWith(HOST_CONTEXT_UPDATE_OPEN)),
 )
 
-// ── openai-compatible driver ────────────────────────────────────────────────
-
-const GOOGLE_COMPAT_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
-const MISTRAL_COMPAT_URL = "https://api.mistral.ai/v1"
-
-type OpenAiCompatConfig = Required<Parameters<typeof OpenAiLanguageModel.layer>[0]>["config"]
+// ── api keys ────────────────────────────────────────────────────────────────
 
 export const readOptionalEnv = (name: string): Effect.Effect<Option.Option<string>> =>
   Config.option(Config.nonEmptyString(name)).pipe(Effect.orElseSucceed(() => Option.none()))
@@ -1004,154 +990,3 @@ export const apiKeyFrom = (
     }),
     Option.orElse(() => envApiKey),
   )
-
-const ChatBodyJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown))
-const decodeChatBody = Schema.decodeUnknownOption(ChatBodyJson)
-const ChatMessages = Schema.Array(Schema.Unknown)
-const isChatMessages = Schema.is(ChatMessages)
-/** A system message as the SDK encodes it; it names `developer` for some model ids. */
-const isSystemChatMessage = Schema.is(
-  Schema.Struct({ role: Schema.Literals(["system", "developer"]), content: Schema.String }),
-)
-const isDeveloperChatMessage = Schema.is(
-  Schema.Struct({ role: Schema.Literal("developer"), content: Schema.String }),
-)
-
-/**
- * The request in the shape a chat-completions API expects of the system
- * messages. The leading run (the system prompt, one message per cache block
- * from `toPrompt`) goes as one message, joined as the blocks join: only the
- * Anthropic marker reads the blocks, and these APIs cache prefixes on their
- * own. The system messages after the last conversation message go as a host
- * context update: Mistral rejects a request whose last message is not user or
- * tool, and `toPrompt` puts the turn notices there. A system message inside
- * the conversation keeps its role: the rule is about the last message only.
- * Every system message goes with the `system` role: the SDK names `developer`
- * for any model id that starts with `o` (Mistral's `open-*` models), and the
- * Mistral chat schema has no `developer` role.
- */
-const withHostContextUpdates = (
-  request: HttpClientRequest.HttpClientRequest,
-): HttpClientRequest.HttpClientRequest => {
-  if (request.body._tag !== "Uint8Array") return request
-  const body = decodeChatBody(new TextDecoder().decode(request.body.body))
-  if (Option.isNone(body)) return request
-  const messages = body.value["messages"]
-  if (!isChatMessages(messages)) return request
-  const start = messages.findIndex((message) => !isSystemChatMessage(message))
-  const end = messages.findLastIndex((message) => !isSystemChatMessage(message))
-  if (start < 0) return request
-  const leading = messages.slice(0, start).filter(isSystemChatMessage)
-  const developer = messages.some(isDeveloperChatMessage)
-  if (!developer && leading.length <= 1 && end === messages.length - 1) return request
-  const head = Option.match(Option.fromUndefinedOr(leading[0]), {
-    onNone: () => [],
-    onSome: () => [
-      { role: "system", content: leading.map((message) => message.content).join("\n\n") },
-    ],
-  })
-  const conversation = messages.slice(start, end + 1).map((message) => {
-    if (!isDeveloperChatMessage(message)) return message
-    return { ...message, role: "system" }
-  })
-  const trailing = messages.slice(end + 1).map((message) => {
-    if (!isSystemChatMessage(message)) return message
-    return { role: "user", content: hostContextUpdateText(message.content) }
-  })
-  return HttpClientRequest.bodyJsonUnsafe(request, {
-    ...body.value,
-    messages: [...head, ...conversation, ...trailing],
-  })
-}
-
-const makeApiKeyCompatDriver = (params: {
-  readonly id: string
-  readonly name: string
-  readonly envApiKey: Option.Option<string>
-  readonly envVarName: string
-  readonly apiUrl: string
-  readonly catalog: CatalogSource
-}): ModelDriverContribution => ({
-  id: params.id,
-  name: params.name,
-  envCredential: params.envVarName,
-  // The driver id is the models.dev provider id, so no mapping is needed.
-  listModels: driverListModels(params.catalog, params.id),
-  retry: {
-    ...DEFAULT_RETRY_POLICY,
-    // An accepted request can still end with an error event inside the stream; the compatible APIs name a code.
-    transientStreamEvent: Schema.Struct({
-      code: Schema.Literals(["server_error", "rate_limit_exceeded"]),
-    }),
-  },
-  resolveModel: (modelName, authInfo, hints) =>
-    Effect.gen(function* () {
-      const apiKey = apiKeyFrom(Option.fromUndefinedOr(authInfo), params.envApiKey)
-      if (Option.isNone(apiKey)) {
-        return yield* new ProviderAuthError({
-          message: `${params.name} credentials unavailable: no stored API key or ${params.envVarName} env var`,
-        })
-      }
-      // The sampling limits the chat-completions APIs take.
-      let config: OpenAiCompatConfig = {}
-      const maxTokens = Option.fromNullishOr(hints?.maxTokens)
-      if (Option.isSome(maxTokens)) config = { ...config, max_tokens: maxTokens.value }
-      const temperature = Option.fromNullishOr(hints?.temperature)
-      if (Option.isSome(temperature)) config = { ...config, temperature: temperature.value }
-      const clientLayer = OpenAiClient.layer({
-        apiKey: Redacted.make(apiKey.value),
-        apiUrl: params.apiUrl,
-        transformClient: HttpClient.mapRequest(withHostContextUpdates),
-      }).pipe(Layer.provide(FetchHttpClient.layer))
-      const modelLayer = OpenAiLanguageModel.layer({ model: modelName, config }).pipe(
-        Layer.provide(clientLayer),
-      )
-      return AiModel.make(params.id, modelName, modelLayer)
-    }),
-  auth: {
-    methods: [AuthMethod.make({ type: "api", label: "Manually enter API key" })],
-  },
-})
-
-const makeApiKeyCompatExtension = (params: {
-  readonly extensionId: string
-  readonly driverId: string
-  readonly name: string
-  readonly envVarName: string
-  readonly apiUrl: string
-}) =>
-  defineExtension({
-    id: params.extensionId,
-    setup: Effect.gen(function* () {
-      const host = yield* ExtensionHost
-      const envApiKey = yield* readOptionalEnv(params.envVarName)
-      const catalog = yield* catalogSource(host.home)
-      yield* host.register(
-        "modelDriver",
-        makeApiKeyCompatDriver({
-          id: params.driverId,
-          name: params.name,
-          envApiKey,
-          envVarName: params.envVarName,
-          apiUrl: params.apiUrl,
-          catalog,
-        }),
-      )
-    }),
-  })
-
-export const GoogleExtension = makeApiKeyCompatExtension({
-  extensionId: "@gent/provider-google",
-  driverId: "google",
-  name: "Google",
-  envVarName: "GOOGLE_GENERATIVE_AI_API_KEY",
-  apiUrl: GOOGLE_COMPAT_URL,
-})
-
-export const MistralExtension = makeApiKeyCompatExtension({
-  extensionId: "@gent/provider-mistral",
-  driverId: "mistral",
-  name: "Mistral",
-  envVarName: "MISTRAL_API_KEY",
-  apiUrl: MISTRAL_COMPAT_URL,
-})
