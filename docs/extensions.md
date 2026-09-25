@@ -248,7 +248,7 @@ const SetStatus = request({
   id: "set-status",
   input: Schema.Struct({ key: Schema.String, value: Schema.String }),
   output: Schema.Void,
-  execute: (input) => Effect.succeed(void 0),
+  execute: () => Effect.void,
 })
 
 export default defineExtension({
@@ -338,12 +338,11 @@ including `gent doctor`.
 import { defineExtension, defineResource, ExtensionHost } from "@gent/core/extensions/api"
 import { Context, Layer, Effect, Ref } from "effect"
 
-class MyService extends Context.Service<
-  MyService,
-  { readonly getData: () => Effect.Effect<string> }
->()("my-service-ext/MyService") {
+class MyService extends Context.Service<MyService, { readonly getData: Effect.Effect<string> }>()(
+  "my-service-ext/MyService",
+) {
   static Live = Layer.succeed(MyService, {
-    getData: () => Effect.succeed("data"),
+    getData: Effect.succeed("data"),
   })
 }
 

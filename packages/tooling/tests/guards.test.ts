@@ -28,6 +28,8 @@ import {
   findUnusedCatalogEntries,
   findUnusedDependencies,
   findUnusedSuppressionApprovals,
+  guideCodeBlocks,
+  guideDiagnosticLine,
   HOOK_FILE,
   type DependencyScope,
   type InstalledPackage,
@@ -1804,6 +1806,44 @@ describe("steering file paths", () => {
       expect(isSteeringFile(file)).toBe(false)
       expect(messagesOfSteeringPath(text, file)).toEqual([])
     }
+  })
+})
+
+// ── the extension guide's code compiles ─────────────────────────────────────
+
+describe("extension guide code blocks", () => {
+  const guide = [
+    "# Guide",
+    "```ts",
+    "const a = 1",
+    "const b = 2",
+    "```",
+    "```json",
+    '{ "x": 1 }',
+    "```",
+    "```ts",
+    "const c = 3",
+    "```",
+  ].join("\n")
+
+  test("each ts block is read with the guide line of its first code line", () => {
+    expect(guideCodeBlocks(guide)).toEqual([
+      { line: 3, code: "const a = 1\nconst b = 2" },
+      { line: 10, code: "const c = 3" },
+    ])
+  })
+
+  test("a diagnostic is reported at its line in the guide", () => {
+    const blocks = guideCodeBlocks(guide)
+    expect(guideDiagnosticLine("b1.ts(2,7): error TS1: x", blocks)).toBe(
+      "docs/extensions.md:4:7: error TS1: x",
+    )
+    expect(
+      guideDiagnosticLine("/tmp/gent-guide-code-x/b2.ts(1,1): suggestion TS2: y", blocks),
+    ).toBe("docs/extensions.md:10:1: suggestion TS2: y")
+    expect(guideDiagnosticLine("error TS2688: no bun types", blocks)).toBe(
+      "error TS2688: no bun types",
+    )
   })
 })
 

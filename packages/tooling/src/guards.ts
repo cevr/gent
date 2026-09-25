@@ -2228,6 +2228,62 @@ export const findSteeringFilePaths = (
   return findings
 }
 
+// ── the extension guide's code compiles ─────────────────────────────────────
+
+/**
+ * Guard: the ```ts blocks of the extension guide compile with the repo's
+ * compiler options and Effect diagnostics.
+ *
+ * An extension author copies these blocks, so a block that no longer
+ * compiles, or that the repo's own diagnostics reject, teaches the wrong
+ * code. `check-guide-code.ts` writes each block to a scoped temp directory as
+ * its own module, runs `tsc` over them with the root tsconfig, and reports
+ * each diagnostic at its line in the guide.
+ */
+export const GUIDE_FILE = "docs/extensions.md"
+
+/** One ```ts block: its code and the guide line of its first code line. */
+export interface GuideBlock {
+  readonly line: number
+  readonly code: string
+}
+
+const TS_FENCE_OPEN = /^```ts\s*$/
+const FENCE_CLOSE = /^```\s*$/
+
+export const guideCodeBlocks = (text: string): ReadonlyArray<GuideBlock> => {
+  const blocks: Array<GuideBlock> = []
+  let start = -1
+  const lines = text.split("\n")
+  for (const [index, line] of lines.entries()) {
+    if (start === -1 && TS_FENCE_OPEN.test(line)) start = index + 1
+    else if (start !== -1 && FENCE_CLOSE.test(line)) {
+      blocks.push({ line: start + 1, code: lines.slice(start, index).join("\n") })
+      start = -1
+    }
+  }
+  return blocks
+}
+
+/** The module file a block is written to: `b1.ts` for the first. */
+export const guideBlockFile = (index: number): string => `b${index + 1}.ts`
+
+const BLOCK_DIAGNOSTIC = /(?:^|[/\\])b(\d+)\.ts\((\d+),(\d+)\)/
+
+/** A `tsc` output line with its block position replaced by the guide position. */
+export const guideDiagnosticLine = (line: string, blocks: ReadonlyArray<GuideBlock>): string =>
+  Option.fromNullishOr(BLOCK_DIAGNOSTIC.exec(line)).pipe(
+    Option.flatMap((match) =>
+      Option.fromNullishOr(blocks.at(Number(match[1]) - 1)).pipe(
+        Option.map(
+          (block) =>
+            `${GUIDE_FILE}:${block.line + Number(match[2]) - 1}:${match[3]}${line.slice(match.index + match[0].length)}`,
+        ),
+      ),
+    ),
+    Option.getOrElse(() => line),
+  )
+
 // ── an effect tracks no whole session record ────────────────────────────────
 
 /**
