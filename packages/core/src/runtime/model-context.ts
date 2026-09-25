@@ -717,14 +717,16 @@ export class ModelContextProjectionError extends Schema.TaggedError<ModelContext
   }
 }
 
-/** A bounded, model-only snapshot of durable messages. */
-export const ModelContextProjection = Schema.Struct({
-  messages: Schema.Array(Message),
-  estimatedTokens: Schema.Natural,
-  availableInputTokens: Schema.Natural,
-  omittedMessageIds: Schema.Array(MessageId),
-})
-export type ModelContextProjection = typeof ModelContextProjection.Type
+/**
+ * A bounded, model-only snapshot of durable messages. It never crosses a
+ * wire or a store; `ModelContextProjected` carries its numbers out.
+ */
+export interface ModelContextProjection {
+  readonly messages: ReadonlyArray<Message>
+  readonly estimatedTokens: number
+  readonly availableInputTokens: number
+  readonly omittedMessageIds: ReadonlyArray<MessageId>
+}
 
 interface ToolCallRecord {
   readonly id: ToolCallId

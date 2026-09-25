@@ -34,7 +34,6 @@ import {
   ModelContextError,
   type ModelContextError as ModelContextErrorValue,
   ModelContextLedger,
-  ModelContextProjection,
   ModelContextProjectionError,
   type ModelContextProjection as ModelContextProjectionValue,
   projectContextWindow,
@@ -426,14 +425,6 @@ describe("projectModelContext", () => {
       ),
     )
     expect(resultError._tag).toBe("ToolResultWrongRole")
-  })
-
-  test("returns a schema-decodable success value", () => {
-    const projection = success(
-      projectModelContext([message("user", "user", [text("hello")])], budget(10)),
-    )
-
-    expect(Schema.decodeSync(ModelContextProjection)(projection)).toEqual(projection)
   })
 })
 
