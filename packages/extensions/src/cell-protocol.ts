@@ -79,28 +79,38 @@ const regExpFlags = regExpFlagKeys.flatMap(([flag, key]) =>
 )
 
 /**
- * The host getters a property read runs: those on `Error.prototype` and on
- * Bun's `BuildMessage` and `ResolveMessage` prototypes, taken when the module
- * loads, before any cell runs. A closed set compared by identity: a cell's
- * own getter, a bound one that prints as native code included, is never in it.
+ * The host getters a property read runs: those on the prototype of every
+ * error type the realm defines as a global, `Error` included. Bun keeps a
+ * `DOMException`'s name and message, and a `BuildMessage`'s position, behind
+ * such getters. Taken when the module loads, before any cell runs, from data
+ * globals only. A closed set compared by identity: a cell's own getter, a
+ * bound one that prints as native code included, is never in it.
  */
+const errorPrototype: object = Error.prototype
 const hostGetters: ReadonlySet<unknown> = new Set(
-  [
-    Error.prototype,
-    ...["BuildMessage", "ResolveMessage"].flatMap((name) =>
+  Object.getOwnPropertyNames(globalThis)
+    .flatMap((name) =>
       Option.toArray(
-        Option.liftPredicate(Reflect.get(globalThis, name), Predicate.isFunction).pipe(
+        Option.fromUndefinedOr(ownDescriptor(globalThis, name)).pipe(
+          Option.flatMap((descriptor) =>
+            Option.liftPredicate(Reflect.get(descriptor, "value"), Predicate.isFunction),
+          ),
           Option.flatMap((type) =>
             Option.liftPredicate(Reflect.get(type, "prototype"), Predicate.isObjectKeyword),
           ),
+          Option.filter(
+            (prototype) =>
+              prototype === errorPrototype ||
+              Object.prototype.isPrototypeOf.call(errorPrototype, prototype),
+          ),
         ),
       ),
+    )
+    .flatMap((prototype) =>
+      Object.values(Object.getOwnPropertyDescriptors(prototype)).flatMap((descriptor) =>
+        Option.toArray(descriptorGetter(descriptor)),
+      ),
     ),
-  ].flatMap((prototype) =>
-    Object.values(Object.getOwnPropertyDescriptors(prototype)).flatMap((descriptor) =>
-      Option.toArray(descriptorGetter(descriptor)),
-    ),
-  ),
 )
 
 /** Prototype links a read follows before it gives up. */
@@ -112,28 +122,36 @@ class UnreadableValue extends Schema.TaggedError<UnreadableValue>()("UnreadableV
 type ValueRead<A> = Result.Result<A, UnreadableValue>
 const unreadable: ValueRead<never> = Result.fail(new UnreadableValue())
 
+/** A property found along the prototype chain, running only the getters in `getters`. */
+const readThrough =
+  (getters: ReadonlySet<unknown>) =>
+  // oxlint-disable-next-line effect/noObjectParameters -- a cell value has any JavaScript shape; descriptors read it without running its getters
+  (target: object, key: string): ValueRead<Option.Option<unknown>> => {
+    let holder: unknown = target
+    for (let depth = 0; depth < PROTOTYPE_DEPTH_LIMIT; depth++) {
+      if (!Predicate.isObjectKeyword(holder)) return Result.succeed(Option.none())
+      if (isProxy(holder)) return unreadable
+      const descriptor = ownDescriptor(holder, key)
+      if (Predicate.isNotUndefined(descriptor)) {
+        if (hasOwn(descriptor, "value")) return Result.succeed(Option.some(descriptor.value))
+        const get = descriptorGetter(descriptor)
+        if (Option.isSome(get) && getters.has(get.value))
+          return Result.succeed(Option.some(apply(get.value, target, [])))
+        return unreadable
+      }
+      holder = prototypeOf(holder)
+    }
+    return unreadable
+  }
+
 /**
  * A property found along the prototype chain; none when absent. A getter
  * runs only when the host provides it, and a host getter can still throw.
  */
-// oxlint-disable-next-line effect/noObjectParameters -- a cell value has any JavaScript shape; descriptors read it without running its getters
-export const readProperty = (target: object, key: string): ValueRead<Option.Option<unknown>> => {
-  let holder: unknown = target
-  for (let depth = 0; depth < PROTOTYPE_DEPTH_LIMIT; depth++) {
-    if (!Predicate.isObjectKeyword(holder)) return Result.succeed(Option.none())
-    if (isProxy(holder)) return unreadable
-    const descriptor = ownDescriptor(holder, key)
-    if (Predicate.isNotUndefined(descriptor)) {
-      if (hasOwn(descriptor, "value")) return Result.succeed(Option.some(descriptor.value))
-      const get = descriptorGetter(descriptor)
-      if (Option.isSome(get) && hostGetters.has(get.value))
-        return Result.succeed(Option.some(apply(get.value, target, [])))
-      return unreadable
-    }
-    holder = prototypeOf(holder)
-  }
-  return unreadable
-}
+export const readProperty = readThrough(hostGetters)
+
+/** A property held as data along the prototype chain; no getter runs, a host one included. */
+export const readDataProperty = readThrough(new Set())
 
 /** Whether `prototype` is on a value's prototype chain, as `instanceof` asks, with no trap run. */
 // oxlint-disable-next-line effect/noUnknownParameters, effect/noObjectParameters -- a cell value has any JavaScript shape; the chain is walked without running its traps

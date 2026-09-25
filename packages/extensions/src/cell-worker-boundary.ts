@@ -40,6 +40,7 @@ import {
   maximumCellDisplayLength,
   maximumCellSourceLength,
   maximumPendingCellCalls,
+  readDataProperty,
   readProperty,
   type SnapshotBinding,
   snapshotReviverSource,
@@ -258,6 +259,8 @@ const SHELL_STDERR_LIMIT = 2000
 
 /** What a thrown value shows when it cannot be read without running cell code: a Proxy, for one. */
 const UNREADABLE_ERROR_TEXT = "A thrown value that cannot be read"
+/** What stands for a cause that cannot be read without running cell code. */
+const UNREADABLE_CAUSE_LINE = "caused by (a value that cannot be read)"
 
 /** Taken when the worker loads: a cell may replace the globals later. */
 const errorPrototype: object = Error.prototype
@@ -307,13 +310,17 @@ const SYSTEM_ERROR_FIELDS = ["code", "errno", "syscall", "path", "dest", "addres
 /** The longest value one system error field shows. */
 const SYSTEM_ERROR_FIELD_LIMIT = 200
 
-/** One line of the system error fields an error holds as scalars; none gives no line. */
+/**
+ * One line of the system error fields an error holds as scalar data; none
+ * gives no line. Only data counts: a `DOMException` keeps a legacy numeric
+ * `code` behind a host getter, and that says nothing a model can use.
+ */
 // oxlint-disable-next-line effect/noObjectParameters -- a thrown value has any JavaScript shape
 const systemErrorFields = (error: object): ReadonlyArray<string> => {
   const fields = SYSTEM_ERROR_FIELDS.flatMap((key) =>
     Option.match(
       Option.filter(
-        errorProperty(error, key),
+        Result.getOrElse(readDataProperty(error, key), () => Option.none()),
         Predicate.or(Predicate.isString, Predicate.isNumber),
       ),
       {
@@ -326,7 +333,11 @@ const systemErrorFields = (error: object): ReadonlyArray<string> => {
   return [`  ${fields.join(", ")}`]
 }
 
-/** An `AggregateError`'s first inner errors, one line each, and a count of the rest. */
+/**
+ * An `AggregateError`'s first inner errors, one line each with its position
+ * below it when it has one, and a count of the rest. Bun splits one syntax
+ * error into several `BuildMessage`s, and each one points somewhere.
+ */
 const aggregateDetail = (inner: ReadonlyArray<unknown>): ReadonlyArray<string> => {
   const listed = Array.from({ length: Math.min(inner.length, AGGREGATE_DETAIL_LIMIT) }, (_, i) =>
     Option.match(errorProperty(inner, String(i)), {
@@ -336,8 +347,11 @@ const aggregateDetail = (inner: ReadonlyArray<unknown>): ReadonlyArray<string> =
         return Result.match(errorValue(each), {
           onFailure: () => "  (an inner value that cannot be read)",
           onSuccess: (isError) => {
-            if (isError) return `  ${errorLine(each)}`
-            return "  (an inner value that is not an error)"
+            if (!isError) return "  (an inner value that is not an error)"
+            return Option.match(positionDetail(each), {
+              onNone: () => `  ${errorLine(each)}`,
+              onSome: (position) => `  ${errorLine(each)}\n  ${position}`,
+            })
           },
         })
       },
@@ -403,6 +417,9 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
   })
   const append = output.append
   const rendered = output.read
+  // `inspect` shows no getter, but it reads `Symbol.toStringTag` with a plain
+  // get and walks the prototype chain, so a getter or trap the cell wrote there
+  // can run. The value reader covers error fields and the snapshot, not this.
   // oxlint-disable-next-line effect/noUnknownParameters -- VM values can have any JavaScript shape; inspect produces bounded display text.
   const display = (value: unknown): string => {
     if (Predicate.isString(value)) return value
@@ -434,29 +451,43 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
   // about the cell's code, so an error goes back as its name and message, with
   // its cause one level deep. A failed host operation already carries the
   // host's message.
-  // A value whose prototype chain holds a Proxy cannot be read: its traps are cell code.
+  // A value whose prototype chain holds a Proxy cannot be read: its traps are
+  // cell code. Each part of an error reads on its own, so a part that throws
+  // (a host getter, or `inspect` running a cell's `Symbol.toStringTag` getter)
+  // leaves its fallback in its place and the other parts stand.
+  const part = (
+    render: () => ReadonlyArray<string>,
+    fallback: ReadonlyArray<string>,
+  ): ReadonlyArray<string> => Option.getOrElse(Option.liftThrowable(render)(), () => fallback)
+  // oxlint-disable-next-line effect/noUnknownParameters -- a cause has any JavaScript shape
+  const causeLine = (inner: unknown): string =>
+    Result.match(errorValue(inner), {
+      onFailure: () => UNREADABLE_CAUSE_LINE,
+      onSuccess: (isError) => {
+        // An Error cause stops at its own line: never recurse, so a looped or deep chain cannot overflow.
+        if (isError && Predicate.isObjectKeyword(inner)) return `caused by ${errorLine(inner)}`
+        return `caused by ${display(inner)}`
+      },
+    })
   const renderError = (cause: unknown): string =>
     Result.match(errorValue(cause), {
       onFailure: () => UNREADABLE_ERROR_TEXT,
       onSuccess: (isError) => {
         if (!isError || !Predicate.isObjectKeyword(cause)) return display(cause)
-        const head = [errorLine(cause), ...errorDetail(cause)].join("\n")
-        return Option.match(
-          Option.filter(errorProperty(cause, "cause"), Predicate.isNotUndefined),
-          {
-            onNone: () => head,
-            // An Error cause stops at its own line: never recurse, so a looped or deep chain cannot overflow.
-            onSome: (inner) =>
-              Result.match(errorValue(inner), {
-                onFailure: () => `${head}\ncaused by (a value that cannot be read)`,
-                onSuccess: (innerIsError) => {
-                  if (innerIsError && Predicate.isObjectKeyword(inner))
-                    return `${head}\ncaused by ${errorLine(inner)}`
-                  return `${head}\ncaused by ${display(inner)}`
-                },
-              }),
-          },
-        )
+        return [
+          ...part(() => [errorLine(cause)], [UNREADABLE_ERROR_TEXT]),
+          ...part(() => errorDetail(cause), []),
+          ...part(
+            () =>
+              Option.toArray(
+                Option.map(
+                  Option.filter(errorProperty(cause, "cause"), Predicate.isNotUndefined),
+                  causeLine,
+                ),
+              ),
+            [UNREADABLE_CAUSE_LINE],
+          ),
+        ].join("\n")
       },
     })
   /**
