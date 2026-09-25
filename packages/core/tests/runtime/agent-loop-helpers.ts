@@ -316,7 +316,7 @@ export const actorTestRoot = <S = never, ES = never, X = never, EX = never>(
     params.storage ?? testSqliteStorage(noBranchTools.storage, noBranchTools.migrations),
     actorTestModelLayer(params),
     params.registry ?? makeExtRegistry(),
-    RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
+    RuntimeEnvironment.Live({ cwd: "/tmp", home: "/nonexistent/gent-test-home" }),
     ConfigService.Test(),
     params.eventStore ?? EventStore.Memory,
     ApprovalService.Test(),

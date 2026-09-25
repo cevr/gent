@@ -32,7 +32,7 @@ const makeCtx = (
       branchId: BranchId.make("test-branch"),
       toolCallId: ToolCallId.make("test-call"),
       cwd: "/tmp",
-      home: "/tmp",
+      home: "/nonexistent/gent-test-home",
       Interaction: interaction,
     }),
     interaction,

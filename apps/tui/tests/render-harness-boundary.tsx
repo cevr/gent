@@ -282,7 +282,7 @@ export const renderWithProviders = (
                       <CommandProvider>
                         <WorkspaceProvider
                           cwd={options?.cwd ?? defaultWorkspaceCwd}
-                          home="/tmp"
+                          home="/nonexistent/gent-test-home"
                           services={services}
                         >
                           <ClientProvider

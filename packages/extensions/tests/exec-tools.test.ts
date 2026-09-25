@@ -3061,7 +3061,7 @@ const stubCtx = testToolContext({
   branchId: BranchId.make("test-branch"),
   toolCallId: ToolCallId.make("tc-1"),
   cwd: process.cwd(),
-  home: "/tmp",
+  home: "/nonexistent/gent-test-home",
   Session: {
     getSession: dieStub("getSession"),
     getDetail: dieStub("getDetail"),
