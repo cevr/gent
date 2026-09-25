@@ -889,8 +889,9 @@ export const findRepoTempDirectories = (file: string, text: string): ReadonlyArr
  * `/private/tmp`, `/dev/shm`, or `tmpdir()` itself) given as a test's home or
  * data directory is shared by every run and every parallel gate: what one
  * test writes there (prompt history, goal and wake files, a skills cache),
- * the next one reads, so a result depends on run order. Reported in test code
- * outside the tooling package, at a `home`, `HOME`, `homeDir`,
+ * the next one reads, so a result depends on run order. Reported in test code,
+ * and in the test layers of product source (`GentPlatform.Test`; see
+ * `sharedHomeScanCode`), both outside the tooling package, at a `home`, `HOME`, `homeDir`,
  * `homeDirectory`, `dataDir` or `GENT_DATA_DIR` name given a value with `:` or
  * `=`. The value is read as an expression, not as the rest of the line: it
  * may start on the next line, and it ends at a `,`, `;`, closing bracket or
@@ -948,10 +949,57 @@ const valueEnd = (text: string, start: number): number => {
 const isSharedTempValue = (value: string): boolean =>
   (SHARED_TEMP_ROOT.test(value) || TEMP_ROOT_CALL.test(value)) && !UNIQUE_TEMP_CALL.test(value)
 
+/**
+ * A test-layer declaration in product source: a `static Test` member, or a
+ * binding whose name has a `Test` word part (`AgentLoopTestActor`).
+ */
+const TEST_LAYER_DECLARATION =
+  /^\s*(?:static\s+|(?:export\s+)?(?:const|let|function)\s+)\w*Test(?![a-z])\w*\b/
+
+/**
+ * `code` with every line blanked but the test layers', so line numbers hold.
+ * A test layer is its declaration line and the lines after it that are blank,
+ * indented deeper, or close a bracket at its own indent; the formatter keeps
+ * that shape. The product code around it (a `Live` layer, an operator
+ * default) is not a test home and is not read.
+ */
+const testLayerLines = (code: string): string => {
+  const lines = code.split("\n")
+  const kept = lines.map(() => "")
+  for (const [index, line] of lines.entries()) {
+    if (!TEST_LAYER_DECLARATION.test(line)) continue
+    const indent = line.length - line.trimStart().length
+    kept[index] = line
+    for (let next = index + 1; next < lines.length; next += 1) {
+      const body = lines[next] ?? ""
+      const bodyIndent = body.length - body.trimStart().length
+      const inside =
+        body.trim().length === 0 ||
+        bodyIndent > indent ||
+        (bodyIndent === indent && /^[)\]}]/.test(body.trimStart()))
+      if (!inside) break
+      kept[next] = body
+    }
+  }
+  return kept.join("\n")
+}
+
+/**
+ * The code the shared-home scan reads: all of a test file, and the test
+ * layers of a product file (`GentPlatform.Test`). The guard's own tests spell
+ * the reported shapes as probe text, so the tooling package is out.
+ */
+const sharedHomeScanCode = (file: string, text: string): Option.Option<string> => {
+  if (file.startsWith("packages/tooling/")) return Option.none()
+  if (isTestCode(file)) return Option.some(withoutComments(text))
+  if (isShippedSource(file)) return Option.some(testLayerLines(withoutComments(text)))
+  return Option.none()
+}
+
 export const findSharedTestHomes = (file: string, text: string): ReadonlyArray<Finding> => {
-  // The guard's own tests spell the reported shapes as probe text.
-  if (!isTestCode(file) || file.startsWith("packages/tooling/")) return []
-  const code = withoutComments(text)
+  const scanned = sharedHomeScanCode(file, text)
+  if (Option.isNone(scanned)) return []
+  const code = scanned.value
   const reported = new Set<number>()
   for (const key of code.matchAll(SHARED_HOME_KEY)) {
     const afterKey = key.index + key[0].length

@@ -722,10 +722,39 @@ describe("shared test home checker", () => {
     expect(lines(source.join("\n"))).toEqual([])
   })
 
-  test("product source and the tooling package are out of scope", () => {
+  test("a test layer in product source is read, the product code around it is not", () => {
+    const product = "packages/core/src/runtime/gent-platform.ts"
+    const source = [
+      "export class GentPlatform extends Context.Service<GentPlatform>()(TAG) {",
+      "  static Live = Layer.succeed(GentPlatform, {",
+      '    homeDirectory: Effect.succeed("/tmp"),',
+      "  })",
+      '  static Test = (prefix = "id"): Layer.Layer<GentPlatform> =>',
+      "    Layer.effect(",
+      "      GentPlatform,",
+      "      Effect.gen(function* () {",
+      "        return GentPlatform.of({",
+      '          homeDirectory: Effect.succeed("/tmp"),',
+      "        })",
+      "      }),",
+      "    )",
+      "  static Other = Layer.succeed(GentPlatform, {",
+      '    homeDirectory: Effect.succeed("/tmp"),',
+      "  })",
+      "}",
+      "export const FakeTestActor = (config: {",
+      "  readonly id: string",
+      "}) =>",
+      '  Layer.succeed(Actor, { home: "/tmp" })',
+      'const fallback = { home: "/tmp" }',
+    ].join("\n")
+    expect(lines(source, product)).toEqual([10, 21])
+  })
+
+  test("the tooling package is out of scope; the test harness is test code", () => {
     const source = 'homeDirectory: Effect.succeed("/tmp"),'
-    expect(lines(source, "packages/core/src/runtime/gent-platform.ts")).toEqual([])
     expect(lines(source, "packages/tooling/tests/guards.test.ts")).toEqual([])
+    expect(lines(source, "packages/tooling/src/guards.ts")).toEqual([])
     expect(lines(source, "packages/core/src/test-utils/harness.ts")).toEqual([1])
   })
 })
