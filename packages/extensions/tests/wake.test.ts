@@ -1283,6 +1283,24 @@ const eventually = <A>(read: Effect.Effect<A>, done: (value: A) => boolean, labe
     expect(`still waiting: ${label}`).toBe(label)
   })
 
+/**
+ * Moves the virtual clock in small steps until `done` holds. A timer fiber reads
+ * the clock and then sleeps; a single `TestClock.adjust` that lands between the
+ * two leaves the sleep one whole delay past the new time, and it never wakes.
+ * Stepping reaches that timer too. Exhaustion fails loudly.
+ */
+const advanceUntil = <A>(read: Effect.Effect<A>, done: (value: A) => boolean, label: string) =>
+  Effect.gen(function* () {
+    const deadline = wallClock.currentTimeMillisUnsafe() + 5_000
+    while (wallClock.currentTimeMillisUnsafe() < deadline) {
+      if (done(yield* read)) return
+      yield* TestClock.adjust("100 millis")
+      // gent/no-sleep: allow the wait is for real file I/O, which only the wall clock paces
+      yield* Effect.sleep("2 millis").pipe(Effect.provideService(Clock.Clock, wallClock))
+    }
+    expect(`still waiting: ${label}`).toBe(label)
+  })
+
 /** A branch's wake file as text; a missing file is the empty list, as the store reads it. */
 const readStoredFile = (file: string) =>
   Effect.gen(function* () {
@@ -1781,8 +1799,11 @@ describe("wake store", () => {
           Effect.provideService(ExtensionContext, testLeafContext(ctx)),
         )
         expect([...(yield* alarms.pending)].sort()).toEqual([once.wakeId, repeat.wakeId].sort())
-        yield* TestClock.adjust("4 seconds")
-        yield* eventually(firedCount, (count) => count === 3, "the one-shot and the repeat fired")
+        yield* advanceUntil(
+          Ref.get(queued),
+          (all) => all.some((text) => text.endsWith(" once")) && all.length >= 3,
+          "the one-shot and the repeat fired",
+        )
         yield* settled(alarms.pending, Option.some(once.wakeId))
         expect(yield* readFile(home)).not.toContain(once.wakeId)
         expect(yield* readFile(home)).toContain(repeat.wakeId)
@@ -1813,8 +1834,7 @@ describe("wake store", () => {
       const alarms = yield* WakeAlarms
       expect([...(yield* alarms.pending)].sort()).toEqual(["later", "past"])
       // TestClock starts at epoch 0, so the stored dueAt of 1_000 is one second out.
-      yield* TestClock.adjust("1 second")
-      yield* Deferred.await(fired)
+      yield* advanceUntil(Deferred.isDone(fired), (done) => done, "the past-due alarm fired")
       yield* settled(alarms.pending, Option.some("past"))
       expect((yield* Ref.get(queued))[0]).toContain("CI should be done")
       expect(yield* readFile(home)).not.toContain("past")
