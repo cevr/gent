@@ -947,11 +947,13 @@ describe("recorded cell execution", () => {
     10000,
   )
 
-  // The snapshot once called a bigint's `toString` and walked host lists with
-  // the array iterator, and a cell can replace both on the shared prototypes.
+  // A cell can replace a shared built-in. The worker puts every built-in back
+  // after the cell, before the display and the snapshot, and names it. The
+  // snapshot once called the replacement and saved what it said.
   const replacedIntrinsics: ReadonlyArray<{
     readonly name: string
     readonly source: string
+    readonly shown: string
     readonly probe: string
     readonly display: string
   }> = [
@@ -959,20 +961,54 @@ describe("recorded cell execution", () => {
       name: "BigInt.prototype.toString",
       source:
         "BigInt.prototype.toString = function () { globalThis.readerRan = true; return '1' }; var saved = 5n; 1",
+      shown: "1\nPut back built-ins the cell changed: BigInt.prototype.toString",
       probe: "String(saved === 5n)",
       display: "true",
     },
     {
       name: "the array iterator",
       source:
-        "const original = Array.prototype[Symbol.iterator]; Array.prototype[Symbol.iterator] = function () { if (this[0] === 'probe-key') globalThis.readerRan = true; return original.call(this) }; var saved = new Map([['probe-key', 5]]); 1",
+        "const original = Array.prototype[Symbol.iterator]; const holds = Array.prototype.includes; Array.prototype[Symbol.iterator] = function () { if (holds.call(this, 'probe-key') || holds.call(this, 'saved')) globalThis.readerRan = true; return original.call(this) }; var saved = new Map([['probe-key', 5]]); 1",
+      shown: "1\nPut back built-ins the cell changed: Array.prototype[Symbol(Symbol.iterator)]",
       probe: "String(saved.get('probe-key'))",
       display: "5",
+    },
+    {
+      name: "Map.prototype.set",
+      source:
+        "const set = Map.prototype.set; Map.prototype.set = function (key, value) { if (key === 'saved') globalThis.readerRan = true; return set.call(this, key, key === 'saved' ? 999 : value) }; var saved = 5; 1",
+      shown: "1\nPut back built-ins the cell changed: Map.prototype.set",
+      probe: "String(saved)",
+      display: "5",
+    },
+    {
+      name: "Object.prototype.toJSON",
+      source:
+        "Object.defineProperty(Object.prototype, 'toJSON', { configurable: true, value: function () { if (this && this.b === 'probe') { globalThis.readerRan = true; return { a: 2, b: 'probe' } } return this } }); var saved = { a: 1, b: 'probe' }; 1",
+      shown: "1\nPut back built-ins the cell changed: Object.prototype.toJSON",
+      probe: "String(saved.a)",
+      display: "1",
+    },
+    {
+      name: "global Reflect",
+      source:
+        "const R = Reflect; globalThis.Reflect = new Proxy(R, { get(target, key) { const found = R.get(target, key); if (typeof found !== 'function') return found; return (...args) => { globalThis.readerRan = true; return R.apply(found, target, args) } } }); var saved = { a: 1 }; 1",
+      shown: "1\nPut back built-ins the cell changed: globalThis.Reflect",
+      probe: "String(saved.a)",
+      display: "1",
+    },
+    {
+      name: "global Symbol",
+      source:
+        "const S = Symbol; globalThis.Symbol = new Proxy(S, { get(target, key) { if (key === 'toStringTag') globalThis.readerRan = true; return Reflect.get(target, key) } }); var saved = 1; ({ a: 1 })",
+      shown: "{ a: 1 }\nPut back built-ins the cell changed: globalThis.Symbol",
+      probe: "String(saved)",
+      display: "1",
     },
   ]
   for (const replaced of replacedIntrinsics) {
     it.scopedLive(
-      `the snapshot never calls a replaced ${replaced.name}`,
+      `the display and the snapshot never call a replaced ${replaced.name}`,
       () =>
         Effect.gen(function* () {
           const worker = yield* buildCellWorker
@@ -992,7 +1028,7 @@ describe("recorded cell execution", () => {
           const cells = yield* open
           const run = (owner: typeof cells, call: typeof bind) =>
             owner.run(call).pipe(Effect.provideService(CellOperationHost, host))
-          expect((yield* run(cells, bind)).result).toMatchObject({ display: "1" })
+          expect((yield* run(cells, bind)).result).toMatchObject({ display: replaced.shown })
           expect((yield* run(cells, ran)).result).toMatchObject({ display: "false" })
           // A restarted owner restores the value the cell bound, not what the replacement said.
           const restarted = yield* open

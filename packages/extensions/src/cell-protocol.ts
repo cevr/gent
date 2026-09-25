@@ -190,16 +190,18 @@ export const CellRequest = Schema.TaggedUnion({
 })
 export type CellRequest = typeof CellRequest.Type
 
+/**
+ * Globals or built-ins the worker could not put back; the host replaces a
+ * worker that names any.
+ */
+const Unrestored = Schema.optional(Schema.Array(Schema.String))
+
 export const CellResponse = Schema.TaggedUnion({
   Ready: { version: Schema.Literal(1) },
-  Evaluated: { cellId: CorrelationId, result: CellEvaluation },
-  Failed: { cellId: CorrelationId, error: CellEvaluationError },
-  Reset: {
-    requestId: CorrelationId,
-    /** Globals the worker could not put back; the host replaces a worker that names any. */
-    unrestored: Schema.optional(Schema.Array(Schema.String)),
-  },
-  Snapshot: { requestId: CorrelationId, snapshot: CellSnapshot },
+  Evaluated: { cellId: CorrelationId, result: CellEvaluation, unrestored: Unrestored },
+  Failed: { cellId: CorrelationId, error: CellEvaluationError, unrestored: Unrestored },
+  Reset: { requestId: CorrelationId, unrestored: Unrestored },
+  Snapshot: { requestId: CorrelationId, snapshot: CellSnapshot, unrestored: Unrestored },
   Restored: { requestId: CorrelationId, bindings: Schema.Array(Schema.String) },
   HostCall: {
     cellId: CorrelationId,

@@ -1337,6 +1337,11 @@ export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
       Effect.tapError(countUnprovenDeath),
       Effect.onError(() => discard().pipe(Effect.orDie)),
     )
+    // The worker named built-ins the cell changed and it cannot put back; its
+    // own code may run cell code through them, so it goes. The result stands,
+    // and the next cell starts on a new worker.
+    if ((response.frame.unrestored ?? []).length > 0)
+      yield* discard().pipe(Effect.mapError(processError))
     // Prime-style result text: process output first, then the cell's own display.
     const withOutput = (display: string) =>
       [response.output.trimEnd(), display].filter((text) => text.length > 0).join("\n")
@@ -1423,14 +1428,24 @@ export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
     return yield* replaceWorker()
   })
 
-  const snapshot = control(
-    (requestId) => CellRequest.cases.Snapshot.make({ requestId }),
-    (frame, requestId): Option.Option<CellSnapshot> => {
-      if (frame._tag === "Snapshot" && frame.requestId === requestId)
-        return Option.some(frame.snapshot)
-      return Option.none()
-    },
-  )
+  const snapshot = Effect.gen(function* () {
+    const frame = yield* control(
+      (requestId) => CellRequest.cases.Snapshot.make({ requestId }),
+      (response, requestId) => {
+        if (response._tag === "Snapshot" && response.requestId === requestId)
+          return Option.some(response)
+        return Option.none()
+      },
+    )
+    const unrestored = frame.unrestored ?? []
+    if (unrestored.length === 0) return frame.snapshot
+    // A worker that cannot put a built-in back saves nothing: it is replaced.
+    yield* discard().pipe(Effect.mapError(processError))
+    return yield* failure(
+      "recovery-required",
+      `The worker could not put back built-ins: ${unrestored.join(", ")}`,
+    )
+  })
   const restore = (bindings: ReadonlyArray<SnapshotBinding>) =>
     control(
       (requestId) => CellRequest.cases.Restore.make({ requestId, bindings }),
@@ -1449,6 +1464,8 @@ export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
     restore: (bindings: ReadonlyArray<SnapshotBinding>) => guarded(restore(bindings)),
     reset: guarded(reset()),
     close: close().pipe(Effect.uninterruptible),
+    /** Whether the kernel discarded its worker; the next cell needs a reset and a restore. */
+    isLost: () => status === "lost",
   }
 })
 
@@ -2450,7 +2467,13 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
                 ),
               onFailure: (error): Effect.Effect<Prompt.ToolResultPart, StorageError> => {
                 if (error._tag === "StorageError") return Effect.fail(error)
-                if (error._tag !== "CellEvaluationError") recoveryPending = true
+                // A cell error leaves the worker as it was, unless the kernel
+                // discarded it for a built-in the worker could not put back.
+                if (
+                  error._tag !== "CellEvaluationError" ||
+                  Option.exists(kernel, (current) => current.isLost())
+                )
+                  recoveryPending = true
                 // A cancelled cell says what its operations did, from their
                 // records. A failed read keeps the plain cancel: the cancel
                 // still records its result.
