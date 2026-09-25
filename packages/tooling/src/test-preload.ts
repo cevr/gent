@@ -11,9 +11,13 @@
  *   bun's 5 s default, a test that bounds itself at 8 or 20 s is cut off at
  *   5 s and its inner bound never runs. A test whose inner bound is 30 s or
  *   more passes its own, longer bun timeout.
- * - Each test process has its own default data directory. `HOME` names a
- *   temp directory made here and removed after the process's last test, and
- *   `GENT_DATA_DIR` is cleared, whatever the shell set: gent's data directory
+ * - Each test file has its own default data directory. `HOME` names a temp
+ *   directory made here and removed in the `afterAll` below, and
+ *   `GENT_DATA_DIR` is cleared, whatever the shell set. A `--parallel` run
+ *   evaluates this file again for each test file, in a fresh global scope,
+ *   and runs the `afterAll` after that file's last test; a plain run
+ *   evaluates it once and runs the `afterAll` after the last file. So a home
+ *   is removed once, after every test that uses it. Gent's data directory
  *   defaults to `<home>/.gent`, so a test that forgets to scope one (a spill
  *   file, a log, a registry) writes under the temp home, never into the real
  *   `~/.gent`. A test that needs a specific data directory still sets its
