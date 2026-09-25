@@ -174,9 +174,29 @@ interface ChromePanelBodyProps {
 function ChromePanelBody(props: ChromePanelBodyProps) {
   const sticky = () => props.stickToBottom === true
   const stickyStart = () => Option.filter(Option.some<"bottom">("bottom"), sticky)
+  // A squeezed body can get no row, and OpenTUI draws a 0-row scrollbox as
+  // one row, over the row below it (the btw ask line, the sign-in code line).
+  // The body reads its laid-out rows before each draw and, at none, hides its
+  // content whole. The scrollbox itself stays laid out, so it reads its rows
+  // again when they come back, and its rows stay its direct children.
+  const [rows, setRows] = createSignal(Option.none<number>())
+  const [scroll, setScroll] = createSignal(Option.none<ScrollBoxRenderable>())
+  createEffect(() => {
+    const shown = !Option.contains(rows(), 0)
+    Option.map(scroll(), (box) => {
+      box.content.visible = shown
+    })
+  })
   return (
     <scrollbox
-      ref={props.ref}
+      ref={(value) => {
+        setScroll(Option.some(value))
+        if (props.ref) props.ref(value)
+      }}
+      renderBefore={function () {
+        const laidOut = Math.max(0, Math.round(this.getLayoutNode().getComputedHeight()))
+        if (!Option.contains(rows(), laidOut)) setRows(Option.some(laidOut))
+      }}
       flexGrow={1}
       stickyScroll={sticky()}
       stickyStart={Option.getOrUndefined(stickyStart())}

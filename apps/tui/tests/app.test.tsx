@@ -2585,6 +2585,35 @@ describe("App auth gate", () => {
       expect(drawn.at(-1)?.startsWith("─")).toBe(true)
     }).pipe(Effect.timeout("10 seconds")),
   )
+  // Below one body row the btw transcript has no row: it hides whole, and the
+  // ask line keeps its row, never drawn over by the transcript's top line.
+  it.live("the btw ask line is never drawn over when the transcript has no row", () =>
+    Effect.gen(function* () {
+      const setup = yield* mountShortTerminalWithTrays(24)
+      yield* Effect.promise(() => setup.mockInput.typeText("/btw which task is hardest?"))
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("ANSWER-TAIL") && frame.includes("ask ›"),
+        "the btw pane",
+      )
+      const width = setup.renderer.terminalWidth
+      for (const height of [9, 8, 6]) {
+        setup.resize(width, height)
+        yield* waitForFrame(
+          setup,
+          (frame) => setup.renderer.terminalHeight === height && frame.includes("ask ›"),
+          `the ask line at ${height} rows`,
+        )
+        for (let draw = 0; draw < 4; draw++) yield* Effect.promise(() => setup.renderOnce())
+        const asks = renderFrame(setup)
+          .split("\n")
+          .filter((line) => line.includes("›"))
+        expect(asks).toHaveLength(1)
+        expect(asks[0]?.trimEnd()).toBe(" ask › │")
+      }
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   it.live("an interjection steers a running turn while an error shows", () =>
     Effect.gen(function* () {
       const view = yield* mountRunningTurnWithError

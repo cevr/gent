@@ -139,7 +139,9 @@ the list's `queryRow`, so it gives way as the filter row does. The composer
 keeps its rows, but while its popup or palette is open it may shrink by that
 picker's rows (`PickerHost`). The live transcript tail, left no row by a
 full footer, hides whole (`NativeTranscript` reads its rows as the frame
-does), so it never draws over the footer's first row. Yoga does not
+does), so it never draws over the footer's first row; so does a
+`ChromePanel.Body` left no row (its content hides), so it never draws over
+the btw ask line or the sign-in code line. Yoga does not
 keep a nested minimum here, and OpenTUI draws a 0-row node as one row, so
 the order is set by hiding whole boxes, not by shrink weights. A pane whose newest row matters
 passes `stickToBottom` to `ChromePanel.Body` and puts its gaps above a row,
