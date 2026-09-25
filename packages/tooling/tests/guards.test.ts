@@ -1910,13 +1910,6 @@ export type LogPaths = { readonly dir: string }
     expect(declaredNames(SDK_FILE, source)).toEqual(["buildLogPaths", "LogPaths"])
   })
 
-  test("a file in an unscanned package declares nothing", () => {
-    // Reference extensions stand alone; no surface row covers `examples/`.
-    expect(
-      declaredNames("examples/extensions/session-notes.ts", `export const ExampleHelper = 1\n`),
-    ).toEqual([])
-  })
-
   test("a bare export block is a surface, so its names are declared", () => {
     // 26 names hid in one such block in packages/sdk/src/client.ts because
     // only `export const|type|...` was read.
@@ -2213,6 +2206,21 @@ describe("support module surface (test helpers, build scripts, testbed drivers)"
     expect(files.map((file) => declaredNames(file, `export const orphan = 1\n`))).toEqual(
       files.map(() => ["orphan"]),
     )
+  })
+
+  test("an example extension is scanned, and its own test keeps a name alive", () => {
+    const example = "examples/extensions/notes.ts"
+    const text = `export const Orphan = 1\nexport const Tested = 2\nexport default { id: "notes" }\n`
+    expect(declaredNames(example, text)).toEqual(["Orphan", "Tested"])
+    expect(
+      findingsFor([
+        { file: example, text },
+        {
+          file: "examples/tests/notes.test.ts",
+          text: `import { Tested } from "../extensions/notes"\nvoid Tested\n`,
+        },
+      ]).map((finding) => finding.message),
+    ).toEqual([expect.stringContaining("`Orphan`")])
   })
 
   test("a test file, the testbed fixture app and the lint fixtures declare nothing", () => {

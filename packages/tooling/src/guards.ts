@@ -2498,6 +2498,17 @@ const SCANNED_SURFACES: ReadonlyArray<ScannedSurface> = [
     specifier: Option.none(),
     leafOf: "apps/server/",
   },
+  {
+    // An example extension is a leaf too: the loader reads its default
+    // export, and its own tests may read a named one. A name nothing else
+    // reads drops the `export` keyword.
+    prefix: "examples/",
+    outsideOf: [],
+    testsCount: true,
+    ownFileCounts: false,
+    specifier: Option.none(),
+    leafOf: "examples/",
+  },
 ]
 
 /**
