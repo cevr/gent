@@ -2619,6 +2619,315 @@ describe("session.send", () => {
   )
 })
 
+// ── a parent interrupt and its session.send turns ───────────────────────────
+
+/**
+ * A parent's session.send can open a turn in a child whose delegate run has
+ * settled, so the delegate registry does not own it. The live run showed one
+ * such turn still running after the user's Ctrl-C. The sender owns it: its
+ * interrupted turn stops that turn, takes back a message no step has read,
+ * and tells its next turn which child it stopped.
+ */
+
+/** A stream that opens, says so, and never ends: a turn that is still running. */
+const stalledStream = (text: string, opened: Deferred.Deferred<void>) =>
+  Stream.make(textDeltaPart(text)).pipe(
+    Stream.concat(Stream.fromEffect(Deferred.succeed(opened, void 0)).pipe(Stream.drain)),
+    Stream.concat(Stream.never),
+  )
+
+/** The branch's turn receipts, from its durable history. */
+const turnReceipts = (
+  harness: Harness,
+  target: { readonly sessionId: SessionId; readonly branchId: BranchId },
+) =>
+  harness.client.session.events(target).pipe(
+    Stream.takeUntil((envelope) => envelope.event._tag === "StreamSynchronized"),
+    Stream.flatMap((envelope) => {
+      if (envelope.event._tag !== "TurnCompleted") return Stream.empty
+      return Stream.make(envelope.event)
+    }),
+    Stream.runCollect,
+    Effect.map((receipts) => Array.from(receipts)),
+  )
+
+const interruptParent = (harness: Harness, requestId: string) =>
+  harness.client.steer.command({
+    command: SteerCommand.make({
+      _tag: "Cancel",
+      sessionId: harness.sessionId,
+      branchId: harness.branchId,
+      requestId: RequestId.make(requestId),
+    }),
+  })
+
+const idle = (
+  harness: Harness,
+  target: { readonly sessionId: SessionId; readonly branchId: BranchId },
+  label: string,
+) =>
+  waitFor(
+    harness.client.session.getSnapshot(target),
+    (current) => current.runtime._tag === "Idle",
+    3_000,
+    label,
+  )
+
+/** One model request's answer, as `LanguageModelLayers.testStream` takes it. */
+type ModelReply = ReturnType<Parameters<typeof LanguageModelLayers.testStream>[0]>
+
+/**
+ * The parent: start one child, end the turn, and on the child's completion
+ * send it the correction, then keep its own turn open. `beforeSend` holds the
+ * send until a test has the child where it wants it.
+ */
+const correctFinishedChild = (options: {
+  readonly child: (texts: ReadonlyArray<string>) => ModelReply
+  readonly parentStreaming: Deferred.Deferred<void>
+  readonly beforeSend?: Effect.Effect<void>
+  readonly parentRequests: Array<{ readonly notices: string; readonly last: string }>
+}) =>
+  LanguageModelLayers.testStream((request) => {
+    const texts = promptTexts(request.prompt)
+    if (texts[0]?.endsWith(childTask) === true) return options.child(texts)
+    const last = texts.at(-1) ?? ""
+    options.parentRequests.push({ notices: noticeText(request.prompt), last })
+    const ids = promptToolCallIds(request.prompt)
+    if (last.startsWith("NEXT-")) return Effect.succeed(reply("ack"))
+    if (!ids.includes("start-1")) {
+      return Effect.succeed(toolStep("delegate.start", { todo: childTask }, "start-1"))
+    }
+    if (!texts.some((text) => text.includes("requestId start-1"))) {
+      return Effect.succeed(reply("started, ending my turn"))
+    }
+    if (!ids.includes("send-fix")) {
+      const to = Option.getOrThrow(startedSessionId(request.prompt))
+      return (options.beforeSend ?? Effect.void).pipe(
+        Effect.as(toolStep("session.send", { to, message: correction }, "send-fix")),
+      )
+    }
+    return Effect.succeed(stalledStream("waiting on the child", options.parentStreaming))
+  })
+
+describe("a parent interrupt and the turns its session.send opened", () => {
+  it.live(
+    "stops the turn a correction opened in a finished child, and the next turn names that child",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const childCorrecting = yield* Deferred.make<void>()
+          const parentStreaming = yield* Deferred.make<void>()
+          const parentRequests: Array<{ readonly notices: string; readonly last: string }> = []
+          const providerLayer = correctFinishedChild({
+            parentStreaming,
+            parentRequests,
+            child: (texts) => {
+              if (texts.some((text) => text.includes(correction))) {
+                return Effect.succeed(stalledStream("correcting", childCorrecting))
+              }
+              return Effect.succeed(reply("pong"))
+            },
+          })
+          const harness = yield* harnessWithHome(providerLayer)
+          const { sessionId, branchId } = harness
+          yield* sendPrompt(harness, "split the work")
+          yield* Deferred.await(childCorrecting)
+          yield* Deferred.await(parentStreaming)
+          const child = yield* childOf(harness)
+          yield* interruptParent(harness, "interrupt-parent-of-corrected-child")
+
+          const receipts = yield* waitFor(
+            turnReceipts(harness, child),
+            (current) => current.length === 2,
+            3_000,
+            "the parent's interrupt ended the child's correction turn",
+          )
+          expect(receipts[1]).toMatchObject({ interrupted: true })
+          yield* idle(harness, child, "the child is idle")
+          yield* idle(harness, { sessionId, branchId }, "the parent is idle")
+
+          yield* sendPrompt(harness, "NEXT-WHAT-IS-RUNNING")
+          yield* waitFor(
+            harness.client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              current.runtime._tag === "Idle" && messageTexts(current.messages).includes("ack"),
+            3_000,
+            "the parent answered the next prompt",
+          )
+          const next = parentRequests.find((request) => request.last === "NEXT-WHAT-IS-RUNNING")
+          expect(next?.notices).toContain(child.sessionId)
+          expect(next?.notices).toContain("session.send")
+
+          // The answered turn read the notice; the turn after it does not see it.
+          yield* sendPrompt(harness, "NEXT-AND-NOW")
+          yield* waitFor(
+            harness.client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              current.runtime._tag === "Idle" &&
+              messageTexts(current.messages).filter((text) => text === "ack").length === 2,
+            3_000,
+            "the parent answered the prompt after",
+          )
+          const after = parentRequests.find((request) => request.last === "NEXT-AND-NOW")
+          expect(after?.notices ?? "").not.toContain(child.sessionId)
+        }).pipe(Effect.timeout("12 seconds")),
+      ),
+    14_000,
+  )
+
+  it.live("a correction that still waits in a running child at the interrupt never runs", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const childStreaming = yield* Deferred.make<void>()
+        const parentStreaming = yield* Deferred.make<void>()
+        let correctionRuns = 0
+        let parentCalls = 0
+        const providerLayer = LanguageModelLayers.testStream((request) => {
+          const texts = promptTexts(request.prompt)
+          if (texts[0]?.endsWith(childTask) === true) {
+            if (texts.some((text) => text.includes(correction))) {
+              correctionRuns += 1
+              return Effect.succeed(reply("corrected"))
+            }
+            // The child's first turn never reaches a step boundary, so the
+            // correction waits in its queue.
+            return Effect.succeed(stalledStream("working", childStreaming))
+          }
+          parentCalls += 1
+          if (parentCalls === 1) {
+            return Effect.succeed(toolStep("delegate.start", { todo: childTask }, "start-1"))
+          }
+          if (parentCalls === 2) {
+            const to = Option.getOrThrow(startedSessionId(request.prompt))
+            return Effect.succeed(toolStep("session.send", { to, message: correction }, "send-fix"))
+          }
+          return Effect.succeed(stalledStream("waiting on the child", parentStreaming))
+        })
+        const harness = yield* harnessWithHome(providerLayer)
+        yield* sendPrompt(harness, "delegate one task")
+        yield* Deferred.await(childStreaming)
+        yield* Deferred.await(parentStreaming)
+        const child = yield* childOf(harness)
+        yield* interruptParent(harness, "interrupt-parent-with-waiting-correction")
+
+        yield* waitFor(
+          turnReceipts(harness, child),
+          (current) => current.length >= 1,
+          3_000,
+          "the parent's interrupt ended the child's first turn",
+        )
+        yield* idle(harness, child, "the child is idle")
+        yield* idle(harness, harness, "the parent is idle")
+        expect(correctionRuns).toBe(0)
+        expect(yield* turnReceipts(harness, child)).toHaveLength(1)
+      }).pipe(Effect.timeout("10 seconds")),
+    ),
+  )
+
+  it.live("a correction turn that ended before the interrupt is not named as stopped", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const parentStreaming = yield* Deferred.make<void>()
+        const parentRequests: Array<{ readonly notices: string; readonly last: string }> = []
+        const providerLayer = correctFinishedChild({
+          parentStreaming,
+          parentRequests,
+          child: (texts) => {
+            if (texts.some((text) => text.includes(correction))) {
+              return Effect.succeed(reply("corrected"))
+            }
+            return Effect.succeed(reply("pong"))
+          },
+        })
+        const harness = yield* harnessWithHome(providerLayer)
+        const { sessionId, branchId } = harness
+        yield* sendPrompt(harness, "split the work")
+        yield* Deferred.await(parentStreaming)
+        const child = yield* childOf(harness)
+        yield* waitFor(
+          turnReceipts(harness, child),
+          (current) => current.length === 2,
+          3_000,
+          "the child answered the correction",
+        )
+        yield* idle(harness, child, "the child is idle")
+        yield* interruptParent(harness, "interrupt-parent-after-correction-ended")
+        yield* idle(harness, { sessionId, branchId }, "the parent is idle")
+
+        yield* sendPrompt(harness, "NEXT-WHAT-IS-RUNNING")
+        yield* waitFor(
+          harness.client.session.getSnapshot({ sessionId, branchId }),
+          (current) =>
+            current.runtime._tag === "Idle" && messageTexts(current.messages).includes("ack"),
+          3_000,
+          "the parent answered the next prompt",
+        )
+        const next = parentRequests.find((request) => request.last === "NEXT-WHAT-IS-RUNNING")
+        expect(next?.notices ?? "").not.toContain(child.sessionId)
+        expect(yield* turnReceipts(harness, child)).toHaveLength(2)
+      }).pipe(Effect.timeout("10 seconds")),
+    ),
+  )
+
+  it.live(
+    "a turn a user opened in the child keeps running, and the waiting correction is taken back",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const userTurnOpen = yield* Deferred.make<void>()
+          const userGate = yield* Deferred.make<void>()
+          const parentStreaming = yield* Deferred.make<void>()
+          const parentRequests: Array<{ readonly notices: string; readonly last: string }> = []
+          let correctionRuns = 0
+          const providerLayer = correctFinishedChild({
+            parentStreaming,
+            parentRequests,
+            // The parent sends only once the user's turn in the child is open.
+            beforeSend: Deferred.await(userTurnOpen),
+            child: (texts) => {
+              if (texts.some((text) => text.includes(correction))) {
+                correctionRuns += 1
+                return Effect.succeed(reply("corrected"))
+              }
+              if (texts.at(-1) === "USER-ASKS-CHILD") {
+                return Deferred.succeed(userTurnOpen, void 0).pipe(
+                  Effect.andThen(Deferred.await(userGate)),
+                  Effect.as(reply("answered the user")),
+                )
+              }
+              return Effect.succeed(reply("pong"))
+            },
+          })
+          const harness = yield* harnessWithHome(providerLayer)
+          yield* sendPrompt(harness, "split the work")
+          const child = yield* childOf(harness)
+          yield* waitFor(
+            turnReceipts(harness, child),
+            (current) => current.length === 1,
+            3_000,
+            "the child's delegate run ended",
+          )
+          yield* idle(harness, child, "the child is idle")
+          yield* harness.client.message.send({ ...child, content: "USER-ASKS-CHILD" })
+          yield* Deferred.await(parentStreaming)
+          yield* interruptParent(harness, "interrupt-parent-while-user-drives-child")
+          yield* idle(harness, harness, "the parent is idle")
+
+          const running = yield* harness.client.session.getSnapshot(child)
+          expect(running.runtime._tag).toBe("Running")
+          expect(yield* turnReceipts(harness, child)).toHaveLength(1)
+
+          yield* Deferred.succeed(userGate, void 0)
+          yield* idle(harness, child, "the user's turn in the child ended")
+          const receipts = yield* turnReceipts(harness, child)
+          expect(receipts).toHaveLength(2)
+          expect(receipts[1]?.interrupted).not.toBe(true)
+          expect(correctionRuns).toBe(0)
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+  )
+})
+
 // ── child later turns ───────────────────────────────────────────────────────
 
 /**
