@@ -129,11 +129,14 @@ interface BackgroundBashStorageService {
     BackgroundBashStorageError
   >
   /**
-   * Marks a settled job whose follow-up message was refused (a full
-   * follow-up queue, for one): the branch's next turn reads it as a notice.
+   * Records whether a settled job's follow-up message was sent. A refused
+   * send (a full follow-up queue, for one) marks the job, and the branch's
+   * next turn reads it as a notice; a later accepted send, a replay after a
+   * restart for one, clears the mark, so the model does not get it twice.
    */
-  readonly markUndelivered: (
+  readonly recordDelivery: (
     key: BackgroundBashJobKeyFields,
+    delivered: boolean,
   ) => Effect.Effect<void, BackgroundBashStorageError>
   /** The branch's settled jobs whose follow-up was refused and no answered turn has read, oldest first. */
   readonly undeliveredJobs: (
@@ -370,8 +373,19 @@ export class BackgroundBashStorage extends Context.Service<
             Effect.mapError(mapError("Failed to read interrupted background bash jobs")),
           ),
 
-          markUndelivered: Effect.fn("BackgroundBashStorage.markUndelivered")(
-            function* (key) {
+          recordDelivery: Effect.fn("BackgroundBashStorage.recordDelivery")(
+            function* (key, delivered) {
+              if (delivered) {
+                yield* sql`
+                  UPDATE background_bash_jobs
+                  SET undelivered_at = NULL
+                  WHERE session_id = ${key.sessionId}
+                    AND branch_id = ${key.branchId}
+                    AND tool_call_id = ${key.toolCallId}
+                    AND undelivered_at IS NOT NULL
+                `
+                return
+              }
               const undeliveredAt = (yield* DateTime.nowAsDate).getTime()
               yield* sql`
                 UPDATE background_bash_jobs
@@ -383,7 +397,7 @@ export class BackgroundBashStorage extends Context.Service<
                   AND undelivered_at IS NULL
               `
             },
-            Effect.mapError(mapError("Failed to mark background bash job undelivered")),
+            Effect.mapError(mapError("Failed to record background bash job delivery")),
           ),
 
           undeliveredJobs: Effect.fn("BackgroundBashStorage.undeliveredJobs")(
@@ -4714,15 +4728,16 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
     })
 
     /**
-     * Queues the settled job's message. A refused send marks the row, and
-     * the branch's next turn reads the job as a notice.
+     * Queues the settled job's message and records the outcome, the one
+     * writer of the row's delivery mark: a refused send marks the row, and
+     * the branch's next turn reads the job as a notice; an accepted send (a
+     * replay of a refused one, for one) clears it.
      */
     const deliverTerminal = (target: BackgroundBashTarget, state: BackgroundBashTerminalState) =>
       queueTerminalFollowUp(target, state).pipe(
-        Effect.flatMap((delivered) => {
-          if (delivered) return Effect.void
-          return storage.markUndelivered(backgroundJobKeyFields(target))
-        }),
+        Effect.flatMap((delivered) =>
+          storage.recordDelivery(backgroundJobKeyFields(target), delivered),
+        ),
       )
 
     const queueFailure = (job: BackgroundBashJob, target: BackgroundBashTarget, message: string) =>

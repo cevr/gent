@@ -57,7 +57,7 @@ import { shippedPreset } from "./helpers/test-preset.js"
 import { toolResultSummary } from "@gent/core/extensions/branch-tools"
 import { BunChildProcessSpawner, BunFileSystem, BunServices } from "@effect/platform-bun"
 import { BunPlatformLive } from "@gent/core/host"
-import { maximumModelToolResultChars } from "@gent/core/extensions/api"
+import { ExtensionServiceError, maximumModelToolResultChars } from "@gent/core/extensions/api"
 import { e2ePreset } from "./helpers/test-preset"
 import { SqlClient } from "effect/unstable/sql"
 import { isToolResultFor } from "./helpers/tool-event.js"
@@ -2697,7 +2697,12 @@ const withSession = (
 })
 /** A fake `Session.send` that records the background notice, a `queue` delivery. */
 const onQueue =
-  (record: (notice: { sourceId: string; content: string }) => Effect.Effect<unknown>) =>
+  (
+    record: (notice: {
+      sourceId: string
+      content: string
+    }) => Effect.Effect<unknown, ExtensionServiceError>,
+  ) =>
   (params: Parameters<TestToolContext["Session"]["send"]>[0]) => {
     if (params.delivery !== "queue") return Effect.die(`unexpected ${params.delivery} delivery`)
     return record({ sourceId: params.sourceId, content: params.content }).pipe(Effect.asVoid)
@@ -3462,6 +3467,77 @@ describe("BashTool execution", () => {
         expect(all.map((notice) => notice.sourceId)).toEqual(["bash:tc-replay:complete"])
         expect(all[0]?.content).toContain("Background command completed (exit code 0)")
         expect(all[0]?.content).toContain("replayed-output")
+      }).pipe(withProcessTimeout),
+    processTestTimeout,
+  )
+
+  it.live(
+    "a refused completion a later replay delivers is not also kept as a notice",
+    () =>
+      Effect.gen(function* () {
+        const toolCallId = ToolCallId.make("tc-refused-replay")
+        const branch = { sessionId: stubCtx.sessionId, branchId: stubCtx.branchId }
+        const delivered = yield* Ref.make<ReadonlyArray<string>>([])
+        const refusing = yield* Ref.make(true)
+        const ctx = withSession(
+          { ...stubCtx, toolCallId },
+          {
+            ...stubCtx.Session,
+            getSession: () =>
+              Effect.succeed(
+                new Session({
+                  id: stubCtx.sessionId,
+                  activeBranchId: stubCtx.branchId,
+                  createdAt: now,
+                  updatedAt: now,
+                }),
+              ),
+            listBranches: Effect.succeed([
+              new Branch({ id: stubCtx.branchId, sessionId: stubCtx.sessionId, createdAt: now }),
+            ]),
+            send: onQueue((notice) =>
+              Effect.gen(function* () {
+                if (yield* Ref.get(refusing)) {
+                  return yield* new ExtensionServiceError({
+                    service: "Session",
+                    operation: "send",
+                    message: "Follow-up queue full (max 10)",
+                  })
+                }
+                yield* Ref.update(delivered, (all) => [...all, notice.sourceId])
+              }),
+            ),
+          },
+        )
+        const millis = yield* Clock.currentTimeMillis
+        const storageLayer = SqliteStorage.LiveWithSql(
+          `/tmp/gent-background-bash-refused-replay-${millis}.db`,
+          () => Layer.empty,
+          {},
+        ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)))
+        const undelivered = BackgroundBashStorage.pipe(
+          Effect.flatMap((storage) => storage.undeliveredJobs(branch)),
+        )
+        const params = { command: "printf refused-output", run_in_background: true }
+
+        // The first server's send is refused: the row keeps the completion.
+        const scope = yield* Scope.make()
+        const firstProfile = yield* Layer.buildWithScope(makeProcessLayer(storageLayer), scope)
+        yield* Effect.gen(function* () {
+          yield* runToolWithCtx(BashTool, params, ctx)
+          yield* waitFor(undelivered, (jobs) => jobs.length === 1, 2_000, "the refused completion")
+        }).pipe(Effect.provideContext(firstProfile))
+        yield* Scope.close(scope, Exit.void)
+
+        // A later server replays the Terminal claim, and its send is accepted.
+        yield* Ref.set(refusing, false)
+        const after = yield* Effect.gen(function* () {
+          yield* runToolWithCtx(BashTool, params, ctx)
+          return yield* undelivered
+        }).pipe(Effect.provide(makeProcessLayer(storageLayer)))
+
+        expect(yield* Ref.get(delivered)).toEqual(["bash:tc-refused-replay:complete"])
+        expect(after).toEqual([])
       }).pipe(withProcessTimeout),
     processTestTimeout,
   )
