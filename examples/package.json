@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && bun ../packages/tooling/src/check-guide-code.ts",
     "test": "env -u FORCE_COLOR NO_COLOR=1 bun test --preload ../packages/tooling/src/test-preload.ts --reporter=dots tests"
   },
   "dependencies": {

@@ -1,8 +1,10 @@
 # Apply prompt
 
-One agent per batch, in the batch's own rift. Fill the slots. The **work rules** block goes in verbatim; it is the single copy, except the **SAFETY** lines, which [`sweep.md`](sweep.md) carries too, so edit both together; the guards fail when the two copies differ.
+One agent per batch, in the batch's own rift. Fill the slots. The **work rules** block goes in verbatim; it is the single copy. The SAFETY rules live in one file, [`safety.md`](../safety.md), which the prompt's first line sends the agent to read; edit the rules there, never in a prompt.
 
 ```
+Read `<rift path>/.claude/skills/architecture-loop/safety.md` in full before any action, and follow it.
+
 Pass-<N> apply batch `p<N>-<batch>`. Rift <rift path> (branch p<N>-<batch>, base main <hash>). Read CLAUDE.md and ARCHITECTURE.md there first. The warm source <warm source> stays untouched. Apply <item ids> from <report paths>; re-verify each receipt in the source first, line numbers move. Reject a finding that does not hold, and say why.
 
 <Decisions the orchestrator already made, with their principle.>
@@ -25,14 +27,6 @@ Work rules:
 - Live binary: only through `bun run gamut` or `--debug` runs with `GENT_DATA_DIR` under <scratchpad>; never `bun run link`, never a paid model.
 - Before the report: merge main into the rift, resolve conflicts there, run `bun run gate` into a log and read `GATE EXIT`.
 - Finish in one run: no timers or monitors left behind. A file that does not fit the description: stop and report.
-
-SAFETY (mandatory; on 2026-09-23 a heredoc of guard probe text ran `rm -rf ~`):
-- Create every file with the Write tool, never through a shell heredoc (`cat > f <<EOF`, quoted or not), `python3 -c`, `python3 - <<X` or `bun -e`.
-- A destructive command string (rm, git reset, git clean, git push -f, dd, mkfs, chmod -R, find -delete, kill and similar) lives only as a string literal in a .ts file created with the Write tool, run with `bun <file>`. It stays out of every shell command line, heredoc, `echo`, `python3 -c`, `bun -e`, stdin heredoc and commit message; commit with `-m "..."` or `git commit -F <file written with Write>`.
-- Probe strings target only harmless paths such as `/nonexistent/gent-probe-x`; never `~`, `$HOME`, `/`, `.` or a real repo path.
-- The classifier is a pure function: call it with the probe strings. Probe text never reaches a shell.
-- To unstage, use `git restore --staged <file>`. Delete with `trash`.
-- A live gent run uses `--debug` only, with `GENT_DATA_DIR` under <scratchpad>. The owner's database `~/.gent/data.db` is read only as a copy: `/bin/cp` the database and its `-wal` file, then open the copy with `sqlite3 -readonly`, or as `file:<copy>?immutable=1` when that fails with code 14. Never write to the owner's database, and never commit, publish or attach it or a copy of it.
 
 Report (final message, ASD-STE100 style): commits (hash + subject), `git diff --stat <base>..HEAD | tail -1`, per-item result with file:line receipts, a probe table, flake names, the last `GATE EXIT`, decisions for the orchestrator, and the abilities the batch changed with the TUI steps that show them in a gamut run.
 ```

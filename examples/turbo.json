@@ -2,7 +2,15 @@
   "extends": ["//"],
   "tasks": {
     "typecheck": {
-      "inputs": ["extensions/**/*.ts", "tests/**/*.ts", "tsconfig.json", "package.json"]
+      "inputs": [
+        "extensions/**/*.ts",
+        "tests/**/*.ts",
+        "tsconfig.json",
+        "package.json",
+        "../docs/extensions.md",
+        "../packages/tooling/src/check-guide-code.ts",
+        "../packages/tooling/src/guards.ts"
+      ]
     }
   }
 }
