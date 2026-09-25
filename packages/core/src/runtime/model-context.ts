@@ -480,6 +480,8 @@ export const latestUserMessageId = (messages: ReadonlyArray<Message>): Option.Op
 /**
  * Applies the newest valid window marker: the marker leads, then every message from
  * the anchor onward. A marker whose anchor is missing is ignored so nothing is lost.
+ * An older marker stored after the anchor (one the newest replaced at the same
+ * message) is left out: only the newest marker speaks for the history.
  */
 export const messagesInCurrentWindow = (
   messages: ReadonlyArray<Message>,
@@ -491,7 +493,10 @@ export const messagesInCurrentWindow = (
     if (Option.isNone(details)) continue
     const anchor = messages.findIndex((message) => message.id === details.value.keepFromMessageId)
     if (anchor < 0) continue
-    return [marker, ...messages.slice(anchor).filter((message) => message.id !== marker.id)]
+    return [
+      marker,
+      ...messages.slice(anchor).filter((message) => Option.isNone(windowDetails(message))),
+    ]
   }
   return messages
 }
@@ -612,14 +617,22 @@ const messageBudget = (budget: ModelContextBudget): number =>
   inputCeiling(budget) - budget.reservedSystemTokens - budget.reservedToolTokens
 
 /**
- * What the provider reported one step's request and reply took, and the reply
- * message that closes that step. The next projection counts the messages up
- * to that reply at the measured size and estimates only what came after.
+ * What the provider reported one step's request took, and the reply message
+ * that step stored. The request held the messages before that reply, so the
+ * next projection counts those at the measured size and estimates the reply
+ * and what came after at chars/4. The step's output is not in the measure:
+ * only its stored reply comes back as input, and that is counted as a message.
  */
 export interface StepMeasure {
   readonly replyId: MessageId
-  /** Input tokens (cached ones included) plus output tokens of that step. */
-  readonly tokens: number
+  /** Input tokens of that step's request, cached ones included. */
+  readonly inputTokens: number
+  /**
+   * The chars/4 estimate of the system prompt, notices and tool definitions
+   * that request carried. The measure subtracts it, not the current one: the
+   * agent or its tools can change between steps.
+   */
+  readonly overheadTokens: number
 }
 
 /**
@@ -1166,7 +1179,7 @@ const handoffAnchorWithinTurn = (
   budget: ModelContextBudget,
   measure: Option.Option<StepMeasure>,
 ): Option.Option<MessageId> => {
-  const measured = measuredUnits(messages, budget, measure)
+  const measured = measuredUnits(messages, measure)
   if (Result.isFailure(measured)) return Option.none()
   const units = measured.success
   const target = Math.floor(messageBudget(budget) / 2)
@@ -1198,7 +1211,7 @@ export const projectModelContext = (
   budget: ModelContextBudget,
   measure: Option.Option<StepMeasure> = Option.none(),
 ): Result.Result<ModelContextProjection, ModelContextError> => {
-  const units = measuredUnits(messages, budget, measure)
+  const units = measuredUnits(messages, measure)
   if (Result.isFailure(units)) return Result.fail(units.failure)
   return projectUnits(units.success, budget)
 }
@@ -1206,15 +1219,13 @@ export const projectModelContext = (
 /**
  * The projection units of `messages`, each with its estimate. chars/4 counts
  * low: it leaves out the wire encoding, and code and JSON tokenize denser.
- * When the provider measured a step of this window (`measure`), the units up
- * to that step's reply take the measured size, spread by their chars/4 share;
- * what came after keeps chars/4. The measure only ever raises an estimate. A
- * reply whose tool results came after it is counted whole with its group, so
- * the correction errs high.
+ * When the provider measured a step of this window (`measure`), the units
+ * before that step's reply (what its request held) take the measured size,
+ * spread by their chars/4 share; the reply and what came after keep chars/4.
+ * The measure only ever raises an estimate.
  */
 const measuredUnits = (
   messages: ReadonlyArray<Message>,
-  budget: ModelContextBudget,
   measure: Option.Option<StepMeasure>,
 ): Result.Result<ReadonlyArray<ProjectionUnit>, ModelContextError> => {
   const visible = visibleSnapshot(messages)
@@ -1227,18 +1238,19 @@ const measuredUnits = (
   const reply = Option.flatMap(measure, (value) => {
     const index = visible.findIndex((message) => message.id === value.replyId)
     if (index < 0) return Option.none()
-    return Option.some({ index, tokens: value.tokens })
+    return Option.some({ index, measured: value.inputTokens - value.overheadTokens })
   })
   if (Option.isNone(reply)) return Result.succeed(units)
-  const { index, tokens } = reply.value
-  const estimated = estimateTokens(visible.slice(0, index + 1))
-  // The step's request carried the system prompt and the tool definitions too.
-  const measured = tokens - budget.reservedSystemTokens - budget.reservedToolTokens
+  const { index, measured } = reply.value
+  // A reply opens its own unit, so the units before it are exactly what the
+  // measured request held.
+  const inRequest = (unit: ProjectionUnit) => unit.start < index
+  const estimated = units.filter(inRequest).reduce((sum, unit) => sum + unit.estimatedTokens, 0)
   if (estimated <= 0 || measured <= estimated) return Result.succeed(units)
   const scale = measured / estimated
   return Result.succeed(
     units.map((unit) => {
-      if (unit.start > index) return unit
+      if (!inRequest(unit)) return unit
       return { ...unit, estimatedTokens: Math.ceil(unit.estimatedTokens * scale) }
     }),
   )
@@ -1465,7 +1477,7 @@ const handoffPlan = (params: {
 
 /** What the model reads at the head of a window cut after a provider refused it as too long. */
 const OVERFLOW_TRUNCATION_NOTICE =
-  "The conversation before this point was dropped: the provider refused the request as longer than the model accepts, and no summary of it could be written. If you need something from it, ask the user."
+  "The conversation before this point was dropped: the provider refused the request as longer than the model accepts, and no summary of it is kept. If you need something from it, ask the user."
 
 /**
  * The window of `messages` as the model sees it, bounded to `budget`. The
@@ -1568,6 +1580,30 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
   // second handoff to the same anchor would reuse that marker's id, spend a
   // summary call, and report a compaction that changed nothing.
   const summarizable = history.some((message) => Option.isNone(windowDetails(message)))
+  // A refused window whose only history is an earlier handoff: that
+  // handoff's summary is all that is left to give up. A truncation marker at
+  // the same message replaces it, so the retry sends a smaller window. A
+  // window already cut to a bare marker has nothing left to drop.
+  const headSummary = Option.fromUndefinedOr(window[0]).pipe(
+    Option.flatMap(windowDetails),
+    Option.filter((details) => Predicate.isNotUndefined(details.summarized)),
+  )
+  if (params.overflowed && !summarizable && Option.isSome(headSummary)) {
+    const marker = yield* params.persist(
+      windowMarkerMessage({
+        sessionId: params.sessionId,
+        branchId: params.branchId,
+        keepFromMessageId: headSummary.value.keepFromMessageId,
+        notice: OVERFLOW_TRUNCATION_NOTICE,
+        createdAt: now,
+      }),
+    )
+    return {
+      durableMessages: [...durableMessages, marker],
+      compacted: true,
+      summary: Option.none(),
+    } satisfies WindowProjection
+  }
   if (!(requested || overflowing) || !summarizable) {
     return { durableMessages, compacted: false, summary: Option.none() } satisfies WindowProjection
   }

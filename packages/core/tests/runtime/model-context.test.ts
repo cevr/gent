@@ -454,25 +454,44 @@ describe("model input cap and measured size", () => {
     expect(underCap.omittedMessageIds).toEqual([MessageId.make("u1"), MessageId.make("a1")])
   })
 
-  test("the messages up to a measured reply count at the provider's size", () => {
+  test("the messages before a measured reply count at the provider's size", () => {
     const measure = Option.some({
       replyId: MessageId.make("a1"),
-      tokens: 2_000,
+      inputTokens: 2_000,
+      overheadTokens: 0,
     })
 
     const estimated = success(projectModelContext(history, budget(10_000)))
     const measured = success(projectModelContext(history, budget(10_000), measure))
 
-    // chars/4: 100 + 100 + 10. Measured: the first two take the 2,000 the
-    // provider reported; the message after the reply keeps chars/4.
+    // chars/4: 100 + 100 + 10. Measured: u1, all the request held, takes the
+    // 2,000 the provider reported; the reply and what follows keep chars/4.
     expect(estimated.estimatedTokens).toBe(210)
-    expect(measured.estimatedTokens).toBe(2_010)
+    expect(measured.estimatedTokens).toBe(2_110)
     const tight = success(projectModelContext(history, budget(1_500), measure))
     expect(tight.omittedMessageIds).toEqual([MessageId.make("u1")])
   })
 
+  test("a measure is taken against the overhead its own request carried", () => {
+    // The measured step ran an agent with a 49,000-token system prompt; the
+    // current one has none. Only the 1,000 left over were the messages before
+    // the reply, so the current window counts u1 at 1,000, not 50,000.
+    const measure = Option.some({
+      replyId: MessageId.make("a1"),
+      inputTokens: 50_000,
+      overheadTokens: 49_000,
+    })
+    const measured = success(projectModelContext(history, budget(10_000), measure))
+    // u1 at the measured 1,000; a1 (the reply, output) and u2 at chars/4.
+    expect(measured.estimatedTokens).toBe(1_110)
+  })
+
   test("a measure below the chars/4 estimate leaves the estimate as it is", () => {
-    const measure = Option.some({ replyId: MessageId.make("a1"), tokens: 10 })
+    const measure = Option.some({
+      replyId: MessageId.make("a1"),
+      inputTokens: 10,
+      overheadTokens: 0,
+    })
     expect(success(projectModelContext(history, budget(10_000), measure)).estimatedTokens).toBe(210)
   })
 
@@ -488,7 +507,8 @@ describe("model input cap and measured size", () => {
         })
       const measure = Option.some({
         replyId: MessageId.make("a1"),
-        tokens: 2_000,
+        inputTokens: 2_000,
+        overheadTokens: 0,
       })
       const project = (messages: ReadonlyArray<Message>) =>
         projectCurrentWindow({
@@ -638,39 +658,40 @@ const sessionIdOverflow = SessionId.make("overflow-session")
 const branchIdOverflow = BranchId.make("overflow-branch")
 const OLD_HISTORY_MARK = "old-history-text"
 
-/** A session with four older messages; none comes near the window. */
-const seedShortHistory = Effect.gen(function* () {
-  const now = dateFromMillis(1_767_225_600_000)
-  yield* (yield* SessionStorage).createSession(
-    new Session({
-      id: sessionIdOverflow,
-      name: "Overflow Test",
-      admission: { agent: wideAgent.name },
-      createdAt: now,
-      updatedAt: now,
-    }),
-  )
-  yield* (yield* BranchStorage).createBranch(
-    new Branch({
-      id: branchIdOverflow,
-      sessionId: sessionIdOverflow,
-      createdAt: now,
-    }),
-  )
-  const roles: ReadonlyArray<"user" | "assistant"> = ["user", "assistant", "user", "assistant"]
-  for (const [ordinal, role] of roles.entries()) {
-    yield* (yield* MessageStorage).createMessage(
-      Message.cases.regular.make({
-        id: MessageId.make(`short-${ordinal}`),
-        sessionId: sessionIdOverflow,
-        branchId: branchIdOverflow,
-        role,
-        parts: [Prompt.textPart({ text: `${OLD_HISTORY_MARK} ${ordinal}` })],
-        createdAt: dateFromMillis(1_000 + ordinal),
+/** A session with four older messages, each `size` characters of text past its mark. */
+const seedHistory = (size: number) =>
+  Effect.gen(function* () {
+    const now = dateFromMillis(1_767_225_600_000)
+    yield* (yield* SessionStorage).createSession(
+      new Session({
+        id: sessionIdOverflow,
+        name: "Overflow Test",
+        admission: { agent: wideAgent.name },
+        createdAt: now,
+        updatedAt: now,
       }),
     )
-  }
-})
+    yield* (yield* BranchStorage).createBranch(
+      new Branch({
+        id: branchIdOverflow,
+        sessionId: sessionIdOverflow,
+        createdAt: now,
+      }),
+    )
+    const roles: ReadonlyArray<"user" | "assistant"> = ["user", "assistant", "user", "assistant"]
+    for (const [ordinal, role] of roles.entries()) {
+      yield* (yield* MessageStorage).createMessage(
+        Message.cases.regular.make({
+          id: MessageId.make(`short-${ordinal}`),
+          sessionId: sessionIdOverflow,
+          branchId: branchIdOverflow,
+          role,
+          parts: [Prompt.textPart({ text: `${OLD_HISTORY_MARK} ${ordinal} ${"x".repeat(size)}` })],
+          createdAt: dateFromMillis(1_000 + ordinal),
+        }),
+      )
+    }
+  })
 
 /** How OpenAI's Responses stream reports a request past the model's input cap. */
 const overflowStep: SequenceStep = {
@@ -703,6 +724,8 @@ const runOverflowTurn = (params: {
   readonly extraLayers: ReadonlyArray<Layer.Layer<never>>
   /** One user message per turn, sent in order. */
   readonly prompts?: ReadonlyArray<string>
+  /** Characters of text in each seeded message; none come near the window by default. */
+  readonly seedSize?: number
 }) =>
   Effect.gen(function* () {
     const requests: Array<string> = []
@@ -719,7 +742,7 @@ const runOverflowTurn = (params: {
       extraLayers: [ModelRegistry.Test([params.model]), ...params.extraLayers],
     })
     const result = yield* Effect.gen(function* () {
-      yield* seedShortHistory
+      yield* seedHistory(params.seedSize ?? 0)
       for (const [index, content] of (params.prompts ?? ["continue"]).entries()) {
         yield* (yield* SessionRuntime).sendUserMessage({
           sessionId: sessionIdOverflow,
@@ -737,6 +760,14 @@ const runOverflowTurn = (params: {
     }).pipe(Effect.provide(layer), Effect.timeout("8 seconds"))
     return { ...result, requests, calls: yield* controls.callCount }
   })
+
+/** A 20,000-token window: the seeded 40,000-character messages overflow it. */
+const smallWideModel = new Model({
+  id: wideModelId,
+  name: "Small Wide",
+  provider: ProviderId.make("test"),
+  contextLength: 20_000,
+})
 
 const wideModel = new Model({
   id: wideModelId,
@@ -832,6 +863,76 @@ describe("provider overflow recovery", () => {
         projected?._tag === "ModelContextProjected" && projected.availableInputTokens
       expect(available).toBeLessThanOrEqual(272_000)
       expect(available).toBeGreaterThan(260_000)
+    }),
+  )
+
+  it.live("a step's hidden output does not count toward the next request", () =>
+    Effect.gen(function* () {
+      const result = yield* runOverflowTurn({
+        steps: [
+          {
+            parts: [
+              textDeltaPart("short reply"),
+              // 60,000 tokens of reasoning the provider never stores back.
+              finishPart({
+                finishReason: "stop",
+                usage: { inputTokens: 1_000, outputTokens: 60_000 },
+              }),
+            ],
+          },
+          textStep("second reply"),
+        ],
+        model: wideModel,
+        extraLayers: [],
+        prompts: ["first", "second"],
+      })
+      const ended = result.events.find(
+        (event) => event._tag === "StreamEnded" && Predicate.isNotUndefined(event.usage),
+      )
+      // The step records the overhead its request carried, so a later agent
+      // switch cannot change what the measure means.
+      expect(ended?._tag === "StreamEnded" && ended.requestOverheadTokens).toBeGreaterThan(0)
+      const projected = result.events.filter((event) => event._tag === "ModelContextProjected")
+      const second = projected.at(1)
+      expect(second?._tag === "ModelContextProjected" && second.estimatedTokens).toBeLessThan(2_000)
+    }),
+  )
+
+  it.live("a refusal after a handoff at the latest message drops the summary and runs again", () =>
+    Effect.gen(function* () {
+      // The seeded history overflows a 20,000-token window, so the first
+      // projection hands off at the new message; the provider still refuses.
+      const result = yield* runOverflowTurn({
+        steps: [overflowStep, textStep("reply after the summary is dropped")],
+        model: smallWideModel,
+        extraLayers: [stubCompactor],
+        seedSize: 40_000,
+      })
+
+      expect(result.calls).toBe(2)
+      expect(result.requests[0]).toContain("summary of the earlier work")
+      expect(result.requests[1]).not.toContain("summary of the earlier work")
+      expect(result.requests[1]).toContain("provider refused the request")
+      expect(streamFailed(result.events)).toEqual(Option.some(false))
+    }),
+  )
+
+  it.live("a refusal with nothing left to drop fails the turn and says so", () =>
+    Effect.gen(function* () {
+      const result = yield* runOverflowTurn({
+        steps: [overflowStep, overflowStep],
+        model: smallWideModel,
+        extraLayers: [stubCompactor],
+        seedSize: 40_000,
+      })
+
+      expect(result.calls).toBe(2)
+      expect(streamFailed(result.events)).toEqual(Option.some(true))
+      const last = result.events.findLast((event) => event._tag === "ErrorOccurred")
+      expect(last?._tag === "ErrorOccurred" && last.notice).not.toBe(true)
+      expect(last?._tag === "ErrorOccurred" && last.error).toContain(
+        "refused the context as too long again",
+      )
     }),
   )
 

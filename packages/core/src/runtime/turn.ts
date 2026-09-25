@@ -482,10 +482,21 @@ const isObservableModelOutputPart = (part: Response.AnyPart): boolean => {
 const CONTEXT_OVERFLOW_RECOVERY =
   "the provider refused the context as too long; handing the window off and running the step again"
 
+/** What the user reads when the handed-off window is refused as well; the turn ends. */
+const CONTEXT_OVERFLOW_AGAIN =
+  "the provider refused the context as too long again after the window was handed off; the latest messages alone are longer than the model accepts"
+
+/** Text a stream failure adds to its error, and whether the turn goes on past it. */
+interface StreamFailureNote {
+  readonly text: string
+  /** The turn recovers: the error is published as a notice. */
+  readonly notice: boolean
+}
+
 /**
  * Close the step on a stream failure: log it, end the stream, and surface the
  * error. The end names the model: the step ran on it, settled or not. A
- * failure the turn recovers from is surfaced as a notice.
+ * `note` adds to the error; one the turn recovers from makes it a notice.
  */
 const reportStreamFailure = <E>(
   params: {
@@ -498,7 +509,7 @@ const reportStreamFailure = <E>(
   },
   streamError: E,
   message: string,
-  recovery: Option.Option<string> = Option.none(),
+  note: Option.Option<StreamFailureNote> = Option.none(),
 ) =>
   Effect.gen(function* () {
     yield* Effect.logWarning(message).pipe(Effect.annotateLogs({ error: String(streamError) }))
@@ -514,16 +525,19 @@ const reportStreamFailure = <E>(
     )
     const error = params.formatStreamError(streamError)
     yield* publishEventOrDie(
-      Option.match(recovery, {
+      Option.match(note, {
         onNone: () =>
           ErrorOccurred.make({ sessionId: params.sessionId, branchId: params.branchId, error }),
-        onSome: (next) =>
-          ErrorOccurred.make({
+        onSome: (next) => {
+          const failure = {
             sessionId: params.sessionId,
             branchId: params.branchId,
-            error: `${error}; ${next}`,
-            notice: true,
-          }),
+            error: `${error}; ${next.text}`,
+          }
+          // Only a recovery is a notice; a turn that ends on it stays an error.
+          if (next.notice) return ErrorOccurred.make({ ...failure, notice: true })
+          return ErrorOccurred.make(failure)
+        },
       }),
     )
   })
@@ -598,16 +612,23 @@ export const collectFailedModelTurnResponse = (params: {
   formatStreamError: (streamError: ProviderError) => string
   /** The provider refused the request as too long, and the turn will hand off and retry. */
   contextOverflow: boolean
+  /** The provider refused as too long a window this turn already handed off. */
+  refusedAgain?: boolean
 }) =>
   Effect.gen(function* () {
     const interrupted = yield* wasInterrupted(params.activeStream)
     const contextOverflow = params.contextOverflow && !interrupted
     if (!interrupted) {
+      let note = Option.none<StreamFailureNote>()
+      if (contextOverflow) note = Option.some({ text: CONTEXT_OVERFLOW_RECOVERY, notice: true })
+      else if (params.refusedAgain === true) {
+        note = Option.some({ text: CONTEXT_OVERFLOW_AGAIN, notice: false })
+      }
       yield* reportStreamFailure(
         params,
         params.streamError,
         "stream error before output, retries exhausted",
-        Option.liftPredicate(CONTEXT_OVERFLOW_RECOVERY, () => contextOverflow),
+        note,
       )
     }
 
@@ -1426,6 +1447,8 @@ const toolCallsFromResponseParts = (
 type ModelTurnSource = {
   /** The compaction summary written for this step, and its price when its model has one. */
   readonly compaction: Option.Option<{ readonly costUsd: Option.Option<number> }>
+  /** The chars/4 estimate of the system prompt, notices and tools this request carries. */
+  readonly overheadTokens: number
   readonly stream: Stream.Stream<Response.AnyPart, ProviderError>
   readonly formatStreamError: (streamError: ProviderError) => string
   readonly collect: <R>(
@@ -1678,6 +1701,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
 
   return {
     compaction,
+    overheadTokens: budget.reservedSystemTokens + budget.reservedToolTokens,
     stream: rawStream.pipe(
       Stream.mapError(
         // oxlint-disable-next-line effect/noUnknownParameters -- Model streams expose provider-specific error values.
@@ -1731,6 +1755,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
               !params.overflowed &&
               !params.finalStep &&
               retryPolicy.contextOverflow(streamError.cause),
+            refusedAgain: params.overflowed && retryPolicy.contextOverflow(streamError.cause),
           }),
         ),
         Effect.tap((collected) => {
@@ -1930,9 +1955,10 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
      * interrupt, does not need the switch announced again.
      *
      * The same read finds the provider's measure of the last settled step:
-     * the usage on its `StreamEnded`, tied to the reply that step stored. The
-     * projection counts the window up to that reply at that size (derived
-     * from the log, never kept beside it).
+     * the input on its `StreamEnded` and the overhead that request carried,
+     * tied to the reply that step stored. The projection counts the messages
+     * before that reply at that size (derived from the log, never kept beside
+     * it). A row with no recorded overhead measures nothing.
      *
      * The cursor only bounds the read to the events since the last one it
      * saw; the values are always re-derived from the log.
@@ -1948,10 +1974,12 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         Option.fromUndefinedOr(event.messageId),
         Option.fromUndefinedOr(event.step),
         Option.fromUndefinedOr(event.usage),
+        Option.fromUndefinedOr(event.requestOverheadTokens),
       ]).pipe(
-        Option.map(([messageId, step, usage]) => ({
+        Option.map(([messageId, step, usage, overheadTokens]) => ({
           replyId: stepAddress(messageId, step).assistant,
-          tokens: usage.inputTokens + usage.outputTokens,
+          inputTokens: usage.inputTokens,
+          overheadTokens,
         })),
       )
     }
@@ -2438,6 +2466,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             sessionId: scope.sessionId,
             branchId: scope.branchId,
             usage: collected.messageProjection.usage,
+            requestOverheadTokens: source.overheadTokens,
             model: params.resolved.modelId,
             costUsd: Option.getOrUndefined(streamEndedCost),
             pricedModel,
