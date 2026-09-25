@@ -10,6 +10,7 @@ import {
   MessageList,
   NativeTranscript,
   promptOnScreen,
+  readerPrompt,
   reasoningMarkdown,
   type SessionEvent,
   type SessionItem,
@@ -3275,9 +3276,17 @@ describe("native transcript commit handover", () => {
 // ── sticky last prompt ──────────────────────────────────────────────────────
 
 describe("sticky last prompt", () => {
+  /** A prompt the reader typed: the server stamps its client origin. */
   const prompt = (id: string, text: string): ListMessage => ({
     ...userMessage("regular-message", id, text, "queued"),
     pendingMode: absent,
+    metadata: { fromClient: true },
+  })
+  /** A user-role message an extension sent: a parent's message, a wake, a delegate start. */
+  const extensionSent = (id: string, text: string): ListMessage => ({
+    ...userMessage("regular-message", id, text, "queued"),
+    pendingMode: absent,
+    metadata: { extensionId: "@gent/delegate" },
   })
   const reply = (id: string, lines: number): ListMessage => {
     const text = Array.from({ length: lines }, (_, index) => `${id} line ${index + 1}`).join("\n\n")
@@ -3393,6 +3402,55 @@ describe("sticky last prompt", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
 
+  it.live("a message another agent sent after the reader's prompt leaves that prompt pinned", () =>
+    Effect.gen(function* () {
+      const setup = yield* mountTranscript(
+        () => [
+          prompt("p1", "ASK-ONE"),
+          reply("r1", 20),
+          extensionSent("w1", "PARENT-SAYS"),
+          reply("r2", 20),
+        ],
+        { streaming: true },
+      )
+      const frame = yield* waitForFrame(setup, (next) => next.includes("↑ ASK-ONE"), "pinned")
+      expect(frame).not.toContain("↑ PARENT-SAYS")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.live("a steer the reader typed that joined the running turn is the pinned prompt", () =>
+    Effect.gen(function* () {
+      const steer: ListMessage = {
+        ...userMessage("interjection-message", "s1", "STEER-NOW", "steer"),
+        pendingMode: absent,
+        metadata: { fromClient: true },
+      }
+      const setup = yield* mountTranscript(
+        () => [prompt("p1", "ASK-ONE"), reply("r1", 4), steer, reply("r2", 20)],
+        { streaming: true },
+      )
+      yield* waitForFrame(setup, (next) => next.includes("↑ STEER-NOW"), "pinned steer")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.live("in a /btw fork the fork's question is the pinned prompt, as the reader asked it", () =>
+    Effect.gen(function* () {
+      const asked: ListMessage = {
+        ...userMessage(
+          "regular-message",
+          "btw-1",
+          forkQuestionText(SessionId.make("01a0ca0cb3e7"), "WHY-THIS"),
+          "queued",
+        ),
+        pendingMode: absent,
+        metadata: { customType: BTW_QUESTION_TYPE, extensionId: "@gent/btw" },
+      }
+      const setup = yield* mountTranscript(() => [asked, reply("r1", 20)], { streaming: true })
+      const frame = yield* waitForFrame(setup, (next) => next.includes("↑ WHY-THIS"), "pinned")
+      expect(frame).not.toContain("↑ A side question")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
   it.live("a terminal too short for the row keeps the live tail and pins nothing", () =>
     Effect.gen(function* () {
       // Two rows left for the transcript: the live tail keeps them both.
@@ -3404,6 +3462,54 @@ describe("sticky last prompt", () => {
       expect(renderFrame(setup)).not.toContain("↑ ASK-ONE")
     }).pipe(Effect.timeout("10 seconds")),
   )
+})
+
+describe("readerPrompt", () => {
+  const user = (
+    metadata: ListMessage["metadata"],
+    options: {
+      readonly tag?: "regular-message" | "interjection-message"
+      readonly queued?: true
+    } = {},
+  ): ListMessage => {
+    const base = userMessage(options.tag ?? "regular-message", "m", "TEXT", "queued")
+    if (options.queued === true) return { ...base, metadata }
+    return { ...base, pendingMode: absent, metadata }
+  }
+  const noTypes = () => Option.none<(content: string) => string>()
+  const btwTypes = (customType: string) =>
+    Option.liftPredicate(
+      (content: string) => `asked: ${content}`,
+      () => customType === "btw",
+    )
+  const read = (
+    message: ListMessage,
+    types: (customType: string) => Option.Option<(content: string) => string> = noTypes,
+  ) => Option.getOrUndefined(readerPrompt(message, types))
+
+  test("the reader's own messages are prompts: typed, or a steer that joined the turn", () => {
+    expect(read(user({ fromClient: true }))).toBe("TEXT")
+    expect(read(user({ fromClient: true }, { tag: "interjection-message" }))).toBe("TEXT")
+  })
+
+  test("a message another agent or an extension sent is not the reader's prompt", () => {
+    // A parent's `session.send`, a delegate start, a wake, a legacy row with no origin.
+    expect(read(user({ extensionId: "@gent/delegate" }))).toBeUndefined()
+    expect(read(user({ extensionId: "@gent/wake", customType: "wake" }))).toBeUndefined()
+    expect(read(user(absent))).toBeUndefined()
+  })
+
+  test("a queued follow-up is not a prompt until it runs, and a hidden message never is", () => {
+    expect(read(user({ fromClient: true }, { queued: true }))).toBeUndefined()
+    expect(read(user({ fromClient: true, hidden: true }))).toBeUndefined()
+  })
+
+  test("a custom type whose renderer names it a prompt is the reader's, in its asked text", () => {
+    expect(read(user({ extensionId: "@gent/btw", customType: "btw" }), btwTypes)).toBe(
+      "asked: TEXT",
+    )
+    expect(read(user({ extensionId: "@gent/x", customType: "other" }), btwTypes)).toBeUndefined()
+  })
 })
 
 describe("promptOnScreen", () => {

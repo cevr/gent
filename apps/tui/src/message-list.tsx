@@ -323,6 +323,10 @@ interface MessageMetadataInfo {
   customType?: string
   hidden?: boolean
   details?: unknown
+  /** The server stamps it on every message a client sent: the reader typed it. */
+  fromClient?: boolean
+  /** The extension that sent the message (`Session.send`). */
+  extensionId?: string
 }
 
 export type AssistantSegment =
@@ -394,8 +398,12 @@ function UserMessage(props: MessageRowProps & { customType?: string; fullDetail:
     Option.fromUndefinedOr(props.customType).pipe(
       Option.filter(() => !props.fullDetail),
       Option.flatMap((customType) =>
-        Option.orElse(Option.fromUndefinedOr(ext.messageRenderers().get(customType)), () =>
-          Option.fromUndefinedOr(runtimeRows.get(customType)),
+        Option.orElse(
+          Option.map(
+            Option.fromUndefinedOr(ext.messageRenderers().get(customType)),
+            (entry) => entry.component,
+          ),
+          () => Option.fromUndefinedOr(runtimeRows.get(customType)),
         ),
       ),
     )
@@ -958,16 +966,32 @@ export const splitFooterHeight = (terminalHeight: number, requestedHeight: numbe
 // ── sticky last prompt ──────────────────────────────────────────────────────
 
 /**
- * The last prompt the reader posted: a user message that ran, typed by the
- * reader. A queued or steering message has not run yet, and a message with a
- * custom type (a wake fire, a child's report) or a hidden one is not typed.
+ * The text of a prompt the reader posted, or `None` when `item` is not one.
+ * The one place that decides whose message it is, from its metadata:
+ *
+ * - The reader's own: a user message the server stamped as a client's
+ *   (`fromClient`), typed or a steer that joined the running turn.
+ * - A custom type whose message renderer names it a prompt (`promptOf`), in
+ *   the text the reader asked: a `/btw` fork's question.
+ * - Nothing else: a message another agent or an extension sent (a parent's
+ *   `Session.send`, a wake, a delegate start) carries no client origin, and a
+ *   row stored before the origin existed carries none either.
+ *
+ * A queued follow-up has not run yet, and a hidden message is not drawn.
  */
-const isPostedPrompt = (item: SessionItem): item is Message =>
-  isMessageItem(item) &&
-  item.role === "user" &&
-  Predicate.isUndefined(item.pendingMode) &&
-  Predicate.isUndefined(item.metadata?.customType) &&
-  item.metadata?.hidden !== true
+export const readerPrompt = (
+  item: SessionItem,
+  promptOf: (customType: string) => Option.Option<(content: string) => string>,
+): Option.Option<string> => {
+  if (!isMessageItem(item) || item.role !== "user") return Option.none()
+  if (Predicate.isNotUndefined(item.pendingMode) || item.metadata?.hidden === true)
+    return Option.none()
+  if (item.metadata?.fromClient === true) return Option.some(item.content)
+  return Option.fromUndefinedOr(item.metadata?.customType).pipe(
+    Option.flatMap(promptOf),
+    Option.map((text) => text(item.content)),
+  )
+}
 
 /** `UserRow` opens with a one-row top margin; the prompt's text starts under it. */
 const PROMPT_TEXT_ROW = 1
@@ -1415,12 +1439,18 @@ export function NativeTranscript(props: NativeTranscriptProps) {
    * expanded transcript and an overlay draw on the alternate screen, where
    * nothing is pinned.
    */
-  const stickyPrompt = createMemo((): Option.Option<Message> => {
+  const promptOf = (customType: string) =>
+    Option.flatMap(Option.fromUndefinedOr(ext.messageRenderers().get(customType)), (renderer) =>
+      Option.fromUndefinedOr(renderer.prompt),
+    )
+  const stickyPrompt = createMemo((): Option.Option<string> => {
     if (props.expanded || props.overlayOpen || liveRows() < 2) return Option.none()
     const items = displayedItems()
-    const index = items.findLastIndex(isPostedPrompt)
-    const prompt = items[index]
-    if (Predicate.isUndefined(prompt) || !isPostedPrompt(prompt)) return Option.none()
+    const index = items.findLastIndex((item) => Option.isSome(readerPrompt(item, promptOf)))
+    const prompt = Option.flatMap(Option.fromUndefinedOr(items[index]), (item) =>
+      readerPrompt(item, promptOf),
+    )
+    if (Option.isNone(prompt)) return Option.none()
     measurementVersion()
     const height = dimensions().height
     const onScreen = promptOnScreen({
@@ -1433,7 +1463,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
         height - splitFooterHeight(height, props.footerHeight + 1 + Math.max(1, liveHeight())),
     })
     if (onScreen) return Option.none()
-    return Option.some(prompt)
+    return prompt
   })
   const stickyRows = () => {
     if (Option.isSome(stickyPrompt())) return 1
@@ -1448,7 +1478,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
   return (
     <box flexDirection="column" flexShrink={1} minHeight={0}>
       <Show when={Option.getOrUndefined(stickyPrompt())}>
-        {(prompt) => <StickyPrompt text={prompt().content} width={dimensions().width} />}
+        {(prompt) => <StickyPrompt text={prompt()} width={dimensions().width} />}
       </Show>
       <scrollbox
         ref={(value) => {

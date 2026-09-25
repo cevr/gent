@@ -41,7 +41,7 @@ import {
   type ClientRuntime,
   type ClientRuntimeServices,
   type InteractionRendererComponent,
-  type MessageRenderer,
+  type MessageRendererEntry,
   type NoticeRow,
   type WidgetComponent,
   type WidgetSlot,
@@ -199,7 +199,7 @@ export interface ResolvedNoticeRows {
 export interface ResolvedTuiExtensions {
   readonly renderers: Map<string, ToolRenderer>
   /** Keyed by `metadata.customType`, matched exactly. */
-  readonly messageRenderers: Map<string, MessageRenderer>
+  readonly messageRenderers: Map<string, MessageRendererEntry>
   readonly widgets: ReadonlyArray<ResolvedWidget>
   /** Each extension's commands, in scope order; `resolveCommands` decides the owners. */
   readonly commandSources: ReadonlyArray<CommandSource>
@@ -422,7 +422,7 @@ export const resolveTuiExtensions = (
   const messageRenderers = resolveKeyed(sorted, failures, "message renderer", (contributions) =>
     itemsOrEmpty(contributions.messageRenderers).map((contribution) => ({
       key: contribution.customType,
-      value: contribution.component,
+      value: contribution,
       name: contribution.customType,
     })),
   )
