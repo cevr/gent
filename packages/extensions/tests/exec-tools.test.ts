@@ -919,6 +919,41 @@ describe("classifyBashCommand", () => {
     }
   })
 
+  // Only the usual subcommand position may hold a run-time subcommand. A
+  // run-time word after a flag the table does not name and a subcommand is
+  // an operand of that subcommand.
+  test("a run-time word after a flag and a subcommand is an operand", () => {
+    const x = "/nonexistent/gent-probe-x"
+    for (const command of [
+      'git --no-pager log "$REF"',
+      'git -P show "$SHA"',
+      "git --no-pager diff $REF",
+      "git --no-pager log {main,dev}",
+      'npm --silent run "$S"',
+      'cargo --locked test "$T"',
+      'cargo +nightly --locked test "$T"',
+      'gh --verbose pr view "$N"',
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+    for (const command of [
+      'git "$CMD"',
+      'git --no-pager "$CMD"',
+      'git -P "$CMD" --hard',
+      `git -C ${x} "$CMD"`,
+      "git --no-pager {reset,status} --hard",
+      'npm --silent "$CMD"',
+      'cargo --locked "$CMD"',
+      // The table names the option that takes the word before it.
+      'npm --loglevel silent "$CMD"',
+      'kubectl -v 3 "$VERB" pod gent-probe-x',
+      // A risky subcommand still reads its own run-time words.
+      'git --no-pager reset "$MODE"',
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+  })
+
   // A risk reads the flags as written. A word known only at run time may be
   // one: an unquoted expansion splits into more words, `"$@"` passes on a
   // function's or `set --`'s arguments, and a quoted `"$F"` stays one word
@@ -1976,8 +2011,8 @@ describe("classifyBashCommand", () => {
     const x = "/nonexistent/gent-probe-x"
     const r = `rm -rf ${x}`
     for (const command of [
-      `npm --loglevel silent exec -- ${r}`,
-      `npm --loglevel silent x -- ${r}`,
+      `npm --gent-probe-unknown silent exec -- ${r}`,
+      `npm --gent-probe-unknown silent x -- ${r}`,
       `uv --cache-dir ${x} run ${r}`,
       `uv --cache-dir ${x} --offline run ${r}`,
       `pnpm --gent-probe-unknown ${x} exec ${r}`,
@@ -1985,7 +2020,7 @@ describe("classifyBashCommand", () => {
       `gh --gent-probe-unknown ${x} repo delete o/r --yes`,
       `pnpm --gent-probe-unknown ${x} exec -c '${r}'`,
       // Input the guard cannot read names the command npm runs.
-      `cat ${x} | xargs npm --loglevel silent exec --`,
+      `cat ${x} | xargs npm --gent-probe-unknown silent exec --`,
       // Accepted over-ask: runners and parents share one rule, so any later
       // word after an unnamed option may be the subcommand.
       "git --no-pager log --format=%H main stash",

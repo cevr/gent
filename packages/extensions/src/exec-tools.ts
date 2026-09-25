@@ -1701,21 +1701,15 @@ const runTimeChild = (resolved: ResolvedCommand, next: number): Option.Option<Re
     }),
   )
 
-/** The readings when `words[next]` of `resolved` is its subcommand word; none when it names no path. */
-const readingsAt = (resolved: ResolvedCommand, next: number): ReadonlyArray<ResolvedCommand> =>
-  Option.match(childCommand(resolved, next), {
-    onNone: () => Option.toArray(runTimeChild(resolved, next)),
-    onSome: readingsUnder,
-  })
-
 /**
  * The readings of the command path under `resolved`. The first takes every
  * option the parent's table does not name to have no value, and stops at
  * the parent when the next word names no path. Each later word that may be
  * the subcommand (`laterCommandWords`) and names a path is a reading too
- * (`npm --loglevel silent exec -- cmd`). An unnamed option alone adds none:
+ * (`uv --cache-dir x run cmd`). An unnamed option alone adds none:
  * `git --no-pager status` has one reading. A subcommand word known only at
- * run time adds a reading that asks (`runTimeChild`).
+ * run time adds a reading that asks (`runTimeChild`) in the usual position
+ * only: a later one is an operand (`git -P show "$SHA"`).
  */
 const readingsUnder = (resolved: ResolvedCommand): Arr.NonEmptyReadonlyArray<ResolvedCommand> => {
   if (!SPEC_PARENTS.has(resolved.path)) return [resolved]
@@ -1725,7 +1719,8 @@ const readingsUnder = (resolved: ResolvedCommand): Arr.NonEmptyReadonlyArray<Res
   const first = subcommandAt(resolved) - 1
   const others = laterCommandWords(args, resolved.spec.valued, from)
     .filter((index) => index !== first)
-    .flatMap((index) => readingsAt(resolved, index + 1))
+    .flatMap((index) => Option.toArray(childCommand(resolved, index + 1)))
+    .flatMap(readingsUnder)
   const head = Option.match(childCommand(resolved, first + 1), {
     onNone: (): Arr.NonEmptyReadonlyArray<ResolvedCommand> => [
       resolved,
@@ -3713,8 +3708,8 @@ const COMPOSE_OPTIONS = options(
 
 /** kubectl global options whose value is the next word. */
 const KUBECTL_OPTIONS = options(
-  "ns",
-  "namespace context kubeconfig cluster user server token as as-group request-timeout",
+  "nsv",
+  "namespace context kubeconfig cluster user server token as as-group request-timeout v",
 )
 
 /** `docker exec` and `docker compose exec` options whose value is the next word. */
@@ -3869,8 +3864,8 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
     // `trap '<script>' SIGNAL`: the script runs when the signal (or `EXIT`) comes.
     trap: spec({}, [joined(0, 1)]),
     // Package managers and runners.
-    pnpm: spec(options("CF", `filter dir ${PUBLISH_OPTIONS}`)),
-    npm: spec(options("w", `workspace prefix userconfig cache ${PUBLISH_OPTIONS}`)),
+    pnpm: spec(options("CF", `filter dir loglevel ${PUBLISH_OPTIONS}`)),
+    npm: spec(options("w", `workspace prefix userconfig cache loglevel ${PUBLISH_OPTIONS}`)),
     yarn: spec(options("", `cwd ${PUBLISH_OPTIONS}`)),
     bun: spec(options("F", `cwd filter config ${PUBLISH_OPTIONS}`)),
     cargo: {
