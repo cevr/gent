@@ -1699,7 +1699,8 @@ const Run = Schema.TaggedUnion({
     entryScript: Schema.Boolean,
   },
   Joined: { positionals: Schema.Int, take: Schema.Int },
-  Typed: {},
+  /** Words typed as keys; `hex` and `literal` are the option letters that make them codes or text. */
+  Typed: { hex: Schema.String, literal: Schema.String },
   Operands: {
     short: Schema.String,
     long: Schema.Array(Schema.String),
@@ -1739,7 +1740,7 @@ const command = (fields: CommandFields = {}): Run =>
 const joined = (positionals = 0, take = Number.MAX_SAFE_INTEGER): Run =>
   Run.cases.Joined.make({ positionals, take })
 
-const TYPED: Run = Run.cases.Typed.make({})
+const typedKeys = (hex = "", literal = ""): Run => Run.cases.Typed.make({ hex, literal })
 
 /** Each operand after the first `skip` is a tmux command. */
 const tmuxCommands = (skip: number): Run => Run.cases.OperandCommands.make({ head: "tmux", skip })
@@ -2256,27 +2257,102 @@ const parameterRuns = (
   return mergeRuns(texts.map(({ text, dynamic }) => joinedRuns(path, [derivedWord(text, dynamic)])))
 }
 
-/** Key names `tmux send-keys` types as text; any other word is typed as it is written. */
+/** The characters `tmux send-keys` sends for its key names. */
 const KEY_TEXT: ReadonlyMap<string, string> = new Map([
   ["Space", " "],
-  ...["Enter", "KPEnter", "C-m", "C-j", "^M", "^J"].map((key): [string, string] => [key, "\n"]),
+  ...["Enter", "KPEnter", "C-m", "^M"].map((key): [string, string] => [key, "\r"]),
+  ...["C-j", "^J"].map((key): [string, string] => [key, "\n"]),
+  ...["BSpace", "C-h", "^H", "C-?", "^?"].map((key): [string, string] => [key, "\x7f"]),
+  ...["C-u", "^U"].map((key): [string, string] => [key, "\x15"]),
+  ...["C-w", "^W"].map((key): [string, string] => [key, "\x17"]),
+  ...["C-c", "^C"].map((key): [string, string] => [key, "\x03"]),
+  ...["C-k", "^K", "C-l", "^L", "C-d", "^D", "C-g", "^G"].map((key): [string, string] => [
+    key,
+    "\x07",
+  ]),
 ])
 
+/** A word tmux reads as a key name whose effect on a line the guard does not rebuild (`Up`, `Tab`, `C-a`). */
+const OTHER_KEY =
+  /^(?:(?:[CMS]-)+\S+|\^\S|F\d{1,2}|Up|Down|Left|Right|Home|End|BTab|DC|IC|Delete|Insert|NPage|PPage|PageUp|PageDown|PgUp|PgDn|Tab|Escape|KP\S+)$/
+
 /**
- * The text `words` type into a terminal, joined with no separator: `tmux
- * send-keys 'git res' 'et --hard' Enter` types `git reset --hard` and a
- * newline. A key name is the text it types, and screen's `^M` and `\n` in
- * a word are a newline. Keys typed across two commands are not joined.
+ * The lines a shell reads from `typed`, as it edits them: Backspace drops
+ * a character, `C-u` and `C-c` drop the line, `C-w` drops the last word,
+ * and a carriage return or newline ends the line. `C-k`, `C-l`, `C-d` and
+ * `C-g` change nothing at the end of a line. None for any other control
+ * character (a cursor move, Tab completion, an escape sequence): the text
+ * it makes is not known.
  */
-const typedWord = (words: ReadonlyArray<ShellWord>): ShellWord =>
-  derivedWord(
+const editedText = (typed: string): Option.Option<string> => {
+  const lines: Array<string> = []
+  let line = ""
+  for (const char of typed) {
+    if (char === "\r" || char === "\n") {
+      lines.push(line)
+      line = ""
+    } else if (char === "\x7f" || char === "\b") line = line.slice(0, -1)
+    else if (char === "\x15" || char === "\x03") line = ""
+    else if (char === "\x17") line = line.replace(/\S*\s*$/, "")
+    else if (char === "\x07" || char === "\x0b" || char === "\x0c" || char === "\x04") continue
+    else if (char < " ") return Option.none()
+    else line += char
+  }
+  return Option.some([...lines, line].join("\n"))
+}
+
+/**
+ * The script `words` type into a terminal, joined with no separator, as
+ * the shell's line editor leaves it: `tmux send-keys 'git res' 'et
+ * --hard' Enter` types `git reset --hard` and a newline. With `hex`
+ * (`send-keys -H 67 69 74`) each word is a character code; with `literal`
+ * (`-l`) each word is text, key names too. Otherwise a key name is the
+ * character it sends, and screen's `^M` and `\n` in a word are a newline.
+ * Keys typed across two commands are not joined.
+ */
+const typedText = (words: ReadonlyArray<ShellWord>, mode: TypedMode): Option.Option<string> => {
+  if (mode === "literal") return Option.some(words.map((word) => word.text).join(""))
+  if (mode === "hex") {
+    if (!words.every((word) => !word.dynamic && /^(?:0x)?[0-9a-f]{1,2}$/i.test(word.text))) {
+      return Option.none()
+    }
+    return Option.some(words.map((word) => String.fromCharCode(parseInt(word.text, 16))).join(""))
+  }
+  if (words.some((word) => !KEY_TEXT.has(word.text) && OTHER_KEY.test(word.text))) {
+    return Option.none()
+  }
+  return Option.some(
     words
       .map(
         (word) => KEY_TEXT.get(word.text) ?? word.text.replaceAll(/\^[MJ]|\\[nr]|\\01[25]/g, "\n"),
       )
       .join(""),
-    words.some((word) => word.dynamic),
   )
+}
+
+/** How `tmux send-keys` reads its words: key names, text (`-l`), or character codes (`-H`). */
+type TypedMode = "keys" | "literal" | "hex"
+
+const typedMode = (
+  parsed: ParsedArguments,
+  letters: { readonly hex: string; readonly literal: string },
+): TypedMode => {
+  if (letters.hex !== "" && hasShort(parsed, letters.hex)) return "hex"
+  if (letters.literal !== "" && hasShort(parsed, letters.literal)) return "literal"
+  return "keys"
+}
+
+const typedRuns = (path: string, words: ReadonlyArray<ShellWord>, mode: TypedMode): SegmentRuns =>
+  Option.match(Option.flatMap(typedText(words, mode), editedText), {
+    onNone: () => unreadableRun(`${path} keys whose text the guard cannot rebuild`),
+    onSome: (text) =>
+      joinedRuns(path, [
+        derivedWord(
+          text,
+          words.some((word) => word.dynamic),
+        ),
+      ]),
+  })
 
 /** What a run runs beyond the commands it starts: its scripts, and its input. */
 const specRuns = (invocation: Invocation, resolved: ResolvedCommand, run: Run): SegmentRuns => {
@@ -2284,10 +2360,13 @@ const specRuns = (invocation: Invocation, resolved: ResolvedCommand, run: Run): 
   if (run._tag === "Command") return entryScriptRuns(resolved, run)
   if (run._tag === "Operands") return parameterRuns(resolved, run)
   if (run._tag === "Typed") {
+    const mode = typedMode(parseWords(words, spec.valued, "leading"), run)
+    // Each start is read twice: joined by spaces, as a word list a shell
+    // splits, and as the text the keys type.
     return mergeRuns(
       commandStarts(words, spec.valued, {}).flatMap((start) => {
         const typed = words.slice(start)
-        return [joinedRuns(path, typed), joinedRuns(path, [typedWord(typed)])]
+        return [joinedRuns(path, typed), typedRuns(path, typed, mode)]
       }),
     )
   }
@@ -2384,6 +2463,10 @@ const DATA_COMMANDS: ReadonlySet<string> = new Set([
   ...["popd", "mkdir", "touch", "ln", "basename", "dirname", "realpath", "readlink", "curl"],
   ...["wget", "tar", "zip", "unzip", "gzip", "gunzip", "node", "python", "python3", "ruby"],
   ...["perl", "deno", "go", "make", "just", "alias", "unalias", "complete", "compgen"],
+  ...["zgrep", "zegrep", "zfgrep", "xzgrep", "bzgrep", "zcat", "bzcat", "xzcat", "zless", "zmore"],
+  ...["tac", "nl", "column", "paste", "join", "comm", "fold", "fmt", "expand", "unexpand"],
+  ...["iconv", "od", "hexdump", "strings", "shuf", "rev", "md5sum", "sha1sum", "sha256sum"],
+  ...["sha512sum", "shasum", "b2sum", "cksum", "sum"],
   ...["for", "select", "case", "in"],
 ])
 
@@ -3697,6 +3780,48 @@ const runner = (valued: ValueOptions = {}, fields: CommandFields = {}) =>
 
 const risky = (...risks: ReadonlyArray<CommandRisk>) => spec({}, [], ...risks)
 
+/**
+ * Rails tasks that drop, empty, roll back or reload a database, with a
+ * database name (`db:drop:primary`) or task arguments (`db:rollback[2]`).
+ * `db:test:*` touches only the test database.
+ */
+const RAILS_DROPS =
+  /^db:(drop|reset|purge|setup|truncate_all|rollback|schema:load|structure:load|seed:replant|migrate:(reset|down|redo))(:[\w:]*)?(\[.*\])?$/
+
+/** A task runner whose operand names a task matching `tasks`. */
+const taskRisk =
+  (tasks: RegExp): CommandRisk =>
+  ({ parsed, resolved }) =>
+    Option.map(
+      Arr.findFirst(parsed.operands, (operand) => tasks.test(operand)),
+      (task): BashRisk => ({
+        level: "destructive",
+        reason: `${resolved.path} ${task} (drops or resets database data)`,
+      }),
+    )
+
+/** The words Go's `strconv.ParseBool` reads as false. */
+const GO_FALSE: ReadonlySet<string> = new Set(["0", "f", "F", "false", "FALSE", "False"])
+
+/** Django management commands that empty a database. */
+const DJANGO_DROPS = new Set(["flush", "reset_db", "reset_schema"])
+
+/**
+ * A Django management command, in the operands from `from` on, that
+ * empties a database, or `migrate <app> zero`, which unapplies every
+ * migration. An option value read as an operand only moves the command.
+ */
+const djangoRisk =
+  (from: number): CommandRisk =>
+  ({ parsed, resolved }) => {
+    const words = parsed.operands.slice(from)
+    return destructiveWhen(
+      words.some((word) => DJANGO_DROPS.has(word)) ||
+        (words.includes("migrate") && words.includes("zero")),
+      `${resolved.path} that empties a database`,
+    )
+  }
+
 /** One spec under each of `paths`. */
 const each = (paths: ReadonlyArray<string>, value: CommandSpec) =>
   Object.fromEntries(paths.map((path) => [path, value]))
@@ -4165,7 +4290,7 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
     // name runs, and reading its words asks only for approval of it.
     screen: SCREEN,
     "screen screen": SCREEN,
-    "screen stuff": spec({}, [TYPED]),
+    "screen stuff": spec({}, [typedKeys()]),
     // `exec [fdpat] cmd`: a first word such as `.!.` routes the descriptors.
     "screen exec": spec({}, [command(), command({ positionals: 1 })]),
     "screen eval": spec({}, [Run.cases.OperandCommands.make({ head: "screen", skip: 0 })]),
@@ -4223,7 +4348,7 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
       // presses the key.
       "set-hook": tmuxRow("t", "agpRuw", [tmuxCommands(1)]),
       "bind-key": tmuxRow("NT", "nr", [command({ positionals: 1, head: "tmux" }), tmuxCommands(1)]),
-      "send-keys": tmuxRow("cNt", "FHKlMRX", [TYPED]),
+      "send-keys": tmuxRow("cNt", "FHKlMRX", [typedKeys("H", "l")]),
       "pipe-pane": tmuxRow("t", "IOo", [joined()]),
     }),
     // `-e`, `-i` and `-l` take only an attached value; so do `--max-lines`,
@@ -4422,6 +4547,7 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
         ),
       ),
       // `apply --prune` deletes the resources the applied files leave out.
+      // A value Go's `strconv.ParseBool` reads as false turns it off.
       apply: spec(
         options("fklo", "filename kustomize selector output prune-allowlist field-manager"),
         [],
@@ -4431,7 +4557,7 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
               (option) =>
                 option.long &&
                 option.name === "prune" &&
-                !Option.exists(option.value, (value) => valueText(texts, value) === "false"),
+                !Option.exists(option.value, (value) => GO_FALSE.has(valueText(texts, value))),
             ),
             `${resolved.path} --prune (deletes resources the files leave out)`,
           ),
@@ -4470,6 +4596,39 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
     ...each(
       ["terraform state rm", "tofu state rm"],
       risky(({ resolved }) => destructive(`${resolved.path} (forgets managed resources)`)),
+    ),
+    // Database tasks that drop, empty or reload a database. Each row is
+    // the tool's own name, so it asks under any runner (`bundle exec`,
+    // `npx`, `uv run`, a container).
+    ...each(["rake", "rails"], risky(taskRisk(RAILS_DROPS))),
+    mix: risky(taskRisk(/^ecto\.(drop|reset|rollback)(,|$)/)),
+    ...each(["django-admin", "manage.py"], risky(djangoRisk(0))),
+    ...each(
+      ["python", "python3"],
+      risky((args) => {
+        const { operands } = args.parsed
+        const script = operands.findIndex(
+          (operand, index) =>
+            /(^|\/)manage\.py$/.test(operand) ||
+            (operand === "django" && index === 0 && hasShort(args.parsed, "m")),
+        )
+        if (script < 0) return Option.none()
+        return djangoRisk(script + 1)(args)
+      }),
+    ),
+    ...each(
+      ["prisma migrate reset", "typeorm schema:drop", "flyway clean", "liquibase drop-all"],
+      risky(({ resolved }) => destructive(`${resolved.path} (drops the database)`)),
+    ),
+    "prisma db push": risky(({ parsed, resolved }) =>
+      destructiveWhen(
+        parsed.longs.some((name) => name === "force-reset" || name === "accept-data-loss"),
+        `${resolved.path} that resets or drops data`,
+      ),
+    ),
+    ...each(
+      ["sequelize", "sequelize-cli"],
+      risky(taskRisk(/^db:(drop|migrate:undo|seed:undo)(:all)?$/)),
     ),
     uv: spec(options("", "directory project")),
     "uv run": runner(

@@ -2826,12 +2826,30 @@ describe("classifyBashCommand", () => {
       // screen's `^M` and `\n` are a newline.
       "screen -S s -X stuff 'git reset --hard^M'",
       "screen -S s -X stuff 'git reset --hard\\n'",
+      // `-H` sends character codes.
+      "tmux send-keys -H 67 69 74 20 72 65 73 65 74 20 2d 2d 68 61 72 64 0d",
+      `tmux send-keys -t p -H 72 6d 20 2d 72 66 20 0x2f 6e 0a`,
+      'tmux send-keys -H "$HEX"',
+      // Editing keys change the line the shell reads.
+      "tmux send-keys 'git reset --harX' BSpace d Enter",
+      "tmux send-keys 'git reset --harX' C-h d Enter",
+      "tmux send-keys 'echo hi' C-u 'git reset --hard' Enter",
+      "tmux send-keys 'echo x' C-w C-w 'git reset --hard' Enter",
+      // A key whose text is not known (history, completion, a cursor move) asks.
+      "tmux send-keys -t p Up Enter",
+      `tmux send-keys 'echo rm -rf ${x}' C-a Enter`,
+      // `-l` types each word as text.
+      `tmux send-keys -t s -l 'rm -rf ${x}' Enter`,
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
     for (const command of [
       "tmux send-keys -t p 'npm test' Enter",
       "tmux send-keys -t p C-c",
+      "tmux send-keys -t p C-l",
+      "tmux send-keys -H 6c 73 0d",
+      "tmux send-keys -t p 'npm tesX' BSpace t Enter",
+      "tmux send-keys -l git Space reset Space --hard Enter",
       "screen -S s -X stuff 'npm test^M'",
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("safe")
@@ -2905,6 +2923,11 @@ describe("classifyBashCommand", () => {
       'for f in rm git; do echo "$f"; done',
       "pip install requests",
       "systemctl status nginx",
+      // Text tools read their words as data.
+      `sed -e p -- ${r}`,
+      `tr a b -- ${r}`,
+      `zgrep x ${r}`,
+      `tac ${x} rm`,
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("safe")
     }
@@ -2970,6 +2993,9 @@ describe("classifyBashCommand", () => {
       "helm -n gent-probe-x delete web",
       "kubectl apply -f /nonexistent/gent-probe-x.yaml --prune --all",
       "oc apply --prune -l app=gent-probe-x -f /nonexistent/gent-probe-x.yaml",
+      "kubectl apply --prune=1 -f /nonexistent/gent-probe-x.yaml",
+      "kubectl apply --prune=true -f /nonexistent/gent-probe-x.yaml",
+      'kubectl apply --prune="$P" -f /nonexistent/gent-probe-x.yaml',
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
@@ -2997,7 +3023,59 @@ describe("classifyBashCommand", () => {
       "helm list -n gent-probe-x",
       "kubectl apply -f /nonexistent/gent-probe-x.yaml",
       "kubectl apply --prune=false -f /nonexistent/gent-probe-x.yaml",
+      // Go's `strconv.ParseBool` reads each of these as false.
+      "kubectl apply --prune=0 -f /nonexistent/gent-probe-x.yaml",
+      "kubectl apply --prune=F -f /nonexistent/gent-probe-x.yaml",
+      "kubectl apply --prune=False -f /nonexistent/gent-probe-x.yaml",
       "kubectl apply -f /nonexistent/gent-probe-x.yaml --prune-allowlist core/v1/ConfigMap",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  test("database tasks that drop, empty or reload a database ask under any runner", () => {
+    for (const command of [
+      "rake db:drop",
+      "bundle exec rake db:drop",
+      "rake db:drop:all",
+      "RAILS_ENV=test rake db:purge",
+      "rake db:rollback[2]",
+      "bin/rails db:reset",
+      "rails db:schema:load",
+      "rails db:schema:load:primary",
+      "bundle exec rails db:migrate:reset",
+      "docker compose exec web bin/rails db:reset",
+      "mix ecto.drop",
+      "mix ecto.reset",
+      "mix do ecto.drop, ecto.create",
+      "python manage.py flush --noinput",
+      "./manage.py flush",
+      "python3 ./manage.py migrate app zero",
+      "python -m django flush",
+      "uv run python manage.py flush",
+      "django-admin flush",
+      "npx prisma migrate reset --force",
+      "prisma db push --force-reset",
+      "prisma db push --accept-data-loss",
+      "npx sequelize db:drop",
+      "npx sequelize-cli db:migrate:undo:all",
+      "typeorm schema:drop",
+      "flyway clean",
+      "liquibase drop-all",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      "rake db:migrate",
+      "bundle exec rake test",
+      "rake db:test:prepare",
+      "rails db:migrate:status",
+      "mix ecto.migrate",
+      "python manage.py migrate",
+      "python /nonexistent/gent-probe-x.py flush",
+      "npx prisma migrate dev",
+      "prisma db push",
+      "npx sequelize db:migrate",
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("safe")
     }
