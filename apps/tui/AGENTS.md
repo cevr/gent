@@ -172,9 +172,9 @@ session in this directory.
 Priority: headless → session → continue → prompt → home
 
 A headless run has no user, so it declines every interaction its turn presents,
-with notes that name `--approve-all`. `--approve-all` approves them all, the
-destructive-command guard's asks included. The run follows only its own turn:
-the live events from the `MessageReceived` of the prompt it sent (the first
+with notes that name `--approve-all`. `--approve-all` approves every ask. The
+run follows only its own turn: the live events from the `MessageReceived` of
+the prompt it sent (the first
 client-sent user message with the prompt's text after the send) to the
 `TurnCompleted` that names that message. A resumed session's history and an
 older turn still running on the branch are not printed and do not settle it. An

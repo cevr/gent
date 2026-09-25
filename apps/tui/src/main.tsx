@@ -177,7 +177,7 @@ const gentFlags = {
   ),
   approveAll: Flag.boolean("approve-all").pipe(
     Flag.withDescription(
-      "Approve every ask of the headless turn, destructive commands included (-H only; default: decline, as no user is present)",
+      "Approve every ask of the headless turn (-H only; default: decline, as no user is present)",
     ),
     Flag.withDefault(false),
   ),

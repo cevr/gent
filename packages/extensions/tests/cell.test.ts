@@ -2469,8 +2469,7 @@ describe("cell worker process", () => {
 
 /**
  * A cell whose `guarded` call asks the user, beside `mark` (records a mark) and
- * `slow` (holds until the test releases it). A declined `guarded` fails, as a
- * declined bash command does.
+ * `slow` (holds until the test releases it). A declined `guarded` fails.
  */
 const approvalCell = Effect.gen(function* () {
   const marks = yield* Ref.make<ReadonlyArray<string>>([])
@@ -6173,7 +6172,7 @@ const shippedSignatures: ReadonlyArray<readonly [ToolCapability, string]> = [
   ],
   [
     BashTool,
-    '- tools.bash(input: { command: string; timeout?: number; cwd?: string; run_in_background?: boolean }): Promise<{ stdout: string; stderr: string; exitCode: number; status?: "blocked" | "background" }> // Execute shell commands',
+    '- tools.bash(input: { command: string; timeout?: number; cwd?: string; run_in_background?: boolean }): Promise<{ stdout: string; stderr: string; exitCode: number; status?: "background" }> // Execute shell commands',
   ],
   [
     ReadTool,

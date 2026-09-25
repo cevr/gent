@@ -306,7 +306,7 @@ const rowOutputLines = (call: ToolCall): number => {
   return lineCount(rowOutputText(call))
 }
 
-/** A declined command never ran and a background one has not ended: neither has lines to count. */
+/** A declined command (stored by an earlier version) never ran and a background one has not ended: neither has lines to count. */
 const hasNoOutputYet = (call: ToolCall): boolean =>
   call.toolName === "bash" &&
   Option.exists(parseBashOutput(call.output), (value) => Option.isSome(value.status))

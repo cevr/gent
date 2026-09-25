@@ -121,8 +121,9 @@ interface BashOutput {
   readonly stderr: string
   readonly exitCode: number
   /**
-   * `blocked`: the guardrail asked and the user said no, so the command never
-   * ran. `background`: it runs on past the call. Neither has a real exit code.
+   * `background`: it runs on past the call. `blocked`: a result an earlier
+   * version stored for a command the user declined, which never ran. Neither
+   * has a real exit code.
    */
   readonly status: Option.Option<"blocked" | "background">
 }
