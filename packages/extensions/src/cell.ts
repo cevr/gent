@@ -2325,9 +2325,18 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
             }),
           )
         })
-        /** Keep the namespace after each good cell. A failed snapshot only loses recency. */
+        /**
+         * Keep the namespace after each good cell. A snapshot that fails lost
+         * the worker, so the next cell replaces it and restores the last
+         * namespace saved; a failed store only loses recency.
+         */
         const saveNamespace = Effect.fn("CellExecution.saveNamespace")(function* (current: Kernel) {
           yield* current.snapshot.pipe(
+            Effect.tapError(() =>
+              Effect.sync(() => {
+                recoveryPending = true
+              }),
+            ),
             Effect.flatMap((snapshot) => namespaces.set(namespaceAddress, snapshot)),
             Effect.catch((error) =>
               Effect.logWarning("Cell namespace snapshot failed").pipe(

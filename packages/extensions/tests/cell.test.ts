@@ -1040,6 +1040,66 @@ describe("recorded cell execution", () => {
     )
   }
 
+  // A built-in the worker cannot put back retires the worker. The snapshot
+  // after a good cell then fails, and the next cell once failed with "reset
+  // before evaluating" instead of restoring the namespace saved before it.
+  const stuckBuiltins: ReadonlyArray<{
+    readonly name: string
+    readonly source: string
+    readonly reply: string
+  }> = [
+    {
+      name: "a good cell",
+      source: "Object.defineProperty(Map.prototype, 'stuck', { value: 1 }); var lost = 1; 2",
+      reply: "display",
+    },
+    {
+      name: "a failed cell",
+      source:
+        "Object.defineProperty(Map.prototype, 'stuck', { value: 1 }); throw new Error('boom')",
+      reply: "output",
+    },
+  ]
+  for (const stuck of stuckBuiltins) {
+    it.scopedLive(
+      `a built-in the worker cannot put back after ${stuck.name} replaces the worker, and the next cell restores`,
+      () =>
+        Effect.gen(function* () {
+          const worker = yield* buildCellWorker
+          const [define, change, after, probe] = yield* setupCalls([
+            "var kept = 7",
+            stuck.source,
+            "kept",
+            "[typeof lost, typeof Map.prototype.stuck].join(',')",
+          ])
+          if (!define || !change || !after || !probe) return yield* Effect.die("Missing test cells")
+          const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
+          const cells = Context.get(
+            yield* Layer.build(
+              CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }),
+            ),
+            CellExecution,
+          )
+          const run = (call: typeof define) =>
+            cells.run(call).pipe(Effect.provideService(CellOperationHost, host))
+          yield* run(define)
+          const changed = (yield* run(change)).result
+          expect(changed).toHaveProperty(
+            stuck.reply,
+            expect.stringContaining(
+              "Built-ins the cell changed that cannot be put back: Map.prototype.stuck. The host replaces this worker",
+            ),
+          )
+          expect((yield* run(after)).result).toMatchObject({
+            display: "7",
+            restored: { restored: ["kept"], omitted: [] },
+          })
+          expect((yield* run(probe)).result).toMatchObject({ display: "undefined,undefined" })
+        }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
+      10000,
+    )
+  }
+
   // Display once went through `inspect`, which reads `Symbol.toStringTag` with
   // a plain get and walks the prototype chain: a looping getter or trap held
   // the worker until the deadline, for a logged, returned, thrown or uncaught value.
