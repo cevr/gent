@@ -658,7 +658,11 @@ export const CellResponse = Schema.TaggedUnion({
   Ready: { version: Schema.Literal(1) },
   Evaluated: { cellId: CorrelationId, result: CellEvaluation },
   Failed: { cellId: CorrelationId, error: CellEvaluationError },
-  Reset: { requestId: CorrelationId },
+  Reset: {
+    requestId: CorrelationId,
+    /** Globals the worker could not put back; the host replaces a worker that names any. */
+    unrestored: Schema.optional(Schema.Array(Schema.String)),
+  },
   Snapshot: { requestId: CorrelationId, snapshot: CellSnapshot },
   Restored: { requestId: CorrelationId, bindings: Schema.Array(Schema.String) },
   HostCall: {

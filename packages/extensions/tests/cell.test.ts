@@ -1463,8 +1463,15 @@ describe("cell worker process", () => {
         const bound = yield* evaluate("const prompt = 'draft'; var performance = 5; 1")
         expect(bound.bindings).toEqual(["performance", "prompt"])
         expect(bound.bindingCount).toBe(2)
-        // A cell may shadow a host namespace for its own run; the next cell has it back.
-        expect((yield* evaluate("const tools = 7; typeof tools")).display).toBe("number")
+        // The host namespaces cannot be rebound: a declaration fails its cell and they stay.
+        const shadowed = yield* Effect.flip(evaluate("const tools = 7; typeof tools"))
+        expect(shadowed.message).toContain("tools")
+        const redefined = yield* Effect.flip(
+          evaluate(
+            "Object.defineProperty(globalThis, 'context', { value: null, configurable: false }); 1",
+          ),
+        )
+        expect(redefined.message).toContain("unconfigurable")
         const after = yield* evaluate("[typeof tools, typeof context.status].join(',')")
         expect(after.display).toBe("function,function")
         expect(after.bindingCount).toBe(2)
@@ -1483,6 +1490,41 @@ describe("cell worker process", () => {
           "prompt",
         ])
         expect((yield* evaluate("[prompt, performance].join(',')")).display).toBe("draft,5")
+        yield* kernel.close
+      }).pipe(Effect.timeout("10 seconds"), Effect.provide(platformLayer)),
+    12000,
+  )
+
+  // Reset once deleted new names and ignored a refusal, and compared globals
+  // by value only, so a non-configurable global or a changed flag survived it.
+  it.scopedLive(
+    "a reset that cannot put a global back replaces the worker; a changed flag is put back",
+    () =>
+      Effect.gen(function* () {
+        const kernel = yield* openCellKernel({
+          worker: yield* cellWorkerLaunch,
+          cwd: packageDirectory,
+        })
+        const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
+        const evaluate = (code: string) =>
+          kernel.evaluate(code).pipe(Effect.provideService(CellOperationHost, host))
+        const flagged = yield* evaluate(
+          "Object.defineProperty(globalThis, 'prompt', { writable: false }); 1",
+        )
+        expect(flagged.bindings).toEqual(["prompt"])
+        yield* kernel.reset
+        expect(
+          (yield* evaluate(
+            "String(Object.getOwnPropertyDescriptor(globalThis, 'prompt').writable)",
+          )).display,
+        ).toBe("true")
+        yield* evaluate(
+          "Object.defineProperty(globalThis, 'stuck', { value: 1, configurable: false }); var pid = process.pid; 1",
+        )
+        const before = (yield* evaluate("pid")).display
+        yield* kernel.reset
+        expect((yield* evaluate("typeof stuck")).display).toBe("undefined")
+        expect((yield* evaluate("String(process.pid)")).display).not.toBe(before)
         yield* kernel.close
       }).pipe(Effect.timeout("10 seconds"), Effect.provide(platformLayer)),
     12000,

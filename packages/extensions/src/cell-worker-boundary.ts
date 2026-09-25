@@ -401,6 +401,34 @@ const errorDetail = (error: object): ReadonlyArray<string> => {
   return systemErrorFields(error)
 }
 
+/** The namespaces `tools` and `context` read: the latest evaluator's. */
+const hostNamespaces = new Map<string, unknown>()
+/**
+ * Install a host namespace once per realm, as an accessor that is not
+ * configurable and whose setter throws. A cell that declares or assigns
+ * `tools` or `context` fails with this message; one that deletes or
+ * redefines it fails, or is refused. So no cell can make either namespace
+ * unrecoverable, and no reset needs to put one back.
+ */
+// oxlint-disable-next-line effect/noUnknownParameters -- a namespace is whatever the evaluator built
+const installHostNamespace = (name: "tools" | "context", value: unknown) => {
+  hostNamespaces.set(name, value)
+  const installed = Option.exists(
+    Option.fromUndefinedOr(Object.getOwnPropertyDescriptor(globalThis, name)),
+    (descriptor) => descriptor.configurable === false,
+  )
+  if (installed) return
+  Object.defineProperty(globalThis, name, {
+    get: () => hostNamespaces.get(name),
+    set: () => {
+      // oxlint-disable-next-line effect/noThrowStatement, effect/noNewError -- a JavaScript setter refuses an assignment only by throwing
+      throw new TypeError(`${name} is the host ${name} namespace; choose another name`)
+    },
+    enumerable: false,
+    configurable: false,
+  })
+}
+
 export const makeBunCellEvaluator = Effect.gen(function* () {
   const host = yield* CellHost
   const environment = yield* CellWorkerEnvironment
@@ -553,16 +581,8 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
     },
     newWindow: () => contextCall("newWindow", {}),
   }
-  Object.defineProperty(globalThis, "tools", {
-    value: toolsNamespace,
-    writable: true,
-    configurable: true,
-  })
-  Object.defineProperty(globalThis, "context", {
-    value: context,
-    writable: true,
-    configurable: true,
-  })
+  installHostNamespace("tools", toolsNamespace)
+  installHostNamespace("context", context)
   if (!Predicate.isFunction(Reflect.get(globalThis, "require"))) {
     Object.defineProperty(globalThis, "require", {
       value: createRequire(`${environment.workingDirectory}/`),
@@ -572,8 +592,8 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
   }
   /**
    * Every global as this evaluator found it, by descriptor. A binding is a
-   * global a cell added, or one whose value or accessor it changed: a cell
-   * that declares `prompt` or `performance` binds it like any new name.
+   * global a cell added, or one whose value, accessor or flags it changed: a
+   * cell that declares `prompt` or `performance` binds it like any new name.
    */
   const baseline = new Map<string, PropertyDescriptor>(
     Object.getOwnPropertyNames(globalThis).flatMap((key) =>
@@ -585,18 +605,21 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
       ),
     ),
   )
-  /** The host's namespaces: a cell may shadow them for its own run, and each cell gets them back. */
-  const hostNamespaces = new Set(["tools", "context"])
   /**
    * Globals the host rewrites while it runs: Effect keeps the running fiber
    * in one. They are never a binding and a reset never touches them.
    */
   const hostGlobals = new Set(["~effect/Fiber/currentFiber"])
+  const descriptorFields = ["value", "get", "set", "writable", "enumerable", "configurable"]
   const sameDescriptor = (left: PropertyDescriptor, right: PropertyDescriptor) =>
-    Object.is(left.value, right.value) &&
-    Object.is(Reflect.get(left, "get"), Reflect.get(right, "get")) &&
-    Object.is(Reflect.get(left, "set"), Reflect.get(right, "set"))
-  /** Whether a cell added, rebound or deleted this global since the evaluator started. */
+    descriptorFields.every((field) =>
+      Object.is(Reflect.get(left, field), Reflect.get(right, field)),
+    )
+  /**
+   * Whether a cell added, rebound, redefined or deleted this global since the
+   * evaluator started. A changed flag counts: a global made read-only is not
+   * the global the evaluator found.
+   */
   const changed = (key: string) =>
     !hostGlobals.has(key) &&
     Option.match(Option.fromUndefinedOr(baseline.get(key)), {
@@ -607,21 +630,18 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
           (current) => sameDescriptor(found, current),
         ),
     })
-  const bindingKeys = () =>
-    Object.getOwnPropertyNames(globalThis).filter((key) => !hostNamespaces.has(key) && changed(key))
+  const bindingKeys = () => Object.getOwnPropertyNames(globalThis).filter(changed)
   /**
    * Put one global back as the evaluator found it, or remove it when the
-   * evaluator found none. Eval-declared vars are configurable; a global that
-   * is not stays as it is, since `Reflect` refuses rather than throws.
+   * evaluator found none; false when the realm refuses. Eval-declared vars
+   * are configurable, but a cell can define a global that is not, and
+   * `Reflect` refuses rather than throws.
    */
-  const restoreGlobal = (key: string) =>
+  const restoreGlobal = (key: string): boolean =>
     Option.match(Option.fromUndefinedOr(baseline.get(key)), {
       onNone: () => Reflect.deleteProperty(globalThis, key),
       onSome: (descriptor) => Reflect.defineProperty(globalThis, key, descriptor),
     })
-  const restoreHostNamespaces = () => {
-    for (const key of hostNamespaces) if (changed(key)) restoreGlobal(key)
-  }
   /**
    * Each binding's value, read from its descriptor: an accessor gives its
    * getter, which the snapshot names as a function, so reading the namespace
@@ -699,7 +719,6 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
 
   const evaluate = Effect.fn("BunCellEvaluator.evaluate")(function* (source: string) {
     output.reset()
-    restoreHostNamespaces()
     for (const text of strays) append(text)
     strays = []
     if (source.length > maximumCellSourceLength) {
@@ -762,7 +781,7 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
         if (!Predicate.isFunction(revive)) return []
         const names: string[] = []
         for (const binding of bindings) {
-          if (hostNamespaces.has(binding.name) || hostGlobals.has(binding.name)) continue
+          if (hostGlobals.has(binding.name)) continue
           // A binding may rebind a worker global; one that is not configurable stays as it is.
           const defined = Reflect.defineProperty(globalThis, binding.name, {
             value: revive(encodeJsonText(binding.value)),
@@ -790,11 +809,13 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
       Semaphore.withPermit(permit, restore(bindings)),
     reset: Semaphore.withPermit(
       permit,
-      Effect.sync(() => {
+      Effect.sync((): ReadonlyArray<string> => {
         // Every global back as the evaluator found it: added names go, rebound or deleted ones return.
+        // A global the realm will not put back is named: the host replaces this worker.
         const names = new Set([...Object.getOwnPropertyNames(globalThis), ...baseline.keys()])
-        for (const name of names) if (changed(name)) restoreGlobal(name)
+        const unrestored = [...names].filter((name) => changed(name) && !restoreGlobal(name))
         reported = new Map()
+        return unrestored
       }),
     ),
   }
@@ -883,8 +904,10 @@ export const runCellWorker = Effect.scoped(
         return yield* new CellProtocolError({ message: "A cell is already active" })
       }
       if (request._tag === "Reset") {
-        yield* kernel.reset
-        yield* transport.send(CellResponse.cases.Reset.make({ requestId: request.requestId }))
+        const unrestored = yield* kernel.reset
+        yield* transport.send(
+          CellResponse.cases.Reset.make({ requestId: request.requestId, unrestored }),
+        )
         return
       }
       if (request._tag === "Snapshot") {

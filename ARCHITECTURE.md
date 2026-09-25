@@ -920,12 +920,17 @@ Inner operation bindings and durable approvals use the stores described below.
 The namespace section of `cell.ts` keeps the top-level bindings of the last good
 cell per branch (`cell_namespaces`) and restores them into a replacement worker;
 the first result after a restore names what came back and what was omitted.
-A binding is a global the cell added, or a worker global it rebound or
-deleted (the worker keeps each global's starting descriptor), so `prompt` or
-`performance` declared by a cell is saved, reported and reset like a new
-name. `tools` and `context` are the host's: a cell may shadow them for its own
-run, and every cell starts with them back. A reset puts every global back as
-the worker found it.
+A binding is a global the cell added, or a worker global it rebound, deleted or
+redefined with other flags (the worker keeps each global's starting descriptor
+and compares value, accessors and flags), so `prompt` or `performance` declared
+by a cell is saved, reported and reset like a new name. `tools` and `context`
+are the host's: the worker installs them once per realm as accessors that are
+not configurable, with a setter that throws, so a cell that declares, assigns,
+deletes or redefines either fails or is refused, and neither can be lost. A
+reset puts every global back as the worker found it; the Reset reply names
+(additive, optional `unrestored`) any global the realm refused to remove or
+put back, such as one a cell made not configurable, and the kernel then
+replaces the worker, so a reset never leaves a global behind.
 The worker reads each binding from its property descriptor, so a snapshot
 never calls a global accessor (it is omitted as a function). The snapshot
 encoder and the error renderer share one value reader in `cell-protocol.ts`
