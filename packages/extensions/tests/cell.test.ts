@@ -804,6 +804,149 @@ describe("recorded cell execution", () => {
     10000,
   )
 
+  // The namespace snapshot after each good cell reads every binding. A read
+  // that ran a looping getter, trap or coercion held the worker until the
+  // compute deadline replaced it, and the namespace was lost.
+  const snapshotHazards: ReadonlyArray<{
+    readonly name: string
+    readonly source: string
+    readonly probe: string
+    readonly display: string
+    readonly restored: ReadonlyArray<string>
+    readonly omitted: ReadonlyArray<{ readonly name: string; readonly reason: string }>
+  }> = [
+    {
+      name: "an error with a looping message getter",
+      source:
+        "var hazard = Object.defineProperty(new Error('x'), 'message', { get() { for (;;) {} } }); 1",
+      probe: "kept",
+      display: "7",
+      restored: ["kept"],
+      omitted: [{ name: "hazard", reason: "unsupported" }],
+    },
+    {
+      name: "a plain object with a looping getter",
+      source: "var hazard = { data: 1, get looping() { for (;;) {} } }; 1",
+      probe: "kept",
+      display: "7",
+      restored: ["kept"],
+      omitted: [{ name: "hazard", reason: "unsupported" }],
+    },
+    {
+      name: "a plain object with a looping Symbol.toStringTag getter, saved without its symbol keys",
+      source: "var hazard = { data: 1, get [Symbol.toStringTag]() { for (;;) {} } }; 1",
+      probe: "[kept, JSON.stringify(hazard)].join(',')",
+      display: '7,{"data":1}',
+      restored: ["kept", "hazard"],
+      omitted: [],
+    },
+    {
+      name: "a Proxy with looping traps",
+      source:
+        "var hazard = new Proxy({}, { get() { for (;;) {} }, ownKeys() { for (;;) {} }, getPrototypeOf() { for (;;) {} }, getOwnPropertyDescriptor() { for (;;) {} } }); 1",
+      probe: "kept",
+      display: "7",
+      restored: ["kept"],
+      omitted: [{ name: "hazard", reason: "unsupported" }],
+    },
+    {
+      name: "a plain object over a Proxy prototype",
+      source: "var hazard = Object.create(new Proxy({}, { getPrototypeOf() { for (;;) {} } })); 1",
+      probe: "kept",
+      display: "7",
+      restored: ["kept"],
+      omitted: [{ name: "hazard", reason: "unsupported" }],
+    },
+    {
+      name: "an error message with a looping toString and Symbol.toPrimitive",
+      source:
+        "var hazard = new Error('x'); hazard.message = { toString() { for (;;) {} }, [Symbol.toPrimitive]() { for (;;) {} } }; 1",
+      probe: "kept",
+      display: "7",
+      restored: ["kept"],
+      omitted: [{ name: "hazard", reason: "unsupported" }],
+    },
+    {
+      name: "a RegExp subclass that overrides source, flags and global",
+      source:
+        "class Looping extends RegExp { get source() { for (;;) {} } get flags() { for (;;) {} } get global() { for (;;) {} } }; var hazard = new Looping('a+', 'gi'); 1",
+      probe: "[kept, hazard instanceof RegExp, hazard.source, hazard.flags].join(',')",
+      display: "7,true,a+,gi",
+      restored: ["kept", "hazard"],
+      omitted: [{ name: "Looping", reason: "function" }],
+    },
+  ]
+  for (const hazard of snapshotHazards) {
+    it.scopedLive(
+      `the snapshot never runs cell code: ${hazard.name}`,
+      () =>
+        Effect.gen(function* () {
+          const worker = yield* buildCellWorker
+          const [define, bind, after, probe] = yield* setupCalls([
+            "let kept = 7; kept",
+            hazard.source,
+            "kept",
+            hazard.probe,
+          ])
+          if (!define || !bind || !after || !probe) return yield* Effect.die("Missing test cells")
+          const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
+          const open = Effect.gen(function* () {
+            const context = yield* Layer.build(
+              CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }),
+            )
+            return Context.get(context, CellExecution)
+          })
+          const cells = yield* open
+          const run = (owner: typeof cells, call: typeof define) =>
+            owner.run(call).pipe(Effect.provideService(CellOperationHost, host))
+          expect((yield* run(cells, define)).result).toMatchObject({ display: "7" })
+          expect((yield* run(cells, bind)).result).toMatchObject({ display: "1" })
+          // The next cell answers from the same worker: no restore report.
+          const next = (yield* run(cells, after)).result
+          expect(next).toMatchObject({ display: "7" })
+          expect(next).not.toHaveProperty("restored")
+          // A second owner stands in for a restart: the saved namespace keeps the earlier binding.
+          const restarted = yield* open
+          expect((yield* run(restarted, probe)).result).toMatchObject({
+            display: hazard.display,
+            restored: { restored: hazard.restored, omitted: hazard.omitted },
+          })
+        }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
+      10000,
+    )
+  }
+
+  // The error reader walks a thrown value's prototype chain. A Proxy in that
+  // chain once ran its trap there, and a looping trap held the worker.
+  it.scopedLive(
+    "a thrown value over a looping Proxy prototype fails its cell; the worker lives",
+    () =>
+      Effect.gen(function* () {
+        const worker = yield* buildCellWorker
+        const [define, thrown, after] = yield* setupCalls([
+          "let kept = 7",
+          "throw Object.create(new Proxy({}, { getPrototypeOf() { for (;;) {} }, get() { for (;;) {} } }))",
+          "kept",
+        ])
+        if (!define || !thrown || !after) return yield* Effect.die("Missing test cells")
+        const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
+        const cells = Context.get(
+          yield* Layer.build(
+            CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }),
+          ),
+          CellExecution,
+        )
+        const run = (call: typeof define) =>
+          cells.run(call).pipe(Effect.provideService(CellOperationHost, host))
+        expect((yield* run(define)).result).toMatchObject({ display: "7" })
+        expect((yield* run(thrown)).result).toMatchObject({
+          message: "A thrown value that cannot be read",
+        })
+        expect((yield* run(after)).result).toMatchObject({ display: "7" })
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
+    10000,
+  )
+
   it.scopedLive(
     "restores the saved namespace into a replaced worker and into a new branch owner",
     () =>
