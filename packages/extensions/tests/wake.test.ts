@@ -391,15 +391,6 @@ describe("wake", () => {
             providerLayer,
           })
           yield* client.message.send({ sessionId, branchId, content: "wake me when CI is done" })
-          const idle = yield* waitFor(
-            client.session.getSnapshot({ sessionId, branchId }),
-            (current) =>
-              current.runtime._tag === "Idle" &&
-              answered(current.messages, "alarm set, going idle"),
-            5_000,
-            "first turn answered",
-          )
-          expect(hasWake(idle.messages)).toBe(false)
           const woken = yield* waitFor(
             client.session.getSnapshot({ sessionId, branchId }),
             (current) =>
@@ -410,6 +401,19 @@ describe("wake", () => {
             "the alarm queued a wake message and the loop answered it",
           )
           expect(textOf(wakeOf(woken.messages)).endsWith("check whether CI is green")).toBe(true)
+          // The alarm may fire before the first turn ends; the wake still
+          // queues behind that turn's answer.
+          const firstAnswer = woken.messages.findIndex(
+            (message) =>
+              message.role === "assistant" &&
+              textOf(Option.some(message)) === "alarm set, going idle",
+          )
+          const wake = woken.messages.findIndex(
+            (message) =>
+              message.role === "user" && message.metadata?.customType === WAKE_MESSAGE_TYPE,
+          )
+          expect(firstAnswer).toBeGreaterThanOrEqual(0)
+          expect(wake).toBeGreaterThan(firstAnswer)
           expect(woken.messages.at(-1)?.role).toBe("assistant")
         }).pipe(Effect.timeout("12 seconds")),
       ),
