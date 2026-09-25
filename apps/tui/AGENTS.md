@@ -125,7 +125,7 @@ the frame drops its rules and note row too, so its one or two rows go to
 the list. With a turn running, a terminal under 9 rows leaves a pane no
 row: the frame then draws nothing, and a `KeyboardGate` keeps its scopes
 from taking keys (register a pane's key scope inside its frame, so the gate
-covers it). Keys go past it; over a held pane Esc still closes it. The frame
+covers it). Keys go past it; Esc still closes it, an extension pane included, and never cancels the turn behind it (the boot branch picker and an enforced sign-in keep their Esc). The frame
 reads its rows from the Yoga layout before each draw, because OpenTUI reports
 a 0-row box as one row and sends no size change between them. A pane that draws
 its own query line (the autocomplete popup, the command palette) passes it as

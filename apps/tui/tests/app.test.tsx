@@ -2286,6 +2286,34 @@ describe("App auth gate", () => {
       expect(view.shutdowns()).toBe(0)
     }).pipe(Effect.timeout("10 seconds")),
   )
+  // An extension pane with no row takes no keys either, and Esc closes it the
+  // same way: the turn runs on, and the pane is gone when the terminal grows.
+  it.live("esc closes an extension pane that has no row and leaves the turn running", () =>
+    Effect.gen(function* () {
+      const view = yield* mountRunningTurn()
+      view.setup.mockInput.pressArrow("left")
+      yield* waitForFrame(view.setup, (frame) => frame.includes("Agents ·"), "the agents pane")
+      const width = view.setup.renderer.terminalWidth
+      view.setup.resize(width, 6)
+      yield* waitForFrame(
+        view.setup,
+        (frame) => view.setup.renderer.terminalHeight === 6 && !frame.includes("Agents ·"),
+        "the agents pane with no row",
+      )
+      view.setup.mockInput.pressEscape()
+      // gent/no-sleep: allow a lone escape byte stays in the stdin parser until its timeout flushes it as a key
+      yield* Effect.sleep("100 millis")
+      view.setup.resize(width, 24)
+      yield* waitForFrame(
+        view.setup,
+        (frame) => view.setup.renderer.terminalHeight === 24 && frame.includes("Generating"),
+        "the full terminal",
+      )
+      expect(renderFrame(view.setup)).not.toContain("Agents ·")
+      expect(view.steers).toEqual([])
+      expect(view.shutdowns()).toBe(0)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   // The live run: an alarm and three working children filled the trays, and
   // the btw pane showed its question but not the fork's stored answer.
   it.live("the btw pane keeps the fork's answer in view on a short terminal with full trays", () =>
