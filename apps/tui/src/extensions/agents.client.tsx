@@ -1,7 +1,12 @@
 /** @jsxImportSource @opentui/solid */
 import { DateTime, Effect, Option, Predicate, Schedule } from "effect"
 import { createEffect, createSignal, For, on, Show } from "solid-js"
-import { type AgentRowEntry, AgentsViewRpc, DELEGATE_EXTENSION_ID } from "@gent/extensions/client"
+import {
+  type AgentRowEntry,
+  AgentsViewRpc,
+  DELEGATE_EXTENSION_ID,
+  type ListAgentsInput,
+} from "@gent/extensions/client"
 import {
   type ActiveExtensionSession,
   ChromePanel,
@@ -234,7 +239,7 @@ const POLL_EVERY = "2 seconds"
 
 export const makeAgentsController = (
   fetchRows: (
-    query: string,
+    input: ListAgentsInput,
   ) => Effect.Effect<ReadonlyArray<AgentRowEntry>, { readonly message: string }>,
   fetchDetail: (key: RowKey) => Effect.Effect<ExtensionAgentDetail, { readonly message: string }>,
 ): Effect.Effect<AgentsController, never, ClientContext> =>
@@ -290,11 +295,21 @@ export const makeAgentsController = (
     // The pane refetches across session switches (on `current()` changing and on
     // the poll), so the session query owns the guard that drops a reply for the
     // session the shell already left.
+    // The open pane lists the workspace under the reader's filter. The closed
+    // pane leaves only the tray, which draws the current session's subtree,
+    // so it reads that subtree alone: its cost follows the subtree, not the
+    // number of stored sessions. With no current session it has nothing to draw.
+    const read = (): Effect.Effect<ReadonlyArray<AgentRowEntry>, { readonly message: string }> => {
+      if (open()) return fetchRows({ query })
+      return Option.match(transport.currentSession(), {
+        onNone: () => Effect.succeed(empty),
+        onSome: (current) => fetchRows({ query, root: current.sessionId }),
+      })
+    }
     const listing = yield* sessionQuery({
       initial: empty,
       follow: false,
-      fetch: () =>
-        fetchRows(query).pipe(Effect.tap((rows) => Effect.sync(() => detailAfterListing(rows)))),
+      fetch: () => read().pipe(Effect.tap((rows) => Effect.sync(() => detailAfterListing(rows)))),
     })
     const refresh = (next: string): void => {
       query = next
@@ -321,7 +336,7 @@ export const makeAgentsController = (
 
     /**
      * Read again what is showing: the open pane under its filter, or the
-     * tray's whole listing. The reply decides whether the detail is read.
+     * tray's subtree, unfiltered. The reply decides whether the detail is read.
      */
     const tick = (): void => {
       if (!open()) {
@@ -691,8 +706,8 @@ export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
     const { transport, shell } = yield* ClientContext
 
     const controller = yield* makeAgentsController(
-      (query) =>
-        transport.request(ref(AgentsViewRpc.ListAgents), { query }).pipe(
+      (input) =>
+        transport.request(ref(AgentsViewRpc.ListAgents), input).pipe(
           Effect.map((reply) => reply.rows),
           Effect.mapError((error) => ({ message: String(error) })),
         ),

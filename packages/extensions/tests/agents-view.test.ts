@@ -524,7 +524,10 @@ const openHarness = Effect.gen(function* () {
 
 type Harness = Effect.Success<typeof openHarness>
 
-const requestRows = (harness: Harness, input: { readonly query?: string }) =>
+const requestRows = (
+  harness: Harness,
+  input: { readonly query?: string; readonly root?: string },
+) =>
   Effect.gen(function* () {
     const raw = yield* harness.client.extension.request({
       sessionId: harness.sessionId,
@@ -971,6 +974,38 @@ describe("AgentsViewExtension via RPC", () => {
           expect(rowFor(sessionOnly.sessionId)?.sideThread).toBe(true)
           expect(handoffRow?.sideThread).toBe(false)
           expect(rowFor(harness.sessionId)?.sideThread).toBe(false)
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    10_000,
+  )
+
+  it.live(
+    "a root listing holds that session's subtree and no session beside it",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const harness = yield* openHarness
+          const child = yield* harness.client.session.create({
+            cwd: "/tmp/agents-view-rpc-child",
+            parentSessionId: harness.sessionId,
+            parentBranchId: harness.branchId,
+          })
+          const grandchild = yield* harness.client.session.create({
+            cwd: "/tmp/agents-view-rpc-grandchild",
+            parentSessionId: child.sessionId,
+            parentBranchId: child.branchId,
+          })
+          // Another conversation in the same workspace.
+          const beside = yield* harness.client.session.create({ cwd: "/tmp/agents-view-rpc" })
+
+          const { reply } = yield* requestRows(harness, { root: harness.sessionId })
+          expect(reply.rows.map((row) => row.sessionId).toSorted()).toEqual(
+            [harness.sessionId, child.sessionId, grandchild.sessionId].toSorted(),
+          )
+          // The root's own loop is live, so its row still carries the live half.
+          expect(reply.rows.find((row) => row.sessionId === harness.sessionId)?.live).toBe(true)
+          const whole = yield* requestRows(harness, {})
+          expect(whole.reply.rows.map((row) => row.sessionId)).toContain(beside.sessionId)
         }).pipe(Effect.timeout("8 seconds")),
       ),
     10_000,

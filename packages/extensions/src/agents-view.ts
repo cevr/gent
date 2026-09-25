@@ -481,38 +481,57 @@ export const AgentRowEntry = Schema.Struct({
 })
 export type AgentRowEntry = typeof AgentRowEntry.Type
 
-const ListAgentsInput = Schema.Struct({
+export const ListAgentsInput = Schema.Struct({
   /** Case-insensitive substring filter over name, cwd, and ids. */
   query: Schema.optional(Schema.String),
+  /**
+   * Only this session and the sessions below it, at any depth: the tray's
+   * read, whose cost follows the subtree rather than the workspace. Absent,
+   * the listing covers every session in the workspace.
+   */
+  root: Schema.optional(SessionId),
 })
+export type ListAgentsInput = typeof ListAgentsInput.Type
 
 const ListAgentsOutput = Schema.Struct({
   rows: Schema.Array(AgentRowEntry),
 })
 
 /**
- * Join the live loop enumeration against durable session storage, unfiltered.
+ * Join the live loop enumeration against durable session storage, before the
+ * query filter: the whole workspace, or with a `root` only its subtree.
  *
  * Neither catalog is sufficient alone: the live one is empty after a restart,
  * and the durable one cannot say what is running. `projectAgentRows` above
- * reconciles the two.
+ * reconciles the two. `listed` is the runtime's whole loop listing, whatever
+ * the root, because only that listing may stop an activity watcher.
  */
-const collectRows = Effect.fn("AgentsView.collectRows")(function* () {
+const collectRows = Effect.fn("AgentsView.collectRows")(function* (root: Option.Option<SessionId>) {
   const ctx = yield* ExtensionContext
 
   // A catalog read that fails is a host defect, not something the caller can
   // recover from, so it dies rather than widening the capability's error type.
   const activeLoops = yield* ctx.Session.listActiveLoops.pipe(Effect.orDie)
-  const sessions = yield* ctx.Session.listSessions.pipe(Effect.orDie)
+  const sessions = yield* ctx.Session.listSessions({ root: Option.getOrUndefined(root) }).pipe(
+    Effect.orDie,
+  )
+  const listed: ReadonlyArray<AgentRowKey> = activeLoops.map((loop) => ({
+    sessionId: loop.sessionId,
+    branchId: loop.branchId,
+  }))
 
   // The live half. Status comes with the enumeration; metrics need a heavier
   // per-loop read (the client transport's `agentDetail`), which it makes for one
-  // selected row at a time.
-  const live: ReadonlyArray<LiveAgentRow> = activeLoops.map((loop) => ({
-    sessionId: loop.sessionId,
-    branchId: loop.branchId,
-    status: loop.status,
-  }))
+  // selected row at a time. Under a root, only the subtree's loops: a loop
+  // with no stored session yet has no parent link to place it by.
+  const inTree = new Set<string>(sessions.map((session) => session.id))
+  const live: ReadonlyArray<LiveAgentRow> = activeLoops
+    .filter((loop) => Option.isNone(root) || inTree.has(loop.sessionId))
+    .map((loop) => ({
+      sessionId: loop.sessionId,
+      branchId: loop.branchId,
+      status: loop.status,
+    }))
 
   // The durable half. One row per session, keyed to its active branch — a
   // session with no active branch has never run and has no loop to show.
@@ -540,7 +559,7 @@ const collectRows = Effect.fn("AgentsView.collectRows")(function* () {
     ]
   })
 
-  return projectAgentRows({ live, durable })
+  return { rows: projectAgentRows({ live, durable }), listed }
 })
 
 export const AgentsViewRpc = defineRequests(AGENTS_VIEW_EXTENSION_ID, {
@@ -552,16 +571,16 @@ export const AgentsViewRpc = defineRequests(AGENTS_VIEW_EXTENSION_ID, {
     input: ListAgentsInput,
     output: ListAgentsOutput,
     execute: Effect.fn("AgentsViewRpc.ListAgents")(function* (input) {
-      const all = yield* collectRows()
+      const { rows: all, listed } = yield* collectRows(Option.fromUndefinedOr(input.root))
       const activity = yield* AgentActivity
-      // Every listed child is watched, working or idle, so its next turn
-      // reports from its first event. A root is never in the tray. The watch
-      // set comes from every row, never from the caller's query, and the rows
-      // already carry the runtime listing: a row is live when it is listed.
-      const listed = all.filter((row) => row.live)
+      // Every live child read here is watched, working or idle, so its next
+      // turn reports from its first event. A tree root is never in the tray.
+      // The watch set comes from the rows before the query filter; under a
+      // `root` it is that subtree, which is all the caller shows. Only the
+      // runtime's whole listing stops a watcher, never the rows read here.
       yield* activity.follow({
         listed,
-        watch: listed.filter((row) => Option.isSome(row.parent)),
+        watch: all.filter((row) => row.live && Option.isSome(row.parent)),
       })
       const rows = filterRows(all, input.query ?? "")
       const lines = new Map<string, string>()

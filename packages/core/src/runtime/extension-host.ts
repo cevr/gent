@@ -2910,10 +2910,11 @@ export const makeExtensionHostContextProvider = (
           Effect.mapError(sessionError("listBranches")),
           inWorkspace,
         ),
-        listSessions: sessions((storage) => storage.listSessions).pipe(
-          Effect.mapError(sessionError("listSessions")),
-          inWorkspace,
-        ),
+        listSessions: (params) =>
+          Option.match(Option.fromUndefinedOr(params?.root), {
+            onNone: () => sessions((storage) => storage.listSessions),
+            onSome: (root) => relationships((storage) => storage.getSessionTree(root)),
+          }).pipe(Effect.mapError(sessionError("listSessions")), inWorkspace),
         listActiveLoops: registry((stateRegistry) =>
           Effect.gen(function* () {
             const workspaceId = yield* CurrentWorkspaceId

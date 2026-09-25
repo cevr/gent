@@ -856,10 +856,14 @@ export interface ExtensionSessionService {
   }) => Effect.Effect<boolean, ExtensionServiceError>
   readonly listBranches: Effect.Effect<ReadonlyArray<Branch>, ExtensionServiceError>
   /**
-   * Every session in the workspace. The durable half of an agent catalog:
+   * Every session in the workspace, or with a `root` only that session and
+   * the sessions below it by parent link, at any depth; a read that costs
+   * the subtree, not the workspace. The durable half of an agent catalog:
    * survives restarts, but says nothing about what is running now.
    */
-  readonly listSessions: Effect.Effect<ReadonlyArray<Session>, ExtensionServiceError>
+  readonly listSessions: (params?: {
+    readonly root?: SessionId
+  }) => Effect.Effect<ReadonlyArray<Session>, ExtensionServiceError>
   /**
    * Loops materialized right now. The live half of an agent catalog: carries
    * status, but is empty after a restart and omits idle or evicted branches.

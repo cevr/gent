@@ -2829,7 +2829,7 @@ const stubCtx = testToolContext({
     send: dieStub("send"),
     stop: dieStub("stop"),
     events: () => Stream.die("events not wired in test"),
-    listSessions: Effect.die("listSessions not wired in test"),
+    listSessions: dieStub("listSessions"),
     listActiveLoops: Effect.die("listActiveLoops not wired in test"),
   },
   Interaction: {

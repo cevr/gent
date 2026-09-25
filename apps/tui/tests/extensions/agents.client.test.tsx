@@ -4,7 +4,11 @@ import { Clock, Deferred, Effect, Option } from "effect"
 import { TestClock } from "effect/testing"
 import { createSignal, Show } from "solid-js"
 import { BranchId, dateFromMillis, Session, SessionId } from "@gent/core/protocol"
-import { type AgentRowEntry, DELEGATE_EXTENSION_ID } from "@gent/extensions/client"
+import {
+  type AgentRowEntry,
+  DELEGATE_EXTENSION_ID,
+  type ListAgentsInput,
+} from "@gent/extensions/client"
 import {
   AgentsPane,
   detailLabel,
@@ -121,8 +125,8 @@ describe("Agents controller reload", () => {
 
       const controller = yield* provideClientServices(
         makeAgentsController(
-          (query) => {
-            asked.push(query)
+          ({ query }) => {
+            asked.push(query ?? "")
             return Effect.succeed([])
           },
           () => Effect.never,
@@ -141,6 +145,40 @@ describe("Agents controller reload", () => {
 
       expect(asked).toEqual(["dep", "dep"])
     }),
+  )
+})
+
+describe("Agents controller listing scope", () => {
+  it.scopedLive(
+    "the closed pane reads the current session's subtree, the open pane every session",
+    () =>
+      Effect.gen(function* () {
+        const asked: Array<ListAgentsInput> = []
+        const pane = makePaneSlot()
+        const controller = yield* provideClientServices(
+          makeAgentsController(
+            (input) => {
+              asked.push(input)
+              return Effect.succeed([])
+            },
+            () => Effect.never,
+          ),
+          {
+            currentSession: () =>
+              Option.some({ sessionId: SessionId.make("here"), branchId: BranchId.make("here") }),
+            shell: { pane },
+          },
+        )
+
+        // Only the tray shows: it draws one subtree, so it asks for that one.
+        controller.refresh("")
+        yield* Effect.yieldNow
+        pane.open("agents.pane")
+        controller.refresh("")
+        yield* Effect.yieldNow
+
+        expect(asked).toEqual([{ query: "", root: SessionId.make("here") }, { query: "" }])
+      }),
   )
 })
 
@@ -436,8 +474,8 @@ describe("Agents pane refresh while open", () => {
         const clock = yield* TestClock.make()
         const controller = yield* provideClientServices(
           makeAgentsController(
-            (query) => {
-              asked.push(query)
+            ({ query }) => {
+              asked.push(query ?? "")
               return Effect.succeed([])
             },
             () => Effect.never,
@@ -1528,8 +1566,8 @@ describe("Agents controller across a session switch", () => {
       const active = Option.some(key("only"))
       const controller = yield* provideClientServices(
         makeAgentsController(
-          (query) =>
-            Option.match(Option.fromUndefinedOr(gates.get(query)), {
+          ({ query }) =>
+            Option.match(Option.fromUndefinedOr(gates.get(query ?? "")), {
               onNone: () => Effect.never,
               onSome: (gate) => Deferred.await(gate),
             }),
