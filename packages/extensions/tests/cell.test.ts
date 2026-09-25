@@ -804,6 +804,277 @@ describe("recorded cell execution", () => {
     10000,
   )
 
+  // The namespace snapshot after each good cell reads every binding. A read
+  // that ran a looping getter, trap or coercion held the worker until the
+  // compute deadline replaced it, and the namespace was lost.
+  const snapshotHazards: ReadonlyArray<{
+    readonly name: string
+    readonly source: string
+    readonly probe: string
+    readonly display: string
+    readonly restored: ReadonlyArray<string>
+    readonly omitted: ReadonlyArray<{ readonly name: string; readonly reason: string }>
+  }> = [
+    {
+      name: "an error with a looping message getter",
+      source:
+        "var hazard = Object.defineProperty(new Error('x'), 'message', { get() { for (;;) {} } }); 1",
+      probe: "kept",
+      display: "7",
+      restored: ["kept"],
+      omitted: [{ name: "hazard", reason: "unsupported" }],
+    },
+    {
+      name: "a plain object with a looping getter",
+      source: "var hazard = { data: 1, get looping() { for (;;) {} } }; 1",
+      probe: "kept",
+      display: "7",
+      restored: ["kept"],
+      omitted: [{ name: "hazard", reason: "unsupported" }],
+    },
+    {
+      name: "a plain object with a looping Symbol.toStringTag getter, saved without its symbol keys",
+      source: "var hazard = { data: 1, get [Symbol.toStringTag]() { for (;;) {} } }; 1",
+      probe: "[kept, JSON.stringify(hazard)].join(',')",
+      display: '7,{"data":1}',
+      restored: ["kept", "hazard"],
+      omitted: [],
+    },
+    {
+      name: "a Proxy with looping traps",
+      source:
+        "var hazard = new Proxy({}, { get() { for (;;) {} }, ownKeys() { for (;;) {} }, getPrototypeOf() { for (;;) {} }, getOwnPropertyDescriptor() { for (;;) {} } }); 1",
+      probe: "kept",
+      display: "7",
+      restored: ["kept"],
+      omitted: [{ name: "hazard", reason: "unsupported" }],
+    },
+    {
+      name: "a plain object over a Proxy prototype",
+      source: "var hazard = Object.create(new Proxy({}, { getPrototypeOf() { for (;;) {} } })); 1",
+      probe: "kept",
+      display: "7",
+      restored: ["kept"],
+      omitted: [{ name: "hazard", reason: "unsupported" }],
+    },
+    {
+      name: "an error message with a looping toString and Symbol.toPrimitive",
+      source:
+        "var hazard = new Error('x'); hazard.message = { toString() { for (;;) {} }, [Symbol.toPrimitive]() { for (;;) {} } }; 1",
+      probe: "kept",
+      display: "7",
+      restored: ["kept"],
+      omitted: [{ name: "hazard", reason: "unsupported" }],
+    },
+    {
+      name: "a RegExp subclass that overrides source, flags and global",
+      source:
+        "class Looping extends RegExp { get source() { for (;;) {} } get flags() { for (;;) {} } get global() { for (;;) {} } }; var hazard = new Looping('a+', 'gi'); 1",
+      probe: "[kept, hazard instanceof RegExp, hazard.source, hazard.flags].join(',')",
+      display: "7,true,a+,gi",
+      restored: ["kept", "hazard"],
+      omitted: [{ name: "Looping", reason: "function" }],
+    },
+  ]
+  for (const hazard of snapshotHazards) {
+    it.scopedLive(
+      `the snapshot never runs cell code: ${hazard.name}`,
+      () =>
+        Effect.gen(function* () {
+          const worker = yield* buildCellWorker
+          const [define, bind, after, probe] = yield* setupCalls([
+            "let kept = 7; kept",
+            hazard.source,
+            "kept",
+            hazard.probe,
+          ])
+          if (!define || !bind || !after || !probe) return yield* Effect.die("Missing test cells")
+          const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
+          const open = Effect.gen(function* () {
+            const context = yield* Layer.build(
+              CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }),
+            )
+            return Context.get(context, CellExecution)
+          })
+          const cells = yield* open
+          const run = (owner: typeof cells, call: typeof define) =>
+            owner.run(call).pipe(Effect.provideService(CellOperationHost, host))
+          expect((yield* run(cells, define)).result).toMatchObject({ display: "7" })
+          expect((yield* run(cells, bind)).result).toMatchObject({ display: "1" })
+          // The next cell answers from the same worker: no restore report.
+          const next = (yield* run(cells, after)).result
+          expect(next).toMatchObject({ display: "7" })
+          expect(next).not.toHaveProperty("restored")
+          // A second owner stands in for a restart: the saved namespace keeps the earlier binding.
+          const restarted = yield* open
+          expect((yield* run(restarted, probe)).result).toMatchObject({
+            display: hazard.display,
+            restored: { restored: hazard.restored, omitted: hazard.omitted },
+          })
+        }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
+      10000,
+    )
+  }
+
+  // The error reader walks a thrown value's prototype chain. A Proxy in that
+  // chain once ran its trap there, and a looping trap held the worker.
+  it.scopedLive(
+    "a thrown value over a looping Proxy prototype fails its cell; the worker lives",
+    () =>
+      Effect.gen(function* () {
+        const worker = yield* buildCellWorker
+        const [define, thrown, after] = yield* setupCalls([
+          "let kept = 7",
+          "throw Object.create(new Proxy({}, { getPrototypeOf() { for (;;) {} }, get() { for (;;) {} } }))",
+          "kept",
+        ])
+        if (!define || !thrown || !after) return yield* Effect.die("Missing test cells")
+        const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
+        const cells = Context.get(
+          yield* Layer.build(
+            CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }),
+          ),
+          CellExecution,
+        )
+        const run = (call: typeof define) =>
+          cells.run(call).pipe(Effect.provideService(CellOperationHost, host))
+        expect((yield* run(define)).result).toMatchObject({ display: "7" })
+        expect((yield* run(thrown)).result).toMatchObject({
+          message: "A thrown value that cannot be read",
+        })
+        expect((yield* run(after)).result).toMatchObject({ display: "7" })
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
+    10000,
+  )
+
+  // The snapshot once called a bigint's `toString` and walked host lists with
+  // the array iterator, and a cell can replace both on the shared prototypes.
+  const replacedIntrinsics: ReadonlyArray<{
+    readonly name: string
+    readonly source: string
+    readonly probe: string
+    readonly display: string
+  }> = [
+    {
+      name: "BigInt.prototype.toString",
+      source:
+        "BigInt.prototype.toString = function () { globalThis.readerRan = true; return '1' }; var saved = 5n; 1",
+      probe: "String(saved === 5n)",
+      display: "true",
+    },
+    {
+      name: "the array iterator",
+      source:
+        "const original = Array.prototype[Symbol.iterator]; Array.prototype[Symbol.iterator] = function () { if (this[0] === 'probe-key') globalThis.readerRan = true; return original.call(this) }; var saved = new Map([['probe-key', 5]]); 1",
+      probe: "String(saved.get('probe-key'))",
+      display: "5",
+    },
+  ]
+  for (const replaced of replacedIntrinsics) {
+    it.scopedLive(
+      `the snapshot never calls a replaced ${replaced.name}`,
+      () =>
+        Effect.gen(function* () {
+          const worker = yield* buildCellWorker
+          const [bind, ran, probe] = yield* setupCalls([
+            replaced.source,
+            "String(globalThis.readerRan === true)",
+            replaced.probe,
+          ])
+          if (!bind || !ran || !probe) return yield* Effect.die("Missing test cells")
+          const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
+          const open = Effect.gen(function* () {
+            const context = yield* Layer.build(
+              CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }),
+            )
+            return Context.get(context, CellExecution)
+          })
+          const cells = yield* open
+          const run = (owner: typeof cells, call: typeof bind) =>
+            owner.run(call).pipe(Effect.provideService(CellOperationHost, host))
+          expect((yield* run(cells, bind)).result).toMatchObject({ display: "1" })
+          expect((yield* run(cells, ran)).result).toMatchObject({ display: "false" })
+          // A restarted owner restores the value the cell bound, not what the replacement said.
+          const restarted = yield* open
+          expect((yield* run(restarted, probe)).result).toMatchObject({
+            display: replaced.display,
+          })
+        }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
+      10000,
+    )
+  }
+
+  // Display once went through `inspect`, which reads `Symbol.toStringTag` with
+  // a plain get and walks the prototype chain: a looping getter or trap held
+  // the worker until the deadline, for a logged, returned, thrown or uncaught value.
+  const displayHazards: ReadonlyArray<{
+    readonly name: string
+    readonly source: string
+    readonly shown: string
+  }> = [
+    {
+      name: "a logged value",
+      source: "console.log({ get [Symbol.toStringTag]() { for (;;) {} } }); 1",
+      shown: "{ Symbol(Symbol.toStringTag): [Getter] }\n1",
+    },
+    {
+      name: "a returned value",
+      source: "({ get [Symbol.toStringTag]() { for (;;) {} } })",
+      shown: "{ Symbol(Symbol.toStringTag): [Getter] }",
+    },
+    {
+      name: "a logged value over a looping Proxy prototype",
+      source:
+        "console.log(Object.create(new Proxy({}, { get() { for (;;) {} }, getOwnPropertyDescriptor() { for (;;) {} }, getPrototypeOf() { for (;;) {} } }))); 1",
+      shown: "[Object: unreadable prototype] {}\n1",
+    },
+    {
+      name: "a thrown error's cause",
+      source:
+        "throw new Error('outer', { cause: { data: 1, get [Symbol.toStringTag]() { for (;;) {} } } })",
+      shown: "Error: outer\ncaused by { data: 1, Symbol(Symbol.toStringTag): [Getter] }",
+    },
+  ]
+  for (const hazard of displayHazards) {
+    it.scopedLive(
+      `display never runs cell code: ${hazard.name}`,
+      () =>
+        Effect.gen(function* () {
+          const worker = yield* buildCellWorker
+          const [define, shown, after] = yield* setupCalls(["let kept = 7", hazard.source, "kept"])
+          if (!define || !shown || !after) return yield* Effect.die("Missing test cells")
+          const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
+          const cells = Context.get(
+            yield* Layer.build(
+              CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }),
+            ),
+            CellExecution,
+          )
+          const ReplyText = Schema.Union([
+            Schema.Struct({ message: Schema.String }),
+            Schema.Struct({ display: Schema.String }),
+          ])
+          const reply = (call: typeof define) =>
+            cells.run(call).pipe(
+              Effect.provideService(CellOperationHost, host),
+              Effect.map((result) => {
+                const text = Schema.decodeUnknownSync(ReplyText)(result.result)
+                if ("message" in text) return text.message
+                return text.display
+              }),
+            )
+          expect(yield* reply(define)).toBe("7")
+          expect(yield* reply(shown)).toBe(hazard.shown)
+          const next = (yield* cells
+            .run(after)
+            .pipe(Effect.provideService(CellOperationHost, host))).result
+          expect(next).toMatchObject({ display: "7" })
+          expect(next).not.toHaveProperty("restored")
+        }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
+      10000,
+    )
+  }
+
   it.scopedLive(
     "restores the saved namespace into a replaced worker and into a new branch owner",
     () =>
@@ -1298,6 +1569,116 @@ describe("cell worker process", () => {
           .evaluate("await tools.read.file({})")
           .pipe(Effect.provideService(CellOperationHost, host))
         expect(evaluation.display).toBe("read.file")
+        yield* kernel.close
+      }).pipe(Effect.timeout("10 seconds"), Effect.provide(platformLayer)),
+    12000,
+  )
+
+  // Bindings were the global names the worker lacked at start, so a cell that
+  // rebound a Bun global (`prompt`, `performance`) or a host namespace bound
+  // nothing: no report, no snapshot, and a reset kept its value.
+  it.scopedLive(
+    "a declaration that rebinds a worker global is a binding; the host namespaces come back each cell",
+    () =>
+      Effect.gen(function* () {
+        const kernel = yield* openCellKernel({
+          worker: yield* cellWorkerLaunch,
+          cwd: packageDirectory,
+        })
+        const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
+        const evaluate = (code: string) =>
+          kernel.evaluate(code).pipe(Effect.provideService(CellOperationHost, host))
+        const bound = yield* evaluate("const prompt = 'draft'; var performance = 5; 1")
+        expect(bound.bindings).toEqual(["performance", "prompt"])
+        expect(bound.bindingCount).toBe(2)
+        // The host namespaces cannot be rebound: a declaration fails its cell and they stay.
+        const shadowed = yield* Effect.flip(evaluate("const tools = 7; typeof tools"))
+        expect(shadowed.message).toContain("tools")
+        const redefined = yield* Effect.flip(
+          evaluate(
+            "Object.defineProperty(globalThis, 'context', { value: null, configurable: false }); 1",
+          ),
+        )
+        expect(redefined.message).toContain("unconfigurable")
+        const after = yield* evaluate("[typeof tools, typeof context.status].join(',')")
+        expect(after.display).toBe("function,function")
+        expect(after.bindingCount).toBe(2)
+        const snapshot = yield* kernel.snapshot
+        expect(snapshot.bindings.map((binding) => binding.name).sort()).toEqual([
+          "performance",
+          "prompt",
+        ])
+        // A reset puts every rebound global back as the worker found it.
+        yield* kernel.reset
+        expect((yield* evaluate("[typeof prompt, typeof performance.now].join(',')")).display).toBe(
+          "function,function",
+        )
+        expect([...(yield* kernel.restore(snapshot.bindings))].sort()).toEqual([
+          "performance",
+          "prompt",
+        ])
+        expect((yield* evaluate("[prompt, performance].join(',')")).display).toBe("draft,5")
+        yield* kernel.close
+      }).pipe(Effect.timeout("10 seconds"), Effect.provide(platformLayer)),
+    12000,
+  )
+
+  // Reset once deleted new names and ignored a refusal, and compared globals
+  // by value only, so a non-configurable global or a changed flag survived it.
+  it.scopedLive(
+    "a reset that cannot put a global back replaces the worker; a changed flag is put back",
+    () =>
+      Effect.gen(function* () {
+        const kernel = yield* openCellKernel({
+          worker: yield* cellWorkerLaunch,
+          cwd: packageDirectory,
+        })
+        const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
+        const evaluate = (code: string) =>
+          kernel.evaluate(code).pipe(Effect.provideService(CellOperationHost, host))
+        const flagged = yield* evaluate(
+          "Object.defineProperty(globalThis, 'prompt', { writable: false }); 1",
+        )
+        expect(flagged.bindings).toEqual(["prompt"])
+        yield* kernel.reset
+        expect(
+          (yield* evaluate(
+            "String(Object.getOwnPropertyDescriptor(globalThis, 'prompt').writable)",
+          )).display,
+        ).toBe("true")
+        yield* evaluate(
+          "Object.defineProperty(globalThis, 'stuck', { value: 1, configurable: false }); var pid = process.pid; 1",
+        )
+        const before = (yield* evaluate("pid")).display
+        yield* kernel.reset
+        expect((yield* evaluate("typeof stuck")).display).toBe("undefined")
+        expect((yield* evaluate("String(process.pid)")).display).not.toBe(before)
+        yield* kernel.close
+      }).pipe(Effect.timeout("10 seconds"), Effect.provide(platformLayer)),
+    12000,
+  )
+
+  // An uncaught value is shown to the next cell; `inspect` once ran its getter.
+  it.scopedLive(
+    "an uncaught value with a looping getter reaches the next cell as text",
+    () =>
+      Effect.gen(function* () {
+        const kernel = yield* openCellKernel({
+          worker: yield* cellWorkerLaunch,
+          cwd: packageDirectory,
+        })
+        const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
+        const evaluate = (code: string) =>
+          kernel.evaluate(code).pipe(Effect.provideService(CellOperationHost, host))
+        yield* evaluate(
+          "let kept = 7; setTimeout(() => { throw { get [Symbol.toStringTag]() { for (;;) {} } } }, 0); 1",
+        )
+        const shown = yield* evaluate("kept").pipe(
+          Effect.repeat({ until: (result) => result.display.includes("Uncaught"), times: 20 }),
+        )
+        expect(shown.display).toBe(
+          "Uncaught (from cell 1): { Symbol(Symbol.toStringTag): [Getter] }\n7",
+        )
         yield* kernel.close
       }).pipe(Effect.timeout("10 seconds"), Effect.provide(platformLayer)),
     12000,

@@ -6,6 +6,7 @@ import {
   Option,
   Predicate,
   Queue,
+  Result,
   Runtime,
   Schema,
   Semaphore,
@@ -13,7 +14,7 @@ import {
 } from "effect"
 import { AsyncLocalStorage } from "node:async_hooks"
 import { createRequire } from "node:module"
-import { inspect } from "node:util"
+import { types } from "node:util"
 import {
   type CellCatalogEntry,
   reservedToolSegments,
@@ -40,6 +41,16 @@ import {
   type SnapshotBinding,
   snapshotReviverSource,
 } from "./cell-protocol.js"
+import {
+  displayValue,
+  errorHead,
+  inheritsFrom,
+  isOrdinaryArray,
+  type PromiseState,
+  readDataProperty,
+  readProperty,
+  sameDescriptor,
+} from "./cell-value.js"
 
 /** Uncaught errors kept for the next cell; later ones between two cells are dropped. */
 const maximumStrayErrors = 20
@@ -252,74 +263,73 @@ const AGGREGATE_DETAIL_LIMIT = 3
 /** The stderr a `ShellError` shows, from its end. */
 const SHELL_STDERR_LIMIT = 2000
 
-/** What a thrown value shows when reading it throws: a trapping Proxy, for one. */
+/** What a thrown value shows when it cannot be read without running cell code: a Proxy, for one. */
 const UNREADABLE_ERROR_TEXT = "A thrown value that cannot be read"
-/** Prototype links a property read follows before it gives up. */
-const PROTOTYPE_DEPTH_LIMIT = 32
+/** What stands for a cause that cannot be read without running cell code. */
+const UNREADABLE_CAUSE_LINE = "caused by (a value that cannot be read)"
 
-/** A getter a descriptor holds; none for a data property. */
-const descriptorGetter = (descriptor: PropertyDescriptor) =>
-  Option.liftPredicate(Reflect.get(descriptor, "get"), Predicate.isFunction)
+/** Taken when the worker loads: a cell may replace the globals later. */
+const errorPrototype: object = Error.prototype
+const aggregateErrorPrototype: object = AggregateError.prototype
+const evaluationErrorPrototype: object = CellEvaluationError.prototype
+const isUint8Array = types.isUint8Array
 
 /**
- * The host getters an error read runs: those on `Error.prototype` and on
- * Bun's `BuildMessage` and `ResolveMessage` prototypes, taken when the worker
- * loads, before any cell runs. A closed set compared by identity: a cell's
- * own getter, a bound one that prints as native code included, is never in it.
+ * Whether a value is an `Error` by its prototype chain, as `instanceof`
+ * asks, with no trap run; unreadable when a Proxy sits on the chain.
  */
-const hostErrorGetters: ReadonlySet<unknown> = new Set(
-  [
-    Error.prototype,
-    ...["BuildMessage", "ResolveMessage"].flatMap((name) =>
-      Option.toArray(
-        Option.liftPredicate(Reflect.get(globalThis, name), Predicate.isFunction).pipe(
-          Option.flatMap((type) =>
-            Option.liftPredicate(Reflect.get(type, "prototype"), Predicate.isObjectKeyword),
-          ),
-        ),
-      ),
-    ),
-  ].flatMap((prototype) =>
-    Object.values(Object.getOwnPropertyDescriptors(prototype)).flatMap((descriptor) =>
-      Option.toArray(descriptorGetter(descriptor)),
-    ),
-  ),
-)
-
-/** The descriptor's getter when the host provides it, not the cell. */
-const hostGetter = (descriptor: PropertyDescriptor) =>
-  Option.filter(descriptorGetter(descriptor), (get) => hostErrorGetters.has(get))
+// oxlint-disable-next-line effect/noUnknownParameters -- a thrown value has any JavaScript shape
+const errorValue = (value: unknown) => inheritsFrom(value, errorPrototype)
 
 /**
- * A property of a thrown value, read from its descriptors along the prototype
- * chain, so a getter the cell wrote never runs; none when absent or behind
- * such a getter. A host getter runs: Bun keeps a `BuildMessage`'s message and
- * position behind one. A Proxy's traps and a host getter can still throw;
- * `errorText` catches that.
+ * A property of a thrown value, read through the value reader, so a getter
+ * the cell wrote and a Proxy trap never run; none when absent or unreadable.
+ * A host getter runs: Bun keeps a `BuildMessage`'s message and position
+ * behind one. A host getter can still throw; `errorText` catches that.
  */
 // oxlint-disable-next-line effect/noObjectParameters -- a thrown value has any JavaScript shape; descriptors read it without running its getters
-const errorProperty = (target: object, key: string): Option.Option<unknown> => {
-  let holder = Option.some(target)
-  for (let depth = 0; depth < PROTOTYPE_DEPTH_LIMIT && Option.isSome(holder); depth++) {
-    const descriptor = Option.fromUndefinedOr(Object.getOwnPropertyDescriptor(holder.value, key))
-    if (Option.isSome(descriptor)) {
-      if ("value" in descriptor.value) return Option.some(descriptor.value.value)
-      return Option.map(hostGetter(descriptor.value), (get) => Reflect.apply(get, target, []))
-    }
-    holder = Option.liftPredicate(Object.getPrototypeOf(holder.value), Predicate.isObjectKeyword)
-  }
-  return Option.none()
+const errorProperty = (target: object, key: string): Option.Option<unknown> =>
+  Result.getOrElse(readProperty(target, key), () => Option.none())
+
+/**
+ * A promise's state through `Bun.peek`, which reads the internal slot and
+ * never runs `then`. Taken when the worker loads: a cell may replace `Bun`.
+ */
+// oxlint-disable-next-line gent/no-bun-outside-adapter -- This worker boundary owns Bun's promise peek.
+const peekPromise = Bun.peek
+const peekStatus = peekPromise.status
+// oxlint-disable-next-line effect/noObjectParameters -- a promise the cell made has any JavaScript shape
+const promiseState = (promise: object): Option.Option<PromiseState> => {
+  const status = peekStatus(promise)
+  if (status === "pending") return Option.some({ status, value: promise })
+  return Option.some({ status, value: peekPromise(promise) })
 }
 
-/** `name: message`, each read only when its value is a string. */
-const errorLine = (error: Error) => {
-  const name = Option.getOrElse(
-    Option.filter(errorProperty(error, "name"), Predicate.isString),
-    () => "Error",
+/** The namespaces `tools` and `context` read: the latest evaluator's. */
+const hostNamespaces = new Map<string, unknown>()
+/**
+ * Install a host namespace once per realm, as an accessor that is not
+ * configurable and whose setter throws. A cell that declares or assigns
+ * `tools` or `context` fails with this message; one that deletes or
+ * redefines it fails, or is refused. So no cell can make either namespace
+ * unrecoverable, and no reset needs to put one back.
+ */
+// oxlint-disable-next-line effect/noUnknownParameters -- a namespace is whatever the evaluator built
+const installHostNamespace = (name: "tools" | "context", value: unknown) => {
+  hostNamespaces.set(name, value)
+  const installed = Option.exists(
+    Option.fromUndefinedOr(Object.getOwnPropertyDescriptor(globalThis, name)),
+    (descriptor) => descriptor.configurable === false,
   )
-  return Option.match(Option.filter(errorProperty(error, "message"), Predicate.isString), {
-    onNone: () => name,
-    onSome: (message) => `${name}: ${message}`,
+  if (installed) return
+  Object.defineProperty(globalThis, name, {
+    get: () => hostNamespaces.get(name),
+    set: () => {
+      // oxlint-disable-next-line effect/noThrowStatement, effect/noNewError -- a JavaScript setter refuses an assignment only by throwing
+      throw new TypeError(`${name} is the host ${name} namespace; choose another name`)
+    },
+    enumerable: false,
+    configurable: false,
   })
 }
 
@@ -335,12 +345,17 @@ const SYSTEM_ERROR_FIELDS = ["code", "errno", "syscall", "path", "dest", "addres
 /** The longest value one system error field shows. */
 const SYSTEM_ERROR_FIELD_LIMIT = 200
 
-/** One line of the system error fields an error holds as scalars; none gives no line. */
-const systemErrorFields = (error: Error): ReadonlyArray<string> => {
+/**
+ * One line of the system error fields an error holds as scalar data; none
+ * gives no line. Only data counts: a `DOMException` keeps a legacy numeric
+ * `code` behind a host getter, and that says nothing a model can use.
+ */
+// oxlint-disable-next-line effect/noObjectParameters -- a thrown value has any JavaScript shape
+const systemErrorFields = (error: object): ReadonlyArray<string> => {
   const fields = SYSTEM_ERROR_FIELDS.flatMap((key) =>
     Option.match(
       Option.filter(
-        errorProperty(error, key),
+        Result.getOrElse(readDataProperty(error, key), () => Option.none()),
         Predicate.or(Predicate.isString, Predicate.isNumber),
       ),
       {
@@ -353,15 +368,27 @@ const systemErrorFields = (error: Error): ReadonlyArray<string> => {
   return [`  ${fields.join(", ")}`]
 }
 
-/** An `AggregateError`'s first inner errors, one line each, and a count of the rest. */
+/**
+ * An `AggregateError`'s first inner errors, one line each with its position
+ * below it when it has one, and a count of the rest. Bun splits one syntax
+ * error into several `BuildMessage`s, and each one points somewhere.
+ */
 const aggregateDetail = (inner: ReadonlyArray<unknown>): ReadonlyArray<string> => {
   const listed = Array.from({ length: Math.min(inner.length, AGGREGATE_DETAIL_LIMIT) }, (_, i) =>
     Option.match(errorProperty(inner, String(i)), {
       onNone: () => "  (an inner value that cannot be read)",
       onSome: (each) => {
-        if (Predicate.isError(each)) return `  ${errorLine(each)}`
-        if (Predicate.isObjectKeyword(each)) return "  (an inner value that is not an error)"
-        return `  ${String(each)}`
+        if (!Predicate.isObjectKeyword(each)) return `  ${String(each)}`
+        return Result.match(errorValue(each), {
+          onFailure: () => "  (an inner value that cannot be read)",
+          onSuccess: (isError) => {
+            if (!isError) return "  (an inner value that is not an error)"
+            return Option.match(positionDetail(each), {
+              onNone: () => `  ${errorHead(each)}`,
+              onSome: (position) => `  ${errorHead(each)}\n  ${position}`,
+            })
+          },
+        })
       },
     }),
   )
@@ -371,7 +398,8 @@ const aggregateDetail = (inner: ReadonlyArray<unknown>): ReadonlyArray<string> =
 }
 
 /** A `BuildMessage`'s position as one line; none for any other error. */
-const positionDetail = (error: Error): Option.Option<string> =>
+// oxlint-disable-next-line effect/noObjectParameters -- a thrown value has any JavaScript shape
+const positionDetail = (error: object): Option.Option<string> =>
   Option.filter(errorProperty(error, "position"), Predicate.isObjectKeyword).pipe(
     Option.flatMap((where) =>
       Schema.decodeUnknownOption(BuildPosition)({
@@ -392,12 +420,14 @@ const positionDetail = (error: Error): Option.Option<string> =>
  * stack: an `AggregateError`'s inner errors, a `BuildMessage`'s position, a
  * `ShellError`'s stderr, or a system error's code, path and syscall.
  */
-const errorDetail = (error: Error): ReadonlyArray<string> => {
-  const inner = Option.filter(errorProperty(error, "errors"), Array.isArray)
-  if (error instanceof AggregateError && Option.isSome(inner)) return aggregateDetail(inner.value)
+// oxlint-disable-next-line effect/noObjectParameters -- a thrown value has any JavaScript shape
+const errorDetail = (error: object): ReadonlyArray<string> => {
+  const inner = Option.filter(errorProperty(error, "errors"), isOrdinaryArray)
+  const aggregate = Result.getOrElse(inheritsFrom(error, aggregateErrorPrototype), () => false)
+  if (aggregate && Option.isSome(inner)) return aggregateDetail(inner.value)
   const position = positionDetail(error)
   if (Option.isSome(position)) return [position.value]
-  const stderr = Option.filter(errorProperty(error, "stderr"), Predicate.isUint8Array)
+  const stderr = Option.filter(errorProperty(error, "stderr"), isUint8Array)
   if (Option.isSome(stderr)) {
     const text = new TextDecoder().decode(stderr.value).trim()
     if (text.length === 0) return []
@@ -422,18 +452,15 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
   })
   const append = output.append
   const rendered = output.read
-  // oxlint-disable-next-line effect/noUnknownParameters -- VM values can have any JavaScript shape; inspect produces bounded display text.
+  // A logged or returned value, a thrown non-Error and a cause show through
+  // the value reader's display, which follows `inspect` and runs no cell code:
+  // no getter, trap, `Symbol.toStringTag` or replaced prototype method.
+  // oxlint-disable-next-line effect/noUnknownParameters -- VM values can have any JavaScript shape; the display is bounded text.
   const display = (value: unknown): string => {
     if (Predicate.isString(value)) return value
     // A caught error the cell logs or returns reads as it does uncaught: no worker stack.
-    if (Predicate.isError(value)) return errorText(value)
-    return inspect(value, {
-      depth: 4,
-      maxArrayLength: 100,
-      maxStringLength: 8192,
-      customInspect: false,
-      getters: false,
-    })
+    if (Result.getOrElse(errorValue(value), () => false)) return errorText(value)
+    return displayValue(value, { promiseState })
   }
   const write = (...values: ReadonlyArray<unknown>) => {
     append(values.map(display).join(" "))
@@ -453,30 +480,63 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
   // about the cell's code, so an error goes back as its name and message, with
   // its cause one level deep. A failed host operation already carries the
   // host's message.
-  const renderError = (cause: unknown): string => {
-    if (!Predicate.isError(cause)) return display(cause)
-    const head = [errorLine(cause), ...errorDetail(cause)].join("\n")
-    return Option.match(Option.filter(errorProperty(cause, "cause"), Predicate.isNotUndefined), {
-      onNone: () => head,
-      // An Error cause stops at its own line: never recurse, so a looped or deep chain cannot overflow.
-      onSome: (inner) => {
-        if (Predicate.isError(inner)) return `${head}\ncaused by ${errorLine(inner)}`
-        return `${head}\ncaused by ${display(inner)}`
+  // A value whose prototype chain holds a Proxy cannot be read: its traps are
+  // cell code. Each part of an error reads on its own, so a part that throws
+  // (a host getter can throw) leaves its fallback in its place and the other
+  // parts stand.
+  const part = (
+    render: () => ReadonlyArray<string>,
+    fallback: ReadonlyArray<string>,
+  ): ReadonlyArray<string> => Option.getOrElse(Option.liftThrowable(render)(), () => fallback)
+  // oxlint-disable-next-line effect/noUnknownParameters -- a cause has any JavaScript shape
+  const causeLine = (inner: unknown): string =>
+    Result.match(errorValue(inner), {
+      onFailure: () => UNREADABLE_CAUSE_LINE,
+      onSuccess: (isError) => {
+        // An Error cause stops at its own line: never recurse, so a looped or deep chain cannot overflow.
+        if (isError && Predicate.isObjectKeyword(inner)) return `caused by ${errorHead(inner)}`
+        return `caused by ${display(inner)}`
       },
     })
-  }
+  const renderError = (cause: unknown): string =>
+    Result.match(errorValue(cause), {
+      onFailure: () => UNREADABLE_ERROR_TEXT,
+      onSuccess: (isError) => {
+        if (!isError || !Predicate.isObjectKeyword(cause)) return display(cause)
+        return [
+          ...part(() => [errorHead(cause)], [UNREADABLE_ERROR_TEXT]),
+          ...part(() => errorDetail(cause), []),
+          ...part(
+            () =>
+              Option.toArray(
+                Option.map(
+                  Option.filter(errorProperty(cause, "cause"), Predicate.isNotUndefined),
+                  causeLine,
+                ),
+              ),
+            [UNREADABLE_CAUSE_LINE],
+          ),
+        ].join("\n")
+      },
+    })
   /**
-   * The one guard every error text goes through: a read that throws (a Proxy
-   * trap, a native getter) gives `UNREADABLE_ERROR_TEXT`, never a worker death.
+   * The one guard every error text goes through: a host getter that throws
+   * gives `UNREADABLE_ERROR_TEXT`, never a worker death.
    */
   const total =
     (render: (cause: unknown) => string) =>
     (cause: unknown): string =>
       Option.getOrElse(Option.liftThrowable(render)(cause), () => UNREADABLE_ERROR_TEXT)
   const errorText = total(renderError)
+  // A cell can catch a host failure and change it before it throws it again,
+  // so its message is read like any other.
   const failureText = total((cause) => {
-    if (Schema.is(CellEvaluationError)(cause)) return cause.message
-    return renderError(cause)
+    const hostFailure = Result.getOrElse(inheritsFrom(cause, evaluationErrorPrototype), () => false)
+    if (!hostFailure || !Predicate.isObjectKeyword(cause)) return renderError(cause)
+    return Option.getOrElse(
+      Option.filter(errorProperty(cause, "message"), Predicate.isString),
+      () => renderError(cause),
+    )
   })
   const failure = (phase: CellEvaluationError["phase"], cause: unknown) =>
     new CellEvaluationError({
@@ -522,17 +582,8 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
     },
     newWindow: () => contextCall("newWindow", {}),
   }
-  const reserved = new Set(["tools", "context", "console", "require"])
-  Object.defineProperty(globalThis, "tools", {
-    value: toolsNamespace,
-    writable: true,
-    configurable: true,
-  })
-  Object.defineProperty(globalThis, "context", {
-    value: context,
-    writable: true,
-    configurable: true,
-  })
+  installHostNamespace("tools", toolsNamespace)
+  installHostNamespace("context", context)
   if (!Predicate.isFunction(Reflect.get(globalThis, "require"))) {
     Object.defineProperty(globalThis, "require", {
       value: createRequire(`${environment.workingDirectory}/`),
@@ -540,10 +591,53 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
       configurable: true,
     })
   }
-  // Bindings are the globals a cell adds after this evaluator starts. Eval-declared vars are configurable, so reset can delete them.
-  const baseline = new Set(Object.getOwnPropertyNames(globalThis))
-  const bindingKeys = () =>
-    Object.getOwnPropertyNames(globalThis).filter((key) => !baseline.has(key) && !reserved.has(key))
+  /**
+   * Every global as this evaluator found it, by descriptor. A binding is a
+   * global a cell added, or one whose value, accessor or flags it changed: a
+   * cell that declares `prompt` or `performance` binds it like any new name.
+   */
+  const baseline = new Map<string, PropertyDescriptor>(
+    Object.getOwnPropertyNames(globalThis).flatMap((key) =>
+      Option.toArray(
+        Option.map(
+          Option.fromUndefinedOr(Object.getOwnPropertyDescriptor(globalThis, key)),
+          (descriptor): readonly [string, PropertyDescriptor] => [key, descriptor],
+        ),
+      ),
+    ),
+  )
+  /**
+   * Globals the host rewrites while it runs: Effect keeps the running fiber
+   * in one. They are never a binding and a reset never touches them.
+   */
+  const hostGlobals = new Set(["~effect/Fiber/currentFiber"])
+  /**
+   * Whether a cell added, rebound, redefined or deleted this global since the
+   * evaluator started. A changed flag counts: a global made read-only is not
+   * the global the evaluator found.
+   */
+  const changed = (key: string) =>
+    !hostGlobals.has(key) &&
+    Option.match(Option.fromUndefinedOr(baseline.get(key)), {
+      onNone: () => true,
+      onSome: (found) =>
+        !Option.exists(
+          Option.fromUndefinedOr(Object.getOwnPropertyDescriptor(globalThis, key)),
+          (current) => sameDescriptor(found, current),
+        ),
+    })
+  const bindingKeys = () => Object.getOwnPropertyNames(globalThis).filter(changed)
+  /**
+   * Put one global back as the evaluator found it, or remove it when the
+   * evaluator found none; false when the realm refuses. Eval-declared vars
+   * are configurable, but a cell can define a global that is not, and
+   * `Reflect` refuses rather than throws.
+   */
+  const restoreGlobal = (key: string): boolean =>
+    Option.match(Option.fromUndefinedOr(baseline.get(key)), {
+      onNone: () => Reflect.deleteProperty(globalThis, key),
+      onSome: (descriptor) => Reflect.defineProperty(globalThis, key, descriptor),
+    })
   /**
    * Each binding's value, read from its descriptor: an accessor gives its
    * getter, which the snapshot names as a function, so reading the namespace
@@ -569,13 +663,13 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
   let reported = new Map<string, unknown>()
   const reportBindings = () => {
     const current = namespace()
-    const changed = [...current.entries()]
+    const named = [...current.entries()]
       .filter(([name, value]) => !reported.has(name) || !Object.is(reported.get(name), value))
       .map(([name]) => name)
       .sort()
       .slice(0, maximumCellBindings)
     reported = current
-    return { bindings: changed, bindingCount: current.size }
+    return { bindings: named, bindingCount: current.size }
   }
   const installConsole = (value: typeof hostConsole) =>
     Effect.sync(() => {
@@ -683,14 +777,15 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
         if (!Predicate.isFunction(revive)) return []
         const names: string[] = []
         for (const binding of bindings) {
-          if (reserved.has(binding.name) || baseline.has(binding.name)) continue
-          Object.defineProperty(globalThis, binding.name, {
+          if (hostGlobals.has(binding.name)) continue
+          // A binding may rebind a worker global; one that is not configurable stays as it is.
+          const defined = Reflect.defineProperty(globalThis, binding.name, {
             value: revive(encodeJsonText(binding.value)),
             writable: true,
             enumerable: true,
             configurable: true,
           })
-          names.push(binding.name)
+          if (defined) names.push(binding.name)
         }
         // The restore report names these; the next result names only what its cell binds.
         reported = namespace()
@@ -710,9 +805,13 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
       Semaphore.withPermit(permit, restore(bindings)),
     reset: Semaphore.withPermit(
       permit,
-      Effect.sync(() => {
-        for (const name of bindingKeys()) Reflect.deleteProperty(globalThis, name)
+      Effect.sync((): ReadonlyArray<string> => {
+        // Every global back as the evaluator found it: added names go, rebound or deleted ones return.
+        // A global the realm will not put back is named: the host replaces this worker.
+        const names = new Set([...Object.getOwnPropertyNames(globalThis), ...baseline.keys()])
+        const unrestored = [...names].filter((name) => changed(name) && !restoreGlobal(name))
         reported = new Map()
+        return unrestored
       }),
     ),
   }
@@ -801,8 +900,10 @@ export const runCellWorker = Effect.scoped(
         return yield* new CellProtocolError({ message: "A cell is already active" })
       }
       if (request._tag === "Reset") {
-        yield* kernel.reset
-        yield* transport.send(CellResponse.cases.Reset.make({ requestId: request.requestId }))
+        const unrestored = yield* kernel.reset
+        yield* transport.send(
+          CellResponse.cases.Reset.make({ requestId: request.requestId, unrestored }),
+        )
         return
       }
       if (request._tag === "Snapshot") {

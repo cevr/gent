@@ -280,4 +280,22 @@ describe("cell namespace snapshot", () => {
       { name: "huge", reason: "too-large" },
     ])
   })
+
+  // The size is the UTF-8 length of the JSON text, counted without a TextEncoder.
+  test("a binding fits by the UTF-8 bytes of its JSON text, escapes included", () => {
+    const limit = maximumSnapshotBindingBytes
+    // Two quotes; "é" is 2 bytes, an emoji 4, a JSON-escaped quote 2, a lone surrogate 6.
+    const fits: ReadonlyArray<readonly [string, string]> = [
+      ["two-byte", "é".repeat((limit - 2) / 2)],
+      ["four-byte", `${"😀".repeat((limit - 4) / 4)}é`],
+      ["escaped", '"'.repeat((limit - 2) / 2)],
+      ["surrogate", `${"\ud800".repeat(43_690)}é`],
+    ]
+    for (const [name, text] of fits) {
+      const inside = encodeSnapshot(new Map([[name, text]]))
+      expect(inside.bindings.map((binding) => binding.name)).toEqual([name])
+      const over = encodeSnapshot(new Map([[name, `${text}a`]]))
+      expect(over.omitted).toEqual([{ name, reason: "too-large" }])
+    }
+  })
 })

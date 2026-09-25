@@ -209,6 +209,18 @@
       }
     },
     {
+      // The cell value reader reads any JavaScript value a cell made, null and
+      // undefined included, through descriptors and the intrinsics it saves
+      // from the realm's globals when it loads, before any cell runs.
+      "files": ["packages/extensions/src/cell-value.ts"],
+      "rules": {
+        "effect/noGlobals": "off",
+        "effect/noNullish": "off",
+        "effect/noObjectParameters": "off",
+        "effect/noUnknownParameters": "off"
+      }
+    },
+    {
       // The shared test preload runs in bun's test host before any Effect
       // runtime: it sets the process's data directory synchronously, and
       // removes it after the process's last test.

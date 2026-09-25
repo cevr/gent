@@ -1375,43 +1375,52 @@ export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
     )
   })
 
+  /** Start a new worker process in place of one that is lost. */
+  const replaceWorker = Effect.fn("CellKernel.replaceWorker")(function* () {
+    if (failedLaunches >= maximumFailedLaunches) {
+      return yield* failure(
+        "replacement-limit",
+        `Cell worker failed ${failedLaunches} times in a row before completing a cell`,
+      )
+    }
+    return yield* Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        workerCatalogHash = Option.none()
+        child = yield* restore(openWorker()).pipe(
+          Effect.tapError(() =>
+            Effect.sync(() => {
+              failedLaunches++
+            }),
+          ),
+          Effect.mapError(processError),
+        )
+        unproven = true
+        // close can run while the replacement is starting. Never restore a closed owner.
+        if (isClosed()) return yield* failure("closed", "Cell kernel closed during replacement")
+        status = "ready"
+      }),
+    )
+  })
+
   const reset = Effect.fn("CellKernel.reset")(function* () {
     if (status === "closed") return yield* failure("closed", "Cell kernel is closed")
     // A lost worker has nothing to talk to: replace the process instead.
-    if (status === "lost") {
-      if (failedLaunches >= maximumFailedLaunches) {
-        return yield* failure(
-          "replacement-limit",
-          `Cell worker failed ${failedLaunches} times in a row before completing a cell`,
-        )
-      }
-      return yield* Effect.uninterruptibleMask((restore) =>
-        Effect.gen(function* () {
-          workerCatalogHash = Option.none()
-          child = yield* restore(openWorker()).pipe(
-            Effect.tapError(() =>
-              Effect.sync(() => {
-                failedLaunches++
-              }),
-            ),
-            Effect.mapError(processError),
-          )
-          unproven = true
-          // close can run while the replacement is starting. Never restore a closed owner.
-          if (isClosed()) return yield* failure("closed", "Cell kernel closed during replacement")
-          status = "ready"
-        }),
-      )
-    }
-    // A live worker resets like any other control request; the reply carries
-    // nothing but its own id, so that is what the read returns.
-    yield* control(
+    if (status === "lost") return yield* replaceWorker()
+    // A live worker resets like any other control request; the reply names
+    // the globals it could not put back.
+    const unrestored = yield* control(
       (requestId) => CellRequest.cases.Reset.make({ requestId }),
-      (frame, requestId): Option.Option<string> => {
-        if (frame._tag === "Reset" && frame.requestId === requestId) return Option.some(requestId)
+      (frame, requestId): Option.Option<ReadonlyArray<string>> => {
+        if (frame._tag === "Reset" && frame.requestId === requestId)
+          return Option.some(frame.unrestored ?? [])
         return Option.none()
       },
     )
+    if (unrestored.length === 0) return
+    // A global the worker cannot remove or put back would outlive the reset,
+    // so the worker is replaced: a reset always leaves the globals it found.
+    yield* discard().pipe(Effect.mapError(processError))
+    return yield* replaceWorker()
   })
 
   const snapshot = control(
