@@ -567,6 +567,13 @@ export function Session(props: SessionProps) {
 
   const syntaxStyle = createMemo(() => buildSyntaxStyle(theme))
   const [footerHeight, setFooterHeight] = createSignal(4)
+  // The sign-in docks in the footer like every pane. It stays mounted while
+  // its overlay is open, so the flow it is in survives other UI updates.
+  const authOverlay = () => {
+    const overlay = controller.uiState().overlay
+    if (overlay._tag === "auth") return Option.some(overlay)
+    return Option.none()
+  }
   const mermaidDiagrams = createMemo(() => {
     if (controller.uiState().overlay._tag === "mermaid") {
       return collectDiagrams(controller.messages(), dimensions().width)
@@ -813,6 +820,16 @@ export function Session(props: SessionProps) {
             entries={controller.promptSearch.entries()}
             onEvent={controller.promptSearch.onEvent}
           />
+          <Show when={Option.getOrUndefined(authOverlay())}>
+            {(overlay) => (
+              <Auth
+                sessionId={props.sessionId}
+                enforceAuth={overlay().enforceAuth}
+                onResolved={controller.resolveAuthGate}
+                onClose={controller.closeOverlay}
+              />
+            )}
+          </Show>
           <ExtensionWidgets slot="below-input" />
         </box>
 
@@ -821,19 +838,6 @@ export function Session(props: SessionProps) {
           diagrams={mermaidDiagrams()}
           onClose={controller.closeOverlay}
         />
-
-        {(() => {
-          const overlay = controller.uiState().overlay
-          if (overlay._tag !== "auth") return <></>
-          return (
-            <Auth
-              sessionId={props.sessionId}
-              enforceAuth={overlay.enforceAuth}
-              onResolved={controller.resolveAuthGate}
-              onClose={controller.closeOverlay}
-            />
-          )
-        })()}
       </box>
     </SessionControllerContext.Provider>
   )

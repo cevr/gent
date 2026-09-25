@@ -153,74 +153,12 @@ function useScrollSync(selectedId: Accessor<string>, options: ScrollSyncOptions)
 // ── chrome panel ────────────────────────────────────────────────────────────
 
 /**
- * ChromePanel — compound component for overlay panels with rounded chrome borders.
+ * ChromePanel — the rows a docked pane draws inside its `PickerFrame`.
  *
- * `Root` floats at a position and size the caller gives it; the sign-in view
- * is the one panel that still floats. The rows inside — `Body`, `Section`,
- * `Error`, `Footer` — are shared with the ruled `PickerFrame` the docked
- * panes draw.
- *
- * Usage:
- *   <ChromePanel.Root title="Commands" width={50} height={14} left={10} top={5}>
- *     <ChromePanel.Body>
- *       {scrollable content}
- *     </ChromePanel.Body>
- *     <ChromePanel.Footer>
- *       ↑↓ navigate · enter select · esc close
- *     </ChromePanel.Footer>
- *   </ChromePanel.Root>
- *
- * Root renders the positioned box with rounded borders, backdrop, and title.
- * Body is a flexGrow scrollbox for the main content.
- * Footer is a flexShrink text row at the bottom.
+ * `Body` is the flexGrow scrollbox for the pane's main content; `Section`
+ * is a padded row outside it (a text line, the note row). The frame draws the
+ * rules, the title and the key hint.
  */
-
-// ── Root ──────────────────────────────────────────────────────────
-
-interface ChromePanelRootProps {
-  title?: string
-  width: number
-  height: number
-  left: number
-  top?: number
-  children: JSX.Element
-}
-
-function ChromePanelRoot(props: ChromePanelRootProps) {
-  const { theme } = useTheme()
-  const dimensions = useTerminalDimensions()
-
-  return (
-    <>
-      {/* Transparent backdrop */}
-      <box
-        position="absolute"
-        left={0}
-        top={0}
-        width={dimensions().width}
-        height={dimensions().height}
-        backgroundColor="transparent"
-      />
-
-      {/* Panel */}
-      <box
-        position="absolute"
-        left={props.left}
-        top={props.top}
-        width={props.width}
-        height={props.height}
-        backgroundColor={theme.backgroundMenu}
-        border
-        borderStyle="rounded"
-        borderColor={theme.borderSubtle}
-        flexDirection="column"
-        title={props.title}
-      >
-        {props.children}
-      </box>
-    </>
-  )
-}
 
 // ── Body ──────────────────────────────────────────────────────────
 
@@ -252,22 +190,6 @@ function ChromePanelBody(props: ChromePanelBodyProps) {
   )
 }
 
-// ── Footer ────────────────────────────────────────────────────────
-
-interface ChromePanelFooterProps {
-  children: JSX.Element
-}
-
-function ChromePanelFooter(props: ChromePanelFooterProps) {
-  const { theme } = useTheme()
-
-  return (
-    <box flexShrink={0} paddingLeft={1}>
-      <text style={{ fg: theme.textMuted }}>{props.children}</text>
-    </box>
-  )
-}
-
 // ── Section ───────────────────────────────────────────────────────
 
 interface ChromePanelSectionProps {
@@ -282,55 +204,11 @@ function ChromePanelSection(props: ChromePanelSectionProps) {
   )
 }
 
-// ── Error ─────────────────────────────────────────────────────────
-
-interface ChromePanelErrorProps {
-  error?: string
-}
-
-function ChromePanelError(props: ChromePanelErrorProps) {
-  const { theme } = useTheme()
-
-  return (
-    <Show when={props.error}>
-      {(error) => (
-        <box paddingLeft={1} paddingRight={1} flexShrink={0}>
-          <text style={{ fg: theme.error }}>{error()}</text>
-        </box>
-      )}
-    </Show>
-  )
-}
-
-// ── Success ───────────────────────────────────────────────────────
-
-interface ChromePanelSuccessProps {
-  message?: string
-}
-
-function ChromePanelSuccess(props: ChromePanelSuccessProps) {
-  const { theme } = useTheme()
-
-  return (
-    <Show when={props.message}>
-      {(message) => (
-        <box paddingLeft={1} paddingRight={1} flexShrink={0}>
-          <text style={{ fg: theme.primary }}>✓ {message()}</text>
-        </box>
-      )}
-    </Show>
-  )
-}
-
 // ── Compound export ───────────────────────────────────────────────
 
 export const ChromePanel = {
-  Root: ChromePanelRoot,
   Body: ChromePanelBody,
   Section: ChromePanelSection,
-  Footer: ChromePanelFooter,
-  Error: ChromePanelError,
-  Success: ChromePanelSuccess,
 }
 
 // ── picker frame ────────────────────────────────────────────────────────────
@@ -449,21 +327,21 @@ export function PickerHost(props: { children: (hosting: () => boolean) => JSX.El
 }
 
 /**
- * The lines a `SelectList` draws in a `PickerFrame` body. `rows` is one line
+ * The lines a `PickerFrame` body draws (a `SelectList`). `rows` is one line
  * per row, headings included, and `query` is the filter or query row above
  * them (1 or 0). `dressed` is the least the list draws before it drops an
  * optional line: the cursor row, with the filter row and one heading above it
  * when the list has them. The frame sizes itself from these, so a list pane
  * never counts its own lines.
  */
-interface PickerListLines {
+interface PickerBodyLines {
   readonly rows: number
   readonly query: number
   readonly dressed: number
 }
 
 /** Every line the list draws: its query row and each row. */
-const fullLines = (lines: PickerListLines): number => lines.rows + lines.query
+const fullLines = (lines: PickerBodyLines): number => lines.rows + lines.query
 
 /**
  * What a `PickerFrame` tells the `SelectList` in its body: the rows the list
@@ -473,13 +351,27 @@ const fullLines = (lines: PickerListLines): number => lines.rows + lines.query
  */
 interface PickerBody {
   readonly rows: () => Option.Option<number>
-  readonly report: (lines: Option.Option<PickerListLines>) => void
+  readonly report: (lines: Option.Option<PickerBodyLines>) => void
 }
 
 const PickerBodyContext = createContext<PickerBody>({
   rows: () => Option.none(),
   report: () => {},
 })
+
+/**
+ * A frame body reports the lines it draws and reads back the rows the frame
+ * gives it (`None` outside a frame or before it is measured). `SelectList`
+ * does this; so does a body that is not a list but must fit its rows (the
+ * sign-in OAuth screen), which hides a whole box rather than let a 0-row
+ * node draw over its neighbour.
+ */
+export const usePickerBody = (lines: () => PickerBodyLines): (() => Option.Option<number>) => {
+  const body = useContext(PickerBodyContext)
+  createEffect(() => body.report(Option.some(lines())))
+  onCleanup(() => body.report(Option.none()))
+  return body.rows
+}
 
 /** Two rules and one body row: below this the rules give way. */
 const PICKER_ROWS_RULED = 3
@@ -564,7 +456,7 @@ export function PickerFrame(
     if (Option.isSome(Option.fromUndefinedOr(props.detail)) || Option.isSome(error())) return 1
     return 0
   }
-  const [list, setList] = createSignal(Option.none<PickerListLines>())
+  const [list, setList] = createSignal(Option.none<PickerBodyLines>())
   const height = () =>
     Option.getOrElse(Option.fromUndefinedOr(props.height), () => {
       const rows = Option.match(list(), { onNone: () => 0, onSome: (lines) => lines.rows })
@@ -875,7 +767,11 @@ interface SelectListFilter {
 interface SelectListProps<A> {
   /** Unique among mounted lists: it keys the scroll-sync row ids. */
   readonly id: string
-  /** Mount but hide when false; keys stay unbound. */
+  /**
+   * Whether the list takes its keys. It draws its rows either way: a pane that
+   * closes unmounts its list (the autocomplete popup keeps its list mounted
+   * and binds its keys only while it has rows).
+   */
   readonly open: boolean
   readonly rows: () => ReadonlyArray<SelectListRow<A>>
   /**
@@ -920,7 +816,7 @@ interface SelectListProps<A> {
 
 /**
  * The list body, plus the query row when a filter is configured. A pane wraps
- * this in its own `ChromePanel` chrome.
+ * this in its `PickerFrame`.
  */
 export function SelectList<A>(props: SelectListProps<A>) {
   const { theme } = useTheme()
@@ -1112,7 +1008,6 @@ export function SelectList<A>(props: SelectListProps<A>) {
   // reports what it draws, so the frame drops its note row first; then the
   // list drops its headings, then its filter row, and one row stays for the
   // cursor. An unmeasured frame, no frame, and a list that fits draw it all.
-  const pickerBody = useContext(PickerBodyContext)
   const hasQueryRow = () =>
     Option.isSome(Option.fromUndefinedOr(props.filter)) ||
     Option.isSome(Option.fromUndefinedOr(props.queryRow))
@@ -1124,15 +1019,14 @@ export function SelectList<A>(props: SelectListProps<A>) {
     if (rows().length > values().length) return 1
     return 0
   }
-  const lines = (): PickerListLines => ({
+  const lines = (): PickerBodyLines => ({
     rows: rows().length,
     query: inputLines(),
     dressed: 1 + inputLines() + headingLines(),
   })
-  createEffect(() => pickerBody.report(Option.some(lines())))
-  onCleanup(() => pickerBody.report(Option.none()))
+  const bodyRows = usePickerBody(lines)
   const fits = (needed: number) =>
-    Option.match(pickerBody.rows(), {
+    Option.match(bodyRows(), {
       onNone: () => true,
       onSome: (available) => available >= fullLines(lines()) || available >= needed,
     })

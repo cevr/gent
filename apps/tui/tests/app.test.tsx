@@ -976,11 +976,11 @@ describe("App auth gate", () => {
       applySnapshotAgent(clientContext, AgentName.make("deepwork"))
       const frame = yield* waitForFrame(
         setup,
-        (next) => next.includes("API Keys"),
+        (next) => next.includes("Sign in ·"),
         "API Keys after agent switch",
       )
       expect(calls.length).toBeGreaterThan(0)
-      expect(frame).toContain("API Keys")
+      expect(frame).toContain("Sign in ·")
       setup.renderer.destroy()
     }),
   )
@@ -1030,7 +1030,7 @@ describe("App auth gate", () => {
       )
       const frame = yield* waitForFrame(
         setup,
-        (next) => next.includes("API Keys"),
+        (next) => next.includes("Sign in ·"),
         "API Keys from initial agent",
       )
       // The auth check names the session that is actually mounted. It used to
@@ -1045,9 +1045,96 @@ describe("App auth gate", () => {
       // checking; it settles instead. (Two checks: the agent arrives after the
       // first, which predates the overlay being the picker's owner.)
       expect(calls.length).toBe(2)
-      expect(frame).toContain("API Keys")
+      expect(frame).toContain("Sign in ·")
       setup.renderer.destroy()
     }),
+  )
+  /**
+   * The enforced sign-in on a `height`-row terminal: openai is required and
+   * has no key, zzprovider is optional. The gate opens the pane on openai's
+   * sign-in methods.
+   */
+  const mountSignIn = (height = 24) =>
+    Effect.gen(function* () {
+      const client = createMockClient({
+        auth: {
+          listProviders: () =>
+            Effect.succeed([
+              {
+                provider: "openai",
+                hasKey: false,
+                required: true,
+                source: noAuthSource,
+                authType: absent,
+              },
+              {
+                provider: "zzprovider",
+                hasKey: false,
+                required: false,
+                source: noAuthSource,
+                authType: absent,
+              },
+            ]),
+          listMethods: () => Effect.succeed({ openai: [apiMethod] }),
+        },
+      })
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <App />, {
+          client,
+          runtime: createMockRuntime(),
+          initialAgent: AgentName.make("main"),
+          height,
+          initialSession: {
+            id: SessionId.make("session-a"),
+            activeBranchId: BranchId.make("branch-a"),
+            name: "A",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        }),
+      )
+      yield* waitForFrame(setup, (frame) => frame.includes("API key [api]"), "openai's methods")
+      return setup
+    })
+  // The method screen is its own pane: the provider list it came from is gone,
+  // so its rows never read as the choice. The key screen draws no list at all.
+  it.live("the sign-in method and key screens draw no provider rows", () =>
+    Effect.gen(function* () {
+      const setup = yield* mountSignIn()
+      const methods = renderFrame(setup)
+      expect(methods).not.toContain("zzprovider")
+      expect(methods).not.toContain("openai [none]")
+      setup.mockInput.pressEnter()
+      const key = yield* waitForFrame(setup, (frame) => frame.includes("API key ›"), "key line")
+      expect(key).not.toContain("zzprovider")
+      expect(key).not.toContain("API key [api]")
+      setup.renderer.destroy()
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  // Docked, not modal: the sign-in draws under the composer's status row like
+  // every pane, and a short terminal keeps its cursor row.
+  it.live("the sign-in docks under the composer and keeps its cursor row at 10 rows", () =>
+    Effect.gen(function* () {
+      const setup = yield* mountSignIn()
+      const lines = renderFrame(setup).split("\n")
+      const input = lines.findIndex((line) => line.startsWith("┃"))
+      const method = lines.findIndex((line) => line.includes("API key [api]"))
+      expect(input).toBeGreaterThanOrEqual(0)
+      expect(method).toBeGreaterThan(input)
+      expect(renderFrame(setup)).not.toContain("╭")
+      setup.resize(setup.renderer.terminalWidth, 10)
+      yield* waitForFrame(
+        setup,
+        (frame) => setup.renderer.terminalHeight === 10 && frame.includes("API key [api]"),
+        "the cursor row at 10 rows",
+      )
+      // Pasted text reaches the key line through the pane's own scope.
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, (frame) => frame.includes("API key ›"), "key line")
+      yield* Effect.promise(() => setup.mockInput.pasteBracketedText("sk-abc\n"))
+      yield* waitForFrame(setup, (frame) => frame.includes("API key › ******"), "masked key")
+      setup.renderer.destroy()
+    }).pipe(Effect.timeout("10 seconds")),
   )
   it.live("a send refused after a switch waits in its own session, draft and reason both", () =>
     Effect.gen(function* () {
@@ -2629,10 +2716,10 @@ describe("App auth gate", () => {
       // Auth overlay should appear
       const authFrame = yield* waitForFrame(
         setup,
-        (next) => next.includes("API Keys"),
+        (next) => next.includes("Sign in ·"),
         "auth overlay",
       )
-      expect(authFrame).toContain("API Keys")
+      expect(authFrame).toContain("Sign in ·")
       // Prompt still not sent while auth overlay is open
       expect(sentMessages).toEqual([])
       setup.renderer.destroy()
@@ -2672,7 +2759,7 @@ describe("App auth gate", () => {
           },
         }),
       )
-      yield* waitForFrame(setup, (frame) => frame.includes("API Keys"), "the sign-in")
+      yield* waitForFrame(setup, (frame) => frame.includes("Sign in ·"), "the sign-in")
       const destroy = setup.renderer.destroy.bind(setup.renderer)
       setup.renderer.destroy = () => {
         shutdowns += 1
@@ -2837,7 +2924,7 @@ describe("App auth gate", () => {
         "retryable auth error",
       )
       setup.mockInput.pressKey("r")
-      yield* waitForFrame(setup, (frame) => !frame.includes("API Keys"), "auth retry resolved")
+      yield* waitForFrame(setup, (frame) => !frame.includes("Sign in ·"), "auth retry resolved")
       expect(authChecks).toBe(3)
       setup.renderer.destroy()
     }),
@@ -3000,7 +3087,7 @@ describe("App auth gate", () => {
       expect(sentMessages).toEqual([])
       initialAuthCheckResolved = true
       yield* Deferred.succeed(initialAuthCheck, void 0)
-      yield* waitForFrame(setup, (frame) => frame.includes("API Keys"), "auth gate")
+      yield* waitForFrame(setup, (frame) => frame.includes("Sign in ·"), "auth gate")
       expect(sentMessages).toEqual([])
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
@@ -3008,12 +3095,12 @@ describe("App auth gate", () => {
       yield* Effect.promise(() => setup.renderOnce())
       yield* waitForFrame(
         setup,
-        (frame) => frame.includes("Enter API key for openai"),
+        (frame) => frame.includes("Sign in · openai · API key"),
         "openai key input",
       )
       yield* Effect.promise(() => setup.mockInput.typeText("sk-test"))
       setup.mockInput.pressEnter()
-      yield* waitForFrame(setup, (frame) => !frame.includes("API Keys"), "auth overlay closed")
+      yield* waitForFrame(setup, (frame) => !frame.includes("Sign in ·"), "auth overlay closed")
       expect(hasOpenAiKey).toBe(true)
       yield* waitForFrame(
         setup,
@@ -3148,7 +3235,7 @@ describe("App auth gate", () => {
         ),
       )
       const clientContext = yield* requireClient(ctx)
-      yield* waitForFrame(setup, (frame) => frame.includes("API Keys"), "auth gate")
+      yield* waitForFrame(setup, (frame) => frame.includes("Sign in ·"), "auth gate")
       applySnapshotAgent(clientContext, AgentName.make("deepwork"))
       yield* waitForFrame(setup, () => sessionAuthChecks >= 2, "stale session auth check started")
       setup.mockInput.pressEnter()
@@ -3156,12 +3243,12 @@ describe("App auth gate", () => {
       setup.mockInput.pressEnter()
       yield* waitForFrame(
         setup,
-        (frame) => frame.includes("Enter API key for openai"),
+        (frame) => frame.includes("Sign in · openai · API key"),
         "openai key input",
       )
       yield* Effect.promise(() => setup.mockInput.typeText("sk-test"))
       setup.mockInput.pressEnter()
-      yield* waitForFrame(setup, (frame) => !frame.includes("API Keys"), "auth resolved")
+      yield* waitForFrame(setup, (frame) => !frame.includes("Sign in ·"), "auth resolved")
       yield* waitForFrame(
         setup,
         () => sentMessages.some((message) => message.content === initialPrompt),
@@ -3179,7 +3266,7 @@ describe("App auth gate", () => {
       // gent/no-sleep: allow real-clock gap so the resumed-send fiber resolves before assertion
       yield* Effect.sleep("20 millis")
       yield* Effect.promise(() => setup.renderOnce())
-      expect(renderFrame(setup)).not.toContain("API Keys")
+      expect(renderFrame(setup)).not.toContain("Sign in ·")
       expect(sentMessages.filter((message) => message.content === initialPrompt)).toHaveLength(1)
       setup.renderer.destroy()
     }),

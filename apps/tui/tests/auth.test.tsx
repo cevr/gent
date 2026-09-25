@@ -407,7 +407,7 @@ describe("Auth route", () => {
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
-      yield* waitForFrame(setup, (frame) => frame.includes("Enter API key for anthropic"))
+      yield* waitForFrame(setup, (frame) => frame.includes("Sign in · anthropic · API key"))
       yield* Effect.promise(() => setup.mockInput.typeText("old-key"))
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressEnter()
@@ -420,15 +420,15 @@ describe("Auth route", () => {
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
-      yield* waitForFrame(setup, (frame) => frame.includes("Enter API key for openai"))
+      yield* waitForFrame(setup, (frame) => frame.includes("Sign in · openai · API key"))
       yield* Deferred.succeed(oldKeySave, void 0)
       const frame = yield* waitForFrame(
         setup,
         (next) =>
-          next.includes("Enter API key for openai") &&
+          next.includes("Sign in · openai · API key") &&
           !next.includes("API key saved for anthropic"),
       )
-      expect(frame).toContain("Enter API key for openai")
+      expect(frame).toContain("Sign in · openai · API key")
       expect(frame).not.toContain("API key saved for anthropic")
       setup.renderer.destroy()
     }),
@@ -866,11 +866,11 @@ describe("Auth route", () => {
         (next) => next.includes("Could not open a browser") && callbackCalls.length === 1,
         "device flow keeps waiting without a browser",
       )
-      expect(frame).toContain("Authorize openai")
+      expect(frame).toContain("Sign in · openai ·")
       expect(frame).toContain("WXYZ-1234")
       expect(panelText(frame)).toContain("https://auth.openai.com/codex/device")
       expect(frame).not.toContain("Failed to open URL")
-      expect(frame).not.toContain("r=retry")
+      expect(frame).not.toContain("r retry")
       expect(callbackCalls).toEqual([
         expect.objectContaining({ provider: "openai", authorizationId: "auth-device" }),
       ])
@@ -945,7 +945,7 @@ describe("Auth route", () => {
         applySnapshotAgent(yield* requireClient(ctx), AgentName.make("cowork"))
         yield* Effect.yieldNow
         const reconnected = yield* waitForFrame(setup, () => true)
-        expect(reconnected).toContain("Authorize openai")
+        expect(reconnected).toContain("Sign in · openai ·")
         expect(reconnected).toContain("WXYZ-1234")
         expect(panelText(reconnected)).toContain("https://auth.openai.com/codex/device")
         expect(providerLoads).toBe(1)
