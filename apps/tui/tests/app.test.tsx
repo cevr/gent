@@ -1366,6 +1366,20 @@ describe("App auth gate", () => {
       }).pipe(Effect.timeout("10 seconds")),
     )
   }
+  // Each render has its own home: no prompt an earlier test or run sent is
+  // in its history.
+  it.live("a render starts with an empty prompt history", () =>
+    Effect.gen(function* () {
+      const view = yield* mountRunningTurn()
+      view.setup.mockInput.pressKey("r", { ctrl: true })
+      const frame = yield* waitForFrame(
+        view.setup,
+        (next) => next.includes("Prompt search"),
+        "prompt search",
+      )
+      expect(frame).toContain("Prompt search · 0")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   // A key the btw ask line takes never reaches the session scope, and it is
   // still another gesture: the second ctrl+c cancels the next turn.
   it.live("a key the btw ask line takes between two ctrl+c presses makes the second cancel", () =>
