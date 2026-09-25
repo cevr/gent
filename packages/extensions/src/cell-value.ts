@@ -592,6 +592,30 @@ const tooLarge = new Omitted("too-large")
 
 const tagged = (kind: string, value: Schema.Json): Schema.Json => ({ [snapshotTag]: kind, value })
 
+/** The native UTF-8 byte count, saved at load so a replaced `Buffer` never runs here. */
+const byteLength = Buffer.byteLength.bind(Buffer)
+
+/**
+ * The UTF-8 bytes one binding may still take. Each value charges a floor of
+ * its encoded size, and the encoder stops at the first charge past the budget,
+ * so a large value is never read to its end.
+ */
+class Budget {
+  constructor(private bytes: number) {}
+
+  /** Charge `bytes`; false once the budget is spent. */
+  spend(bytes: number): boolean {
+    this.bytes -= bytes
+    return this.bytes >= 0
+  }
+
+  /** A string and its quotes. UTF-8 takes at least one byte per UTF-16 unit, so a longer string is refused uncounted. */
+  text(value: string): boolean {
+    if (value.length > this.bytes) return this.spend(value.length)
+    return this.spend(byteLength(value) + 2)
+  }
+}
+
 /** Plain means its prototype is null or a root Object.prototype from any realm. */
 const isPlainObject = (value: object) => {
   const proto: unknown = prototypeOf(value)
@@ -614,18 +638,28 @@ const typedArrayKinds: ReadonlyArray<string> = [
   "BigUint64Array",
 ]
 
-const encodePrimitive = (value: unknown): Encoded | undefined => {
-  if (value === null || Predicate.isString(value) || Predicate.isBoolean(value)) return value
+const encodePrimitive = (value: unknown, budget: Budget): Encoded | undefined => {
+  if (Predicate.isString(value)) {
+    if (budget.text(value)) return value
+    return tooLarge
+  }
+  if (Predicate.isFunction(value)) return omittedFunction
+  if (Predicate.isObjectKeyword(value)) return undefined
+  // Every other primitive encodes to at least one byte, plus a separator.
+  if (!budget.spend(2)) return tooLarge
+  if (value === null || Predicate.isBoolean(value)) return value
   if (Predicate.isUndefined(value)) return tagged("undefined", null)
   if (Predicate.isNumber(value)) {
-    if (Number.isFinite(value)) return value
+    // A finite number is its shortest text; the floor already charged two bytes.
+    if (Number.isFinite(value)) {
+      if (budget.spend(String(value).length - 1)) return value
+      return tooLarge
+    }
     return tagged("number", String(value))
   }
   // The abstract ToString: a `toString` on the value never runs.
   if (Predicate.isBigInt(value)) return tagged("bigint", String(value))
-  if (Predicate.isFunction(value)) return omittedFunction
-  if (!Predicate.isObjectKeyword(value)) return unsupported
-  return undefined
+  return unsupported
 }
 
 /** An array's elements through their descriptors; a hole reads as undefined. */
@@ -645,7 +679,11 @@ const encodeArray = (array: ReadonlyArray<unknown>, inner: (item: unknown) => En
 }
 
 /** A plain object's own enumerable string keys, in `Object.entries` order; any accessor is cell code. */
-const encodeRecord = (object: object, inner: (item: unknown) => Encoded): Encoded => {
+const encodeRecord = (
+  object: object,
+  inner: (item: unknown) => Encoded,
+  budget: Budget,
+): Encoded => {
   const keys = ownKeys(object)
   if (keys.length > maximumSnapshotEntries) return tooLarge
   const out: Record<string, Schema.Json> = {}
@@ -654,6 +692,7 @@ const encodeRecord = (object: object, inner: (item: unknown) => Encoded): Encode
     const descriptor = ownDescriptor(object, key)
     if (Predicate.isUndefined(descriptor) || descriptor.enumerable !== true) continue
     if (!hasOwn(descriptor, "value")) return unsupported
+    if (!budget.text(key)) return tooLarge
     const encoded = inner(descriptor.value)
     if (isOmitted(encoded)) return encoded
     // Assignment to an own `__proto__` key would set the prototype and drop the key.
@@ -681,18 +720,23 @@ const errorText = (error: object, key: string, fallback: string): Option.Option<
     },
   })
 
-const encodeError = (error: object): Encoded => {
+const encodeError = (error: object, budget: Budget): Encoded => {
   const name = errorText(error, "name", "Error")
   const message = errorText(error, "message", "")
   const stack = errorText(error, "stack", "")
   if (Option.isNone(name) || Option.isNone(message) || Option.isNone(stack)) return unsupported
+  if (!budget.text(name.value) || !budget.text(message.value) || !budget.text(stack.value))
+    return tooLarge
   return tagged("error", { name: name.value, message: message.value, stack: stack.value })
 }
 
-const encodeRegExp = (value: object): Encoded =>
+const encodeRegExp = (value: object, budget: Budget): Encoded =>
   Option.match(readRegExp(value), {
     onNone: () => unsupported,
-    onSome: ({ source, flags }) => tagged("regexp", [source, flags]),
+    onSome: ({ source, flags }) => {
+      if (!budget.text(source)) return tooLarge
+      return tagged("regexp", [source, flags])
+    },
   })
 
 /** A Map's or Set's members through the built-in `size` and `forEach`; a Map member encodes as `[key, value]`. */
@@ -719,11 +763,11 @@ const encodeCollection = (
   return tagged(kind, out)
 }
 
-const encodeTypedArray = (value: object): Encoded => {
+const encodeTypedArray = (value: object, budget: Budget): Encoded => {
   const typed = readTypedArray(value)
   if (Option.isNone(typed) || !typedArrayKinds.includes(typed.value.kind)) return unsupported
   const { kind, length } = typed.value
-  if (length > maximumSnapshotEntries) return tooLarge
+  if (length > maximumSnapshotEntries || !budget.spend(length * 2)) return tooLarge
   const values: Array<Schema.Json> = []
   for (let index = 0; index < length; index++) {
     const item = typedArrayItem(value, index)
@@ -735,61 +779,58 @@ const encodeTypedArray = (value: object): Encoded => {
 }
 
 /** Built-ins by brand: a brand check reads the internal slot, and so does the read. */
-const encodeBuiltin = (value: object, inner: (item: unknown) => Encoded): Encoded | undefined => {
-  if (isNativeError(value)) return encodeError(value)
+const encodeBuiltin = (
+  value: object,
+  inner: (item: unknown) => Encoded,
+  budget: Budget,
+): Encoded | undefined => {
+  if (isNativeError(value)) return encodeError(value, budget)
   if (isDate(value))
     return Option.match(readDate(value), {
       onNone: () => unsupported,
       onSome: (time) => tagged("date", time),
     })
-  if (isRegExp(value)) return encodeRegExp(value)
+  if (isRegExp(value)) return encodeRegExp(value, budget)
   if (isMap(value)) return encodeCollection(value, "map", inner)
   if (isSet(value)) return encodeCollection(value, "set", inner)
-  if (isTypedArray(value)) return encodeTypedArray(value)
+  if (isTypedArray(value)) return encodeTypedArray(value, budget)
   return undefined
 }
 
-const encodeValue = (value: unknown, depth: number, seen: Array<object>): Encoded => {
+const encodeValue = (
+  value: unknown,
+  depth: number,
+  seen: Array<object>,
+  budget: Budget,
+): Encoded => {
   if (depth > maximumSnapshotDepth) return tooDeep
-  const primitive = encodePrimitive(value)
+  const primitive = encodePrimitive(value, budget)
   if (!Predicate.isUndefined(primitive)) return primitive
   // Every trap of a Proxy is cell code, and no read of one is safe.
   if (!Predicate.isObjectKeyword(value) || isProxy(value)) return unsupported
   const object: object = value
   if (seen.includes(object)) return cyclic
+  // A container encodes to at least its brackets and a separator.
+  if (!budget.spend(3)) return tooLarge
   seen.push(object)
-  const inner = (child: unknown) => encodeValue(child, depth + 1, seen)
+  const inner = (child: unknown) => encodeValue(child, depth + 1, seen, budget)
   let encoded: Encoded
-  const builtin = encodeBuiltin(object, inner)
+  const builtin = encodeBuiltin(object, inner, budget)
   if (!Predicate.isUndefined(builtin)) encoded = builtin
   else if (isOrdinaryArray(object)) encoded = encodeArray(object, inner)
-  else if (isPlainObject(object)) encoded = encodeRecord(object, inner)
+  else if (isPlainObject(object)) encoded = encodeRecord(object, inner, budget)
   else encoded = unsupported
   seen.pop()
   return encoded
-}
-
-/** The JSON text's UTF-8 length. */
-const utf8Length = (text: string): number => {
-  let bytes = 0
-  for (let index = 0; index < text.length; index++) {
-    const code = text.charCodeAt(index)
-    if (code < 0x80) bytes += 1
-    else if (code < 0x800) bytes += 2
-    else if (code >= 0xd800 && code <= 0xdbff && index + 1 < text.length) {
-      // Stringified JSON escapes a lone surrogate, so a high one here opens a pair.
-      bytes += 4
-      index++
-    } else bytes += 3
-  }
-  return bytes
 }
 
 /**
  * One binding's encoding. Encoding runs no cell code; a host getter can still
  * throw, and that value cannot round-trip either.
  */
-const encodeBinding = Option.liftThrowable((value: unknown): Encoded => encodeValue(value, 0, []))
+const encodeBinding = Option.liftThrowable((value: unknown, budget: Budget): Encoded =>
+  encodeValue(value, 0, [], budget),
+)
 
 /** Encode every binding. Values that cannot round-trip are named with the reason, never silently dropped. */
 export const encodeSnapshot = (namespace: ReadonlyMap<string, unknown>): CellSnapshot => {
@@ -797,12 +838,14 @@ export const encodeSnapshot = (namespace: ReadonlyMap<string, unknown>): CellSna
   const omitted: Array<SnapshotOmission> = []
   let total = 0
   for (const [name, value] of namespace) {
-    const encoded = Option.getOrElse(encodeBinding(value), () => unsupported)
+    // The budget is the smaller of the binding cap and what the snapshot has left.
+    const budget = new Budget(Math.min(maximumSnapshotBindingBytes, maximumSnapshotBytes - total))
+    const encoded = Option.getOrElse(encodeBinding(value, budget), () => unsupported)
     if (isOmitted(encoded)) {
       omitted.push({ name, reason: encoded.reason })
       continue
     }
-    const size = utf8Length(JSON.stringify(encoded))
+    const size = byteLength(JSON.stringify(encoded))
     if (size > maximumSnapshotBindingBytes || total + size > maximumSnapshotBytes) {
       omitted.push({ name, reason: "too-large" })
       continue
