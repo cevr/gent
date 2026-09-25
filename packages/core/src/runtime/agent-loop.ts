@@ -1198,10 +1198,11 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
     Effect.ignore,
   )
 
-  /** True when the turn `messageId` opened runs and an interrupt already stops it. */
-  const stopping = Effect.fn("AgentLoop.stopping")(function* (messageId: MessageId) {
+  /** True when a turn (the one `messageId` opened, if given) runs and an interrupt already stops it. */
+  const stopping = Effect.fn("AgentLoop.stopping")(function* (messageId?: MessageId) {
     const snap = yield* scope.inbox.phase
-    if (snap._tag === "Idle" || snap.message.id !== messageId) return false
+    if (snap._tag === "Idle") return false
+    if (Predicate.isNotUndefined(messageId) && snap.message.id !== messageId) return false
     return yield* scope.turnInterruption.interrupted
   })
 
@@ -1436,8 +1437,8 @@ type AgentLoopBehavior = {
     options: { readonly queueOnly: boolean },
   ) => Effect.Effect<Option.Option<RunningState>, AgentLoopError | FollowUpQueueFull>
   interrupt: (messageId?: MessageId) => Effect.Effect<boolean, AgentLoopError>
-  /** True when the turn `messageId` opened runs and an interrupt already stops it. */
-  stopping: (messageId: MessageId) => Effect.Effect<boolean>
+  /** True when a turn (the one `messageId` opened, if given) runs and an interrupt already stops it. */
+  stopping: (messageId?: MessageId) => Effect.Effect<boolean>
   respondInteraction: (requestId: InteractionRequestId) => Effect.Effect<void, AgentLoopError>
   withSideMutation: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
   /** Mark the per-entity behavior ready to accept state mutations. */
@@ -2765,13 +2766,21 @@ const buildAgentLoopActorHandlers = (config: {
      * when the loop no longer holds it (its turn ended, or a step already
      * joined it into a turn that another message opened), or when an earlier
      * interrupt already stops its turn: that stop is not this one's doing.
+     * A steer waits to join the running turn, so a steer taken back while an
+     * earlier interrupt stops that turn is also false: the earlier stop
+     * already ends what the steer was for, and its owner reports it.
      */
     const stopMessage = Effect.fn("AgentLoopActor.stopMessage")(function* (messageId: MessageId) {
       // Read before the cancellation is recorded: a turn that starts after
       // the record latches itself, and that latch is this stop's.
-      const alreadyStopping = yield* Option.match(lifecycleHandle(yield* Ref.get(lifecycleRef)), {
+      const open = lifecycleHandle(yield* Ref.get(lifecycleRef))
+      const alreadyStopping = yield* Option.match(open, {
         onNone: () => Effect.succeed(false),
-        onSome: (open) => open.stopping(messageId),
+        onSome: (loop) => loop.stopping(messageId),
+      })
+      const turnStopping = yield* Option.match(open, {
+        onNone: () => Effect.succeed(false),
+        onSome: (loop) => loop.stopping(),
       })
       yield* operations
         .cancelTurn({ sessionId, branchId, messageId })
@@ -2781,7 +2790,7 @@ const buildAgentLoopActorHandlers = (config: {
       // An idle loop has no turn to interrupt: the interrupt reports false.
       const interrupted = yield* handle.interrupt(messageId).pipe(orCleanup(handle))
       const held = handle.inbox.holds(yield* handle.inbox.read, messageId)
-      return takenBack || (!alreadyStopping && (interrupted || held))
+      return (takenBack && !turnStopping) || (!alreadyStopping && (interrupted || held))
     })
 
     const applySteer = Effect.fn("AgentLoopActor.applySteer")(function* (

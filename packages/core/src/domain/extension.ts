@@ -845,8 +845,9 @@ export interface ExtensionSessionService {
    * has read (the steer is taken back). Waits for the branch's loop and
    * returns true when the stop reached the message there; false when the
    * loop no longer holds it (its turn ended, or a step joined it into a turn
-   * another message opened, which runs on). A `requestId` makes a repeat of
-   * the same stop a no-op.
+   * another message opened, which runs on), and when an earlier stop already
+   * stops the turn it opened or the turn its steer waited to join. A
+   * `requestId` makes a repeat of the same stop a no-op.
    */
   readonly stopMessage: (params: {
     readonly sessionId?: SessionId
