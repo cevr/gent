@@ -9,6 +9,7 @@ import {
   type FollowUpQueueFull,
   entityIdOf,
   type SessionRuntimeState,
+  type StopRequester,
 } from "../../src/domain/agent-loop"
 import { AgentDefinition, AgentName, type Model, ModelId } from "../../src/domain/agent"
 import { AgentLoopSessionGovernance, AgentLoopTestActor } from "../../src/runtime/agent-loop"
@@ -251,6 +252,8 @@ export const stopAgentLoopMessage = (input: {
   readonly branchId: BranchId
   readonly messageId: MessageId
   readonly requestId: string
+  /** The asking branch; a raw client stop names none. */
+  readonly requester?: StopRequester
 }) =>
   Effect.gen(function* () {
     yield* ensureAgentLoopStorageParents(input)
@@ -265,6 +268,7 @@ export const stopAgentLoopMessage = (input: {
         branchId: input.branchId,
         commandId: ActorCommandId.make(input.requestId),
         messageId: input.messageId,
+        requester: input.requester,
       }),
     )
   })

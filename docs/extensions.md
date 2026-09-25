@@ -158,8 +158,10 @@ no-op.
   back). It waits for the branch's loop and answers `true` when the stop
   reached the message. It answers `false` when the loop no longer holds the
   message (its turn ended, or a step joined it into another turn), and when
-  an earlier stop already stops the turn it opened or the turn it waited to
-  join.
+  an earlier stop already stops the turn it opened. A steer taken back
+  answers `true`, unless an earlier stop from the same branch already stops
+  the turn the steer waited to join: that stop answered `true`, so the
+  calling branch hears of it once.
 
 A branch's loop that nothing holds is passivated after about a minute idle,
 and the branch scope closes with it: a fiber forked into a branch resource

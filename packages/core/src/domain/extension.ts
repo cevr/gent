@@ -855,7 +855,9 @@ export interface ExtensionSessionService {
    * returns true when the stop reached the message there; false when the
    * loop no longer holds it (its turn ended, or a step joined it into a turn
    * another message opened, which runs on), and when an earlier stop already
-   * stops the turn it opened or the turn its steer waited to join. A
+   * stops the turn it opened. A steer taken back answers true, unless an
+   * earlier stop from this same branch already stops the turn the steer
+   * waited to join: that stop answered true, so the branch is told once. A
    * `requestId` makes a repeat of the same stop a no-op.
    */
   readonly stopMessage: (params: {
