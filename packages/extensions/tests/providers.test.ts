@@ -225,6 +225,32 @@ describe("OpenAI-compatible provider drivers", () => {
       }
     }).pipe(Effect.provide(platformLayer)),
   )
+
+  // The SDK names `developer` for any model id that starts with `o`; the
+  // Mistral chat schema (`@mistralai/mistralai` `Roles`) has no such role.
+  it.live("a Mistral open model gets its system messages with the system role", () =>
+    Effect.gen(function* () {
+      const contributions = yield* collectTestContributions(MistralExtension.setup)
+      const driver = onlyDriver(contributions.modelDrivers ?? [])
+      const model = yield* driver.resolveModel("open-mistral-nemo", makeApiAuthInfo("key"))
+      const fetchState = makeFakeFetchState()
+      yield* oneGenerate(model, fetchState, () => chatHappyResponse("open-mistral-nemo"), [
+        { role: "system", content: "Fixed session instructions." },
+        { role: "user", content: "Start the job." },
+        { role: "system", content: "Answer in one line from now on." },
+        { role: "user", content: "What is running?" },
+      ])
+      const body = yield* Schema.decodeEffect(ChatRequestJson)(
+        Option.getOrThrow(Option.fromUndefinedOr(fetchState.captured.at(-1)?.body)),
+      )
+      expect(body.messages.map((message) => message.role)).toEqual([
+        "system",
+        "user",
+        "system",
+        "user",
+      ])
+    }).pipe(Effect.provide(platformLayer)),
+  )
 })
 
 /** The chat-completions request fields the notice test reads. */

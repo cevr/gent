@@ -2545,6 +2545,9 @@ describe("classifyBashCommand", () => {
       "docker run --group-add g --entrypoint git alpine reset --hard",
       `docker run --expose 80 --entrypoint sh alpine -c 'rm -rf ${x}'`,
       `docker run --volumes-from c --entrypoint sh alpine -c 'rm -rf ${x}'`,
+      // After the entrypoint too: the image may be the word after `80`.
+      `docker run --entrypoint sh --expose 80 alpine -c 'rm -rf ${x}'`,
+      `docker compose run --entrypoint sh --label-file f web -c 'rm -rf ${x}'`,
       // Compose splits the entrypoint into words: with the words after the
       // service, it is one script.
       `docker compose run --entrypoint 'rm -rf ${x}' web`,
@@ -2559,6 +2562,7 @@ describe("classifyBashCommand", () => {
     for (const command of [
       "docker run --rm --entrypoint '' alpine ls",
       "docker run --group-add g --entrypoint ls alpine -la",
+      "docker run --entrypoint sh --expose 80 alpine -c 'ls -la'",
       "docker compose run --entrypoint 'ls -la' web /tmp",
       "docker compose run --rm --entrypoint sh web -c 'ls -la'",
     ]) {
@@ -2594,6 +2598,16 @@ describe("classifyBashCommand", () => {
       `docker run --health-cmd 'rm -rf ${x}' alpine`,
       `docker run --health-cmd='rm -rf ${x}' --health-interval 5s alpine ls`,
       `docker service create --health-cmd 'rm -rf ${x}' alpine`,
+      // podman reads a JSON array entrypoint as the command and its first
+      // arguments; nerdctl runs every entrypoint value in order.
+      `podman run --entrypoint '["rm","-rf","${x}"]' alpine`,
+      `podman run --entrypoint='["sh","-c","rm -rf ${x}"]' alpine`,
+      `nerdctl run --entrypoint rm --entrypoint -rf alpine ${x}`,
+      `nerdctl run --entrypoint=rm --entrypoint=-rf --entrypoint=${x} alpine`,
+      `nerdctl compose run --entrypoint rm --entrypoint -rf web ${x}`,
+      `podman unshare rm -rf ${x}`,
+      `podman machine ssh 'rm -rf ${x}'`,
+      `podman machine ssh vm 'rm -rf ${x}'`,
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
@@ -2610,6 +2624,11 @@ describe("classifyBashCommand", () => {
       "oc run p --image=alpine -- ls",
       "podman-compose ps",
       "docker run --health-cmd 'curl -f localhost' --health-interval 5s alpine ls",
+      // Docker runs no JSON entrypoint: the one word names no program.
+      `docker run --entrypoint '["rm","-rf","/w"]' -v ${x}:/w alpine`,
+      `podman run --entrypoint '["ls","-la"]' alpine`,
+      "nerdctl run --entrypoint ls --entrypoint -la alpine /tmp",
+      "podman unshare ls",
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("safe")
     }
@@ -2635,6 +2654,13 @@ describe("classifyBashCommand", () => {
       'bunx --bun vitest "$F"',
       'strace -f ls "$D"',
       'op run --no-masking -- npm test "$T"',
+      'docker run --rm --cpuset-cpus 0 img npm test "$T"',
+      'docker run --rm --oom-kill-disable img ls "$D"',
+      'docker compose run --rm --env-from-file .env web npm test "$T"',
+      'uv run --with-editable . pytest "$T"',
+      'uv run --python 3.12 -m pytest "$T"',
+      'npx --no-install eslint "$F"',
+      'strace -A -o out ls "$D"',
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("safe")
     }
@@ -2728,6 +2754,211 @@ describe("classifyBashCommand", () => {
       "tmux new -d \\; split-window 'npm test'",
       // The script file is not read, as a `source`d file is not.
       `at -f ${x} now`,
+      // Several words run as they are: a run-time word is an argument.
+      'tmux new -d npm test "$T"',
+      'screen -dmS s npm test "$T"',
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  test("a tmux word that ends in ; ends a command, and a tmux command may be an alias or a prefix", () => {
+    const x = "/nonexistent/gent-probe-x"
+    const r = `rm -rf ${x}`
+    for (const command of [
+      `tmux new -d 'true;' new -d '${r}'`,
+      `tmux 'neww;' run-shell '${r}'`,
+      `tmux neww\\; run-shell '${r}'`,
+      `tmux kill-session -t p\\; run-shell '${r}'`,
+      `tmux split '${r}'`,
+      `tmux new-w '${r}'`,
+      `tmux new-s -d '${r}'`,
+      `tmux run-s '${r}'`,
+      `tmux respawn-p -k '${r}'`,
+      `tmux pipe-p -o '${r}'`,
+      `tmux send-k -t p '${r}' Enter`,
+      // An ambiguous prefix makes tmux exit; reading it as a row only asks.
+      `tmux display-p '${r}'`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      // `set` is `set-option`, not a prefix of `set-hook`.
+      "tmux set -g status off",
+      "tmux new -d 'npm test;'",
+      "tmux display -p '#S'",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  test("a tmux command given to if-shell, run-shell -C, confirm-before, a hook or a key binding is read", () => {
+    const x = "/nonexistent/gent-probe-x"
+    const r = `rm -rf ${x}`
+    for (const command of [
+      `tmux if-shell true 'run-shell "${r}"'`,
+      `tmux if -F 1 'new -d "${r}"'`,
+      `tmux if true 'display hi; run-shell "${r}"'`,
+      `tmux if-shell '${r}' 'display hi'`,
+      `tmux run-shell -C 'run-shell "${r}"'`,
+      `tmux confirm-before -y 'run-shell "${r}"'`,
+      `tmux set-hook -g after-new-window 'run-shell "${r}"' \\; new-window`,
+      `tmux bind-key -n F5 run-shell '${r}'`,
+      `tmux bind -T root F6 'run-shell "${r}"'`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      "tmux if-shell true 'display-message hi'",
+      "tmux bind-key -n F5 display-message hi",
+      "tmux set-hook -g after-new-window 'display hi'",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  test("keys tmux send-keys or screen's stuff types are read joined with no separator", () => {
+    const x = "/nonexistent/gent-probe-x"
+    for (const command of [
+      "tmux send-keys -t p 'git res' 'et --hard' Enter",
+      "tmux send-keys -t p git Space reset Space --hard Enter",
+      `tmux send -t p 'rm -r' 'f ${x}' C-m`,
+      // screen's `^M` and `\n` are a newline.
+      "screen -S s -X stuff 'git reset --hard^M'",
+      "screen -S s -X stuff 'git reset --hard\\n'",
+      // `-H` sends character codes.
+      "tmux send-keys -H 67 69 74 20 72 65 73 65 74 20 2d 2d 68 61 72 64 0d",
+      `tmux send-keys -t p -H 72 6d 20 2d 72 66 20 0x2f 6e 0a`,
+      'tmux send-keys -H "$HEX"',
+      // Editing keys change the line the shell reads.
+      "tmux send-keys 'git reset --harX' BSpace d Enter",
+      "tmux send-keys 'git reset --harX' C-h d Enter",
+      "tmux send-keys 'echo hi' C-u 'git reset --hard' Enter",
+      "tmux send-keys 'echo x' C-w C-w 'git reset --hard' Enter",
+      // A key whose text is not known (history, completion, a cursor move) asks.
+      "tmux send-keys -t p Up Enter",
+      `tmux send-keys 'echo rm -rf ${x}' C-a Enter`,
+      // `-l` types each word as text.
+      `tmux send-keys -t s -l 'rm -rf ${x}' Enter`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      "tmux send-keys -t p 'npm test' Enter",
+      "tmux send-keys -t p C-c",
+      "tmux send-keys -t p C-l",
+      "tmux send-keys -H 6c 73 0d",
+      "tmux send-keys -t p 'npm tesX' BSpace t Enter",
+      "tmux send-keys -l git Space reset Space --hard Enter",
+      "screen -S s -X stuff 'npm test^M'",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  test("screen -X takes no value: the screen command after the options is read", () => {
+    const x = "/nonexistent/gent-probe-x"
+    const r = `rm -rf ${x}`
+    for (const command of [
+      `screen -X -S s stuff '${r}\\n'`,
+      `screen -S s -X -p 0 stuff '${r}\\n'`,
+      `screen -S s -X eval 'stuff "${r}^M"'`,
+      `screen -S s -X exec ${r}`,
+      `screen -S s -X screen ${r}`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of ["screen -X -S s quit", "screen -S s -X eval 'select 1'"]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  test("hyperfine reads each command once per parameter value", () => {
+    const x = "/nonexistent/gent-probe-x"
+    for (const command of [
+      `hyperfine -L c rm,ls '{c} -rf ${x}'`,
+      "hyperfine --parameter-list sub reset,status 'git {sub} --hard'",
+      `hyperfine -L f -rf,-v 'rm {f} ${x}'`,
+      `hyperfine -L a rm,ls -L b -rf,-v '{a} {b} ${x}'`,
+      `hyperfine -L c rm,ls --prepare '{c} -rf ${x}' 'ls'`,
+      "hyperfine -P n 1 10 'kill -{n} 1'",
+      // Values known only at run time ask.
+      `hyperfine -L c "$LIST" '{c} ${x}'`,
+      // The shell runs each command.
+      `hyperfine -S 'sh -c "rm -rf ${x}" sh' ls`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      "hyperfine -L n 1,2 'sleep {n}'",
+      "hyperfine -P threads 1 8 'make -j {threads}'",
+      "hyperfine -w 3 -P n 1 10 'sleep 0.{n}'",
+      "hyperfine -N -L c ls,pwd '{c}'",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  test("a command the table does not name runs a later word that names a command the guard reads", () => {
+    const x = "/nonexistent/gent-probe-x"
+    const r = `rm -rf ${x}`
+    for (const command of [
+      `poetry run ${r}`,
+      `poetry run bash -c '${r}'`,
+      `conda run -n base ${r}`,
+      `firejail --net=none ${r}`,
+      `buildah run ctr -- ${r}`,
+      `machinectl shell root@ /bin/${r}`,
+      "aws-vault exec prof -- git push --force",
+      `lxc exec c -- ${r}`,
+      `adb shell ${r}`,
+      `ls | entr ${r}`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      "poetry run pytest",
+      'grep -rn "git push --force" src',
+      "man git-reset",
+      'for f in rm git; do echo "$f"; done',
+      "pip install requests",
+      "systemctl status nginx",
+      // Text tools read their words as data.
+      `sed -e p -- ${r}`,
+      `tr a b -- ${r}`,
+      `zgrep x ${r}`,
+      `tac ${x} rm`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  test("run0, and tools that run a quoted script on a host, a VM, a file change or in Tcl, are read", () => {
+    const x = "/nonexistent/gent-probe-x"
+    const r = `rm -rf ${x}`
+    for (const command of [
+      `run0 ${r}`,
+      `run0 -u root ${r}`,
+      `run0 rm ${x}`,
+      `echo '${r}' | run0`,
+      `vagrant ssh -c '${r}'`,
+      `gcloud compute ssh vm --zone z --command '${r}'`,
+      `gcloud compute ssh vm --command='${r}'`,
+      `nodemon --exec '${r}'`,
+      `ls | entr -s '${r}'`,
+      `ansible all -m shell -a '${r}'`,
+      `expect -c 'spawn ${r}'`,
+      `autossh -M 0 host '${r}'`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      "run0 systemctl restart nginx",
+      "vagrant ssh -c 'ls -la'",
+      "ansible all -m ping",
+      "nodemon --exec 'ts-node' src/index.ts",
+      "ls | entr -s 'make test'",
+      "autossh -M 0 host ls",
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("safe")
     }
@@ -2756,6 +2987,15 @@ describe("classifyBashCommand", () => {
       "podman-compose down -v",
       "podman-compose rm -f",
       'docker compose "$CMD"',
+      "podman system reset",
+      "podman system reset -f",
+      "helm uninstall gent-probe-x",
+      "helm -n gent-probe-x delete web",
+      "kubectl apply -f /nonexistent/gent-probe-x.yaml --prune --all",
+      "oc apply --prune -l app=gent-probe-x -f /nonexistent/gent-probe-x.yaml",
+      "kubectl apply --prune=1 -f /nonexistent/gent-probe-x.yaml",
+      "kubectl apply --prune=true -f /nonexistent/gent-probe-x.yaml",
+      'kubectl apply --prune="$P" -f /nonexistent/gent-probe-x.yaml',
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
@@ -2780,6 +3020,62 @@ describe("classifyBashCommand", () => {
       "docker compose down",
       "docker compose rm",
       "docker-compose up",
+      "helm list -n gent-probe-x",
+      "kubectl apply -f /nonexistent/gent-probe-x.yaml",
+      "kubectl apply --prune=false -f /nonexistent/gent-probe-x.yaml",
+      // Go's `strconv.ParseBool` reads each of these as false.
+      "kubectl apply --prune=0 -f /nonexistent/gent-probe-x.yaml",
+      "kubectl apply --prune=F -f /nonexistent/gent-probe-x.yaml",
+      "kubectl apply --prune=False -f /nonexistent/gent-probe-x.yaml",
+      "kubectl apply -f /nonexistent/gent-probe-x.yaml --prune-allowlist core/v1/ConfigMap",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  test("database tasks that drop, empty or reload a database ask under any runner", () => {
+    for (const command of [
+      "rake db:drop",
+      "bundle exec rake db:drop",
+      "rake db:drop:all",
+      "RAILS_ENV=test rake db:purge",
+      "rake db:rollback[2]",
+      "bin/rails db:reset",
+      "rails db:schema:load",
+      "rails db:schema:load:primary",
+      "bundle exec rails db:migrate:reset",
+      "docker compose exec web bin/rails db:reset",
+      "mix ecto.drop",
+      "mix ecto.reset",
+      "mix do ecto.drop, ecto.create",
+      "python manage.py flush --noinput",
+      "./manage.py flush",
+      "python3 ./manage.py migrate app zero",
+      "python -m django flush",
+      "uv run python manage.py flush",
+      "django-admin flush",
+      "npx prisma migrate reset --force",
+      "prisma db push --force-reset",
+      "prisma db push --accept-data-loss",
+      "npx sequelize db:drop",
+      "npx sequelize-cli db:migrate:undo:all",
+      "typeorm schema:drop",
+      "flyway clean",
+      "liquibase drop-all",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      "rake db:migrate",
+      "bundle exec rake test",
+      "rake db:test:prepare",
+      "rails db:migrate:status",
+      "mix ecto.migrate",
+      "python manage.py migrate",
+      "python /nonexistent/gent-probe-x.py flush",
+      "npx prisma migrate dev",
+      "prisma db push",
+      "npx sequelize db:migrate",
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("safe")
     }
@@ -2947,6 +3243,20 @@ describe("background shell through a cell", () => {
 
         // The whole user-role notice, the file line included, fits the bound.
         expect(text.length).toBeLessThanOrEqual(maximumModelToolResultChars)
+        // The frame, the head, one cut marker, the tail, then the file line.
+        const wholeChars = Array.from(
+          { length: hugeLineCount },
+          (_, index) => `line ${index + 1}\n`.length,
+        ).reduce((sum, chars) => sum + chars, 0)
+        expect(text).toMatch(
+          new RegExp(
+            [
+              "^Background command completed \\(exit code 0\\):\\n```\\n\\$ seq 1 4000 \\| sed 's/\\^/line /'\\n",
+              "line 1\\n[^]*\\n\\n\\.\\.\\. \\[\\d+ characters truncated\\] \\.\\.\\.\\n\\n[^]*line 4000\\n",
+              `\\n\\n\\[The whole output is in \\S+ \\(${wholeChars} characters\\); page it with the read tool's offset and limit\\.\\]\\n\`\`\`$`,
+            ].join(""),
+          ),
+        )
         // Head and tail both survive; the middle is cut.
         expect(text).toContain("line 1\n")
         expect(text).toContain(`line ${hugeLineCount}`)
@@ -2988,6 +3298,31 @@ describe("background shell through a cell", () => {
         expect(file.startsWith(`${dataDir}/background-bash/`)).toBe(true)
         const saved = yield* fs.readFileString(path.resolve("/tmp", file))
         expect(saved.trimEnd().split("\n")).toHaveLength(hugeLineCount)
+      }).pipe(Effect.timeout("20 seconds")),
+    30_000,
+  )
+
+  it.scopedLive.layer(BunServices.layer)(
+    "a job whose file cannot be written still reports its ends",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const home = yield* fs.makeTempDirectoryScoped({ prefix: "gent-bg-output-" })
+        // A data directory that is a file: no job file can go under it.
+        const dataDir = path.join(home, "not-a-directory")
+        yield* fs.writeFileString(dataDir, "")
+        const text = yield* hugeBackgroundNotice([
+          RuntimeEnvironment.Live({ cwd: "/tmp", home }),
+          Layer.succeed(
+            ConfigProvider.ConfigProvider,
+            ConfigProvider.fromEnv({ env: { GENT_DATA_DIR: dataDir } }),
+          ),
+        ])
+        expect(text.length).toBeLessThanOrEqual(maximumModelToolResultChars)
+        expect(text).toContain("line 1\n")
+        expect(text).toContain(`line ${hugeLineCount}`)
+        expect(text).toContain("[The whole output could not be saved.]")
       }).pipe(Effect.timeout("20 seconds")),
     30_000,
   )
@@ -3543,6 +3878,82 @@ describe("BashTool execution", () => {
     processTestTimeout,
   )
 
+  // A build before the output file stored the whole output on the row and
+  // wrote no file until it cut a message; a replay must not lose the middle.
+  it.scopedLive(
+    "a replayed row that holds a whole long output gets its file",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const home = yield* fs.makeTempDirectoryScoped({ prefix: "gent-bg-old-row-" })
+        const sent = yield* Deferred.make<{ sourceId: string; content: string }>()
+        const toolCallId = ToolCallId.make("tc-old-row-replay")
+        const ctx = withSession(
+          { ...stubCtx, toolCallId, home },
+          {
+            ...stubCtx.Session,
+            getSession: () =>
+              Effect.succeed(
+                new Session({
+                  id: stubCtx.sessionId,
+                  activeBranchId: stubCtx.branchId,
+                  createdAt: now,
+                  updatedAt: now,
+                }),
+              ),
+            listBranches: Effect.succeed([
+              new Branch({ id: stubCtx.branchId, sessionId: stubCtx.sessionId, createdAt: now }),
+            ]),
+            send: onQueue((notice) => Deferred.succeed(sent, notice)),
+          },
+        )
+        const storageLayer = SqliteStorage.LiveWithSql(
+          `${home}/gent.db`,
+          () => Layer.empty,
+          {},
+        ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)))
+        const output = Array.from({ length: 3000 }, (_, index) => `old line ${index + 1}\n`).join(
+          "",
+        )
+        yield* Effect.gen(function* () {
+          const storage = yield* BackgroundBashStorage
+          yield* storage.claimStart({
+            sessionId: ctx.sessionId,
+            branchId: ctx.branchId,
+            toolCallId,
+            command: "seq-old",
+            cwd: Option.some(ctx.cwd),
+          })
+          yield* storage.markCompleted(
+            { sessionId: ctx.sessionId, branchId: ctx.branchId, toolCallId },
+            { exitCode: 0, message: output },
+          )
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              storageLayer,
+              BackgroundBashStorage.Live.pipe(Layer.provide(storageLayer)),
+            ),
+          ),
+        )
+
+        yield* runToolWithCtx(
+          BashTool,
+          { command: "printf should-not-run", run_in_background: true },
+          ctx,
+        ).pipe(Effect.provide(makeProcessLayer(storageLayer)))
+        const message = yield* Deferred.await(sent).pipe(Effect.timeout("2 seconds"))
+        expect(message.content.length).toBeLessThanOrEqual(maximumModelToolResultChars)
+        expect(message.content).toContain("old line 1\n")
+        expect(message.content).toContain("old line 3000\n")
+        expect(message.content).toContain(`(${output.length} characters)`)
+        const file = savedOutputFile(message.content)
+        expect(file.startsWith(`${home}/.gent/background-bash/`)).toBe(true)
+        expect(yield* fs.readFileString(file)).toBe(output)
+      }).pipe(Effect.provide(BunFileSystem.layer), withProcessTimeout),
+    processTestTimeout,
+  )
+
   it.live(
     "failed background job does not notify before failure state is durable",
     () =>
@@ -3994,6 +4405,103 @@ describe("ExecToolsExtension (bash) via model turn", () => {
   )
 })
 
+describe("background job output", () => {
+  /** Live heap bytes after a full collection; Bun counts array buffers in it. */
+  const liveBytes = Effect.sync(() => {
+    Bun.gc(true)
+    return process.memoryUsage().heapUsed
+  })
+
+  it.scopedLive.layer(BunFileSystem.layer)(
+    "a running job's output is in its file, not in server memory",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-bg-stream-" })
+        const produced = `${directory}/produced`
+        const release = `${directory}/release`
+        const bytes = 96 * 1024 * 1024
+        const mark = "\nMID-RUN-MARK\n"
+        const command = `head -c ${bytes} /dev/zero | tr '\\0' x; printf '\\nMID-RUN-MARK\\n'; touch ${produced}; while ! test -f ${release}; do sleep 0.02; done; printf 'after release\\n'`
+        const toolCallId = ToolCallId.make("bg-stream-call")
+        const calls = yield* Ref.make(0)
+        const providerLayer = LanguageModelLayers.testStream(() =>
+          Ref.updateAndGet(calls, (n) => n + 1).pipe(
+            Effect.map((call) => {
+              if (call === 1) {
+                return Stream.fromIterable([
+                  toolCallPart("bash", { command, run_in_background: true }, { toolCallId }),
+                  finishPart({ finishReason: "tool-calls" }),
+                ])
+              }
+              return Stream.fromIterable([
+                textDeltaPart(`reply ${call}`),
+                finishPart({ finishReason: "stop" }),
+              ])
+            }),
+          ),
+        )
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+          cwd: directory,
+          extraLayers: [RuntimeEnvironment.Live({ cwd: directory, home: directory })],
+        })
+        const file = `${directory}/.gent/background-bash/${sessionId}/${branchId}/${toolCallId}.txt`
+        const baseline = yield* liveBytes
+        yield* client.message.send({ sessionId, branchId, content: "start the job" })
+        yield* waitFor(fs.exists(produced), (exists) => exists, 20_000, "the job printed")
+
+        // The job printed 96 MiB and still runs; the server holds only its ends.
+        const held = (yield* liveBytes) - baseline
+        expect(held).toBeLessThan(bytes / 8)
+
+        // The file is readable before the job exits and holds all of it so far.
+        const size = yield* waitFor(
+          fs.stat(file).pipe(
+            Effect.map((info) => Number(info.size)),
+            Effect.orElseSucceed(() => 0),
+          ),
+          (current) => current >= bytes + mark.length,
+          5_000,
+          "the running job's file",
+        )
+        expect(size).toBe(bytes + mark.length)
+        // The start result names the file, so the model can read it mid-run.
+        const started = yield* client.session.getSnapshot({ sessionId, branchId })
+        const results = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(
+          started.messages.filter((message) => message.role === "tool"),
+        )
+        expect(results).toContain(file)
+
+        yield* fs.writeFileString(release, "go")
+        yield* waitFor(
+          client.session.getSnapshot({ sessionId, branchId }),
+          (snapshot) =>
+            snapshot.runtime._tag === "Idle" &&
+            snapshot.messages.some((message) =>
+              message.parts.some(
+                (part) => part.type === "text" && part.text.includes("after release"),
+              ),
+            ),
+          10_000,
+          "the completion notice",
+        )
+        const notice = (yield* client.session.getSnapshot({ sessionId, branchId })).messages
+          .flatMap((message) => message.parts)
+          .flatMap((part) => {
+            if (part.type === "text" && part.text.includes("after release")) return [part.text]
+            return []
+          })
+        expect(notice).toHaveLength(1)
+        expect(notice[0]?.length ?? 0).toBeLessThanOrEqual(maximumModelToolResultChars)
+        expect(notice[0]).toContain(`The whole output is in ${file} (`)
+        expect(notice[0]).toContain("MID-RUN-MARK")
+      }).pipe(Effect.timeout("40 seconds")),
+    45_000,
+  )
+})
+
 describe("background bash after session deletion", () => {
   it.scopedLive.layer(BunFileSystem.layer)(
     "a completion that lands after the session is deleted starts no turn",
@@ -4316,6 +4824,9 @@ describe("a background job the server stopped", () => {
             expect(failed[0]).toContain(heading)
             expect(failed[0]).toContain(command)
             expect(failed[0]).toContain("start one again only when the user asks for it")
+            // The file holds only what was written before the stop, and says so.
+            expect(failed[0]).toMatch(/output up to the stop is in \S+\/background-bash\/\S+\.txt/)
+            expect(failed[0]).toContain("holds only the output written before the stop")
             const answered = yield* ask(client, systems, 2)
             expect(answered[1]).toContain(heading)
             const after = yield* ask(client, systems, 3)

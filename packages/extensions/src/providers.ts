@@ -1007,6 +1007,9 @@ const isChatMessages = Schema.is(ChatMessages)
 const isSystemChatMessage = Schema.is(
   Schema.Struct({ role: Schema.Literals(["system", "developer"]), content: Schema.String }),
 )
+const isDeveloperChatMessage = Schema.is(
+  Schema.Struct({ role: Schema.Literal("developer"), content: Schema.String }),
+)
 
 /**
  * The request in the shape a chat-completions API expects of the system
@@ -1017,6 +1020,9 @@ const isSystemChatMessage = Schema.is(
  * context update: Mistral rejects a request whose last message is not user or
  * tool, and `toPrompt` puts the turn notices there. A system message inside
  * the conversation keeps its role: the rule is about the last message only.
+ * Every system message goes with the `system` role: the SDK names `developer`
+ * for any model id that starts with `o` (Mistral's `open-*` models), and the
+ * Mistral chat schema has no `developer` role.
  */
 const withHostContextUpdates = (
   request: HttpClientRequest.HttpClientRequest,
@@ -1030,12 +1036,17 @@ const withHostContextUpdates = (
   const end = messages.findLastIndex((message) => !isSystemChatMessage(message))
   if (start < 0) return request
   const leading = messages.slice(0, start).filter(isSystemChatMessage)
-  if (leading.length <= 1 && end === messages.length - 1) return request
+  const developer = messages.some(isDeveloperChatMessage)
+  if (!developer && leading.length <= 1 && end === messages.length - 1) return request
   const head = Option.match(Option.fromUndefinedOr(leading[0]), {
     onNone: () => [],
-    onSome: (first) => [
-      { ...first, content: leading.map((message) => message.content).join("\n\n") },
+    onSome: () => [
+      { role: "system", content: leading.map((message) => message.content).join("\n\n") },
     ],
+  })
+  const conversation = messages.slice(start, end + 1).map((message) => {
+    if (!isDeveloperChatMessage(message)) return message
+    return { ...message, role: "system" }
   })
   const trailing = messages.slice(end + 1).map((message) => {
     if (!isSystemChatMessage(message)) return message
@@ -1043,7 +1054,7 @@ const withHostContextUpdates = (
   })
   return HttpClientRequest.bodyJsonUnsafe(request, {
     ...body.value,
-    messages: [...head, ...messages.slice(start, end + 1), ...trailing],
+    messages: [...head, ...conversation, ...trailing],
   })
 }
 
