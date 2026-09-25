@@ -80,6 +80,7 @@ import { SessionRuntime } from "../runtime/session.js"
 import {
   type AgentLoopClientServices,
   dequeueFollowUpOn,
+  stopMessageOn,
   queueFollowUpOn,
 } from "../domain/agent-loop.js"
 import { type ApprovalDecision, encodeInteractionDecision } from "../domain/interaction.js"
@@ -134,6 +135,7 @@ const defaultSession = (): ExtensionSessionService => ({
   delete: () => die("Session.delete"),
   send: () => die("Session.send"),
   stop: () => die("Session.stop"),
+  stopMessage: () => die("Session.stopMessage"),
   events: () => Stream.die("Session.events"),
   dequeueFollowUp: () => die("Session.dequeueFollowUp"),
   listBranches: die("Session.listBranches"),
@@ -270,6 +272,7 @@ export const testToolContext = (overrides?: TestToolContextOverrides): TestToolC
     delete: dieStub("session.delete"),
     send: dieStub("session.send"),
     stop: dieStub("session.stop"),
+    stopMessage: dieStub("session.stopMessage"),
     events: () => Stream.die("session.events"),
     dequeueFollowUp: dieStub("session.dequeueFollowUp"),
     listBranches: dieEffect("session.listBranches"),
@@ -614,6 +617,7 @@ export const runtimeHostContext = Effect.fn("test.runtimeHostContext")(function*
       dequeueFollowUp: (input) => dequeueFollowUpOn(input).pipe(Effect.provideContext(loopClient)),
       send: (input) => runtime.sendUserMessage(input),
       steer: (command) => runtime.steer(command),
+      stopMessage: (input) => stopMessageOn(input).pipe(Effect.provideContext(loopClient)),
     },
   })
   return provider.forRun(hostRun(run))
