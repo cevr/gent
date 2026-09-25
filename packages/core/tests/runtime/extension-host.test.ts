@@ -486,10 +486,8 @@ describe("session profile resolution", () => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
-      // Under the repo, so the project module resolves `effect`.
       const directory = yield* fs.makeTempDirectoryScoped({
-        directory: path.resolve(import.meta.dir, "../../.."),
-        prefix: ".tmp-profile-trust-",
+        prefix: "gent-profile-trust-",
       })
       const home = path.join(directory, "home")
       const project = path.join(directory, "project")
@@ -536,10 +534,8 @@ export default { manifest: { id: "profile-trust" }, setup: Effect.void };`,
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
-      // Under the repo, so the project module resolves `effect`.
       const directory = yield* fs.makeTempDirectoryScoped({
-        directory: path.resolve(import.meta.dir, "../../.."),
-        prefix: ".tmp-profile-broken-trust-",
+        prefix: "gent-profile-broken-trust-",
       })
       const home = path.join(directory, "home")
       const project = path.join(directory, "project")
@@ -584,10 +580,8 @@ export default { manifest: { id: "profile-broken-trust" }, setup: Effect.void };
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
-      // Under the package, so the module resolves `effect` and `@gent/core`.
       const directory = yield* fs.makeTempDirectoryScoped({
-        directory: path.resolve(import.meta.dir, "../.."),
-        prefix: ".tmp-profile-version-",
+        prefix: "gent-profile-version-",
       })
       const home = path.join(directory, "home")
       const launch = path.join(directory, "launch")
@@ -3220,8 +3214,7 @@ describe("setupExtension", () => {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
       const directory = yield* fs.makeTempDirectoryScoped({
-        directory: path.resolve(import.meta.dir, "../../.."),
-        prefix: ".tmp-project-trust-",
+        prefix: "gent-project-trust-",
       })
       const userDir = path.join(directory, "home/.gent/extensions")
       const projectDir = path.join(directory, "project/.gent/extensions")
@@ -3259,8 +3252,7 @@ export default { manifest: { id: "trusted-project" }, setup: Effect.void };`,
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
       const directory = yield* fs.makeTempDirectoryScoped({
-        directory: path.resolve(import.meta.dir, "../../.."),
-        prefix: ".tmp-home-launch-",
+        prefix: "gent-home-launch-",
       })
       const home = yield* fs.realPath(directory)
       const userDir = path.join(home, ".gent/extensions")
@@ -3369,10 +3361,8 @@ export default { manifest: { id: "home-user" }, setup: Effect.void };`,
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
-      const repositoryRoot = path.resolve(import.meta.dir, "../../..")
       const packageDir = yield* fs.makeTempDirectoryScoped({
-        directory: repositoryRoot,
-        prefix: ".tmp-loader-package-",
+        prefix: "gent-loader-package-",
       })
       yield* fs.writeFileString(
         path.join(packageDir, "package.json"),
@@ -3584,10 +3574,8 @@ export default { manifest: { id: "home-user" }, setup: Effect.void };`,
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
-      const repositoryRoot = path.resolve(import.meta.dir, "../../..")
       const dir = yield* fs.makeTempDirectoryScoped({
-        directory: repositoryRoot,
-        prefix: ".tmp-loader-order-",
+        prefix: "gent-loader-order-",
       })
       for (const id of ["alpha", "Zeta"]) {
         yield* fs.writeFileString(
@@ -3612,10 +3600,8 @@ export default { manifest: { id: "home-user" }, setup: Effect.void };`,
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
-      const repositoryRoot = path.resolve(import.meta.dir, "../../..")
       const dir = yield* fs.makeTempDirectoryScoped({
-        directory: repositoryRoot,
-        prefix: ".tmp-loader-dangling-",
+        prefix: "gent-loader-dangling-",
       })
       yield* fs.writeFileString(
         path.join(dir, "good.ts"),

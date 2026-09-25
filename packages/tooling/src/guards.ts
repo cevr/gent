@@ -801,6 +801,52 @@ export const findE2eFixtureImportFindings = (
   ]
 }
 
+// ── a test writes its temp files outside the repo ───────────────────────────
+
+/**
+ * Guard: a test's temp directory lives in the system temp directory.
+ *
+ * A temp directory under the repo that a killed test leaves behind is linted,
+ * formatted and scanned by these guards as if it were source. The extension
+ * loaders bind `effect` and the public entries, so an extension file resolves
+ * them from anywhere; no test needs `node_modules` above its fixture.
+ *
+ * Two spellings are reported in test code outside the tooling package: a
+ * `directory:` option that names `import.meta` or a name bound from it, and a
+ * `.tmp-` path on a line that names `import.meta`.
+ */
+const IMPORT_META_DIR = /\bimport\.meta\.dir(?:name)?\b/
+const IMPORT_META_BINDING =
+  /\b(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=.*\bimport\.meta\.dir(?:name)?\b/
+const DIRECTORY_OPTION = /\bdirectory:\s*(.+)$/
+const TMP_PATH_LITERAL = /["'`][^"'`]*\.tmp-/
+
+const TEMP_IN_REPO_MESSAGE =
+  "a test temp directory under the repo is linted when a killed test leaves it behind; use `makeTempDirectoryScoped` without `directory` (the loaders bind `effect` and the public entries, so no node_modules is needed above it)"
+
+export const findRepoTempDirectories = (file: string, text: string): ReadonlyArray<Finding> => {
+  // The guard's own tests spell the reported shapes as probe text.
+  if (!isTestCode(file) || file.startsWith("packages/tooling/")) return []
+  const lines = withoutComments(text).split("\n")
+  const bound = lines.flatMap((line) =>
+    Option.match(Option.fromNullishOr(IMPORT_META_BINDING.exec(line)), {
+      onNone: () => [],
+      onSome: (match) => [match[1] ?? ""],
+    }),
+  )
+  const namesRepo = (value: string): boolean =>
+    IMPORT_META_DIR.test(value) || bound.some((name) => value.split(/[^\w$]+/).includes(name))
+  return lines.flatMap((line, index) => {
+    const intoRepo = Option.match(Option.fromNullishOr(DIRECTORY_OPTION.exec(line)), {
+      onNone: () => false,
+      onSome: (match) => namesRepo(match[1] ?? ""),
+    })
+    const tmpBesideMeta = IMPORT_META_DIR.test(line) && TMP_PATH_LITERAL.test(line)
+    if (!intoRepo && !tmpBesideMeta) return []
+    return [{ file, line: index + 1, message: TEMP_IN_REPO_MESSAGE }]
+  })
+}
+
 // ── the pre-commit hook runs the guards ─────────────────────────────────────
 
 /**

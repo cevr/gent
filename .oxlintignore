@@ -5,7 +5,6 @@
 **/node_modules/
 **/*.d.ts
 packages/tooling/fixtures/
-apps/tui/tests/.tmp-*/
 # `testbeds/gamut/fixture/` is the deliberately broken ledgerline app the
 # agent under test is asked to repair. The gamut driver and its tests are
 # linted and formatted like the rest of the repo.

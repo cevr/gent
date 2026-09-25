@@ -9,6 +9,7 @@ import {
   findCoreFeatureIndependenceFindings,
   findCoreVendorModelPins,
   findE2eFixtureImportFindings,
+  findRepoTempDirectories,
   findHookWithoutGuards,
   findIdentityEncodes,
   findPackageSurfaceFindings,
@@ -541,6 +542,49 @@ describe("e2e fixture import guard", () => {
         `${noFixtureSource}\n// see ../src/pty-fixture\nconst hint = "../src/server-process-fixture"\n`,
       ),
     ).toHaveLength(1)
+  })
+})
+
+// ── test temp directories ───────────────────────────────────────────────────
+
+describe("repo temp directory guard", () => {
+  const testFile = "packages/core/tests/runtime/loader.test.ts"
+
+  test("a directory option under import.meta is reported", () => {
+    const source = [
+      "const root = yield* fs.makeTempDirectoryScoped({",
+      '  directory: path.resolve(import.meta.dir, "../.."),',
+      '  prefix: "gent-x-",',
+      "})",
+    ].join("\n")
+    expect(findRepoTempDirectories(testFile, source).map((finding) => finding.line)).toEqual([2])
+  })
+
+  test("a directory option naming a binding from import.meta is reported", () => {
+    const source = [
+      'const packageRoot = path.resolve(import.meta.dir, "../../..")',
+      'const dir = yield* fs.makeTempDirectoryScoped({ directory: packageRoot, prefix: "x-" })',
+    ].join("\n")
+    expect(findRepoTempDirectories(testFile, source).map((finding) => finding.line)).toEqual([2])
+  })
+
+  test("a .tmp- path joined to import.meta is reported", () => {
+    const source = 'const TEST_DIR = join(import.meta.dir, "../../.tmp-ext-integration")'
+    expect(findRepoTempDirectories(testFile, source)).toHaveLength(1)
+  })
+
+  test("a system temp directory and a read of the source tree pass", () => {
+    const source = [
+      'const root = yield* fs.makeTempDirectoryScoped({ prefix: "gent-x-" })',
+      'const dir = path.resolve(import.meta.dir, "../../src/extensions")',
+      "const other = yield* fs.makeTempDirectoryScoped({ directory: root })",
+    ].join("\n")
+    expect(findRepoTempDirectories(testFile, source)).toEqual([])
+  })
+
+  test("product source is out of scope", () => {
+    const source = 'const dir = { directory: path.resolve(import.meta.dir, "..") }'
+    expect(findRepoTempDirectories("packages/core/src/runtime/x.ts", source)).toEqual([])
   })
 })
 

@@ -11,6 +11,7 @@ import {
   findCoreFeatureIndependenceFindings,
   findCoreVendorModelPins,
   findE2eFixtureImportFindings,
+  findRepoTempDirectories,
   findHookWithoutGuards,
   findIdentityEncodes,
   findPackageSurfaceFindings,
@@ -124,6 +125,7 @@ const SOURCE_FILE_FINDERS: ReadonlyArray<FileFinder> = [
   findCoreVendorModelPins,
   findAliasTestLayers,
   findE2eFixtureImportFindings,
+  findRepoTempDirectories,
   findIdentityEncodes,
   findTuiSessionIdentityReads,
 ]
