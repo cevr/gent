@@ -33,6 +33,12 @@ export class Model extends Schema.Class<Model>("Model")({
   name: Schema.String,
   provider: ProviderId,
   contextLength: Schema.optional(Schema.Finite),
+  /**
+   * The most input tokens one request may carry, when the catalog names a cap
+   * below the window: GPT-5 has a 400k window and refuses input past 272k.
+   * Absent when input may fill the window less the output.
+   */
+  inputLimit: Schema.optional(Schema.Finite),
   pricing: Schema.optional(ModelPricing),
   /** When the driver released the model; an ISO-8601 prefix: `2026-02-17` or `2025-04`. */
   releaseDate: Schema.optional(Schema.String),

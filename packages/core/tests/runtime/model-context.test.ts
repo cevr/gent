@@ -38,6 +38,7 @@ import {
   ModelContextProjectionError,
   type ModelContextProjection as ModelContextProjectionValue,
   projectContextWindow,
+  projectCurrentWindow,
   projectModelContext,
   toPrompt,
   toPromptMessages,
@@ -48,8 +49,12 @@ import {
 } from "../../src/runtime/model-context"
 import { describe, expect, it } from "effect-bun-test"
 import { AgentDefinition, AgentName, Model, ModelId, ProviderId } from "../../src/domain/agent"
-import { LanguageModelLayers, textStep } from "../../src/test-utils/language-model"
-import { ModelRegistry } from "../../src/runtime/provider"
+import {
+  LanguageModelLayers,
+  type SequenceStep,
+  textStep,
+} from "../../src/test-utils/language-model"
+import { finishPart, ModelRegistry, textDeltaPart } from "../../src/runtime/provider"
 import { SessionRuntime } from "../../src/runtime/session"
 import { getSessionSnapshot } from "../../src/server/server"
 import {
@@ -432,6 +437,87 @@ describe("projectModelContext", () => {
   })
 })
 
+// ── input cap and measured size ─────────────────────────────────────────────
+
+describe("model input cap and measured size", () => {
+  const u1 = message("u1", "user", [text("a".repeat(400))])
+  const a1 = message("a1", "assistant", [text("b".repeat(400))])
+  const u2 = message("u2", "user", [text("c".repeat(40))])
+  const history = [u1, a1, u2]
+
+  test("a model whose input cap is below its window projects against the cap", () => {
+    const window = ModelContextBudget.make({
+      contextLimitTokens: 1_000,
+      reservedSystemTokens: 0,
+      reservedToolTokens: 0,
+      reservedOutputTokens: 100,
+    })
+    const capped = { ...window, inputLimitTokens: 100 }
+
+    const uncapped = success(projectModelContext(history, window))
+    const underCap = success(projectModelContext(history, capped))
+
+    expect(uncapped.availableInputTokens).toBe(900)
+    expect(uncapped.omittedMessageIds).toEqual([])
+    expect(underCap.availableInputTokens).toBe(100)
+    expect(underCap.omittedMessageIds).toEqual([MessageId.make("u1"), MessageId.make("a1")])
+  })
+
+  test("the messages up to a measured reply count at the provider's size", () => {
+    const measure = Option.some({
+      replyId: MessageId.make("a1"),
+      tokens: 2_000,
+    })
+
+    const estimated = success(projectModelContext(history, budget(10_000)))
+    const measured = success(projectModelContext(history, budget(10_000), measure))
+
+    // chars/4: 100 + 100 + 10. Measured: the first two take the 2,000 the
+    // provider reported; the message after the reply keeps chars/4.
+    expect(estimated.estimatedTokens).toBe(210)
+    expect(measured.estimatedTokens).toBe(2_010)
+    const tight = success(projectModelContext(history, budget(1_500), measure))
+    expect(tight.omittedMessageIds).toEqual([MessageId.make("u1")])
+  })
+
+  test("a measure below the chars/4 estimate leaves the estimate as it is", () => {
+    const measure = Option.some({ replyId: MessageId.make("a1"), tokens: 10 })
+    expect(success(projectModelContext(history, budget(10_000), measure)).estimatedTokens).toBe(210)
+  })
+
+  it.effect("a measure taken before the newest window marker is not applied", () =>
+    Effect.gen(function* () {
+      const marker = (keepFrom: string) =>
+        windowMarkerMessage({
+          sessionId,
+          branchId,
+          keepFromMessageId: MessageId.make(keepFrom),
+          notice: "fresh window",
+          createdAt,
+        })
+      const measure = Option.some({
+        replyId: MessageId.make("a1"),
+        tokens: 2_000,
+      })
+      const project = (messages: ReadonlyArray<Message>) =>
+        projectCurrentWindow({
+          modelId: "test/model",
+          messages,
+          budget: budget(10_000),
+          measure,
+        })
+
+      const replyAfterMarker = yield* project([u1, marker("u1"), a1, u2])
+      const replyBeforeMarker = yield* project([u1, a1, marker("a1"), u2])
+
+      // Stored after the marker, the reply measured the marker's window.
+      expect(replyAfterMarker.estimatedTokens).toBeGreaterThan(2_000)
+      // Stored before it, the reply measured history the marker replaced.
+      expect(replyBeforeMarker.estimatedTokens).toBeLessThan(200)
+    }),
+  )
+})
+
 // ── context compaction degrade ──────────────────────────────────────────────
 
 const CONTEXT_LIMIT_TOKENS = 40_000
@@ -544,6 +630,247 @@ describe("context compaction degrade path", () => {
       expect(last?.role).toBe("assistant")
       expect(result.metrics.context?.omittedMessages).toBeGreaterThan(0)
       expect(result.metrics.context?.compactions).toBe(0)
+    }),
+  )
+})
+
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
+
+// ── provider overflow and input cap ─────────────────────────────────────────
+
+const wideModelId = ModelId.make("test/wide-window")
+const wideAgent = AgentDefinition.make({
+  name: AgentName.make("cowork"),
+  model: wideModelId,
+})
+const sessionIdOverflow = SessionId.make("overflow-session")
+const branchIdOverflow = BranchId.make("overflow-branch")
+const OLD_HISTORY_MARK = "old-history-text"
+
+/** A session with four older messages; none comes near the window. */
+const seedShortHistory = Effect.gen(function* () {
+  const now = dateFromMillis(1_767_225_600_000)
+  yield* (yield* SessionStorage).createSession(
+    new Session({
+      id: sessionIdOverflow,
+      name: "Overflow Test",
+      admission: { agent: wideAgent.name },
+      createdAt: now,
+      updatedAt: now,
+    }),
+  )
+  yield* (yield* BranchStorage).createBranch(
+    new Branch({
+      id: branchIdOverflow,
+      sessionId: sessionIdOverflow,
+      createdAt: now,
+    }),
+  )
+  const roles: ReadonlyArray<"user" | "assistant"> = ["user", "assistant", "user", "assistant"]
+  for (const [ordinal, role] of roles.entries()) {
+    yield* (yield* MessageStorage).createMessage(
+      Message.cases.regular.make({
+        id: MessageId.make(`short-${ordinal}`),
+        sessionId: sessionIdOverflow,
+        branchId: branchIdOverflow,
+        role,
+        parts: [Prompt.textPart({ text: `${OLD_HISTORY_MARK} ${ordinal}` })],
+        createdAt: dateFromMillis(1_000 + ordinal),
+      }),
+    )
+  }
+})
+
+/** How OpenAI's Responses stream reports a request past the model's input cap. */
+const overflowStep: SequenceStep = {
+  parts: [
+    Response.makePart("error", {
+      error: {
+        code: "context_length_exceeded",
+        message:
+          "Your input exceeds the context window of this model. Please adjust your input and try again.",
+      },
+    }),
+  ],
+}
+
+const stubCompactor = Layer.succeed(
+  ModelContextCompactor,
+  ModelContextCompactor.of({
+    compact: (request) =>
+      Effect.succeed({
+        notice: "summary of the earlier work",
+        modelId: request.modelId,
+      }),
+  }),
+)
+
+/** One turn on the seeded session; returns its events, stored messages and the requests' text. */
+const runOverflowTurn = (params: {
+  readonly steps: ReadonlyArray<SequenceStep>
+  readonly model: Model
+  readonly extraLayers: ReadonlyArray<Layer.Layer<never>>
+  /** One user message per turn, sent in order. */
+  readonly prompts?: ReadonlyArray<string>
+}) =>
+  Effect.gen(function* () {
+    const requests: Array<string> = []
+    const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence(
+      params.steps.map((step) => ({
+        parts: step.parts,
+        assertOptions: (options) => {
+          requests.push(encodeJson(options.prompt.content))
+        },
+      })),
+    )
+    const layer = baseLocalLayerWithProvider(providerLayer, {
+      agents: [wideAgent],
+      extraLayers: [ModelRegistry.Test([params.model]), ...params.extraLayers],
+    })
+    const result = yield* Effect.gen(function* () {
+      yield* seedShortHistory
+      for (const [index, content] of (params.prompts ?? ["continue"]).entries()) {
+        yield* (yield* SessionRuntime).sendUserMessage({
+          sessionId: sessionIdOverflow,
+          branchId: branchIdOverflow,
+          commandId: ActorCommandId.make(`turn:overflow:${index}`),
+          content,
+        })
+      }
+      const events = (yield* (yield* EventStorage).listEvents({
+        sessionId: sessionIdOverflow,
+        branchId: branchIdOverflow,
+      })).map((envelope) => envelope.event)
+      const durable = yield* (yield* MessageStorage).listMessages(branchIdOverflow)
+      return { events, durable }
+    }).pipe(Effect.provide(layer), Effect.timeout("8 seconds"))
+    return { ...result, requests, calls: yield* controls.callCount }
+  })
+
+const wideModel = new Model({
+  id: wideModelId,
+  name: "Wide Window",
+  provider: ProviderId.make("test"),
+  contextLength: 1_000_000,
+})
+
+/** What the last turn's receipt says of its stream; none when no turn completed. */
+const streamFailed = (events: ReadonlyArray<AgentEvent>) =>
+  Option.fromUndefinedOr(events.findLast((event) => event._tag === "TurnCompleted")).pipe(
+    Option.map((receipt) => receipt._tag === "TurnCompleted" && receipt.streamFailed === true),
+  )
+
+describe("provider overflow recovery", () => {
+  it.live("a request refused as too long hands the window off once and the step runs again", () =>
+    Effect.gen(function* () {
+      const result = yield* runOverflowTurn({
+        steps: [overflowStep, textStep("reply after handoff")],
+        model: wideModel,
+        extraLayers: [stubCompactor],
+      })
+
+      expect(result.calls).toBe(2)
+      // The refused request carried the old history; the retry carries the summary instead.
+      expect(result.requests[0]).toContain(OLD_HISTORY_MARK)
+      expect(result.requests[1]).not.toContain(OLD_HISTORY_MARK)
+      expect(result.requests[1]).toContain("summary of the earlier work")
+      const handoff = result.durable.find((message) =>
+        Option.exists(windowDetails(message), (details) =>
+          Predicate.isNotUndefined(details.summarized),
+        ),
+      )
+      expect(handoff).toBeDefined()
+      // The refusal is a notice: the turn went on and answered.
+      expect(result.events.filter((event) => event._tag === "ErrorOccurred")).toEqual([
+        expect.objectContaining({ notice: true }),
+      ])
+      expect(streamFailed(result.events)).toEqual(Option.some(false))
+      expect(result.durable.at(-1)?.role).toBe("assistant")
+    }),
+  )
+
+  it.live("with no compactor the refused history is dropped behind a marker that says so", () =>
+    Effect.gen(function* () {
+      const result = yield* runOverflowTurn({
+        steps: [overflowStep, textStep("reply after truncation")],
+        model: wideModel,
+        extraLayers: [],
+      })
+
+      expect(result.calls).toBe(2)
+      expect(result.requests[1]).not.toContain(OLD_HISTORY_MARK)
+      expect(result.requests[1]).toContain("provider refused the request")
+      expect(streamFailed(result.events)).toEqual(Option.some(false))
+    }),
+  )
+
+  it.live("a second refusal after the handoff fails the turn", () =>
+    Effect.gen(function* () {
+      const result = yield* runOverflowTurn({
+        steps: [overflowStep, overflowStep],
+        model: wideModel,
+        extraLayers: [stubCompactor],
+      })
+
+      expect(result.calls).toBe(2)
+      expect(streamFailed(result.events)).toEqual(Option.some(true))
+      const errors = result.events.filter((event) => event._tag === "ErrorOccurred")
+      expect(errors).toEqual([
+        expect.objectContaining({ notice: true }),
+        expect.not.objectContaining({ notice: true }),
+      ])
+    }),
+  )
+
+  it.live("a model whose input cap is below its window is budgeted against the cap", () =>
+    Effect.gen(function* () {
+      const capped = new Model({
+        id: wideModelId,
+        name: "GPT-5 shaped",
+        provider: ProviderId.make("test"),
+        contextLength: 400_000,
+        inputLimit: 272_000,
+      })
+      const result = yield* runOverflowTurn({
+        steps: [textStep("reply")],
+        model: capped,
+        extraLayers: [],
+      })
+      const projected = result.events.find((event) => event._tag === "ModelContextProjected")
+      const available =
+        projected?._tag === "ModelContextProjected" && projected.availableInputTokens
+      expect(available).toBeLessThanOrEqual(272_000)
+      expect(available).toBeGreaterThan(260_000)
+    }),
+  )
+
+  it.live("the next turn counts the window at the size the provider reported", () =>
+    Effect.gen(function* () {
+      const result = yield* runOverflowTurn({
+        steps: [
+          {
+            parts: [
+              textDeltaPart("first reply"),
+              finishPart({
+                finishReason: "stop",
+                usage: { inputTokens: 50_000, outputTokens: 20 },
+              }),
+            ],
+          },
+          textStep("second reply"),
+        ],
+        model: wideModel,
+        extraLayers: [],
+        prompts: ["first", "second"],
+      })
+      const projected = result.events.filter((event) => event._tag === "ModelContextProjected")
+      expect(projected).toHaveLength(2)
+      const [first, second] = projected
+      // chars/4 of a short history, then the provider's 50,000 for the same messages.
+      expect(first?._tag === "ModelContextProjected" && first.estimatedTokens).toBeLessThan(1_000)
+      expect(second?._tag === "ModelContextProjected" && second.estimatedTokens).toBeGreaterThan(
+        40_000,
+      )
     }),
   )
 })
@@ -782,8 +1109,6 @@ describe("model context window", () => {
 })
 
 // ── token estimation ────────────────────────────────────────────────────────
-
-const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 
 describe("Token Estimation", () => {
   test("estimateTokens calculates token count", () => {
@@ -1060,7 +1385,8 @@ describe("turn window projection", () => {
         messages: [prompt, ...steps],
         budget,
         directive: Option.none(),
-        project: projectWith(budget),
+        measure: Option.none(),
+        overflowed: false,
         persist: (message) => {
           persisted.push(message)
           return Effect.succeed(message)
@@ -1150,7 +1476,8 @@ describe("turn window projection", () => {
             messages,
             budget,
             directive: Option.some(ContextDirective.cases.Compact.make({})),
-            project: projectWith(budget),
+            measure: Option.none(),
+            overflowed: false,
             persist: (message) => Effect.succeed(message),
             summaryModel,
           }).pipe(Effect.provide(Layer.mergeAll(compactor, publisher.layer)))
@@ -1226,7 +1553,8 @@ describe("turn window projection", () => {
         messages,
         budget,
         directive: Option.none(),
-        project: projectWith(budget),
+        measure: Option.none(),
+        overflowed: false,
         persist: (message) => {
           persisted.push(message)
           return Effect.succeed(message)

@@ -18,6 +18,7 @@ import { TestClock } from "effect/testing"
 import * as AiError from "effect/unstable/ai/AiError"
 import {
   DEFAULT_RETRY_POLICY,
+  isContextOverflow,
   type ModelDriverContribution,
   ProviderAuthError,
   type ProviderResolution,
@@ -219,6 +220,55 @@ describe("provider retry", () => {
       expect(untyped.calls()).toBe(1)
     }),
   )
+})
+
+// ── context overflow ────────────────────────────────────────────────────────
+
+const refused = (description: string) =>
+  AiError.make({
+    module: "AnthropicLanguageModel",
+    method: "streamText",
+    reason: new AiError.InvalidRequestError({ description }),
+  })
+
+describe("context overflow", () => {
+  bunTest("a request refused as longer than the model accepts is an overflow", () => {
+    expect(isContextOverflow(refused("prompt is too long: 213462 tokens > 200000 maximum"))).toBe(
+      true,
+    )
+    expect(
+      isContextOverflow(
+        refused("input length and `max_tokens` exceed context limit: 188240 + 21333 > 200000"),
+      ),
+    ).toBe(true)
+    expect(
+      isContextOverflow({
+        code: "context_length_exceeded",
+        message: "Your input exceeds the context window of this model.",
+      }),
+    ).toBe(true)
+  })
+
+  bunTest("a rate limit or an unrelated failure is not an overflow", () => {
+    expect(
+      isContextOverflow(
+        AiError.make({
+          module: "Test",
+          method: "streamText",
+          reason: new AiError.RateLimitError({}),
+        }),
+      ),
+    ).toBe(false)
+    // A raw rate-limit event whose text also reads like an overflow stays a rate limit.
+    expect(
+      isContextOverflow({
+        code: "rate_limit_exceeded",
+        message: "Rate limit reached: reduce the length of the messages or try again later",
+      }),
+    ).toBe(false)
+    expect(isContextOverflow(refused("temperature must be at most 1"))).toBe(false)
+    expect(isContextOverflow("boom")).toBe(false)
+  })
 })
 
 // ── model catalog resolution ────────────────────────────────────────────────
