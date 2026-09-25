@@ -987,7 +987,7 @@ const collectResourceEntries = (
       .map((resource) => ({ extensionId: ext.manifest.id, resource })),
   )
 
-export const buildResourceLayer = (
+const buildResourceLayer = (
   extensions: ReadonlyArray<LoadedExtension>,
   scope: ResourceScope = "process",
 ): ErasedResourceLayer => {
@@ -1007,11 +1007,29 @@ type Restore = <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, 
 
 /** One extension whose Resources of a scope failed to build, and the cause. */
 interface FailedResourceBuild {
-  readonly extension: LoadedExtension
-  /** The full cause, frames included, for the log and the failure report. */
-  readonly error: string
+  /** The extension suspended at the `startup` phase, with the full cause. */
+  readonly failure: FailedExtension
   /** The messages down the cause chain, for a reader. */
   readonly message: string
+}
+
+/**
+ * The resolved extensions with some suspended: their tools, requests, hooks,
+ * agents and drivers leave the registry, and they are reported failed. A
+ * profile suspends an extension whose process Resource failed this way
+ * (`resolveExtensions` over the rest); a branch loop suspends one whose
+ * branch Resource failed, for that loop only.
+ */
+export const suspendExtensions = (
+  resolved: ResolvedExtensions,
+  failed: ReadonlyArray<FailedExtension>,
+): ResolvedExtensions => {
+  if (failed.length === 0) return resolved
+  const suspended = new Set(failed.map((failure) => failure.manifest.id))
+  return resolveExtensions(
+    resolved.extensions.filter((extension) => !suspended.has(extension.manifest.id)),
+    [...resolved.failedExtensions, ...failed],
+  )
 }
 
 interface BuiltScopeResources {
@@ -1089,7 +1107,10 @@ export const buildScopeResources = (params: {
       yield* Effect.logError("extension.resource.failed").pipe(
         Effect.annotateLogs({ extensionId: extension.manifest.id, scope: params.scope, error }),
       )
-      failed.push({ extension, error, message: causeChainMessage(Cause.squash(built.cause)) })
+      failed.push({
+        failure: toFailedExtension(extension, "startup", error),
+        message: causeChainMessage(Cause.squash(built.cause)),
+      })
     }
     return { active, failed, context }
   })
@@ -2234,9 +2255,7 @@ export class SessionProfileCache extends Context.Service<
             })
             return {
               active: started.active,
-              failed: started.failed.map(({ extension, error }) =>
-                toFailedExtension(extension, "startup", error),
-              ),
+              failed: started.failed.map(({ failure }) => failure),
               context: started.context,
             }
           })

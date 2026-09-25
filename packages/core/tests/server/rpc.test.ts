@@ -101,7 +101,7 @@ import {
 } from "@gent/core/extensions/api"
 import {
   ApprovalService,
-  buildResourceLayer,
+  buildScopeResources,
   ExtensionRegistry,
   resolveExtensions,
   type SessionProfile,
@@ -3300,12 +3300,15 @@ describe("extension command RPCs", () => {
   const makeProfile = (cwd: string, extensions: ReadonlyArray<LoadedExtension>) =>
     Effect.gen(function* () {
       const resolved = resolveExtensions(extensions)
-      const layerContext = yield* Layer.build(
-        Layer.provideMerge(
-          buildResourceLayer(resolved.extensions, "process"),
-          ExtensionRegistry.fromResolved(resolved),
-        ),
-      )
+      const registryContext = yield* Layer.build(ExtensionRegistry.fromResolved(resolved))
+      const started = yield* buildScopeResources({
+        extensions: resolved.extensions,
+        scope: "process",
+        context: Context.merge(Context.makeUnsafe<unknown>(new Map()), registryContext),
+        parent: yield* Effect.scope,
+        restore: (effect) => effect,
+      })
+      const layerContext = started.context
       return {
         cwd,
         resolved,
@@ -4264,10 +4267,58 @@ export default defineExtension({
 });
 `,
         )
+        // Sorts after the broken one and needs the service it would have built.
+        yield* fs.writeFileString(
+          path.join(userDir, "dependent-branch.ts"),
+          `import { Context, Effect, Layer, Schema } from "effect";
+import { defineExtension, defineResource, ExtensionHost, tool } from "@gent/core/extensions/api";
+class Broken extends Context.Service<Broken, { readonly value: string }>()(
+  "@gent/core/tests/server/rpc.test/BrokenBranchResource",
+) {}
+class Dependent extends Context.Service<Dependent, { readonly value: string }>()(
+  "@gent/core/tests/server/rpc.test/DependentBranchResource",
+) {}
+export default defineExtension({
+  id: "@test/zz-dependent-branch-resource",
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost;
+    yield* host.register("resource", defineResource({
+      id: "test/zz-dependent-branch-resource/resource",
+      scope: "branch",
+      layer: Layer.effect(Dependent, Effect.gen(function* () {
+        const broken = yield* Broken;
+        return Dependent.of({ value: broken.value });
+      })),
+    }));
+    yield* host.register("tool", tool({
+      id: "dependent_probe",
+      description: "Read the dependent branch service",
+      params: Schema.Struct({}),
+      output: Schema.String,
+      execute: () => Effect.gen(function* () { return (yield* Dependent).value; }),
+    }));
+  }),
+});
+`,
+        )
         const working: GentExtension = {
           manifest: { id: ExtensionId.make("@test/working-branch-resource") },
           setup: Effect.gen(function* () {
             const host = yield* ExtensionHost
+            yield* host.register(
+              "tool",
+              tool({
+                id: "working_probe",
+                description: "Read the working branch service",
+                params: Schema.Struct({}),
+                output: Schema.String,
+                execute: () =>
+                  Effect.gen(function* () {
+                    const token = yield* ProfileToken
+                    return yield* token.read
+                  }),
+              }),
+            )
             yield* host.register(
               "resource",
               defineResource({
@@ -4326,8 +4377,14 @@ export default defineExtension({
                 ),
               ),
             )
+            const offered: Array<string> = []
             const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-              textStep("the turn ran"),
+              {
+                ...textStep("the turn ran"),
+                assertOptions: (options) => {
+                  offered.push(...options.tools.map((entry) => entry.name))
+                },
+              },
             ])
             const { client, sessionId, branchId } = yield* createRpcHarness({
               ...e2ePreset,
@@ -4360,7 +4417,11 @@ export default defineExtension({
               branchId,
             })
             expect(token).toBe("working branch resource")
-            // The failure names its extension once, as a notice.
+            // The dependent extension is suspended for this loop: its tool
+            // is not offered, while the working one's is.
+            expect(offered).toContain("working_probe")
+            expect(offered).not.toContain("dependent_probe")
+            // Each failure names its extension once, as a notice.
             const events = yield* client.session.events({ sessionId, branchId }).pipe(
               Stream.takeUntil(({ event }) => event._tag === "StreamSynchronized"),
               Stream.map(({ event }) => event),
@@ -4377,6 +4438,13 @@ export default defineExtension({
             expect(notices[0]?._tag === "ErrorOccurred" && notices[0].error).toContain(
               "branch resource boom",
             )
+            const dependentNotices = events.filter(
+              (event) =>
+                event._tag === "ErrorOccurred" &&
+                event.error.includes("@test/zz-dependent-branch-resource"),
+            )
+            expect(dependentNotices).toHaveLength(1)
+            expect(dependentNotices[0]).toMatchObject({ notice: true })
           }).pipe(Effect.timeout("8 seconds")),
         )
       }).pipe(Effect.provide(BunPlatformLive)),

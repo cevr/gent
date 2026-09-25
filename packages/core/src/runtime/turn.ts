@@ -293,10 +293,14 @@ export const runAgentLoopTurnProfile =
   (profile: AgentLoopTurnProfile) =>
   <A, E, R>(effect: Effect.Effect<A, E, R>) => {
     const { turnCapabilityContext = Context.empty() } = profile
+    // The registry is provided inside the capability context, which carries
+    // the profile's own registry too: a loop that suspends an extension (a
+    // failed branch Resource) narrows `turnExtensionRegistry`, and the turn
+    // reads the narrowed one.
     return effect.pipe(
-      Effect.provideContext(turnCapabilityContext),
-      Effect.provideService(CurrentAgentLoopTurnProfile, profile),
       Effect.provideService(ExtensionRegistry, profile.turnExtensionRegistry),
+      Effect.provideService(CurrentAgentLoopTurnProfile, profile),
+      Effect.provideContext(turnCapabilityContext),
       provideCurrentCapabilityContext(profile.turnCapabilityContext),
       provideCurrentHostCtx(profile.turnHostCtx),
     )

@@ -1398,10 +1398,16 @@ Other notes:
   reports it failed at the `startup` phase. Branch resources come from the
   session's profile (the extensions set up for the session's cwd) and build on
   the loop's first turn or extension request, so a control-plane write never
-  resolves a profile. A branch Resource that fails is named once in the
-  transcript (an `ErrorOccurred` notice with the extension id); its services
-  stay absent for that loop, and the branch's turns run with the others.
-  Release runs in reverse build order when the owning scope closes.
+  resolves a profile. A branch Resource that fails, or that needs a service a
+  failed one would have built, is named once in the transcript (an
+  `ErrorOccurred` notice with the extension id) and suspends its extension
+  for that loop the way a failed process Resource does for the profile
+  (`suspendExtensions`): the loop's turns, requests and hooks read the
+  registry without it, so none of its tools, requests or hooks is offered or
+  dispatched, and the branch's turns run with the others. The turn profile's
+  registry is provided inside the profile's capability context, so the
+  narrowed registry is the one a turn reads. Release runs in reverse build
+  order when the owning scope closes.
 - Prompt shaping, input normalization, permission policy, and turn hooks are explicit runtime slots compiled from extension hooks and typed leaves, not generic middleware buckets.
 - The agent is a session property. `Session.admission` (agent, run spec;
   `sessions.admission_json`, migration 023) is fixed at creation,
