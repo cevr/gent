@@ -1558,7 +1558,9 @@ const valueWord = (words: ReadonlyArray<ShellWord>, value: OptionValue): Option.
  * - `Command`: the command after the options and `positionals` more words
  *   (`timeout 5 cmd`), after a `named` word before `{` (`coproc NAME { … }`),
  *   or after the first of `after` (`nix develop .#x -c cmd`). `head` is the
- *   command it is a subcommand of (`yarn workspace x npm publish`).
+ *   command it is a subcommand of (`yarn workspace x npm publish`). The
+ *   value of an `entry` option is the command word, and those words are its
+ *   arguments (`docker run --entrypoint rm image -rf x`).
  * - `Joined`: the words after the options and `positionals`, `take` of them,
  *   joined into one script (`eval`, `ssh host cmd`, `trap 'cmd' EXIT`).
  * - `OptionScript`: the values of these options are scripts (`su -c`,
@@ -1578,6 +1580,7 @@ const Run = Schema.TaggedUnion({
     after: Schema.Array(Schema.String),
     named: Schema.Boolean,
     head: Schema.String,
+    entry: Schema.Array(Schema.String),
   },
   Joined: { positionals: Schema.Int, take: Schema.Int },
   OptionScript: { short: Schema.String, long: Schema.Array(Schema.String), rest: Schema.Boolean },
@@ -1589,7 +1592,14 @@ type Run = typeof Run.Type
 type CommandFields = Partial<Omit<typeof Run.cases.Command.Type, "_tag">>
 
 const command = (fields: CommandFields = {}): Run =>
-  Run.cases.Command.make({ positionals: 0, after: [], named: false, head: "", ...fields })
+  Run.cases.Command.make({
+    positionals: 0,
+    after: [],
+    named: false,
+    head: "",
+    entry: [],
+    ...fields,
+  })
 
 const joined = (positionals = 0, take = Number.MAX_SAFE_INTEGER): Run =>
   Run.cases.Joined.make({ positionals, take })
@@ -1840,8 +1850,14 @@ const runCommands = (
   if (run._tag !== "Command") return []
   let starts = commandStarts(words, valued, run)
   if (readings === "first") starts = starts.slice(0, 1)
+  const entry = Arr.last(
+    optionValues(parseWords(words, valued, "leading"), "", run.entry).flatMap((value) =>
+      Option.toArray(valueWord(words, value)),
+    ),
+  )
   return starts.map((start) => {
     const rest = words.slice(start)
+    if (Option.isSome(entry)) return [entry.value, ...rest]
     if (run.head === "") return rest
     return [derivedWord(run.head, false), ...rest]
   })
@@ -3763,6 +3779,12 @@ const KUBECTL_EXEC_OPTIONS = options(
   `${(KUBECTL_OPTIONS.long ?? []).join(" ")} container filename pod-running-timeout`,
 )
 
+/** `kubectl debug` options whose value is the next word. */
+const KUBECTL_DEBUG_OPTIONS = options(
+  `${KUBECTL_OPTIONS.short ?? ""}cf`,
+  `${(KUBECTL_OPTIONS.long ?? []).join(" ")} container filename image target profile copy-to env set-image custom`,
+)
+
 /** `terraform apply` options whose value may be the next word (`-var x=1`). */
 const TERRAFORM_APPLY_OPTIONS: ValueOptions = {
   long: names("var var-file target replace state state-out backup lock-timeout parallelism"),
@@ -4002,19 +4024,22 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
     ),
     // The command a container or a pod runs, after the container, service or
     // pod word; it shares volumes, mounts and databases with the host.
-    // `kubectl exec` takes it after `--`, or after the pod in the old form.
+    // `run --entrypoint cmd` runs `cmd` with the words after the image.
+    // `kubectl exec` takes it after `--`, or after the pod in the old form;
+    // `kubectl debug` after `--`.
     ...each(
       ["docker exec", "docker container exec", "docker compose exec", "docker-compose exec"],
       runner(CONTAINER_EXEC_OPTIONS, { positionals: 1 }),
     ),
     ...each(
       ["docker run", "docker container run", "docker compose run", "docker-compose run"],
-      runner(CONTAINER_RUN_OPTIONS, { positionals: 1 }),
+      runner(CONTAINER_RUN_OPTIONS, { positionals: 1, entry: ["entrypoint"] }),
     ),
     "kubectl exec": spec(KUBECTL_EXEC_OPTIONS, [
       command({ after: ["--"] }),
       command({ positionals: 1 }),
     ]),
+    "kubectl debug": runner(KUBECTL_DEBUG_OPTIONS, { after: ["--"] }),
     kubectl: spec(KUBECTL_OPTIONS),
     ...each(
       ["kubectl delete", "kubectl drain"],

@@ -2509,10 +2509,21 @@ describe("classifyBashCommand", () => {
       `kubectl exec pod -c app -- rm -rf ${x}`,
       // The form without `--`.
       `kubectl exec pod rm -rf ${x}`,
+      // `--entrypoint` names the command; the words after the image are its arguments.
+      `docker run --entrypoint rm alpine -rf ${x}`,
+      `docker run --entrypoint=rm alpine -rf ${x}`,
+      `docker run --rm --entrypoint sh -v ${x}:/w alpine -c 'rm -rf /w'`,
+      `docker compose run --entrypoint rm web -rf ${x}`,
+      `docker run --entrypoint "$E" alpine`,
+      // `kubectl debug` runs its command after `--`.
+      `kubectl debug node/n -it --image=busybox -- rm -rf ${x}`,
+      `kubectl debug pod -c dbg --image busybox -- sh -c 'rm -rf ${x}'`,
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
     for (const command of [
+      `docker run --entrypoint ls alpine -la ${x}`,
+      "kubectl debug pod -it --image=busybox -- ls",
       "docker exec db ls",
       `docker exec -w ${x} -e X=1 db cat f`,
       "docker exec -it db psql -c 'select 1'",
