@@ -3,13 +3,15 @@
  *
  * A child is a session under the caller's branch, run as the `delegate`
  * agent. The registry is one JSON file per parent branch under
- * `~/.gent/delegates/`; every entry names the child, the tool call that owns
- * it, and whether the parent has its completion. `delegate.start` admits a
- * child and returns its handle at admission, never its answer: the child
- * reports through the delegate's own `turnAfter` hook, as a message on the
- * parent branch that wakes it. The same hook stops a parent's running children
- * when the parent's turn is interrupted. The parent's first turn in a
- * process and every `delegate.list` reconcile what a crash left.
+ * `<data directory>/delegates/`, the data directory `resolveDataDir` names
+ * (`GENT_DATA_DIR`, else `~/.gent`); every entry names the child, the tool
+ * call that owns it, and whether the parent has its completion.
+ * `delegate.start` admits a child and returns its handle at admission, never
+ * its answer: the child reports through the delegate's own `turnAfter` hook,
+ * as a message on the parent branch that wakes it. The same hook stops a
+ * parent's running children when the parent's turn is interrupted. The
+ * parent's first turn in a process and every `delegate.list` reconcile what a
+ * crash left.
  */
 import {
   Cause,
