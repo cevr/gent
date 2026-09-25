@@ -12,7 +12,7 @@ jobs:
     # A pinned arm64 image, not macos-latest, whose image moves under the job.
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: oven-sh/setup-bun@v2
         with:
