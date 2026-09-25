@@ -720,4 +720,86 @@ Decisions:
 | Cell       | Merged `d0a3224b7`. The value reader moved to its own lint-scoped file, `packages/extensions/src/cell-value.ts`, because the codec, the error renderer and the display share it (decided by fix-root-causes). It calls only intrinsics saved at load through the saved `Reflect.apply`: bigint through the abstract `String`, Map and Set through the saved `forEach`, lists grown through the saved `defineProperty`, and no for-of, spread or `push`. A total `displayValue` replaces `inspect` for logged and returned values, uncaught reports and causes. It matches `inspect` on 63 ordinary values; a Proxy shows as `[Proxy]`, a getter as `[Getter]`, and it has property and value caps. `tools` and `context` are permanent accessors that are not configurable (decided by correctness). `sameDescriptor` compares the flags. A reset that cannot restore a global reports it in the optional `unrestored` field on the reset reply (wire only), and the kernel replaces the worker. Counsel found the bigint and iterator calls, the silent reset skip, a non-Error cause through `inspect`, and the display itself; all fixed with red tests first, and 10 mutation probes were red. Out of reach, documented: Effect's field assignment and the renderer's string work use shared intrinsics, so a cell that poisons them stalls the worker until the host replaces it on timeout. Safety slip: the agent ran an empty `python3 -` heredoc (nothing created or changed). Gate 0. |
 | TUI        | Merged `8c482fa0d`. TUI19-1: a docked pane on a short terminal reads its real Yoga height before each draw, drops its rules under 3 rows, and at 0 rows draws nothing and takes no keys (`KeyboardGate`, `useScopedKeyboard`); Esc still closes a hidden held pane without cancelling the turn. TUI19-2: the feed backoff resets only after both the `StreamSynchronized` marker and the first watch item arrive, and each attempt's scope closes both subscriptions. TUI19-3: Ctrl+C closes a held pane, then cancels, then quits; the boot branch picker and enforced sign-in quit. TUI19-4/5: a session pane holds every composer key and paste. TUI19-6: `pickerHeight` counts 4 rows of chrome plus a `queryRow` flag (decided by redesign-from-first-principles). TUI19-7: each render gets its own scoped temp home. TUI19-8: server slash commands list again after a reconnect and settle per connection generation, so a command sent during the new listing waits. A bare Esc keybind is refused (`holdsEscape`). Counsel found the settled state kept across reconnects; fixed with a red test first. 19 mutation probes were red. Open product question: at 6-8 rows with a turn running, a pane gets no cursor row unless the composer's blank row gives way. Flakes: btw pulses, and the cell background-shell notice (both passed on retry). Gate 0.                                                                                                                            |
 
+Pushed `4845614f2`; CI run 36149935898 failed in the wake test "an interrupted timer leaves its row…". The cause: a timer fiber reads the clock and then sleeps, and one `TestClock.adjust` landing between the two leaves the sleep a whole delay past. Fixed in `8efcda702` (`advanceUntil` steps the virtual clock). The next run, 36150927791, failed in the cell recovery test ("the cancelled child reported to the parent"); a root-cause agent is on it.
+
 Round end: all six Pass 19 batches merged. Build warning cause: `TURBO_CACHE_DIR=/workspaces/.cache/turbo` is on the 60G `/workspaces` volume, which is 100% full (the turbo cache there is 23G); turbo skips its cache writes and the gate still passes. It is the Bite work volume, so it is left to the owner.
+
+## Pass 20
+
+Sweeps against main `4845614f2`: six areas, and all six report "not polish". Guard blind spots were found in guard, extensions, TUI, tooling and core. Reports are in `~/.cache/gent-pass20/pass20-<area>.md`.
+
+### Pass 20 findings
+
+- Guard:
+  - G20-1a: m2 re-runs for every start, a Pass 19 regression, about n^4.6.
+  - G20-1b: the xargs and parallel input check is cubic (`inputNamesCommand` makes a new memo per call), and every nested level copies the word list.
+  - Fail-opens:
+    - G20-2: m2 never fires under a named parent (`pnpm prisma migrate reset`, `pnpm dlx rimraf`, `bun run rm`, `gh codespace ssh --`).
+    - G20-3: the program-holding variables are a 12-name list.
+    - G20-4: tmux `#(…)` and `default-command`.
+    - G20-5: screen `-x s -X`.
+    - G20-6: tar `--to-command`/`-I`, sort `--compress-program`, man `-P`.
+  - G20-7: rimraf, truncate, shred and dropdb ask with no operand.
+  - G20-8: missing risk rows: docker container prune, vagrant destroy, redis FLUSHALL, mongosh dropDatabase, podman machine/pod rm, and curl/wget onto a sensitive file.
+  - No runner row folds into m2.
+- Core:
+  - C20-1: Anthropic `model_context_window_exceeded` arrives as an `unknown` finish, and the cut reply ends as a finished answer.
+  - C20-2: the 4,096-token output reserve is below the `max_tokens` Effect sends.
+  - C20-4, TL20-4, TUI20-9: tests run in the shared `/tmp` as their cwd, loader dirs and harness defaults. The Pass 19 gate wrote `/tmp/.gent/prompts/…`.
+  - C20-5, TL20-3: `GentPlatform.Test` home is `/tmp`, and the guard skips product files.
+  - C20-6: harness JSDoc.
+  - BR20-1: branch Resources are built as one merged layer, so one failing extension fails every turn.
+- Cell and extensions:
+  - CX20-1: guard (b), the saved intrinsics, does not hold end to end. A replaced `Map.prototype.set` saves 999 for 5, and `Object.prototype.toJSON` changes the stored frame.
+  - CX20-2: the snapshot encoder sits outside `cell-value.ts`.
+  - CX20-3: a failed snapshot leaves `recoveryPending` false, and the model is told to reset, which wipes the saved namespace.
+  - CX20-4: about 120 lines only match `inspect` layout.
+  - EF20-1: the snapshot is 16-50× slower (per-code-unit UTF-8 count, full encode before the cap).
+  - FS20-1: the large-file read loads and re-encodes the whole file.
+  - PV20-1 to PV20-3: login in-flight count, an unsettled `finished` on interrupt, and one completion owner for both flows.
+  - BG20-1: the interrupted notice names missing files and always blames a server stop.
+  - BG20-2: the old-row replay file write is a shim.
+- Context gauge (C20-3, EF20-2, TUI20-3): the TUI gauge and `context.status` divide by the window, not the input ceiling. They read 68% at handoff on GPT-5.
+- TUI:
+  - TUI20-1, TUI20-2: the auth pane is still modal and draws the closed provider list.
+  - TUI20-4: Esc on a no-row extension pane cancels the turn.
+  - TUI20-5: a pane with no row at 6-8 rows.
+  - TUI20-6: the boot auth pass-through.
+  - TUI20-7: `PickerFrame` `lines`/`queryRow` the list already knows.
+  - TUI20-8: a client `ctrl+c` keybind pre-empts the Ctrl+C ladder.
+  - TUI20-10: no guard for "docked, not modal". The mermaid viewer is modal.
+- Tooling:
+  - TL20-1: four files state the live-binary rule and disagree.
+  - TL20-2: guards read two file sets (HEAD tree and index), and each gives a wrong answer in one mode.
+  - TL20-6: the guide check crashes on a trashed, un-`git rm`'d file.
+  - TL20-7: the capture preload lives outside the repo and uses the owner's HOME.
+
+### Pass 20 decisions
+
+- G20-2: m2 applies from the subcommand word in any reading with no runs and no risks, and `cargo run -- rm -rf X` asking is accepted (decided by correctness: an unseen fail-open under pnpm, yarn and bun is a P1 for those projects). G20-1: the linear shape (offset word views, one memo per classification), not a nesting cap (decided by redesign-from-first-principles). The classifier runs synchronously on the server.
+- C20-1: detect `model_context_window_exceeded` by the raw stop reason and treat it as overflow and truncation. Do not treat every `unknown` finish as truncated (decided by prove-it-works: other drivers may report `unknown` on normal ends).
+- C20-2: an optional `outputLimit` on `Model` from the catalog. Reserve `min(outputLimit ?? 32k, 32k)`, capped for small windows.
+- Gauge: divide by the `availableInputTokens` the projection already records. No new event field (decided by derive-dont-sync; this supersedes the core sweep's event-field proposal).
+- CX20-1: after each cell, before the snapshot, compare the built-ins with a baseline taken at load. Put back what changed, name it in the result, and send what cannot be put back through `unrestored` → `replaceWorker`. Then delete guard (b)'s hand-written helpers (decided by fix-root-causes and subtract-before-you-add). This is not a sandbox: the cell still runs full Bun within a cell. The namespace holds bindings, not patched built-ins.
+- CX20-4: delete the `inspect`-parity layout code (decided by subtract-before-you-add). The model reads the output, and exact parity with `inspect` is not a feature.
+- BG20-2: delete the old-row replay file write. An old row replays its stored text (personal library, no shims).
+- BR20-1: one resource builder for process and branch scopes, isolated per extension, and a failure names its extension (decided by redesign-from-first-principles).
+- TL20-2: every existence question reads the index (`git ls-files --cached`), and `committedFilesCommand` is deleted (decided by subtract-before-you-add). In a hook the index is the commit, and a guard must never tell an agent to delete a needed override.
+- TL20-1: `safety.md` owns the live-binary rule, and gamut is allowed to the orchestrator only.
+- TUI20-10: the mermaid viewer stays modal for now as an owner question. No guard until that is settled.
+- Rejected: folding runner rows into m2 (G20 reduction question), because it loses the run-time command-word ask for about 10 lines.
+
+### Pass 20 triage
+
+| Batch   | Worktree      | Items                                                              |
+| ------- | ------------- | ------------------------------------------------------------------ |
+| Guard   | `p20-guard`   | G20-1a, G20-1b and the linear shape, G20-2 to G20-8                |
+| Core    | `p20-core`    | C20-1, C20-2, the gauge (TUI and `context.status`), BR20-1         |
+| Cell    | `p20-cell`    | CX20-1 to CX20-4, EF20-1, FS20-1, PV20-1 to PV20-3, BG20-1, BG20-2 |
+| TUI     | `p20-tui`     | TUI20-1, TUI20-2, TUI20-4 to TUI20-8                               |
+| Tooling | `p20-tooling` | TL20-1 to TL20-3, TL20-6, TL20-7, C20-4 to C20-6, TUI20-9          |
+
+### Pass 20 results
+
+| Batch | Result |
+| ----- | ------ |

@@ -4820,9 +4820,18 @@ const delegateToolContext = Effect.fn("test.delegateToolContext")(function* (par
   }
 })
 
+/**
+ * Starts the recovered child and cancels it once it holds a request at the
+ * model. The first `delegate.list` is what starts it: its reconcile re-sends
+ * the start the lost worker never sent, and admission returns before the
+ * child's turn reaches the model. A cancel sent at once can stop that turn
+ * first, and the parent's next turn then takes the model reply scripted for
+ * the child. `childAtModel` ends that race.
+ */
 const cancelRecoveredChild = Effect.fn("test.cancelRecoveredChild")(function* (
   outer: Option.Option<Message["parts"][number]>,
   parent: { readonly sessionId: SessionId; readonly branchId: BranchId },
+  childAtModel: Effect.Effect<void>,
 ) {
   if (Option.isNone(outer) || outer.value.type !== "tool-result")
     return yield* Effect.die("Missing recovered cell result")
@@ -4845,6 +4854,7 @@ const cancelRecoveredChild = Effect.fn("test.cancelRecoveredChild")(function* (
     Effect.map((children) => children.find((child) => child.requestId === requestId)),
   )
   expect((yield* observe)?.completed).toBe(false)
+  yield* childAtModel
   yield* runToolWithCtx(CancelChild, { requestId }, ctx)
   const cancelled = yield* waitFor(
     observe,
@@ -4924,9 +4934,9 @@ it.scopedLive(
         ]
         const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
           textStep("Recovered"),
-          // The orphaned child's own turn. It is gated and never released, so
-          // the child is still at the model when the parent cancels it — the
-          // state a lost worker leaves behind.
+          // The orphaned child's own turn, once `delegate.list` restarts it
+          // after the recovery turn. It is gated and never released, so the
+          // child is still at the model when the parent cancels it.
           { ...textStep("child"), gated: true },
           // The parent reads the cancelled child's completion message.
           textStep("Child cancelled"),
@@ -5127,7 +5137,11 @@ it.scopedLive(
           (part) => part.type === "tool-result" && part.id === cell.toolCallId,
         )
         if (state === "unknown-child") {
-          yield* cancelRecoveredChild(Option.fromUndefinedOr(outer), { sessionId, branchId }).pipe(
+          yield* cancelRecoveredChild(
+            Option.fromUndefinedOr(outer),
+            { sessionId, branchId },
+            controls.waitForCall(1),
+          ).pipe(
             Effect.provideContext(context),
             Effect.provideService(CurrentWorkspaceId, workspaceId),
           )
