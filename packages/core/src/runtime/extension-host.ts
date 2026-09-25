@@ -1476,8 +1476,8 @@ export const setupExtension = Effect.fn("ExtensionLoader.setupExtension")(functi
     failureMessage: (cause) => `Extension setup failed: ${String(cause)}`,
     defectMessage: (cause) => `Extension setup defect: ${String(cause)}`,
   })
-  // A setup that returns a value is the old contribution-object contract. Loading
-  // it as an empty extension would silently drop everything it meant to add.
+  // Contributions register through `ExtensionHost`; a setup that returns a value
+  // meant to contribute it, and loading it as empty would drop it silently.
   if (!Predicate.isUndefined(setupResult)) {
     return yield* new ExtensionLoadError({
       extensionId: manifest.id,

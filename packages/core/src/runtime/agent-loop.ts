@@ -440,15 +440,18 @@ const clearInFlightQueuedTurn = (queue: LoopQueueState, messageId: MessageId): L
   return queue
 }
 
-/** The loop still owns this message: starting, running, waiting, or queued. */
-const stateHoldsMessage = (state: LoopState, messageId: MessageId) =>
-  state._tag !== "Idle" && state.message.id === messageId
+/** The phase runs, or waits on an interaction in, the turn this message opened. */
+const phaseHolds = (phase: LoopState, messageId: MessageId): boolean => {
+  if (phase._tag === "Idle") return false
+  return phase.message.id === messageId
+}
 
+/** The loop still owns this message: starting, running, waiting, or queued. */
 const loopHoldsMessage = (s: AgentLoopState, messageId: MessageId): boolean => {
   const item = (queued: QueuedTurnItem) => queued.message.id === messageId
   return (
-    stateHoldsMessage(s.state, messageId) ||
-    (Predicate.isNotUndefined(s.startingState) && stateHoldsMessage(s.startingState, messageId)) ||
+    phaseHolds(s.state, messageId) ||
+    (Predicate.isNotUndefined(s.startingState) && phaseHolds(s.startingState, messageId)) ||
     (Predicate.isNotUndefined(s.queue.inFlight) && item(s.queue.inFlight)) ||
     s.queue.followUp.some(item) ||
     s.queue.steering.some(item)
@@ -516,11 +519,6 @@ const turnAdmitted = (s: AgentLoopState, messageId: MessageId): boolean =>
   s.queue.inFlight?.message.id === messageId ||
   phaseHolds(s.state, messageId) ||
   (Predicate.isNotUndefined(s.startingState) && phaseHolds(s.startingState, messageId))
-
-const phaseHolds = (phase: LoopState, messageId: MessageId): boolean => {
-  if (phase._tag === "Idle") return false
-  return phase.message.id === messageId
-}
 
 /**
  * Whether a caller may take a turn for this branch right now.
@@ -841,15 +839,19 @@ export const makeLoopInbox = (
       })
     })
 
+    // A removal answers whether it took anything, and stores only when it did.
+    // `remove` returns the same queue when nothing matched.
+    const removeFromQueue = (label: string, remove: (queue: LoopQueueState) => LoopQueueState) =>
+      commitQueueTransaction(label, (s) => {
+        const queue = remove(s.queue)
+        const removed = queue !== s.queue
+        return { value: removed, next: { ...s, queue }, persist: removed }
+      })
+
     const settle = Effect.fn("LoopInbox.settle")((messageId: MessageId) =>
-      commitQueueTransaction("cleared in-flight turn", (s) => {
-        const queue = clearInFlightQueuedTurn(s.queue, messageId)
-        return {
-          value: queue !== s.queue,
-          next: { ...s, queue },
-          persist: queue !== s.queue,
-        }
-      }),
+      removeFromQueue("cleared in-flight turn", (queue) =>
+        clearInFlightQueuedTurn(queue, messageId),
+      ),
     )
 
     // Delivery stores the message before it drops the item, and the drop takes
@@ -866,16 +868,10 @@ export const makeLoopInbox = (
     // A queued copy goes even when the message is stored: a turn that id
     // opened may run while a repeat of its steer still waits.
     const withdrawSteering = (messageId: MessageId) =>
-      commitQueueTransaction("withdrew steering", (s) => {
-        const kept = s.queue.steering.filter((item) => item.message.id !== messageId)
-        if (kept.length === s.queue.steering.length) {
-          return { value: false, next: s, persist: false }
-        }
-        return {
-          value: true,
-          next: { ...s, queue: { ...s.queue, steering: kept } },
-          persist: true,
-        }
+      removeFromQueue("withdrew steering", (queue) => {
+        const kept = queue.steering.filter((item) => item.message.id !== messageId)
+        if (kept.length === queue.steering.length) return queue
+        return { ...queue, steering: kept }
       }).pipe(Effect.withSpan("LoopInbox.withdrawSteering"))
 
     const dropSteeringDelivered = (delivered: ReadonlyArray<QueuedTurnItem>) => {
@@ -923,14 +919,9 @@ export const makeLoopInbox = (
     })).pipe(Effect.withSpan("LoopInbox.drain"))
 
     const withdraw = Effect.fn("LoopInbox.withdraw")((messageId: MessageId) =>
-      commitQueueTransaction("removed queued follow-up", (s) => {
-        const queue = removeQueuedFollowUp(s.queue, messageId)
-        return {
-          value: queue !== s.queue,
-          next: { ...s, queue },
-          persist: queue !== s.queue,
-        }
-      }),
+      removeFromQueue("removed queued follow-up", (queue) =>
+        removeQueuedFollowUp(queue, messageId),
+      ),
     )
 
     return {
@@ -2808,8 +2799,9 @@ const buildAgentLoopActorHandlers = (config: {
       switch (command._tag) {
         case "Cancel":
         case "Interrupt":
+          // A cancellation that names a message took the `stopMessage` path above.
           if (isActiveLoopState(yield* handle.inbox.phase)) {
-            yield* handle.interrupt(command.messageId).pipe(orCleanup(handle))
+            yield* handle.interrupt().pipe(orCleanup(handle))
           }
           return
 
