@@ -354,6 +354,14 @@ export interface TurnAfterInput {
   readonly branchId: BranchId
   /** The user message that opened the turn; `TurnCompleted.messageId` carries the same id. */
   readonly messageId: MessageId
+  /**
+   * The `steer` messages a step joined into this turn. Each ends with this
+   * turn and has no turn end of its own. Only joins this process saw: a turn
+   * resumed after a restart names none from before it.
+   */
+  readonly joinedMessageIds: ReadonlySet<MessageId>
+  /** When the turn started, in epoch milliseconds; a turn resumed after a park or a restart keeps its start. */
+  readonly startedAtMs: number
   readonly durationMs: number
   readonly agentName: AgentName
   readonly interrupted: boolean
@@ -846,8 +854,11 @@ export interface ExtensionSessionService {
    * has read (the steer is taken back). Waits for the branch's loop and
    * returns true when the stop reached the message there; false when the
    * loop no longer holds it (its turn ended, or a step joined it into a turn
-   * another message opened, which runs on). A `requestId` makes a repeat of
-   * the same stop a no-op.
+   * another message opened, which runs on), and when an earlier stop already
+   * stops the turn it opened. A steer taken back answers true, unless an
+   * earlier stop from this same branch already stops the turn the steer
+   * waited to join: that stop answered true, so the branch is told once. A
+   * `requestId` makes a repeat of the same stop a no-op.
    */
   readonly stopMessage: (params: {
     readonly sessionId?: SessionId

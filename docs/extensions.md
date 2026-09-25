@@ -144,8 +144,24 @@ target session: `ctx.Session.create` sets them once in its `admission`.
 `"queue"` and `"steer"` target the current branch when no `sessionId` and
 `branchId` are named. A `"turn"` names its target, and the current branch
 refuses it: a turn that waits on its own loop never returns, so it takes
-`"queue"`. `ctx.Session.stop({ sessionId?, branchId?, messageId? })` stops a
-running turn.
+`"queue"`.
+
+Two verbs stop work, and both target the current branch when no `sessionId`
+and `branchId` are named. A `requestId` makes a repeat of the same stop a
+no-op.
+
+- `ctx.Session.stop({ sessionId?, branchId?, requestId? })` stops the branch's
+  running turn, whichever message opened it, and answers nothing.
+- `ctx.Session.stopMessage({ sessionId?, branchId?, messageId, requestId? })`
+  stops only what one message opens: its running turn, its turn that has not
+  started yet, or its `"steer"` that no step has read (the steer is taken
+  back). It waits for the branch's loop and answers `true` when the stop
+  reached the message. It answers `false` when the loop no longer holds the
+  message (its turn ended, or a step joined it into another turn), and when
+  an earlier stop already stops the turn it opened. A steer taken back
+  answers `true`, unless an earlier stop from the same branch already stops
+  the turn the steer waited to join: that stop answered `true`, so the
+  calling branch hears of it once.
 
 A branch's loop that nothing holds is passivated after about a minute idle,
 and the branch scope closes with it: a fiber forked into a branch resource

@@ -352,7 +352,13 @@ describe("wake", () => {
             "the notice is listed alone",
           )
           expect(noticed.entries).toMatchObject([{ _tag: "notice", note: "stand up" }])
-          const idle = yield* client.session.getSnapshot({ sessionId, branchId })
+          // The alarm can fire while the turn that set it still ends: wait for that end.
+          const idle = yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) => current.runtime._tag === "Idle",
+            3_000,
+            "the turn that set the alarm ended",
+          )
           expect(idle.runtime._tag).toBe("Idle")
           expect(hasWake(idle.messages)).toBe(false)
           // The tool-call step and the reply: nothing after the fire.
@@ -879,6 +885,8 @@ const wakeTurnHooks = (home: string) =>
             sessionId: SessionId.make("wake-session"),
             branchId,
             messageId: MessageId.make("wake-message"),
+            joinedMessageIds: new Set(),
+            startedAtMs: 0,
             durationMs: 10,
             agentName: builtinAgent.name,
             interrupted: false,

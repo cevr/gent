@@ -149,6 +149,7 @@ import {
   type SendUserMessagePayload,
   type SessionRuntimeState,
   type SteerCommandType,
+  type StopRequester,
 } from "../domain/agent-loop.js"
 import { StorageError } from "../domain/errors.js"
 import type { AgentLoopTurnProfile } from "./turn.js"
@@ -1476,8 +1477,8 @@ export const setupExtension = Effect.fn("ExtensionLoader.setupExtension")(functi
     failureMessage: (cause) => `Extension setup failed: ${String(cause)}`,
     defectMessage: (cause) => `Extension setup defect: ${String(cause)}`,
   })
-  // A setup that returns a value is the old contribution-object contract. Loading
-  // it as an empty extension would silently drop everything it meant to add.
+  // Contributions register through `ExtensionHost`; a setup that returns a value
+  // meant to contribute it, and loading it as empty would drop it silently.
   if (!Predicate.isUndefined(setupResult)) {
     return yield* new ExtensionLoadError({
       extensionId: manifest.id,
@@ -2535,6 +2536,8 @@ interface ExtensionSessionControlService {
     readonly branchId: BranchId
     readonly messageId: MessageId
     readonly requestId: RequestId
+    /** The branch that asks: a take-back names what its own earlier stop already reported. */
+    readonly requester: StopRequester
   }) => Effect.Effect<boolean, Error>
   /** Holds the loop's own entity resident until the enclosing scope closes. */
   readonly holdResident: Effect.Effect<void, never, ScopeType.Scope>
@@ -2892,7 +2895,12 @@ export const makeExtensionHostContextProvider = (
             yield* requireTarget("stopMessage", target)
             const requestId = params.requestId ?? RequestId.make(yield* host.randomId)
             return yield* control((loop) =>
-              loop.stopMessage({ ...target, messageId: params.messageId, requestId }),
+              loop.stopMessage({
+                ...target,
+                messageId: params.messageId,
+                requestId,
+                requester: { sessionId: runInfo.sessionId, branchId: runInfo.branchId },
+              }),
             ).pipe(Effect.mapError(sessionError("stopMessage")))
           }).pipe(inWorkspace),
         // The subscription does its reads at pull time, so the workspace is

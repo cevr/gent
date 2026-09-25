@@ -381,13 +381,28 @@ const clearGoal = Effect.gen(function* () {
  * end is charged: an interrupted or failed turn spent its known tokens and
  * its time too. The known part is charged even when a step's usage is
  * missing (a step cut short, or a restart).
+ *
+ * A turn that started before the goal existed (the model created it with
+ * the goal tool, or `/goal` ran while the turn ran) is charged only its time
+ * since the goal's creation. Its tokens are not charged: the turn reports one
+ * total, and the part spent before the goal cannot be told apart, so a small
+ * budget would read as spent before any goal work.
  */
-const chargeTurn = (goal: GoalState, input: TurnAfterInput, updatedAt: number): GoalState => ({
-  ...goal,
-  tokensUsed: goal.tokensUsed + input.usage.known.inputTokens + input.usage.known.outputTokens,
-  timeUsedMs: goal.timeUsedMs + input.durationMs,
-  updatedAt,
-})
+const chargeTurn = (goal: GoalState, input: TurnAfterInput, updatedAt: number): GoalState => {
+  if (input.startedAtMs < goal.createdAt) {
+    return {
+      ...goal,
+      timeUsedMs: goal.timeUsedMs + Math.max(0, updatedAt - goal.createdAt),
+      updatedAt,
+    }
+  }
+  return {
+    ...goal,
+    tokensUsed: goal.tokensUsed + input.usage.known.inputTokens + input.usage.known.outputTokens,
+    timeUsedMs: goal.timeUsedMs + input.durationMs,
+    updatedAt,
+  }
+}
 
 /** `report` is false only after an interrupt: nothing is logged or queued then. */
 type TurnDecision = { readonly next: GoalState; readonly report: boolean }

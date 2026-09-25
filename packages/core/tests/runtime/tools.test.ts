@@ -940,6 +940,21 @@ describe("turn interruption", () => {
     }),
   )
 
+  it.live("the turn keeps the requester of its first stop, and the next turn forgets it", () =>
+    Effect.gen(function* () {
+      const turn = yield* makeTurnInterruption
+      yield* turn.interrupt
+      yield* turn.interruptFor("parent-after-user")
+      expect(yield* turn.stoppedFor).toEqual(Option.none())
+      yield* turn.beginTurn
+      yield* turn.interruptFor("parent")
+      yield* turn.interruptFor("other")
+      expect(yield* turn.stoppedFor).toEqual(Option.some("parent"))
+      yield* turn.beginTurn
+      expect(yield* turn.stoppedFor).toEqual(Option.none())
+    }),
+  )
+
   it.live("branch work with no turn behind it is never interrupted", () =>
     Effect.gen(function* () {
       expect(yield* neverInterrupted.interrupted).toBe(false)

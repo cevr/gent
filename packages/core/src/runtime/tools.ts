@@ -91,20 +91,41 @@ export interface TurnInterruptionStatus {
 export interface TurnInterruption extends TurnInterruptionStatus {
   /** Stop the turn now running. Work that checks `interrupted` will see it. */
   readonly interrupt: Effect.Effect<void>
+  /** `interrupt`; when it is the turn's first, `by` is recorded as the stop's requester. */
+  readonly interruptFor: (by: string) => Effect.Effect<void>
+  /** The requester of the stop that first latched the turn now running, when it named one. */
+  readonly stoppedFor: Effect.Effect<Option.Option<string>>
   /** A fresh turn begins, so it is not interrupted. */
   readonly beginTurn: Effect.Effect<void>
   /** Completes when the turn now running is interrupted; work races it to stop. */
   readonly awaitInterrupt: Effect.Effect<void>
 }
 
+interface TurnLatch {
+  readonly stop: Deferred.Deferred<void>
+  readonly by: Ref.Ref<Option.Option<string>>
+}
+
+const makeTurnLatch: Effect.Effect<TurnLatch> = Effect.all({
+  stop: Deferred.make<void>(),
+  by: Ref.make(Option.none<string>()),
+})
+
 export const makeTurnInterruption: Effect.Effect<TurnInterruption> = Effect.gen(function* () {
   // One latch per turn: a bit can only be polled, a latch can also be raced.
-  const latch = yield* Ref.make(yield* Deferred.make<void>())
+  const latch = yield* Ref.make(yield* makeTurnLatch)
+  const current = Ref.get(latch)
   return {
-    interrupted: Ref.get(latch).pipe(Effect.flatMap(Deferred.isDone)),
-    interrupt: Ref.get(latch).pipe(Effect.flatMap((turn) => Deferred.succeed(turn, void 0))),
-    beginTurn: Deferred.make<void>().pipe(Effect.flatMap((turn) => Ref.set(latch, turn))),
-    awaitInterrupt: Ref.get(latch).pipe(Effect.flatMap(Deferred.await)),
+    interrupted: current.pipe(Effect.flatMap((turn) => Deferred.isDone(turn.stop))),
+    interrupt: current.pipe(Effect.flatMap((turn) => Deferred.succeed(turn.stop, void 0))),
+    interruptFor: (by) =>
+      Effect.gen(function* () {
+        const turn = yield* current
+        if (yield* Deferred.succeed(turn.stop, void 0)) yield* Ref.set(turn.by, Option.some(by))
+      }),
+    stoppedFor: current.pipe(Effect.flatMap((turn) => Ref.get(turn.by))),
+    beginTurn: makeTurnLatch.pipe(Effect.flatMap((turn) => Ref.set(latch, turn))),
+    awaitInterrupt: current.pipe(Effect.flatMap((turn) => Deferred.await(turn.stop))),
   }
 })
 

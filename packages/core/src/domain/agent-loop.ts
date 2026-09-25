@@ -397,7 +397,18 @@ interface StopMessagePayload {
   readonly branchId: BranchId
   readonly messageId: MessageId
   readonly requestId: RequestId
+  readonly requester?: StopRequester
 }
+
+/**
+ * The branch that asks for a stop. A turn remembers the requester of the stop
+ * that first latched it, so a later take-back from the same branch knows its
+ * own earlier stop already ends what the steer waited to join.
+ */
+export const StopRequester = Schema.Struct({ sessionId: SessionId, branchId: BranchId })
+export type StopRequester = typeof StopRequester.Type
+export const stopRequesterKey = (requester: StopRequester): string =>
+  `${requester.sessionId}/${requester.branchId}`
 
 const WorkspaceFields = {
   workspaceId: WorkspaceId,
@@ -442,6 +453,12 @@ const MessageCommandFields = {
   messageId: MessageId,
 }
 
+/** `requester` is optional: a stored command written before it decodes. */
+const StopMessageFields = {
+  ...MessageCommandFields,
+  requester: Schema.optional(StopRequester),
+}
+
 const ExtensionRequestInputEnvelope = Schema.TaggedUnion({
   Present: { value: Schema.Unknown },
   Missing: {},
@@ -465,7 +482,7 @@ export type SteerInput = FieldsInput<typeof SteerFields>
 export type RespondInteractionInput = FieldsInput<typeof RespondInteractionFields>
 export type BranchCommandInput = FieldsInput<typeof BranchCommandFields>
 export type RemoveFollowUpInput = FieldsInput<typeof MessageCommandFields>
-export type StopMessageInput = FieldsInput<typeof MessageCommandFields>
+export type StopMessageInput = FieldsInput<typeof StopMessageFields>
 export type RequestExtensionInput = FieldsInput<typeof RequestExtensionFields>
 export type HandlerRequest<Operation> = {
   readonly operation: Operation & { readonly _tag: string }
@@ -539,7 +556,7 @@ export const AgentLoop = Actor.fromEntity(
     // Stop what one message opens: take back its waiting steer, stop its
     // running turn, or cancel a turn that has not started. True when it did.
     StopMessage: {
-      payload: MessageCommandFields,
+      payload: StopMessageFields,
       success: Schema.Boolean,
       error: AgentLoopError,
       persisted: true,
@@ -758,6 +775,7 @@ export const stopMessageOn = Effect.fn("AgentLoop.client.stopMessage")(function*
         branchId: input.branchId,
         commandId: ActorCommandId.make(input.requestId),
         messageId: input.messageId,
+        requester: input.requester,
       }),
     )
     .pipe(asAgentLoopError(`Failed to stop message ${input.messageId}`))

@@ -1395,7 +1395,13 @@ describe("a start nobody waits for", () => {
             "the recovered child delivered its completion",
           )
           expect(completionMessages(snapshot.messages)).toHaveLength(1)
-          const [entry] = yield* harness.registryOf(branchId)
+          // The completion is sent before its row is written.
+          const [entry] = yield* waitFor(
+            harness.registryOf(branchId),
+            (entries) => entries[0]?.delivered === true,
+            3_000,
+            "the recovered child's row is written",
+          )
           expect(entry).toMatchObject({
             requestId: "crashed-start",
             submitted: true,
@@ -2988,6 +2994,61 @@ describe("a parent interrupt and the turns its session.send opened", () => {
     ),
   )
 
+  it.live("a child the interrupt stopped with a correction waiting in it is named once", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const childStreaming = yield* Deferred.make<void>()
+        const parentStreaming = yield* Deferred.make<void>()
+        const parentRequests: Array<{ readonly notices: string; readonly last: string }> = []
+        let parentCalls = 0
+        const providerLayer = LanguageModelLayers.testStream((request) => {
+          const texts = promptTexts(request.prompt)
+          if (texts[0]?.endsWith(childTask) === true) {
+            if (texts.some((text) => text.includes(correction))) {
+              return Effect.succeed(reply("corrected"))
+            }
+            return Effect.succeed(stalledStream("working", childStreaming))
+          }
+          const last = texts.at(-1) ?? ""
+          parentRequests.push({ notices: noticeText(request.prompt), last })
+          if (last.startsWith("NEXT-")) return Effect.succeed(reply("ack"))
+          parentCalls += 1
+          if (parentCalls === 1) {
+            return Effect.succeed(toolStep("delegate.start", { todo: childTask }, "start-1"))
+          }
+          if (parentCalls === 2) {
+            const to = Option.getOrThrow(startedSessionId(request.prompt))
+            return Effect.succeed(toolStep("session.send", { to, message: correction }, "send-fix"))
+          }
+          return Effect.succeed(stalledStream("waiting on the child", parentStreaming))
+        })
+        const harness = yield* harnessWithHome(providerLayer)
+        const { sessionId, branchId } = harness
+        yield* sendPrompt(harness, "delegate one task")
+        yield* Deferred.await(childStreaming)
+        yield* Deferred.await(parentStreaming)
+        const child = yield* childOf(harness)
+        yield* interruptParent(harness, "interrupt-parent-with-waiting-correction-once")
+        yield* idle(harness, child, "the child is idle")
+        yield* idle(harness, { sessionId, branchId }, "the parent is idle")
+
+        yield* sendPrompt(harness, "NEXT-WHAT-IS-RUNNING")
+        yield* waitFor(
+          harness.client.session.getSnapshot({ sessionId, branchId }),
+          (current) =>
+            current.runtime._tag === "Idle" && messageTexts(current.messages).includes("ack"),
+          3_000,
+          "the parent answered the next prompt",
+        )
+        const next = parentRequests.find((request) => request.last === "NEXT-WHAT-IS-RUNNING")
+        // The delegate stop names the child; the correction went with its turn.
+        expect(next?.notices).toContain("# Stopped children")
+        expect(next?.notices).not.toContain("# Stopped child turns")
+        expect(next?.notices.split(child.sessionId)).toHaveLength(2)
+      }).pipe(Effect.timeout("10 seconds")),
+    ),
+  )
+
   it.live("a correction turn that ended before the interrupt is not named as stopped", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -3152,6 +3213,222 @@ describe("a parent interrupt and the turns its session.send opened", () => {
           expect(correctionRuns).toBe(0)
         }).pipe(Effect.timeout("10 seconds")),
       ),
+  )
+
+  it.live(
+    "a correction taken back from a child turn the user already stops is named to the parent",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const userTurnOpen = yield* Deferred.make<void>()
+          const parentStreaming = yield* Deferred.make<void>()
+          const childEnding = yield* Deferred.make<void>()
+          const release = yield* Deferred.make<void>()
+          const held = yield* Ref.make(Option.none<SessionId>())
+          const parentRequests: Array<{ readonly notices: string; readonly last: string }> = []
+          let correctionRuns = 0
+          const providerLayer = correctFinishedChild({
+            parentStreaming,
+            parentRequests,
+            // The parent sends only once the user's turn in the child is open.
+            beforeSend: Deferred.await(userTurnOpen),
+            child: (texts) => {
+              if (texts.some((text) => text.includes(correction))) {
+                correctionRuns += 1
+                return Effect.succeed(reply("corrected"))
+              }
+              // The user's turn never reaches a step boundary, so the
+              // correction waits in its queue.
+              if (texts.at(-1) === "USER-ASKS-CHILD") {
+                return Effect.succeed(stalledStream("answering the user", userTurnOpen))
+              }
+              return Effect.succeed(reply("pong"))
+            },
+          })
+          const harness = yield* harnessWithHome(providerLayer, {
+            fixtures: [holdTurnEnd({ held, ending: childEnding, release })],
+          })
+          const { sessionId, branchId } = harness
+          yield* sendPrompt(harness, "split the work")
+          const child = yield* childOf(harness)
+          yield* waitFor(
+            turnReceipts(harness, child),
+            (current) => current.length === 1,
+            3_000,
+            "the child's delegate run ended",
+          )
+          yield* idle(harness, child, "the child is idle")
+          yield* harness.client.message.send({ ...child, content: "USER-ASKS-CHILD" })
+          yield* Deferred.await(parentStreaming)
+          yield* Ref.set(held, Option.some(child.sessionId))
+          // The user stops the child's turn; its end is held open, so the
+          // correction still waits to join a turn that is stopping.
+          yield* harness.client.steer.command({
+            command: SteerCommand.make({
+              _tag: "Cancel",
+              ...child,
+              requestId: RequestId.make("user-stops-child-with-correction-waiting"),
+            }),
+          })
+          yield* Deferred.await(childEnding)
+          yield* interruptParent(harness, "interrupt-parent-takes-correction-back")
+          yield* idle(harness, { sessionId, branchId }, "the parent is idle")
+          yield* Deferred.succeed(release, void 0)
+          yield* idle(harness, child, "the child is idle")
+          expect(correctionRuns).toBe(0)
+
+          yield* sendPrompt(harness, "NEXT-WHAT-IS-RUNNING")
+          yield* waitFor(
+            harness.client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              current.runtime._tag === "Idle" && messageTexts(current.messages).includes("ack"),
+            3_000,
+            "the parent answered the next prompt",
+          )
+          const next = parentRequests.find((request) => request.last === "NEXT-WHAT-IS-RUNNING")
+          // The user's stop is the child's own news; the lost correction is the parent's.
+          expect(next?.notices).toContain("# Stopped child turns")
+          expect(next?.notices.split(child.sessionId)).toHaveLength(2)
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
+  )
+})
+
+// ── a parent interrupt as a child finishes ──────────────────────────────────
+
+describe("a parent interrupt as a child finishes", () => {
+  it.live(
+    "a child whose turn completed before the stop reached it keeps its completion",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const childGo = yield* Deferred.make<void>()
+          const parentStreaming = yield* Deferred.make<void>()
+          const childEnding = yield* Deferred.make<void>()
+          const release = yield* Deferred.make<void>()
+          const held = yield* Ref.make(Option.none<SessionId>())
+          const parentRequests: Array<{ readonly notices: string; readonly last: string }> = []
+          const providerLayer = LanguageModelLayers.testStream((request) => {
+            const texts = promptTexts(request.prompt)
+            if (texts[0]?.endsWith(childTask) === true) {
+              return Deferred.await(childGo).pipe(Effect.as(reply("pong")))
+            }
+            parentRequests.push({ notices: noticeText(request.prompt), last: texts.at(-1) ?? "" })
+            if (parentRequests.length === 1) {
+              return Effect.succeed(toolStep("delegate.start", { todo: childTask }, "start-1"))
+            }
+            if (parentRequests.length === 2) {
+              return Effect.succeed(stalledStream("waiting on the child", parentStreaming))
+            }
+            return Effect.succeed(reply("ack"))
+          })
+          const harness = yield* harnessWithHome(providerLayer, {
+            fixtures: [holdTurnEnd({ held, ending: childEnding, release })],
+          })
+          const { client, sessionId, branchId } = harness
+          yield* sendPrompt(harness, "delegate one task")
+          yield* Deferred.await(parentStreaming)
+          const child = yield* childOf(harness)
+          yield* Ref.set(held, Option.some(child.sessionId))
+          yield* Deferred.succeed(childGo, void 0)
+          // The child's turn completed and its receipt is stored; its end is
+          // held open before the delegate hook reads it.
+          yield* Deferred.await(childEnding)
+          yield* interruptParent(harness, "interrupt-parent-as-child-finishes")
+          // The parent's interrupt has run its cascade: the parent is idle, or
+          // the child's completion already woke it.
+          yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              current.runtime._tag === "Idle" || completionMessages(current.messages).length > 0,
+            3_000,
+            "the parent's interrupt ran its cascade",
+          )
+          yield* Deferred.succeed(release, void 0)
+          yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              current.runtime._tag === "Idle" &&
+              completionMessages(current.messages).length === 1 &&
+              messageTexts(current.messages).includes("ack"),
+            5_000,
+            "the child's completion woke the parent and the parent read it",
+          )
+          // The completion is sent before its row is written.
+          const [row] = yield* waitFor(
+            harness.registryOf(branchId),
+            (entries) => Predicate.isUndefined(entries[0]?.stopNoticeAt),
+            3_000,
+            "the child's completion row is written",
+          )
+          expect(row).toMatchObject({ delivered: true, completed: {} })
+          expect(row?.stopNoticeAt).toBeUndefined()
+          const woken = parentRequests.at(-1)
+          expect(woken?.last).toContain("pong")
+          expect(woken?.notices ?? "").not.toContain("# Stopped children")
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
+  )
+
+  it.live(
+    "a session whose parent's registry cannot be read still stops its own children",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const grandchildStreaming = yield* Deferred.make<void>()
+          const middleStreaming = yield* Deferred.make<void>()
+          const providerLayer = LanguageModelLayers.testStream((request) => {
+            const texts = promptTexts(request.prompt)
+            if (texts[0]?.endsWith(childTask) === true) {
+              return Effect.succeed(stalledStream("working", grandchildStreaming))
+            }
+            if (!promptToolCallIds(request.prompt).includes("start-g")) {
+              return Effect.succeed(toolStep("delegate.start", { todo: childTask }, "start-g"))
+            }
+            return Effect.succeed(stalledStream("waiting on the child", middleStreaming))
+          })
+          const harness = yield* harnessWithHome(providerLayer)
+          const { client, sessionId, branchId } = harness
+          // The middle session is a child of the harness session, and its
+          // parent's registry is unreadable, so its turn end fails as a child.
+          const middle = yield* client.session.create({
+            cwd: "/tmp",
+            parentSessionId: sessionId,
+            parentBranchId: branchId,
+          })
+          const fs = yield* FileSystem.FileSystem
+          yield* fs.makeDirectory(`${harness.home}/.gent/delegates`, { recursive: true })
+          yield* fs.writeFileString(`${harness.home}/.gent/delegates/${branchId}.json`, "not json")
+          yield* client.message.send({ ...middle, content: "MIDDLE-PROMPT" })
+          yield* Deferred.await(grandchildStreaming)
+          yield* Deferred.await(middleStreaming)
+          const sessions = yield* client.session.list()
+          const grandchild = sessions.find(
+            (session) => session.parentSessionId === middle.sessionId,
+          )
+          if (Predicate.isUndefined(grandchild?.activeBranchId)) {
+            return yield* Effect.die("no grandchild session")
+          }
+          const target = { sessionId: grandchild.id, branchId: grandchild.activeBranchId }
+          yield* client.steer.command({
+            command: SteerCommand.make({
+              _tag: "Cancel",
+              ...middle,
+              requestId: RequestId.make("interrupt-middle"),
+            }),
+          })
+          const receipts = yield* waitFor(
+            turnReceipts(harness, target),
+            (current) => current.length === 1,
+            3_000,
+            "the middle session's interrupt stopped its child",
+          )
+          expect(receipts[0]).toMatchObject({ interrupted: true })
+        }).pipe(Effect.provide(BunFileSystem.layer), Effect.timeout("10 seconds")),
+      ),
+    12_000,
   )
 })
 
