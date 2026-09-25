@@ -1774,10 +1774,9 @@ export const buildOpenAIModelDriver = (
           )
         }
 
-        // Fail closed — no stored OAuth, no stored API key, no env var.
-        // Previous versions fell through to `OpenAiClient.layer({})` and let
-        // the unauthenticated request fail late as a generic HTTP error,
-        // masking the real auth failure for non-TUI callers.
+        // Fail closed — no stored OAuth, no stored API key, no env var. An
+        // unauthenticated request would fail late as a generic HTTP error
+        // and hide the auth failure.
         return yield* new ProviderAuthError({
           message:
             "OpenAI credentials unavailable: no ChatGPT OAuth, stored API key, or OPENAI_API_KEY env var",

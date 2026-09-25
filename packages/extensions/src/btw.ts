@@ -48,11 +48,11 @@ const FORK_QUESTION_PREFIX = "A side question, asked in a fork of session "
 
 /**
  * The text the fork's model reads for a question. The fork copies the branch
- * as it is, a request the session is still working on included, and a bare
- * question under that request read as a second user message: the fork took
- * the session's work as its own and did it beside the session, in the same
- * working tree. The header says whose history it is and what is asked. The
- * request stays, because the question is usually about it.
+ * as it is, a request the session is still working on included. A bare
+ * question under that request reads as a second user message, and the model
+ * takes the session's work as its own. The header says whose history it is
+ * and what is asked. The request stays, because the question is usually
+ * about it.
  */
 export const forkQuestionText = (parentSessionId: SessionId, question: string): string =>
   [
