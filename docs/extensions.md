@@ -187,7 +187,9 @@ export const timer = Effect.gen(function* () {
 })
 ```
 
-Outside a loop there is nothing to hold, and the verb does nothing.
+Outside a loop there is nothing to hold, and the verb does nothing. A
+`"queue"` send that asks to wake the loop holds it too, until the turn it
+wakes has run, so the fire's hold can end right after its send.
 
 `ExtensionHost.host` is the only public host platform view at setup time. It
 exposes small, serializable facts such as OS info, executable path, and home

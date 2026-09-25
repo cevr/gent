@@ -378,15 +378,21 @@ Shape:
   `(workspaceId, sessionId, branchId)`.
 - Residency (`AgentLoopResidency` in `agent-loop.ts`): the cluster reaper
   passivates an entity idle past `entityMaxIdleTime` (one minute), and its
-  runtime-state stream and branch scope close with it. Three things hold the
+  runtime-state stream and branch scope close with it. Four things hold the
   entity resident, counted on its one keep-alive switch (first hold on, last
-  release off; a failed switch-on takes its count back): a running turn (the
-  mailbox request can return before the model finishes), each watcher of the
-  loop's runtime state (`session.watchRuntime`, so an idle client's stream
-  does not end), and each extension hold through
-  `ExtensionContext.Session.holdResident` (a pending wake alarm or monitor).
-  Every hold is scoped, so completion, failure, interruption, a fire, or a
-  cancel releases it, and an entity nothing holds expires.
+  release off; a failed switch-on takes its count back): a turn, from its
+  hand-over to the worker until the worker is done with it, receipt and hooks
+  included (the mailbox request can return before the model finishes); a
+  re-entrant admission's asked-for start (`wakeAfterPermit`), until the start
+  is decided; each watcher of the loop's runtime state
+  (`session.watchRuntime`, so an idle client's stream does not end); and each
+  extension hold through `ExtensionContext.Session.holdResident` (a pending
+  wake alarm or monitor). Every hold is scoped, so completion, failure,
+  interruption, a fire, or a cancel releases it, and an entity nothing holds
+  expires. Each hand-over takes the next hold before the last one ends
+  (a wake's send, then its start, then its turn): the switch-on is an
+  asynchronous keep-alive message, so a count that reached zero in between
+  would let the reaper take a loop whose woken turn is about to start.
 - Runtime commands resolve an existing `(sessionId, branchId)` target before loop dispatch.
 - The `@gent/delegate` extension is the helper-agent boundary, built only on the public extension API. Every child is a session in the one runtime, created through the addressed `Session` facade verbs. The delegate owns its own child registry on disk; core carries no runner and no child-run events.
 - Child admission uses one shared ancestry check on the `session.create` command
