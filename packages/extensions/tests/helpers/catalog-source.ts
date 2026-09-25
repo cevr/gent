@@ -1,6 +1,5 @@
-import { Effect, Exit, type FileSystem, Layer, Path, Scope } from "effect"
+import { Config, Effect, type FileSystem, Layer, Path } from "effect"
 import { BunFileSystem } from "@effect/platform-bun"
-import { makeTempDirectoryScoped } from "@gent/core/test-utils"
 import type { CatalogSource } from "../../src/providers.js"
 
 const platformLayer = Layer.merge(BunFileSystem.layer, Path.layer)
@@ -11,23 +10,20 @@ const platformLayer = Layer.merge(BunFileSystem.layer, Path.layer)
  * tests want: they exercise `resolveModel` and the auth methods, never
  * `listModels`.
  *
- * The scope is closed when the test process exits, which removes the
- * directory. `makeTempDirectoryScoped` is `mkdtempSync` under an
- * `acquireRelease`, so building it and the platform context is synchronous.
+ * The home is a path inside the test process's own `HOME`, the temp home the
+ * shared test preload makes and removes in a global `afterAll` after the
+ * process's last test. Nothing makes it: a missing directory holds no cache,
+ * and whatever a driver writes there goes with the process's home. (A process
+ * `exit` handler does not run under `bun test`, so it could not remove it.)
  */
-const scope = Scope.makeUnsafe()
-
 const source = Effect.runSync(
   Effect.gen(function* () {
-    const home = yield* makeTempDirectoryScoped("gent-no-catalog-")
+    const path = yield* Path.Path
+    const home = path.join(yield* Config.string("HOME"), "no-catalog")
     const platform = yield* Effect.context<FileSystem.FileSystem | Path.Path>()
     return { home, platform } satisfies CatalogSource
-  }).pipe(Effect.provide(platformLayer), Scope.provide(scope)),
+  }).pipe(Effect.provide(platformLayer), Effect.orDie),
 )
-
-process.on("exit", () => {
-  Effect.runSync(Scope.close(scope, Exit.void))
-})
 
 /**
  * A `CatalogSource` for a test that exercises a driver's `resolveModel` or its
