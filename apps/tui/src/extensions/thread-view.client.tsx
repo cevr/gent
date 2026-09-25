@@ -452,6 +452,7 @@ export function ThreadPane(props: {
           id="thread"
           open={props.open}
           rows={rows}
+          rowKey={(window) => `${window.sessionId}/${window.index}`}
           sticky={sticky}
           // The detail line below reads the row under the cursor; the list is
           // the only thing that knows where it is.

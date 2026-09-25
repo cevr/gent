@@ -535,7 +535,8 @@ export function TrayFrame(props: { children: JSX.Element }) {
  * the selection index and its wrap-around, the query string, the key table
  * (up/down, ^p/^n, enter, escape, backspace, printable characters), the
  * scroll sync that keeps the cursor row in view, the sticky selection that
- * re-anchors when the data arrives, and the empty fallback.
+ * re-anchors when the data arrives, the moved cursor that follows its entry
+ * by key when the rows arrive again, and the empty fallback.
  *
  * A caller supplies four things: the rows, how to draw one, what to do with
  * the chosen row, and what to do on escape. Everything else is optional and
@@ -557,12 +558,19 @@ export function TrayFrame(props: { children: JSX.Element }) {
 export interface SelectListState {
   readonly query: string
   readonly selectedIndex: number
+  /**
+   * The reader moved the cursor since the list opened or the query changed.
+   * Rows that change under a moved cursor keep it on the same entry; an
+   * unmoved cursor stays where the pane's sticky rule or the query puts it.
+   */
+  readonly moved: boolean
 }
 
 export const SelectListState = {
   initial: (selectedIndex = 0): SelectListState => ({
     query: "",
     selectedIndex,
+    moved: false,
   }),
 }
 
@@ -601,19 +609,22 @@ export function transitionSelectList(
         Anchor: (event) => ({ ...state, selectedIndex: event.selectedIndex }),
         Backspace: () => {
           if (state.query.length === 0) return state
-          return { query: state.query.slice(0, -1), selectedIndex: 0 }
+          return { query: state.query.slice(0, -1), selectedIndex: 0, moved: false }
         },
         MoveUp: (event) => ({
           ...state,
           selectedIndex: wrapIndex(state.selectedIndex, event.itemCount, -1),
+          moved: true,
         }),
         MoveDown: (event) => ({
           ...state,
           selectedIndex: wrapIndex(state.selectedIndex, event.itemCount, 1),
+          moved: true,
         }),
         TypeChar: (event) => ({
           query: state.query + event.char,
           selectedIndex: 0,
+          moved: false,
         }),
         Clamp: (event) => {
           if (event.itemCount <= 0) return { ...state, selectedIndex: 0 }
@@ -698,13 +709,20 @@ interface SelectListProps<A> {
   /** Mount but hide when false; keys stay unbound. */
   readonly open: boolean
   readonly rows: () => ReadonlyArray<SelectListRow<A>>
+  /**
+   * The entry's identity across two arrivals of the rows. A pane that reads
+   * its rows again (a poll, a reply) builds new values; the cursor the
+   * reader moved follows this key, not the index or the object.
+   */
+  readonly rowKey: (value: A) => string
   readonly onSelect: (value: A) => void
   readonly onDismiss: () => void
   readonly filter?: SelectListFilter
   /**
    * The row to sit on when the pane opens or its data arrives. Returning
-   * `None` keeps the first row. Re-runs whenever the rows change, so a pane
-   * whose fetch resolves after it mounts still lands on the right row.
+   * `None` keeps the first row. Re-runs whenever the rows change until the
+   * reader moves the cursor or types, so a pane whose fetch resolves after it
+   * mounts still lands on the right row.
    */
   readonly sticky?: (values: ReadonlyArray<A>) => Option.Option<number>
   /** Drawn in place of the list when it holds nothing selectable. */
@@ -789,31 +807,47 @@ export function SelectList<A>(props: SelectListProps<A>) {
     if (props.onCursor) props.onCursor(Option.none())
   })
 
-  // A pane whose fetch resolves after it opens re-anchors when the rows land.
-  // Typing ends that: once the reader has a query, the rows change because they
-  // asked them to, and moving their cursor for them would fight the filter. A
-  // pane with no sticky rule still clamps, so a list that shrinks cannot leave
-  // the cursor past its end.
+  // Where the cursor goes when the rows change under it. A cursor the reader
+  // moved stays on its entry, found by key in the new rows; an entry that is
+  // gone leaves the cursor where it was, clamped into the list. An unmoved
+  // cursor re-anchors on the sticky rule, so a pane whose fetch resolves after
+  // it opens lands on the right row. Typing ends that: once the reader has a
+  // query, the rows change because they asked them to, and the cursor stays on
+  // the top match. A pane with no sticky rule clamps.
+  const follow = (
+    current: SelectListState,
+    entries: ReadonlyArray<A>,
+    previous: ReadonlyArray<A>,
+  ): Option.Option<number> => {
+    if (current.moved) {
+      return Option.flatMap(Option.fromNullishOr(previous[current.selectedIndex]), (value) => {
+        const key = props.rowKey(value)
+        return Option.liftPredicate(
+          entries.findIndex((entry) => props.rowKey(entry) === key),
+          (index) => index >= 0,
+        )
+      })
+    }
+    if (current.query.length > 0) return Option.none()
+    return anchor(entries)
+  }
   createEffect(
-    on(values, (entries) => {
+    on(values, (entries, previous) => {
       if (!props.open) return
-      const typed = state().query.length > 0
+      const before = Option.getOrElse(Option.fromNullishOr(previous), (): ReadonlyArray<A> => [])
       setState((current) =>
-        Option.match(
-          Option.filter(anchor(entries), () => !typed),
-          {
-            onNone: () =>
-              transitionSelectList(
-                current,
-                SelectListEvent.cases.Clamp.make({ itemCount: entries.length }),
-              ),
-            onSome: (index) =>
-              transitionSelectList(
-                current,
-                SelectListEvent.cases.Anchor.make({ selectedIndex: index }),
-              ),
-          },
-        ),
+        Option.match(follow(current, entries, before), {
+          onNone: () =>
+            transitionSelectList(
+              current,
+              SelectListEvent.cases.Clamp.make({ itemCount: entries.length }),
+            ),
+          onSome: (index) =>
+            transitionSelectList(
+              current,
+              SelectListEvent.cases.Anchor.make({ selectedIndex: index }),
+            ),
+        }),
       )
     }),
   )

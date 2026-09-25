@@ -769,6 +769,7 @@ export function Auth(props: AuthProps) {
           id="auth-provider"
           open={listOpen()}
           rows={providerRows}
+          rowKey={(provider) => provider.provider}
           onSelect={(provider) =>
             send(AuthEvent.cases.OpenMethod.make({ provider: provider.provider }))
           }
@@ -791,6 +792,7 @@ export function Auth(props: AuthProps) {
           id="auth-method"
           open={methodOpen()}
           rows={methodRows}
+          rowKey={(choice) => String(choice.index)}
           onSelect={(choice) =>
             Option.map(methodProvider(), (provider) =>
               startMethod(provider.provider, choice.index, choice.method),

@@ -684,6 +684,7 @@ export function AgentsPane(props: {
           id="agents"
           open={props.open}
           rows={() => rows(headings)}
+          rowKey={(row) => `${row.sessionId}/${row.branchId}`}
           filter={{
             onQueryChange: (query) => props.controller.refresh(query),
             showInput: lines().filter,

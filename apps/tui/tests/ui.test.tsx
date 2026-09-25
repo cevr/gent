@@ -34,9 +34,9 @@ import { ThreadPane, type ThreadWindow } from "../src/extensions/thread-view.cli
 /**
  * The one selectable list every pane mounts.
  *
- * These cover the block the panes used to hand-write: the wrapped cursor, the
- * filter input, the sticky anchor and when it yields, the empty fallback, and
- * the keys a pane claims for itself.
+ * These cover the wrapped cursor, the filter input, the sticky anchor and when
+ * it yields, the cursor that follows its entry, the empty fallback, and the
+ * keys a pane claims for itself.
  */
 
 interface Fruit {
@@ -73,6 +73,10 @@ describe("select list reducer", () => {
       expect(up.selectedIndex).toBe(2)
       const down = transitionSelectList(up, SelectListEvent.cases.MoveDown.make({ itemCount: 3 }))
       expect(down.selectedIndex).toBe(0)
+      // A move marks the cursor as the reader's, so changed rows keep it on its entry.
+      expect(down.moved).toBe(true)
+      const retyped = transitionSelectList(down, SelectListEvent.cases.TypeChar.make({ char: "a" }))
+      expect(retyped.moved).toBe(false)
 
       const far = SelectListState.initial(7)
       const clamped = transitionSelectList(far, SelectListEvent.cases.Clamp.make({ itemCount: 3 }))
@@ -88,19 +92,19 @@ describe("select list reducer", () => {
         SelectListState.initial(2),
         SelectListEvent.cases.TypeChar.make({ char: "a" }),
       )
-      expect(typed).toEqual({ query: "a", selectedIndex: 0 })
+      expect(typed).toEqual({ query: "a", selectedIndex: 0, moved: false })
 
       const anchored = transitionSelectList(
         typed,
         SelectListEvent.cases.Anchor.make({ selectedIndex: 2 }),
       )
-      expect(anchored).toEqual({ query: "a", selectedIndex: 2 })
+      expect(anchored).toEqual({ query: "a", selectedIndex: 2, moved: false })
 
       const opened = transitionSelectList(
         typed,
         SelectListEvent.cases.Open.make({ selectedIndex: 1 }),
       )
-      expect(opened).toEqual({ query: "", selectedIndex: 1 })
+      expect(opened).toEqual({ query: "", selectedIndex: 1, moved: false })
     }),
   )
 })
@@ -115,6 +119,7 @@ describe("select list keyboard", () => {
             id="fruit"
             open={true}
             rows={() => plainRows(fruits)}
+            rowKey={(fruit) => fruit.id}
             onSelect={(fruit) => picked.push(fruit.id)}
             onDismiss={() => {}}
           />
@@ -153,6 +158,7 @@ describe("select list keyboard", () => {
             id="fruit"
             open={open()}
             rows={() => plainRows(fruits)}
+            rowKey={(fruit) => fruit.id}
             onSelect={() => {}}
             onDismiss={() => setOpen(false)}
           />
@@ -176,6 +182,7 @@ describe("select list keyboard", () => {
             id="fruit"
             open={true}
             rows={() => plainRows(fruits)}
+            rowKey={(fruit) => fruit.id}
             extraKeys={(event, selected) => {
               if (event.ctrl !== true || event.name !== "x") return false
               Option.match(selected, {
@@ -206,6 +213,7 @@ describe("select list keyboard", () => {
             id="fruit"
             open={false}
             rows={() => plainRows(fruits)}
+            rowKey={(fruit) => fruit.id}
             onSelect={(fruit) => picked.push(fruit.id)}
             onDismiss={() => {}}
           />
@@ -232,6 +240,7 @@ describe("select list filter", () => {
             id="fruit"
             open={true}
             rows={() => plainRows(visible())}
+            rowKey={(fruit) => fruit.id}
             filter={{
               onQueryChange: (next) => {
                 seen.push(next)
@@ -270,6 +279,7 @@ describe("select list filter", () => {
             id="fruit"
             open={true}
             rows={() => plainRows(fruits)}
+            rowKey={(fruit) => fruit.id}
             filter={{ onQueryChange: (next) => seen.push(next) }}
             onSelect={() => {}}
             onDismiss={() => {}}
@@ -292,6 +302,7 @@ describe("select list filter", () => {
             id="fruit"
             open={true}
             rows={() => plainRows(fruits)}
+            rowKey={(fruit) => fruit.id}
             filter={{ onQueryChange: () => {}, showInput: false }}
             onSelect={() => {}}
             onDismiss={() => {}}
@@ -316,6 +327,7 @@ describe("select list sticky selection", () => {
             id="fruit"
             open={true}
             rows={() => plainRows(rows())}
+            rowKey={(fruit) => fruit.id}
             sticky={(values) => {
               const index = values.findIndex((fruit) => fruit.id === "cherry")
               if (index < 0) return Option.none()
@@ -350,6 +362,7 @@ describe("select list sticky selection", () => {
             id="fruit"
             open={true}
             rows={() => plainRows(visible())}
+            rowKey={(fruit) => fruit.id}
             filter={{ onQueryChange: setQuery }}
             sticky={(values) => {
               const index = values.findIndex((fruit) => fruit.id === "cherry")
@@ -373,6 +386,42 @@ describe("select list sticky selection", () => {
     }),
   )
 
+  it.live("keeps the cursor on the reader's row when the rows arrive again reordered", () =>
+    Effect.gen(function* () {
+      // A pane that polls hands the list fresh objects, in a new order. The
+      // cursor the reader moved stays on the same entry, not the same index
+      // and not the sticky row.
+      const [rows, setRows] = createSignal<ReadonlyArray<Fruit>>(fruits)
+      const picked: Array<string> = []
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => (
+          <SelectList
+            id="fruit"
+            open={true}
+            rows={() => plainRows(rows())}
+            rowKey={(fruit) => fruit.id}
+            sticky={(values) => Option.some(values.findIndex((fruit) => fruit.id === "cherry"))}
+            onSelect={(fruit) => picked.push(fruit.id)}
+            onDismiss={() => {}}
+          />
+        )),
+      )
+      yield* waitForFrame(setup, () => renderFrame(setup).includes("> Cherry"), "anchored")
+      setup.mockInput.pressArrow("up")
+      yield* waitForFrame(setup, () => renderFrame(setup).includes("> Banana"), "moved")
+
+      setRows([
+        { id: "banana", name: "Banana" },
+        { id: "cherry", name: "Cherry" },
+        { id: "apple", name: "Apple" },
+      ])
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(renderFrame(setup)).toContain("> Banana")
+      setup.mockInput.pressEnter()
+      expect(picked).toEqual(["banana"])
+    }),
+  )
+
   it.live("keeps the cursor inside a list that shrank under it", () =>
     Effect.gen(function* () {
       const [rows, setRows] = createSignal(fruits)
@@ -383,6 +432,7 @@ describe("select list sticky selection", () => {
             id="fruit"
             open={true}
             rows={() => plainRows(rows())}
+            rowKey={(fruit) => fruit.id}
             onSelect={(fruit) => picked.push(fruit.id)}
             onDismiss={() => {}}
           />
@@ -418,6 +468,7 @@ describe("select list rows", () => {
             id="fruit"
             open={true}
             rows={rows}
+            rowKey={(fruit) => fruit.id}
             onSelect={(fruit) => picked.push(fruit.id)}
             onDismiss={() => {}}
           />
@@ -440,7 +491,8 @@ describe("select list rows", () => {
           <SelectList
             id="fruit"
             open={true}
-            rows={() => []}
+            rows={(): ReadonlyArray<SelectListRow<Fruit>> => []}
+            rowKey={(fruit) => fruit.id}
             empty={() => <text>nothing matches</text>}
             onSelect={() => {}}
             onDismiss={() => {}}

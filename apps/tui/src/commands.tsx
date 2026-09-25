@@ -700,6 +700,7 @@ export function CommandPalette() {
           id="command-palette"
           open={command.paletteOpen()}
           rows={rows}
+          rowKey={(item) => item.id}
           filter={{ onQueryChange: setSearchQuery, showInput: false }}
           empty={emptyRow}
           api={(api) => (list = Option.some(api))}

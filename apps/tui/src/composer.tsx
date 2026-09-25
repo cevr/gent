@@ -470,6 +470,7 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
         id="autocomplete"
         open={hasItems()}
         rows={rows}
+        rowKey={(item) => item.id}
         sticky={() => Option.some(0)}
         empty={emptyRow}
         onCursor={setCursor}

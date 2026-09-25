@@ -210,6 +210,7 @@ export function PromptSearchPalette(props: PromptSearchPaletteProps) {
               id="prompt-search"
               open={true}
               rows={rows}
+              rowKey={(entry) => entry}
               filter={{ onQueryChange: setQuery }}
               empty={emptyRow}
               extraKeys={(event) => {
@@ -358,6 +359,7 @@ export function BranchPicker(props: BranchPickerProps) {
           id="branch-picker"
           open={props.open}
           rows={rows}
+          rowKey={(branch) => branch.id}
           onSelect={(branch) => props.onSelect(branch.id)}
           onDismiss={props.onClose}
         />
@@ -446,6 +448,7 @@ export function MessagePicker(props: MessagePickerProps) {
           id="message-picker"
           open={props.open}
           rows={rows}
+          rowKey={(item) => item.id}
           // SAFETY: PickerItem.id originates from domain Message.id which is a MessageId
           onSelect={(item) => props.onSelect(MessageId.make(item.id))}
           onDismiss={props.onClose}
@@ -568,6 +571,7 @@ export function SettingsPicker(props: SettingsPickerProps) {
           id="settings-picker"
           open={props.open}
           rows={rows}
+          rowKey={(row) => row.id}
           filter={{ onQueryChange: setQuery }}
           sticky={sticky}
           empty={() => <text style={{ fg: theme.textMuted }}> nothing matches</text>}
