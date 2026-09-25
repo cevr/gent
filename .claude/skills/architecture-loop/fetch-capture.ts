@@ -15,29 +15,72 @@
 // `$CAP_DIR/..` (the capture's scratch directory). The Anthropic driver reads
 // Claude Code credentials from the OS home, and an OAuth login changes the
 // rendered request, so a capture under the owner's home would measure the
-// owner's login state, not gent.
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+// owner's login state, not gent. The owner is the passwd home of the user
+// (`~$(id -un)` in `sh`), which `HOME` cannot fake: Bun's `os.userInfo()` reads
+// `HOME`. The check runs twice: on the
+// written paths before anything is created, then on the real paths
+// (symlinks followed) after each directory exists. It refuses:
+// - a scratch directory that is the owner's home or above it;
+// - a variable outside the scratch directory;
+// - a variable at or under the owner's `~/.gent`.
+import { execFileSync } from "node:child_process"
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs"
 import { dirname, resolve, sep } from "node:path"
 
-const captureDirectory = process.env["CAP_DIR"]
-if (captureDirectory === undefined || captureDirectory.length === 0) {
-  throw new Error("fetch-capture: CAP_DIR is unset")
-}
-const dir = resolve(captureDirectory)
-const scratch = dirname(dir)
+/** The variables the check reads; `CAP_DIR` names the scratch directory as its parent. */
+const CHECKED_VARIABLES = ["CAP_DIR", "HOME", "GENT_AUTH_DIRECTORY", "GENT_DATA_DIR"] as const
 
-/** The environment variables that must point into the scratch directory. */
-const SCRATCH_VARIABLES = ["HOME", "GENT_AUTH_DIRECTORY", "GENT_DATA_DIR"] as const
-for (const name of SCRATCH_VARIABLES) {
+const refuse = (reason: string): never => {
+  throw new Error(`fetch-capture: ${reason}`)
+}
+
+/** Whether `path` is `root` or lies under it. */
+const within = (path: string, root: string): boolean =>
+  path === root || path.startsWith(root.endsWith(sep) ? root : root + sep)
+
+const written = new Map<string, string>()
+for (const name of CHECKED_VARIABLES) {
   const value = process.env[name]
-  if (value === undefined || !resolve(value).startsWith(scratch + sep)) {
-    throw new Error(
-      `fetch-capture: ${name} must name a directory under ${scratch} (the capture's scratch directory), got ${String(value)}`,
+  if (value === undefined || value.length === 0) refuse(`${name} is unset`)
+  else written.set(name, resolve(value))
+}
+const writtenCapture = written.get("CAP_DIR") ?? refuse("CAP_DIR is unset")
+
+/** The check, over one reading of the paths: as written, or as real paths. */
+const check = (paths: ReadonlyMap<string, string>, scratch: string, owner: string): void => {
+  if (within(owner, scratch)) {
+    refuse(
+      `the scratch directory ${scratch} (the parent of CAP_DIR) is the owner's home or above it`,
     )
+  }
+  for (const [name, path] of paths) {
+    if (path === scratch || !within(path, scratch)) {
+      refuse(
+        `${name} must name a directory under ${scratch} (the capture's scratch directory), got ${path}`,
+      )
+    }
+    if (within(path, `${owner}${sep}.gent`)) refuse(`${name} names the owner's gent state: ${path}`)
   }
 }
 
-mkdirSync(dir, { recursive: true })
+/** The passwd home of the user running the capture, read without `HOME`. */
+const ownerHome = execFileSync("sh", ["-c", 'eval echo "~$(id -un)"'], {
+  env: { PATH: process.env["PATH"] ?? "" },
+  encoding: "utf8",
+}).trim()
+if (!ownerHome.startsWith(sep)) refuse(`cannot read the owner's passwd home, got "${ownerHome}"`)
+check(written, dirname(writtenCapture), ownerHome)
+for (const path of written.values()) mkdirSync(path, { recursive: true })
+const real = new Map([...written].map(([name, path]) => [name, realpathSync(path)]))
+const dir = real.get("CAP_DIR") ?? refuse("CAP_DIR is unset")
+check(real, realpathSync(dirname(writtenCapture)), realpathSync(ownerHome))
 
 /** The next index of a counter kept in `$CAP_DIR/<name>`, shared across the run's processes. */
 const nextIndex = (name = "counter"): number => {
