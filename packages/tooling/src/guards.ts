@@ -1017,7 +1017,7 @@ export const findUnmatchedOverrideGlobs = (
 }
 
 // ---------------------------------------------------------------------------
-// (a2) An override "off" that suppresses nothing
+// (a2) An "off" that suppresses nothing
 // ---------------------------------------------------------------------------
 
 /** One diagnostic of a lint run: the file it names and its `plugin(rule)` code. */
@@ -1035,13 +1035,27 @@ const diagnosticCode = (rule: string): string => {
 
 const isOff = Schema.is(Schema.Literals(["off", 0]))
 
+const offsIn = (entries: ReadonlyArray<readonly [string, unknown]>): ReadonlyArray<string> =>
+  entries.filter(([, severity]) => isOff(severity)).map(([rule]) => rule)
+
+/** Each rule the root `rules` block turns off. */
+export const rootOffs = (config: OxlintConfig): ReadonlyArray<string> =>
+  offsIn(Object.entries(config.rules ?? {}))
+
 /** Each rule an override turns off, keyed by the override's index. */
 export const overrideOffs = (config: OxlintConfig): ReadonlyArray<ReadonlyArray<string>> =>
-  (config.overrides ?? []).map((override) =>
-    Object.entries(override.rules ?? {})
-      .filter(([, severity]) => isOff(severity))
-      .map(([rule]) => rule),
+  (config.overrides ?? []).map((override) => offsIn(Object.entries(override.rules ?? {})))
+
+/** The line of `rule`'s key in the root `rules` block, which precedes the overrides. */
+const lineOfRootRule = (configText: string, rule: string): number => {
+  const lines = configText.split("\n")
+  const start = Math.max(
+    lines.findIndex((line) => line.includes('"rules":')),
+    0,
   )
+  const offset = lines.slice(start).findIndex((line) => line.includes(`"${rule}":`))
+  return start + Math.max(offset, 0) + 1
+}
 
 /** The line of `rule`'s key inside the override whose first glob is `glob`. */
 const lineOfOverrideRule = (configText: string, glob: string, rule: string): number => {
@@ -1052,15 +1066,16 @@ const lineOfOverrideRule = (configText: string, glob: string, rule: string): num
 }
 
 /**
- * An override "off" is a suppression: it must hide at least one diagnostic.
- * `diagnostics` come from a run of the same config with every override "off"
- * removed. Such a diagnostic belongs to an override when the override's
- * globs match its file and no other override turns the same rule off for
- * that file: removing that override alone would bring it back. An "off" that
- * owns no diagnostic suppresses nothing today, and it would hide the next
- * real hit without review.
+ * An "off" is a suppression: it must hide at least one diagnostic.
+ * `diagnostics` come from a run of the same config with every "off" removed,
+ * root and override. A diagnostic belongs to an override "off" when the
+ * override's globs match its file and no other override turns the same rule
+ * off for that file: removing that override alone would bring it back. It
+ * belongs to a root "off" when no override sets the rule for its file. An
+ * "off" that owns no diagnostic suppresses nothing today, and it would hide
+ * the next real hit without review.
  */
-export const findUnneededOverrideOffs = (
+export const findUnneededOffs = (
   configFile: string,
   configText: string,
   config: OxlintConfig,
@@ -1070,6 +1085,7 @@ export const findUnneededOverrideOffs = (
     globs: override.files ?? [],
     matchers: (override.files ?? []).map(globMatcher),
     offs: new Set(overrideOffs(config)[index] ?? []),
+    named: new Set(Object.keys(override.rules ?? {})),
   }))
   const matches = (matchers: ReadonlyArray<RegExp>, file: string): boolean =>
     matchers.some((matcher) => matcher.test(file))
@@ -1096,6 +1112,22 @@ export const findUnneededOverrideOffs = (
         message: `oxlint override for "${firstGlob}" turns off \`${rule}\`, which reports nothing in its files; delete the "off"`,
       })
     }
+  }
+  for (const rule of rootOffs(config)) {
+    const code = diagnosticCode(rule)
+    const owned = diagnostics.some(
+      (diagnostic) =>
+        diagnostic.code === code &&
+        !overrides.some(
+          (override) => override.named.has(rule) && matches(override.matchers, diagnostic.file),
+        ),
+    )
+    if (owned) continue
+    findings.push({
+      file: configFile,
+      line: lineOfRootRule(configText, rule),
+      message: `oxlint root config turns off \`${rule}\`, which reports nothing; delete the "off"`,
+    })
   }
   return findings
 }
