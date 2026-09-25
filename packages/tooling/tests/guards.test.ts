@@ -9,12 +9,15 @@ import {
   findCoreFeatureIndependenceFindings,
   findCoreVendorModelPins,
   findE2eFixtureImportFindings,
+  findEffectVersionDrift,
+  findRepoTempDirectories,
   findHookWithoutGuards,
   findIdentityEncodes,
   findPackageSurfaceFindings,
   findPlatformDuplicationViolations,
   findReadersWithoutWriters,
   findRetiredSurfaces,
+  findSafetyBlockDrift,
   findSteeringFilePaths,
   findSuppressionInventoryFindings,
   findTuiSessionIdentityReads,
@@ -22,7 +25,7 @@ import {
   findUnconsumedExports,
   findUnenabledPluginRules,
   findUnmatchedOverrideGlobs,
-  findUnneededOverrideOffs,
+  findUnneededOffs,
   findUnusedCatalogEntries,
   findUnusedDependencies,
   findUnusedSuppressionApprovals,
@@ -544,6 +547,158 @@ describe("e2e fixture import guard", () => {
   })
 })
 
+// ── test temp directories ───────────────────────────────────────────────────
+
+describe("repo temp directory guard", () => {
+  const testFile = "packages/core/tests/runtime/loader.test.ts"
+
+  test("a directory option under import.meta is reported", () => {
+    const source = [
+      "const root = yield* fs.makeTempDirectoryScoped({",
+      '  directory: path.resolve(import.meta.dir, "../.."),',
+      '  prefix: "gent-x-",',
+      "})",
+    ].join("\n")
+    expect(findRepoTempDirectories(testFile, source).map((finding) => finding.line)).toEqual([2])
+  })
+
+  test("a directory option naming a binding from import.meta is reported", () => {
+    const source = [
+      'const packageRoot = path.resolve(import.meta.dir, "../../..")',
+      'const dir = yield* fs.makeTempDirectoryScoped({ directory: packageRoot, prefix: "x-" })',
+    ].join("\n")
+    expect(findRepoTempDirectories(testFile, source).map((finding) => finding.line)).toEqual([2])
+  })
+
+  test("a .tmp- path joined to import.meta is reported", () => {
+    const source = 'const TEST_DIR = join(import.meta.dir, "../../.tmp-ext-integration")'
+    expect(findRepoTempDirectories(testFile, source)).toHaveLength(1)
+  })
+
+  test("a tmp path of any spelling joined to a repo path is reported", () => {
+    const sources = [
+      'const dir = join(import.meta.dir, ".tmp")',
+      'const dir = join(__dirname, "tmp", "case")',
+      'const dir = path.resolve(import.meta.dirname, "../temp-fixtures")',
+    ]
+    expect(sources.map((source) => findRepoTempDirectories(testFile, source).length)).toEqual([
+      1, 1, 1,
+    ])
+  })
+
+  test("a temp directory call rooted in the repo is reported, whatever its prefix", () => {
+    const sources = [
+      'const dir = mkdtempSync(join(__dirname, "fixture-"))',
+      'const dir = mkdtempSync(path.join("packages/core/tests", "case-"))',
+      'const dir = yield* fs.makeTempDirectory({ directory: resolve("./apps/tui") })',
+      [
+        "const packageRoot = path.resolve(__dirname, '..')",
+        "const dir = yield* fs.makeTempDirectoryScoped({",
+        '  prefix: "case-",',
+        "  directory: packageRoot,",
+        "})",
+      ].join("\n"),
+    ]
+    expect(
+      sources.map((source) => findRepoTempDirectories(testFile, source).map((f) => f.line)),
+    ).toEqual([[1], [1], [1], [4]])
+  })
+
+  test("a system temp directory and a read of the source tree pass", () => {
+    const source = [
+      'const root = yield* fs.makeTempDirectoryScoped({ prefix: "gent-x-" })',
+      'const dir = path.resolve(import.meta.dir, "../../src/extensions")',
+      "const other = yield* fs.makeTempDirectoryScoped({ directory: root })",
+      'const sys = mkdtempSync(join(tmpdir(), "gent-case-"))',
+      'const template = path.join(import.meta.dir, "templates", "prompt.md")',
+    ].join("\n")
+    expect(findRepoTempDirectories(testFile, source)).toEqual([])
+  })
+
+  test("product source is out of scope", () => {
+    const source = 'const dir = { directory: path.resolve(import.meta.dir, "..") }'
+    expect(findRepoTempDirectories("packages/core/src/runtime/x.ts", source)).toEqual([])
+  })
+})
+
+// ── loop prompt SAFETY block ────────────────────────────────────────────────
+
+describe("loop prompt SAFETY block guard", () => {
+  const APPLY = ".claude/skills/architecture-loop/prompts/apply.md"
+  const SWEEP = ".claude/skills/architecture-loop/prompts/sweep.md"
+  const prompt = (...rules: ReadonlyArray<string>) =>
+    [
+      "```",
+      "Work rules:",
+      "- one",
+      "",
+      "SAFETY (mandatory):",
+      ...rules,
+      "",
+      "Report: x",
+      "```",
+    ].join("\n")
+
+  test("two identical blocks pass", () => {
+    const texts = new Map([
+      [APPLY, prompt("- a", "- b")],
+      [SWEEP, prompt("- a", "- b")],
+    ])
+    expect(findSafetyBlockDrift(texts)).toEqual([])
+  })
+
+  test("a rule in one block only is reported at the other block", () => {
+    const texts = new Map([
+      [APPLY, prompt("- a", "- b")],
+      [SWEEP, prompt("- a")],
+    ])
+    expect(findSafetyBlockDrift(texts)).toEqual([
+      {
+        file: SWEEP,
+        line: 5,
+        message: expect.stringContaining(`differs from the one in ${APPLY}`),
+      },
+    ])
+  })
+
+  test("a prompt without the block is reported", () => {
+    const texts = new Map([
+      [APPLY, prompt("- a")],
+      [SWEEP, "no block"],
+    ])
+    expect(findSafetyBlockDrift(texts).map((finding) => finding.file)).toEqual([SWEEP])
+  })
+
+  test("a SAFETY block outside the fenced prompt is reported", () => {
+    const outside = ["```", "Work rules:", "- one", "```", "", "SAFETY (mandatory):", "- a"].join(
+      "\n",
+    )
+    const texts = new Map([
+      [APPLY, prompt("- a")],
+      [SWEEP, outside],
+    ])
+    expect(findSafetyBlockDrift(texts)).toEqual([
+      { file: SWEEP, line: 6, message: expect.stringContaining("outside the fenced prompt") },
+    ])
+  })
+
+  test("a rule added after a blank line in one block is reported", () => {
+    const texts = new Map([
+      [APPLY, prompt("- a")],
+      [SWEEP, prompt("- a", "", "- b")],
+    ])
+    expect(findSafetyBlockDrift(texts).map((finding) => finding.file)).toEqual([SWEEP])
+  })
+
+  test("trailing whitespace alone is no drift", () => {
+    const texts = new Map([
+      [APPLY, prompt("- a", "- b")],
+      [SWEEP, prompt("- a  ", "- b\t")],
+    ])
+    expect(findSafetyBlockDrift(texts)).toEqual([])
+  })
+})
+
 // ── hook runs guards ────────────────────────────────────────────────────────
 
 const hook = (...jobs: ReadonlyArray<string>): string =>
@@ -685,18 +840,18 @@ describe('an override "off" must suppress a diagnostic', () => {
   ]
 
   test("an off whose rule reports in the override's files is silent", () => {
-    expect(findUnneededOverrideOffs(CONFIG, configText, config, allHit)).toEqual([])
+    expect(findUnneededOffs(CONFIG, configText, config, allHit)).toEqual([])
   })
 
   test("an off with no diagnostic is reported at its rule's line", () => {
-    const findings = findUnneededOverrideOffs(CONFIG, configText, config, allHit.slice(1))
+    const findings = findUnneededOffs(CONFIG, configText, config, allHit.slice(1))
     expect(findings.map((finding) => [finding.line, finding.message])).toEqual([
       [4, expect.stringContaining("turns off `effect/noGlobals`, which reports nothing")],
     ])
   })
 
   test("a diagnostic in a file outside the override's globs does not count", () => {
-    const findings = findUnneededOverrideOffs(CONFIG, configText, config, [
+    const findings = findUnneededOffs(CONFIG, configText, config, [
       ...allHit.slice(0, 2),
       { file: "packages/core/src/a.ts", code: "typescript(no-explicit-any)" },
     ])
@@ -710,7 +865,7 @@ describe('an override "off" must suppress a diagnostic', () => {
         { files: ["packages/core/tests/**"], rules: { "typescript/no-explicit-any": "off" } },
       ],
     }
-    const findings = findUnneededOverrideOffs(CONFIG, configText, shared, allHit)
+    const findings = findUnneededOffs(CONFIG, configText, shared, allHit)
     expect(findings.map((finding) => finding.message)).toEqual([
       expect.stringContaining('"**/tests/**" turns off `typescript/no-explicit-any`'),
       expect.stringContaining('"packages/core/tests/**" turns off `typescript/no-explicit-any`'),
@@ -719,7 +874,55 @@ describe('an override "off" must suppress a diagnostic', () => {
 
   test("a rule an override sets to a severity is not an off", () => {
     const enabling = { overrides: [{ files: ["**/tests/**"], rules: { "effect/noAs": "error" } }] }
-    expect(findUnneededOverrideOffs(CONFIG, configText, enabling, [])).toEqual([])
+    expect(findUnneededOffs(CONFIG, configText, enabling, [])).toEqual([])
+  })
+})
+
+describe('a root "off" must suppress a diagnostic', () => {
+  const configText = [
+    "{",
+    '  "rules": {',
+    '    "no-shadow": "off",',
+    '    "typescript/await-thenable": "off",',
+    '    "complexity": ["error", 20]',
+    "  },",
+    '  "overrides": [',
+    '    { "files": ["**/tests/**"], "rules": { "typescript/await-thenable": "error" } }',
+    "  ]",
+    "}",
+  ].join("\n")
+  const config = {
+    rules: {
+      "no-shadow": "off",
+      "typescript/await-thenable": "off",
+      complexity: ["error", 20],
+    },
+    overrides: [{ files: ["**/tests/**"], rules: { "typescript/await-thenable": "error" } }],
+  }
+
+  test("a root off whose rule reports somewhere is silent", () => {
+    const findings = findUnneededOffs(CONFIG, configText, config, [
+      { file: "packages/core/src/a.ts", code: "eslint(no-shadow)" },
+      { file: "packages/core/src/b.ts", code: "typescript(await-thenable)" },
+    ])
+    expect(findings).toEqual([])
+  })
+
+  test("a root off with no diagnostic is reported at its rule's line", () => {
+    const findings = findUnneededOffs(CONFIG, configText, config, [
+      { file: "packages/core/src/a.ts", code: "eslint(no-shadow)" },
+    ])
+    expect(findings.map((finding) => [finding.line, finding.message])).toEqual([
+      [4, expect.stringContaining("root config turns off `typescript/await-thenable`")],
+    ])
+  })
+
+  test("a diagnostic in a file an override sets the rule for does not count", () => {
+    const findings = findUnneededOffs(CONFIG, configText, config, [
+      { file: "packages/core/src/a.ts", code: "eslint(no-shadow)" },
+      { file: "packages/core/tests/a.test.ts", code: "typescript(await-thenable)" },
+    ])
+    expect(findings.map((finding) => finding.line)).toEqual([4])
   })
 })
 
@@ -1768,13 +1971,6 @@ export type LogPaths = { readonly dir: string }
     expect(declaredNames(SDK_FILE, source)).toEqual(["buildLogPaths", "LogPaths"])
   })
 
-  test("a file in an unscanned package declares nothing", () => {
-    // Reference extensions stand alone; no surface row covers `examples/`.
-    expect(
-      declaredNames("examples/extensions/session-notes.ts", `export const ExampleHelper = 1\n`),
-    ).toEqual([])
-  })
-
   test("a bare export block is a surface, so its names are declared", () => {
     // 26 names hid in one such block in packages/sdk/src/client.ts because
     // only `export const|type|...` was read.
@@ -2071,6 +2267,21 @@ describe("support module surface (test helpers, build scripts, testbed drivers)"
     expect(files.map((file) => declaredNames(file, `export const orphan = 1\n`))).toEqual(
       files.map(() => ["orphan"]),
     )
+  })
+
+  test("an example extension is scanned, and its own test keeps a name alive", () => {
+    const example = "examples/extensions/notes.ts"
+    const text = `export const Orphan = 1\nexport const Tested = 2\nexport default { id: "notes" }\n`
+    expect(declaredNames(example, text)).toEqual(["Orphan", "Tested"])
+    expect(
+      findingsFor([
+        { file: example, text },
+        {
+          file: "examples/tests/notes.test.ts",
+          text: `import { Tested } from "../extensions/notes"\nvoid Tested\n`,
+        },
+      ]).map((finding) => finding.message),
+    ).toEqual([expect.stringContaining("`Orphan`")])
   })
 
   test("a test file, the testbed fixture app and the lint fixtures declare nothing", () => {
@@ -3280,5 +3491,97 @@ describe("a catalog entry must be taken", () => {
         message: 'catalog["effect-machine"]: no manifest takes it with "catalog:"; drop it',
       },
     ])
+  })
+})
+
+describe("the Effect packages share one version", () => {
+  const rootText = [
+    "{",
+    '  "devDependencies": { "effect": "catalog:", "@effect/tsgo": "0.41.0" },',
+    '  "overrides": {',
+    '    "effect": "4.1.0",',
+    '    "@effect/ai-openai": "4.0.0"',
+    "  },",
+    '  "catalog": {',
+    '    "effect": "4.1.0",',
+    '    "@effect/platform-bun": "4.1.0",',
+    '    "picomatch": "^4"',
+    "  },",
+    '  "patchedDependencies": {',
+    '    "@opentui/core@0.5.11": "patches/a.patch",',
+    '    "@effect/ai-anthropic@4.0.0": "patches/b.patch"',
+    "  }",
+    "}",
+  ].join("\n")
+  const root = {
+    manifest: "package.json",
+    text: rootText,
+    packageJson: {
+      devDependencies: { effect: "catalog:", "@effect/tsgo": "0.41.0" },
+      overrides: { effect: "4.1.0", "@effect/ai-openai": "4.0.0" },
+      catalog: { effect: "4.1.0", "@effect/platform-bun": "4.1.0", picomatch: "^4" },
+      patchedDependencies: {
+        "@opentui/core@0.5.11": "patches/a.patch",
+        "@effect/ai-anthropic@4.0.0": "patches/b.patch",
+      },
+    },
+  }
+
+  test("an override and a patch behind catalog.effect are reported at their lines", () => {
+    const findings = findEffectVersionDrift(root, [])
+    expect(findings.map((finding) => [finding.line, finding.message])).toEqual([
+      [5, expect.stringContaining('overrides["@effect/ai-openai"] pins 4.0.0')],
+      [14, expect.stringContaining('patchedDependencies["@effect/ai-anthropic"] pins 4.0.0')],
+    ])
+  })
+
+  test("a workspace that names an Effect package with a literal version is reported", () => {
+    const sdkText = [
+      "{",
+      '  "dependencies": {',
+      '    "@effect/opentelemetry": "4.1.0"',
+      "  }",
+      "}",
+    ].join("\n")
+    const agreeing = {
+      ...root,
+      packageJson: {
+        ...root.packageJson,
+        overrides: { effect: "4.1.0" },
+        patchedDependencies: { "@effect/ai-anthropic@4.1.0": "patches/b.patch" },
+      },
+    }
+    const findings = findEffectVersionDrift(agreeing, [
+      {
+        manifest: "packages/sdk/package.json",
+        text: sdkText,
+        packageJson: { dependencies: { "@effect/opentelemetry": "4.1.0" } },
+      },
+    ])
+    expect(findings).toEqual([
+      {
+        file: "packages/sdk/package.json",
+        line: 3,
+        message: expect.stringContaining(
+          'dependencies["@effect/opentelemetry"] is the literal "4.1.0"',
+        ),
+      },
+    ])
+  })
+
+  test("catalog.effect must be one exact version, not a range, a tag or a catalog reference", () => {
+    const withEffect = (effect: string) => {
+      const text = ["{", '  "catalog": {', `    "effect": "${effect}"`, "  }", "}"].join("\n")
+      return findEffectVersionDrift(
+        { manifest: "package.json", text, packageJson: { catalog: { effect } } },
+        [],
+      ).map((finding) => [finding.line, finding.message])
+    }
+    for (const spec of ["^4.0.0", "~4.0.0", ">=4.0.0 <5", "latest", "catalog:", "4.x"]) {
+      expect(withEffect(spec)).toEqual([
+        [3, expect.stringContaining(`catalog["effect"] is "${spec}"`)],
+      ])
+    }
+    expect(withEffect("4.0.0-rc.112")).toEqual([])
   })
 })

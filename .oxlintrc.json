@@ -118,13 +118,11 @@
 
     // Type-aware rules — disable auto-enabled ones we don't want yet
     "typescript/no-unnecessary-type-assertion": "off",
-    "typescript/no-base-to-string": "off",
     "typescript/no-unnecessary-type-arguments": "off",
     "typescript/consistent-return": "off",
     "typescript/no-redundant-type-constituents": "off",
     "typescript/no-unnecessary-boolean-literal-compare": "off",
     "typescript/restrict-template-expressions": "off",
-    "typescript/await-thenable": "off",
     "typescript/no-unnecessary-type-conversion": "off",
     "typescript/no-misused-spread": "off",
     "typescript/no-floating-promises": "off",
@@ -181,10 +179,12 @@
       }
     },
     {
-      // The gamut driver is a plain Bun script too: it drives herdr, git and
-      // SQLite with async shell calls, and its polls wait one step at a time.
-      // Its tests read it as such. Type assertions stay banned: it decodes
-      // the SQLite rows it reads.
+      // The gamut driver is a plain Bun script, not an Effect program: it
+      // drives herdr, git and SQLite with async shell calls, and its polls
+      // wait one step at a time. Its tests read it as such and build tuples
+      // with `as const`. Unsafe type assertions stay banned in the driver
+      // (`typescript/no-unsafe-type-assertion`): it decodes the SQLite rows
+      // it reads.
       "files": ["testbeds/gamut/gamut.ts", "testbeds/gamut/tests/**"],
       "rules": {
         "effect/noAs": "off",
