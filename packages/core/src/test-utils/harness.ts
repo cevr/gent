@@ -703,14 +703,6 @@ export const storedEvents = Effect.fn("test.storedEvents")(function* (run: Harne
 
 // ── e2e-layer ───────────────────────────────────────────────────────────────
 
-/**
- * E2E test layer with queued event publishing and tool execution.
- *
- * Unlike baseLocalLayerWithProvider (which stubs everything), this layer wires the
- * prod-shaped event publisher, real ToolRunner.Live, and direct session-loop
- * follow-ups — so QueueFollowUp actually drives multi-turn loops.
- */
-
 export interface E2ELayerConfig {
   /**
    * The branch-tool feature this harness installs. Defaults to
@@ -944,8 +936,6 @@ export const baseLocalLayer = (config: InProcessLayerConfig) =>
  * any test file. Because `core` cannot reach into `@gent/extensions`, the
  * caller passes pre-loaded extensions and an agents bucket — the same
  * fragments callers already pass to `createE2ELayer`.
- *
- * @module
  */
 
 interface RpcHarnessConfig extends Omit<E2ELayerConfig, "toolRunner"> {
@@ -960,9 +950,9 @@ interface RpcHarnessConfig extends Omit<E2ELayerConfig, "toolRunner"> {
  *
  * ```typescript
  * const { client, sessionId, branchId } = yield* createRpcHarness({
- *   ...e2ePreset,
  *   providerLayer,
- *   extensions: [taskExt],
+ *   agents: [testAgent],
+ *   extensionInputs: [testTurnExtension, myExtension],
  * })
  * yield* client.extension.request({ sessionId, branchId, ... })
  * ```
