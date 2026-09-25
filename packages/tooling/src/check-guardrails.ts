@@ -56,32 +56,23 @@ import gentRules from "./gent-rules"
 const fileNames = (output: string): ReadonlyArray<string> =>
   output.split("\n").filter((file) => file.length > 0)
 
-/** Every file the scan reads: tracked, and new files git does not ignore. */
-const trackedFileNames = Effect.promise(() =>
-  Bun.$`git ls-files --cached --others --exclude-standard`.text(),
-).pipe(Effect.map(fileNames))
-
 /**
- * The git command that lists the files CI will check out. In a pre-commit
- * hook git sets `GIT_INDEX_FILE` (`hookIndex`) to the index the commit is made from (a
- * temporary one for `git commit -- <path>`), so the index is exactly the
- * commit being made. Outside a hook the index also holds staged additions
- * that are not committed yet, so the `HEAD` tree is what a clean clone holds.
+ * The one file set every guard reads: the git index of the repository at
+ * `root`, under git's environment `env`. It answers both which files the scan
+ * reads and every existence question (a config row, a steering path, a
+ * dependency use, an export consumer). In CI the index is `HEAD`; in a
+ * pre-commit hook git sets `GIT_INDEX_FILE` to the index the commit is made
+ * from (a temporary one for `git commit -- <path>`), so it is the commit being
+ * made; outside a hook it is what the next commit holds. An untracked file
+ * never satisfies a check: a clean clone would not hold it.
  */
-export const committedFilesCommand = (hookIndex: Option.Option<string>): ReadonlyArray<string> => {
-  if (Option.isSome(hookIndex)) return ["ls-files", "--cached"]
-  return ["ls-tree", "-r", "--name-only", "HEAD"]
-}
-
-/**
- * The files a clean clone holds (see `committedFilesCommand`). A config row
- * matched only by a local file (a scratch file, an unstaged draft, a staged
- * addition outside a commit) passes locally and fails in CI, so the config
- * checks match against this set.
- */
-const committedFileNames = Effect.promise(() =>
-  Bun.$`git ${committedFilesCommand(Option.fromNullishOr(Bun.env["GIT_INDEX_FILE"]))}`.text(),
-).pipe(Effect.map(fileNames))
+export const indexFileNames = (root: string, env: typeof Bun.env) =>
+  Effect.promise(() =>
+    Bun.$`git ls-files --cached`
+      .cwd(root)
+      .env({ ...env })
+      .text(),
+  ).pipe(Effect.map(fileNames))
 
 /**
  * Tracked symlinks (git mode 120000). A symlink is not a second file: its
@@ -132,7 +123,7 @@ const LINT_PLUGIN = "packages/tooling/src/gent-rules.ts"
 
 /** The findings that read the lint and compiler configs rather than one source file. */
 const lintConfigFindings = Effect.fn("Tooling.lintConfigFindings")(function* (
-  committedFiles: ReadonlyArray<string>,
+  indexFiles: ReadonlyArray<string>,
   sourceTexts: ReadonlyMap<string, string>,
 ) {
   const { text: configText, value: config } = yield* readJsonc(OXLINT_CONFIG, OxlintConfigSchema)
@@ -144,9 +135,9 @@ const lintConfigFindings = Effect.fn("Tooling.lintConfigFindings")(function* (
   const rootRules = new Set(Object.keys(config.rules ?? {}))
   const pluginText = Option.getOrElse(Option.fromNullishOr(sourceTexts.get(LINT_PLUGIN)), () => "")
   return [
-    ...findUnmatchedOverrideGlobs(OXLINT_CONFIG, configText, config, committedFiles),
-    ...findUnmatchedIgnoreRows(OXLINT_IGNORE, ignoreText, committedFiles),
-    ...findUnmatchedTsconfigOverrides(ROOT_TSCONFIG, tsconfig.text, tsconfig.value, committedFiles),
+    ...findUnmatchedOverrideGlobs(OXLINT_CONFIG, configText, config, indexFiles),
+    ...findUnmatchedIgnoreRows(OXLINT_IGNORE, ignoreText, indexFiles),
+    ...findUnmatchedTsconfigOverrides(ROOT_TSCONFIG, tsconfig.text, tsconfig.value, indexFiles),
     ...findUnenabledPluginRules(LINT_PLUGIN, pluginText, Object.keys(gentRules.rules), rootRules),
   ]
 })
@@ -156,10 +147,10 @@ const GUIDE_CHECK_TURBO = "examples/turbo.json"
 
 /** The guide check's cache key against the steering files, new ones included. */
 const guideInputFindings = Effect.fn("Tooling.guideInputFindings")(function* (
-  trackedFiles: ReadonlyArray<string>,
+  indexFiles: ReadonlyArray<string>,
 ) {
   const { value } = yield* readJsonc(GUIDE_CHECK_TURBO, TurboTypecheckInputsSchema)
-  return findUnhashedSteeringFiles(GUIDE_CHECK_TURBO, value.tasks.typecheck.inputs, trackedFiles)
+  return findUnhashedSteeringFiles(GUIDE_CHECK_TURBO, value.tasks.typecheck.inputs, indexFiles)
 })
 
 type FileFinder = (file: string, text: string) => ReadonlyArray<Finding>
@@ -247,9 +238,9 @@ const scriptsOf = (packageJson: PackageJson): ReadonlyArray<string> =>
 const dependencyScopes = Effect.fn("Tooling.dependencyScopes")(function* (
   root: ManifestRead,
   manifests: ReadonlyMap<string, ManifestRead>,
-  trackedFiles: ReadonlyArray<string>,
+  indexFiles: ReadonlyArray<string>,
 ) {
-  const reads = yield* Effect.forEach(trackedFiles.filter(isDependencyUseFile), readTrackedFile, {
+  const reads = yield* Effect.forEach(indexFiles.filter(isDependencyUseFile), readTrackedFile, {
     concurrency: 32,
   })
   const useTexts = new Map<string, string>(
@@ -282,10 +273,10 @@ const dependencyScopes = Effect.fn("Tooling.dependencyScopes")(function* (
 
 /** The findings that read every manifest and every workspace tsconfig. */
 const packageSurfaceFindings = Effect.fn("Tooling.packageSurfaceFindings")(function* (
-  trackedFiles: ReadonlyArray<string>,
+  indexFiles: ReadonlyArray<string>,
 ) {
   const root = yield* readJsonc(ROOT_MANIFEST, PackageJsonSchema)
-  const manifestPaths = workspaceManifests(root.value.workspaces ?? [], trackedFiles)
+  const manifestPaths = workspaceManifests(root.value.workspaces ?? [], indexFiles)
   const manifestReads = yield* Effect.forEach(
     manifestPaths,
     (path) => readJsonc(path, PackageJsonSchema),
@@ -294,7 +285,7 @@ const packageSurfaceFindings = Effect.fn("Tooling.packageSurfaceFindings")(funct
   const manifests = new Map<string, ManifestRead>(
     manifestReads.map((read, index) => [manifestPaths[index] ?? "", read]),
   )
-  const tsconfigPaths = workspaceTsconfigs(trackedFiles)
+  const tsconfigPaths = workspaceTsconfigs(indexFiles)
   const tsconfigs = yield* Effect.forEach(
     tsconfigPaths,
     (path) => Effect.result(readJsonc(path, TsConfigSchema)),
@@ -314,7 +305,7 @@ const packageSurfaceFindings = Effect.fn("Tooling.packageSurfaceFindings")(funct
   return [
     ...unreadable,
     ...findPackageSurfaceFindings(packageJsonByPath, tsconfigByPath),
-    ...findUnusedDependencies(yield* dependencyScopes(root, manifests, trackedFiles)),
+    ...findUnusedDependencies(yield* dependencyScopes(root, manifests, indexFiles)),
     ...findUnusedCatalogEntries(
       { manifest: ROOT_MANIFEST, text: root.text, packageJson: root.value },
       [...manifests.values()].map((read) => read.value),
@@ -346,7 +337,7 @@ const isManifest = (file: string): boolean => /(?:^|\/)package\.json$/.test(file
  */
 export const scanTrackedTexts = (
   files: ReadonlyArray<TrackedText>,
-  trackedFiles: ReadonlyArray<string>,
+  indexFiles: ReadonlyArray<string>,
 ) => {
   const findings: Array<Finding> = []
 
@@ -373,7 +364,7 @@ export const scanTrackedTexts = (
 
   for (const { file, text } of files) {
     for (const finder of ANY_FILE_FINDERS) findings.push(...finder(file, text))
-    findings.push(...findSteeringFilePaths(file, text, trackedFiles))
+    findings.push(...findSteeringFilePaths(file, text, indexFiles))
     if (isManifest(file)) manifestTexts.set(file, text)
     if (!isSourceFile(file)) continue
     for (const finder of SOURCE_FILE_FINDERS) findings.push(...finder(file, text))
@@ -387,16 +378,16 @@ export const scanTrackedTexts = (
     // A GENT_* variable whose writer left: its reader is a branch nothing takes.
     ...findReadersWithoutWriters(new Map([...sourceTexts, ...manifestTexts])),
     // A bundled skill file the skills module does not import never ships.
-    ...findUnshippedSkillFiles(sourceTexts.get(BUNDLED_SKILLS_MODULE) ?? "", trackedFiles),
+    ...findUnshippedSkillFiles(sourceTexts.get(BUNDLED_SKILLS_MODULE) ?? "", indexFiles),
   )
   return { findings, sourceTexts }
 }
 
 const program = Effect.gen(function* () {
-  const trackedFiles = yield* trackedFileNames
+  const indexFiles = yield* indexFileNames(".", Bun.env)
   const symlinks = yield* trackedSymlinks
   const textFiles = yield* Effect.forEach(
-    trackedFiles
+    indexFiles
       // The steering files and docs are Markdown and the hook is YAML; they
       // join the pass so their own scans get the text.
       .filter(
@@ -410,14 +401,14 @@ const program = Effect.gen(function* () {
 
   const { findings: treeFindings, sourceTexts } = scanTrackedTexts(
     textFiles.flatMap(Option.toArray),
-    trackedFiles,
+    indexFiles,
   )
   const findings: Array<Finding> = [
     ...treeFindings,
     // The lint config must not name a file or a rule that is gone.
-    ...(yield* lintConfigFindings(yield* committedFileNames, sourceTexts)),
-    ...(yield* packageSurfaceFindings(trackedFiles)),
-    ...(yield* guideInputFindings(trackedFiles)),
+    ...(yield* lintConfigFindings(indexFiles, sourceTexts)),
+    ...(yield* packageSurfaceFindings(indexFiles)),
+    ...(yield* guideInputFindings(indexFiles)),
   ]
 
   // Two finders may report one line with one message; say it once.

@@ -48,8 +48,11 @@ import {
   RETIRED_SURFACES,
   workspaceTsconfigs,
 } from "../src/guards"
-import { committedFilesCommand, scanTrackedTexts } from "../src/check-guardrails"
-import { Option } from "effect"
+import { indexFileNames, scanTrackedTexts } from "../src/check-guardrails"
+import { BunServices } from "@effect/platform-bun"
+import { Config, Effect, FileSystem, Option, Path } from "effect"
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
+import { it } from "effect-bun-test"
 
 // ── blanket eslint disable ──────────────────────────────────────────────────
 
@@ -815,7 +818,9 @@ describe("an override must match a tracked file", () => {
       configFor(["**/sdk/src/supervisor.ts"]),
       ["packages/sdk/src/server.ts"],
     )
-    expect(messages(findings)).toEqual([expect.stringContaining("matches no tracked file")])
+    expect(messages(findings)).toEqual([
+      expect.stringContaining("matches no staged or committed file"),
+    ])
   })
 
   test("the finding points at the line the glob sits on", () => {
@@ -867,17 +872,90 @@ describe("an ignore row must match a file oxlint would lint", () => {
   })
 })
 
-describe("the committed file set the config rows match", () => {
-  test("in a commit hook it is the index git is committing, partial commits included", () => {
-    expect(committedFilesCommand(Option.some(".git/next-index-1.lock"))).toEqual([
-      "ls-files",
-      "--cached",
-    ])
-  })
+describe("every existence question reads the git index", () => {
+  const gitTest = it.scopedLive.layer(BunServices.layer)
+  const PROBE = "packages/extensions/src/probe-new.ts"
 
-  test("outside a hook it is the tree of the last commit, which is what CI checks out", () => {
-    expect(committedFilesCommand(Option.none())).toEqual(["ls-tree", "-r", "--name-only", "HEAD"])
-  })
+  /**
+   * Git's whole environment for the scratch repository: `PATH`, and the
+   * repository itself as `HOME`, so no user config applies. Nothing is
+   * inherited: a pre-commit hook exports `GIT_INDEX_FILE` and friends, which
+   * would aim the scratch git at the real repository's index.
+   */
+  const scratchEnv = (root: string, extra: Readonly<Record<string, string>> = {}) =>
+    Effect.map(Config.string("PATH"), (PATH) => ({ PATH, HOME: root, ...extra }))
+
+  const git = (
+    root: string,
+    args: ReadonlyArray<string>,
+    extra: Readonly<Record<string, string>> = {},
+  ) =>
+    Effect.gen(function* () {
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+      const identity = ["-c", "user.name=probe", "-c", "user.email=probe@example.invalid"]
+      const command = ChildProcess.make("git", [...identity, ...args], {
+        cwd: root,
+        env: yield* scratchEnv(root, extra),
+        extendEnv: false,
+      })
+      expect(yield* spawner.exitCode(command)).toBe(ChildProcessSpawner.ExitCode(0))
+    })
+
+  /** A scratch repository with one commit, and `files` written but not added. */
+  const scratchRepo = (files: ReadonlyArray<readonly [string, string]>) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "gent-guard-index-" })
+      yield* fs.writeFileString(path.join(root, "README.md"), "scratch\n")
+      yield* git(root, ["init", "-q"])
+      yield* git(root, ["add", "README.md"])
+      yield* git(root, ["commit", "-qm", "init"])
+      for (const [file, text] of files) {
+        yield* fs.makeDirectory(path.dirname(path.join(root, file)), { recursive: true })
+        yield* fs.writeFileString(path.join(root, file), text)
+      }
+      return root
+    })
+
+  gitTest("a staged new file outside a hook satisfies the override that names it", () =>
+    Effect.gen(function* () {
+      const root = yield* scratchRepo([[PROBE, "export {}\n"]])
+      yield* git(root, ["add", PROBE])
+      const findings = findUnmatchedOverrideGlobs(
+        CONFIG,
+        `{ "files": ["${PROBE}"] }`,
+        { overrides: [{ files: [PROBE] }] },
+        yield* indexFileNames(root, yield* scratchEnv(root)),
+      )
+      expect(findings).toEqual([])
+    }),
+  )
+
+  gitTest("an untracked file does not satisfy a steering file's path claim", () =>
+    Effect.gen(function* () {
+      const root = yield* scratchRepo([[PROBE, "export {}\n"]])
+      const { findings } = scanTrackedTexts(
+        [{ file: "AGENTS.md", text: `The probe lives in \`${PROBE}\`.\n` }],
+        yield* indexFileNames(root, yield* scratchEnv(root)),
+      )
+      expect(messages(findings.filter((finding) => finding.file === "AGENTS.md"))).toEqual([
+        expect.stringContaining(`\`${PROBE}\`, which no staged or committed file matches`),
+      ])
+    }),
+  )
+
+  gitTest("in a hook the index git hands the hook is the file set", () =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path
+      const root = yield* scratchRepo([[PROBE, "export {}\n"]])
+      const hookIndex = { GIT_INDEX_FILE: path.join(root, ".git", "next-index.lock") }
+      yield* git(root, ["read-tree", "HEAD"], hookIndex)
+      yield* git(root, ["add", PROBE], hookIndex)
+      expect(yield* indexFileNames(root, yield* scratchEnv(root, hookIndex))).toContain(PROBE)
+      expect(yield* indexFileNames(root, yield* scratchEnv(root))).not.toContain(PROBE)
+    }),
+  )
 })
 
 describe("a tsconfig plugin override must match a tracked file", () => {
@@ -894,7 +972,12 @@ describe("a tsconfig plugin override must match a tracked file", () => {
       ["packages/core/tests/a.test.ts"],
     )
     expect(findings.map((finding) => [finding.line, finding.message])).toEqual([
-      [3, expect.stringContaining('`include: "testbeds/gone/gone.ts"` matches no tracked file')],
+      [
+        3,
+        expect.stringContaining(
+          '`include: "testbeds/gone/gone.ts"` matches no staged or committed file',
+        ),
+      ],
     ])
   })
 })

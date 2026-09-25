@@ -1130,7 +1130,7 @@ export const findUnmatchedOverrideGlobs = (
       findings.push({
         file: configFile,
         line: lineOfGlob(configText, glob),
-        message: `oxlint override \`files: "${glob}"\` matches no tracked file; delete the override, or fix the glob`,
+        message: `oxlint override \`files: "${glob}"\` matches no staged or committed file; delete the override, or fix the glob`,
       })
     }
   }
@@ -1139,9 +1139,9 @@ export const findUnmatchedOverrideGlobs = (
 
 /**
  * An `.oxlintignore` row that matches no file oxlint would walk in a clean
- * clone. oxlint also honors `.gitignore`, so `trackedFiles` is the committed
- * set (`committedFilesCommand`): a row that only a local file matches
- * passes here and fails in CI. A row follows gitignore form: a trailing `/`
+ * clone. oxlint also honors `.gitignore`, so `trackedFiles` is the git index
+ * (`indexFileNames`): a row that only an untracked local file matches is
+ * reported here, as CI would report it. A row follows gitignore form: a trailing `/`
  * names a directory, a row with no inner `/` matches at any depth, a leading
  * `/` anchors at the root. Comment, blank and `!` rows are skipped.
  */
@@ -1162,7 +1162,7 @@ export const findUnmatchedIgnoreRows = (
       {
         file: ignoreFile,
         line: index + 1,
-        message: `ignore row \`${row}\` matches no committed file oxlint would lint (git-ignored files are skipped already); delete the row, or fix it`,
+        message: `ignore row \`${row}\` matches no staged or committed file oxlint would lint (git-ignored files are skipped already); delete the row, or fix it`,
       },
     ]
   })
@@ -1203,7 +1203,7 @@ export const findUnmatchedTsconfigOverrides = (
         {
           file: configFile,
           line: lineOfGlob(configText, glob),
-          message: `tsconfig plugin override \`include: "${glob}"\` matches no tracked file; delete it, or fix the glob`,
+          message: `tsconfig plugin override \`include: "${glob}"\` matches no staged or committed file; delete it, or fix the glob`,
         },
       ]
     })
@@ -2421,14 +2421,14 @@ export const findSteeringFilePaths = (
       findings.push({
         file,
         line: index + 1,
-        message: `steering file names \`${claimed}\`, which no tracked file matches -- point it at the path that exists, or drop the reference`,
+        message: `steering file names \`${claimed}\`, which no staged or committed file matches -- point it at the path that exists, or drop the reference`,
       })
     }
     for (const target of danglingLinkTargets(line, directory, tracked, prefixes)) {
       findings.push({
         file,
         line: index + 1,
-        message: `steering file links \`${target}\`, which resolves to no tracked file from \`${file}\` -- point the link at the file that exists, or drop it`,
+        message: `steering file links \`${target}\`, which resolves to no staged or committed file from \`${file}\` -- point the link at the file that exists, or drop it`,
       })
     }
   }
@@ -2510,7 +2510,7 @@ export const findUnshippedSkillFiles = (
  * list that misses a steering file (`../docs/*.md` against
  * `docs/topic/guide.md`) replays a pass after that file alone changes; one
  * that reads a Markdown file outside the set reruns the check for nothing. So
- * over the tracked and new files, the `.md` files the inputs match must be the
+ * over the git index, the `.md` files the inputs match must be the
  * files `isSteeringFile` accepts. Turbo globs are relative to the package, so
  * `../x` names the repo path `x`, and a `!` input subtracts.
  */
