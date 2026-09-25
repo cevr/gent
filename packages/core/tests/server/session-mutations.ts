@@ -281,7 +281,7 @@ export const racySessionMutationsLayer = (params: {
               yield* sessions.createSession(
                 new Session({
                   id: params.lateChild.sessionId,
-                  cwd: "/tmp/racing-late-child",
+                  cwd: "/nonexistent/racing-late-child",
                   parentSessionId: rootId,
                   createdAt: now,
                   updatedAt: now,

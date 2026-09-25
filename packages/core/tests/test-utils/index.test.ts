@@ -1,13 +1,16 @@
+import { BunServices } from "@effect/platform-bun"
 import { describe, expect, it } from "effect-bun-test"
-import { Context, Effect, Layer, Ref, Schema } from "effect"
+import { Context, Effect, FileSystem, Layer, Path, Ref, Schema } from "effect"
 import { AgentDefinition, AgentName } from "../../src/domain/agent"
 import { ExtensionId, SessionId } from "../../src/domain/ids"
 import type { Session } from "../../src/domain/message"
 import {
   createE2ELayer,
+  createRpcHarness,
   ensureStorageParents,
   type E2ELayerConfig,
 } from "../../src/test-utils/harness"
+import { RuntimeEnvironment } from "../../src/runtime/config"
 import { LanguageModelLayers } from "../../src/test-utils/language-model"
 import { SessionStorage, type SessionStorageService } from "../../src/storage/storage"
 import { ExtensionRegistry } from "../../src/runtime/extension-host"
@@ -162,5 +165,52 @@ describe("createE2ELayer agents", () => {
         }),
       ),
     ),
+  )
+})
+
+// ── the test root's working directory ───────────────────────────────────────
+
+describe("the test root's working directory", () => {
+  const fsTest = it.scopedLive.layer(BunServices.layer)
+  const bareConfig = {
+    providerLayer: LanguageModelLayers.debug(),
+    agents: [],
+    extensionInputs: [],
+  } satisfies E2ELayerConfig
+
+  /** The layer's cwd and home while it runs, and whether the cwd exists then. */
+  const whileRunning = Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const environment = yield* RuntimeEnvironment
+    return {
+      cwd: environment.cwd,
+      home: environment.home,
+      existed: yield* fs.exists(environment.cwd),
+    }
+  }).pipe(Effect.provide(createE2ELayer({ ...bareConfig, toolRunner: "test" })))
+
+  fsTest("each layer runs in a temp directory of its own, removed with the layer", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const first = yield* whileRunning
+      const second = yield* whileRunning
+      expect(first.existed).toBe(true)
+      expect(path.basename(first.cwd)).toStartWith("gent-test-cwd-")
+      expect(first.cwd).not.toBe(first.home)
+      expect(second.cwd).not.toBe(first.cwd)
+      expect(yield* fs.exists(first.cwd)).toBe(false)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  fsTest("the RPC harness seeds its session in a temp working directory", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const { client, sessionId } = yield* createRpcHarness(bareConfig)
+      const cwd = (yield* client.session.get({ sessionId }))?.cwd ?? ""
+      expect(path.basename(cwd)).toStartWith("gent-test-cwd-")
+      expect(yield* fs.exists(cwd)).toBe(true)
+    }).pipe(Effect.timeout("10 seconds")),
   )
 })

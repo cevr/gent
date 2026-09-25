@@ -36,7 +36,7 @@ import {
   type GentClientRpcError,
   type QueueEntryInfo,
 } from "@gent/core/protocol"
-import { emptyQueueSnapshot } from "@gent/core/test-utils"
+import { emptyQueueSnapshot, makeTempDirectoryScoped } from "@gent/core/test-utils"
 import { Gent, type GentRuntime } from "@gent/sdk"
 import {
   App,
@@ -150,7 +150,7 @@ describe("resolveStartupAuthState", () => {
           name: "Session A",
           createdAt: dateFromMillis(0),
           updatedAt: dateFromMillis(0),
-          cwd: "/tmp",
+          cwd: "/nonexistent/gent-test-cwd",
           reasoningLevel: absent,
           parentSessionId: absent,
           parentBranchId: absent,
@@ -210,7 +210,7 @@ describe("resolveStartupAuthState", () => {
           name: "Session A",
           createdAt: dateFromMillis(0),
           updatedAt: dateFromMillis(0),
-          cwd: "/tmp",
+          cwd: "/nonexistent/gent-test-cwd",
           reasoningLevel: absent,
           parentSessionId: absent,
           parentBranchId: absent,
@@ -248,7 +248,7 @@ describe("resolveStartupAuthState", () => {
           name: "Session A",
           createdAt: dateFromMillis(0),
           updatedAt: dateFromMillis(0),
-          cwd: "/tmp",
+          cwd: "/nonexistent/gent-test-cwd",
           reasoningLevel: absent,
           parentSessionId: absent,
           parentBranchId: absent,
@@ -287,7 +287,7 @@ describe("resolveStartupAuthState", () => {
           name: "Session A",
           createdAt: dateFromMillis(0),
           updatedAt: dateFromMillis(0),
-          cwd: "/tmp",
+          cwd: "/nonexistent/gent-test-cwd",
           reasoningLevel: absent,
           parentSessionId: absent,
           parentBranchId: absent,
@@ -322,7 +322,7 @@ describe("resolveInitialState", () => {
       const error = yield* expectAppBootstrapFailure(
         resolveInitialState({
           client: createMockClient(),
-          cwd: "/tmp",
+          cwd: "/nonexistent/gent-test-cwd",
           session: Option.none(),
           continue_: false,
           headless: true,
@@ -340,7 +340,7 @@ describe("resolveInitialState", () => {
       const error = yield* expectAppBootstrapFailure(
         resolveInitialState({
           client: createMockClient(),
-          cwd: "/tmp",
+          cwd: "/nonexistent/gent-test-cwd",
           session: Option.none(),
           continue_: false,
           headless: true,
@@ -380,7 +380,7 @@ describe("resolveInitialState", () => {
             get: () => Effect.succeed(session),
           },
         }),
-        cwd: "/tmp",
+        cwd: "/nonexistent/gent-test-cwd",
         session: Option.none(),
         continue_: false,
         headless: true,
@@ -399,7 +399,7 @@ describe("resolveInitialState", () => {
       const error = yield* expectAppBootstrapFailure(
         resolveInitialState({
           client: createMockClient(),
-          cwd: "/tmp",
+          cwd: "/nonexistent/gent-test-cwd",
           session: Option.some("missing-session"),
           continue_: false,
           headless: false,
@@ -3364,7 +3364,7 @@ const syntaxStyle = () => SyntaxStyle.create()
 const testSession: Session = {
   id: SessionId.make("session-test"),
   name: "Test Session",
-  cwd: "/tmp/gent-test",
+  cwd: "/nonexistent/gent-test-session",
   reasoningLevel: absent,
   activeBranchId: BranchId.make("branch-test"),
   parentSessionId: absent,
@@ -3375,7 +3375,7 @@ const testSession: Session = {
 const nextSession: Session = {
   id: SessionId.make("session-next"),
   name: "Next Session",
-  cwd: "/tmp/gent-next",
+  cwd: "/nonexistent/gent-test-next-session",
   reasoningLevel: absent,
   activeBranchId: BranchId.make("branch-next"),
   parentSessionId: absent,
@@ -3951,13 +3951,14 @@ describe("debug playground", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
+          const cwd = yield* makeTempDirectoryScoped("gent-test-cwd-")
           const server = yield* Gent.server({
-            cwd: "/tmp",
+            cwd,
             debug: true,
             state: Gent.state.memory(),
             provider: Gent.provider.mock(),
           })
-          const { client, runtime } = yield* Gent.client(server, { cwd: "/tmp" })
+          const { client, runtime } = yield* Gent.client(server, { cwd })
           const [session] = yield* client.session.list()
           const initialSession = yield* Effect.fromNullishOr(session)
           const setup = yield* Effect.promise(() =>
@@ -3965,7 +3966,7 @@ describe("debug playground", () => {
               client,
               runtime,
               initialSession,
-              cwd: "/tmp",
+              cwd,
               width: 120,
               height: 40,
             }),

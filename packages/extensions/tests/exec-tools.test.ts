@@ -48,6 +48,7 @@ import {
   createE2ELayer,
   createRpcClient,
   createRpcHarness,
+  makeTempDirectoryScoped,
   runToolWithCtx,
   testToolContext,
   type TestToolContext,
@@ -3239,7 +3240,8 @@ describe("background shell through a cell", () => {
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
         const home = yield* fs.makeTempDirectoryScoped({ prefix: "gent-bg-output-" })
-        const text = yield* hugeBackgroundNotice([RuntimeEnvironment.Live({ cwd: "/tmp", home })])
+        const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "gent-test-cwd-" })
+        const text = yield* hugeBackgroundNotice([RuntimeEnvironment.Live({ cwd, home })])
 
         // The whole user-role notice, the file line included, fits the bound.
         expect(text.length).toBeLessThanOrEqual(maximumModelToolResultChars)
@@ -3284,8 +3286,9 @@ describe("background shell through a cell", () => {
         const path = yield* Path.Path
         const home = yield* fs.makeTempDirectoryScoped({ prefix: "gent-bg-output-" })
         const dataDir = yield* fs.makeTempDirectoryScoped({ prefix: "gent-bg-data-" })
+        const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "gent-test-cwd-" })
         const text = yield* hugeBackgroundNotice([
-          RuntimeEnvironment.Live({ cwd: "/tmp", home }),
+          RuntimeEnvironment.Live({ cwd, home }),
           Layer.succeed(
             ConfigProvider.ConfigProvider,
             ConfigProvider.fromEnv({
@@ -3296,7 +3299,7 @@ describe("background shell through a cell", () => {
         const file = savedOutputFile(text)
         expect(path.isAbsolute(file)).toBe(true)
         expect(file.startsWith(`${dataDir}/background-bash/`)).toBe(true)
-        const saved = yield* fs.readFileString(path.resolve("/tmp", file))
+        const saved = yield* fs.readFileString(file)
         expect(saved.trimEnd().split("\n")).toHaveLength(hugeLineCount)
       }).pipe(Effect.timeout("20 seconds")),
     30_000,
@@ -3312,8 +3315,9 @@ describe("background shell through a cell", () => {
         // A data directory that is a file: no job file can go under it.
         const dataDir = path.join(home, "not-a-directory")
         yield* fs.writeFileString(dataDir, "")
+        const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "gent-test-cwd-" })
         const text = yield* hugeBackgroundNotice([
-          RuntimeEnvironment.Live({ cwd: "/tmp", home }),
+          RuntimeEnvironment.Live({ cwd, home }),
           Layer.succeed(
             ConfigProvider.ConfigProvider,
             ConfigProvider.fromEnv({ env: { GENT_DATA_DIR: dataDir } }),
@@ -3622,13 +3626,14 @@ describe("BashTool execution", () => {
     "respects cwd parameter",
     () =>
       Effect.gen(function* () {
-        const result = yield* provideBun(
-          runToolWithCtx(BashTool, { command: "pwd", cwd: "/tmp" }, stubCtx),
-        )
+        const fs = yield* FileSystem.FileSystem
+        const cwd = yield* makeTempDirectoryScoped("gent-test-cwd-")
+        const result = yield* provideBun(runToolWithCtx(BashTool, { command: "pwd", cwd }, stubCtx))
 
-        expect(result.stdout.trim()).toMatch(/\/tmp$/)
+        // the temp root may resolve through a symlink (/private/tmp on macOS)
+        expect(result.stdout.trim()).toBe(yield* fs.realPath(cwd))
         expect(result.exitCode).toBe(0)
-      }).pipe(withProcessTimeout),
+      }).pipe(withProcessTimeout, Effect.scoped, Effect.provide(BunFileSystem.layer)),
     processTestTimeout,
   )
 
@@ -3994,7 +3999,7 @@ describe("BashTool execution", () => {
           BashTool,
           {
             command: "printf should-not-run",
-            cwd: "/tmp/gent-missing-cwd",
+            cwd: "/nonexistent/gent-missing-cwd",
             run_in_background: true,
           },
           ctx,

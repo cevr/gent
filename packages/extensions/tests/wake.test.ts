@@ -115,18 +115,19 @@ const answered = (messages: ReadonlyArray<MessageLike>, text: string): boolean =
 const restartedSession = (home: string) =>
   Effect.gen(function* () {
     const directory = yield* makeTempDirectoryScoped("wake-db-")
+    const cwd = yield* makeTempDirectoryScoped("gent-test-cwd-")
     const layerFor = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) =>
       createE2ELayer({
         ...e2ePreset,
         providerLayer,
         storagePath: `${directory}/gent.db`,
-        extraLayers: [RuntimeEnvironment.Live({ cwd: "/tmp", home })],
+        extraLayers: [RuntimeEnvironment.Live({ cwd, home })],
       })
     const { layer: firstProvider } = yield* LanguageModelLayers.sequence([textStep("hello")])
     const ids = yield* Effect.scoped(
       Effect.gen(function* () {
         const { client } = yield* createRpcClient(layerFor(firstProvider))
-        const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+        const { sessionId, branchId } = yield* client.session.create({})
         yield* client.message.send({ sessionId, branchId, content: "hi" })
         yield* waitFor(
           client.session.getSnapshot({ sessionId, branchId }),
@@ -471,6 +472,7 @@ describe("wake", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const home = yield* makeTempDirectoryScoped("wake-restart-")
+          const cwd = yield* makeTempDirectoryScoped("gent-test-cwd-")
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
             textStep("hello again"),
             textStep("checked the build as the alarm asked"),
@@ -478,7 +480,7 @@ describe("wake", () => {
           const { client, sessionId, branchId } = yield* createRpcHarness({
             ...e2ePreset,
             providerLayer,
-            extraLayers: [RuntimeEnvironment.Live({ cwd: "/tmp", home })],
+            extraLayers: [RuntimeEnvironment.Live({ cwd, home })],
           })
           const fs = yield* FileSystem.FileSystem
           yield* fs.makeDirectory(`${home}/.gent/wakes`, { recursive: true })
@@ -1023,13 +1025,14 @@ describe("notices", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const home = yield* makeTempDirectoryScoped("wake-no-file-")
+          const cwd = yield* makeTempDirectoryScoped("gent-test-cwd-")
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
             textStep("nothing to wake"),
           ])
           const { client, sessionId, branchId } = yield* createRpcHarness({
             ...e2ePreset,
             providerLayer,
-            extraLayers: [RuntimeEnvironment.Live({ cwd: "/tmp", home })],
+            extraLayers: [RuntimeEnvironment.Live({ cwd, home })],
           })
           yield* client.message.send({ sessionId, branchId, content: "hi" })
           yield* waitFor(
@@ -1121,6 +1124,7 @@ describe("notices", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const home = yield* makeTempDirectoryScoped("wake-blocked-once-")
+          const cwd = yield* makeTempDirectoryScoped("gent-test-cwd-")
           const requests: Array<{ readonly systemPrompt: string; readonly notices: string }> = []
           let calls = 0
           const providerLayer = LanguageModelLayers.testStream((options) => {
@@ -1131,7 +1135,7 @@ describe("notices", () => {
           const { client, sessionId, branchId } = yield* createRpcHarness({
             ...e2ePreset,
             providerLayer,
-            extraLayers: [RuntimeEnvironment.Live({ cwd: "/tmp", home })],
+            extraLayers: [RuntimeEnvironment.Live({ cwd, home })],
           })
           const fs = yield* FileSystem.FileSystem
           const file = `${home}/.gent/wakes/${branchId}.json`
@@ -1536,7 +1540,7 @@ describe("monitor recovery and deadline", () => {
         const home = yield* makeTempDirectoryScoped("wake-monitor-hang-until-")
         const queued = yield* Ref.make<ReadonlyArray<string>>([])
         const fired = yield* Deferred.make<boolean>()
-        const ctx = contextWith(home, queued, Option.some(fired))
+        const ctx = { ...contextWith(home, queued, Option.some(fired)), cwd: home }
         yield* runToolWithCtx(
           MonitorTool,
           {

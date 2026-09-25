@@ -210,7 +210,10 @@ describe("sessionQuery", () => {
  * restate no-op callbacks.
  */
 
-const workspace = { cwd: "/tmp/client-runtime-cwd", home: "/nonexistent/client-runtime-home" }
+const workspace = {
+  cwd: "/nonexistent/client-runtime-cwd",
+  home: "/nonexistent/client-runtime-home",
+}
 const mockRuntime = createMockRuntime()
 const runCast = { cast: mockRuntime.cast, pane: makePaneSlot() }
 const session = { sessionId: SessionId.make("sess-1"), branchId: BranchId.make("branch-1") }

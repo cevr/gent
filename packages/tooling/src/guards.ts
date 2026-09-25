@@ -883,16 +883,19 @@ export const findRepoTempDirectories = (file: string, text: string): ReadonlyArr
 }
 
 /**
- * Guard: a test's home or data directory is its own.
+ * Guard: a test's home, data directory and working directory are its own.
  *
  * A fixed path under the shared temp root (`/tmp`, `/var/tmp`,
- * `/private/tmp`, `/dev/shm`, or `tmpdir()` itself) given as a test's home or
- * data directory is shared by every run and every parallel gate: what one
- * test writes there (prompt history, goal and wake files, a skills cache),
- * the next one reads, so a result depends on run order. Reported in test code,
- * and in the test layers of product source (`GentPlatform.Test`; see
- * `sharedHomeScanCode`), both outside the tooling package, at a `home`, `HOME`, `homeDir`,
- * `homeDirectory`, `dataDir` or `GENT_DATA_DIR` name given a value with `:` or
+ * `/private/tmp`, `/dev/shm`, or `tmpdir()` itself) given as a test's home,
+ * data directory, working directory or extension directory is shared by every
+ * run and every parallel gate: what one test writes there (prompt history,
+ * goal and wake files, a skills cache, `<cwd>/.gent/prompts`), the next one
+ * reads (`<cwd>/.gent/extensions`, `<cwd>/AGENTS.md`), so a result depends on
+ * run order. Reported in test code, and in the test layers of product source
+ * (`GentPlatform.Test`; see `sharedHomeScanCode`), both outside the tooling
+ * package, at a `home`, `HOME`, `homeDir`, `homeDirectory`, `dataDir`,
+ * `GENT_DATA_DIR`, `cwd` (or a `…Cwd` name such as `sessionCwd`), `userDir`
+ * or `projectDir` name given a value with `:` or
  * `=`. The value is read as an expression, not as the rest of the line: it
  * may start on the next line, and it ends at a `,`, `;`, closing bracket or
  * line end outside its own brackets, strings and template interpolations, so
@@ -904,11 +907,12 @@ export const findRepoTempDirectories = (file: string, text: string): ReadonlyArr
  * a binding, a parameter default (`home: string = "/tmp"`), a fallback
  * (`home: overrides ?? "/tmp"`) and a wrapped value
  * (`homeDirectory: Effect.succeed("/tmp")`) alike. A test that writes there
- * takes `makeTempDirectoryScoped`; a test that only names a home takes a path
- * no test can create, such as `/nonexistent/<name>`.
+ * takes `makeTempDirectoryScoped`; a test that only names a directory (a
+ * workspace label, a profile key) takes a path no test can create, such as
+ * `/nonexistent/<name>`.
  */
 const SHARED_HOME_KEY =
-  /\b(?:home|HOME|homeDir|homeDirectory|dataDir|GENT_DATA_DIR)\b\s*(?::|=(?![=>]))/g
+  /\b(?:home|HOME|homeDir|homeDirectory|dataDir|GENT_DATA_DIR|cwd|[a-z]\w*Cwd|userDir|projectDir)\b\s*(?::|=(?![=>]))/g
 
 const SHARED_TEMP_ROOT = /["'`](?:(?:\/private)?(?:\/var)?\/tmp|\/dev\/shm)(?=[/"'`$])/
 
@@ -917,7 +921,7 @@ const TEMP_ROOT_CALL = /\btmpdir\(\)/
 const UNIQUE_TEMP_CALL = /\b(?:mkdtemp|makeTempDirectory)/
 
 const SHARED_TEMP_HOME_MESSAGE =
-  "a test home or data directory under the shared temp root is shared by every run and parallel gate; use `makeTempDirectoryScoped` when the test writes there, or a `/nonexistent/<name>` path when it only names one"
+  "a test home, data directory or working directory under the shared temp root is shared by every run and parallel gate; use `makeTempDirectoryScoped` (or the harness default cwd) when the test reads or writes there, or a `/nonexistent/<name>` path when it only names one"
 
 /**
  * One step over a value expression: past a string or a one-line template (a

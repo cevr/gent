@@ -182,7 +182,7 @@ export const testExtensionHostContext = (
 ): ExtensionHostContext => ({
   sessionId: overrides.sessionId ?? SessionId.make("test-session"),
   branchId: overrides.branchId ?? BranchId.make("test-branch"),
-  cwd: overrides.cwd ?? "/tmp",
+  cwd: overrides.cwd ?? "/nonexistent/gent-test-cwd",
   home: overrides.home ?? "/nonexistent/gent-test-home",
   host: overrides.host ?? testExtensionHostPlatform(overrides.home),
   agentName: overrides.agentName,
@@ -195,13 +195,14 @@ export const testExtensionHostContext = (
 // ── test-root ───────────────────────────────────────────────────────────────
 
 /**
- * What the test composition root shares with its presets: a `/tmp` working
- * directory, a home of its own (see `createE2ELayer`), a deterministic server
- * identity, and an agents extension. `createE2ELayer` is the one root; the
- * in-process layer and the RPC harness are presets over it.
+ * What the test composition root shares with its presets: a working
+ * directory and a home of its own (see `createE2ELayer`), a deterministic
+ * server identity, and an agents extension. `createE2ELayer` is the one root;
+ * the in-process layer and the RPC harness are presets over it. The stub
+ * contexts above (`testExtensionHostContext`, `testToolContext`,
+ * `testHostFacts`) have no scope to make a directory in, so their default cwd
+ * is a path no test can create; a test that touches files passes its own.
  */
-
-const testEnvironment = { cwd: "/tmp", platform: "test" }
 
 const testAgentsExtension = (agents: ReadonlyArray<AgentDefinition>) =>
   defineExtension({
@@ -280,7 +281,7 @@ export const testToolContext = (overrides?: TestToolContextOverrides): TestToolC
     sessionId: SessionId.make("test-session"),
     branchId: BranchId.make("test-branch"),
     toolCallId: ToolCallId.make("test-call"),
-    cwd: "/tmp",
+    cwd: "/nonexistent/gent-test-cwd",
     home: "/nonexistent/gent-test-home",
     host,
     Session: resolvedSession,
@@ -451,7 +452,7 @@ interface TestExtensionHostFacts {
 export const testHostFacts = (
   overrides?: Partial<Pick<TestExtensionHostFacts, "cwd" | "home">>,
 ): TestExtensionHostFacts => ({
-  cwd: overrides?.cwd ?? "/tmp",
+  cwd: overrides?.cwd ?? "/nonexistent/gent-test-cwd",
   home: overrides?.home ?? "/nonexistent/gent-test-home",
   host: testExtensionHostPlatform(overrides?.home),
 })
@@ -582,8 +583,8 @@ const hostRun = (run: HarnessRun) => ({
  * builds them before it dispatches a tool.
  */
 export const captureTurnTools = Effect.fn("test.captureTurnTools")(function* (run: HarnessRun) {
-  const profile = yield* (yield* SessionProfileCache).resolve(run.sessionCwd ?? "/tmp")
   const environment = yield* RuntimeEnvironment
+  const profile = yield* (yield* SessionProfileCache).resolve(run.sessionCwd ?? environment.cwd)
   const hostProvider = yield* makeExtensionHostContextProvider({
     host: testHostFacts({ cwd: environment.cwd, home: environment.home }).host,
   })
@@ -729,6 +730,11 @@ export interface E2ELayerConfig {
   readonly durableApproval?: boolean
   /** File-backed SQLite path for restart/recovery tests. Defaults to in-memory SQLite. */
   readonly storagePath?: string
+  /**
+   * The runtime's working directory. Defaults to a temp directory of the
+   * layer's own, made beside its home and removed with it.
+   */
+  readonly cwd?: string
   /** Optional per-cwd profile cache for per-workspace routing tests. */
   readonly sessionProfileCacheLayer?: Layer.Layer<SessionProfileCache>
   /** Extra layers to merge (e.g., additional service overrides) */
@@ -841,29 +847,36 @@ const approvalOverrideForConfig = (config: E2ELayerConfig) => {
  * event publishing, interaction recovery, and session runtime wiring flow
  * through `createDependencies`, the root the SDK builds.
  *
- * Each layer gets its own temp home, removed when the layer's scope closes:
- * the extensions write goal, wake and delegate files under it, and a
- * shared home would hand one test's files to the next.
+ * Each layer gets its own temp home and temp working directory, removed when
+ * the layer's scope closes: the extensions write goal, wake and delegate
+ * files under the home and prompt files under `<cwd>/.gent`, and a session
+ * reads project extensions, skills and `AGENTS.md` from its cwd. A shared
+ * directory would hand one test's files to the next.
  */
 export const createE2ELayer = (config: E2ELayerConfig) => {
   let toolRunnerLayer = Option.none<Layer.Layer<ToolRunner>>()
   if (config.toolRunner === "test") toolRunnerLayer = Option.some(ToolRunner.Test())
 
   return Layer.unwrap(
-    Effect.map(makeTempDirectoryScoped("gent-test-home-"), (home) =>
-      e2eDependencies(config, home, toolRunnerLayer),
-    ),
+    Effect.gen(function* () {
+      const home = yield* makeTempDirectoryScoped("gent-test-home-")
+      const cwd = yield* Option.match(Option.fromUndefinedOr(config.cwd), {
+        onNone: () => makeTempDirectoryScoped("gent-test-cwd-"),
+        onSome: Effect.succeed,
+      })
+      return e2eDependencies(config, { cwd, home }, toolRunnerLayer)
+    }),
   ).pipe(Layer.provide(BunPlatformLive))
 }
 
 const e2eDependencies = (
   config: E2ELayerConfig,
-  home: string,
+  directories: { readonly cwd: string; readonly home: string },
   toolRunnerLayer: Option.Option<Layer.Layer<ToolRunner>>,
 ) =>
   createDependencies({
-    ...testEnvironment,
-    home,
+    ...directories,
+    platform: "test",
     state: Option.match(Option.fromUndefinedOr(config.storagePath), {
       onNone: () => StateLocation.cases.Memory.make({}),
       onSome: (dbPath) => StateLocation.cases.Disk.make({ dbPath }),
@@ -929,8 +942,8 @@ export const baseLocalLayer = (config: InProcessLayerConfig) =>
  *
  * The harness is intentionally thin: it folds the four lines every RPC test
  * already writes (build E2E layer → createRpcClient → session.create → return
- * client + ids) into a single yield. Pass `cwd` to override the default
- * `/tmp` working directory.
+ * client + ids) into a single yield. The seeded session runs in the layer's
+ * own temp working directory; pass `cwd` to seed it elsewhere.
  *
  * The harness is exposed as `@gent/core/test-utils` so it can be imported from
  * any test file. Because `core` cannot reach into `@gent/extensions`, the
@@ -938,8 +951,11 @@ export const baseLocalLayer = (config: InProcessLayerConfig) =>
  * fragments callers already pass to `createE2ELayer`.
  */
 
-interface RpcHarnessConfig extends Omit<E2ELayerConfig, "toolRunner"> {
-  /** Working directory passed to the seeded session.create call. Defaults to `/tmp`. */
+interface RpcHarnessConfig extends Omit<E2ELayerConfig, "toolRunner" | "cwd"> {
+  /**
+   * Working directory passed to the seeded session.create call. Defaults to
+   * the layer's own temp working directory.
+   */
   readonly cwd?: string
   /** The seeded session's agent, run spec and interactivity; its turns all run under it. */
   readonly admission?: SessionAdmission
@@ -960,9 +976,10 @@ interface RpcHarnessConfig extends Omit<E2ELayerConfig, "toolRunner"> {
 export const createRpcHarness = (config: RpcHarnessConfig) =>
   Effect.gen(function* () {
     const { cwd, admission, ...layerConfig } = config
-    const { client } = yield* createRpcClient(createE2ELayer(layerConfig))
+    const layerCwd = yield* makeTempDirectoryScoped("gent-test-cwd-")
+    const { client } = yield* createRpcClient(createE2ELayer({ ...layerConfig, cwd: layerCwd }))
     const { sessionId, branchId } = yield* client.session.create({
-      cwd: cwd ?? "/tmp",
+      cwd: cwd ?? layerCwd,
       ...omitUndefined({ admission }),
     })
     return { client, sessionId, branchId }

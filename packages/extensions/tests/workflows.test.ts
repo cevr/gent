@@ -238,7 +238,6 @@ describe("WorkflowsExtension via RPC", () => {
             providerLayer,
           })
           const child = yield* client.session.create({
-            cwd: "/tmp",
             parentSessionId: sessionId,
             parentBranchId: branchId,
           })

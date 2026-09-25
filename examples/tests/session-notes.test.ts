@@ -78,7 +78,7 @@ describe("session notes reference extension", () => {
         expect(yield* summary()).toBe("1. ship the authoring loop")
 
         // Notes belong to the session that wrote them; another session in the same process has none.
-        const other = yield* client.session.create({ cwd: "/tmp" })
+        const other = yield* client.session.create({})
         const otherSummary = yield* client.extension.request({
           sessionId: other.sessionId,
           branchId: other.branchId,

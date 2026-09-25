@@ -644,7 +644,7 @@ describe("session command persistence", () => {
       const sessions = yield* SessionStorage
       const branches = yield* BranchStorage
 
-      const exit = yield* Effect.exit(mutations.createSession({ cwd: "/tmp/rollback" }))
+      const exit = yield* Effect.exit(mutations.createSession({ cwd: "/nonexistent/rollback" }))
 
       expect(exit._tag).toBe("Failure")
       expect(yield* sessions.listSessions).toHaveLength(0)
@@ -1165,14 +1165,14 @@ describe("session.delete", () => {
         const mutations = yield* SessionMutations
         const eventStore = yield* EventStore
 
-        const parent = yield* mutations.createSession({ cwd: "/tmp/delete-parent" })
+        const parent = yield* mutations.createSession({ cwd: "/nonexistent/delete-parent" })
         const child = yield* mutations.createSession({
-          cwd: "/tmp/delete-child",
+          cwd: "/nonexistent/delete-child",
           parentSessionId: parent.sessionId,
           parentBranchId: parent.branchId,
         })
         const grandchild = yield* mutations.createSession({
-          cwd: "/tmp/delete-grandchild",
+          cwd: "/nonexistent/delete-grandchild",
           parentSessionId: child.sessionId,
           parentBranchId: child.branchId,
         })
@@ -1215,7 +1215,7 @@ describe("session.delete", () => {
         const mutations = yield* SessionMutations
         const sessions = yield* SessionStorage
 
-        const parent = yield* mutations.createSession({ cwd: "/tmp/race-parent" })
+        const parent = yield* mutations.createSession({ cwd: "/nonexistent/race-parent" })
 
         yield* mutations.deleteSession(parent.sessionId)
 
@@ -1260,7 +1260,7 @@ describe("session.delete", () => {
           sessions,
           branches,
           now,
-          cwd: "/tmp/mutation-delete-child",
+          cwd: "/nonexistent/mutation-delete-child",
           parentSessionId: parent.sessionId,
           parentBranchId: parent.branchId,
         })
@@ -2050,15 +2050,15 @@ describe("requestId idempotency", () => {
       const mutations = yield* SessionMutations
       const sessions = yield* SessionStorage
       const first = yield* mutations.createSession({
-        cwd: "/tmp/idem",
+        cwd: "/nonexistent/idem",
         requestId: "req-create-1",
       })
       const second = yield* mutations.createSession({
-        cwd: "/tmp/idem",
+        cwd: "/nonexistent/idem",
         requestId: "req-create-1",
       })
       const third = yield* mutations.createSession({
-        cwd: "/tmp/idem",
+        cwd: "/nonexistent/idem",
         requestId: "req-create-1",
       })
       expect(second.sessionId).toBe(first.sessionId)
@@ -2095,7 +2095,7 @@ describe("requestId idempotency", () => {
         const create = (registry: Layer.Layer<ExtensionRegistry>, requestId: string) =>
           Effect.flatMap(SessionMutations, (mutations) =>
             mutations.createSession({
-              cwd: "/tmp/retry",
+              cwd: "/nonexistent/retry",
               admission: { agent: reviewer },
               requestId,
             }),
@@ -2132,7 +2132,7 @@ describe("requestId idempotency", () => {
         ])
         const layerContext = yield* Layer.build(ExtensionRegistry.fromResolved(resolved))
         const profile: SessionProfile = {
-          cwd: "/tmp/profiled",
+          cwd: "/nonexistent/profiled",
           resolved,
           layerContext,
           registryService: Context.get(layerContext, ExtensionRegistry),
@@ -2159,7 +2159,10 @@ describe("requestId idempotency", () => {
         // the service captured, not one from the caller's context.
         const create = (layer: typeof deps) =>
           Effect.flatMap(SessionMutations, (mutations) =>
-            mutations.createSession({ cwd: "/tmp/profiled", admission: { agent: reviewer } }),
+            mutations.createSession({
+              cwd: "/nonexistent/profiled",
+              admission: { agent: reviewer },
+            }),
           ).pipe(Effect.provide(Layer.provide(SessionMutationsLive, layer)))
         const created = yield* create(deps)
         expect(created.sessionId).toBeDefined()
@@ -2171,8 +2174,8 @@ describe("requestId idempotency", () => {
     Effect.gen(function* () {
       const mutations = yield* SessionMutations
       const sessions = yield* SessionStorage
-      const a = yield* mutations.createSession({ cwd: "/tmp/a", requestId: "req-a" })
-      const b = yield* mutations.createSession({ cwd: "/tmp/b", requestId: "req-b" })
+      const a = yield* mutations.createSession({ cwd: "/nonexistent/a", requestId: "req-a" })
+      const b = yield* mutations.createSession({ cwd: "/nonexistent/b", requestId: "req-b" })
       expect(a.sessionId).not.toBe(b.sessionId)
       expect((yield* sessions.listSessions).length).toBe(2)
     }).pipe(Effect.provide(sessionMutationsLayer), Effect.timeout("4 seconds")),
@@ -2188,9 +2191,9 @@ describe("requestId idempotency", () => {
       // fiber wins the write; the others `Deferred.await` its outcome.
       const results = yield* Effect.all(
         [
-          mutations.createSession({ cwd: "/tmp/conc", requestId: "req-conc-1" }),
-          mutations.createSession({ cwd: "/tmp/conc", requestId: "req-conc-1" }),
-          mutations.createSession({ cwd: "/tmp/conc", requestId: "req-conc-1" }),
+          mutations.createSession({ cwd: "/nonexistent/conc", requestId: "req-conc-1" }),
+          mutations.createSession({ cwd: "/nonexistent/conc", requestId: "req-conc-1" }),
+          mutations.createSession({ cwd: "/nonexistent/conc", requestId: "req-conc-1" }),
         ],
         { concurrency: "unbounded" },
       )
@@ -2406,7 +2409,7 @@ describe("requestId idempotency", () => {
         const { client } = yield* createRpcClient(
           createE2ELayer({ ...e2ePreset, providerLayer: LanguageModelLayers.debug() }),
         )
-        const created = yield* client.session.create({ cwd: "/tmp/rpc-branch-create-idem" })
+        const created = yield* client.session.create({ cwd: "/nonexistent/rpc-branch-create-idem" })
 
         const first = yield* client.branch.create({
           sessionId: created.sessionId,
@@ -2432,7 +2435,7 @@ describe("requestId idempotency", () => {
         const { client } = yield* createRpcClient(
           createE2ELayer({ ...e2ePreset, providerLayer: LanguageModelLayers.debug() }),
         )
-        const created = yield* client.session.create({ cwd: "/tmp/rpc-branch-switch-idem" })
+        const created = yield* client.session.create({ cwd: "/nonexistent/rpc-branch-switch-idem" })
         const target = yield* client.branch.create({
           sessionId: created.sessionId,
           name: "target",
@@ -2464,7 +2467,7 @@ describe("requestId idempotency", () => {
         const { client } = yield* createRpcClient(
           createE2ELayer({ ...e2ePreset, providerLayer: LanguageModelLayers.debug() }),
         )
-        const created = yield* client.session.create({ cwd: "/tmp/rpc-branch-fork-idem" })
+        const created = yield* client.session.create({ cwd: "/nonexistent/rpc-branch-fork-idem" })
         yield* client.message.send({
           sessionId: created.sessionId,
           branchId: created.branchId,
@@ -2508,7 +2511,7 @@ describe("requestId idempotency", () => {
         const { client } = yield* createRpcClient(
           createE2ELayer({ ...e2ePreset, providerLayer: LanguageModelLayers.debug() }),
         )
-        const created = yield* client.session.create({ cwd: "/tmp/rpc-steer-idem" })
+        const created = yield* client.session.create({ cwd: "/nonexistent/rpc-steer-idem" })
 
         const command = {
           _tag: "Interject",
@@ -2552,7 +2555,7 @@ describe("requestId idempotency", () => {
         const { client } = yield* createRpcClient(
           createE2ELayer({ ...e2ePreset, providerLayer: LanguageModelLayers.debug() }),
         )
-        const created = yield* client.session.create({ cwd: "/tmp/rpc-drain-idem" })
+        const created = yield* client.session.create({ cwd: "/nonexistent/rpc-drain-idem" })
         yield* client.steer.command({
           command: {
             _tag: "Interject",
@@ -2599,7 +2602,7 @@ describe("requestId idempotency", () => {
       const layer = makePersistentSessionMutationsLayer(dbPath)
       const create = Effect.gen(function* () {
         const mutations = yield* SessionMutations
-        return yield* mutations.createSession({ cwd: "/tmp/ttl", requestId: "req-ttl-1" })
+        return yield* mutations.createSession({ cwd: "/nonexistent/ttl", requestId: "req-ttl-1" })
       })
 
       const first = yield* create.pipe(Effect.provide(layer))
@@ -2623,13 +2626,13 @@ describe("requestId idempotency", () => {
       const mutations = yield* SessionMutations
       const sessions = yield* SessionStorage
       const first = yield* mutations.createSession({
-        cwd: "/tmp/ttl-mid",
+        cwd: "/nonexistent/ttl-mid",
         requestId: "req-ttl-mid",
       })
       // Advance well inside the 60s window — should still hit the cache.
       yield* TestClock.adjust("30 seconds")
       const second = yield* mutations.createSession({
-        cwd: "/tmp/ttl-mid",
+        cwd: "/nonexistent/ttl-mid",
         requestId: "req-ttl-mid",
       })
       expect(second.sessionId).toBe(first.sessionId)
@@ -2748,7 +2751,7 @@ describe("requestId idempotency", () => {
         Effect.gen(function* () {
           const mutations = yield* SessionMutations
           yield* mutations.createSession({
-            cwd: "/tmp/restart-create",
+            cwd: "/nonexistent/restart-create",
             requestId: "req-create-restart",
             initialPrompt: "stored prompt",
           })
@@ -2759,7 +2762,7 @@ describe("requestId idempotency", () => {
       const second = yield* Effect.gen(function* () {
         const mutations = yield* SessionMutations
         return yield* mutations.createSession({
-          cwd: "/tmp/restart-create",
+          cwd: "/nonexistent/restart-create",
           requestId: "req-create-restart",
           initialPrompt: "retry prompt should not win",
         })
@@ -3496,7 +3499,7 @@ describe("Session snapshot across RPC boundaries", () => {
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
           const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
 
-          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+          const { sessionId, branchId } = yield* client.session.create({})
 
           const before = yield* client.session.getSnapshot({ sessionId, branchId })
           yield* client.message.send({ sessionId, branchId, content: "hello" })

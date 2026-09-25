@@ -148,7 +148,10 @@ const makeRuntimeLayer = (
     recorderLayer,
     ToolRunner.Test(),
     ApprovalService.Test(),
-    RuntimeEnvironment.Live({ cwd: "/tmp", home: "/nonexistent/gent-test-home" }),
+    RuntimeEnvironment.Live({
+      cwd: "/nonexistent/gent-test-cwd",
+      home: "/nonexistent/gent-test-home",
+    }),
     ConfigService.Test(),
     BunServices.layer,
     ModelRegistry.Test(),
@@ -182,7 +185,10 @@ const makeLiveToolRuntimeLayer = (
     ExtensionRegistry.fromResolved(resolvedExtensions),
     eventStoreLayer,
     recorderLayer,
-    RuntimeEnvironment.Live({ cwd: "/tmp", home: "/nonexistent/gent-test-home" }),
+    RuntimeEnvironment.Live({
+      cwd: "/nonexistent/gent-test-cwd",
+      home: "/nonexistent/gent-test-home",
+    }),
     ConfigService.Test(),
     ApprovalService.Test(),
     BunServices.layer,
@@ -220,7 +226,7 @@ const createCwdSessionBranch = Effect.gen(function* () {
     new Session({
       id: sessionId,
       name: "Runtime Test With Cwd",
-      cwd: "/tmp/profile-breaks",
+      cwd: "/nonexistent/profile-breaks",
       createdAt: now,
       updatedAt: now,
     }),
@@ -1085,7 +1091,7 @@ describe("session metrics", () => {
       })
       return yield* Effect.gen(function* () {
         const { client } = yield* createRpcClient(layer)
-        const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+        const { sessionId, branchId } = yield* client.session.create({})
         for (const content of [`first ${"a".repeat(16_000)}`, `second ${"b".repeat(16_000)}`]) {
           yield* client.message.send({ sessionId, branchId, content })
           yield* waitFor(

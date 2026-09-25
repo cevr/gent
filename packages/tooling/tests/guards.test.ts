@@ -679,12 +679,25 @@ describe("shared test home checker", () => {
     expect(lines(source)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9])
   })
 
-  test("a scoped temp home, a path no test can create, or a cwd alone is not reported", () => {
+  test("a working or extension directory under the shared temp root is reported like a home", () => {
+    const source = [
+      'const { sessionId } = yield* client.session.create({ cwd: "/tmp" })',
+      'const alphaCwd = "/tmp/gent-alpha-profile"',
+      'loadClientExtensions({ userDir: "/tmp/user", projectDir: "/tmp/project" })',
+      '...(yield* runtimeHostContext({ ...parent, sessionCwd: "/tmp" })),',
+      "const facts = { cwd: tmpdir() }",
+    ].join("\n")
+    expect(lines(source)).toEqual([1, 2, 3, 4, 5])
+  })
+
+  test("a scoped temp home, a path no test can create, or a temp path under another name is not reported", () => {
     const source = [
       'const home = yield* fs.makeTempDirectoryScoped({ prefix: "gent-home-" })',
-      'const env = { cwd: "/tmp", home: "/nonexistent/gent-test-home" }',
-      'RuntimeEnvironment.Live({ home, cwd: "/tmp" })',
-      'RuntimeEnvironment.Live({ home: root, cwd: "/tmp" })',
+      'const env = { cwd: "/nonexistent/gent-test-cwd", home: "/nonexistent/gent-test-home" }',
+      "RuntimeEnvironment.Live({ home, cwd })",
+      'RuntimeEnvironment.Live({ home: root, cwd: yield* makeTempDirectoryScoped("gent-cwd-") })',
+      'const workspace = workspaceIdForCwd("/tmp/run-workspace")',
+      '{ extension, scope: "user", sourcePath: "/tmp/good.ts" }',
       'const home = mkdtempSync(join(tmpdir(), "gent-home-"))',
       'const homePage = "/tmp/page"',
       '// home: "/tmp" in a comment',
@@ -711,11 +724,11 @@ describe("shared test home checker", () => {
     const source = [
       'const home = mkdtempSync(join(tmpdir(), "gent-home-")); const opts = { directory: "/tmp" }',
       'const env = { home: yield* makeTempDirectoryScoped("gent-home-"), directory: "/tmp" }',
-      'const env2 = { home: root, cwd: "/tmp" }',
+      'const env2 = { home: root, directory: "/tmp" }',
       'const env3 = { home: yield* fs.makeTempDirectoryScoped({ directory: "/tmp" }) }',
       'const env4 = { home: mkdtempSync("/tmp/gent-home-") }',
       // A template is one value: its `'` opens no string that runs past the comma.
-      'const env5 = { home: `${root}/it\'s`, cwd: "/tmp" }',
+      'const env5 = { home: `${root}/it\'s`, directory: "/tmp" }',
     ]
     // Each alone too: a value read past its end would take a later line's `mkdtemp`.
     expect(source.flatMap((line) => lines(line))).toEqual([])
@@ -746,7 +759,7 @@ describe("shared test home checker", () => {
       "  readonly id: string",
       "}) =>",
       '  Layer.succeed(Actor, { home: "/tmp" })',
-      'const fallback = { home: "/tmp" }',
+      'const fallback = { home: "/tmp", cwd: "/tmp" }',
     ].join("\n")
     expect(lines(source, product)).toEqual([10, 21])
   })

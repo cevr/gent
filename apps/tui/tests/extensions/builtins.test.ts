@@ -717,7 +717,7 @@ describe("files popup finder", () => {
 const contextLayer = (deps: Partial<ClientContextDeps> = {}) =>
   makeClientContextLayer({
     transport: makeClientTestTransport({ currentSession: () => Option.none() }),
-    workspace: { cwd: "/tmp/test-cwd", home: "/nonexistent/test-home" },
+    workspace: { cwd: "/nonexistent/test-cwd", home: "/nonexistent/test-home" },
     shell: { cast: createMockRuntime().cast, pane: makePaneSlot() },
     ...deps,
   })
