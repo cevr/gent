@@ -847,6 +847,63 @@ export const findRepoTempDirectories = (file: string, text: string): ReadonlyArr
   })
 }
 
+// ── the loop prompts carry one SAFETY block ─────────────────────────────────
+
+/**
+ * Guard: the sweep and apply prompts of the architecture loop carry the same
+ * SAFETY block. Each agent reads only its own prompt, so a rule added to one
+ * copy leaves the other agents without it. The block is the `SAFETY` line and
+ * the `- ` lines that follow it.
+ */
+const SAFETY_PROMPTS: ReadonlyArray<string> = [
+  ".claude/skills/architecture-loop/prompts/apply.md",
+  ".claude/skills/architecture-loop/prompts/sweep.md",
+]
+
+const safetyBlock = (text: string): Option.Option<{ line: number; block: string }> => {
+  const lines = text.split("\n")
+  const start = lines.findIndex((line) => line.startsWith("SAFETY"))
+  if (start === -1) return Option.none()
+  const block: Array<string> = [lines[start] ?? ""]
+  for (const line of lines.slice(start + 1)) {
+    if (!line.startsWith("- ")) break
+    block.push(line)
+  }
+  return Option.some({ line: start + 1, block: block.join("\n") })
+}
+
+export const findSafetyBlockDrift = (
+  texts: ReadonlyMap<string, string>,
+): ReadonlyArray<Finding> => {
+  const blocks = SAFETY_PROMPTS.map((file) => ({
+    file,
+    found: Option.flatMap(Option.fromNullishOr(texts.get(file)), safetyBlock),
+  }))
+  const findings: Array<Finding> = []
+  for (const { file, found } of blocks) {
+    if (Option.isNone(found)) {
+      findings.push({
+        file,
+        line: 1,
+        message: "the loop prompt has no SAFETY block; copy it from the other prompt",
+      })
+    }
+  }
+  const present = blocks.flatMap(({ file, found }) =>
+    Option.match(found, { onNone: () => [], onSome: (value) => [{ file, ...value }] }),
+  )
+  const [first, ...others] = present
+  for (const other of others) {
+    if (other.block === first?.block) continue
+    findings.push({
+      file: other.file,
+      line: other.line,
+      message: `the SAFETY block differs from the one in ${first?.file}; edit both together`,
+    })
+  }
+  return findings
+}
+
 // ── the pre-commit hook runs the guards ─────────────────────────────────────
 
 /**
