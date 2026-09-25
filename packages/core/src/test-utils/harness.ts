@@ -142,6 +142,8 @@ const defaultSession = (): ExtensionSessionService => ({
   stopMessage: () => die("Session.stopMessage"),
   events: () => Stream.die("Session.events"),
   dequeueFollowUp: () => die("Session.dequeueFollowUp"),
+  // A test context runs outside a loop: there is no entity to hold.
+  holdResident: Effect.void,
   listBranches: die("Session.listBranches"),
   listSessions: () => die("Session.listSessions"),
   listActiveLoops: die("Session.listActiveLoops"),
@@ -279,6 +281,8 @@ export const testToolContext = (overrides?: TestToolContextOverrides): TestToolC
     stopMessage: dieStub("session.stopMessage"),
     events: () => Stream.die("session.events"),
     dequeueFollowUp: dieStub("session.dequeueFollowUp"),
+    // A test context runs outside a loop: there is no entity to hold.
+    holdResident: Effect.void,
     listBranches: dieEffect("session.listBranches"),
     listSessions: dieStub("session.listSessions"),
     listActiveLoops: dieEffect("session.listActiveLoops"),
@@ -636,6 +640,8 @@ export const runtimeHostContext = Effect.fn("test.runtimeHostContext")(function*
       send: (input) => runtime.sendUserMessage(input),
       steer: (command) => runtime.steer(command),
       stopMessage: (input) => stopMessageOn(input).pipe(Effect.provideContext(loopClient)),
+      // This leaf runs outside the branch loop: there is no entity to hold.
+      holdResident: Effect.void,
     },
   })
   return provider.forRun(hostRun(run))

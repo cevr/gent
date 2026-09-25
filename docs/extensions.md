@@ -147,6 +147,23 @@ refuses it: a turn that waits on its own loop never returns, so it takes
 `"queue"`. `ctx.Session.stop({ sessionId?, branchId?, messageId? })` stops a
 running turn.
 
+A branch's loop that nothing holds is passivated after about a minute idle,
+and the branch scope closes with it: a fiber forked into a branch resource
+stops. Work that must outlive an idle stretch, such as a pending timer, holds
+the loop with `ctx.Session.holdResident`, a scoped verb. The hold lasts until
+its scope closes, so a timer that holds for its whole life releases the loop
+when it fires or is cancelled:
+
+```ts
+const timer = ctx.Session.holdResident.pipe(
+  Effect.andThen(Effect.sleep("5 minutes")),
+  Effect.andThen(fire),
+  Effect.scoped,
+)
+```
+
+Outside a loop there is nothing to hold, and the verb does nothing.
+
 `ExtensionHost.host` is the only public host platform view at setup time. It
 exposes small, serializable facts such as OS info, executable path, and home
 directory.

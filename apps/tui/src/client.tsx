@@ -1411,8 +1411,13 @@ export function ClientProvider(props: ClientProviderProps) {
     Object.values(modelStore.modelsById).filter((model) =>
       modelStore.driverIds.includes(model.provider),
     )
+  // The agent's name, held as a memo. Every session snapshot writes a new
+  // `Option` for the agent (a reconnect refetches one), and a write of the
+  // same name is not a new agent: the effects keyed on it (the auth gate, the
+  // auth pane's catalog) must not run again and reset an open sign-in.
+  const agentName = createMemo(() => Option.getOrUndefined(agentStore.agent))
   const agentValue: ClientAgentValue = {
-    agent: () => Option.getOrUndefined(agentStore.agent),
+    agent: agentName,
     cost: () => agentStore.cost,
     model: () => {
       // The session setting applies before the snapshot refresh lands; the

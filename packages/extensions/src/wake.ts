@@ -534,6 +534,10 @@ const blockedNotice = (
  * close or a shutdown leaves the row for the next re-arm, and a cancel cleans
  * the file itself. A repeating alarm never settles; only a cancel ends it. An
  * id already running is left alone.
+ *
+ * A pending timer holds its branch's loop resident until it fires or is
+ * cancelled: an idle loop that nothing holds is passivated, and the branch
+ * scope the timer runs in closes with it.
  */
 const armEntry = Effect.fn("WakeTool.arm")(function* (entry: PendingWakeEntry) {
   const ctx = yield* ExtensionContext
@@ -547,7 +551,9 @@ const armEntry = Effect.fn("WakeTool.arm")(function* (entry: PendingWakeEntry) {
   const forget = modifyWakeEntries(dropPendingRow(entry.wakeId)).pipe(Effect.ignore)
   return yield* alarms.schedule(
     entry.wakeId,
-    work.pipe(
+    ctx.Session.holdResident.pipe(
+      Effect.andThen(work),
+      Effect.scoped,
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) return Effect.void
         return Effect.logWarning("wake.fire.failed").pipe(
