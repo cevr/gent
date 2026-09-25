@@ -4647,9 +4647,14 @@ const queueBackgroundFollowUp = (params: {
 // module learns how a job keeps its output. A settled job's output never
 // changes, so a file already written stays as it is.
 
-/** `<data dir>/background-bash/<sessionId>/<branchId>/<toolCallId>.txt`: one file per job key. */
+/**
+ * `<data dir>/background-bash/<sessionId>/<branchId>/<toolCallId>.txt`: one
+ * file per job key. The path is absolute: a relative `GENT_DATA_DIR` resolves
+ * against the server's cwd, as the database does, and the read tool resolves
+ * a relative path against the session cwd instead.
+ */
 const jobOutputFile = (path: Path.Path, dataDir: string, key: BackgroundBashJobKeyFields) =>
-  path.join(
+  path.resolve(
     dataDir,
     "background-bash",
     key.sessionId,
@@ -4682,53 +4687,53 @@ const saveJobOutput = Effect.fn("ExecTools.saveJobOutput")(function* (
 })
 
 /**
- * The head and tail of `message` within `maxChars`. A cut output also names
- * the file that holds all of it; the cut marker states the one omitted count.
+ * `message` within `maxChars`, the file line included. A cut output keeps its
+ * head and tail and names the file that holds all of it; the cut marker
+ * states the one omitted count.
  */
 const boundedJobOutput = Effect.fn("ExecTools.boundedJobOutput")(function* (
   file: string,
   message: string,
   maxChars: number,
 ) {
-  const bounded = headTailChars(message, maxChars)
-  if (!bounded.truncated) return bounded.text
+  if (message.length <= maxChars) return message
   const where = Option.match(yield* saveJobOutput(file, message), {
     onNone: () => "[The whole output could not be saved.]",
     onSome: (saved) =>
-      `[The whole output is in ${saved} (${bounded.totalChars} characters); page it with the read tool's offset and limit.]`,
+      `[The whole output is in ${saved} (${message.length} characters); page it with the read tool's offset and limit.]`,
   })
-  return `${bounded.text}\n\n${where}`
+  const cut = headTailChars(message, Math.max(0, maxChars - where.length - 2)).text
+  // A file line longer than the whole budget is cut too.
+  return headTailChars(`${cut}\n\n${where}`, maxChars).text
 })
+
+/** The longest command a follow-up notice repeats; the rest is cut from its middle. */
+const maximumFollowUpCommandChars = 1_000
 
 /**
  * Queues the settled job's message; false when the send was refused. The
- * notice is a user-role message, and core bounds only tool results, so it is
- * bounded here at the same budget.
+ * notice is a user-role message, and core bounds only tool results, so the
+ * whole notice, its frame included, is bounded here at the same budget.
  */
 const queueTerminalFollowUp = (target: BackgroundBashTarget, state: BackgroundBashTerminalState) =>
   Effect.gen(function* () {
-    const command = state.command
+    // An interrupted job wakes nobody: the next turn reads it as a notice.
+    if (state.status === "interrupted") return true
+    const command = headTailChars(state.command, maximumFollowUpCommandChars).text
+    let header = "Background command failed:"
+    let sourceId = `bash:${target.toolCallId}:failure`
+    if (state.status === "completed") {
+      header = `Background command completed (exit code ${state.exitCode ?? 0}):`
+      sourceId = `bash:${target.toolCallId}:complete`
+    }
+    const frame = (output: string) => `${header}\n\`\`\`\n$ ${command}\n${output}\n\`\`\``
     const path = yield* Path.Path
     const message = yield* boundedJobOutput(
       jobOutputFile(path, target.dataDir, target),
       state.message ?? "",
-      maximumModelToolResultChars,
+      maximumModelToolResultChars - frame("").length,
     )
-    if (state.status === "completed") {
-      const exitCode = state.exitCode ?? 0
-      return yield* queueBackgroundFollowUp({
-        target,
-        sourceId: `bash:${target.toolCallId}:complete`,
-        content: `Background command completed (exit code ${exitCode}):\n\`\`\`\n$ ${command}\n${message}\n\`\`\``,
-      })
-    }
-    // An interrupted job wakes nobody: the next turn reads it as a notice.
-    if (state.status === "interrupted") return true
-    return yield* queueBackgroundFollowUp({
-      target,
-      sourceId: `bash:${target.toolCallId}:failure`,
-      content: `Background command failed:\n\`\`\`\n$ ${command}\n${message}\n\`\`\``,
-    })
+    return yield* queueBackgroundFollowUp({ target, sourceId, content: frame(message) })
   })
 
 // ── job notices ──

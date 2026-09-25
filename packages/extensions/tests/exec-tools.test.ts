@@ -1,6 +1,7 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import {
   Clock,
+  ConfigProvider,
   Deferred,
   Effect,
   Exit,
@@ -2942,78 +2943,117 @@ describe("background shell through a cell", () => {
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
         const home = yield* fs.makeTempDirectoryScoped({ prefix: "gent-bg-output-" })
-        // Far past the model-facing bound, so the notice must be cut.
-        const lineCount = 4000
-        const input = yield* Schema.encodeEffect(Schema.fromJsonString(BashParams))({
-          command: `seq 1 ${lineCount} | sed 's/^/line /'`,
-          run_in_background: true,
-        })
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-          toolCallStep("cell", { code: `await tools.bash(${input})` }),
-          textStep("started"),
-          textStep("received completion"),
-        ])
-        const { client, sessionId, branchId } = yield* createRpcHarness({
-          ...shippedPreset,
-          providerLayer,
-          durableApproval: true,
-          extraLayers: [RuntimeEnvironment.Live({ cwd: "/tmp", home })],
-        })
-        const notice = yield* client.session.events({ sessionId, branchId }).pipe(
-          Stream.filter(
-            ({ event }) =>
-              event._tag === "MessageReceived" &&
-              event.message.parts.some(
-                (part) =>
-                  part.type === "text" &&
-                  part.text.includes("Background command completed (exit code 0)"),
-              ),
-          ),
-          Stream.map(({ event }) => {
-            if (event._tag !== "MessageReceived") return ""
-            return event.message.parts
-              .map((part) => {
-                if (part.type === "text") return part.text
-                return ""
-              })
-              .join("")
-          }),
-          Stream.take(1),
-          Stream.runCollect,
-          Effect.forkScoped,
-        )
-        const completed = yield* client.session.events({ sessionId, branchId }).pipe(
-          Stream.filter(({ event }) => event._tag === "TurnCompleted"),
-          Stream.take(1),
-          Stream.runDrain,
-          Effect.forkScoped,
-        )
-        yield* client.message.send({
-          sessionId,
-          branchId,
-          content: "Run the big background shell test",
-        })
-        yield* Fiber.join(completed)
-        const text = Array.from(yield* Fiber.join(notice)).join("")
+        const text = yield* hugeBackgroundNotice([RuntimeEnvironment.Live({ cwd: "/tmp", home })])
 
-        // The user-role notice carries a bounded copy, not the whole output.
-        expect(text.length).toBeLessThan(maximumModelToolResultChars * 2)
+        // The whole user-role notice, the file line included, fits the bound.
+        expect(text.length).toBeLessThanOrEqual(maximumModelToolResultChars)
         // Head and tail both survive; the middle is cut.
         expect(text).toContain("line 1\n")
-        expect(text).toContain(`line ${lineCount}`)
-        expect(text).not.toContain(`line ${lineCount / 2}\n`)
+        expect(text).toContain(`line ${hugeLineCount}`)
+        expect(text).not.toContain(`line ${hugeLineCount / 2}\n`)
         // One omitted count: the cut marker's.
         expect(text.match(/\d+ (of \d+ )?characters (truncated|omitted)/g)).toHaveLength(1)
         // The notice names a file under the data directory that a read
         // reaches, and the file holds the whole output, the cut middle too.
-        const file = /The whole output is in (\S+) /.exec(text)?.[1] ?? ""
+        const file = savedOutputFile(text)
         expect(file.startsWith(`${home}/.gent/background-bash/`)).toBe(true)
         const saved = yield* fs.readFileString(file)
-        expect(saved).toContain(`line ${lineCount / 2}\n`)
-        expect(saved.trimEnd().split("\n")).toHaveLength(lineCount)
+        expect(saved).toContain(`line ${hugeLineCount / 2}\n`)
+        expect(saved.trimEnd().split("\n")).toHaveLength(hugeLineCount)
       }).pipe(Effect.timeout("20 seconds")),
     30_000,
   )
+
+  // The read tool resolves a relative path against the session cwd, not the
+  // server's, so the notice names the file by its absolute path.
+  it.scopedLive.layer(BunServices.layer)(
+    "a relative data directory still gives the notice an absolute file path",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const home = yield* fs.makeTempDirectoryScoped({ prefix: "gent-bg-output-" })
+        const dataDir = yield* fs.makeTempDirectoryScoped({ prefix: "gent-bg-data-" })
+        const text = yield* hugeBackgroundNotice([
+          RuntimeEnvironment.Live({ cwd: "/tmp", home }),
+          Layer.succeed(
+            ConfigProvider.ConfigProvider,
+            ConfigProvider.fromEnv({
+              env: { GENT_DATA_DIR: path.relative(process.cwd(), dataDir) },
+            }),
+          ),
+        ])
+        const file = savedOutputFile(text)
+        expect(path.isAbsolute(file)).toBe(true)
+        expect(file.startsWith(`${dataDir}/background-bash/`)).toBe(true)
+        const saved = yield* fs.readFileString(path.resolve("/tmp", file))
+        expect(saved.trimEnd().split("\n")).toHaveLength(hugeLineCount)
+      }).pipe(Effect.timeout("20 seconds")),
+    30_000,
+  )
+})
+
+/** Far past the model-facing bound, so the notice must be cut. */
+const hugeLineCount = 4000
+
+/** The file a cut notice names; empty when it names none. */
+const savedOutputFile = (text: string) => /The whole output is in (\S+) /.exec(text)?.[1] ?? ""
+
+/** The completion notice of a background job whose output is far past the bound. */
+const hugeBackgroundNotice = Effect.fn("test.hugeBackgroundNotice")(function* (
+  extraLayers: ReadonlyArray<Layer.Layer<never>>,
+) {
+  const input = yield* Schema.encodeEffect(Schema.fromJsonString(BashParams))({
+    command: `seq 1 ${hugeLineCount} | sed 's/^/line /'`,
+    run_in_background: true,
+  })
+  const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+    toolCallStep("cell", { code: `await tools.bash(${input})` }),
+    textStep("started"),
+    textStep("received completion"),
+  ])
+  const { client, sessionId, branchId } = yield* createRpcHarness({
+    ...shippedPreset,
+    providerLayer,
+    durableApproval: true,
+    extraLayers,
+  })
+  const notice = yield* client.session.events({ sessionId, branchId }).pipe(
+    Stream.filter(
+      ({ event }) =>
+        event._tag === "MessageReceived" &&
+        event.message.parts.some(
+          (part) =>
+            part.type === "text" &&
+            part.text.includes("Background command completed (exit code 0)"),
+        ),
+    ),
+    Stream.map(({ event }) => {
+      if (event._tag !== "MessageReceived") return ""
+      return event.message.parts
+        .map((part) => {
+          if (part.type === "text") return part.text
+          return ""
+        })
+        .join("")
+    }),
+    Stream.take(1),
+    Stream.runCollect,
+    Effect.forkScoped,
+  )
+  const completed = yield* client.session.events({ sessionId, branchId }).pipe(
+    Stream.filter(({ event }) => event._tag === "TurnCompleted"),
+    Stream.take(1),
+    Stream.runDrain,
+    Effect.forkScoped,
+  )
+  yield* client.message.send({
+    sessionId,
+    branchId,
+    content: "Run the big background shell test",
+  })
+  yield* Fiber.join(completed)
+  return Array.from(yield* Fiber.join(notice)).join("")
 })
 
 const stubCtx = testToolContext({
