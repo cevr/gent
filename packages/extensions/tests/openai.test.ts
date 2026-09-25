@@ -920,7 +920,8 @@ describe("OpenAI device-code login", () => {
         const flow = yield* authorizeOpenAIDevice
         expect(flow.authorization.method).toBe("auto")
         expect(flow.authorization.url).toBe("https://auth.openai.com/codex/device")
-        expect(flow.authorization.instructions).toContain("ABCD-1234")
+        // The code stands on its own line, so no wrap splits it.
+        expect(flow.authorization.instructions?.split("\n")).toContain("ABCD-1234")
         expect(state.calls[0]?.body).toContain("app_EMoamEEZ73f0CkXaXp7hrann")
 
         const fiber = yield* Effect.forkChild(flow.callback())

@@ -777,7 +777,8 @@ export const authorizeOpenAIDevice: Effect.Effect<
     authorization: {
       url: DEVICE_VERIFY_URL,
       method: "auto",
-      instructions: `Open ${DEVICE_VERIFY_URL} and enter code: ${auth.user_code}`,
+      // The code stands on its own line: a wrap must never split it.
+      instructions: `Open the URL and enter this code:\n${auth.user_code}`,
     },
     callback,
   } satisfies OpenAIAuthorizationFlow

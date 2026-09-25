@@ -171,6 +171,19 @@ describe("auth-state", () => {
     expect(transitionAuth(key, { _tag: "OAuthAutoFailed", error: "late" })).toEqual(key)
   })
 
+  test("a missing browser keeps the oauth screen waiting and says so", () => {
+    const state = transitionAuth(openOAuth(autoAuthorization), { _tag: "BrowserUnavailable" })
+
+    expect(state.screen).toMatchObject({ _tag: "OAuth", waiting: true, browserUnavailable: true })
+    expect(state.error).toEqual(Option.none())
+  })
+
+  test("a missing browser reported on another screen changes nothing", () => {
+    const state = loaded()
+
+    expect(transitionAuth(state, { _tag: "BrowserUnavailable" })).toEqual(state)
+  })
+
   test("closing a screen returns to the list and clears the error", () => {
     const failed = transitionAuth(loaded(), { _tag: "Failed", error: "bad key" })
     const closed = transitionAuth(failed, { _tag: "Close" })
@@ -786,5 +799,119 @@ describe("Auth route", () => {
       ])
       setup.renderer.destroy()
     }),
+  )
+
+  // ── browser unavailable ───────────────────────────────────────────
+  //
+  // Opening a browser is a convenience. On a machine without one (a
+  // headless box, where the device-code flow exists for exactly this) a
+  // failed open keeps the flow: the pane shows what to open and keeps
+  // waiting.
+
+  const noBrowser = (url: string) =>
+    Effect.fail(
+      new LinkOpenerError({
+        message: `Failed to open URL: ${url}: /usr/bin/xdg-open: no method available`,
+      }),
+    )
+
+  const openaiOnly = [
+    { provider: "openai", hasKey: false, required: false, source: "none", authType: absent },
+  ]
+
+  /** The frame's panel text, borders and padding removed, lines joined. */
+  const panelText = (frame: string) =>
+    frame
+      .split("\n")
+      .map((line) => line.replace(/[│┃║|]/g, "").trim())
+      .join("")
+
+  it.scopedLive("a device-code flow without a browser shows the url and the user code", () =>
+    Effect.gen(function* () {
+      const callbackCalls: Array<{ provider: string; authorizationId: string }> = []
+      const client = createMockClient({
+        auth: {
+          listProviders: () => Effect.succeed(openaiOnly),
+          listMethods: () =>
+            Effect.succeed({
+              openai: [{ label: "ChatGPT Pro/Plus (device code)", type: "oauth" }],
+            }),
+          authorize: () =>
+            Effect.succeed({
+              authorizationId: "auth-device",
+              url: "https://auth.openai.com/codex/device",
+              method: "auto",
+              instructions: "Open the URL and enter this code:\nWXYZ-1234",
+            }),
+          // The device poll is still pending: the user has not entered the code.
+          callback: (input: { provider: string; authorizationId: string }) =>
+            Effect.sync(() => callbackCalls.push(input)).pipe(Effect.andThen(Effect.never)),
+        },
+      })
+      const services = yield* servicesWithLinkOpener(noBrowser)
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <Auth sessionId={activeSessionId} />, {
+          client,
+          runtime: createMockRuntime(),
+          services,
+          initialAgent: AgentName.make("cowork"),
+        }),
+      )
+      yield* waitForFrame(setup, (frame) => frame.includes("openai"))
+      setup.mockInput.pressEnter()
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      const frame = yield* waitForFrame(
+        setup,
+        (next) => next.includes("Could not open a browser") && callbackCalls.length === 1,
+        "device flow keeps waiting without a browser",
+      )
+      expect(frame).toContain("Authorize openai")
+      expect(frame).toContain("WXYZ-1234")
+      expect(panelText(frame)).toContain("https://auth.openai.com/codex/device")
+      expect(frame).not.toContain("Failed to open URL")
+      expect(frame).not.toContain("r=retry")
+      expect(callbackCalls).toEqual([
+        expect.objectContaining({ provider: "openai", authorizationId: "auth-device" }),
+      ])
+      setup.renderer.destroy()
+    }).pipe(Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive("a browser flow without a browser shows its whole url to copy", () =>
+    Effect.gen(function* () {
+      const longUrl = `https://claude.ai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&response_type=code&redirect_uri=https%3A%2F%2Fconsole.anthropic.com%2Foauth%2Fcode%2Fcallback&scope=org%3Acreate_api_key+user%3Aprofile&state=${"s".repeat(43)}`
+      const client = createMockClient({
+        auth: {
+          listProviders: () => Effect.succeed(openaiOnly),
+          listMethods: () =>
+            Effect.succeed({ openai: [{ label: "ChatGPT (browser)", type: "oauth" }] }),
+          authorize: () =>
+            Effect.succeed({ authorizationId: "auth-browser", url: longUrl, method: "code" }),
+        },
+      })
+      const services = yield* servicesWithLinkOpener(noBrowser)
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <Auth sessionId={activeSessionId} />, {
+          client,
+          runtime: createMockRuntime(),
+          services,
+          initialAgent: AgentName.make("cowork"),
+        }),
+      )
+      yield* waitForFrame(setup, (frame) => frame.includes("openai"))
+      setup.mockInput.pressEnter()
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      const frame = yield* waitForFrame(
+        setup,
+        (next) => next.includes("Could not open a browser"),
+        "browser flow keeps its code field without a browser",
+      )
+      expect(panelText(frame)).toContain(longUrl)
+      expect(frame).toContain("Paste code:")
+      expect(frame).not.toContain("Failed to open URL")
+      setup.renderer.destroy()
+    }).pipe(Effect.timeout("8 seconds")),
   )
 })

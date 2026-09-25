@@ -13,7 +13,7 @@ import { LinkOpener } from "./os"
 import { useTheme } from "./theme"
 import { useClient, useRuntime } from "./client"
 import { ChromePanel, selectable, SelectList, type SelectListRow } from "./ui"
-import { ClientError, formatError, type UiError } from "./utils"
+import { formatError, type UiError } from "./utils"
 import { type ScopedKeyboardEvent, useScopedKeyboard, useTerminalDimensions } from "./terminal"
 
 // ── auth state ──────────────────────────────────────────────────────────────
@@ -70,8 +70,10 @@ const AuthScreen = Schema.TaggedUnion({
     method: AuthMethod,
     authorization: AuthAuthorization,
     code: Schema.String,
-    /** `waiting` means the browser is expected to finish it without a code. */
+    /** `waiting` means sign-in (a browser callback or a device poll) finishes it without a code. */
     waiting: Schema.Boolean,
+    /** No browser opened the URL; the reader opens it. The flow goes on. */
+    browserUnavailable: Schema.Boolean,
   },
 })
 type AuthScreen = Schema.Schema.Type<typeof AuthScreen>
@@ -127,6 +129,11 @@ export const AuthEvent = Schema.TaggedUnion({
   Backspace: {},
   /** The browser leg of an `auto` flow failed; fall back to pasting a code. */
   OAuthAutoFailed: { error: Schema.String },
+  /**
+   * No browser opened the authorization URL. Opening one is a convenience,
+   * so the flow keeps its screen and keeps waiting; the reader opens the URL.
+   */
+  BrowserUnavailable: {},
   /** Escape, or an action that finished: back to the list, error cleared. */
   Close: {},
 })
@@ -183,6 +190,7 @@ export function transitionAuth(state: AuthState, event: AuthEvent): AuthState {
           authorization: event.authorization,
           code: "",
           waiting: event.authorization.method === "auto",
+          browserUnavailable: false,
         }),
         error: Option.none(),
       }),
@@ -194,6 +202,13 @@ export function transitionAuth(state: AuthState, event: AuthEvent): AuthState {
           ...state,
           screen: AuthScreen.cases.OAuth.make({ ...state.screen, waiting: false }),
           error: Option.some(event.error),
+        }
+      },
+      BrowserUnavailable: () => {
+        if (state.screen._tag !== "OAuth") return state
+        return {
+          ...state,
+          screen: AuthScreen.cases.OAuth.make({ ...state.screen, browserUnavailable: true }),
         }
       },
       Close: () => list(state, Option.none()),
@@ -418,6 +433,11 @@ export function Auth(props: AuthProps) {
     )
   }
 
+  /**
+   * Open the authorization URL in a browser. A failed open never fails the
+   * flow: a headless machine has no browser, and the device-code flow exists
+   * for exactly that machine. The screen keeps the URL and says to open it.
+   */
   const openAuthorization = (token: number, url: string) =>
     Effect.gen(function* () {
       clientCtx.log.info("auth:open-authorization", { url })
@@ -425,9 +445,10 @@ export function Auth(props: AuthProps) {
       yield* opener.open(url)
     }).pipe(
       Effect.catchEager((err) =>
-        whileCurrent(token, () =>
-          send(AuthEvent.cases.Failed.make({ error: formatError(ClientError(err.message)) })),
-        ),
+        whileCurrent(token, () => {
+          clientCtx.log.warn("auth:browser-unavailable", { error: err.message })
+          send(AuthEvent.cases.BrowserUnavailable.make({}))
+        }),
       ),
     )
 
@@ -732,7 +753,7 @@ export function Auth(props: AuthProps) {
   }
   const codePrompt = (screen: { readonly code: string; readonly waiting: boolean }) => {
     if (screen.code.length > 0) return screen.code
-    if (screen.waiting) return "(waiting for browser...)"
+    if (screen.waiting) return "(waiting for sign-in...)"
     return "(type code)"
   }
   const codeLabel = (method: string) => {
@@ -825,12 +846,19 @@ export function Auth(props: AuthProps) {
                     () => "Open the URL below:",
                   )}
                 </text>
-                <text style={{ fg: theme.text }}>{current().authorization.url}</text>
+                <text wrapMode="char" style={{ fg: theme.text }}>
+                  {current().authorization.url}
+                </text>
+                <Show when={current().browserUnavailable}>
+                  <text style={{ fg: theme.textMuted }}>
+                    Could not open a browser; open the URL yourself.
+                  </text>
+                </Show>
                 <text style={{ fg: theme.text }}>{codeLabel(current().authorization.method)}</text>
                 <text style={{ fg: theme.text }}>{codePrompt(current())}</text>
                 <Show when={current().waiting}>
                   <text style={{ fg: theme.textMuted }}>
-                    Waiting for browser callback. Paste code if it fails.
+                    Waiting for sign-in to finish. Paste a code if it fails.
                   </text>
                 </Show>
               </box>
