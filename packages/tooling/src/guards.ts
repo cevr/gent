@@ -1086,12 +1086,12 @@ export const findUnmatchedOverrideGlobs = (
 }
 
 /**
- * An `.oxlintignore` row that matches no file oxlint would walk. oxlint also
- * honors `.gitignore`, so `trackedFiles` (tracked and untracked, minus what
- * git ignores) is the set a row can still take out. A row follows gitignore
- * form: a trailing `/` names a directory, a row with no inner `/` matches at
- * any depth, a leading `/` anchors at the root. Comment, blank and `!` rows
- * are skipped.
+ * An `.oxlintignore` row that matches no file oxlint would walk in a clean
+ * clone. oxlint also honors `.gitignore`, so `trackedFiles` is the committed
+ * set (`git ls-files --cached`): a row that only a new local file matches
+ * passes here and fails in CI. A row follows gitignore form: a trailing `/`
+ * names a directory, a row with no inner `/` matches at any depth, a leading
+ * `/` anchors at the root. Comment, blank and `!` rows are skipped.
  */
 export const findUnmatchedIgnoreRows = (
   ignoreFile: string,
@@ -1110,7 +1110,7 @@ export const findUnmatchedIgnoreRows = (
       {
         file: ignoreFile,
         line: index + 1,
-        message: `ignore row \`${row}\` matches no file oxlint would lint (git-ignored files are skipped already); delete the row, or fix it`,
+        message: `ignore row \`${row}\` matches no committed file oxlint would lint (git-ignored files are skipped already); delete the row, or fix it`,
       },
     ]
   })

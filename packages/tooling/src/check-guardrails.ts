@@ -51,9 +51,22 @@ import {
 } from "./guards"
 import gentRules from "./gent-rules"
 
+const fileNames = (output: string): ReadonlyArray<string> =>
+  output.split("\n").filter((file) => file.length > 0)
+
+/** Every file the scan reads: tracked, and new files git does not ignore. */
 const trackedFileNames = Effect.promise(() =>
   Bun.$`git ls-files --cached --others --exclude-standard`.text(),
-).pipe(Effect.map((output) => output.split("\n").filter((file) => file.length > 0)))
+).pipe(Effect.map(fileNames))
+
+/**
+ * The files a clean clone holds: tracked or staged, not new. A config row
+ * matched only by a new local file (a scratch file, an unstaged draft) passes
+ * here and fails in CI, so the config checks match against this set.
+ */
+const committedFileNames = Effect.promise(() => Bun.$`git ls-files --cached`.text()).pipe(
+  Effect.map(fileNames),
+)
 
 /**
  * Tracked symlinks (git mode 120000). A symlink is not a second file: its
@@ -104,7 +117,7 @@ const LINT_PLUGIN = "packages/tooling/src/gent-rules.ts"
 
 /** The findings that read the lint and compiler configs rather than one source file. */
 const lintConfigFindings = Effect.fn("Tooling.lintConfigFindings")(function* (
-  trackedFiles: ReadonlyArray<string>,
+  committedFiles: ReadonlyArray<string>,
   sourceTexts: ReadonlyMap<string, string>,
 ) {
   const { text: configText, value: config } = yield* readJsonc(OXLINT_CONFIG, OxlintConfigSchema)
@@ -116,9 +129,9 @@ const lintConfigFindings = Effect.fn("Tooling.lintConfigFindings")(function* (
   const rootRules = new Set(Object.keys(config.rules ?? {}))
   const pluginText = Option.getOrElse(Option.fromNullishOr(sourceTexts.get(LINT_PLUGIN)), () => "")
   return [
-    ...findUnmatchedOverrideGlobs(OXLINT_CONFIG, configText, config, trackedFiles),
-    ...findUnmatchedIgnoreRows(OXLINT_IGNORE, ignoreText, trackedFiles),
-    ...findUnmatchedTsconfigOverrides(ROOT_TSCONFIG, tsconfig.text, tsconfig.value, trackedFiles),
+    ...findUnmatchedOverrideGlobs(OXLINT_CONFIG, configText, config, committedFiles),
+    ...findUnmatchedIgnoreRows(OXLINT_IGNORE, ignoreText, committedFiles),
+    ...findUnmatchedTsconfigOverrides(ROOT_TSCONFIG, tsconfig.text, tsconfig.value, committedFiles),
     ...findUnenabledPluginRules(LINT_PLUGIN, pluginText, Object.keys(gentRules.rules), rootRules),
   ]
 })
@@ -376,7 +389,7 @@ const program = Effect.gen(function* () {
   const findings: Array<Finding> = [
     ...treeFindings,
     // The lint config must not name a file or a rule that is gone.
-    ...(yield* lintConfigFindings(trackedFiles, sourceTexts)),
+    ...(yield* lintConfigFindings(yield* committedFileNames, sourceTexts)),
     ...(yield* packageSurfaceFindings(trackedFiles)),
   ]
 
