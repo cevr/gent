@@ -11,7 +11,9 @@ import {
   waitStep,
   sendAwaitsTurn,
   latestEventId,
+  newestInFamily,
   openTurnSessions,
+  resolvePreset,
   encodeState,
   parseCount,
   parseUpArgs,
@@ -28,7 +30,53 @@ import {
   type GamutState,
 } from "../gamut"
 
-const preset = PRESETS["opus-luna"]!
+/** A models.dev slice: older releases, dated snapshots and variants beside the newest. */
+const catalog = {
+  anthropic: [
+    "claude-opus-4-5-20251101",
+    "claude-opus-4-8",
+    "claude-opus-5",
+    "claude-opus-5-5",
+    "claude-sonnet-4-6",
+    "claude-sonnet-5",
+    "claude-fable-5",
+    "claude-fable-5-1",
+  ],
+  openai: ["gpt-5.6-luna", "gpt-6-luna", "gpt-6-luna-pro", "gpt-5.6-sol", "gpt-6-sol"],
+}
+
+const preset = resolvePreset(PRESETS["opus-luna"]!, catalog)
+
+describe("gamut model families", () => {
+  test("a family resolves to its newest release, not a snapshot or a variant", () => {
+    expect(newestInFamily("anthropic/opus", catalog.anthropic)).toBe("anthropic/claude-opus-5-5")
+    expect(newestInFamily("anthropic/sonnet", catalog.anthropic)).toBe("anthropic/claude-sonnet-5")
+    expect(newestInFamily("anthropic/fable", catalog.anthropic)).toBe("anthropic/claude-fable-5-1")
+    expect(newestInFamily("openai/sol", catalog.openai)).toBe("openai/gpt-6-sol")
+    expect(newestInFamily("openai/luna", catalog.openai)).toBe("openai/gpt-6-luna")
+  })
+
+  test("a release number compares as numbers: 5.10 is newer than 5.9", () => {
+    expect(newestInFamily("openai/sol", ["gpt-5.9-sol", "gpt-5.10-sol"])).toBe(
+      "openai/gpt-5.10-sol",
+    )
+  })
+
+  test("every preset resolves against the catalog", () => {
+    for (const [name, named] of Object.entries(PRESETS)) {
+      const resolved = resolvePreset(named, catalog)
+      for (const role of [resolved.orchestrator, resolved.worker, resolved.reviewer]) {
+        expect(role.modelId, name).toMatch(/^(anthropic\/claude|openai\/gpt)-/)
+      }
+    }
+  })
+
+  test("a family with no release in the catalog stops the run", () => {
+    expect(() => resolvePreset(PRESETS["sol-luna"]!, { anthropic: catalog.anthropic })).toThrow(
+      "no openai/sol release",
+    )
+  })
+})
 
 describe("gamut preset config", () => {
   // The exact bytes matter: this is the file gent reads from the work dir.
@@ -37,11 +85,11 @@ describe("gamut preset config", () => {
       `{
   "agents": {
     "main": {
-      "modelId": "anthropic/claude-opus-5",
+      "modelId": "anthropic/claude-opus-5-5",
       "reasoningEffort": "low"
     },
     "delegate": {
-      "modelId": "openai/gpt-5.6-luna",
+      "modelId": "openai/gpt-6-luna",
       "reasoningEffort": "max"
     }
   }
@@ -63,9 +111,9 @@ describe("gamut preset config", () => {
 describe("gamut roster block", () => {
   test("names the paired worker and the reviewer overrides the orchestrator must pass", () => {
     const block = rosterBlock(preset)
-    expect(block).toContain("paired in `.gent/config.json` as `openai/gpt-5.6-luna` at `max`")
-    expect(block).not.toContain("`overrides.modelId` = `openai/gpt-5.6-luna`")
-    expect(block).toContain("`overrides.modelId` = `anthropic/claude-opus-5`")
+    expect(block).toContain("paired in `.gent/config.json` as `openai/gpt-6-luna` at `max`")
+    expect(block).not.toContain("`overrides.modelId` = `openai/gpt-6-luna`")
+    expect(block).toContain("`overrides.modelId` = `anthropic/claude-opus-5-5`")
     expect(block).toContain("`overrides.reasoningEffort` = `high`")
   })
 
@@ -76,7 +124,7 @@ describe("gamut roster block", () => {
     expect(after).toContain("prose above")
     expect(after).toContain("prose below")
     expect(after).not.toContain("- stale")
-    expect(after).toContain("openai/gpt-5.6-luna")
+    expect(after).toContain("openai/gpt-6-luna")
   })
 
   test("a second rewrite is stable", () => {

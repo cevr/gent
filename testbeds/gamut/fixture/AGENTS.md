@@ -27,8 +27,8 @@ A child runs as the `delegate` agent. The roster below says which role needs
 `overrides` on its `delegate.start` call. Do not invent other models.
 
 <!-- roster -->
-- Worker (fix or feature): the `delegate` agent, paired in `.gent/config.json` as `openai/gpt-5.6-luna` at `max`. Pass no model override.
-- Reviewer (second opinion on a diff): `overrides.modelId` = `openai/gpt-5.6-sol`, `overrides.reasoningEffort` = `high`
+- Worker (fix or feature): the `delegate` agent, paired in `.gent/config.json` as `openai/gpt-6-luna` at `max`. Pass no model override.
+- Reviewer (second opinion on a diff): `overrides.modelId` = `openai/gpt-6-sol`, `overrides.reasoningEffort` = `high`
 <!-- /roster -->
 
 Children have no history. Each prompt must name the task, the files, the

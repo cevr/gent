@@ -29,7 +29,7 @@ import { Database } from "bun:sqlite"
 import { mkdirSync, cpSync, renameSync, existsSync, rmSync } from "node:fs"
 import { basename, dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
-import { tmpdir } from "node:os"
+import { homedir, tmpdir } from "node:os"
 import { Schema } from "effect"
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -60,32 +60,151 @@ interface Preset {
 
 const slot = (modelId: string, reasoningEffort: string): Slot => ({ modelId, reasoningEffort })
 
+/**
+ * The model families a preset names instead of a release. `up` resolves each
+ * to the family's newest release in the models.dev catalog, so a preset never
+ * pins a release that a newer one replaced. `version` captures the release
+ * number; a dated snapshot (`claude-opus-4-5-20251101`) and a variant
+ * (`gpt-6-sol-pro`) do not match.
+ */
+const FAMILIES: Record<string, { readonly provider: string; readonly pattern: RegExp }> = {
+  "openai/sol": { provider: "openai", pattern: /^gpt-(?<version>\d+(?:\.\d+)*)-sol$/ },
+  "openai/luna": { provider: "openai", pattern: /^gpt-(?<version>\d+(?:\.\d+)*)-luna$/ },
+  "anthropic/opus": { provider: "anthropic", pattern: /^claude-opus-(?<version>\d+(?:-\d+)?)$/ },
+  "anthropic/sonnet": {
+    provider: "anthropic",
+    pattern: /^claude-sonnet-(?<version>\d+(?:-\d+)?)$/,
+  },
+  "anthropic/fable": { provider: "anthropic", pattern: /^claude-fable-(?<version>\d+(?:-\d+)?)$/ },
+}
+
 export const PRESETS: Record<string, Preset> = {
   "sol-luna": {
-    orchestrator: slot("openai/gpt-5.6-sol", "medium"),
-    worker: slot("openai/gpt-5.6-luna", "max"),
-    reviewer: slot("openai/gpt-5.6-sol", "high"),
+    orchestrator: slot("openai/sol", "medium"),
+    worker: slot("openai/luna", "max"),
+    reviewer: slot("openai/sol", "high"),
   },
   "opus-sonnet": {
-    orchestrator: slot("anthropic/claude-opus-5", "medium"),
-    worker: slot("anthropic/claude-sonnet-5", "high"),
-    reviewer: slot("anthropic/claude-opus-5", "high"),
+    orchestrator: slot("anthropic/opus", "medium"),
+    worker: slot("anthropic/sonnet", "high"),
+    reviewer: slot("anthropic/opus", "high"),
+  },
+  "fable-opus": {
+    orchestrator: slot("anthropic/fable", "medium"),
+    worker: slot("anthropic/opus", "high"),
+    reviewer: slot("anthropic/fable", "high"),
   },
   "sonnet-sonnet": {
-    orchestrator: slot("anthropic/claude-sonnet-5", "medium"),
-    worker: slot("anthropic/claude-sonnet-5", "max"),
-    reviewer: slot("anthropic/claude-sonnet-5", "high"),
+    orchestrator: slot("anthropic/sonnet", "medium"),
+    worker: slot("anthropic/sonnet", "max"),
+    reviewer: slot("anthropic/sonnet", "high"),
   },
   mixed: {
-    orchestrator: slot("openai/gpt-5.6-sol", "medium"),
-    worker: slot("anthropic/claude-sonnet-5", "max"),
-    reviewer: slot("anthropic/claude-opus-5", "high"),
+    orchestrator: slot("openai/sol", "medium"),
+    worker: slot("anthropic/sonnet", "max"),
+    reviewer: slot("anthropic/opus", "high"),
   },
   "opus-luna": {
-    orchestrator: slot("anthropic/claude-opus-5", "low"),
-    worker: slot("openai/gpt-5.6-luna", "max"),
-    reviewer: slot("anthropic/claude-opus-5", "high"),
+    orchestrator: slot("anthropic/opus", "low"),
+    worker: slot("openai/luna", "max"),
+    reviewer: slot("anthropic/opus", "high"),
   },
+}
+
+/** A release number as integers: `5.6` and `5-6` both read `[5, 6]`. */
+const versionParts = (version: string): ReadonlyArray<number> =>
+  version.split(/[.-]/).map((part) => Number(part))
+
+const newerVersion = (a: ReadonlyArray<number>, b: ReadonlyArray<number>): boolean => {
+  for (let index = 0; index < Math.max(a.length, b.length); index++) {
+    const left = a[index] ?? 0
+    const right = b[index] ?? 0
+    if (left !== right) return left > right
+  }
+  return false
+}
+
+/** The newest release of a family among one provider's model ids (`gpt-6-sol`, not `openai/gpt-6-sol`). */
+export const newestInFamily = (
+  family: string,
+  modelIds: ReadonlyArray<string>,
+): string | undefined => {
+  const entry = FAMILIES[family]
+  if (entry === undefined) return undefined
+  let best: { readonly id: string; readonly parts: ReadonlyArray<number> } | undefined
+  for (const id of modelIds) {
+    const version = entry.pattern.exec(id)?.groups?.["version"]
+    if (version === undefined) continue
+    const parts = versionParts(version)
+    if (best === undefined || newerVersion(parts, best.parts)) best = { id, parts }
+  }
+  return best === undefined ? undefined : `${entry.provider}/${best.id}`
+}
+
+/**
+ * The preset with each family resolved to its newest release. `catalog` maps
+ * a provider id to its model ids. A family with no release in the catalog
+ * stops the run: a guessed id would fail inside the TUI instead.
+ */
+export const resolvePreset = (
+  preset: Preset,
+  catalog: Readonly<Record<string, ReadonlyArray<string>>>,
+): Preset => {
+  const resolveSlot = (role: Slot): Slot => {
+    const entry = FAMILIES[role.modelId]
+    if (entry === undefined) return role
+    const newest = newestInFamily(role.modelId, catalog[entry.provider] ?? [])
+    if (newest === undefined) {
+      throw new Error(`no ${role.modelId} release in the models.dev catalog`)
+    }
+    return { ...role, modelId: newest }
+  }
+  return {
+    orchestrator: resolveSlot(preset.orchestrator),
+    worker: resolveSlot(preset.worker),
+    reviewer: resolveSlot(preset.reviewer),
+  }
+}
+
+const MODELS_DEV_URL = "https://models.dev/api.json"
+const ModelsDevPayload = Schema.fromJsonString(
+  Schema.Record(
+    Schema.String,
+    Schema.Struct({ models: Schema.Record(Schema.String, Schema.Unknown) }),
+  ),
+)
+/** gent's own models.dev cache: provider-prefixed ids. */
+const GentModelsCache = Schema.fromJsonString(
+  Schema.Struct({ models: Schema.Array(Schema.Struct({ id: Schema.String })) }),
+)
+
+/**
+ * The models.dev catalog as provider → model ids. It fetches the catalog, and
+ * falls back to the copy gent keeps in `~/.gent/models.json` (read only) when
+ * the fetch fails.
+ */
+const loadCatalog = async (): Promise<Record<string, ReadonlyArray<string>>> => {
+  try {
+    // curl, as the script shells out to herdr and git: it builds no Effect layer.
+    const body = await $`curl -sf -m 15 ${MODELS_DEV_URL}`.quiet().text()
+    const payload = Schema.decodeSync(ModelsDevPayload)(body)
+    return Object.fromEntries(
+      Object.entries(payload).map(([provider, entry]) => [provider, Object.keys(entry.models)]),
+    )
+  } catch (error) {
+    const cachePath = join(homedir(), ".gent/models.json")
+    if (!existsSync(cachePath)) throw error
+    console.log(`models.dev unreachable (${String(error)}); using ${cachePath}`)
+    const cache = Schema.decodeSync(GentModelsCache)(await Bun.file(cachePath).text())
+    const catalog: Record<string, Array<string>> = {}
+    for (const { id } of cache.models) {
+      const slash = id.indexOf("/")
+      if (slash < 0) continue
+      const provider = id.slice(0, slash)
+      catalog[provider] = [...(catalog[provider] ?? []), id.slice(slash + 1)]
+    }
+    return catalog
+  }
 }
 
 // ── Pure transforms ─────────────────────────────────────────────────────
@@ -313,14 +432,15 @@ const quitTui = async (state: GamutState): Promise<void> => {
 // ── up ──────────────────────────────────────────────────────────────────
 
 const up = async (presetName: string, promptArg: string | undefined, build: boolean) => {
-  const preset = PRESETS[presetName]
-  if (!preset) {
+  const named = PRESETS[presetName]
+  if (!named) {
     throw new Error(`unknown preset: ${presetName}. Presets: ${Object.keys(PRESETS).join(", ")}`)
   }
   if (existsSync(STATE_FILE)) {
     throw new Error(`a gamut run is already up (${STATE_FILE}). Run: bun run gamut down`)
   }
   await requireHerdrPane()
+  const preset = resolvePreset(named, await loadCatalog())
 
   const root = join(tmpdir(), `gent-gamut-${Date.now()}`)
   // Until the state file names `root`, `down` cannot find it: a failed `up`
@@ -362,7 +482,9 @@ const prepareAndLaunch = async (
 
   console.log(`work  ${work}`)
   console.log(`data  ${data}`)
-  console.log(`preset ${presetName}  orchestrator ${preset.orchestrator.modelId}`)
+  console.log(
+    `preset ${presetName}  orchestrator ${preset.orchestrator.modelId}  worker ${preset.worker.modelId}  reviewer ${preset.reviewer.modelId}`,
+  )
 
   console.log("installing…")
   await $`bun install --silent`.cwd(work).quiet()
@@ -752,8 +874,11 @@ const down = async () => {
   console.log(`closed ${state.pane}, removed ${state.root}`)
 }
 
-const list = () => {
-  for (const [name, preset] of Object.entries(PRESETS)) {
+/** The presets with each family resolved, as `up` would run them today. */
+const list = async () => {
+  const catalog = await loadCatalog()
+  for (const [name, named] of Object.entries(PRESETS)) {
+    const preset = resolvePreset(named, catalog)
     const format = (s: Slot) => `${s.modelId}:${s.reasoningEffort}`
     console.log(
       `${name.padEnd(14)} orchestrator ${format(preset.orchestrator).padEnd(34)} worker ${format(preset.worker).padEnd(34)} reviewer ${format(preset.reviewer)}`,

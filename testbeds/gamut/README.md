@@ -21,6 +21,12 @@ bun run gamut restart               # quit and resume the same session
 bun run gamut down                  # quit, close the pane, remove the scratch dir
 ```
 
+A preset names model families (`openai/sol`, `openai/luna`, `anthropic/opus`,
+`anthropic/sonnet`, `anthropic/fable`), not releases. `up` and `list` resolve
+each family to its newest release in the models.dev catalog (falling back to
+gent's `~/.gent/models.json` copy offline), so a new Sol, Luna, Opus, Sonnet or
+Fable release needs no edit here.
+
 `up` first checks that herdr has a current pane, and stops with one line if
 not. It then copies `fixture/` to `$TMPDIR/gent-gamut-<timestamp>/work`, makes it a git
 repo, installs it, writes the preset into `work/.gent/config.json` and the
