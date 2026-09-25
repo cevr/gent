@@ -29,7 +29,6 @@ import {
   cellResponseFd,
   decodeCellRequest,
   encodeCellResponse,
-  encodeSnapshot,
   makeBoundedOutput,
   makeCellFrameReader,
   maximumCallsPerCell,
@@ -43,13 +42,18 @@ import {
 } from "./cell-protocol.js"
 import {
   displayValue,
+  encodeSnapshot,
   errorHead,
+  type BuiltinRepair,
   inheritsFrom,
+  isNativePromise,
   isOrdinaryArray,
   type PromiseState,
+  putBackBuiltins,
   readDataProperty,
   readProperty,
   sameDescriptor,
+  whenSettled,
 } from "./cell-value.js"
 
 /** Uncaught errors kept for the next cell; later ones between two cells are dropped. */
@@ -223,17 +227,26 @@ export class CellWorkerEnvironment extends Context.Service<
  */
 const cellOrigin = new AsyncLocalStorage<number>()
 
-/** An error cell code raised outside any awaited path, with the cell that raised it when known. */
+/**
+ * An error cell code raised outside any awaited path, with the cell that
+ * raised it when known, and the built-ins put back before the worker's own
+ * code handled it.
+ */
 interface UncaughtError {
   readonly cause: unknown
   readonly origin: Option.Option<number>
+  readonly repair: BuiltinRepair
 }
 
-/** Read in the process's uncaught handler, while the throwing callback's context is still current. */
-const uncaughtError = (cause: unknown): UncaughtError => ({
-  cause,
-  origin: Option.fromUndefinedOr(cellOrigin.getStore()),
-})
+/**
+ * Made in the process's uncaught handler, while the throwing callback's
+ * context is still current. The code that threw may have replaced a built-in
+ * the queue or the error text calls, so the built-ins are put back first.
+ */
+const uncaughtError = (cause: unknown): UncaughtError => {
+  const repair = putBackBuiltins()
+  return { cause, origin: Option.fromUndefinedOr(cellOrigin.getStore()), repair }
+}
 
 /** The worker transport supplies this proxy. It never supplies Gent host services. */
 export class CellHost extends Context.Service<
@@ -267,6 +280,9 @@ const SHELL_STDERR_LIMIT = 2000
 const UNREADABLE_ERROR_TEXT = "A thrown value that cannot be read"
 /** What stands for a cause that cannot be read without running cell code. */
 const UNREADABLE_CAUSE_LINE = "caused by (a value that cannot be read)"
+
+/** A value the cell threw, or a promise it returned rejected with; rendered once the built-ins are back. */
+class CellThrow extends Schema.TaggedError<CellThrow>()("CellThrow", { cause: Schema.Unknown }) {}
 
 /** Taken when the worker loads: a cell may replace the globals later. */
 const errorPrototype: object = Error.prototype
@@ -694,8 +710,43 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
   let cellNumber = 0
   let running = Option.none<number>()
   let strays: Array<string> = []
+
+  /**
+   * Built-ins a check could not put back. Once any is named, this worker's
+   * own code may run cell code through them: the host replaces the worker,
+   * and no snapshot reads its namespace.
+   */
+  let unrestoredBuiltins: ReadonlyArray<string> = []
+  /** The notes for a put-back already done; a built-in it could not put back retires the worker. */
+  const repairNotes = (changed: string, repair: BuiltinRepair): ReadonlyArray<string> => {
+    const notes: Array<string> = []
+    if (repair.restored.length > 0)
+      notes.push(`Put back built-ins ${changed}: ${repair.restored.join(", ")}`)
+    if (repair.unrestored.length > 0) {
+      unrestoredBuiltins = [...unrestoredBuiltins, ...repair.unrestored]
+      notes.push(
+        `Built-ins ${changed} that cannot be put back: ${repair.unrestored.join(", ")}. The host replaces this worker and restores the namespace it saved before this cell.`,
+      )
+    }
+    return notes
+  }
+  /**
+   * Put the built-ins back as the worker loaded them, and say which were
+   * changed. The worker's own code calls built-ins as soon as cell code
+   * returns, so this runs in the same turn as the cell's return or throw,
+   * and when its promise settles, before the worker goes on. It runs again
+   * before the display and the snapshot, as a timer the cell left can change
+   * one between cells, and before an uncaught error is rendered.
+   */
+  const repairBuiltins = (changed: string): ReadonlyArray<string> =>
+    repairNotes(changed, putBackBuiltins())
+
   const reportUncaught = (error: UncaughtError) =>
     Effect.gen(function* () {
+      const notes = [
+        ...repairNotes("changed before an uncaught error", error.repair),
+        ...repairBuiltins("changed before an uncaught error"),
+      ]
       const text = errorText(error.cause)
       if (Option.isNone(error.origin) && cellNumber === 0) {
         return yield* new CellProtocolError({
@@ -703,14 +754,15 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
         })
       }
       if (Option.isSome(error.origin) && Option.contains(running, error.origin.value)) {
-        return append(`Uncaught: ${text}`)
-      }
-      if (strays.length >= maximumStrayErrors) return
-      if (Option.isSome(error.origin)) {
-        strays.push(`Uncaught (from cell ${error.origin.value}): ${text}`)
+        append(`Uncaught: ${text}`)
+        for (const note of notes) append(note)
         return
       }
-      strays.push(`Uncaught (origin unknown: an unawaited promise or microtask): ${text}`)
+      if (strays.length >= maximumStrayErrors) return
+      if (Option.isSome(error.origin))
+        strays.push(`Uncaught (from cell ${error.origin.value}): ${text}`)
+      else strays.push(`Uncaught (origin unknown: an unawaited promise or microtask): ${text}`)
+      strays.push(...notes)
     })
 
   const evaluate = Effect.fn("BunCellEvaluator.evaluate")(function* (source: string) {
@@ -726,16 +778,40 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
     })
     const origin = ++cellNumber
     running = Option.some(origin)
-    const result = yield* Effect.gen(function* () {
+    const notes: Array<string> = []
+    // Called first in each callback below, before any worker code runs.
+    const putBack = () => {
+      // `notes.push` is read only after the put-back: a call reads its callee before its arguments.
+      const found = repairBuiltins("the cell changed")
+      notes.push(...found)
+    }
+    const outcome = yield* Effect.gen(function* () {
       const started = yield* Effect.try({
         // Timers and continuations the cell starts keep its number.
-        try: (): unknown => cellOrigin.run(origin, () => evaluateInRealm(compiled)),
-        catch: (cause) => failure("execute", cause),
+        try: (): unknown => {
+          const value = cellOrigin.run(origin, () => evaluateInRealm(compiled))
+          putBack()
+          return value
+        },
+        catch: (cause) => {
+          putBack()
+          return new CellThrow({ cause })
+        },
       })
-      if (!Predicate.isPromiseLike(started)) return started
-      return yield* Effect.tryPromise({
-        try: () => started,
-        catch: (cause) => failure("execute", cause),
+      // A thenable a cell wrote is its value; only the realm's own promise is awaited.
+      if (!isNativePromise(started)) return started
+      return yield* Effect.callback<unknown, CellThrow>((resume) => {
+        whenSettled(
+          started,
+          (value) => {
+            putBack()
+            resume(Effect.succeed(value))
+          },
+          (cause) => {
+            putBack()
+            resume(Effect.fail(new CellThrow({ cause })))
+          },
+        )
       })
     }).pipe(
       captureConsole,
@@ -744,7 +820,16 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
           running = Option.none()
         }),
       ),
+      Effect.result,
     )
+    // The error text and the display run on the built-ins: a microtask the
+    // cell queued may have changed one since.
+    putBack()
+    if (Result.isFailure(outcome)) {
+      for (const note of notes) append(note)
+      return yield* failure("execute", outcome.failure.cause)
+    }
+    const result = outcome.success
     // An undefined result shows nothing, as IPython shows nothing for None; the
     // console output the cell wrote is then the whole display.
     if (Predicate.hasProperty(result, "value") && Predicate.isNotUndefined(result.value)) {
@@ -753,6 +838,7 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
         catch: (cause) => failure("execute", cause),
       })
     }
+    for (const note of notes) append(note)
     return CellEvaluation.make({
       display: rendered(),
       ...reportBindings(),
@@ -766,8 +852,17 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
       catalog = tools
     })
 
-  /** Encode the namespace in this realm; the codec names every value it cannot carry. */
-  const snapshot = Effect.sync(() => encodeSnapshot(namespace()))
+  /**
+   * Encode the namespace in this realm; the codec names every value it
+   * cannot carry. A built-in changed since the cell is put back first and
+   * named to the next cell. A worker with a built-in it cannot put back
+   * encodes nothing: the host replaces it.
+   */
+  const snapshot = Effect.sync(() => {
+    for (const note of repairBuiltins("changed after the last cell")) strays.push(note)
+    if (unrestoredBuiltins.length > 0) return { bindings: [], omitted: [] }
+    return encodeSnapshot(namespace())
+  })
 
   /** Revive in the realm so restored values use its intrinsics. */
   const restore = (bindings: ReadonlyArray<SnapshotBinding>) =>
@@ -801,17 +896,20 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
     setCatalog: (tools: ReadonlyArray<CellCatalogEntry>) =>
       Semaphore.withPermit(permit, setCatalog(tools)),
     snapshot: Semaphore.withPermit(permit, snapshot),
+    /** Built-ins this worker could not put back; the host replaces a worker that names any. */
+    unrestored: Effect.sync(() => unrestoredBuiltins),
     restore: (bindings: ReadonlyArray<SnapshotBinding>) =>
       Semaphore.withPermit(permit, restore(bindings)),
     reset: Semaphore.withPermit(
       permit,
       Effect.sync((): ReadonlyArray<string> => {
+        repairBuiltins("changed")
         // Every global back as the evaluator found it: added names go, rebound or deleted ones return.
         // A global the realm will not put back is named: the host replaces this worker.
         const names = new Set([...Object.getOwnPropertyNames(globalThis), ...baseline.keys()])
         const unrestored = [...names].filter((name) => changed(name) && !restoreGlobal(name))
         reported = new Map()
-        return unrestored
+        return [...unrestoredBuiltins, ...unrestored]
       }),
     ),
   }
@@ -882,6 +980,11 @@ export const runCellWorker = Effect.scoped(
       Effect.forkScoped,
     )
 
+    /** The frame field naming built-ins the worker could not put back; absent when none. */
+    const unrestoredField = Effect.map(kernel.unrestored, (names) => ({
+      unrestored: Option.getOrUndefined(Option.liftPredicate(names, (list) => list.length > 0)),
+    }))
+
     const receive = Effect.fn("CellWorker.receive")(function* (request: CellRequest) {
       if (isHostReply(request)) {
         const reply = Option.fromUndefinedOr(pending.get(request.operationId))
@@ -909,7 +1012,11 @@ export const runCellWorker = Effect.scoped(
       if (request._tag === "Snapshot") {
         const snapshot = yield* kernel.snapshot
         yield* transport.send(
-          CellResponse.cases.Snapshot.make({ requestId: request.requestId, snapshot }),
+          CellResponse.cases.Snapshot.make({
+            requestId: request.requestId,
+            snapshot,
+            ...(yield* unrestoredField),
+          }),
         )
         return
       }
@@ -926,11 +1033,21 @@ export const runCellWorker = Effect.scoped(
       activeCell = Option.some(request.cellId)
       cellCalls = 0
       yield* kernel.evaluate(request.source).pipe(
-        Effect.match({
-          onFailure: (error) => CellResponse.cases.Failed.make({ cellId: request.cellId, error }),
-          onSuccess: (result) =>
-            CellResponse.cases.Evaluated.make({ cellId: request.cellId, result }),
-        }),
+        Effect.result,
+        Effect.flatMap((outcome) =>
+          Effect.map(unrestoredField, (unrestored) =>
+            Result.match(outcome, {
+              onFailure: (error) =>
+                CellResponse.cases.Failed.make({ cellId: request.cellId, error, ...unrestored }),
+              onSuccess: (result) =>
+                CellResponse.cases.Evaluated.make({
+                  cellId: request.cellId,
+                  result,
+                  ...unrestored,
+                }),
+            }),
+          ),
+        ),
         Effect.tap(() => transport.endCellOutput(request.outputToken)),
         Effect.flatMap((response) =>
           Effect.gen(function* () {

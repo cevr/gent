@@ -41,6 +41,7 @@ import {
   textDeltaPart,
   textStep,
   toolCallPart,
+  multiToolCallStep,
   toolCallStep,
   waitFor,
   createE2ELayer,
@@ -1024,10 +1025,10 @@ describe("BashTool execution", () => {
     processTestTimeout,
   )
 
-  // A build before the output file stored the whole output on the row and
-  // wrote no file until it cut a message; a replay must not lose the middle.
+  // A build before the output file stored the whole output on the row. A
+  // replay cuts that message to its head and tail and writes no file for it.
   it.scopedLive(
-    "a replayed row that holds a whole long output gets its file",
+    "a replayed row that holds a whole long output is cut, with no file written",
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
@@ -1092,9 +1093,87 @@ describe("BashTool execution", () => {
         expect(message.content.length).toBeLessThanOrEqual(maximumModelToolResultChars)
         expect(message.content).toContain("old line 1\n")
         expect(message.content).toContain("old line 3000\n")
-        expect(message.content).toContain(`(${output.length} characters)`)
-        const file = savedOutputFile(message.content)
-        expect(file.startsWith(`${home}/.gent/background-bash/`)).toBe(true)
+        expect(message.content).toContain("characters truncated")
+        expect(message.content).not.toContain("The whole output is in")
+        expect(yield* fs.exists(`${home}/.gent/background-bash`)).toBe(false)
+      }).pipe(Effect.provide(BunFileSystem.layer), withProcessTimeout),
+    processTestTimeout,
+  )
+
+  // A build that streamed output to the job's file also kept a follow-up's
+  // worth on the row. A replay names that file, unchanged.
+  it.scopedLive(
+    "a replayed row longer than its bound names the job's file when it exists",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const home = yield* fs.makeTempDirectoryScoped({ prefix: "gent-bg-row-file-" })
+        const sent = yield* Deferred.make<{ sourceId: string; content: string }>()
+        const toolCallId = ToolCallId.make("tc-row-file-replay")
+        const ctx = withSession(
+          { ...stubCtx, toolCallId, home },
+          {
+            ...stubCtx.Session,
+            getSession: () =>
+              Effect.succeed(
+                new Session({
+                  id: stubCtx.sessionId,
+                  activeBranchId: stubCtx.branchId,
+                  createdAt: now,
+                  updatedAt: now,
+                }),
+              ),
+            listBranches: Effect.succeed([
+              new Branch({ id: stubCtx.branchId, sessionId: stubCtx.sessionId, createdAt: now }),
+            ]),
+            send: onQueue((notice) => Deferred.succeed(sent, notice)),
+          },
+        )
+        const storageLayer = SqliteStorage.LiveWithSql(
+          `${home}/gent.db`,
+          () => Layer.empty,
+          {},
+        ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)))
+        const output = Array.from({ length: 3000 }, (_, index) => `row line ${index + 1}\n`).join(
+          "",
+        )
+        const folder = `${home}/.gent/background-bash/${ctx.sessionId}/${ctx.branchId}`
+        const file = `${folder}/${toolCallId}.txt`
+        yield* fs.makeDirectory(folder, { recursive: true })
+        yield* fs.writeFileString(file, output)
+        yield* Effect.gen(function* () {
+          const storage = yield* BackgroundBashStorage
+          yield* storage.claimStart({
+            sessionId: ctx.sessionId,
+            branchId: ctx.branchId,
+            toolCallId,
+            command: "seq-row",
+            cwd: Option.some(ctx.cwd),
+          })
+          yield* storage.markCompleted(
+            { sessionId: ctx.sessionId, branchId: ctx.branchId, toolCallId },
+            { exitCode: 0, message: output },
+          )
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              storageLayer,
+              BackgroundBashStorage.Live.pipe(Layer.provide(storageLayer)),
+            ),
+          ),
+        )
+
+        yield* runToolWithCtx(
+          BashTool,
+          { command: "printf should-not-run", run_in_background: true },
+          ctx,
+        ).pipe(Effect.provide(makeProcessLayer(storageLayer)))
+        const message = yield* Deferred.await(sent).pipe(Effect.timeout("2 seconds"))
+        expect(message.content.length).toBeLessThanOrEqual(maximumModelToolResultChars)
+        expect(message.content).toContain("row line 1\n")
+        expect(message.content).toContain(
+          `The whole output is in ${file} (${output.length} characters)`,
+        )
         expect(yield* fs.readFileString(file)).toBe(output)
       }).pipe(Effect.provide(BunFileSystem.layer), withProcessTimeout),
     processTestTimeout,
@@ -1806,6 +1885,90 @@ describe("a background completion the full follow-up queue refused", () => {
       }).pipe(Effect.timeout("25 seconds")),
     30_000,
   )
+
+  // A build before the 2,000-character row bound stored up to a follow-up's
+  // worth of output on the row, and streamed all of it to the job's file. The
+  // notice once cut that row to its bound and named no file.
+  it.scopedLive.layer(BunFileSystem.layer)(
+    "a stored row longer than the notice bound names the job's file; a missing file is named as not saved",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-bg-long-row-" })
+        const storagePath = `${directory}/gent.db`
+        const notices = yield* Ref.make<ReadonlyArray<string>>([])
+        const providerLayer = LanguageModelLayers.testStream((options) =>
+          Ref.updateAndGet(notices, (all) => [
+            ...all,
+            turnRequestText(options.prompt).notices,
+          ]).pipe(
+            Effect.map((all) =>
+              Stream.fromIterable([
+                textDeltaPart(`reply ${all.length}`),
+                finishPart({ finishReason: "stop" }),
+              ]),
+            ),
+          ),
+        )
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+          storagePath,
+          cwd: directory,
+          extraLayers: [RuntimeEnvironment.Live({ cwd: directory, home: directory })],
+        })
+        const printed = Array.from({ length: 1000 }, (_, index) => `${index + 1}\n`).join("")
+        const finished = ToolCallId.make("tc-long-row")
+        const stopped = ToolCallId.make("tc-stopped-no-file")
+        const file = `${directory}/.gent/background-bash/${sessionId}/${branchId}/${finished}.txt`
+        yield* fs.makeDirectory(`${directory}/.gent/background-bash/${sessionId}/${branchId}`, {
+          recursive: true,
+        })
+        yield* fs.writeFileString(file, printed)
+        const storageLayer = SqliteStorage.LiveWithSql(storagePath, () => Layer.empty, {}).pipe(
+          Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)),
+        )
+        yield* Effect.gen(function* () {
+          const storage = yield* BackgroundBashStorage
+          const job = (toolCallId: ToolCallId) => ({ sessionId, branchId, toolCallId })
+          yield* storage.claimStart({
+            ...job(finished),
+            command: "seq 1 1000",
+            cwd: Option.some(directory),
+          })
+          yield* storage.markCompleted(job(finished), { exitCode: 0, message: printed })
+          yield* storage.recordDelivery(job(finished), false)
+          yield* storage.claimStart({
+            ...job(stopped),
+            command: "sleep 100",
+            cwd: Option.some(directory),
+          })
+          yield* storage.markInterrupted(job(stopped))
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              storageLayer,
+              BackgroundBashStorage.Live.pipe(Layer.provide(storageLayer)),
+            ),
+          ),
+        )
+        yield* client.message.send({ sessionId, branchId, content: "what happened?" })
+        const shown = (yield* waitFor(
+          Ref.get(notices),
+          (all) => all.length > 0,
+          5_000,
+          "the first model call",
+        ))[0]
+        expect(shown).toContain("# Background commands finished")
+        expect(shown).toContain("1\n2\n3\n")
+        expect(shown).toContain("\n1000\n")
+        expect(shown).toContain(`The whole output is in ${file} (${printed.length} characters)`)
+        expect(yield* fs.readFileString(file)).toBe(printed)
+        expect(shown).toContain("# Interrupted background commands")
+        expect(shown).toContain(`\`sleep 100\` · call ${stopped} · no output was saved`)
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
+  )
 })
 
 // ── background bash across a restart ───────────────────────────────────────
@@ -1857,9 +2020,12 @@ describe("a background job the server stopped", () => {
         const fs = yield* FileSystem.FileSystem
         const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-bg-restart-" })
         const storagePath = `${directory}/gent.db`
-        // The job waits for a file nobody writes, so it is running when the
-        // first process stops.
+        // The jobs wait for a file nobody writes, so they are running when the
+        // first process stops. One prints first; the other writes nothing.
         const command = `while ! test -f ${directory}/never; do sleep 0.02; done`
+        const printing = `printf started; ${command}`
+        // Every process has the one home, so a job's file outlives the server that wrote it.
+        const sharedHome = RuntimeEnvironment.Live({ cwd: directory, home: directory })
         const textOf = (message: { readonly parts: ReadonlyArray<Prompt.Part> }) =>
           message.parts
             .map((part) => {
@@ -1878,14 +2044,18 @@ describe("a background job the server stopped", () => {
         const target = yield* Effect.scoped(
           Effect.gen(function* () {
             const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-              toolCallStep("bash", { command, run_in_background: true }),
-              textStep("background command started"),
+              multiToolCallStep(
+                { toolName: "bash", input: { command, run_in_background: true } },
+                { toolName: "bash", input: { command: printing, run_in_background: true } },
+              ),
+              textStep("background commands started"),
             ])
             const { client, sessionId, branchId } = yield* createRpcHarness({
               ...e2ePreset,
               providerLayer,
               storagePath,
               cwd: directory,
+              extraLayers: [sharedHome],
             })
             yield* client.message.send({ sessionId, branchId, content: "start the job" })
             yield* waitFor(
@@ -1894,7 +2064,24 @@ describe("a background job the server stopped", () => {
                 snapshot.runtime._tag === "Idle" &&
                 snapshot.messages.some((message) => message.role === "tool"),
               5_000,
-              "the job started and the turn ended",
+              "the jobs started and the turn ended",
+            )
+            // The printing job's output reaches its file before the server stops.
+            yield* waitFor(
+              fs.readDirectory(directory, { recursive: true }).pipe(
+                Effect.flatMap((entries) =>
+                  Effect.forEach(
+                    entries.filter(
+                      (entry) => entry.includes("background-bash/") && entry.endsWith(".txt"),
+                    ),
+                    (entry) => fs.readFileString(`${directory}/${entry}`),
+                  ),
+                ),
+                Effect.orElseSucceed((): ReadonlyArray<string> => []),
+              ),
+              (texts) => texts.includes("started"),
+              5_000,
+              "the printing job's output was saved",
             )
             return { sessionId, branchId }
           }),
@@ -1954,7 +2141,12 @@ describe("a background job the server stopped", () => {
           Effect.gen(function* () {
             const { systems, providerLayer } = yield* recordingModel(new Set([1]))
             const { client } = yield* createRpcClient(
-              createE2ELayer({ ...e2ePreset, providerLayer, storagePath }),
+              createE2ELayer({
+                ...e2ePreset,
+                providerLayer,
+                storagePath,
+                extraLayers: [sharedHome],
+              }),
             )
             yield* client.session.getSnapshot(target)
             // Absence has no event to wait for: a notice that starts a turn
@@ -1968,9 +2160,16 @@ describe("a background job the server stopped", () => {
             expect(failed[0]).toContain(heading)
             expect(failed[0]).toContain(command)
             expect(failed[0]).toContain("start one again only when the user asks for it")
-            // The file holds only what was written before the stop, and says so.
+            // A file is named only when it holds output, and holds only what was written before the stop.
+            expect(failed[0]).toContain(printing)
             expect(failed[0]).toMatch(/output up to the stop is in \S+\/background-bash\/\S+\.txt/)
+            expect((failed[0] ?? "").split("output up to the stop is in")).toHaveLength(2)
+            expect(failed[0]).toContain("it wrote no output before the stop")
             expect(failed[0]).toContain("holds only the output written before the stop")
+            // The cause is not named: a reload stops a job as a restart does.
+            expect(failed[0]).toContain(
+              "stopped before they finished (a server restart or a reload)",
+            )
             const answered = yield* ask(client, systems, 2)
             expect(answered[1]).toContain(heading)
             const after = yield* ask(client, systems, 3)
@@ -1986,7 +2185,12 @@ describe("a background job the server stopped", () => {
           Effect.gen(function* () {
             const { systems, providerLayer } = yield* recordingModel(new Set())
             const { client } = yield* createRpcClient(
-              createE2ELayer({ ...e2ePreset, providerLayer, storagePath }),
+              createE2ELayer({
+                ...e2ePreset,
+                providerLayer,
+                storagePath,
+                extraLayers: [sharedHome],
+              }),
             )
             const prompts = yield* ask(client, systems, 1)
             expect(prompts[0]).not.toContain(heading)

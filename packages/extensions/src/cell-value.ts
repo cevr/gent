@@ -1,11 +1,17 @@
 import { Option, Predicate, Result, Schema } from "effect"
 import { types } from "node:util"
+import {
+  type CellSnapshot,
+  type SnapshotBinding,
+  type SnapshotOmission,
+  snapshotTag,
+} from "./cell-protocol.js"
 
 /**
  * A cell runs in full Bun, in the same realm as the worker that reads its
  * values. A getter, a Proxy trap, a `toString`, a `Symbol.toPrimitive`, an
- * iterator or any prototype method the cell wrote or replaced is cell code,
- * and cell code may loop or throw. This module reads and displays a cell value
+ * iterator or a method the cell attached to a value is cell code, and cell
+ * code may loop or throw. This module reads, encodes and displays a cell value
  * without running any of it. The snapshot codec, the error renderer and the
  * worker's display read through it.
  *
@@ -14,23 +20,283 @@ import { types } from "node:util"
  * - It never touches a Proxy. Bun's `util.types.isProxy` reads the engine's
  *   own proxy mark; no trap runs, so no Proxy can fake the answer.
  * - It checks a built-in's brand with `util.types`, which reads the internal
- *   slot.
- * - Every function it calls is saved when the module loads, before any cell
- *   runs, and is called with the saved `Reflect.apply`. It never calls a method
- *   through a value or through a prototype at call time: no `value.toString()`,
- *   no iterator, no spread, no `push`, no string or array prototype method.
- *   Lists grow through the saved `Reflect.defineProperty`, with a descriptor
- *   that has no prototype, so no setter or inherited descriptor field on
- *   `Array.prototype` or `Object.prototype` runs.
+ *   slot, and reads the slot through the built-in's own getter or method,
+ *   never through the value, so a subclass override never runs.
  *
- * Out of reach: the Effect data this module returns (`Option`, `Result`) is
- * built by Effect, which assigns fields; the worker's Effect runtime and its
- * JSON frames do the same on every step. A cell that plants a setter on
- * `Object.prototype` stalls the whole worker, and the host replaces a worker
- * that stops answering.
+ * A cell can also change a shared built-in: `Map.prototype.set`,
+ * `Object.prototype.toJSON`, the global `Reflect`. The worker puts every
+ * built-in back after each cell, before the display and the snapshot
+ * (`putBackBuiltins`), so this module and the worker's own code call the
+ * built-ins as the realm held them when it loaded.
  */
 
-// ── saved intrinsics ────────────────────────────────────────────────────────
+// ── built-ins ───────────────────────────────────────────────────────────────
+
+// The check below runs before anything is put back, so it calls only these,
+// saved when the module loads.
+const ownDescriptor = Object.getOwnPropertyDescriptor
+const ownKeys = Reflect.ownKeys
+const hasOwn = Object.hasOwn
+const defineOwn = Reflect.defineProperty
+const deleteOwn = Reflect.deleteProperty
+const prototypeOf = Reflect.getPrototypeOf
+const setPrototype = Reflect.setPrototypeOf
+const isExtensible = Reflect.isExtensible
+const sameValue = Object.is
+const readField = Reflect.get
+/** The abstract ToString of a primitive: it reads no prototype. */
+const toText = String
+
+/**
+ * The globals the check covers: every ECMAScript constructor and namespace,
+ * and the text codecs the frames use. The worker's own code runs on them
+ * after every cell: the reader, the codec and the display here, the error
+ * renderer, the Effect runtime (generators, promises, iterators, Map and
+ * Set), and the frame encoder (JSON, `TextEncoder`, typed arrays). Host
+ * objects (`Bun`, `process`, `console`, node modules) stay the cell's to
+ * change; a cell that breaks the worker's frames through one stops the
+ * worker answering, and the host replaces it.
+ */
+const builtinGlobalNames: ReadonlyArray<string> = [
+  "Object",
+  "Function",
+  "Array",
+  "String",
+  "Number",
+  "Boolean",
+  "Symbol",
+  "BigInt",
+  "Math",
+  "JSON",
+  "Reflect",
+  "Promise",
+  "Proxy",
+  "Map",
+  "Set",
+  "WeakMap",
+  "WeakSet",
+  "WeakRef",
+  "FinalizationRegistry",
+  "Error",
+  "AggregateError",
+  "EvalError",
+  "RangeError",
+  "ReferenceError",
+  "SyntaxError",
+  "TypeError",
+  "URIError",
+  "RegExp",
+  "Date",
+  "ArrayBuffer",
+  "SharedArrayBuffer",
+  "DataView",
+  "Atomics",
+  "Iterator",
+  "Int8Array",
+  "Uint8Array",
+  "Uint8ClampedArray",
+  "Int16Array",
+  "Uint16Array",
+  "Int32Array",
+  "Uint32Array",
+  "Float16Array",
+  "Float32Array",
+  "Float64Array",
+  "BigInt64Array",
+  "BigUint64Array",
+  "TextEncoder",
+  "TextDecoder",
+]
+
+/**
+ * Built-ins the worker's own code reaches through syntax, with no global
+ * name: `for-of` and spread (the iterator prototypes), generators (the
+ * Effect runtime runs `Effect.gen` on them) and typed arrays. The worker
+ * runs no async function or async generator of its own after it loads.
+ */
+const syntaxIntrinsics = (): ReadonlyArray<readonly [string, unknown]> => {
+  const generator = function* () {
+    yield 1
+  }
+  const arrayIterator = prototypeOf([][Symbol.iterator]())
+  return [
+    ["%TypedArray%", prototypeOf(Uint8Array)],
+    ["%TypedArray%.prototype", prototypeOf(Uint8Array.prototype)],
+    ["%ArrayIteratorPrototype%", arrayIterator],
+    ["%IteratorPrototype%", Predicate.isObjectKeyword(arrayIterator) && prototypeOf(arrayIterator)],
+    ["%MapIteratorPrototype%", prototypeOf(new Map()[Symbol.iterator]())],
+    ["%SetIteratorPrototype%", prototypeOf(new Set()[Symbol.iterator]())],
+    ["%StringIteratorPrototype%", prototypeOf(""[Symbol.iterator]())],
+    ["%RegExpStringIteratorPrototype%", prototypeOf(/(?:)/g[Symbol.matchAll](""))],
+    ["%GeneratorFunction.prototype%", prototypeOf(generator)],
+    ["%GeneratorPrototype%", prototypeOf(generator.prototype)],
+  ]
+}
+
+/** A descriptor with no prototype: defining it reads no field a cell put on `Object.prototype`. */
+const detached = (descriptor: PropertyDescriptor): PropertyDescriptor => {
+  const copy: PropertyDescriptor = { ...descriptor }
+  setPrototype(copy, null)
+  return copy
+}
+
+/** A global the check covers, by its descriptor on `globalThis` at load. */
+interface BuiltinGlobal {
+  readonly name: string
+  readonly descriptor: PropertyDescriptor
+}
+
+/** A built-in object at load: every own property, its prototype, and whether it was extensible. */
+interface BuiltinObject {
+  readonly path: string
+  readonly target: object
+  readonly prototype: object | null
+  readonly extensible: boolean
+  readonly keys: ReadonlyArray<string | symbol>
+  /** The descriptors by key; no prototype, so an absent key reads as undefined. */
+  readonly properties: Record<string | symbol, PropertyDescriptor | undefined>
+}
+
+const builtinObject = (path: string, target: object): BuiltinObject => {
+  const keys = ownKeys(target)
+  const properties: Record<string | symbol, PropertyDescriptor | undefined> = {}
+  setPrototype(properties, null)
+  for (const key of keys) {
+    const descriptor = ownDescriptor(target, key)
+    if (descriptor !== undefined) properties[key] = detached(descriptor)
+  }
+  return {
+    path,
+    target,
+    prototype: prototypeOf(target),
+    extensible: isExtensible(target),
+    keys,
+    properties,
+  }
+}
+
+const builtinGlobals: ReadonlyArray<BuiltinGlobal> = builtinGlobalNames.flatMap((name) => {
+  const descriptor = ownDescriptor(globalThis, name)
+  if (descriptor === undefined || !hasOwn(descriptor, "value")) return []
+  return [{ name, descriptor: detached(descriptor) }]
+})
+
+const builtinObjects: ReadonlyArray<BuiltinObject> = (() => {
+  const found: Array<readonly [string, object]> = []
+  const add = (path: string, value: unknown) => {
+    if (Predicate.isObjectKeyword(value) && !found.some(([, target]) => target === value))
+      found.push([path, value])
+  }
+  for (const { name, descriptor } of builtinGlobals) {
+    const value: unknown = descriptor.value
+    add(name, value)
+    if (!Predicate.isObjectKeyword(value)) continue
+    const prototype = ownDescriptor(value, "prototype")
+    if (prototype !== undefined && hasOwn(prototype, "value"))
+      add(`${name}.prototype`, prototype.value)
+  }
+  for (const [path, value] of syntaxIntrinsics()) add(path, value)
+  return found.map(([path, target]) => builtinObject(path, target))
+})()
+
+/** An own field of a descriptor; an absent one reads as undefined, never through `Object.prototype`. */
+const descriptorField = (descriptor: PropertyDescriptor, key: string): unknown => {
+  if (hasOwn(descriptor, key)) return readField(descriptor, key)
+  return undefined
+}
+
+const sameField = (left: PropertyDescriptor, right: PropertyDescriptor, key: string): boolean =>
+  sameValue(descriptorField(left, key), descriptorField(right, key))
+
+/** Whether two descriptors hold the same value or accessors and the same flags. */
+export const sameDescriptor = (left: PropertyDescriptor, right: PropertyDescriptor): boolean =>
+  sameField(left, right, "value") &&
+  sameField(left, right, "get") &&
+  sameField(left, right, "set") &&
+  sameField(left, right, "writable") &&
+  sameField(left, right, "enumerable") &&
+  sameField(left, right, "configurable")
+
+const propertyPath = (path: string, key: string | symbol): string => {
+  if (Predicate.isSymbol(key)) return `${path}[${toText(key)}]`
+  return `${path}.${key}`
+}
+
+/** The built-ins a check found changed: put back, or refused by the realm. */
+export interface BuiltinRepair {
+  readonly restored: ReadonlyArray<string>
+  readonly unrestored: ReadonlyArray<string>
+}
+
+const pathList = (text: string): ReadonlyArray<string> => {
+  if (text === "") return []
+  return text.slice(1).split("\n")
+}
+
+/** Records a built-in the check found changed: put back when `done`, refused otherwise. */
+type Report = (path: string, done: boolean) => void
+
+/** Put one property back: define a changed one again, delete an added one. */
+const putBackProperty = (builtin: BuiltinObject, key: string | symbol, report: Report): void => {
+  const found = builtin.properties[key]
+  if (found === undefined) {
+    report(propertyPath(builtin.path, key), deleteOwn(builtin.target, key))
+    return
+  }
+  const current = ownDescriptor(builtin.target, key)
+  if (current === undefined || !sameDescriptor(found, current))
+    report(propertyPath(builtin.path, key), defineOwn(builtin.target, key, found))
+}
+
+/** Put one built-in object back: its properties, the ones deleted from it, and its prototype. */
+const putBackObject = (builtin: BuiltinObject, report: Report): void => {
+  const { path, target, properties } = builtin
+  const keys = ownKeys(target)
+  for (let position = 0; position < keys.length; position++) {
+    const key = keys[position]
+    if (key !== undefined) putBackProperty(builtin, key, report)
+  }
+  for (let position = 0; position < builtin.keys.length; position++) {
+    const key = builtin.keys[position]
+    if (key === undefined || hasOwn(target, key)) continue
+    const found = properties[key]
+    if (found !== undefined) report(propertyPath(path, key), defineOwn(target, key, found))
+  }
+  if (prototypeOf(target) !== builtin.prototype)
+    report(`${path} prototype`, setPrototype(target, builtin.prototype))
+  if (builtin.extensible && !isExtensible(target)) report(`${path} extensibility`, false)
+}
+
+/**
+ * Put every built-in back as the realm held it when this module loaded: a
+ * changed or deleted property is defined again, an added one is deleted, a
+ * changed prototype is set back. The realm refuses some, such as a property a
+ * cell made non-configurable, or an object it made non-extensible; those are
+ * named in `unrestored`, and the host replaces a worker that names any.
+ */
+export const putBackBuiltins = (): BuiltinRepair => {
+  // Nothing is put back yet, so no list grows here: names collect in text.
+  let restored = ""
+  let unrestored = ""
+  const report: Report = (path, done) => {
+    if (done) restored += `\n${path}`
+    else unrestored += `\n${path}`
+  }
+  for (let index = 0; index < builtinGlobals.length; index++) {
+    const entry = builtinGlobals[index]
+    if (entry === undefined) continue
+    const current = ownDescriptor(globalThis, entry.name)
+    if (current === undefined || !sameDescriptor(entry.descriptor, current))
+      report(`globalThis.${entry.name}`, defineOwn(globalThis, entry.name, entry.descriptor))
+  }
+  for (let index = 0; index < builtinObjects.length; index++) {
+    const builtin = builtinObjects[index]
+    if (builtin !== undefined) putBackObject(builtin, report)
+  }
+  return { restored: pathList(restored), unrestored: pathList(unrestored) }
+}
+
+// ── slot readers ────────────────────────────────────────────────────────────
 
 const isProxy = types.isProxy
 const isNativeError = types.isNativeError
@@ -51,74 +317,68 @@ const isBigIntObject = types.isBigIntObject
 const isAsyncFunction = types.isAsyncFunction
 const isGeneratorFunction = types.isGeneratorFunction
 const isArgumentsObject = types.isArgumentsObject
-const ownDescriptor = Object.getOwnPropertyDescriptor
-const prototypeOf = Object.getPrototypeOf
-const ownKeys = Reflect.ownKeys
-const hasOwn = Object.hasOwn
-const apply = Reflect.apply
-const construct = Reflect.construct
-const defineOwn = Reflect.defineProperty
-const setPrototype = Reflect.setPrototypeOf
-const isArray = Array.isArray
-/** The abstract ToString for a primitive: it reads no prototype. Never called with an object. */
-const toText = String
-const isFiniteNumber = Number.isFinite
-const isNotANumber = Number.isNaN
-const sameValue = Object.is
-const readField = Reflect.get
-const stringifyJson = JSON.stringify
-const squareRoot = Math.sqrt
-const roundNumber = Math.round
-const floorNumber = Math.floor
-const smallest = Math.min
-const largest = Math.max
-const ByteView = Uint8Array
 const errorPrototype: object = Error.prototype
 
 /** The getter a descriptor holds; none for a data property. */
 const descriptorGetter = (descriptor: PropertyDescriptor) =>
-  Option.liftPredicate(readField(descriptor, "get"), Predicate.isFunction)
+  Option.liftPredicate(descriptorField(descriptor, "get"), Predicate.isFunction)
 
-/** An intrinsic accessor's getter, taken now. */
-const intrinsicGetter = (prototype: object, key: PropertyKey) =>
-  Option.flatMap(Option.fromUndefinedOr(ownDescriptor(prototype, key)), descriptorGetter)
-
-/** An intrinsic method, taken now. */
-const intrinsicMethod = (prototype: object, key: PropertyKey) =>
-  Option.flatMap(Option.fromUndefinedOr(ownDescriptor(prototype, key)), (descriptor) =>
-    Option.liftPredicate(Reflect.get(descriptor, "value"), Predicate.isFunction),
+/** A built-in's getter or method, found by key; a missing one fails the module load. */
+const intrinsic = (prototype: object, key: PropertyKey, field: "get" | "value"): Function =>
+  Option.getOrThrow(
+    Option.flatMap(Option.fromUndefinedOr(ownDescriptor(prototype, key)), (descriptor) =>
+      Option.liftPredicate(descriptorField(descriptor, field), Predicate.isFunction),
+    ),
   )
 
-/** An intrinsic every Bun has; a missing one fails the module load, before any cell runs. */
-const requiredMethod = (prototype: object, key: PropertyKey): Function =>
-  Option.getOrThrow(intrinsicMethod(prototype, key))
-const requiredGetter = (prototype: object, key: PropertyKey): Function =>
-  Option.getOrThrow(intrinsicGetter(prototype, key))
+/** A built-in's slot reader called on a value, never through the value. */
+const readSlot = (reader: Function, value: object, args: ReadonlyArray<unknown> = []): unknown =>
+  Reflect.apply(reader, value, args)
 
-const typedArrayPrototype: object = prototypeOf(Uint8Array.prototype)
-const charCodeAt = requiredMethod(String.prototype, "charCodeAt")
-const stringSlice = requiredMethod(String.prototype, "slice")
-const functionSource = requiredMethod(Function.prototype, "toString")
-const dateTime = requiredMethod(Date.prototype, "getTime")
-const dateIso = requiredMethod(Date.prototype, "toISOString")
-const mapForEach = requiredMethod(Map.prototype, "forEach")
-const setForEach = requiredMethod(Set.prototype, "forEach")
-const mapSize = requiredGetter(Map.prototype, "size")
-const setSize = requiredGetter(Set.prototype, "size")
-const typedArrayKind = requiredGetter(typedArrayPrototype, Symbol.toStringTag)
-const typedArrayLength = requiredGetter(typedArrayPrototype, "length")
-const regExpSource = requiredGetter(RegExp.prototype, "source")
-const numberValue = requiredMethod(Number.prototype, "valueOf")
-const stringValue = requiredMethod(String.prototype, "valueOf")
-const booleanValue = requiredMethod(Boolean.prototype, "valueOf")
-const bigIntValue = requiredMethod(BigInt.prototype, "valueOf")
-const symbolValue = requiredMethod(Symbol.prototype, "valueOf")
+// ── promise settlement ──────────────────────────────────────────────────────
+
+const applySaved = Reflect.apply
+const promiseThen = intrinsic(Promise.prototype, "then", "value")
+
+/** True for a promise the realm made; a thenable a cell wrote is a plain value. */
+export const isNativePromise = (value: unknown): value is Promise<unknown> => isPromise(value)
+
+/**
+ * Wait for a promise through the `then` this module saved when it loaded, not
+ * the one the promise holds now: a cell may replace `Promise.prototype.then`
+ * before it awaits. The realm's `then` still reads the promise's
+ * `constructor` to make its result promise.
+ */
+export const whenSettled = (
+  promise: Promise<unknown>,
+  onFulfilled: (value: unknown) => void,
+  onRejected: (cause: unknown) => void,
+): void => {
+  applySaved(promiseThen, promise, [onFulfilled, onRejected])
+}
+
+const typedArrayPrototype: object = Object.getPrototypeOf(Uint8Array.prototype)
+const functionSource = intrinsic(Function.prototype, "toString", "value")
+const dateTime = intrinsic(Date.prototype, "getTime", "value")
+const dateIso = intrinsic(Date.prototype, "toISOString", "value")
+const mapForEach = intrinsic(Map.prototype, "forEach", "value")
+const setForEach = intrinsic(Set.prototype, "forEach", "value")
+const mapSize = intrinsic(Map.prototype, "size", "get")
+const setSize = intrinsic(Set.prototype, "size", "get")
+const typedArrayKind = intrinsic(typedArrayPrototype, Symbol.toStringTag, "get")
+const typedArrayLength = intrinsic(typedArrayPrototype, "length", "get")
+const regExpSource = intrinsic(RegExp.prototype, "source", "get")
+const numberValue = intrinsic(Number.prototype, "valueOf", "value")
+const stringValue = intrinsic(String.prototype, "valueOf", "value")
+const booleanValue = intrinsic(Boolean.prototype, "valueOf", "value")
+const bigIntValue = intrinsic(BigInt.prototype, "valueOf", "value")
+const symbolValue = intrinsic(Symbol.prototype, "valueOf", "value")
 /**
  * `RegExp.prototype.flags` reads `this.global` and the other flag getters by
  * name, so a subclass getter runs; each flag getter reads the internal slot.
  * Spec order, and only the flags this Bun knows.
  */
-const regExpFlagKeys: ReadonlyArray<readonly [string, string]> = [
+const regExpFlagKeys = [
   ["d", "hasIndices"],
   ["g", "global"],
   ["i", "ignoreCase"],
@@ -127,10 +387,18 @@ const regExpFlagKeys: ReadonlyArray<readonly [string, string]> = [
   ["u", "unicode"],
   ["v", "unicodeSets"],
   ["y", "sticky"],
-]
+] satisfies ReadonlyArray<readonly [string, string]>
 const regExpFlags: ReadonlyArray<{ readonly flag: string; readonly get: Function }> =
   regExpFlagKeys.flatMap(([flag, key]) =>
-    Option.toArray(Option.map(intrinsicGetter(RegExp.prototype, key), (get) => ({ flag, get }))),
+    Option.toArray(
+      Option.map(
+        Option.flatMap(
+          Option.fromUndefinedOr(ownDescriptor(RegExp.prototype, key)),
+          descriptorGetter,
+        ),
+        (get) => ({ flag, get }),
+      ),
+    ),
   )
 
 /**
@@ -146,15 +414,13 @@ const hostGetters: ReadonlyArray<unknown> = Object.getOwnPropertyNames(globalThi
     Option.toArray(
       Option.fromUndefinedOr(ownDescriptor(globalThis, name)).pipe(
         Option.flatMap((descriptor) =>
-          Option.liftPredicate(Reflect.get(descriptor, "value"), Predicate.isFunction),
+          Option.liftPredicate(descriptorField(descriptor, "value"), Predicate.isFunction),
         ),
         Option.flatMap((type) =>
           Option.liftPredicate(Reflect.get(type, "prototype"), Predicate.isObjectKeyword),
         ),
         Option.filter(
-          (prototype) =>
-            prototype === errorPrototype ||
-            Object.prototype.isPrototypeOf.call(errorPrototype, prototype),
+          (prototype) => prototype === errorPrototype || errorPrototype.isPrototypeOf(prototype),
         ),
       ),
     ),
@@ -164,145 +430,6 @@ const hostGetters: ReadonlyArray<unknown> = Object.getOwnPropertyNames(globalThi
       Option.toArray(descriptorGetter(descriptor)),
     ),
   )
-
-// ── list and text helpers ───────────────────────────────────────────────────
-
-/** A saved intrinsic called on a value. */
-const call = (fn: Function, target: unknown, args: ReadonlyArray<unknown> = []): unknown =>
-  apply(fn, target, args)
-
-/** A data slot with no prototype: defining it reads no inherited descriptor field. */
-const dataSlot = (value: unknown): PropertyDescriptor => {
-  const slot = { value, writable: true, enumerable: true, configurable: true }
-  setPrototype(slot, null)
-  return slot
-}
-
-/** Define an own data property; no setter along the prototype chain runs. */
-export const defineData = (target: object, key: PropertyKey, value: unknown): void => {
-  defineOwn(target, key, dataSlot(value))
-}
-
-/** Add to the end of a list the caller owns, without `push`. */
-export const append = <A>(list: Array<A>, value: A): void => defineData(list, list.length, value)
-
-/** An item of a dense list the caller owns; the fallback past its end, never a read through its prototype. */
-const itemAt = <A>(list: ReadonlyArray<A>, index: number, fallback: A): A => {
-  if (index < 0 || index >= list.length) return fallback
-  const item = list[index]
-  if (item === undefined) return fallback
-  return item
-}
-
-/** Remove the last item of a list the caller owns. */
-export const dropLast = (list: Array<unknown>): void => {
-  if (list.length > 0) list.length = list.length - 1
-}
-
-/** Whether a list the caller owns holds this exact value. */
-export const holds = (list: ReadonlyArray<unknown>, value: unknown): boolean => {
-  for (let index = 0; index < list.length; index++) if (list[index] === value) return true
-  return false
-}
-
-/** Where a list the caller owns holds this exact value; -1 when it does not. */
-const positionOf = (list: ReadonlyArray<unknown>, value: unknown): number => {
-  for (let index = 0; index < list.length; index++) if (list[index] === value) return index
-  return -1
-}
-
-/** A primitive as text, through the abstract ToString. */
-export const primitiveText = (value: unknown): string => {
-  // ToString of an object runs its `toString` or `Symbol.toPrimitive`: cell code.
-  if (Predicate.isObjectKeyword(value)) return unreadableDisplay
-  return toText(value)
-}
-
-export const isFinite = (value: number): boolean => isFiniteNumber(value)
-
-/** JSON text through the `JSON.stringify` saved at load. */
-export const jsonText = (value: Schema.Json): string => {
-  const text: unknown = stringifyJson(value)
-  if (Predicate.isString(text)) return text
-  return ""
-}
-
-/** A value's prototype; the caller has checked it is not a Proxy. */
-export const valuePrototype = (value: object): unknown => prototypeOf(value)
-
-/** Brand checks that read internal slots, saved at load. */
-export const brands = {
-  isProxy,
-  isNativeError,
-  isDate,
-  isRegExp,
-  isMap,
-  isSet,
-  isTypedArray,
-}
-
-export const codeUnit = (text: string, index: number): number => codeAt(text, index)
-
-const codeAt = (text: string, index: number): number => {
-  const code = call(charCodeAt, text, [index])
-  if (Predicate.isNumber(code)) return code
-  return -1
-}
-
-const slice = (text: string, start: number, end: number): string => {
-  const part = call(stringSlice, text, [start, end])
-  if (Predicate.isString(part)) return part
-  return ""
-}
-
-const holdsCode = (text: string, code: number): boolean => {
-  for (let index = 0; index < text.length; index++) if (codeAt(text, index) === code) return true
-  return false
-}
-
-/** Whether a text holds `${`, which a template literal would read as a placeholder. */
-const holdsPlaceholder = (text: string): boolean => {
-  for (let index = 0; index + 1 < text.length; index++)
-    if (codeAt(text, index) === 36 && codeAt(text, index + 1) === 123) return true
-  return false
-}
-
-const spaces = (count: number): string => {
-  let out = ""
-  for (let index = 0; index < count; index++) out += " "
-  return out
-}
-
-const join = (list: ReadonlyArray<string>, separator: string): string => {
-  let out = ""
-  for (let index = 0; index < list.length; index++) {
-    if (index > 0) out += separator
-    out += list[index]
-  }
-  return out
-}
-
-const padStart = (text: string, width: number): string => spaces(width - text.length) + text
-const padEnd = (text: string, width: number): string => text + spaces(width - text.length)
-
-const plural = (count: number, one: string, many: string): string => {
-  if (count > 1) return many
-  return one
-}
-
-const hexDigits = "0123456789abcdef"
-const upperHexDigits = "0123456789ABCDEF"
-
-/** A code unit as hexadecimal of at least `width` digits. */
-const hex = (value: number, width: number, digits: string): string => {
-  let out = ""
-  let rest = value
-  while (rest > 0 || out.length < width) {
-    out = digits[rest % 16] + out
-    rest = floorNumber(rest / 16)
-  }
-  return out
-}
 
 // ── value reader ────────────────────────────────────────────────────────────
 
@@ -327,8 +454,8 @@ const readThrough =
       if (Predicate.isNotUndefined(descriptor)) {
         if (hasOwn(descriptor, "value")) return Result.succeed(Option.some(descriptor.value))
         const get = descriptorGetter(descriptor)
-        if (Option.isSome(get) && holds(getters, get.value))
-          return Result.succeed(Option.some(call(get.value, target)))
+        if (Option.isSome(get) && getters.includes(get.value))
+          return Result.succeed(Option.some(readSlot(get.value, target)))
         return unreadable
       }
       holder = prototypeOf(holder)
@@ -364,44 +491,25 @@ export const inheritsFrom = (value: unknown, prototype: object): ValueRead<boole
 
 /** An array that is not a Proxy: its length and elements read without traps. */
 export const isOrdinaryArray = (value: unknown): value is ReadonlyArray<unknown> =>
-  !isProxy(value) && isArray(value)
+  !isProxy(value) && Array.isArray(value)
 
-/** An own field of a descriptor; an absent one reads as undefined, never through `Object.prototype`. */
-const descriptorField = (descriptor: PropertyDescriptor, key: string): unknown => {
-  if (hasOwn(descriptor, key)) return readField(descriptor, key)
-  return undefined
-}
-
-/** Whether two descriptors hold the same value or accessors and the same flags. */
-export const sameDescriptor = (left: PropertyDescriptor, right: PropertyDescriptor): boolean => {
-  const fields = ["value", "get", "set", "writable", "enumerable", "configurable"]
-  for (let index = 0; index < fields.length; index++) {
-    const field = itemAt(fields, index, "value")
-    if (!sameValue(descriptorField(left, field), descriptorField(right, field))) return false
-  }
-  return true
-}
-
-/** A date's time value through the saved `getTime`, which reads the internal slot. */
-export const readDate = (value: object): Option.Option<number> => {
+/** A date's time value through `getTime`, which reads the internal slot. */
+const readDate = (value: object): Option.Option<number> => {
   if (!isDate(value)) return Option.none()
-  return Option.liftPredicate(call(dateTime, value), Predicate.isNumber)
+  return Option.liftPredicate(readSlot(dateTime, value), Predicate.isNumber)
 }
 
-/** A regular expression's source and flags through the saved slot getters. */
-export const readRegExp = (
+/** A regular expression's source and flags through the slot getters. */
+const readRegExp = (
   value: object,
 ): Option.Option<{ readonly source: string; readonly flags: string }> => {
   if (!isRegExp(value)) return Option.none()
-  const source = call(regExpSource, value)
+  const source = readSlot(regExpSource, value)
   if (!Predicate.isString(source)) return Option.none()
-  let flags = ""
-  for (let index = 0; index < regExpFlags.length; index++) {
-    const found = regExpFlags[index]
-    if (found === undefined) continue
-    const { flag, get } = found
-    if (call(get, value) === true) flags += flag
-  }
+  const flags = regExpFlags
+    .filter(({ get }) => readSlot(get, value) === true)
+    .map(({ flag }) => flag)
+    .join("")
   return Option.some({ source, flags })
 }
 
@@ -412,46 +520,46 @@ interface CollectionMember {
 }
 
 /**
- * A Map's or Set's size and first `limit` members through the saved `size`
+ * A Map's or Set's size and first `limit` members through the built-in `size`
  * getter and `forEach`, which walk the internal table, so a subclass
  * iterator never runs.
  */
-export const readCollection = (
+const readCollection = (
   value: object,
   limit: number,
 ): Option.Option<{ readonly size: number; readonly members: ReadonlyArray<CollectionMember> }> => {
   let size: unknown
   let forEach: Function
   if (isMap(value)) {
-    size = call(mapSize, value)
+    size = readSlot(mapSize, value)
     forEach = mapForEach
   } else if (isSet(value)) {
-    size = call(setSize, value)
+    size = readSlot(setSize, value)
     forEach = setForEach
   } else return Option.none()
   if (!Predicate.isNumber(size)) return Option.none()
   const members: Array<CollectionMember> = []
-  call(forEach, value, [
+  readSlot(forEach, value, [
     (item: unknown, key: unknown) => {
-      if (members.length < limit) append(members, { value: item, key })
+      if (members.length < limit) members.push({ value: item, key })
     },
   ])
   return Option.some({ size, members })
 }
 
-/** A typed array's kind and length through the saved slot getters. */
-export const readTypedArray = (
+/** A typed array's kind and length through the slot getters. */
+const readTypedArray = (
   value: object,
 ): Option.Option<{ readonly kind: string; readonly length: number }> => {
   if (!isTypedArray(value)) return Option.none()
-  const kind = call(typedArrayKind, value)
-  const length = call(typedArrayLength, value)
+  const kind = readSlot(typedArrayKind, value)
+  const length = readSlot(typedArrayLength, value)
   if (!Predicate.isString(kind) || !Predicate.isNumber(length)) return Option.none()
   return Option.some({ kind, length })
 }
 
 /** An element of a typed array: an integer index reads its buffer, never its prototype. */
-export const typedArrayItem = (value: object, index: number): unknown =>
+const typedArrayItem = (value: object, index: number): unknown =>
   Option.getOrUndefined(
     Option.map(Option.fromUndefinedOr(ownDescriptor(value, index)), (d) => d.value),
   )
@@ -475,6 +583,299 @@ export const errorHead = (error: object): string => {
       onSome: (message) => `${name}: ${message}`,
     },
   )
+}
+
+// ── namespace snapshot codec ────────────────────────────────────────────────
+
+/**
+ * The worker encodes cell bindings to tagged JSON through the value reader,
+ * so encoding runs no getter, trap or iterator. Brand checks read internal
+ * slots, so they hold for a value from any realm. The reviver in
+ * `cell-protocol.ts` decodes it in the realm that restores.
+ */
+export const maximumSnapshotBindingBytes = 256 * 1024
+const maximumSnapshotBytes = 768 * 1024
+const maximumSnapshotDepth = 64
+/** Each entry encodes to at least two bytes, so a longer collection is too large unread. */
+const maximumSnapshotEntries = maximumSnapshotBindingBytes / 2
+
+/** A value that cannot round-trip. It never enters the encoded JSON. Each is made at load. */
+class Omitted {
+  constructor(readonly reason: OmissionReason) {}
+}
+type OmissionReason = SnapshotOmission["reason"]
+type Encoded = Schema.Json | Omitted
+const isOmitted = (value: Encoded): value is Omitted => value instanceof Omitted
+const omittedFunction = new Omitted("function")
+const unsupported = new Omitted("unsupported")
+const cyclic = new Omitted("cyclic")
+const tooDeep = new Omitted("too-deep")
+const tooLarge = new Omitted("too-large")
+
+const tagged = (kind: string, value: Schema.Json): Schema.Json => ({ [snapshotTag]: kind, value })
+
+/** The native UTF-8 byte count, saved at load so a replaced `Buffer` never runs here. */
+const byteLength = Buffer.byteLength.bind(Buffer)
+
+/**
+ * The UTF-8 bytes one binding may still take. Each value charges a floor of
+ * its encoded size, and the encoder stops at the first charge past the budget,
+ * so a large value is never read to its end.
+ */
+class Budget {
+  constructor(private bytes: number) {}
+
+  /** Charge `bytes`; false once the budget is spent. */
+  spend(bytes: number): boolean {
+    this.bytes -= bytes
+    return this.bytes >= 0
+  }
+
+  /** A string and its quotes. UTF-8 takes at least one byte per UTF-16 unit, so a longer string is refused uncounted. */
+  text(value: string): boolean {
+    if (value.length > this.bytes) return this.spend(value.length)
+    return this.spend(byteLength(value) + 2)
+  }
+}
+
+/** Plain means its prototype is null or a root Object.prototype from any realm. */
+const isPlainObject = (value: object) => {
+  const proto: unknown = prototypeOf(value)
+  if (proto === null) return true
+  if (!Predicate.isObjectKeyword(proto) || isProxy(proto)) return false
+  return prototypeOf(proto) === null
+}
+
+const typedArrayKinds: ReadonlyArray<string> = [
+  "Uint8Array",
+  "Int8Array",
+  "Uint16Array",
+  "Int16Array",
+  "Uint32Array",
+  "Int32Array",
+  "Float32Array",
+  "Float64Array",
+  "Uint8ClampedArray",
+  "BigInt64Array",
+  "BigUint64Array",
+]
+
+const encodePrimitive = (value: unknown, budget: Budget): Encoded | undefined => {
+  if (Predicate.isString(value)) {
+    if (budget.text(value)) return value
+    return tooLarge
+  }
+  if (Predicate.isFunction(value)) return omittedFunction
+  if (Predicate.isObjectKeyword(value)) return undefined
+  // Every other primitive encodes to at least one byte, plus a separator.
+  if (!budget.spend(2)) return tooLarge
+  if (value === null || Predicate.isBoolean(value)) return value
+  if (Predicate.isUndefined(value)) return tagged("undefined", null)
+  if (Predicate.isNumber(value)) {
+    // A finite number is its shortest text; the floor already charged two bytes.
+    if (Number.isFinite(value)) {
+      if (budget.spend(String(value).length - 1)) return value
+      return tooLarge
+    }
+    return tagged("number", String(value))
+  }
+  // The abstract ToString: a `toString` on the value never runs.
+  if (Predicate.isBigInt(value)) return tagged("bigint", String(value))
+  return unsupported
+}
+
+/** An array's elements through their descriptors; a hole reads as undefined. */
+const encodeArray = (array: ReadonlyArray<unknown>, inner: (item: unknown) => Encoded): Encoded => {
+  // An array's own length is a data property: no getter can stand in for it.
+  if (array.length > maximumSnapshotEntries) return tooLarge
+  const out: Array<Schema.Json> = []
+  for (let index = 0; index < array.length; index++) {
+    const encoded = Result.match(readProperty(array, index), {
+      onFailure: (): Encoded => unsupported,
+      onSuccess: (item) => inner(Option.getOrUndefined(item)),
+    })
+    if (isOmitted(encoded)) return encoded
+    out.push(encoded)
+  }
+  return out
+}
+
+/** A plain object's own enumerable string keys, in `Object.entries` order; any accessor is cell code. */
+const encodeRecord = (
+  object: object,
+  inner: (item: unknown) => Encoded,
+  budget: Budget,
+): Encoded => {
+  const keys = ownKeys(object)
+  if (keys.length > maximumSnapshotEntries) return tooLarge
+  const out: Record<string, Schema.Json> = {}
+  for (const key of keys) {
+    if (!Predicate.isString(key)) continue
+    const descriptor = ownDescriptor(object, key)
+    if (Predicate.isUndefined(descriptor) || descriptor.enumerable !== true) continue
+    if (!hasOwn(descriptor, "value")) return unsupported
+    if (!budget.text(key)) return tooLarge
+    const encoded = inner(descriptor.value)
+    if (isOmitted(encoded)) return encoded
+    // Assignment to an own `__proto__` key would set the prototype and drop the key.
+    Object.defineProperty(out, key, {
+      value: encoded,
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    })
+  }
+  if (hasOwn(out, snapshotTag)) return tagged("object", out)
+  return out
+}
+
+/** A native error's `name`, `message` or `stack`: a primitive as text, absent as the fallback. */
+const errorText = (error: object, key: string, fallback: string): Option.Option<string> =>
+  Result.match(readProperty(error, key), {
+    onFailure: () => Option.none(),
+    onSuccess: (found) => {
+      if (Option.isNone(found)) return Option.some(fallback)
+      // String() of an object runs its toString or Symbol.toPrimitive: cell code.
+      const text = found.value
+      if (Predicate.isObjectKeyword(text)) return Option.none()
+      return Option.some(String(text))
+    },
+  })
+
+const encodeError = (error: object, budget: Budget): Encoded => {
+  const name = errorText(error, "name", "Error")
+  const message = errorText(error, "message", "")
+  const stack = errorText(error, "stack", "")
+  if (Option.isNone(name) || Option.isNone(message) || Option.isNone(stack)) return unsupported
+  if (!budget.text(name.value) || !budget.text(message.value) || !budget.text(stack.value))
+    return tooLarge
+  return tagged("error", { name: name.value, message: message.value, stack: stack.value })
+}
+
+const encodeRegExp = (value: object, budget: Budget): Encoded =>
+  Option.match(readRegExp(value), {
+    onNone: () => unsupported,
+    onSome: ({ source, flags }) => {
+      if (!budget.text(source)) return tooLarge
+      return tagged("regexp", [source, flags])
+    },
+  })
+
+/** A Map's or Set's members through the built-in `size` and `forEach`; a Map member encodes as `[key, value]`. */
+const encodeCollection = (
+  value: object,
+  kind: "map" | "set",
+  inner: (item: unknown) => Encoded,
+): Encoded => {
+  const collection = readCollection(value, maximumSnapshotEntries)
+  if (Option.isNone(collection)) return unsupported
+  if (collection.value.size > maximumSnapshotEntries) return tooLarge
+  const out: Array<Schema.Json> = []
+  for (const member of collection.value.members) {
+    let key: Encoded = null
+    if (kind === "map") {
+      key = inner(member.key)
+      if (isOmitted(key)) return key
+    }
+    const item = inner(member.value)
+    if (isOmitted(item)) return item
+    if (kind === "map") out.push([key, item])
+    else out.push(item)
+  }
+  return tagged(kind, out)
+}
+
+const encodeTypedArray = (value: object, budget: Budget): Encoded => {
+  const typed = readTypedArray(value)
+  if (Option.isNone(typed) || !typedArrayKinds.includes(typed.value.kind)) return unsupported
+  const { kind, length } = typed.value
+  if (length > maximumSnapshotEntries || !budget.spend(length * 2)) return tooLarge
+  const values: Array<Schema.Json> = []
+  for (let index = 0; index < length; index++) {
+    const item = typedArrayItem(value, index)
+    // Bigint elements travel as strings, through the abstract ToString.
+    if (Predicate.isBigInt(item)) values.push(String(item))
+    else if (Predicate.isNumber(item)) values.push(item)
+  }
+  return tagged(kind, values)
+}
+
+/** Built-ins by brand: a brand check reads the internal slot, and so does the read. */
+const encodeBuiltin = (
+  value: object,
+  inner: (item: unknown) => Encoded,
+  budget: Budget,
+): Encoded | undefined => {
+  if (isNativeError(value)) return encodeError(value, budget)
+  if (isDate(value))
+    return Option.match(readDate(value), {
+      onNone: () => unsupported,
+      onSome: (time) => tagged("date", time),
+    })
+  if (isRegExp(value)) return encodeRegExp(value, budget)
+  if (isMap(value)) return encodeCollection(value, "map", inner)
+  if (isSet(value)) return encodeCollection(value, "set", inner)
+  if (isTypedArray(value)) return encodeTypedArray(value, budget)
+  return undefined
+}
+
+const encodeValue = (
+  value: unknown,
+  depth: number,
+  seen: Array<object>,
+  budget: Budget,
+): Encoded => {
+  if (depth > maximumSnapshotDepth) return tooDeep
+  const primitive = encodePrimitive(value, budget)
+  if (!Predicate.isUndefined(primitive)) return primitive
+  // Every trap of a Proxy is cell code, and no read of one is safe.
+  if (!Predicate.isObjectKeyword(value) || isProxy(value)) return unsupported
+  const object: object = value
+  if (seen.includes(object)) return cyclic
+  // A container encodes to at least its brackets and a separator.
+  if (!budget.spend(3)) return tooLarge
+  seen.push(object)
+  const inner = (child: unknown) => encodeValue(child, depth + 1, seen, budget)
+  let encoded: Encoded
+  const builtin = encodeBuiltin(object, inner, budget)
+  if (!Predicate.isUndefined(builtin)) encoded = builtin
+  else if (isOrdinaryArray(object)) encoded = encodeArray(object, inner)
+  else if (isPlainObject(object)) encoded = encodeRecord(object, inner, budget)
+  else encoded = unsupported
+  seen.pop()
+  return encoded
+}
+
+/**
+ * One binding's encoding. Encoding runs no cell code; a host getter can still
+ * throw, and that value cannot round-trip either.
+ */
+const encodeBinding = Option.liftThrowable((value: unknown, budget: Budget): Encoded =>
+  encodeValue(value, 0, [], budget),
+)
+
+/** Encode every binding. Values that cannot round-trip are named with the reason, never silently dropped. */
+export const encodeSnapshot = (namespace: ReadonlyMap<string, unknown>): CellSnapshot => {
+  const bindings: Array<SnapshotBinding> = []
+  const omitted: Array<SnapshotOmission> = []
+  let total = 0
+  for (const [name, value] of namespace) {
+    // The budget is the smaller of the binding cap and what the snapshot has left.
+    const budget = new Budget(Math.min(maximumSnapshotBindingBytes, maximumSnapshotBytes - total))
+    const encoded = Option.getOrElse(encodeBinding(value, budget), () => unsupported)
+    if (isOmitted(encoded)) {
+      omitted.push({ name, reason: encoded.reason })
+      continue
+    }
+    const size = byteLength(JSON.stringify(encoded))
+    if (size > maximumSnapshotBindingBytes || total + size > maximumSnapshotBytes) {
+      omitted.push({ name, reason: "too-large" })
+      continue
+    }
+    total += size
+    bindings.push({ name, value: encoded })
+  }
+  return { bindings, omitted }
 }
 
 // ── value display ───────────────────────────────────────────────────────────
@@ -514,7 +915,6 @@ const displayKeyScanLength = 10_000
 const holeScanLength = 10_000
 const breakLength = 80
 const compactLevels = 3
-const minimumSplitLength = 16
 const unreadableDisplay = "[unreadable]"
 
 interface DisplayContext {
@@ -537,18 +937,26 @@ interface Layout {
   readonly open: string
   readonly close: string
   readonly keys: ReadonlyArray<PropertyKey>
-  /** An array-like list, which groups more than six items in columns. */
+  /** An array-like list, which packs its items onto lines. */
   readonly list: boolean
   readonly items: (context: DisplayContext, depth: number) => Array<string>
 }
 
 const noItems = (): Array<string> => []
 
+const plural = (count: number, one: string, many: string): string => {
+  if (count > 1) return many
+  return one
+}
+
+/** A code unit as hexadecimal of at least `width` digits. */
+const hex = (value: number, width: number): string => value.toString(16).padStart(width, "0")
+
 // ── display: primitives and text ──
 
 const formatNumber = (value: number): string => {
   if (value === 0 && 1 / value < 0) return "-0"
-  return toText(value)
+  return String(value)
 }
 
 const escapeCode = (code: number): string => {
@@ -568,127 +976,68 @@ const escapeCode = (code: number): string => {
     case 92:
       return "\\\\"
     default:
-      return `\\x${hex(code, 2, upperHexDigits)}`
+      return `\\x${hex(code, 2).toUpperCase()}`
   }
 }
 
 const isSurrogatePair = (text: string, index: number): boolean => {
-  const code = codeAt(text, index)
+  const code = text.charCodeAt(index)
   if (code < 0xd800 || code > 0xdbff || index + 1 >= text.length) return false
-  const next = codeAt(text, index + 1)
+  const next = text.charCodeAt(index + 1)
   return next >= 0xdc00 && next <= 0xdfff
 }
 
-/** The quote `inspect` picks: single, else double, else a backtick. */
-const quoteFor = (text: string): number => {
-  if (!holdsCode(text, 39)) return 39
-  if (!holdsCode(text, 34)) return 34
-  if (!holdsCode(text, 96) && !holdsPlaceholder(text)) return 96
-  return 39
-}
-
-const escapeText = (text: string, quote: number): string => {
+const escapeText = (text: string): string => {
   let out = ""
   let last = 0
   for (let index = 0; index < text.length; index++) {
-    const code = codeAt(text, index)
-    if (code === quote || code === 92 || code < 32 || (code > 126 && code < 160)) {
-      out += slice(text, last, index) + escapeCode(code)
+    const code = text.charCodeAt(index)
+    if (code === 39 || code === 92 || code < 32 || (code > 126 && code < 160)) {
+      out += text.slice(last, index) + escapeCode(code)
       last = index + 1
     } else if (code >= 0xd800 && code <= 0xdfff) {
       if (isSurrogatePair(text, index)) {
         index++
         continue
       }
-      out += `${slice(text, last, index)}\\u${hex(code, 4, hexDigits)}`
+      out += `${text.slice(last, index)}\\u${hex(code, 4)}`
       last = index + 1
     }
   }
-  return out + slice(text, last, text.length)
+  return out + text.slice(last)
 }
 
-const quoteMark = (quote: number): string => {
-  if (quote === 34) return '"'
-  if (quote === 96) return "`"
-  return "'"
-}
+/** A string in single quotes, escaped. */
+const quoteText = (text: string): string => `'${escapeText(text)}'`
 
-const quoteText = (text: string): string => {
-  const quote = quoteFor(text)
-  const mark = quoteMark(quote)
-  return mark + escapeText(text, quote) + mark
-}
-
-/** Lines that each keep their trailing newline. */
-const splitAfterNewlines = (text: string): Array<string> => {
-  const lines: Array<string> = []
-  let start = 0
-  for (let index = 0; index < text.length; index++) {
-    if (codeAt(text, index) !== 10) continue
-    append(lines, slice(text, start, index + 1))
-    start = index + 1
-  }
-  if (start < text.length) append(lines, slice(text, start, text.length))
-  return lines
-}
-
-const formatString = (context: DisplayContext, value: string): string => {
-  let text = value
-  let trailer = ""
-  if (text.length > displayStringLength) {
-    const remaining = text.length - displayStringLength
-    text = slice(text, 0, displayStringLength)
-    trailer = `... ${remaining} more ${plural(remaining, "character", "characters")}`
-  }
-  if (text.length > minimumSplitLength && text.length > breakLength - context.indentation - 4) {
-    const lines = splitAfterNewlines(text)
-    const quoted: Array<string> = []
-    for (let index = 0; index < lines.length; index++)
-      append(quoted, quoteText(itemAt(lines, index, "")))
-    return join(quoted, ` +\n${spaces(context.indentation + 2)}`) + trailer
-  }
-  return quoteText(text) + trailer
+const formatString = (value: string): string => {
+  if (value.length <= displayStringLength) return quoteText(value)
+  const remaining = value.length - displayStringLength
+  return `${quoteText(value.slice(0, displayStringLength))}... ${remaining} more ${plural(remaining, "character", "characters")}`
 }
 
 const formatPrimitive = (context: DisplayContext, value: unknown): string => {
-  if (Predicate.isString(value)) return formatString(context, value)
+  if (Predicate.isString(value)) return formatString(value)
   if (Predicate.isNumber(value)) return formatNumber(value)
-  if (Predicate.isBigInt(value)) return `${toText(value)}n`
-  if (Predicate.isSymbol(value) || Predicate.isBoolean(value)) return toText(value)
+  if (Predicate.isBigInt(value)) return `${String(value)}n`
+  if (Predicate.isSymbol(value) || Predicate.isBoolean(value)) return String(value)
   if (value === null) return "null"
   return "undefined"
 }
 
 /** A key as `inspect` writes it: bare when an identifier, else quoted; a symbol as Bun writes it. */
 const keyText = (key: PropertyKey): string => {
-  if (Predicate.isSymbol(key)) return toText(key)
-  const text = toText(key)
+  if (Predicate.isSymbol(key)) return String(key)
+  const text = String(key)
   if (text === "__proto__") return "['__proto__']"
-  if (isIdentifier(text)) return text
+  if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(text)) return text
   return quoteText(text)
-}
-
-const isIdentifierStart = (code: number) =>
-  (code >= 65 && code <= 90) || (code >= 97 && code <= 122) || code === 95
-const isIdentifier = (text: string): boolean => {
-  if (text.length === 0 || !isIdentifierStart(codeAt(text, 0))) return false
-  for (let index = 1; index < text.length; index++) {
-    const code = codeAt(text, index)
-    if (!isIdentifierStart(code) && (code < 48 || code > 57)) return false
-  }
-  return true
 }
 
 /** An array index key: digits with no leading zero, below 2^32 - 1. */
 const indexOfKey = (key: PropertyKey): Option.Option<number> => {
-  if (!Predicate.isString(key) || key.length === 0 || key.length > 10) return Option.none()
-  if (key.length > 1 && codeAt(key, 0) === 48) return Option.none()
-  let index = 0
-  for (let position = 0; position < key.length; position++) {
-    const code = codeAt(key, position)
-    if (code < 48 || code > 57) return Option.none()
-    index = index * 10 + (code - 48)
-  }
+  if (!Predicate.isString(key) || !/^(?:0|[1-9][0-9]{0,9})$/.test(key)) return Option.none()
+  const index = Number(key)
   if (index > 4_294_967_294) return Option.none()
   return Option.some(index)
 }
@@ -773,18 +1122,11 @@ const depthMarker = (constructor: ConstructorName): string => `[${constructorLab
 // ── display: keys and properties ──
 
 /** Own enumerable keys, strings first and then symbols, as `inspect` lists them. */
-const keysOf = (value: object, skipIndexes: boolean): Array<PropertyKey> => {
-  const all = ownKeys(value)
-  const keys: Array<PropertyKey> = []
-  for (let index = 0; index < all.length; index++) {
-    const key = all[index]
-    if (key === undefined) continue
-    if (skipIndexes && Option.isSome(indexOfKey(key))) continue
-    const descriptor = ownDescriptor(value, key)
-    if (Predicate.isNotUndefined(descriptor) && descriptor.enumerable === true) append(keys, key)
-  }
-  return keys
-}
+const keysOf = (value: object, skipIndexes: boolean): Array<PropertyKey> =>
+  ownKeys(value).filter((key) => {
+    if (skipIndexes && Option.isSome(indexOfKey(key))) return false
+    return ownDescriptor(value, key)?.enumerable === true
+  })
 
 /** Extra keys of an array-like value; a long one lists none, since listing reads every index key. */
 const extraKeysOf = (value: object, length: number): Array<PropertyKey> => {
@@ -831,13 +1173,12 @@ const formatProperty = (
 
 /** The next own index at or after `from`; `length` when none. */
 const nextOwnIndex = (value: object, from: number, length: number): number => {
-  const scanEnd = smallest(length, from + holeScanLength)
+  const scanEnd = Math.min(length, from + holeScanLength)
   for (let index = from; index < scanEnd; index++) if (hasOwn(value, index)) return index
   if (scanEnd === length) return length
-  const keys = ownKeys(value)
   let next = length
-  for (let position = 0; position < keys.length; position++) {
-    const index = indexOfKey(itemAt(keys, position, ""))
+  for (const key of ownKeys(value)) {
+    const index = indexOfKey(key)
     if (Option.isSome(index) && index.value >= from && index.value < next) next = index.value
   }
   return next
@@ -851,16 +1192,16 @@ const arrayItems =
     let index = 0
     while (index < length && output.length < displayListLength) {
       if (hasOwn(value, index)) {
-        append(output, propertyText(context, value, toText(index), depth))
+        output.push(propertyText(context, value, String(index), depth))
         index++
         continue
       }
       const next = nextOwnIndex(value, index, length)
       const empty = next - index
-      append(output, `<${empty} empty ${plural(empty, "item", "items")}>`)
+      output.push(`<${empty} empty ${plural(empty, "item", "items")}>`)
       index = next
     }
-    if (index < length) append(output, remainingItems(length - index))
+    if (index < length) output.push(remainingItems(length - index))
     return output
   }
 
@@ -868,13 +1209,13 @@ const typedArrayItems =
   (value: object, length: number) =>
   (_context: DisplayContext, _depth: number): Array<string> => {
     const output: Array<string> = []
-    const shown = smallest(displayListLength, length)
+    const shown = Math.min(displayListLength, length)
     for (let index = 0; index < shown; index++) {
       const item = typedArrayItem(value, index)
-      if (Predicate.isBigInt(item)) append(output, `${toText(item)}n`)
-      else if (Predicate.isNumber(item)) append(output, formatNumber(item))
+      if (Predicate.isBigInt(item)) output.push(`${String(item)}n`)
+      else if (Predicate.isNumber(item)) output.push(formatNumber(item))
     }
-    if (length > shown) append(output, remainingItems(length - shown))
+    if (length > shown) output.push(remainingItems(length - shown))
     return output
   }
 
@@ -884,21 +1225,15 @@ const collectionItems =
     map: boolean,
   ) =>
   (context: DisplayContext, depth: number): Array<string> => {
-    const output: Array<string> = []
     context.indentation += 2
-    for (let index = 0; index < collection.members.length; index++) {
-      const member = collection.members[index]
-      if (member === undefined) continue
+    const output = collection.members.map((member) => {
       if (map)
-        append(
-          output,
-          `${formatValue(context, member.key, depth)} => ${formatValue(context, member.value, depth)}`,
-        )
-      else append(output, formatValue(context, member.value, depth))
-    }
+        return `${formatValue(context, member.key, depth)} => ${formatValue(context, member.value, depth)}`
+      return formatValue(context, member.value, depth)
+    })
     context.indentation -= 2
     const remaining = collection.size - collection.members.length
-    if (remaining > 0) append(output, remainingItems(remaining))
+    if (remaining > 0) output.push(remainingItems(remaining))
     return output
   }
 
@@ -918,17 +1253,17 @@ const promiseItems =
 const bufferItems =
   (value: object) =>
   (_context: DisplayContext, _depth: number): Array<string> => {
-    const bytes = Option.liftThrowable((): object => construct(ByteView, [value]))()
+    const bytes = Option.liftThrowable((): object => Reflect.construct(Uint8Array, [value]))()
     if (Option.isNone(bytes)) return ["(detached)"]
-    const length = call(typedArrayLength, bytes.value)
+    const length = readSlot(typedArrayLength, bytes.value)
     if (!Predicate.isNumber(length)) return ["(detached)"]
-    const shown = smallest(displayListLength, length)
+    const shown = Math.min(displayListLength, length)
     const pairs: Array<string> = []
     for (let index = 0; index < shown; index++) {
       const byte = typedArrayItem(bytes.value, index)
-      if (Predicate.isNumber(byte)) append(pairs, hex(byte, 2, hexDigits))
+      if (Predicate.isNumber(byte)) pairs.push(hex(byte, 2))
     }
-    let contents = join(pairs, " ")
+    let contents = pairs.join(" ")
     if (length > shown)
       contents += ` ... ${length - shown} more ${plural(length - shown, "byte", "bytes")}`
     return [`[Uint8Contents]: <${contents}>`, `[byteLength]: ${formatNumber(length)}`]
@@ -936,18 +1271,13 @@ const bufferItems =
 
 // ── display: bases ──
 
-const isClassSource = (source: string): boolean => {
-  if (source.length < 6 || slice(source, 0, 5) !== "class") return false
-  const next = codeAt(source, 5)
-  if (next !== 32 && next !== 123 && next !== 9 && next !== 10) return false
-  return codeAt(source, source.length - 1) === 125
-}
+const isClassSource = (source: string): boolean => /^class[\s{][\s\S]*\}$/.test(source)
 
 const classBase = (value: Function, constructor: ConstructorName, tag: string): string => {
   const own = ownDescriptor(value, "name")
   let name = "(anonymous)"
   if (Predicate.isNotUndefined(own) && Predicate.isString(descriptorField(own, "value")))
-    name = toText(descriptorField(own, "value"))
+    name = String(descriptorField(own, "value"))
   if (name === "") name = "(anonymous)"
   let base = `class ${name}`
   if (constructor !== "Function" && constructor !== null)
@@ -960,7 +1290,7 @@ const classBase = (value: Function, constructor: ConstructorName, tag: string): 
 }
 
 const functionBase = (value: Function, constructor: ConstructorName, tag: string): string => {
-  const source = Option.liftThrowable(() => call(functionSource, value))()
+  const source = Option.liftThrowable(() => readSlot(functionSource, value))()
   if (Option.isSome(source) && Predicate.isString(source.value) && isClassSource(source.value))
     return classBase(value, constructor, tag)
   let type = "Function"
@@ -1003,7 +1333,7 @@ const boxedBase = (
     if (Predicate.isString(constructor)) base += ` (${constructor})`
     else base += ` (${prototypeLabel(constructor)})`
   }
-  const inner = call(unbox, value)
+  const inner = readSlot(unbox, value)
   base += `: ${formatPrimitive(context, inner)}]`
   if (tag !== "" && tag !== constructor) base += ` [${tag}]`
   return base
@@ -1012,8 +1342,8 @@ const boxedBase = (
 const dateBase = (value: object, constructor: ConstructorName, tag: string): string => {
   const time = readDate(value)
   let base = "Invalid Date"
-  if (Option.isSome(time) && !isNotANumber(time.value)) {
-    const iso = call(dateIso, value)
+  if (Option.isSome(time) && !Number.isNaN(time.value)) {
+    const iso = readSlot(dateIso, value)
     if (Predicate.isString(iso)) base = iso
   }
   const prefix = getPrefix(constructor, tag, "Date")
@@ -1064,7 +1394,7 @@ const listLayout = (
   constructor: ConstructorName,
   tag: string,
 ): Option.Option<Layout | string> => {
-  if (isArray(value)) {
+  if (Array.isArray(value)) {
     const length = value.length
     const keys = extraKeysOf(value, length)
     let prefix = ""
@@ -1186,87 +1516,33 @@ const isBelowBreakLength = (
 ): boolean => {
   let total = output.length + start
   if (total + output.length > breakLength) return false
-  for (let index = 0; index < output.length; index++) {
-    total += itemAt(output, index, "").length
+  for (const item of output) {
+    total += item.length
     if (total > breakLength) return false
   }
-  return base === "" || !holdsCode(base, 10)
+  return base === "" || !base.includes("\n")
 }
 
-/** Whether every listed item of an array-like value is a number or a bigint: they align right. */
-const numericItems = (value: object, count: number): boolean => {
-  for (let index = 0; index < count; index++) {
-    const descriptor = ownDescriptor(value, index)
-    if (Predicate.isUndefined(descriptor) || !hasOwn(descriptor, "value")) return false
-    const item: unknown = descriptor.value
-    if (!Predicate.isNumber(item) && !Predicate.isBigInt(item)) return false
-  }
-  return true
-}
-
-const columnCount = (
-  context: DisplayContext,
-  lengths: ReadonlyArray<number>,
-  totalLength: number,
-  maxLength: number,
-  outputLength: number,
-): number => {
-  const actualMax = maxLength + 2
-  if (actualMax * 3 + context.indentation >= breakLength) return 1
-  if (!(totalLength / actualMax > 5 || maxLength <= 6)) return 1
-  const averageBias = squareRoot(actualMax - totalLength / lengths.length)
-  const biasedMax = largest(actualMax - 3 - averageBias, 1)
-  return smallest(
-    roundNumber(squareRoot(2.5 * biasedMax * outputLength) / biasedMax),
-    floorNumber((breakLength - context.indentation) / actualMax),
-    compactLevels * 4,
-    15,
-  )
-}
-
-/** More than six array items in aligned columns, as `inspect` groups them. */
-const groupArrayElements = (
+/** A list's items packed onto lines that fit the break length; one per line when any spans lines. */
+const packLines = (
   context: DisplayContext,
   output: ReadonlyArray<string>,
-  value: object,
 ): ReadonlyArray<string> => {
-  let outputLength = output.length
-  if (displayListLength < output.length) outputLength--
-  const lengths: Array<number> = []
-  let totalLength = 0
-  let maxLength = 0
-  for (let index = 0; index < outputLength; index++) {
-    const length = itemAt(output, index, "").length
-    append(lengths, length)
-    totalLength += length + 2
-    if (maxLength < length) maxLength = length
-  }
-  const columns = columnCount(context, lengths, totalLength, maxLength, outputLength)
-  if (columns <= 1) return output
-  const widths: Array<number> = []
-  for (let column = 0; column < columns; column++) {
-    let width = 0
-    for (let index = column; index < outputLength; index += columns)
-      width = largest(width, itemAt(lengths, index, 0))
-    append(widths, width + 2)
-  }
-  const alignRight = numericItems(value, output.length)
-  const grouped: Array<string> = []
-  for (let row = 0; row < outputLength; row += columns) {
-    const end = smallest(row + columns, outputLength)
-    let line = ""
-    let index = row
-    for (; index < end - 1; index++) {
-      const cell = `${output[index]}, `
-      if (alignRight) line += padStart(cell, itemAt(widths, index - row, 0))
-      else line += padEnd(cell, itemAt(widths, index - row, 0))
+  if (output.some((item) => item.includes("\n"))) return output
+  // Two spaces of indentation before a line, a comma after it.
+  const width = breakLength - context.indentation - 3
+  const lines: Array<string> = []
+  let line = ""
+  for (const item of output) {
+    if (line === "") line = item
+    else if (line.length + 2 + item.length <= width) line += `, ${item}`
+    else {
+      lines.push(line)
+      line = item
     }
-    if (alignRight) line += padStart(itemAt(output, index, ""), itemAt(widths, index - row, 0) - 2)
-    else line += output[index]
-    append(grouped, line)
   }
-  if (displayListLength < output.length) append(grouped, output[outputLength])
-  return grouped
+  if (line !== "") lines.push(line)
+  return lines
 }
 
 const reduceToSingleString = (
@@ -1274,31 +1550,29 @@ const reduceToSingleString = (
   output: ReadonlyArray<string>,
   view: Layout,
   depth: number,
-  value: object,
 ): string => {
   const base = view.base
-  let lines = output
-  if (view.list && output.length > 6) lines = groupArrayElements(context, output, value)
   let lead = ""
   if (base !== "") lead = `${base} `
-  if (context.currentDepth - depth < compactLevels && output.length === lines.length) {
-    const start = lines.length + context.indentation + view.open.length + base.length + 10
-    if (isBelowBreakLength(lines, start, base)) {
-      const joined = join(lines, ", ")
-      if (!holdsCode(joined, 10)) return `${lead}${view.open} ${joined} ${view.close}`
+  if (context.currentDepth - depth < compactLevels) {
+    const start = output.length + context.indentation + view.open.length + base.length + 10
+    if (isBelowBreakLength(output, start, base)) {
+      const joined = output.join(", ")
+      if (!joined.includes("\n")) return `${lead}${view.open} ${joined} ${view.close}`
     }
   }
-  const indentation = `\n${spaces(context.indentation)}`
-  return `${lead}${view.open}${indentation}  ${join(lines, `,${indentation}  `)}${indentation}${view.close}`
+  let lines = output
+  if (view.list) lines = packLines(context, output)
+  const indentation = `\n${" ".repeat(context.indentation)}`
+  return `${lead}${view.open}${indentation}  ${lines.join(`,${indentation}  `)}${indentation}${view.close}`
 }
 
 // ── display: values ──
 
 const circularIndex = (context: DisplayContext, value: object): number => {
-  const position = positionOf(context.circular, value)
+  const position = context.circular.indexOf(value)
   if (position !== -1) return position + 1
-  append(context.circular, value)
-  return context.circular.length
+  return context.circular.push(value)
 }
 
 const formatRaw = (context: DisplayContext, value: object, depth: number): string => {
@@ -1307,23 +1581,23 @@ const formatRaw = (context: DisplayContext, value: object, depth: number): strin
   if (Predicate.isString(view)) return view
   if (depth > displayDepth) return depthMarker(constructor)
   const next = depth + 1
-  append(context.seen, value)
+  context.seen.push(value)
   context.currentDepth = next
   const output = view.items(context, next)
-  const shown = smallest(view.keys.length, displayListLength)
-  for (let index = 0; index < shown; index++)
-    append(output, formatProperty(context, value, itemAt(view.keys, index, ""), next))
+  const shown = Math.min(view.keys.length, displayListLength)
+  for (const key of view.keys.slice(0, shown))
+    output.push(formatProperty(context, value, key, next))
   const hidden = view.keys.length - shown
-  if (hidden > 0) append(output, `... ${hidden} more ${plural(hidden, "property", "properties")}`)
-  dropLast(context.seen)
+  if (hidden > 0) output.push(`... ${hidden} more ${plural(hidden, "property", "properties")}`)
+  context.seen.pop()
   let base = view.base
-  const reference = positionOf(context.circular, value)
+  const reference = context.circular.indexOf(value)
   if (reference !== -1) {
     const marker = `<ref *${reference + 1}>`
     if (base === "") base = marker
     else base = `${marker} ${base}`
   }
-  return reduceToSingleString(context, output, { ...view, base }, next, value)
+  return reduceToSingleString(context, output, { ...view, base }, next)
 }
 
 const formatValue = (context: DisplayContext, value: unknown, depth: number): string => {
@@ -1331,7 +1605,7 @@ const formatValue = (context: DisplayContext, value: unknown, depth: number): st
   if (context.budget <= 0) return "..."
   context.budget--
   if (isProxy(value)) return "[Proxy]"
-  if (holds(context.seen, value)) return `[Circular *${circularIndex(context, value)}]`
+  if (context.seen.includes(value)) return `[Circular *${circularIndex(context, value)}]`
   return formatRaw(context, value, depth)
 }
 

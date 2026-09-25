@@ -1337,6 +1337,11 @@ export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
       Effect.tapError(countUnprovenDeath),
       Effect.onError(() => discard().pipe(Effect.orDie)),
     )
+    // The worker named built-ins the cell changed and it cannot put back; its
+    // own code may run cell code through them, so it goes. The result stands,
+    // and the next cell starts on a new worker.
+    if ((response.frame.unrestored ?? []).length > 0)
+      yield* discard().pipe(Effect.mapError(processError))
     // Prime-style result text: process output first, then the cell's own display.
     const withOutput = (display: string) =>
       [response.output.trimEnd(), display].filter((text) => text.length > 0).join("\n")
@@ -1423,14 +1428,24 @@ export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
     return yield* replaceWorker()
   })
 
-  const snapshot = control(
-    (requestId) => CellRequest.cases.Snapshot.make({ requestId }),
-    (frame, requestId): Option.Option<CellSnapshot> => {
-      if (frame._tag === "Snapshot" && frame.requestId === requestId)
-        return Option.some(frame.snapshot)
-      return Option.none()
-    },
-  )
+  const snapshot = Effect.gen(function* () {
+    const frame = yield* control(
+      (requestId) => CellRequest.cases.Snapshot.make({ requestId }),
+      (response, requestId) => {
+        if (response._tag === "Snapshot" && response.requestId === requestId)
+          return Option.some(response)
+        return Option.none()
+      },
+    )
+    const unrestored = frame.unrestored ?? []
+    if (unrestored.length === 0) return frame.snapshot
+    // A worker that cannot put a built-in back saves nothing: it is replaced.
+    yield* discard().pipe(Effect.mapError(processError))
+    return yield* failure(
+      "recovery-required",
+      `The worker could not put back built-ins: ${unrestored.join(", ")}`,
+    )
+  })
   const restore = (bindings: ReadonlyArray<SnapshotBinding>) =>
     control(
       (requestId) => CellRequest.cases.Restore.make({ requestId, bindings }),
@@ -1449,6 +1464,8 @@ export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
     restore: (bindings: ReadonlyArray<SnapshotBinding>) => guarded(restore(bindings)),
     reset: guarded(reset()),
     close: close().pipe(Effect.uninterruptible),
+    /** Whether the kernel discarded its worker; the next cell needs a reset and a restore. */
+    isLost: () => status === "lost",
   }
 })
 
@@ -2310,13 +2327,28 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
             }),
           )
         })
-        /** Keep the namespace after each good cell. A failed snapshot only loses recency. */
+        /**
+         * Keep the namespace after each good cell. A snapshot that fails lost
+         * the worker, so the next cell replaces it and restores the last
+         * namespace saved; a failed store only loses recency. The cell's
+         * result names a failed snapshot: what it bound is not kept.
+         */
         const saveNamespace = Effect.fn("CellExecution.saveNamespace")(function* (current: Kernel) {
-          yield* current.snapshot.pipe(
+          return yield* current.snapshot.pipe(
             Effect.flatMap((snapshot) => namespaces.set(namespaceAddress, snapshot)),
+            Effect.as(Option.none<string>()),
+            Effect.catchTag("CellKernelError", (error) =>
+              Effect.sync(() => {
+                recoveryPending = true
+                return Option.some(
+                  `The namespace after this cell was not saved: ${error.message}. The next cell runs on a new worker with the namespace saved before this cell.`,
+                )
+              }),
+            ),
             Effect.catch((error) =>
               Effect.logWarning("Cell namespace snapshot failed").pipe(
                 Effect.annotateLogs({ error: String(error) }),
+                Effect.as(Option.none<string>()),
               ),
             ),
           )
@@ -2379,6 +2411,12 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
           // Cleared only after the restore: a failed one is tried again next cell.
           recoveryPending = false
         })
+        /** The display ends with a note the host adds after the worker answered. */
+        const withNote = (value: CellEvaluation, note: Option.Option<string>): CellEvaluation => {
+          if (Option.isNone(note)) return value
+          if (value.display === "") return { ...value, display: note.value }
+          return { ...value, display: `${value.display}\n${note.value}` }
+        }
         const evaluated = (value: CellEvaluation): CellEvaluation => {
           if (Option.isNone(restoreReport)) return value
           const report = restoreReport.value
@@ -2429,8 +2467,8 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
               Effect.gen(function* () {
                 yield* prepare(current, admission.reset === true)
                 const value = yield* current.evaluate(admission.code)
-                yield* saveNamespace(current)
-                return evaluated(value)
+                const lost = yield* saveNamespace(current)
+                return evaluated(withNote(value, lost))
               }),
             ),
             Effect.raceFirst(Deferred.await(signal)),
@@ -2452,7 +2490,13 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
                 ),
               onFailure: (error): Effect.Effect<Prompt.ToolResultPart, StorageError> => {
                 if (error._tag === "StorageError") return Effect.fail(error)
-                if (error._tag !== "CellEvaluationError") recoveryPending = true
+                // A cell error leaves the worker as it was, unless the kernel
+                // discarded it for a built-in the worker could not put back.
+                if (
+                  error._tag !== "CellEvaluationError" ||
+                  Option.exists(kernel, (current) => current.isLost())
+                )
+                  recoveryPending = true
                 // A cancelled cell says what its operations did, from their
                 // records. A failed read keeps the plain cancel: the cancel
                 // still records its result.

@@ -893,6 +893,10 @@ const makeState = (
 
 const settle = Effect.yieldNow
 
+/** A device login end to end: wait for the grant, then trade it. */
+const signIn = (flow: Effect.Success<typeof authorizeOpenAIDevice>) =>
+  flow.grant().pipe(Effect.flatMap(flow.exchange))
+
 const run = <A, E>(state: StubState, eff: Effect.Effect<A, E, HttpClient.HttpClient>) =>
   Effect.scoped(eff).pipe(Effect.provide(Layer.mergeAll(TestClock.layer(), stubLayer(state))))
 
@@ -926,7 +930,7 @@ describe("OpenAI device-code login", () => {
         expect(flow.authorization.instructions?.split("\n")).toContain("ABCD-1234")
         expect(state.calls[0]?.body).toContain("app_EMoamEEZ73f0CkXaXp7hrann")
 
-        const fiber = yield* Effect.forkChild(flow.callback())
+        const fiber = yield* Effect.forkChild(signIn(flow))
         yield* settle
         expect(state.tokenPolls).toBe(0)
 
@@ -980,7 +984,7 @@ describe("OpenAI device-code login", () => {
       state,
       Effect.gen(function* () {
         const flow = yield* authorizeOpenAIDevice
-        const fiber = yield* Effect.forkChild(flow.callback())
+        const fiber = yield* Effect.forkChild(signIn(flow))
         yield* TestClock.adjust("1 second")
         const exit = yield* Fiber.await(fiber)
         expect(errorReason(exit)).toEqual(Option.some("device-code-denied"))
@@ -994,7 +998,7 @@ describe("OpenAI device-code login", () => {
       state,
       Effect.gen(function* () {
         const flow = yield* authorizeOpenAIDevice
-        const fiber = yield* Effect.forkChild(flow.callback())
+        const fiber = yield* Effect.forkChild(signIn(flow))
         yield* TestClock.adjust("14 minutes")
         yield* settle
         expect(state.tokenPolls).toBeGreaterThan(0)
@@ -2496,7 +2500,7 @@ describe("buildOpenAIModelDriver — OAuth login lifetime", () => {
       const held = Option.fromNullishOr(pending.get(authorizationId))
       pending.delete(authorizationId)
       if (Option.isNone(held)) return
-      yield* Fiber.interrupt(held.value.timeoutFiber)
+      if (Option.isSome(held.value.timer)) yield* Fiber.interrupt(held.value.timer.value)
       yield* held.value.close
     })
   const authContext = (methodIndex: number, authorizationId: string) => ({
@@ -2731,6 +2735,255 @@ describe("buildOpenAIModelDriver — OAuth login lifetime", () => {
       expect(pending.has("both")).toBe(false)
     }),
   )
+
+  /** Device endpoints: the user code, the poll (scripted per call), and the token trade. */
+  const deviceEndpoints = (
+    poll: (call: number) => { status: number; body: string },
+    trade: (call: number) => { status: number; body: string },
+  ) => {
+    let polls = 0
+    let trades = 0
+    return (request: { url: string }) => {
+      if (request.url.endsWith("/deviceauth/usercode")) {
+        return {
+          status: 200,
+          body: '{"device_auth_id":"device-auth-1","user_code":"ABCD-1234","interval":"1"}',
+        }
+      }
+      if (request.url.endsWith("/deviceauth/token")) return poll(polls++)
+      return trade(trades++)
+    }
+  }
+  const deviceDone = {
+    status: 200,
+    body: '{"authorization_code":"device-code-1","code_verifier":"verifier-1"}',
+  }
+  const settleUntil = (done: () => boolean) =>
+    Effect.yieldNow.pipe(Effect.repeat({ until: done, times: 1000 }))
+
+  // Two callers on one device login: one poll fails at once, the other polls on past five minutes.
+  it.live(
+    "a caller still polling keeps the login past the timer another caller's failure would arm",
+    () =>
+      Effect.gen(function* () {
+        const pending: PendingCallbacks = new Map()
+        const { authorize, callback } = yield* makeDriver(pending)
+        let approved = false
+        const fetchState = makeFakeFetchState()
+        const endpoints = fakeFetchLayer(
+          fetchState,
+          deviceEndpoints((call) => {
+            if (call === 0) return { status: 500, body: "{}" }
+            if (approved) return deviceDone
+            return { status: 403, body: "{}" }
+          }, tokenReply),
+        )
+        const persisted = yield* Ref.make(0)
+        const context = {
+          ...authContext(1, "polling"),
+          persist: () => Ref.update(persisted, (n) => n + 1),
+        }
+        yield* runWithTestClock(
+          Effect.gen(function* () {
+            yield* authorize(authContext(1, "polling"))
+            let ended = 0
+            const call = Effect.exit(callback(context)).pipe(
+              Effect.ensuring(Effect.sync(() => ended++)),
+            )
+            const first = yield* Effect.forkChild(call)
+            const second = yield* Effect.forkChild(call)
+            yield* TestClock.adjust("1 second")
+            yield* settleUntil(() => ended === 1)
+            yield* TestClock.adjust("6 minutes")
+            expect(pending.has("polling")).toBe(true)
+            approved = true
+            yield* TestClock.adjust("2 seconds")
+            const exits = yield* Effect.all([Fiber.join(first), Fiber.join(second)])
+            expect(exits.filter((exit) => Exit.isSuccess(exit))).toHaveLength(1)
+            expect(yield* Ref.get(persisted)).toBe(1)
+            expect(pending.has("polling")).toBe(false)
+          }).pipe(Effect.provide(endpoints)),
+        ).pipe(Effect.timeout("5 seconds"))
+      }),
+  )
+
+  // Two device polls reach Done together; the code trades once, so a second trade would fail.
+  it.live("two callers whose polls finish together trade the code once and both succeed", () =>
+    Effect.gen(function* () {
+      const pending: PendingCallbacks = new Map()
+      const { authorize, callback } = yield* makeDriver(pending)
+      const fetchState = makeFakeFetchState()
+      const endpoints = fakeFetchLayer(
+        fetchState,
+        deviceEndpoints(
+          () => deviceDone,
+          (call) => {
+            if (call === 0) return tokenReply()
+            return { status: 400, body: '{"error":"invalid_grant"}' }
+          },
+        ),
+      )
+      const persisted = yield* Ref.make(0)
+      const context = {
+        ...authContext(1, "together"),
+        persist: () => Ref.update(persisted, (n) => n + 1),
+      }
+      yield* runWithTestClock(
+        Effect.gen(function* () {
+          yield* authorize(authContext(1, "together"))
+          const first = yield* Effect.forkChild(Effect.exit(callback(context)))
+          const second = yield* Effect.forkChild(Effect.exit(callback(context)))
+          yield* TestClock.adjust("1 second")
+          const exits = yield* Effect.all([Fiber.join(first), Fiber.join(second)])
+          expect(exits.map((exit) => Exit.isSuccess(exit))).toEqual([true, true])
+          expect(exchangedCodes(fetchState)).toEqual(["device-code-1"])
+          expect(yield* Ref.get(persisted)).toBe(1)
+        }).pipe(Effect.provide(endpoints)),
+      ).pipe(Effect.timeout("5 seconds"))
+    }),
+  )
+
+  // A second device caller polled on after the first finished the login,
+  // up to the device deadline.
+  it.live("a device caller still polling stops when another caller finishes the login", () =>
+    Effect.gen(function* () {
+      const pending: PendingCallbacks = new Map()
+      const { authorize, callback } = yield* makeDriver(pending)
+      const fetchState = makeFakeFetchState()
+      const endpoints = fakeFetchLayer(
+        fetchState,
+        deviceEndpoints((call) => {
+          if (call === 0) return deviceDone
+          return { status: 403, body: "{}" }
+        }, tokenReply),
+      )
+      const persisted = yield* Ref.make(0)
+      const context = {
+        ...authContext(1, "finished-elsewhere"),
+        persist: () => Ref.update(persisted, (n) => n + 1),
+      }
+      const polls = () =>
+        fetchState.captured.filter((request) => request.url.endsWith("/deviceauth/token")).length
+      yield* runWithTestClock(
+        Effect.gen(function* () {
+          yield* authorize(authContext(1, "finished-elsewhere"))
+          const first = yield* Effect.forkChild(Effect.exit(callback(context)))
+          const second = yield* Effect.forkChild(Effect.exit(callback(context)))
+          yield* TestClock.adjust("1 second")
+          // No more time passes: the caller still polling ends with the login.
+          const exits = yield* Effect.all([Fiber.join(first), Fiber.join(second)])
+          expect(exits.map((exit) => Exit.isSuccess(exit))).toEqual([true, true])
+          const polled = polls()
+          yield* TestClock.adjust("1 minute")
+          expect(polls()).toBe(polled)
+          expect(yield* Ref.get(persisted)).toBe(1)
+          expect(pending.has("finished-elsewhere")).toBe(false)
+        }).pipe(Effect.provide(endpoints)),
+      ).pipe(Effect.timeout("3 seconds"))
+    }),
+  )
+
+  const newSignInTokens = {
+    type: "oauth",
+    access: "a",
+    refresh: "r",
+    expires: FAR_FUTURE_MS,
+  } satisfies {
+    readonly type: "oauth"
+    readonly access: string
+    readonly refresh: string
+    readonly expires: number
+  }
+
+  // The winner stops after it took the login and before its store: the caller waiting still hears.
+  it.live("a caller stopped between the claim and the store still settles the login", () =>
+    Effect.gen(function* () {
+      const pending: PendingCallbacks = new Map()
+      const { callback } = yield* makeDriver(pending)
+      const closing = yield* Deferred.make<void>()
+      const waiting = yield* Deferred.make<void>()
+      const releaseGrant = yield* Deferred.make<void>()
+      let grants = 0
+      pending.set("claimed", {
+        flow: {
+          authorization: { url: "https://auth.openai.com", method: "auto", instructions: "" },
+          // The first caller's grant waits until the second is stopped; the second's comes at once.
+          grant: () => {
+            grants++
+            if (grants === 2) return Effect.succeed({ code: "code", verifier: "verifier" })
+            return Deferred.succeed(waiting, void 0).pipe(
+              Effect.andThen(Deferred.await(releaseGrant)),
+              Effect.as({ code: "code", verifier: "verifier" }),
+            )
+          },
+          exchange: () => Effect.succeed({ ...newSignInTokens }),
+        },
+        // Closing the login's scope blocks, so the first caller stops inside the claim.
+        close: Deferred.succeed(closing, void 0).pipe(Effect.andThen(Effect.never)),
+        finished: yield* Deferred.make<void, ProviderAuthError>(),
+        exchanging: yield* Semaphore.make(1),
+        inFlight: 0,
+        timer: Option.none(),
+      })
+      const waiter = yield* Effect.forkChild(Effect.exit(callback(authContext(0, "claimed"))))
+      yield* Deferred.await(waiting)
+      const winner = yield* Effect.forkChild(callback(authContext(0, "claimed")))
+      yield* Deferred.await(closing)
+      yield* Fiber.interrupt(winner)
+      yield* Deferred.succeed(releaseGrant, void 0)
+      const exit = yield* Fiber.join(waiter).pipe(Effect.timeout("3 seconds"))
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(String(exit)).toContain("stopped before it stored")
+    }),
+  )
+
+  // A caller entering the login interrupts its timer. The timer once took
+  // the login and could then be stopped before it failed `finished`.
+  it.live("a timer stopped after it took the login still fails the login", () =>
+    Effect.gen(function* () {
+      const pending: PendingCallbacks = new Map()
+      const { callback } = yield* makeDriver(pending)
+      const closing = yield* Deferred.make<void>()
+      const releaseClose = yield* Deferred.make<void>()
+      const finished = yield* Deferred.make<void, ProviderAuthError>()
+      const entry: Parameters<PendingCallbacks["set"]>[1] = {
+        flow: {
+          authorization: {
+            url: "https://auth.openai.com",
+            method: "auto",
+            instructions: "",
+          },
+          grant: () => Effect.die(new Error("the grant failed")),
+          exchange: () => Effect.succeed({ ...newSignInTokens }),
+        },
+        // Closing the login's scope waits, so the timer is stopped inside it.
+        close: Deferred.succeed(closing, void 0).pipe(Effect.andThen(Deferred.await(releaseClose))),
+        finished,
+        exchanging: yield* Semaphore.make(1),
+        inFlight: 0,
+        timer: Option.none<Fiber.Fiber<void>>(),
+      }
+      pending.set("expiring", entry)
+      yield* runWithTestClock(
+        Effect.gen(function* () {
+          // The failed caller is the last to leave: it arms the timer.
+          yield* Effect.exit(callback(authContext(1, "expiring")))
+          const timer = entry.timer
+          if (Option.isNone(timer)) return yield* Effect.die(new Error("no timer armed"))
+          yield* TestClock.adjust("5 minutes")
+          yield* Deferred.await(closing)
+          expect(pending.has("expiring")).toBe(false)
+          const stopping = yield* Effect.forkChild(Fiber.interrupt(timer.value))
+          yield* Effect.yieldNow.pipe(Effect.repeat({ times: 50 }))
+          yield* Deferred.succeed(releaseClose, void 0)
+          yield* Fiber.join(stopping)
+          expect(yield* Deferred.isDone(finished)).toBe(true)
+          const outcome = yield* Effect.exit(Deferred.await(finished))
+          expect(String(outcome)).toContain("OpenAI login expired")
+        }),
+      ).pipe(Effect.timeout("3 seconds"))
+    }),
+  )
 })
 describe("buildOpenAIModelDriver — token endpoint outage", () => {
   it.live(
@@ -2918,15 +3171,17 @@ describe("buildOpenAIModelDriver — a new sign-in replaces the held account", (
     signedIn: typeof newSignIn = newSignIn,
   ) =>
     Effect.gen(function* () {
-      const timeoutFiber = yield* Effect.forkDetach(Effect.never)
       pending.set("sign-in", {
         flow: {
           authorization: { url: "https://auth.openai.com", method: "auto", instructions: "" },
-          callback: () => Effect.succeed(signedIn),
+          grant: () => Effect.succeed({ code: "code", verifier: "verifier" }),
+          exchange: () => Effect.succeed(signedIn),
         },
         close: Effect.void,
         finished: yield* Deferred.make<void, ProviderAuthError>(),
-        timeoutFiber,
+        exchanging: yield* Semaphore.make(1),
+        inFlight: 0,
+        timer: Option.none(),
       })
       const callback = Option.getOrThrow(Option.fromUndefinedOr(driver.auth?.callback))
       yield* callback({

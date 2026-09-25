@@ -1,5 +1,6 @@
 import {
   Array as Arr,
+  Cause,
   Clock,
   Crypto,
   Context,
@@ -18,6 +19,7 @@ import {
   Result,
   Schema,
   Scope,
+  Semaphore,
   SynchronizedRef,
 } from "effect"
 import {
@@ -203,13 +205,26 @@ interface OpenAIRefreshTokens {
   readonly accountId?: string
 }
 
+/** An authorization code and the PKCE verifier that trades it. */
+interface AuthorizationGrant {
+  readonly code: string
+  readonly verifier: string
+}
+
+/**
+ * One login. `grant` waits for its authorization code: the browser redirect,
+ * a pasted code, or an approved device code. `exchange` trades a grant for
+ * tokens; a code trades once, so the driver runs one exchange at a time per
+ * login and owns its one completion.
+ */
 interface OpenAIAuthorizationFlow {
   readonly authorization: {
     readonly url: string
     readonly method: "auto"
     readonly instructions: string
   }
-  readonly callback: (manualInput?: string) => Effect.Effect<OpenAIOAuthTokens, OAuthError>
+  readonly grant: (manualInput?: string) => Effect.Effect<AuthorizationGrant, OAuthError>
+  readonly exchange: (grant: AuthorizationGrant) => Effect.Effect<OpenAIOAuthTokens, OAuthError>
 }
 const generatePKCE: Effect.Effect<PkceCodes, OAuthError, Crypto.Crypto> = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto
@@ -514,9 +529,6 @@ const tokensToRefreshResult = (tokens: TokenResponse, now: number): OpenAIRefres
   return result
 }
 
-/** A login's tokens for this caller, and what the login holds after. */
-type Exchanged = readonly [OpenAIOAuthTokens, Option.Option<OpenAIOAuthTokens>]
-
 /**
  * Begin the OpenAI OAuth (Codex CLI) flow. The returned Effect is
  * `Scope`-requiring: the caller's scope owns the redirect HTTP server
@@ -529,8 +541,9 @@ type Exchanged = readonly [OpenAIOAuthTokens, Option.Option<OpenAIOAuthTokens>]
  *   - User pastes the raw redirect URL or `code#state` into the prompt
  *     and `callback(manualInput)` exchanges directly.
  *
- * Either way, `callback` returns the structured `OpenAIOAuthTokens` the
- * extension persists. The 5-minute abandoned-flow timer in
+ * Either way, `grant` returns the code with the login's PKCE verifier, and
+ * `exchange` trades it for the tokens the extension persists. The 5-minute
+ * abandoned-flow timer in
  * `buildOpenAIModelDriver`'s `authorize` closes the flow's scope, which stops
  * the redirect server.
  */
@@ -571,8 +584,7 @@ const authorizeOpenAI: Effect.Effect<
     ),
   )
 
-  const exchanged = yield* SynchronizedRef.make(Option.none<OpenAIOAuthTokens>())
-  const callback = (manualInput?: string): Effect.Effect<OpenAIOAuthTokens, OAuthError> =>
+  const grant = (manualInput?: string): Effect.Effect<AuthorizationGrant, OAuthError> =>
     Effect.gen(function* () {
       let code: string
       if (manualInput && manualInput.trim().length > 0) {
@@ -594,23 +606,7 @@ const authorizeOpenAI: Effect.Effect<
         const payload = yield* Deferred.await(deferred)
         code = payload.code
       }
-
-      // One exchange per login: a caller that arrives while another
-      // exchanges waits and takes its tokens; a failed exchange leaves the
-      // login to the next code.
-      return yield* SynchronizedRef.modifyEffect(exchanged, (held) =>
-        Option.match(held, {
-          onSome: (tokens) => Effect.succeed<Exchanged>([tokens, held]),
-          onNone: () =>
-            Effect.gen(function* () {
-              const tokens = yield* exchangeCodeWithFetch(code, redirectUri, pkce.verifier)
-              const now = yield* Clock.currentTimeMillis
-              const result = tokensToOAuthResult(tokens, now)
-              const next: Exchanged = [result, Option.some(result)]
-              return next
-            }),
-        }),
-      )
+      return { code, verifier: pkce.verifier }
     })
 
   return {
@@ -619,7 +615,13 @@ const authorizeOpenAI: Effect.Effect<
       method: "auto",
       instructions: "Complete authorization in your browser. Paste the code if needed.",
     },
-    callback,
+    grant,
+    exchange: (granted) =>
+      exchangeCodeWithFetch(granted.code, redirectUri, granted.verifier).pipe(
+        Effect.flatMap((tokens) =>
+          Effect.map(Clock.currentTimeMillis, (now) => tokensToOAuthResult(tokens, now)),
+        ),
+      ),
   } satisfies OpenAIAuthorizationFlow
 })
 
@@ -754,22 +756,20 @@ const pollDeviceOnce = (
   )
 
 /**
- * Poll until the user approves the code, then exchange the returned
- * authorization code with the verifier the server minted. Bounded by
+ * Poll until the user approves the code; the server hands back an
+ * authorization code and the verifier it minted. Bounded by
  * `DEVICE_DEADLINE`; each `slow_down` adds `DEVICE_POLL_BACKOFF`.
  */
-const completeDeviceAuthorization = (
+const awaitDeviceGrant = (
   auth: DeviceAuthResponse,
-): Effect.Effect<TokenResponse, OAuthError, HttpClient.HttpClient> => {
+): Effect.Effect<AuthorizationGrant, OAuthError, HttpClient.HttpClient> => {
   const loop = (
     interval: Duration.Duration,
-  ): Effect.Effect<TokenResponse, OAuthError, HttpClient.HttpClient> =>
+  ): Effect.Effect<AuthorizationGrant, OAuthError, HttpClient.HttpClient> =>
     Effect.gen(function* () {
       yield* Effect.sleep(interval)
       const poll = yield* pollDeviceOnce(auth)
-      if (poll._tag === "Done") {
-        return yield* exchangeCodeForTokens(poll.code, DEVICE_REDIRECT_URI, poll.verifier)
-      }
+      if (poll._tag === "Done") return { code: poll.code, verifier: poll.verifier }
       if (poll.slowDown) return yield* loop(Duration.sum(interval, DEVICE_POLL_BACKOFF))
       return yield* loop(interval)
     })
@@ -791,8 +791,8 @@ const completeDeviceAuthorization = (
  * Begin the OpenAI device-code flow (the "headless" ChatGPT login used
  * by Codex CLI, OpenCode, and Pi). No local server: the user opens
  * `auth.openai.com/codex/device`, enters the short code, and
- * `callback()` polls until the server hands back an authorization
- * code plus its verifier, then exchanges them.
+ * `grant()` polls until the server hands back an authorization
+ * code plus its verifier; `exchange` trades them.
  *
  * The HTTP client is taken from the environment so tests can stub the
  * three endpoints; `allocateOpenAIDeviceAuthorization` binds fetch.
@@ -804,12 +804,6 @@ export const authorizeOpenAIDevice: Effect.Effect<
 > = Effect.gen(function* () {
   const http = yield* HttpClient.HttpClient
   const auth = yield* startDeviceAuthorization
-  const callback = (): Effect.Effect<OpenAIOAuthTokens, OAuthError> =>
-    Effect.gen(function* () {
-      const tokens = yield* completeDeviceAuthorization(auth)
-      const now = yield* Clock.currentTimeMillis
-      return tokensToOAuthResult(tokens, now)
-    }).pipe(Effect.provideService(HttpClient.HttpClient, http))
   return {
     authorization: {
       url: DEVICE_VERIFY_URL,
@@ -817,7 +811,14 @@ export const authorizeOpenAIDevice: Effect.Effect<
       // The code stands on its own line: a wrap must never split it.
       instructions: `Open the URL and enter this code:\n${auth.user_code}`,
     },
-    callback,
+    grant: () => awaitDeviceGrant(auth).pipe(Effect.provideService(HttpClient.HttpClient, http)),
+    exchange: (granted) =>
+      exchangeCodeForTokens(granted.code, DEVICE_REDIRECT_URI, granted.verifier).pipe(
+        Effect.flatMap((tokens) =>
+          Effect.map(Clock.currentTimeMillis, (now) => tokensToOAuthResult(tokens, now)),
+        ),
+        Effect.provideService(HttpClient.HttpClient, http),
+      ),
   } satisfies OpenAIAuthorizationFlow
 })
 
@@ -1276,12 +1277,40 @@ export const buildCodexTransformClient = (
 
 // ── extension ───────────────────────────────────────────────────────────────
 
-type PendingCallbackEntry = {
-  readonly flow: OpenAIAuthorizationFlow
-  readonly close: Effect.Effect<void>
-  /** Settles when the caller that claimed the login has stored its credential. */
-  readonly finished: Deferred.Deferred<void, ProviderAuthError>
-  readonly timeoutFiber: Fiber.Fiber<void>
+/**
+ * A login between `authorize` and its one completion. The driver owns that
+ * completion for both flows: the first caller whose grant trades for tokens
+ * takes the login from the map and stores them, and every other caller takes
+ * the outcome from `finished`.
+ */
+class PendingCallbackEntry {
+  /** Callers inside `callback`. The abandoned-login timer runs only while none is. */
+  inFlight = 0
+  timer: Option.Option<Fiber.Fiber<void>> = Option.none()
+
+  constructor(
+    readonly flow: OpenAIAuthorizationFlow,
+    readonly close: Effect.Effect<void>,
+    /** Settles once: with the store's outcome, or failed when the timer drops the login. */
+    readonly finished: Deferred.Deferred<void, ProviderAuthError>,
+    /** One exchange at a time: a code trades once. */
+    readonly exchanging: Semaphore.Semaphore,
+  ) {}
+}
+
+/** What a driver `callback` receives: the login id, a pasted code, and the store to persist to. */
+type LoginCallbackContext = Parameters<
+  NonNullable<NonNullable<ModelDriverContribution["auth"]>["callback"]>
+>[0]
+
+/** An interrupted store still settles the login, as a failure its other callers can report. */
+const settledLogin = (
+  exit: Exit.Exit<void, ProviderAuthError>,
+): Exit.Exit<void, ProviderAuthError> => {
+  if (Exit.isSuccess(exit) || !Cause.hasInterruptsOnly(exit.cause)) return exit
+  return Exit.fail(
+    new ProviderAuthError({ message: "OpenAI login stopped before it stored the credential" }),
+  )
 }
 
 /** Index-aligned with the `oauth` entries of `auth.methods` below. */
@@ -1712,40 +1741,101 @@ export const buildOpenAIModelDriver = (
   const refusedKeys: RefusedKeys = Ref.makeUnsafe(HashSet.empty())
   // The reasoning items the API could not decrypt for this driver's account.
   const rejectedReasoning: RejectedReasoning = Ref.makeUnsafe(HashSet.empty())
+  /** Whether `entry` is still the pending login under `authorizationId`. */
+  const isPending = (authorizationId: string, entry: PendingCallbackEntry) =>
+    pendingCallbacks.get(authorizationId) === entry
   /**
-   * Hold a pending login under a 5-minute abandoned-login timer. The timer
-   * clears the entry and closes the login's scope (the redirect listener).
-   * It is detached: `authorize` returns at once, and a child fiber would
-   * stop with it.
+   * Arm the 5-minute abandoned-login timer. A timer that fires takes the
+   * login from the map, closes its scope (the redirect listener) and fails
+   * `finished`, with no interrupt between: a caller that enters the login
+   * stops the timer only while it sleeps, so a login it took is always
+   * failed. It is detached: `authorize` returns at once, and a child fiber
+   * would stop with it.
    */
-  const holdLogin = (authorizationId: string, login: Omit<PendingCallbackEntry, "timeoutFiber">) =>
+  const armTimer = (authorizationId: string, entry: PendingCallbackEntry) =>
     Effect.gen(function* () {
-      const timeoutFiber = yield* Effect.sleep(Duration.minutes(5)).pipe(
+      const timer = yield* Effect.sleep(Duration.minutes(5)).pipe(
         Effect.flatMap(() =>
           Effect.gen(function* () {
+            if (!isPending(authorizationId, entry)) return
             pendingCallbacks.delete(authorizationId)
-            yield* login.close
-          }),
+            yield* entry.close
+            yield* Deferred.fail(
+              entry.finished,
+              new ProviderAuthError({
+                message: "OpenAI login expired: nothing finished it in five minutes",
+              }),
+            )
+          }).pipe(Effect.uninterruptible),
         ),
         Effect.forkDetach,
       )
-      pendingCallbacks.set(authorizationId, { ...login, timeoutFiber })
+      entry.timer = Option.some(timer)
     })
-  /**
-   * Claim a login to finish it: the one caller that takes it from the map
-   * stops its timer, closes its scope and gets it back. A login another
-   * caller took is none.
-   */
-  const claimLogin = (authorizationId: string, flow: OpenAIAuthorizationFlow) =>
+  /** A caller enters a login: the first one stops its timer. */
+  const enterLogin = (entry: PendingCallbackEntry) =>
     Effect.gen(function* () {
-      const held = Option.fromNullishOr(pendingCallbacks.get(authorizationId)).pipe(
-        Option.filter((current) => current.flow === flow),
+      entry.inFlight++
+      const timer = entry.timer
+      entry.timer = Option.none()
+      if (Option.isSome(timer)) yield* Fiber.interrupt(timer.value)
+    })
+  /** A caller leaves a login: the last one out of a login still pending re-arms its timer. */
+  const leaveLogin = (authorizationId: string, entry: PendingCallbackEntry) =>
+    Effect.suspend(() => {
+      entry.inFlight--
+      if (entry.inFlight > 0 || !isPending(authorizationId, entry)) return Effect.void
+      return armTimer(authorizationId, entry)
+    })
+  const callbackFailed = (e: OAuthError) =>
+    new ProviderAuthError({ message: `OpenAI OAuth callback failed: ${e.message}`, cause: e })
+  /**
+   * Finish a login. A caller's grant stops when the login finishes: that
+   * caller takes the outcome (a device poll still pending, or a browser wait
+   * after a pasted code's store). A caller whose grant fails reports its own
+   * error, unless the login already finished: then it takes that outcome. A
+   * caller with a grant exchanges it under `exchanging`; a caller that
+   * waited there behind a completed login takes that outcome and never
+   * trades its spent code. A failed exchange leaves the login pending for
+   * the next code.
+   */
+  const completeLogin = (
+    authorizationId: string,
+    entry: PendingCallbackEntry,
+    ctx: LoginCallbackContext,
+  ) =>
+    Effect.gen(function* () {
+      const granted = yield* Effect.raceFirst(
+        Effect.exit(entry.flow.grant(ctx.code)).pipe(Effect.asSome),
+        Effect.exit(Deferred.await(entry.finished)).pipe(Effect.as(Option.none())),
       )
-      if (Option.isNone(held)) return held
-      pendingCallbacks.delete(authorizationId)
-      yield* Fiber.interrupt(held.value.timeoutFiber)
-      yield* held.value.close
-      return held
+      if (Option.isNone(granted) || !isPending(authorizationId, entry))
+        return yield* Deferred.await(entry.finished)
+      const grant = granted.value
+      if (Exit.isFailure(grant)) {
+        return yield* Effect.failCause(Cause.map(grant.cause, callbackFailed))
+      }
+      return yield* Effect.gen(function* () {
+        if (!isPending(authorizationId, entry)) return yield* Deferred.await(entry.finished)
+        const result = yield* entry.flow.exchange(grant.value).pipe(Effect.mapError(callbackFailed))
+        const signedIn: OpenAICredentials = {
+          access: result.access,
+          refresh: result.refresh,
+          expires: result.expires,
+          accountId: Option.fromNullishOr(result.accountId),
+        }
+        // The claim and the store settle `finished` together, whatever ends them.
+        yield* Effect.gen(function* () {
+          pendingCallbacks.delete(authorizationId)
+          yield* entry.close
+          yield* replaceHeldCredential(
+            OpenAICredentials,
+            credentialCellRef,
+            signedIn,
+            ctx.persist(result),
+          )
+        }).pipe(Effect.onExit((exit) => Deferred.done(entry.finished, settledLogin(exit))))
+      }).pipe((exchange) => entry.exchanging.withPermit(exchange))
     })
   return {
     id: "openai",
@@ -1845,8 +1935,14 @@ export const buildOpenAIModelDriver = (
                 }),
             ),
           )
-          const finished = yield* Deferred.make<void, ProviderAuthError>()
-          yield* holdLogin(ctx.authorizationId, { flow, close, finished })
+          const entry = new PendingCallbackEntry(
+            flow,
+            close,
+            yield* Deferred.make<void, ProviderAuthError>(),
+            yield* Semaphore.make(1),
+          )
+          pendingCallbacks.set(ctx.authorizationId, entry)
+          yield* armTimer(ctx.authorizationId, entry)
           return Option.some(flow.authorization)
         }),
       callback: (ctx) =>
@@ -1858,46 +1954,14 @@ export const buildOpenAIModelDriver = (
             })
           }
           const entry = pendingEntry.value
-          // A device poll can outlast the timer, so the timer stops while
-          // the callback runs and a failed callback arms a new one.
-          const result = yield* Fiber.interrupt(entry.timeoutFiber).pipe(
-            Effect.andThen(entry.flow.callback(ctx.code)),
-            Effect.mapError(
-              (e) =>
-                new ProviderAuthError({
-                  message: `OpenAI OAuth callback failed: ${e.message}`,
-                  cause: e,
-                }),
-            ),
-            // The login stays pending after a failure or an interrupt: a
-            // failed browser wait (the port taken) still leaves the pasted
-            // code to finish it. Only the first of two concurrent failures
-            // re-arms the timer, and a login a concurrent callback finished
-            // stays gone.
-            Effect.onError(() =>
-              Effect.suspend(() => {
-                if (pendingCallbacks.get(ctx.authorizationId) !== entry) return Effect.void
-                return holdLogin(ctx.authorizationId, entry)
-              }),
-            ),
+          // A device poll can outlast the timer, so the timer stops while any
+          // caller is in; a failed browser wait (the port taken) still leaves
+          // a pasted code to finish the login.
+          return yield* Effect.acquireUseRelease(
+            enterLogin(entry),
+            () => completeLogin(ctx.authorizationId, entry, ctx),
+            () => leaveLogin(ctx.authorizationId, entry),
           )
-          // A browser callback and a pasted code can both reach here with
-          // the one exchange's tokens. The caller that claims the login
-          // stores them; the other waits for that store's outcome.
-          const claimed = yield* claimLogin(ctx.authorizationId, entry.flow)
-          if (Option.isNone(claimed)) return yield* Deferred.await(entry.finished)
-          const signedIn: OpenAICredentials = {
-            access: result.access,
-            refresh: result.refresh,
-            expires: result.expires,
-            accountId: Option.fromNullishOr(result.accountId),
-          }
-          yield* replaceHeldCredential(
-            OpenAICredentials,
-            credentialCellRef,
-            signedIn,
-            ctx.persist(result),
-          ).pipe(Effect.onExit((exit) => Deferred.done(entry.finished, exit)))
         }),
     },
   }
