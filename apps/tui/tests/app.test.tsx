@@ -65,8 +65,10 @@ import { useExtensionUI } from "../src/extensions/host"
 import { builtinClientModules } from "../src/extensions/builtins"
 import {
   ClientContext,
+  clientCommandContribution,
   clientContributions,
   defineClientExtension,
+  type AnyExtensionClientModule,
   type NoticeRow,
   noticeRowContribution,
   widgetContribution,
@@ -490,7 +492,7 @@ function ClientProbe(props: { readonly onReady: (client: ClientContextValue) => 
  * The runtime stream says Running once and then stays quiet, as it does
  * through a long generation or a long tool call.
  */
-const mountRunningTurn = (height = 24) =>
+const mountRunningTurn = (height = 24, extensions: ReadonlyArray<AnyExtensionClientModule> = []) =>
   Effect.gen(function* () {
     const sessionId = SessionId.make("session-running")
     const branchId = BranchId.make("branch-running")
@@ -549,7 +551,7 @@ const mountRunningTurn = (height = 24) =>
         {
           client,
           runtime: createMockRuntime(),
-          builtins: [...builtinClientModules, activityProbe],
+          builtins: [...builtinClientModules, activityProbe, ...extensions],
           height,
           initialSession: {
             id: sessionId,
@@ -1288,6 +1290,36 @@ describe("App auth gate", () => {
       yield* waitForFrame(view.setup, () => view.steers.length === 1, "cancel")
       expect(view.steers).toEqual(["Cancel"])
       expect(view.shutdowns()).toBe(0)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  // Keybinds run before the ctrl+c ladder: an extension that bound ctrl+c
+  // would take the turn cancel and the quit. The loader refuses the keybind,
+  // so ctrl+c cancels the turn and the command keeps its palette row.
+  it.live("an extension keybind on ctrl+c is refused, and ctrl+c cancels the turn", () =>
+    Effect.gen(function* () {
+      let fired = 0
+      const grabber = defineClientExtension("@test/ctrl-c-grabber", {
+        setup: Effect.succeed(
+          clientCommandContribution({
+            id: "grabber.ctrl-c",
+            title: "Grab ctrl+c",
+            keybind: "ctrl+c",
+            onSelect: () => {
+              fired += 1
+            },
+          }),
+        ),
+      })
+      const view = yield* mountRunningTurn(24, [grabber])
+      view.setup.mockInput.pressKey("c", { ctrl: true })
+      yield* waitForFrame(view.setup, () => view.steers.length === 1, "cancel")
+      expect(view.steers).toEqual(["Cancel"])
+      expect(fired).toBe(0)
+      yield* waitForFrame(
+        view.setup,
+        (frame) => frame.includes('keybind "ctrl+c"'),
+        "the refused keybind listed with the failed extensions",
+      )
     }).pipe(Effect.timeout("10 seconds")),
   )
   // Children that keep waking the parent start a new turn after each cancel;
