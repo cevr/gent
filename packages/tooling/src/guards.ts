@@ -1481,21 +1481,73 @@ const platformLayerAllowances: ReadonlyArray<PlatformLayerAllowance> = [
 /** The gent-owned names of the Bun platform layer. */
 const GENT_PLATFORM_LAYER = /\b(?:BunPlatformLive|BunGentPlatformLive)\b/g
 
-/** `import { A, B as C } from "@effect/platform-bun"`: each name is a module. */
-const PLATFORM_BUN_MODULES_IMPORT =
-  /import\s+(?:type\s+)?\{([^}]*)\}\s*from\s*["']@effect\/platform-bun["']/g
-/** `import { layer as l } from "@effect/platform-bun/BunCrypto"`: names from one module. */
-const PLATFORM_BUN_MEMBERS_IMPORT =
-  /import\s+(?:type\s+)?\{([^}]*)\}\s*from\s*["']@effect\/platform-bun\/\w+["']/g
-/** `import * as PlatformBun from "@effect/platform-bun"`: the package namespace. */
-const PLATFORM_BUN_PACKAGE_NAMESPACE =
-  /import\s+\*\s+as\s+([A-Za-z_$][\w$]*)\s+from\s*["']@effect\/platform-bun["']/g
-/** `import * as BunPath from "@effect/platform-bun/BunPath"`: one module. */
-const PLATFORM_BUN_MODULE_NAMESPACE =
-  /import\s+\*\s+as\s+([A-Za-z_$][\w$]*)\s+from\s*["']@effect\/platform-bun\/\w+["']/g
+/** The package, quoted. */
+const PLATFORM_BUN_PACKAGE = String.raw`["']@effect/platform-bun["']`
+/** One module under the package, quoted: `"@effect/platform-bun/BunCrypto"`. */
+const PLATFORM_BUN_MODULE = String.raw`["']@effect/platform-bun/\w+["']`
+const BINDING_NAME = String.raw`[A-Za-z_$][\w$]*`
+const DECLARE = String.raw`\b(?:const|let|var)`
+/** Whatever may follow a bare alias: `const C = BunCrypto` ends there. */
+const ALIAS_END = String.raw`\s*(?=[;,)\n]|$)`
+
+const dynamicImport = (specifier: string): string =>
+  String.raw`\bawait\s+import\(\s*${specifier}\s*\)`
+
+const IMPORT_STATEMENT = new RegExp(
+  String.raw`\bimport\s+(?:type\s+)?(?:\{[^}]*\}|\*\s+as\s+${BINDING_NAME}|${BINDING_NAME})\s*from\s*["'][^"']*["']`,
+  "g",
+)
+const RE_EXPORT_FROM = new RegExp(
+  String.raw`\bexport\s+(?:\*(?:\s+as\s+${BINDING_NAME})?|\{[^}]*\})\s*from\s*(?:${PLATFORM_BUN_PACKAGE}|${PLATFORM_BUN_MODULE})`,
+  "g",
+)
+const LOCAL_EXPORT_LIST = /\bexport\s+\{([^}]*)\}(?!\s*from)/g
 const IMPORT_SPECIFIER = /^\s*(?:type\s+)?([\w$]+)(?:\s+as\s+([\w$]+))?\s*$/
-const IMPORT_STATEMENT = /^\s*import\b[^;]*?\bfrom\s*["'][^"']*["']/gm
-const COMMENT_LINE = /^\s*(?:\/\/|\/\*|\*)/
+const DESTRUCTURE_SPECIFIER = /^\s*([\w$]+)(?:\s*:\s*([\w$]+))?\s*$/
+
+/** Where each kind of `@effect/platform-bun` binding comes from. */
+const BINDING_SOURCES = {
+  /** `import { BunCrypto } from "@effect/platform-bun"`: modules. */
+  packageMembers: new RegExp(
+    String.raw`\bimport\s+(?:type\s+)?\{([^}]*)\}\s*from\s*${PLATFORM_BUN_PACKAGE}`,
+    "g",
+  ),
+  /** `import { layer } from "@effect/platform-bun/BunCrypto"`: one module's exports. */
+  moduleMembers: new RegExp(
+    String.raw`\bimport\s+(?:type\s+)?\{([^}]*)\}\s*from\s*${PLATFORM_BUN_MODULE}`,
+    "g",
+  ),
+  /** `import * as PlatformBun from "@effect/platform-bun"`: the package. */
+  packageNamespace: new RegExp(
+    String.raw`\bimport\s+\*\s+as\s+(${BINDING_NAME})\s+from\s*${PLATFORM_BUN_PACKAGE}`,
+    "g",
+  ),
+  /** `import * as BunPath from "@effect/platform-bun/BunPath"`: a module. */
+  moduleNamespace: new RegExp(
+    String.raw`\bimport\s+\*\s+as\s+(${BINDING_NAME})\s+from\s*${PLATFORM_BUN_MODULE}`,
+    "g",
+  ),
+  /** `const PlatformBun = await import("@effect/platform-bun")`: the package. */
+  dynamicPackage: new RegExp(
+    String.raw`${DECLARE}\s+(${BINDING_NAME})\s*=\s*${dynamicImport(PLATFORM_BUN_PACKAGE)}`,
+    "g",
+  ),
+  /** `const BunCrypto = await import("@effect/platform-bun/BunCrypto")`: a module. */
+  dynamicModule: new RegExp(
+    String.raw`${DECLARE}\s+(${BINDING_NAME})\s*=\s*${dynamicImport(PLATFORM_BUN_MODULE)}`,
+    "g",
+  ),
+  /** `const { BunCrypto } = await import("@effect/platform-bun")`: modules. */
+  dynamicPackageMembers: new RegExp(
+    String.raw`${DECLARE}\s*\{([^}]*)\}\s*=\s*${dynamicImport(PLATFORM_BUN_PACKAGE)}`,
+    "g",
+  ),
+  /** `const { layer } = await import("@effect/platform-bun/BunCrypto")`: one module's exports. */
+  dynamicModuleMembers: new RegExp(
+    String.raw`${DECLARE}\s*\{([^}]*)\}\s*=\s*${dynamicImport(PLATFORM_BUN_MODULE)}`,
+    "g",
+  ),
+}
 
 const escapeRegExp = (text: string): string => text.replace(/[$.*+?^()[\]{}|\\]/g, "\\$&")
 
@@ -1510,10 +1562,10 @@ interface ImportedName {
   readonly local: string
 }
 
-/** The names a `{ ... }` import list binds, with the local name of each. */
-const importSpecifiers = (list: string): ReadonlyArray<ImportedName> =>
-  list.split(",").flatMap((specifier) =>
-    Option.toArray(Option.fromNullishOr(IMPORT_SPECIFIER.exec(specifier))).flatMap((parts) =>
+/** The names a `{ ... }` list binds, with the local name of each. */
+const listedNames = (list: string, specifier: RegExp): ReadonlyArray<ImportedName> =>
+  list.split(",").flatMap((entry) =>
+    Option.toArray(Option.fromNullishOr(specifier.exec(entry))).flatMap((parts) =>
       Option.toArray(Option.fromNullishOr(parts[1])).map((imported) => ({
         imported,
         local: Option.getOrElse(Option.fromNullishOr(parts[2]), () => imported),
@@ -1521,54 +1573,166 @@ const importSpecifiers = (list: string): ReadonlyArray<ImportedName> =>
     ),
   )
 
-/**
- * The pattern of a layer provision from `@effect/platform-bun` as this file
- * imports it: `BunCrypto.layer` and `Http.layerServer` through a module
- * binding, `PlatformBun.BunServices.layer` through the package namespace,
- * and a `layer` export imported under its own name. Constructors such as
- * `BunSocket.makeNet` and runners such as `BunRuntime.runMain` are not
- * provisions.
- */
-const platformBunLayerPattern = (text: string): RegExp => {
-  const modules = [
-    "Bun[A-Z]\\w*",
-    ...firstCaptures(text, PLATFORM_BUN_MODULES_IMPORT).flatMap((list) =>
-      importSpecifiers(list).map((name) => escapeRegExp(name.local)),
-    ),
-    ...firstCaptures(text, PLATFORM_BUN_PACKAGE_NAMESPACE).map(
-      (local) => `${escapeRegExp(local)}\\.\\w+`,
-    ),
-    ...firstCaptures(text, PLATFORM_BUN_MODULE_NAMESPACE).map(escapeRegExp),
-  ]
-  const layers = firstCaptures(text, PLATFORM_BUN_MEMBERS_IMPORT).flatMap((list) =>
-    importSpecifiers(list)
-      .filter((name) => /^layer\w*$/.test(name.imported))
-      .map((name) => escapeRegExp(name.local)),
+/** The local names each `{ ... }` list matched by `pattern` binds. */
+const boundNames = (
+  code: string,
+  pattern: RegExp,
+  specifier: RegExp,
+  keep: (imported: string) => boolean,
+): ReadonlyArray<string> =>
+  firstCaptures(code, pattern).flatMap((list) =>
+    listedNames(list, specifier)
+      .filter((name) => keep(name.imported))
+      .map((name) => name.local),
   )
-  const provisions = [`(?:${modules.join("|")})\\.layer\\w*`, ...layers]
-  return new RegExp(`(?<![\\w$.])(?:${provisions.join("|")})(?![\\w$])`, "g")
+
+const isLayerExport = (imported: string): boolean => /^layer\w*$/.test(imported)
+const anyExport = (): boolean => true
+
+/**
+ * The names this file binds from `@effect/platform-bun`. A module's `.layer*`
+ * is a layer, a package namespace's `.<Module>.layer*` is one, and a layer
+ * binding is one itself. A `const` that aliases a module or the package is
+ * followed.
+ */
+interface PlatformBunBindings {
+  readonly modules: ReadonlyArray<string>
+  readonly namespaces: ReadonlyArray<string>
+  readonly layers: ReadonlyArray<string>
 }
 
-/** The 0-based lines an import statement covers. */
-const importLines = (text: string): ReadonlySet<number> => {
-  const lines = new Set<number>()
-  for (const match of text.matchAll(IMPORT_STATEMENT)) {
-    const first = text.slice(0, match.index).split("\n").length - 1
-    const count = match[0].split("\n").length
-    for (let at = first; at < first + count; at++) lines.add(at)
+/** `A|B` of the escaped names, or nothing when there are none. */
+const alternation = (names: ReadonlyArray<string>): ReadonlyArray<string> =>
+  [names].filter((list) => list.length > 0).map((list) => list.map(escapeRegExp).join("|"))
+
+/** One pass of `const X = <module>` and `const X = <namespace>.<Module>` aliases. */
+const aliasedModules = (code: string, bindings: PlatformBunBindings): ReadonlyArray<string> =>
+  [
+    ...alternation(bindings.modules),
+    ...alternation(bindings.namespaces).map((names) => String.raw`(?:${names})\s*\.\s*\w+`),
+  ].flatMap((source) =>
+    firstCaptures(
+      code,
+      new RegExp(String.raw`${DECLARE}\s+(${BINDING_NAME})\s*=\s*(?:${source})${ALIAS_END}`, "g"),
+    ),
+  )
+
+const platformBunBindings = (code: string): PlatformBunBindings => {
+  const imported: PlatformBunBindings = {
+    modules: [
+      ...boundNames(code, BINDING_SOURCES.packageMembers, IMPORT_SPECIFIER, anyExport),
+      ...boundNames(code, BINDING_SOURCES.dynamicPackageMembers, DESTRUCTURE_SPECIFIER, anyExport),
+      ...firstCaptures(code, BINDING_SOURCES.moduleNamespace),
+      ...firstCaptures(code, BINDING_SOURCES.dynamicModule),
+    ],
+    namespaces: [
+      ...firstCaptures(code, BINDING_SOURCES.packageNamespace),
+      ...firstCaptures(code, BINDING_SOURCES.dynamicPackage),
+    ],
+    layers: [
+      ...boundNames(code, BINDING_SOURCES.moduleMembers, IMPORT_SPECIFIER, isLayerExport),
+      ...boundNames(
+        code,
+        BINDING_SOURCES.dynamicModuleMembers,
+        DESTRUCTURE_SPECIFIER,
+        isLayerExport,
+      ),
+    ],
   }
-  return lines
+  const follow = (bindings: PlatformBunBindings): PlatformBunBindings => {
+    const modules = new Set([...bindings.modules, ...aliasedModules(code, bindings)])
+    if (modules.size === new Set(bindings.modules).size) return bindings
+    return follow({ ...bindings, modules: Array.from(modules) })
+  }
+  return follow(imported)
 }
+
+/**
+ * The pattern of a layer provision: a module's `.layer*`, a namespace's
+ * `.<Module>.layer*`, a layer binding, or `.layer*` on an inline
+ * `await import(...)`. Whitespace may sit around each `.`, so an access split
+ * across lines still matches. Constructors such as `BunSocket.makeNet` and
+ * runners such as `BunRuntime.runMain` are not provisions.
+ */
+const platformBunLayerPattern = (bindings: PlatformBunBindings): RegExp => {
+  const provisions = [
+    ...alternation(bindings.modules).map((names) => String.raw`(?:${names})\s*\.\s*layer\w*`),
+    ...alternation(bindings.namespaces).map(
+      (names) => String.raw`(?:${names})\s*\.\s*\w+\s*\.\s*layer\w*`,
+    ),
+    ...alternation(bindings.layers),
+    String.raw`\(\s*${dynamicImport(PLATFORM_BUN_MODULE)}\s*\)\s*\.\s*layer\w*`,
+    String.raw`\(\s*${dynamicImport(PLATFORM_BUN_PACKAGE)}\s*\)\s*\.\s*\w+\s*\.\s*layer\w*`,
+  ]
+  return new RegExp(String.raw`(?<![\w$.])(?:${provisions.join("|")})(?![\w$])`, "g")
+}
+
+/**
+ * A statement that hands `@effect/platform-bun` on: a re-export from the
+ * package, an `export { ... }` of a name bound from it, or an exported alias.
+ */
+const platformBunReExports = (
+  code: string,
+  bindings: PlatformBunBindings,
+): ReadonlyArray<RegExpExecArray> => {
+  const bound = new Set([...bindings.modules, ...bindings.namespaces, ...bindings.layers])
+  const exportedLists = Array.from(code.matchAll(LOCAL_EXPORT_LIST)).filter((match) =>
+    listedNames(
+      Option.getOrElse(Option.fromNullishOr(match[1]), () => ""),
+      IMPORT_SPECIFIER,
+    ).some((name) => bound.has(name.imported)),
+  )
+  const exportedAliases = alternation(Array.from(bound)).flatMap((names) =>
+    Array.from(
+      code.matchAll(
+        new RegExp(
+          String.raw`\bexport\s+(?:const|let|var)\s+${BINDING_NAME}\s*=\s*(?:${names})(?:\s*\.\s*\w+)?${ALIAS_END}`,
+          "g",
+        ),
+      ),
+    ),
+  )
+  return [...code.matchAll(RE_EXPORT_FROM), ...exportedLists, ...exportedAliases]
+}
+
+/** A `[start, end)` stretch of source. */
+interface Span {
+  readonly start: number
+  readonly end: number
+}
+
+/** The spans that bind names rather than use them. */
+const bindingSpans = (code: string): ReadonlyArray<Span> =>
+  [
+    IMPORT_STATEMENT,
+    RE_EXPORT_FROM,
+    BINDING_SOURCES.dynamicPackageMembers,
+    BINDING_SOURCES.dynamicModuleMembers,
+  ].flatMap((pattern) =>
+    Array.from(code.matchAll(pattern)).map((match) => {
+      const start = match.index
+      return { start, end: start + match[0].length }
+    }),
+  )
+
+/** The source text of a match, its whitespace around `.` and parentheses dropped. */
+const collapsedText = (text: string): string => text.replace(/\s*([.()])\s*/g, "$1")
+
+const lineAt = (code: string, index: number): number => code.slice(0, index).split("\n").length
 
 /**
  * Every Bun platform layer is provided by a platform root. A file outside
  * the roots yields the service the root provides (`FileSystem`, `Path`,
  * `ChildProcessSpawner`, `Crypto`, ...) instead of providing its own, so a
  * test host's services reach it and a shipped extension is never more
- * privileged than a user extension. A layer no root can provide takes a
- * `platformLayerAllowances` entry with its reason. What a launcher or a
- * reference extension may import is its manifest's business: the
- * `gent/declared-workspace-imports` lint rule reads it.
+ * privileged than a user extension. The guard reads the names the file binds
+ * from `@effect/platform-bun` (static or dynamic imports, and their aliases),
+ * so a local `BunWidget.layer` is no provision, and it reports a module that
+ * re-exports the package, since that hands the layers to any importer. A
+ * layer no root can provide takes a `platformLayerAllowances` entry with its
+ * reason. What a launcher or a reference extension may import is its
+ * manifest's business: the `gent/declared-workspace-imports` lint rule reads
+ * it.
  */
 export const findPlatformDuplicationViolations = (
   file: string,
@@ -1578,20 +1742,30 @@ export const findPlatformDuplicationViolations = (
   const allowed = new Set(
     platformLayerAllowances.filter((entry) => entry.file === file).map((entry) => entry.layer),
   )
-  const layerPattern = platformBunLayerPattern(text)
-  const imports = importLines(text)
-  return text.split("\n").flatMap((line, index) => {
-    if (COMMENT_LINE.test(line)) return []
-    const layerMatches = Array.from(line.matchAll(layerPattern)).filter(() => !imports.has(index))
-    const provisions = [...line.matchAll(GENT_PLATFORM_LAYER), ...layerMatches]
-      .map((match) => match[0])
-      .filter((name) => !allowed.has(name))
-    return provisions.map((name) => ({
-      file,
-      line: index + 1,
-      message: `\`${name}\` provides a Bun platform layer outside the platform roots; yield the service the root provides, or record why no root can provide it in platformLayerAllowances`,
+  const code = withoutComments(text)
+  const bindings = platformBunBindings(code)
+  const spans = bindingSpans(code)
+  const inBindingSpan = (index: number): boolean =>
+    spans.some((span) => index >= span.start && index < span.end)
+  const provisions = [
+    ...code.matchAll(GENT_PLATFORM_LAYER),
+    ...Array.from(code.matchAll(platformBunLayerPattern(bindings))).filter(
+      (match) => !inBindingSpan(match.index),
+    ),
+  ]
+    .map((match) => ({ index: match.index, name: collapsedText(match[0]) }))
+    .filter((provision) => !allowed.has(provision.name))
+    .map((provision) => ({
+      index: provision.index,
+      message: `\`${provision.name}\` provides a Bun platform layer outside the platform roots; yield the service the root provides, or record why no root can provide it in platformLayerAllowances`,
     }))
-  })
+  const reExports = platformBunReExports(code, bindings).map((match) => ({
+    index: match.index,
+    message: `\`${collapsedText(match[0].replace(/\s+/g, " "))}\` re-exports @effect/platform-bun outside the platform roots, which hands its layers to any importer; import from the package where it is used, or yield the service the root provides`,
+  }))
+  return [...provisions, ...reExports]
+    .toSorted((left, right) => left.index - right.index)
+    .map((finding) => ({ file, line: lineAt(code, finding.index), message: finding.message }))
 }
 
 // ── a deleted surface stays deleted ─────────────────────────────────────────
