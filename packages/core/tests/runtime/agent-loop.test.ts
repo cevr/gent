@@ -43,6 +43,7 @@ import {
   makeAgentLoopWorker,
   makeHoldCount,
   makeLoopInbox,
+  type TurnWork,
   wantsWakeOnRecovery,
 } from "../../src/runtime/agent-loop"
 import { TestClock } from "effect/testing"
@@ -608,6 +609,46 @@ describe("turn lifetime", () => {
             ),
           ),
         ).toBe(true)
+      }).pipe(Effect.provide(TestClock.layer()), Effect.timeout("8 seconds")),
+    10_000,
+  )
+
+  // A phase-failed turn runs its receipt and hooks after the turn phase
+  // ended. The loop is still busy with that turn, so it stays resident.
+  it.scopedLive(
+    "a failed turn's hook runs to its end past the entity idle limit",
+    () =>
+      Effect.gen(function* () {
+        const entered = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        const ended = yield* Deferred.make<"finished" | "interrupted">()
+        const extension = defineExtension({
+          id: "@gent/test-slow-failed-turn-hook",
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.on("turnAfter", () =>
+              Deferred.succeed(entered, void 0).pipe(
+                Effect.andThen(Deferred.await(release)),
+                Effect.andThen(Deferred.succeed(ended, "finished")),
+                Effect.onInterrupt(() => Deferred.succeed(ended, "interrupted")),
+                Effect.asVoid,
+              ),
+            )
+          }),
+        })
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer: LanguageModelLayers.testStream(() =>
+            Effect.succeed(Stream.die("stream defect")),
+          ),
+          extensionInputs: [...e2ePreset.extensionInputs, extension],
+        })
+        yield* client.message.send({ sessionId, branchId, content: "fail this turn" })
+        yield* Deferred.await(entered)
+        // Idle past the entity idle limit (one minute) and the reaper's ticks.
+        for (let step = 0; step < 12; step++) yield* TestClock.adjust("10 seconds")
+        yield* Deferred.succeed(release, void 0)
+        expect(yield* Deferred.await(ended)).toBe("finished")
       }).pipe(Effect.provide(TestClock.layer()), Effect.timeout("8 seconds")),
     10_000,
   )
@@ -2747,7 +2788,7 @@ const makeHarness = (
     })
     const ranTurns = yield* Ref.make<ReadonlyArray<string>>([])
     const interruptedTurns = yield* Ref.make<ReadonlyArray<boolean>>([])
-    const turnWorkerQueue = yield* TxQueue.unbounded<RunningState>()
+    const turnWorkerQueue = yield* TxQueue.unbounded<TurnWork>()
     const gateRef = yield* Ref.make(emptyAdmissionGate)
     const sideMutationSemaphore = yield* Semaphore.make(1)
     const turnInterruption = yield* makeTurnInterruption
@@ -2760,6 +2801,8 @@ const makeHarness = (
       sideMutationSemaphore,
       interruptSemaphore: yield* Semaphore.make(1),
       turnWorkerQueue,
+      // No cluster here: a hold switches nothing.
+      residency: yield* makeHoldCount(() => Effect.void),
       activeStreamRef: yield* Ref.make(Option.none<ActiveStreamHandle>()),
       turnInterruption,
       interruptToolWork: Effect.void,
@@ -2809,13 +2852,19 @@ const makeHarness = (
       failedTurns,
       interruptedTurns,
       turnWorkerQueue,
+      /** Hands a turn to the worker, as the loop's own hand-over does. */
+      handOver: (state: RunningState) =>
+        Scope.make().pipe(
+          Effect.flatMap((resident) => TxQueue.offer(turnWorkerQueue, { state, resident })),
+          Effect.asVoid,
+        ),
       gateRef,
       sideMutationSemaphore,
       loopScope,
     }
   }).pipe(Effect.provide(memoryQueueStorage))
 
-const waitForEmptyWorkerQueue = (queue: TxQueue.TxQueue<RunningState>): Effect.Effect<void> =>
+const waitForEmptyWorkerQueue = (queue: TxQueue.TxQueue<TurnWork>): Effect.Effect<void> =>
   TxQueue.size(queue).pipe(
     Effect.flatMap((size) => {
       if (size === 0) return Effect.void
@@ -2839,7 +2888,7 @@ describe("a turn whose agent cannot be read", () => {
           }),
         ),
       })
-      yield* TxQueue.offer(harness.turnWorkerQueue, initial.state)
+      yield* harness.handOver(initial.state)
       const loop = yield* Effect.forkChild(harness.worker.turnWorkerLoop)
       const settle = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) =>
         read.pipe(
@@ -2853,7 +2902,7 @@ describe("a turn whose agent cannot be read", () => {
       expect((yield* harness.queue).inFlight).toBeUndefined()
       expect(Option.isNone((yield* Ref.get(harness.gateRef)).started)).toBe(true)
       // The same worker runs the next turn.
-      yield* TxQueue.offer(harness.turnWorkerQueue, buildRunningState(second, { startedAtMs: 1 }))
+      yield* harness.handOver(buildRunningState(second, { startedAtMs: 1 }))
       yield* settle(Ref.get(harness.ranTurns), (ids) => ids.length > 0)
       expect(yield* Ref.get(harness.ranTurns)).toEqual(["second"])
       yield* Fiber.interrupt(loop)
@@ -2883,7 +2932,7 @@ describe("a turn whose agent cannot be read", () => {
               Effect.andThen(Deferred.await(releaseHooks)),
             ),
         })
-        yield* TxQueue.offer(harness.turnWorkerQueue, initial.state)
+        yield* harness.handOver(initial.state)
         const loop = yield* Effect.forkChild(harness.worker.turnWorkerLoop)
         yield* Deferred.await(hooksStarted).pipe(Effect.timeout("2 seconds"))
         // A normal turn's hooks run outside the interrupt permit; so do these.
@@ -3207,7 +3256,7 @@ describe("admitted turn withdrawal", () => {
       const initial = admitted(first, [])
       const harness = yield* makeHarness(initial)
       // The finishing turn enqueued `first`; the withdrawal lands before the worker takes it.
-      yield* TxQueue.offer(harness.turnWorkerQueue, initial.state)
+      yield* harness.handOver(initial.state)
       yield* harness.worker.withdrawAdmittedTurn(first.message.id)
       yield* harness.setPhase(buildIdleState())
       const loop = yield* Effect.forkChild(harness.worker.turnWorkerLoop)
@@ -3222,7 +3271,7 @@ describe("admitted turn withdrawal", () => {
       const first = queuedItem("first")
       const initial = admitted(first, [])
       const harness = yield* makeHarness(initial)
-      yield* TxQueue.offer(harness.turnWorkerQueue, initial.state)
+      yield* harness.handOver(initial.state)
       const results = yield* Effect.all(
         [
           harness.worker.withdrawAdmittedTurn(first.message.id),

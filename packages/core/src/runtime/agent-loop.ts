@@ -968,12 +968,25 @@ export const makeLoopInbox = (
 
 // ── worker ──────────────────────────────────────────────────────────────────
 
+/**
+ * A turn handed to the worker, with a residency hold taken at the hand-over.
+ * The worker closes the hold when it is done with the turn, receipt and
+ * hooks included. The next turn is handed over before that, so the loop
+ * stays held from one turn to the next.
+ */
+export interface TurnWork {
+  readonly state: RunningState
+  readonly resident: Scope.Closeable
+}
+
 type AgentLoopWorkerContext<E = never, R = never> = {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly sideMutationSemaphore: Semaphore.Semaphore
   readonly interruptSemaphore: Semaphore.Semaphore
-  readonly turnWorkerQueue: TxQueue.TxQueue<RunningState>
+  readonly turnWorkerQueue: TxQueue.TxQueue<TurnWork>
+  /** Holds the loop's entity resident; a handed-over turn holds it until the worker is done with it. */
+  readonly residency: AgentLoopResidencyService
   readonly activeStreamRef: Ref.Ref<Option.Option<ActiveStreamHandle>>
   readonly turnInterruption: TurnInterruption
   /** Cancel whatever tool work this loop has in flight. Idempotent. */
@@ -1049,8 +1062,15 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
         Effect.asVoid,
       )
 
+  /** Hands a turn to the worker. The hold is taken here, before the caller goes on. */
   const enqueueTurnWorker = (state: RunningState): Effect.Effect<void> =>
-    TxQueue.offer(scope.turnWorkerQueue, state).pipe(Effect.asVoid)
+    Effect.uninterruptible(
+      Effect.gen(function* () {
+        const resident = yield* Scope.make()
+        yield* scope.residency.held.pipe(Scope.provide(resident))
+        yield* TxQueue.offer(scope.turnWorkerQueue, { state, resident })
+      }),
+    )
 
   /** Start the next admitted turn on this loop, or park it idle. */
   const advanceOrIdle = (
@@ -1204,7 +1224,9 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
   )
 
   const turnWorkerLoop = TxQueue.take(scope.turnWorkerQueue).pipe(
-    Effect.flatMap(runTurnWorker),
+    Effect.flatMap((work) =>
+      runTurnWorker(work.state).pipe(Effect.ensuring(Scope.close(work.resident, Exit.void))),
+    ),
     Effect.forever,
     Effect.ignore,
   )
@@ -1539,12 +1561,16 @@ class AgentLoopFollowUp extends Context.Service<AgentLoopFollowUp, AgentLoopFoll
  *
  * The cluster reaper passivates an entity that is idle past its limit (one
  * minute), and a passivated entity closes its runtime-state stream and its
- * branch scope. Three things hold a loop resident: a running turn, a client
- * that watches the loop's runtime state, and an extension hold
- * (`Session.holdResident`, which a pending wake timer takes). A watch that
- * held nothing would end a minute into an idle stretch, and the client would
- * reconnect and rebuild the loop each time; a timer that held nothing would
- * stop with the branch scope and never fire.
+ * branch scope. Four things hold a loop resident: a turn, from its hand-over
+ * to the worker until the worker is done with it; a queued turn's asked-for
+ * start, until it is decided; a client that watches the loop's runtime
+ * state; and an extension hold (`Session.holdResident`, which a pending wake
+ * timer takes). A watch that held nothing would end a minute into an idle
+ * stretch, and the client would reconnect and rebuild the loop each time; a
+ * timer that held nothing would stop with the branch scope and never fire.
+ * Each hand-over takes the next hold before the last one ends: a count that
+ * reached zero in between would let the reaper take the loop before the
+ * next keep-alive arrived.
  *
  * The holds are counted, because the entity has one keep-alive switch: the
  * first hold turns it on and the last release turns it off. An entity with
@@ -1655,8 +1681,9 @@ const makeAgentLoopBehavior = (
     const recoveryEvents = yield* EventStorage
     const host = yield* makeExtensionHostPlatform
     const runtimeContext = yield* captureAgentLoopRuntimeContext
-    // A running turn holds the entity resident: its worker is detached from
-    // the request that started it.
+    // A turn holds the entity resident from its hand-over to the worker until
+    // the worker is done with it: the worker is detached from the request
+    // that started the turn.
     const residency = yield* AgentLoopResidency
 
     const publishEvent = (event: AgentEvent) =>
@@ -1829,7 +1856,7 @@ const makeAgentLoopBehavior = (
         suspendedRegistries.set(registry, narrowed)
         return { ...profile, turnExtensionRegistry: narrowed }
       })
-    const turnWorkerQueue = yield* TxQueue.unbounded<RunningState>()
+    const turnWorkerQueue = yield* TxQueue.unbounded<TurnWork>()
     const activeStreamRef = yield* Ref.make<Option.Option<ActiveStreamHandle>>(Option.none())
     const turnLedger = yield* makeTurnLedger
     // A tool holding branch-scoped work exposes how to cancel it. A branch
@@ -1903,6 +1930,7 @@ const makeAgentLoopBehavior = (
       sideMutationSemaphore,
       interruptSemaphore: yield* Semaphore.make(1),
       turnWorkerQueue,
+      residency,
       activeStreamRef,
       turnInterruption,
       interruptToolWork,
@@ -1922,8 +1950,7 @@ const makeAgentLoopBehavior = (
         ),
       interactionAnswered: approval.answered,
       runTurn: (state) =>
-        residency.held.pipe(
-          Effect.andThen(branchContext),
+        branchContext.pipe(
           // The turn's profile lease ends with the turn.
           Effect.flatMap((context) =>
             turnExecution.runTurn(state).pipe(Effect.provideContext(context), Effect.scoped),
@@ -2611,11 +2638,25 @@ const buildAgentLoopActorHandlers = (config: {
     /**
      * Ask for a turn from inside a caller that holds the side-mutation permit.
      * The start is forked, so it waits for that permit instead of deadlocking.
+     *
+     * The ask holds the entity resident until the start is decided, and a
+     * started turn holds it from its hand-over to the worker. The hold is
+     * taken here, before the caller goes on: a caller may let go of the loop
+     * as soon as this returns (a wake timer's hold ends with its fire), and
+     * the reaper could passivate the idle loop before the turn starts.
      */
     const wakeAfterPermit = (handle: AgentLoopBehavior): Effect.Effect<void> =>
-      Ref.set(wakeRequested, true).pipe(
-        Effect.andThen(drainWake(handle).pipe(provideActorWorkspace, Effect.forkIn(actorScope))),
-        Effect.asVoid,
+      Effect.uninterruptible(
+        Effect.gen(function* () {
+          const resident = yield* Scope.make()
+          yield* residency.held.pipe(Scope.provide(resident))
+          yield* Ref.set(wakeRequested, true)
+          yield* drainWake(handle).pipe(
+            Effect.ensuring(Scope.close(resident, Exit.void)),
+            provideActorWorkspace,
+            Effect.forkIn(actorScope),
+          )
+        }),
       )
 
     /** Start a queued turn requested by a re-entrant admission once the permit is free. */
