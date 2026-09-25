@@ -1,7 +1,7 @@
 import { describe, expect, it, test } from "effect-bun-test"
-import { Effect, Layer, Predicate, Random, Schema } from "effect"
+import { Crypto, Effect, Layer, Predicate, Random, Schema } from "effect"
 import { BunChildProcessSpawner, BunServices } from "@effect/platform-bun"
-import { getToolId } from "@gent/core/extensions/api"
+import { defineExtension, ExtensionHost, getToolId, request } from "@gent/core/extensions/api"
 import { BuiltinExtensions } from "@gent/extensions"
 import {
   collectTestContributions,
@@ -205,6 +205,53 @@ const rejectedCalls = (calls: ReadonlyArray<SeededCall>) =>
       ),
     ),
   )
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+// A user-shaped extension whose setup mints an id with Effect `Crypto`. The
+// TUI and `apps/server` both build their root through `Gent.server`.
+const cryptoSetupExtension = defineExtension({
+  id: "crypto-setup",
+  setup: Effect.gen(function* () {
+    const id = yield* (yield* Crypto.Crypto).randomUUIDv7.pipe(Effect.orDie)
+    const host = yield* ExtensionHost
+    yield* host.register(
+      "request",
+      request({
+        id: "minted",
+        slash: { name: "minted", description: id },
+        description: id,
+        input: Schema.String,
+        output: Schema.Void,
+        execute: () => Effect.void,
+      }),
+    )
+  }),
+})
+
+describe("Gent.server extension setup", () => {
+  it.live(
+    "gives setup the Crypto service",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const cwd = yield* makeTempDirectoryScoped("gent-server-crypto-")
+          const server = yield* Gent.server({
+            cwd,
+            state: Gent.state.memory(),
+            provider: Gent.provider.mock(),
+            extensions: [...BuiltinExtensions, cryptoSetupExtension],
+          })
+          const { client } = yield* Gent.client(server, { cwd })
+          const { sessionId } = yield* client.session.create({ cwd })
+          const commands = yield* client.extension.listSlashCommands({ sessionId })
+          const minted = commands.find((command) => command.name === "minted")
+          expect(minted?.description).toMatch(UUID_PATTERN)
+        }).pipe(Effect.timeout("20 seconds")),
+      ),
+    30_000,
+  )
+})
 
 describe("Gent.server debug playground", () => {
   it.live(

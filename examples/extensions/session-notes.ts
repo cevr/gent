@@ -43,7 +43,7 @@ const NoteOutput = Schema.Struct({
   latest: Schema.String,
 })
 
-export const AddNoteTool = tool({
+const AddNoteTool = tool({
   id: "session_note_add",
   description: "Remember a short note for this session",
   params: NoteInput,
@@ -63,7 +63,7 @@ export const AddNoteTool = tool({
     }),
 })
 
-export const SessionNotesSummary = request({
+const SessionNotesSummary = request({
   id: "session-notes-summary",
   slash: {
     trigger: "notes",

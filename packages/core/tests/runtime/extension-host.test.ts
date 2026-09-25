@@ -1,6 +1,7 @@
 import {
   Cause,
   Context,
+  Crypto,
   Data,
   Deferred,
   Effect,
@@ -485,10 +486,8 @@ describe("session profile resolution", () => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
-      // Under the repo, so the project module resolves `effect`.
       const directory = yield* fs.makeTempDirectoryScoped({
-        directory: path.resolve(import.meta.dir, "../../.."),
-        prefix: ".tmp-profile-trust-",
+        prefix: "gent-profile-trust-",
       })
       const home = path.join(directory, "home")
       const project = path.join(directory, "project")
@@ -535,10 +534,8 @@ export default { manifest: { id: "profile-trust" }, setup: Effect.void };`,
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
-      // Under the repo, so the project module resolves `effect`.
       const directory = yield* fs.makeTempDirectoryScoped({
-        directory: path.resolve(import.meta.dir, "../../.."),
-        prefix: ".tmp-profile-broken-trust-",
+        prefix: "gent-profile-broken-trust-",
       })
       const home = path.join(directory, "home")
       const project = path.join(directory, "project")
@@ -583,10 +580,8 @@ export default { manifest: { id: "profile-broken-trust" }, setup: Effect.void };
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
-      // Under the package, so the module resolves `effect` and `@gent/core`.
       const directory = yield* fs.makeTempDirectoryScoped({
-        directory: path.resolve(import.meta.dir, "../.."),
-        prefix: ".tmp-profile-version-",
+        prefix: "gent-profile-version-",
       })
       const home = path.join(directory, "home")
       const launch = path.join(directory, "launch")
@@ -2237,6 +2232,62 @@ describe("extension activation isolation", () => {
   )
 })
 
+// ── setup platform services ──────────────────────────────────────────────────
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+// A user-shaped extension whose setup mints an id with Effect `Crypto` and
+// names its slash command's description after it.
+const cryptoSetupExtension = defineExtension({
+  id: "crypto-setup",
+  setup: Effect.gen(function* () {
+    const id = yield* (yield* Crypto.Crypto).randomUUIDv7.pipe(Effect.orDie)
+    const host = yield* ExtensionHost
+    yield* host.register(
+      "request",
+      request({
+        id: "minted",
+        slash: { name: "minted", description: id },
+        description: id,
+        input: Schema.String,
+        output: Schema.Void,
+        execute: () => Effect.void,
+      }),
+    )
+  }),
+})
+
+describe("setup platform services", () => {
+  it.live("the loader gives setup the Crypto service", () =>
+    Effect.gen(function* () {
+      const result = yield* setupExtensions({
+        extensions: [{ extension: cryptoSetupExtension, scope: "user", sourcePath: "/tmp/c.ts" }],
+        cwd: "/tmp",
+        home: "/tmp",
+        disabled: new Set(),
+      })
+      expect(result.failed).toEqual([])
+      const minted = result.active[0]?.contributions.requests?.[0]
+      expect(minted?.description).toMatch(UUID_PATTERN)
+    }).pipe(Effect.provide(fsLayer)),
+  )
+
+  it.live("the E2E root gives setup the Crypto service", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { client, sessionId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer: LanguageModelLayers.debug(),
+          extensionInputs: [...e2ePreset.extensionInputs, cryptoSetupExtension],
+        })
+        const commands = yield* client.extension.listSlashCommands({ sessionId })
+        const minted = commands.find((command) => command.name === "minted")
+        expect(minted?.description).toMatch(UUID_PATTERN)
+      }).pipe(Effect.timeout("20 seconds")),
+    ),
+  )
+})
+
 // ── capability registries ────────────────────────────────────────────────────
 
 /**
@@ -3163,8 +3214,7 @@ describe("setupExtension", () => {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
       const directory = yield* fs.makeTempDirectoryScoped({
-        directory: path.resolve(import.meta.dir, "../../.."),
-        prefix: ".tmp-project-trust-",
+        prefix: "gent-project-trust-",
       })
       const userDir = path.join(directory, "home/.gent/extensions")
       const projectDir = path.join(directory, "project/.gent/extensions")
@@ -3202,8 +3252,7 @@ export default { manifest: { id: "trusted-project" }, setup: Effect.void };`,
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
       const directory = yield* fs.makeTempDirectoryScoped({
-        directory: path.resolve(import.meta.dir, "../../.."),
-        prefix: ".tmp-home-launch-",
+        prefix: "gent-home-launch-",
       })
       const home = yield* fs.realPath(directory)
       const userDir = path.join(home, ".gent/extensions")
@@ -3312,10 +3361,8 @@ export default { manifest: { id: "home-user" }, setup: Effect.void };`,
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
-      const repositoryRoot = path.resolve(import.meta.dir, "../../..")
       const packageDir = yield* fs.makeTempDirectoryScoped({
-        directory: repositoryRoot,
-        prefix: ".tmp-loader-package-",
+        prefix: "gent-loader-package-",
       })
       yield* fs.writeFileString(
         path.join(packageDir, "package.json"),
@@ -3527,10 +3574,8 @@ export default { manifest: { id: "home-user" }, setup: Effect.void };`,
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
-      const repositoryRoot = path.resolve(import.meta.dir, "../../..")
       const dir = yield* fs.makeTempDirectoryScoped({
-        directory: repositoryRoot,
-        prefix: ".tmp-loader-order-",
+        prefix: "gent-loader-order-",
       })
       for (const id of ["alpha", "Zeta"]) {
         yield* fs.writeFileString(
@@ -3555,10 +3600,8 @@ export default { manifest: { id: "home-user" }, setup: Effect.void };`,
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
-      const repositoryRoot = path.resolve(import.meta.dir, "../../..")
       const dir = yield* fs.makeTempDirectoryScoped({
-        directory: repositoryRoot,
-        prefix: ".tmp-loader-dangling-",
+        prefix: "gent-loader-dangling-",
       })
       yield* fs.writeFileString(
         path.join(dir, "good.ts"),

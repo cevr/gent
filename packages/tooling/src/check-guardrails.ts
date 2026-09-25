@@ -11,12 +11,15 @@ import {
   findCoreFeatureIndependenceFindings,
   findCoreVendorModelPins,
   findE2eFixtureImportFindings,
+  findEffectVersionDrift,
+  findRepoTempDirectories,
   findHookWithoutGuards,
   findIdentityEncodes,
   findPackageSurfaceFindings,
   findPlatformDuplicationViolations,
   findReadersWithoutWriters,
   findRetiredSurfaces,
+  findSafetyBlockDrift,
   findSteeringFilePaths,
   findSuppressionInventoryFindings,
   findTuiSessionIdentityReads,
@@ -124,6 +127,7 @@ const SOURCE_FILE_FINDERS: ReadonlyArray<FileFinder> = [
   findCoreVendorModelPins,
   findAliasTestLayers,
   findE2eFixtureImportFindings,
+  findRepoTempDirectories,
   findIdentityEncodes,
   findTuiSessionIdentityReads,
 ]
@@ -261,6 +265,14 @@ const packageSurfaceFindings = Effect.fn("Tooling.packageSurfaceFindings")(funct
       { manifest: ROOT_MANIFEST, text: root.text, packageJson: root.value },
       [...manifests.values()].map((read) => read.value),
     ),
+    ...findEffectVersionDrift(
+      { manifest: ROOT_MANIFEST, text: root.text, packageJson: root.value },
+      [...manifests].map(([manifest, read]) => ({
+        manifest,
+        text: read.text,
+        packageJson: read.value,
+      })),
+    ),
   ]
 })
 
@@ -293,6 +305,8 @@ export const scanTrackedTexts = (
   const adaptedSeams = new Set<string>()
   // A package script is a writer of the variables it sets.
   const manifestTexts = new Map<string, string>()
+  // The loop prompts share one SAFETY block.
+  const steeringTexts = new Map<string, string>()
 
   /**
    * Facts the cross-file scans need, gathered in the single pass over the
@@ -309,6 +323,7 @@ export const scanTrackedTexts = (
     for (const finder of ANY_FILE_FINDERS) findings.push(...finder(file, text))
     findings.push(...findSteeringFilePaths(file, text, trackedFiles))
     if (isManifest(file)) manifestTexts.set(file, text)
+    if (isSteeringFile(file)) steeringTexts.set(file, text)
     if (!isSourceFile(file)) continue
     for (const finder of SOURCE_FILE_FINDERS) findings.push(...finder(file, text))
     collectWholeTreeFacts(file, text)
@@ -320,6 +335,7 @@ export const scanTrackedTexts = (
     ...findUnadaptedSeams(sourceTexts, adaptedSeams),
     // A GENT_* variable whose writer left: its reader is a branch nothing takes.
     ...findReadersWithoutWriters(new Map([...sourceTexts, ...manifestTexts])),
+    ...findSafetyBlockDrift(steeringTexts),
   )
   return { findings, sourceTexts }
 }

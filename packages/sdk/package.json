@@ -10,7 +10,7 @@
     "test": "env -u FORCE_COLOR NO_COLOR=1 bun test --preload ../../packages/tooling/src/test-preload.ts --reporter=dots --parallel tests"
   },
   "dependencies": {
-    "@effect/opentelemetry": "4.0.0-rc.112",
+    "@effect/opentelemetry": "catalog:",
     "@effect/platform-bun": "catalog:",
     "@gent/core": "workspace:*",
     "@gent/extensions": "workspace:*",
