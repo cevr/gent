@@ -54,7 +54,7 @@ export const CurrentWorkspaceId = Context.Reference<WorkspaceId>(
   { defaultValue: () => DefaultWorkspaceId },
 )
 
-export class WorkspaceHeaderError extends Schema.TaggedError<WorkspaceHeaderError>()(
+class WorkspaceHeaderError extends Schema.TaggedError<WorkspaceHeaderError>()(
   "WorkspaceHeaderError",
   {
     message: Schema.String,

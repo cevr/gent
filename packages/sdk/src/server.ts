@@ -818,23 +818,23 @@ const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: string) 
 
 type BuiltRpcHandlers = Layer.Success<typeof RpcHandlersLive>
 
-export const StateSpec = Schema.Union([
+const StateSpec = Schema.Union([
   Schema.TaggedStruct("Sqlite", {
     /** The fallback root for the data directory when `GENT_DATA_DIR` is unset. */
     home: Schema.optional(Schema.String),
   }),
   Schema.TaggedStruct("Memory", {}),
 ]).pipe(Schema.toTaggedUnion("_tag"))
-export type StateSpec = Schema.Schema.Type<typeof StateSpec>
+type StateSpec = Schema.Schema.Type<typeof StateSpec>
 
-export const ProviderSpec = Schema.Union([
+const ProviderSpec = Schema.Union([
   Schema.TaggedStruct("Live", {}),
   Schema.TaggedStruct("Mock", {
     /** Finish every step having produced nothing — drives the unanswered turn. */
     empty: Schema.optional(Schema.Boolean),
   }),
 ]).pipe(Schema.toTaggedUnion("_tag"))
-export type ProviderSpec = Schema.Schema.Type<typeof ProviderSpec>
+type ProviderSpec = Schema.Schema.Type<typeof ProviderSpec>
 
 /**
  * Every launch value the standalone server reads from its environment.

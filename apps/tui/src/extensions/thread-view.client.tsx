@@ -96,7 +96,7 @@ export const summaryBody = (notice: string): string => {
   return notice.slice(at + "\n\nSummary:\n".length)
 }
 
-export const sessionLabel = (session: Session): string =>
+const sessionLabel = (session: Session): string =>
   Option.fromUndefinedOr(session.name).pipe(
     Option.orElse(() => Option.fromUndefinedOr(session.cwd)),
     Option.getOrElse(() => session.id),

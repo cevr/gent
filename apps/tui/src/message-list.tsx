@@ -157,7 +157,7 @@ export type SessionEvent =
       seq: number
     }
 
-const currentMillis = () => DateTime.toEpochMillis(DateTime.nowUnsafe())
+export const currentMillis = () => DateTime.toEpochMillis(DateTime.nowUnsafe())
 
 /** "3 steps · 2 tool calls · $0.012"; a turn with no recorded steps says nothing extra. */
 const stepSummary = (steps: TurnSteps): ReadonlyArray<string> => {
