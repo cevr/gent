@@ -11,6 +11,7 @@ import {
   Option,
   Path,
   Schema,
+  Stream,
 } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { TestClock } from "effect/testing"
@@ -30,11 +31,14 @@ import {
   runToolWithCtx,
   testToolContext,
   textStep,
+  toolCallStep,
 } from "@gent/core/test-utils"
 import { ref, runProcess } from "@gent/core/extensions/api"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/protocol"
 import { toolResultSummary } from "@gent/core/extensions/branch-tools"
 import { e2ePreset } from "./helpers/test-preset"
+import { isToolEventFor } from "./helpers/tool-event.js"
+import { AgentsExtension } from "../src/agents.js"
 
 // ── read tool ───────────────────────────────────────────────────────────────
 
@@ -1512,16 +1516,25 @@ describe("GrepTool", () => {
 // ── file index ──────────────────────────────────────────────────────────────
 
 describe("grep's file listing outside a git work tree", () => {
-  it.scopedLive("lists every file, dotfiles too", () =>
+  it.scopedLive("the .gitignore rules decide, and dotfiles are listed", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const tmpDir = yield* fs.makeTempDirectoryScoped()
-      yield* fs.writeFileString(`${tmpDir}/.gitignore`, "node_modules")
-      yield* fs.writeFileString(`${tmpDir}/a.ts`, "hello")
-      yield* fs.writeFileString(`${tmpDir}/b.js`, "world")
+      yield* writeTree(
+        tmpDir,
+        [".env", ".github/ci.yml", "a.ts", "dist/o.js", "node_modules/x/i.js"],
+        { ".gitignore": "dist/\n" },
+      )
 
-      expect(yield* listed(tmpDir)).toEqual([".gitignore", "a.ts", "b.js"])
-    }).pipe(Effect.provide(IndexLayer)),
+      expect(yield* listed(tmpDir)).toEqual([
+        ".env",
+        ".github/ci.yml",
+        ".gitignore",
+        "a.ts",
+        "node_modules/x/i.js",
+      ])
+      expect(yield* listed(tmpDir, `${tmpDir}/dist`)).toEqual(["o.js"])
+    }).pipe(Effect.provide(IndexLayer), Effect.timeout("4 seconds")),
   )
 
   it.scopedLive("a .gitignore line drops the file it names", () =>
@@ -1773,6 +1786,24 @@ describe("the matcher walk against git", () => {
   )
 })
 
+/** git with a fixed identity, no signing and no global hooks, for test commits. */
+const git = (repo: string, args: ReadonlyArray<string>) =>
+  runProcess("git", [
+    "-C",
+    repo,
+    "-c",
+    "user.name=test",
+    "-c",
+    "user.email=test@example.com",
+    "-c",
+    "commit.gpgsign=false",
+    "-c",
+    "core.hooksPath=/dev/null",
+    "-c",
+    "protocol.file.allow=always",
+    ...args,
+  ])
+
 describe("grep's file listing inside a git work tree", () => {
   it.scopedLive("a subdirectory listing applies the repo's ignore rules above it", () =>
     Effect.gen(function* () {
@@ -1815,27 +1846,6 @@ describe("grep's file listing inside a git work tree", () => {
       expect(yield* listed(repo, `${repo}/dist`)).toEqual(["b.js"])
     }).pipe(Effect.provide(IndexLayer), Effect.timeout("8 seconds")),
   )
-})
-
-/** git with a fixed identity, no signing and no global hooks, for test commits. */
-const git = (repo: string, args: ReadonlyArray<string>) =>
-  runProcess("git", [
-    "-C",
-    repo,
-    "-c",
-    "user.name=test",
-    "-c",
-    "user.email=test@example.com",
-    "-c",
-    "commit.gpgsign=false",
-    "-c",
-    "core.hooksPath=/dev/null",
-    "-c",
-    "protocol.file.allow=always",
-    ...args,
-  ])
-
-describe("git decides the listing inside a work tree", () => {
   it.scopedLive("a package session applies every exclude source above it", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
@@ -1897,29 +1907,6 @@ describe("git decides the listing inside a work tree", () => {
         "vendor/lib/inner.ts",
       ])
     }).pipe(Effect.provide(IndexLayer), Effect.timeout("8 seconds")),
-  )
-})
-
-describe("the listing outside a work tree", () => {
-  it.scopedLive("the .gitignore rules decide, and dotfiles are listed", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const tmpDir = yield* fs.makeTempDirectoryScoped()
-      yield* writeTree(
-        tmpDir,
-        [".env", ".github/ci.yml", "a.ts", "dist/o.js", "node_modules/x/i.js"],
-        { ".gitignore": "dist/\n" },
-      )
-
-      expect(yield* listed(tmpDir)).toEqual([
-        ".env",
-        ".github/ci.yml",
-        ".gitignore",
-        "a.ts",
-        "node_modules/x/i.js",
-      ])
-      expect(yield* listed(tmpDir, `${tmpDir}/dist`)).toEqual(["o.js"])
-    }).pipe(Effect.provide(IndexLayer), Effect.timeout("4 seconds")),
   )
 })
 
@@ -2150,5 +2137,125 @@ describe("the file listing request", () => {
         ])
       }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
     15_000,
+  )
+})
+
+// ── fs tools model turn ─────────────────────────────────────────────────────
+
+/**
+ * FS tools model-turn acceptance test — exercises a real model tool call
+ * through the extension layer, not the direct tool executor.
+ */
+
+describe("FsToolsExtension via model turn", () => {
+  const modelTurnTest = it.scopedLive.layer(BunServices.layer)
+
+  modelTurnTest(
+    "read tool call succeeds through a real agent turn",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const path = yield* Path.Path
+          const cwd = yield* fs.makeTempDirectoryScoped()
+          const filePath = path.join(cwd, "fixture.txt")
+          yield* fs.writeFileString(filePath, "Hello from fs model turn\n")
+
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            toolCallStep("read", { path: filePath }),
+          ])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            extensionInputs: [AgentsExtension, FsToolsExtension],
+            cwd,
+          })
+          const toolEventFiber = yield* client.session
+            .events({ sessionId, branchId })
+            .pipe(
+              Stream.filter(isToolEventFor("read")),
+              Stream.take(2),
+              Stream.runCollect,
+              Effect.forkScoped,
+            )
+
+          yield* client.message.send({
+            sessionId,
+            branchId,
+            content: "Read fixture.txt",
+          })
+
+          const events = Array.from(yield* Fiber.join(toolEventFiber))
+          expect(events.some((event) => event.event._tag === "ToolCallStarted")).toBe(true)
+          const succeeded = events.find((event) => event.event._tag === "ToolCallSucceeded")
+          expect(succeeded).toBeDefined()
+          expect(succeeded?.event._tag).toBe("ToolCallSucceeded")
+          if (succeeded?.event._tag === "ToolCallSucceeded") {
+            expect(succeeded.event.output).toContain("Hello from fs model turn")
+          }
+          // Every tool event names the assistant message that holds its tool-call part.
+          const messages = yield* client.message.list({ branchId })
+          const assistant = messages.find(
+            (message) =>
+              message.role === "assistant" &&
+              message.parts.some(
+                (part) => part.type === "tool-call" && part.id === succeeded?.event.toolCallId,
+              ),
+          )
+          expect(assistant).toBeDefined()
+          expect(events.map((event) => event.event.assistantMessageId)).toEqual([
+            assistant?.id,
+            assistant?.id,
+          ])
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    10_000,
+  )
+
+  modelTurnTest(
+    "atomic write replaces a saved result through the real RPC tool path",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const path = yield* Path.Path
+          const cwd = yield* fs.makeTempDirectoryScoped()
+          const filePath = path.join(cwd, "out.txt")
+          yield* fs.writeFileString(filePath, "previous result")
+          const content = "produced via the real write tool"
+
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            toolCallStep("write", { path: filePath, content, atomic: true }),
+          ])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            extensionInputs: [AgentsExtension, FsToolsExtension],
+            cwd,
+          })
+          const toolEventFiber = yield* client.session
+            .events({ sessionId, branchId })
+            .pipe(
+              Stream.filter(isToolEventFor("write")),
+              Stream.take(2),
+              Stream.runCollect,
+              Effect.forkScoped,
+            )
+
+          yield* client.message.send({
+            sessionId,
+            branchId,
+            content: "Replace out.txt",
+          })
+
+          const events = Array.from(yield* Fiber.join(toolEventFiber))
+          const succeeded = events.find((event) => event.event._tag === "ToolCallSucceeded")
+          expect(succeeded).toBeDefined()
+
+          const written = yield* fs.readFileString(filePath)
+          expect(written).toBe(content)
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    10_000,
   )
 })
