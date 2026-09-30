@@ -1886,6 +1886,42 @@ describe("mcp oauth", () => {
   )
 
   it.scopedLive(
+    "a dial that times out while the auth lock is being created leaves no lock behind",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const oauth = yield* serveOAuthFixture
+        const data = yield* makeDataDir
+        yield* storeExpiringLogin(oauth, data.directory)
+        const home = path.join(data.directory, "home")
+        const lock = path.join(data.directory, "mcp-auth.json.lock")
+        // The lock file's create takes 500 ms, and the dial gives up after 200 ms.
+        const slowLockCreate = FileSystem.FileSystem.of({
+          ...fs,
+          writeFileString: (file, data, options) => {
+            if (file !== lock) return fs.writeFileString(file, data, options)
+            // gent/no-sleep: allow the create must outlast the dial's real 200 ms timeout
+            return Effect.sleep("500 millis").pipe(
+              Effect.andThen(fs.writeFileString(file, data, options)),
+            )
+          },
+        })
+        yield* collectTestContributions(
+          McpServers("@test/mcp-oauth", { secure: { url: `${oauth.origin}/mcp`, timeoutMs: 200 } })
+            .setup,
+          { home, cwd: data.directory },
+        ).pipe(
+          Effect.provideService(FileSystem.FileSystem, slowLockCreate),
+          Effect.provide(data.layer),
+        )
+        // A lock left here would block every refresh until it goes stale.
+        expect(yield* fs.exists(lock)).toBe(false)
+      }).pipe(Effect.timeout("40 seconds"), Effect.provide(platformLayer)),
+    45_000,
+  )
+
+  it.scopedLive(
     "a server whose resource metadata only its WWW-Authenticate header names logs in and refreshes",
     () =>
       Effect.gen(function* () {

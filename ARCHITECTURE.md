@@ -1338,7 +1338,9 @@ process or another, already stored a new token, it uses that token and never
 redeems the spent refresh token. The token request and the stored login are
 one step that is not interrupted, and its requests end within 20 seconds: a
 dial that times out, or a request the SDK aborts, waits for it, so a rotated
-token is always stored and the lock never outlives its 30 seconds.
+token is always stored and the lock never outlives its 30 seconds. Only the
+wait between tries to take the lock can be interrupted: a lock a holder
+created is always removed.
 
 Setup reads each server's tool list from `<data dir>/mcp-catalog.json`, keyed
 by the SHA-256 digest of the entry as it runs (its expanded values, for a

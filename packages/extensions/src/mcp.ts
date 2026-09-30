@@ -22,7 +22,6 @@ import {
   Result,
   Schema,
   SchemaRepresentation,
-  Schedule,
   Scope,
   Semaphore,
 } from "effect"
@@ -1034,8 +1033,9 @@ const refreshUnlessFresh = (
 const AUTH_LOCK_STALE = Duration.seconds(30)
 /** The longest a refresh's requests run: well inside `AUTH_LOCK_STALE`. */
 const REFRESH_BOUND = Duration.seconds(20)
-/** How often a writer tries a held lock again, and how many times before it gives up. */
-const AUTH_LOCK_RETRY = { schedule: Schedule.spaced("50 millis"), times: 1200 }
+/** How long a writer waits before it tries a held lock again, and how many tries it makes. */
+const AUTH_LOCK_WAIT = Duration.millis(50)
+const AUTH_LOCK_TRIES = 1200
 
 /** Another writer held the auth lock for longer than a stale lock lives. */
 class AuthLockBusy extends Schema.TaggedError<AuthLockBusy>()("AuthLockBusy", {
@@ -1060,13 +1060,10 @@ const underAuthLock =
       const path = yield* Path.Path
       const file = `${store.file}.lock`
       yield* fs.makeDirectory(path.dirname(file), { recursive: true })
-      // One try is not interrupted between the create and its answer, so an
-      // interrupted wait never leaves a lock it made; the wait between tries is.
       const take = Effect.gen(function* () {
         const taken = yield* fs.writeFileString(file, "", { flag: "wx", mode: 0o600 }).pipe(
           Effect.as(true),
           Effect.orElseSucceed(() => false),
-          Effect.uninterruptible,
         )
         if (taken) return
         const now = yield* Clock.currentTimeMillis
@@ -1078,11 +1075,23 @@ const underAuthLock =
         }
         return yield* new AuthLockBusy({ message: `the auth lock ${file} stays held` })
       })
-      return yield* Effect.acquireUseRelease(
-        Effect.interruptible(Effect.retry(take, AUTH_LOCK_RETRY)),
-        () => effect,
-        () => Effect.ignore(fs.remove(file)),
-      )
+      // From a try's create to the release's registration nothing is
+      // interrupted, so a lock this holder made is always removed. Only the
+      // wait between tries, and the effect itself, can be interrupted.
+      return yield* Effect.uninterruptibleMask((restore) => {
+        const acquire = (tries: number): Effect.Effect<void, AuthLockBusy> =>
+          take.pipe(
+            Effect.catchTag("AuthLockBusy", (busy) => {
+              if (tries >= AUTH_LOCK_TRIES) return Effect.fail(busy)
+              return restore(Effect.sleep(AUTH_LOCK_WAIT)).pipe(Effect.andThen(acquire(tries + 1)))
+            }),
+          )
+        return Effect.acquireUseRelease(
+          acquire(1),
+          () => restore(effect),
+          () => Effect.ignore(fs.remove(file)),
+        )
+      })
     })
 
 const JsonRpcMethod = Schema.fromJsonString(Schema.Struct({ method: Schema.String }))
