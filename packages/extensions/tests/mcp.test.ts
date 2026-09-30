@@ -35,6 +35,7 @@ import { shippedPreset } from "./helpers/test-preset.js"
  * no SDK, so the test owns every byte it answers. Each start appends a line
  * to `MCP_FIXTURE_LOG` with its extra arguments, and `count` returns the calls
  * this process served. `MCP_FIXTURE_FAIL_ON_START=n` exits the nth start;
+ * `MCP_FIXTURE_EXIT_AFTER_CALL` exits once it answered a call;
  * `count` is not listed while `MCP_FIXTURE_HIDE_COUNT` names a file that
  * exists; `MCP_FIXTURE_COLLIDE` adds tools whose names clean to one id.
  */
@@ -115,7 +116,12 @@ process.stdin.on("data", (chunk) => {
     if (line === "") continue
     const request = JSON.parse(line)
     if (request.id === undefined) continue
-    send({ id: request.id, ...answer(request) })
+    const answered = answer(request)
+    if (request.method === "tools/call" && process.env.MCP_FIXTURE_EXIT_AFTER_CALL) {
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, ...answered }) + "\n", () => process.exit(0))
+      return
+    }
+    send({ id: request.id, ...answered })
   }
 })
 `
@@ -447,35 +453,64 @@ const JsonRpcRequest = Schema.Struct({
 })
 const decodeRequest = Schema.decodeUnknownEffect(Schema.fromJsonString(JsonRpcRequest))
 
-/** An in-process streamable HTTP server that answers only a matching bearer token. */
-const httpFixtureApp = Effect.gen(function* () {
-  const request = yield* HttpServerRequest.HttpServerRequest
-  if (request.method !== "POST") return HttpServerResponse.empty({ status: 405 })
-  if (request.headers["authorization"] !== "Bearer fixture-token") {
-    return HttpServerResponse.text("unauthorized", { status: 401 })
-  }
-  const message = yield* Effect.flatMap(request.text, decodeRequest)
-  return Option.match(Option.fromUndefinedOr(message.id), {
-    onNone: () => HttpServerResponse.empty({ status: 202 }),
-    onSome: (id) =>
-      HttpServerResponse.jsonUnsafe({
-        jsonrpc: "2.0",
-        id,
-        result: answerHttp(message.method, Option.fromUndefinedOr(message.params)),
-      }),
-  })
-}).pipe(Effect.orElseSucceed(() => HttpServerResponse.text("bad request", { status: 400 })))
+/**
+ * The HTTP fixture's sessions: `initialize` opens one, and every other
+ * request names a live one or is answered 404, as the spec asks. The `forget`
+ * tool drops them all, as a restarted server does.
+ */
+interface HttpSessions {
+  readonly live: Set<string>
+  opened: number
+}
 
-/** The fixture's port; the server stops with the test scope. */
+/** An in-process streamable HTTP server that answers only a matching bearer token. */
+const httpFixtureApp = (sessions: HttpSessions) =>
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest
+    if (request.method !== "POST") return HttpServerResponse.empty({ status: 405 })
+    if (request.headers["authorization"] !== "Bearer fixture-token") {
+      return HttpServerResponse.text("unauthorized", { status: 401 })
+    }
+    const message = yield* Effect.flatMap(request.text, decodeRequest)
+    const params = Option.fromUndefinedOr(message.params)
+    let session = request.headers["mcp-session-id"] ?? ""
+    if (message.method === "initialize") {
+      sessions.opened += 1
+      session = `session-${sessions.opened}`
+      sessions.live.add(session)
+    } else if (!sessions.live.has(session)) {
+      return HttpServerResponse.text("unknown session", { status: 404 })
+    }
+    const result = answerHttp(message.method, params)
+    if (
+      Option.contains(
+        Option.flatMap(params, (value) => Option.fromUndefinedOr(value["name"])),
+        "forget",
+      )
+    ) {
+      sessions.live.clear()
+    }
+    return Option.match(Option.fromUndefinedOr(message.id), {
+      onNone: () => HttpServerResponse.empty({ status: 202 }),
+      onSome: (id) =>
+        HttpServerResponse.jsonUnsafe(
+          { jsonrpc: "2.0", id, result },
+          { headers: { "mcp-session-id": session } },
+        ),
+    })
+  }).pipe(Effect.orElseSucceed(() => HttpServerResponse.text("bad request", { status: 400 })))
+
+/** The fixture's port and its sessions; the server stops with the test scope. */
 const serveHttpFixture = Effect.gen(function* () {
+  const sessions: HttpSessions = { live: new Set(), opened: 0 }
   const context = yield* Layer.build(
-    HttpServer.serve(httpFixtureApp).pipe(
+    HttpServer.serve(httpFixtureApp(sessions)).pipe(
       Layer.provideMerge(BunHttpServer.layerServer({ port: 0, hostname: "127.0.0.1" })),
     ),
   )
   const address = Context.get(context, HttpServer.HttpServer).address
   if (address._tag !== "TcpAddress") return yield* Effect.die("expected a TCP address")
-  return address.port
+  return { port: address.port, sessions }
 })
 
 const answerHttp = (
@@ -500,18 +535,33 @@ const answerHttp = (
           description: "Name the caller.",
           inputSchema: { type: "object", properties: {} },
         },
+        {
+          name: "forget",
+          description: "Drop every session.",
+          inputSchema: { type: "object", properties: {} },
+        },
       ],
     }
   }
   return { content: [{ type: "text", text: "http caller" }] }
 }
 
+const withFixtureToken = ConfigProvider.layer(
+  ConfigProvider.fromUnknown({ GENT_MCP_FIXTURE_TOKEN: "fixture-token" }),
+)
+
+/** The fixture as an entry, its token from a variable. */
+const httpEntry = (port: number) => ({
+  url: `http://127.0.0.1:${port}/mcp`,
+  headers: { Authorization: "Bearer ${GENT_MCP_FIXTURE_TOKEN}" },
+})
+
 describe("mcp over streamable http", () => {
   it.scopedLive(
     "a header variable expands, and the tool lists and answers over HTTP",
     () =>
       Effect.gen(function* () {
-        const port = yield* serveHttpFixture
+        const { port } = yield* serveHttpFixture
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
           toolCallStep("cell", { code: "await tools.mcp.remote.whoami()" }),
           textStep("done"),
@@ -520,12 +570,7 @@ describe("mcp over streamable http", () => {
           ...shippedPreset,
           extensionInputs: [
             ...shippedPreset.extensionInputs,
-            McpServers("@test/mcp-http", {
-              remote: {
-                url: `http://127.0.0.1:${port}/mcp`,
-                headers: { Authorization: "Bearer ${GENT_MCP_FIXTURE_TOKEN}" },
-              },
-            }),
+            McpServers("@test/mcp-http", { remote: httpEntry(port) }),
           ],
           providerLayer,
         })
@@ -538,14 +583,46 @@ describe("mcp over streamable http", () => {
         })
       }).pipe(
         Effect.timeout("20 seconds"),
-        Effect.provide(
-          Layer.merge(
-            platformLayer,
-            ConfigProvider.layer(
-              ConfigProvider.fromUnknown({ GENT_MCP_FIXTURE_TOKEN: "fixture-token" }),
-            ),
-          ),
-        ),
+        Effect.provide(Layer.merge(platformLayer, withFixtureToken)),
+      ),
+    25_000,
+  )
+
+  it.scopedLive(
+    "a session the server forgot is answered 404, and the call opens a new session once",
+    () =>
+      Effect.gen(function* () {
+        const { port, sessions } = yield* serveHttpFixture
+        const code = [
+          "const first = await tools.mcp.remote.whoami()",
+          "await tools.mcp.remote.forget()",
+          "const second = await tools.mcp.remote.whoami()",
+          "JSON.stringify({ first, second })",
+        ].join("; ")
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          toolCallStep("cell", { code }),
+          textStep("done"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...shippedPreset,
+          extensionInputs: [
+            ...shippedPreset.extensionInputs,
+            McpServers("@test/mcp-http-session", { remote: httpEntry(port) }),
+          ],
+          providerLayer,
+        })
+        yield* client.message.send({ sessionId, branchId, content: "ask twice" })
+        const result = yield* cellResultAfterDone(client, branchId)
+        expect(result).toMatchObject({
+          name: "cell",
+          isFailure: false,
+          result: { display: encodeJson({ first: "http caller", second: "http caller" }) },
+        })
+        // Setup's listing, the first call's connection, and the one redial.
+        expect(sessions.opened).toBe(3)
+      }).pipe(
+        Effect.timeout("20 seconds"),
+        Effect.provide(Layer.merge(platformLayer, withFixtureToken)),
       ),
     25_000,
   )
@@ -834,6 +911,43 @@ describe("mcp tools in the cell", () => {
           result: { display: encodeJson({ first: "failed", second: "b" }) },
         })
         expect(yield* fixture.starts).toBe(3)
+      }).pipe(Effect.timeout("25 seconds"), Effect.provide(platformLayer)),
+    30_000,
+  )
+
+  it.scopedLive(
+    "a server that exits after connecting is dropped: the next call starts it again",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* makeFixture
+        const code = [
+          "const counts = []",
+          "for (let index = 0; index < 3; index++) { try { counts.push(await tools.mcp.fixture.count()) } catch (error) { counts.push('failed') } }",
+          "JSON.stringify(counts)",
+        ].join("; ")
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          toolCallStep("cell", { code }),
+          textStep("done"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...shippedPreset,
+          extensionInputs: [
+            ...shippedPreset.extensionInputs,
+            McpServers("@test/mcp-exit", {
+              fixture: { ...fixture.stdio({ MCP_FIXTURE_EXIT_AFTER_CALL: "1" }), timeoutMs: 5000 },
+            }),
+          ],
+          providerLayer,
+        })
+        yield* client.message.send({ sessionId, branchId, content: "count three times" })
+        const result = yield* cellResultAfterDone(client, branchId)
+        // Each call reaches a new process, which served one call and exited.
+        expect(result).toMatchObject({
+          name: "cell",
+          isFailure: false,
+          result: { display: encodeJson(["1", "1", "1"]) },
+        })
+        expect(yield* fixture.starts).toBe(4)
       }).pipe(Effect.timeout("25 seconds"), Effect.provide(platformLayer)),
     30_000,
   )

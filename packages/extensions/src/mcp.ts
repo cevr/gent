@@ -7,6 +7,7 @@ import {
   Crypto,
   Encoding,
   Equal,
+  FiberSet,
   JsonSchema,
   Layer,
   Option,
@@ -20,7 +21,11 @@ import {
 } from "effect"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
+import {
+  StreamableHTTPClientTransport,
+  StreamableHTTPError,
+} from "@modelcontextprotocol/sdk/client/streamableHttp.js"
+import { ErrorCode, McpError as ProtocolError } from "@modelcontextprotocol/sdk/types.js"
 import {
   defineExtension,
   defineResource,
@@ -416,12 +421,16 @@ const transportFor = (server: McpServer) => {
   })
 }
 
+/** A close that has not finished within this long is abandoned. */
+const CLOSE_TIMEOUT = Duration.seconds(2)
+
 /** An initialized client; closing its scope closes the transport, and a stdio server with it. */
 const connect = (server: McpServer) =>
   Effect.gen(function* () {
     const client = yield* Effect.acquireRelease(
       Effect.sync(() => new Client({ name: "gent", version: "1.0.0" })),
-      (opened) => Effect.promise(() => opened.close()).pipe(Effect.ignore),
+      (opened) =>
+        Effect.tryPromise(() => opened.close()).pipe(Effect.timeout(CLOSE_TIMEOUT), Effect.ignore),
     )
     yield* Effect.tryPromise({
       try: () => client.connect(transportFor(server)),
@@ -477,6 +486,46 @@ const CallResult = Schema.Struct({
 })
 type CallResult = typeof CallResult.Type
 
+/**
+ * What a failed call says about its connection. `answered`: the server sent
+ * a JSON-RPC error, so the connection is sound. `expired`: HTTP 404, a
+ * session the server no longer knows, so it ran nothing. `dead`: the
+ * transport failed (the connection closed, the call timed out, HTTP 400, 401
+ * or 408, a network error). `kept`: any other HTTP status, which says nothing
+ * about the connection.
+ */
+const CallFailureKind = Schema.Literals(["answered", "expired", "dead", "kept"])
+type CallFailureKind = typeof CallFailureKind.Type
+
+/** HTTP statuses that end a connection: the request, the credential, or the session is bad. */
+const DEAD_STATUSES: ReadonlySet<number> = new Set([400, 401, 408])
+
+/** JSON-RPC codes the SDK raises itself, for a closed connection or a timeout; no server sent them. */
+const CLIENT_RAISED: ReadonlySet<number> = new Set<number>([
+  ErrorCode.ConnectionClosed,
+  ErrorCode.RequestTimeout,
+])
+
+const failureKind = (cause: unknown): CallFailureKind => {
+  if (cause instanceof ProtocolError) {
+    if (CLIENT_RAISED.has(cause.code)) return "dead"
+    return "answered"
+  }
+  if (cause instanceof StreamableHTTPError) {
+    if (cause.code === 404) return "expired"
+    if (DEAD_STATUSES.has(cause.code ?? 0)) return "dead"
+    return "kept"
+  }
+  return "dead"
+}
+
+/** A failed call on one connection, and whether that connection had served a call before. */
+class CallFailed extends Schema.TaggedError<CallFailed>()("CallFailed", {
+  kind: CallFailureKind,
+  reused: Schema.Boolean,
+  message: Schema.String,
+}) {}
+
 interface McpClientsService {
   /** Calls one tool on a server, opening its connection on first use. */
   readonly call: (
@@ -505,6 +554,10 @@ interface RegisteredServer {
 interface Connection {
   readonly client: Client
   readonly listed: ReadonlySet<string>
+  /** Set when the transport closed: the stdio server exited, or the HTTP transport ended. */
+  closed: boolean
+  /** Calls started on this connection. */
+  calls: number
 }
 
 /**
@@ -514,6 +567,13 @@ interface Connection {
  * registered is written to the cache, so the next session registers it. The
  * current session keeps the tools it registered; changing them live needs a
  * host seam to re-register an extension's tools.
+ *
+ * A connection is dropped when its transport closes and when a call on it
+ * fails in the transport (see `failureKind`); a JSON-RPC error leaves it
+ * open. A connection that closed before a call starts is replaced before the
+ * call is sent. A call on a reused connection answered 404 (the server
+ * forgot the session, so it ran nothing) is sent once more on a new
+ * connection; no other failure sends a call twice.
  */
 const mcpClientsLive = (registered: ReadonlyArray<RegisteredServer>, file: string) =>
   Layer.effect(
@@ -521,6 +581,9 @@ const mcpClientsLive = (registered: ReadonlyArray<RegisteredServer>, file: strin
     Effect.gen(function* () {
       const byKey = new Map(registered.map((entry) => [entry.server.key, entry]))
       const writePermit = yield* Semaphore.make(1)
+      const runFork = yield* FiberSet.makeRuntime()
+      /** The connection each key holds now, so a late close never drops its successor. */
+      const live = new Map<string, Connection>()
       const relist = (entry: RegisteredServer, client: Client) =>
         Effect.gen(function* () {
           const tools = yield* listTools(entry.server, client)
@@ -544,45 +607,95 @@ const mcpClientsLive = (registered: ReadonlyArray<RegisteredServer>, file: strin
             const listed = yield* relist(entry, client).pipe(
               Effect.orElseSucceed(() => new Set(entry.tools.map((listed) => listed.name))),
             )
-            return { client, listed } satisfies Connection
+            const connection: Connection = { client, listed, closed: false, calls: 0 }
+            live.set(key, connection)
+            // Runs before the client closes, so its own close event finds nothing to drop.
+            yield* Effect.addFinalizer(() => Effect.sync(() => forget(key, connection)))
+            client.onclose = () => {
+              connection.closed = true
+              runFork(evict(key, connection))
+            }
+            return connection
           }),
         idleTimeToLive: IDLE_TIME_TO_LIVE,
       })
+      /** Whether `connection` was the key's current one; it no longer is. */
+      const forget = (key: string, connection: Connection) => {
+        if (live.get(key) !== connection) return false
+        live.delete(key)
+        return true
+      }
+      const evict = (key: string, connection: Connection) =>
+        Effect.suspend(() => {
+          if (!forget(key, connection)) return Effect.void
+          return RcMap.invalidate(clients, key)
+        })
+      const acquire = (server: McpServer) =>
+        RcMap.get(clients, server.key).pipe(
+          // RcMap keeps a failed lookup until it idles out; drop it so the next call connects.
+          Effect.tapError(() => RcMap.invalidate(clients, server.key)),
+        )
+      /** The key's connection; one whose transport already closed ran nothing, so it is replaced. */
+      const open = (server: McpServer) =>
+        Effect.gen(function* () {
+          const connection = yield* acquire(server)
+          if (!connection.closed) return connection
+          yield* evict(server.key, connection)
+          return yield* acquire(server)
+        })
+      const callOnce = (
+        server: McpServer,
+        name: string,
+        input: Readonly<Record<string, Schema.Json>>,
+      ) =>
+        Effect.gen(function* () {
+          const connection = yield* open(server)
+          if (!connection.listed.has(name)) {
+            return yield* new McpError({
+              server: server.name,
+              message: `the server no longer lists ${name}; the tool catalog was stale, and the next session registers the current list`,
+            })
+          }
+          const reused = connection.calls > 0
+          connection.calls += 1
+          return yield* Effect.tryPromise({
+            try: (signal) =>
+              // oxlint-disable-next-line effect/noNullish -- the SDK takes its default result schema positionally
+              connection.client.callTool({ name, arguments: input }, undefined, {
+                signal,
+                timeout: timeoutOf(server),
+              }),
+            catch: (cause) =>
+              new CallFailed({
+                kind: failureKind(cause),
+                reused,
+                message: `${name}: ${failureMessage(cause)}`,
+              }),
+          }).pipe(
+            Effect.tapError((failed) => {
+              if (failed.kind === "dead" || failed.kind === "expired") {
+                return evict(server.key, connection)
+              }
+              return Effect.void
+            }),
+          )
+        })
       return McpClients.of({
         call: (server, name, input) =>
-          RcMap.get(clients, server.key).pipe(
-            // RcMap keeps a failed lookup until it idles out; drop it so the next call connects.
-            Effect.tapError(() => RcMap.invalidate(clients, server.key)),
-            Effect.filterOrFail(
-              (connection) => connection.listed.has(name),
-              () =>
-                new McpError({
-                  server: server.name,
-                  message: `the server no longer lists ${name}; the tool catalog was stale, and the next session registers the current list`,
-                }),
-            ),
-            Effect.map((connection) => connection.client),
-            Effect.flatMap((client) =>
-              Effect.tryPromise({
-                try: (signal) =>
-                  // oxlint-disable-next-line effect/noNullish -- the SDK takes its default result schema positionally
-                  client.callTool({ name, arguments: input }, undefined, {
-                    signal,
-                    timeout: timeoutOf(server),
-                  }),
-                catch: (cause) =>
-                  new McpError({
-                    server: server.name,
-                    message: `${name}: ${failureMessage(cause)}`,
-                  }),
-              }).pipe(
-                Effect.flatMap((value) =>
-                  Schema.decodeUnknownEffect(CallResult)(value).pipe(
-                    Effect.mapError(
-                      (error) =>
-                        new McpError({ server: server.name, message: `${name}: ${error.message}` }),
-                    ),
-                  ),
+          callOnce(server, name, input).pipe(
+            Effect.catchTag("CallFailed", (failed) => {
+              if (failed.kind === "expired" && failed.reused) return callOnce(server, name, input)
+              return Effect.fail(failed)
+            }),
+            Effect.mapError((error) => {
+              if (error._tag === "McpError") return error
+              return new McpError({ server: server.name, message: error.message })
+            }),
+            Effect.flatMap((value) =>
+              Schema.decodeUnknownEffect(CallResult)(value).pipe(
+                Effect.mapError(
+                  (error) =>
+                    new McpError({ server: server.name, message: `${name}: ${error.message}` }),
                 ),
               ),
             ),
