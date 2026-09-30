@@ -24,7 +24,7 @@ import {
   toolCallStep,
   waitFor,
 } from "@gent/core/test-utils"
-import { getToolId, type ToolCapability } from "@gent/core/extensions/api"
+import { ExtensionId, getToolId, type ToolCapability } from "@gent/core/extensions/api"
 import { messagePartsText } from "@gent/core/protocol"
 import { McpExtension, McpServers, projectCallResult } from "../src/mcp.js"
 import { shippedPreset } from "./helpers/test-preset.js"
@@ -120,7 +120,7 @@ for (let index = 0; index < Number(process.env.MCP_FIXTURE_EXTRA ?? 0); index++)
 const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\n")
 const answer = (request) => {
   if (request.method === "initialize") {
-    return { result: { protocolVersion: request.params.protocolVersion, capabilities: { tools: { listChanged: true } }, serverInfo: { name: "fixture", version: "1" } } }
+    return { result: { protocolVersion: request.params.protocolVersion, capabilities: { tools: { listChanged: true } }, serverInfo: { name: "fixture", version: "1" }, instructions: "Fixture server for tests.\nIt counts calls." } }
   }
   if (request.method === "tools/list") {
     if (process.env.MCP_FIXTURE_EMPTY_LIST && fs.existsSync(process.env.MCP_FIXTURE_EMPTY_LIST)) return { result: { tools: [] } }
@@ -212,9 +212,11 @@ const toolList = (contributions: { readonly tools?: ReadonlyArray<ToolCapability
     (): ReadonlyArray<ToolCapability> => [],
   )
 
+/** The ids of the servers' tools, without the extension's own `mcp.status`. */
 const toolIds = (contributions: { readonly tools?: ReadonlyArray<ToolCapability> }) =>
   toolList(contributions)
     .map((capability) => String(getToolId(capability)))
+    .filter((id) => id !== "mcp.status")
     .toSorted()
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Json))
@@ -804,6 +806,105 @@ describe("mcp over sse", () => {
         expect(counts).toEqual({ streamRequests: 0, streams: 0, refusedPosts: 0 })
       }).pipe(Effect.timeout("20 seconds"), Effect.provide(platformLayer)),
     25_000,
+  )
+})
+
+// ── status ──────────────────────────────────────────────────────────────────
+
+const StatusDisplay = Schema.fromJsonString(
+  Schema.Struct({
+    servers: Schema.Array(
+      Schema.Struct({
+        name: Schema.String,
+        transport: Schema.String,
+        health: Schema.String,
+        connected: Schema.Boolean,
+        tools: Schema.Int,
+        description: Schema.optional(Schema.String),
+        reason: Schema.optional(Schema.String),
+      }),
+    ),
+  }),
+)
+
+describe("mcp status", () => {
+  it.scopedLive(
+    "mcp.status and /mcp report each server's transport, health, tool count and instructions",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* makeFixture
+        const sse = yield* serveSseFixture
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          toolCallStep("cell", {
+            code: "await tools.mcp.fixture.count(); JSON.stringify(await tools.mcp.status())",
+          }),
+          textStep("done"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...shippedPreset,
+          extensionInputs: [
+            ...shippedPreset.extensionInputs,
+            McpServers("@test/mcp-status", {
+              dead: { command: "/nonexistent/gent-probe-x", timeoutMs: 2000 },
+              fixture: fixture.stdio(),
+              locked: {
+                url: `http://127.0.0.1:${sse.port}/sse`,
+                headers: { Authorization: "Bearer wrong-token" },
+              },
+              missing: {
+                url: "http://127.0.0.1:9/mcp",
+                headers: { authorization: "${GENT_MCP_UNSET}" },
+              },
+            }),
+          ],
+          providerLayer,
+        })
+        yield* client.message.send({ sessionId, branchId, content: "status" })
+        const result = yield* cellResultAfterDone(client, branchId)
+        expect(result).toMatchObject({ name: "cell", isFailure: false })
+        const status = yield* Schema.decodeUnknownEffect(StatusDisplay)(
+          Reflect.get(result?.result ?? {}, "display"),
+        )
+        expect(status.servers.map((server) => [server.name, server.health])).toEqual([
+          ["dead", "degraded"],
+          ["fixture", "healthy"],
+          ["locked", "expired"],
+          ["missing", "misconfigured"],
+        ])
+        expect(status.servers[1]).toEqual({
+          name: "fixture",
+          transport: "stdio",
+          health: "healthy",
+          connected: true,
+          tools: 5,
+          description: "Fixture server for tests.\nIt counts calls.",
+        })
+        expect(status.servers[2]).toMatchObject({ transport: "auto", connected: false, tools: 0 })
+        expect(status.servers[3]?.reason).toBe("environment variable GENT_MCP_UNSET is not set")
+        yield* client.extension.request({
+          sessionId,
+          branchId,
+          extensionId: ExtensionId.make("@test/mcp-status"),
+          capabilityId: "mcp-command",
+          input: "",
+        })
+        const shown = yield* waitFor(
+          client.message.list({ branchId }),
+          (all) => all.some((message) => messagePartsText(message.parts).includes("- fixture")),
+          10_000,
+          "the /mcp report",
+        )
+        const report = shown
+          .map((message) => messagePartsText(message.parts))
+          .find((text) => text.includes("- fixture"))
+        expect(report).toContain(
+          "- fixture (stdio): healthy, 5 tools, connected\n  Fixture server for tests.",
+        )
+        expect(report).toContain(
+          "- missing (auto): misconfigured, 0 tools, not connected\n  environment variable GENT_MCP_UNSET is not set",
+        )
+      }).pipe(Effect.timeout("25 seconds"), Effect.provide(platformLayer)),
+    30_000,
   )
 })
 

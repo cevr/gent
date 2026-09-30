@@ -1,4 +1,5 @@
 import {
+  Cause,
   Config,
   ConfigProvider,
   Context,
@@ -31,10 +32,12 @@ import { ErrorCode, McpError as ProtocolError } from "@modelcontextprotocol/sdk/
 import {
   defineExtension,
   defineResource,
+  ExtensionContext,
   ExtensionHost,
   hasProjectScope,
   isRecord,
   omitUndefined,
+  request,
   resolveDataDir,
   tool,
   ToolResultFailure,
@@ -296,12 +299,24 @@ const readMcpConfig = Effect.fn("Mcp.readConfig")(function* (home: string, cwd: 
   return { ...user, ...project }
 })
 
+/** An enabled entry that cannot run, and why; `mcp.status` reports it. */
+interface MisconfiguredServer {
+  readonly name: string
+  readonly config: McpServerConfig
+  readonly reason: string
+}
+
+/**
+ * The enabled entries as servers, and the ones whose variables do not expand
+ * or whose key cannot be computed, which are reported and never started.
+ */
 const resolveServers = Effect.fn("Mcp.resolveServers")(function* (
   entries: Readonly<Record<string, McpServerConfig>>,
   sessionCwd: string,
 ) {
   const path = yield* Path.Path
   const servers: Array<McpServer> = []
+  const misconfigured: Array<MisconfiguredServer> = []
   const enabled = Object.entries(entries)
     .filter(([, config]) => config.enabled !== false)
     .toSorted(([left], [right]) => compareCodeUnits(left, right))
@@ -317,6 +332,7 @@ const resolveServers = Effect.fn("Mcp.resolveServers")(function* (
       yield* Effect.logWarning("mcp.server.config").pipe(
         Effect.annotateLogs({ server: written, error: expanded.failure }),
       )
+      misconfigured.push({ name, config, reason: expanded.failure })
       continue
     }
     let cwd = sessionCwd
@@ -328,11 +344,12 @@ const resolveServers = Effect.fn("Mcp.resolveServers")(function* (
       yield* Effect.logWarning("mcp.server.key").pipe(
         Effect.annotateLogs({ server: written, error: key.failure.message }),
       )
+      misconfigured.push({ name, config, reason: key.failure.message })
       continue
     }
     servers.push({ name, key: key.success, config: expanded.success, cwd })
   }
-  return servers
+  return { servers, misconfigured }
 })
 
 // ── catalog cache ───────────────────────────────────────────────────────────
@@ -357,11 +374,16 @@ const ListToolsPage = Schema.Struct({
   nextCursor: Schema.optional(Schema.String),
 })
 
-/** Each server's tools, keyed by the hash of its entry, so an edited entry lists again. */
+/** A server's tools and the `instructions` its `initialize` answer carried, if any. */
+const CatalogServer = Schema.Struct({
+  tools: Schema.Array(CatalogTool),
+  instructions: Schema.optional(Schema.String),
+})
+type CatalogServer = typeof CatalogServer.Type
+
+/** Each server's entry, keyed by the hash of its config, so an edited entry lists again. */
 const CatalogFile = Schema.fromJsonString(
-  Schema.Struct({
-    servers: Schema.Record(Schema.String, Schema.Struct({ tools: Schema.Array(CatalogTool) })),
-  }),
+  Schema.Struct({ servers: Schema.Record(Schema.String, CatalogServer) }),
 )
 type CatalogFile = typeof CatalogFile.Type
 
@@ -386,14 +408,14 @@ const readCatalog = Effect.fn("Mcp.readCatalog")(function* (file: string) {
  */
 const writeCatalogEntries = Effect.fn("Mcp.writeCatalogEntries")(function* (
   file: string,
-  entries: ReadonlyArray<readonly [key: string, tools: ReadonlyArray<CatalogTool>]>,
+  entries: ReadonlyArray<readonly [key: string, server: CatalogServer]>,
 ) {
   if (entries.length === 0) return
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
   const current = yield* readCatalog(file)
   const servers = { ...current.servers }
-  for (const [key, tools] of entries) servers[key] = { tools }
+  for (const [key, server] of entries) servers[key] = server
   yield* fs.makeDirectory(path.dirname(file), { recursive: true })
   yield* writeFileAtomic(file, yield* Schema.encodeEffect(CatalogFile)({ servers }))
 })
@@ -518,7 +540,11 @@ const dial = (
           ...omitUndefined({ status: Option.getOrUndefined(statusOf(cause)) }),
         }),
     })
-    return { client, transport: kind }
+    return {
+      client,
+      transport: kind,
+      instructions: Option.fromUndefinedOr(client.getInstructions()),
+    }
   })
 
 /**
@@ -662,6 +688,41 @@ class CallFailed extends Schema.TaggedError<CallFailed>()("CallFailed", {
   message: Schema.String,
 }) {}
 
+/**
+ * A server's health as `mcp.status` reports it: `healthy` once a connect and
+ * its list worked, `expired` when the server refused the credential (401 or
+ * 403), `misconfigured` when the entry cannot run, `degraded` when the last
+ * connect, list or call failed or the server listed no tools, and `unknown`
+ * while this process has not connected to it.
+ */
+const McpHealth = Schema.Literals(["healthy", "expired", "misconfigured", "degraded", "unknown"])
+type McpHealth = typeof McpHealth.Type
+
+const McpServerStatus = Schema.Struct({
+  /** The id segment: `mcp.<name>.<tool>`. */
+  name: Schema.String,
+  /** The transport the open connection uses, else the one the entry names. */
+  transport: Schema.Literals(["stdio", "streamable-http", "sse", "auto"]),
+  health: McpHealth,
+  connected: Schema.Boolean,
+  tools: Schema.Int,
+  /** The `instructions` of the server's `initialize` answer. */
+  description: Schema.optional(Schema.String),
+  /** Why the health is not `healthy` or `unknown`. */
+  reason: Schema.optional(Schema.String),
+})
+type McpServerStatus = typeof McpServerStatus.Type
+
+const McpStatus = Schema.Struct({ servers: Schema.Array(McpServerStatus) })
+type McpStatus = typeof McpStatus.Type
+
+/** The transport an entry names before any connection opens. */
+const configuredTransport = (config: McpServerConfig): McpServerStatus["transport"] => {
+  if ("command" in config) return "stdio"
+  if (config.type === "http") return "streamable-http"
+  return config.type ?? "auto"
+}
+
 interface McpClientsService {
   /** Calls one tool on a server, opening its connection on first use. */
   readonly call: (
@@ -669,6 +730,8 @@ interface McpClientsService {
     tool: string,
     input: Readonly<Record<string, Schema.Json>>,
   ) => Effect.Effect<CallResult, McpError>
+  /** Every configured server as this process sees it now, by name. */
+  readonly status: Effect.Effect<McpStatus>
 }
 
 /**
@@ -680,16 +743,38 @@ class McpClients extends Context.Service<McpClients, McpClientsService>()(
   "@gent/extensions/src/mcp/McpClients",
 ) {}
 
-/** A server this process registered, with the tools its registration read. */
-interface RegisteredServer {
+/** A server this process registered, with what its registration read. */
+interface RegisteredServer extends SetupCatalog {
   readonly server: McpServer
-  readonly tools: ReadonlyArray<CatalogTool>
 }
+
+interface ServerHealth {
+  readonly health: McpHealth
+  readonly reason: Option.Option<string>
+}
+
+/** A refused credential is `expired`; any other failure leaves the server `degraded`. */
+const failureHealth = (error: McpError): ServerHealth => {
+  let health: McpHealth = "degraded"
+  if (error.status === 401 || error.status === 403) health = "expired"
+  return { health, reason: Option.some(error.message) }
+}
+
+/** A server listed at setup is `healthy`; one read from the cache is `unknown` until it connects. */
+const setupHealth = (entry: RegisteredServer): ServerHealth =>
+  Option.match(entry.failure, {
+    onSome: failureHealth,
+    onNone: (): ServerHealth => {
+      if (entry.listedNow) return { health: "healthy", reason: Option.none() }
+      return { health: "unknown", reason: Option.none() }
+    },
+  })
 
 /** An open connection and the tool names the server listed last. */
 interface Connection {
   readonly client: Client
   readonly transport: TransportKind
+  readonly instructions: Option.Option<string>
   listed: ReadonlySet<string>
   /** Set when the transport closed: the stdio server exited, or the HTTP transport ended. */
   closed: boolean
@@ -713,8 +798,15 @@ interface Connection {
  * call is sent. A call on a reused connection answered 404 (the server
  * forgot the session, so it ran nothing) is sent once more on a new
  * connection; no other failure sends a call twice.
+ *
+ * Each server's health (see `McpHealth`) starts from its setup listing and
+ * follows its connects, lists and failed calls; `status` reads it.
  */
-const mcpClientsLive = (registered: ReadonlyArray<RegisteredServer>, file: string) =>
+const mcpClientsLive = (
+  registered: ReadonlyArray<RegisteredServer>,
+  misconfigured: ReadonlyArray<MisconfiguredServer>,
+  file: string,
+) =>
   Layer.effect(
     McpClients,
     Effect.gen(function* () {
@@ -723,46 +815,66 @@ const mcpClientsLive = (registered: ReadonlyArray<RegisteredServer>, file: strin
       const runFork = yield* FiberSet.makeRuntime<FileSystem.FileSystem | Path.Path>()
       /** The connection each key holds now, so a late close never drops its successor. */
       const live = new Map<string, Connection>()
-      /** Each server's last accepted list, which a new list is compared with. */
-      const known = new Map(registered.map((entry) => [entry.server.key, entry.tools]))
+      /** Each server's last accepted entry, which a new list is compared with. */
+      const known = new Map(registered.map((entry) => [entry.server.key, entry.catalog]))
+      const health = new Map(registered.map((entry) => [entry.server.key, setupHealth(entry)]))
+      const setHealth = (key: string, state: McpHealth, reason: Option.Option<string>) => {
+        health.set(key, { health: state, reason })
+      }
+      const setFailed = (key: string, error: McpError) => {
+        health.set(key, failureHealth(error))
+      }
       const namesOf = (tools: ReadonlyArray<CatalogTool>) =>
         new Set(tools.map((listed) => listed.name))
       /**
-       * The names the server lists now, written to the cache when they
-       * changed. An empty list from a server that had tools is not trusted (a
-       * server whose auth broke can answer one), and a failed list is not
-       * either: both keep the last list and the cached tools.
+       * The names the server lists now, written to the cache with its
+       * instructions when either changed. An empty list from a server that
+       * had tools is not trusted (a server whose auth broke can answer one),
+       * and a failed list is not either: both keep the last list and the
+       * cached tools, and leave the server `degraded`.
        */
-      const relist = (server: McpServer, client: Client) =>
+      const relist = (server: McpServer, client: Client, instructions: Option.Option<string>) =>
         Effect.gen(function* () {
-          const previous = known.get(server.key) ?? []
+          const previous = known.get(server.key) ?? { tools: [] }
           const tools = yield* listTools(server, client)
-          if (tools.length === 0 && previous.length > 0) {
+          if (tools.length === 0 && previous.tools.length > 0) {
             yield* Effect.logWarning("mcp.server.relist.empty").pipe(
               Effect.annotateLogs({ server: server.name }),
             )
-            return namesOf(previous)
+            setHealth(
+              server.key,
+              "degraded",
+              Option.some(`listed no tools; kept the ${previous.tools.length} listed before`),
+            )
+            return namesOf(previous.tools)
           }
-          known.set(server.key, tools)
-          if (!Equal.equals(tools, previous)) {
+          const next: CatalogServer = {
+            tools,
+            ...omitUndefined({ instructions: Option.getOrUndefined(instructions) }),
+          }
+          known.set(server.key, next)
+          setHealth(server.key, "healthy", Option.none())
+          if (!Equal.equals(next, previous)) {
             yield* Semaphore.withPermit(
               writePermit,
-              writeCatalogEntries(file, [[server.key, tools]]),
+              writeCatalogEntries(file, [[server.key, next]]),
             )
           }
           return namesOf(tools)
         }).pipe(
-          Effect.catchCause((cause) =>
-            Effect.logWarning("mcp.server.relist.failed").pipe(
-              Effect.annotateLogs({ server: server.name, error: String(cause) }),
-              Effect.as(namesOf(known.get(server.key) ?? [])),
-            ),
-          ),
+          Effect.catchCause((cause) => {
+            const message = failureMessage(Cause.squash(cause))
+            setHealth(server.key, "degraded", Option.some(message))
+            return Effect.logWarning("mcp.server.relist.failed").pipe(
+              Effect.annotateLogs({ server: server.name, error: message }),
+              Effect.as(namesOf(known.get(server.key)?.tools ?? [])),
+            )
+          }),
         )
       /** Lists an open connection's tools again, off the call that asked. */
       const refresh = (server: McpServer, connection: Connection) =>
         runFork(
-          relist(server, connection.client).pipe(
+          relist(server, connection.client, connection.instructions).pipe(
             Effect.map((listed) => {
               connection.listed = listed
             }),
@@ -777,14 +889,15 @@ const mcpClientsLive = (registered: ReadonlyArray<RegisteredServer>, file: strin
             }
             // The notification can only arrive once the connection below exists.
             let onToolsChanged = () => {}
-            const { client, transport } = yield* connect(
+            const { client, transport, instructions } = yield* connect(
               entry.server,
               Option.some(() => onToolsChanged()),
             )
             const connection: Connection = {
               client,
               transport,
-              listed: yield* relist(entry.server, client),
+              instructions,
+              listed: yield* relist(entry.server, client, instructions),
               closed: false,
               calls: 0,
             }
@@ -794,6 +907,9 @@ const mcpClientsLive = (registered: ReadonlyArray<RegisteredServer>, file: strin
             yield* Effect.addFinalizer(() => Effect.sync(() => forget(key, connection)))
             client.onclose = () => {
               connection.closed = true
+              if (live.get(key) === connection) {
+                setHealth(key, "degraded", Option.some("the connection closed"))
+              }
               runFork(evict(key, connection))
             }
             return connection
@@ -814,7 +930,12 @@ const mcpClientsLive = (registered: ReadonlyArray<RegisteredServer>, file: strin
       const acquire = (server: McpServer) =>
         RcMap.get(clients, server.key).pipe(
           // RcMap keeps a failed lookup until it idles out; drop it so the next call connects.
-          Effect.tapError(() => RcMap.invalidate(clients, server.key)),
+          Effect.tapError((error) =>
+            Effect.andThen(
+              Effect.sync(() => setFailed(server.key, error)),
+              RcMap.invalidate(clients, server.key),
+            ),
+          ),
         )
       /** The key's connection; one whose transport already closed ran nothing, so it is replaced. */
       const open = (server: McpServer) =>
@@ -869,6 +990,9 @@ const mcpClientsLive = (registered: ReadonlyArray<RegisteredServer>, file: strin
           })
           return yield* send.pipe(
             Effect.tapError((failed) => {
+              if (failed.kind === "dead") {
+                setHealth(server.key, "degraded", Option.some(failed.message))
+              }
               if (failed.kind === "dead" || failed.kind === "expired") {
                 return evict(server.key, connection)
               }
@@ -890,6 +1014,42 @@ const mcpClientsLive = (registered: ReadonlyArray<RegisteredServer>, file: strin
             }),
             Effect.scoped,
           ),
+        status: Effect.sync(() => {
+          const servers = registered.map(({ server }): McpServerStatus => {
+            const state = health.get(server.key) ?? { health: "unknown", reason: Option.none() }
+            const connection = Option.fromUndefinedOr(live.get(server.key)).pipe(
+              Option.filter((open) => !open.closed),
+            )
+            const catalog = known.get(server.key) ?? { tools: [] }
+            return {
+              name: server.name,
+              transport: Option.match(connection, {
+                onNone: () => configuredTransport(server.config),
+                onSome: (open) => open.transport,
+              }),
+              health: state.health,
+              connected: Option.isSome(connection),
+              tools: catalog.tools.length,
+              ...omitUndefined({
+                description: catalog.instructions,
+                reason: Option.getOrUndefined(state.reason),
+              }),
+            }
+          })
+          for (const entry of misconfigured) {
+            servers.push({
+              name: entry.name,
+              transport: configuredTransport(entry.config),
+              health: "misconfigured",
+              connected: false,
+              tools: 0,
+              reason: entry.reason,
+            })
+          }
+          return {
+            servers: servers.toSorted((left, right) => compareCodeUnits(left.name, right.name)),
+          }
+        }),
       })
     }),
   )
@@ -1110,10 +1270,14 @@ const toolsFor = (server: McpServer, listed: ReadonlyArray<CatalogTool>) => {
   })
 }
 
-/** A server's tools, and whether setup listed them now (so they go to the cache). */
+/**
+ * A server's catalog entry, whether setup listed it now (so it goes to the
+ * cache), and the failure of a setup listing that did not work.
+ */
 interface SetupCatalog {
-  readonly tools: ReadonlyArray<CatalogTool>
+  readonly catalog: CatalogServer
   readonly listedNow: boolean
+  readonly failure: Option.Option<McpError>
 }
 
 /**
@@ -1124,20 +1288,98 @@ interface SetupCatalog {
 const catalogFor = (server: McpServer, cache: CatalogFile): Effect.Effect<SetupCatalog> => {
   const cached = cache.servers[server.key]
   if (Predicate.isNotUndefined(cached)) {
-    return Effect.succeed({ tools: cached.tools, listedNow: false })
+    return Effect.succeed({ catalog: cached, listedNow: false, failure: Option.none() })
   }
+  const unlisted = (error: McpError) =>
+    Effect.logWarning("mcp.server.unlisted").pipe(
+      Effect.annotateLogs({ server: server.name, error: error.message }),
+      Effect.as<SetupCatalog>({
+        catalog: { tools: [] },
+        listedNow: false,
+        failure: Option.some(error),
+      }),
+    )
   return Effect.scoped(
-    connect(server).pipe(Effect.flatMap(({ client }) => listTools(server, client))),
+    Effect.gen(function* () {
+      const { client, instructions } = yield* connect(server)
+      const tools = yield* listTools(server, client)
+      const catalog: CatalogServer = {
+        tools,
+        ...omitUndefined({ instructions: Option.getOrUndefined(instructions) }),
+      }
+      return catalog
+    }),
   ).pipe(
-    Effect.map((tools): SetupCatalog => ({ tools, listedNow: true })),
+    Effect.map((catalog): SetupCatalog => ({ catalog, listedNow: true, failure: Option.none() })),
+    Effect.catchTag("McpError", unlisted),
     Effect.catchCause((cause) =>
-      Effect.logWarning("mcp.server.unlisted").pipe(
-        Effect.annotateLogs({ server: server.name, error: String(cause) }),
-        Effect.as<SetupCatalog>({ tools: [], listedNow: false }),
-      ),
+      unlisted(new McpError({ server: server.name, message: String(Cause.squash(cause)) })),
     ),
   )
 }
+
+// ── status ──────────────────────────────────────────────────────────────────
+
+/**
+ * `mcp.status()`: every configured server with its transport, health, tool
+ * count and instructions. It reads this process's state and connects to
+ * nothing.
+ */
+const McpStatusTool = tool({
+  id: "mcp.status",
+  description:
+    "Report each configured MCP server: transport, health, connection, tool count, and the server's own instructions",
+  readonly: true,
+  params: Schema.Struct({}),
+  output: McpStatus,
+  execute: Effect.fn("Mcp.status")(function* () {
+    const clients = yield* McpClients
+    return yield* clients.status
+  }),
+})
+
+const statusLine = (server: McpServerStatus) => {
+  let tools = `${server.tools} tools`
+  if (server.tools === 1) tools = "1 tool"
+  let connected = "not connected"
+  if (server.connected) connected = "connected"
+  const facts = [server.health, tools, connected]
+  const reason = Option.match(Option.fromUndefinedOr(server.reason), {
+    onNone: () => "",
+    onSome: (text) => `\n  ${text}`,
+  })
+  const description = Option.match(Option.fromUndefinedOr(server.description), {
+    onNone: () => "",
+    onSome: (text) => `\n  ${firstLine(text)}`,
+  })
+  return `- ${server.name} (${server.transport}): ${facts.join(", ")}${reason}${description}`
+}
+
+const firstLine = (text: string) => text.trim().split("\n")[0] ?? ""
+
+/** `/mcp`: shows `mcp.status` to the user. */
+const McpCommand = request({
+  id: "mcp-command",
+  description: "Show the MCP servers: transport, health, and tool count",
+  slash: {
+    trigger: "mcp",
+    name: "MCP",
+    description: "/mcp · status of each MCP server",
+    category: "Tools",
+  },
+  input: Schema.String,
+  output: Schema.Void,
+  execute: () =>
+    Effect.gen(function* () {
+      const ctx = yield* ExtensionContext
+      const clients = yield* McpClients
+      const { servers } = yield* clients.status
+      yield* ctx.Interaction.present({
+        title: "MCP servers",
+        content: servers.map(statusLine).join("\n"),
+      })
+    }),
+})
 
 // ── extension ───────────────────────────────────────────────────────────────
 
@@ -1151,8 +1393,8 @@ const registerServers = Effect.fn("Mcp.registerServers")(function* (
   entries: Readonly<Record<string, McpServerConfig>>,
 ) {
   const host = yield* ExtensionHost
-  const servers = yield* resolveServers(entries, host.cwd)
-  if (servers.length === 0) return
+  const { servers, misconfigured } = yield* resolveServers(entries, host.cwd)
+  if (servers.length === 0 && misconfigured.length === 0) return
   const file = yield* catalogPath(host.home)
   const cache = yield* readCatalog(file)
   const registered = yield* Effect.forEach(
@@ -1165,23 +1407,22 @@ const registerServers = Effect.fn("Mcp.registerServers")(function* (
     file,
     registered
       .filter((entry) => entry.listedNow)
-      .map((entry): readonly [string, ReadonlyArray<CatalogTool>] => [
-        entry.server.key,
-        entry.tools,
-      ]),
+      .map((entry): readonly [string, CatalogServer] => [entry.server.key, entry.catalog]),
   ).pipe(Effect.ignore)
   yield* host.register(
     "resource",
     defineResource({
       id: `${extensionId}/clients`,
       scope: "process",
-      layer: mcpClientsLive(registered, file),
+      layer: mcpClientsLive(registered, misconfigured, file),
     }),
   )
   yield* host.register(
     "tool",
-    ...registered.flatMap((entry) => toolsFor(entry.server, entry.tools)),
+    McpStatusTool,
+    ...registered.flatMap((entry) => toolsFor(entry.server, entry.catalog.tools)),
   )
+  yield* host.register("request", McpCommand)
 })
 
 /**
