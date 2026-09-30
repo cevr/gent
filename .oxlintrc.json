@@ -43,6 +43,9 @@
     "gent/no-inert-it": "error",
     // Custom — a child-session writer admits the depth in its own function
     "gent/child-session-writer-admits": "error",
+    // Custom — no `undefined`/`unknown` spelled to pass noNullish or noUnknownParameters.
+    // Off until the p22-core batch, with p22-tui and p22-ext, rewrites the sites it reports in their trees.
+    "gent/no-lint-evasion": "off",
 
     // TypeScript - no any
     "typescript/no-explicit-any": "error",

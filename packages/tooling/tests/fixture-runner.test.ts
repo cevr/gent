@@ -331,6 +331,15 @@ const CASES: ReadonlyArray<RuleCase> = [
     // and an admission after the write
     expectedCount: 5,
   },
+  {
+    rule: "gent/no-lint-evasion",
+    invalid: "no-lint-evasion.invalid.ts",
+    valid: ["no-lint-evasion.valid.ts"],
+    // `Option.getOrUndefined(Option.none())` bare, with a type argument and in
+    // a record; `Schema.Schema.Type<typeof Schema.Unknown>` as an alias and as
+    // a parameter type
+    expectedCount: 5,
+  },
 ]
 
 /** Each fixture file once: a run lints a path it is given once, however many cases name it. */
