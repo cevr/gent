@@ -51,9 +51,10 @@ import {
   App,
   AppBootstrapError,
   ConnectionWidget,
-  type InitialState,
+  type HeadlessState,
   QueueWidget,
-  resolveInitialState,
+  resolveHeadlessState,
+  resolveInteractiveState,
   resolveHeadlessMissingProviders,
   resolveInteractiveBootstrap,
 } from "../src/app"
@@ -190,7 +191,6 @@ describe("startup agent and headless auth", () => {
         cwd: "/nonexistent/gent-test-cwd",
         sessionId: "session-a",
         continue_: false,
-        debugMode: false,
       })
       expect(result.initialAgent).toBe(AgentName.make("secondary"))
       // The session view's auth gate checks the providers itself, once mounted.
@@ -240,8 +240,7 @@ describe("startup agent and headless auth", () => {
           },
         },
       })
-      const state: InitialState = {
-        _tag: "headless",
+      const state: HeadlessState = {
         session: {
           id: SessionId.make("session-a"),
           activeBranchId: BranchId.make("branch-a"),
@@ -276,8 +275,7 @@ describe("startup agent and headless auth", () => {
           },
         },
       })
-      const state: InitialState = {
-        _tag: "headless",
+      const state: HeadlessState = {
         session: { ...sessionA, activeBranchId: absent },
         prompt: "hi",
       }
@@ -309,7 +307,6 @@ describe("startup agent and headless auth", () => {
         cwd: "/nonexistent/gent-test-cwd",
         sessionId: "session-a",
         continue_: false,
-        debugMode: false,
       })
       expect(Option.map(result.bootstrap.initialBranches, (branches) => branches.length)).toEqual(
         Option.some(2),
@@ -333,7 +330,6 @@ describe("startup agent and headless auth", () => {
           cwd: "/nonexistent/gent-test-cwd",
           sessionId: "session-a",
           continue_: false,
-          debugMode: false,
         }),
       )
       expect(error.reason).toBe("missing-branch")
@@ -341,17 +337,14 @@ describe("startup agent and headless auth", () => {
   )
 })
 
-describe("resolveInitialState", () => {
+describe("startup state", () => {
   it.live("fails with typed bootstrap error when headless prompt is missing", () =>
     Effect.gen(function* () {
       const error = yield* expectAppBootstrapFailure(
-        resolveInitialState({
+        resolveHeadlessState({
           client: createMockClient(),
           cwd: "/nonexistent/gent-test-cwd",
           session: Option.none(),
-          continue_: false,
-          headless: true,
-          prompt: Option.none(),
           promptArg: Option.none(),
         }),
       )
@@ -363,13 +356,10 @@ describe("resolveInitialState", () => {
   it.live("a whitespace-only headless prompt is a missing prompt", () =>
     Effect.gen(function* () {
       const error = yield* expectAppBootstrapFailure(
-        resolveInitialState({
+        resolveHeadlessState({
           client: createMockClient(),
           cwd: "/nonexistent/gent-test-cwd",
           session: Option.none(),
-          continue_: false,
-          headless: true,
-          prompt: Option.none(),
           promptArg: Option.some(" \n\t "),
         }),
       )
@@ -390,7 +380,7 @@ describe("resolveInitialState", () => {
         agent: AgentName.make("secondary"),
         runSpec: { overrides: { maxSteps: 3 } },
       }
-      const state = yield* resolveInitialState({
+      const state = yield* resolveHeadlessState({
         client: createMockClient({
           session: {
             create: (input: { readonly admission?: unknown }) =>
@@ -407,13 +397,10 @@ describe("resolveInitialState", () => {
         }),
         cwd: "/nonexistent/gent-test-cwd",
         session: Option.none(),
-        continue_: false,
-        headless: true,
-        prompt: Option.none(),
         promptArg: Option.some("hi"),
         admission,
       })
-      expect(state).toMatchObject({ _tag: "headless", session: { id: "session-test" } })
+      expect(state).toMatchObject({ session: { id: "session-test" } })
       // The agent is fixed on the session; the prompt's turn carries none.
       expect(created.map((input) => input.admission)).toEqual([admission])
     }),
@@ -422,14 +409,12 @@ describe("resolveInitialState", () => {
   it.live("fails with typed bootstrap error when requested session is missing", () =>
     Effect.gen(function* () {
       const error = yield* expectAppBootstrapFailure(
-        resolveInitialState({
+        resolveInteractiveState({
           client: createMockClient(),
           cwd: "/nonexistent/gent-test-cwd",
           session: Option.some("missing-session"),
           continue_: false,
-          headless: false,
           prompt: Option.none(),
-          promptArg: Option.none(),
         }),
       )
       expect(error.reason).toBe("session-not-found")
@@ -464,16 +449,14 @@ describe("resolveInitialState", () => {
         createdAt: at(40),
         updatedAt: at(50),
       })
-      const state = yield* resolveInitialState({
+      const state = yield* resolveInteractiveState({
         client: createMockClient({
           session: { list: () => Effect.succeed([child, root, handoff]) },
         }),
         cwd: "/work",
         session: Option.none(),
         continue_: true,
-        headless: false,
         prompt: Option.none(),
-        promptArg: Option.none(),
       })
       expect(state).toMatchObject({ _tag: "session", session: { id: "handoff" } })
     }),

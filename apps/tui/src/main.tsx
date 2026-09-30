@@ -28,8 +28,8 @@ import { createCliRenderer, type CliRenderer } from "@opentui/core"
 import {
   App,
   AppBootstrapError,
-  type InitialState,
-  resolveInitialState,
+  type HeadlessState,
+  resolveHeadlessState,
   resolveInteractiveBootstrap,
   resolveHeadlessMissingProviders,
 } from "./app"
@@ -98,7 +98,7 @@ const makeUiLayer = () => Layer.provideMerge(LinkOpener.Live, BunPlatformLive)
 
 const runHeadlessTurn = (
   bundle: GentClientBundle,
-  state: Extract<InitialState, { readonly _tag: "headless" }>,
+  state: HeadlessState,
   options: HeadlessOptions,
 ) => {
   const branchId = Option.fromNullishOr(state.session.activeBranchId)
@@ -283,13 +283,10 @@ const runGent = ({
         })
       }
       yield* waitForHeadlessReady(bundle.runtime.lifecycle.waitForReady)
-      const state = yield* resolveInitialState({
+      const state = yield* resolveHeadlessState({
         client: bundle.client,
         cwd,
         session,
-        continue_: continue_ || debug,
-        headless,
-        prompt,
         promptArg,
         // No flag, no admission: the session stores none rather than `{}`.
         ...Record.filter(
@@ -301,12 +298,6 @@ const runGent = ({
           Predicate.isNotUndefined,
         ),
       })
-
-      if (state._tag !== "headless") {
-        return yield* new CliStartupError({
-          message: "headless startup resolved an interactive state",
-        })
-      }
 
       const missingProviders = yield* resolveHeadlessMissingProviders({
         client: bundle.client,
@@ -338,7 +329,6 @@ const runGent = ({
       sessionId: Option.getOrUndefined(session),
       continue_: continue_ || debug,
       prompt: Option.getOrUndefined(prompt),
-      debugMode: debug,
     })
 
     // Resolve the terminal color scheme once before render so theme detection

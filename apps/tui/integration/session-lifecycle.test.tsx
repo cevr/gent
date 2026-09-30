@@ -2,7 +2,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Option } from "effect"
 import { onMount } from "solid-js"
-import { App, resolveInitialState, resolveInteractiveBootstrap } from "../src/app"
+import { App, resolveInteractiveState, resolveInteractiveBootstrap } from "../src/app"
 import { type ClientContextValue, useClient } from "../src/client"
 import { destroyRenderSetup, renderWithProviders } from "../tests/render-harness-boundary"
 import {
@@ -35,14 +35,12 @@ describe("app bootstrap", () => {
           // gent/no-sleep: allow real-clock gap so the second session's createdAt sorts strictly after the first
           yield* Effect.sleep("5 millis")
           const second = yield* client.session.create({ cwd: repoRoot })
-          const state = yield* resolveInitialState({
+          const state = yield* resolveInteractiveState({
             client,
             cwd: repoRoot,
             session: Option.none(),
             continue_: true,
-            headless: false,
             prompt: Option.none(),
-            promptArg: Option.none(),
           })
           expect(state._tag).toBe("session")
           if (state._tag !== "session") return
@@ -58,14 +56,12 @@ describe("app bootstrap", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const { client } = yield* Gent.test(localLayer())
-          const state = yield* resolveInitialState({
+          const state = yield* resolveInteractiveState({
             client,
             cwd: repoRoot,
             session: Option.none(),
             continue_: true,
-            headless: false,
             prompt: Option.some("bootstrap prompt"),
-            promptArg: Option.none(),
           })
           expect(state._tag).toBe("session")
           if (state._tag !== "session") return
@@ -92,7 +88,6 @@ describe("session lifecycle", () => {
             client,
             cwd: repoRoot,
             continue_: false,
-            debugMode: false,
           })
           expect(bootstrap.initialSession).toBeDefined()
           expect(Option.isNone(bootstrap.initialBranches)).toBe(true)
@@ -150,7 +145,6 @@ describe("session lifecycle", () => {
             client,
             cwd: repoRoot,
             continue_: false,
-            debugMode: false,
           })
           const setup = yield* Effect.promise(() =>
             renderWithProviders(

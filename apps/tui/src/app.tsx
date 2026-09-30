@@ -67,7 +67,6 @@ export class AppBootstrapError extends Schema.TaggedError<AppBootstrapError>()(
     sessionId: Schema.optional(SessionId),
     reason: Schema.Literals([
       "created-session-unreadable",
-      "interactive-headless-state",
       "headless-missing-prompt",
       "missing-branch",
       "session-not-found",
@@ -79,8 +78,6 @@ export class AppBootstrapError extends Schema.TaggedError<AppBootstrapError>()(
     switch (this.reason) {
       case "created-session-unreadable":
         return `Created session ${sessionLabel} was not readable`
-      case "interactive-headless-state":
-        return "Interactive bootstrap resolved a headless state"
       case "headless-missing-prompt":
         return "Headless startup requires a prompt argument"
       case "missing-branch":
@@ -91,7 +88,8 @@ export class AppBootstrapError extends Schema.TaggedError<AppBootstrapError>()(
   }
 }
 
-export type InitialState =
+/** Where the interactive start lands: the session, or its branch picker when it has more than one branch. */
+type InteractiveState =
   | { _tag: "session"; session: DomainSession; prompt?: string }
   | {
       _tag: "branchPicker"
@@ -99,7 +97,12 @@ export type InitialState =
       branches: readonly Branch[]
       prompt?: string
     }
-  | { _tag: "headless"; session: DomainSession; prompt: string }
+
+/** The session a headless run sends its one prompt to. */
+export interface HeadlessState {
+  readonly session: DomainSession
+  readonly prompt: string
+}
 
 interface AppBootstrap {
   readonly initialSession: ClientSession
@@ -110,7 +113,6 @@ interface AppBootstrap {
    * the picker over it; `None` means resume straight into the session.
    */
   readonly initialBranches: Option.Option<readonly Branch[]>
-  readonly debugMode: boolean
 }
 
 interface InteractiveBootstrapResult {
@@ -157,10 +159,7 @@ const createAndLoadSession = (input: {
   })
 
 const resolveAppBootstrap = (
-  state: Exclude<InitialState, { _tag: "headless" }>,
-  options: {
-    debugMode: boolean
-  },
+  state: InteractiveState,
 ): Effect.Effect<AppBootstrap, AppBootstrapError> => {
   // A created session always has its branch. A corrupt record from `-s <id>`
   // may not, and the view (and a picker docked over it) needs one to mount.
@@ -176,7 +175,6 @@ const resolveAppBootstrap = (
     initialSession: initialSession.value,
     initialPrompt: Option.fromNullishOr(state.prompt),
     initialBranches,
-    debugMode: options.debugMode,
   })
 }
 
@@ -186,27 +184,20 @@ export const resolveInteractiveBootstrap = (input: {
   sessionId?: string
   continue_: boolean
   prompt?: string
-  debugMode: boolean
 }): Effect.Effect<InteractiveBootstrapResult, GentClientRpcError | AppBootstrapError> =>
   Effect.gen(function* () {
-    const state = yield* resolveInitialState({
+    const state = yield* resolveInteractiveState({
       client: input.client,
       cwd: input.cwd,
       session: Option.fromNullishOr(input.sessionId),
       continue_: input.continue_,
-      headless: false,
       prompt: Option.fromNullishOr(input.prompt),
-      promptArg: Option.none(),
     })
-
-    if (state._tag === "headless") {
-      return yield* new AppBootstrapError({ reason: "interactive-headless-state" })
-    }
 
     const initialAgent = yield* resolveStartupAgent({ client: input.client, state })
 
     return {
-      bootstrap: yield* resolveAppBootstrap(state, { debugMode: input.debugMode }),
+      bootstrap: yield* resolveAppBootstrap(state),
       initialAgent: Option.getOrUndefined(initialAgent),
     }
   })
@@ -230,7 +221,7 @@ const sessionAgent = (
  */
 const resolveStartupAgent = (input: {
   client: Pick<GentNamespacedClient, "session">
-  state: Exclude<InitialState, { _tag: "headless" }>
+  state: InteractiveState
 }): Effect.Effect<Option.Option<AgentName>, GentClientRpcError> => {
   if (input.state._tag === "branchPicker") return Effect.succeedNone
   return sessionAgent(input.client, input.state.session).pipe(Effect.asSome)
@@ -242,7 +233,7 @@ const resolveStartupAgent = (input: {
  */
 export const resolveHeadlessMissingProviders = (input: {
   client: Pick<GentNamespacedClient, "auth" | "session">
-  state: Extract<InitialState, { _tag: "headless" }>
+  state: HeadlessState
 }): Effect.Effect<readonly ProviderId[], GentClientRpcError> =>
   Effect.gen(function* () {
     const agent = yield* sessionAgent(input.client, input.state.session)
@@ -275,49 +266,54 @@ const resumeState = (
   client: Pick<GentNamespacedClient, "branch">,
   session: DomainSession,
   prompt: Option.Option<string>,
-): Effect.Effect<InitialState, GentClientRpcError> =>
+): Effect.Effect<InteractiveState, GentClientRpcError> =>
   Effect.gen(function* () {
     const promptText = Option.getOrUndefined(prompt)
     const branches = yield* client.branch.list({ sessionId: session.id })
     if (branches.length > 1) {
-      return { _tag: "branchPicker", session, branches, prompt: promptText } satisfies InitialState
+      return {
+        _tag: "branchPicker",
+        session,
+        branches,
+        prompt: promptText,
+      } satisfies InteractiveState
     }
-    return { _tag: "session", session, prompt: promptText } satisfies InitialState
+    return { _tag: "session", session, prompt: promptText } satisfies InteractiveState
   })
 
-export const resolveInitialState = (input: {
+/** The session `-H` runs its prompt in: the one `-s` names, else a new one. */
+export const resolveHeadlessState = (input: {
+  client: Pick<GentNamespacedClient, "session">
+  cwd: string
+  session: Option.Option<string>
+  promptArg: Option.Option<string>
+  /** The agent and run spec a new headless session runs as, for every turn. */
+  admission?: SessionAdmission
+}): Effect.Effect<HeadlessState, GentClientRpcError | AppBootstrapError> =>
+  Effect.gen(function* () {
+    const { client, cwd, session, promptArg, admission } = input
+    if (Option.isNone(promptArg) || promptArg.value.trim().length === 0) {
+      return yield* new AppBootstrapError({ reason: "headless-missing-prompt" })
+    }
+    if (Option.isSome(session)) {
+      return { session: yield* loadSession(client, session.value), prompt: promptArg.value }
+    }
+    return {
+      session: yield* createAndLoadSession({ client, cwd, admission }),
+      prompt: promptArg.value,
+    }
+  })
+
+/** The session the TUI opens: the one `-s` names, the last one in `cwd` to continue, else a new one. */
+export const resolveInteractiveState = (input: {
   client: Pick<GentNamespacedClient, "session" | "branch">
   cwd: string
   session: Option.Option<string>
   continue_: boolean
-  headless: boolean
   prompt: Option.Option<string>
-  promptArg: Option.Option<string>
-  /** The agent and run spec a new headless session runs as, for every turn. */
-  admission?: SessionAdmission
-}): Effect.Effect<InitialState, GentClientRpcError | AppBootstrapError> =>
+}): Effect.Effect<InteractiveState, GentClientRpcError | AppBootstrapError> =>
   Effect.gen(function* () {
-    const { client, cwd, session, continue_, headless, prompt, promptArg, admission } = input
-
-    if (headless) {
-      if (Option.isNone(promptArg) || promptArg.value.trim().length === 0) {
-        return yield* new AppBootstrapError({ reason: "headless-missing-prompt" })
-      }
-      if (Option.isSome(session)) {
-        return {
-          _tag: "headless",
-          session: yield* loadSession(client, session.value),
-          prompt: promptArg.value,
-        } satisfies InitialState
-      }
-
-      const created = yield* createAndLoadSession({ client, cwd, admission })
-      return {
-        _tag: "headless",
-        session: created,
-        prompt: promptArg.value,
-      } satisfies InitialState
-    }
+    const { client, cwd, session, continue_, prompt } = input
 
     if (Option.isSome(session)) {
       return yield* resumeState(client, yield* loadSession(client, session.value), prompt)
@@ -340,7 +336,7 @@ export const resolveInitialState = (input: {
 
     const promptText = Option.getOrUndefined(prompt)
     const created = yield* createAndLoadSession({ client, cwd })
-    return { _tag: "session", session: created, prompt: promptText } satisfies InitialState
+    return { _tag: "session", session: created, prompt: promptText } satisfies InteractiveState
   })
 
 // ── connection widget ───────────────────────────────────────────────────────
