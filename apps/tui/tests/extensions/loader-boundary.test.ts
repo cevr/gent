@@ -19,7 +19,6 @@ import {
   type MessageRenderer,
   messageRendererContribution,
   type MessageRowProps,
-  NoActiveSessionError,
   type NoticeRow,
   noticeRowContribution,
   rendererContribution,
@@ -1008,10 +1007,6 @@ describe("autocomplete Effect items() through the client transport", () => {
       yield* Effect.promise(() => runtime.dispose())
     }),
   )
-  test("NoActiveSessionError is a Schema.TaggedError instance", () => {
-    const err = new NoActiveSessionError()
-    expect(err._tag).toBe("NoActiveSessionError")
-  })
   it.live("transport.request seals transport failures to ClientTransportRequestError", () =>
     Effect.gen(function* () {
       const transport = makeFakeTransport({

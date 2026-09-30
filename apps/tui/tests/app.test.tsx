@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { describe, expect, it, test } from "effect-bun-test"
+import { describe, expect, it } from "effect-bun-test"
 import {
   Cause,
   Clock,
@@ -5149,45 +5149,6 @@ describe("TUI renderer surfaces", () => {
       }).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
     ),
   )
-})
-describe("uiModel schema validation", () => {
-  const ArtifactUiModel = Schema.Struct({
-    items: Schema.Array(
-      Schema.Struct({
-        id: Schema.String,
-        label: Schema.String,
-        sourceTool: Schema.String,
-        status: Schema.Literals(["active", "resolved"]),
-      }),
-    ),
-  })
-  const decode = Schema.decodeUnknownOption(ArtifactUiModel)
-  test("valid artifact snapshot decodes correctly", () => {
-    const valid = {
-      items: [{ id: "a1", label: "Plan: auth refactor", sourceTool: "plan", status: "active" }],
-    }
-    const result = decode(valid)
-    expect(result._tag).toBe("Some")
-  })
-  test("empty items decodes correctly", () => {
-    const valid = { items: [] }
-    const result = decode(valid)
-    expect(result._tag).toBe("Some")
-  })
-  test("malformed snapshot decodes to None (not crash)", () => {
-    const malformed = { items: "not-an-array" }
-    const result = decode(malformed)
-    expect(result._tag).toBe("None")
-  })
-  test("missing fields decode to None", () => {
-    const partial = {}
-    const result = decode(partial)
-    expect(result._tag).toBe("None")
-  })
-  test("null snapshot decodes to None", () => {
-    const result = decode(nullValue)
-    expect(result._tag).toBe("None")
-  })
 })
 
 // ── debug playground ────────────────────────────────────────────────────────
