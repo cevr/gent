@@ -757,6 +757,46 @@ describe("Composer renderer", () => {
       expect(renderFrame(setup)).toContain("┃ pasted line 2 from")
     }).pipe(Effect.timeout("10 seconds")),
   )
+  // Up and down walk the prompts sent before, newest first; a prompt sent
+  // twice in a row is one entry. Down past the newest gives back the draft
+  // the walk started from.
+  it.live("up recalls earlier prompts and down gives back the draft", () =>
+    Effect.gen(function* () {
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <TestComposer onSubmit={() => {}} />),
+      )
+      const send = (text: string) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() => setup.mockInput.typeText(text))
+          setup.mockInput.pressKey("RETURN")
+          yield* waitForFrame(setup, (frame) => !frame.includes(`┃ ${text}`), `sent ${text}`)
+        })
+      yield* send("alpha")
+      yield* send("beta")
+      yield* send("beta")
+      const press = (direction: "up" | "down", shown: string) =>
+        Effect.gen(function* () {
+          setup.mockInput.pressArrow(direction)
+          return yield* waitForFrame(setup, (frame) => frame.includes(shown), shown)
+        })
+      yield* press("up", "┃ beta")
+      yield* press("up", "┃ alpha")
+      // The oldest entry stays; there is no third.
+      setup.mockInput.pressArrow("up")
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(renderFrame(setup)).toContain("┃ alpha")
+      yield* press("down", "┃ beta")
+      const restored = yield* press("down", "┃")
+      expect(restored).not.toContain("┃ beta")
+      expect(restored).not.toContain("┃ alpha")
+      yield* Effect.promise(() => setup.mockInput.typeText("draft"))
+      yield* waitForFrame(setup, (frame) => frame.includes("┃ draft"), "the draft")
+      // Up recalls only from the draft's start; elsewhere it moves the cursor.
+      setup.mockInput.pressKey("a", { ctrl: true })
+      yield* press("up", "┃ beta")
+      yield* press("down", "┃ draft")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   // A chip is one unit: a delete at its end takes the whole chip and its
   // stored text, so no fragment of it reaches the model.
   it.live("backspace or ctrl+w at a paste chip's end removes the whole chip", () =>

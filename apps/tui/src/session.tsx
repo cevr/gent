@@ -1156,11 +1156,20 @@ type PromptHistoryStore = {
   historyIndex: number
   savedEntry: Option.Option<string>
   loaded: boolean
+  /** Counts the adds; only the newest add's write sets the merged list. */
+  adds: number
 }
 
 function makePromptHistoryStore(): PromptHistoryStore {
   const [entries, setEntries] = createSignal<string[]>([])
-  return { entries, setEntries, historyIndex: -1, savedEntry: Option.none(), loaded: false }
+  return {
+    entries,
+    setEntries,
+    historyIndex: -1,
+    savedEntry: Option.none(),
+    loaded: false,
+    adds: 0,
+  }
 }
 
 export function usePromptHistory(): PromptHistory {
@@ -1193,11 +1202,19 @@ export function usePromptHistory(): PromptHistory {
       if (trimmed.length === 0) return
 
       // The local fold answers the next up-arrow at once; the merged list
-      // from disk replaces it when the write lands.
+      // from disk replaces it when the write lands. The writes run in order,
+      // so the newest add's write holds every prompt; an older one that lands
+      // after a newer add would drop that add, and is not applied.
       store.setEntries((prev) => foldPrompt(prev, trimmed))
+      store.adds += 1
+      const add = store.adds
       cast(
         recordPrompt(workspace.home, trimmed).pipe(
-          Effect.tap((merged) => Effect.sync(() => store.setEntries(merged))),
+          Effect.tap((merged) =>
+            Effect.sync(() => {
+              if (add === store.adds) store.setEntries(merged)
+            }),
+          ),
         ),
       )
       store.historyIndex = -1
