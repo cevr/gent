@@ -106,6 +106,7 @@ import {
   maximumCellDisplayLength,
   maximumCellSourceLength,
   maximumPendingCellCalls,
+  compareIds,
   type SnapshotBinding,
   toolPath,
 } from "./cell-protocol.js"
@@ -1490,7 +1491,7 @@ const buildCellCatalog = Effect.fn("CellCatalog.build")(function* (
 ) {
   const selected = [...bindings.entries()]
     .filter(([name]) => name !== "cell")
-    .sort(([left], [right]) => left.localeCompare(right))
+    .sort(([left], [right]) => compareIds(left, right))
   const tools = yield* Effect.forEach(selected, ([name, entry]) =>
     Effect.gen(function* () {
       const { signature, summary } = yield* toolSignatureParts(entry.capability)
@@ -3017,7 +3018,7 @@ export const CellExtension = defineExtension({
         const entries = yield* Effect.forEach(
           (input.hostTools ?? [])
             .filter((tool) => getToolId(tool) !== "cell")
-            .toSorted((left, right) => getToolId(left).localeCompare(getToolId(right))),
+            .toSorted((left, right) => compareIds(getToolId(left), getToolId(right))),
           (tool) =>
             renderToolSignature(tool).pipe(Effect.map((line) => ({ id: getToolId(tool), line }))),
         )
@@ -3057,7 +3058,7 @@ const CELL_WORK_SECTION = {
 
 const HOST_TOOLS_HEADING = `## Host Tools
 
-Inside \`cell\`, each host tool id is a function path under \`tools\`: id \`a.b\` is \`await tools.a.b(input)\`. Every host tool is callable, listed below or not. A line \`tools.a.*: N tools\` stands for a namespace listed by name only. \`tools.search(query)\` returns \`{ id, description }[]\` for the ids whose id or description holds a query word. \`tools.describe(id)\` returns one tool's typed signature. \`tools(id)\` returns the tool with its full input schema (\`parameters\`) and \`guidelines\`, and reaches an id with a JavaScript built-in segment such as \`then\` or \`name\`.`
+Inside \`cell\`, each host tool id is a function path under \`tools\`: id \`a.b\` is \`await tools.a.b(input)\`. Every host tool is callable, listed below or not. A line \`tools.a.*: N tools\` stands for a namespace listed by name only, and a \`more\` line counts tools not listed. \`tools.search(query)\` returns \`{ id, description }[]\` for the ids whose id or description holds a query word. \`tools.describe(id)\` returns one tool's typed signature. \`tools(id)\` returns the tool with its full input schema (\`parameters\`) and \`guidelines\`, and reaches an id with a JavaScript built-in segment such as \`then\` or \`name\`.`
 
 /**
  * The characters the Host Tools signature lines may take. The shipped tool set
@@ -3067,6 +3068,14 @@ export const HOST_TOOL_CATALOG_BUDGET = 8000
 
 /** A collapsed line names its tools up to this many characters, then `…`. */
 const COLLAPSED_NAMES_LIMIT = 100
+
+/**
+ * The budget kept for the two tail lines: `- more tools: <names>` (at most
+ * 14 + COLLAPSED_NAMES_LIMIT + 1 characters) and the hidden namespace count
+ * (under 90). Every other line, a collapsed namespace included, is charged
+ * against the rest.
+ */
+const CATALOG_TAIL_RESERVE = 220
 
 interface HostToolLine {
   readonly id: string
@@ -3100,13 +3109,17 @@ const namesUpTo = (names: ReadonlyArray<string>) => {
  * namespace (a dotted id's parent path: `mcp.github.search` is in `mcp.github`)
  * lists whole, in id order, while the running total stays within
  * `HOST_TOOL_CATALOG_BUDGET`. A namespace past it collapses to
- * `- tools.mcp.github.*: 42 tools (a, b, …)`; top-level ids past it share one
- * `- more tools: …` line. The text depends only on the tool set, so the
+ * `- tools.mcp.github.*: 42 tools (a, b, …)` while that line fits; a namespace
+ * whose line does not fit is counted in one last line,
+ * `- N more namespaces (M tools), listed by tools.search(query)`. Top-level ids
+ * past the budget share one `- more tools: …` line. Every line counts against
+ * the budget, so the listing never exceeds it. Ids order by code unit
+ * (`compareIds`), not by locale. The text depends only on the tool set, so the
  * listing, and the cached prompt prefix it is part of, is byte-stable while the
  * set stays the same.
  */
 export const renderHostToolCatalog = (entries: ReadonlyArray<HostToolLine>): string => {
-  const sorted = entries.toSorted((left, right) => left.id.localeCompare(right.id))
+  const sorted = entries.toSorted((left, right) => compareIds(left.id, right.id))
   const topLevel: Array<HostToolGroup> = []
   const namespaces = new Map<string, Array<HostToolLine>>()
   for (const entry of sorted) {
@@ -3128,10 +3141,14 @@ export const renderHostToolCatalog = (entries: ReadonlyArray<HostToolLine>): str
   ]
   const listed: Array<HostToolLine> = []
   const collapsedTopLevel: Array<string> = []
+  let hiddenNamespaces = 0
+  let hiddenTools = 0
   let total = 0
+  const budget = HOST_TOOL_CATALOG_BUDGET - CATALOG_TAIL_RESERVE
+  const fits = (size: number) => total + size <= budget
   for (const group of groups) {
     const size = group.lines.reduce((sum, entry) => sum + entry.line.length + 1, 0)
-    if (total + size <= HOST_TOOL_CATALOG_BUDGET) {
+    if (fits(size)) {
       total += size
       listed.push(...group.lines)
       continue
@@ -3142,15 +3159,25 @@ export const renderHostToolCatalog = (entries: ReadonlyArray<HostToolLine>): str
     }
     const namespace = group.namespace.value
     const names = group.lines.map((entry) => entry.id.slice(namespace.length + 1))
-    listed.push({
-      id: namespace,
-      line: `- ${toolPath(namespace)}.*: ${names.length} tools (${namesUpTo(names)})`,
-    })
+    const line = `- ${toolPath(namespace)}.*: ${names.length} tools (${namesUpTo(names)})`
+    if (fits(line.length + 1)) {
+      total += line.length + 1
+      listed.push({ id: namespace, line })
+      continue
+    }
+    hiddenNamespaces += 1
+    hiddenTools += names.length
   }
   const lines = listed
-    .toSorted((left, right) => left.id.localeCompare(right.id))
+    .toSorted((left, right) => compareIds(left.id, right.id))
     .map((entry) => entry.line)
+  // The tail lines are bounded, and CATALOG_TAIL_RESERVE holds both.
   if (collapsedTopLevel.length > 0) lines.push(`- more tools: ${namesUpTo(collapsedTopLevel)}`)
+  if (hiddenNamespaces > 0) {
+    lines.push(
+      `- ${hiddenNamespaces} more namespaces (${hiddenTools} tools), listed by tools.search(query)`,
+    )
+  }
   return lines.join("\n")
 }
 

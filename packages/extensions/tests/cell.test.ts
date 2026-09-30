@@ -6954,6 +6954,35 @@ describe("host tool catalog budget", () => {
     )
   })
 
+  test("the listing orders ids by code unit, whatever the locale or registration order", () => {
+    // Under a locale order `ä` sorts beside `a`, and a composed and a
+    // decomposed `é` compare equal, so their order would follow registration.
+    const ids = ["z.x", "café.x", "ä.x", "a.x", "café.x"]
+    const listed = (order: ReadonlyArray<string>) =>
+      renderHostToolCatalog(order.map((id) => ({ id, line: `- tools.${id}` })))
+    expect(listed(ids).split("\n")).toEqual(
+      ["a.x", "café.x", "café.x", "z.x", "ä.x"].map((id) => `- tools.${id}`),
+    )
+    expect(listed(ids.toReversed())).toBe(listed(ids))
+  })
+
+  test("collapsed lines count against the budget, and namespaces past it share one line", () => {
+    const many = Array.from({ length: 400 }, (_, server) =>
+      Array.from({ length: 20 }, (_, index) =>
+        catalogLine(`mcp.server_${String(server).padStart(3, "0")}.op_${index}`, 120),
+      ),
+    ).flat()
+    const rendered = renderHostToolCatalog(many)
+    expect(rendered.length).toBeLessThanOrEqual(HOST_TOOL_CATALOG_BUDGET)
+    const lines = rendered.split("\n")
+    // The first namespaces list whole, the next collapse, the rest are counted.
+    expect(lines[0]?.startsWith("- tools.mcp.server_000.op_0x")).toBe(true)
+    expect(lines.some((line) => /^- tools\.mcp\.server_\d{3}\.\*: 20 tools/.test(line))).toBe(true)
+    expect(lines.at(-1)).toMatch(
+      /^- \d+ more namespaces \(\d+ tools\), listed by tools\.search\(query\)$/,
+    )
+  })
+
   test("top-level tools past the budget share one line", () => {
     const many = Array.from({ length: 50 }, (_, index) =>
       catalogLine(`t${String(index).padStart(2, "0")}`, 200),

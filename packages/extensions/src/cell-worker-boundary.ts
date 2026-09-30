@@ -38,6 +38,7 @@ import {
   maximumCellDisplayLength,
   maximumCellSourceLength,
   maximumPendingCellCalls,
+  compareIds,
   type SnapshotBinding,
   snapshotReviverSource,
 } from "./cell-protocol.js"
@@ -88,7 +89,7 @@ const closeIds = (wanted: string, ids: ReadonlyArray<string>): string =>
       const depth = id.split(".").slice(0, wanted.split(".").length).join(".")
       return { id, score: Math.min(editDistance(wanted, id), editDistance(wanted, depth)) }
     })
-    .toSorted((left, right) => left.score - right.score || left.id.localeCompare(right.id))
+    .toSorted((left, right) => left.score - right.score || compareIds(left.id, right.id))
     .slice(0, 3)
     .map((candidate) => candidate.id)
     .join(", ")
@@ -127,7 +128,7 @@ const searchCatalog = (entries: ReadonlyArray<CellCatalogEntry>, query: string) 
     })
     .filter((match) => words.length === 0 || match.score > 0)
     .toSorted(
-      (left, right) => right.score - left.score || left.entry.name.localeCompare(right.entry.name),
+      (left, right) => right.score - left.score || compareIds(left.entry.name, right.entry.name),
     )
     .map((match) => ({ id: match.entry.name, description: match.entry.summary }))
 }

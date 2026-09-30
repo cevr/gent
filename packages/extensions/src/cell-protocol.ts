@@ -112,6 +112,16 @@ export const reservedToolSegments: ReadonlySet<string> = new Set([
 export const toolDiscoveryKeys: ReadonlySet<string> = new Set(["search", "describe"])
 
 /**
+ * The one order for tool ids: by UTF-16 code unit. It is total and does not
+ * read the process locale, so a listing sorted by it is byte-stable.
+ */
+export const compareIds = (left: string, right: string): number => {
+  if (left < right) return -1
+  if (left > right) return 1
+  return 0
+}
+
+/**
  * The source a model writes to reach `id`: `tools.delegate.start`,
  * `tools["must-not-run"]`, or `tools("read.then")` when a segment is reserved
  * or the first segment is a discovery key.

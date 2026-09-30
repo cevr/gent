@@ -1121,9 +1121,13 @@ A top-level id (read, edit, write, bash, grep, ...) is a host tool the model
 calls most, so it lists first; then each namespace (a dotted id's parent path,
 `mcp.github` for `mcp.github.search`) lists whole, in id order, while it fits.
 A namespace past the budget collapses to `- tools.mcp.github.*: 42 tools (a, b,
-…)`, and top-level ids past it share one `- more tools:` line. The text depends
-only on the tool set, so the cached prompt prefix stays byte-stable while the
-set does. The section is rebuilt each turn, so live composition changes reach
+…)` while that line fits; a namespace whose line does not fit is counted in one
+last line, `- N more namespaces (M tools), listed by tools.search(query)`, and
+top-level ids past the budget share one `- more tools:` line. Every line counts
+against the budget, with a fixed reserve for the two tail lines, so the listing
+never exceeds it. Ids order by UTF-16 code unit (`compareIds` in
+`cell-protocol.ts`), never by locale. The text depends only on the tool set, so
+the cached prompt prefix stays byte-stable while the set does. The section is rebuilt each turn, so live composition changes reach
 the model as ordinary instruction changes. `cell.ts` builds the data half from
 the same selected map: name, description, guidelines, the actual Effect AI
 input schema, the rendered signature line, and its one-line summary, hashed
