@@ -2140,19 +2140,18 @@ describe("thread sessions", () => {
       const sessions = yield* SessionStorage
       const relationships = yield* RelationshipStorage
 
+      const planned = yield* sessions.deletionSet(SessionId.make("root"))
       const deleted = yield* sessions.deleteSession(SessionId.make("root"))
 
-      expect(deleted.map((entry) => String(entry.sessionId)).toSorted()).toEqual([
-        "delegate",
-        "delegate-handoff",
-        "root",
-      ])
+      const removed = ["delegate", "delegate-handoff", "root"]
+      expect(planned.map(String).toSorted()).toEqual(removed)
+      expect(deleted.map((entry) => String(entry.sessionId)).toSorted()).toEqual(removed)
       const handoff = yield* sessions.getSession(SessionId.make("handoff"))
       expect(handoff?.parentSessionId).toBeUndefined()
       const thread = yield* relationships.getThreadSessions(SessionId.make("handoff"))
       expect(ids(thread)).toEqual(["handoff"])
-      const children = yield* relationships.getChildSessions(SessionId.make("handoff"))
-      expect(ids(children)).toEqual(["handoff-spawn"])
+      const handoffSpawn = yield* sessions.getSession(SessionId.make("handoff-spawn"))
+      expect(handoffSpawn?.parentSessionId).toBe(SessionId.make("handoff"))
     }).pipe(Effect.provide(testSqliteStorage(() => Layer.empty, {}))),
   )
 

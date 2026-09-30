@@ -7,6 +7,8 @@ import {
   ToolCallId,
   ToolId,
 } from "./ids.js"
+import * as Prompt from "effect/ai/Prompt"
+import type * as Response from "effect/ai/Response"
 import * as AiTool from "effect/ai/Tool"
 import { clipSummary, summarizeOutput } from "./message.js"
 
@@ -716,12 +718,52 @@ const TOOL_ID_PATTERN = /^[a-zA-Z0-9-]+(?:_[a-zA-Z0-9-]+)*(?:\.[a-zA-Z0-9-]+(?:_
 
 export const wireToolName = (id: string): string => id.replaceAll(".", WIRE_NAMESPACE_SEPARATOR)
 
-export const toolIdFromWire = (name: string): string =>
-  name.replaceAll(WIRE_NAMESPACE_SEPARATOR, ".")
+const toolIdFromWire = (name: string): string => name.replaceAll(WIRE_NAMESPACE_SEPARATOR, ".")
 
 /** True when `id` has a wire name every provider accepts and that decodes back to it. */
 export const isWireToolId = (id: string): boolean =>
   TOOL_ID_PATTERN.test(id) && wireToolName(id).length <= WIRE_TOOL_NAME_MAX
+
+/** A prompt as the provider sees it: every tool call and result under its tool's wire name. */
+export const toWirePrompt = (prompt: Prompt.Prompt): Prompt.Prompt =>
+  Prompt.fromMessages(
+    prompt.content.map((message): Prompt.Message => {
+      switch (message.role) {
+        case "assistant":
+          return Prompt.makeMessage("assistant", {
+            content: message.content.map((part) => {
+              if (part.type === "tool-call" || part.type === "tool-result") {
+                return { ...part, name: wireToolName(part.name) }
+              }
+              return part
+            }),
+            options: message.options,
+          })
+        case "tool":
+          return Prompt.makeMessage("tool", {
+            content: message.content.map((part) => {
+              if (part.type === "tool-result") return { ...part, name: wireToolName(part.name) }
+              return part
+            }),
+            options: message.options,
+          })
+        default:
+          return message
+      }
+    }),
+  )
+
+/** A part of the model's reply, with each tool named by its id again. */
+export const fromWireToolPart = (part: Response.AnyPart): Response.AnyPart => {
+  switch (part.type) {
+    case "tool-params-start":
+    case "tool-call":
+    case "tool-result":
+      return { ...part, name: toolIdFromWire(part.name) }
+    default:
+      return part
+  }
+}
 
 // ── tool-binding ────────────────────────────────────────────────────────────
 

@@ -6,7 +6,6 @@ import {
   Layer,
   Option,
   Predicate,
-  PubSub,
   Random,
   Ref,
   Schema,
@@ -113,14 +112,7 @@ import {
   SqliteStorage,
   ToolCallBindingStorage,
 } from "../storage/storage.js"
-import {
-  EventEnvelope,
-  EventId,
-  EventStore,
-  type EventStoreService,
-  getEventSessionId,
-  matchesEventFilter,
-} from "../domain/event.js"
+import { EventStore, type EventStoreService } from "../domain/event.js"
 import { type LanguageModel, Model as AiModel } from "effect/ai"
 import { GentPlatform } from "../runtime/gent-platform.js"
 import { BunCrypto } from "@effect/platform-bun"
@@ -367,89 +359,33 @@ export class SequenceRecorder extends Context.Service<SequenceRecorder, Sequence
 
 // Recording EventStore
 
-export const RecordingEventStore: Layer.Layer<EventStore, never, SequenceRecorder> = Layer.unwrap(
+/**
+ * The in-memory event store with each append recorded in the
+ * `SequenceRecorder`, so a test asserts event order against the store
+ * semantics production runs (sliding delivery, the synchronize marker). A
+ * publish appends through the recording `append`.
+ */
+export const RecordingEventStore: Layer.Layer<EventStore, never, SequenceRecorder> = Layer.effect(
+  EventStore,
   Effect.gen(function* () {
     const recorder = yield* SequenceRecorder
-    const events: EventEnvelope[] = []
-    const sessions = new Map<SessionId, PubSub.PubSub<EventEnvelope>>()
-    let nextId = 0
-    const getOrCreateSessionPubSub = (sessionId: SessionId) =>
-      Effect.gen(function* () {
-        const existing = sessions.get(sessionId)
-        if (!Predicate.isUndefined(existing)) return existing
-        const ps = yield* PubSub.unbounded<EventEnvelope>()
-        sessions.set(sessionId, ps)
-        return ps
-      })
-
-    const service: EventStoreService = {
-      append: Effect.fn("RecordingEventStore.append")(function* (event) {
-        nextId += 1
-        const createdAt = yield* Clock.currentTimeMillis
-        const envelope = EventEnvelope.make({
-          id: EventId.make(nextId),
-          event,
-          createdAt,
-        })
-        events.push(envelope)
-        yield* recorder.record({
-          service: "EventStore",
-          method: "append",
-          args: event,
-        })
+    const inner = yield* EventStore
+    const append: EventStoreService["append"] = Effect.fn("RecordingEventStore.append")(
+      function* (event) {
+        const envelope = yield* inner.append(event)
+        yield* recorder.record({ service: "EventStore", method: "append", args: event })
         return envelope
-      }),
-      deliver: (envelope) =>
-        Effect.gen(function* () {
-          const sessionId = getEventSessionId(envelope.event)
-          if (Predicate.isUndefined(sessionId)) return
-          const ps = yield* getOrCreateSessionPubSub(sessionId)
-          yield* PubSub.publish(ps, envelope)
-        }),
+      },
+    )
+    return EventStore.of({
+      ...inner,
+      append,
       publish: Effect.fn("RecordingEventStore.publish")(function* (event) {
-        const envelope = yield* service.append(event)
-        yield* service.deliver(envelope)
-        yield* recorder.record({
-          service: "EventStore",
-          method: "publish",
-          args: event,
-        })
+        yield* inner.deliver(yield* append(event))
       }),
-      subscribe: ({ sessionId, branchId, after }) =>
-        Stream.scoped(
-          Stream.unwrap(
-            Effect.gen(function* () {
-              const ps = yield* getOrCreateSessionPubSub(sessionId)
-              const subscription = yield* PubSub.subscribe(ps)
-              const latestId = nextId
-              let afterId = 0
-              if (after === "latest") afterId = latestId
-              else if (Predicate.isNotUndefined(after)) afterId = after
-              const buffered = events.filter(
-                (env) => matchesEventFilter(env, sessionId, branchId) && env.id > afterId,
-              )
-              const live = Stream.fromSubscription(subscription).pipe(
-                Stream.filter(
-                  (env) => matchesEventFilter(env, sessionId, branchId) && env.id > latestId,
-                ),
-              )
-              return Stream.concat(Stream.fromIterable(buffered), live)
-            }),
-          ),
-        ),
-      removeSession: (sessionId) =>
-        Effect.gen(function* () {
-          const ps = sessions.get(sessionId)
-          if (!Predicate.isUndefined(ps)) {
-            sessions.delete(sessionId)
-            yield* PubSub.shutdown(ps)
-          }
-        }),
-    }
-
-    return Layer.succeed(EventStore, service)
+    })
   }),
-)
+).pipe(Layer.provide(EventStore.Memory))
 
 // ── test extension host ─────────────────────────────────────────────────────
 

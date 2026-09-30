@@ -363,13 +363,6 @@ const StreamSynchronized = AgentEvent.cases.StreamSynchronized
 /** Active interaction — the generic InteractionPresented event */
 export type ActiveInteraction = InteractionPresented
 
-/** Approval decision — the generic resolution */
-export type ApprovalResult = {
-  readonly approved: boolean
-  readonly notes?: string
-  readonly editedContent?: string
-}
-
 // ── event envelope and store ────────────────────────────────────────────────
 
 export class EventEnvelope extends Schema.Class<EventEnvelope>("EventEnvelope")({
@@ -463,7 +456,7 @@ export const getEventBranchId = (event: AgentEvent): BranchId | undefined => {
   return undefined
 }
 
-export const matchesEventFilter = (
+const matchesEventFilter = (
   env: EventEnvelope,
   sessionId: SessionId,
   branchId?: BranchId,

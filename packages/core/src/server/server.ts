@@ -435,33 +435,6 @@ const makeSessionMutationsService: Effect.Effect<
       return committed.result
     })
 
-  const collectSessionTreeIds = Effect.fn("SessionMutations.collectSessionTreeIds")(function* (
-    rootSessionId: SessionId,
-  ) {
-    const sessionIds: SessionId[] = []
-    const queue: SessionId[] = [rootSessionId]
-    const seen = new Set<SessionId>()
-    let index = 0
-    // Same rule as the durable delete: a handoff that continues the deleted
-    // session's thread survives, so its runtime is not stopped.
-    const rootThread = (yield* sessionStorage.getSession(rootSessionId))?.threadId
-
-    while (index < queue.length) {
-      const sessionId = queue[index]
-      index += 1
-      if (Predicate.isUndefined(sessionId) || seen.has(sessionId)) continue
-      seen.add(sessionId)
-      sessionIds.push(sessionId)
-      const children = yield* relationshipStorage.getChildSessions(sessionId)
-      for (const child of children) {
-        if (Predicate.isNotUndefined(rootThread) && child.threadId === rootThread) continue
-        queue.push(child.id)
-      }
-    }
-
-    return sessionIds
-  })
-
   const cleanupSessionRuntimeStateForMutation = (sessionId: SessionId) =>
     sessionRuntime.terminateSession(sessionId).pipe(Effect.orDie)
   const restoreSessionRuntimeStateForMutation = (sessionId: SessionId) =>
@@ -511,7 +484,7 @@ const makeSessionMutationsService: Effect.Effect<
     // touched, collected inside its own tx) which we then use for the final
     // cleanup pass. Any descendant created between pre-collect and the tx is
     // included in the authoritative set and cleaned up here too.
-    const preTombstoned = yield* collectSessionTreeIds(sessionId)
+    const preTombstoned = yield* sessionStorage.deletionSet(sessionId)
     // Each session's own profile, resolved while its rows still exist: sessions
     // of one tree can live in different cwds with different extensions.
     const profiles = new Map<SessionId, Option.Option<AgentLoopTurnProfile>>()

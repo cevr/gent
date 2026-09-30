@@ -12,11 +12,12 @@ export {
   type ActiveInteraction,
   AgentEvent,
   EventEnvelope,
-  type ApprovalResult,
   InteractionPresented,
   type QuestionOption,
   QuestionSchema,
 } from "./domain/event.js"
+// One decision schema; the client names its type `ApprovalResult`.
+export { type ApprovalDecision as ApprovalResult } from "./domain/interaction.js"
 export {
   type ExtensionScope,
   isClientEntrypoint,

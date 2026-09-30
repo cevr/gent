@@ -19,11 +19,13 @@ import {
   compileSharedSystemPrompt,
   compileSystemPrompt,
   dateSection,
+  fromWireToolPart,
   getToolId,
   getToolMetadata,
   type PromptSection,
   systemPromptBlocks,
   type ToolCapability,
+  toWirePrompt,
 } from "../domain/capability.js"
 import {
   assistantMessageIdForTurn,
@@ -122,8 +124,6 @@ import {
   attachToolBindingIdentity,
   compileToolPolicy,
   convertTools,
-  fromWireToolPart,
-  toWirePrompt,
   executeToolCalls,
   processLocalReplayBindingKey,
   processLocalReplayResultKey,

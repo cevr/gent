@@ -35,7 +35,6 @@ import {
 } from "../domain/ids.js"
 import type { ExtensionHostContext, LoadedExtension, TurnProjection } from "../domain/extension.js"
 import * as Prompt from "effect/ai/Prompt"
-import type * as Response from "effect/ai/Response"
 import {
   getToolId,
   getToolMetadata,
@@ -46,7 +45,6 @@ import {
   toolResultSummary,
   ToolSchemaRevision,
   ToolSourceRevision,
-  toolIdFromWire,
   wireToolName,
 } from "../domain/capability.js"
 import {
@@ -651,11 +649,7 @@ export const CurrentBranchToolFeature = Context.Reference<BranchToolFeature<neve
   { defaultValue: () => noBranchTools },
 )
 
-// ── tool-runner ─────────────────────────────────────────────────────────────
-
-type ToolCapabilityMap = Record<string, ToolCapability>
-
-// ── wire-tool-names ─────────────────────────────────────────────────────────
+// ── model toolkit ───────────────────────────────────────────────────────────
 
 /**
  * The toolkit a model request declares: each tool under its wire name
@@ -676,46 +670,7 @@ export function convertTools(tools: ReadonlyArray<ToolCapability>) {
   )
 }
 
-/** A prompt as the provider sees it: every tool call and result under its tool's wire name. */
-export const toWirePrompt = (prompt: Prompt.Prompt): Prompt.Prompt =>
-  Prompt.fromMessages(
-    prompt.content.map((message): Prompt.Message => {
-      switch (message.role) {
-        case "assistant":
-          return Prompt.makeMessage("assistant", {
-            content: message.content.map((part) => {
-              if (part.type === "tool-call" || part.type === "tool-result") {
-                return { ...part, name: wireToolName(part.name) }
-              }
-              return part
-            }),
-            options: message.options,
-          })
-        case "tool":
-          return Prompt.makeMessage("tool", {
-            content: message.content.map((part) => {
-              if (part.type === "tool-result") return { ...part, name: wireToolName(part.name) }
-              return part
-            }),
-            options: message.options,
-          })
-        default:
-          return message
-      }
-    }),
-  )
-
-/** A part of the model's reply, with each tool named by its id again. */
-export const fromWireToolPart = (part: Response.AnyPart): Response.AnyPart => {
-  switch (part.type) {
-    case "tool-params-start":
-    case "tool-call":
-    case "tool-result":
-      return { ...part, name: toolIdFromWire(part.name) }
-    default:
-      return part
-  }
-}
+// ── tool-runner ─────────────────────────────────────────────────────────────
 
 type ToolCall = { toolCallId: ToolCallId; toolName: string; input: unknown }
 
@@ -737,6 +692,8 @@ class ToolExecutionFailure extends Schema.TaggedError<ToolExecutionFailure>(
 )("ToolExecutionFailure", {
   message: Schema.String,
 }) {}
+
+type ToolCapabilityMap = Record<string, ToolCapability>
 
 type ToolRunnerToolkit = AiToolkit.WithHandler<ToolCapabilityMap>
 

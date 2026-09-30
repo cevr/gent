@@ -224,6 +224,7 @@ const createActiveSessionFixture = Effect.fn("createActiveSessionFixture")(funct
   readonly cwd?: string
   readonly parentSessionId?: SessionId
   readonly parentBranchId?: BranchId
+  readonly threadId?: SessionId
 }) {
   const session = new Session({
     id: input.sessionId,
@@ -231,6 +232,7 @@ const createActiveSessionFixture = Effect.fn("createActiveSessionFixture")(funct
     cwd: input.cwd,
     parentSessionId: input.parentSessionId,
     parentBranchId: input.parentBranchId,
+    threadId: input.threadId,
     createdAt: input.now,
     updatedAt: input.now,
   })
@@ -1514,6 +1516,56 @@ describe("session.delete", () => {
         yield* mutations.deleteSession(parent.sessionId)
 
         expect(runtimeTerminated).toEqual([parent.sessionId, child.sessionId])
+      }).pipe(
+        Effect.provide(sessionMutationsLayerWithMachineProbe(runtimeTerminated)),
+        Effect.timeout("4 seconds"),
+      ),
+    )
+  })
+
+  // The runtimes stopped before the delete are the sessions the delete
+  // removes: a spawn's handoff goes with the spawn, the root's handoff stays.
+  it.live("a delete stops the runtimes of exactly the sessions it removes", () => {
+    const runtimeTerminated: Array<SessionId> = []
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const mutations = yield* SessionMutations
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
+        const base = { sessions, branches, now: FIXED_NOW }
+        const ids = (name: string) => ({
+          sessionId: SessionId.make(`tree-${name}`),
+          branchId: BranchId.make(`tree-${name}-branch`),
+        })
+        const under = (parent: string) => ({
+          parentSessionId: SessionId.make(`tree-${parent}`),
+          parentBranchId: BranchId.make(`tree-${parent}-branch`),
+        })
+        yield* createActiveSessionFixture({ ...base, ...ids("root") })
+        yield* createActiveSessionFixture({
+          ...base,
+          ...ids("root-handoff"),
+          ...under("root"),
+          threadId: SessionId.make("tree-root"),
+        })
+        yield* createActiveSessionFixture({ ...base, ...ids("spawn"), ...under("root") })
+        yield* createActiveSessionFixture({
+          ...base,
+          ...ids("spawn-handoff"),
+          ...under("spawn"),
+          threadId: SessionId.make("tree-spawn"),
+        })
+
+        yield* mutations.deleteSession(SessionId.make("tree-root"))
+
+        expect(runtimeTerminated.map(String).toSorted()).toEqual([
+          "tree-root",
+          "tree-spawn",
+          "tree-spawn-handoff",
+        ])
+        const kept = yield* sessions.getSession(SessionId.make("tree-root-handoff"))
+        expect(kept?.parentSessionId).toBeUndefined()
+        expect(yield* sessions.getSession(SessionId.make("tree-spawn-handoff"))).toBeUndefined()
       }).pipe(
         Effect.provide(sessionMutationsLayerWithMachineProbe(runtimeTerminated)),
         Effect.timeout("4 seconds"),

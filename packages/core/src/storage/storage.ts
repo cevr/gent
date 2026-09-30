@@ -162,6 +162,13 @@ export interface SessionStorageService {
     updatedAt: Date,
   ) => Effect.Effect<void, StorageError>
   /**
+   * The sessions a delete of `id` removes: the session, everything it
+   * spawned, and a spawn's own handoffs. A handoff that continues the deleted
+   * session's thread is the conversation the user kept working in: it stays.
+   * Empty when the session does not exist. `deleteSession` removes this set.
+   */
+  readonly deletionSet: (id: SessionId) => Effect.Effect<ReadonlyArray<SessionId>, StorageError>
+  /**
    * Deletes the session and every descendant, returning each session the
    * cascade actually removed with the branches it had. Callers use the
    * returned set (not a pre-read tree snapshot) to clean in-memory runtime
@@ -186,6 +193,29 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
     SessionStorage,
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient
+
+      /** The one delete-set rule; see `SessionStorageService.deletionSet`. */
+      const deletionSetOf = (id: SessionId) =>
+        Effect.gen(function* () {
+          const workspaceId = yield* CurrentWorkspaceId
+          const rows = yield* sql<{ id: SessionId }>`
+            WITH RECURSIVE
+              target(id, thread_id) AS (
+                SELECT id, thread_id FROM sessions WHERE id = ${id} AND workspace_id = ${workspaceId}
+              ),
+              descendants(id) AS (
+                SELECT id FROM target
+                UNION
+                SELECT sessions.id
+                FROM sessions
+                JOIN descendants ON sessions.parent_session_id = descendants.id
+                WHERE sessions.workspace_id = ${workspaceId}
+                  AND sessions.thread_id IS NOT (SELECT thread_id FROM target)
+              )
+            SELECT id FROM descendants
+          `
+          return rows.map((row) => row.id)
+        })
 
       return {
         createSession: Effect.fn("SessionStorage.createSession")(
@@ -297,31 +327,18 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
           Effect.mapError(storageError("Failed to set active branch")),
         ),
 
+        deletionSet: Effect.fn("SessionStorage.deletionSet")(
+          function* (id) {
+            return yield* deletionSetOf(id)
+          },
+          Effect.mapError(storageError("Failed to read the sessions a delete removes")),
+        ),
+
         deleteSession: Effect.fn("SessionStorage.deleteSession")(
           function* (id) {
-            const workspaceId = yield* CurrentWorkspaceId
             return yield* Effect.gen(function* () {
-              // The session goes with everything it spawned, and a spawn goes
-              // with its own handoffs. A handoff that continues the deleted
-              // session's thread is the conversation the user kept working in:
-              // it stays, detached from the parent it no longer has.
-              const descendantRows = yield* sql<{ id: SessionId }>`
-                  WITH RECURSIVE
-                    target(id, thread_id) AS (
-                      SELECT id, thread_id FROM sessions WHERE id = ${id} AND workspace_id = ${workspaceId}
-                    ),
-                    descendants(id) AS (
-                      SELECT id FROM target
-                      UNION
-                      SELECT sessions.id
-                      FROM sessions
-                      JOIN descendants ON sessions.parent_session_id = descendants.id
-                      WHERE sessions.workspace_id = ${workspaceId}
-                        AND sessions.thread_id IS NOT (SELECT thread_id FROM target)
-                    )
-                  SELECT id FROM descendants
-                `
-              const cascadedIds = descendantRows.map((row) => row.id)
+              // A handoff that stays is detached from the parent it no longer has.
+              const cascadedIds = yield* deletionSetOf(id)
               if (cascadedIds.length === 0) return []
               const branchRows = yield* sql<{ id: BranchId; session_id: SessionId }>`
                 SELECT id, session_id FROM branches WHERE session_id IN ${sql.in(cascadedIds)}`
@@ -915,10 +932,6 @@ export class EventStorage extends Context.Service<EventStorage, EventStorageServ
  */
 
 interface RelationshipStorageService {
-  readonly getChildSessions: (
-    parentSessionId: SessionId,
-  ) => Effect.Effect<ReadonlyArray<Session>, StorageError>
-
   /**
    * The session and its persisted parent chain, nearest first, up to the
    * real root however many handoffs it crosses. The walk stops at a missing
@@ -975,16 +988,6 @@ export class RelationshipStorage extends Context.Service<
       const sql = yield* SqlClient.SqlClient
 
       return {
-        getChildSessions: Effect.fn("RelationshipStorage.getChildSessions")(
-          function* (parentSessionId) {
-            const workspaceId = yield* CurrentWorkspaceId
-            const rows =
-              yield* sql<SessionRow>`SELECT ${sql.literal(SESSION_COLUMNS)} FROM sessions WHERE parent_session_id = ${parentSessionId} AND workspace_id = ${workspaceId} ORDER BY created_at ASC`
-            return yield* Effect.forEach(rows, sessionFromRow)
-          },
-          Effect.mapError(storageError("Failed to get child sessions")),
-        ),
-
         getSessionAncestors: Effect.fn("RelationshipStorage.getSessionAncestors")(
           function* (sessionId) {
             const workspaceId = yield* CurrentWorkspaceId
