@@ -138,7 +138,7 @@ import {
   type TurnInterruption,
 } from "./tools.js"
 import { ConfigService, type UserConfig } from "./config.js"
-import { asAgentLoopError, type RunningState } from "../domain/agent-loop.js"
+import { type AgentLoopError, asAgentLoopError, type RunningState } from "../domain/agent-loop.js"
 import {
   driverCacheWritesByLifetime,
   driverRetryPolicy,
@@ -2041,13 +2041,13 @@ type AgentLoopTurnExecutionContext = {
   readonly branchId: BranchId
   readonly resolveTurnProfile: (
     run: RunOpener,
-  ) => Effect.Effect<AgentLoopTurnProfile, never, Scope.Scope>
+  ) => Effect.Effect<AgentLoopTurnProfile, AgentLoopError, Scope.Scope>
   readonly activeStreamRef: Ref.Ref<Option.Option<ActiveStreamHandle>>
   readonly turnLedger: TurnLedger
   readonly turnInterruption: TurnInterruption
   readonly inbox: LoopInbox
   /** The branch's services a turn's hooks run with; see `AgentLoopBehavior.branchContext`. */
-  readonly branchContext: Effect.Effect<Context.Context<never>>
+  readonly branchContext: Effect.Effect<Context.Context<never>, AgentLoopError>
 }
 
 export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext) =>

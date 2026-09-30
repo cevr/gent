@@ -3107,17 +3107,17 @@ interface ExistingSessionBranch {
   readonly branchId: BranchId
 }
 
-/** The stored session. A missing session or a storage failure reads as none. */
+/**
+ * The stored session; none when its row is missing (a deleted session). A
+ * storage failure fails: the launch profile and the host cwd would be
+ * another project's.
+ */
 const storedSession = (
   sessionId: SessionId,
-): Effect.Effect<Option.Option<Session>, never, SessionStorage> =>
-  Effect.gen(function* () {
-    const sessions = yield* SessionStorage
-    return yield* sessions.getSession(sessionId).pipe(
-      Effect.map(Option.fromUndefinedOr),
-      Effect.orElseSucceed(() => Option.none<Session>()),
-    )
-  })
+): Effect.Effect<Option.Option<Session>, StorageError, SessionStorage> =>
+  Effect.flatMap(SessionStorage, (sessions) =>
+    Effect.map(sessions.getSession(sessionId), Option.fromUndefinedOr),
+  )
 
 /**
  * The session's working directory: its stored cwd, else the host's. The same
@@ -3125,7 +3125,7 @@ const storedSession = (
  */
 export const sessionWorkingDirectory = (
   sessionId: SessionId,
-): Effect.Effect<string, never, SessionStorage | RuntimeEnvironment> =>
+): Effect.Effect<string, StorageError, SessionStorage | RuntimeEnvironment> =>
   Effect.gen(function* () {
     const environment = yield* RuntimeEnvironment
     const stored = yield* storedSession(sessionId)
@@ -3138,7 +3138,7 @@ export const sessionWorkingDirectory = (
 /**
  * Resolve the turn profile for one branch: the stored session cwd selects a
  * profile from the cache; without a session or a cache, the launch registry
- * and the host defaults apply. A storage lookup failure falls back to them as well.
+ * and the host defaults apply. A failed session read fails the resolve.
  * The caller's scope holds the profile's lease for as long as it uses it.
  */
 export const resolveTurnProfile = (params: {
@@ -3150,7 +3150,7 @@ export const resolveTurnProfile = (params: {
   readonly opener: RunOpener
 }): Effect.Effect<
   AgentLoopTurnProfile,
-  never,
+  StorageError,
   ExtensionRegistry | SessionStorage | ScopeType.Scope
 > =>
   Effect.gen(function* () {

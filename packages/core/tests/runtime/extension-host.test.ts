@@ -70,6 +70,7 @@ import {
   resolveExtensions,
   resolveTurnProfile,
   RunOpener,
+  sessionWorkingDirectory,
   SESSION_DELETED_HOOK_TIMEOUT,
   type SessionProfile,
   SessionProfileCache,
@@ -1404,7 +1405,9 @@ describe("resolveTurnProfile", () => {
       }).pipe(Effect.provide(testLayer))
     }),
   )
-  it.scopedLive("preserves storage lookup failures when fallback is disabled", () =>
+  // A failed read is not a missing session: the launch profile and the host
+  // cwd would run the turn in another project.
+  it.scopedLive("a failed session read fails the turn profile and the working directory", () =>
     Effect.gen(function* () {
       const runtimeEnvironmentLayer = RuntimeEnvironment.Live({
         cwd: "/nonexistent/runtime-context-fail",
@@ -1424,19 +1427,22 @@ describe("resolveTurnProfile", () => {
         const hostProvider = yield* makeExtensionHostContextProvider({
           host: testHostFacts().host,
         })
-        const exit = yield* Effect.exit(
+        const sessionId = SessionId.make("session-runtime-context-storage-failure")
+        const profileFailure = yield* Effect.flip(
           resolveTurnProfile({
-            sessionId: SessionId.make("session-runtime-context-storage-failure"),
+            sessionId,
             branchId: BranchId.make("branch-runtime-context-storage-failure"),
             opener: RunOpener.cases.Turn.make({ openedByClient: true }),
             hostProvider,
             defaults: { baseSections: [] },
           }).pipe(Effect.provideService(SessionStorage, failingSessionStorage)),
         )
-        expect(exit._tag).toBe("Success")
-        if (exit._tag === "Success") {
-          expect(exit.value.turnHostCtx.cwd).toBe("/nonexistent/runtime-context-fail")
-        }
+        const cwdFailure = yield* Effect.flip(
+          sessionWorkingDirectory(sessionId).pipe(
+            Effect.provideService(SessionStorage, failingSessionStorage),
+          ),
+        )
+        expect([profileFailure._tag, cwdFailure._tag]).toEqual(["StorageError", "StorageError"])
       }).pipe(Effect.provide(testLayer))
     }),
   )
