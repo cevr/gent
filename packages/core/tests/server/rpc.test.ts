@@ -3343,62 +3343,65 @@ const makeProfile = (cwd: string, extensions: ReadonlyArray<LoadedExtension>) =>
     } satisfies SessionProfile
   })
 
-describe("extension command RPCs", () => {
-  const invoked: Array<{
-    args: string
-    sessionId: string
-    cwd: string
-  }> = []
-  // Server-visible slash commands are slash-decorated requests.
-  const TestCommandsExtension: GentExtension = {
-    manifest: { id: ExtensionId.make("@test/commands") },
-    setup: registerContributions({
-      requests: [
-        request({
-          id: "greet",
-          slash: { name: "greet", description: "Say hello" },
-          description: "Say hello",
-          input: Schema.String,
-          output: Schema.Void,
-          execute: (args) =>
-            Effect.gen(function* () {
-              const ctx = yield* ExtensionContext
-              invoked.push({ args, sessionId: ctx.sessionId, cwd: ctx.cwd })
-            }),
-        }),
-        request({
-          id: "noop",
-          slash: { name: "noop", description: "noop" },
-          description: "noop",
-          input: Schema.String,
-          output: Schema.Void,
-          execute: () => Effect.void,
-        }),
-      ],
-    }),
-  }
-  const layer = createE2ELayer({
-    agents: [],
-    providerLayer: LanguageModelLayers.debug(),
-    extensionInputs: [TestCommandsExtension],
-    toolRunner: "test",
-  })
-  const makeCommandExtension = (extensionId: string, commandId: string): LoadedExtension => ({
-    manifest: { id: ExtensionId.make(extensionId) },
-    scope: "builtin",
-    sourcePath: "test",
-    contributions: {
-      requests: [
-        request({
-          id: commandId,
-          slash: { name: commandId, description: commandId },
-          input: Schema.String,
-          output: Schema.Void,
-          execute: () => Effect.void,
-        }),
-      ],
-    },
-  })
+// ── extension command fixtures ──────────────────────────────────────────────
+
+const invoked: Array<{
+  args: string
+  sessionId: string
+  cwd: string
+}> = []
+// Server-visible slash commands are slash-decorated requests.
+const TestCommandsExtension: GentExtension = {
+  manifest: { id: ExtensionId.make("@test/commands") },
+  setup: registerContributions({
+    requests: [
+      request({
+        id: "greet",
+        slash: { name: "greet", description: "Say hello" },
+        description: "Say hello",
+        input: Schema.String,
+        output: Schema.Void,
+        execute: (args) =>
+          Effect.gen(function* () {
+            const ctx = yield* ExtensionContext
+            invoked.push({ args, sessionId: ctx.sessionId, cwd: ctx.cwd })
+          }),
+      }),
+      request({
+        id: "noop",
+        slash: { name: "noop", description: "noop" },
+        description: "noop",
+        input: Schema.String,
+        output: Schema.Void,
+        execute: () => Effect.void,
+      }),
+    ],
+  }),
+}
+const layer = createE2ELayer({
+  agents: [],
+  providerLayer: LanguageModelLayers.debug(),
+  extensionInputs: [TestCommandsExtension],
+  toolRunner: "test",
+})
+const makeCommandExtension = (extensionId: string, commandId: string): LoadedExtension => ({
+  manifest: { id: ExtensionId.make(extensionId) },
+  scope: "builtin",
+  sourcePath: "test",
+  contributions: {
+    requests: [
+      request({
+        id: commandId,
+        slash: { name: commandId, description: commandId },
+        input: Schema.String,
+        output: Schema.Void,
+        execute: () => Effect.void,
+      }),
+    ],
+  },
+})
+
+describe("extension requests and slash commands", () => {
   it.live("resolved slash commands list registered commands", () =>
     Effect.gen(function* () {
       const registry = yield* ExtensionRegistry
@@ -3409,6 +3412,7 @@ describe("extension command RPCs", () => {
       expect(testCmds.find((c) => c.name === "noop")?.description).toBe("noop")
     }).pipe(Effect.provide(layer)),
   )
+
   it.live("RPC listSlashCommands + request round-trip through the transport boundary", () =>
     Effect.gen(function* () {
       invoked.length = 0
@@ -3486,6 +3490,7 @@ describe("extension command RPCs", () => {
       ])
     }),
   )
+
   it.live("RPC request can queue follow-up through ExtensionContext service", () =>
     Effect.gen(function* () {
       const extensionId = ExtensionId.make("@test/queue-follow-up-request")
@@ -3548,214 +3553,6 @@ describe("extension command RPCs", () => {
         }).pipe(Effect.timeout("4 seconds")),
       )
     }),
-  )
-  it.live("the settings wide event records the stored settings, not the change", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-        const wideEvents = MutableRef.make<Array<LogEvent>>([])
-        const minimumLogLevel = Layer.effectContext(
-          Effect.succeed(Context.make(MinimumLogLevel, "Info")),
-        )
-        const { client, sessionId } = yield* createRpcHarness({
-          ...e2ePreset,
-          providerLayer,
-          extensionInputs: [],
-          cwd: "/nonexistent/gent-settings-wide-event",
-          extraLayers: [WideEventLogger.Capture(wideEvents), minimumLogLevel],
-        })
-        yield* client.session.updateSettings({
-          sessionId,
-          modelId: Option.some(ModelId.make("anthropic/kept-model")),
-        })
-        // This change leaves the model out; the stored model is what the event names.
-        yield* client.session.updateSettings({ sessionId, reasoningLevel: Option.some("high") })
-        const settingsEvents = MutableRef.get(wideEvents).filter(
-          (event) =>
-            event.annotations["service"] === "rpc" &&
-            event.annotations["method"] === "session.updateSettings",
-        )
-        expect(settingsEvents).toHaveLength(2)
-        const last = settingsEvents[1]?.annotations
-        expect(last?.["sessionId"]).toBe(sessionId)
-        expect(last?.["modelId"]).toBe("anthropic/kept-model")
-        expect(last?.["reasoningLevel"]).toBe("high")
-      }).pipe(Effect.timeout("4 seconds")),
-    ),
-  )
-  it.live("a turn emits one agent-loop wide event with its session envelope", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-          textStep("traced reply"),
-        ])
-        const wideEvents = MutableRef.make<Array<LogEvent>>([])
-        const minimumLogLevel = Layer.effectContext(
-          Effect.succeed(Context.make(MinimumLogLevel, "Info")),
-        )
-        const { client, sessionId, branchId } = yield* createRpcHarness({
-          ...e2ePreset,
-          providerLayer,
-          cwd: "/nonexistent/gent-turn-wide-event",
-          extraLayers: [WideEventLogger.Capture(wideEvents), minimumLogLevel],
-        })
-        yield* client.message.send({ sessionId, branchId, content: "trace me" })
-        const turnEvents = yield* waitFor(
-          Effect.sync(() =>
-            MutableRef.get(wideEvents).filter(
-              (event) => event.annotations["service"] === "agent-loop",
-            ),
-          ),
-          (events) => events.length > 0,
-          4000,
-          "turn wide event",
-        )
-        expect(turnEvents).toHaveLength(1)
-        expect(turnEvents[0]?.annotations).toMatchObject({
-          service: "agent-loop",
-          method: "turn",
-          status: "ok",
-          actor: DEFAULT_AGENT_NAME,
-          sessionId,
-          branchId,
-        })
-      }),
-    ).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
-  )
-  it.live("RPC event subscriptions mark the move from replay to live", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-          textStep("synced reply"),
-        ])
-        const { client, sessionId, branchId } = yield* createRpcHarness({
-          ...e2ePreset,
-          providerLayer,
-          extensions: [],
-          cwd: "/nonexistent/gent-extension-stream-synchronized",
-        })
-        const untilMarker = (after: number) =>
-          client.session.events({ sessionId, branchId, after }).pipe(
-            Stream.takeUntil((env) => env.event._tag === "StreamSynchronized"),
-            Stream.runCollect,
-          )
-        // A fresh branch replays its creation events, then the marker closes the replay.
-        const fresh = yield* untilMarker(0)
-        expect(fresh.map((env) => env.event._tag)).toEqual(["SessionStarted", "StreamSynchronized"])
-        expect(fresh[1]?.id).toBe(fresh[0]?.id)
-        yield* client.message.send({ sessionId, branchId, content: "sync" })
-        yield* waitFor(
-          client.message.list({ branchId }),
-          (messages) =>
-            messages.some(
-              (message) =>
-                message.role === "assistant" && messagePartsText(message.parts) === "synced reply",
-            ),
-          4000,
-          "synced reply",
-        )
-        // After a turn, the marker closes the replay and names the last replayed id.
-        const replayed = yield* untilMarker(0)
-        const marker = replayed[replayed.length - 1]
-        const events = replayed.slice(0, -1)
-        expect(marker?.event).toMatchObject({ _tag: "StreamSynchronized", sessionId, branchId })
-        expect(events.length).toBeGreaterThan(1)
-        expect(events.every((env) => env.event._tag !== "StreamSynchronized")).toBe(true)
-        expect(marker?.id).toBe(events[events.length - 1]?.id)
-        // Resuming from the marker id replays nothing and synchronizes at once.
-        const resumed = yield* untilMarker(Number(marker?.id))
-        expect(resumed.map((env) => env.event._tag)).toEqual(["StreamSynchronized"])
-      }),
-    ).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
-  )
-
-  it.live("a child session created through the facade starts its own thread", () =>
-    Effect.gen(function* () {
-      const extensionId = ExtensionId.make("@test/spawn-child")
-      const ext: LoadedExtension = {
-        manifest: { id: extensionId },
-        scope: "builtin",
-        sourcePath: "test",
-        contributions: {
-          requests: [
-            request({
-              id: "spawn-child",
-              input: Schema.String,
-              output: SessionId,
-              execute: (name) =>
-                Effect.gen(function* () {
-                  const ctx = yield* ExtensionContext
-                  const child = yield* ctx.Session.create({
-                    name,
-                    parentSessionId: ctx.sessionId,
-                    parentBranchId: ctx.branchId,
-                  })
-                  return child.sessionId
-                }).pipe(
-                  Effect.mapError(
-                    (cause) =>
-                      new CapabilityError({
-                        extensionId,
-                        capabilityId: "spawn-child",
-                        reason: cause.message,
-                      }),
-                  ),
-                ),
-            }),
-          ],
-        },
-      }
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
-          const { client, sessionId, branchId } = yield* createRpcHarness({
-            ...e2ePreset,
-            providerLayer,
-            extensions: [ext],
-            cwd: "/nonexistent/gent-child-thread",
-          })
-          const childId = yield* client.extension.request({
-            sessionId,
-            branchId,
-            extensionId,
-            capabilityId: "spawn-child",
-            input: "side work",
-          })
-          const child = yield* Schema.decodeUnknownEffect(SessionId)(childId)
-          const parentThread = yield* client.session.thread({ sessionId })
-          expect(parentThread.map((session) => session.id)).toEqual([sessionId])
-          const childThread = yield* client.session.thread({ sessionId: child })
-          expect(childThread.map((session) => session.id)).toEqual([child])
-          expect(childThread[0]?.parentSessionId).toBe(sessionId)
-        }).pipe(Effect.timeout("4 seconds")),
-      )
-    }),
-  )
-
-  it.live("a handoff joins its parent's thread; a plain child starts its own", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
-        const { client, sessionId, branchId } = yield* createRpcHarness({
-          ...e2ePreset,
-          providerLayer,
-          cwd: "/nonexistent/gent-handoff-thread",
-        })
-        const handoff = yield* client.session.create({
-          parentSessionId: sessionId,
-          parentBranchId: branchId,
-          continueThread: true,
-        })
-        const plain = yield* client.session.create({
-          parentSessionId: sessionId,
-          parentBranchId: branchId,
-        })
-        const thread = yield* client.session.thread({ sessionId: handoff.sessionId })
-        expect(thread.map((session) => session.id)).toEqual([sessionId, handoff.sessionId])
-        const plainThread = yield* client.session.thread({ sessionId: plain.sessionId })
-        expect(plainThread.map((session) => session.id)).toEqual([plain.sessionId])
-      }).pipe(Effect.timeout("4 seconds")),
-    ),
   )
 
   it.live("RPC request follow-up on a warm idle branch runs the queued turn", () =>
@@ -3848,6 +3645,7 @@ describe("extension command RPCs", () => {
       )
     }),
   )
+
   it.live("RPC request runs slash request with ExtensionContext service", () =>
     Effect.gen(function* () {
       const extensionId = ExtensionId.make("@test/queue-follow-up-slash")
@@ -3918,6 +3716,7 @@ describe("extension command RPCs", () => {
       )
     }),
   )
+
   it.live("RPC request rejects missing sessions instead of using launch cwd", () =>
     Effect.gen(function* () {
       invoked.length = 0
@@ -3950,6 +3749,7 @@ describe("extension command RPCs", () => {
       )
     }),
   )
+
   it.live("RPC request rejects missing branches", () =>
     Effect.gen(function* () {
       invoked.length = 0
@@ -3983,6 +3783,7 @@ describe("extension command RPCs", () => {
       )
     }),
   )
+
   it.live("RPC request rejects branches outside the requested session", () =>
     Effect.gen(function* () {
       invoked.length = 0
@@ -4020,6 +3821,674 @@ describe("extension command RPCs", () => {
       )
     }),
   )
+
+  it.live("RPC listSlashCommands lists slash-decorated requests only", () =>
+    Effect.gen(function* () {
+      const extensionId = ExtensionId.make("@test/public-filter")
+      const ext: LoadedExtension = {
+        manifest: { id: extensionId },
+        scope: "builtin",
+        sourcePath: "test",
+        contributions: {
+          requests: [
+            request({
+              id: "visible",
+              slash: { name: "visible", description: "visible" },
+              input: Schema.String,
+              output: Schema.Void,
+              execute: () => Effect.void,
+            }),
+          ],
+        },
+      }
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+          const { client, sessionId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            extensions: [ext],
+          })
+          const commands = yield* client.extension.listSlashCommands({ sessionId })
+          expect(commands.map((command) => command.name)).toEqual(["visible"])
+        }).pipe(Effect.timeout("4 seconds")),
+      )
+    }),
+  )
+
+  it.live("RPC handlers receive ExtensionContext authority without intent ceremony", () =>
+    Effect.gen(function* () {
+      const extensionId = ExtensionId.make("@test/read-context")
+      const ext: GentExtension = {
+        manifest: { id: extensionId },
+        setup: registerContributions({
+          requests: [
+            request({
+              id: "inspect",
+              input: Schema.Void,
+              output: Schema.Struct({
+                hasSessionMutations: Schema.Boolean,
+                hasAgentRun: Schema.Boolean,
+                extensionContextFollowUpQueued: Schema.Boolean,
+              }),
+              execute: () =>
+                Effect.gen(function* () {
+                  const extensionCtx = yield* ExtensionContext
+                  const followUpExit = yield* Effect.exit(
+                    extensionCtx.Session.send({
+                      delivery: "queue",
+                      sourceId: "rpc",
+                      content: "queued",
+                    }),
+                  )
+                  return {
+                    hasSessionMutations: false,
+                    hasAgentRun: false,
+                    extensionContextFollowUpQueued: Exit.isSuccess(followUpExit),
+                  }
+                }),
+            }),
+          ],
+        }),
+      }
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            extensionInputs: [...e2ePreset.extensionInputs, ext],
+          })
+          const result = yield* client.extension.request({
+            sessionId,
+            branchId,
+            extensionId,
+            capabilityId: "inspect",
+            // oxlint-disable-next-line effect/noNullish -- Keep the absent field in this schema boundary fixture.
+            input: undefined,
+          })
+          expect(result).toEqual({
+            hasSessionMutations: false,
+            hasAgentRun: false,
+            extensionContextFollowUpQueued: true,
+          })
+        }).pipe(Effect.timeout("4 seconds")),
+      )
+    }),
+  )
+
+  it.live("RPC request invokes slash-decorated requests through the transport boundary", () =>
+    Effect.gen(function* () {
+      const extensionId = ExtensionId.make("@test/public-shadow")
+      const projectExt: LoadedExtension = {
+        manifest: { id: extensionId },
+        scope: "project",
+        sourcePath: "project",
+        contributions: {
+          requests: [
+            request({
+              id: "shadowed",
+              slash: { name: "shadowed private", description: "shadowed private" },
+              description: "shadowed private",
+              input: Schema.Struct({ value: Schema.String }),
+              output: Schema.Struct({ value: Schema.String }),
+              execute: (input: { value: string }) => Effect.succeed({ value: input.value }),
+            }),
+          ],
+        },
+      }
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            extensions: [projectExt],
+          })
+          const commands = yield* client.extension.listSlashCommands({ sessionId })
+          expect(commands.map((command) => command.name)).toEqual(["shadowed"])
+          const result = yield* client.extension.request({
+            sessionId,
+            branchId,
+            extensionId,
+            capabilityId: "shadowed",
+            input: { value: "hi" },
+          })
+          expect(result).toEqual({ value: "hi" })
+        }).pipe(Effect.timeout("4 seconds")),
+      )
+    }),
+  )
+
+  it.live("RPC listSlashCommands omits lower-scope slash request shadowed by project request", () =>
+    Effect.gen(function* () {
+      const extensionId = ExtensionId.make("@test/public-rpc-shadow")
+      const builtinExt: LoadedExtension = {
+        manifest: { id: extensionId },
+        scope: "builtin",
+        sourcePath: "builtin",
+        contributions: {
+          requests: [
+            request({
+              id: "shadowed",
+              slash: { name: "shadowed", description: "shadowed" },
+              input: Schema.Struct({ value: Schema.String }),
+              output: Schema.Struct({ value: Schema.String }),
+              execute: () => Effect.succeed({ value: "builtin" }),
+            }),
+          ],
+        },
+      }
+      const projectExt: LoadedExtension = {
+        manifest: { id: extensionId },
+        scope: "project",
+        sourcePath: "project",
+        contributions: {
+          requests: [
+            request({
+              id: "shadowed",
+              input: Schema.Struct({ value: Schema.String }),
+              output: Schema.Struct({ value: Schema.String }),
+              execute: (input) => Effect.succeed({ value: input.value }),
+            }),
+          ],
+        },
+      }
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          // The harness loads every input as builtin, so the two scopes go in through a profile.
+          const profile = yield* makeProfile("/nonexistent/gent-test-profile-cwd", [
+            builtinExt,
+            projectExt,
+          ])
+          expect(profile.resolved.failedExtensions).toEqual([])
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            extensions: [],
+            sessionProfileCacheLayer: SessionProfileCache.Test(
+              new Map([["/nonexistent/gent-test-profile-cwd", profile]]),
+            ),
+            cwd: "/nonexistent/gent-test-profile-cwd",
+          })
+          const commands = yield* client.extension.listSlashCommands({ sessionId })
+          expect(commands.map((command) => command.name)).toEqual([])
+          // The project request answers, not the builtin one it shadows.
+          const answer = yield* client.extension.request({
+            sessionId,
+            branchId,
+            extensionId,
+            capabilityId: "shadowed",
+            input: { value: "project" },
+          })
+          expect(answer).toEqual({ value: "project" })
+        }).pipe(Effect.timeout("4 seconds")),
+      )
+    }),
+  )
+
+  it.live("RPC listSlashCommands omits lower-scope slash request shadowed by project tool", () =>
+    Effect.gen(function* () {
+      const extensionId = ExtensionId.make("@test/public-tool-shadow")
+      const builtinExt: LoadedExtension = {
+        manifest: { id: extensionId },
+        scope: "builtin",
+        sourcePath: "builtin",
+        contributions: {
+          requests: [
+            request({
+              id: "shadowed",
+              slash: { name: "shadowed", description: "shadowed" },
+              input: Schema.Struct({ value: Schema.String }),
+              output: Schema.Struct({ value: Schema.String }),
+              execute: () => Effect.succeed({ value: "builtin" }),
+            }),
+          ],
+        },
+      }
+      const projectExt: LoadedExtension = {
+        manifest: { id: extensionId },
+        scope: "project",
+        sourcePath: "project",
+        contributions: {
+          tools: [
+            tool({
+              id: "shadowed",
+              description: "shadowed tool",
+              params: Schema.Struct({ value: Schema.String }),
+              output: Schema.Struct({ value: Schema.String }),
+              execute: (input) => Effect.succeed({ value: input.value }),
+            }),
+          ],
+        },
+      }
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          // The harness loads every input as builtin, so the two scopes go in through a profile.
+          const profile = yield* makeProfile("/nonexistent/gent-test-profile-cwd", [
+            builtinExt,
+            projectExt,
+          ])
+          expect(profile.resolved.failedExtensions).toEqual([])
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+          const { client, sessionId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            extensions: [],
+            sessionProfileCacheLayer: SessionProfileCache.Test(
+              new Map([["/nonexistent/gent-test-profile-cwd", profile]]),
+            ),
+            cwd: "/nonexistent/gent-test-profile-cwd",
+          })
+          const commands = yield* client.extension.listSlashCommands({ sessionId })
+          expect(commands.map((command) => command.name)).toEqual([])
+        }).pipe(Effect.timeout("4 seconds")),
+      )
+    }),
+  )
+
+  it.live("RPC listSlashCommands resolves commands from the requested session profile", () =>
+    Effect.gen(function* () {
+      const alphaCwd = "/nonexistent/gent-alpha-profile"
+      const betaCwd = "/nonexistent/gent-beta-profile"
+      const alphaExt = makeCommandExtension("@test/alpha-profile", "alpha")
+      const betaExt = makeCommandExtension("@test/beta-profile", "beta")
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const alphaProfile = yield* makeProfile(alphaCwd, [alphaExt])
+          const betaProfile = yield* makeProfile(betaCwd, [betaExt])
+          const sessionProfileCacheLayer = SessionProfileCache.Test(
+            new Map([
+              [alphaCwd, alphaProfile],
+              [betaCwd, betaProfile],
+            ]),
+          )
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            extensions: [],
+            sessionProfileCacheLayer,
+            cwd: alphaCwd,
+          })
+          const alpha = { sessionId, branchId }
+          const beta = yield* client.session.create({ cwd: betaCwd })
+          const alphaCommands = yield* client.extension.listSlashCommands({
+            sessionId: alpha.sessionId,
+          })
+          const betaCommands = yield* client.extension.listSlashCommands({
+            sessionId: beta.sessionId,
+          })
+          expect(alphaCommands.map((command) => command.name)).toEqual(["alpha"])
+          expect(betaCommands.map((command) => command.name)).toEqual(["beta"])
+        }).pipe(Effect.timeout("4 seconds")),
+      )
+    }),
+  )
+})
+
+describe("extension health", () => {
+  it.live("a test root stops at a failed extension and names it", () =>
+    Effect.gen(function* () {
+      const failingExtension: GentExtension = {
+        manifest: { id: ExtensionId.make("@test/failing-load") },
+        setup: Effect.fail(
+          new ExtensionLoadError({
+            extensionId: ExtensionId.make("@test/failing-load"),
+            message: "setup boom",
+          }),
+        ),
+      }
+      const exit = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+          return yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            extensionInputs: [failingExtension],
+          })
+        }).pipe(Effect.timeout("4 seconds")),
+      ).pipe(Effect.exit)
+      // A defect with the reason, at once; not a later timeout with the extension silently gone.
+      expect(Exit.isFailure(exit)).toBe(true)
+      const reason = Exit.match(exit, { onSuccess: () => "", onFailure: Cause.pretty })
+      expect(reason).toContain("@test/failing-load (builtin, setup): setup boom")
+      expect(reason).not.toContain("TimeoutError")
+    }),
+  )
+
+  it.live("RPC listStatus returns structurally tagged extension health", () =>
+    Effect.gen(function* () {
+      const failingExtension: GentExtension = {
+        manifest: { id: ExtensionId.make("@test/failing-status") },
+        setup: Effect.fail(
+          new ExtensionLoadError({
+            extensionId: ExtensionId.make("@test/failing-status"),
+            message: "setup boom",
+          }),
+        ),
+      }
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+          const { client, sessionId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            agents: [],
+            extensionInputs: [failingExtension],
+            // This test is about the failure report, so the load must survive it.
+            allowFailedExtensions: true,
+          })
+          const status = yield* client.extension.listStatus({ sessionId })
+          expect(status._tag).toBe("Degraded")
+          if (status._tag !== "Degraded") return
+          expect(status.healthyExtensions).toEqual([])
+          expect(status.degradedExtensions).toHaveLength(1)
+          expect(status.degradedExtensions[0]?.manifest.id).toBe("@test/failing-status")
+          expect(status.degradedExtensions[0]?.issues).toEqual([
+            {
+              _tag: "ActivationFailed",
+              phase: "setup",
+              error: "setup boom",
+            },
+          ])
+        }).pipe(Effect.timeout("4 seconds")),
+      )
+    }),
+  )
+
+  it.live("a broken config names its file in health and clears once the file is fixed", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const home = yield* fs.makeTempDirectoryScoped()
+      const project = yield* fs.makeTempDirectoryScoped()
+      const projectConfig = path.join(project, ".gent", "config.json")
+      yield* fs.makeDirectory(path.dirname(projectConfig), { recursive: true })
+      // A trailing comma: not JSON.
+      yield* fs.writeFileString(projectConfig, '{ "disabledExtensions": ["x"], }')
+      const configIssues = (status: ExtensionHealthSnapshot) => {
+        if (status._tag !== "Degraded") return []
+        return status.degradedExtensions
+          .filter((extension) => extension.sourcePath === projectConfig)
+          .flatMap((extension) => extension.issues)
+      }
+      yield* Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const { client, sessionId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+          configServiceLayer: ConfigService.Live.pipe(
+            Layer.provide(RuntimeEnvironment.Live({ cwd: project, home })),
+            Layer.provide(BunPlatformLive),
+          ),
+          // This test is about the failure report, so the load must survive it.
+          allowFailedExtensions: true,
+          cwd: project,
+        })
+        const broken = configIssues(yield* client.extension.listStatus({ sessionId }))
+        expect(broken).toHaveLength(1)
+        expect(broken[0]).toMatchObject({ _tag: "ActivationFailed", phase: "load" })
+        expect(broken[0]?.error).toContain(projectConfig)
+
+        // Fixed on disk, same server: the next read has no config issue.
+        yield* fs.writeFileString(projectConfig, '{ "disabledExtensions": ["x"] }')
+        expect(configIssues(yield* client.extension.listStatus({ sessionId }))).toEqual([])
+      }).pipe(Effect.timeout("4 seconds"))
+    }).pipe(Effect.scoped, Effect.provide(BunPlatformLive)),
+  )
+
+  it.live("a failing driver catalog leaves model.list working and shows in extension health", () =>
+    Effect.gen(function* () {
+      const catalogDrivers: LoadedExtension = {
+        manifest: { id: ExtensionId.make("@test/catalog-drivers") },
+        scope: "builtin",
+        sourcePath: "test",
+        contributions: {
+          modelDrivers: [
+            {
+              id: "local",
+              name: "Local server",
+              resolveModel: () => Effect.succeed(stubModel),
+              listModels: () => Effect.die(new Error("connect ECONNREFUSED 127.0.0.1:11434")),
+            },
+            {
+              id: "working",
+              name: "Working",
+              resolveModel: () => Effect.succeed(stubModel),
+              listModels: () =>
+                Effect.succeed([
+                  Model.make({
+                    id: ModelId.make("working/one"),
+                    name: "One",
+                    provider: ProviderId.make("working"),
+                  }),
+                ]),
+            },
+          ],
+        },
+      }
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+          const { client } = yield* createRpcClient(
+            createE2ELayer({ ...e2ePreset, providerLayer, extensions: [catalogDrivers] }),
+          )
+          const models = yield* client.model.list({})
+          expect(models.map((model) => model.id)).toContain(ModelId.make("working/one"))
+          const status = yield* client.extension.listStatus({})
+          expect(status._tag).toBe("Degraded")
+          if (status._tag !== "Degraded") return
+          const degraded = status.degradedExtensions.find(
+            (extension) => extension.manifest.id === "@test/catalog-drivers",
+          )
+          expect(degraded?.issues).toEqual([
+            {
+              _tag: "ModelCatalogFailed",
+              driverId: "local",
+              error: "connect ECONNREFUSED 127.0.0.1:11434",
+            },
+          ])
+        }).pipe(Effect.timeout("4 seconds")),
+      )
+    }),
+  )
+
+  // Health reads the failures the last catalog run recorded; it does not run
+  // every driver's catalog again on each read.
+  it.live("extension health reports the last catalog run without listing again", () =>
+    Effect.gen(function* () {
+      let localCalls = 0
+      const catalogDrivers: LoadedExtension = {
+        manifest: { id: ExtensionId.make("@test/catalog-count") },
+        scope: "builtin",
+        sourcePath: "test",
+        contributions: {
+          modelDrivers: [
+            {
+              id: "local",
+              name: "Local server",
+              resolveModel: () => Effect.succeed(stubModel),
+              listModels: () =>
+                Effect.suspend(() => {
+                  localCalls += 1
+                  return Effect.die(new Error("connect ECONNREFUSED 127.0.0.1:11434"))
+                }),
+            },
+          ],
+        },
+      }
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+          const { client } = yield* createRpcClient(
+            createE2ELayer({ ...e2ePreset, providerLayer, extensions: [catalogDrivers] }),
+          )
+          // No run yet: health runs the catalog once, then reads that record.
+          const first = yield* client.extension.listStatus({})
+          const second = yield* client.extension.listStatus({})
+          expect(localCalls).toBe(1)
+          yield* client.model.list({})
+          expect(localCalls).toBe(2)
+          const third = yield* client.extension.listStatus({})
+          expect(localCalls).toBe(2)
+          for (const status of [first, second, third]) {
+            expect(status._tag).toBe("Degraded")
+            if (status._tag !== "Degraded") continue
+            expect(status.degradedExtensions.flatMap((extension) => extension.issues)).toEqual([
+              {
+                _tag: "ModelCatalogFailed",
+                driverId: "local",
+                error: "connect ECONNREFUSED 127.0.0.1:11434",
+              },
+            ])
+          }
+        }).pipe(Effect.timeout("4 seconds")),
+      )
+    }),
+  )
+})
+
+describe("event subscriptions", () => {
+  it.live("RPC event subscriptions mark the move from replay to live", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          textStep("synced reply"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+          extensions: [],
+          cwd: "/nonexistent/gent-extension-stream-synchronized",
+        })
+        const untilMarker = (after: number) =>
+          client.session.events({ sessionId, branchId, after }).pipe(
+            Stream.takeUntil((env) => env.event._tag === "StreamSynchronized"),
+            Stream.runCollect,
+          )
+        // A fresh branch replays its creation events, then the marker closes the replay.
+        const fresh = yield* untilMarker(0)
+        expect(fresh.map((env) => env.event._tag)).toEqual(["SessionStarted", "StreamSynchronized"])
+        expect(fresh[1]?.id).toBe(fresh[0]?.id)
+        yield* client.message.send({ sessionId, branchId, content: "sync" })
+        yield* waitFor(
+          client.message.list({ branchId }),
+          (messages) =>
+            messages.some(
+              (message) =>
+                message.role === "assistant" && messagePartsText(message.parts) === "synced reply",
+            ),
+          4000,
+          "synced reply",
+        )
+        // After a turn, the marker closes the replay and names the last replayed id.
+        const replayed = yield* untilMarker(0)
+        const marker = replayed[replayed.length - 1]
+        const events = replayed.slice(0, -1)
+        expect(marker?.event).toMatchObject({ _tag: "StreamSynchronized", sessionId, branchId })
+        expect(events.length).toBeGreaterThan(1)
+        expect(events.every((env) => env.event._tag !== "StreamSynchronized")).toBe(true)
+        expect(marker?.id).toBe(events[events.length - 1]?.id)
+        // Resuming from the marker id replays nothing and synchronizes at once.
+        const resumed = yield* untilMarker(Number(marker?.id))
+        expect(resumed.map((env) => env.event._tag)).toEqual(["StreamSynchronized"])
+      }),
+    ).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
+  )
+})
+
+describe("session threads", () => {
+  it.live("a child session created through the facade starts its own thread", () =>
+    Effect.gen(function* () {
+      const extensionId = ExtensionId.make("@test/spawn-child")
+      const ext: LoadedExtension = {
+        manifest: { id: extensionId },
+        scope: "builtin",
+        sourcePath: "test",
+        contributions: {
+          requests: [
+            request({
+              id: "spawn-child",
+              input: Schema.String,
+              output: SessionId,
+              execute: (name) =>
+                Effect.gen(function* () {
+                  const ctx = yield* ExtensionContext
+                  const child = yield* ctx.Session.create({
+                    name,
+                    parentSessionId: ctx.sessionId,
+                    parentBranchId: ctx.branchId,
+                  })
+                  return child.sessionId
+                }).pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new CapabilityError({
+                        extensionId,
+                        capabilityId: "spawn-child",
+                        reason: cause.message,
+                      }),
+                  ),
+                ),
+            }),
+          ],
+        },
+      }
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            extensions: [ext],
+            cwd: "/nonexistent/gent-child-thread",
+          })
+          const childId = yield* client.extension.request({
+            sessionId,
+            branchId,
+            extensionId,
+            capabilityId: "spawn-child",
+            input: "side work",
+          })
+          const child = yield* Schema.decodeUnknownEffect(SessionId)(childId)
+          const parentThread = yield* client.session.thread({ sessionId })
+          expect(parentThread.map((session) => session.id)).toEqual([sessionId])
+          const childThread = yield* client.session.thread({ sessionId: child })
+          expect(childThread.map((session) => session.id)).toEqual([child])
+          expect(childThread[0]?.parentSessionId).toBe(sessionId)
+        }).pipe(Effect.timeout("4 seconds")),
+      )
+    }),
+  )
+
+  it.live("a handoff joins its parent's thread; a plain child starts its own", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+          cwd: "/nonexistent/gent-handoff-thread",
+        })
+        const handoff = yield* client.session.create({
+          parentSessionId: sessionId,
+          parentBranchId: branchId,
+          continueThread: true,
+        })
+        const plain = yield* client.session.create({
+          parentSessionId: sessionId,
+          parentBranchId: branchId,
+        })
+        const thread = yield* client.session.thread({ sessionId: handoff.sessionId })
+        expect(thread.map((session) => session.id)).toEqual([sessionId, handoff.sessionId])
+        const plainThread = yield* client.session.thread({ sessionId: plain.sessionId })
+        expect(plainThread.map((session) => session.id)).toEqual([plain.sessionId])
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+
   const reviewerAgent = AgentName.make("reviewer")
   const reviewerExtension: LoadedExtension = {
     manifest: { id: ExtensionId.make("@test/reviewer-agent") },
@@ -4081,7 +4550,9 @@ describe("extension command RPCs", () => {
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )
+})
 
+describe("extension resources", () => {
   it.live("RPC request provides profile resource services to public capabilities", () =>
     Effect.gen(function* () {
       const profileCwd = "/nonexistent/gent-extension-request-profile-service"
@@ -4142,6 +4613,7 @@ describe("extension command RPCs", () => {
       )
     }),
   )
+
   it.scoped("RPC request resolves resources from SessionProfileCache.Live", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
@@ -4223,6 +4695,7 @@ describe("extension command RPCs", () => {
       )
     }).pipe(Effect.provide(BunPlatformLive)),
   )
+
   it.scoped("a branch resource is built from the session's profile, not the launch registry", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
@@ -4304,6 +4777,7 @@ describe("extension command RPCs", () => {
       )
     }).pipe(Effect.provide(BunPlatformLive)),
   )
+
   it.scopedLive(
     "a user extension whose branch resource fails leaves the others and the turn running",
     () =>
@@ -4550,520 +5024,6 @@ export default defineExtension({
         )
       }).pipe(Effect.provide(BunPlatformLive)),
   )
-  it.live("a test root stops at a failed extension and names it", () =>
-    Effect.gen(function* () {
-      const failingExtension: GentExtension = {
-        manifest: { id: ExtensionId.make("@test/failing-load") },
-        setup: Effect.fail(
-          new ExtensionLoadError({
-            extensionId: ExtensionId.make("@test/failing-load"),
-            message: "setup boom",
-          }),
-        ),
-      }
-      const exit = yield* Effect.scoped(
-        Effect.gen(function* () {
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-          return yield* createRpcHarness({
-            ...e2ePreset,
-            providerLayer,
-            extensionInputs: [failingExtension],
-          })
-        }).pipe(Effect.timeout("4 seconds")),
-      ).pipe(Effect.exit)
-      // A defect with the reason, at once; not a later timeout with the extension silently gone.
-      expect(Exit.isFailure(exit)).toBe(true)
-      const reason = Exit.match(exit, { onSuccess: () => "", onFailure: Cause.pretty })
-      expect(reason).toContain("@test/failing-load (builtin, setup): setup boom")
-      expect(reason).not.toContain("TimeoutError")
-    }),
-  )
-  it.live("RPC listStatus returns structurally tagged extension health", () =>
-    Effect.gen(function* () {
-      const failingExtension: GentExtension = {
-        manifest: { id: ExtensionId.make("@test/failing-status") },
-        setup: Effect.fail(
-          new ExtensionLoadError({
-            extensionId: ExtensionId.make("@test/failing-status"),
-            message: "setup boom",
-          }),
-        ),
-      }
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-          const { client, sessionId } = yield* createRpcHarness({
-            ...e2ePreset,
-            providerLayer,
-            agents: [],
-            extensionInputs: [failingExtension],
-            // This test is about the failure report, so the load must survive it.
-            allowFailedExtensions: true,
-          })
-          const status = yield* client.extension.listStatus({ sessionId })
-          expect(status._tag).toBe("Degraded")
-          if (status._tag !== "Degraded") return
-          expect(status.healthyExtensions).toEqual([])
-          expect(status.degradedExtensions).toHaveLength(1)
-          expect(status.degradedExtensions[0]?.manifest.id).toBe("@test/failing-status")
-          expect(status.degradedExtensions[0]?.issues).toEqual([
-            {
-              _tag: "ActivationFailed",
-              phase: "setup",
-              error: "setup boom",
-            },
-          ])
-        }).pipe(Effect.timeout("4 seconds")),
-      )
-    }),
-  )
-  it.live("a broken config names its file in health and clears once the file is fixed", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const path = yield* Path.Path
-      const home = yield* fs.makeTempDirectoryScoped()
-      const project = yield* fs.makeTempDirectoryScoped()
-      const projectConfig = path.join(project, ".gent", "config.json")
-      yield* fs.makeDirectory(path.dirname(projectConfig), { recursive: true })
-      // A trailing comma: not JSON.
-      yield* fs.writeFileString(projectConfig, '{ "disabledExtensions": ["x"], }')
-      const configIssues = (status: ExtensionHealthSnapshot) => {
-        if (status._tag !== "Degraded") return []
-        return status.degradedExtensions
-          .filter((extension) => extension.sourcePath === projectConfig)
-          .flatMap((extension) => extension.issues)
-      }
-      yield* Effect.gen(function* () {
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-        const { client, sessionId } = yield* createRpcHarness({
-          ...e2ePreset,
-          providerLayer,
-          configServiceLayer: ConfigService.Live.pipe(
-            Layer.provide(RuntimeEnvironment.Live({ cwd: project, home })),
-            Layer.provide(BunPlatformLive),
-          ),
-          // This test is about the failure report, so the load must survive it.
-          allowFailedExtensions: true,
-          cwd: project,
-        })
-        const broken = configIssues(yield* client.extension.listStatus({ sessionId }))
-        expect(broken).toHaveLength(1)
-        expect(broken[0]).toMatchObject({ _tag: "ActivationFailed", phase: "load" })
-        expect(broken[0]?.error).toContain(projectConfig)
-
-        // Fixed on disk, same server: the next read has no config issue.
-        yield* fs.writeFileString(projectConfig, '{ "disabledExtensions": ["x"] }')
-        expect(configIssues(yield* client.extension.listStatus({ sessionId }))).toEqual([])
-      }).pipe(Effect.timeout("4 seconds"))
-    }).pipe(Effect.scoped, Effect.provide(BunPlatformLive)),
-  )
-  it.live("a failing driver catalog leaves model.list working and shows in extension health", () =>
-    Effect.gen(function* () {
-      const catalogDrivers: LoadedExtension = {
-        manifest: { id: ExtensionId.make("@test/catalog-drivers") },
-        scope: "builtin",
-        sourcePath: "test",
-        contributions: {
-          modelDrivers: [
-            {
-              id: "local",
-              name: "Local server",
-              resolveModel: () => Effect.succeed(stubModel),
-              listModels: () => Effect.die(new Error("connect ECONNREFUSED 127.0.0.1:11434")),
-            },
-            {
-              id: "working",
-              name: "Working",
-              resolveModel: () => Effect.succeed(stubModel),
-              listModels: () =>
-                Effect.succeed([
-                  Model.make({
-                    id: ModelId.make("working/one"),
-                    name: "One",
-                    provider: ProviderId.make("working"),
-                  }),
-                ]),
-            },
-          ],
-        },
-      }
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-          const { client } = yield* createRpcClient(
-            createE2ELayer({ ...e2ePreset, providerLayer, extensions: [catalogDrivers] }),
-          )
-          const models = yield* client.model.list({})
-          expect(models.map((model) => model.id)).toContain(ModelId.make("working/one"))
-          const status = yield* client.extension.listStatus({})
-          expect(status._tag).toBe("Degraded")
-          if (status._tag !== "Degraded") return
-          const degraded = status.degradedExtensions.find(
-            (extension) => extension.manifest.id === "@test/catalog-drivers",
-          )
-          expect(degraded?.issues).toEqual([
-            {
-              _tag: "ModelCatalogFailed",
-              driverId: "local",
-              error: "connect ECONNREFUSED 127.0.0.1:11434",
-            },
-          ])
-        }).pipe(Effect.timeout("4 seconds")),
-      )
-    }),
-  )
-  // Health reads the failures the last catalog run recorded; it does not run
-  // every driver's catalog again on each read.
-  it.live("extension health reports the last catalog run without listing again", () =>
-    Effect.gen(function* () {
-      let localCalls = 0
-      const catalogDrivers: LoadedExtension = {
-        manifest: { id: ExtensionId.make("@test/catalog-count") },
-        scope: "builtin",
-        sourcePath: "test",
-        contributions: {
-          modelDrivers: [
-            {
-              id: "local",
-              name: "Local server",
-              resolveModel: () => Effect.succeed(stubModel),
-              listModels: () =>
-                Effect.suspend(() => {
-                  localCalls += 1
-                  return Effect.die(new Error("connect ECONNREFUSED 127.0.0.1:11434"))
-                }),
-            },
-          ],
-        },
-      }
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-          const { client } = yield* createRpcClient(
-            createE2ELayer({ ...e2ePreset, providerLayer, extensions: [catalogDrivers] }),
-          )
-          // No run yet: health runs the catalog once, then reads that record.
-          const first = yield* client.extension.listStatus({})
-          const second = yield* client.extension.listStatus({})
-          expect(localCalls).toBe(1)
-          yield* client.model.list({})
-          expect(localCalls).toBe(2)
-          const third = yield* client.extension.listStatus({})
-          expect(localCalls).toBe(2)
-          for (const status of [first, second, third]) {
-            expect(status._tag).toBe("Degraded")
-            if (status._tag !== "Degraded") continue
-            expect(status.degradedExtensions.flatMap((extension) => extension.issues)).toEqual([
-              {
-                _tag: "ModelCatalogFailed",
-                driverId: "local",
-                error: "connect ECONNREFUSED 127.0.0.1:11434",
-              },
-            ])
-          }
-        }).pipe(Effect.timeout("4 seconds")),
-      )
-    }),
-  )
-  it.live("RPC listSlashCommands lists slash-decorated requests only", () =>
-    Effect.gen(function* () {
-      const extensionId = ExtensionId.make("@test/public-filter")
-      const ext: LoadedExtension = {
-        manifest: { id: extensionId },
-        scope: "builtin",
-        sourcePath: "test",
-        contributions: {
-          requests: [
-            request({
-              id: "visible",
-              slash: { name: "visible", description: "visible" },
-              input: Schema.String,
-              output: Schema.Void,
-              execute: () => Effect.void,
-            }),
-          ],
-        },
-      }
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-          const { client, sessionId } = yield* createRpcHarness({
-            ...e2ePreset,
-            providerLayer,
-            extensions: [ext],
-          })
-          const commands = yield* client.extension.listSlashCommands({ sessionId })
-          expect(commands.map((command) => command.name)).toEqual(["visible"])
-        }).pipe(Effect.timeout("4 seconds")),
-      )
-    }),
-  )
-  it.live("RPC handlers receive ExtensionContext authority without intent ceremony", () =>
-    Effect.gen(function* () {
-      const extensionId = ExtensionId.make("@test/read-context")
-      const ext: GentExtension = {
-        manifest: { id: extensionId },
-        setup: registerContributions({
-          requests: [
-            request({
-              id: "inspect",
-              input: Schema.Void,
-              output: Schema.Struct({
-                hasSessionMutations: Schema.Boolean,
-                hasAgentRun: Schema.Boolean,
-                extensionContextFollowUpQueued: Schema.Boolean,
-              }),
-              execute: () =>
-                Effect.gen(function* () {
-                  const extensionCtx = yield* ExtensionContext
-                  const followUpExit = yield* Effect.exit(
-                    extensionCtx.Session.send({
-                      delivery: "queue",
-                      sourceId: "rpc",
-                      content: "queued",
-                    }),
-                  )
-                  return {
-                    hasSessionMutations: false,
-                    hasAgentRun: false,
-                    extensionContextFollowUpQueued: Exit.isSuccess(followUpExit),
-                  }
-                }),
-            }),
-          ],
-        }),
-      }
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-          const { client, sessionId, branchId } = yield* createRpcHarness({
-            ...e2ePreset,
-            providerLayer,
-            extensionInputs: [...e2ePreset.extensionInputs, ext],
-          })
-          const result = yield* client.extension.request({
-            sessionId,
-            branchId,
-            extensionId,
-            capabilityId: "inspect",
-            // oxlint-disable-next-line effect/noNullish -- Keep the absent field in this schema boundary fixture.
-            input: undefined,
-          })
-          expect(result).toEqual({
-            hasSessionMutations: false,
-            hasAgentRun: false,
-            extensionContextFollowUpQueued: true,
-          })
-        }).pipe(Effect.timeout("4 seconds")),
-      )
-    }),
-  )
-  it.live("RPC request invokes slash-decorated requests through the transport boundary", () =>
-    Effect.gen(function* () {
-      const extensionId = ExtensionId.make("@test/public-shadow")
-      const projectExt: LoadedExtension = {
-        manifest: { id: extensionId },
-        scope: "project",
-        sourcePath: "project",
-        contributions: {
-          requests: [
-            request({
-              id: "shadowed",
-              slash: { name: "shadowed private", description: "shadowed private" },
-              description: "shadowed private",
-              input: Schema.Struct({ value: Schema.String }),
-              output: Schema.Struct({ value: Schema.String }),
-              execute: (input: { value: string }) => Effect.succeed({ value: input.value }),
-            }),
-          ],
-        },
-      }
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-          const { client, sessionId, branchId } = yield* createRpcHarness({
-            ...e2ePreset,
-            providerLayer,
-            extensions: [projectExt],
-          })
-          const commands = yield* client.extension.listSlashCommands({ sessionId })
-          expect(commands.map((command) => command.name)).toEqual(["shadowed"])
-          const result = yield* client.extension.request({
-            sessionId,
-            branchId,
-            extensionId,
-            capabilityId: "shadowed",
-            input: { value: "hi" },
-          })
-          expect(result).toEqual({ value: "hi" })
-        }).pipe(Effect.timeout("4 seconds")),
-      )
-    }),
-  )
-  it.live("RPC listSlashCommands omits lower-scope slash request shadowed by project request", () =>
-    Effect.gen(function* () {
-      const extensionId = ExtensionId.make("@test/public-rpc-shadow")
-      const builtinExt: LoadedExtension = {
-        manifest: { id: extensionId },
-        scope: "builtin",
-        sourcePath: "builtin",
-        contributions: {
-          requests: [
-            request({
-              id: "shadowed",
-              slash: { name: "shadowed", description: "shadowed" },
-              input: Schema.Struct({ value: Schema.String }),
-              output: Schema.Struct({ value: Schema.String }),
-              execute: () => Effect.succeed({ value: "builtin" }),
-            }),
-          ],
-        },
-      }
-      const projectExt: LoadedExtension = {
-        manifest: { id: extensionId },
-        scope: "project",
-        sourcePath: "project",
-        contributions: {
-          requests: [
-            request({
-              id: "shadowed",
-              input: Schema.Struct({ value: Schema.String }),
-              output: Schema.Struct({ value: Schema.String }),
-              execute: (input) => Effect.succeed({ value: input.value }),
-            }),
-          ],
-        },
-      }
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          // The harness loads every input as builtin, so the two scopes go in through a profile.
-          const profile = yield* makeProfile("/nonexistent/gent-test-profile-cwd", [
-            builtinExt,
-            projectExt,
-          ])
-          expect(profile.resolved.failedExtensions).toEqual([])
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-          const { client, sessionId, branchId } = yield* createRpcHarness({
-            ...e2ePreset,
-            providerLayer,
-            extensions: [],
-            sessionProfileCacheLayer: SessionProfileCache.Test(
-              new Map([["/nonexistent/gent-test-profile-cwd", profile]]),
-            ),
-            cwd: "/nonexistent/gent-test-profile-cwd",
-          })
-          const commands = yield* client.extension.listSlashCommands({ sessionId })
-          expect(commands.map((command) => command.name)).toEqual([])
-          // The project request answers, not the builtin one it shadows.
-          const answer = yield* client.extension.request({
-            sessionId,
-            branchId,
-            extensionId,
-            capabilityId: "shadowed",
-            input: { value: "project" },
-          })
-          expect(answer).toEqual({ value: "project" })
-        }).pipe(Effect.timeout("4 seconds")),
-      )
-    }),
-  )
-  it.live("RPC listSlashCommands omits lower-scope slash request shadowed by project tool", () =>
-    Effect.gen(function* () {
-      const extensionId = ExtensionId.make("@test/public-tool-shadow")
-      const builtinExt: LoadedExtension = {
-        manifest: { id: extensionId },
-        scope: "builtin",
-        sourcePath: "builtin",
-        contributions: {
-          requests: [
-            request({
-              id: "shadowed",
-              slash: { name: "shadowed", description: "shadowed" },
-              input: Schema.Struct({ value: Schema.String }),
-              output: Schema.Struct({ value: Schema.String }),
-              execute: () => Effect.succeed({ value: "builtin" }),
-            }),
-          ],
-        },
-      }
-      const projectExt: LoadedExtension = {
-        manifest: { id: extensionId },
-        scope: "project",
-        sourcePath: "project",
-        contributions: {
-          tools: [
-            tool({
-              id: "shadowed",
-              description: "shadowed tool",
-              params: Schema.Struct({ value: Schema.String }),
-              output: Schema.Struct({ value: Schema.String }),
-              execute: (input) => Effect.succeed({ value: input.value }),
-            }),
-          ],
-        },
-      }
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          // The harness loads every input as builtin, so the two scopes go in through a profile.
-          const profile = yield* makeProfile("/nonexistent/gent-test-profile-cwd", [
-            builtinExt,
-            projectExt,
-          ])
-          expect(profile.resolved.failedExtensions).toEqual([])
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-          const { client, sessionId } = yield* createRpcHarness({
-            ...e2ePreset,
-            providerLayer,
-            extensions: [],
-            sessionProfileCacheLayer: SessionProfileCache.Test(
-              new Map([["/nonexistent/gent-test-profile-cwd", profile]]),
-            ),
-            cwd: "/nonexistent/gent-test-profile-cwd",
-          })
-          const commands = yield* client.extension.listSlashCommands({ sessionId })
-          expect(commands.map((command) => command.name)).toEqual([])
-        }).pipe(Effect.timeout("4 seconds")),
-      )
-    }),
-  )
-  it.live("RPC listSlashCommands resolves commands from the requested session profile", () =>
-    Effect.gen(function* () {
-      const alphaCwd = "/nonexistent/gent-alpha-profile"
-      const betaCwd = "/nonexistent/gent-beta-profile"
-      const alphaExt = makeCommandExtension("@test/alpha-profile", "alpha")
-      const betaExt = makeCommandExtension("@test/beta-profile", "beta")
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const alphaProfile = yield* makeProfile(alphaCwd, [alphaExt])
-          const betaProfile = yield* makeProfile(betaCwd, [betaExt])
-          const sessionProfileCacheLayer = SessionProfileCache.Test(
-            new Map([
-              [alphaCwd, alphaProfile],
-              [betaCwd, betaProfile],
-            ]),
-          )
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-          const { client, sessionId, branchId } = yield* createRpcHarness({
-            ...e2ePreset,
-            providerLayer,
-            extensions: [],
-            sessionProfileCacheLayer,
-            cwd: alphaCwd,
-          })
-          const alpha = { sessionId, branchId }
-          const beta = yield* client.session.create({ cwd: betaCwd })
-          const alphaCommands = yield* client.extension.listSlashCommands({
-            sessionId: alpha.sessionId,
-          })
-          const betaCommands = yield* client.extension.listSlashCommands({
-            sessionId: beta.sessionId,
-          })
-          expect(alphaCommands.map((command) => command.name)).toEqual(["alpha"])
-          expect(betaCommands.map((command) => command.name)).toEqual(["beta"])
-        }).pipe(Effect.timeout("4 seconds")),
-      )
-    }),
-  )
 })
 
 // ── session deletion hooks ──────────────────────────────────────────────────
@@ -5235,6 +5195,81 @@ describe("rpc wide events", () => {
         expect(event?.annotations["branchId"]).toBe(missingBranchId)
       }).pipe(Effect.timeout("4 seconds")),
     ),
+  )
+
+  it.live("the settings wide event records the stored settings, not the change", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const wideEvents = MutableRef.make<Array<LogEvent>>([])
+        const minimumLogLevel = Layer.effectContext(
+          Effect.succeed(Context.make(MinimumLogLevel, "Info")),
+        )
+        const { client, sessionId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+          extensionInputs: [],
+          cwd: "/nonexistent/gent-settings-wide-event",
+          extraLayers: [WideEventLogger.Capture(wideEvents), minimumLogLevel],
+        })
+        yield* client.session.updateSettings({
+          sessionId,
+          modelId: Option.some(ModelId.make("anthropic/kept-model")),
+        })
+        // This change leaves the model out; the stored model is what the event names.
+        yield* client.session.updateSettings({ sessionId, reasoningLevel: Option.some("high") })
+        const settingsEvents = MutableRef.get(wideEvents).filter(
+          (event) =>
+            event.annotations["service"] === "rpc" &&
+            event.annotations["method"] === "session.updateSettings",
+        )
+        expect(settingsEvents).toHaveLength(2)
+        const last = settingsEvents[1]?.annotations
+        expect(last?.["sessionId"]).toBe(sessionId)
+        expect(last?.["modelId"]).toBe("anthropic/kept-model")
+        expect(last?.["reasoningLevel"]).toBe("high")
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+
+  it.live("a turn emits one agent-loop wide event with its session envelope", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          textStep("traced reply"),
+        ])
+        const wideEvents = MutableRef.make<Array<LogEvent>>([])
+        const minimumLogLevel = Layer.effectContext(
+          Effect.succeed(Context.make(MinimumLogLevel, "Info")),
+        )
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+          cwd: "/nonexistent/gent-turn-wide-event",
+          extraLayers: [WideEventLogger.Capture(wideEvents), minimumLogLevel],
+        })
+        yield* client.message.send({ sessionId, branchId, content: "trace me" })
+        const turnEvents = yield* waitFor(
+          Effect.sync(() =>
+            MutableRef.get(wideEvents).filter(
+              (event) => event.annotations["service"] === "agent-loop",
+            ),
+          ),
+          (events) => events.length > 0,
+          4000,
+          "turn wide event",
+        )
+        expect(turnEvents).toHaveLength(1)
+        expect(turnEvents[0]?.annotations).toMatchObject({
+          service: "agent-loop",
+          method: "turn",
+          status: "ok",
+          actor: DEFAULT_AGENT_NAME,
+          sessionId,
+          branchId,
+        })
+      }),
+    ).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
   )
 })
 

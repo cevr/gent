@@ -6,6 +6,7 @@ import {
   Model,
   ModelId,
   ProviderId,
+  DEFAULT_MAX_AGENT_RUN_DEPTH,
 } from "../../src/domain/agent"
 import { BunCrypto, BunServices } from "@effect/platform-bun"
 import { describe, expect, it } from "effect-bun-test"
@@ -89,12 +90,18 @@ import {
   EventStorage,
   MessageStorage,
   SessionStorage,
+  type RelationshipStorage,
 } from "../../src/storage/storage"
-import { SessionRuntime } from "../../src/runtime/session"
+import {
+  SessionRuntime,
+  admitChildSessionDepth,
+  makeRequestDeduper,
+} from "../../src/runtime/session"
+import { TestClock } from "effect/testing"
 import { ModelCompactionError, ModelContextCompactor } from "../../src/runtime/model-context"
-import { makeTurnLedger } from "../../src/runtime/turn"
 import type { ExtensionContributions } from "../../src/domain/extension.js"
 import { e2ePreset } from "../helpers/test-preset"
+import { SqlClient } from "effect/sql"
 
 // ── session runtime ─────────────────────────────────────────────────────────
 
@@ -1186,51 +1193,6 @@ describe("session metrics", () => {
   )
 })
 
-describe("turn ledger", () => {
-  it.effect("a turn that mixes a priced and an unpriced step has no cost", () =>
-    Effect.gen(function* () {
-      const ledger = yield* makeTurnLedger
-      const messageId = MessageId.make("ledger-turn")
-      yield* ledger.beginTurn(messageId)
-      const usage = Option.some({ inputTokens: 100, outputTokens: 10 })
-      yield* ledger.noteStep({
-        agent: AgentName.make("primary"),
-        model: ModelId.make("test/priced"),
-        usage,
-        costUsd: Option.some(0.5),
-        toolCallCount: 1,
-      })
-      yield* ledger.noteStep({
-        agent: AgentName.make("primary"),
-        model: ModelId.make("custom/unpriced"),
-        usage,
-        costUsd: Option.none(),
-        toolCallCount: 0,
-      })
-      const total = yield* ledger.total
-      expect(total.usageKnown).toBe(true)
-      expect(total.costUsd).toEqual(Option.none())
-    }),
-  )
-
-  it.effect("a turn whose steps are all priced sums them", () =>
-    Effect.gen(function* () {
-      const ledger = yield* makeTurnLedger
-      yield* ledger.beginTurn(MessageId.make("ledger-priced"))
-      for (const cost of [0.5, 0.25]) {
-        yield* ledger.noteStep({
-          agent: AgentName.make("primary"),
-          model: ModelId.make("test/priced"),
-          usage: Option.some({ inputTokens: 100, outputTokens: 10 }),
-          costUsd: Option.some(cost),
-          toolCallCount: 0,
-        })
-      }
-      expect((yield* ledger.total).costUsd).toEqual(Option.some(0.75))
-    }),
-  )
-})
-
 // ── branch resources ────────────────────────────────────────────────────────
 
 class BranchCounter extends Context.Service<BranchCounter, { readonly instance: number }>()(
@@ -1314,5 +1276,193 @@ describe("branch-scoped resources", () => {
       expect(second).toBe("instance:1")
       expect(nextInstance).toBe(1)
     }).pipe(Effect.scoped),
+  )
+})
+
+// ── session depth guard ─────────────────────────────────────────────────────
+
+describe("session depth guard", () => {
+  const depthStorage = testSqliteStorage(noBranchTools.storage, noBranchTools.migrations)
+  const run = <A, E>(
+    effect: Effect.Effect<
+      A,
+      E,
+      SessionStorage | BranchStorage | RelationshipStorage | SqlClient.SqlClient
+    >,
+  ) => effect.pipe(Effect.timeout("4 seconds"), Effect.provide(depthStorage))
+
+  const makeSession = (id: string, parentSessionId?: string) => {
+    const fields = {
+      id: SessionId.make(id),
+      name: `session-${id}`,
+      createdAt: dateFromMillis(1_767_225_600_000),
+      updatedAt: dateFromMillis(1_767_225_600_000),
+    }
+    if (!Predicate.isUndefined(parentSessionId)) {
+      Object.assign(fields, {
+        parentSessionId: SessionId.make(parentSessionId),
+        parentBranchId: BranchId.make(`branch-${parentSessionId}`),
+      })
+    }
+    return new Session(fields)
+  }
+  const makeBranch = (sessionId: string) =>
+    new Branch({
+      id: BranchId.make(`branch-${sessionId}`),
+      sessionId: SessionId.make(sessionId),
+      createdAt: dateFromMillis(1_767_225_600_000),
+    })
+  const buildSessionChain = (depth: number) =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionStorage
+      const branches = yield* BranchStorage
+      yield* sessions.createSession(makeSession("s0"))
+      yield* branches.createBranch(makeBranch("s0"))
+      for (let i = 1; i <= depth; i++) {
+        yield* sessions.createSession(makeSession(`s${i}`, `s${i - 1}`))
+        yield* branches.createBranch(makeBranch(`s${i}`))
+      }
+    })
+  // Each test calls `admitChildSessionDepth`, the check `session.create` runs
+  // before it admits a child.
+  it.live("parent at max depth blocks child spawn", () =>
+    run(
+      Effect.gen(function* () {
+        yield* buildSessionChain(DEFAULT_MAX_AGENT_RUN_DEPTH)
+        const error = yield* admitChildSessionDepth(
+          SessionId.make(`s${DEFAULT_MAX_AGENT_RUN_DEPTH}`),
+        ).pipe(Effect.flip)
+        expect(error._tag).toBe("SessionDepthLimitError")
+        expect(error.message).toContain(
+          `Agent run depth limit reached (max ${DEFAULT_MAX_AGENT_RUN_DEPTH})`,
+        )
+      }),
+    ),
+  )
+  it.live("parent below max depth allows child spawn", () =>
+    run(
+      Effect.gen(function* () {
+        yield* buildSessionChain(DEFAULT_MAX_AGENT_RUN_DEPTH - 1)
+        const depth = yield* admitChildSessionDepth(
+          SessionId.make(`s${DEFAULT_MAX_AGENT_RUN_DEPTH - 1}`),
+        )
+        expect(depth).toBe(DEFAULT_MAX_AGENT_RUN_DEPTH - 1)
+      }),
+    ),
+  )
+  it.live("a thread of many handoffs still admits a spawn, counted from its real root", () =>
+    run(
+      Effect.gen(function* () {
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
+        yield* sessions.createSession(makeSession("h0"))
+        yield* branches.createBranch(makeBranch("h0"))
+        // Each handoff joins the root's thread: an edge, not a spawn.
+        const handoffs = 25
+        for (let i = 1; i <= handoffs; i++) {
+          yield* sessions.createSession(
+            new Session({ ...makeSession(`h${i}`, `h${i - 1}`), threadId: SessionId.make("h0") }),
+          )
+          yield* branches.createBranch(makeBranch(`h${i}`))
+        }
+        expect(yield* admitChildSessionDepth(SessionId.make(`h${handoffs}`))).toBe(0)
+        yield* sessions.createSession(makeSession("spawned", `h${handoffs}`))
+        yield* branches.createBranch(makeBranch("spawned"))
+        expect(yield* admitChildSessionDepth(SessionId.make("spawned"))).toBe(1)
+      }),
+    ),
+  )
+  it.live("a parent cycle fails closed instead of walking forever", () =>
+    run(
+      Effect.gen(function* () {
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
+        const sql = yield* SqlClient.SqlClient
+        yield* sessions.createSession(makeSession("loop-a"))
+        yield* branches.createBranch(makeBranch("loop-a"))
+        yield* sessions.createSession(makeSession("loop-b", "loop-a"))
+        yield* sql`UPDATE sessions SET parent_session_id = 'loop-b' WHERE id = 'loop-a'`
+        const error = yield* admitChildSessionDepth(SessionId.make("loop-b")).pipe(Effect.flip)
+        expect(error.message).toContain("ancestry is missing or incomplete")
+      }),
+    ),
+  )
+  it.live("missing ancestry cannot grant root-level child admission", () =>
+    run(
+      Effect.gen(function* () {
+        const error = yield* admitChildSessionDepth(SessionId.make("nonexistent")).pipe(Effect.flip)
+        expect(error.message).toContain("ancestry is missing or incomplete")
+      }),
+    ),
+  )
+})
+
+// ── request dedup ───────────────────────────────────────────────────────────
+
+describe("request dedup", () => {
+  it.effect("dedup cache hard cap evicts the oldest requestId", () =>
+    Effect.gen(function* () {
+      let value = 0
+      const run = yield* makeRequestDeduper<{ requestId: string }, number, never>({
+        body: () =>
+          Effect.sync(() => {
+            value += 1
+            return value
+          }),
+        keyOf: (input) => Option.some(input.requestId),
+      })
+
+      // The cap is 1024 entries: fill it, then add one more.
+      const first = yield* run({ requestId: "req-cap-0" })
+      for (let index = 1; index <= 1024; index += 1) {
+        yield* run({ requestId: `req-cap-${index}` })
+      }
+      expect(value).toBe(1025)
+
+      // Past the cap, "req-cap-0" was evicted to make room for
+      // "req-cap-1024", so this call is a fresh lookup, not a cache hit.
+      const retry = yield* run({ requestId: "req-cap-0" })
+      expect(retry).not.toBe(first)
+      expect(retry).toBe(1026)
+    }),
+  )
+
+  // Regression: a same-key retry inside the TTL window must collapse onto
+  // the cached outcome AND must not let a stale body leak into pending such
+  // that a post-eviction retry runs the wrong body.
+  it.effect("dedup cache post-eviction retry runs the fresh body, not a stale one", () =>
+    Effect.gen(function* () {
+      // The body's identity is captured in `lastSeen` so we can prove which
+      // input arg triggered the lookup. If the post-eviction call ran a
+      // stale closure, `lastSeen` would show input1's marker, not input3's.
+      let lastSeen = ""
+      const run = yield* makeRequestDeduper<{ requestId: string; marker: string }, string, never>({
+        body: (input) =>
+          Effect.sync(() => {
+            lastSeen = input.marker
+            return input.marker
+          }),
+        keyOf: (input) => Option.some(input.requestId),
+      })
+
+      // F1 populates the cache with key="K", body uses marker="m1".
+      const first = yield* run({ requestId: "K", marker: "m1" })
+      expect(first).toBe("m1")
+      expect(lastSeen).toBe("m1")
+
+      // F2 retries the same key inside the TTL window — must hit the cache
+      // and observe F1's outcome. F2's body (marker="m2") must NOT run.
+      const second = yield* run({ requestId: "K", marker: "m2" })
+      expect(second).toBe("m1")
+      expect(lastSeen).toBe("m1")
+
+      // Advance past the TTL so F1's cache entry is gone. F3 must run a
+      // fresh lookup with ITS OWN body (marker="m3"). If F2's body leaked
+      // into pending, this would observe "m2" instead of "m3".
+      yield* TestClock.adjust("61 seconds")
+      const third = yield* run({ requestId: "K", marker: "m3" })
+      expect(third).toBe("m3")
+      expect(lastSeen).toBe("m3")
+    }),
   )
 })

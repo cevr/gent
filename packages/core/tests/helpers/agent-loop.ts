@@ -2,7 +2,6 @@ import type { LanguageModel } from "effect/ai"
 import { BunServices } from "@effect/platform-bun"
 import { Clock, Duration, Effect, Layer, Option, Ref, Schema, Stream } from "effect"
 import * as Prompt from "effect/ai/Prompt"
-import * as AiError from "effect/ai/AiError"
 import {
   AgentLoop as AgentLoopActor,
   AgentLoopError,
@@ -12,12 +11,7 @@ import {
 } from "../../src/domain/agent-loop"
 import { AgentDefinition, AgentName, type Model, ModelId } from "../../src/domain/agent"
 import { AgentLoopSessionGovernance, AgentLoopTestActor } from "../../src/runtime/agent-loop"
-import {
-  ModelRegistry,
-  type ModelResolver,
-  finishPart,
-  type LanguageModelStreamPart,
-} from "../../src/runtime/provider"
+import { ModelRegistry, type ModelResolver } from "../../src/runtime/provider"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import {
   ApprovalService,
@@ -35,7 +29,7 @@ import {
   type SteerCommand,
   type SessionAdmission,
 } from "../../src/domain/message"
-import { testAgents } from "../helpers/test-preset"
+import { testAgents } from "./test-preset"
 import { type ToolCapability } from "@gent/core/extensions/api"
 import type { AnyResourceContribution } from "../../src/domain/extension"
 import { type AgentEvent, EventEnvelope, EventId, EventStore } from "../../src/domain/event"
@@ -352,37 +346,6 @@ export const makeRecordingLayer = (providerLayer: Layer.Layer<LanguageModel.Lang
     overrides: recorderLayer,
   })
 }
-/** Scripted provider: returns stream parts from an array, one response per model stream call. */
-export const scriptedProvider = (
-  responses: ReadonlyArray<ReadonlyArray<LanguageModelStreamPart>>,
-): Layer.Layer<LanguageModel.LanguageModel> => {
-  let index = 0
-  return LanguageModelLayers.testStream(() =>
-    Effect.succeed(
-      Stream.fromIterable(responses[index++] ?? [finishPart({ finishReason: "stop" })]),
-    ),
-  )
-}
-export const retryableStreamError = () =>
-  AiError.make({
-    module: "Test",
-    method: "streamText",
-    reason: new AiError.RateLimitError({
-      retryAfter: Duration.zero,
-    }),
-  })
-export const makeLiveToolLayer = (
-  providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
-  tools: ReadonlyArray<ToolCapability> = [],
-  resources: AnyResourceContribution[] = [],
-  eventStoreLayer: Layer.Layer<EventStore> = EventStore.Memory,
-) =>
-  actorTestRoot({
-    provider: providerLayer,
-    registry: makeExtRegistry(tools, resources),
-    eventStore: eventStoreLayer,
-    toolRunner: ToolRunner.Live,
-  })
 export const makeCountingEventStore = (eventsRef: Ref.Ref<AgentEvent[]>) =>
   Layer.effect(
     EventStore,

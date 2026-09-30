@@ -207,9 +207,7 @@ export const makeRequestDeduper = <In, A, E>(opts: {
  * chain (`isSpawnedSession`). Root sessions have depth 0. A handoff joins its
  * parent's thread and does not count.
  */
-export const getSessionDepth = Effect.fn("SessionDepth.getSessionDepth")(function* (
-  sessionId: SessionId,
-) {
+const getSessionDepth = Effect.fn("SessionDepth.getSessionDepth")(function* (sessionId: SessionId) {
   const relationshipStorage = yield* RelationshipStorage
   // Fail closed: an unreadable ancestry is a failure, never a root-level grant.
   const ancestors = yield* relationshipStorage.getSessionAncestors(sessionId)
