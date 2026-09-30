@@ -865,14 +865,6 @@ interface AppProps {
 }
 
 function AppContent(props: AppProps) {
-  const renderer = useRenderer()
-  const env = useEnv()
-  useScopedKeyboard((event) => {
-    if (event.ctrl !== true || event.name !== "c") return false
-    renderer.destroy()
-    env.shutdown()
-    return true
-  })
   useCopyOnSelect()
 
   // Which session shows is the client's to say. `switchSession` is the one
@@ -900,7 +892,7 @@ function AppContent(props: AppProps) {
 
   return (
     <box flexDirection="column" width="100%" height="100%">
-      <Show when={active()} keyed fallback={<CommandPalette />}>
+      <Show when={active()} keyed>
         {(session) => {
           const branches = bootBranches()
           setBootBranches(Option.none())
