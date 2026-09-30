@@ -15,7 +15,7 @@ import {
   type Session as DomainSession,
 } from "@gent/core/protocol"
 import { type Session as ClientSession, useClient } from "./client"
-import { formatDuration, randomId, truncate } from "./utils"
+import { formatCost, formatDuration, randomId, truncate } from "./utils"
 import { createMemo, createSignal, ErrorBoundary, For, type JSX, Show } from "solid-js"
 import { buildSyntaxStyle, resolveThemeColor, ThemeProvider, useTheme } from "./theme"
 import {
@@ -631,7 +631,7 @@ export function Session(props: SessionProps) {
   const costLabels = (): StatusRowLabel[] => {
     const c = client.cost()
     if (c <= 0) return []
-    return [{ text: `$${c.toFixed(2)}`, color: theme.textMuted }]
+    return [{ text: formatCost(c), color: theme.textMuted }]
   }
 
   const modelLabels = (): StatusRowLabel[] => {

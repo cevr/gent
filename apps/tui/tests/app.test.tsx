@@ -22,6 +22,7 @@ import { BunServices } from "@effect/platform-bun"
 import { TestClock } from "effect/testing"
 import { RpcClientError } from "effect/unstable/rpc/RpcClientError"
 import { SocketCloseError } from "effect/unstable/socket/Socket"
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import {
   AgentName,
@@ -593,7 +594,15 @@ const ESC_CUE = "esc again to clear"
 const CTRL_C_CUE = "ctrl+c again to exit"
 
 /** An idle session view with no draft; `shutdowns` counts the exits it performs. */
-const mountIdleSession = (runtime: GentRuntime = createMockRuntime()) =>
+const mountIdleSession = (
+  runtime: GentRuntime = createMockRuntime(),
+  terminal: {
+    readonly kittyKeyboard?: boolean
+    readonly width?: number
+    readonly resumable?: boolean
+    readonly writeTerminal?: (text: string) => void
+  } = {},
+) =>
   Effect.gen(function* () {
     let shutdowns = 0
     const client = createMockClient({
@@ -604,6 +613,7 @@ const mountIdleSession = (runtime: GentRuntime = createMockRuntime()) =>
       renderWithProviders(() => <App />, {
         client,
         runtime,
+        ...terminal,
         initialSession: {
           id: SessionId.make("session-a"),
           activeBranchId: BranchId.make("branch-a"),
@@ -1498,6 +1508,76 @@ describe("App auth gate", () => {
       yield* waitForFrame(view.setup, () => view.shutdowns() > 0, "quit")
     }).pipe(Effect.timeout("10 seconds")),
   )
+  it.live("ctrl+j starts a new line under the kitty keyboard protocol", () =>
+    Effect.gen(function* () {
+      const view = yield* mountIdleSession(createMockRuntime(), { kittyKeyboard: true })
+      yield* Effect.promise(() => view.setup.mockInput.typeText("second"))
+      view.setup.mockInput.pressKey("j", { ctrl: true })
+      yield* Effect.promise(() => view.setup.mockInput.typeText("third"))
+      const frame = yield* waitForFrame(
+        view.setup,
+        (next) => next.includes("third"),
+        "the second line",
+      )
+      expect(frame).not.toContain("secondthird")
+      expect(frame).toContain("┃ second")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  for (const resumable of [true, false]) {
+    it.live(
+      `exit names the way back only when the session outlives the process (${resumable})`,
+      () =>
+        Effect.gen(function* () {
+          const written: string[] = []
+          const view = yield* mountIdleSession(createMockRuntime(), {
+            resumable,
+            writeTerminal: (text) => written.push(text),
+          })
+          view.setup.mockInput.pressKey("d", { ctrl: true })
+          yield* waitForFrame(view.setup, () => view.shutdowns() > 0, "quit")
+          if (resumable) expect(written).toEqual(["\nto resume: gent resume session-a\n"])
+          else expect(written).toEqual([])
+        }).pipe(Effect.timeout("10 seconds")),
+    )
+  }
+  it.live("a session cost under a cent reads as the turn row spells it, not as free", () =>
+    Effect.gen(function* () {
+      const client = createMockClient({
+        auth: { listProviders: () => Effect.succeed([]) },
+        branch: { getTree: () => Effect.succeed([]) },
+        session: {
+          getSnapshot: () =>
+            Effect.succeed({
+              sessionId: SessionId.make("session-a"),
+              branchId: BranchId.make("branch-a"),
+              messages: [],
+              lastEventId: nullValue,
+              reasoningLevel: absent,
+              resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
+              agent: AgentName.make("main"),
+              runtime: { _tag: idleTag, queue: emptyQueueSnapshot() },
+              metrics: { turns: 1, durationMs: 0, costUsd: 0.002, lastInputTokens: 0 },
+            }),
+        },
+      })
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <App />, {
+          client,
+          runtime: createMockRuntime(),
+          initialSession: {
+            id: SessionId.make("session-a"),
+            activeBranchId: BranchId.make("branch-a"),
+            name: "Session A",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        }),
+      )
+      const frame = yield* waitForFrame(setup, (next) => next.includes("$0.0"), "the cost label")
+      expect(frame).toContain("$0.002")
+      setup.renderer.destroy()
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   it.live("an error shown during a running turn leaves the turn running", () =>
     Effect.gen(function* () {
       const view = yield* mountRunningTurnWithError
@@ -2059,6 +2139,44 @@ describe("App auth gate", () => {
       yield* waitForFrame(setup, () => requests.length === 1, "the server command ran")
       expect(requests).toEqual(["now"])
       expect(renderFrame(setup)).not.toContain("Unknown command")
+      setup.renderer.destroy()
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  it.live("the slash popup shows a server command's description", () =>
+    Effect.gen(function* () {
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <App />, {
+          client: createMockClient({
+            auth: { listProviders: () => Effect.succeed([]) },
+            branch: { getTree: () => Effect.succeed([]) },
+            extension: {
+              listSlashCommands: () =>
+                Effect.succeed([
+                  {
+                    name: "audit",
+                    displayName: "Audit",
+                    description: "Detect, audit, and report code issues",
+                    extensionId: "@test/server-audit",
+                    capabilityId: "audit",
+                  },
+                ]),
+            },
+          }),
+          runtime: createMockRuntime(),
+          builtins: builtinClientModules,
+          initialSession: {
+            id: SessionId.make("session-a"),
+            activeBranchId: BranchId.make("branch-a"),
+            name: "Session A",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        }),
+      )
+      yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
+      yield* Effect.promise(() => setup.mockInput.typeText("/aud"))
+      yield* waitForFrame(setup, (frame) => frame.includes("/audit"), "the popup row")
+      expect(renderFrame(setup)).toContain("Detect, audit")
       setup.renderer.destroy()
     }).pipe(Effect.timeout("10 seconds")),
   )
@@ -4172,6 +4290,35 @@ describe("agents view on the left arrow", () => {
 })
 
 describe("TUI renderer surfaces", () => {
+  // A text too wide for its column is cut once, at its end, by gent; the
+  // renderer's own cut (`...` in the middle) never shows.
+  it.live("at 40 columns the slash popup and the palette cut a text once, at its end", () =>
+    Effect.gen(function* () {
+      const view = yield* mountIdleSession(createMockRuntime(), { width: 40 })
+      yield* Effect.promise(() => view.setup.mockInput.typeText("/frec"))
+      const popup = yield* waitForFrame(
+        view.setup,
+        (frame) => frame.includes("Forget"),
+        "the popup row",
+      )
+      const popupRow = popup.split("\n").find((line) => line.includes("Forget")) ?? ""
+      expect(popupRow).not.toContain("...")
+      expect(popupRow.trimEnd().endsWith("…")).toBe(true)
+      view.setup.mockInput.pressEscape()
+      yield* waitForFrame(view.setup, (frame) => !frame.includes("Forget"), "popup closed")
+      view.setup.mockInput.pressKey("c", { ctrl: true })
+      view.setup.mockInput.pressKey("p", { ctrl: true })
+      const palette = yield* waitForFrame(
+        view.setup,
+        (frame) => frame.includes("[All]"),
+        "the palette",
+      )
+      const title = palette.split("\n").find((line) => line.includes("[All]")) ?? ""
+      expect(title).not.toContain("...")
+      const paletteRows = palette.split("\n").filter((line) => line.includes("Forget"))
+      for (const row of paletteRows) expect(row).not.toContain("...")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   // One dock slot: the status row stays under the input, and the slash popup,
   // the palette and the panes all dock under it.
   it.live("every docked pane, the slash popup included, docks under the status row", () =>
@@ -4613,6 +4760,50 @@ describe("TUI renderer surfaces", () => {
       expect(frame).toContain("failed extensions")
       expect(frame).toContain("@gent/plan")
     }),
+  )
+  it.live("the status row names an unborn branch, and a detached head by its commit", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const cwd = yield* makeTempDirectoryScoped("gent-test-branch-")
+        const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+        const git = (...args: ReadonlyArray<string>) =>
+          spawner.exitCode(
+            ChildProcess.make(
+              "git",
+              ["-c", "user.email=probe@gent.test", "-c", "user.name=probe", ...args],
+              { cwd },
+            ),
+          )
+        const statusRow = Effect.gen(function* () {
+          const setup = yield* Effect.promise(() =>
+            renderWithProviders(() => <App />, {
+              client: createMockClient({
+                auth: { listProviders: () => Effect.succeed([]) },
+                branch: { getTree: () => Effect.succeed([]) },
+              }),
+              runtime: createMockRuntime(),
+              initialSession: {
+                id: SessionId.make("session-a"),
+                activeBranchId: BranchId.make("branch-a"),
+                name: "Session A",
+                createdAt: dateFromMillis(0),
+                updatedAt: dateFromMillis(0),
+              },
+              cwd,
+            }),
+          )
+          const frame = yield* waitForFrame(setup, (next) => /\(.+\)/.test(next), "the branch")
+          setup.renderer.destroy()
+          return frame.split("\n").find((line) => line.startsWith("ready ·")) ?? ""
+        })
+        yield* git("init", "-q", "-b", "trunk")
+        expect(yield* statusRow).toContain("(trunk)")
+        yield* git("commit", "-q", "--allow-empty", "-m", "first")
+        yield* git("checkout", "-q", "--detach")
+        const row = yield* statusRow
+        expect(row).toMatch(/\(detached @[0-9a-f]{7,}\)/)
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
+    ),
   )
 })
 describe("uiModel schema validation", () => {

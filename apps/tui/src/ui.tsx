@@ -714,7 +714,7 @@ export function PickerFrame(
         <Show when={titled()}>
           <box height={1} flexShrink={0} overflow="hidden">
             <text wrapMode="none" truncate style={{ fg: theme.textMuted }}>
-              {props.title}
+              {truncate(props.title, sectionWidth())}
             </text>
           </box>
         </Show>

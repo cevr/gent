@@ -18,6 +18,7 @@ import {
   type ExtensionAgentDetail,
   fitWidth,
   formatAge,
+  formatCost,
   formatDuration,
   keyHint,
   KeyHints,
@@ -493,9 +494,6 @@ const currentMarker = (current: boolean): string => {
   if (current) return "› "
   return "  "
 }
-
-/** Sub-cent costs still deserve a number, so keep three decimals throughout. */
-const formatCost = (usd: number): string => `$${usd.toFixed(3)}`
 
 /**
  * Drop the provider prefix from a model id: `anthropic/claude-sonnet-5` becomes

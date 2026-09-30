@@ -354,6 +354,12 @@ export const renderWithProviders = (
     services?: Context.Context<unknown>
     /** A terminal that keeps what the renderer writes; OpenTUI's own drops it. */
     output?: TerminalOutput
+    /** Keys arrive as the kitty keyboard protocol spells them (herdr, kitty). */
+    kittyKeyboard?: boolean
+    /** Sessions outlive the process; false as an in-memory store runs. Defaults to true. */
+    resumable?: boolean
+    /** Takes what the session writes to the terminal once the renderer is gone. */
+    writeTerminal?: (text: string) => void
   },
 ): Promise<TestRenderSetup> =>
   Effect.runPromise(
@@ -384,6 +390,7 @@ export const renderWithProviders = (
           width: options?.width ?? 80,
           height: options?.height ?? 24,
           exitOnCtrlC: false,
+          kittyKeyboard: options?.kittyKeyboard ?? false,
           ...output,
         }),
       )
@@ -406,7 +413,13 @@ export const renderWithProviders = (
                 <KeyboardScopeProvider>
                   <ThemeProvider mode="dark">
                     <EnvProvider
-                      env={{ visual: Option.none(), editor: Option.none(), shutdown: () => {} }}
+                      env={{
+                        visual: Option.none(),
+                        editor: Option.none(),
+                        shutdown: () => {},
+                        resumable: options?.resumable ?? true,
+                        writeTerminal: options?.writeTerminal ?? (() => {}),
+                      }}
                     >
                       <CommandProvider>
                         <WorkspaceProvider

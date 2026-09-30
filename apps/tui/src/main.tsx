@@ -269,13 +269,14 @@ const runGent = ({
       }
     }
 
+    const inMemory = debug || isolate || mockEmpty
     let mock = Option.none<{ readonly empty: boolean }>()
     if (debug) mock = Option.some({ empty: false })
     if (mockEmpty) mock = Option.some({ empty: true })
     const bundle = yield* resolveClientBundle({
       cwd,
       connect,
-      inMemory: debug || isolate || mockEmpty,
+      inMemory,
       debug,
       mock,
       authDirectory: authDirectoryOpt,
@@ -351,6 +352,11 @@ const runGent = ({
       ...env,
       shutdown: () => {
         interruptMain()
+      },
+      resumable: !inMemory,
+      writeTerminal: (text: string) => {
+        // eslint-disable-next-line effect/noGlobals -- The line must reach the real terminal after the renderer is destroyed, outside any Effect.
+        process.stdout.write(text)
       },
     }
 

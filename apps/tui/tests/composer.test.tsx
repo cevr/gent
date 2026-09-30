@@ -280,32 +280,40 @@ describe("createPlaceholder", () => {
   test("creates placeholder with line count", () => {
     const paste = createPasteManager()
     const placeholder = paste.createPlaceholder("line1\nline2\nline3")
-    expect(placeholder).toMatch(/\[Pasted ~3 lines #paste-\d+\]/)
+    expect(placeholder).toMatch(/\[Pasted 3 lines #\d+\]/)
   })
 
   test("stores original text for later retrieval", () => {
     const paste = createPasteManager()
     const text = "original content\nwith lines"
     const placeholder = paste.createPlaceholder(text)
-    expect(placeholder).toBe("[Pasted ~2 lines #paste-1]")
+    expect(placeholder).toBe("[Pasted 2 lines #1]")
     expect(paste.expandPlaceholders(placeholder)).toBe(text)
   })
 
   test("increments ID for each placeholder", () => {
     const paste = createPasteManager()
-    expect(paste.createPlaceholder("a\nb\nc")).toBe("[Pasted ~3 lines #paste-1]")
-    expect(paste.createPlaceholder("x\ny\nz")).toBe("[Pasted ~3 lines #paste-2]")
+    expect(paste.createPlaceholder("a\nb\nc")).toBe("[Pasted 3 lines #1]")
+    expect(paste.createPlaceholder("x\ny\nz")).toBe("[Pasted 3 lines #2]")
   })
 
   test("each manager owns its own id sequence", () => {
-    expect(createPasteManager().createPlaceholder("a\nb\nc")).toBe("[Pasted ~3 lines #paste-1]")
-    expect(createPasteManager().createPlaceholder("a\nb\nc")).toBe("[Pasted ~3 lines #paste-1]")
+    expect(createPasteManager().createPlaceholder("a\nb\nc")).toBe("[Pasted 3 lines #1]")
+    expect(createPasteManager().createPlaceholder("a\nb\nc")).toBe("[Pasted 3 lines #1]")
   })
 
   // The count follows the shared line rule: a final newline ends the last
   // line and starts none, as every other count in gent reads it.
   test("a trailing newline does not count as a line", () => {
-    expect(createPasteManager().createPlaceholder("a\nb\nc\n")).toBe("[Pasted ~3 lines #paste-1]")
+    expect(createPasteManager().createPlaceholder("a\nb\nc\n")).toBe("[Pasted 3 lines #1]")
+  })
+
+  test("a one-line paste counts its characters, exactly", () => {
+    const paste = createPasteManager()
+    const line = "x".repeat(200)
+    const placeholder = paste.createPlaceholder(line)
+    expect(placeholder).toBe("[Pasted 200 chars #1]")
+    expect(paste.expandPlaceholders(`see ${placeholder}`)).toBe(`see ${line}`)
   })
 })
 
@@ -341,7 +349,7 @@ describe("expandPlaceholders", () => {
 
   test("preserves unknown placeholders", () => {
     const paste = createPasteManager()
-    const input = "text with [Pasted ~5 lines #paste-unknown] placeholder"
+    const input = "text with [Pasted 5 lines #99] placeholder"
     expect(paste.expandPlaceholders(input)).toBe(input)
   })
 
@@ -374,7 +382,7 @@ describe("paste workflow integration", () => {
     expect(isLargePaste(pastedCode)).toBe(true)
 
     const placeholder = paste.createPlaceholder(pastedCode)
-    expect(placeholder).toMatch(/\[Pasted ~5 lines #paste-\d+\]/)
+    expect(placeholder).toMatch(/\[Pasted 5 lines #\d+\]/)
 
     const userInput = `Check this code: ${placeholder}`
     expect(paste.expandPlaceholders(userInput)).toBe(`Check this code: ${pastedCode}`)
@@ -621,7 +629,7 @@ describe("Composer renderer", () => {
       for (let i = 0; i < 5; i++) setup.mockInput.pressArrow("left")
       yield* Effect.promise(() => setup.mockInput.pasteBracketedText(pasted))
       yield* Effect.promise(() => setup.renderOnce())
-      expect(renderFrame(setup)).toContain("hello [Pasted ~5 lines #paste-1]world")
+      expect(renderFrame(setup)).toContain("hello [Pasted 5 lines #1]world")
       setup.mockInput.pressKey("RETURN")
       yield* Effect.promise(() => setup.renderOnce())
       expect(submitted).toEqual([`hello ${pasted}world`])
@@ -1022,7 +1030,7 @@ describe("Composer submit", () => {
       const reason = Option.flatMap(client, (c) => Option.fromNullishOr(c.error()))
       expect(Option.exists(reason, (m) => m.includes("ran"))).toBe(true)
       // The output is as large as a paste, so it comes back as a placeholder.
-      yield* waitForFrame(setup, (frame) => frame.includes("[Pasted ~3 lines"), "output restored")
+      yield* waitForFrame(setup, (frame) => frame.includes("[Pasted 3 lines"), "output restored")
       setup.mockInput.pressEnter()
       yield* waitForFrame(setup, () => sends === 2, "sent again")
       expect(submitted[1]).toBe(submitted[0])
@@ -1093,14 +1101,14 @@ describe("Composer submit", () => {
       yield* waitForFrame(setup, () => sends === 1, "first send out")
       const pasted = "one\ntwo\nthree\nfour\nfive"
       yield* Effect.promise(() => setup.mockInput.pasteBracketedText(pasted))
-      yield* waitForFrame(setup, (frame) => frame.includes("[Pasted ~5 lines"), "placeholder")
+      yield* waitForFrame(setup, (frame) => frame.includes("[Pasted 5 lines"), "placeholder")
       yield* Deferred.complete(reply, Effect.void)
       const frame = yield* waitForFrame(
         setup,
         (text) => text.includes("first send"),
         "refused back",
       )
-      expect(frame).toContain("[Pasted ~5 lines #paste-1]")
+      expect(frame).toContain("[Pasted 5 lines #1]")
       setup.mockInput.pressEnter()
       yield* waitForFrame(setup, () => sends === 2, "sent again")
       expect(submitted[1]).toBe(`first send\n\n${pasted}`)

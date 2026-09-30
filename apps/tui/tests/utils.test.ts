@@ -18,6 +18,7 @@ import {
   fileUrl,
   formatActivityHeader,
   formatAge,
+  formatCost,
   formatCellRowLabel,
   formatDuration,
   formatError,
@@ -524,7 +525,7 @@ describe("formatUsageStats", () => {
 
   test("formats all populated fields", () => {
     const result = formatUsageStats({ input: 1500, output: 500, cost: 0.0023, turns: 3 }, "gpt-5.4")
-    expect(result).toBe("3 turns ↑1.5k ↓500 $0.0023 gpt-5.4")
+    expect(result).toBe("3 turns ↑1.5k ↓500 $0.002 gpt-5.4")
   })
 
   test("singular turn", () => {
@@ -537,7 +538,21 @@ describe("formatUsageStats", () => {
 
   test("partial fields", () => {
     expect(formatUsageStats({ input: 500 })).toBe("↑500")
-    expect(formatUsageStats({ cost: 0.01 })).toBe("$0.0100")
+    expect(formatUsageStats({ cost: 0.01 })).toBe("$0.01")
+  })
+})
+
+describe("formatCost", () => {
+  test("a cent or more reads in cents", () => {
+    expect(formatCost(0.01)).toBe("$0.01")
+    expect(formatCost(0.125)).toBe("$0.13")
+    expect(formatCost(12.3)).toBe("$12.30")
+  })
+
+  test("under a cent keeps a tenth of a cent, so it never reads as free", () => {
+    expect(formatCost(0.002)).toBe("$0.002")
+    expect(formatCost(0.0004)).toBe("<$0.001")
+    expect(formatCost(0)).toBe("$0.00")
   })
 })
 

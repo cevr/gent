@@ -78,6 +78,7 @@ export { textWidth } from "./text-width-adapter"
 export {
   fitWidth,
   formatAge,
+  formatCost,
   formatDuration,
   formatFileRef,
   formatTokens,

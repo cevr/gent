@@ -3,6 +3,7 @@ import {
   decodeToolOutputOption,
   formatActivityHeader,
   formatCellRowLabel,
+  formatCost,
   formatDuration,
   formatGenericToolText,
   formatPreviewFooter,
@@ -167,7 +168,7 @@ const stepSummary = (steps: TurnSteps): ReadonlyArray<string> => {
   if (steps.count === 0) return []
   const parts = [plural(steps.count, "step")]
   if (steps.toolCalls > 0) parts.push(plural(steps.toolCalls, "tool call"))
-  if (steps.costUsd > 0) parts.push(`$${steps.costUsd.toFixed(3)}`)
+  if (steps.costUsd > 0) parts.push(formatCost(steps.costUsd))
   return parts
 }
 

@@ -133,7 +133,7 @@ describe("refused submissions", () => {
   // The composer on screen writes a text as large as a paste as a placeholder.
   const placeholder = (text: string) => {
     if (text.length < 150) return text
-    return `[Pasted ~1 lines #${text.length}]`
+    return `[Pasted ${text.length} chars #1]`
   }
   const longCommand = `echo ${"x".repeat(200)}`
   const longMessage = "y".repeat(200)

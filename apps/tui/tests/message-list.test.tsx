@@ -224,7 +224,7 @@ describe("worked-for row", () => {
       createdAt: 0,
       seq: 1,
     }
-    expect(getSessionEventLabel(event)).toBe("Worked for 7m 32s · 3 steps · 2 tool calls · $0.012")
+    expect(getSessionEventLabel(event)).toBe("Worked for 7m 32s · 3 steps · 2 tool calls · $0.01")
   })
 
   test("a turn with no recorded steps keeps the plain duration", () => {

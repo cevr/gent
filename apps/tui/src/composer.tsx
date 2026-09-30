@@ -50,6 +50,7 @@ import {
   type SelectListApi,
   type SelectListRow,
   useDockSpacer,
+  usePickerGeometry,
 } from "./ui"
 import { useExtensionUI } from "./extensions/host"
 import { type SessionIdentity, useClient, useRuntime } from "./client"
@@ -441,6 +442,9 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
 
   const loading = () => items.loading && !hasItems()
   const labelWidth = () => Math.max(8, Math.min(24, Math.floor(dimensions().width * 0.28)))
+  // A row pads 1, gives the label labelWidth - 2 and a gap of 2: the description has the rest.
+  const { rowWidth } = usePickerGeometry()
+  const descriptionWidth = () => Math.max(0, rowWidth() - labelWidth() - 1)
 
   const keys = [KeyHints.move, KeyHints.select, keyHint("tab", "complete"), KeyHints.close]
 
@@ -479,7 +483,7 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
                       dim: !isSelected(),
                     }}
                   >
-                    {truncate(text(), dimensions().width - labelWidth() - 2)}
+                    {truncate(text(), descriptionWidth())}
                   </span>
                 )}
               </Show>
@@ -551,14 +555,16 @@ export function createPasteManager() {
   const store = new Map<string, string>()
 
   return {
+    // A paste of several lines counts its lines; one long line counts its characters.
     createPlaceholder(text: string): string {
-      const id = `paste-${++idCounter}`
+      const id = String(++idCounter)
       store.set(id, text)
       const lines = lineCount(text)
-      return `[Pasted ~${lines} lines #${id}]`
+      if (lines > 1) return `[Pasted ${lines} lines #${id}]`
+      return `[Pasted ${text.length} chars #${id}]`
     },
     expandPlaceholders(text: string): string {
-      return text.replace(/\[Pasted ~\d+ lines #(paste-\d+)\]/g, (match, id) => {
+      return text.replace(/\[Pasted \d+ (?:lines|chars) #(\d+)\]/g, (match, id) => {
         const content = Option.fromNullishOr(store.get(id))
         if (Option.isSome(content)) {
           store.delete(id)
@@ -1401,6 +1407,8 @@ export function Composer(props: ComposerProps) {
                 { name: "return", ctrl: true, action: "newline" },
                 { name: "linefeed", action: "newline" },
                 { name: "linefeed", shift: true, action: "newline" },
+                // The kitty keyboard protocol spells ctrl+j as j with ctrl, not as linefeed.
+                { name: "j", ctrl: true, action: "newline" },
                 { name: "backspace", meta: true, action: "delete-word-backward" },
               ]}
               backgroundColor="transparent"

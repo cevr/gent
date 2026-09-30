@@ -751,7 +751,7 @@ describe("Agents pane navigation", () => {
       expect(frame).toContain("claude-sonnet-5")
       expect(frame).not.toContain("anthropic/")
       expect(frame).toContain("7 turns")
-      expect(frame).toContain("$0.125")
+      expect(frame).toContain("$0.13")
       expect(frame).toContain("1m33s")
     }),
   )
@@ -1440,9 +1440,9 @@ describe("agents pane counts and detail", () => {
         omittedMessages: 0,
       })
       expect(detailLabel(Option.some(detail("Running", 0)))).toBe(
-        "claude-sonnet-5  ·  turn 1 running  ·  $0.028",
+        "claude-sonnet-5  ·  turn 1 running  ·  $0.03",
       )
-      expect(detailLabel(Option.some(detail("Idle", 2)))).toContain("2 turns  ·  $0.028")
+      expect(detailLabel(Option.some(detail("Idle", 2)))).toContain("2 turns  ·  $0.03")
     }),
   )
 })

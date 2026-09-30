@@ -345,6 +345,16 @@ export function formatTokens(count: number): string {
   return `${(count / 1000000).toFixed(1)}M`
 }
 
+/**
+ * The one spelling of a dollar cost: cents at a cent or more, a tenth of a
+ * cent below it, so a cheap turn never reads as free.
+ */
+export function formatCost(usd: number): string {
+  if (usd > 0 && usd < 0.001) return "<$0.001"
+  if (usd > 0 && usd < 0.01) return `$${usd.toFixed(3)}`
+  return `$${usd.toFixed(2)}`
+}
+
 export function formatUsageStats(
   usage: {
     input?: number
@@ -366,7 +376,7 @@ export function formatUsageStats(
   const output = Option.fromNullishOr(usage.output)
   if (Option.isSome(output) && output.value > 0) parts.push(`↓${formatTokens(output.value)}`)
   const cost = Option.fromNullishOr(usage.cost)
-  if (Option.isSome(cost) && cost.value > 0) parts.push(`$${cost.value.toFixed(4)}`)
+  if (Option.isSome(cost) && cost.value > 0) parts.push(formatCost(cost.value))
   const modelName = Option.fromNullishOr(model)
   if (Option.isSome(modelName)) parts.push(modelName.value)
   return parts.join(" ")
