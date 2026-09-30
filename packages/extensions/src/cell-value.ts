@@ -660,6 +660,25 @@ const typedArrayKinds: ReadonlyArray<string> = [
   "BigUint64Array",
 ]
 
+/**
+ * A number JSON carries as itself. JSON has no NaN or infinities and writes
+ * -0 as 0, so those travel as text: `Number` and a typed array's `from` read
+ * the text back to the same number.
+ */
+const isJsonNumber = (value: number) => Number.isFinite(value) && !Object.is(value, -0)
+
+/** The text of a number JSON cannot carry: `String` writes -0 as "0". */
+const numberText = (value: number) => {
+  if (Object.is(value, -0)) return "-0"
+  return String(value)
+}
+
+/** A number as snapshot JSON: itself when JSON carries it, else its text. */
+const jsonNumber = (value: number): Schema.Json => {
+  if (isJsonNumber(value)) return value
+  return numberText(value)
+}
+
 const encodePrimitive = (value: unknown, budget: Budget): Encoded | undefined => {
   if (Predicate.isString(value)) {
     if (budget.text(value)) return value
@@ -672,12 +691,10 @@ const encodePrimitive = (value: unknown, budget: Budget): Encoded | undefined =>
   if (value === null || Predicate.isBoolean(value)) return value
   if (Predicate.isUndefined(value)) return tagged("undefined", null)
   if (Predicate.isNumber(value)) {
+    if (!isJsonNumber(value)) return tagged("number", numberText(value))
     // A finite number is its shortest text; the floor already charged two bytes.
-    if (Number.isFinite(value)) {
-      if (budget.spend(String(value).length - 1)) return value
-      return tooLarge
-    }
-    return tagged("number", String(value))
+    if (budget.spend(String(value).length - 1)) return value
+    return tooLarge
   }
   // The abstract ToString: a `toString` on the value never runs.
   if (Predicate.isBigInt(value)) return tagged("bigint", String(value))
@@ -793,9 +810,10 @@ const encodeTypedArray = (value: object, budget: Budget): Encoded => {
   const values: Array<Schema.Json> = []
   for (let index = 0; index < length; index++) {
     const item = typedArrayItem(value, index)
-    // Bigint elements travel as strings, through the abstract ToString.
+    // Bigint elements travel as strings, through the abstract ToString; so
+    // does a number JSON cannot carry.
     if (Predicate.isBigInt(item)) values.push(String(item))
-    else if (Predicate.isNumber(item)) values.push(item)
+    else if (Predicate.isNumber(item)) values.push(jsonNumber(item))
   }
   return tagged(kind, values)
 }
@@ -810,7 +828,8 @@ const encodeBuiltin = (
   if (isDate(value))
     return Option.match(readDate(value), {
       onNone: () => unsupported,
-      onSome: (time) => tagged("date", time),
+      // An invalid date's time is NaN: its text keeps the date invalid.
+      onSome: (time) => tagged("date", jsonNumber(time)),
     })
   if (isRegExp(value)) return encodeRegExp(value, budget)
   if (isMap(value)) return encodeCollection(value, "map", inner)
