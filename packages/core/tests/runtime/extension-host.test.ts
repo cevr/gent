@@ -1478,11 +1478,13 @@ describe("resolveTurnProfile", () => {
             updatedAt: now,
           }),
         )
+        // A built profile's services hold its registry, as `Layer.build` makes them.
+        const profileRegistry = ExtensionRegistry.of({ getResolved: () => profileResolved })
         const fakeProfile: SessionProfile = {
           cwd: "/nonexistent/profile-driver-scope",
           resolved: profileResolved,
-          layerContext: Context.makeUnsafe(new Map<string, unknown>()),
-          registryService: { getResolved: () => profileResolved },
+          layerContext: Context.make(ExtensionRegistry, profileRegistry),
+          registryService: profileRegistry,
           baseSections: [],
           generationId: ProcessGenerationId.make("test"),
         }
@@ -1500,7 +1502,8 @@ describe("resolveTurnProfile", () => {
           hostProvider,
           defaults: { baseSections: [] },
         })
-        const drivers = resolved.turnExtensionRegistry.getResolved().modelDrivers
+        const drivers = Context.get(resolved.turnCapabilityContext, ExtensionRegistry).getResolved()
+          .modelDrivers
         expect(resolved.turnHostCtx.cwd).toBe("/nonexistent/profile-driver-scope")
         expect(drivers.get("profile-driver")?.id).toBe("profile-driver")
         expect(extensionRegistry.getResolved().modelDrivers.has("profile-driver")).toBe(false)

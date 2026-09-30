@@ -4314,6 +4314,24 @@ export default defineExtension({
                   }),
               }),
             )
+            // A leaf that reads core's registry sees the turn's registry.
+            yield* host.register(
+              "tool",
+              tool({
+                id: "registry_probe",
+                description: "List the extensions the turn's registry holds",
+                params: Schema.Struct({}),
+                output: Schema.String,
+                execute: () =>
+                  Effect.gen(function* () {
+                    const registry = yield* ExtensionRegistry
+                    return registry
+                      .getResolved()
+                      .extensions.map((extension) => extension.manifest.id)
+                      .join(",")
+                  }),
+              }),
+            )
             yield* host.register(
               "resource",
               defineResource({
@@ -4375,11 +4393,12 @@ export default defineExtension({
             const offered: Array<string> = []
             const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
               {
-                ...textStep("the turn ran"),
+                ...toolCallStep("registry_probe", {}),
                 assertOptions: (options) => {
                   offered.push(...options.tools.map((entry) => entry.name))
                 },
               },
+              textStep("the turn ran"),
             ])
             const { client, sessionId, branchId } = yield* createRpcHarness({
               ...e2ePreset,
@@ -4416,6 +4435,21 @@ export default defineExtension({
             // is not offered, while the working one's is.
             expect(offered).toContain("working_probe")
             expect(offered).not.toContain("dependent_probe")
+            // A leaf reading the registry sees the same narrowed registry.
+            const probed = yield* client.session.events({ sessionId, branchId }).pipe(
+              Stream.takeUntil(({ event }) => event._tag === "StreamSynchronized"),
+              Stream.flatMap(({ event }) => {
+                if (event._tag !== "ToolCallSucceeded" || event.toolName !== "registry_probe") {
+                  return Stream.empty
+                }
+                return Stream.make(String(event.output))
+              }),
+              Stream.runCollect,
+              Effect.map((all) => Array.from(all)),
+            )
+            expect(probed).toHaveLength(1)
+            expect(probed[0]).toContain("@test/working-branch-resource")
+            expect(probed[0]).not.toContain("@test/zz-dependent-branch-resource")
             // Each failure names its extension once, as a notice.
             const events = yield* client.session.events({ sessionId, branchId }).pipe(
               Stream.takeUntil(({ event }) => event._tag === "StreamSynchronized"),

@@ -106,6 +106,7 @@ import {
   makeAgentLoopTurnExecution,
   makeTurnLedger,
   runAgentLoopTurnProfile,
+  turnRegistry,
   sessionAgentName,
   signalActiveStreamInterrupt,
   type TurnOutcome,
@@ -127,7 +128,6 @@ import {
   buildScopeResources,
   type CurrentExtensionHostContext,
   ExtensionRegistry,
-  type ExtensionRegistryService,
   makeExtensionHostContextProvider,
   makeExtensionHostPlatform,
   resolveTurnProfile as resolveSessionTurnProfile,
@@ -1809,14 +1809,11 @@ const makeAgentLoopBehavior = (
       return yield* Effect.uninterruptible(
         Effect.gen(function* () {
           const started = yield* buildScopeResources({
-            extensions: profile.turnExtensionRegistry.getResolved().extensions,
+            extensions: turnRegistry(profile).getResolved().extensions,
             scope: "branch",
             context: Context.merge(
               Context.makeUnsafe<unknown>(new Map()),
-              Option.getOrElse(
-                Option.fromUndefinedOr(profile.turnCapabilityContext),
-                Context.empty,
-              ),
+              profile.turnCapabilityContext,
             ),
             parent: loopScope,
             restore: (effect) => effect,
@@ -1852,24 +1849,33 @@ const makeAgentLoopBehavior = (
     const branchContext = Effect.map(buildBranchResources, ({ context }) => context)
     // A turn, a request and a hook read the registry with the loop's
     // suspended extensions left out, so none of their tools, requests or
-    // hooks is offered or dispatched. One registry per profile: a profile
-    // resolves to the same registry until a config edit replaces it.
-    const suspendedRegistries = new WeakMap<ExtensionRegistryService, ExtensionRegistryService>()
+    // hooks is offered or dispatched. The narrowed registry replaces the one
+    // in the capability context, so a leaf that reads `ExtensionRegistry`
+    // sees it too. One context per profile: a profile resolves to the same
+    // context until a config edit replaces it.
+    const suspendedContexts = new WeakMap<
+      Context.Context<ExtensionRegistry>,
+      Context.Context<ExtensionRegistry>
+    >()
     const resolveTurnProfile = (opener: RunOpener) =>
       Effect.gen(function* () {
         const profile = yield* resolveProfile(opener)
         const { suspended } = yield* buildBranchResources
         if (suspended.length === 0) return profile
-        const registry = profile.turnExtensionRegistry
+        const context = profile.turnCapabilityContext
         const narrowed = Option.getOrElse(
-          Option.fromUndefinedOr(suspendedRegistries.get(registry)),
+          Option.fromUndefinedOr(suspendedContexts.get(context)),
           () => {
-            const resolved = suspendExtensions(registry.getResolved(), suspended)
-            return ExtensionRegistry.of({ getResolved: () => resolved })
+            const resolved = suspendExtensions(turnRegistry(profile).getResolved(), suspended)
+            return Context.add(
+              context,
+              ExtensionRegistry,
+              ExtensionRegistry.of({ getResolved: () => resolved }),
+            )
           },
         )
-        suspendedRegistries.set(registry, narrowed)
-        return { ...profile, turnExtensionRegistry: narrowed }
+        suspendedContexts.set(context, narrowed)
+        return { ...profile, turnCapabilityContext: narrowed }
       })
     const turnWorkerQueue = yield* TxQueue.unbounded<TurnWork>()
     const activeStreamRef = yield* Ref.make<Option.Option<ActiveStreamHandle>>(Option.none())
@@ -2010,7 +2016,7 @@ const makeAgentLoopBehavior = (
           profile: resolveTurnProfile(RunOpener.cases.Turn.make({ openedByClient: false })),
           context: branchContext,
         })
-        yield* profile.turnExtensionRegistry
+        yield* turnRegistry(profile)
           .getResolved()
           .extensionHooks.emitLoopOpen.pipe(
             runAgentLoopTurnProfile(profile),
@@ -3145,7 +3151,7 @@ const buildAgentLoopActorHandlers = (config: {
             const environment = yield* handle.resolveTurnProfile(
               RunOpener.cases.ClientRequest.make({ grant }),
             )
-            const rpcRegistry = environment.turnExtensionRegistry.getResolved().rpcRegistry
+            const rpcRegistry = turnRegistry(environment).getResolved().rpcRegistry
             const capabilityId = RpcId.make(operation.capabilityId)
             let input: unknown = Option.getOrUndefined(Option.none())
             if (operation.input._tag === "Present") input = operation.input.value

@@ -3204,14 +3204,13 @@ export const resolveTurnProfile = (params: {
     )
     if (Option.isNone(profile)) {
       return {
-        turnExtensionRegistry: launchRegistry,
         turnBaseSections: params.defaults.baseSections,
         turnHostCtx: hostProvider.forRun(runInfo),
         turnInteractive: interactive,
+        turnCapabilityContext: Context.make(ExtensionRegistry, launchRegistry),
       }
     }
     return {
-      turnExtensionRegistry: profile.value.registryService,
       turnBaseSections: profile.value.baseSections,
       turnHostCtx: hostProvider.forRun(runInfo),
       turnInteractive: interactive,
