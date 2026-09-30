@@ -1681,6 +1681,61 @@ describe("mcp oauth", () => {
   )
 
   it.scopedLive(
+    "two setups that refresh two different logins at once both keep their rotated tokens",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const oauth = yield* serveOAuthFixtureWith({
+          ...defaultOAuthFixture,
+          overlapRefreshes: true,
+        })
+        const data = yield* makeDataDir
+        const authFile = path.join(data.directory, "mcp-auth.json")
+        const now = yield* Clock.currentTimeMillis
+        const expiring = (name: string) => {
+          oauth.valid.add(`token-${name}`)
+          oauth.refreshTokens.add(`refresh-${name}`)
+          return {
+            tokens: {
+              access_token: `token-${name}`,
+              token_type: "Bearer",
+              refresh_token: `refresh-${name}`,
+            },
+            expiresAt: now + 30_000,
+            client: { client_id: "client-1" },
+            redirectUri: "http://127.0.0.1:9/callback",
+          }
+        }
+        yield* fs.writeFileString(
+          authFile,
+          encodeJson({
+            servers: {
+              [`alpha ${oauth.origin}/mcp`]: expiring("alpha"),
+              [`beta ${oauth.origin}/mcp`]: expiring("beta"),
+            },
+          }),
+        )
+        // Two extensions, each with its own login store: two gent processes on one data directory.
+        const home = path.join(data.directory, "home")
+        const setupOf = (name: string) =>
+          collectTestContributions(
+            McpServers(`@test/mcp-${name}`, { [name]: { url: `${oauth.origin}/mcp` } }).setup,
+            { home, cwd: data.directory },
+          )
+        yield* Effect.all([setupOf("alpha"), setupOf("beta")], { concurrency: 2 }).pipe(
+          Effect.provide(data.layer),
+        )
+        expect(oauth.refreshes).toBe(2)
+        // Each login holds its rotated refresh token; neither write dropped the other's.
+        const stored = yield* fs.readFileString(authFile)
+        expect(stored).not.toContain('"refresh_token":"refresh-alpha"')
+        expect(stored).not.toContain('"refresh_token":"refresh-beta"')
+      }).pipe(Effect.timeout("40 seconds"), Effect.provide(platformLayer)),
+    45_000,
+  )
+
+  it.scopedLive(
     "a server whose resource metadata only its WWW-Authenticate header names logs in and refreshes",
     () =>
       Effect.gen(function* () {

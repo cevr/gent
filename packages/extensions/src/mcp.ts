@@ -667,10 +667,9 @@ const usesOAuth = (config: McpServerConfig): config is HttpServerConfig =>
  */
 const authKey = (server: McpServer, config: HttpServerConfig) => `${server.name} ${config.url}`
 
-/** The login file, the permit its writes take, and the services a fetch runs its refresh with. */
+/** The login file, and the services a fetch runs its refresh with. */
 interface AuthStore {
   readonly file: string
-  readonly permit: Semaphore.Semaphore
   readonly services: Context.Context<FileSystem.FileSystem | Path.Path | Crypto.Crypto>
 }
 
@@ -678,7 +677,6 @@ const makeAuthStore = Effect.fn("Mcp.makeAuthStore")(function* (home: string) {
   const path = yield* Path.Path
   return {
     file: path.join(yield* resolveDataDir(home), "mcp-auth.json"),
-    permit: yield* Semaphore.make(1),
     services: yield* Effect.context<FileSystem.FileSystem | Path.Path | Crypto.Crypto>(),
   }
 })
@@ -695,21 +693,22 @@ const readLogins = (store: AuthStore) =>
 const readLogin = (store: AuthStore, key: string) =>
   Effect.map(readLogins(store), (file) => Option.fromUndefinedOr(file.servers[key]))
 
-/** Stores one login; the file is written whole, atomically, readable by its owner only. */
+/**
+ * Stores one login; the file is written whole, atomically, readable by its
+ * owner only. The caller holds the auth lock (`underAuthLock`): the read and
+ * the write here are one step no other writer comes between.
+ */
 const writeLogin = (store: AuthStore, key: string, login: StoredLogin) =>
-  Semaphore.withPermit(
-    store.permit,
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const path = yield* Path.Path
-      const current = yield* readLogins(store)
-      const servers = { ...current.servers, [key]: login }
-      yield* fs.makeDirectory(path.dirname(store.file), { recursive: true })
-      yield* writeFileAtomic(store.file, yield* Schema.encodeEffect(AuthFile)({ servers }), {
-        mode: 0o600,
-      })
-    }),
-  )
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+    const current = yield* readLogins(store)
+    const servers = { ...current.servers, [key]: login }
+    yield* fs.makeDirectory(path.dirname(store.file), { recursive: true })
+    yield* writeFileAtomic(store.file, yield* Schema.encodeEffect(AuthFile)({ servers }), {
+      mode: 0o600,
+    })
+  })
 
 /** The SDK's tokens as stored; a refresh answer without a refresh token keeps the old one. */
 const storedTokens = (
@@ -942,11 +941,11 @@ const nearExpiry = (login: StoredLogin, now: number) =>
   )
 
 /**
- * Refreshes the stored login under its key's refresh lock, unless the login
- * read again under the lock is `fresh`. So of two refreshes of one login, in
- * this process or another, the second finds the token the first stored and
- * uses it; it never redeems the refresh token the first already spent. None
- * when there is no login, or the refresh or the lock failed.
+ * Refreshes the stored login under the auth lock, unless the login read again
+ * under the lock is `fresh`. So of two refreshes of one login, in this
+ * process or another, the second finds the token the first stored and uses
+ * it; it never redeems the refresh token the first already spent. None when
+ * there is no login, or the refresh or the lock failed.
  */
 const refreshUnlessFresh = (
   server: McpServer,
@@ -963,7 +962,7 @@ const refreshUnlessFresh = (
       if (fresh(login.value, yield* Clock.currentTimeMillis)) return login
       return yield* refreshLogin(server, config, store, login.value, named)
     })
-    return yield* refresh.pipe(underRefreshLock(store, key))
+    return yield* refresh.pipe(underAuthLock(store))
   }).pipe(
     Effect.catchCause((cause) =>
       Effect.logWarning("mcp.oauth.refresh.failed").pipe(
@@ -973,32 +972,33 @@ const refreshUnlessFresh = (
     ),
   )
 
-/** A refresh lock older than this was left by a holder that died; no refresh takes this long. */
-const REFRESH_LOCK_STALE = Duration.seconds(30)
-/** How often a refresh tries a held lock again, and how many times before it gives up. */
-const REFRESH_LOCK_RETRY = { schedule: Schedule.spaced("50 millis"), times: 1200 }
+/** An auth lock older than this was left by a holder that died; no refresh takes this long. */
+const AUTH_LOCK_STALE = Duration.seconds(30)
+/** How often a writer tries a held lock again, and how many times before it gives up. */
+const AUTH_LOCK_RETRY = { schedule: Schedule.spaced("50 millis"), times: 1200 }
 
-/** Another refresh of the same login held the lock for longer than a stale lock lives. */
-class RefreshLockBusy extends Schema.TaggedError<RefreshLockBusy>()("RefreshLockBusy", {
+/** Another writer held the auth lock for longer than a stale lock lives. */
+class AuthLockBusy extends Schema.TaggedError<AuthLockBusy>()("AuthLockBusy", {
   message: Schema.String,
 }) {}
 
 /**
- * Runs an effect while holding the refresh lock of the login under `key`:
- * `<data dir>/mcp-auth.<sha256 of key>.lock`, created with `wx`, so one
- * holder at a time across every gent process on the data directory. The
- * holder removes the file when done. A file older than `REFRESH_LOCK_STALE`
- * is a dead holder's, and the next taker removes it first.
+ * Runs an effect while holding the lock of the login file: `<data
+ * dir>/mcp-auth.json.lock`, created with `wx`, so one holder at a time across
+ * every gent process on the data directory. Every refresh and every stored
+ * login holds it, so two writers of different logins never read the same
+ * file and each drop the other's token. Refreshes are rare, so one lock for
+ * every server costs nothing. The holder removes the file when done. A file
+ * older than `AUTH_LOCK_STALE` is a dead holder's, and the next taker removes
+ * it first.
  */
-const underRefreshLock =
-  (store: AuthStore, key: string) =>
+const underAuthLock =
+  (store: AuthStore) =>
   <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
-      const crypto = yield* Crypto.Crypto
-      const digest = yield* crypto.digest("SHA-256", new TextEncoder().encode(key))
-      const file = path.join(path.dirname(store.file), `mcp-auth.${Hex.encode(digest)}.lock`)
+      const file = `${store.file}.lock`
       yield* fs.makeDirectory(path.dirname(file), { recursive: true })
       const take = Effect.gen(function* () {
         const taken = yield* fs.writeFileString(file, "", { flag: "wx", mode: 0o600 }).pipe(
@@ -1009,17 +1009,14 @@ const underRefreshLock =
         const now = yield* Clock.currentTimeMillis
         const modified = Option.flatMap(yield* Effect.option(fs.stat(file)), (info) => info.mtime)
         if (
-          Option.exists(
-            modified,
-            (at) => now - at.getTime() > Duration.toMillis(REFRESH_LOCK_STALE),
-          )
+          Option.exists(modified, (at) => now - at.getTime() > Duration.toMillis(AUTH_LOCK_STALE))
         ) {
           yield* Effect.ignore(fs.remove(file))
         }
-        return yield* new RefreshLockBusy({ message: `the refresh lock ${file} stays held` })
+        return yield* new AuthLockBusy({ message: `the auth lock ${file} stays held` })
       })
       return yield* Effect.acquireUseRelease(
-        Effect.retry(take, REFRESH_LOCK_RETRY),
+        Effect.retry(take, AUTH_LOCK_RETRY),
         () => effect,
         () => Effect.ignore(fs.remove(file)),
       )
@@ -1169,7 +1166,7 @@ const startLogin = (
         metadata,
         yield* Clock.currentTimeMillis,
       )
-      yield* writeLogin(store, authKey(server, config), login)
+      yield* writeLogin(store, authKey(server, config), login).pipe(underAuthLock(store))
       return login
     }).pipe(
       Effect.provideService(

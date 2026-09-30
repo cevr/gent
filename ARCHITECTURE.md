@@ -1316,12 +1316,13 @@ transport's `fetch` answers each 401 or 403 before the SDK sees it: a 401 on
 `GET` refreshes the token (discovery starting from the metadata URL that 401
 names) and sends that request once more; any other refusal, a `tools/call`
 included, fails with "the <server> MCP server needs a login: run /mcp login
-<server>". So a call is never sent twice. A refresh holds the login's lock
-file, `<data dir>/mcp-auth.<sha256 of the key>.lock` (created with `wx`,
-removed when done, taken over when older than 30 seconds), and reads the login
-again under it: when another refresh, in this process or another, already
-stored a new token, it uses that token and never redeems the spent refresh
-token.
+<server>". So a call is never sent twice. Every refresh and every stored login
+holds the login file's one lock, `<data dir>/mcp-auth.json.lock` (created with
+`wx`, removed when done, taken over when older than 30 seconds), so two gent
+processes that write different logins never drop each other's token. A
+refresh reads the login again under the lock: when another refresh, in this
+process or another, already stored a new token, it uses that token and never
+redeems the spent refresh token.
 
 Setup reads each server's tool list from `<data dir>/mcp-catalog.json`, keyed
 by the SHA-256 digest of the entry as it runs (its expanded values, for a
