@@ -647,8 +647,8 @@ export function Session(props: SessionProps) {
     items.push({
       text: formatCwdGit(
         sessionCwd,
-        Option.filter(Option.fromNullishOr(workspace.gitRoot()), () => atLaunchCwd),
-        Option.filter(Option.fromNullishOr(workspace.gitStatus()?.branch), () => atLaunchCwd),
+        Option.filter(workspace.gitRoot(), () => atLaunchCwd),
+        Option.filter(workspace.gitBranch(), () => atLaunchCwd),
       ),
       color: theme.textMuted,
     })

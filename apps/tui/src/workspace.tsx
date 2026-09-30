@@ -40,22 +40,13 @@ export function EnvProvider(props: EnvProviderProps) {
 
 // ── workspace provider ──────────────────────────────────────────────────────
 
-interface GitStatus {
-  branch: string
-  files: number
-  additions: number
-  deletions: number
-}
-
 interface WorkspaceContextValue {
   cwd: string
   home: string
-  // eslint-disable-next-line effect/noNullish -- UI consumers use null while git metadata is unavailable.
-  gitRoot: () => string | null
-  // eslint-disable-next-line effect/noNullish -- UI consumers use null while git metadata is unavailable.
-  gitStatus: () => GitStatus | null
-  isGitRepo: () => boolean
-  projectName: () => string
+  /** The checkout's top directory; none outside git or until the first read lands. */
+  gitRoot: () => Option.Option<string>
+  /** The branch, or `detached @<sha>`; none outside git or until the first read lands. */
+  gitBranch: () => Option.Option<string>
 }
 
 const WorkspaceContext = createContext<WorkspaceContextValue>()
@@ -72,8 +63,8 @@ interface WorkspaceProviderProps {
 }
 
 interface GitInfo {
-  root: string
-  status: GitStatus
+  readonly root: string
+  readonly branch: string
 }
 
 const gitCommand = (cwd: string, args: ReadonlyArray<string>) =>
@@ -109,49 +100,8 @@ const getGitInfo = (
       branch = `detached @${sha}`
     }
 
-    const diffText = yield* gitCommand(cwd, ["diff", "--stat", "HEAD"]).pipe(
-      Effect.catchEager(() => Effect.succeed("")),
-    )
-
-    let files = 0
-    let additions = 0
-    let deletions = 0
-
-    // Parse last line: " N files changed, X insertions(+), Y deletions(-)"
-    const lines = diffText.trim().split("\n")
-    const summaryLine = Option.getOrElse(Option.fromNullishOr(lines[lines.length - 1]), () => "")
-
-    const filesMatch = summaryLine.match(/(\d+) files? changed/)
-    const addMatch = summaryLine.match(/(\d+) insertions?\(\+\)/)
-    const delMatch = summaryLine.match(/(\d+) deletions?\(-\)/)
-
-    const filesValue = Option.flatMap(Option.fromNullishOr(filesMatch), (match) =>
-      Option.fromNullishOr(match[1]),
-    )
-    const addValue = Option.flatMap(Option.fromNullishOr(addMatch), (match) =>
-      Option.fromNullishOr(match[1]),
-    )
-    const delValue = Option.flatMap(Option.fromNullishOr(delMatch), (match) =>
-      Option.fromNullishOr(match[1]),
-    )
-
-    if (Option.isSome(filesValue)) files = parseInt(filesValue.value, 10)
-    if (Option.isSome(addValue)) additions = parseInt(addValue.value, 10)
-    if (Option.isSome(delValue)) deletions = parseInt(delValue.value, 10)
-
-    return Option.some({ root, status: { branch, files, additions, deletions } })
+    return Option.some({ root, branch })
   })
-
-function deriveProjectName(cwd: string, gitRoot: Option.Option<string>): string {
-  // Prefer git repo name
-  if (Option.isSome(gitRoot)) {
-    const parts = gitRoot.value.split("/")
-    return Option.getOrElse(Option.fromNullishOr(parts[parts.length - 1]), () => gitRoot.value)
-  }
-  // Fall back to cwd dirname
-  const parts = cwd.split("/")
-  return Option.getOrElse(Option.fromNullishOr(parts[parts.length - 1]), () => cwd)
-}
 
 export function WorkspaceProvider(props: WorkspaceProviderProps) {
   const [gitInfo, setGitInfo] = createSignal<Option.Option<GitInfo>>(Option.none())
@@ -269,15 +219,8 @@ export function WorkspaceProvider(props: WorkspaceProviderProps) {
   const value: WorkspaceContextValue = {
     cwd: props.cwd,
     home: props.home,
-    gitRoot: () => Option.getOrNull(Option.flatMap(gitInfo(), (info) => Option.some(info.root))),
-    gitStatus: () =>
-      Option.getOrNull(Option.flatMap(gitInfo(), (info) => Option.some(info.status))),
-    isGitRepo: () => Option.isSome(gitInfo()),
-    projectName: () =>
-      deriveProjectName(
-        props.cwd,
-        Option.map(gitInfo(), (info) => info.root),
-      ),
+    gitRoot: () => Option.map(gitInfo(), (info) => info.root),
+    gitBranch: () => Option.map(gitInfo(), (info) => info.branch),
   }
 
   return <WorkspaceContext.Provider value={value}>{props.children}</WorkspaceContext.Provider>
