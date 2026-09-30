@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it, test } from "effect-bun-test"
-import { Context, Deferred, Effect, Layer, Option, Scope } from "effect"
+import { Context, Deferred, Effect, Exit, Fiber, Layer, Option, Scope } from "effect"
+import type { GentRuntime } from "@gent/sdk"
 import {
   AgentName,
   BranchId,
@@ -29,6 +30,7 @@ import {
   applySnapshotAgent,
   createMockClient,
   createMockRuntime,
+  destroyRenderSetup,
   renderWithProviders,
   renderFrame,
 } from "./render-harness-boundary"
@@ -275,6 +277,53 @@ describe("Auth route", () => {
       expect(calls).toEqual([{ agentName: "helper:google", sessionId: activeSessionId }])
       setup.renderer.destroy()
     }),
+  )
+  // The success flash clears itself after a while. A pane that closes first
+  // stops that clock with it, so nothing writes to the closed pane later.
+  it.live("closing the pane stops its success flash", () =>
+    Effect.gen(function* () {
+      const forked: Array<Fiber.Fiber<unknown, unknown>> = []
+      const base = createMockRuntime()
+      const runtime: GentRuntime = {
+        ...base,
+        fork: (effect) => {
+          const fiber = base.fork(effect)
+          forked.push(fiber)
+          return fiber
+        },
+      }
+      const client = createMockClient({
+        auth: {
+          listProviders: () =>
+            Effect.succeed([
+              {
+                provider: ProviderId.make("anthropic"),
+                hasKey: false,
+                required: false,
+                source: "none",
+                authType: absent,
+              },
+            ]),
+          listMethods: () => Effect.succeed({ anthropic: [apiMethodRoute] }),
+          setKey: () => Effect.void,
+        },
+      })
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <Auth sessionId={activeSessionId} />, { client, runtime }),
+      )
+      yield* waitForFrame(setup, (frame) => frame.includes("anthropic"))
+      setup.mockInput.pressEnter()
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, (frame) => frame.includes("Sign in · anthropic · API key"))
+      yield* Effect.promise(() => setup.mockInput.typeText("new-key"))
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, (frame) => frame.includes("API key saved for anthropic"))
+      const flash = yield* Effect.fromOption(Option.fromNullishOr(forked.at(-1)))
+      destroyRenderSetup(setup)
+      const exit = yield* Fiber.await(flash).pipe(Effect.timeout("1 second"))
+      expect(Exit.hasInterrupts(exit)).toBe(true)
+    }).pipe(Effect.timeout("10 seconds")),
   )
   // Signing out is destructive, so it takes the agents pane's key and ladder:
   // ctrl+x arms the row, a second ctrl+x removes the stored key.

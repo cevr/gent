@@ -6,7 +6,16 @@ import {
   AuthProviderInfo,
   type SessionId,
 } from "@gent/core/protocol"
-import { createEffect, createSignal, For, Match as SolidMatch, on, Show, Switch } from "solid-js"
+import {
+  createEffect,
+  createSignal,
+  For,
+  Match as SolidMatch,
+  on,
+  onCleanup,
+  Show,
+  Switch,
+} from "solid-js"
 import { omitUndefined } from "@gent/core/extensions/api"
 import { LinkOpener } from "./os"
 import { useTheme } from "./theme"
@@ -302,11 +311,16 @@ export function Auth(props: AuthProps) {
   let version = 0
   let successTimer = Option.none<Fiber.Fiber<void, never>>()
 
-  const clearSuccess = () => {
-    if (Option.isSome(successTimer)) clientCtx.runtime.cast(Fiber.interrupt(successTimer.value))
+  const stopSuccessTimer = () => {
+    if (Option.isSome(successTimer)) cast(Fiber.interrupt(successTimer.value))
     successTimer = Option.none()
+  }
+  const clearSuccess = () => {
+    stopSuccessTimer()
     setSuccessMessage(Option.none())
   }
+  // A pane that closes stops the flash's clock with it.
+  onCleanup(stopSuccessTimer)
 
   /** Start an action: everything already in flight stops counting. */
   const begin = () => {
