@@ -10,6 +10,7 @@ import {
   makeTempDirectoryScoped,
   textStep,
   toolCallStep,
+  ApprovalService,
 } from "@gent/core/test-utils"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import type { ApprovalDecision, ExtensionContextService } from "@gent/core/extensions/api"
@@ -292,7 +293,7 @@ describe("InteractionToolsExtension via model turn", () => {
         const { client, sessionId, branchId } = yield* createRpcHarness({
           ...shippedPreset,
           providerLayer,
-          durableApproval: true,
+          approvalLayer: ApprovalService.Live,
         })
         const events = yield* client.session.events({ sessionId, branchId }).pipe(
           Stream.takeUntil(({ event }) => event._tag === "TurnCompleted"),
@@ -342,7 +343,7 @@ describe("InteractionToolsExtension via model turn", () => {
           const { client, sessionId, branchId } = yield* createRpcHarness({
             ...e2ePreset,
             providerLayer,
-            durableApproval: true,
+            approvalLayer: ApprovalService.Live,
             cwd,
             home: cwd,
           })

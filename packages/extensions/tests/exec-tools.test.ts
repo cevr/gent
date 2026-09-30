@@ -53,6 +53,7 @@ import {
   type TestToolContext,
   turnRequestText,
   SqliteStorage,
+  ApprovalService,
 } from "@gent/core/test-utils"
 import { e2ePreset, shippedPreset } from "./helpers/test-preset.js"
 import { toolResultSummary } from "@gent/core/extensions/branch-tools"
@@ -194,7 +195,7 @@ describe("background shell through a cell", () => {
           const { client, sessionId, branchId } = yield* createRpcHarness({
             ...shippedPreset,
             providerLayer,
-            durableApproval: true,
+            approvalLayer: ApprovalService.Live,
           })
           const notice = yield* client.session.events({ sessionId, branchId }).pipe(
             Stream.filter(
@@ -348,7 +349,7 @@ const hugeBackgroundNotice = Effect.fn("test.hugeBackgroundNotice")(function* (
   const { client, sessionId, branchId } = yield* createRpcHarness({
     ...shippedPreset,
     providerLayer,
-    durableApproval: true,
+    approvalLayer: ApprovalService.Live,
     home,
     extraLayers,
   })

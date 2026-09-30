@@ -1701,21 +1701,11 @@ const RpcHandlers = GentRpcs.toLayer(
         input,
         branchId,
       }: ExtensionRpcRequestInput) =>
-        Effect.gen(function* () {
-          yield* WideEvent.set({
-            sessionId,
-            branchId,
-            extensionId,
-            capabilityId,
-          })
-          return yield* sessionRuntime
-            .requestExtension({
-              sessionId,
-              branchId,
-              extensionId,
-              capabilityId,
-              input,
-            })
+        rpc(
+          "extension.request",
+          { sessionId, branchId, extensionId, capabilityId },
+          sessionRuntime
+            .requestExtension({ sessionId, branchId, extensionId, capabilityId, input })
             .pipe(
               Effect.mapError(
                 (error) =>
@@ -1725,8 +1715,8 @@ const RpcHandlers = GentRpcs.toLayer(
                     message: error.message,
                   }),
               ),
-            )
-        }).pipe(withWideEvent(WideEventBoundary.rpc("extension.request"))),
+            ),
+        ),
 
       "extension.listSlashCommands": ({ sessionId }: SessionIdPayload) =>
         Effect.gen(function* () {
@@ -2053,12 +2043,6 @@ export const createDependencies = (config: DependenciesConfig) => {
   )
 }
 
-// ── http routes ─────────────────────────────────────────────────────────────
-
-// Reusable HTTP route assembly for gent servers.
-//
-// Used by the SDK's owned-server path: `Gent.server` with its in-process HTTP listener.
-
 // ── websocket lifecycle tracing ─────────────────────────────────────────────
 
 /**
@@ -2116,7 +2100,8 @@ interface ServerRoutesConfig {
 }
 
 /**
- * Build the full HTTP route layer for a gent server.
+ * Build the full HTTP route layer for a gent server; the SDK's owned-server
+ * path (`Gent.server`) serves it from its in-process HTTP listener.
  *
  * Includes: RPC-over-WS, identity route, CORS.
  * Caller provides `coreServicesLive` containing all service dependencies.

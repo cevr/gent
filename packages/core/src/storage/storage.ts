@@ -862,7 +862,7 @@ export class EventStorage extends Context.Service<EventStorage, EventStorageServ
               JOIN sessions s ON s.id = e.session_id
               WHERE e.session_id = ${sessionId}
                 AND s.workspace_id = ${workspaceId}
-                AND (e.branch_id = ${branchId} OR e.branch_id IS NULL)
+                ${onBranch(Option.some(branchId))}
                 AND e.event_tag = 'MessageReceived'
                 AND json_extract(e.event_json, '$.message.id') = ${assistantMessageId}
               ORDER BY e.id DESC LIMIT 1`
@@ -873,7 +873,7 @@ export class EventStorage extends Context.Service<EventStorage, EventStorageServ
               JOIN sessions s ON s.id = e.session_id
               WHERE e.session_id = ${sessionId}
                 AND s.workspace_id = ${workspaceId}
-                AND (e.branch_id = ${branchId} OR e.branch_id IS NULL)
+                ${onBranch(Option.some(branchId))}
                 AND e.id > ${anchor.id}
                 AND e.event_tag = 'MessageReceived'
                 AND json_extract(e.event_json, '$.message.role') = 'assistant'
@@ -1531,27 +1531,6 @@ export class SessionOperationStorage extends Context.Service<
         `
       })
 
-      const sessionIdForBranch = Effect.fn("SessionOperationStorage.sessionIdForBranch")(function* (
-        branchId: BranchId,
-      ) {
-        const workspaceId = yield* CurrentWorkspaceId
-        const rows = yield* sql<{ session_id: SessionId }>`
-          SELECT b.session_id
-          FROM branches b
-          JOIN sessions s ON s.id = b.session_id
-          WHERE b.id = ${branchId}
-            AND s.workspace_id = ${workspaceId}
-          LIMIT 1
-        `
-        const row = rows[0]
-        if (Predicate.isUndefined(row)) {
-          return yield* new StorageError({
-            message: `Cannot persist durable operation for missing branch: ${branchId}`,
-          })
-        }
-        return row.session_id
-      })
-
       return {
         reserveModelAttempt: Effect.fn("SessionOperationStorage.reserveModelAttempt")(
           function* (address) {
@@ -1560,8 +1539,7 @@ export class SessionOperationStorage extends Context.Service<
                 message: "Model admission must commit outside a caller transaction",
               })
             }
-            const sessionId = yield* sessionIdForBranch(address.branchId)
-            if (sessionId !== address.sessionId)
+            if (!(yield* branchInSession(sql, address.branchId, address.sessionId)))
               return yield* new StorageError({ message: "Model branch does not belong to session" })
             const workspaceId = yield* CurrentWorkspaceId
             const createdAt = (yield* DateTime.nowAsDate).getTime()
@@ -1584,8 +1562,7 @@ export class SessionOperationStorage extends Context.Service<
         cancelTurn: Effect.fn("SessionOperationStorage.cancelTurn")(
           function* (address) {
             const workspaceId = yield* CurrentWorkspaceId
-            const sessionId = yield* sessionIdForBranch(address.branchId)
-            if (sessionId !== address.sessionId) {
+            if (!(yield* branchInSession(sql, address.branchId, address.sessionId))) {
               return yield* new StorageError({
                 message: "Cancellation branch does not belong to session",
               })
@@ -1838,12 +1815,11 @@ export class ToolCallBindingStorage extends Context.Service<
 /**
  * The durable position of one turn.
  *
- * A turn is keyed by the user message that opened it. Before the record
- * existed, a resumed turn found its position by probing up to 200 derived
- * message ids and, for each, a second id for the tool results. The record
- * replaces that scan with one row: the step whose messages committed, how
- * many continuation instructions the turn has spent, and the tool calls the
- * current step issued and has not settled.
+ * A turn is keyed by the user message that opened it. The record is one row:
+ * the step whose messages committed, how many continuation instructions the
+ * turn has spent, and the tool calls the current step issued and has not
+ * settled. A resumed turn reads it in one query; only a turn with no row
+ * probes its derived message ids (`resolveTurnPosition`).
  *
  * The row is written after the step's messages commit, in its own
  * transaction. A reader can therefore see a step's messages without the
@@ -1888,11 +1864,9 @@ interface TurnRecordKey {
   readonly messageId: MessageId
 }
 
-const TurnCount = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
-
 const TurnRecordRow = Schema.Struct({
-  step: TurnCount,
-  continuations: TurnCount,
+  step: Schema.Natural,
+  continuations: Schema.Natural,
   pending_tool_calls_json: Schema.String,
 })
 
@@ -1944,6 +1918,9 @@ export class TurnRecordStorage extends Context.Service<
         record: TurnRecord,
       ) {
         return yield* Effect.gen(function* () {
+          // The writer checks what the reader decodes: a negative or
+          // fractional count fails here instead of being stored.
+          yield* Schema.encodeEffect(TurnRecord)(record)
           const pendingJson = yield* encodePending(record.pendingToolCalls)
           const updatedAt = (yield* DateTime.nowAsDate).getTime()
           yield* sql`
@@ -1978,29 +1955,14 @@ export class TurnRecordStorage extends Context.Service<
   )
 }
 
-/** The record a step boundary writes once its messages have committed. */
-export const turnRecordAtStep = (params: {
-  readonly step: number
-  readonly continuations: number
-  readonly pendingToolCalls: ReadonlyArray<PendingToolCall>
-}): TurnRecord => ({
-  step: Math.max(0, Math.trunc(params.step)),
-  continuations: Math.max(0, Math.trunc(params.continuations)),
-  pendingToolCalls: params.pendingToolCalls,
-})
-
 // ── sqlite-storage ──────────────────────────────────────────────────────────
 
 export type StorageTransaction = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
 ) => Effect.Effect<A, E | StorageError, R>
 
-// `makeStorageTransaction` yields `SqlClient` once at layer-build time and
-// returns a closure that wraps each mutation in a transaction. Callers do not
-// thread `SqlClient` as a parameter and do not surface it on per-method
-// R-channels; the closure binds it through lexical scope. The Live layer
-// yields sql once and holds the `storageTransaction` helper bound to it for
-// the lifetime of the layer.
+// A closure over the layer's `SqlClient` that runs an effect in one
+// transaction and reports a SQL failure as a StorageError.
 export const makeStorageTransaction: Effect.Effect<StorageTransaction, never, SqlClient.SqlClient> =
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient

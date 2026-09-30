@@ -148,6 +148,7 @@ import { type ModelDriverContribution, type ProviderHints } from "../../src/doma
 import { RuntimeEnvironment } from "../../src/runtime/config"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import {
+  ApprovalService,
   ExtensionRegistry,
   resolveExtensions,
   SessionProfileCache,
@@ -4390,7 +4391,7 @@ describe("a tool call a restart cut short", () => {
             agents: e2ePreset.agents,
             providerLayer,
             extensions: [extension],
-            durableApproval: true,
+            approvalLayer: ApprovalService.Live,
             storagePath: dbPath,
           }),
         )

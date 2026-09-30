@@ -1341,7 +1341,7 @@ describe("interaction.respondInteraction", () => {
                 agents: e2ePreset.agents,
                 providerLayer: firstProvider.layer,
                 extensions: [InteractionProbeExtension],
-                durableApproval: true,
+                approvalLayer: ApprovalService.Live,
                 storagePath: dbPath,
               }),
             )
@@ -1390,7 +1390,7 @@ describe("interaction.respondInteraction", () => {
                 agents: e2ePreset.agents,
                 providerLayer: secondProvider.layer,
                 extensions: [InteractionProbeExtension],
-                durableApproval: true,
+                approvalLayer: ApprovalService.Live,
                 storagePath: dbPath,
               }),
             )
@@ -1472,7 +1472,7 @@ describe("interaction.respondInteraction", () => {
                 agents: e2ePreset.agents,
                 providerLayer: firstProvider.layer,
                 extensions: [InteractionProbeExtension],
-                durableApproval: true,
+                approvalLayer: ApprovalService.Live,
                 storagePath: dbPath,
               }),
             )
@@ -1530,7 +1530,7 @@ describe("interaction.respondInteraction", () => {
                 agents: e2ePreset.agents,
                 providerLayer: secondProvider.layer,
                 extensions: [InteractionProbeExtension],
-                durableApproval: true,
+                approvalLayer: ApprovalService.Live,
                 storagePath: dbPath,
               }),
             )
@@ -2513,7 +2513,7 @@ describe("interaction.respondInteraction", () => {
                 agents: e2ePreset.agents,
                 providerLayer: firstProvider.layer,
                 extensions: [extension],
-                durableApproval: true,
+                approvalLayer: ApprovalService.Live,
                 storagePath: dbPath,
               }),
             )
@@ -2558,7 +2558,7 @@ describe("interaction.respondInteraction", () => {
                 agents: e2ePreset.agents,
                 providerLayer: secondProvider.layer,
                 extensions: [extension],
-                durableApproval: true,
+                approvalLayer: ApprovalService.Live,
                 storagePath: dbPath,
               }),
             )
@@ -2693,7 +2693,7 @@ describe("interaction.respondInteraction", () => {
                 agents: e2ePreset.agents,
                 providerLayer,
                 extensions: [extension],
-                durableApproval: true,
+                approvalLayer: ApprovalService.Live,
                 storagePath: dbPath,
               }),
             )
@@ -2757,7 +2757,7 @@ describe("interaction.respondInteraction", () => {
                 agents: e2ePreset.agents,
                 providerLayer: firstProvider.layer,
                 extensions: [extension],
-                durableApproval: true,
+                approvalLayer: ApprovalService.Live,
                 storagePath: dbPath,
               }),
             )
@@ -2790,7 +2790,7 @@ describe("interaction.respondInteraction", () => {
                 agents: e2ePreset.agents,
                 providerLayer: secondProvider.layer,
                 extensions: [extension],
-                durableApproval: true,
+                approvalLayer: ApprovalService.Live,
                 storagePath: dbPath,
               }),
             )
@@ -3247,7 +3247,7 @@ describe("interaction.respondInteraction", () => {
               agents: e2ePreset.agents,
               providerLayer: firstProvider.layer,
               extensions: [extension],
-              durableApproval: true,
+              approvalLayer: ApprovalService.Live,
               storagePath: dbPath,
             }),
           )
@@ -3299,7 +3299,7 @@ describe("interaction.respondInteraction", () => {
               agents: e2ePreset.agents,
               providerLayer: secondProvider.layer,
               extensions: [extension],
-              durableApproval: true,
+              approvalLayer: ApprovalService.Live,
               storagePath: dbPath,
             }),
           )
@@ -5547,7 +5547,7 @@ describe("a resumed call that had taken its answer", () => {
             agents: e2ePreset.agents,
             providerLayer,
             extensions: [extension],
-            durableApproval: true,
+            approvalLayer: ApprovalService.Live,
             storagePath: dbPath,
           })
 
@@ -5668,7 +5668,7 @@ describe("a call answered while a sibling call still ran", () => {
             agents: e2ePreset.agents,
             providerLayer,
             extensions: [extension],
-            durableApproval: true,
+            approvalLayer: ApprovalService.Live,
             storagePath: dbPath,
           })
 

@@ -28,7 +28,6 @@ import {
   SessionStorage,
   SqliteStorage,
   ToolCallBindingStorage,
-  turnRecordAtStep,
   TurnRecordStorage,
 } from "../../src/storage/storage"
 import { GentPlatform } from "../../src/runtime/gent-platform"
@@ -2607,11 +2606,11 @@ describe("TurnRecordStorage", () => {
     Effect.gen(function* () {
       const key = yield* makeFixtureTurnRecord("round-trip")
       const storage = yield* TurnRecordStorage
-      const record = turnRecordAtStep({
+      const record = {
         step: 3,
         continuations: 1,
         pendingToolCalls: [{ id: "call-1", name: "@test/tool" }],
-      })
+      }
       yield* storage.put(key, record)
       expect(yield* storage.get(key)).toEqual(record)
     }).pipe(
@@ -2631,27 +2630,25 @@ describe("TurnRecordStorage", () => {
         INSERT INTO turn_records (session_id, branch_id, message_id, step, continuations, pending_tool_calls_json, admission_json, updated_at)
         VALUES (${key.sessionId}, ${key.branchId}, ${key.messageId}, ${2}, ${0}, ${"[]"}, ${admission}, ${FIXED_NOW.getTime()})
       `
-      expect(yield* storage.get(key)).toEqual(
-        turnRecordAtStep({ step: 2, continuations: 0, pendingToolCalls: [] }),
-      )
+      expect(yield* storage.get(key)).toEqual({ step: 2, continuations: 0, pendingToolCalls: [] })
     }).pipe(
       Effect.provideService(CurrentWorkspaceId, DefaultWorkspaceId),
       Effect.provide(storageLayer),
     ),
   )
 
-  it.live("a row written before admissions existed reads as a plain turn", () =>
+  it.live("refuses a negative or fractional position instead of storing it", () =>
     Effect.gen(function* () {
-      const key = yield* makeFixtureTurnRecord("pre-admission")
+      const key = yield* makeFixtureTurnRecord("invalid-position")
       const storage = yield* TurnRecordStorage
-      const sql = yield* SqlClient.SqlClient
-      yield* sql`
-        INSERT INTO turn_records (session_id, branch_id, message_id, step, continuations, pending_tool_calls_json, updated_at)
-        VALUES (${key.sessionId}, ${key.branchId}, ${key.messageId}, ${3}, ${0}, ${"[]"}, ${FIXED_NOW.getTime()})
-      `
-      expect(yield* storage.get(key)).toEqual(
-        turnRecordAtStep({ step: 3, continuations: 0, pendingToolCalls: [] }),
-      )
+      for (const record of [
+        { step: -1, continuations: 0, pendingToolCalls: [] },
+        { step: 1, continuations: 0.5, pendingToolCalls: [] },
+      ]) {
+        const error = yield* Effect.flip(storage.put(key, record))
+        expect(error._tag).toBe("StorageError")
+      }
+      expect(yield* storage.get(key)).toEqual(emptyTurnRecord)
     }).pipe(
       Effect.provideService(CurrentWorkspaceId, DefaultWorkspaceId),
       Effect.provide(storageLayer),
@@ -2662,15 +2659,12 @@ describe("TurnRecordStorage", () => {
     Effect.gen(function* () {
       const key = yield* makeFixtureTurnRecord("advance")
       const storage = yield* TurnRecordStorage
-      yield* storage.put(
-        key,
-        turnRecordAtStep({
-          step: 1,
-          continuations: 0,
-          pendingToolCalls: [{ id: "call-1", name: "@test/tool" }],
-        }),
-      )
-      yield* storage.put(key, turnRecordAtStep({ step: 2, continuations: 0, pendingToolCalls: [] }))
+      yield* storage.put(key, {
+        step: 1,
+        continuations: 0,
+        pendingToolCalls: [{ id: "call-1", name: "@test/tool" }],
+      })
+      yield* storage.put(key, { step: 2, continuations: 0, pendingToolCalls: [] })
       const loaded = yield* storage.get(key)
       expect(loaded.step).toBe(2)
       expect(loaded.pendingToolCalls).toEqual([])
@@ -2685,7 +2679,7 @@ describe("TurnRecordStorage", () => {
       const key = yield* makeFixtureTurnRecord("workspace", WORKSPACE_B)
       const storage = yield* TurnRecordStorage
       yield* storage
-        .put(key, turnRecordAtStep({ step: 5, continuations: 2, pendingToolCalls: [] }))
+        .put(key, { step: 5, continuations: 2, pendingToolCalls: [] })
         .pipe(Effect.provideService(CurrentWorkspaceId, WORKSPACE_B))
       const own = yield* storage
         .get(key)
@@ -2703,7 +2697,7 @@ describe("TurnRecordStorage", () => {
       const key = yield* makeFixtureTurnRecord("cascade")
       const storage = yield* TurnRecordStorage
       const sql = yield* SqlClient.SqlClient
-      yield* storage.put(key, turnRecordAtStep({ step: 2, continuations: 0, pendingToolCalls: [] }))
+      yield* storage.put(key, { step: 2, continuations: 0, pendingToolCalls: [] })
       yield* sql`DELETE FROM messages WHERE id = ${key.messageId}`
       expect(yield* storage.get(key)).toEqual(emptyTurnRecord)
     }).pipe(

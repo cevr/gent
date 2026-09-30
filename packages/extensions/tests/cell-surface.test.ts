@@ -40,6 +40,7 @@ import {
   createRpcClient,
   toolResultMessageIdForTurn,
   testSqliteStorage,
+  ApprovalService,
 } from "@gent/core/test-utils"
 import { BunServices } from "@effect/platform-bun"
 import * as Prompt from "effect/ai/Prompt"
@@ -1242,7 +1243,7 @@ it.scopedLive(
             providerLayer,
             agents: [new AgentDefinition({ name: DEFAULT_AGENT_NAME, deniedTools })],
             branchTools: CellBranchTools,
-            durableApproval: true,
+            approvalLayer: ApprovalService.Live,
           }),
         )
         const { client } = yield* createRpcClient(Layer.succeedContext(context))

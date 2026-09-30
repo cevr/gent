@@ -333,8 +333,6 @@ export const testLeafContext = (ctx: TestToolContext): ExtensionContextService =
 
 // ── call recording ──────────────────────────────────────────────────────────
 
-// Call Record
-
 export interface CallRecord {
   service: string
   method: string
@@ -342,8 +340,6 @@ export interface CallRecord {
   result?: unknown
   timestamp: number
 }
-
-// Sequence Recorder Service
 
 interface SequenceRecorderService {
   readonly record: (call: Omit<CallRecord, "timestamp">) => Effect.Effect<void>
@@ -370,8 +366,6 @@ export class SequenceRecorder extends Context.Service<SequenceRecorder, Sequence
     }),
   )
 }
-
-// Recording EventStore
 
 /**
  * The in-memory event store with each append recorded in the
@@ -432,6 +426,8 @@ export const collectTestContributions = <E, R>(
     return yield* collector.seal
   })
 
+// ── storage fixtures ────────────────────────────────────────────────────────
+
 /**
  * In-memory SQLite storage with its platform closed: deterministic ids from
  * `GentPlatform.Test()` and the Bun `Crypto` the host would provide. Storage
@@ -445,8 +441,6 @@ export const testSqliteStorage = <A>(
   SqliteStorage.MemoryWithSql(extra, featureMigrations).pipe(
     Layer.provide(Layer.merge(GentPlatform.Test(), BunCrypto.layer)),
   )
-
-// Mock Helpers
 
 const sameAdmission = Schema.toEquivalence(SessionAdmission)
 
@@ -725,14 +719,16 @@ interface E2ELayerOptions {
   readonly agents: ReadonlyArray<AgentDefinition>
   /** Keep running when an extension fails to load. Only for tests about that failure path. */
   readonly allowFailedExtensions?: boolean
-  /** Approval service override. Default auto-approves for E2E tests. */
+  /**
+   * The approval service. Default `ApprovalService.Test()` approves every
+   * ask; `ApprovalService.Live` is the production service with durable
+   * pending rows.
+   */
   readonly approvalLayer?: Layer.Layer<
     ApprovalService,
     never,
     EventStore | GentPlatform | InteractionStorage
   >
-  /** Use the production cold-interaction service with durable pending rows. */
-  readonly durableApproval?: boolean
   /** File-backed SQLite path for restart/recovery tests. Defaults to in-memory SQLite. */
   readonly storagePath?: string
   /**
@@ -819,12 +815,6 @@ const extensionInputsForConfig = (
   return [...agents, ...config.extensions.map(fromLoadedExtension)]
 }
 
-const approvalOverrideForConfig = (config: E2ELayerConfig) => {
-  if (!Predicate.isUndefined(config.approvalLayer)) return Option.some(config.approvalLayer)
-  if (config.durableApproval === true) return Option.none()
-  return Option.some(ApprovalService.Test())
-}
-
 /**
  * Build a complete E2E test layer with queued event publishing.
  *
@@ -838,11 +828,8 @@ const approvalOverrideForConfig = (config: E2ELayerConfig) => {
  * reads project extensions, skills and `AGENTS.md` from its cwd. A shared
  * directory would hand one test's files to the next.
  */
-export const createE2ELayer = (config: E2ELayerConfig) => {
-  let toolRunnerLayer = Option.none<Layer.Layer<ToolRunner>>()
-  if (config.toolRunner === "test") toolRunnerLayer = Option.some(ToolRunner.Test())
-
-  return Layer.unwrap(
+export const createE2ELayer = (config: E2ELayerConfig) =>
+  Layer.unwrap(
     Effect.gen(function* () {
       const home = yield* Option.match(Option.fromUndefinedOr(config.home), {
         onNone: () => makeTempDirectoryScoped("gent-test-home-"),
@@ -859,15 +846,13 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         onNone: () => makeTempDirectoryScoped("gent-test-cwd-"),
         onSome: Effect.succeed,
       })
-      return e2eDependencies(config, { cwd, home }, toolRunnerLayer)
+      return e2eDependencies(config, { cwd, home })
     }),
   ).pipe(Layer.provide(BunPlatformLive))
-}
 
 const e2eDependencies = (
   config: E2ELayerConfig,
   directories: { readonly cwd: string; readonly home: string },
-  toolRunnerLayer: Option.Option<Layer.Layer<ToolRunner>>,
 ) =>
   createDependencies({
     ...directories,
@@ -876,9 +861,7 @@ const e2eDependencies = (
       onNone: () => StateLocation.cases.Memory.make({}),
       onSome: (dbPath) => StateLocation.cases.Disk.make({ dbPath }),
     }),
-    modelResolverOverride: Option.getOrUndefined(
-      Option.map(Option.fromUndefinedOr(config.providerLayer), LanguageModelLayers.resolver),
-    ),
+    modelResolverOverride: LanguageModelLayers.resolver(config.providerLayer),
     extensions: extensionInputsForConfig(config),
     // A broken extension fails the test with its reason, not a later timeout.
     failOnExtensionFailure: config.allowFailedExtensions !== true,
@@ -886,10 +869,16 @@ const e2eDependencies = (
     overrides: {
       modelRegistryLayer: ModelRegistry.Test([], Option.fromUndefinedOr(config.modelPricing)),
       authLayer: config.authLayer ?? Auth.Test(),
-      approvalLayer: Option.getOrUndefined(approvalOverrideForConfig(config)),
+      approvalLayer: config.approvalLayer ?? ApprovalService.Test(),
       configServiceLayer: config.configServiceLayer ?? ConfigService.Test(),
       sessionProfileCacheLayer: config.sessionProfileCacheLayer,
-      toolRunnerLayer: Option.getOrUndefined(toolRunnerLayer),
+      // `"test"` stubs the tool runner; otherwise the production runner runs.
+      toolRunnerLayer: Option.getOrUndefined(
+        Option.map(
+          Option.liftPredicate(config.toolRunner, (runner) => runner === "test"),
+          () => ToolRunner.Test(),
+        ),
+      ),
       extraLayers: config.extraLayers,
     },
   })

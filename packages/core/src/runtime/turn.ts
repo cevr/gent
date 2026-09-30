@@ -117,7 +117,6 @@ import {
   type StorageTransaction,
   ToolCallBindingStorage,
   type TurnRecord,
-  turnRecordAtStep,
   TurnRecordStorage,
 } from "../storage/storage.js"
 import {
@@ -2256,10 +2255,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       })
       const write = Effect.gen(function* () {
         const current = yield* readBase
-        yield* turnRecordStorage.put(
-          turnRecordKey(messageId),
-          turnRecordAtStep({ ...current, ...change(current) }),
-        )
+        yield* turnRecordStorage.put(turnRecordKey(messageId), { ...current, ...change(current) })
       })
       if (options.onFailure === "die") return write.pipe(Effect.orDie)
       return write.pipe(
