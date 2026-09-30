@@ -1005,50 +1005,31 @@ export const makeOpenAICredentialCache = (
 // ── codex transform ─────────────────────────────────────────────────────────
 
 /**
- * codexTransformClient — the `HttpClient` middleware for the ChatGPT
- * OAuth (Codex) path.
- *
- * The SDK applies `transformClient` after its own baseline pipeline
- * (`prependUrl(${apiUrl}/v1)` + optional `bearerToken(apiKey)` +
- * `acceptJson`). With the OAuth path we omit `apiKey` entirely, so
- * the SDK never injects a placeholder Bearer header. This middleware
- * supplies the OAuth Bearer + Codex-specific headers itself, then
- * rewrites Codex-bound requests to the ChatGPT backend endpoint.
+ * The `HttpClient` the ChatGPT OAuth (Codex) path's Responses client runs
+ * over. It is the base client under `OpenAiClient.layer({ apiUrl:
+ * "https://chatgpt.com/backend-api/codex" })`, so it runs under the SDK's
+ * base URL: it sees the relative path the SDK posts (`/responses`), and the
+ * SDK prefixes the Codex base after it. The OAuth path passes no `apiKey`, so
+ * the SDK sends no Bearer header of its own; this client supplies the OAuth
+ * Bearer and the Codex headers.
  *
  * Pipeline (in order):
- *   - auth-header preprocess (Bearer + ChatGPT-Account-Id +
- *     originator/user-agent defaults)
- *   - URL rewrite to the Codex backend, JSON body rewrite (input →
- *     top-level `instructions`, `store: false`), and `OpenAI-Beta:
- *     responses=experimental` for Codex-bound paths
+ *   - auth headers (Bearer + ChatGPT-Account-Id + originator/user-agent
+ *     defaults)
+ *   - for `/responses`: JSON body rewrite (input → top-level
+ *     `instructions`, `store: false`) and `OpenAI-Beta:
+ *     responses=experimental`
  *   - 401 recovery: invalidate creds + retry once
  *
-
- * Why a factory `(creds) => (client) => client`: the SDK's
- * `transformClient` signature is `(HttpClient) => HttpClient`, which
- * requires the returned client's requirement channel to stay empty, so
- * the credential cache is a closure argument. Per-request semantics
- * survive because each call to `creds.getFresh` still consults the live
- * `Ref` cache. The Anthropic `buildKeychainTransformClient` factory has
- * the same shape.
+ * The factory `(creds) => (client) => client` keeps the credential cache a
+ * closure argument, so the returned client needs no services. Each request
+ * still calls `creds.getFresh`, which reads the live `Ref` cache.
  */
 
 // ── Codex routing ──
 
-/**
- * The ChatGPT backend endpoint Codex requests target. A request whose
- * path is a Responses path (see `isCodexBoundPath`) is sent here whole.
- */
-const CODEX_API_ENDPOINT = "https://chatgpt.com/backend-api/codex/responses"
-
-/**
- * Exact path equality: only `/v1/responses` and `/responses` qualify, so a
- * sub-resource such as `/v1/responses/foo` is left alone.
- */
-const isCodexBoundPath = (pathname: string): boolean =>
-  pathname === "/v1/responses" || pathname === "/responses"
-
-const codexUrlMatches = (url: URL): boolean => isCodexBoundPath(url.pathname)
+/** Exact path equality, so a sub-resource such as `/responses/foo` is left alone. */
+const isCodexBoundPath = (pathname: string): boolean => pathname === "/responses"
 
 /**
  * Required `OpenAI-Beta` token for Codex backend traffic. Pure
@@ -1235,17 +1216,15 @@ const buildOauthHeaders = (
  * resident rotated refresh token survives invalidate so a subsequent
  * refresh attempt has a usable token).
  *
- * Pipeline (per-request, before the request hits the wire):
+ * Pipeline (per-request, before the SDK prefixes the Codex base URL):
  *   1. `creds.getFresh` — fetch live access token + account id
  *   2. Auth headers — Bearer + ChatGPT-Account-Id +
  *      originator/user-agent defaults
- *   3. If the request URL matches a Codex-eligible path
- *      (`/v1/responses` or `/responses`):
+ *   3. If the relative path is `/responses`:
  *        a. Ensure `OpenAI-Beta` carries `responses=experimental`,
  *           merged with any upstream tokens
  *        b. Rewrite body shape if it carries an `input` array
- *        c. Rewrite URL to the ChatGPT Codex endpoint
- *      Non-Codex paths pass through unchanged after auth headers.
+ *      Other paths pass through unchanged after auth headers.
  *
  * Response side:
  *   - 401 recovery (outermost transformResponse): on HTTP 401 invalidate
@@ -1258,8 +1237,8 @@ export const buildCodexTransformClient = (
 ): ((client: HttpClient.HttpClient) => HttpClient.HttpClient) =>
   authorizedClient(creds, (req, fresh) => {
     let headers = buildOauthHeaders(req, fresh.access, fresh.accountId)
-    const url = new URL(req.url, "https://api.openai.com")
-    if (codexUrlMatches(url)) {
+    // The SDK has not prefixed its base URL yet, so the path is relative.
+    if (isCodexBoundPath(new URL(req.url, "https://codex.invalid").pathname)) {
       headers = Headers.set(
         headers,
         "openai-beta",
@@ -1267,9 +1246,7 @@ export const buildCodexTransformClient = (
       )
       const sessionId = codexSessionId(req)
       if (Option.isSome(sessionId)) headers = Headers.set(headers, "session-id", sessionId.value)
-      const withBody = rewriteCodexBody(withHeaders(req, headers))
-      if (req.url.startsWith("/")) return withBody
-      return HttpClientRequest.setUrl(withBody, new URL(CODEX_API_ENDPOINT))
+      return rewriteCodexBody(withHeaders(req, headers))
     }
     return withHeaders(req, headers)
   })
@@ -1669,11 +1646,11 @@ const makeApiKeyOpenAIResolution = (
 }
 
 /**
- * OAuth path: builds `OpenAiClient.layer` with `transformClient` set to
- * the Codex transform middleware (auth headers, URL/body/beta rewrite,
- * 401 recovery). No `apiKey` — the SDK only injects Bearer auth when
- * `apiKey !== undefined`, so omitting it lets our middleware own the
- * Authorization header without a "scrub-the-placeholder" coupling.
+ * OAuth path: builds `OpenAiClient.layer` on the Codex base URL over the
+ * Codex client (auth headers, body/beta rewrite, 401 recovery) as its base
+ * `HttpClient`, which runs under the SDK's base URL and sees the relative
+ * path. No `apiKey`: the SDK sends a Bearer header only for an `apiKey`, so
+ * the Codex client owns the Authorization header.
  *
  * `resolveModel` builds the credential cache over the cell that the
  * Effectful `modelDrivers()` setup allocates once, and checks it before the
@@ -1723,10 +1700,8 @@ const explainedClientLayer = (
   )
 
 /**
- * Build the model-driver contribution given a pre-allocated credential
- * cache cell. Extracted from the inline `modelDrivers` factory so
- * tests can inject their own cell and assert that two `resolveModel`
- * calls share the same closure-owned cell. `crypto` is the host's Crypto,
+ * Build the model-driver contribution over a credential cache cell the
+ * caller allocated once: every `resolveModel` call shares it. `crypto` is the host's Crypto,
  * captured at setup; the browser OAuth flow draws its PKCE and state from it.
  */
 export const buildOpenAIModelDriver = (
@@ -1976,11 +1951,9 @@ export const OpenAIExtension = defineExtension({
   id: "@gent/provider-openai",
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
-    // Credential cache cell hoisted to extension-closure scope so it
-    // survives across `resolveModel` calls. One extension instance →
-    // one cell that lives until the runtime tears the extension down.
-    // Setup is Effectful, so the cache cell is allocated through
-    // SynchronizedRef.make instead of an unsafe closure escape hatch.
+    // One credential cell per extension instance, allocated at setup, so it
+    // survives across `resolveModel` calls until the runtime tears the
+    // extension down.
     const credentialCellRef =
       yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
     // Pending OAuth callbacks keyed by authorizationId. Entries

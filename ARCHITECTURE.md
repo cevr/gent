@@ -109,6 +109,11 @@ updates this list in the same commit.
     message is summarised into one durable user-role marker that names the
     session, the branch, and the id range it replaced; every replaced message
     stays readable from the cell through `context.history` and `context.read`.
+    The marker leans on that discovery, not on a long summary: it lists the
+    user's messages by id with a one-line preview, oldest first so the
+    original task is always there (12 at most, then how many more), tells
+    the model to read the task and any message its next step depends on
+    before it continues, and carries a summary of at most 150 words.
     When the newest turn alone overflows, the handoff anchors inside the turn
     at a step boundary and keeps the newest steps that fit half the budget.
     A summary that cannot be produced degrades to truncation with a visible
@@ -1116,8 +1121,10 @@ set. Default cutover must retain a host binding set when the advertised model
 surface narrows to `cell`; it cannot reuse a cell-only advertised map for discovery.
 
 The catalog is instruction plus data, not a tool. When the surface narrows to
-`cell`, the cell extension's `systemPrompt` hook adds a `## Host Tools` section
-with one signature line per selected host tool: its callable path, an input
+`cell`, the cell extension's `systemPrompt` hook adds a `## Host Tools` section.
+Its heading is the one place that explains the discovery calls
+(`tools.search`, `tools.describe`, `tools(id)`); the cell guidelines do not
+repeat it. The section has one signature line per selected host tool: its callable path, an input
 type and a result type rendered from the JSON Schema, and the first line of its
 prompt snippet or description (`- tools.wake.cancel(input?: { wakeId?:
 string }): Promise<{ cancelled: string[] }> // Cancel a pending alarm ...`). Nested objects
@@ -1136,13 +1143,16 @@ never exceeds it. Ids order by UTF-16 code unit (`compareIds` in
 the cached prompt prefix stays byte-stable while the set does. The section is rebuilt each turn, so live composition changes reach
 the model as ordinary instruction changes. `cell.ts` builds the data half from
 the same selected map: name, description, guidelines, the actual Effect AI
-input schema, the rendered signature line, and its one-line summary, hashed
-over its encoding. `dispatchCell` hands it to the cell host; the kernel sends it inside
-`Evaluate` only when the hash differs from what the current worker holds, and
-clears that memory when a replacement worker starts, so the first cell on a new
-worker carries the full catalog. The worker keeps the catalog beside the
-namespace: `reset` clears bindings, not the catalog, and a snapshot never
-contains it.
+input schema (derived once with the signature; a schema that cannot be
+derived is `{}`), the rendered signature line, and its one-line summary,
+hashed over its encoding. `dispatchCell` hands it to the cell host. The kernel
+sends only its listing (id, signature line, summary) inside `Evaluate`, and
+only when the hash differs from what the current worker holds, so the frame
+stays small with hundreds of tools; it keeps the whole catalog and clears that
+memory when a replacement worker starts, so the first cell on a new worker
+carries the listing. A listing past the 1 MiB frame fails the cell with the
+tool count named. The worker keeps the listing beside the namespace: `reset`
+clears bindings, not the listing, and a snapshot never contains it.
 
 Inside the cell `tools` is a namespace over that catalog: every selected id is
 a callable path, split on `.` (`delegate.start` is `tools.delegate.start(input)`,
@@ -1155,15 +1165,17 @@ its own or defines on a function (`then`, `toJSON`, `constructor`, `call`,
 `name`, ...; `reservedToolSegments` in `cell-protocol.ts`) keeps its JavaScript
 meaning and never names a tool, so `await`, `JSON.stringify`, and inspection
 never call one. `tools(id)` is the one lookup by string: a local synchronous
-read that returns the tool as a function carrying its catalog entry (`id`,
-`description`, `guidelines`, `parameters`). It reaches an id with a reserved
-segment, which the prompt renders as `tools("read.then")(input)`; it records
-no operation receipt and grants no execution permission. The root also holds
+read that returns the tool as a function carrying its `id` and `signature`.
+It reaches an id with a reserved segment, which the prompt renders as
+`tools("read.then")(input)`. The function is thenable: `await tools(id)` sends
+a `Describe` frame and the kernel answers from the catalog it kept with the
+tool's `{ id, description, guidelines, parameters, signature }`. Neither
+records an operation receipt or grants execution permission. The root also holds
 two discovery functions (`toolDiscoveryKeys`). `tools.search(query, { namespace,
 limit, offset }?)` returns one page, `{ items: { id, description }[], total,
 hasMore, nextOffset }`, 20 items by default. It splits camelCase and
 `_ . / : -`, weighs the whole id over its last segment, its namespace and the
-description, adds exact, prefix and phrase bonuses, drops an id that matches
+one-line summary, adds exact, prefix and phrase bonuses, drops an id that matches
 fewer than all distinct words of a one- or two-word query (60% of a longer one;
 a repeated word counts once) unless
 the whole query appears in a field, and breaks ties by id in code-unit order
@@ -1286,8 +1298,9 @@ the loose result schema); core has no MCP concept. The one Promise edge, the
 is the `mcpServers` object Claude Code, Cursor, and opencode share, in
 `~/.gent/mcp.json` and, for a project root `trustedProjects` names, in
 `<project>/.gent/mcp.json` (a project entry wins by name). A `command` entry
-runs over stdio with the host's whole environment, its own `env` winning (its
-stderr is ignored, so it never draws on the TUI). A `url` entry sends its
+runs over stdio with the host's whole environment, empty values included and
+read once per setup, its own `env` winning (its stderr is ignored, so it never
+draws on the TUI). A `url` entry sends its
 `headers`; its `type` picks the transport: `http` (or `streamable-http`) and
 `sse` pin one, and `auto`, the default, tries streamable HTTP and then SSE
 when the server answers 400, 404, 405, 406, 415, 422 or 501 (never on 401 or
@@ -1316,26 +1329,39 @@ transport's `fetch` answers each 401 or 403 before the SDK sees it: a 401 on
 `GET` refreshes the token (discovery starting from the metadata URL that 401
 names) and sends that request once more; any other refusal, a `tools/call`
 included, fails with "the <server> MCP server needs a login: run /mcp login
-<server>". So a call is never sent twice. A refresh holds the login's lock
-file, `<data dir>/mcp-auth.<sha256 of the key>.lock` (created with `wx`,
-removed when done, taken over when older than 30 seconds), and reads the login
-again under it: when another refresh, in this process or another, already
-stored a new token, it uses that token and never redeems the spent refresh
-token.
+<server>". So a call is never sent twice. Every refresh and every stored login
+holds the login file's one lock, `<data dir>/mcp-auth.json.lock` (created with
+`wx`, removed when done, taken over when older than 30 seconds), so two gent
+processes that write different logins never drop each other's token. A
+refresh reads the login again under the lock: when another refresh, in this
+process or another, already stored a new token, it uses that token and never
+redeems the spent refresh token. The token request and the stored login are
+one step that is not interrupted, and its requests end within 20 seconds: a
+dial that times out, or a request the SDK aborts, waits for it, so a rotated
+token is always stored and the lock never outlives its 30 seconds. Only the
+wait between tries to take the lock can be interrupted: a lock a holder
+created is always removed.
 
 Setup reads each server's tool list from `<data dir>/mcp-catalog.json`, keyed
 by the SHA-256 digest of the entry as it runs (its expanded values, for a
 `url` entry its configured `type`, with `http` and `streamable-http` one
-value, and for stdio its resolved directory), so an edited entry, a changed
-variable, or another project lists again; the file holds only the digest and
-the server's `initialize` instructions, never a token. On a miss setup connects once and
-lists; every server setup listed goes to the cache in one write. A server
+value, and for stdio the resolved directory its `cwd` names), so an edited
+entry or a changed variable lists again. A stdio entry whose command or
+arguments name a relative path (`./server.ts`, `src/x.js`, `server.py`, or a
+flag value such as `--config=./x.json`) also keys with the session directory,
+so two projects' `./server.ts` are two servers. Any other stdio entry that
+names no `cwd` runs in the session directory but keys without it, so a new
+project does not spawn every server at setup. A relist on the first
+connection corrects the cache for the next session; the capabilities a
+session registered stay as its setup listed them. The file holds only the
+digest, the server's `initialize` instructions and a `listedAt` stamp, never a
+token. On a miss setup connects once and lists; every server setup listed, and
+every cached entry it read whose stamp is over a day old, goes to the cache in
+one write, stamped now. A write drops each entry stamped over 14 days ago. A server
 that cannot list is logged and contributes nothing. `tools/list` goes out with
 the SDK's loose result schema and each entry decodes on its own: an entry the
 spec's tool shape refuses is skipped with a warning, and a `null` description
-counts as none. A skipped entry that has a name still takes part in id
-allocation (the cache keeps it as `reserved`), so skipping it never moves
-another tool's collision suffix. So the SDK keeps no output validators, and the tool checks
+counts as none. So the SDK keeps no output validators, and the tool checks
 structured content itself.
 
 Calls share one process Resource (`McpClients`): an `RcMap` opens a server's
@@ -1362,7 +1388,8 @@ server's transport, tool count, connection, and health: `healthy` (listed or
 connected), `expired` (the server refused the credential; the reason names
 `/mcp login`), `misconfigured` (the entry cannot run: an unset variable),
 `degraded` (a connect, list or call failed in the transport), or `unknown`
-(read from the cache, not yet connected).
+(read from the cache, not yet connected). With no server configured, only
+`/mcp` is registered, and it says where to add one.
 
 Each tool's input schema is imported from its JSON Schema (patterns ignored),
 so the host checks input and the catalog shows its types. A tool with an

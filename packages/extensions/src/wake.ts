@@ -205,11 +205,6 @@ const store = makeBranchStateStore({
     new WakeError({ message: `Wake file ${file} is invalid: ${cause.message}` }),
 })
 
-/** The entries still pending on this branch; a missing file is an empty list. */
-const readWakeEntries = store.read
-
-const modifyWakeEntries = store.update
-
 // ── Firing ──
 
 const isoOf = (millis: number) => DateTime.formatIso(DateTime.makeUnsafe(millis))
@@ -294,7 +289,7 @@ const queueWake = (
         content,
         note: entry.note,
       })
-      yield* modifyWakeEntries((current) => {
+      yield* store.update((current) => {
         const settled = settle(current)
         const seen = current.some(
           (candidate) =>
@@ -324,7 +319,7 @@ const queueWake = (
       ),
     )
     if (!sent) return yield* leaveNotice
-    yield* modifyWakeEntries(settle)
+    yield* store.update(settle)
   })
 
 type NoticeEntry = Extract<WakeEntry, { readonly _tag: "notice" }>
@@ -340,7 +335,7 @@ const noticeKey = (notice: NoticeEntry) => `${notice.wakeId}@${notice.firedAt}`
  * for the next turn.
  */
 const turnNotices = Effect.fn("WakeTool.notices")(function* () {
-  const notices = (yield* readWakeEntries()).flatMap((entry) => {
+  const notices = (yield* store.read()).flatMap((entry) => {
     if (entry._tag === "notice") return [entry]
     return []
   })
@@ -537,7 +532,7 @@ const armEntry = Effect.fn("WakeTool.arm")(function* (entry: PendingWakeEntry) {
   const alarms = yield* WakeAlarms
   const work = workFor(entry)
   // A settled fire moved its own row; a failed one drops the pending entry here.
-  const forget = modifyWakeEntries(dropPendingRow(entry.wakeId)).pipe(Effect.ignore)
+  const forget = store.update(dropPendingRow(entry.wakeId)).pipe(Effect.ignore)
   return yield* alarms.schedule(
     entry.wakeId,
     ctx.Session.holdResident.pipe(
@@ -578,7 +573,7 @@ export const rearmPendingAlarms = Effect.fn("WakeTool.rearm")(function* () {
 })
 
 const storeAndArm = Effect.fn("WakeTool.storeAndArm")(function* (entry: PendingWakeEntry) {
-  yield* modifyWakeEntries((current) => [...current, entry])
+  yield* store.update((current) => [...current, entry])
   yield* armEntry(entry)
 })
 
@@ -886,7 +881,7 @@ export const CancelTool = tool({
 /** One read for the model and the tray: what is pending on this branch, against the same clock. */
 const listPending = Effect.fn("WakeTool.list")(function* () {
   const now = yield* Clock.currentTimeMillis
-  const entries = yield* readWakeEntries()
+  const entries = yield* store.read()
   return { now, entries }
 })
 

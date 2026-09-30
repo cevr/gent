@@ -80,7 +80,6 @@ export const maximumCellReplyBytes = maximumCellFrameBytes - 4 * 1024
 export const maximumCellDisplayHeadLength = 48 * 1024
 export const maximumPendingCellCalls = 32
 export const maximumCallsPerCell = 4096
-const maximumCatalogEntries = 512
 
 /** A tool id segment that needs no brackets in a property path. */
 const identifierSegment = /^[A-Za-z_$][A-Za-z0-9_$]*$/
@@ -142,7 +141,11 @@ export const toolPath = (id: string): string => {
     .reduce((path, segment) => `${path}${segment}`, "tools")
 }
 
-/** One selected host tool as the kernel describes it. Descriptions never grant execution. */
+/**
+ * One selected host tool as the host describes it. The worker holds only its
+ * listing; `await tools(id)` fetches the rest with a `Describe`. Descriptions
+ * never grant execution.
+ */
 export const CellCatalogEntry = Schema.Struct({
   name: Schema.String,
   description: Schema.String,
@@ -155,12 +158,56 @@ export const CellCatalogEntry = Schema.Struct({
 })
 export type CellCatalogEntry = typeof CellCatalogEntry.Type
 
-/** The kernel keeps the last catalog it received; the host resends only when the hash changes. */
+/** The host's catalog for one evaluation, hashed so an unchanged one is not sent again. */
 export const CellCatalog = Schema.Struct({
   hash: Schema.String,
-  tools: Schema.Array(CellCatalogEntry).check(Schema.isMaxLength(maximumCatalogEntries)),
+  tools: Schema.Array(CellCatalogEntry),
 })
 export type CellCatalog = typeof CellCatalog.Type
+
+/**
+ * What the worker holds of each tool: its id, typed call line and summary,
+ * so the `Evaluate` frame stays small with hundreds of tools. The schema,
+ * guidelines and description stay on the host.
+ */
+export const CellCatalogListing = Schema.Struct({
+  name: Schema.String,
+  signature: Schema.String,
+  summary: Schema.String,
+})
+export type CellCatalogListing = typeof CellCatalogListing.Type
+
+/** The listing of a host catalog; the worker keeps the last one it received. */
+const CellListing = Schema.Struct({
+  hash: Schema.String,
+  tools: Schema.Array(CellCatalogListing),
+})
+type CellListing = typeof CellListing.Type
+
+/** The worker's listing of `catalog`. */
+export const listingOf = (catalog: CellCatalog): CellListing => ({
+  hash: catalog.hash,
+  tools: catalog.tools.map(({ name, signature, summary }) => ({ name, signature, summary })),
+})
+
+/** What `await tools(id)` resolves to: the tool's full description, served by the host. */
+const CellToolDetails = Schema.Struct({
+  id: Schema.String,
+  description: Schema.String,
+  guidelines: Schema.Array(Schema.String),
+  parameters: Schema.Json,
+  signature: Schema.String,
+})
+type CellToolDetails = typeof CellToolDetails.Type
+
+/** The details `await tools(id)` reads for `entry`. */
+export const toolDetailsOf = (entry: CellCatalogEntry): CellToolDetails => ({
+  id: entry.name,
+  description: entry.description,
+  guidelines: entry.guidelines,
+  parameters: entry.parameters,
+  signature: entry.signature,
+})
 
 export class CellEvaluationError extends Schema.TaggedError<CellEvaluationError>()(
   "CellEvaluationError",
@@ -207,7 +254,7 @@ export const CellRequest = Schema.TaggedUnion({
     outputToken: CorrelationId,
     source: Schema.String.check(Schema.isMaxLength(maximumCellSourceLength)),
     /** Present only when the host catalog changed since the worker last received one. */
-    catalog: Schema.optional(CellCatalog),
+    catalog: Schema.optional(CellListing),
   },
   Reset: { requestId: CorrelationId },
   Snapshot: { requestId: CorrelationId },
@@ -236,6 +283,12 @@ export const CellResponse = Schema.TaggedUnion({
     name: Schema.String,
     input: Schema.Json,
   },
+  /**
+   * `await tools(id)`: the host answers with a `HostSucceeded` carrying the
+   * tool's `CellToolDetails`, or a `HostFailed`. Not a host call: it runs no
+   * tool and leaves no receipt.
+   */
+  Describe: { cellId: CorrelationId, operationId: CorrelationId, id: Schema.String },
 })
 export type CellResponse = typeof CellResponse.Type
 

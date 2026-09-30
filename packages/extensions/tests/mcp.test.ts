@@ -60,6 +60,7 @@ import { shippedPreset } from "./helpers/test-preset.js"
  * `MCP_FIXTURE_ENV_TOOL` adds `env`, which reads the server's environment;
  * `MCP_FIXTURE_MALFORMED` adds four entries the spec's tool schema refuses, one named `a.b`, and `a_b`;
  * `MCP_FIXTURE_BINARY` adds `image`, which returns an image and a blob;
+ * `MCP_FIXTURE_MANY=n` adds `n` tools `bulk_<i>`, each with a 2 KB input schema;
  * `MCP_FIXTURE_TYPED` adds `stats` and `badstats`, which declare an output
  * schema, and only `stats` keeps it;
  * `tools/list` answers no tools while `MCP_FIXTURE_EMPTY_LIST` names a file that exists.
@@ -134,6 +135,12 @@ if (process.env.MCP_FIXTURE_MALFORMED) {
 }
 if (process.env.MCP_FIXTURE_BINARY) {
   tools.push({ name: "image", description: "Return an image and a blob.", inputSchema: { type: "object" } })
+}
+if (process.env.MCP_FIXTURE_MANY) {
+  const padding = "p".repeat(2000)
+  for (let index = 0; index < Number(process.env.MCP_FIXTURE_MANY); index++) {
+    tools.push({ name: "bulk_" + index, description: "Bulk tool " + index + ".", inputSchema: { type: "object", description: padding, properties: {} } })
+  }
 }
 if (process.env.MCP_FIXTURE_TYPED) {
   const outputSchema = {
@@ -254,6 +261,11 @@ process.stdin.on("data", (chunk) => {
 `
 
 const platformLayer = Layer.merge(BunServices.layer, BunGentPlatformLive)
+
+/** The shipped extensions without `@gent/mcp`: a test's inline servers stand in for it, and both would claim `/mcp`. */
+const shippedWithoutMcp = shippedPreset.extensionInputs.filter(
+  (extension) => extension.manifest.id !== McpExtension.manifest.id,
+)
 
 /** A scratch directory holding the fixture server and the file its starts are logged to. */
 const makeFixture = Effect.gen(function* () {
@@ -480,7 +492,7 @@ describe("mcp config", () => {
   )
 
   it.scopedLive(
-    "the cache key is the entry as it runs: its expanded values and its directory",
+    "the cache key is the entry as it runs: its expanded values and the directory it names",
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
@@ -503,9 +515,89 @@ describe("mcp config", () => {
         // Another value behind the same written entry is another server.
         yield* setup(fixture.directory, "two")
         expect(yield* fixture.starts).toBe(2)
-        // So is the same entry run from another directory.
+        // An entry that names no directory is one server from every session directory.
         yield* setup(other, "one")
-        expect(yield* fixture.starts).toBe(3)
+        expect(yield* fixture.starts).toBe(2)
+        // An entry that names a directory relative to the session is one server per directory.
+        const pinned = McpServers("@test/mcp-identity", { fixture: { ...entry, cwd: "." } })
+        yield* collectTestContributions(pinned.setup, { home, cwd: fixture.directory })
+        yield* collectTestContributions(pinned.setup, { home, cwd: other })
+        expect(yield* fixture.starts).toBe(4)
+        // So is an entry whose command or arguments name a path relative to the
+        // session: two projects' `./server.cjs` are two servers.
+        yield* fs.copyFile(fixture.server, path.join(other, "server.cjs"))
+        const relative = McpServers("@test/mcp-identity", {
+          fixture: { ...entry, args: ["./server.cjs"] },
+        })
+        yield* collectTestContributions(relative.setup, { home, cwd: fixture.directory })
+        yield* collectTestContributions(relative.setup, { home, cwd: other })
+        expect(yield* fixture.starts).toBe(6)
+        // A path in a flag's value counts too.
+        const flagged = McpServers("@test/mcp-identity", {
+          fixture: { ...entry, args: [entry.args[0] ?? "", "--config=./settings.json"] },
+        })
+        yield* collectTestContributions(flagged.setup, { home, cwd: fixture.directory })
+        yield* collectTestContributions(flagged.setup, { home, cwd: other })
+        expect(yield* fixture.starts).toBe(8)
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(platformLayer)),
+    30_000,
+  )
+
+  it.scopedLive(
+    "setup drops a cached catalog no setup listed or read in 14 days, and keeps the rest",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const fixture = yield* makeFixture
+        const home = path.join(fixture.directory, "home")
+        const dataDir = path.join(home, ".gent")
+        yield* fs.makeDirectory(dataDir, { recursive: true })
+        const catalogFile = path.join(dataDir, "mcp-catalog.json")
+        const now = yield* Clock.currentTimeMillis
+        const day = 24 * 60 * 60 * 1000
+        yield* fs.writeFileString(
+          catalogFile,
+          encodeJson({
+            servers: {
+              abandoned: { tools: [], listedAt: now - 15 * day },
+              recent: { tools: [], listedAt: now - 2 * day },
+            },
+          }),
+        )
+        const extension = McpServers("@test/mcp-prune", { fixture: fixture.stdio() })
+        const readStamps = fs.readFileString(catalogFile).pipe(
+          Effect.flatMap(
+            Schema.decodeEffect(
+              Schema.fromJsonString(
+                Schema.Struct({
+                  servers: Schema.Record(
+                    Schema.String,
+                    Schema.Struct({ tools: Schema.Array(Schema.Json), listedAt: Schema.Finite }),
+                  ),
+                }),
+              ),
+            ),
+          ),
+          Effect.map((file) => file.servers),
+        )
+        yield* collectTestContributions(extension.setup, { home, cwd: fixture.directory })
+        const listed = yield* readStamps
+        expect(Object.keys(listed)).toContain("recent")
+        expect(Object.keys(listed)).not.toContain("abandoned")
+        expect(Object.keys(listed)).toHaveLength(2)
+        // A setup that reads an entry stamped days ago stamps it again, so a used server stays.
+        const [fixtureKey = ""] = Object.keys(listed).filter((key) => key !== "recent")
+        yield* fs.writeFileString(
+          catalogFile,
+          encodeJson({
+            servers: { [fixtureKey]: { ...listed[fixtureKey], listedAt: now - 13 * day } },
+          }),
+        )
+        yield* collectTestContributions(extension.setup, { home, cwd: fixture.directory })
+        expect(yield* fixture.starts).toBe(1)
+        const restamped = yield* readStamps
+        expect(restamped[fixtureKey]?.listedAt ?? 0).toBeGreaterThanOrEqual(now)
       }).pipe(Effect.timeout("20 seconds"), Effect.provide(platformLayer)),
     30_000,
   )
@@ -558,7 +650,7 @@ describe("mcp config", () => {
   )
 
   it.scopedLive(
-    "a malformed tools/list entry is skipped and the rest of the list stays, its name still holding its id; a null description counts as none",
+    "a malformed tools/list entry is skipped and the rest of the list stays; a null description counts as none",
     () =>
       Effect.gen(function* () {
         const path = yield* Path.Path
@@ -573,7 +665,7 @@ describe("mcp config", () => {
           }),
         )
         expect(ids).toEqual(
-          ["a_b_2", "count", "echo", "fail", "nulldesc", "repo_search_issues", "structured"].map(
+          ["a_b", "count", "echo", "fail", "nulldesc", "repo_search_issues", "structured"].map(
             (name) => `mcp.fixture.${name}`,
           ),
         )
@@ -799,7 +891,7 @@ describe("mcp over streamable http", () => {
         const { client, sessionId, branchId } = yield* createRpcHarness({
           ...shippedPreset,
           extensionInputs: [
-            ...shippedPreset.extensionInputs,
+            ...shippedWithoutMcp,
             McpServers("@test/mcp-http", { remote: httpEntry(port) }),
           ],
           providerLayer,
@@ -836,7 +928,7 @@ describe("mcp over streamable http", () => {
         const { client, sessionId, branchId } = yield* createRpcHarness({
           ...shippedPreset,
           extensionInputs: [
-            ...shippedPreset.extensionInputs,
+            ...shippedWithoutMcp,
             McpServers("@test/mcp-http-session", { remote: httpEntry(port) }),
           ],
           providerLayer,
@@ -930,10 +1022,7 @@ const runHttpCell = (port: number, code: string, other?: number) =>
     })
     const { client, sessionId, branchId } = yield* createRpcHarness({
       ...shippedPreset,
-      extensionInputs: [
-        ...shippedPreset.extensionInputs,
-        McpServers("@test/mcp-http-cell", servers),
-      ],
+      extensionInputs: [...shippedWithoutMcp, McpServers("@test/mcp-http-cell", servers)],
       providerLayer,
     })
     yield* client.message.send({ sessionId, branchId, content: "run" })
@@ -1018,7 +1107,7 @@ describe("mcp over sse", () => {
         const { client, sessionId, branchId } = yield* createRpcHarness({
           ...shippedPreset,
           extensionInputs: [
-            ...shippedPreset.extensionInputs,
+            ...shippedWithoutMcp,
             McpServers("@test/mcp-sse", { pinned: { ...sse, type: "sse" }, auto: sse }),
           ],
           providerLayer,
@@ -1123,7 +1212,7 @@ describe("mcp status", () => {
         const { client, sessionId, branchId } = yield* createRpcHarness({
           ...shippedPreset,
           extensionInputs: [
-            ...shippedPreset.extensionInputs,
+            ...shippedWithoutMcp,
             McpServers("@test/mcp-status", {
               dead: { command: "/nonexistent/gent-probe-x", timeoutMs: 2000 },
               fixture: fixture.stdio(),
@@ -1184,6 +1273,47 @@ describe("mcp status", () => {
       }).pipe(Effect.timeout("25 seconds"), Effect.provide(platformLayer)),
     30_000,
   )
+
+  it.scopedLive(
+    "/mcp with no server configured says where to add one, and the model gets no status tool",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        // A home with no mcp.json: the shipped extension registers /mcp and no tool.
+        const home = yield* fs.makeTempDirectoryScoped({ prefix: "gent-mcp-none-" })
+        const zero = yield* collectTestContributions(McpExtension.setup, { home, cwd: home })
+        expect(toolList(zero)).toEqual([])
+        expect(zero.requests?.map((capability) => String(capability.id))).toEqual(["mcp-command"])
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...shippedPreset,
+          providerLayer,
+        })
+        const commands = yield* client.extension.listSlashCommands({ sessionId })
+        expect(commands.filter((command) => command.extensionId === "@gent/mcp")).toMatchObject([
+          { name: "mcp", capabilityId: "mcp-command" },
+        ])
+        yield* client.extension.request({
+          sessionId,
+          branchId,
+          extensionId: ExtensionId.make("@gent/mcp"),
+          capabilityId: "mcp-command",
+          input: "",
+        })
+        const shown = yield* waitFor(
+          client.message.list({ branchId }),
+          (all) => all.some((message) => messagePartsText(message.parts).includes("mcp.json")),
+          10_000,
+          "the /mcp report",
+        )
+        expect(shown.map((message) => messagePartsText(message.parts))).toContainEqual(
+          expect.stringContaining(
+            "No MCP servers are configured. Add one to ~/.gent/mcp.json, or to .gent/mcp.json in a trusted project.",
+          ),
+        )
+      }).pipe(Effect.timeout("25 seconds"), Effect.provide(platformLayer)),
+    30_000,
+  )
 })
 
 // ── oauth ───────────────────────────────────────────────────────────────────
@@ -1211,6 +1341,8 @@ interface OAuthFixtureState {
   readonly redirects: Array<string>
   /** Open until the test lets registrations answer. */
   readonly registerGate: Deferred.Deferred<void>
+  /** Never opened: a slow refresh answers when its wait on it times out. */
+  readonly refreshGate: Deferred.Deferred<void>
 }
 
 /**
@@ -1218,18 +1350,21 @@ interface OAuthFixtureState {
  * `WWW-Authenticate` names, and the authorization server lives under `/as`,
  * so only a client that reads the header finds it. `overlapRefreshes`: a
  * refresh grant is held until a second one arrives, or a second passes.
- * `holdRegister`: a registration waits for `registerGate`.
+ * `holdRegister`: a registration waits for `registerGate`. `slowRefreshes`:
+ * a refresh grant rotates the token at once but answers a second later.
  */
 interface OAuthFixtureOptions {
   readonly headerOnly: boolean
   readonly overlapRefreshes: boolean
   readonly holdRegister: boolean
+  readonly slowRefreshes: boolean
 }
 
 const defaultOAuthFixture: OAuthFixtureOptions = {
   headerOnly: false,
   overlapRefreshes: false,
   holdRegister: false,
+  slowRefreshes: false,
 }
 
 /** Where the authorization server lives: the origin, or `/as` under `headerOnly`. */
@@ -1342,7 +1477,13 @@ const exchangeToken = (state: OAuthFixtureState, request: OAuthRequest) =>
     if (form.grant_type === "refresh_token" && state.refreshTokens.has(refresh)) {
       state.refreshTokens.delete(refresh)
       state.refreshes += 1
-      return issueTokens(state)
+      const answer = issueTokens(state)
+      // The spent refresh token is gone before the answer leaves: a client
+      // that stops waiting has lost it.
+      if (state.options.slowRefreshes) {
+        yield* Deferred.await(state.refreshGate).pipe(Effect.timeout("1 second"), Effect.ignore)
+      }
+      return answer
     }
     if (form.grant_type === "refresh_token") state.failedRefreshes += 1
     return fixtureJson({ error: "invalid_grant" }, 400)
@@ -1451,6 +1592,7 @@ const serveOAuthFixtureWith = Effect.fnUntraced(function* (options: OAuthFixture
     secondRefresh: yield* Deferred.make<void>(),
     redirects: [],
     registerGate: yield* Deferred.make<void>(),
+    refreshGate: yield* Deferred.make<void>(),
   }
   const context = yield* Layer.build(
     HttpServer.serve(oauthFixtureApp(state)).pipe(
@@ -1487,7 +1629,7 @@ const runOAuthCell = (oauth: OAuthFixtureState, code: string) =>
     ])
     const { client, sessionId, branchId } = yield* createRpcHarness({
       ...shippedPreset,
-      extensionInputs: [...shippedPreset.extensionInputs, oauthServers(oauth)],
+      extensionInputs: [...shippedWithoutMcp, oauthServers(oauth)],
       providerLayer,
     })
     yield* client.message.send({ sessionId, branchId, content: "who am I" })
@@ -1500,7 +1642,7 @@ const commandSession = (oauth: OAuthFixtureState) =>
     const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
     const harness = yield* createRpcHarness({
       ...shippedPreset,
-      extensionInputs: [...shippedPreset.extensionInputs, oauthServers(oauth)],
+      extensionInputs: [...shippedWithoutMcp, oauthServers(oauth)],
       providerLayer,
     })
     const request = (input: string) =>
@@ -1681,6 +1823,121 @@ describe("mcp oauth", () => {
   )
 
   it.scopedLive(
+    "two setups that refresh two different logins at once both keep their rotated tokens",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const oauth = yield* serveOAuthFixtureWith({
+          ...defaultOAuthFixture,
+          overlapRefreshes: true,
+        })
+        const data = yield* makeDataDir
+        const authFile = path.join(data.directory, "mcp-auth.json")
+        const now = yield* Clock.currentTimeMillis
+        const expiring = (name: string) => {
+          oauth.valid.add(`token-${name}`)
+          oauth.refreshTokens.add(`refresh-${name}`)
+          return {
+            tokens: {
+              access_token: `token-${name}`,
+              token_type: "Bearer",
+              refresh_token: `refresh-${name}`,
+            },
+            expiresAt: now + 30_000,
+            client: { client_id: "client-1" },
+            redirectUri: "http://127.0.0.1:9/callback",
+          }
+        }
+        yield* fs.writeFileString(
+          authFile,
+          encodeJson({
+            servers: {
+              [`alpha ${oauth.origin}/mcp`]: expiring("alpha"),
+              [`beta ${oauth.origin}/mcp`]: expiring("beta"),
+            },
+          }),
+        )
+        // Two extensions, each with its own login store: two gent processes on one data directory.
+        const home = path.join(data.directory, "home")
+        const setupOf = (name: string) =>
+          collectTestContributions(
+            McpServers(`@test/mcp-${name}`, { [name]: { url: `${oauth.origin}/mcp` } }).setup,
+            { home, cwd: data.directory },
+          )
+        yield* Effect.all([setupOf("alpha"), setupOf("beta")], { concurrency: 2 }).pipe(
+          Effect.provide(data.layer),
+        )
+        expect(oauth.refreshes).toBe(2)
+        // Each login holds its rotated refresh token; neither write dropped the other's.
+        const stored = yield* fs.readFileString(authFile)
+        expect(stored).not.toContain('"refresh_token":"refresh-alpha"')
+        expect(stored).not.toContain('"refresh_token":"refresh-beta"')
+      }).pipe(Effect.timeout("40 seconds"), Effect.provide(platformLayer)),
+    45_000,
+  )
+
+  it.scopedLive(
+    "a refresh slower than the entry's timeout still stores the rotated token",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const oauth = yield* serveOAuthFixtureWith({ ...defaultOAuthFixture, slowRefreshes: true })
+        const data = yield* makeDataDir
+        yield* storeExpiringLogin(oauth, data.directory)
+        const home = path.join(data.directory, "home")
+        // The dial gives up after 200 ms; the authorization server answers the refresh after 1 s.
+        yield* collectTestContributions(
+          McpServers("@test/mcp-oauth", { secure: { url: `${oauth.origin}/mcp`, timeoutMs: 200 } })
+            .setup,
+          { home, cwd: data.directory },
+        ).pipe(Effect.provide(data.layer))
+        expect(oauth.refreshes).toBe(1)
+        // refresh-0 is spent at the server, so the store must hold what replaced it.
+        const stored = yield* fs.readFileString(path.join(data.directory, "mcp-auth.json"))
+        expect(stored).toContain('"refresh_token":"refresh-1"')
+      }).pipe(Effect.timeout("40 seconds"), Effect.provide(platformLayer)),
+    45_000,
+  )
+
+  it.scopedLive(
+    "a dial that times out while the auth lock is being created leaves no lock behind",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const oauth = yield* serveOAuthFixture
+        const data = yield* makeDataDir
+        yield* storeExpiringLogin(oauth, data.directory)
+        const home = path.join(data.directory, "home")
+        const lock = path.join(data.directory, "mcp-auth.json.lock")
+        // The lock file's create takes 500 ms, and the dial gives up after 200 ms.
+        const slowLockCreate = FileSystem.FileSystem.of({
+          ...fs,
+          writeFileString: (file, data, options) => {
+            if (file !== lock) return fs.writeFileString(file, data, options)
+            // gent/no-sleep: allow the create must outlast the dial's real 200 ms timeout
+            return Effect.sleep("500 millis").pipe(
+              Effect.andThen(fs.writeFileString(file, data, options)),
+            )
+          },
+        })
+        yield* collectTestContributions(
+          McpServers("@test/mcp-oauth", { secure: { url: `${oauth.origin}/mcp`, timeoutMs: 200 } })
+            .setup,
+          { home, cwd: data.directory },
+        ).pipe(
+          Effect.provideService(FileSystem.FileSystem, slowLockCreate),
+          Effect.provide(data.layer),
+        )
+        // A lock left here would block every refresh until it goes stale.
+        expect(yield* fs.exists(lock)).toBe(false)
+      }).pipe(Effect.timeout("40 seconds"), Effect.provide(platformLayer)),
+    45_000,
+  )
+
+  it.scopedLive(
     "a server whose resource metadata only its WWW-Authenticate header names logs in and refreshes",
     () =>
       Effect.gen(function* () {
@@ -1816,7 +2073,7 @@ describe("mcp binary content", () => {
           const { client, sessionId, branchId } = yield* createRpcHarness({
             ...shippedPreset,
             extensionInputs: [
-              ...shippedPreset.extensionInputs,
+              ...shippedWithoutMcp,
               McpServers("@test/mcp-binary", {
                 fixture: fixture.stdio({ MCP_FIXTURE_BINARY: "1" }),
                 remote: httpEntry(port),
@@ -1944,6 +2201,44 @@ describe("mcp results", () => {
 
 describe("mcp tools in the cell", () => {
   it.scopedLive(
+    "a server listing 600 tools with 2 KB schemas leaves the cell working, and await tools(id) reads one schema",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* makeFixture
+        const code = [
+          "const spec = await tools('mcp.fixture.bulk_599')",
+          "const echoed = await tools.mcp.fixture.echo({ text: 'hi' })",
+          "JSON.stringify({ echoed, id: spec.id, schema: spec.parameters.description.length })",
+        ].join("; ")
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          toolCallStep("cell", { code }),
+          textStep("done"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...shippedPreset,
+          extensionInputs: [
+            ...shippedWithoutMcp,
+            McpServers("@test/mcp-many", { fixture: fixture.stdio({ MCP_FIXTURE_MANY: "600" }) }),
+          ],
+          providerLayer,
+        })
+        yield* client.message.send({ sessionId, branchId, content: "use one of many tools" })
+        const result = yield* cellResultAfterDone(client, branchId)
+        expect(result).toMatchObject({
+          name: "cell",
+          isFailure: false,
+          result: {
+            display: encodeJson({ echoed: "hi", id: "mcp.fixture.bulk_599", schema: 2000 }),
+          },
+        })
+      }).pipe(
+        Effect.timeout("25 seconds"),
+        Effect.provide(Layer.provideMerge(withDataDir, platformLayer)),
+      ),
+    30_000,
+  )
+
+  it.scopedLive(
     "the cell calls MCP tools as typed functions through the host tool path, on one lazy connection",
     () =>
       Effect.gen(function* () {
@@ -1964,7 +2259,7 @@ describe("mcp tools in the cell", () => {
         const { client, sessionId, branchId } = yield* createRpcHarness({
           ...shippedPreset,
           extensionInputs: [
-            ...shippedPreset.extensionInputs,
+            ...shippedWithoutMcp,
             McpServers("@test/mcp-cell", { fixture: fixture.stdio() }),
           ],
           providerLayer,
@@ -2040,7 +2335,7 @@ describe("mcp tools in the cell", () => {
         const { client, sessionId, branchId } = yield* createRpcHarness({
           ...shippedPreset,
           extensionInputs: [
-            ...shippedPreset.extensionInputs,
+            ...shippedWithoutMcp,
             // Five named tools and 95 generated ones.
             McpServers("@test/mcp-many", { fixture: fixture.stdio({ MCP_FIXTURE_EXTRA: "95" }) }),
           ],
@@ -2086,7 +2381,7 @@ describe("mcp tools in the cell", () => {
         const { client, sessionId, branchId } = yield* createRpcHarness({
           ...shippedPreset,
           extensionInputs: [
-            ...shippedPreset.extensionInputs,
+            ...shippedWithoutMcp,
             McpServers("@test/mcp-typed", { fixture: fixture.stdio({ MCP_FIXTURE_TYPED: "1" }) }),
           ],
           providerLayer,
@@ -2136,10 +2431,7 @@ describe("mcp tools in the cell", () => {
         ])
         const { client, sessionId, branchId } = yield* createRpcHarness({
           ...shippedPreset,
-          extensionInputs: [
-            ...shippedPreset.extensionInputs,
-            McpServers("@test/mcp-stale", servers),
-          ],
+          extensionInputs: [...shippedWithoutMcp, McpServers("@test/mcp-stale", servers)],
           providerLayer,
         })
         expect(yield* fixture.starts).toBe(1)
@@ -2185,10 +2477,7 @@ describe("mcp tools in the cell", () => {
         ])
         const { client, sessionId, branchId } = yield* createRpcHarness({
           ...shippedPreset,
-          extensionInputs: [
-            ...shippedPreset.extensionInputs,
-            McpServers("@test/mcp-empty", servers),
-          ],
+          extensionInputs: [...shippedWithoutMcp, McpServers("@test/mcp-empty", servers)],
           providerLayer,
         })
         // The server answers an empty list from now on, as one with broken auth can.
@@ -2229,10 +2518,7 @@ describe("mcp tools in the cell", () => {
         ])
         const { client, sessionId, branchId } = yield* createRpcHarness({
           ...shippedPreset,
-          extensionInputs: [
-            ...shippedPreset.extensionInputs,
-            McpServers("@test/mcp-changed", servers),
-          ],
+          extensionInputs: [...shippedWithoutMcp, McpServers("@test/mcp-changed", servers)],
           providerLayer,
         })
         yield* client.message.send({ sessionId, branchId, content: "hide count" })
@@ -2280,10 +2566,7 @@ describe("mcp tools in the cell", () => {
         ])
         const { client, sessionId, branchId } = yield* createRpcHarness({
           ...shippedPreset,
-          extensionInputs: [
-            ...shippedPreset.extensionInputs,
-            McpServers("@test/mcp-swap", servers),
-          ],
+          extensionInputs: [...shippedWithoutMcp, McpServers("@test/mcp-swap", servers)],
           providerLayer,
         })
         yield* client.message.send({ sessionId, branchId, content: "swap" })
@@ -2343,10 +2626,7 @@ describe("mcp tools in the cell", () => {
           ])
           const { client, sessionId, branchId } = yield* createRpcHarness({
             ...shippedPreset,
-            extensionInputs: [
-              ...shippedPreset.extensionInputs,
-              McpServers("@test/mcp-unknown", servers),
-            ],
+            extensionInputs: [...shippedWithoutMcp, McpServers("@test/mcp-unknown", servers)],
             providerLayer,
           })
           yield* client.message.send({ sessionId, branchId, content: "count" })
@@ -2386,7 +2666,7 @@ describe("mcp tools in the cell", () => {
         const { client, sessionId, branchId } = yield* createRpcHarness({
           ...shippedPreset,
           extensionInputs: [
-            ...shippedPreset.extensionInputs,
+            ...shippedWithoutMcp,
             // Setup is start 1; the first call's connect is start 2, which exits.
             McpServers("@test/mcp-retry", {
               fixture: { ...fixture.stdio({ MCP_FIXTURE_FAIL_ON_START: "2" }), timeoutMs: 5000 },
@@ -2425,7 +2705,7 @@ describe("mcp tools in the cell", () => {
         const { client, sessionId, branchId } = yield* createRpcHarness({
           ...shippedPreset,
           extensionInputs: [
-            ...shippedPreset.extensionInputs,
+            ...shippedWithoutMcp,
             McpServers("@test/mcp-exit", {
               fixture: { ...fixture.stdio({ MCP_FIXTURE_EXIT_AFTER_CALL: "1" }), timeoutMs: 5000 },
             }),
@@ -2446,14 +2726,33 @@ describe("mcp tools in the cell", () => {
   )
 
   it.scopedLive(
-    "a stdio server runs with the host environment, its entry's env winning",
-    () =>
-      Effect.gen(function* () {
+    "stdio servers run with the host environment, empty and numbered names included, their entry's env winning, and it is read once",
+    () => {
+      // The gent process's environment, as a proxy or CA variable is in a user's
+      // shell. `NO_PROXY=` is set empty on purpose; Docker links name a port.
+      const hostEnv = ConfigProvider.fromEnv({
+        env: {
+          GENT_MCP_HOST_ONLY: "from the host",
+          GENT_MCP_DECLARED: "from the host",
+          GENT_MCP_EMPTY: "",
+          GENT_MCP_PORT_5432_TCP: "tcp://db:5432",
+        },
+      })
+      // Each walk of the environment loads this name once.
+      const walks = { count: 0 }
+      const counting = ConfigProvider.make((path) => {
+        if (path.join("_") === "GENT_MCP_HOST_ONLY") walks.count += 1
+        return hostEnv.load(path)
+      })
+      return Effect.gen(function* () {
         const fixture = yield* makeFixture
         const code = [
           "const host = await tools.mcp.fixture.env({ name: 'GENT_MCP_HOST_ONLY' })",
           "const declared = await tools.mcp.fixture.env({ name: 'GENT_MCP_DECLARED' })",
-          "JSON.stringify({ host, declared })",
+          "const empty = await tools.mcp.fixture.env({ name: 'GENT_MCP_EMPTY' })",
+          "const port = await tools.mcp.fixture.env({ name: 'GENT_MCP_PORT_5432_TCP' })",
+          "const other = await tools.mcp.other.env({ name: 'GENT_MCP_HOST_ONLY' })",
+          "JSON.stringify({ host, declared, empty, port, other })",
         ].join("; ")
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
           toolCallStep("cell", { code }),
@@ -2462,12 +2761,13 @@ describe("mcp tools in the cell", () => {
         const { client, sessionId, branchId } = yield* createRpcHarness({
           ...shippedPreset,
           extensionInputs: [
-            ...shippedPreset.extensionInputs,
+            ...shippedWithoutMcp,
             McpServers("@test/mcp-env", {
               fixture: fixture.stdio({
                 MCP_FIXTURE_ENV_TOOL: "1",
                 GENT_MCP_DECLARED: "from the entry",
               }),
+              other: fixture.stdio({ MCP_FIXTURE_ENV_TOOL: "1" }),
             }),
           ],
           providerLayer,
@@ -2478,23 +2778,24 @@ describe("mcp tools in the cell", () => {
           name: "cell",
           isFailure: false,
           result: {
-            display: encodeJson({ host: "from the host", declared: "from the entry" }),
+            display: encodeJson({
+              host: "from the host",
+              declared: "from the entry",
+              empty: "",
+              port: "tcp://db:5432",
+              other: "from the host",
+            }),
           },
         })
+        // Two servers listed at setup and dialed again for their calls: four dials.
+        // This harness runs the extension's setup twice, and each setup walks once.
+        expect(yield* fixture.starts).toBe(4)
+        expect(walks.count).toBe(2)
       }).pipe(
         Effect.timeout("25 seconds"),
-        Effect.provide(
-          Layer.merge(
-            platformLayer,
-            // The gent process's environment, as a proxy or CA variable is in a user's shell.
-            ConfigProvider.layer(
-              ConfigProvider.fromEnv({
-                env: { GENT_MCP_HOST_ONLY: "from the host", GENT_MCP_DECLARED: "from the host" },
-              }),
-            ),
-          ),
-        ),
-      ),
+        Effect.provide(Layer.merge(platformLayer, ConfigProvider.layer(counting))),
+      )
+    },
     30_000,
   )
 })

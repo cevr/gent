@@ -698,12 +698,11 @@ const CACHE_FORMAT = (
 ).toString(16)
 
 /**
- * The cache file: the catalog and the format that wrote it. A bare array is a
- * file from a build before the format stamp; it still decodes, so an offline
- * load can serve it.
+ * The cache file: the catalog and the format that wrote it. A file without
+ * the stamp reads as absent, so the next load fetches and rewrites it.
  */
 const CachedCatalog = Schema.Struct({ format: Schema.String, models: Schema.Array(Model) })
-const CachedCatalogJson = Schema.fromJsonString(Schema.Union([CachedCatalog, Schema.Array(Model)]))
+const CachedCatalogJson = Schema.fromJsonString(CachedCatalog)
 const decodeCachedCatalog = Schema.decodeUnknownOption(CachedCatalogJson)
 const encodeCachedCatalog = Schema.encodeSync(CachedCatalogJson)
 
@@ -789,10 +788,10 @@ const readCachedModels = Effect.fn("ModelsDev.readCache")(
     if (content.trim().length === 0) return NO_DISK_CATALOG
     return Option.match(decodeCachedCatalog(content), {
       onNone: () => NO_DISK_CATALOG,
-      onSome: (cached): DiskCatalog => {
-        if (!("format" in cached)) return { models: cached, current: false }
-        return { models: cached.models, current: cached.format === CACHE_FORMAT }
-      },
+      onSome: (cached): DiskCatalog => ({
+        models: cached.models,
+        current: cached.format === CACHE_FORMAT,
+      }),
     })
   },
   Effect.catchEager(() => Effect.succeed(NO_DISK_CATALOG)),

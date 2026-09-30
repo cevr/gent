@@ -220,7 +220,7 @@ describe("cell namespace snapshot", () => {
         "var n = 42; var s = 'text'; var nothing = undefined; var nan = NaN; var big = 10n;",
         "var when = new Date(86400000); var re = /a+/gi; var err = new RangeError('boom');",
         "var m = new Map([['k', { nested: [1, 2, 3] }]]); var set = new Set([1, 'two']);",
-        "var bytes = new Uint8Array([1, 2, 3]); var floats = new Float64Array([1.5]);",
+        "var bytes = new Uint8Array([1, 2, 3]); var floats = new Float64Array([1.5]); var halves = new Float16Array([0.5, -2]);",
         "var plain = { a: { b: null }, '$gent': 'literal key' };",
       ].join("\n"),
       source,
@@ -238,7 +238,7 @@ describe("cell namespace snapshot", () => {
         " when instanceof Date && when.getTime(), re instanceof RegExp && re.flags,",
         " err instanceof Error && err.name + ':' + err.message,",
         " m instanceof Map && m.get('k').nested.join(','), set instanceof Set && set.has('two'),",
-        " bytes instanceof Uint8Array && Array.from(bytes).join(','), floats[0],",
+        " bytes instanceof Uint8Array && Array.from(bytes).join(','), floats[0], halves instanceof Float16Array && Array.from(halves).join(','),",
         " plain.a.b === null && plain['$gent']]",
       ].join(""),
       target,
@@ -256,6 +256,7 @@ describe("cell namespace snapshot", () => {
       true,
       "1,2,3",
       1.5,
+      "0.5,-2",
       "literal key",
     ])
   })

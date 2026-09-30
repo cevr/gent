@@ -20,9 +20,8 @@ import {
   type TurnAfterInput,
 } from "@gent/core/extensions/api"
 
-// Test seam: only tests read these exports. renderMessageParts and
-// renderSessionTree are pure with unit tests; ReadSessionTool is the capability
-// the cell signature tests render.
+// Test seam: only tests read these exports. renderSessionTree is pure with
+// unit tests; ReadSessionTool is the capability the cell signature tests render.
 
 // ── read-session ────────────────────────────────────────────────────────────
 
@@ -61,7 +60,7 @@ const ReadSessionResult = Schema.Struct({
 const MAX_TOOL_ARG_CHARS = 500
 const MAX_TREE_CHARS = 120_000
 
-export const renderMessageParts = (parts: ReadonlyArray<Message["parts"][number]>): string =>
+const renderMessageParts = (parts: ReadonlyArray<Message["parts"][number]>): string =>
   messagePartsDisplayText(parts, { maxToolChars: MAX_TOOL_ARG_CHARS })
 
 export function renderSessionTree(

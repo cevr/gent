@@ -318,6 +318,64 @@ describe("context handoff", () => {
     }).pipe(Effect.provide(summaryProvider("tail only")), Effect.timeout("10 seconds")),
   )
 
+  it.scopedLive(
+    "the notice lists the user's messages oldest first, the original task among them when the summary never saw it, and says to read them",
+    () => {
+      let captured = Option.none<Prompt.Prompt>()
+      const followUps = Array.from({ length: 13 }, (_, index) =>
+        textMessage(`ask-${index + 2}`, "user", `follow-up ${index + 2}`, index + 3),
+      )
+      return Effect.gen(function* () {
+        const result = yield* compact({
+          history: [
+            textMessage("task", "user", "Make 36 listings.\n  Title each one.", 1),
+            textMessage("work", "assistant", "a".repeat(6_000), 2),
+            ...followUps,
+            textMessage("last", "assistant", "b".repeat(100), 16),
+          ],
+          budget: budget(1_700),
+        })
+        // The summary saw only the tail; the task stayed outside it.
+        expect(promptText(Option.getOrThrow(captured))).not.toContain("Make 36 listings")
+        expect(result.notice).toContain("were not summarized")
+        expect(result.notice).toContain(
+          "The user's messages, oldest first:\n- task: Make 36 listings. Title each one.\n- ask-2: follow-up 2\n",
+        )
+        expect(result.notice).toContain("- ask-12: follow-up 12\n- 2 more:")
+        expect(result.notice).not.toContain("ask-13:")
+        expect(result.notice).toContain(
+          "Before you continue, read the original task and any message the next step depends on with context.read(id)",
+        )
+        expect(result.notice).toContain("Summary:\ntail only")
+      }).pipe(
+        Effect.provide(
+          summaryProvider("tail only", (prompt) => {
+            captured = Option.some(prompt)
+          }),
+        ),
+        Effect.timeout("10 seconds"),
+      )
+    },
+  )
+
+  it.scopedLive("the summary is asked for a short bridge", () => {
+    let captured = Option.none<Prompt.Prompt>()
+    return Effect.gen(function* () {
+      yield* compact()
+      const system = Option.getOrThrow(captured).content.find(
+        (message) => message.role === "system",
+      )
+      expect(system?.content).toContain("at most 150 words")
+    }).pipe(
+      Effect.provide(
+        summaryProvider("bridge", (prompt) => {
+          captured = Option.some(prompt)
+        }),
+      ),
+      Effect.timeout("10 seconds"),
+    )
+  })
+
   it.scopedLive("the summary bound uses the projection's token estimate", () => {
     // The bound is `estimateTextTokens`, which core holds equal to the
     // projection's estimate of a one-text message; the summary at that bound
