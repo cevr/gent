@@ -5168,6 +5168,41 @@ describe("sessionDeleted hook", () => {
   )
 })
 
+// ── rpc wide events ─────────────────────────────────────────────────────────
+
+describe("rpc wide events", () => {
+  it.live("the wide event of a failed call names its session and branch", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const wideEvents = MutableRef.make<Array<LogEvent>>([])
+        const minimumLogLevel = Layer.effectContext(
+          Effect.succeed(Context.make(MinimumLogLevel, "Info")),
+        )
+        const { client, sessionId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+          extraLayers: [WideEventLogger.Capture(wideEvents), minimumLogLevel],
+        })
+        const missingBranchId = BranchId.make("missing-branch")
+        const failed = yield* Effect.exit(
+          client.session.getSnapshot({ sessionId, branchId: missingBranchId }),
+        )
+        expect(failed._tag).toBe("Failure")
+
+        const event = MutableRef.get(wideEvents).find(
+          (entry) =>
+            entry.annotations["service"] === "rpc" &&
+            entry.annotations["method"] === "session.getSnapshot",
+        )
+        expect(event).not.toBeUndefined()
+        expect(event?.annotations["sessionId"]).toBe(sessionId)
+        expect(event?.annotations["branchId"]).toBe(missingBranchId)
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+})
+
 // ── namespaced client ───────────────────────────────────────────────────────
 
 describe("namespaced client", () => {

@@ -1208,16 +1208,31 @@ const authPersistenceError = (
     cause,
   })
 
-/** Run one RPC inside its wide-event boundary and record the fields its result names. */
+type WideEventFields = Parameters<typeof WideEvent.set>[0]
+
+/**
+ * Run one RPC inside its wide-event boundary. The input's fields are recorded
+ * before the call runs, so a failed call still names its session; the fields
+ * the result names are recorded after it succeeds.
+ */
 const rpc = <A, E, R>(
   method: string,
+  fields: WideEventFields,
   effect: Effect.Effect<A, E, R>,
-  fields: (result: A) => Parameters<typeof WideEvent.set>[0],
-  requestId?: RequestId,
+  options: {
+    readonly requestId?: RequestId
+    readonly result?: (result: A) => WideEventFields
+  } = {},
 ) =>
-  effect.pipe(
-    Effect.tap((result) => WideEvent.set(fields(result))),
-    withWideEvent(WideEventBoundary.rpc(method, { requestId })),
+  WideEvent.set(fields).pipe(
+    Effect.andThen(effect),
+    Effect.tap((result) =>
+      Option.match(Option.fromUndefinedOr(options.result), {
+        onNone: () => Effect.void,
+        onSome: (resultFields) => WideEvent.set(resultFields(result)),
+      }),
+    ),
+    withWideEvent(WideEventBoundary.rpc(method, { requestId: options.requestId })),
   )
 
 // ── rpc handlers layer ──────────────────────────────────────────────────────
@@ -1315,12 +1330,10 @@ const RpcHandlers = GentRpcs.toLayer(
       // Session / branch / message / queue / interaction
       // ----------------------------------------------------------------------
       "session.create": (input: CreateSessionInput) =>
-        rpc(
-          "session.create",
-          mutations.createSession(input),
-          (result) => ({ sessionId: result.sessionId }),
-          input.requestId,
-        ),
+        rpc("session.create", {}, mutations.createSession(input), {
+          requestId: input.requestId,
+          result: (result) => ({ sessionId: result.sessionId }),
+        }),
 
       "session.list": () => sessionStorage.listSessions,
 
@@ -1333,16 +1346,18 @@ const RpcHandlers = GentRpcs.toLayer(
           .pipe(Effect.map(Option.fromUndefinedOr), Effect.map(Option.getOrNull)),
 
       "session.delete": ({ sessionId }: SessionIdPayload) =>
-        rpc("session.delete", mutations.deleteSession(sessionId), () => ({ sessionId })),
+        rpc("session.delete", { sessionId }, mutations.deleteSession(sessionId)),
 
       "session.getSnapshot": (input: GetSessionSnapshotInput) =>
-        rpc("session.getSnapshot", getSessionSnapshot(input), () => input),
+        rpc("session.getSnapshot", input, getSessionSnapshot(input)),
 
       "session.updateSettings": (input: UpdateSessionSettingsInput) =>
-        rpc("session.updateSettings", mutations.updateSettings(input), (result) => ({
-          sessionId: input.sessionId,
-          ...result,
-        })),
+        rpc(
+          "session.updateSettings",
+          { sessionId: input.sessionId },
+          mutations.updateSettings(input),
+          { result: (result) => result },
+        ),
 
       "session.events": ({ sessionId, branchId, after }: SubscribeEventsInput) => {
         const subscription = { sessionId, branchId, synchronize: true }
@@ -1356,82 +1371,80 @@ const RpcHandlers = GentRpcs.toLayer(
       "branch.list": ({ sessionId }: SessionIdPayload) => branchStorage.listBranches(sessionId),
 
       "branch.create": (input: CreateBranchInput) =>
-        rpc(
-          "branch.create",
-          mutations.createSessionBranch(input),
-          (result) => ({ sessionId: input.sessionId, branchId: result.branchId }),
-          input.requestId,
-        ),
+        rpc("branch.create", { sessionId: input.sessionId }, mutations.createSessionBranch(input), {
+          requestId: input.requestId,
+          result: (result) => ({ branchId: result.branchId }),
+        }),
 
       "branch.getTree": ({ sessionId }: SessionIdPayload) => getBranchTree(sessionId),
 
       "branch.switch": (input: SwitchBranchInput) =>
         rpc(
           "branch.switch",
-          mutations.switchActiveBranch(input),
-          () => ({
+          {
             sessionId: input.sessionId,
             fromBranchId: input.fromBranchId,
             toBranchId: input.toBranchId,
-          }),
-          input.requestId,
+          },
+          mutations.switchActiveBranch(input),
+          { requestId: input.requestId },
         ),
 
       "branch.fork": (input: ForkBranchInput) =>
         rpc(
           "branch.fork",
+          { sessionId: input.sessionId, fromBranchId: input.fromBranchId },
           mutations.forkSessionBranch(input),
-          (result) => ({
-            sessionId: input.sessionId,
-            fromBranchId: input.fromBranchId,
-            branchId: result.branchId,
-          }),
-          input.requestId,
+          { requestId: input.requestId, result: (result) => ({ branchId: result.branchId }) },
         ),
 
       "message.send": (input: SendMessageInput) =>
         rpc(
           "message.send",
+          { sessionId: input.sessionId, branchId: input.branchId },
           sendMessage(input),
-          () => ({ sessionId: input.sessionId, branchId: input.branchId }),
-          input.requestId,
+          { requestId: input.requestId },
         ),
 
       "message.list": ({ branchId }: BranchPayload) => messageStorage.listMessages(branchId),
 
       "steer.command": ({ command }: { readonly command: TransportSteerCommand }) =>
-        rpc("steer.command", sessionRuntime.steer(clientSteer(command)), () => ({
-          sessionId: command.sessionId,
-          branchId: command.branchId,
-          steerTag: command._tag,
-        })),
+        rpc(
+          "steer.command",
+          { sessionId: command.sessionId, branchId: command.branchId, steerTag: command._tag },
+          sessionRuntime.steer(clientSteer(command)),
+        ),
 
       "queue.drain": ({ sessionId, branchId, requestId }: QueueDrainInput) =>
         rpc(
           "queue.drain",
+          { sessionId, branchId },
           sessionRuntime
             .drainQueuedMessages({ sessionId, branchId, requestId })
             .pipe(Effect.withSpan("SessionRuntime.drainQueuedMessages")),
-          () => ({ sessionId, branchId }),
-          requestId,
+          { requestId },
         ),
 
       "queue.get": (input: QueueTarget) =>
         rpc(
           "queue.get",
+          input,
           sessionRuntime
             .getQueuedMessages(input)
             .pipe(Effect.withSpan("SessionQueries.getQueuedMessages")),
-          () => input,
         ),
 
       "interaction.respondInteraction": (input: RespondInteractionInput) =>
-        rpc("interaction.respondInteraction", respondInteraction(input), () => ({
-          sessionId: input.sessionId,
-          branchId: input.branchId,
-          requestId: input.requestId,
-          approved: input.approved,
-        })),
+        rpc(
+          "interaction.respondInteraction",
+          {
+            sessionId: input.sessionId,
+            branchId: input.branchId,
+            requestId: input.requestId,
+            approved: input.approved,
+          },
+          respondInteraction(input),
+        ),
 
       // ----------------------------------------------------------------------
       // Config / driver / model / auth
