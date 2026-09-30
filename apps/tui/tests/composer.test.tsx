@@ -36,7 +36,7 @@ import {
   renderFrame,
   renderWithProviders as renderHarness,
 } from "./render-harness-boundary"
-import { createSignal, type JSX, onMount, Show } from "solid-js"
+import { createSignal, ErrorBoundary, type JSX, onMount, Show } from "solid-js"
 import { PromptSearchState } from "../src/pickers"
 import { type ClientContextValue, type SessionIdentity, useClient } from "../src/client"
 import { useExtensionUI } from "../src/extensions/host"
@@ -649,6 +649,41 @@ describe("Composer renderer", () => {
       setup.mockInput.pressKey("RETURN")
       yield* Effect.promise(() => setup.renderOnce())
       expect(submitted).toEqual([`hello ${pasted}`])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  // A terminal that sends Enter as CR pastes CR-separated lines. The paste is
+  // the one place raw terminal bytes reach the draft, so the lines, the chip's
+  // count, what the model reads and the ↑ recall all see `\n`.
+  it.live("a large paste with CR line breaks sends real lines and recalls with ↑", () =>
+    Effect.gen(function* () {
+      const submitted: Array<string> = []
+      const thrown: Array<unknown> = []
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => (
+          <ErrorBoundary
+            fallback={(error) => {
+              thrown.push(error)
+              return <text>render threw</text>
+            }}
+          >
+            <TestComposer onSubmit={(content) => submitted.push(content)} />
+          </ErrorBoundary>
+        )),
+      )
+      const lines = Array.from(
+        { length: 10 },
+        (_, i) => `pasted line ${i + 1} from a terminal that sends CR`,
+      )
+      yield* Effect.promise(() => setup.mockInput.pasteBracketedText(lines.join("\r")))
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(renderFrame(setup)).toContain("[Pasted 10 lines #1]")
+      setup.mockInput.pressKey("RETURN")
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(submitted).toEqual([lines.join("\n")])
+      setup.mockInput.pressArrow("up")
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(thrown).toEqual([])
+      expect(renderFrame(setup)).toContain("┃ pasted line 2 from")
     }).pipe(Effect.timeout("10 seconds")),
   )
   it.live("suspended composer blocks enter submission", () =>

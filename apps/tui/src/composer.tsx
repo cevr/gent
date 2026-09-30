@@ -767,10 +767,15 @@ function useComposerController(): ComposerController {
    * the pasted text, and the textarea's own insert puts the placeholder where
    * the paste would have gone: at the caret, over any selection. Reading the
    * paste back from the changed draft cannot tell where it landed.
+   *
+   * The paste is where raw terminal bytes enter the draft. A terminal that
+   * sends Enter as CR pastes CR line breaks, so they become `\n` here: the
+   * chip counts the lines, the model reads them, and ↑ recalls text the
+   * textarea holds unchanged.
    */
   const handlePaste = (event: PasteEvent) => {
     if (Option.isNone(inputRef)) return
-    const pasted = stripAnsiSequences(decodePasteBytes(event.bytes))
+    const pasted = stripAnsiSequences(decodePasteBytes(event.bytes)).replace(/\r\n?/g, "\n")
     if (!isLargePaste(pasted)) return
     event.preventDefault()
     inputRef.value.insertText(paste.createPlaceholder(pasted))
