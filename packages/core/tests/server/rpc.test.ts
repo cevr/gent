@@ -82,7 +82,7 @@ import {
 } from "../../src/domain/ids"
 import { Model as AiModel, type LanguageModel } from "effect/ai"
 import { BunServices } from "@effect/platform-bun"
-import type { ModelDriverContribution } from "../../src/domain/driver.js"
+import { type ModelDriverContribution, ProviderAuthError } from "../../src/domain/driver.js"
 import { type ExtensionHealthSnapshot, SetDriverOverrideInput } from "../../src/server/rpc.js"
 import {
   defineResource,
@@ -889,6 +889,81 @@ describe("provider login", () => {
         expect(providers.find((entry) => entry.provider === "project-oauth")?.hasKey).toBe(true)
       }).pipe(Effect.timeout("4 seconds")),
     ),
+  )
+
+  // A login's pending state lives on the driver instance that authorized it.
+  // A config edit between the two calls supersedes the session's profile;
+  // the callback still reaches the instance that holds the login.
+  it.live("a login finishes on the profile that began it, across a config edit", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const project = yield* makeTempDirectoryScoped("gent-login-edit-")
+        const home = yield* makeTempDirectoryScoped("gent-login-edit-home-")
+        const loginDriver = defineExtension({
+          id: "@test/pending-login",
+          setup: Effect.gen(function* () {
+            const pending = new Set<string>()
+            yield* (yield* ExtensionHost).register("modelDriver", {
+              id: "pending-oauth",
+              name: "Pending OAuth",
+              resolveModel: () => Effect.succeed(stubModel),
+              auth: {
+                methods: [AuthMethod.make({ type: "oauth", label: "OAuth" })],
+                authorize: (ctx) =>
+                  Effect.sync(() => {
+                    pending.add(ctx.authorizationId)
+                    return Option.some({ url: "http://example.com/auth", method: "code" as const })
+                  }),
+                callback: (ctx) =>
+                  Effect.gen(function* () {
+                    if (!pending.delete(ctx.authorizationId)) {
+                      return yield* new ProviderAuthError({ message: "login state missing" })
+                    }
+                    yield* ctx.persist({ type: "api", key: ctx.code ?? "" })
+                  }),
+              },
+            })
+          }),
+        })
+        const toggle = defineExtension({ id: "@test/login-toggle", setup: Effect.void })
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const { client } = yield* createRpcClient(
+          createE2ELayer({
+            agents: e2ePreset.agents,
+            providerLayer,
+            extensionInputs: [loginDriver, toggle],
+            configServiceLayer: ConfigService.Live.pipe(
+              Layer.provide(RuntimeEnvironment.Live({ cwd: project, home })),
+              Layer.provide(BunPlatformLive),
+            ),
+          }),
+        )
+        const { sessionId } = yield* client.session.create({ cwd: project })
+        const authorization = yield* client.auth.authorize({
+          sessionId,
+          provider: "pending-oauth",
+          method: 0,
+        })
+        if (Predicate.isNull(authorization)) return yield* Effect.die("authorize gave no link")
+        const projectConfig = path.join(project, ".gent", "config.json")
+        yield* fs.makeDirectory(path.dirname(projectConfig), { recursive: true })
+        yield* fs.writeFileString(
+          projectConfig,
+          encodeJson({ disabledExtensions: ["@test/login-toggle"] }),
+        )
+        yield* client.auth.callback({
+          sessionId,
+          provider: "pending-oauth",
+          method: 0,
+          authorizationId: authorization.authorizationId,
+          code: "sk-edited",
+        })
+        const providers = yield* client.auth.listProviders({ sessionId })
+        expect(providers.find((entry) => entry.provider === "pending-oauth")?.hasKey).toBe(true)
+      }).pipe(Effect.timeout("8 seconds")),
+    ).pipe(Effect.provide(BunServices.layer)),
   )
 })
 
