@@ -735,7 +735,7 @@ class CurrentCellToolOperation extends Context.Service<
 
 // ── process ─────────────────────────────────────────────────────────────────
 
-export class CellProcessError extends Schema.TaggedError<CellProcessError>()("CellProcessError", {
+class CellProcessError extends Schema.TaggedError<CellProcessError>()("CellProcessError", {
   phase: Schema.Literals(["launch", "io", "exit"]),
   message: Schema.String,
   diagnostics: Schema.String,
@@ -1069,7 +1069,7 @@ export class CellOperationHost extends Context.Service<
   }
 >()("@gent/extensions/src/cell/CellOperationHost") {}
 
-export class CellKernelError extends Schema.TaggedError<CellKernelError>()("CellKernelError", {
+class CellKernelError extends Schema.TaggedError<CellKernelError>()("CellKernelError", {
   reason: Schema.Literals([
     "timeout",
     "cancelled",
@@ -2195,7 +2195,7 @@ export const cellWorkerLaunch = Effect.gen(function* () {
   return CellWorker.cases.Script.make({ runtimePath: execPath, scriptPath })
 })
 
-export class CellExecutionIncomplete extends Schema.TaggedError<CellExecutionIncomplete>()(
+class CellExecutionIncomplete extends Schema.TaggedError<CellExecutionIncomplete>()(
   "CellExecutionIncomplete",
   {
     sessionId: SessionId,

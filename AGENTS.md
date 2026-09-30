@@ -95,7 +95,6 @@ packages/core/src/       # Everything non-UI
   test-utils/            # Mock layers, sequence recording, step builders, in-process layer
 packages/sdk/            # Client wrappers
 apps/tui/                # @opentui/solid TUI
-apps/server/             # BunHttpServer
 ```
 
 ## Testing

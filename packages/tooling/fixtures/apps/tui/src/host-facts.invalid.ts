@@ -1,6 +1,6 @@
 // @ts-nocheck — fixture file
 // EXPECTED: rule `gent/no-bun-outside-adapter` fires
-// The server launcher reads its environment and calls Gent.server; it reads
+// The TUI's `gent server start` reads its flags and calls Gent.server; it reads
 // no host facts of its own.
 declare const process: { execPath: string }
 

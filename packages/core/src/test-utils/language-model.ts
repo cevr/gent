@@ -225,14 +225,13 @@ export const makeTempDirectoryScoped = (prefix: string) =>
     (dir) => Effect.sync(() => fs.rmSync(dir, { recursive: true, force: true })),
   )
 
-/** Create a worker environment with data dir, auth files, and provider mode */
-export const createWorkerEnv = (root: string, providerMode?: string): Record<string, string> => {
+/** Create a worker environment with its own data and auth directories under `root`. */
+export const createWorkerEnv = (root: string): Record<string, string> => {
   const dataDir = path.join(root, "data")
   fs.mkdirSync(dataDir, { recursive: true })
 
   const env = Record.empty<string, string>()
   env["GENT_DATA_DIR"] = dataDir
-  if (!Predicate.isUndefined(providerMode)) env["GENT_PROVIDER_MODE"] = providerMode
   env["GENT_AUTH_DIRECTORY"] = path.join(root, "auth")
   return env
 }

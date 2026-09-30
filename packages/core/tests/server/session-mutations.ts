@@ -82,7 +82,7 @@ export const collectSessionEvents = <A, E>(stream: Stream.Stream<A, E>) =>
     return closed
   })
 
-export const failingPublisherLayer = Layer.succeed(
+const failingPublisherLayer = Layer.succeed(
   EventStore,
   EventStore.of({
     subscribe: () => Stream.empty,

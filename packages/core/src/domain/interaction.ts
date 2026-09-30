@@ -74,7 +74,7 @@ export class InteractionPendingError extends Schema.TaggedError<InteractionPendi
  * An ask made outside a tool call the loop dispatched. No turn parks on it and
  * nothing runs it again, so its answer would reach the next call that asks.
  */
-export class InteractionOwnerMissingError extends Schema.TaggedError<InteractionOwnerMissingError>(
+class InteractionOwnerMissingError extends Schema.TaggedError<InteractionOwnerMissingError>(
   "@gent/core/src/domain/interaction/InteractionOwnerMissingError",
 )("InteractionOwnerMissingError", {
   message: Schema.String,
@@ -96,7 +96,7 @@ export class InteractionDecisionConflictError extends Schema.TaggedError<Interac
  * same step has parked on an approval. The parked call keeps the branch's one
  * slot until its step runs again, which the dispatcher's step prevents.
  */
-export class InteractionSlotBusyError extends Schema.TaggedError<InteractionSlotBusyError>(
+class InteractionSlotBusyError extends Schema.TaggedError<InteractionSlotBusyError>(
   "@gent/core/src/domain/interaction/InteractionSlotBusyError",
 )("InteractionSlotBusyError", {
   message: Schema.String,

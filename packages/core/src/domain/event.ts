@@ -357,8 +357,7 @@ export const BranchSwitched = AgentEvent.cases.BranchSwitched
 export type BranchSwitched = typeof AgentEvent.cases.BranchSwitched.Type
 export const ExtensionStateChanged = AgentEvent.cases.ExtensionStateChanged
 export type ExtensionStateChanged = typeof AgentEvent.cases.ExtensionStateChanged.Type
-export const StreamSynchronized = AgentEvent.cases.StreamSynchronized
-export type StreamSynchronized = typeof AgentEvent.cases.StreamSynchronized.Type
+const StreamSynchronized = AgentEvent.cases.StreamSynchronized
 
 // ============================================================================
 // Interaction types — shared between server and client

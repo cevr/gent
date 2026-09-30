@@ -47,6 +47,7 @@ import {
   doctor,
   readHome,
   resolveClientBundle,
+  resumableSessions,
   server,
   sessions,
   storage,
@@ -232,10 +233,10 @@ const runGent = ({
     }
 
     // Marked before anything slow runs: a signal while the bundle resolves
-    // (it can start a server) still exits the way a headless run does.
-    if (headless) {
+    // (it can start a server) already exits the way the chosen mode does.
+    if (!headless) {
       yield* Effect.sync(() => {
-        cliRun.headless = true
+        cliRun.interactive = true
       })
     }
 
@@ -269,13 +270,14 @@ const runGent = ({
       }
     }
 
+    const inMemory = debug || isolate || mockEmpty
     let mock = Option.none<{ readonly empty: boolean }>()
     if (debug) mock = Option.some({ empty: false })
     if (mockEmpty) mock = Option.some({ empty: true })
     const bundle = yield* resolveClientBundle({
       cwd,
       connect,
-      inMemory: debug || isolate || mockEmpty,
+      inMemory,
       debug,
       mock,
       authDirectory: authDirectoryOpt,
@@ -324,7 +326,12 @@ const runGent = ({
         })
       }
 
-      yield* runHeadlessTurn(bundle, state, { approveAll })
+      // Tool paths read from the session's own cwd, as the TUI spells them.
+      const place = {
+        cwd: Option.getOrElse(Option.fromNullishOr(state.session.cwd), () => cwd),
+        home,
+      }
+      yield* runHeadlessTurn(bundle, state, { approveAll, place })
       return
     }
 
@@ -351,6 +358,11 @@ const runGent = ({
       ...env,
       shutdown: () => {
         interruptMain()
+      },
+      resumable: resumableSessions({ connect, inMemory }),
+      writeTerminal: (text: string) => {
+        // eslint-disable-next-line effect/noGlobals -- The line must reach the real terminal after the renderer is destroyed, outside any Effect.
+        process.stdout.write(text)
       },
     }
 
@@ -485,11 +497,11 @@ const mainEffect = Effect.scoped(
 
 /**
  * What the teardown reads about the run: the signal that stopped it, and
- * whether it was a headless run. The process entry owns both.
+ * whether it was the interactive TUI. The process entry owns both.
  */
 const cliRun = {
   signal: Option.none<ExitSignal>(),
-  headless: false,
+  interactive: false,
 }
 
 const runCliMain = Runtime.makeRunMain(({ fiber, teardown }) => {
@@ -519,6 +531,9 @@ const runCliMain = Runtime.makeRunMain(({ fiber, teardown }) => {
 })
 
 runCliMain(mainEffect, {
-  teardown: makeCliTeardown({ signal: () => cliRun.signal, headless: () => cliRun.headless }),
+  teardown: makeCliTeardown({
+    signal: () => cliRun.signal,
+    interactive: () => cliRun.interactive,
+  }),
   disableErrorReporting: true,
 })

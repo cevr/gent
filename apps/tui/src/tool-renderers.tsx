@@ -3,6 +3,7 @@ import { createPatch } from "diff"
 import { Match, Option, Schema } from "effect"
 import { createContext, createMemo, For, type JSX as SolidJSX, Show, useContext } from "solid-js"
 import { buildSyntaxStyle, useTheme } from "./theme"
+import { useClient } from "./client"
 import { GutterText, ToolCallIdentityProvider, ToolFrame } from "./ui"
 import {
   formatHeadTail,
@@ -18,18 +19,19 @@ import {
   countNoun,
   decodeToolOutputOption,
   describeCellCode,
+  displayPath,
   fileUrl,
   formatGenericToolDetail,
   formatGenericToolInput,
   formatGenericToolText,
   formatOperationLabels,
-  formatToolInput,
   getString,
   isAbsPath,
   parseBashOutput,
   plural,
   shortId,
   toolArgSummary,
+  type PathPlace,
   type ToolInput,
   truncatePath,
 } from "./utils"
@@ -207,7 +209,8 @@ export function GenericToolRenderer(props: ToolRendererProps) {
   }
 
   const hasOutput = () => summaryText() || outputText()
-  const subtitle = () => formatToolInput(props.toolCall.toolName, props.toolCall.input)
+  const { pathPlace } = useClient()
+  const subtitle = () => toolArgSummary(props.toolCall.toolName, props.toolCall.input, pathPlace())
 
   return (
     <ToolFrame
@@ -626,13 +629,16 @@ const liveOutcome = (status: ToolCall["status"]): ActivityOperation["outcome"] =
 }
 
 /** Calls a cell admitted: live nested calls carry arguments; saved receipts carry tool and outcome. */
-export const cellOperations = (call: ToolCall): ReadonlyArray<ActivityOperation> => {
+export const cellOperations = (
+  call: ToolCall,
+  place: PathPlace,
+): ReadonlyArray<ActivityOperation> => {
   const live = Option.fromNullishOr(call.operations)
   if (Option.isSome(live) && live.value.length > 0) {
     return live.value.map((operation) => ({
       tool: operation.toolName,
       outcome: liveOutcome(operation.status),
-      detail: toolArgSummary(operation.toolName, operation.input),
+      detail: toolArgSummary(operation.toolName, operation.input, place),
     }))
   }
   return Option.match(decodeToolOutputOption(CellOperationReceipts, call.output), {
@@ -648,6 +654,7 @@ export const cellOperations = (call: ToolCall): ReadonlyArray<ActivityOperation>
 
 function CellToolRenderer(props: ToolRendererProps) {
   const { theme } = useTheme()
+  const { pathPlace } = useClient()
 
   const data = createMemo(() => decodeToolOutputOption(CellOutputSchema, props.toolCall.output))
   const code = createMemo(() => getString(props.toolCall.input, "code"))
@@ -655,7 +662,7 @@ function CellToolRenderer(props: ToolRendererProps) {
   // The ops that ran, once there are any, as the header counts them; before
   // that the verbs the source spells out, else its first line.
   const subtitle = createMemo(() => {
-    const operations = cellOperations(props.toolCall)
+    const operations = cellOperations(props.toolCall, pathPlace())
     const verbs = describeCellCode(code())
     let first = codeLines()[0] ?? ""
     if (verbs.length > 0) first = verbs.join(" · ")
@@ -880,6 +887,7 @@ function getStartLine(content: string): number {
 }
 
 export function ReadToolRenderer(props: ToolRendererProps) {
+  const { pathPlace } = useClient()
   const { theme } = useTheme()
 
   const data = createMemo(() => parseReadOutput(props.toolCall.output))
@@ -914,7 +922,7 @@ export function ReadToolRenderer(props: ToolRendererProps) {
   return (
     <ToolFrame
       title="read"
-      subtitle={truncatePath(path())}
+      subtitle={displayPath(path(), pathPlace())}
       subtitleHref={Option.getOrUndefined(
         Option.some(path()).pipe(Option.filter(isAbsPath), Option.map(fileUrl)),
       )}
@@ -1031,6 +1039,7 @@ const renderDiffLine = (
 }
 
 export function EditToolRenderer(props: ToolRendererProps) {
+  const { pathPlace } = useClient()
   const { theme } = useTheme()
   const syntaxStyle = createMemo(() => buildSyntaxStyle(theme))
 
@@ -1060,7 +1069,7 @@ export function EditToolRenderer(props: ToolRendererProps) {
       fallback={
         <ToolFrame
           title="edit"
-          subtitle={truncatePath(path())}
+          subtitle={displayPath(path(), pathPlace())}
           subtitleHref={subtitleHref()}
           status={props.toolCall.status}
           expanded={props.expanded}
@@ -1073,7 +1082,7 @@ export function EditToolRenderer(props: ToolRendererProps) {
       {(data) => (
         <ToolFrame
           title="edit"
-          subtitle={truncatePath(path())}
+          subtitle={displayPath(path(), pathPlace())}
           subtitleHref={subtitleHref()}
           status={props.toolCall.status}
           expanded={props.expanded}
@@ -1138,6 +1147,7 @@ function formatBytes(bytes: number): string {
 }
 
 function WriteToolRenderer(props: ToolRendererProps) {
+  const { pathPlace } = useClient()
   const { theme } = useTheme()
 
   const data = createMemo(() => decodeToolOutput(WriteOutputSchema, props.toolCall.output))
@@ -1150,7 +1160,7 @@ function WriteToolRenderer(props: ToolRendererProps) {
   return (
     <ToolFrame
       title="write"
-      subtitle={truncatePath(path())}
+      subtitle={displayPath(path(), pathPlace())}
       subtitleHref={subtitleHref()}
       status={props.toolCall.status}
       expanded={props.expanded}

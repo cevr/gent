@@ -20,6 +20,7 @@ const TEST_TIMEOUT = 30_000
 const ENTER = "\r"
 const ESC = "\x1b"
 const CTRL_C = "\x03"
+const CTRL_D = "\x04"
 const UP = "\x1b[A"
 const ESC_KEY_DECODE_MS = 650
 
@@ -60,15 +61,32 @@ describe("E2E: Basics", () => {
     TEST_TIMEOUT,
   )
 
+  // Esc never quits: after one, ctrl+c twice on the empty composer does, with
+  // the cue drawn between the presses.
   it.scopedLive(
-    "double ESC exits with code 0",
+    "ctrl+c twice exits with code 0",
     () =>
       Effect.gen(function* () {
         const ctx = yield* acquireTestContext(seedAndSpawn())
         yield* ptyWaitFor(ctx, "┃", { timeout: 10_000 })
         ctx.pty.write(ESC)
         yield* shortPause(ESC_KEY_DECODE_MS)
-        ctx.pty.write(ESC)
+        ctx.pty.write(CTRL_C)
+        yield* ptyWaitFor(ctx, "ctrl+c again to exit", { timeout: 5_000 })
+        ctx.pty.write(CTRL_C)
+        const code = yield* raceWithTimeout(ctx.pty.exited, 10_000)
+        expect(code).toEqual(Option.some(0))
+      }),
+    TEST_TIMEOUT,
+  )
+
+  it.scopedLive(
+    "ctrl+d on the empty composer exits with code 0",
+    () =>
+      Effect.gen(function* () {
+        const ctx = yield* acquireTestContext(seedAndSpawn())
+        yield* ptyWaitFor(ctx, "┃", { timeout: 10_000 })
+        ctx.pty.write(CTRL_D)
         const code = yield* raceWithTimeout(ctx.pty.exited, 10_000)
         expect(code).toEqual(Option.some(0))
       }),

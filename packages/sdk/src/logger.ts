@@ -3,9 +3,11 @@ import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http"
 import { BatchSpanProcessor } from "@opentelemetry/sdk-trace-base"
 import {
   Cause,
+  Clock,
   Config,
   type Context,
   DateTime,
+  Duration,
   Effect,
   FileSystem,
   Layer,
@@ -50,19 +52,19 @@ export const GentTracerLive: Layer.Layer<never> = Layer.unwrap(
 // ── log-paths ───────────────────────────────────────────────────────────────
 
 /**
- * Centralized log path resolution — logs go to /tmp/gent/logs/, or to
- * `<GENT_DATA_DIR>/logs` for a run with a data directory of its own
- * (`resolveLogDir` in server.ts, beside the data-path owner), so an isolated
- * run keeps its logs beside its database and its doctor reads them.
+ * Log path resolution — logs follow the data directory, in
+ * `<GENT_DATA_DIR or ~/.gent>/logs` (`dataPaths(home).logDir` in server.ts,
+ * the data-path owner), so an isolated run keeps its logs beside its database
+ * and its doctor reads them.
  *
  * Files are named by a short hash of the cwd + process start timestamp so
  * multiple gent instances don't clobber each other and old logs are easy to
- * identify by time.
+ * identify by time. Nothing outside gent clears the directory, so
+ * {@link ensureLogDir} removes log files older than {@link LOG_RETENTION}.
  *
  * File naming: `<hash>-<ts>-server.log`, `<hash>-<ts>-client.log`
  */
 
-export const LOG_DIR = "/tmp/gent/logs"
 const FALLBACK_CWD_IDENTITY = "unknown-cwd"
 
 /** FNV-1a 32-bit hash → 8-char hex */
@@ -111,11 +113,17 @@ const LOG_SUFFIX = { server: "-server.log", client: "-client.log" } satisfies Re
   string
 >
 
-/** Which side wrote a log file, by name; `None` for anything else in the directory. */
+/** The whole name {@link buildLogPaths} gives a file: cwd hash, start time, side. */
+const GENERATED_LOG_NAME = /^[0-9a-f]{8}-(?:\d{14}|unknown)-(?:server|client)\.log$/
+
+/**
+ * Which side wrote a log file, by name; `None` for anything else in the
+ * directory, such as `notes-server.log`: only a name gent generated is a log.
+ */
 export const classifyLogFile = (name: string): Option.Option<"server" | "client"> => {
+  if (!GENERATED_LOG_NAME.test(name)) return Option.none()
   if (name.endsWith(LOG_SUFFIX.server)) return Option.some("server")
-  if (name.endsWith(LOG_SUFFIX.client)) return Option.some("client")
-  return Option.none()
+  return Option.some("client")
 }
 
 /**
@@ -133,11 +141,39 @@ export const buildLogPaths = (cwd: string, dir: string): LogPaths => {
   }
 }
 
-/** Create the log directory if it doesn't exist. Call once at startup. */
+/** How long a log file stays after its last write. */
+const LOG_RETENTION = Duration.days(14)
+
+/**
+ * Remove `name` from `dir` when it is a regular file with a name gent
+ * generated, last written before `cutoff`.
+ */
+const pruneLogFile = (dir: string, name: string, cutoff: number) =>
+  Effect.gen(function* () {
+    if (Option.isNone(classifyLogFile(name))) return
+    const fs = yield* FileSystem.FileSystem
+    const path = `${dir}/${name}`
+    const info = yield* fs.stat(path)
+    if (info.type !== "File") return
+    if (Option.exists(info.mtime, (date) => date.getTime() < cutoff)) yield* fs.remove(path)
+  }).pipe(Effect.ignore)
+
+/**
+ * Create the log directory if it doesn't exist, and remove the gent logs in it
+ * last written more than {@link LOG_RETENTION} ago. Call once at startup. A
+ * file it cannot read or remove is left as it is.
+ *
+ * A pruned log may belong to a live, idle process: the names carry no pid.
+ * No writer holds its file open, so that process's next flush writes the file
+ * again, and no line goes to an unlinked file.
+ */
 export const ensureLogDir = (dir: string): Effect.Effect<void, never, FileSystem.FileSystem> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     yield* Effect.ignore(fs.makeDirectory(dir, { recursive: true }))
+    const cutoff = (yield* Clock.currentTimeMillis) - Duration.toMillis(LOG_RETENTION)
+    const names = yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => []))
+    yield* Effect.forEach(names, (name) => pruneLogFile(dir, name, cutoff), { discard: true })
   })
 
 // ── logger ──────────────────────────────────────────────────────────────────
@@ -231,7 +267,10 @@ const formatJsonLogger: Logger.Logger<unknown, string> = Logger.make(
 /**
  * Batched JSON file logger: one entry per line, appended to `path`, flushed
  * every 250 ms and once more when the scope closes. The server and the TUI
- * client both write this shape, so `gent doctor` reads one format.
+ * client both write this shape, so `gent doctor` reads one format. The file
+ * exists once this returns. Each flush appends by path and holds no
+ * descriptor: a file pruned while this logger is idle comes back at its next
+ * flush.
  */
 export const makeJsonFileLogger = (
   path: string,
@@ -242,11 +281,12 @@ export const makeJsonFileLogger = (
 > =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
-    const logFile = yield* fs.open(path, { flag: "a+" })
     const encoder = new TextEncoder()
+    const append = (bytes: Uint8Array) => fs.writeFile(path, bytes, { flag: "a" })
+    yield* append(new Uint8Array())
     return yield* Logger.batched(formatJsonLogger, {
       window: 250,
-      flush: (output) => Effect.ignore(logFile.write(encoder.encode(output.join("\n") + "\n"))),
+      flush: (output) => Effect.ignore(append(encoder.encode(output.join("\n") + "\n"))),
     })
   })
 

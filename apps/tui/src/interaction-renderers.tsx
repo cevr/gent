@@ -5,7 +5,7 @@ import { Effect, Option, Schema } from "effect"
 import { type QuestionOption, QuestionSchema } from "@gent/core/protocol"
 import { useTheme } from "./theme"
 import { useScopedKeyboard, useTerminalDimensions } from "./terminal"
-import { textWidth } from "./text-width-adapter"
+import { keyHint, keyHintsLine, KeyHints } from "./ui"
 import type { InteractionRendererProps } from "./extensions/client-facets.js"
 import { useRenderer } from "@opentui/solid"
 import { useEnv } from "./workspace"
@@ -185,18 +185,15 @@ function OptionList(props: OptionListProps): JSX.Element {
     if (isFreeformFocused()) return "> "
     return "  "
   }
-  const compactSelectionHint = () => {
-    if (isMultiple()) return "Space select"
-    return "↑↓ move"
-  }
+  // The docked panes' key vocabulary. Enter picks the focused option of a
+  // single choice; a multiple choice toggles with space and sends with Enter.
+  // Esc declines the ask, so it says cancel, not close.
   const footer = () => {
-    const hints = [
-      "↑↓ move · Space select · Enter submit · Esc cancel",
-      `${compactSelectionHint()} · Enter submit · Esc cancel`,
-    ]
-    return (
-      hints.find((hint) => textWidth(hint) <= dimensions().width - 2) ?? "Enter submit · Esc cancel"
-    )
+    let keys = [KeyHints.move, KeyHints.select, keyHint("esc", "cancel")]
+    if (isMultiple()) {
+      keys = [KeyHints.move, keyHint("space", "toggle"), KeyHints.submit, keyHint("esc", "cancel")]
+    }
+    return keyHintsLine(keys, dimensions().width - 2)
   }
 
   return (

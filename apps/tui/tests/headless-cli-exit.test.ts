@@ -29,8 +29,6 @@ const makeChildEnv = (homeDir: string, env: ReturnType<typeof createWorkerEnv>) 
   return {
     ...childEnv,
     HOME: homeDir,
-    GENT_PERSISTENCE_MODE: "memory",
-    GENT_PROVIDER_MODE: "debug-scripted",
     ...env,
   }
 }
@@ -43,7 +41,7 @@ const runGent = (args: ReadonlyArray<string>, options: { readonly keyless?: bool
     const path = yield* Path.Path
     const appDir = path.resolve(import.meta.dir, "..")
     const homeDir = yield* makeTempDir
-    const env = createWorkerEnv(homeDir, "debug-scripted")
+    const env = createWorkerEnv(homeDir)
     const mode: Array<string> = []
     if (options.keyless !== true) {
       yield* seedAuthKeys(env["GENT_AUTH_DIRECTORY"]!)
@@ -236,7 +234,7 @@ describe("compiled binary", () => {
         const extensionDir = path.join(homeDir, ".gent", "extensions")
         yield* fs.makeDirectory(extensionDir, { recursive: true })
         yield* fs.writeFileString(path.join(extensionDir, "peers-probe.ts"), PEERS_PROBE)
-        const env = createWorkerEnv(homeDir, "debug-scripted")
+        const env = createWorkerEnv(homeDir)
         yield* seedAuthKeys(env["GENT_AUTH_DIRECTORY"]!)
         // eslint-disable-next-line effect/noGlobals -- subprocess execution is the integration boundary under test.
         const proc = Bun.spawn([binary, "--debug", "-H", "Say hi in 3 words"], {

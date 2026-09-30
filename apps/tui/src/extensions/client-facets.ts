@@ -250,7 +250,7 @@ export class NoActiveSessionError extends Schema.TaggedError<NoActiveSessionErro
   {},
 ) {}
 
-export class ClientTransportRequestError extends Schema.TaggedError<ClientTransportRequestError>()(
+class ClientTransportRequestError extends Schema.TaggedError<ClientTransportRequestError>()(
   "ClientTransportRequestError",
   {
     extensionId: Schema.String,
@@ -260,7 +260,7 @@ export class ClientTransportRequestError extends Schema.TaggedError<ClientTransp
   },
 ) {}
 
-export class ClientTransportReplyDecodeError extends Schema.TaggedError<ClientTransportReplyDecodeError>()(
+class ClientTransportReplyDecodeError extends Schema.TaggedError<ClientTransportReplyDecodeError>()(
   "ClientTransportReplyDecodeError",
   {
     extensionId: Schema.String,

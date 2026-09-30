@@ -732,7 +732,7 @@ export const fromWireToolPart = (part: Response.AnyPart): Response.AnyPart => {
   }
 }
 
-export type ToolCall = { toolCallId: ToolCallId; toolName: string; input: unknown }
+type ToolCall = { toolCallId: ToolCallId; toolName: string; input: unknown }
 
 type ToolCapabilityContext = ExtensionHostContext & {
   readonly toolCallId: ToolCallId

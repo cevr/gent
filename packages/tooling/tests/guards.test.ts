@@ -650,6 +650,21 @@ describe("repo temp directory guard", () => {
     expect(findRepoTempDirectories(testFile, source)).toEqual([])
   })
 
+  test("an array joined with a separator is no path literal", () => {
+    const sources = [
+      [
+        'const suffix = ["a", "b"].join("")',
+        "const dir = yield* fs.makeTempDirectoryScoped({ prefix: `gent-${suffix}-` })",
+      ].join("\n"),
+      'const text = ["tmp", "x"].join("\\n")',
+      [
+        'const label = parts.join(", ")',
+        "const d = mkdtempSync(`/nonexistent/gent-probe-x/${label}`)",
+      ].join("\n"),
+    ]
+    expect(sources.map((source) => findRepoTempDirectories(testFile, source))).toEqual([[], [], []])
+  })
+
   test("product source is out of scope", () => {
     const source = 'const dir = { directory: path.resolve(import.meta.dir, "..") }'
     expect(findRepoTempDirectories("packages/core/src/runtime/x.ts", source)).toEqual([])
@@ -1753,19 +1768,11 @@ const RETIRED_CASES: ReadonlyArray<readonly [string, string, string]> = [
     "runAgentLoopTurnProfileOrLegacy()",
     "runAgentLoopTurnProfileOrLegacy",
   ],
-  [
-    "apps/server/src/main.ts",
-    'import { x } from "../core/src/resource-graph.js"',
-    "resource-graph",
-  ],
-  [
-    "apps/server/src/main.ts",
-    'import { x } from "./resource-graph-host.js"',
-    "resource-graph-host",
-  ],
-  ["apps/server/src/main.ts", 'import { x } from "./resource-leases"', "resource-leases"],
-  ["apps/server/src/main.ts", 'export { x } from "./resource-lifecycle.ts"', "resource-lifecycle"],
-  ["apps/server/src/main.ts", 'import { x } from "./live-profile.js"', "live-profile"],
+  ["apps/tui/src/main.tsx", 'import { x } from "../core/src/resource-graph.js"', "resource-graph"],
+  ["apps/tui/src/main.tsx", 'import { x } from "./resource-graph-host.js"', "resource-graph-host"],
+  ["apps/tui/src/main.tsx", 'import { x } from "./resource-leases"', "resource-leases"],
+  ["apps/tui/src/main.tsx", 'export { x } from "./resource-lifecycle.ts"', "resource-lifecycle"],
+  ["apps/tui/src/main.tsx", 'import { x } from "./live-profile.js"', "live-profile"],
   ["packages/core/src/runtime/x.ts", "const a = ExtensionRuntime", "ExtensionRuntime"],
   ["packages/core/src/runtime/x.ts", "const b = ExtensionTurnControl", "ExtensionTurnControl"],
   ["packages/core/src/runtime/x.ts", "const c = TurnEvent", "TurnEvent"],
@@ -1801,12 +1808,12 @@ const RETIRED_CASES: ReadonlyArray<readonly [string, string, string]> = [
   ["packages/sdk/src/x.ts", "sdkBoundary(x)", "sdkBoundary"],
   ["packages/sdk/src/x.ts", "runSdkBoundary(x)", "runSdkBoundary"],
   ["packages/sdk/src/x.ts", "type B = SdkBoundary", "SdkBoundary"],
-  ["apps/server/src/x.ts", 'env["GENT_TRACE_ID"]', "GENT_TRACE_ID"],
-  ["apps/server/src/x.ts", 'env["GENT_PARENT_SPAN_ID"]', "GENT_PARENT_SPAN_ID"],
-  ["apps/server/src/x.ts", "positiveIntegerOr(x)", "positiveIntegerOr"],
-  ["apps/server/src/x.ts", "tcpPortOr(x)", "tcpPortOr"],
-  ["apps/server/src/x.ts", "knownModeOr(x)", "knownModeOr"],
-  ["apps/server/src/x.ts", "new LaunchConfigError()", "LaunchConfigError"],
+  ["apps/tui/src/x.ts", 'env["GENT_TRACE_ID"]', "GENT_TRACE_ID"],
+  ["apps/tui/src/x.ts", 'env["GENT_PARENT_SPAN_ID"]', "GENT_PARENT_SPAN_ID"],
+  ["apps/tui/src/x.ts", "positiveIntegerOr(x)", "positiveIntegerOr"],
+  ["apps/tui/src/x.ts", "tcpPortOr(x)", "tcpPortOr"],
+  ["apps/tui/src/x.ts", "knownModeOr(x)", "knownModeOr"],
+  ["apps/tui/src/x.ts", "new LaunchConfigError()", "LaunchConfigError"],
   ["packages/extensions/src/x.ts", "type Q = AnyQueryContribution", "AnyQueryContribution"],
   ["packages/extensions/src/x.ts", "type C = CapabilityContribution", "CapabilityContribution"],
   ["packages/core/src/providers/x.ts", "Provider.Sequence([])", "Provider.Sequence"],
@@ -2780,7 +2787,7 @@ describe("the TUI app surface", () => {
     expect(
       findingsFor([
         { file: TUI_FILE, text: `export const formatTokens = 1\n` },
-        { file: TUI_CONSUMER, text: `import { formatTokens } from "../utils"\n` },
+        { file: TUI_CONSUMER, text: `import { formatTokens } from "./utils"\n` },
       ]),
     ).toEqual([])
   })
@@ -2788,7 +2795,7 @@ describe("the TUI app surface", () => {
   test("a TUI export nothing reaches is reported and fails the guard", () => {
     const findings = findingsFor([
       { file: TUI_FILE, text: `export const formatTokens = 1\nexport const orphan = 2\n` },
-      { file: TUI_CONSUMER, text: `import { formatTokens } from "../utils"\n` },
+      { file: TUI_CONSUMER, text: `import { formatTokens } from "./utils"\n` },
     ])
     expect(findings.map((finding) => finding.line)).toEqual([2])
     expect(findings[0]?.message).toContain("`orphan`")
@@ -2827,36 +2834,6 @@ describe("the TUI app surface", () => {
     ])
     expect(findings.map((finding) => finding.line)).toEqual([1])
     expect(findings[0]?.message).toContain("`waitFor`")
-  })
-})
-
-describe("the server app surface", () => {
-  const SERVER_FILE = "apps/server/src/main.ts"
-
-  test("the launcher exporting nothing is clean", () => {
-    expect(findingsFor([{ file: SERVER_FILE, text: `const program = 1\nvoid program\n` }])).toEqual(
-      [],
-    )
-  })
-
-  test("a server export nothing reaches is reported", () => {
-    const findings = findingsFor([
-      { file: SERVER_FILE, text: `const program = 1\nexport const orphan = program\n` },
-    ])
-    expect(findings.map((finding) => finding.line)).toEqual([2])
-    expect(findings[0]?.message).toContain("`orphan`")
-  })
-
-  test("a server test file keeps a name alive", () => {
-    expect(
-      findingsFor([
-        { file: SERVER_FILE, text: `export const orphan = 1\n` },
-        {
-          file: "apps/server/tests/main.test.ts",
-          text: `import { orphan } from "../src/main"\nvoid orphan\n`,
-        },
-      ]),
-    ).toEqual([])
   })
 })
 
@@ -2963,10 +2940,14 @@ export const plantedDeadSdkExport = "nothing imports this"
     ).toEqual([])
   })
 
-  test("a name an unscanned package reaches for is live", () => {
+  test("a name an unscanned package reaches for through the entry point is live", () => {
     expect(
       findingsFor([
         { file: SDK_FILE, text: `export const sharedName = 1\n` },
+        {
+          file: "packages/sdk/src/index.ts",
+          text: `export { sharedName } from "./log-paths.js"\n`,
+        },
         { file: "apps/tui/src/app.tsx", text: `import { sharedName } from "@gent/sdk"\n` },
       ]),
     ).toEqual([])
@@ -2978,7 +2959,7 @@ export const plantedDeadSdkExport = "nothing imports this"
         { file: CORE_FILE, text: `export const retrySchedule = 1\n` },
         {
           file: "packages/core/tests/runtime/provider.test.ts",
-          text: `import { retrySchedule } from "../../src/runtime/retry"\n`,
+          text: `import { retrySchedule } from "../../src/runtime/provider"\n`,
         },
       ]),
     ).toEqual([])
@@ -3037,52 +3018,49 @@ export const plantedDeadSdkExport = "nothing imports this"
     expect(findings[0]?.message).toContain("viaRelative")
   })
 
+  // An own-file surface reads identifiers in its own code, so what the blanking
+  // leaves as code decides these.
+  const OWN_FILE = "packages/tooling/src/check-guardrails.ts"
+  const ownFindings = (text: string) =>
+    findingsFor([{ file: OWN_FILE, text }]).map((finding) => finding.message)
+
   test("a comment inside a template interpolation does not keep a name alive", () => {
-    const findings = findingsFor([
-      { file: SDK_FILE, text: `export const vanished = 1\n` },
-      {
-        file: SDK_CONSUMER,
-        text: "export const shown = `a ${/* vanished */ 1} b ${`c ${2 /* vanished */}`}`\n",
-      },
-    ])
-    expect(findings.map((finding) => finding.message)).toContainEqual(
-      expect.stringContaining("`vanished`"),
-    )
+    expect(
+      ownFindings(
+        "export const vanished = 1\nexport const shown = `a ${/* vanished */ 1} b ${`c ${2 /* vanished */}`}`\nuse(shown)\n",
+      ),
+    ).toEqual([expect.stringContaining("`vanished`")])
+  })
+
+  test("template text naming an export does not keep it alive", () => {
+    expect(
+      ownFindings(
+        "export const fixtureOnly = 1\nconst fixture = `\nimport { fixtureOnly } from './x'\n`\nuse(fixture)\n",
+      ),
+    ).toEqual([expect.stringContaining("`fixtureOnly`")])
   })
 
   test("a name read inside a template interpolation is live", () => {
     expect(
-      findingsFor([
-        { file: SDK_FILE, text: `export const interpolated = 1\n` },
-        {
-          file: "apps/tui/src/app.tsx",
-          text: "const label = `n = ${ { value: interpolated }.value } // not a comment`\nuse(label)\n",
-        },
-      ]),
+      ownFindings(
+        "export const interpolated = 1\nconst label = `n = ${ { value: interpolated }.value } // not a comment`\nuse(label)\n",
+      ),
     ).toEqual([])
   })
 
   test("a name read in an interpolation after template text holding `//` is live", () => {
     expect(
-      findingsFor([
-        { file: SDK_FILE, text: `export const afterSlashes = 1\n` },
-        {
-          file: "apps/tui/src/app.tsx",
-          text: "const label = `${ { value: 1 }.value } // ${ afterSlashes }`\nuse(label)\n",
-        },
-      ]),
+      ownFindings(
+        "export const afterSlashes = 1\nconst label = `${ { value: 1 }.value } // ${ afterSlashes }`\nuse(label)\n",
+      ),
     ).toEqual([])
   })
 
-  test("a name another file reads beside a URL in a string is live", () => {
+  test("a name read beside a URL in a string is live", () => {
     expect(
-      findingsFor([
-        { file: SDK_FILE, text: `export const fetchedName = 1\n` },
-        {
-          file: "apps/tui/src/app.tsx",
-          text: `const url = "https://example.test"; use(fetchedName)\n`,
-        },
-      ]),
+      ownFindings(
+        `export const fetchedName = 1\nconst url = "https://example.test"; use(url, fetchedName)\n`,
+      ),
     ).toEqual([])
   })
 
@@ -3195,7 +3173,7 @@ export type SessionUpdate = typeof SessionUpdate.Type
         { file: EXTENSION_FILE, text: `export const findMatch = 1\n` },
         {
           file: "packages/extensions/tests/fs-tools.test.ts",
-          text: `import { findMatch } from "../../src/fs-tools/edit"\n`,
+          text: `import { findMatch } from "../src/fs-tools/edit"\n`,
         },
       ]),
     ).toEqual([])
@@ -3462,7 +3440,6 @@ const VALID_MANIFESTS: ReadonlyArray<readonly [string, PackageJson]> = [
   ],
   ["packages/sdk/package.json", { exports: { ".": "./src/index.ts" } }],
   ["apps/tui/package.json", { exports: { "./extensions": "./src/extensions.ts" } }],
-  ["apps/server/package.json", {}],
   ["packages/e2e/package.json", { private: true }],
   ["packages/tooling/package.json", { private: true }],
   ["examples/package.json", { private: true }],
@@ -3473,7 +3450,6 @@ const PACKAGE_NAMES = new Map([
   ["packages/extensions/package.json", "@gent/extensions"],
   ["packages/sdk/package.json", "@gent/sdk"],
   ["apps/tui/package.json", "@gent/tui"],
-  ["apps/server/package.json", "@gent/server-http"],
   ["packages/e2e/package.json", "@gent/e2e"],
   ["packages/tooling/package.json", "@gent/tooling"],
   ["examples/package.json", "@gent/examples"],
@@ -3521,7 +3497,7 @@ describe("host entry point", () => {
     for (const file of [
       "packages/e2e/src/pty-fixture.ts",
       "testbeds/gamut/gamut.ts",
-      "packages/tooling/fixtures/apps/server/src/launch.valid.ts",
+      "packages/tooling/fixtures/apps/tui/src/host-facts.valid.ts",
       "apps/tui/tests/headless-cli-exit.test.ts",
     ]) {
       expect(
@@ -3540,7 +3516,7 @@ describe("host entry point", () => {
     expect(
       findingsFor([
         { file: HOST_FILE, text: hostSource },
-        { file: "apps/server/src/main.ts", text: reading },
+        { file: "apps/tui/src/main.tsx", text: reading },
       ]),
     ).toEqual([])
   })
@@ -3681,7 +3657,6 @@ describe("package entry points", () => {
     for (const file of [
       "packages/e2e/package.json",
       "packages/tooling/package.json",
-      "apps/server/package.json",
       "examples/package.json",
     ]) {
       expect(
@@ -3814,6 +3789,10 @@ describe("a namesake does not vouch for an export", () => {
     const findings = findingsFor([
       coreDeclaration,
       {
+        file: "packages/core/src/protocol.ts",
+        text: "export { isClientFile } from './runtime/provider.js'\n",
+      },
+      {
         file: TUI_FILE,
         text: "import { isClientFile } from '@gent/core/protocol'\nexport const use = () => isClientFile('a')\n",
       },
@@ -3828,7 +3807,7 @@ describe("a namesake does not vouch for an export", () => {
       coreDeclaration,
       {
         file: TUI_FILE,
-        text: `import { isClientFile as coreIsClientFile } from '../${stem}.js'\nconst isClientFile = () => true\nexport const use = () => coreIsClientFile('a') && isClientFile()\n`,
+        text: `import { isClientFile as coreIsClientFile } from '../../../../packages/core/src/runtime/${stem}.js'\nconst isClientFile = () => true\nexport const use = () => coreIsClientFile('a') && isClientFile()\n`,
       },
       usedElsewhere,
     ])
@@ -3841,32 +3820,165 @@ describe("a namesake does not vouch for an export", () => {
       coreDeclaration,
       {
         file: TUI_FILE,
-        text: `import * as Core from '../${stem}.js'\nconst isClientFile = () => true\nexport const use = () => Core.isClientFile('a') && isClientFile()\n`,
+        text: `import * as Core from '../../../../packages/core/src/runtime/${stem}.js'\nconst isClientFile = () => true\nexport const use = () => Core.isClientFile('a') && isClientFile()\n`,
       },
       usedElsewhere,
     ])
     expect(findings).toEqual([])
   })
 
-  test("a plain mention with no local binding still vouches", () => {
+  test("a plain mention with no import does not vouch", () => {
     const findings = findingsFor([
       coreDeclaration,
       { file: TUI_FILE, text: "export const use = () => isClientFile('a')\n" },
       usedElsewhere,
     ])
+    expect(findings.map((finding) => finding.message)).toEqual([
+      expect.stringContaining("`isClientFile` is exported but no file outside"),
+    ])
+  })
+})
+
+describe("an export is read only through an import", () => {
+  const names = (findings: ReadonlyArray<{ readonly message: string }>) =>
+    findings.map((finding) => /`([^`]+)`/.exec(finding.message)?.[1])
+
+  test("fixture text, a _tag string and a test title naming an export do not keep it alive", () => {
+    const findings = findingsFor([
+      { file: "packages/core/src/domain/extension.ts", text: "export const ResourceId = 1\n" },
+      {
+        file: "packages/extensions/src/wake.ts",
+        text: "export interface WakeAlarmsService {}\n",
+      },
+      {
+        file: "packages/tooling/tests/guards.test.ts",
+        text: [
+          "const fixture = `",
+          'import { ResourceId } from "./extension"',
+          "export interface WakeAlarmsService {}",
+          "`",
+          'test("WakeAlarmsService is reported", () => expect(fixture).toContain("ResourceId"))',
+          "",
+        ].join("\n"),
+      },
+    ])
+    expect(names(findings)).toEqual(["ResourceId", "WakeAlarmsService"])
+  })
+
+  test("a name on a @ts-expect-error line asserts absence, not a read", () => {
+    const findings = findingsFor([
+      {
+        file: "packages/sdk/src/server.ts",
+        text: "export interface StateSpec {}\nexport interface ProviderSpec {}\n",
+      },
+      {
+        file: "packages/sdk/tests/index.test.ts",
+        text: [
+          'import * as Server from "../src/server"',
+          "// @ts-expect-error — state specs are built through factories",
+          "type _BadStateSpec = Server.StateSpec",
+          "// @ts-expect-error — provider specs are built through factories",
+          "type _BadProviderSpec = Server.ProviderSpec",
+          "",
+        ].join("\n"),
+      },
+    ])
+    expect(names(findings)).toEqual(["StateSpec", "ProviderSpec"])
+  })
+
+  test("an importer's own copy of the name is not a read of the export", () => {
+    const findings = findingsFor([
+      {
+        file: "apps/tui/src/session.tsx",
+        text: "export type SessionView = {}\nexport const currentMillis = () => Date.now()\n",
+      },
+      {
+        file: "apps/tui/src/message-list.tsx",
+        text: [
+          'import type { SessionView } from "./session"',
+          "const currentMillis = () => Date.now()",
+          "export const view = (session: SessionView) => [session, currentMillis()]",
+          "",
+        ].join("\n"),
+      },
+      { file: "apps/tui/src/app.tsx", text: 'import { view } from "./message-list"\nview({})\n' },
+    ])
+    expect(names(findings)).toEqual(["currentMillis"])
+  })
+
+  test("a nested local of the same name is not a read of the export", () => {
+    const findings = findingsFor([
+      {
+        file: "apps/tui/src/extensions/thread-view.client.tsx",
+        text: "export const sessionLabel = (id: string) => id\n",
+      },
+      {
+        file: "apps/tui/src/app.tsx",
+        text: 'export const App = () => {\n  const sessionLabel = "x"\n  return sessionLabel\n}\n',
+      },
+      { file: "apps/tui/src/main.tsx", text: 'import { App } from "./app"\nApp()\n' },
+    ])
+    expect(names(findings)).toEqual(["sessionLabel"])
+  })
+
+  test("a re-export names the upstream declaration, so the chain keeps it alive", () => {
+    const findings = findingsFor([
+      { file: "packages/core/src/domain/queue.ts", text: "export const emptyQueue = 1\n" },
+      {
+        file: "packages/core/src/protocol.ts",
+        text: 'export { emptyQueue } from "./domain/queue.js"\n',
+      },
+      {
+        file: "apps/tui/src/app.tsx",
+        text: 'import { emptyQueue } from "@gent/core/protocol"\nvoid emptyQueue\n',
+      },
+    ])
     expect(findings).toEqual([])
   })
 
-  test("a local binding in a comment does not discount the mention", () => {
-    const findings = findingsFor([
-      coreDeclaration,
-      {
-        file: TUI_FILE,
-        text: "// const isClientFile = () => true\nexport const use = () => isClientFile('a')\n",
-      },
-      usedElsewhere,
-    ])
+  test("a name read through a package index that star-re-exports its module is live", () => {
+    const findings = findUnconsumedExports(
+      factsFor([
+        { file: "packages/extensions/src/notes.ts", text: "export const NotesExtension = 1\n" },
+        { file: "packages/extensions/src/index.ts", text: 'export * from "./notes.js"\n' },
+        {
+          file: "apps/tui/src/app.tsx",
+          text: 'import { NotesExtension } from "@gent/extensions"\nvoid NotesExtension\n',
+        },
+      ]),
+      new Map([
+        [
+          "packages/extensions/package.json",
+          '{ "name": "@gent/extensions", "exports": { ".": "./src/index.ts" } }',
+        ],
+      ]),
+    )
     expect(findings).toEqual([])
+  })
+
+  test("a star re-export chain carries the read through each barrel", () => {
+    const findings = findingsFor([
+      {
+        file: "apps/tui/src/parts/row.tsx",
+        text: "export const Row = 1\nexport const Unread = 2\n",
+      },
+      { file: "apps/tui/src/parts/index.ts", text: 'export * from "./row"\n' },
+      { file: "apps/tui/src/barrel.ts", text: 'export * from "./parts"\n' },
+      { file: "apps/tui/src/app.tsx", text: 'import { Row } from "./barrel"\nvoid Row\n' },
+    ])
+    expect(names(findings)).toEqual(["Unread"])
+  })
+
+  test("an import of a same-named module elsewhere does not vouch for this one", () => {
+    const findings = findingsFor([
+      { file: "packages/core/src/runtime/format.ts", text: "export const render = 1\n" },
+      { file: "packages/extensions/src/format.ts", text: "export const render = 2\n" },
+      {
+        file: "packages/extensions/src/notes.ts",
+        text: 'import { render } from "./format.js"\nvoid render\n',
+      },
+    ])
+    expect(findings.map((finding) => finding.file)).toEqual(["packages/core/src/runtime/format.ts"])
   })
 })
 

@@ -19,13 +19,14 @@ import { GentPlatform } from "@gent/core/host"
 import {
   BuildFingerprint,
   dataPaths,
-  LaunchConfig,
   serverLock,
+  serverLockFile,
   ServerLockEntry,
 } from "../src/server"
 import { BunServices } from "@effect/platform-bun"
-import { hostname, tmpdir } from "node:os"
+import { homedir, hostname, tmpdir } from "node:os"
 import { Gent } from "../src/client"
+import { buildLogPaths } from "../src/logger"
 
 // ── build fingerprint ───────────────────────────────────────────────────────
 
@@ -128,111 +129,6 @@ describe("BuildFingerprint", () => {
         expect(result.fp2).toBe(result.fp3)
         expect(result.fp1).toMatch(/^bin-/)
       }),
-  )
-})
-
-// ── launch config ───────────────────────────────────────────────────────────
-
-/**
- * The launch values `apps/server/src/main.ts` reads its environment through.
- *
- * A launcher gets strings. Before this config, `Number()` accepted anything
- * finite and an unknown mode string fell through to the default, so a wrong
- * value ran instead of stopping: a misspelled `GENT_PROVIDER_MODE` selected
- * the live provider for a caller that asked for the scripted one. Each test
- * below names the value that used to pass.
- *
- * Every case drives the real `ConfigProvider`, so it exercises the same path
- * the launcher takes rather than a decoder called by hand.
- */
-
-/** Read `LaunchConfig` against an environment holding exactly `env`. */
-const launchWith = (env: Record<string, string>) =>
-  LaunchConfig.parse(ConfigProvider.fromEnvRecord(env))
-
-/** The failure `LaunchConfig` gives for `env`, as its rendered message. */
-const failureOf = (env: Record<string, string>) =>
-  Effect.gen(function* () {
-    const result = yield* Effect.result(launchWith(env))
-    if (result._tag === "Success") {
-      const named = Object.entries(env)
-        .map(([key, value]) => `${key}=${value}`)
-        .join(" ")
-      return yield* Effect.die(`expected a config failure for ${named}`)
-    }
-    return String(result.failure)
-  })
-
-describe("GENT_PORT", () => {
-  it.effect("an unset variable takes the fallback", () =>
-    Effect.gen(function* () {
-      const launch = yield* launchWith({})
-      expect(launch.port).toBe(3000)
-    }),
-  )
-
-  it.effect("a port inside the TCP range is taken as given", () =>
-    Effect.gen(function* () {
-      const launch = yield* launchWith({ GENT_PORT: "8080" })
-      expect(launch.port).toBe(8080)
-    }),
-  )
-
-  it.effect("a port above the TCP range fails", () =>
-    Effect.gen(function* () {
-      const failure = yield* failureOf({ GENT_PORT: "70000" })
-      expect(failure).toContain("GENT_PORT")
-      expect(failure).toContain("between 1 and 65535")
-    }),
-  )
-
-  it.effect("a negative port fails", () =>
-    Effect.gen(function* () {
-      const failure = yield* failureOf({ GENT_PORT: "-8080" })
-      expect(failure).toContain("GENT_PORT")
-      expect(failure).toContain("between 1 and 65535")
-    }),
-  )
-
-  it.effect("port zero fails: the launcher names a port its clients dial", () =>
-    Effect.gen(function* () {
-      const failure = yield* failureOf({ GENT_PORT: "0" })
-      expect(failure).toContain("GENT_PORT")
-      expect(failure).toContain("between 1 and 65535")
-    }),
-  )
-})
-
-describe("mode words", () => {
-  it.effect("unset variables take their fallbacks", () =>
-    Effect.gen(function* () {
-      const launch = yield* launchWith({})
-      expect(launch.providerMode).toBe("live")
-      expect(launch.persistenceMode).toBe("sqlite")
-    }),
-  )
-
-  it.effect("a known mode is taken as given", () =>
-    Effect.gen(function* () {
-      const launch = yield* launchWith({ GENT_PROVIDER_MODE: "debug-scripted" })
-      expect(launch.providerMode).toBe("debug-scripted")
-    }),
-  )
-
-  it.effect("a misspelled provider mode fails instead of selecting the live provider", () =>
-    Effect.gen(function* () {
-      const failure = yield* failureOf({ GENT_PROVIDER_MODE: "debug-script" })
-      expect(failure).toContain("GENT_PROVIDER_MODE")
-      expect(failure).toContain('"live" | "debug-scripted"')
-    }),
-  )
-
-  it.effect("a misspelled persistence mode fails instead of writing SQLite", () =>
-    Effect.gen(function* () {
-      const failure = yield* failureOf({ GENT_PERSISTENCE_MODE: "in-memory" })
-      expect(failure).toContain("GENT_PERSISTENCE_MODE")
-      expect(failure).toContain('"sqlite" | "memory"')
-    }),
   )
 })
 
@@ -346,7 +242,7 @@ const holdAsAnotherServer = (home: string) =>
   Effect.gen(function* () {
     const scope = yield* Scope.make()
     yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
-    expect(yield* serverLock.hold(home).pipe(Scope.provide(scope))).toBe(true)
+    expect(yield* serverLockFile.hold(home).pipe(Scope.provide(scope))).toBe(true)
     return { release: Scope.close(scope, Exit.void) }
   })
 
@@ -365,13 +261,13 @@ describe("Server Lock", () => {
               ConfigProvider.ConfigProvider,
               ConfigProvider.fromEnvRecord({ GENT_DATA_DIR: dataDir }),
             )
-          yield* isolated(serverLock.write(home, entry))
+          yield* isolated(serverLockFile.write(home, entry))
           const fs = yield* FileSystem.FileSystem
           expect(yield* fs.exists(`${dataDir}/server.lock`)).toBe(true)
           expect(yield* fs.exists(`${home}/.gent/server.lock`)).toBe(false)
           // the home-scoped reader does not see the isolated run's server
-          expect(Option.isNone(yield* serverLock.read(home))).toBe(true)
-          expect(Option.isSome(yield* isolated(serverLock.read(home)))).toBe(true)
+          expect(Option.isNone(yield* serverLockFile.read(home))).toBe(true)
+          expect(Option.isSome(yield* isolated(serverLockFile.read(home)))).toBe(true)
         }),
       ),
   )
@@ -381,8 +277,8 @@ describe("Server Lock", () => {
       Effect.gen(function* () {
         const home = yield* makeTmpHomeScoped
         const entry = makeEntry()
-        yield* serverLock.write(home, entry)
-        const read = Option.getOrThrow(yield* serverLock.read(home))
+        yield* serverLockFile.write(home, entry)
+        const read = Option.getOrThrow(yield* serverLockFile.read(home))
         expect(read.serverId).toBe(entry.serverId)
         expect(read.pid).toBe(entry.pid)
         expect(read.rpcUrl).toBe(entry.rpcUrl)
@@ -398,10 +294,10 @@ describe("Server Lock", () => {
         const fs = yield* FileSystem.FileSystem
         const path = yield* Path.Path
         const home = yield* makeTmpHomeScoped
-        expect(Option.isNone(yield* serverLock.read(home))).toBe(true)
+        expect(Option.isNone(yield* serverLockFile.read(home))).toBe(true)
         yield* fs.makeDirectory(path.join(home, ".gent"), { recursive: true })
         yield* fs.writeFileString(path.join(home, ".gent", "server.lock"), "not json")
-        expect(Option.isNone(yield* serverLock.read(home))).toBe(true)
+        expect(Option.isNone(yield* serverLockFile.read(home))).toBe(true)
       }),
     ),
   )
@@ -411,8 +307,8 @@ describe("Server Lock", () => {
       Effect.gen(function* () {
         const home = yield* makeTmpHomeScoped
         const entry = makeEntry({ hostname: "other-host.example.com" })
-        yield* serverLock.write(home, entry)
-        expect(Option.isNone(yield* serverLock.read(home))).toBe(true)
+        yield* serverLockFile.write(home, entry)
+        expect(Option.isNone(yield* serverLockFile.read(home))).toBe(true)
       }),
     ),
   )
@@ -422,11 +318,11 @@ describe("Server Lock", () => {
       Effect.gen(function* () {
         const home = yield* makeTmpHomeScoped
         const entry = makeEntry()
-        yield* serverLock.write(home, entry)
-        expect(yield* serverLock.remove(home, "wrong-id")).toBe(false)
-        expect(Option.isSome(yield* serverLock.read(home))).toBe(true)
-        expect(yield* serverLock.remove(home, entry.serverId)).toBe(true)
-        expect(Option.isNone(yield* serverLock.read(home))).toBe(true)
+        yield* serverLockFile.write(home, entry)
+        expect(yield* serverLockFile.remove(home, "wrong-id")).toBe(false)
+        expect(Option.isSome(yield* serverLockFile.read(home))).toBe(true)
+        expect(yield* serverLockFile.remove(home, entry.serverId)).toBe(true)
+        expect(Option.isNone(yield* serverLockFile.read(home))).toBe(true)
       }),
     ),
   )
@@ -464,7 +360,7 @@ describe("Server Lock", () => {
           ...entry,
           rpcUrl: `${fakeOwnerUrl.origin}/rpc`,
         })
-        yield* serverLock.write(home, entryWithEndpoint)
+        yield* serverLockFile.write(home, entryWithEndpoint)
         yield* holdAsAnotherServer(home)
 
         const server = yield* Gent.server({
@@ -492,7 +388,7 @@ describe("Server Lock", () => {
 
           const owner = yield* Gent.server(options)
           expect(owner._tag).toBe("Owned")
-          const ownerEntry = Option.getOrThrow(yield* serverLock.read(home))
+          const ownerEntry = Option.getOrThrow(yield* serverLockFile.read(home))
 
           const attached = yield* Gent.server(options)
           expect(attached._tag).toBe("Attached")
@@ -527,7 +423,7 @@ describe("Server Lock", () => {
           }
           const owner = yield* Gent.server(options)
           expect(owner._tag).toBe("Owned")
-          const entry = Option.getOrThrow(yield* serverLock.read(home))
+          const entry = Option.getOrThrow(yield* serverLockFile.read(home))
           const response = yield* Effect.promise(() =>
             Bun.fetch(`${owner.url.replace("/rpc", "")}/_gent/identity`),
           )
@@ -574,7 +470,7 @@ describe("Server Lock", () => {
           ),
           (server) => Effect.promise(() => server.stop(true)),
         )
-        yield* serverLock.write(
+        yield* serverLockFile.write(
           home,
           new ServerLockEntry({ ...entry, rpcUrl: `${new URL(foreignOwner.url).origin}/rpc` }),
         )
@@ -585,7 +481,7 @@ describe("Server Lock", () => {
           provider: Gent.provider.mock(),
         }).pipe(withSignalTrap)
         expect(server._tag).toBe("Owned")
-        expect(Option.getOrThrow(yield* serverLock.read(home)).dbPath).toBe(ownDb)
+        expect(Option.getOrThrow(yield* serverLockFile.read(home)).dbPath).toBe(ownDb)
       }),
     ),
   )
@@ -601,7 +497,7 @@ describe("Server Lock", () => {
           provider: Gent.provider.mock(),
         })
         expect(owner._tag).toBe("Owned")
-        expect(Option.getOrThrow(yield* serverLock.read(home)).rpcUrl).toBe(owner.url)
+        expect(Option.getOrThrow(yield* serverLockFile.read(home)).rpcUrl).toBe(owner.url)
         // A client without a port finds that server and attaches to it.
         const client = yield* Gent.server({
           cwd: home,
@@ -670,7 +566,7 @@ describe("Server Lock", () => {
         }
         const owner = yield* Gent.server(options)
         expect(owner._tag).toBe("Owned")
-        const pid = Option.getOrThrow(yield* serverLock.read(home)).pid
+        const pid = Option.getOrThrow(yield* serverLockFile.read(home)).pid
         const second = yield* Gent.server({ ...options, port: 0 }).pipe(Effect.flip)
         expect(second.message).toContain(`PID ${pid}`)
       }),
@@ -707,7 +603,7 @@ const lockWithIdentity = (
       (server) => Effect.promise(() => server.stop(true)),
     )
     const locked = new ServerLockEntry({ ...entry, rpcUrl: `${new URL(endpoint.url).origin}/rpc` })
-    yield* serverLock.write(home, locked)
+    yield* serverLockFile.write(home, locked)
     return locked
   })
 
@@ -718,7 +614,7 @@ describe("Server Lock Ownership", () => {
       const home = yield* makeTmpHomeScoped
       const dbPath = (yield* dataPaths(home)).dbPath
       const buildFingerprint = yield* (yield* BuildFingerprint).current
-      yield* serverLock.write(
+      yield* serverLockFile.write(
         home,
         makeEntry({ pid, dbPath, buildFingerprint, rpcUrl: "http://127.0.0.1:1/rpc" }),
       )
@@ -729,7 +625,7 @@ describe("Server Lock Ownership", () => {
       }).pipe(withSignalTrap)
       expect(result._tag).toBe("Owned")
       expect(signals).toEqual([])
-      expect(Option.getOrThrow(yield* serverLock.read(home)).serverId).not.toBe("test-server-1")
+      expect(Option.getOrThrow(yield* serverLockFile.read(home)).serverId).not.toBe("test-server-1")
     }).pipe(Effect.timeout("20 seconds"))
 
   it.scopedLive("a lock whose pid now belongs to another live process does not block startup", () =>
@@ -767,15 +663,15 @@ describe("Server Lock Ownership", () => {
         const home = yield* makeTmpHomeScoped
         expect((yield* serverLock.status(home))._tag).toBe("None")
         // A live pid under a free kernel lock is a server that is gone.
-        yield* serverLock.write(home, makeEntry())
+        yield* serverLockFile.write(home, makeEntry())
         expect((yield* serverLock.status(home))._tag).toBe("Stale")
         const { release } = yield* holdAsAnotherServer(home)
         expect((yield* serverLock.status(home))._tag).toBe("Alive")
-        yield* serverLock.remove(home, "test-server-1")
+        yield* serverLockFile.remove(home, "test-server-1")
         expect((yield* serverLock.status(home))._tag).toBe("Unnamed")
         yield* release
         expect((yield* serverLock.status(home))._tag).toBe("None")
-        yield* serverLock.write(home, makeEntry({ hostname: "alien-host" }))
+        yield* serverLockFile.write(home, makeEntry({ hostname: "alien-host" }))
         expect((yield* serverLock.status(home))._tag).toBe("None")
       }),
     ),
@@ -803,7 +699,7 @@ describe("Server Lock Ownership", () => {
           expect(result._tag).toBe("@gent/core/GentConnectionError")
           expect(result.message).toContain(String(holder.pid))
           expect(signals).toEqual([])
-          expect(Option.getOrThrow(yield* serverLock.read(home)).serverId).toBe(holder.serverId)
+          expect(Option.getOrThrow(yield* serverLockFile.read(home)).serverId).toBe(holder.serverId)
         }),
       ),
   )
@@ -830,7 +726,7 @@ describe("Server Lock Ownership", () => {
         expect(result.message).toContain("another-build")
         expect(result.message).toContain("gent server stop")
         expect(signals).toEqual([])
-        expect(Option.getOrThrow(yield* serverLock.read(home)).serverId).toBe(holder.serverId)
+        expect(Option.getOrThrow(yield* serverLockFile.read(home)).serverId).toBe(holder.serverId)
       }),
     ),
   )
@@ -858,7 +754,7 @@ describe("Server Lock Ownership", () => {
           expect(result.message).toContain(`PID ${holder.pid}`)
           expect(result.message).toContain("older-build")
           expect(signals).toEqual([])
-          expect(Option.getOrThrow(yield* serverLock.read(home)).serverId).toBe(holder.serverId)
+          expect(Option.getOrThrow(yield* serverLockFile.read(home)).serverId).toBe(holder.serverId)
         }),
       ),
   )
@@ -919,7 +815,7 @@ describe("Server Lock Ownership", () => {
           )
           const firstLine = yield* Effect.promise(() => holder.stdout.getReader().read())
           expect(new TextDecoder().decode(firstLine.value)).toContain("held")
-          yield* serverLock.write(
+          yield* serverLockFile.write(
             home,
             makeEntry({ pid: holder.pid, dbPath: paths.dbPath, buildFingerprint }),
           )
@@ -929,7 +825,7 @@ describe("Server Lock Ownership", () => {
           yield* Effect.promise(() => holder.exited)
           expect((yield* serverLock.status(home))._tag).toBe("Stale")
           // The pid now names this process, which is alive and serves nothing yet.
-          yield* serverLock.write(
+          yield* serverLockFile.write(
             home,
             makeEntry({ pid: process.pid, dbPath: paths.dbPath, buildFingerprint }),
           )
@@ -962,7 +858,7 @@ describe("serverLock.stop", () => {
         ...entry,
         rpcUrl: `${new URL(endpoint.url).origin}/rpc`,
       })
-      yield* serverLock.write(home, locked)
+      yield* serverLockFile.write(home, locked)
       const held = yield* holdAsAnotherServer(home)
       // The server exits: its kernel lock goes, and its endpoint stops answering.
       const release = held.release.pipe(
@@ -988,7 +884,7 @@ describe("serverLock.stop", () => {
       Effect.gen(function* () {
         const home = yield* makeTmpHomeScoped
         expect((yield* serverLock.stop(home))._tag).toBe("None")
-        yield* serverLock.write(home, makeEntry({ hostname: "other-host" }))
+        yield* serverLockFile.write(home, makeEntry({ hostname: "other-host" }))
         const { result, signals } = yield* serverLock.stop(home).pipe(withSignalTrap)
         expect(result._tag).toBe("None")
         expect(signals).toEqual([])
@@ -1014,9 +910,9 @@ describe("serverLock.stop", () => {
             if (path !== lockPath || paused) return base.remove(path, options)
             paused = true
             return Effect.gen(function* () {
-              if (yield* serverLock.hold(home).pipe(Scope.provide(newOwnerScope))) {
+              if (yield* serverLockFile.hold(home).pipe(Scope.provide(newOwnerScope))) {
                 newOwnerTookLock = true
-                yield* serverLock.write(home, newOwner)
+                yield* serverLockFile.write(home, newOwner)
               }
             }).pipe(
               Effect.orDie,
@@ -1025,14 +921,14 @@ describe("serverLock.stop", () => {
             )
           },
         })
-        yield* serverLock.write(home, makeEntry({ rpcUrl: "http://127.0.0.1:1/rpc" }))
+        yield* serverLockFile.write(home, makeEntry({ rpcUrl: "http://127.0.0.1:1/rpc" }))
         const result = yield* serverLock
           .stop(home, { removeStale: true })
           .pipe(Effect.provideService(FileSystem.FileSystem, racing))
         expect(result._tag).toBe("Removed")
         expect(paused).toBe(true)
         if (newOwnerTookLock) {
-          expect(Option.getOrThrow(yield* serverLock.read(home)).serverId).toBe("new-owner")
+          expect(Option.getOrThrow(yield* serverLockFile.read(home)).serverId).toBe("new-owner")
         }
       }),
     ),
@@ -1055,11 +951,11 @@ describe("serverLock.stop", () => {
       Effect.gen(function* () {
         const home = yield* makeTmpHomeScoped
         // The pid is this live process: only the kernel lock proves the server gone.
-        yield* serverLock.write(home, makeEntry())
+        yield* serverLockFile.write(home, makeEntry())
         expect((yield* serverLock.stop(home))._tag).toBe("NotRunning")
-        expect(Option.isSome(yield* serverLock.read(home))).toBe(true)
+        expect(Option.isSome(yield* serverLockFile.read(home))).toBe(true)
         expect((yield* serverLock.stop(home, { removeStale: true }))._tag).toBe("Removed")
-        expect(Option.isNone(yield* serverLock.read(home))).toBe(true)
+        expect(Option.isNone(yield* serverLockFile.read(home))).toBe(true)
       }),
     ),
   )
@@ -1072,7 +968,7 @@ describe("serverLock.stop", () => {
         const { result, signals } = yield* serverLock.stop(home).pipe(withSignalTrap)
         expect(result._tag).toBe("NotOwned")
         expect(signals).toEqual([])
-        expect(Option.isSome(yield* serverLock.read(home))).toBe(true)
+        expect(Option.isSome(yield* serverLockFile.read(home))).toBe(true)
       }),
     ),
   )
@@ -1081,7 +977,7 @@ describe("serverLock.stop", () => {
     provideFs(
       Effect.gen(function* () {
         const home = yield* makeTmpHomeScoped
-        yield* serverLock.write(home, makeEntry({ rpcUrl: "http://127.0.0.1:1/rpc" }))
+        yield* serverLockFile.write(home, makeEntry({ rpcUrl: "http://127.0.0.1:1/rpc" }))
         yield* holdAsAnotherServer(home)
         const { result, signals } = yield* serverLock.stop(home).pipe(withSignalTrap)
         expect(result._tag).toBe("NotOwned")
@@ -1098,7 +994,7 @@ describe("serverLock.stop", () => {
         const { result, signals } = yield* serverLock.stop(home).pipe(withSignalTrap)
         expect(result._tag).toBe("StillRunning")
         expect(signals).toEqual(["SIGTERM"])
-        expect(Option.isSome(yield* serverLock.read(home))).toBe(true)
+        expect(Option.isSome(yield* serverLockFile.read(home))).toBe(true)
       }),
     ),
   )
@@ -1111,8 +1007,27 @@ describe("serverLock.stop", () => {
         const { result, signals } = yield* serverLock.stop(home).pipe(signalTrap(release))
         expect(result._tag).toBe("Stopped")
         expect(signals).toEqual(["SIGTERM"])
-        expect(Option.isNone(yield* serverLock.read(home))).toBe(true)
+        expect(Option.isNone(yield* serverLockFile.read(home))).toBe(true)
       }),
+    ),
+  )
+})
+
+// ── logs ────────────────────────────────────────────────────────────────────
+
+describe("server logs", () => {
+  // Logs follow the data directory. A run without GENT_DATA_DIR logs under
+  // `<home>/.gent/logs`; under the test preload the home is this file's own,
+  // so the logs go away with it instead of piling up in a shared /tmp path.
+  it.scopedLive("a server without a data directory logs under its home's data directory", () =>
+    provideFs(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const cwd = `${process.cwd()}/log-location-probe`
+        yield* Gent.server({ cwd, state: Gent.state.memory(), provider: Gent.provider.mock() })
+        const { log } = buildLogPaths(cwd, `${homedir()}/.gent/logs`)
+        expect(yield* fs.exists(log)).toBe(true)
+      }).pipe(Effect.timeout("15 seconds")),
     ),
   )
 })

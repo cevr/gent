@@ -456,9 +456,9 @@ describe("CommandPalette renderer", () => {
       setup.mockInput.pressArrow("up")
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressEnter()
-      yield* waitForFrame(setup, (frame) => frame.includes("Esc Back"), "branches level")
+      yield* waitForFrame(setup, (frame) => frame.includes("esc back"), "branches level")
       setup.mockInput.pressEscape()
-      yield* waitForFrame(setup, (frame) => frame.includes("Esc Close"), "root again")
+      yield* waitForFrame(setup, (frame) => frame.includes("esc close"), "root again")
       // Down from the last row lands on the first: Theme.
       setup.mockInput.pressArrow("up")
       yield* Effect.promise(() => setup.renderOnce())

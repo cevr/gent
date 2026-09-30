@@ -1919,8 +1919,7 @@ export const createDependencies = (config: DependenciesConfig) => {
 /**
  * Reusable HTTP route assembly for gent servers.
  *
- * Used by both the standalone server (apps/server/src/main.ts) and
- * the SDK's owned-server path (Gent.server with in-process HTTP listener).
+ * Used by the SDK's owned-server path: `Gent.server` with its in-process HTTP listener.
  */
 
 // ── WebSocket lifecycle tracing ──

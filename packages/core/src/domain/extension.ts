@@ -87,8 +87,8 @@ import type {
  */
 
 /** Stable identity for a declared resource. */
-export const ResourceId = Schema.NonEmptyString.pipe(Schema.brand("ResourceId"))
-export type ResourceId = typeof ResourceId.Type
+const ResourceId = Schema.NonEmptyString.pipe(Schema.brand("ResourceId"))
+type ResourceId = typeof ResourceId.Type
 
 // ── Scope discriminator + brand mapping ──
 

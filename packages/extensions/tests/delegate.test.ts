@@ -2656,59 +2656,67 @@ describe("session.send", () => {
     ),
   )
 
-  it.live("a child's question wakes its idle parent, who answers in a turn of its own", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        let parentCalls = 0
-        let childCalls = 0
-        const providerLayer = LanguageModelLayers.testStream((options) => {
-          const texts = promptTexts(options.prompt)
-          if (texts[0]?.endsWith(childTask) === true) {
-            childCalls += 1
-            if (childCalls === 1) {
-              return Effect.succeed(
-                toolStep("session.send", { to: "parent", message: question }, "ask-parent"),
-              )
+  it.live(
+    "a child's question wakes its idle parent, who answers in a turn of its own",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          let parentCalls = 0
+          let childCalls = 0
+          const answered = yield* Deferred.make<void>()
+          const providerLayer = LanguageModelLayers.testStream((options) => {
+            const texts = promptTexts(options.prompt)
+            if (texts[0]?.endsWith(childTask) === true) {
+              childCalls += 1
+              if (childCalls === 1) {
+                return Effect.succeed(
+                  toolStep("session.send", { to: "parent", message: question }, "ask-parent"),
+                )
+              }
+              return Effect.succeed(reply("pong"))
             }
-            return Effect.succeed(reply("pong"))
-          }
-          parentCalls += 1
-          if (parentCalls === 1) {
-            return Effect.succeed(toolStep("delegate.start", { todo: childTask }, "bg-child"))
-          }
-          if (texts.some((text) => text.includes(question))) {
-            return Effect.succeed(reply("ANSWER: sqlite"))
-          }
-          return Effect.succeed(reply("ack"))
-        })
-        const harness = yield* harnessWithHome(providerLayer)
-        const { client, sessionId, branchId } = harness
-        yield* sendPrompt(harness, "split the work")
-        const snapshot = yield* waitFor(
-          client.session.getSnapshot({ sessionId, branchId }),
-          (current) =>
-            messageTexts(current.messages).some((text) => text.includes("ANSWER: sqlite")),
-          3_000,
-          "the parent answered the child's question",
-        )
-        const [asked] = sessionMessages(snapshot.messages)
-        expect(asked?.metadata?.details).toMatchObject({ from: { relation: "child" } })
-        expect(messageTexts([asked!])[0]).toContain("Message from your child")
-        // A question mid-turn must not read as the child being done.
-        expect(messageTexts([asked!])[0]).toContain("this message is not one")
-        // The question was a turn of its own: the parent's last user text before the answer.
-        const texts = messageTexts(snapshot.messages)
-        expect(texts.indexOf(texts.find((t) => t.includes(question))!)).toBeLessThan(
-          texts.indexOf("ANSWER: sqlite"),
-        )
-        const child = yield* childOf(harness)
-        const childSnapshot = yield* client.session.getSnapshot(child)
-        expect(resultsOf("session.send", childSnapshot.messages)[0]).toMatchObject({
-          isFailure: false,
-          result: { sessionId, relation: "parent" },
-        })
-      }).pipe(Effect.timeout("4 seconds")),
-    ),
+            parentCalls += 1
+            if (parentCalls === 1) {
+              return Effect.succeed(toolStep("delegate.start", { todo: childTask }, "bg-child"))
+            }
+            if (texts.some((text) => text.includes(question))) {
+              return Deferred.succeed(answered, void 0).pipe(Effect.as(reply("ANSWER: sqlite")))
+            }
+            return Effect.succeed(reply("ack"))
+          })
+          const harness = yield* harnessWithHome(providerLayer)
+          const { client, sessionId, branchId } = harness
+          yield* sendPrompt(harness, "split the work")
+          // The model serves the answer once the question reached the parent;
+          // the poll then waits only for the answer's write.
+          yield* Deferred.await(answered)
+          const snapshot = yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              messageTexts(current.messages).some((text) => text.includes("ANSWER: sqlite")),
+            10_000,
+            "the parent answered the child's question",
+          )
+          const [asked] = sessionMessages(snapshot.messages)
+          expect(asked?.metadata?.details).toMatchObject({ from: { relation: "child" } })
+          expect(messageTexts([asked!])[0]).toContain("Message from your child")
+          // A question mid-turn must not read as the child being done.
+          expect(messageTexts([asked!])[0]).toContain("this message is not one")
+          // The question was a turn of its own: the parent's last user text before the answer.
+          const texts = messageTexts(snapshot.messages)
+          expect(texts.indexOf(texts.find((t) => t.includes(question))!)).toBeLessThan(
+            texts.indexOf("ANSWER: sqlite"),
+          )
+          const child = yield* childOf(harness)
+          const childSnapshot = yield* client.session.getSnapshot(child)
+          expect(resultsOf("session.send", childSnapshot.messages)[0]).toMatchObject({
+            isFailure: false,
+            result: { sessionId, relation: "parent" },
+          })
+          // A deadlock bound only: the waits above are events, not deadlines.
+        }).pipe(Effect.timeout("20 seconds")),
+      ),
+    30_000,
   )
 
   it.live("a message to a finished child wakes it for another turn", () =>

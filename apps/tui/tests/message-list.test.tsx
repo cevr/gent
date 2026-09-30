@@ -249,7 +249,7 @@ describe("worked-for row", () => {
       createdAt: 0,
       seq: 1,
     }
-    expect(getSessionEventLabel(event)).toBe("Worked for 7m 32s · 3 steps · 2 tool calls · $0.012")
+    expect(getSessionEventLabel(event)).toBe("Worked for 7m 32s · 3 steps · 2 tool calls · $0.01")
   })
 
   test("a turn with no recorded steps keeps the plain duration", () => {
@@ -2046,13 +2046,17 @@ describe("FX transcript treatment", () => {
         Option.fromUndefinedOr(preview.split("\n").find((line) => line.includes("└ cell"))),
       ).trim()
       expect(row).toContain("↑ 2 ↓ 25 lines")
+      // The preview row names no call id; the open rows add it at the end of the same words.
+      expect(row).not.toContain("#call-stable")
+      const isOpenRow = (line: string) =>
+        line.trim().startsWith(row) && line.trim().endsWith("#call-stable")
       yield* Effect.sync(() => setDisclosure("full"))
       const full = yield* waitForFrame(
         setup,
         (frame) => frame.includes("CELL-OUTPUT-025") && frame.includes("note.content"),
         "full cell output",
       )
-      expect(full.split("\n").some((line) => line.trim() === row)).toBe(true)
+      expect(full.split("\n").some(isOpenRow)).toBe(true)
       expect(full.match(/#call-stable/g)).toHaveLength(1)
       expect(full).not.toContain("… +5 lines")
       yield* Effect.sync(() => {
@@ -2064,7 +2068,7 @@ describe("FX transcript treatment", () => {
         (frame) => frame.includes("CELL-OUTPUT-025") && !frame.includes("1 cell ·"),
         "full transcript from preview",
       )
-      expect(transcript.split("\n").some((line) => line.trim() === row)).toBe(true)
+      expect(transcript.split("\n").some(isOpenRow)).toBe(true)
       expect(transcript).not.toContain("… +5 lines")
       for (let line = 1; line <= 25; line++) {
         const text = `CELL-OUTPUT-${String(line).padStart(3, "0")}`
@@ -3798,4 +3802,147 @@ describe("promptOnScreen", () => {
     expect(onScreen).toBe(false)
     expect(reads).toBeLessThanOrEqual(8)
   })
+})
+
+describe("tool group rows", () => {
+  const cwd = "/work/proj"
+  const readCall = (id: string, path: string): ToolCall => ({
+    id,
+    toolName: "read",
+    status: "completed",
+    input: { path },
+    summary: absent,
+    output: "one\ntwo",
+  })
+  /** A session in view rooted at `sessionCwd`, while the TUI launched in `cwd`. */
+  const sessionAt = (sessionCwd: string) => ({
+    initialSession: {
+      id: SessionId.make("session-elsewhere"),
+      activeBranchId: BranchId.make("branch-elsewhere"),
+      name: "Elsewhere",
+      cwd: sessionCwd,
+      createdAt: dateFromMillis(0),
+      updatedAt: dateFromMillis(0),
+    },
+  })
+  // The session in view runs where the TUI launched unless a test says otherwise.
+  const groupRows = (items: SessionItem[], width: number, sessionCwd = cwd) =>
+    Effect.promise(() =>
+      renderWithProviders(
+        () => (
+          <MessageList
+            items={items}
+            disclosure="preview"
+            syntaxStyle={syntaxStyle}
+            streaming={false}
+          />
+        ),
+        {
+          width,
+          height: 20,
+          cwd,
+          ...sessionAt(sessionCwd),
+        },
+      ),
+    ).pipe(
+      Effect.map((setup) =>
+        renderFrame(setup)
+          .split("\n")
+          .filter((line) => line.trim().length > 0),
+      ),
+    )
+  const callLabels = (lines: ReadonlyArray<string>) =>
+    lines
+      .filter((line) => line.includes("├") || line.includes("└"))
+      .map((line) => line.trim().split(/\s{2,}/)[0])
+
+  it.live("the group row and the read frame name the file from the cwd", () =>
+    Effect.gen(function* () {
+      const call = readCall("call-read-path", `${cwd}/apps/tui/src/app.tsx`)
+      const rows = yield* groupRows([assistantToolMessage("assistant-read-path", call)], 80)
+      expect(callLabels(rows)).toEqual(["└ read apps/tui/src/app.tsx"])
+      const ReadToolRenderer = builtinRenderer("read")
+      const frame = yield* Effect.promise(() =>
+        renderWithProviders(() => <ReadToolRenderer expanded={false} toolCall={call} />, {
+          width: 80,
+          height: 10,
+          cwd,
+        }),
+      )
+      const header = renderFrame(frame).split("\n")[0] ?? ""
+      expect(header).toContain("read apps/tui/src/app.tsx")
+      expect(header).not.toContain(cwd)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.live("paths read from the cwd of the session in view, not the launch cwd", () =>
+    Effect.gen(function* () {
+      const inLaunch = readCall("call-read-launch", `${cwd}/config.ts`)
+      const inSession = readCall("call-read-session", "/work/other/src/app.tsx")
+      const rows = yield* groupRows(
+        [
+          assistantToolMessage("assistant-read-launch", inLaunch),
+          assistantToolMessage("assistant-read-session", inSession),
+        ],
+        80,
+        "/work/other",
+      )
+      expect(callLabels(rows)).toEqual([`└ read ${cwd}/config.ts`, "└ read src/app.tsx"])
+      const ReadToolRenderer = builtinRenderer("read")
+      const frame = yield* Effect.promise(() =>
+        renderWithProviders(() => <ReadToolRenderer expanded={false} toolCall={inSession} />, {
+          width: 80,
+          height: 10,
+          cwd,
+          ...sessionAt("/work/other"),
+        }),
+      )
+      expect(renderFrame(frame).split("\n")[0]).toContain("read src/app.tsx")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.live("a path outside the cwd keeps its full spelling", () =>
+    Effect.gen(function* () {
+      const call = readCall("call-read-outside", "/etc/hosts")
+      const rows = yield* groupRows([assistantToolMessage("assistant-read-outside", call)], 80)
+      expect(callLabels(rows)).toEqual(["└ read /etc/hosts"])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.live("a frame header with a long path keeps one line", () =>
+    Effect.gen(function* () {
+      const path = "/var/lib/very/long/path/that/does/not/fit/in/forty/columns/app.tsx"
+      const ReadToolRenderer = builtinRenderer("read")
+      const frame = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => <ReadToolRenderer expanded={false} toolCall={readCall("call-long", path)} />,
+          { width: 40, height: 10, cwd },
+        ),
+      )
+      const lines = renderFrame(frame).split("\n")
+      expect(lines[0]).toContain("read")
+      expect(lines[1]).not.toContain("columns")
+      expect(lines[1]).not.toContain("app.tsx")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.live("a long row keeps one line and names no call id near 60 columns", () =>
+    Effect.gen(function* () {
+      const call: ToolCall = {
+        id: "dbg-review",
+        toolName: "bash",
+        status: "completed",
+        input: { command: "echo sanity-check the debug session bootstrap and the queue semantics" },
+        summary: absent,
+        output: absent,
+      }
+      for (const width of [59, 60, 61]) {
+        const lines = yield* groupRows([assistantToolMessage("assistant-long-row", call)], width)
+        const row = lines.findIndex((line) => line.includes("└ bash"))
+        expect(lines[row]).toContain("└ bash echo sanity-")
+        expect(lines.join("\n")).not.toContain("dbg-review")
+        expect(lines.slice(row + 1).join("\n")).not.toContain("semantics")
+      }
+    }).pipe(Effect.timeout("10 seconds")),
+  )
 })
