@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test"
 import { Database } from "bun:sqlite"
+import { makeTempDirectoryScoped, testSqliteStorage } from "@gent/core/test-utils"
+import { Effect, Layer } from "effect"
+import { SqlClient } from "effect/sql"
+import { it } from "effect-bun-test"
 import {
   decodeState,
   extensionPulses,
@@ -19,6 +23,8 @@ import {
   parseUpArgs,
   binaryProcessPattern,
   runRecord,
+  sessionStatuses,
+  userMessageTexts,
   paneIdFromSplit,
   presetConfigJson,
   PRESETS,
@@ -167,6 +173,15 @@ describe("gamut state file", () => {
 
   test("a missing field is refused rather than read as undefined", () => {
     expect(() => decodeState(`{"root":"/tmp/x"}`)).toThrow('Missing key\n  at ["work"]')
+  })
+
+  test("the state file holds the schema's fields in its order, two-space indented", () => {
+    const { root, ...rest } = state
+    const reordered = { ...rest, root, stray: "x" }
+    const written = encodeState(reordered)
+    expect(written).toBe(encodeState(state))
+    expect(written.split("\n").slice(0, 2)).toEqual(["{", '  "root": "/tmp/gent-gamut-1",'])
+    expect(written.endsWith("}\n")).toBe(true)
   })
 })
 
@@ -477,4 +492,31 @@ describe("gamut status", () => {
       { extension: "@gent/delegate", count: 1 },
     ])
   })
+})
+
+describe("gamut reads the schema gent migrates", () => {
+  // SQLite prepares each query as it runs, so a table or a column the
+  // migrated schema lacks fails the read here, not in the next live run.
+  it.live("every status and wait query runs on a freshly migrated database", () =>
+    Effect.gen(function* () {
+      const dir = yield* makeTempDirectoryScoped("gent-gamut-schema-")
+      const file = `${dir}/data.db`
+      const sql = yield* SqlClient.SqlClient
+      yield* sql.unsafe(`VACUUM INTO '${file}'`)
+      const db = yield* Effect.acquireRelease(
+        Effect.sync(() => new Database(file, { readonly: true })),
+        (opened) => Effect.sync(() => opened.close()),
+      )
+      expect(sessionStatuses(db)).toEqual([])
+      expect(userMessageTexts(db)).toEqual([])
+      expect(extensionPulses(db)).toEqual([])
+      expect(openTurnSessions(db)).toEqual([])
+      expect(runRecord(db, 0)).toEqual({ started: false, open: [], stored: false })
+      expect(latestEventId(db)).toBe(0)
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(testSqliteStorage(() => Layer.empty, {})),
+      Effect.timeout("10 seconds"),
+    ),
+  )
 })

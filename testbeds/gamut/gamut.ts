@@ -244,32 +244,11 @@ export const rewriteRoster = (agentsMd: string, preset: Preset): string => {
   return agentsMd.slice(0, start) + rosterBlock(preset) + agentsMd.slice(end + ROSTER_END.length)
 }
 
-/** What `up` records so every later subcommand can find the run. */
-export interface GamutState {
-  readonly root: string
-  readonly work: string
-  readonly data: string
-  readonly pane: string
-  readonly binary: string
-  readonly preset: string
-  /**
-   * The newest event id when `send` last typed a message (zero until then).
-   * `wait` counts only a turn newer than it, so the turn the previous prompt
-   * finished cannot pass for the one just sent.
-   */
-  readonly sendMark: number
-  /**
-   * Whether the last thing typed starts a turn. A prompt does; a slash
-   * command (`/model …`, `/goal status`) runs in the client and may start
-   * none, so `wait` takes any event stored after the send as proof it was
-   * handled, or a quiet period when it stores nothing (`waitStep`).
-   */
-  readonly awaitsTurn: boolean
-}
-
-export const encodeState = (state: GamutState): string => `${JSON.stringify(state, null, 2)}\n`
-
-/** The state file as `up` and `send` write it. It lives for one `up`/`down` cycle. */
+/**
+ * What `up` records so every later subcommand can find the run: the state
+ * file as `up` and `send` write it, two-space indented. It lives for one
+ * `up`/`down` cycle.
+ */
 const StateFile = Schema.fromJsonString(
   Schema.Struct({
     root: Schema.String,
@@ -278,10 +257,26 @@ const StateFile = Schema.fromJsonString(
     pane: Schema.String,
     binary: Schema.String,
     preset: Schema.String,
+    /**
+     * The newest event id when `send` last typed a message (zero until then).
+     * `wait` counts only a turn newer than it, so the turn the previous prompt
+     * finished cannot pass for the one just sent.
+     */
     sendMark: Schema.Finite,
+    /**
+     * Whether the last thing typed starts a turn. A prompt does; a slash
+     * command (`/model …`, `/goal status`) runs in the client and may start
+     * none, so `wait` takes any event stored after the send as proof it was
+     * handled, or a quiet period when it stores nothing (`waitStep`).
+     */
     awaitsTurn: Schema.Boolean,
   }),
+  { space: 2 },
 )
+
+export type GamutState = typeof StateFile.Type
+
+export const encodeState = (state: GamutState): string => `${Schema.encodeSync(StateFile)(state)}\n`
 
 export const decodeState = (text: string): GamutState => Schema.decodeSync(StateFile)(text)
 
@@ -599,20 +594,20 @@ export const extensionPulses = (
       .all(),
   )
 
-const status = async () => {
-  const state = await readState()
-  const dbPath = join(state.data, "data.db")
-  if (!existsSync(dbPath)) {
-    console.log(`no database yet at ${dbPath} — the run has not stored a turn`)
-    return
-  }
-  const db = new Database(dbPath, { readonly: true })
+/** One session of the run: its place in the parent chain, its last model and its tool calls. */
+interface SessionStatus {
+  readonly row: SessionRow
+  readonly depth: number
+  readonly model: string | null
+  readonly toolCalls: number
+}
 
+/** The sessions of the run, each under its parent. */
+export const sessionStatuses = (db: Database): ReadonlyArray<SessionStatus> => {
   const sessions = decodeRows(
     SessionRow,
     db.query(`SELECT id, name, parent_session_id FROM sessions ORDER BY created_at`).all(),
   )
-
   // `StreamEnded.model` is where the model that produced a step is recorded.
   const modelOf = db.query(
     `SELECT json_extract(event_json, '$.model') AS model FROM events
@@ -623,35 +618,53 @@ const status = async () => {
   const toolCallsOf = db.query(
     `SELECT COUNT(*) AS n FROM events WHERE session_id = ? AND event_tag = 'ToolCallStarted'`,
   )
+  return sessionTree(sessions).map(({ row, depth }) => ({
+    row,
+    depth,
+    model:
+      decodeRow(Schema.Struct({ model: Schema.NullOr(Schema.String) }), modelOf.get(row.id))
+        ?.model ?? null,
+    toolCalls: decodeRow(Schema.Struct({ n: Schema.Finite }), toolCallsOf.get(row.id))?.n ?? 0,
+  }))
+}
+
+/** The text part of every user message, in the order the run stored them. */
+export const userMessageTexts = (
+  db: Database,
+): ReadonlyArray<{ readonly session_id: string; readonly text: string | null }> =>
+  // A user message's text lives in the chunk parts, one row per part.
+  decodeRows(
+    Schema.Struct({ session_id: Schema.String, text: Schema.NullOr(Schema.String) }),
+    db
+      .query(
+        `SELECT m.session_id AS session_id, json_extract(cc.part_json, '$.text') AS text
+         FROM messages m
+         JOIN message_chunks mc ON mc.message_id = m.id
+         JOIN content_chunks cc ON cc.id = mc.chunk_id
+         WHERE m.role = 'user' AND json_extract(cc.part_json, '$.type') = 'text'
+         ORDER BY m.created_at, mc.ordinal`,
+      )
+      .all(),
+  )
+
+const status = async () => {
+  const state = await readState()
+  const dbPath = join(state.data, "data.db")
+  if (!existsSync(dbPath)) {
+    console.log(`no database yet at ${dbPath} — the run has not stored a turn`)
+    return
+  }
+  const db = new Database(dbPath, { readonly: true })
 
   console.log("sessions:")
-  for (const { row, depth } of sessionTree(sessions)) {
-    const model = decodeRow(
-      Schema.Struct({ model: Schema.NullOr(Schema.String) }),
-      modelOf.get(row.id),
-    )
-    const tools = decodeRow(Schema.Struct({ n: Schema.Finite }), toolCallsOf.get(row.id))
+  for (const { row, depth, model, toolCalls } of sessionStatuses(db)) {
     const indent = "  ".repeat(depth + 1)
     console.log(
-      `${indent}${row.id}  ${row.name ?? "(unnamed)"}  model=${model?.model ?? "-"}  toolCalls=${tools?.n ?? 0}`,
+      `${indent}${row.id}  ${row.name ?? "(unnamed)"}  model=${model ?? "-"}  toolCalls=${toolCalls}`,
     )
   }
 
-  // A user message's text lives in the chunk parts, one row per part.
-  const userMessageRows = db
-    .query(
-      `SELECT m.session_id AS session_id, json_extract(cc.part_json, '$.text') AS text
-       FROM messages m
-       JOIN message_chunks mc ON mc.message_id = m.id
-       JOIN content_chunks cc ON cc.id = mc.chunk_id
-       WHERE m.role = 'user' AND json_extract(cc.part_json, '$.type') = 'text'
-       ORDER BY m.created_at, mc.ordinal`,
-    )
-    .all()
-  const userMessages = decodeRows(
-    Schema.Struct({ session_id: Schema.String, text: Schema.NullOr(Schema.String) }),
-    userMessageRows,
-  )
+  const userMessages = userMessageTexts(db)
   console.log(`\nuser messages (${userMessages.length}):`)
   for (const message of userMessages) {
     console.log(`  [${message.session_id.slice(-8)}] ${JSON.stringify(message.text)}`)
