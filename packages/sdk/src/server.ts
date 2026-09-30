@@ -333,13 +333,19 @@ const ServerStopResult = Schema.Union([
   Schema.TaggedStruct("None", {}),
   /** A process holds the kernel lock but names no pid to signal. */
   Schema.TaggedStruct("Unnamed", {}),
-  /** The server is gone and the caller did not ask to remove its entry. */
+  /**
+   * The server is gone and its entry stays: the caller did not ask to remove
+   * it, or a new owner took the kernel lock first and the entry is its own.
+   */
   Schema.TaggedStruct("NotRunning", { entry: ServerLockEntry }),
   /** The server is gone; its entry is removed. */
   Schema.TaggedStruct("Removed", { entry: ServerLockEntry }),
   /** The server is alive but its identity endpoint does not confirm the entry, so no signal. */
   Schema.TaggedStruct("NotOwned", { entry: ServerLockEntry }),
-  /** SIGTERM sent, the server released the kernel lock, and its entry is removed. */
+  /**
+   * SIGTERM sent and the server released the kernel lock. Its entry is
+   * removed, unless a new owner took the lock first.
+   */
   Schema.TaggedStruct("Stopped", { entry: ServerLockEntry }),
   /** SIGTERM sent, but the server still held the kernel lock when the wait ended. */
   Schema.TaggedStruct("StillRunning", { entry: ServerLockEntry }),
@@ -470,7 +476,9 @@ const stopLocked = (
     const { entry } = status
     if (status._tag === "Stale") {
       if (options?.removeStale !== true) return ServerStopResult.cases.NotRunning.make({ entry })
-      yield* removeStaleEntry(home, entry.serverId)
+      if (!(yield* removeStaleEntry(home, entry.serverId))) {
+        return ServerStopResult.cases.NotRunning.make({ entry })
+      }
       return ServerStopResult.cases.Removed.make({ entry })
     }
     if (!(yield* probeServerLockEntryIdentity(entry))) {

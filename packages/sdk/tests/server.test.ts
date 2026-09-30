@@ -794,6 +794,46 @@ describe("serverLock.stop", () => {
     ),
   )
 
+  it.scopedLive(
+    "a stale entry a new owner takes first is left to it and not reported removed",
+    () =>
+      provideFs(
+        Effect.gen(function* () {
+          const home = yield* makeTmpHomeScoped
+          const base = yield* FileSystem.FileSystem
+          const newOwner = makeEntry({ serverId: "new-owner" })
+          const newOwnerScope = yield* Scope.make()
+          yield* Effect.addFinalizer(() => Scope.close(newOwnerScope, Exit.void))
+          let raced = false
+          // Between the status read and the cleanup's lock, a new server owns the database.
+          const racing = FileSystem.FileSystem.of({
+            ...base,
+            makeDirectory: (path, options) => {
+              if (raced) return base.makeDirectory(path, options)
+              raced = true
+              return Effect.gen(function* () {
+                expect(yield* serverLockFile.hold(home).pipe(Scope.provide(newOwnerScope))).toBe(
+                  true,
+                )
+                yield* serverLockFile.write(home, newOwner)
+              }).pipe(
+                Effect.orDie,
+                Effect.provideService(FileSystem.FileSystem, base),
+                Effect.andThen(base.makeDirectory(path, options)),
+              )
+            },
+          })
+          yield* serverLockFile.write(home, makeEntry())
+          const result = yield* serverLock
+            .stop(home, { removeStale: true })
+            .pipe(Effect.provideService(FileSystem.FileSystem, racing))
+          expect(raced).toBe(true)
+          expect(result._tag).toBe("NotRunning")
+          expect(Option.getOrThrow(yield* serverLockFile.read(home)).serverId).toBe("new-owner")
+        }),
+      ),
+  )
+
   it.scopedLive("a held lock that names no pid signals nothing", () =>
     provideFs(
       Effect.gen(function* () {
