@@ -1576,6 +1576,7 @@ const feedClientStub = (
   applySessionEvent: () => {},
   resetSessionEvents: () => {},
   applyBufferedSessionEvent: () => {},
+  finishReplay: () => {},
   pathPlace: () => ({ cwd: "/work/proj", home: "/home/test" }),
   ...parts,
 })

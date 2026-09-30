@@ -39,11 +39,13 @@ import {
   Session,
   SessionId,
   ConnectionState,
+  AgentEvent,
+  EventEnvelope,
   type ExtensionHealthSnapshot,
   type GentClientRpcError,
   type QueueEntryInfo,
 } from "@gent/core/protocol"
-import { emptyQueueSnapshot, makeTempDirectoryScoped } from "@gent/core/test-utils"
+import { emptyQueueSnapshot, EventId, makeTempDirectoryScoped } from "@gent/core/test-utils"
 import { Gent, type GentRuntime } from "@gent/sdk"
 import {
   App,
@@ -66,7 +68,7 @@ import {
 } from "./render-harness-boundary"
 import { LinkOpener, LinkOpenerError } from "../src/os"
 import { createSignal, type JSX, onMount, Show, type Signal } from "solid-js"
-import { ProviderAuthError } from "@gent/core/extensions/api"
+import { ExtensionId, ProviderAuthError } from "@gent/core/extensions/api"
 import { type ClientContextValue, useClient } from "../src/client"
 import {
   type RenderWaitTimeoutError,
@@ -5230,6 +5232,93 @@ describe("debug playground", () => {
 })
 
 describe("client extension status", () => {
+  // Opening a session replays its stored pulses. They are history: the
+  // session reads health once for all of them, when the replay ends. A live
+  // pulse after it reads health again.
+  it.live("a session whose log holds many extension pulses reads health once for them", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-pulses")
+      const branchId = BranchId.make("branch-pulses")
+      let healthReads = 0
+      const envelope = (id: number, event: EventEnvelope["event"]) =>
+        EventEnvelope.make({ id: EventId.make(id), createdAt: id, event })
+      const pulse = (id: number) =>
+        envelope(
+          id,
+          AgentEvent.cases.ExtensionStateChanged.make({
+            sessionId,
+            branchId,
+            extensionId: ExtensionId.make("pulse-source"),
+          }),
+        )
+      const idle = { _tag: "Idle" satisfies "Idle", queue: emptyQueueSnapshot() }
+      const client = createMockClient({
+        auth: { listProviders: () => Effect.succeed([]) },
+        branch: { getTree: () => Effect.succeed([]) },
+        extension: {
+          listStatus: () =>
+            Effect.sync(() => {
+              healthReads += 1
+              return { _tag: "Healthy" satisfies "Healthy", extensions: [] }
+            }),
+        },
+        session: {
+          getSnapshot: () =>
+            Effect.succeed({
+              sessionId,
+              branchId,
+              messages: [],
+              lastEventId: 5,
+              reasoningLevel: absent,
+              resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
+              agent: AgentName.make("main"),
+              runtime: idle,
+              metrics: { turns: 0, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
+            }),
+          watchRuntime: () => Stream.concat(Stream.make(idle), Stream.never),
+          events: () =>
+            Stream.concat(
+              Stream.make(
+                pulse(1),
+                pulse(2),
+                pulse(3),
+                pulse(4),
+                pulse(5),
+                envelope(
+                  5,
+                  AgentEvent.cases.StreamSynchronized.make({
+                    sessionId,
+                    branchId,
+                    lastEventId: EventId.make(5),
+                  }),
+                ),
+                pulse(6),
+              ),
+              Stream.never,
+            ),
+        },
+      })
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <App />, {
+          client,
+          runtime: createMockRuntime(),
+          initialSession: {
+            id: sessionId,
+            activeBranchId: branchId,
+            name: "Pulses",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        }),
+      )
+      yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
+      // The mount read, one read for the replayed five, and one for the live pulse.
+      yield* waitUntil(() => healthReads >= 3, "the live pulse reads health")
+      yield* waitForFrame(setup, () => true)
+      expect(healthReads).toBe(3)
+      setup.renderer.destroy()
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   it.live("a /driver usage hint lands in the footer and never starts a model turn", () =>
     Effect.gen(function* () {
       const sentMessages: Array<{ readonly content: string }> = []

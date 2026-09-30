@@ -493,6 +493,8 @@ interface ClientTransportValue {
   applySessionSnapshot: (snapshot: SessionSnapshot) => void
   applySessionEvent: (envelope: EventEnvelope) => void
   applyBufferedSessionEvent: (envelope: EventEnvelope) => void
+  /** The feed's replay reached live delivery (`StreamSynchronized`). */
+  finishReplay: () => void
 }
 
 /**
@@ -1194,9 +1196,17 @@ export function ClientProvider(props: ClientProviderProps) {
   }
 
   // An extension that has news may report another health: read it again.
+  const isActivePulse = (event: EventEnvelope["event"]): boolean =>
+    event._tag === "ExtensionStateChanged" && Option.contains(activeSessionId(), event.sessionId)
   const invalidateHealthOn = (event: EventEnvelope["event"]): void => {
-    if (event._tag !== "ExtensionStateChanged") return
-    if (!Option.contains(activeSessionId(), event.sessionId)) return
+    if (isActivePulse(event)) setExtensionPulses((count) => count + 1)
+  }
+  // A replayed pulse is history, and a long session replays many. They read
+  // health once, when the replay ends.
+  let replayedPulse = false
+  const finishReplay = (): void => {
+    if (!replayedPulse) return
+    replayedPulse = false
     setExtensionPulses((count) => count + 1)
   }
 
@@ -1220,7 +1230,7 @@ export function ClientProvider(props: ClientProviderProps) {
     // Snapshot replay owns lifecycle, metadata, and metrics; buffered events
     // may still invalidate extension subscribers, which must stay idempotent.
     eventHub.notifyExtensionStateChanged(event)
-    invalidateHealthOn(event)
+    if (isActivePulse(event)) replayedPulse = true
   }
 
   const transportValue: ClientTransportValue = {
@@ -1243,6 +1253,7 @@ export function ClientProvider(props: ClientProviderProps) {
     applySessionSnapshot,
     applySessionEvent,
     applyBufferedSessionEvent,
+    finishReplay,
   }
 
   const createSessionWith = (

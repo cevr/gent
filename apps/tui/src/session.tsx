@@ -1657,6 +1657,7 @@ type SessionFeedClient = Pick<
   | "applySessionSnapshot"
   | "applySessionEvent"
   | "applyBufferedSessionEvent"
+  | "finishReplay"
   | "resetSessionEvents"
   | "pathPlace"
 >
@@ -2573,6 +2574,7 @@ export function useSessionFeed(
           () => 0,
         )
         lastSeenEventIdByKey.set(key, Math.max(lastSeen, envelope.event.lastEventId))
+        client.finishReplay()
         client.log.info("feed.stream.synchronized", {
           key,
           lastEventId: envelope.event.lastEventId,
