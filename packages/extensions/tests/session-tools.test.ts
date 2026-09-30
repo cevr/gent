@@ -15,7 +15,6 @@ import {
 } from "@gent/core/test-utils"
 import * as Prompt from "effect/ai/Prompt"
 import {
-  renderMessageParts,
   renderSessionTree,
   sessionMessageBody,
   sessionMessageText,
@@ -103,11 +102,6 @@ describe("session.send summary", () => {
 })
 
 describe("messagePartsDisplayText", () => {
-  test("read-session subpath exports renderMessageParts", () => {
-    const parts: MessagePart[] = [Prompt.textPart({ text: "hello world" })]
-    expect(renderMessageParts(parts)).toBe(messagePartsDisplayText(parts))
-  })
-
   test("text part → text content", () => {
     const parts: MessagePart[] = [Prompt.textPart({ text: "hello world" })]
     expect(messagePartsDisplayText(parts)).toBe("hello world")

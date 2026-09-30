@@ -216,18 +216,16 @@ const ServerLockEntryJson = Schema.fromJsonString(ServerLockEntry)
 
 /**
  * The lock sits in the data directory `dataPaths` resolves, beside the
- * database it guards, so each `GENT_DATA_DIR` has its own server.
+ * database it guards, so each `GENT_DATA_DIR` has its own server. Only a
+ * write creates the directory: a read of a missing one finds no server.
  */
-const serverLockPaths = (home: string): Effect.Effect<DataPaths, never, FileSystem.FileSystem> =>
+const writableLockPaths = (home: string): Effect.Effect<DataPaths, never, FileSystem.FileSystem> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const paths = yield* dataPaths(home)
     yield* fs.makeDirectory(paths.dataDir, { recursive: true }).pipe(Effect.ignore)
     return paths
   })
-
-const serverLockPath = (home: string): Effect.Effect<string, never, FileSystem.FileSystem> =>
-  Effect.map(serverLockPaths(home), (paths) => paths.serverLock)
 
 /** SQLite reports a lock another connection holds as `SQLITE_BUSY`. */
 const isSqliteBusy = Schema.is(Schema.Struct({ code: Schema.Literal("SQLITE_BUSY") }))
@@ -288,7 +286,7 @@ const holdKernelLock = (
   home: string,
 ): Effect.Effect<boolean, GentConnectionError, Scope.Scope | FileSystem.FileSystem> =>
   Effect.gen(function* () {
-    const path = (yield* serverLockPaths(home)).serverKernelLock
+    const path = (yield* writableLockPaths(home)).serverKernelLock
     return yield* Effect.uninterruptible(
       Effect.gen(function* () {
         const lock = yield* tryKernelLock(path)
@@ -299,12 +297,18 @@ const holdKernelLock = (
     )
   })
 
-/** True while some connection holds the kernel lock. The probe releases what it takes. */
+/**
+ * True while some connection holds the kernel lock. The probe releases what it
+ * takes. A holder creates the lock file before it locks it, so no file means
+ * no holder, and the probe creates nothing.
+ */
 const kernelLockHeld = (
   home: string,
 ): Effect.Effect<boolean, GentConnectionError, FileSystem.FileSystem> =>
   Effect.gen(function* () {
-    const path = (yield* serverLockPaths(home)).serverKernelLock
+    const fs = yield* FileSystem.FileSystem
+    const path = (yield* dataPaths(home)).serverKernelLock
+    if (!(yield* fs.exists(path).pipe(Effect.orElseSucceed(() => false)))) return false
     const lock = yield* tryKernelLock(path)
     if (Option.isNone(lock)) return true
     yield* releaseKernelLock(lock.value)
@@ -348,7 +352,7 @@ const readLock = (
 ): Effect.Effect<Option.Option<ServerLockEntry>, never, FileSystem.FileSystem | GentPlatform> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
-    const path = yield* serverLockPath(home)
+    const path = (yield* dataPaths(home)).serverLock
     const osInfo = yield* (yield* GentPlatform).osInfo
     const content = yield* fs.readFileString(path).pipe(Effect.option)
     return Option.flatMap(content, Schema.decodeOption(ServerLockEntryJson)).pipe(
@@ -367,7 +371,7 @@ const writeLock = (
 ): Effect.Effect<void, GentConnectionError, FileSystem.FileSystem> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
-    const path = yield* serverLockPath(home)
+    const path = (yield* writableLockPaths(home)).serverLock
     const json = yield* Schema.encodeEffect(ServerLockEntryJson)(entry).pipe(Effect.orDie)
     yield* fs.writeFileString(path, json).pipe(
       Effect.mapError(
@@ -388,7 +392,7 @@ const removeLock = (
     const fs = yield* FileSystem.FileSystem
     const current = yield* readLock(home)
     if (Option.isNone(current) || current.value.serverId !== serverId) return false
-    const path = yield* serverLockPath(home)
+    const path = (yield* dataPaths(home)).serverLock
     return yield* fs.remove(path).pipe(
       Effect.as(true),
       Effect.catchEager(() => Effect.succeed(false)),
@@ -642,14 +646,6 @@ const resolveHome = (stateSpec: StateSpec, homeDirectory: string): string =>
     Option.getOrElse(() => homeDirectory),
   )
 
-/**
- * The database always sits in the data directory `dataPaths` resolves, beside
- * the server lock. The server writes where `gent doctor` and
- * `gent storage reset` look, and a lock never guards a database it does not sit beside.
- */
-const resolveDbPath = (home: string): Effect.Effect<string> =>
-  Effect.map(dataPaths(home), (paths) => paths.dbPath)
-
 // ── Build owned server (in-process + HTTP listener) ──
 
 const buildOwnedServer = (
@@ -689,10 +685,13 @@ const buildOwnedServer = (
     const buildFingerprint = yield* (yield* BuildFingerprint).current
 
     const languageModelLayer = resolveLanguageModelLayer(providerSpec)
-    const dbPath = yield* Match.value(stateSpec).pipe(
+    // The database sits in the data directory beside the server lock and the
+    // logs, where `gent doctor` and `gent storage reset` look.
+    const paths = yield* dataPaths(home)
+    const dbPath = Match.value(stateSpec).pipe(
       Match.tagsExhaustive({
-        Memory: () => Effect.succeed(Option.none<string>()),
-        Sqlite: () => Effect.asSome(resolveDbPath(home)),
+        Memory: () => Option.none<string>(),
+        Sqlite: () => Option.some(paths.dbPath),
       }),
     )
     const logLevel = yield* GentLogLevel.pipe(
@@ -702,8 +701,7 @@ const buildOwnedServer = (
     )
     // A user extension imports the same effect modules the shipped ones do.
     yield* platform.bindModules(BuiltinExtensionModules)
-    const { logDir } = yield* dataPaths(home)
-    const observability = GentObservability(options.cwd, logLevel, logDir)
+    const observability = GentObservability(options.cwd, logLevel, paths.logDir)
     const coreServices = yield* Layer.buildWithScope(
       createDependencies({
         cwd: options.cwd,
@@ -857,9 +855,9 @@ const resolveServerInternal = (
     const mayAttach = Predicate.isNullish(options.port)
     const platform = yield* GentPlatform
     const home = resolveHome(stateSpec, yield* platform.homeDirectory)
-    const dbPath = yield* resolveDbPath(home)
-    const fingerprint = yield* (yield* BuildFingerprint).current
     const paths = yield* dataPaths(home)
+    const dbPath = paths.dbPath
+    const fingerprint = yield* (yield* BuildFingerprint).current
 
     // An entry that failed the identity probe once. The owner writes its entry
     // only after it listens, so a second failure on the same entry is final.

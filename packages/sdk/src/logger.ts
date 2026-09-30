@@ -15,6 +15,7 @@ import {
   Option,
   type PlatformError,
   Predicate,
+  Record as EffectRecord,
   Schema,
   type Scope,
 } from "effect"
@@ -33,7 +34,7 @@ import { CurrentLogAnnotations, CurrentLogSpans, MinimumLogLevel } from "effect/
 const otlpEndpoint = Config.option(Config.String("OTEL_EXPORTER_OTLP_ENDPOINT"))
 const otlpServiceName = Config.option(Config.String("OTEL_SERVICE_NAME"))
 
-export const GentTracerLive: Layer.Layer<never> = Layer.unwrap(
+const GentTracerLive: Layer.Layer<never> = Layer.unwrap(
   Effect.gen(function* () {
     const endpoint = yield* otlpEndpoint
     if (Option.isNone(endpoint)) return Layer.empty
@@ -97,7 +98,6 @@ const formatStartTs = (timeOrigin: number): string =>
 const processStartTs = (): string => formatStartTs(performance.timeOrigin)
 
 interface LogPaths {
-  readonly dir: string
   readonly log: string
   readonly client: string
 }
@@ -130,7 +130,6 @@ export const classifyLogFile = (name: string): Option.Option<"server" | "client"
 export const buildLogPaths = (cwd: string, dir: string): LogPaths => {
   const prefix = `${hashCwd(cwd || FALLBACK_CWD_IDENTITY)}-${processStartTs()}`
   return {
-    dir,
     log: `${dir}/${prefix}${LOG_SUFFIX.server}`,
     client: `${dir}/${prefix}${LOG_SUFFIX.client}`,
   }
@@ -189,14 +188,7 @@ export const ensureLogDir = (dir: string): Effect.Effect<void, never, FileSystem
 // oxlint-disable-next-line effect/noUnknownParameters -- Effect logger messages are an external logger boundary.
 const extractMessage = (message: unknown): string => {
   if (Predicate.isString(message)) return message
-  if (Array.isArray(message)) {
-    return message
-      .map((m) => {
-        if (Predicate.isString(m)) return m
-        return String(m)
-      })
-      .join(" ")
-  }
+  if (Array.isArray(message)) return message.map(String).join(" ")
   return String(message)
 }
 
@@ -313,42 +305,27 @@ const GentLogger = (
   )
 
 /** The `GENT_LOG_LEVEL` names; each selects the one level of the same name. */
-type LogLevelName = "trace" | "debug" | "info" | "warn" | "error" | "fatal"
-
-const levelOf = (name: LogLevelName): LogLevel => {
-  switch (name) {
-    case "trace":
-      return "Trace"
-    case "debug":
-      return "Debug"
-    case "info":
-      return "Info"
-    case "warn":
-      return "Warn"
-    case "error":
-      return "Error"
-    case "fatal":
-      return "Fatal"
-  }
-}
-
-const LOG_LEVEL_NAMES: ReadonlyArray<LogLevelName> = [
-  "trace",
-  "debug",
-  "info",
-  "warn",
-  "error",
-  "fatal",
-]
+const LOG_LEVELS = {
+  trace: "Trace",
+  debug: "Debug",
+  info: "Info",
+  warn: "Warn",
+  error: "Error",
+  fatal: "Fatal",
+} as const satisfies Record<string, LogLevel>
+type LogLevelName = keyof typeof LOG_LEVELS
 
 /**
  * Minimum log level from `GENT_LOG_LEVEL`. Unset keeps the Debug floor; a
- * name outside {@link LOG_LEVEL_NAMES} fails with a config error.
+ * name outside {@link LOG_LEVELS} fails with a config error.
  */
 export const GentLogLevel: Config.Config<LogLevel> = Config.Literals(
-  LOG_LEVEL_NAMES,
+  EffectRecord.keys(LOG_LEVELS),
   "GENT_LOG_LEVEL",
-).pipe(Config.withDefault<LogLevelName>("debug"), Config.map(levelOf))
+).pipe(
+  Config.withDefault<LogLevelName>("debug"),
+  Config.map((name) => LOG_LEVELS[name]),
+)
 
 /** File logger under `logDir`, the `GENT_LOG_LEVEL` floor, and OTLP tracing when configured. */
 export const GentObservability = (

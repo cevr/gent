@@ -269,10 +269,7 @@ export interface GamutState {
 
 export const encodeState = (state: GamutState): string => `${JSON.stringify(state, null, 2)}\n`
 
-/**
- * The state file as written. `sendMark` and `awaitsTurn` are absent in a file
- * an older `up` wrote.
- */
+/** The state file as `up` and `send` write it. It lives for one `up`/`down` cycle. */
 const StateFile = Schema.fromJsonString(
   Schema.Struct({
     root: Schema.String,
@@ -281,15 +278,12 @@ const StateFile = Schema.fromJsonString(
     pane: Schema.String,
     binary: Schema.String,
     preset: Schema.String,
-    sendMark: Schema.optional(Schema.Finite),
-    awaitsTurn: Schema.optional(Schema.Boolean),
+    sendMark: Schema.Finite,
+    awaitsTurn: Schema.Boolean,
   }),
 )
 
-export const decodeState = (text: string): GamutState => {
-  const state = Schema.decodeSync(StateFile)(text)
-  return { ...state, sendMark: state.sendMark ?? 0, awaitsTurn: state.awaitsTurn ?? true }
-}
+export const decodeState = (text: string): GamutState => Schema.decodeSync(StateFile)(text)
 
 // ── State file ──────────────────────────────────────────────────────────
 
@@ -301,7 +295,7 @@ export const decodeState = (text: string): GamutState => {
 export const stateFileFor = (checkoutRoot: string): string =>
   join(tmpdir(), `gent-gamut-${basename(checkoutRoot)}.json`)
 
-const STATE_FILE = stateFileFor(resolve(import.meta.dir, "../.."))
+const STATE_FILE = stateFileFor(CHECKOUT)
 
 const readState = async (): Promise<GamutState> => {
   const file = Bun.file(STATE_FILE)
@@ -352,16 +346,16 @@ export const paneIdFromSplit = (stdout: string): string => {
  */
 export const shellQuote = (argument: string): string => `'${argument.replaceAll("'", `'\\''`)}'`
 
-/**
- * The one line to show for a failed command. herdr answers a failed CLI call
- * with `{"error":{"message":...}}`; other commands say why on
- * stderr, so its last non-empty line wins, then stdout's.
- */
 /** A herdr JSON error reply. */
 const ErrorReply = Schema.fromJsonString(
   Schema.Struct({ error: Schema.Struct({ message: Schema.String }) }),
 )
 
+/**
+ * The one line to show for a failed command. herdr answers a failed CLI call
+ * with `{"error":{"message":...}}`; other commands say why on
+ * stderr, so its last non-empty line wins, then stdout's.
+ */
 export const failureText = (stdout: string, stderr: string): string => {
   for (const text of [stdout, stderr]) {
     const reply = Schema.decodeOption(ErrorReply)(text.trim())

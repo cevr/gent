@@ -32,6 +32,7 @@ import {
   type ProviderHints,
   reportProviderStopReason,
   runProcess,
+  writeFileAtomic,
 } from "@gent/core/extensions/api"
 import {
   type CatalogSource,
@@ -215,10 +216,9 @@ export class AnthropicPlatform extends Context.Service<AnthropicPlatform, Anthro
   /**
    * Build from the `ExtensionHost` seen during setup. `home` is sourced from
    * `host.homeDirectory` (the OS user home), not `ctx.home` (the Gent
-   * configured home) — the Claude Code credential file lives at the OS
-   * user's home regardless of a `GENT_HOME` override, and earlier
-   * refactors regressed this exactly once. Centralizing the lookup here
-   * means future callers can't pick the wrong field.
+   * configured home): the Claude Code credential file lives at the OS
+   * user's home regardless of a `GENT_HOME` override. This is the one place
+   * that picks the field.
    */
   static readonly fromSetup = (
     ctx: Pick<ExtensionHostService, "host">,
@@ -406,9 +406,7 @@ const decodeCredentials = (raw: string): Effect.Effect<ClaudeCredentials, Provid
  * Splice fresh credentials into an existing keychain blob, preserving
  * any other fields (e.g. `subscriptionType`, `mcpOAuth`) so a write-back
  * doesn't blow away CLI state. Returns `None` if the blob isn't
- * valid JSON. Exported for testing.
- *
- * @internal
+ * valid JSON.
  */
 export const updateCredentialBlob = (
   existingJson: string,
@@ -435,9 +433,7 @@ export const updateCredentialBlob = (
  * Parse a raw OAuth refresh response body into `ClaudeCredentials`.
  * Returns `None` if the body is not valid JSON, not an object,
  * or missing `access_token`. Defaults `expires_in` to 36 000s (10h) per
- * Anthropic's observed token lifetime. Exported for testing.
- *
- * @internal
+ * Anthropic's observed token lifetime.
  */
 export const parseOAuthResponse = (
   raw: string,
@@ -624,13 +620,10 @@ const writeCredentialsFile = (
     if (exists) {
       raw = yield* fs.readFileString(credentialsFile).pipe(Effect.mapError(mapFsError))
     }
+    // Staged and renamed over the file, owner-only from the first byte: the
+    // claude CLI reading it at the same time sees the old or the new blob.
     return yield* compareAndWrite(raw, creds, base, (blob) =>
-      fs.writeFileString(credentialsFile, blob).pipe(
-        // chmod 0600 after write so the credentials file is not
-        // world-readable on first creation.
-        Effect.andThen(fs.chmod(credentialsFile, 0o600)),
-        Effect.mapError(mapFsError),
-      ),
+      writeFileAtomic(credentialsFile, blob, { mode: 0o600 }).pipe(Effect.mapError(mapFsError)),
     )
   })
 
@@ -2447,11 +2440,9 @@ const makeOauthAnthropicLayer = (
 }
 
 /**
- * Build the model-driver contribution given the pre-allocated credential
- * cell. Extracted from the inline `modelDrivers` factory so tests can
- * inject their own cell and assert that two `resolveModel` calls share
- * the closure-owned cell (a fresh cell per `resolveModel` would kill
- * credential reuse).
+ * Build the model-driver contribution over a credential cell the caller
+ * allocated once: every `resolveModel` call shares it, so a credential is
+ * reused (a fresh cell per `resolveModel` would lose it).
  */
 export const buildAnthropicModelDriver = (
   credentialCellRef: CredentialCacheCellRef<ClaudeCredentials>,
@@ -2590,11 +2581,9 @@ export const AnthropicExtension = defineExtension({
       Context.add(AnthropicPlatform, AnthropicPlatform.fromSetup(ctx, env)),
     )
 
-    // Cache cells are hoisted to extension-closure scope so they
-    // survive across `resolveModel` calls. Lifetime: one extension
-    // instance → one cell that lives until the runtime tears the
-    // extension down. Setup is Effectful, so cache cells are allocated
-    // through SynchronizedRef.make instead of an unsafe closure escape hatch.
+    // One credential cell per extension instance, allocated at setup, so it
+    // survives across `resolveModel` calls until the runtime tears the
+    // extension down.
     const credentialCellRef =
       yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
 

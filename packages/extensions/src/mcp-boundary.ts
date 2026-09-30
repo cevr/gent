@@ -12,12 +12,17 @@ export type SdkFetch = (url: string | URL, init?: RequestInit) => Promise<Respon
 /**
  * A fetch function for an SDK transport that runs `answer` with `services`.
  * A failure rejects the Promise with the failure itself, so the SDK hands it
- * back to the caller unchanged.
+ * back to the caller unchanged. A request the SDK aborts interrupts `answer`.
  */
 export const sdkFetch =
   <E, R>(
     services: Context.Context<R>,
     answer: (url: string | URL, init: Option.Option<RequestInit>) => Effect.Effect<Response, E, R>,
   ): SdkFetch =>
-  (url, init) =>
-    Effect.runPromiseWith(services)(answer(url, Option.fromUndefinedOr(init)))
+  (url, init) => {
+    const request = Option.fromUndefinedOr(init)
+    const signal = Option.getOrUndefined(
+      Option.flatMap(request, (value) => Option.fromNullishOr(value.signal)),
+    )
+    return Effect.runPromiseWith(services)(answer(url, request), { signal })
+  }

@@ -1408,11 +1408,12 @@ export const BashTool = tool({
       }
     }
 
-    // Sync mode — spawn into an explicit scope so on timeout we can
-    // fork-and-forget the scope-close (which fires SIGTERM/SIGKILL via
-    // the spawn finalizer) instead of awaiting forceKillAfter on the
-    // calling fiber: the tool returns immediately on timeout and the kill
-    // happens async.
+    // Sync mode: the process lives in its own scope. On timeout a detached
+    // fiber closes it (SIGTERM, then SIGKILL after `SIGKILL_DELAY_MS`), and
+    // starts at once, so the scope is already closing when the `ensuring`
+    // below runs and that close returns without waiting: the call returns at
+    // its timeout even when the command ignores SIGTERM. Any other end closes
+    // the scope in the `ensuring`.
     // Output past what the result keeps goes to the call's file, where a
     // background job's output goes; a call with no host id keeps only the ends.
     const dataDir = yield* resolveDataDir(ctx.home)
@@ -1430,7 +1431,7 @@ export const BashTool = tool({
       Effect.timeoutOrElse({
         duration: Duration.millis(timeout),
         orElse: () =>
-          Effect.forkDetach(closeSpawnScope).pipe(
+          Effect.forkDetach(closeSpawnScope, { startImmediately: true }).pipe(
             Effect.andThen(
               Effect.fail(
                 new BashError({ message: `Command timed out after ${timeout}ms`, command }),

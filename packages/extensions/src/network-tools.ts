@@ -193,22 +193,19 @@ export const WebSearchTool = tool({
           }),
         ),
         Effect.timeout(TIMEOUT_MS),
-        Effect.catchEager((e) => {
-          if (Predicate.isTagged("TimeoutError")(e)) {
-            return Effect.fail(
+        Effect.catchTags({
+          TimeoutError: () =>
+            Effect.fail(
               new WebSearchError({ message: "Search request timed out", query: params.query }),
-            )
-          }
-          if (Predicate.isTagged("WebSearchError")(e)) return Effect.fail(e)
-          let message = String(e)
-          if (e instanceof Error) message = e.message
-          return Effect.fail(
-            new WebSearchError({
-              message: `Search failed: ${message}`,
-              query: params.query,
-              cause: e,
-            }),
-          )
+            ),
+          HttpClientError: (error) =>
+            Effect.fail(
+              new WebSearchError({
+                message: `Search failed: ${error.message}`,
+                query: params.query,
+                cause: error,
+              }),
+            ),
         }),
       )
 

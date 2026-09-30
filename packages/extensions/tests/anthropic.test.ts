@@ -2469,6 +2469,62 @@ describe("buildAnthropicModelDriver — refresh writes only the keychain", () =>
       expect(keychain).toContain("refreshed-refresh")
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
   )
+  it.live(
+    "a refresh replaces the credentials file whole, owner-only, with no staging file left",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const home = yield* fs.makeTempDirectoryScoped()
+        const claudeDir = path.join(home, ".claude")
+        yield* fs.makeDirectory(claudeDir)
+        const credentialsFile = path.join(claudeDir, ".credentials.json")
+        yield* fs.writeFileString(
+          credentialsFile,
+          encodeExternalJson({
+            claudeAiOauth: { accessToken: "old-access", refreshToken: "old-refresh", expiresAt: 0 },
+          }),
+          { mode: 0o644 },
+        )
+        const before = yield* fs.stat(credentialsFile)
+        const credentialCellRef =
+          yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
+        const driver = buildAnthropicModelDriverLive(
+          credentialCellRef,
+          Option.none(),
+          yield* driverServices(AnthropicPlatform.of({ platform: "linux", home, env: {} })),
+          testCatalogSource(),
+          "1h",
+        )
+        const fetchState = makeFakeFetchState()
+        const fetchLayer = fakeFetchLayer(fetchState, (request) => {
+          if (!request.url.endsWith("/v1/oauth/token")) return anthropicHappyResponse()
+          return {
+            status: 200,
+            body: encodeExternalJson({
+              access_token: "refreshed-access",
+              refresh_token: "refreshed-refresh",
+              expires_in: 3600,
+            }),
+          }
+        })
+        const authInfo = ProviderAuthInfo.cases.Oauth.make({
+          update: () => Effect.die(new Error("the Claude Code path never writes the gent store")),
+        })
+        const model = yield* driver
+          .resolveModel("claude-opus-4-6", authInfo)
+          .pipe(Effect.provide(fetchLayer))
+        yield* runOne(model, fetchState)
+
+        const after = yield* fs.stat(credentialsFile)
+        // A new inode: the refresh renamed a staged file over the old one, so a
+        // concurrent reader (the claude CLI) never sees a half-written file.
+        expect(after.ino).not.toEqual(before.ino)
+        expect(after.mode & 0o777).toBe(0o600)
+        expect(yield* fs.readDirectory(claudeDir)).toEqual([".credentials.json"])
+        expect(yield* fs.readFileString(credentialsFile)).toContain("refreshed-refresh")
+      }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+  )
   it.live("a sign-in written during the refresh survives, and the request uses it", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem

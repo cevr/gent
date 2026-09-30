@@ -22,7 +22,6 @@ import {
   Result,
   Schema,
   SchemaRepresentation,
-  Schedule,
   Scope,
   Semaphore,
 } from "effect"
@@ -46,6 +45,7 @@ import {
   McpError as ProtocolError,
   ResultSchema,
 } from "@modelcontextprotocol/sdk/types.js"
+import { compareIds } from "./cell-protocol.js"
 import { type SdkFetch, sdkFetch } from "./mcp-boundary.js"
 import {
   defineExtension,
@@ -120,31 +120,53 @@ interface McpServer {
 
 const encodeKeyFields = Schema.encodeSync(Schema.fromJsonString(Schema.Json))
 
-const compareCodeUnits = (left: string, right: string) => {
-  if (left < right) return -1
-  if (left > right) return 1
-  return 0
-}
-
 const sortedEntries = (record: Readonly<Record<string, string>> = {}) =>
-  Object.entries(record).toSorted(([left], [right]) => compareCodeUnits(left, right))
+  Object.entries(record).toSorted(([left], [right]) => compareIds(left, right))
+
+/** `.`, `..`, `./x` or `../x`; `dir/x` (not `@scope/name`); or a name with an extension, such as `server.py`. */
+const RELATIVE_PATH = /^\.{1,2}(\/|$)|^[^/@:][^:]*\/|\.[A-Za-z0-9]+$/
+/** A flag with a value: `--config=./x.json` names `./x.json`. */
+const FLAG_VALUE = /^-{1,2}[^=]*=(.*)$/
+
+/**
+ * Whether a command or an argument can name a file relative to the working
+ * directory, alone or as a flag's value. It errs toward yes: a wrong yes costs
+ * one listing per project, a wrong no hands one project another's tools.
+ */
+const namesRelativePath = (value: string): boolean => {
+  const flag = Option.fromNullishOr(FLAG_VALUE.exec(value))
+  if (Option.isNone(flag) && value.startsWith("-")) return false
+  const target = Option.match(flag, { onNone: () => value, onSome: (match) => match[1] ?? "" })
+  if (target.startsWith("/") || target.includes("://")) return false
+  return RELATIVE_PATH.test(target)
+}
 
 /**
  * What decides the tools a server lists: the entry as it runs, after
- * expansion, with its transport type, and for a stdio server the directory
- * it runs in, in a fixed
- * order so key order never matters. It holds secrets, so only its SHA-256
- * digest is kept.
+ * expansion, with its transport type, and for a stdio server the directory it
+ * runs in when that can change what it runs: the entry names a `cwd`, or its
+ * command or an argument names a relative path. The rest run in the session's
+ * directory but key without it, so one listing serves every project. The key
+ * fields go in a fixed order so key order never matters. It holds secrets, so
+ * only its SHA-256 digest is kept.
  */
 const serverIdentity = (written: string, config: McpServerConfig, cwd: string) => {
   if ("command" in config) {
+    let namedCwd = ""
+    if (
+      Predicate.isNotUndefined(config.cwd) ||
+      namesRelativePath(config.command) ||
+      (config.args ?? []).some(namesRelativePath)
+    ) {
+      namedCwd = cwd
+    }
     return encodeKeyFields([
       written,
       "stdio",
       config.command,
       config.args ?? [],
       sortedEntries(config.env),
-      cwd,
+      namedCwd,
       config.timeoutMs ?? 0,
     ])
   }
@@ -210,7 +232,7 @@ const allocateSegments = (
 ): ReadonlyMap<string, string> => {
   const allocated = new Map<string, string>()
   const taken = new Set<string>()
-  for (const name of [...new Set(names)].toSorted(compareCodeUnits)) {
+  for (const name of [...new Set(names)].toSorted(compareIds)) {
     const base = idSegment(name, limit, fallback)
     let segment = base
     for (let suffix = 2; taken.has(segment); suffix++) {
@@ -339,7 +361,7 @@ const resolveServers = Effect.fn("Mcp.resolveServers")(function* (
   const misconfigured: Array<MisconfiguredServer> = []
   const enabled = Object.entries(entries)
     .filter(([, config]) => config.enabled !== false)
-    .toSorted(([left], [right]) => compareCodeUnits(left, right))
+    .toSorted(([left], [right]) => compareIds(left, right))
   const names = allocateSegments(
     enabled.map(([written]) => written),
     SERVER_SEGMENT_LIMIT,
@@ -415,27 +437,44 @@ const catalogToolOf = (entry: Schema.Json) =>
     }),
   )
 
-/** The `name` of a listed entry the tool shape refused, when it has one. */
-const NamedEntry = Schema.Struct({ name: Schema.String })
-
-/**
- * A server's tools, the `instructions` its `initialize` answer carried, if
- * any, and the names of the entries it listed that were skipped as malformed:
- * they still take part in id allocation, so a tool's id does not move when a
- * colliding entry turns malformed.
- */
+/** A server's tools, and the `instructions` its `initialize` answer carried, if any. */
 const CatalogServer = Schema.Struct({
   tools: Schema.Array(CatalogTool),
   instructions: Schema.optional(Schema.String),
-  reserved: Schema.optional(Schema.Array(Schema.String)),
 })
 type CatalogServer = typeof CatalogServer.Type
 
+/** A server's cached catalog, and when a setup last listed or read it (epoch ms). */
+const CachedServer = Schema.Struct({
+  ...CatalogServer.fields,
+  listedAt: Schema.optional(Schema.Finite),
+})
+type CachedServer = typeof CachedServer.Type
+
 /** Each server's entry, keyed by the hash of its config, so an edited entry lists again. */
 const CatalogFile = Schema.fromJsonString(
-  Schema.Struct({ servers: Schema.Record(Schema.String, CatalogServer) }),
+  Schema.Struct({ servers: Schema.Record(Schema.String, CachedServer) }),
 )
 type CatalogFile = typeof CatalogFile.Type
+
+/** A cached entry no setup listed or read for this long is dropped at the next write. */
+const CATALOG_MAX_AGE = Duration.days(14)
+/** A setup that reads an entry stamped longer ago than this stamps it again. */
+const CATALOG_RESTAMP_AGE = Duration.days(1)
+
+/** The cached entry's catalog, without its stamp. */
+const catalogOf = (cached: CachedServer): CatalogServer => {
+  const catalog: CatalogServer = { tools: cached.tools }
+  if (Predicate.isUndefined(cached.instructions)) return catalog
+  return { ...catalog, instructions: cached.instructions }
+}
+
+/** The entry has no stamp, or one older than `CATALOG_RESTAMP_AGE`. */
+const needsRestamp = (cached: CachedServer, now: number) =>
+  !Option.exists(
+    Option.fromUndefinedOr(cached.listedAt),
+    (at) => now - at < Duration.toMillis(CATALOG_RESTAMP_AGE),
+  )
 
 const catalogPath = Effect.fn("Mcp.catalogPath")(function* (home: string) {
   const path = yield* Path.Path
@@ -455,6 +494,11 @@ const readCatalog = Effect.fn("Mcp.readCatalog")(function* (file: string) {
  * writes every server it listed at once, and the connections write under one
  * permit, so no entry is lost to another's write in this process. A write
  * another gent process races can still lose an entry; that costs one relist.
+ *
+ * Each written entry is stamped now. An entry stamped longer ago than
+ * `CATALOG_MAX_AGE` is dropped, so the file holds only servers a setup used
+ * lately (one for each project directory a stdio entry names). An entry with
+ * no stamp is stamped now and ages from this write.
  */
 const writeCatalogEntries = Effect.fn("Mcp.writeCatalogEntries")(function* (
   file: string,
@@ -463,9 +507,16 @@ const writeCatalogEntries = Effect.fn("Mcp.writeCatalogEntries")(function* (
   if (entries.length === 0) return
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
+  const now = yield* Clock.currentTimeMillis
   const current = yield* readCatalog(file)
-  const servers = { ...current.servers }
-  for (const [key, server] of entries) servers[key] = server
+  const servers: Record<string, CachedServer> = {}
+  for (const [key, cached] of Object.entries(current.servers)) {
+    const listedAt = cached.listedAt ?? now
+    if (now - listedAt <= Duration.toMillis(CATALOG_MAX_AGE)) {
+      servers[key] = { ...cached, listedAt }
+    }
+  }
+  for (const [key, server] of entries) servers[key] = { ...server, listedAt: now }
   yield* fs.makeDirectory(path.dirname(file), { recursive: true })
   yield* writeFileAtomic(file, yield* Schema.encodeEffect(CatalogFile)({ servers }))
 })
@@ -681,10 +732,9 @@ const usesOAuth = (config: McpServerConfig): config is HttpServerConfig =>
  */
 const authKey = (server: McpServer, config: HttpServerConfig) => `${server.name} ${config.url}`
 
-/** The login file, the permit its writes take, and the services a fetch runs its refresh with. */
+/** The login file, and the services a fetch runs its refresh with. */
 interface AuthStore {
   readonly file: string
-  readonly permit: Semaphore.Semaphore
   readonly services: Context.Context<FileSystem.FileSystem | Path.Path | Crypto.Crypto>
 }
 
@@ -692,7 +742,6 @@ const makeAuthStore = Effect.fn("Mcp.makeAuthStore")(function* (home: string) {
   const path = yield* Path.Path
   return {
     file: path.join(yield* resolveDataDir(home), "mcp-auth.json"),
-    permit: yield* Semaphore.make(1),
     services: yield* Effect.context<FileSystem.FileSystem | Path.Path | Crypto.Crypto>(),
   }
 })
@@ -709,21 +758,22 @@ const readLogins = (store: AuthStore) =>
 const readLogin = (store: AuthStore, key: string) =>
   Effect.map(readLogins(store), (file) => Option.fromUndefinedOr(file.servers[key]))
 
-/** Stores one login; the file is written whole, atomically, readable by its owner only. */
+/**
+ * Stores one login; the file is written whole, atomically, readable by its
+ * owner only. The caller holds the auth lock (`underAuthLock`): the read and
+ * the write here are one step no other writer comes between.
+ */
 const writeLogin = (store: AuthStore, key: string, login: StoredLogin) =>
-  Semaphore.withPermit(
-    store.permit,
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const path = yield* Path.Path
-      const current = yield* readLogins(store)
-      const servers = { ...current.servers, [key]: login }
-      yield* fs.makeDirectory(path.dirname(store.file), { recursive: true })
-      yield* writeFileAtomic(store.file, yield* Schema.encodeEffect(AuthFile)({ servers }), {
-        mode: 0o600,
-      })
-    }),
-  )
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+    const current = yield* readLogins(store)
+    const servers = { ...current.servers, [key]: login }
+    yield* fs.makeDirectory(path.dirname(store.file), { recursive: true })
+    yield* writeFileAtomic(store.file, yield* Schema.encodeEffect(AuthFile)({ servers }), {
+      mode: 0o600,
+    })
+  })
 
 /** The SDK's tokens as stored; a refresh answer without a refresh token keeps the old one. */
 const storedTokens = (
@@ -912,7 +962,16 @@ const refreshLogin = (
       Option.none(),
     )
     const metadata = Option.orElse(named, () => storedMetadata(login))
-    const result = yield* Effect.tryPromise(() => auth(provider, authOptions(config, metadata)))
+    // The step this runs in is not interrupted (`refreshUnlessFresh`), so this
+    // signal is what ends every request of the refresh by `REFRESH_BOUND`.
+    const signal = AbortSignal.timeout(Duration.toMillis(REFRESH_BOUND))
+    const fetchWeb = yield* FetchHttpClient.Fetch
+    const result = yield* Effect.tryPromise(() =>
+      auth(provider, {
+        ...authOptions(config, metadata),
+        fetchFn: (url, init) => fetchWeb(url, { ...init, signal }),
+      }),
+    )
     if (result !== "AUTHORIZED" || Option.isNone(flow.tokens)) return Option.none<StoredLogin>()
     const refreshed = loginFrom(
       flow.tokens.value,
@@ -956,11 +1015,18 @@ const nearExpiry = (login: StoredLogin, now: number) =>
   )
 
 /**
- * Refreshes the stored login under its key's refresh lock, unless the login
- * read again under the lock is `fresh`. So of two refreshes of one login, in
- * this process or another, the second finds the token the first stored and
- * uses it; it never redeems the refresh token the first already spent. None
- * when there is no login, or the refresh or the lock failed.
+ * Refreshes the stored login under the auth lock, unless the login read again
+ * under the lock is `fresh`. So of two refreshes of one login, in this
+ * process or another, the second finds the token the first stored and uses
+ * it; it never redeems the refresh token the first already spent. None when
+ * there is no login, or the refresh or the lock failed.
+ *
+ * The token request and the stored login are one step that is not
+ * interrupted: a dial that times out, or a request the SDK aborts, waits for
+ * it, since a refresh token the server spent is lost unless the new one is
+ * stored. `REFRESH_BOUND` ends the step well inside `AUTH_LOCK_STALE`, so no
+ * other process takes the lock over while it runs. The wait for the lock is
+ * interrupted as usual.
  */
 const refreshUnlessFresh = (
   server: McpServer,
@@ -977,7 +1043,7 @@ const refreshUnlessFresh = (
       if (fresh(login.value, yield* Clock.currentTimeMillis)) return login
       return yield* refreshLogin(server, config, store, login.value, named)
     })
-    return yield* refresh.pipe(underRefreshLock(store, key))
+    return yield* Effect.uninterruptible(refresh).pipe(underAuthLock(store))
   }).pipe(
     Effect.catchCause((cause) =>
       Effect.logWarning("mcp.oauth.refresh.failed").pipe(
@@ -987,32 +1053,36 @@ const refreshUnlessFresh = (
     ),
   )
 
-/** A refresh lock older than this was left by a holder that died; no refresh takes this long. */
-const REFRESH_LOCK_STALE = Duration.seconds(30)
-/** How often a refresh tries a held lock again, and how many times before it gives up. */
-const REFRESH_LOCK_RETRY = { schedule: Schedule.spaced("50 millis"), times: 1200 }
+/** An auth lock older than this was left by a holder that died; no refresh takes this long. */
+const AUTH_LOCK_STALE = Duration.seconds(30)
+/** The longest a refresh's requests run: well inside `AUTH_LOCK_STALE`. */
+const REFRESH_BOUND = Duration.seconds(20)
+/** How long a writer waits before it tries a held lock again, and how many tries it makes. */
+const AUTH_LOCK_WAIT = Duration.millis(50)
+const AUTH_LOCK_TRIES = 1200
 
-/** Another refresh of the same login held the lock for longer than a stale lock lives. */
-class RefreshLockBusy extends Schema.TaggedError<RefreshLockBusy>()("RefreshLockBusy", {
+/** Another writer held the auth lock for longer than a stale lock lives. */
+class AuthLockBusy extends Schema.TaggedError<AuthLockBusy>()("AuthLockBusy", {
   message: Schema.String,
 }) {}
 
 /**
- * Runs an effect while holding the refresh lock of the login under `key`:
- * `<data dir>/mcp-auth.<sha256 of key>.lock`, created with `wx`, so one
- * holder at a time across every gent process on the data directory. The
- * holder removes the file when done. A file older than `REFRESH_LOCK_STALE`
- * is a dead holder's, and the next taker removes it first.
+ * Runs an effect while holding the lock of the login file: `<data
+ * dir>/mcp-auth.json.lock`, created with `wx`, so one holder at a time across
+ * every gent process on the data directory. Every refresh and every stored
+ * login holds it, so two writers of different logins never read the same
+ * file and each drop the other's token. Refreshes are rare, so one lock for
+ * every server costs nothing. The holder removes the file when done. A file
+ * older than `AUTH_LOCK_STALE` is a dead holder's, and the next taker removes
+ * it first.
  */
-const underRefreshLock =
-  (store: AuthStore, key: string) =>
+const underAuthLock =
+  (store: AuthStore) =>
   <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
-      const crypto = yield* Crypto.Crypto
-      const digest = yield* crypto.digest("SHA-256", new TextEncoder().encode(key))
-      const file = path.join(path.dirname(store.file), `mcp-auth.${Hex.encode(digest)}.lock`)
+      const file = `${store.file}.lock`
       yield* fs.makeDirectory(path.dirname(file), { recursive: true })
       const take = Effect.gen(function* () {
         const taken = yield* fs.writeFileString(file, "", { flag: "wx", mode: 0o600 }).pipe(
@@ -1023,20 +1093,29 @@ const underRefreshLock =
         const now = yield* Clock.currentTimeMillis
         const modified = Option.flatMap(yield* Effect.option(fs.stat(file)), (info) => info.mtime)
         if (
-          Option.exists(
-            modified,
-            (at) => now - at.getTime() > Duration.toMillis(REFRESH_LOCK_STALE),
-          )
+          Option.exists(modified, (at) => now - at.getTime() > Duration.toMillis(AUTH_LOCK_STALE))
         ) {
           yield* Effect.ignore(fs.remove(file))
         }
-        return yield* new RefreshLockBusy({ message: `the refresh lock ${file} stays held` })
+        return yield* new AuthLockBusy({ message: `the auth lock ${file} stays held` })
       })
-      return yield* Effect.acquireUseRelease(
-        Effect.retry(take, REFRESH_LOCK_RETRY),
-        () => effect,
-        () => Effect.ignore(fs.remove(file)),
-      )
+      // From a try's create to the release's registration nothing is
+      // interrupted, so a lock this holder made is always removed. Only the
+      // wait between tries, and the effect itself, can be interrupted.
+      return yield* Effect.uninterruptibleMask((restore) => {
+        const acquire = (tries: number): Effect.Effect<void, AuthLockBusy> =>
+          take.pipe(
+            Effect.catchTag("AuthLockBusy", (busy) => {
+              if (tries >= AUTH_LOCK_TRIES) return Effect.fail(busy)
+              return restore(Effect.sleep(AUTH_LOCK_WAIT)).pipe(Effect.andThen(acquire(tries + 1)))
+            }),
+          )
+        return Effect.acquireUseRelease(
+          acquire(1),
+          () => restore(effect),
+          () => Effect.ignore(fs.remove(file)),
+        )
+      })
     })
 
 const JsonRpcMethod = Schema.fromJsonString(Schema.Struct({ method: Schema.String }))
@@ -1183,7 +1262,7 @@ const startLogin = (
         metadata,
         yield* Clock.currentTimeMillis,
       )
-      yield* writeLogin(store, authKey(server, config), login)
+      yield* writeLogin(store, authKey(server, config), login).pipe(underAuthLock(store))
       return login
     }).pipe(
       Effect.provideService(
@@ -1272,19 +1351,29 @@ const timeoutOf = (server: McpServer) => server.config.timeoutMs ?? DEFAULT_TIME
  * user's shell reaches the server, and a restricted list would protect
  * nothing the cell cannot already run (decided by consistency with bash and
  * the cell; the cell runs full Bun).
+ *
+ * It is read from the ambient `ConfigProvider`, the environment seam every
+ * other read here uses. Each setup reads it at most once (see
+ * `HostEnvironment`): a name with a numeric segment (`DB_PORT_5432_TCP`)
+ * makes its parent an array node, and the walk loads every index below the
+ * largest one.
  */
 const hostEnvironment = Effect.gen(function* () {
   const provider = yield* ConfigProvider.ConfigProvider
   const environment = new Map<string, string>()
   // The environment provider nests a name at each `_`; the walk joins the path back.
-  const walk = (path: ReadonlyArray<string>): Effect.Effect<void> =>
+  const walk = (path: ReadonlyArray<string>, listed: boolean): Effect.Effect<void> =>
     Effect.gen(function* () {
-      const loaded = yield* provider.load(path).pipe(
-        Effect.map(Option.fromUndefinedOr),
-        Effect.orElseSucceed(() => Option.none()),
-      )
+      const loaded = yield* Effect.option(provider.load(path))
       if (Option.isNone(loaded)) return
       const node = loaded.value
+      if (Predicate.isUndefined(node)) {
+        // A record lists only names the environment holds, and the provider reads
+        // an empty value as missing: a listed name that loads nothing is set empty.
+        // An array node keeps only its length, so its missing and empty indices look alike.
+        if (listed) environment.set(path.join("_"), "")
+        return
+      }
       if (Predicate.isString(node.value) && path.length > 0) {
         environment.set(path.join("_"), node.value)
       }
@@ -1293,11 +1382,20 @@ const hostEnvironment = Effect.gen(function* () {
       if (node._tag === "Array") {
         children = Array.from({ length: node.length }, (_, index) => String(index))
       }
-      yield* Effect.forEach(children, (child) => walk([...path, child]), { discard: true })
+      const listsChildren = node._tag === "Record"
+      yield* Effect.forEach(children, (child) => walk([...path, child], listsChildren), {
+        discard: true,
+      })
     })
-  yield* walk([])
+  yield* walk([], false)
   return Object.fromEntries(environment)
 })
+
+/**
+ * The host environment as setup hands it to every stdio dial: `hostEnvironment`
+ * under `Effect.cached`, so each setup walks the environment once.
+ */
+type HostEnvironment = Effect.Effect<Readonly<Record<string, string>>>
 
 /** The transport a connection runs over. */
 const TransportKind = Schema.Literals(["stdio", "streamable-http", "sse"])
@@ -1396,12 +1494,13 @@ const dial = (
 const connect = (
   server: McpServer,
   auth: AuthStore,
+  environment: HostEnvironment,
   onToolsChanged: Option.Option<() => void> = Option.none(),
 ) =>
   Effect.gen(function* () {
     const config = server.config
     if ("command" in config) {
-      return yield* dial(server, "stdio", yield* hostEnvironment, Option.none(), onToolsChanged)
+      return yield* dial(server, "stdio", yield* environment, Option.none(), onToolsChanged)
     }
     const oauth = yield* oauthTransport(server, config, auth)
     const type = config.type ?? "auto"
@@ -1439,14 +1538,12 @@ const connect = (
  * Every page of `tools/list`. The request goes out with the SDK's loose
  * result schema, not `client.listTools`, whose schema refuses the whole page
  * for one malformed entry; each entry decodes here instead, and one the
- * spec's tool shape refuses is skipped with a warning, its `name`, when it
- * has one, kept in `reserved`. So the SDK keeps no output-schema validators,
- * and the tool checks structured content itself.
+ * spec's tool shape refuses is skipped with a warning. So the SDK keeps no
+ * output-schema validators, and the tool checks structured content itself.
  */
 const listTools = (server: McpServer, client: Client) =>
   Effect.gen(function* () {
     const tools: Array<CatalogTool> = []
-    const reserved: Array<string> = []
     let cursor = Option.none<string>()
     for (let page = 0; page < 100; page++) {
       const params = Option.match(cursor, {
@@ -1473,8 +1570,6 @@ const listTools = (server: McpServer, client: Client) =>
           tools.push(tool.success)
           continue
         }
-        const named = Schema.decodeUnknownOption(NamedEntry)(entry)
-        if (Option.isSome(named)) reserved.push(named.value.name)
         yield* Effect.logWarning("mcp.tools.skipped").pipe(
           Effect.annotateLogs({ server: server.name, entry: index, error: tool.failure.message }),
         )
@@ -1482,21 +1577,16 @@ const listTools = (server: McpServer, client: Client) =>
       cursor = Option.fromNullishOr(listed.nextCursor)
       if (Option.isNone(cursor)) break
     }
-    return { tools, reserved }
+    return tools
   })
 
-/** A listing as the cache keeps it: `reserved` only when some entry was skipped. */
+/** A listing as the cache keeps it. */
 const catalogServerOf = (
-  listed: { readonly tools: ReadonlyArray<CatalogTool>; readonly reserved: ReadonlyArray<string> },
+  tools: ReadonlyArray<CatalogTool>,
   instructions: Option.Option<string>,
 ): CatalogServer => ({
-  tools: listed.tools,
-  ...omitUndefined({
-    instructions: Option.getOrUndefined(instructions),
-    reserved: Option.getOrUndefined(
-      Option.filter(Option.some(listed.reserved), (names) => names.length > 0),
-    ),
-  }),
+  tools,
+  ...omitUndefined({ instructions: Option.getOrUndefined(instructions) }),
 })
 
 /** The result fields a call reads; content blocks stay JSON. */
@@ -1509,26 +1599,17 @@ type CallResult = typeof CallResult.Type
 
 /**
  * What a failed call says about its connection. `answered`: the server sent
- * a JSON-RPC error, so the connection is sound. `expired`: HTTP 404 to a
- * request that carried an `Mcp-Session-Id`, a session the server no longer
- * knows, so it ran nothing. A 404 without a session says no such thing (a
- * gateway can answer it after the server ran the call), so it is `kept`.
- * `dead`: the transport failed (the connection closed, the call timed out,
- * HTTP 400 or 408, a network error). `refused`: HTTP 401 or 403, the server
- * no longer takes the entry's credential. `kept`: any other HTTP status,
- * which says nothing about the connection. `stale`: the server answered that
- * it has no such tool, so the catalog is out of date. `login`: the server
- * refused the OAuth token and no refresh helped (see `oauthTransport`).
+ * a JSON-RPC error, or an HTTP status that says nothing about the connection
+ * (a 404 without a session included: a gateway can answer it after the server
+ * ran the call), so the connection stays. `expired`: HTTP 404 to a request
+ * that carried an `Mcp-Session-Id`, a session the server no longer knows, so
+ * it ran nothing. `dead`: the transport failed (the connection closed, the
+ * call timed out, HTTP 400 or 408, a network error). `refused`: HTTP 401 or
+ * 403, or an OAuth token no refresh helped (see `oauthTransport`): the server
+ * no longer takes the entry's credential. `stale`: the server answered that
+ * it has no such tool, so the catalog is out of date.
  */
-const CallFailureKind = Schema.Literals([
-  "answered",
-  "expired",
-  "dead",
-  "refused",
-  "kept",
-  "stale",
-  "login",
-])
+const CallFailureKind = Schema.Literals(["answered", "expired", "dead", "refused", "stale"])
 type CallFailureKind = typeof CallFailureKind.Type
 
 const staleMessage = (name: string) =>
@@ -1562,7 +1643,7 @@ const INVALID_PARAMS: number = ErrorCode.InvalidParams
 
 /** `hadSession`: the request carried the transport's `Mcp-Session-Id`. */
 const failureKind = (cause: unknown, name: string, hadSession: boolean): CallFailureKind => {
-  if (Schema.is(LoginRequired)(cause)) return "login"
+  if (Schema.is(LoginRequired)(cause)) return "refused"
   if (cause instanceof ProtocolError) {
     if (CLIENT_RAISED.has(cause.code)) return "dead"
     if (cause.code === INVALID_PARAMS && isUnknownToolMessage(cause.message, name)) return "stale"
@@ -1573,18 +1654,13 @@ const failureKind = (cause: unknown, name: string, hadSession: boolean): CallFai
     if (status === 404 && hadSession) return "expired"
     if (REFUSED_STATUSES.has(status)) return "refused"
     if (DEAD_STATUSES.has(status)) return "dead"
-    return "kept"
+    return "answered"
   }
   return "dead"
 }
 
 /** The failures that drop the connection: the next call dials again, with the credential as it is then. */
-const DROPPING_FAILURES: ReadonlySet<CallFailureKind> = new Set([
-  "dead",
-  "expired",
-  "refused",
-  "login",
-])
+const DROPPING_FAILURES: ReadonlySet<CallFailureKind> = new Set(["dead", "expired", "refused"])
 
 /** A failed call's message, with the HTTP status the server answered, when it did. */
 const callFailureMessage = (name: string, cause: unknown) =>
@@ -1700,6 +1776,20 @@ interface Connection {
   calls: number
 }
 
+/** What this process holds for one registered server; `status` is a projection of it. */
+interface ServerState {
+  readonly entry: RegisteredServer
+  /** Its lists run one at a time, so an older list never lands last. */
+  readonly listPermit: Semaphore.Semaphore
+  /** The connection it holds now, so a late close never drops its successor. */
+  connection: Option.Option<Connection>
+  /** The last accepted listing, which a new list is compared with. */
+  catalog: CatalogServer
+  health: ServerHealth
+  /** The login it waits for, so a second `/mcp login` replaces the first. */
+  pendingLogin: Option.Option<Fiber.Fiber<void>>
+}
+
 /**
  * The connections of `registered`, each under its cache key, which names one
  * entry. The server's tools are listed again when a connection opens, when
@@ -1726,6 +1816,7 @@ const mcpClientsLive = ({
   file,
   blobs,
   auth,
+  environment,
 }: {
   readonly registered: ReadonlyArray<RegisteredServer>
   readonly misconfigured: ReadonlyArray<MisconfiguredServer>
@@ -1734,35 +1825,39 @@ const mcpClientsLive = ({
   /** The directory binary blocks are written to. */
   readonly blobs: string
   readonly auth: AuthStore
+  readonly environment: HostEnvironment
 }) =>
   Layer.effect(
     McpClients,
     Effect.gen(function* () {
       const crypto = yield* Crypto.Crypto
       const blobStore = yield* makeBlobStore(blobs)
-      const byKey = new Map(registered.map((entry) => [entry.server.key, entry]))
       const writePermit = yield* Semaphore.make(1)
-      /** One permit per server: its lists run one at a time, so an older list never lands last. */
-      const listPermits = new Map(
+      /** Each registered server's state, under its cache key. */
+      const states = new Map(
         yield* Effect.forEach(registered, (entry) =>
-          Effect.map(Semaphore.make(1), (permit) => [entry.server.key, permit] as const),
+          Effect.map(Semaphore.make(1), (listPermit) => {
+            const state: ServerState = {
+              entry,
+              listPermit,
+              connection: Option.none(),
+              catalog: entry.catalog,
+              health: setupHealth(entry),
+              pendingLogin: Option.none(),
+            }
+            return [entry.server.key, state] as const
+          }),
         ),
       )
+      const stateOf = (server: McpServer) =>
+        Effect.fromOption(Option.fromUndefinedOr(states.get(server.key))).pipe(
+          Effect.mapError(() => new McpError({ server: server.name, message: "not configured" })),
+        )
       const runFork = yield* FiberSet.makeRuntime<FileSystem.FileSystem | Path.Path>()
       /** The layer's scope: each login's listener lives in a child of it. */
       const layerScope = yield* Scope.Scope
-      /** The login each server waits for, so a second `/mcp login` replaces the first. */
-      const pendingLogins = new Map<string, Fiber.Fiber<void>>()
-      /** The connection each key holds now, so a late close never drops its successor. */
-      const live = new Map<string, Connection>()
-      /** Each server's last accepted entry, which a new list is compared with. */
-      const known = new Map(registered.map((entry) => [entry.server.key, entry.catalog]))
-      const health = new Map(registered.map((entry) => [entry.server.key, setupHealth(entry)]))
-      const setHealth = (key: string, state: McpHealth, reason: Option.Option<string>) => {
-        health.set(key, { health: state, reason })
-      }
-      const setFailed = (key: string, error: McpError) => {
-        health.set(key, failureHealth(error))
+      const setHealth = (state: ServerState, health: McpHealth, reason: Option.Option<string>) => {
+        state.health = { health, reason }
       }
       const namesOf = (tools: ReadonlyArray<CatalogTool>) =>
         new Set(tools.map((listed) => listed.name))
@@ -1773,25 +1868,25 @@ const mcpClientsLive = ({
        * and a failed list is not either: both keep the last list and the
        * cached tools, and leave the server `degraded`.
        */
-      const listNames = (server: McpServer, client: Client, instructions: Option.Option<string>) =>
+      const listNames = (state: ServerState, client: Client, instructions: Option.Option<string>) =>
         Effect.gen(function* () {
-          const previous = known.get(server.key) ?? { tools: [] }
-          const listed = yield* listTools(server, client)
-          const tools = listed.tools
+          const { server } = state.entry
+          const previous = state.catalog
+          const tools = yield* listTools(server, client)
           if (tools.length === 0 && previous.tools.length > 0) {
             yield* Effect.logWarning("mcp.server.relist.empty").pipe(
               Effect.annotateLogs({ server: server.name }),
             )
             setHealth(
-              server.key,
+              state,
               "degraded",
               Option.some(`listed no tools; kept the ${previous.tools.length} listed before`),
             )
             return namesOf(previous.tools)
           }
-          const next = catalogServerOf(listed, instructions)
-          known.set(server.key, next)
-          setHealth(server.key, "healthy", Option.none())
+          const next = catalogServerOf(tools, instructions)
+          state.catalog = next
+          setHealth(state, "healthy", Option.none())
           if (!Equal.equals(next, previous)) {
             yield* Semaphore.withPermit(
               writePermit,
@@ -1802,10 +1897,10 @@ const mcpClientsLive = ({
         }).pipe(
           Effect.catchCause((cause) => {
             const message = failureMessage(Cause.squash(cause))
-            setHealth(server.key, "degraded", Option.some(message))
+            setHealth(state, "degraded", Option.some(message))
             return Effect.logWarning("mcp.server.relist.failed").pipe(
-              Effect.annotateLogs({ server: server.name, error: message }),
-              Effect.as(namesOf(known.get(server.key)?.tools ?? [])),
+              Effect.annotateLogs({ server: state.entry.server.name, error: message }),
+              Effect.as(namesOf(state.catalog.tools)),
             )
           }),
         )
@@ -1815,38 +1910,35 @@ const mcpClientsLive = ({
        * land in the order they were asked for.
        */
       const relist = (
-        server: McpServer,
+        state: ServerState,
         client: Client,
         instructions: Option.Option<string>,
         apply: (names: ReadonlySet<string>) => void,
       ) =>
-        Option.match(Option.fromUndefinedOr(listPermits.get(server.key)), {
-          onNone: () => Effect.void,
-          onSome: (permit) =>
-            Semaphore.withPermit(
-              permit,
-              listNames(server, client, instructions).pipe(Effect.map((names) => apply(names))),
-            ),
-        })
+        Semaphore.withPermit(
+          state.listPermit,
+          listNames(state, client, instructions).pipe(Effect.map((names) => apply(names))),
+        )
       /** Lists an open connection's tools again, off the call that asked. */
-      const refresh = (server: McpServer, connection: Connection) =>
+      const refresh = (state: ServerState, connection: Connection) =>
         runFork(
-          relist(server, connection.client, connection.instructions, (names) => {
+          relist(state, connection.client, connection.instructions, (names) => {
             connection.listed = names
           }),
         )
       const clients = yield* RcMap.make({
         lookup: (key: string) =>
           Effect.gen(function* () {
-            const entry = byKey.get(key)
-            if (Predicate.isUndefined(entry)) {
+            const state = Option.fromUndefinedOr(states.get(key))
+            if (Option.isNone(state)) {
               return yield* new McpError({ server: key, message: "not configured" })
             }
             // The notification can only arrive once the connection below exists.
             let onToolsChanged = () => {}
             const { client, transport, instructions } = yield* connect(
-              entry.server,
+              state.value.entry.server,
               auth,
+              environment,
               Option.some(() => onToolsChanged()),
             )
             const connection: Connection = {
@@ -1857,61 +1949,64 @@ const mcpClientsLive = ({
               closed: false,
               calls: 0,
             }
-            yield* relist(entry.server, client, instructions, (names) => {
+            yield* relist(state.value, client, instructions, (names) => {
               connection.listed = names
             })
-            onToolsChanged = () => refresh(entry.server, connection)
-            live.set(key, connection)
+            onToolsChanged = () => refresh(state.value, connection)
+            state.value.connection = Option.some(connection)
             // Runs before the client closes, so its own close event finds nothing to drop.
-            yield* Effect.addFinalizer(() => Effect.sync(() => forget(key, connection)))
+            yield* Effect.addFinalizer(() => Effect.sync(() => forget(state.value, connection)))
             client.onclose = () => {
               connection.closed = true
-              if (live.get(key) === connection) {
-                setHealth(key, "degraded", Option.some("the connection closed"))
+              if (Option.contains(state.value.connection, connection)) {
+                setHealth(state.value, "degraded", Option.some("the connection closed"))
               }
-              runFork(evict(key, connection))
+              runFork(evict(state.value, connection))
             }
             return connection
           }),
         idleTimeToLive: IDLE_TIME_TO_LIVE,
       })
-      /** Whether `connection` was the key's current one; it no longer is. */
-      const forget = (key: string, connection: Connection) => {
-        if (live.get(key) !== connection) return false
-        live.delete(key)
+      /** Whether `connection` was the server's current one; it no longer is. */
+      const forget = (state: ServerState, connection: Connection) => {
+        if (!Option.contains(state.connection, connection)) return false
+        state.connection = Option.none()
         return true
       }
-      const evict = (key: string, connection: Connection) =>
+      const evict = (state: ServerState, connection: Connection) =>
         Effect.suspend(() => {
-          if (!forget(key, connection)) return Effect.void
-          return RcMap.invalidate(clients, key)
+          if (!forget(state, connection)) return Effect.void
+          return RcMap.invalidate(clients, state.entry.server.key)
         })
-      const acquire = (server: McpServer) =>
-        RcMap.get(clients, server.key).pipe(
+      const acquire = (state: ServerState) =>
+        RcMap.get(clients, state.entry.server.key).pipe(
           // RcMap keeps a failed lookup until it idles out; drop it so the next call connects.
           Effect.tapError((error) =>
             Effect.andThen(
-              Effect.sync(() => setFailed(server.key, error)),
-              RcMap.invalidate(clients, server.key),
+              Effect.sync(() => {
+                state.health = failureHealth(error)
+              }),
+              RcMap.invalidate(clients, state.entry.server.key),
             ),
           ),
         )
-      /** The key's connection; one whose transport already closed ran nothing, so it is replaced. */
-      const open = (server: McpServer) =>
+      /** The server's connection; one whose transport already closed ran nothing, so it is replaced. */
+      const open = (state: ServerState) =>
         Effect.gen(function* () {
-          const connection = yield* acquire(server)
+          const connection = yield* acquire(state)
           if (!connection.closed) return connection
-          yield* evict(server.key, connection)
-          return yield* acquire(server)
+          yield* evict(state, connection)
+          return yield* acquire(state)
         })
-      /** One `tools/call` on the key's connection, which the failure's kind then drops or relists. */
+      /** One `tools/call` on the server's connection, which the failure's kind then drops or relists. */
       const callOnce = (
-        server: McpServer,
+        state: ServerState,
         name: string,
         input: Readonly<Record<string, Schema.Json>>,
       ) =>
         Effect.gen(function* () {
-          const connection = yield* open(server)
+          const { server } = state.entry
+          const connection = yield* open(state)
           if (!connection.listed.has(name)) {
             return yield* new McpError({ server: server.name, message: staleMessage(name) })
           }
@@ -1952,38 +2047,41 @@ const mcpClientsLive = ({
           return yield* send.pipe(
             Effect.tapError((failed) => {
               if (failed.kind === "dead") {
-                setHealth(server.key, "degraded", Option.some(failed.message))
+                setHealth(state, "degraded", Option.some(failed.message))
               }
-              if (failed.kind === "login" || failed.kind === "refused") {
-                setHealth(server.key, "expired", Option.some(failed.message))
+              if (failed.kind === "refused") {
+                setHealth(state, "expired", Option.some(failed.message))
               }
-              if (DROPPING_FAILURES.has(failed.kind)) return evict(server.key, connection)
-              if (failed.kind === "stale") return Effect.sync(() => refresh(server, connection))
+              if (DROPPING_FAILURES.has(failed.kind)) return evict(state, connection)
+              if (failed.kind === "stale") return Effect.sync(() => refresh(state, connection))
               return Effect.void
             }),
           )
         })
       /** Waits for a started login's redirect, then connects with its token; closes `scope` at the end. */
-      const finishLogin = (server: McpServer, started: LoginStart, scope: Scope.Closeable) =>
+      const finishLogin = (state: ServerState, started: LoginStart, scope: Scope.Closeable) =>
         Effect.gen(function* () {
           yield* started.finish
           // A connection opened before the login sends no token; the next one does.
-          const current = Option.fromUndefinedOr(live.get(server.key))
-          if (Option.isSome(current)) yield* evict(server.key, current.value)
-          yield* Effect.scoped(acquire(server))
+          if (Option.isSome(state.connection)) yield* evict(state, state.connection.value)
+          yield* Effect.scoped(acquire(state))
           yield* Effect.logInfo("mcp.oauth.login.done").pipe(
-            Effect.annotateLogs({ server: server.name }),
+            Effect.annotateLogs({ server: state.entry.server.name }),
           )
         }).pipe(
           Effect.catchCause((cause) => {
             const message = failureMessage(Cause.squash(cause))
-            setHealth(server.key, "expired", Option.some(message))
+            setHealth(state, "expired", Option.some(message))
             return Effect.logWarning("mcp.oauth.login.failed").pipe(
-              Effect.annotateLogs({ server: server.name, error: message }),
+              Effect.annotateLogs({ server: state.entry.server.name, error: message }),
             )
           }),
           Effect.ensuring(Scope.close(scope, Exit.void)),
-          Effect.ensuring(Effect.sync(() => pendingLogins.delete(server.name))),
+          Effect.ensuring(
+            Effect.sync(() => {
+              state.pendingLogin = Option.none()
+            }),
+          ),
         )
       /**
        * Starts a login to the server named `name` and returns its URL at
@@ -1993,12 +2091,15 @@ const mcpClientsLive = ({
        */
       const login = (name: string) =>
         Effect.gen(function* () {
-          const entry = Option.fromUndefinedOr(
-            registered.find(
-              (candidate) => candidate.server.name === name && usesOAuth(candidate.server.config),
-            ),
+          const found = Option.fromUndefinedOr(
+            [...states.values()].find((candidate) => candidate.entry.server.name === name),
           )
-          if (Option.isNone(entry) || !usesOAuth(entry.value.server.config)) {
+          const config = Option.flatMap(found, (candidate) => {
+            const entry = candidate.entry.server.config
+            if (usesOAuth(entry)) return Option.some(entry)
+            return Option.none()
+          })
+          if (Option.isNone(found) || Option.isNone(config)) {
             const names = registered
               .filter((candidate) => usesOAuth(candidate.server.config))
               .map((candidate) => candidate.server.name)
@@ -2007,10 +2108,8 @@ const mcpClientsLive = ({
               message: `no MCP server named ${name} signs in with OAuth; these do: ${names.join(", ") || "none"}`,
             })
           }
-          const { server } = entry.value
-          const config = entry.value.server.config
-          const previous = Option.fromUndefinedOr(pendingLogins.get(name))
-          if (Option.isSome(previous)) yield* Fiber.interrupt(previous.value)
+          const state = found.value
+          if (Option.isSome(state.pendingLogin)) yield* Fiber.interrupt(state.pendingLogin.value)
           // The listener's scope is a child of the layer's from its creation. A
           // start that fails or is interrupted closes it; a start that
           // succeeds hands it to the finishing fiber in the same
@@ -2019,7 +2118,7 @@ const mcpClientsLive = ({
             Effect.gen(function* () {
               const scope = yield* Scope.fork(layerScope)
               const started = yield* restore(
-                startLogin(server, config, auth, scope).pipe(
+                startLogin(state.entry.server, config.value, auth, scope).pipe(
                   Effect.provideService(Crypto.Crypto, crypto),
                   Effect.mapError((error) => {
                     if (error._tag === "McpError") return error
@@ -2027,7 +2126,7 @@ const mcpClientsLive = ({
                   }),
                 ),
               ).pipe(Effect.onExit((exit) => closeOnFailure(scope, exit)))
-              pendingLogins.set(name, runFork(finishLogin(server, started, scope)))
+              state.pendingLogin = Option.some(runFork(finishLogin(state, started, scope)))
               return started.url
             }),
           )
@@ -2035,11 +2134,15 @@ const mcpClientsLive = ({
       return McpClients.of({
         login,
         call: (server, name, input) =>
-          callOnce(server, name, input).pipe(
-            Effect.catchTag("CallFailed", (failed) => {
-              if (failed.kind === "expired" && failed.reused) return callOnce(server, name, input)
-              return Effect.fail(failed)
-            }),
+          Effect.gen(function* () {
+            const state = yield* stateOf(server)
+            return yield* callOnce(state, name, input).pipe(
+              Effect.catchTag("CallFailed", (failed) => {
+                if (failed.kind === "expired" && failed.reused) return callOnce(state, name, input)
+                return Effect.fail(failed)
+              }),
+            )
+          }).pipe(
             Effect.mapError((error) => {
               if (error._tag === "McpError") return error
               return new McpError({ server: server.name, message: error.message })
@@ -2047,24 +2150,21 @@ const mcpClientsLive = ({
             Effect.scoped,
           ),
         status: Effect.sync(() => {
-          const servers = registered.map(({ server }): McpServerStatus => {
-            const state = health.get(server.key) ?? { health: "unknown", reason: Option.none() }
-            const connection = Option.fromUndefinedOr(live.get(server.key)).pipe(
-              Option.filter((open) => !open.closed),
-            )
-            const catalog = known.get(server.key) ?? { tools: [] }
+          const servers = [...states.values()].map((state): McpServerStatus => {
+            const { server } = state.entry
+            const connection = Option.filter(state.connection, (open) => !open.closed)
             return {
               name: server.name,
               transport: Option.match(connection, {
                 onNone: () => configuredTransport(server.config),
                 onSome: (open) => open.transport,
               }),
-              health: state.health,
+              health: state.health.health,
               connected: Option.isSome(connection),
-              tools: catalog.tools.length,
+              tools: state.catalog.tools.length,
               ...omitUndefined({
-                description: catalog.instructions,
-                reason: Option.getOrUndefined(state.reason),
+                description: state.catalog.instructions,
+                reason: Option.getOrUndefined(state.health.reason),
               }),
             }
           })
@@ -2079,7 +2179,7 @@ const mcpClientsLive = ({
             })
           }
           return {
-            servers: servers.toSorted((left, right) => compareCodeUnits(left.name, right.name)),
+            servers: servers.toSorted((left, right) => compareIds(left.name, right.name)),
           }
         }),
         saveBlobs: blobStore.save,
@@ -2277,13 +2377,12 @@ const toolDescription = (server: McpServer, listed: CatalogTool) => {
 
 /**
  * One host tool per listed MCP tool, each under its own segment (see
- * `allocateSegments`), allocated over the tools' names and the `reserved`
- * names of skipped entries. A name the server lists twice is one tool.
+ * `allocateSegments`). A name the server lists twice is one tool.
  */
 const toolsFor = (server: McpServer, catalog: CatalogServer) => {
   const listed = catalog.tools
   const segments = allocateSegments(
-    [...listed.map((entry) => entry.name), ...(catalog.reserved ?? [])],
+    listed.map((entry) => entry.name),
     WIRE_SEGMENTS_LIMIT - server.name.length,
     "tool",
   )
@@ -2338,12 +2437,14 @@ const toolsFor = (server: McpServer, catalog: CatalogServer) => {
 }
 
 /**
- * A server's catalog entry, whether setup listed it now (so it goes to the
- * cache), and the failure of a setup listing that did not work.
+ * A server's catalog entry, whether setup listed it now, whether a cached
+ * entry is stamped again (either goes to the cache), and the failure of a
+ * setup listing that did not work.
  */
 interface SetupCatalog {
   readonly catalog: CatalogServer
   readonly listedNow: boolean
+  readonly restamp: boolean
   readonly failure: Option.Option<McpError>
 }
 
@@ -2352,12 +2453,19 @@ interface SetupCatalog {
  * setup that lists them. A server that cannot list is reported and
  * contributes nothing; the other servers are unaffected.
  */
-const catalogFor = (server: McpServer, cache: CatalogFile, auth: AuthStore) => {
+const catalogFor = (
+  server: McpServer,
+  cache: CatalogFile,
+  auth: AuthStore,
+  environment: HostEnvironment,
+  now: number,
+) => {
   const cached = cache.servers[server.key]
   if (Predicate.isNotUndefined(cached)) {
     return Effect.succeed<SetupCatalog>({
-      catalog: cached,
+      catalog: catalogOf(cached),
       listedNow: false,
+      restamp: needsRestamp(cached, now),
       failure: Option.none(),
     })
   }
@@ -2367,16 +2475,22 @@ const catalogFor = (server: McpServer, cache: CatalogFile, auth: AuthStore) => {
       Effect.as<SetupCatalog>({
         catalog: { tools: [] },
         listedNow: false,
+        restamp: false,
         failure: Option.some(error),
       }),
     )
   return Effect.scoped(
     Effect.gen(function* () {
-      const { client, instructions } = yield* connect(server, auth)
+      const { client, instructions } = yield* connect(server, auth, environment)
       return catalogServerOf(yield* listTools(server, client), instructions)
     }),
   ).pipe(
-    Effect.map((catalog): SetupCatalog => ({ catalog, listedNow: true, failure: Option.none() })),
+    Effect.map((catalog): SetupCatalog => ({
+      catalog,
+      listedNow: true,
+      restamp: false,
+      failure: Option.none(),
+    })),
     Effect.catchTag("McpError", unlisted),
     Effect.catchCause((cause) =>
       unlisted(new McpError({ server: server.name, message: String(Cause.squash(cause)) })),
@@ -2427,8 +2541,12 @@ const firstLine = (text: string) => text.trim().split("\n")[0] ?? ""
  * `/mcp` shows `mcp.status` to the user. `/mcp login <server>` starts that
  * server's OAuth login and shows the URL to open; the login finishes in the
  * background, and `/mcp` shows the result. The URL is shown, not opened: the
- * gent server may run on another machine than the browser.
+ * gent server may run on another machine than the browser. With no server
+ * configured there is no pool, and `/mcp` says where to add one.
  */
+const NO_SERVERS =
+  "No MCP servers are configured. Add one to ~/.gent/mcp.json, or to .gent/mcp.json in a trusted project."
+
 const McpCommand = request({
   id: "mcp-command",
   description: "Show the MCP servers, or log in to one",
@@ -2443,7 +2561,11 @@ const McpCommand = request({
   execute: (input: string) =>
     Effect.gen(function* () {
       const ctx = yield* ExtensionContext
-      const clients = yield* McpClients
+      const pool = yield* Effect.serviceOption(McpClients)
+      if (Option.isNone(pool)) {
+        return yield* ctx.Interaction.present({ title: "MCP servers", content: NO_SERVERS })
+      }
+      const clients = pool.value
       const words = input.trim().split(/\s+/)
       if (words[0] === "login") {
         const name = words[1] ?? ""
@@ -2474,23 +2596,32 @@ const McpCommand = request({
 const registerServers = Effect.fn("Mcp.registerServers")(function* (
   extensionId: string,
   entries: Readonly<Record<string, McpServerConfig>>,
+  environment: HostEnvironment,
 ) {
   const host = yield* ExtensionHost
   const { servers, misconfigured } = yield* resolveServers(entries, host.cwd)
-  if (servers.length === 0 && misconfigured.length === 0) return
+  // No server: `/mcp` still answers, and the model gets no status tool with nothing to report.
+  if (servers.length === 0 && misconfigured.length === 0) {
+    return yield* host.register("request", McpCommand)
+  }
   const file = yield* catalogPath(host.home)
   const cache = yield* readCatalog(file)
   const auth = yield* makeAuthStore(host.home)
+  const now = yield* Clock.currentTimeMillis
   const registered = yield* Effect.forEach(
     servers,
-    (server) => Effect.map(catalogFor(server, cache, auth), (catalog) => ({ server, ...catalog })),
+    (server) =>
+      Effect.map(catalogFor(server, cache, auth, environment, now), (catalog) => ({
+        server,
+        ...catalog,
+      })),
     { concurrency: 8 },
   )
-  // One write for every server listed now; a failed write only costs a relist.
+  // One write for every server listed now or stamped again; a failed write only costs a relist.
   yield* writeCatalogEntries(
     file,
     registered
-      .filter((entry) => entry.listedNow)
+      .filter((entry) => entry.listedNow || entry.restamp)
       .map((entry): readonly [string, CatalogServer] => [entry.server.key, entry.catalog]),
   ).pipe(Effect.ignore)
   yield* host.register(
@@ -2504,6 +2635,7 @@ const registerServers = Effect.fn("Mcp.registerServers")(function* (
         file,
         blobs: yield* blobDirectory(host.home),
         auth,
+        environment,
       }),
     }),
   )
@@ -2525,10 +2657,16 @@ export const McpExtension = defineExtension({
   id: "@gent/mcp",
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
-    yield* registerServers("@gent/mcp", yield* readMcpConfig(host.home, host.cwd))
+    const entries = yield* readMcpConfig(host.home, host.cwd)
+    yield* registerServers("@gent/mcp", entries, yield* Effect.cached(hostEnvironment))
   }),
 })
 
 /** The MCP extension over inline servers instead of the config files. */
 export const McpServers = (id: string, entries: Readonly<Record<string, McpServerConfig>>) =>
-  defineExtension({ id, setup: registerServers(id, entries) })
+  defineExtension({
+    id,
+    setup: Effect.gen(function* () {
+      yield* registerServers(id, entries, yield* Effect.cached(hostEnvironment))
+    }),
+  })

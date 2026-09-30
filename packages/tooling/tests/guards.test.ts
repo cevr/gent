@@ -17,6 +17,7 @@ import {
   findPackageSurfaceFindings,
   findPlatformDuplicationViolations,
   findReadersWithoutWriters,
+  findWritersWithoutReaders,
   findRetiredSurfaces,
   findSteeringFilePaths,
   findSuppressionInventoryFindings,
@@ -139,7 +140,7 @@ describe("blanket eslint disable checker", () => {
     const block = `/* ${directive} @typescript-eslint/no-unsafe-type-assertion -- probe */`
     expect(
       [
-        "packages/tooling/src/fixture-runner.ts",
+        "packages/tooling/src/fixture-loader.ts",
         "packages/e2e/src/pty-fixture.ts",
         "packages/sdk/src/fixtures.ts",
       ].map((file) => findBannedEslintDisableBlocks(file, block).length),
@@ -466,6 +467,22 @@ describe("unadapted seam guard", () => {
 
   test("test files never count as adapters", () => {
     expect(adaptedSeamsIn("packages/extensions/tests/notes.test.ts", "ctx.Telepathy").size).toBe(0)
+  })
+
+  test("a bracket in a comment, a string or a regex does not end the declaration", () => {
+    const hooks = [
+      "export interface ExtensionHookSignatures {",
+      "  // 1) Register hooks",
+      "  readonly beforeTurn: Hook",
+      '  readonly note: "(" /* ) */',
+      "  readonly afterTurn: Hook",
+      "}",
+    ].join("\n")
+    const findings = findUnadaptedSeams(new Map([[SEAMS_FILE, hooks]]), new Set(["note"]))
+    expect(findings.map((finding) => finding.message.split('"')[1])).toEqual([
+      "beforeTurn",
+      "afterTurn",
+    ])
   })
 
   test("the seam file never credits a facet, not even one its own helpers reach", () => {
@@ -1469,6 +1486,30 @@ describe("a read variable must have a writer", () => {
     expect(findings).toEqual([])
   })
 
+  test("a bracket in a regex, a template or a comment inside an env record hides no key", () => {
+    const findings = findReadersWithoutWriters(
+      new Map([
+        [
+          "packages/sdk/src/reader.ts",
+          [`Config.String("GENT_R1")`, `Config.String("GENT_R2")`, `Config.String("GENT_R3")`].join(
+            "\n",
+          ),
+        ],
+        [
+          "packages/sdk/src/spawn.ts",
+          [
+            `const env = { NOTE: /[)]/.source, GENT_R1: "1" }`,
+            'const twoEnv = { NOTE: `a\n)`, GENT_R2: "1" }',
+            `const threeEnv = { // }`,
+            `  GENT_R3: "1" }`,
+          ].join("\n"),
+        ],
+      ]),
+      none,
+    )
+    expect(findings).toEqual([])
+  })
+
   test("an env record bound to a name ending in Env sets its keys", () => {
     const findings = findReadersWithoutWriters(
       new Map([
@@ -1498,6 +1539,102 @@ describe("a read variable must have a writer", () => {
       expect.stringContaining("`GENT_UNREAD` is allowed as operator-set, but nothing reads it"),
       expect.stringContaining("`GENT_SET_HERE` is allowed as operator-set, but the tree sets it"),
     ])
+  })
+})
+
+describe("a set variable must have a reader", () => {
+  test("a variable a test sets and nothing reads is reported at the setter", () => {
+    // GENT_BUILD_FINGERPRINT outlived its reader in a server test that still set it.
+    const findings = findWritersWithoutReaders(
+      new Map([
+        [
+          "packages/sdk/tests/server.test.ts",
+          `const a = 1\nLayer.provide(ConfigProvider.fromEnvRecord({ GENT_GONE: "x" }))\n`,
+        ],
+      ]),
+    )
+    expect(findings.map((finding) => [finding.file, finding.line, finding.message])).toEqual([
+      [
+        "packages/sdk/tests/server.test.ts",
+        2,
+        expect.stringContaining(
+          "`GENT_GONE` is set but nothing in the tree names it apart from its setters",
+        ),
+      ],
+    ])
+  })
+
+  test("every setter shape is reported when nothing reads the name", () => {
+    const findings = findWritersWithoutReaders(
+      new Map([
+        ["packages/sdk/src/spawn.ts", `Bun.spawn(["gent"], {\n  env: { GENT_S1: "1" },\n})\n`],
+        ["packages/sdk/src/boot.ts", `process.env.GENT_S2 = "1"\nBun.env["GENT_S3"] = "1"\n`],
+        ["apps/tui/package.json", `{\n  "scripts": { "dev": "GENT_S4=1 bun run x" }\n}\n`],
+      ]),
+    )
+    expect(
+      findings.map((finding) => [finding.file, finding.line, finding.message.split("`")[1]]),
+    ).toEqual([
+      ["packages/sdk/src/spawn.ts", 2, "GENT_S1"],
+      ["packages/sdk/src/boot.ts", 1, "GENT_S2"],
+      ["packages/sdk/src/boot.ts", 2, "GENT_S3"],
+      ["apps/tui/package.json", 2, "GENT_S4"],
+    ])
+  })
+
+  test("a child shell or an expanded config string that names the variable reads it", () => {
+    const findings = findWritersWithoutReaders(
+      new Map([
+        [
+          "apps/tui/package.json",
+          `{ "scripts": { "probe": "GENT_SH1=1 sh -c 'printf %s \\"$GENT_SH1\\"'" } }\n`,
+        ],
+        [
+          "packages/sdk/src/spawn.ts",
+          `Bun.spawn(["sh", "-c", "echo $GENT_SH2"], { env: { GENT_SH2: "1" } })\n`,
+        ],
+        [
+          "packages/extensions/tests/mcp.test.ts",
+          [
+            `ConfigProvider.fromEnvRecord({ GENT_KEYED: "v" })`,
+            // The server reads Bun.env[key], with the key taken from this string.
+            `const args = ["\${GENT_KEYED}"]`,
+          ].join("\n"),
+        ],
+      ]),
+    )
+    expect(findings).toEqual([])
+  })
+
+  test("a record merged into the environment or handed to a config provider sets its keys", () => {
+    const findings = findWritersWithoutReaders(
+      new Map([
+        [
+          "packages/sdk/src/boot.ts",
+          `Object.assign(process.env, { GENT_S5: "1" })\nObject.assign(Bun.env, {\n  GENT_S6: "1",\n})\n`,
+        ],
+        ["packages/sdk/tests/a.test.ts", `ConfigProvider.fromUnknown({ GENT_S7: "1" })\n`],
+      ]),
+    )
+    expect(
+      findings.map((finding) => [finding.file, finding.line, finding.message.split("`")[1]]),
+    ).toEqual([
+      ["packages/sdk/src/boot.ts", 1, "GENT_S5"],
+      ["packages/sdk/src/boot.ts", 3, "GENT_S6"],
+      ["packages/sdk/tests/a.test.ts", 1, "GENT_S7"],
+    ])
+  })
+
+  test("a set variable read in production or in a fixture is silent", () => {
+    const findings = findWritersWithoutReaders(
+      new Map([
+        ["packages/sdk/tests/a.test.ts", `ConfigProvider.fromEnvRecord({ GENT_READ: "x" })\n`],
+        ["packages/sdk/src/reader.ts", `Config.String("GENT_READ")\n`],
+        ["packages/e2e/tests/b.test.ts", `const env = { GENT_FIXTURE: "1" }\n`],
+        ["packages/e2e/src/pty-fixture.ts", `const on = Bun.env.GENT_FIXTURE === "1"\n`],
+      ]),
+    )
+    expect(findings).toEqual([])
   })
 })
 
@@ -1843,6 +1980,11 @@ const RETIRED_CASES: ReadonlyArray<readonly [string, string, string]> = [
   ["packages/core/src/runtime/x.ts", "scope.inbox.releaseStart(item)", "inbox.releaseStart"],
   ["packages/sdk/src/x.ts", 'import { x } from "./server/server-root.js"', "server-root"],
   ["packages/core/tests/x.test.ts", "yield* buildServerRoot(deps)", "buildServerRoot"],
+  [
+    "packages/sdk/src/x.ts",
+    "// oxlint-disable-next-line gent/all-errors-are-tagged",
+    "all-errors-are-tagged",
+  ],
   ["AGENTS.md", "the `ExtensionStatePublisher` publishes state", "ExtensionStatePublisher"],
   ["docs/extensions.md", "yield* ProcessRunner", "ProcessRunner"],
   ["packages/core/AGENTS.md", "Runtime code yields `EventPublisher`", "EventPublisher"],
@@ -3936,37 +4078,22 @@ describe("an export is read only through an import", () => {
     expect(findings).toEqual([])
   })
 
-  test("a name read through a package index that star-re-exports its module is live", () => {
-    const findings = findUnconsumedExports(
-      factsFor([
-        { file: "packages/extensions/src/notes.ts", text: "export const NotesExtension = 1\n" },
-        { file: "packages/extensions/src/index.ts", text: 'export * from "./notes.js"\n' },
-        {
-          file: "apps/tui/src/app.tsx",
-          text: 'import { NotesExtension } from "@gent/extensions"\nvoid NotesExtension\n',
-        },
-      ]),
-      new Map([
-        [
-          "packages/extensions/package.json",
-          '{ "name": "@gent/extensions", "exports": { ".": "./src/index.ts" } }',
-        ],
-      ]),
-    )
-    expect(findings).toEqual([])
-  })
-
-  test("a star re-export chain carries the read through each barrel", () => {
+  test("a star re-export on a scanned surface is a finding in either form", () => {
     const findings = findingsFor([
+      { file: "packages/extensions/src/notes.ts", text: "export const NotesExtension = 1\n" },
       {
-        file: "apps/tui/src/parts/row.tsx",
-        text: "export const Row = 1\nexport const Unread = 2\n",
+        file: "packages/extensions/src/index.ts",
+        text: 'export * from "./notes.js"\nexport * as Notes from "./notes.js"\n',
       },
-      { file: "apps/tui/src/parts/index.ts", text: 'export * from "./row"\n' },
-      { file: "apps/tui/src/barrel.ts", text: 'export * from "./parts"\n' },
-      { file: "apps/tui/src/app.tsx", text: 'import { Row } from "./barrel"\nvoid Row\n' },
+      { file: "testbeds/gamut/fixture/src/index.ts", text: 'export * from "./app.js"\n' },
     ])
-    expect(names(findings)).toEqual(["Unread"])
+    const stars = findings.filter((finding) => finding.message.includes("`export *` hides"))
+    expect(stars.map((finding) => [finding.file, finding.line])).toEqual([
+      ["packages/extensions/src/index.ts", 1],
+      ["packages/extensions/src/index.ts", 2],
+    ])
+    // The star hides the one reader NotesExtension could have: it reads as dead.
+    expect(names(findings)).toContain("NotesExtension")
   })
 
   test("an import of a same-named module elsewhere does not vouch for this one", () => {

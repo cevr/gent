@@ -29,6 +29,7 @@ Find, with receipts:
 - Bugs: a concrete input or state that gives a wrong result, with file:line and the failure scenario, verified by reading the path end to end. When cheap, run a focused `bun test` or a scratch script under <scratchpad>.
 - Reductions: a concept, file, export, option or second path that the deletion test shows is a pass-through or has no product consumer. Caller-count greps cover `packages/`, `apps/` and `examples/`.
 - Structural: a place where an extension could own what core owns, or where the actor model or Effect idiom is bypassed.
+- Tooling area only — upstream: each rule in `packages/tooling/src/gent-rules.ts` and each AST-shaped guard in `guards.ts`, sorted into gent-specific (needs gent names, paths or APIs) or generic (needs none, or only a name list that can become an option). A generic rule moves to the owner's oxlint-plugin-effect (`~/Developer/personal/effect-oxlint`), released there, and gent consumes it; a gent rule that duplicates an upstream rule switches to upstream.
 
 Classes:
 - P1: wrong behavior users hit.

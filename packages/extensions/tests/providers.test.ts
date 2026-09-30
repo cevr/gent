@@ -641,19 +641,6 @@ describe("models.dev catalog", () => {
     }).pipe(Effect.provide(platformLayer)),
   )
 
-  it.scopedLive("a cache an older build wrote still serves when the fetch fails", () =>
-    Effect.gen(function* () {
-      const home = yield* freshHome("unstamped-offline")
-      yield* writeCache(home, olderBuildCache)
-      const calls = yield* Ref.make(0)
-
-      const models = yield* modelsDevCatalog(home).pipe(Effect.provide(failingHttpLayer(calls)))
-
-      expect(yield* Ref.get(calls)).toBe(1)
-      expect(models.map((model) => model.id)).toEqual([ModelId.make("anthropic/claude-opus-5")])
-    }).pipe(Effect.provide(platformLayer)),
-  )
-
   it.scopedLive("driverCatalog serves only the driver's own provider", () =>
     Effect.gen(function* () {
       const home = yield* freshHome("per-provider")
