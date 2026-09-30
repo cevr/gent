@@ -14,6 +14,13 @@ import { ChildProcess } from "effect/process"
  */
 const homesTest = it.scopedLive.layer(BunServices.layer)
 
+/**
+ * Each case bounds itself at 60 s inside the Effect. A plain multi-file run
+ * (the e2e lane) keeps bun's 5 s default, not the preload's backstop, so the
+ * bun timeout sits past the inner bound and the bound is the one that fires.
+ */
+const HOMES_BUN_TIMEOUT_MS = 90_000
+
 const APP_DIR = new URL("..", import.meta.url).pathname
 const HARNESS = new URL("../tests/render-harness-boundary.tsx", import.meta.url).pathname
 const PRELOAD = new URL("../../../packages/tooling/src/test-preload.ts", import.meta.url).pathname
@@ -90,24 +97,27 @@ const runTestFile = (sandbox: string, source: string) =>
   })
 
 describe("render homes", () => {
-  homesTest("a test process removes its own homes root and leaves every other root", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const path = yield* Path.Path
-      const sandbox = yield* fs.makeTempDirectoryScoped({ prefix: "gent-render-homes-" })
-      // Another process's root: its pid reads as ended here, as a pid of
-      // another pid namespace does, but the root is not this process's to remove.
-      const other = path.join(sandbox, "gent-tui-homes-999999999-other")
-      yield* fs.makeDirectory(other)
-      const run = yield* runTestFile(sandbox, RENDER_ONCE)
-      expect(run.output).toContain("1 pass")
-      expect(run.exitCode).toBe(0)
-      expect(yield* fs.exists(other)).toBe(true)
-      const left = (yield* fs.readDirectory(sandbox)).filter(
-        (name) => name.startsWith("gent-tui-homes-") || name.startsWith("gent-test-home-"),
-      )
-      expect(left).toEqual(["gent-tui-homes-999999999-other"])
-    }).pipe(Effect.timeout("60 seconds")),
+  homesTest(
+    "a test process removes its own homes root and leaves every other root",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const sandbox = yield* fs.makeTempDirectoryScoped({ prefix: "gent-render-homes-" })
+        // Another process's root: its pid reads as ended here, as a pid of
+        // another pid namespace does, but the root is not this process's to remove.
+        const other = path.join(sandbox, "gent-tui-homes-999999999-other")
+        yield* fs.makeDirectory(other)
+        const run = yield* runTestFile(sandbox, RENDER_ONCE)
+        expect(run.output).toContain("1 pass")
+        expect(run.exitCode).toBe(0)
+        expect(yield* fs.exists(other)).toBe(true)
+        const left = (yield* fs.readDirectory(sandbox)).filter(
+          (name) => name.startsWith("gent-tui-homes-") || name.startsWith("gent-test-home-"),
+        )
+        expect(left).toEqual(["gent-tui-homes-999999999-other"])
+      }).pipe(Effect.timeout("60 seconds")),
+    HOMES_BUN_TIMEOUT_MS,
   )
 
   homesTest(
@@ -124,5 +134,6 @@ describe("render homes", () => {
         )
         expect(left).toEqual([])
       }).pipe(Effect.timeout("60 seconds")),
+    HOMES_BUN_TIMEOUT_MS,
   )
 })
