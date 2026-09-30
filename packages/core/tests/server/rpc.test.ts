@@ -3462,9 +3462,10 @@ const TestCommandsExtension: GentExtension = {
         id: "noop",
         slash: { name: "noop", description: "noop" },
         description: "noop",
-        input: Schema.String,
-        output: Schema.Void,
-        execute: () => Effect.void,
+        // A structured input and output, so the round trip decodes both.
+        input: Schema.Struct({ value: Schema.String }),
+        output: Schema.Struct({ value: Schema.String }),
+        execute: (input: { value: string }) => Effect.succeed({ value: input.value }),
       }),
     ],
   }),
@@ -3548,6 +3549,15 @@ describe("extension requests and slash commands", () => {
           expect(extensionRequestEvent?.annotations["extensionId"]).toBe(greet!.extensionId)
           expect(extensionRequestEvent?.annotations["capabilityId"]).toBe(greet!.capabilityId)
 
+          const echoed = yield* client.extension.request({
+            sessionId,
+            extensionId: ExtensionId.make("@test/commands"),
+            capabilityId: "noop",
+            input: { value: "hi" },
+            branchId,
+          })
+          expect(echoed).toEqual({ value: "hi" })
+
           const missingCapabilityId = "missing-greet"
           const failed = yield* client.extension
             .request({
@@ -3582,7 +3592,7 @@ describe("extension requests and slash commands", () => {
     }),
   )
 
-  it.live("RPC request can queue follow-up through ExtensionContext service", () =>
+  it.live("RPC slash request can queue follow-up through ExtensionContext service", () =>
     Effect.gen(function* () {
       const extensionId = ExtensionId.make("@test/queue-follow-up-request")
       const ext: LoadedExtension = {
@@ -3593,6 +3603,11 @@ describe("extension requests and slash commands", () => {
           requests: [
             request({
               id: "queue-follow-up",
+              slash: {
+                trigger: "queue",
+                name: "Queue Follow Up",
+                description: "Queue follow-up request",
+              },
               input: Schema.String,
               output: Schema.Void,
               execute: (input) =>
@@ -3626,6 +3641,8 @@ describe("extension requests and slash commands", () => {
             extensions: [ext],
             cwd: "/nonexistent/gent-extension-queue-follow-up",
           })
+          const commands = yield* client.extension.listSlashCommands({ sessionId })
+          expect(commands.map((command) => command.name)).toEqual(["queue"])
           yield* client.extension.request({
             sessionId,
             branchId,
@@ -3733,77 +3750,6 @@ describe("extension requests and slash commands", () => {
           ).toBe(true)
           yield* controls.assertDone
         }).pipe(Effect.timeout("10 seconds")),
-      )
-    }),
-  )
-
-  it.live("RPC request runs slash request with ExtensionContext service", () =>
-    Effect.gen(function* () {
-      const extensionId = ExtensionId.make("@test/queue-follow-up-slash")
-      const ext: LoadedExtension = {
-        manifest: { id: extensionId },
-        scope: "builtin",
-        sourcePath: "test",
-        contributions: {
-          requests: [
-            request({
-              id: "queue-follow-up-slash",
-              slash: {
-                trigger: "queue-follow-up",
-                name: "Queue Follow Up",
-                description: "Queue follow-up request",
-              },
-              description: "Queue follow-up request",
-              input: Schema.String,
-              output: Schema.Void,
-              execute: (input: string) =>
-                Effect.gen(function* () {
-                  const ctx = yield* ExtensionContext
-                  yield* ctx.Session.send({
-                    delivery: "queue",
-                    sourceId: "test-slash-request",
-                    content: input,
-                  })
-                }).pipe(
-                  Effect.mapError(
-                    (cause) =>
-                      new CapabilityError({
-                        extensionId,
-                        capabilityId: "queue-follow-up-slash",
-                        reason: cause.message,
-                      }),
-                  ),
-                ),
-            }),
-          ],
-        },
-      }
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-          const { client, sessionId, branchId } = yield* createRpcHarness({
-            agents: e2ePreset.agents,
-            providerLayer,
-            extensions: [ext],
-            cwd: "/nonexistent/gent-extension-queue-follow-up-slash",
-          })
-          const commands = yield* client.extension.listSlashCommands({ sessionId })
-          expect(commands.map((command) => command.name)).toEqual(["queue-follow-up"])
-          yield* client.extension.request({
-            sessionId,
-            branchId,
-            extensionId,
-            capabilityId: "queue-follow-up-slash",
-            input: "queued through slash request",
-          })
-          const queue = yield* client.queue.get({ sessionId, branchId })
-          expect(queue.followUp).toEqual([
-            expect.objectContaining({
-              _tag: "FollowUp",
-              content: "queued through slash request",
-            }),
-          ])
-        }).pipe(Effect.timeout("4 seconds")),
       )
     }),
   )
@@ -3948,49 +3894,6 @@ describe("extension requests and slash commands", () => {
           })
           const commands = yield* client.extension.listSlashCommands({ sessionId })
           expect(commands.map((command) => command.name)).toEqual(["visible"])
-        }).pipe(Effect.timeout("4 seconds")),
-      )
-    }),
-  )
-
-  it.live("RPC request invokes slash-decorated requests through the transport boundary", () =>
-    Effect.gen(function* () {
-      const extensionId = ExtensionId.make("@test/public-shadow")
-      const projectExt: LoadedExtension = {
-        manifest: { id: extensionId },
-        scope: "project",
-        sourcePath: "project",
-        contributions: {
-          requests: [
-            request({
-              id: "shadowed",
-              slash: { name: "shadowed private", description: "shadowed private" },
-              description: "shadowed private",
-              input: Schema.Struct({ value: Schema.String }),
-              output: Schema.Struct({ value: Schema.String }),
-              execute: (input: { value: string }) => Effect.succeed({ value: input.value }),
-            }),
-          ],
-        },
-      }
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-          const { client, sessionId, branchId } = yield* createRpcHarness({
-            agents: e2ePreset.agents,
-            providerLayer,
-            extensions: [projectExt],
-          })
-          const commands = yield* client.extension.listSlashCommands({ sessionId })
-          expect(commands.map((command) => command.name)).toEqual(["shadowed"])
-          const result = yield* client.extension.request({
-            sessionId,
-            branchId,
-            extensionId,
-            capabilityId: "shadowed",
-            input: { value: "hi" },
-          })
-          expect(result).toEqual({ value: "hi" })
         }).pipe(Effect.timeout("4 seconds")),
       )
     }),
