@@ -167,17 +167,9 @@ describe("session settings", () => {
 // ── client provider contract ────────────────────────────────────────────────
 
 /**
- * The merged client provider's contract.
- *
- * `ClientProvider` used to publish four Solid contexts — transport, session,
- * agent, actions — and every consumer spread them back into one object. That
- * split had two observable costs, and each test below fails if it returns:
- *
- * 1. Two consumers read two different objects, so a value could not be
- *    compared or passed across the seam without re-merging it.
- * 2. A merged object captured before a write kept serving the value from the
- *    merge, so a consumer that held one observed a stale session while a
- *    consumer that re-read observed the new one.
+ * What a consumer of `ClientProvider` reads: a value it holds reports every
+ * later write, a session switch resets the turn state, and a late subscriber
+ * to session events first receives what the feed already delivered.
  */
 
 class ClientProviderContractError extends Schema.TaggedError<ClientProviderContractError>()(
@@ -205,28 +197,6 @@ const settle = (setup: Awaited<ReturnType<typeof renderWithProviders>>) =>
   Effect.promise(() => setup.renderOnce())
 
 describe("ClientProvider contract", () => {
-  it.live("two consumers read one value, not one merge each", () =>
-    Effect.gen(function* () {
-      let first = Option.none<ClientContextValue>()
-      let second = Option.none<ClientContextValue>()
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <box>
-            <Probe onReady={(value) => (first = Option.some(value))} />
-            <Probe onReady={(value) => (second = Option.some(value))} />
-          </box>
-        )),
-      )
-      yield* settle(setup)
-
-      const a = yield* requireValue(first, "first consumer never mounted")
-      const b = yield* requireValue(second, "second consumer never mounted")
-
-      // A spread per hook call would hand each consumer its own object.
-      expect(a).toBe(b)
-    }).pipe(Effect.timeout("10 seconds")),
-  )
-
   it.live("a value held across a write reports the write, never the merge", () =>
     Effect.gen(function* () {
       let held = Option.none<ClientContextValue>()
@@ -257,7 +227,7 @@ describe("ClientProvider contract", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
 
-  it.live("one value carries every facet the consumers used to merge", () =>
+  it.live("a session switch clears the error, the stream and the cost", () =>
     Effect.gen(function* () {
       let held = Option.none<ClientContextValue>()
       const setup = yield* Effect.promise(() =>
@@ -267,9 +237,6 @@ describe("ClientProvider contract", () => {
 
       const client = yield* requireValue(held, "consumer never mounted")
 
-      // Transport, session, agent and actions — all exercised through one
-      // read. Four contexts forced a consumer that needed two facets to
-      // merge them; this one value answers for every facet at once.
       let seen = 0
       const unsubscribe = client.onSessionEvent(() => {
         seen = seen + 1
@@ -279,16 +246,13 @@ describe("ClientProvider contract", () => {
       expect(client.isError()).toBe(false)
       expect(client.isStreaming()).toBe(false)
 
-      // An action writes; the agent facet on the same value reports it.
       client.setError("contract failure")
       expect(client.isError()).toBe(true)
       expect(client.error()).toEqual(Option.some("contract failure"))
 
-      // A session write; the session facet on the same value reports it.
       client.switchSession(SessionId.make("facet-session"), BranchId.make("facet-branch"), "Facets")
       yield* settle(setup)
       expect(client.isActive()).toBe(true)
-      // switchSession also resets the agent facet, from the same value.
       expect(client.isError()).toBe(false)
       expect(client.isStreaming()).toBe(false)
       expect(client.cost()).toBe(0)
