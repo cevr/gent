@@ -725,14 +725,6 @@ interface MessagePartsDisplayTextOptions {
   readonly maxToolChars?: number
 }
 
-type JsonEncoderInput = Parameters<typeof encodeToolOutput>[0]
-
-const stringifyDisplayValue = (value: JsonEncoderInput): string => {
-  const encoded = Result.try(() => encodeToolOutput(value))
-  if (Result.isFailure(encoded)) return String(value)
-  return encoded.success
-}
-
 // oxlint-disable-next-line effect/noNullish -- A part projection answers undefined for a part of another kind.
 const messagePartText = (part: MessagePart): string | undefined => {
   if (part.type === "text") return part.text
@@ -1656,7 +1648,7 @@ export const messagePartsDisplayText = (
     if (!Predicate.isUndefined(toolCall)) {
       chunks.push(
         `### tool: ${toolCall.toolName}\n${clipChars(
-          stringifyDisplayValue(toolCall.input),
+          Option.getOrElse(tryStringifyJson(toolCall.input), () => String(toolCall.input)),
           maxToolChars,
         )}`,
       )
@@ -1807,6 +1799,10 @@ const mergeProviderMetadata = (
 const hasProviderMetadata = (metadata: Response.ProviderMetadata): boolean =>
   Object.keys(metadata).length > 0
 
+/** The part kinds a provider streams in chunks; an unfinished text part flushes first. */
+const streamedKinds = ["text", "reasoning"] as const
+type StreamedKind = (typeof streamedKinds)[number]
+
 /**
  * Text and reasoning a provider streams, as whole parts. A part that carries
  * provider metadata stays whole and keeps it: the metadata (an OpenAI item id
@@ -1815,34 +1811,26 @@ const hasProviderMetadata = (metadata: Response.ProviderMetadata): boolean =>
  * text, as an OpenAI reasoning item without a summary is. Chunks without
  * metadata join the previous part of their kind.
  */
-const appendNormalizedTextPart = (
+const appendNormalizedPart = (
   parts: Array<Response.AnyPart>,
+  kind: StreamedKind,
   text: string,
   metadata: Response.ProviderMetadata = {},
 ): void => {
   const keep = hasProviderMetadata(metadata)
   if (text === "" && !keep) return
   const last = parts.at(-1)
-  if (!keep && last?.type === "text" && !hasProviderMetadata(last.metadata)) {
-    parts[parts.length - 1] = Response.makePart("text", { text: `${last.text}${text}` })
+  if (
+    !keep &&
+    !Predicate.isUndefined(last) &&
+    (last.type === "text" || last.type === "reasoning") &&
+    last.type === kind &&
+    !hasProviderMetadata(last.metadata)
+  ) {
+    parts[parts.length - 1] = Response.makePart(kind, { text: `${last.text}${text}` })
     return
   }
-  parts.push(Response.makePart("text", { text, metadata }))
-}
-
-const appendNormalizedReasoningPart = (
-  parts: Array<Response.AnyPart>,
-  text: string,
-  metadata: Response.ProviderMetadata = {},
-): void => {
-  const keep = hasProviderMetadata(metadata)
-  if (text === "" && !keep) return
-  const last = parts.at(-1)
-  if (!keep && last?.type === "reasoning" && !hasProviderMetadata(last.metadata)) {
-    parts[parts.length - 1] = Response.makePart("reasoning", { text: `${last.text}${text}` })
-    return
-  }
-  parts.push(Response.makePart("reasoning", { text, metadata }))
+  parts.push(Response.makePart(kind, { text, metadata }))
 }
 
 /** A streamed part between its start and its end. */
@@ -1853,21 +1841,39 @@ interface ActiveDelta {
 
 interface NormalizedResponseState {
   readonly normalized: Array<Response.AnyPart>
-  readonly activeTextDeltas: Map<string, ActiveDelta>
-  readonly activeReasoningDeltas: Map<string, ActiveDelta>
+  readonly activeDeltas: Record<StreamedKind, Map<string, ActiveDelta>>
   readonly toolCallIds: Set<string>
   readonly toolResultIds: Set<string>
 }
 
-type TextResponsePart = Extract<
+type StreamedResponsePart = Extract<
   Response.AnyPart,
-  { readonly type: "text" | "text-start" | "text-delta" | "text-end" }
+  {
+    readonly type:
+      | "text"
+      | "text-start"
+      | "text-delta"
+      | "text-end"
+      | "reasoning"
+      | "reasoning-start"
+      | "reasoning-delta"
+      | "reasoning-end"
+  }
 >
 
-type ReasoningResponsePart = Extract<
-  Response.AnyPart,
-  { readonly type: "reasoning" | "reasoning-start" | "reasoning-delta" | "reasoning-end" }
->
+const streamedKindOf: Record<StreamedResponsePart["type"], StreamedKind> = {
+  text: "text",
+  "text-start": "text",
+  "text-delta": "text",
+  "text-end": "text",
+  reasoning: "reasoning",
+  "reasoning-start": "reasoning",
+  "reasoning-delta": "reasoning",
+  "reasoning-end": "reasoning",
+}
+
+const isStreamedResponsePart = (part: Response.AnyPart): part is StreamedResponsePart =>
+  Object.hasOwn(streamedKindOf, part.type)
 
 /** Fold one streamed chunk into its active part; `false` when no part with that id started. */
 const foldActiveDelta = (
@@ -1900,52 +1906,32 @@ const takeActiveDelta = (
   })
 }
 
-const normalizeTextResponsePart = (
+const normalizeStreamedResponsePart = (
   state: NormalizedResponseState,
-  part: TextResponsePart,
+  part: StreamedResponsePart,
 ): void => {
+  const kind = streamedKindOf[part.type]
+  const active = state.activeDeltas[kind]
   switch (part.type) {
     case "text":
-      appendNormalizedTextPart(state.normalized, part.text, part.metadata)
+    case "reasoning":
+      appendNormalizedPart(state.normalized, kind, part.text, part.metadata)
       return
     case "text-start":
-      state.activeTextDeltas.set(part.id, { text: "", metadata: part.metadata })
+    case "reasoning-start":
+      active.set(part.id, { text: "", metadata: part.metadata })
       return
     case "text-delta":
-      if (!foldActiveDelta(state.activeTextDeltas, part.id, part.delta, part.metadata)) {
-        appendNormalizedTextPart(state.normalized, part.delta, part.metadata)
-      }
-      return
-    case "text-end": {
-      const done = takeActiveDelta(state.activeTextDeltas, part.id, part.metadata)
-      if (Option.isSome(done)) {
-        appendNormalizedTextPart(state.normalized, done.value.text, done.value.metadata)
-      }
-      return
-    }
-  }
-}
-
-const normalizeReasoningResponsePart = (
-  state: NormalizedResponseState,
-  part: ReasoningResponsePart,
-): void => {
-  switch (part.type) {
-    case "reasoning":
-      appendNormalizedReasoningPart(state.normalized, part.text, part.metadata)
-      return
-    case "reasoning-start":
-      state.activeReasoningDeltas.set(part.id, { text: "", metadata: part.metadata })
-      return
     case "reasoning-delta":
-      if (!foldActiveDelta(state.activeReasoningDeltas, part.id, part.delta, part.metadata)) {
-        appendNormalizedReasoningPart(state.normalized, part.delta, part.metadata)
+      if (!foldActiveDelta(active, part.id, part.delta, part.metadata)) {
+        appendNormalizedPart(state.normalized, kind, part.delta, part.metadata)
       }
       return
+    case "text-end":
     case "reasoning-end": {
-      const done = takeActiveDelta(state.activeReasoningDeltas, part.id, part.metadata)
+      const done = takeActiveDelta(active, part.id, part.metadata)
       if (Option.isSome(done)) {
-        appendNormalizedReasoningPart(state.normalized, done.value.text, done.value.metadata)
+        appendNormalizedPart(state.normalized, kind, done.value.text, done.value.metadata)
       }
       return
     }
@@ -1985,41 +1971,23 @@ export const normalizeResponseParts = (
 ): ReadonlyArray<Response.AnyPart> => {
   const state: NormalizedResponseState = {
     normalized: [],
-    activeTextDeltas: new Map<string, ActiveDelta>(),
-    activeReasoningDeltas: new Map<string, ActiveDelta>(),
+    activeDeltas: { text: new Map(), reasoning: new Map() },
     toolCallIds: new Set<string>(),
     toolResultIds: new Set<string>(),
   }
 
   for (const part of parts) {
-    if (
-      part.type === "text" ||
-      part.type === "text-start" ||
-      part.type === "text-delta" ||
-      part.type === "text-end"
-    ) {
-      normalizeTextResponsePart(state, part)
+    if (isStreamedResponsePart(part)) {
+      normalizeStreamedResponsePart(state, part)
       continue
     }
-
-    if (
-      part.type === "reasoning" ||
-      part.type === "reasoning-start" ||
-      part.type === "reasoning-delta" ||
-      part.type === "reasoning-end"
-    ) {
-      normalizeReasoningResponsePart(state, part)
-      continue
-    }
-
     normalizePassthroughResponsePart(state, part)
   }
 
-  for (const active of state.activeTextDeltas.values()) {
-    appendNormalizedTextPart(state.normalized, active.text, active.metadata)
-  }
-  for (const active of state.activeReasoningDeltas.values()) {
-    appendNormalizedReasoningPart(state.normalized, active.text, active.metadata)
+  for (const kind of streamedKinds) {
+    for (const active of state.activeDeltas[kind].values()) {
+      appendNormalizedPart(state.normalized, kind, active.text, active.metadata)
+    }
   }
 
   return state.normalized

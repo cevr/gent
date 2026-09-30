@@ -1,10 +1,10 @@
 import { Effect, Layer, Option, Predicate, Schema } from "effect"
-import * as Prompt from "effect/ai/Prompt"
 import {
   Branch,
   decodeDateFromMillis,
   Message,
   MessageMetadata,
+  MessagePart,
   Session,
   SessionAdmission,
 } from "../domain/message.js"
@@ -19,16 +19,7 @@ import { DefaultWorkspaceId } from "../server/workspace-rpc.js"
 // ── stored rows ─────────────────────────────────────────────────────────────
 
 // Schema decoders - Effect-based (no sync throws)
-const StoredPromptPart = Schema.Union([
-  Prompt.TextPart,
-  Prompt.FilePart,
-  Prompt.ToolCallPart,
-  Prompt.ToolResultPart,
-  Prompt.ReasoningPart,
-  Prompt.ToolApprovalRequestPart,
-  Prompt.ToolApprovalResponsePart,
-])
-const StoredPromptPartJson = Schema.fromJsonString(StoredPromptPart)
+const StoredPromptPartJson = Schema.fromJsonString(MessagePart)
 export const decodeStoredPromptPart = Schema.decodeUnknownEffect(StoredPromptPartJson)
 const encodeStoredPromptPart = Schema.encodeEffect(StoredPromptPartJson)
 const EventJson = Schema.fromJsonString(Schema.Unknown)
