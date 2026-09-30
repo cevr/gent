@@ -637,7 +637,7 @@ export const effortAtOrAbove = <Level extends string>(
  * Core resolves a model through the driver seam and concatenates every
  * driver's `listModels`. Where a driver's list comes from is the driver's
  * concern, so the fetch, the parse, and the disk cache live here — shared by
- * the anthropic, openai, and api-key-compat drivers.
+ * the anthropic and openai drivers.
  *
  * One load per home directory. `Effect.cached` memoizes it, so several drivers
  * listing at once share one read and at most one fetch. There is no background

@@ -2837,7 +2837,7 @@ describe("buildAnthropicModelDriver — prompt caching", () => {
           const plain = yield* sentFor(authInfo)
           const noticed = yield* sentFor(authInfo, {}, [notice])
           const update = noticed.messages.at(-1)?.content ?? []
-          // The SDK's wrap is the one the compatible drivers build.
+          // The patched SDK builds the same wrap as `hostContextUpdateText`.
           expect(update.map((block) => block.text)).toEqual([hostContextUpdateText(notice.content)])
           expect(update[0]?.text).toContain("# Stopped &lt;children&gt;")
           expect(update.some(isMarked)).toBe(false)
