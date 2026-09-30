@@ -3444,23 +3444,24 @@ export function createSessionController(props: {
     paste: disarm,
   })
 
-  // A bare keybind (`left` opens the agents pane) fires only here: an empty
-  // editing draft, and no overlay, pane, interaction or full transcript that
-  // reads the key first or hides the composer.
-  const composerIdle = (): boolean =>
+  // The composer is empty and nothing sits over it: no overlay, pane,
+  // interaction or full transcript that reads a key first or hides it.
+  const composerEmpty = (): boolean =>
     interactionState().draft.length === 0 &&
-    interactionState().mode === "editing" &&
     uiState().overlay._tag === "none" &&
     !uiState().transcriptExpanded &&
     composerState()._tag !== "interaction"
 
-  // ctrl+d on an empty composer exits; on a draft it deletes forward in the
-  // composer. An ask or an open pane or palette keeps it.
+  // A bare keybind (`left` opens the agents pane) fires only on an empty
+  // editing draft: shell mode reads the key itself.
+  const composerIdle = (): boolean => composerEmpty() && interactionState().mode === "editing"
+
+  // ctrl+d on an empty composer exits, in shell mode too; on a draft it
+  // deletes forward in the composer. An ask, an open pane or palette, and the
+  // expanded transcript are layers over it, as for Esc and ctrl+c.
   const handleEmptyComposerExit = (event: ScopedKeyboardEvent): boolean => {
     if (event.ctrl !== true || event.name !== "d") return false
-    if (interactionState().draft.length > 0) return false
-    if (uiState().overlay._tag !== "none" || command.paletteOpen()) return false
-    if (composerState()._tag === "interaction") return false
+    if (!composerEmpty() || command.paletteOpen()) return false
     exit()
     return true
   }

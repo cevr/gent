@@ -1711,6 +1711,22 @@ describe("App auth gate", () => {
       yield* waitForFrame(view.setup, () => view.shutdowns() > 0, "quit")
     }).pipe(Effect.timeout("10 seconds")),
   )
+  // The expanded transcript is a layer, as for Esc and ctrl+c: ctrl+d over it
+  // does not exit. Once it collapses, ctrl+d on the empty composer does.
+  it.live("ctrl+d over the expanded transcript does not exit", () =>
+    Effect.gen(function* () {
+      const view = yield* mountIdleSession(createMockRuntime(), { kittyKeyboard: true })
+      view.setup.mockInput.pressKey("o", { ctrl: true, shift: true })
+      yield* waitForFrame(view.setup, (frame) => frame.includes("transcript ·"), "transcript")
+      view.setup.mockInput.pressKey("d", { ctrl: true })
+      yield* view.settle
+      expect(view.shutdowns()).toBe(0)
+      view.setup.mockInput.pressEscape()
+      yield* waitForFrame(view.setup, (frame) => frame.includes("ready ·"), "collapsed")
+      view.setup.mockInput.pressKey("d", { ctrl: true })
+      yield* waitForFrame(view.setup, () => view.shutdowns() > 0, "quit")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   it.live("ctrl+j starts a new line under the kitty keyboard protocol", () =>
     Effect.gen(function* () {
       const view = yield* mountIdleSession(createMockRuntime(), { kittyKeyboard: true })
