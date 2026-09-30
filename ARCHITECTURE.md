@@ -129,7 +129,10 @@ updates this list in the same commit.
     below the window. A session with no projection yet reads the last step's
     input against `modelInputCeilingTokens` (`@gent/core/protocol`): the
     window less the output reserve, never past the input cap, the same
-    ceiling the turn's budget uses.
+    ceiling the turn's budget uses. The client hydrates the totals from the
+    snapshot (`foldSessionMetrics`) and applies each live event to them with
+    the same step (`stepSessionMetrics`, `@gent/core/protocol`), so the gauge
+    moves at a step's `ModelContextProjected` and no step re-reads the snapshot.
     A request the provider refuses as too long (`RetryPolicy.contextOverflow`,
     one pattern list in `packages/core/src/domain/driver.ts`; the byte cap
     `request_too_large` is not an overflow) hands the window off once and runs

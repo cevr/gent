@@ -388,6 +388,8 @@ const SECOND = {
   sessionId: SessionId.make("session-metrics-second"),
   branchId: BranchId.make("branch-metrics-second"),
 }
+/** The model the server resolves for the first session only. */
+const firstResolvedModel = ModelId.make("anthropic/first-session-model")
 
 /** A projection that fills most of the window: the value a reader would see as `ctx 90%`. */
 const busyContext = {
@@ -536,17 +538,13 @@ describe("ClientProvider session metrics", () => {
       )
       const clientContext = yield* requireClient(ctx)
 
-      // The product path: a stream that ends with usage refreshes the metrics.
+      // The product path: a settings change reads what the server resolves.
       // Its reply stays in flight because the mock holds this session's answer.
       clientContext.applySessionEvent(
         EventEnvelope.make({
           id: EventId.make(1),
           createdAt: 0,
-          event: AgentEvent.cases.StreamEnded.make({
-            sessionId: FIRST.sessionId,
-            branchId: FIRST.branchId,
-            usage: { inputTokens: 9_000, outputTokens: 120 },
-          }),
+          event: AgentEvent.cases.SessionSettingsUpdated.make({ sessionId: FIRST.sessionId }),
         }),
       )
       yield* Effect.promise(() => setup.renderOnce())
@@ -554,21 +552,94 @@ describe("ClientProvider session metrics", () => {
 
       clientContext.switchSession(SECOND.sessionId, SECOND.branchId, "Second")
       yield* Effect.promise(() => setup.renderOnce())
-      expect(clientContext.cost()).toBe(0)
-      expect(Option.isNone(clientContext.sessionMetrics().context)).toBe(true)
+      expect(clientContext.model()).not.toBe(firstResolvedModel)
 
       // The first session's reply lands now, naming a session nobody is on.
-      yield* Deferred.succeed(
-        held,
-        snapshotOf(FIRST, { costUsd: 4.2, lastInputTokens: 9_000, context: busyContext }),
-      )
+      yield* Deferred.succeed(held, {
+        ...snapshotOf(FIRST, { costUsd: 4.2, lastInputTokens: 9_000, context: busyContext }),
+        resolvedModelId: firstResolvedModel,
+      })
       yield* Effect.promise(() => setup.renderOnce())
       yield* Effect.promise(() => setup.renderOnce())
 
-      // None of the first session's numbers come back.
+      // None of the first session's values come back.
+      expect(clientContext.model()).not.toBe(firstResolvedModel)
       expect(clientContext.cost()).toBe(0)
       expect(clientContext.sessionMetrics().latestInputTokens).toBe(0)
       expect(Option.isNone(clientContext.sessionMetrics().context)).toBe(true)
+
+      setup.renderer.destroy()
+    }),
+  )
+
+  it.live("live events move the totals on the snapshot's, with no snapshot read", () =>
+    Effect.gen(function* () {
+      let ctx = Option.none<ClientContextValue>()
+      let reads = 0
+      const client = createMockClient({
+        session: {
+          getSnapshot: () =>
+            Effect.sync(() => {
+              reads += 1
+              return snapshotOf(FIRST, { costUsd: 1, lastInputTokens: 9_000, context: busyContext })
+            }),
+        },
+      })
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <ClientProbe onReady={(c) => (ctx = Option.some(c))} />, {
+          client,
+          initialSession: {
+            id: FIRST.sessionId,
+            activeBranchId: FIRST.branchId,
+            name: "First",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        }),
+      )
+      const clientContext = yield* requireClient(ctx)
+      clientContext.applySessionSnapshot(
+        snapshotOf(FIRST, { costUsd: 1, lastInputTokens: 9_000, context: busyContext }),
+      )
+      yield* Effect.promise(() => setup.renderOnce())
+      const readsAfterHydrate = reads
+      const live = (id: number, event: AgentEvent) =>
+        clientContext.applySessionEvent(
+          EventEnvelope.make({ id: EventId.make(id), createdAt: 0, event }),
+        )
+
+      // A new step's projection moves the gauge before the step ends.
+      live(
+        10,
+        AgentEvent.cases.ModelContextProjected.make({
+          sessionId: FIRST.sessionId,
+          branchId: FIRST.branchId,
+          estimatedTokens: 95_000,
+          availableInputTokens: 5_000,
+          contextLimitTokens: 100_000,
+          omittedMessages: 0,
+          compacted: false,
+        }),
+      )
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(
+        Option.map(clientContext.sessionMetrics().context, (context) => context.estimatedTokens),
+      ).toEqual(Option.some(95_000))
+      expect(clientContext.sessionMetrics().latestInputTokens).toBe(0)
+
+      live(
+        11,
+        AgentEvent.cases.StreamEnded.make({
+          sessionId: FIRST.sessionId,
+          branchId: FIRST.branchId,
+          usage: { inputTokens: 96_000, outputTokens: 10 },
+          costUsd: 0.5,
+        }),
+      )
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(clientContext.cost()).toBe(1.5)
+      expect(clientContext.sessionMetrics().latestInputTokens).toBe(96_000)
+      expect(reads).toBe(readsAfterHydrate)
 
       setup.renderer.destroy()
     }),
