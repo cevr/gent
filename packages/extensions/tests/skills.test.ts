@@ -1,5 +1,5 @@
 import { describe, expect, it, test } from "effect-bun-test"
-import { Effect, FileSystem, Layer, Option, Path, Schema } from "effect"
+import { Effect, FileSystem, Option, Path, Schema } from "effect"
 import {
   bundledSkillFiles,
   formatSkillsForPrompt,
@@ -229,7 +229,31 @@ const testSkills: ReadonlyArray<SkillEntry> = [
   },
 ]
 
-const skillsLayerOverride = { "@gent/skills": () => Skills.Test(testSkills) }
+/** A home with a global skill and a working directory with a local one, as a machine has them. */
+const plantSkills = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const home = yield* fs.makeTempDirectoryScoped({ prefix: "gent-skills-home-" })
+  const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "gent-skills-cwd-" })
+  const globalDir = path.join(home, ".claude", "skills")
+  const localDir = path.join(cwd, ".gent", "skills")
+  yield* fs.makeDirectory(globalDir, { recursive: true })
+  yield* fs.makeDirectory(localDir, { recursive: true })
+  const globalFile = path.join(globalDir, "effect-v4.md")
+  yield* fs.writeFileString(
+    globalFile,
+    "---\nname: effect-v4\ndescription: Effect v4 patterns\n---\nbody",
+  )
+  yield* fs.writeFileString(
+    path.join(localDir, "react.md"),
+    "---\nname: react\ndescription: React component patterns\n---\nbody",
+  )
+  return { home, cwd, globalFile }
+})
+
+/** The planted skills in a listing, which also holds the bundled ones. */
+const plantedSkills = (listed: ReadonlyArray<SkillEntry>) =>
+  listed.filter((skill) => skill.name === "effect-v4" || skill.name === "react")
 
 describe("SkillsExtension via RPC", () => {
   it.scopedLive(
@@ -238,16 +262,12 @@ describe("SkillsExtension via RPC", () => {
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
         const path = yield* Path.Path
-        const home = yield* fs.makeTempDirectoryScoped({ prefix: "gent-principles-rpc-" })
+        // The harness home is a fresh temp directory: the bundle installs there.
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
         const { client, sessionId, branchId } = yield* createRpcHarness({
           ...e2ePreset,
           providerLayer,
           extensionInputs: [SkillsExtension],
-          layerOverrides: {
-            "@gent/skills": () =>
-              Skills.Live({ home, cwd: home }).pipe(Layer.provide(BunServices.layer), Layer.orDie),
-          },
         })
         const raw = yield* client.extension.request({
           sessionId,
@@ -301,12 +321,14 @@ describe("SkillsExtension via RPC", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
+          const { home, cwd, globalFile } = yield* plantSkills
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
           const { client, sessionId, branchId } = yield* createRpcHarness({
             ...e2ePreset,
             providerLayer,
             extensionInputs: [SkillsExtension],
-            layerOverrides: skillsLayerOverride,
+            cwd,
+            home,
           })
 
           const rawReply = yield* client.extension.request({
@@ -318,11 +340,13 @@ describe("SkillsExtension via RPC", () => {
           })
           const reply = yield* Schema.decodeUnknownEffect(Schema.Array(SkillEntry))(rawReply)
 
-          expect(Array.isArray(reply)).toBe(true)
-          expect(reply).toHaveLength(2)
-          expect(reply.map((s) => s.name)).toEqual(["effect-v4", "react"])
-          expect(reply[0]?.filePath).toBe("/global/effect-v4.md")
-        }).pipe(Effect.timeout("8 seconds")),
+          // The working directory's skill first, then the home's.
+          expect(plantedSkills(reply).map((s) => [s.name, s.level])).toEqual([
+            ["react", "local"],
+            ["effect-v4", "global"],
+          ])
+          expect(plantedSkills(reply)[1]?.filePath).toBe(globalFile)
+        }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
       ),
     10_000,
   )
@@ -332,6 +356,7 @@ describe("SkillsExtension via RPC", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
+          const { home, cwd } = yield* plantSkills
           const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
             { ...textStep("working"), gated: true },
           ])
@@ -339,7 +364,8 @@ describe("SkillsExtension via RPC", () => {
           const { client, sessionId, branchId } = yield* createRpcHarness({
             ...e2ePreset,
             providerLayer,
-            layerOverrides: skillsLayerOverride,
+            cwd,
+            home,
           })
           yield* client.message.send({ sessionId, branchId, content: "work" })
           yield* controls.waitForCall(0)
@@ -358,9 +384,9 @@ describe("SkillsExtension via RPC", () => {
               }),
             )
           const reply = yield* Schema.decodeUnknownEffect(Schema.Array(SkillEntry))(rawReply)
-          expect(reply.map((s) => s.name)).toEqual(["effect-v4", "react"])
+          expect(plantedSkills(reply).map((s) => s.name)).toEqual(["react", "effect-v4"])
           yield* controls.emitAll(0)
-        }).pipe(Effect.timeout("8 seconds")),
+        }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
       ),
     10_000,
   )

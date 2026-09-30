@@ -47,7 +47,6 @@ import {
   turnRequestText,
   waitFor,
   ConfigService,
-  RuntimeEnvironment,
   UserConfig,
 } from "@gent/core/test-utils"
 import {
@@ -100,7 +99,8 @@ const harnessWithHome = (
       ...e2ePreset,
       extensionInputs: [...e2ePreset.extensionInputs, ...(options.fixtures ?? [])],
       providerLayer,
-      extraLayers: [RuntimeEnvironment.Live({ cwd, home })],
+      cwd,
+      home,
       ...Record.filter(
         {
           modelPricing: options.modelPricing,
@@ -2343,7 +2343,7 @@ describe("delegation guidance", () => {
             ...shippedPreset,
             providerLayer,
             cwd,
-            extraLayers: [RuntimeEnvironment.Live({ cwd, home })],
+            home,
           })
           yield* harness.client.message.send({
             sessionId: harness.sessionId,
@@ -2408,7 +2408,7 @@ describe("delegation guidance", () => {
             ...shippedPreset,
             providerLayer,
             cwd,
-            extraLayers: [RuntimeEnvironment.Live({ cwd, home })],
+            home,
           })
           yield* harness.client.message.send({
             sessionId: harness.sessionId,
@@ -3757,7 +3757,8 @@ const restartableHome = Effect.gen(function* () {
       ...e2ePreset,
       providerLayer,
       storagePath: `${home}/gent.db`,
-      extraLayers: [RuntimeEnvironment.Live({ cwd, home })],
+      cwd,
+      home,
     })
   const registryOf = (branchId: BranchId) =>
     storedRegistry(`${home}/.gent/delegates/${branchId}.json`).pipe(

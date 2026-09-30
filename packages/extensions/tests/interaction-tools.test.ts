@@ -10,7 +10,6 @@ import {
   makeTempDirectoryScoped,
   textStep,
   toolCallStep,
-  RuntimeEnvironment,
 } from "@gent/core/test-utils"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import type { ApprovalDecision, ExtensionContextService } from "@gent/core/extensions/api"
@@ -345,7 +344,7 @@ describe("InteractionToolsExtension via model turn", () => {
             providerLayer,
             durableApproval: true,
             cwd,
-            extraLayers: [RuntimeEnvironment.Live({ cwd, home: cwd })],
+            home: cwd,
           })
           const interaction = yield* client.session.events({ sessionId, branchId }).pipe(
             Stream.filter((envelope) => envelope.event._tag === "InteractionPresented"),

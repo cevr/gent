@@ -36,7 +36,6 @@ import {
   testLeafContext,
   testToolContext,
   turnRequestText,
-  RuntimeEnvironment,
 } from "@gent/core/test-utils"
 import { builtinAgent } from "./helpers/builtin-agents"
 import { e2ePreset } from "./helpers/test-preset"
@@ -122,7 +121,8 @@ const restartedSession = (home: string) =>
         ...e2ePreset,
         providerLayer,
         storagePath: `${directory}/gent.db`,
-        extraLayers: [RuntimeEnvironment.Live({ cwd, home })],
+        cwd,
+        home,
       })
     const { layer: firstProvider } = yield* LanguageModelLayers.sequence([textStep("hello")])
     const ids = yield* Effect.scoped(
@@ -486,7 +486,8 @@ describe("wake", () => {
           const { client, sessionId, branchId } = yield* createRpcHarness({
             ...e2ePreset,
             providerLayer,
-            extraLayers: [RuntimeEnvironment.Live({ cwd, home })],
+            cwd,
+            home,
           })
           const fs = yield* FileSystem.FileSystem
           yield* fs.makeDirectory(`${home}/.gent/wakes`, { recursive: true })
@@ -1114,7 +1115,8 @@ describe("notices", () => {
           const { client, sessionId, branchId } = yield* createRpcHarness({
             ...e2ePreset,
             providerLayer,
-            extraLayers: [RuntimeEnvironment.Live({ cwd, home })],
+            cwd,
+            home,
           })
           yield* client.message.send({ sessionId, branchId, content: "hi" })
           yield* waitFor(
@@ -1217,7 +1219,8 @@ describe("notices", () => {
           const { client, sessionId, branchId } = yield* createRpcHarness({
             ...e2ePreset,
             providerLayer,
-            extraLayers: [RuntimeEnvironment.Live({ cwd, home })],
+            cwd,
+            home,
           })
           const fs = yield* FileSystem.FileSystem
           const file = `${home}/.gent/wakes/${branchId}.json`

@@ -11,7 +11,6 @@ import {
   collectTestContributions,
   createRpcHarness,
   LanguageModelLayers,
-  RuntimeEnvironment,
   textStep,
 } from "@gent/core/test-utils"
 
@@ -134,7 +133,7 @@ describe("session deletion", () => {
           ...e2ePreset,
           providerLayer,
           cwd: directory,
-          extraLayers: [RuntimeEnvironment.Live({ cwd: directory, home: directory })],
+          home: directory,
         })
         const second = yield* client.branch.create({ sessionId })
         const branches = [branchId, second.branchId, "another-session-branch"]

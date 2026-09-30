@@ -52,7 +52,6 @@ import {
   testToolContext,
   type TestToolContext,
   turnRequestText,
-  RuntimeEnvironment,
   SqliteStorage,
 } from "@gent/core/test-utils"
 import { e2ePreset, shippedPreset } from "./helpers/test-preset.js"
@@ -239,8 +238,7 @@ describe("background shell through a cell", () => {
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
         const home = yield* fs.makeTempDirectoryScoped({ prefix: "gent-bg-output-" })
-        const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "gent-test-cwd-" })
-        const text = yield* hugeBackgroundNotice([RuntimeEnvironment.Live({ cwd, home })])
+        const text = yield* hugeBackgroundNotice(home)
 
         // The whole user-role notice, the file line included, fits the bound.
         expect(text.length).toBeLessThanOrEqual(maximumModelToolResultChars)
@@ -285,9 +283,7 @@ describe("background shell through a cell", () => {
         const path = yield* Path.Path
         const home = yield* fs.makeTempDirectoryScoped({ prefix: "gent-bg-output-" })
         const dataDir = yield* fs.makeTempDirectoryScoped({ prefix: "gent-bg-data-" })
-        const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "gent-test-cwd-" })
-        const text = yield* hugeBackgroundNotice([
-          RuntimeEnvironment.Live({ cwd, home }),
+        const text = yield* hugeBackgroundNotice(home, [
           Layer.succeed(
             ConfigProvider.ConfigProvider,
             ConfigProvider.fromEnv({
@@ -314,9 +310,7 @@ describe("background shell through a cell", () => {
         // A data directory that is a file: no job file can go under it.
         const dataDir = path.join(home, "not-a-directory")
         yield* fs.writeFileString(dataDir, "")
-        const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "gent-test-cwd-" })
-        const text = yield* hugeBackgroundNotice([
-          RuntimeEnvironment.Live({ cwd, home }),
+        const text = yield* hugeBackgroundNotice(home, [
           Layer.succeed(
             ConfigProvider.ConfigProvider,
             ConfigProvider.fromEnv({ env: { GENT_DATA_DIR: dataDir } }),
@@ -337,9 +331,10 @@ const hugeLineCount = 4000
 /** The file a cut notice names; empty when it names none. */
 const savedOutputFile = (text: string) => /The whole output is in (\S+) /.exec(text)?.[1] ?? ""
 
-/** The completion notice of a background job whose output is far past the bound. */
+/** The completion notice of a background job, run under `home`, whose output is far past the bound. */
 const hugeBackgroundNotice = Effect.fn("test.hugeBackgroundNotice")(function* (
-  extraLayers: ReadonlyArray<Layer.Layer<never>>,
+  home: string,
+  extraLayers: ReadonlyArray<Layer.Layer<never>> = [],
 ) {
   const input = yield* Schema.encodeEffect(Schema.fromJsonString(BashParams))({
     command: `seq 1 ${hugeLineCount} | sed 's/^/line /'`,
@@ -354,6 +349,7 @@ const hugeBackgroundNotice = Effect.fn("test.hugeBackgroundNotice")(function* (
     ...shippedPreset,
     providerLayer,
     durableApproval: true,
+    home,
     extraLayers,
   })
   const notice = yield* client.session.events({ sessionId, branchId }).pipe(
@@ -1500,7 +1496,7 @@ describe("background job output", () => {
           ...e2ePreset,
           providerLayer,
           cwd: directory,
-          extraLayers: [RuntimeEnvironment.Live({ cwd: directory, home: directory })],
+          home: directory,
         })
         const file = `${directory}/.gent/background-bash/${sessionId}/${branchId}/${toolCallId}.txt`
         const baseline = yield* liveBytes
@@ -1596,7 +1592,7 @@ describe("foreground command output", () => {
           ...e2ePreset,
           providerLayer,
           cwd: directory,
-          extraLayers: [RuntimeEnvironment.Live({ cwd: directory, home: directory })],
+          home: directory,
         })
         const file = `${directory}/.gent/background-bash/${sessionId}/${branchId}/${toolCallId}.txt`
         const baseline = yield* liveBytes
@@ -1677,7 +1673,7 @@ describe("foreground command output", () => {
           ...e2ePreset,
           providerLayer,
           cwd: directory,
-          extraLayers: [RuntimeEnvironment.Live({ cwd: directory, home: directory })],
+          home: directory,
         })
         const file = `${directory}/.gent/background-bash/${sessionId}/${branchId}/${toolCallId}.txt`
         yield* client.message.send({ sessionId, branchId, content: "run the command" })
@@ -1725,7 +1721,7 @@ describe("background bash after session deletion", () => {
           ...e2ePreset,
           providerLayer,
           cwd: directory,
-          extraLayers: [RuntimeEnvironment.Live({ cwd: directory, home: directory })],
+          home: directory,
         })
         const sessionFiles = `${directory}/.gent/background-bash/${sessionId}`
         const file = `${sessionFiles}/${branchId}/${toolCallId}.txt`
@@ -1839,7 +1835,7 @@ describe("a background completion the full follow-up queue refused", () => {
           providerLayer,
           storagePath,
           cwd: directory,
-          extraLayers: [RuntimeEnvironment.Live({ cwd: directory, home: directory })],
+          home: directory,
         })
         const idle = (label: string) =>
           waitFor(
@@ -1944,7 +1940,7 @@ describe("a background completion the full follow-up queue refused", () => {
           providerLayer,
           storagePath,
           cwd: directory,
-          extraLayers: [RuntimeEnvironment.Live({ cwd: directory, home: directory })],
+          home: directory,
         })
         const printed = Array.from({ length: 1000 }, (_, index) => `${index + 1}\n`).join("")
         const finished = ToolCallId.make("tc-long-row")
@@ -2053,8 +2049,8 @@ describe("a background job the server stopped", () => {
         // first process stops. One prints first; the other writes nothing.
         const command = `while ! test -f ${directory}/never; do sleep 0.02; done`
         const printing = `printf started; ${command}`
-        // Every process has the one home, so a job's file outlives the server that wrote it.
-        const sharedHome = RuntimeEnvironment.Live({ cwd: directory, home: directory })
+        // Every process has the one home (the directory), so a job's file outlives the
+        // server that wrote it.
         const textOf = (message: { readonly parts: ReadonlyArray<Prompt.Part> }) =>
           message.parts
             .map((part) => {
@@ -2084,7 +2080,7 @@ describe("a background job the server stopped", () => {
               providerLayer,
               storagePath,
               cwd: directory,
-              extraLayers: [sharedHome],
+              home: directory,
             })
             yield* client.message.send({ sessionId, branchId, content: "start the job" })
             yield* waitFor(
@@ -2174,7 +2170,7 @@ describe("a background job the server stopped", () => {
                 ...e2ePreset,
                 providerLayer,
                 storagePath,
-                extraLayers: [sharedHome],
+                home: directory,
               }),
             )
             yield* client.session.getSnapshot(target)
@@ -2218,7 +2214,7 @@ describe("a background job the server stopped", () => {
                 ...e2ePreset,
                 providerLayer,
                 storagePath,
-                extraLayers: [sharedHome],
+                home: directory,
               }),
             )
             const prompts = yield* ask(client, systems, 1)

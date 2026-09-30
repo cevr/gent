@@ -2,7 +2,12 @@ import { BunServices } from "@effect/platform-bun"
 import { describe, expect, it } from "effect-bun-test"
 import { Context, Effect, FileSystem, Layer, Path } from "effect"
 import { AgentDefinition, AgentName } from "../../src/domain/agent"
-import { createE2ELayer, createRpcHarness, type E2ELayerConfig } from "../../src/test-utils/harness"
+import {
+  createE2ELayer,
+  createRpcClient,
+  createRpcHarness,
+  type E2ELayerConfig,
+} from "../../src/test-utils/harness"
 import { RuntimeEnvironment } from "../../src/runtime/config"
 import { LanguageModelLayers } from "../../src/test-utils/language-model"
 import { ExtensionRegistry } from "../../src/runtime/extension-host"
@@ -132,6 +137,49 @@ describe("the test root's working directory", () => {
       const cwd = (yield* client.session.get({ sessionId }))?.cwd ?? ""
       expect(path.basename(cwd)).toStartWith("gent-test-cwd-")
       expect(yield* fs.exists(cwd)).toBe(true)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  fsTest("a layer runs in the cwd and home it is given", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "gent-test-given-cwd-" })
+      const home = yield* fs.makeTempDirectoryScoped({ prefix: "gent-test-given-home-" })
+      const environment = yield* RuntimeEnvironment.pipe(
+        Effect.provide(createE2ELayer({ ...bareConfig, cwd, home, toolRunner: "test" })),
+      )
+      expect({ cwd: environment.cwd, home: environment.home }).toEqual({ cwd, home })
+      // A given directory is the test's: the layer leaves it in place.
+      expect(yield* fs.exists(home)).toBe(true)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  fsTest("a layer restarted on the same database and home lists the sessions made before", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-test-restart-" })
+      const home = yield* fs.makeTempDirectoryScoped({ prefix: "gent-test-restart-home-" })
+      // No environment override: the database's directory is the working
+      // directory of both layers, as it is for a host restarted in place.
+      const layer = createE2ELayer({
+        ...bareConfig,
+        storagePath: `${directory}/gent.db`,
+        home,
+        toolRunner: "test",
+      })
+      const created = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const { client } = yield* createRpcClient(layer)
+          return yield* client.session.create({ cwd: directory })
+        }),
+      )
+      const listed = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const { client } = yield* createRpcClient(layer)
+          return yield* client.session.list()
+        }),
+      )
+      expect(listed.map((session) => session.id)).toEqual([created.sessionId])
     }).pipe(Effect.timeout("10 seconds")),
   )
 })

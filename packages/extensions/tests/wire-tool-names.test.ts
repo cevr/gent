@@ -36,7 +36,6 @@ import {
   fakeFetchLayer,
   makeFakeFetchState,
   makeTempDirectoryScoped,
-  RuntimeEnvironment,
 } from "@gent/core/test-utils"
 import type { AgentEvent } from "@gent/core/protocol"
 import { e2ePreset } from "./helpers/test-preset.js"
@@ -322,7 +321,8 @@ describe("tool names on the wire", () => {
           const { client, sessionId, branchId } = yield* createRpcHarness({
             ...e2ePreset,
             providerLayer,
-            extraLayers: [RuntimeEnvironment.Live({ cwd, home })],
+            cwd,
+            home,
           })
           const turn = yield* client.session.events({ sessionId, branchId }).pipe(
             Stream.map((envelope) => envelope.event),
