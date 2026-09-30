@@ -3,6 +3,7 @@ import {
   Context,
   Crypto,
   DateTime,
+  Duration,
   Effect,
   Exit,
   FileSystem,
@@ -450,6 +451,13 @@ const collectHookSlot = (
   }
 }
 
+/**
+ * How long a delete waits for one extension's `sessionDeleted` handler. The
+ * rows are already gone, so a handler that never returns must not hold the
+ * delete RPC; past the bound it is interrupted and a warning is logged.
+ */
+export const SESSION_DELETED_HOOK_TIMEOUT = Duration.seconds(30)
+
 export const compileExtensionHooks = (
   extensions: ReadonlyArray<LoadedExtension>,
 ): CompiledExtensionHooks => {
@@ -548,11 +556,29 @@ export const compileExtensionHooks = (
     }),
 
     // Each extension removes its own data, so no handler waits for another.
+    // Each runs up to its bound; one that never returns is cut and logged.
     emitSessionDeleted: (input) =>
-      Effect.forEach(sessionDeletedSlots, (slot) => runHook(input, slot), {
-        concurrency: Math.max(sessionDeletedSlots.length, 1),
-        discard: true,
-      }),
+      Effect.forEach(
+        sessionDeletedSlots,
+        (slot) =>
+          runHook(input, slot).pipe(
+            Effect.timeoutOption(SESSION_DELETED_HOOK_TIMEOUT),
+            Effect.flatMap(
+              Option.match({
+                onSome: () => Effect.void,
+                onNone: () =>
+                  Effect.logWarning("extension.hook.session-deleted.timeout").pipe(
+                    Effect.annotateLogs({
+                      extensionId: slot.extensionId,
+                      sessionId: input.sessionId,
+                      timeout: Duration.format(SESSION_DELETED_HOOK_TIMEOUT),
+                    }),
+                  ),
+              }),
+            ),
+          ),
+        { concurrency: Math.max(sessionDeletedSlots.length, 1), discard: true },
+      ),
   }
 }
 

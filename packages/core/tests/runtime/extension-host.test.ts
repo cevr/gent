@@ -52,6 +52,7 @@ import {
   tool,
   type ToolCapability,
 } from "@gent/core/extensions/api"
+import { TestClock } from "effect/testing"
 import {
   ApprovalService,
   buildScopeResources,
@@ -68,6 +69,7 @@ import {
   resolveExtensions,
   resolveTurnProfile,
   RunOpener,
+  SESSION_DELETED_HOOK_TIMEOUT,
   type SessionProfile,
   SessionProfileCache,
   type SessionProfileCacheService,
@@ -2731,6 +2733,32 @@ class HookCounter extends Context.Service<
 
 describe("runtime slots", () => {
   const test = it.live.layer(BunServices.layer)
+
+  test("a sessionDeleted handler that never returns is cut at its bound; the others run", () =>
+    Effect.gen(function* () {
+      const heard: Array<SessionId> = []
+      const slots = compileExtensionHooks([
+        makeExtExtensionHooks("stuck", "project", {
+          hooks: [hook("sessionDeleted", () => Effect.never)],
+        }),
+        makeExtExtensionHooks("listener", "user", {
+          hooks: [
+            hook("sessionDeleted", ({ sessionId }) =>
+              Effect.sync(() => {
+                heard.push(sessionId)
+              }),
+            ),
+          ],
+        }),
+      ])
+      const emit = yield* slots
+        .emitSessionDeleted({ sessionId: SessionId.make("deleted-session") })
+        .pipe(Effect.provideService(CurrentExtensionHostContext, stubHostCtx), Effect.forkChild)
+      yield* TestClock.adjust(SESSION_DELETED_HOOK_TIMEOUT)
+      // The emit returns: the stuck handler no longer holds the delete.
+      yield* Fiber.join(emit)
+      expect(heard).toEqual([SessionId.make("deleted-session")])
+    }).pipe(Effect.provide(TestClock.layer()), Effect.timeout("3 seconds")))
 
   test("systemPrompt composes explicit hook rewrites in scope order", () => {
     const extensions = [

@@ -458,8 +458,9 @@ interface ExtensionHookSignatures {
    * profile of that session's own cwd, resolved before the delete. A handler
    * removes what the extension keeps for the session outside the database.
    * `ExtensionContext` names the deleted session; its session verbs find no
-   * session. No user watches it, so it cannot ask. The delete waits for every
-   * handler.
+   * session. No user watches it, so it cannot ask. The delete waits for each
+   * handler up to `SESSION_DELETED_HOOK_TIMEOUT` (runtime/extension-host.ts),
+   * then interrupts it and logs a warning.
    */
   readonly sessionDeleted: { readonly input: SessionDeletedInput; readonly output: void }
 }
