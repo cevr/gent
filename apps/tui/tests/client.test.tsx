@@ -967,49 +967,80 @@ describe("ClientProvider session lifecycle", () => {
       expect(listings).toBe(2)
     }).pipe(Effect.timeout("10 seconds")),
   )
-  it.live("a settings change on the session in view does not read extension health again", () =>
-    Effect.gen(function* () {
-      let ctx = Option.none<ClientContextValue>()
-      const healthReads: Array<Option.Option<SessionId>> = []
-      const mockClient = createMockClient({
-        session: {
-          updateSettings: () =>
-            Effect.succeed({
-              modelId: ModelId.make("openai/gpt-5.6-luna"),
-              reasoningLevel: absent,
-            }),
-        },
-        extension: {
-          listStatus: (input: { readonly sessionId?: SessionId }) =>
-            Effect.sync(() => {
-              healthReads.push(Option.fromUndefinedOr(input.sessionId))
-              return { _tag: "Healthy" satisfies "Healthy", extensions: [] }
-            }),
-        },
-      })
-      yield* Effect.promise(() =>
-        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
-          client: mockClient,
-          initialSession: {
-            id: FIRST.sessionId,
-            activeBranchId: FIRST.branchId,
-            name: "First",
-            createdAt: dateFromMillis(0),
-            updatedAt: dateFromMillis(0),
+  it.live(
+    "extension health reads again on a settings change or an extension pulse, not a rename",
+    () =>
+      Effect.gen(function* () {
+        let ctx = Option.none<ClientContextValue>()
+        const healthReads: Array<Option.Option<SessionId>> = []
+        const mockClient = createMockClient({
+          session: {
+            updateSettings: () =>
+              Effect.succeed({
+                modelId: ModelId.make("openai/gpt-5.6-luna"),
+                reasoningLevel: absent,
+              }),
           },
-        }),
-      )
-      const client = yield* requireClientSessionState(ctx)
-      yield* waitUntil(() => healthReads.length === 1, "the mount read")
-      yield* client.updateSessionSettings({ modelId: Option.none() })
-      expect(client.session()?.modelId).toBe(ModelId.make("openai/gpt-5.6-luna"))
-      client.switchSession(SECOND.sessionId, SECOND.branchId, "Second")
-      yield* waitUntil(
-        () => healthReads.some((read) => Option.contains(read, SECOND.sessionId)),
-        "the switch reads the next session's health",
-      )
-      expect(healthReads).toEqual([Option.some(FIRST.sessionId), Option.some(SECOND.sessionId)])
-    }).pipe(Effect.timeout("10 seconds")),
+          extension: {
+            listStatus: (input: { readonly sessionId?: SessionId }) =>
+              Effect.sync(() => {
+                healthReads.push(Option.fromUndefinedOr(input.sessionId))
+                return { _tag: "Healthy" satisfies "Healthy", extensions: [] }
+              }),
+          },
+        })
+        yield* Effect.promise(() =>
+          renderWithProviders(
+            () => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />,
+            {
+              client: mockClient,
+              initialSession: {
+                id: FIRST.sessionId,
+                activeBranchId: FIRST.branchId,
+                name: "First",
+                createdAt: dateFromMillis(0),
+                updatedAt: dateFromMillis(0),
+              },
+            },
+          ),
+        )
+        const client = yield* requireClientSessionState(ctx)
+        yield* waitUntil(() => healthReads.length === 1, "the mount read")
+        const pulse = (id: number, event: EventEnvelope["event"]) =>
+          client.applySessionEvent(
+            EventEnvelope.make({ id: EventId.make(id), createdAt: 0, event }),
+          )
+        // A rename changes nothing health reads.
+        pulse(
+          1,
+          AgentEvent.cases.SessionNameUpdated.make({ sessionId: FIRST.sessionId, name: "Renamed" }),
+        )
+        expect(client.session()?.name).toBe("Renamed")
+        yield* client.updateSessionSettings({ modelId: Option.none() })
+        expect(client.session()?.modelId).toBe(ModelId.make("openai/gpt-5.6-luna"))
+        // A settings change can change what an extension reports; so can its own pulse.
+        yield* waitUntil(() => healthReads.length === 2, "the settings change reads health")
+        pulse(
+          2,
+          AgentEvent.cases.ExtensionStateChanged.make({
+            sessionId: FIRST.sessionId,
+            branchId: FIRST.branchId,
+            extensionId: ExtensionId.make("health-pulse"),
+          }),
+        )
+        yield* waitUntil(() => healthReads.length === 3, "the extension pulse reads health")
+        client.switchSession(SECOND.sessionId, SECOND.branchId, "Second")
+        yield* waitUntil(
+          () => healthReads.some((read) => Option.contains(read, SECOND.sessionId)),
+          "the switch reads the next session's health",
+        )
+        expect(healthReads).toEqual([
+          Option.some(FIRST.sessionId),
+          Option.some(FIRST.sessionId),
+          Option.some(FIRST.sessionId),
+          Option.some(SECOND.sessionId),
+        ])
+      }).pipe(Effect.timeout("10 seconds")),
   )
   it.live("a failing RPC through surfaceError lands the formatted text in the error line", () =>
     Effect.gen(function* () {

@@ -965,17 +965,34 @@ export function ClientProvider(props: ClientProviderProps) {
 
   // The server reads below follow the open connection and the session's
   // identity. Both keys are memos: a rename or a settings change on the session
-  // record reads nothing again, and a reconnect reads again.
+  // record reads nothing again, and a reconnect reads again. Health adds its
+  // own invalidations below.
   const connectionAndSession = (): readonly [Option.Option<number>, Option.Option<SessionId>] => [
     connectedGeneration(),
     activeSessionId(),
   ]
 
   let extensionHealthLoadVersion = 0
+  // Health can change while the session stays: a settings change (a model its
+  // extension needs) or an extension's own pulse. Both invalidate it
+  // explicitly; a rename, which also rebuilds the record, does not.
+  const sessionSettings = createMemo(() =>
+    Option.match(sessionOption(), {
+      onNone: () => "",
+      onSome: (active) => `${active.modelId ?? ""}|${active.reasoningLevel ?? ""}`,
+    }),
+  )
+  const [extensionPulses, setExtensionPulses] = createSignal(0)
+  const healthKey = (): readonly [
+    Option.Option<number>,
+    Option.Option<SessionId>,
+    string,
+    number,
+  ] => [...connectionAndSession(), sessionSettings(), extensionPulses()]
 
   createEffect(
     on(
-      connectionAndSession,
+      healthKey,
       ([epoch, sessionId]) => {
         const version = ++extensionHealthLoadVersion
         if (Option.isNone(epoch)) {
@@ -1172,10 +1189,18 @@ export function ClientProvider(props: ClientProviderProps) {
     }
   }
 
+  // An extension that has news may report another health: read it again.
+  const invalidateHealthOn = (event: EventEnvelope["event"]): void => {
+    if (event._tag !== "ExtensionStateChanged") return
+    if (!Option.contains(activeSessionId(), event.sessionId)) return
+    setExtensionPulses((count) => count + 1)
+  }
+
   const applySessionEvent = (envelope: EventEnvelope): void => {
     const event = envelope.event
     eventHub.notifySessionEvent(envelope)
     eventHub.notifyExtensionStateChanged(event)
+    invalidateHealthOn(event)
     if (event._tag === "StreamEnded" && Option.isSome(Option.fromNullishOr(event.usage))) {
       refreshSessionMetrics()
     }
@@ -1192,6 +1217,7 @@ export function ClientProvider(props: ClientProviderProps) {
     // Snapshot replay owns lifecycle, metadata, and metrics; buffered events
     // may still invalidate extension subscribers, which must stay idempotent.
     eventHub.notifyExtensionStateChanged(event)
+    invalidateHealthOn(event)
   }
 
   const transportValue: ClientTransportValue = {
