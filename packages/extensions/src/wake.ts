@@ -33,7 +33,7 @@ import {
 import { makeBranchStateStore } from "./branch-state-store.js"
 import { runBashCommand, wholeCommandOutputText } from "./exec-tools.js"
 
-// Test seam: only tests read these exports. WakeAlarms, WakeAlarmsService and
+// Test seam: only tests read these exports. WakeAlarms and
 // WakeAlarmsLive let a test hold and cancel timers; rearmPendingAlarms runs the
 // restart path directly. wakeMessage, monitorMessage, nextDueAt and dueAtOf are pure functions with
 // unit tests. WakeTool, MonitorTool and CancelTool are the
@@ -152,7 +152,7 @@ class WakeError extends Schema.TaggedError<WakeError>()("WakeError", {
 
 // ── Timers: one branch-scoped resource ──
 
-export interface WakeAlarmsService {
+interface WakeAlarmsService {
   /**
    * Forks `work` into the branch scope under `wakeId`, so a closed branch
    * cancels it. Work already running under that id is left alone.

@@ -227,8 +227,10 @@ describe("background shell through a cell", () => {
           expect(Array.from(yield* Fiber.join(notice))).toHaveLength(1)
           yield* fs.remove(release)
         }
-      }).pipe(Effect.timeout("8 seconds")),
-    10_000,
+        // A deadlock bound only: each wait above is an event. Two harnesses
+        // and their shells outgrow a tight bound on a loaded machine.
+      }).pipe(Effect.timeout("25 seconds")),
+    30_000,
   )
 
   it.scopedLive.layer(BunFileSystem.layer)(

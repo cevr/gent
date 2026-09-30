@@ -485,15 +485,17 @@ const SIGNAL_EXIT_CODE = { SIGINT: 130, SIGTERM: 143 } satisfies Record<ExitSign
 /**
  * How the CLI's exit becomes the process exit code.
  *
- * A signal interrupts the root fiber. For the TUI that is a quit and exits 0.
- * A headless run a signal ended did not answer, and a caller that chains
- * `gent -H … && next` must not read it as success, so it exits 130 or 143.
- * Any other failure takes the default teardown's code.
+ * A signal interrupts the root fiber. For the interactive TUI that is a quit
+ * and exits 0. Any other command a signal ended did not finish: a headless
+ * run did not answer, and `gent server start` was stopped. A caller that
+ * chains `gent -H … && next` or `gent server start && next` must not read it
+ * as success, so it exits 130 or 143. Any other failure takes the default
+ * teardown's code.
  */
 export const makeCliTeardown =
   (run: {
     readonly signal: () => Option.Option<ExitSignal>
-    readonly headless: () => boolean
+    readonly interactive: () => boolean
   }): Runtime.Teardown =>
   (exit, onExit) => {
     if (Exit.isSuccess(exit)) {
@@ -502,7 +504,7 @@ export const makeCliTeardown =
     }
     if (Cause.hasInterruptsOnly(exit.cause)) {
       const signal = run.signal()
-      if (run.headless() && Option.isSome(signal)) {
+      if (!run.interactive() && Option.isSome(signal)) {
         onExit(SIGNAL_EXIT_CODE[signal.value])
         return
       }

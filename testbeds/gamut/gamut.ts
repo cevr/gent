@@ -64,18 +64,25 @@ const slot = (modelId: string, reasoningEffort: string): Slot => ({ modelId, rea
  * The model families a preset names instead of a release. `up` resolves each
  * to the family's newest release in the models.dev catalog, so a preset never
  * pins a release that a newer one replaced. `version` captures the release
- * number; a dated snapshot (`claude-opus-4-5-20251101`) and a variant
+ * number, whose Anthropic minor part has at most two digits; a dated snapshot
+ * (`claude-opus-4-5-20251101`, `claude-sonnet-4-20250514`) and a variant
  * (`gpt-6-sol-pro`) do not match.
  */
 const FAMILIES: Record<string, { readonly provider: string; readonly pattern: RegExp }> = {
   "openai/sol": { provider: "openai", pattern: /^gpt-(?<version>\d+(?:\.\d+)*)-sol$/ },
   "openai/luna": { provider: "openai", pattern: /^gpt-(?<version>\d+(?:\.\d+)*)-luna$/ },
-  "anthropic/opus": { provider: "anthropic", pattern: /^claude-opus-(?<version>\d+(?:-\d+)?)$/ },
+  "anthropic/opus": {
+    provider: "anthropic",
+    pattern: /^claude-opus-(?<version>\d+(?:-\d{1,2})?)$/,
+  },
   "anthropic/sonnet": {
     provider: "anthropic",
-    pattern: /^claude-sonnet-(?<version>\d+(?:-\d+)?)$/,
+    pattern: /^claude-sonnet-(?<version>\d+(?:-\d{1,2})?)$/,
   },
-  "anthropic/fable": { provider: "anthropic", pattern: /^claude-fable-(?<version>\d+(?:-\d+)?)$/ },
+  "anthropic/fable": {
+    provider: "anthropic",
+    pattern: /^claude-fable-(?<version>\d+(?:-\d{1,2})?)$/,
+  },
 }
 
 export const PRESETS: Record<string, Preset> = {

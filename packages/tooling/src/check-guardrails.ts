@@ -478,7 +478,7 @@ export const scanTrackedTexts = (
 
   findings.push(
     ...findUnusedSuppressionApprovals(sourceTexts),
-    ...findUnconsumedExports(exportFacts),
+    ...findUnconsumedExports(exportFacts, manifestTexts),
     ...findUnadaptedSeams(sourceTexts, adaptedSeams),
     // A GENT_* variable whose writer left: its reader is a branch nothing takes.
     ...findReadersWithoutWriters(new Map([...sourceTexts, ...manifestTexts])),

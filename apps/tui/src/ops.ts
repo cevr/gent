@@ -1,7 +1,19 @@
-import { type ExtensionHealthIssue, type ExtensionHealthSnapshot } from "@gent/core/protocol"
+import {
+  Branch,
+  BranchId,
+  dateFromMillis,
+  type ExtensionHealthIssue,
+  type ExtensionHealthSnapshot,
+  Message,
+  MessageId,
+  Session,
+  SessionId,
+  ToolCallId,
+} from "@gent/core/protocol"
 import { Database } from "bun:sqlite"
 import {
   Cause,
+  Clock,
   Config,
   Console,
   DateTime,
@@ -19,12 +31,12 @@ import {
   classifyLogFile,
   dataPaths,
   Gent,
-  resolveLogDir,
   serverLock,
   type ServerLockEntry,
   type ServerLockStatus,
 } from "@gent/sdk"
-import type { GentPlatform } from "@gent/core/host"
+import { BranchStorage, GentPlatform, MessageStorage, SessionStorage } from "@gent/core/host"
+import * as Prompt from "effect/unstable/ai/Prompt"
 import { Command, Flag } from "effect/unstable/cli"
 import * as Terminal from "effect/Terminal"
 
@@ -157,7 +169,7 @@ export const inspectStorage = (
 
 /**
  * Read a log directory. The doctor passes the one this environment writes to
- * (`resolveLogDir`); tests pass a directory they own, so they never read or
+ * (`dataPaths(home).logDir`); tests pass a directory they own, so they never read or
  * remove real logs.
  */
 export const inspectLogs = (dir: string): Effect.Effect<LogHealth, never, FileSystem.FileSystem> =>
@@ -262,7 +274,7 @@ export const makeDoctorReport = (
       home,
       storage,
       server,
-      logs: yield* inspectLogs(yield* resolveLogDir),
+      logs: yield* inspectLogs((yield* dataPaths(home)).logDir),
       extensions: Option.getOrElse(Option.fromNullishOr(extensions), defaultExtensions),
     }
   })
@@ -371,6 +383,291 @@ export const formatDoctorReport = (report: DoctorReport): string => {
   return lines.join("\n")
 }
 
+// ── debug session ───────────────────────────────────────────────────────────
+
+/**
+ * `gent --debug` starts an in-memory server seeded with one sample session:
+ * a transcript with the shipped tools' calls and results, a queued
+ * interjection, and delegate rows, so the session view renders every
+ * surface without a live model.
+ */
+
+type DebugValue = Schema.Schema.Type<typeof Schema.Unknown>
+
+const makeText = (text: string) => Prompt.textPart({ text })
+
+const asToolCallId = (value: string) => ToolCallId.make(value)
+
+const makeJsonResult = (toolCallId: ToolCallId, toolName: string, value: DebugValue) =>
+  Prompt.toolResultPart({
+    id: toolCallId,
+    name: toolName,
+    isFailure: false,
+    providerExecuted: false,
+    result: value,
+  })
+
+const makeToolCall = (params: {
+  readonly id: ToolCallId
+  readonly name: string
+  readonly params: DebugValue
+}) => Prompt.toolCallPart({ ...params, providerExecuted: false })
+
+const writeDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: string) {
+  const sessions = yield* SessionStorage
+  const branches = yield* BranchStorage
+  const messages = yield* MessageStorage
+  const platform = yield* GentPlatform
+  const sessionId = SessionId.make(yield* platform.randomId)
+  const branchId = BranchId.make(yield* platform.randomId)
+  const now = yield* Clock.currentTimeMillis
+  const nowPlus = (offsetMs: number) => dateFromMillis(now + offsetMs)
+
+  const session = new Session({
+    id: sessionId,
+    name: "debug scenario",
+    cwd,
+    createdAt: nowPlus(-60_000),
+    updatedAt: nowPlus(-1_000),
+  })
+  const branch = new Branch({
+    id: branchId,
+    sessionId,
+    createdAt: nowPlus(-60_000),
+  })
+
+  yield* sessions.createSession(session)
+  yield* branches.createBranch(branch)
+  yield* sessions.setActiveBranch(sessionId, branchId, session.updatedAt)
+
+  const user1 = Message.cases.regular.make({
+    id: MessageId.make(yield* platform.randomId),
+    sessionId,
+    branchId,
+    role: "user",
+    parts: [makeText("Review the TUI renderer cleanup and inspect the current implementation.")],
+    createdAt: nowPlus(-50_000),
+  })
+
+  const assistant1 = Message.cases.regular.make({
+    id: MessageId.make(yield* platform.randomId),
+    sessionId,
+    branchId,
+    role: "assistant",
+    parts: [
+      Prompt.reasoningPart({
+        text: "Need tool chrome parity, queue semantics, and child agent rows.",
+      }),
+      makeText("Inspected the relevant files and compared the renderer chrome paths."),
+      makeToolCall({
+        id: asToolCallId("dbg-read"),
+        name: "read",
+        params: { path: `${cwd}/apps/tui/src/session.tsx` },
+      }),
+      makeToolCall({
+        id: asToolCallId("dbg-grep"),
+        name: "grep",
+        params: { pattern: "ToolFrame", path: `${cwd}/apps/tui/src` },
+      }),
+      makeToolCall({
+        id: asToolCallId("dbg-bash"),
+        name: "bash",
+        params: { command: "bun run typecheck" },
+      }),
+      makeToolCall({
+        id: asToolCallId("dbg-edit"),
+        name: "edit",
+        params: {
+          path: `${cwd}/apps/tui/src/message-list.tsx`,
+          oldString: "<text>[ x ] tool_call</text>",
+          newString: "<ToolFrame />",
+        },
+      }),
+      makeToolCall({
+        id: asToolCallId("dbg-write"),
+        name: "write",
+        params: {
+          path: `${cwd}/apps/tui/src/ops.ts`,
+          content: "export const debugScenario = true\n",
+        },
+      }),
+    ],
+    createdAt: nowPlus(-47_000),
+  })
+
+  const toolResults1 = Message.cases.regular.make({
+    id: MessageId.make(yield* platform.randomId),
+    sessionId,
+    branchId,
+    role: "tool",
+    parts: [
+      makeJsonResult(asToolCallId("dbg-read"), "read", {
+        path: `${cwd}/apps/tui/src/session.tsx`,
+        lineCount: 18,
+        truncated: false,
+        content:
+          "const [toolsExpanded, setToolsExpanded] = createSignal(false)\nconst [composerState, setComposerState] = createSignal(...)",
+      }),
+      makeJsonResult(asToolCallId("dbg-grep"), "grep", {
+        matches: [
+          {
+            file: `${cwd}/apps/tui/src/tool-renderers.tsx`,
+            line: 6,
+            content: 'import { GutterText, ToolCallIdentityProvider, ToolFrame } from "./ui"',
+          },
+        ],
+        truncated: false,
+      }),
+      makeJsonResult(asToolCallId("dbg-bash"), "bash", {
+        stdout: "$ turbo run typecheck\nTodos: 4 successful, 4 total",
+        stderr: "",
+        exitCode: 0,
+      }),
+      makeJsonResult(asToolCallId("dbg-edit"), "edit", {
+        path: `${cwd}/apps/tui/src/message-list.tsx`,
+        replacements: 1,
+      }),
+      makeJsonResult(asToolCallId("dbg-write"), "write", {
+        path: `${cwd}/apps/tui/src/ops.ts`,
+        bytesWritten: 7421,
+      }),
+    ],
+    createdAt: nowPlus(-46_000),
+  })
+
+  const assistant2 = Message.cases.regular.make({
+    id: MessageId.make(yield* platform.randomId),
+    sessionId,
+    branchId,
+    role: "assistant",
+    parts: [makeText("The duplicate chrome came from rendering both tool summary surfaces.")],
+    createdAt: nowPlus(-45_000),
+  })
+
+  const user2 = Message.cases.interjection.make({
+    id: MessageId.make(yield* platform.randomId),
+    sessionId,
+    branchId,
+    role: "user",
+    parts: [makeText("Actually check queue vs steer too.")],
+    createdAt: nowPlus(-38_000),
+  })
+
+  const assistant3 = Message.cases.regular.make({
+    id: MessageId.make(yield* platform.randomId),
+    sessionId,
+    branchId,
+    role: "assistant",
+    parts: [
+      makeText(
+        "Steer should cut ahead of queued regular work. Regular sends queue in order while a turn is active.",
+      ),
+    ],
+    createdAt: nowPlus(-36_000),
+  })
+
+  const user3 = Message.cases.regular.make({
+    id: MessageId.make(yield* platform.randomId),
+    sessionId,
+    branchId,
+    role: "user",
+    parts: [makeText("Read the related session and review the audit output.")],
+    createdAt: nowPlus(-28_000),
+  })
+
+  const assistant4 = Message.cases.regular.make({
+    id: MessageId.make(yield* platform.randomId),
+    sessionId,
+    branchId,
+    role: "assistant",
+    parts: [
+      makeText("Pulled adjacent context and kicked off review helpers."),
+      makeToolCall({
+        id: asToolCallId("dbg-explore"),
+        name: "delegate.start",
+        params: { todo: "Where is the double-border coming from?" },
+      }),
+      makeToolCall({
+        id: asToolCallId("dbg-review"),
+        name: "delegate.start",
+        params: { todo: "Sanity-check the debug session bootstrap.", context: "fork" },
+      }),
+      makeToolCall({
+        id: asToolCallId("dbg-read-session"),
+        name: "read_session",
+        params: { sessionId: "019debug1-session" },
+      }),
+    ],
+    createdAt: nowPlus(-25_000),
+  })
+
+  const toolResults2 = Message.cases.regular.make({
+    id: MessageId.make(yield* platform.randomId),
+    sessionId,
+    branchId,
+    role: "tool",
+    parts: [
+      makeJsonResult(asToolCallId("dbg-explore"), "delegate.start", {
+        requestId: "dbg-explore",
+        sessionId: "019debug1-explore",
+        branchId: "019debug1-explore-branch",
+      }),
+      makeJsonResult(asToolCallId("dbg-review"), "delegate.start", {
+        requestId: "dbg-review",
+        sessionId: "019debug1-review",
+        branchId: "019debug1-review-branch",
+      }),
+      makeJsonResult(asToolCallId("dbg-read-session"), "read_session", {
+        sessionId: "019debug1-session",
+        content: "Audit said queue semantics and renderer chrome should be tested together.",
+        messageCount: 12,
+        branchCount: 1,
+      }),
+    ],
+    createdAt: nowPlus(-23_000),
+  })
+
+  const assistant5 = Message.cases.regular.make({
+    id: MessageId.make(yield* platform.randomId),
+    sessionId,
+    branchId,
+    role: "assistant",
+    parts: [
+      makeText(
+        "Audit lines up: keep one tool frame, make queue state structural, and test renderer behavior directly.",
+      ),
+    ],
+    createdAt: nowPlus(-21_000),
+  })
+
+  const seedMessages = [
+    user1,
+    assistant1,
+    toolResults1,
+    assistant2,
+    user2,
+    assistant3,
+    user3,
+    assistant4,
+    toolResults2,
+    assistant5,
+  ]
+
+  for (const message of seedMessages) {
+    yield* messages.createMessage(message)
+  }
+})
+
+/** The `Gent.server` seed behind `--debug`. A failed seed is logged; the server still starts. */
+export const seedDebugSession = (cwd: string) =>
+  writeDebugSession(cwd).pipe(
+    Effect.catchEager((error) =>
+      Effect.logWarning("Debug session seeding failed").pipe(
+        Effect.annotateLogs({ error: String(error) }),
+      ),
+    ),
+  )
+
 // ── admin subcommands ───────────────────────────────────────────────────────
 
 /**
@@ -416,6 +713,30 @@ export const readHome = Effect.map(
   Option.getOrElse(() => "/tmp"),
 )
 
+/** What a command asks of the server it starts. */
+interface ServerChoice {
+  readonly cwd: string
+  /** Keep state in memory instead of the shared SQLite file. */
+  readonly inMemory: boolean
+  readonly debug: boolean
+  /** Serve scripted responses instead of a real provider; `empty` serves none. */
+  readonly mock: Option.Option<{ readonly empty: boolean }>
+  readonly authDirectory: Option.Option<string>
+}
+
+/** The `Gent.server` options for a command's choice: the one launcher every command shares. */
+const serverOptions = (choice: ServerChoice): Parameters<typeof Gent.server>[0] => {
+  let state = Gent.state.sqlite()
+  if (choice.inMemory) state = Gent.state.memory()
+  let provider = Gent.provider.live()
+  if (Option.isSome(choice.mock)) provider = Gent.provider.mock(choice.mock.value)
+  let options: Parameters<typeof Gent.server>[0] = { cwd: choice.cwd, state, provider }
+  if (choice.debug) options = { ...options, seed: seedDebugSession(choice.cwd) }
+  if (Option.isSome(choice.authDirectory))
+    options = { ...options, authDirectory: choice.authDirectory.value }
+  return options
+}
+
 /**
  * The one way a command reaches a running gent.
  *
@@ -423,27 +744,11 @@ export const readHome = Effect.map(
  * one in-process, which is what every caller wants when no url is given: the
  * bundle owns its own server for the life of the call.
  */
-export const resolveClientBundle = (options: {
-  readonly cwd: string
-  readonly connect: Option.Option<string>
-  /** Keep state in memory instead of the shared SQLite file. */
-  readonly inMemory: boolean
-  readonly debug: boolean
-  /** Serve scripted responses instead of a real provider; `empty` serves none. */
-  readonly mock: Option.Option<{ readonly empty: boolean }>
-  readonly authDirectory: Option.Option<string>
-}) => {
+export const resolveClientBundle = (
+  options: ServerChoice & { readonly connect: Option.Option<string> },
+) => {
   if (Option.isSome(options.connect)) return Gent.client(options.connect.value)
-  let state = Gent.state.sqlite()
-  if (options.inMemory) state = Gent.state.memory()
-  let provider = Gent.provider.live()
-  if (Option.isSome(options.mock)) provider = Gent.provider.mock(options.mock.value)
-  const base = { cwd: options.cwd, state, provider, debug: options.debug }
-  const configured = Option.match(options.authDirectory, {
-    onNone: () => base,
-    onSome: (authDirectory) => ({ ...base, authDirectory }),
-  })
-  return Effect.flatMap(Gent.server(configured), Gent.client)
+  return Effect.flatMap(Gent.server(serverOptions(options)), Gent.client)
 }
 
 /**
@@ -603,9 +908,50 @@ const serverStop = Command.make(
     }),
 )
 
+/**
+ * Run a standalone server in the foreground until a signal stops it. A SQLite
+ * server on a fixed port still takes the data directory's lock and writes its
+ * entry, so a later `gent` finds and attaches to it.
+ */
+const serverStart = Command.make(
+  "start",
+  {
+    port: Flag.integer("port").pipe(
+      Flag.withDescription("Bind this TCP port"),
+      Flag.withDefault(3000),
+    ),
+    isolate: Flag.boolean("isolate").pipe(
+      Flag.withDescription("Keep state in memory: no data-directory database or lock"),
+      Flag.withDefault(false),
+    ),
+    mock: Flag.boolean("mock").pipe(
+      Flag.withDescription("Serve the scripted model instead of a real provider"),
+      Flag.withDefault(false),
+    ),
+  },
+  ({ port, isolate, mock }) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        let scripted = Option.none<{ readonly empty: boolean }>()
+        if (mock) scripted = Option.some({ empty: false })
+        const options = serverOptions({
+          cwd: process.cwd(),
+          inMemory: isolate,
+          debug: false,
+          mock: scripted,
+          authDirectory: yield* Config.option(Config.string("GENT_AUTH_DIRECTORY")),
+        })
+        const started = yield* Gent.server({ ...options, port })
+        // Process fixtures parse this raw stdout line.
+        yield* Console.log(`Gent server ready on ${started.url.replace("/rpc", "")}`)
+        return yield* Effect.never
+      }),
+    ),
+)
+
 export const server = Command.make("server", {}, () =>
-  Console.log("Usage: gent server <status|stop>"),
-).pipe(Command.withSubcommands([serverStatus, serverStop]))
+  Console.log("Usage: gent server <start|status|stop>"),
+).pipe(Command.withSubcommands([serverStart, serverStatus, serverStop]))
 
 /** How long the doctor waits for a confirmed server to report extension health. */
 const DOCTOR_QUERY_TIMEOUT = "5 seconds"

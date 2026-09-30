@@ -1,7 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off — server primitive owns filesystem path resolution for gent's data directory
 import {
   Clock,
-  Config,
   Context,
   Effect,
   Exit,
@@ -17,22 +16,12 @@ import {
 import { join as pathJoin, resolve as pathResolve } from "node:path"
 import { Database } from "bun:sqlite"
 import type { ChildProcessSpawner } from "effect/unstable/process"
-import {
-  Branch,
-  dateFromMillis,
-  Message,
-  Session,
-  BranchId,
-  MessageId,
-  SessionId,
-  ToolCallId,
-  GentConnectionError,
-} from "@gent/core/protocol"
+import { dateFromMillis, GentConnectionError } from "@gent/core/protocol"
 import {
   GentPlatform,
-  BranchStorage,
-  MessageStorage,
-  SessionStorage,
+  type BranchStorage,
+  type MessageStorage,
+  type SessionStorage,
   RpcHandlersLive,
   provideWorkspaceIdHeader,
   workspaceHeadersForCwd,
@@ -46,13 +35,12 @@ import {
   StateLocation,
 } from "@gent/core/host"
 import { runProcess, type GentExtension } from "@gent/core/extensions/api"
-import * as Prompt from "effect/unstable/ai/Prompt"
 import { BunHttpServer } from "@effect/platform-bun"
 import { FetchHttpClient, Headers, HttpClient, HttpRouter, HttpServer } from "effect/unstable/http"
 import { BuiltinExtensionModules, BuiltinExtensions, CellBranchTools } from "@gent/extensions"
 import type { BranchToolFeature } from "@gent/core/extensions/branch-tools"
 import type { LanguageModel } from "effect/unstable/ai"
-import { GentLogLevel, GentObservability, LOG_DIR } from "./logger.js"
+import { GentLogLevel, GentObservability } from "./logger.js"
 
 // ── data-paths ──────────────────────────────────────────────────────────────
 
@@ -66,10 +54,6 @@ import { GentLogLevel, GentObservability, LOG_DIR } from "./logger.js"
  * here, so an operator who redirects the database does not get tools that
  * look somewhere else.
  */
-
-/** A malformed value is no value: the fallback under `home` still applies. */
-const optionalEnv = (name: string): Effect.Effect<Option.Option<string>> =>
-  Config.option(Config.string(name)).pipe(Effect.orElseSucceed(() => Option.none<string>()))
 
 const DB_FILE = "data.db"
 
@@ -85,6 +69,12 @@ interface DataPaths {
   readonly serverLock: string
   /** The SQLite file whose exclusive lock the owning server holds for its life. */
   readonly serverKernelLock: string
+  /**
+   * Where the server and the client write their logs. They follow the data
+   * directory, so an isolated run keeps its logs beside its database and its
+   * `doctor` reads the logs that run wrote.
+   */
+  readonly logDir: string
 }
 
 /** The paths inside an already-resolved data directory. */
@@ -98,6 +88,7 @@ const dataPathsIn = (dataDir: string): DataPaths => {
     archiveDir: pathJoin(resolvedDir, "storage-archive"),
     serverLock: pathJoin(resolvedDir, "server.lock"),
     serverKernelLock: pathJoin(resolvedDir, "server.lock.db"),
+    logDir: pathJoin(resolvedDir, "logs"),
   }
 }
 
@@ -108,19 +99,6 @@ const dataPathsIn = (dataDir: string): DataPaths => {
  */
 export const dataPaths = (home: string): Effect.Effect<DataPaths> =>
   Effect.map(resolveDataDir(home), dataPathsIn)
-
-/**
- * The log directory: `<GENT_DATA_DIR>/logs` for a run with a data directory of
- * its own, else the shared {@link LOG_DIR}. An isolated run keeps its logs
- * beside its database, and its `doctor` reads the logs that run wrote.
- */
-export const resolveLogDir: Effect.Effect<string> = Effect.map(
-  optionalEnv("GENT_DATA_DIR"),
-  Option.match({
-    onNone: () => LOG_DIR,
-    onSome: (dataDir) => pathJoin(pathResolve(dataDir), "logs"),
-  }),
-)
 
 // ── build-fingerprint ───────────────────────────────────────────────────────
 
@@ -237,10 +215,8 @@ export class ServerLockEntry extends Schema.Class<ServerLockEntry>("ServerLockEn
 const ServerLockEntryJson = Schema.fromJsonString(ServerLockEntry)
 
 /**
- * The lock sits in the data directory `data-paths.ts` resolves, beside the
- * database it guards. Under `~/.gent` it was shared by every `GENT_DATA_DIR`
- * run on the machine: a second run saw a foreign `dbPath`, signalled the
- * first run's server as stale, and that TUI lost its server.
+ * The lock sits in the data directory `dataPaths` resolves, beside the
+ * database it guards, so each `GENT_DATA_DIR` has its own server.
  */
 const serverLockPaths = (home: string): Effect.Effect<DataPaths, never, FileSystem.FileSystem> =>
   Effect.gen(function* () {
@@ -508,301 +484,24 @@ const stopLocked = (
     return ServerStopResult.cases.Stopped.make({ entry })
   })
 
-/** The shared server lock: the discovery entry, the kernel lock, status, probe, and stop. */
-export const serverLock = {
+/**
+ * The lock verbs `Gent.server` runs on its own lock: the discovery entry and
+ * the kernel lock. The SDK tests import it by relative path; the public
+ * surface does not export it.
+ */
+export const serverLockFile = {
   read: readLock,
   write: writeLock,
   remove: removeLock,
   hold: holdKernelLock,
+}
+
+/** What a client runs against the server that holds the lock: status, probe, and stop. */
+export const serverLock = {
   status: lockStatus,
   probe: (entry: ServerLockEntry) => probeServerLockEntryIdentity(entry),
   stop: stopLocked,
 }
-
-// ── debug-session ───────────────────────────────────────────────────────────
-
-/**
- * Debug session seeding — creates a pre-populated session with realistic
- * tool calls and message history for TUI development/testing.
- */
-
-interface DebugSessionInfo {
-  readonly sessionId: SessionId
-  readonly branchId: BranchId
-  readonly name: string
-}
-
-type DebugValue = Schema.Schema.Type<typeof Schema.Unknown>
-
-const makeText = (text: string) => Prompt.textPart({ text })
-
-const asToolCallId = (value: string) => ToolCallId.make(value)
-
-const makeJsonResult = (toolCallId: ToolCallId, toolName: string, value: DebugValue) =>
-  Prompt.toolResultPart({
-    id: toolCallId,
-    name: toolName,
-    isFailure: false,
-    providerExecuted: false,
-    result: value,
-  })
-
-const makeToolCall = (params: {
-  readonly id: ToolCallId
-  readonly name: string
-  readonly params: DebugValue
-}) => Prompt.toolCallPart({ ...params, providerExecuted: false })
-
-const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: string) {
-  const sessions = yield* SessionStorage
-  const branches = yield* BranchStorage
-  const messages = yield* MessageStorage
-  const platform = yield* GentPlatform
-  const sessionId = SessionId.make(yield* platform.randomId)
-  const branchId = BranchId.make(yield* platform.randomId)
-  const now = yield* Clock.currentTimeMillis
-  const nowPlus = (offsetMs: number) => dateFromMillis(now + offsetMs)
-
-  const session = new Session({
-    id: sessionId,
-    name: "debug scenario",
-    cwd,
-    createdAt: nowPlus(-60_000),
-    updatedAt: nowPlus(-1_000),
-  })
-  const branch = new Branch({
-    id: branchId,
-    sessionId,
-    createdAt: nowPlus(-60_000),
-  })
-
-  yield* sessions.createSession(session)
-  yield* branches.createBranch(branch)
-  yield* sessions.setActiveBranch(sessionId, branchId, session.updatedAt)
-
-  const user1 = Message.cases.regular.make({
-    id: MessageId.make(yield* platform.randomId),
-    sessionId,
-    branchId,
-    role: "user",
-    parts: [makeText("Review the TUI renderer cleanup and inspect the current implementation.")],
-    createdAt: nowPlus(-50_000),
-  })
-
-  const assistant1 = Message.cases.regular.make({
-    id: MessageId.make(yield* platform.randomId),
-    sessionId,
-    branchId,
-    role: "assistant",
-    parts: [
-      Prompt.reasoningPart({
-        text: "Need tool chrome parity, queue semantics, and child agent rows.",
-      }),
-      makeText("Inspected the relevant files and compared the renderer chrome paths."),
-      makeToolCall({
-        id: asToolCallId("dbg-read"),
-        name: "read",
-        params: { path: `${cwd}/apps/tui/src/routes/session.tsx` },
-      }),
-      makeToolCall({
-        id: asToolCallId("dbg-grep"),
-        name: "grep",
-        params: { pattern: "ToolFrame", path: `${cwd}/apps/tui/src` },
-      }),
-      makeToolCall({
-        id: asToolCallId("dbg-bash"),
-        name: "bash",
-        params: { command: "bun run typecheck" },
-      }),
-      makeToolCall({
-        id: asToolCallId("dbg-edit"),
-        name: "edit",
-        params: {
-          path: `${cwd}/apps/tui/src/components/message-list.tsx`,
-          oldString: "<text>[ x ] tool_call</text>",
-          newString: "<ToolFrame />",
-        },
-      }),
-      makeToolCall({
-        id: asToolCallId("dbg-write"),
-        name: "write",
-        params: {
-          path: `${cwd}/packages/sdk/src/server.ts`,
-          content: "export const debugScenario = true\n",
-        },
-      }),
-    ],
-    createdAt: nowPlus(-47_000),
-  })
-
-  const toolResults1 = Message.cases.regular.make({
-    id: MessageId.make(yield* platform.randomId),
-    sessionId,
-    branchId,
-    role: "tool",
-    parts: [
-      makeJsonResult(asToolCallId("dbg-read"), "read", {
-        path: `${cwd}/apps/tui/src/routes/session.tsx`,
-        lineCount: 18,
-        truncated: false,
-        content:
-          "const [toolsExpanded, setToolsExpanded] = createSignal(false)\nconst [composerState, setComposerState] = createSignal(...)",
-      }),
-      makeJsonResult(asToolCallId("dbg-grep"), "grep", {
-        matches: [
-          {
-            file: `${cwd}/apps/tui/src/components/tool-renderers/generic.tsx`,
-            line: 3,
-            content: 'import { ToolFrame } from "../tool-frame"',
-          },
-        ],
-        truncated: false,
-      }),
-      makeJsonResult(asToolCallId("dbg-bash"), "bash", {
-        stdout: "$ turbo run typecheck\nTodos: 4 successful, 4 total",
-        stderr: "",
-        exitCode: 0,
-      }),
-      makeJsonResult(asToolCallId("dbg-edit"), "edit", {
-        path: `${cwd}/apps/tui/src/components/message-list.tsx`,
-        replacements: 1,
-      }),
-      makeJsonResult(asToolCallId("dbg-write"), "write", {
-        path: `${cwd}/packages/sdk/src/server.ts`,
-        bytesWritten: 7421,
-      }),
-    ],
-    createdAt: nowPlus(-46_000),
-  })
-
-  const assistant2 = Message.cases.regular.make({
-    id: MessageId.make(yield* platform.randomId),
-    sessionId,
-    branchId,
-    role: "assistant",
-    parts: [makeText("The duplicate chrome came from rendering both tool summary surfaces.")],
-    createdAt: nowPlus(-45_000),
-  })
-
-  const user2 = Message.cases.interjection.make({
-    id: MessageId.make(yield* platform.randomId),
-    sessionId,
-    branchId,
-    role: "user",
-    parts: [makeText("Actually check queue vs steer too.")],
-    createdAt: nowPlus(-38_000),
-  })
-
-  const assistant3 = Message.cases.regular.make({
-    id: MessageId.make(yield* platform.randomId),
-    sessionId,
-    branchId,
-    role: "assistant",
-    parts: [
-      makeText(
-        "Steer should cut ahead of queued regular work. Regular sends queue in order while a turn is active.",
-      ),
-    ],
-    createdAt: nowPlus(-36_000),
-  })
-
-  const user3 = Message.cases.regular.make({
-    id: MessageId.make(yield* platform.randomId),
-    sessionId,
-    branchId,
-    role: "user",
-    parts: [makeText("Read the related session and review the audit output.")],
-    createdAt: nowPlus(-28_000),
-  })
-
-  const assistant4 = Message.cases.regular.make({
-    id: MessageId.make(yield* platform.randomId),
-    sessionId,
-    branchId,
-    role: "assistant",
-    parts: [
-      makeText("Pulled adjacent context and kicked off review helpers."),
-      makeToolCall({
-        id: asToolCallId("dbg-explore"),
-        name: "delegate.start",
-        params: { todo: "Where is the double-border coming from?" },
-      }),
-      makeToolCall({
-        id: asToolCallId("dbg-review"),
-        name: "delegate.start",
-        params: { todo: "Sanity-check the debug session bootstrap.", context: "fork" },
-      }),
-      makeToolCall({
-        id: asToolCallId("dbg-read-session"),
-        name: "read_session",
-        params: { sessionId: "019debug1-session" },
-      }),
-    ],
-    createdAt: nowPlus(-25_000),
-  })
-
-  const toolResults2 = Message.cases.regular.make({
-    id: MessageId.make(yield* platform.randomId),
-    sessionId,
-    branchId,
-    role: "tool",
-    parts: [
-      makeJsonResult(asToolCallId("dbg-explore"), "delegate.start", {
-        requestId: "dbg-explore",
-        sessionId: "019debug1-explore",
-        branchId: "019debug1-explore-branch",
-      }),
-      makeJsonResult(asToolCallId("dbg-review"), "delegate.start", {
-        requestId: "dbg-review",
-        sessionId: "019debug1-review",
-        branchId: "019debug1-review-branch",
-      }),
-      makeJsonResult(asToolCallId("dbg-read-session"), "read_session", {
-        sessionId: "019debug1-session",
-        content: "Audit said queue semantics and renderer chrome should be tested together.",
-        messageCount: 12,
-        branchCount: 1,
-      }),
-    ],
-    createdAt: nowPlus(-23_000),
-  })
-
-  const assistant5 = Message.cases.regular.make({
-    id: MessageId.make(yield* platform.randomId),
-    sessionId,
-    branchId,
-    role: "assistant",
-    parts: [
-      makeText(
-        "Audit lines up: keep one tool frame, make queue state structural, and test renderer behavior directly.",
-      ),
-    ],
-    createdAt: nowPlus(-21_000),
-  })
-
-  const seedMessages = [
-    user1,
-    assistant1,
-    toolResults1,
-    assistant2,
-    user2,
-    assistant3,
-    user3,
-    assistant4,
-    toolResults2,
-    assistant5,
-  ]
-
-  for (const message of seedMessages) {
-    yield* messages.createMessage(message)
-  }
-
-  return {
-    sessionId,
-    branchId,
-    name: Option.getOrElse(Option.fromUndefinedOr(session.name), () => "debug scenario"),
-  } satisfies DebugSessionInfo
-})
 
 // ── server ──────────────────────────────────────────────────────────────────
 
@@ -818,49 +517,26 @@ const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: string) 
 
 type BuiltRpcHandlers = Layer.Success<typeof RpcHandlersLive>
 
-export const StateSpec = Schema.Union([
+const StateSpec = Schema.Union([
   Schema.TaggedStruct("Sqlite", {
     /** The fallback root for the data directory when `GENT_DATA_DIR` is unset. */
     home: Schema.optional(Schema.String),
   }),
   Schema.TaggedStruct("Memory", {}),
 ]).pipe(Schema.toTaggedUnion("_tag"))
-export type StateSpec = Schema.Schema.Type<typeof StateSpec>
+type StateSpec = Schema.Schema.Type<typeof StateSpec>
 
-export const ProviderSpec = Schema.Union([
+const ProviderSpec = Schema.Union([
   Schema.TaggedStruct("Live", {}),
   Schema.TaggedStruct("Mock", {
     /** Finish every step having produced nothing — drives the unanswered turn. */
     empty: Schema.optional(Schema.Boolean),
   }),
 ]).pipe(Schema.toTaggedUnion("_tag"))
-export type ProviderSpec = Schema.Schema.Type<typeof ProviderSpec>
+type ProviderSpec = Schema.Schema.Type<typeof ProviderSpec>
 
-/**
- * Every launch value the standalone server reads from its environment.
- *
- * Each field stops the process at startup rather than letting a wrong value
- * run: a misspelled `GENT_PROVIDER_MODE` would otherwise quietly bill a live
- * provider for what the caller asked to run scripted. An unset variable takes
- * its default; a present but invalid one fails.
- *
- * This lives beside `GentServerOptions` because that is the surface it guards.
- * A launcher reads strings from its environment; this is where they become
- * values `Gent.server` accepts.
- */
-export const LaunchConfig = Config.all({
-  port: Config.port("GENT_PORT").pipe(Config.withDefault(3000)),
-  persistenceMode: Config.literals(["sqlite", "memory"], "GENT_PERSISTENCE_MODE").pipe(
-    Config.withDefault("sqlite"),
-  ),
-  providerMode: Config.literals(["live", "debug-scripted"], "GENT_PROVIDER_MODE").pipe(
-    Config.withDefault("live"),
-  ),
-  // `GENT_DATA_DIR` and the home directory are not read here: `dataPaths` and
-  // the platform own them, so the server and the doctor resolve one directory.
-  authDirectory: Config.option(Config.string("GENT_AUTH_DIRECTORY")),
-  shell: Config.option(Config.string("SHELL")),
-})
+/** What a startup `seed` reads and writes: the server's storage and its platform. */
+type ServerSeedServices = SessionStorage | BranchStorage | MessageStorage | GentPlatform
 
 export interface GentServerOptions {
   readonly cwd: string
@@ -875,8 +551,12 @@ export interface GentServerOptions {
   readonly state?: StateSpec
   readonly provider?: ProviderSpec
   readonly authDirectory?: string
-  /** Seed storage with a debug session on startup. */
-  readonly debug?: boolean
+  /**
+   * Runs once against a new owned server's storage, in the server's
+   * workspace, before `Gent.server` returns. The seed handles its own
+   * failures. The TUI's `--debug` seeds its sample session here.
+   */
+  readonly seed?: Effect.Effect<void, never, ServerSeedServices>
   /**
    * Bind this TCP port instead of an ephemeral one. A SQLite server still
    * takes the database lock and writes its entry, so other clients find it;
@@ -1022,7 +702,8 @@ const buildOwnedServer = (
     )
     // A user extension imports the same effect modules the shipped ones do.
     yield* platform.bindModules(BuiltinExtensionModules)
-    const observability = GentObservability(options.cwd, logLevel, yield* resolveLogDir)
+    const { logDir } = yield* dataPaths(home)
+    const observability = GentObservability(options.cwd, logLevel, logDir)
     const coreServices = yield* Layer.buildWithScope(
       createDependencies({
         cwd: options.cwd,
@@ -1071,16 +752,12 @@ const buildOwnedServer = (
 
     yield* Layer.buildWithScope(HttpServerLive, scope).pipe(Effect.orDie)
 
-    // Seed debug session if requested
-    if (options.debug === true) {
-      yield* seedDebugSession(options.cwd).pipe(
+    if (Predicate.isNotUndefined(options.seed)) {
+      yield* options.seed.pipe(
         provideWorkspaceIdHeader(Headers.fromInput(workspaceHeaders)),
+        // The SDK builds these headers from `cwd`; a rejected header is a bug.
+        Effect.orDie,
         Effect.provideContext(coreServices),
-        Effect.catchEager((error) =>
-          Effect.logWarning("Debug session seeding failed").pipe(
-            Effect.annotateLogs({ error: String(error) }),
-          ),
-        ),
       )
     }
 
@@ -1211,9 +888,9 @@ const resolveServerInternal = (
     for (let attempt = 0; attempt < HOLDER_WAIT_ATTEMPTS; attempt++) {
       // The lock is taken in a child scope, so a start that does not own can let it go.
       const lockScope = yield* Scope.fork(scope)
-      if (yield* serverLock.hold(home).pipe(Scope.provide(lockScope))) {
+      if (yield* serverLockFile.hold(home).pipe(Scope.provide(lockScope))) {
         // A server from before the kernel lock holds none; its entry still names it.
-        const existing = yield* serverLock.read(home)
+        const existing = yield* serverLockFile.read(home)
         if (
           Option.isSome(existing) &&
           existing.value.dbPath === dbPath &&
@@ -1225,7 +902,7 @@ const resolveServerInternal = (
         return yield* startOwnedServer(options, stateSpec, providerSpec, home, dbPath, fingerprint)
       }
       yield* Scope.close(lockScope, Exit.void)
-      const entry = yield* serverLock.read(home)
+      const entry = yield* serverLockFile.read(home)
       if (Option.isSome(entry)) {
         const holder = entry.value
         if (yield* probeServerLockEntryIdentity(holder)) return yield* attachOrBlock(holder)
@@ -1257,8 +934,8 @@ const startOwnedServer = (
   fingerprint: string,
 ): Effect.Effect<GentServer, GentConnectionError, Scope.Scope | LocalPlatform> =>
   Effect.gen(function* () {
-    const stale = yield* serverLock.read(home)
-    if (Option.isSome(stale)) yield* serverLock.remove(home, stale.value.serverId)
+    const stale = yield* serverLockFile.read(home)
+    if (Option.isSome(stale)) yield* serverLockFile.remove(home, stale.value.serverId)
 
     const platform = yield* GentPlatform
     const osInfo = yield* platform.osInfo
@@ -1269,7 +946,7 @@ const startOwnedServer = (
         () => new GentConnectionError({ message: "owned server internal state missing" }),
       ),
     )
-    yield* serverLock.write(
+    yield* serverLockFile.write(
       home,
       new ServerLockEntry({
         serverId: internal.serverId,
@@ -1282,6 +959,8 @@ const startOwnedServer = (
       }),
     )
     // The entry goes before the kernel lock is released: finalizers run in reverse.
-    yield* Effect.addFinalizer(() => serverLock.remove(home, internal.serverId).pipe(Effect.ignore))
+    yield* Effect.addFinalizer(() =>
+      serverLockFile.remove(home, internal.serverId).pipe(Effect.ignore),
+    )
     return server
   })

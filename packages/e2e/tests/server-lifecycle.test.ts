@@ -99,7 +99,7 @@ describe("server lifecycle", () => {
   )
 
   it.live(
-    "a standalone server stops on SIGTERM",
+    "a standalone server stops on SIGTERM and exits 143",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -109,6 +109,23 @@ describe("server lifecycle", () => {
           yield* killProcess(proc, "SIGTERM")
           const exited = yield* waitForProcessExit(proc.pid, 5_000)
           expect(exited).toBe(true)
+          // A shell chain after an interrupted server must not read success.
+          expect(yield* Effect.promise(() => proc.exited)).toBe(143)
+        }),
+      ).pipe(Effect.timeout("12 seconds")),
+    15_000,
+  )
+
+  it.live(
+    "a standalone server interrupted by SIGINT exits 130",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const dataDir = yield* makeTempDirectoryScoped("gent-lifecycle-")
+          const port = yield* randomLifecyclePort
+          const { proc } = yield* spawnServer({ dataDir, port })
+          yield* killProcess(proc, "SIGINT")
+          expect(yield* Effect.promise(() => proc.exited)).toBe(130)
         }),
       ).pipe(Effect.timeout("12 seconds")),
     15_000,

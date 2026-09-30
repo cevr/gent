@@ -14,7 +14,6 @@ import {
 import {
   type Array as Arr,
   Clock,
-  DateTime,
   Deferred,
   Duration,
   Effect,
@@ -105,6 +104,7 @@ import { createStore, produce, type SetStoreFunction } from "solid-js/store"
 import {
   addStep,
   type AssistantSegment,
+  currentMillis,
   emptyTurnSteps,
   type Message,
   type SessionEvent,
@@ -1074,8 +1074,6 @@ const THINKING_WORDS = [
   "assessing",
   "ruminating",
 ] satisfies Arr.NonEmptyReadonlyArray<string>
-
-export const currentMillis = () => DateTime.toEpochMillis(DateTime.nowUnsafe())
 
 const pickThinkingWord = (random: number): string => {
   const word = THINKING_WORDS[Math.floor(random * THINKING_WORDS.length)]
