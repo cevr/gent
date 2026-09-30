@@ -351,6 +351,8 @@ describe("Auth route", () => {
       let ctx = Option.none<ClientContextValue>()
       const pending: Array<{
         agentName?: string
+        /** The load's own fiber: its end is the end of the pane's handling of the reply. */
+        fiber: Fiber.Fiber<unknown, unknown>
         deferred: Deferred.Deferred<
           ReadonlyArray<{
             provider: string
@@ -367,7 +369,8 @@ describe("Auth route", () => {
                 yield* Deferred.make<
                   ReadonlyArray<{ provider: string; hasKey: boolean; required: boolean }>
                 >()
-              pending.push({ agentName: input.agentName, deferred })
+              const fiber = yield* Effect.withFiber((current) => Effect.succeed(current))
+              pending.push({ agentName: input.agentName, fiber, deferred })
               return yield* Deferred.await(deferred)
             }),
           listMethods: () => Effect.succeed({}),
@@ -407,11 +410,11 @@ describe("Auth route", () => {
         yield* Deferred.succeed(firstPending.value.deferred, [
           { provider: "anthropic", hasKey: false, required: false },
         ])
+        // The stale reply has been handled, dropped or not, before the frame is read.
+        yield* Fiber.await(firstPending.value.fiber).pipe(Effect.timeout("2 seconds"))
       }
-      const frame = yield* waitForFrame(
-        setup,
-        (next) => next.includes("openai") && !next.includes("anthropic"),
-      )
+      yield* Effect.promise(() => setup.renderOnce())
+      const frame = renderFrame(setup)
       expect(frame).toContain("openai")
       expect(frame).not.toContain("anthropic")
     }),
