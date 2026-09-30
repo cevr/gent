@@ -38,6 +38,9 @@ import {
 import type { LanguageModel } from "effect/ai"
 import * as AiError from "effect/ai/AiError"
 import * as Prompt from "effect/ai/Prompt"
+import { CHILD_COMPLETION_TYPE } from "./delegate.js"
+import { GOAL_CONTEXT_MESSAGE_TYPE } from "./goal.js"
+import { WAKE_MESSAGE_TYPE } from "./wake.js"
 import type * as Response from "effect/ai/Response"
 
 // Test seam: only tests read these exports. MODEL_COMPACTION_OUTPUT_TOKENS,
@@ -287,17 +290,35 @@ const previewOf = (message: Message): string => {
 }
 
 /**
+ * User-role notices the runtime or an extension writes for the model: the
+ * loop's step continuation, last-step and model-change notes (core's
+ * `RuntimeUserMessageType`), a goal continuation, a child's completion, and a
+ * wake. None is something the user asked. Any other custom type (an older
+ * build's "steering" correction, an extension's rendering of a user's task)
+ * can carry what the user wrote.
+ */
+const NOTICE_TYPES: ReadonlySet<string> = new Set([
+  "continuation",
+  "max-steps",
+  "model-change",
+  GOAL_CONTEXT_MESSAGE_TYPE,
+  CHILD_COMPLETION_TYPE,
+  WAKE_MESSAGE_TYPE,
+])
+
+/**
  * The user's messages by id with a preview each, oldest first, then how many
- * the cap left out. A user-role message with a custom type is a runtime or
- * extension notice (a goal continuation, a child's completion, a wake), not
- * something the user asked, so it is left out. An earlier window marker gets
+ * the cap left out. A message a client sent is the user's whatever its custom
+ * type (a `/goal` runs as a client request, so the goal it queues is the
+ * user's); otherwise a notice type leaves it out. An earlier window marker gets
  * its own line: the messages before it are listed there.
  */
 const userMessageLines = (history: ReadonlyArray<Message>): ReadonlyArray<string> => {
   const asked = history.filter((message) => {
     if (message.role !== "user") return false
+    if (message.metadata?.fromClient === true) return true
     const customType = message.metadata?.customType
-    return Predicate.isUndefined(customType) || customType === CONTEXT_WINDOW_TYPE
+    return Predicate.isUndefined(customType) || !NOTICE_TYPES.has(customType)
   })
   if (asked.length === 0) return []
   const listed = asked.slice(0, HANDOFF_USER_MESSAGES)
