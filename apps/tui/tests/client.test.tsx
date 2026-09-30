@@ -51,6 +51,7 @@ import { inRuntime, waitForFrame, waitUntil, waitUntilAdvancing } from "./helper
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { InteractionRequestId } from "@gent/core/extensions/branch-tools"
 import { useSessionFeed } from "../src/session"
+import { getSessionEventLabel } from "../src/message-list"
 import { useExtensionUI } from "../src/extensions/host"
 import { ClientContext, type ClientRuntime } from "../src/extensions/client-facets"
 import { RpcClientDefect, RpcClientError } from "effect/unstable/rpc/RpcClientError"
@@ -2170,8 +2171,9 @@ describe("useSessionFeed", () => {
           _tag: "turn-ended",
           steps: { count: 1, toolCalls: 1, costUsd: 0.01 },
         })
+        // The retry ran and failed; the error row says how the turn ended.
         const retry = events.find((event) => event._tag === "retrying")
-        expect(retry?._tag === "retrying" && retry.resolved).toBe(true)
+        expect(retry?._tag === "retrying" && retry.outcome).toBe("retried")
         dispose()
       })
     }),
@@ -2249,6 +2251,78 @@ describe("useSessionFeed", () => {
         dispose()
       })
     }),
+  )
+
+  it.live("a retry row sits above the answer of the attempt it waited for, and says why", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("retry-order-session")
+      const branchId = BranchId.make("retry-order-branch")
+      // The step opens its answer, the first attempt fails, and the retry answers.
+      const envelopes = [
+        makeEnvelope(1, AgentEvent.cases.StreamStarted.make({ sessionId, branchId })),
+        makeEnvelope(
+          2,
+          AgentEvent.cases.ProviderRetrying.make({
+            sessionId,
+            branchId,
+            attempt: 1,
+            maxAttempts: 3,
+            delayMs: 2_000,
+            error: "overloaded (529)\nretry-after: 2",
+          }),
+        ),
+        makeEnvelope(
+          3,
+          AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk: "the answer" }),
+        ),
+      ]
+      let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
+      const dispose = createRoot((disposeRoot) => {
+        const [active] = createSignal(makeSession(sessionId, branchId))
+        const client = feedClientStub({
+          sessionIdentity: identityOf(active),
+          client: createMockClient({
+            session: {
+              getSnapshot: () => Effect.succeed(snapshotFor(sessionId, branchId)),
+              events: () => Stream.concat(Stream.make(...envelopes), Stream.never),
+              watchRuntime: () => Stream.concat(Stream.make(runtimeSnapshot()), Stream.never),
+            },
+          }),
+          runtime: createMockRuntime(),
+        })
+        feed = Option.some(
+          useSessionFeed(
+            () => sessionId,
+            () => branchId,
+            client,
+            client.runtime.cast,
+            {
+              onInteraction: () => {},
+              onInteractionDismissed: () => {},
+              onBranchSwitch: () => {},
+              onQueueSnapshot: () => {},
+            },
+          ),
+        )
+        return disposeRoot
+      })
+      yield* waitUntil(
+        () =>
+          Option.isSome(feed) &&
+          feed.value.messages().some((message) => message.content === "the answer"),
+      )
+      yield* Effect.sync(() => {
+        if (Option.isNone(feed)) return
+        const items = feed.value.items()
+        expect(items.map((item) => item._tag)).toEqual(["retrying", "regular-message"])
+        const retry = items[0]
+        if (retry?._tag !== "retrying") return
+        // The answer streams, so the retry ran; its row names the provider's reason.
+        expect(retry.outcome).toBe("retried")
+        expect(getSessionEventLabel(retry)).toBe("Retried 1/3 · overloaded (529)")
+        dispose()
+      })
+    }).pipe(Effect.timeout("4 seconds")),
   )
 
   const expectNestedCellOperation = (
@@ -3182,7 +3256,11 @@ describe("useSessionFeed", () => {
       )
       if (Option.isNone(feed)) return yield* Effect.die("feed did not initialize")
       const retry = feed.value.items().find((item) => item._tag === "retrying")
-      expect(retry?._tag === "retrying" && retry.resolved).toBe(true)
+      // The cancel cut the retry short: it did not finish.
+      expect(retry?._tag === "retrying" && retry.outcome).toBe("cancelled")
+      if (retry?._tag === "retrying") {
+        expect(getSessionEventLabel(retry)).toBe("Retry 1/3 cancelled · temporary provider failure")
+      }
       expect(feed.value.items().some((item) => item._tag === "interruption")).toBe(true)
       expect(feed.value.messages()[0]?.content).toContain("stored summary")
       dispose()
