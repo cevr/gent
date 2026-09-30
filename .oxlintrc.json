@@ -45,6 +45,8 @@
     "gent/child-session-writer-admits": "error",
     // Custom — no `undefined`/`unknown` spelled to pass noNullish or noUnknownParameters.
     "gent/no-lint-evasion": "error",
+    // Custom — a whole-object JSON encode decides no identity (shipped source)
+    "gent/no-identity-encode": "error",
 
     // TypeScript - no any
     "typescript/no-explicit-any": "error",

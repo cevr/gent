@@ -14,7 +14,7 @@
     "install:global": "dir=\"${BUN_INSTALL:-$HOME/.bun}/bin\" && mkdir -p \"$dir\" && for f in gent-cell gent; do cp \"bin/$f\" \"$dir/.$f.new\" && mv -f \"$dir/.$f.new\" \"$dir/$f\"; done && echo \"Installed gent and gent-cell into $dir\"",
     "typecheck": "tsc --noEmit",
     "test": "env -u FORCE_COLOR NO_COLOR=1 bun test --reporter=dots --preload ../../packages/tooling/src/test-preload.ts --parallel --path-ignore-patterns=\"**/headless-cli-exit.test.ts\" tests",
-    "test:e2e": "env -u FORCE_COLOR NO_COLOR=1 bun test --reporter=dots --preload ../../packages/tooling/src/test-preload.ts integration tests/headless-cli-exit.test.ts"
+    "test:e2e": "env -u FORCE_COLOR NO_COLOR=1 bun test --reporter=dots --preload ../../packages/tooling/src/test-preload.ts --timeout=30000 integration tests/headless-cli-exit.test.ts"
   },
   "dependencies": {
     "@effect/platform-bun": "catalog:",

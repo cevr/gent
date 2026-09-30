@@ -474,72 +474,55 @@ describe("local health", () => {
     }).pipe(Effect.provide(BunServices.layer)),
   )
 
-  it.scopedLive(
-    "storage reset refuses while a server without the kernel lock answers for the database",
-    () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem
-        const home = yield* fs.makeTempDirectoryScoped()
-        const { hostname } = yield* (yield* GentPlatform).osInfo
-        const identity = { ...lockEntry, hostname, buildFingerprint: "older-build" }
-        const endpoint = yield* Effect.acquireRelease(
-          Effect.sync(() =>
-            // oxlint-disable-next-line effect/noGlobals -- this test needs a raw Bun identity fixture server
-            Bun.serve({
-              port: 0,
-              fetch: () =>
-                Response.json({
-                  serverId: identity.serverId,
-                  pid: identity.pid,
-                  hostname: identity.hostname,
-                  dbPath: identity.dbPath,
-                  buildFingerprint: identity.buildFingerprint,
-                }),
-            }),
-          ),
-          (server) => Effect.promise(() => server.stop(true)),
-        )
-        // The discovery entry a server writes once it listens, as its JSON file.
-        const paths = yield* dataPaths(home)
-        yield* fs.makeDirectory(paths.dataDir, { recursive: true })
-        const entry = new ServerLockEntry({
-          ...identity,
-          rpcUrl: `${new URL(endpoint.url).origin}/rpc`,
-        })
-        yield* fs.writeFileString(
-          paths.serverLock,
-          yield* Schema.encodeEffect(Schema.fromJsonString(ServerLockEntry))(entry),
-        )
-        reported.stderr = ""
-        const refused = yield* reportFailureOnStderr(refuseResetWhileServing(home)).pipe(
-          Effect.flip,
-        )
-        expect(refused._tag).toBe("CliStartupError")
-        expect(reported.stderr).toBe(
-          "CliStartupError: a server is running for this data directory; stop it with `gent server stop` first\n",
-        )
-      }).pipe(
-        Effect.provide(
-          Layer.mergeAll(
-            BunServices.layer,
-            GentPlatform.Test(),
-            Stdio.layerTest({
-              stdout: () => captureTo("stdout"),
-              stderr: () => captureTo("stderr"),
-            }),
-            // Anything logged as an error reaches the same stderr.
-            Layer.effect(
-              Console.Console,
-              Effect.map(Console.Console, (console) => ({
-                ...console,
-                error: (...args: ReadonlyArray<unknown>) => {
-                  reported.stderr += `${args.join(" ")}\n`
-                },
-              })),
-            ),
+  it.scopedLive("storage reset refuses while a server holds the database", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const home = yield* fs.makeTempDirectoryScoped()
+      const { hostname } = yield* (yield* GentPlatform).osInfo
+      const paths = yield* dataPaths(home)
+      yield* fs.makeDirectory(paths.dataDir, { recursive: true })
+      // The kernel lock a server holds for its life: an exclusive transaction,
+      // open until this test's scope closes.
+      const kernelLock = yield* Layer.build(
+        BunSqliteClient.layer({ filename: paths.serverKernelLock }),
+      )
+      yield* Effect.flatMap(SqlClient.SqlClient, (sql) => sql.unsafe("BEGIN EXCLUSIVE")).pipe(
+        Effect.provide(kernelLock),
+      )
+      // The discovery entry a server writes once it listens, as its JSON file.
+      const entry = new ServerLockEntry({ ...lockEntry, hostname })
+      yield* fs.writeFileString(
+        paths.serverLock,
+        yield* Schema.encodeEffect(Schema.fromJsonString(ServerLockEntry))(entry),
+      )
+      reported.stderr = ""
+      const refused = yield* reportFailureOnStderr(refuseResetWhileServing(home)).pipe(Effect.flip)
+      expect(refused._tag).toBe("CliStartupError")
+      expect(reported.stderr).toBe(
+        "CliStartupError: a server is running for this data directory; stop it with `gent server stop` first\n",
+      )
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          BunServices.layer,
+          GentPlatform.Test(),
+          Stdio.layerTest({
+            stdout: () => captureTo("stdout"),
+            stderr: () => captureTo("stderr"),
+          }),
+          // Anything logged as an error reaches the same stderr.
+          Layer.effect(
+            Console.Console,
+            Effect.map(Console.Console, (console) => ({
+              ...console,
+              error: (...args: ReadonlyArray<unknown>) => {
+                reported.stderr += `${args.join(" ")}\n`
+              },
+            })),
           ),
         ),
       ),
+    ),
   )
 
   it.scopedLive("storage reset is idempotent when no db files exist", () =>
