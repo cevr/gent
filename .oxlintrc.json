@@ -106,7 +106,6 @@
       "rules": {
         "effect/noNodeBuiltinImport": "off",
         "effect/noGlobals": "off",
-        "effect/noKnownValueWidening": "off",
         "effect/noNullish": "off",
         "effect/noReflectGet": "off",
         "effect/noRuntimeTypeof": "off",

@@ -7,15 +7,16 @@ import {
   FileSystem,
   Layer,
   Logger,
+  Option,
   References,
   Schema,
 } from "effect"
 import {
   buildLogPaths,
+  classifyLogFile,
   ensureLogDir,
   GentLogLevel,
   GentObservability,
-  GentTracerLive,
   makeJsonFileLogger,
 } from "../src/logger"
 import { dataPaths } from "../src/server"
@@ -25,12 +26,13 @@ import { dataPaths } from "../src/server"
 const LOG_DIR = "/nonexistent/gent-probe-x/logs"
 
 describe("buildLogPaths", () => {
-  it.effect("returns a deterministic shape under the given log dir", () =>
+  it.effect("names each side's file so the log classifier claims it for that side", () =>
     Effect.sync(() => {
       const paths = buildLogPaths("/Users/example/repo", LOG_DIR)
-      expect(paths.dir).toBe(LOG_DIR)
+      const nameIn = (file: string) => file.slice(`${LOG_DIR}/`.length)
       expect(paths.log.startsWith(`${LOG_DIR}/`)).toBe(true)
-      expect(paths.client.endsWith("-client.log")).toBe(true)
+      expect(classifyLogFile(nameIn(paths.log))).toEqual(Option.some("server"))
+      expect(classifyLogFile(nameIn(paths.client))).toEqual(Option.some("client"))
     }),
   )
 
@@ -177,8 +179,12 @@ describe("GentObservability", () => {
 
 // ── tracer ──────────────────────────────────────────────────────────────────
 
+// The file logger has nowhere to write under this directory and is skipped.
 const tracerWithConfig = (env: Record<string, string>) =>
-  Layer.provide(GentTracerLive, ConfigProvider.layer(ConfigProvider.fromEnv({ env })))
+  GentObservability("/logger-test/tracer", "Debug", LOG_DIR).pipe(
+    Layer.provide(BunFileSystem.layer),
+    Layer.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))),
+  )
 
 describe("tracer configuration", () => {
   it.live("keeps the default Effect tracer when OTLP is not configured", () =>

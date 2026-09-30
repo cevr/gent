@@ -29,7 +29,7 @@ import {
   guideDiagnosticLine,
   isSteeringFile,
 } from "./guards"
-import { type FileSet, processFileSet } from "./check-guardrails"
+import { fileSet } from "./check-guardrails"
 
 class GuideCodeError extends Schema.TaggedError<GuideCodeError>()("GuideCodeError", {
   message: Schema.String,
@@ -71,18 +71,6 @@ export const steeringFilesAmong = Effect.fn("Tooling.steeringFilesAmong")(functi
     concurrency: 16,
   })
   return files.filter((file, index) => path.join(realRoot, file) === real[index])
-})
-
-/**
- * The steering files of the guards' one file set (`fileSet`: the git index),
- * each once by its real path. An untracked file is not read: a clean clone
- * would not hold it.
- */
-export const steeringFiles = Effect.fn("Tooling.steeringFiles")(function* (
-  repoRoot: string,
-  set: FileSet,
-) {
-  return yield* steeringFilesAmong(repoRoot, yield* set.files)
 })
 
 /**
@@ -134,9 +122,11 @@ const checkGuideCode = Effect.fn("Tooling.checkGuideCode")(function* () {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
   const repoRoot = path.resolve(import.meta.dirname, "..", "..", "..")
-  const set = processFileSet(repoRoot)
-  // In a hook, the staged text: the check compiles the commit being made.
-  const texts = yield* set.texts(yield* steeringFiles(repoRoot, set))
+  // The guards' one file set: the git index. An untracked file is not read, since a
+  // clean clone would not hold it. In a hook, the staged text: the check compiles
+  // the commit being made.
+  const set = fileSet(repoRoot)
+  const texts = yield* set.texts(yield* steeringFilesAmong(repoRoot, yield* set.files))
   const blocks = texts.flatMap(({ file, text }) => guideCodeBlocks(file, text))
   if (blocks.length === 0) {
     return yield* new GuideCodeError({ message: "  the steering prose has no ```ts block" })

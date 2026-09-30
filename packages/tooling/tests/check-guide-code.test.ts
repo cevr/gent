@@ -3,7 +3,7 @@ import { Config, Effect, FileSystem, Path } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import { describe, expect, it } from "effect-bun-test"
 import { fileSet } from "../src/check-guardrails"
-import { requireContextModules, steeringFiles, steeringFilesAmong } from "../src/check-guide-code"
+import { requireContextModules, steeringFilesAmong } from "../src/check-guide-code"
 
 const contextTest = it.scopedLive.layer(BunServices.layer)
 
@@ -25,7 +25,7 @@ describe("a compile context's dependencies", () => {
     }),
   )
 
-  contextTest("a context whose node_modules is installed compiles", () =>
+  contextTest("a context with installed node_modules passes the dependency check", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
@@ -79,7 +79,8 @@ describe("the steering files the check reads", () => {
       yield* fs.writeFileString(path.join(repoRoot, "docs", "draft.md"), "# Draft\n")
       expect(yield* git(["init", "-q"])).toBe(ChildProcessSpawner.ExitCode(0))
       expect(yield* git(["add", "AGENTS.md"])).toBe(ChildProcessSpawner.ExitCode(0))
-      expect(yield* steeringFiles(repoRoot, fileSet(repoRoot, env))).toEqual(["AGENTS.md"])
+      const listed = yield* fileSet(repoRoot, env).files
+      expect(yield* steeringFilesAmong(repoRoot, listed)).toEqual(["AGENTS.md"])
     }),
   )
 })
