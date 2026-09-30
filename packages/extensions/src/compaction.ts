@@ -264,10 +264,18 @@ const summarize = Effect.fn("ModelCompaction.summarize")(function* (params: {
 })
 
 /**
- * User messages the notice lists by id. The list runs oldest first, so the
- * original task is always on it, whatever part of the history the summary saw.
+ * User messages the notice lists by id. The list runs oldest first, so its
+ * first line is the original task or the earlier handoff that lists it,
+ * whatever part of the history the summary saw.
  */
 const HANDOFF_USER_MESSAGES = 12
+
+/**
+ * `metadata.customType` of the marker that starts a context window (core's
+ * `RuntimeUserMessageType` "context-window"). An earlier handoff's marker
+ * leads the history of the next one.
+ */
+const CONTEXT_WINDOW_TYPE = "context-window"
 
 /** Characters of one listed user message's one-line preview. */
 const HANDOFF_PREVIEW_CHARS = 120
@@ -278,15 +286,28 @@ const previewOf = (message: Message): string => {
   return `${line.slice(0, HANDOFF_PREVIEW_CHARS)}…`
 }
 
-/** The user's messages by id with a preview each, oldest first, then how many the cap left out. */
+/**
+ * The user's messages by id with a preview each, oldest first, then how many
+ * the cap left out. A user-role message with a custom type is a runtime or
+ * extension notice (a goal continuation, a child's completion, a wake), not
+ * something the user asked, so it is left out. An earlier window marker gets
+ * its own line: the messages before it are listed there.
+ */
 const userMessageLines = (history: ReadonlyArray<Message>): ReadonlyArray<string> => {
-  const asked = history.filter((message) => message.role === "user")
+  const asked = history.filter((message) => {
+    if (message.role !== "user") return false
+    const customType = message.metadata?.customType
+    return Predicate.isUndefined(customType) || customType === CONTEXT_WINDOW_TYPE
+  })
   if (asked.length === 0) return []
   const listed = asked.slice(0, HANDOFF_USER_MESSAGES)
-  const lines = [
-    "The user's messages, oldest first:",
-    ...listed.map((message) => `- ${message.id}: ${previewOf(message)}`),
-  ]
+  const lineOf = (message: Message) => {
+    if (message.metadata?.customType === CONTEXT_WINDOW_TYPE) {
+      return `- ${message.id}: the earlier handoff; it, or context.history, lists the user's messages before it.`
+    }
+    return `- ${message.id}: ${previewOf(message)}`
+  }
+  const lines = ["The user's messages, oldest first:", ...listed.map(lineOf)]
   const more = asked.length - listed.length
   if (more > 0) lines.push(`- ${more} more: page context.history for them.`)
   return lines

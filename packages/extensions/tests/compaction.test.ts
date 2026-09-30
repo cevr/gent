@@ -16,6 +16,8 @@ import {
   finishPart,
   LanguageModelLayers,
   textDeltaPart,
+  textStep,
+  toolCallStep,
   waitFor,
   createRpcHarness,
 } from "@gent/core/test-utils"
@@ -33,7 +35,8 @@ import {
   RetainedBindings,
   selectSummarySource,
 } from "../src/compaction.js"
-import { e2ePreset } from "./helpers/test-preset.js"
+import { platform } from "./helpers/cell-kernel.js"
+import { e2ePreset, shippedPreset } from "./helpers/test-preset.js"
 
 // ── context handoff ─────────────────────────────────────────────────────────
 
@@ -70,6 +73,12 @@ const failureOf = <A, E>(exit: Exit.Exit<A, E>): Option.Option<E> => {
   if (Exit.isFailure(exit)) return Cause.findErrorOption(exit.cause)
   return Option.none()
 }
+
+const partsText = (message: Message): string =>
+  message.parts
+    .filter((part) => part.type === "text")
+    .map((part) => part.text)
+    .join("")
 
 const promptText = (prompt: Prompt.Prompt): string =>
   prompt.content
@@ -325,10 +334,16 @@ describe("context handoff", () => {
       const followUps = Array.from({ length: 13 }, (_, index) =>
         textMessage(`ask-${index + 2}`, "user", `follow-up ${index + 2}`, index + 3),
       )
+      // A goal continuation is a user-role notice, not something the user asked.
+      const continuation = Message.cases.regular.make({
+        ...textMessage("goal", "user", "Continue toward the goal.", 2),
+        metadata: { customType: "goal-context" },
+      })
       return Effect.gen(function* () {
         const result = yield* compact({
           history: [
             textMessage("task", "user", "Make 36 listings.\n  Title each one.", 1),
+            continuation,
             textMessage("work", "assistant", "a".repeat(6_000), 2),
             ...followUps,
             textMessage("last", "assistant", "b".repeat(100), 16),
@@ -481,6 +496,56 @@ describe("context handoff", () => {
 // ── model compaction rpc ────────────────────────────────────────────────────
 
 describe("model compaction RPC boundary", () => {
+  it.scopedLive(
+    "a second handoff names the first one, so the original task is one read away",
+    () =>
+      Effect.gen(function* () {
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          textStep("noted"),
+          toolCallStep("cell", { code: "await context.compact()" }),
+          textStep("first summary"),
+          textStep("compacted once"),
+          textStep("kept going"),
+          toolCallStep("cell", { code: "await context.compact()" }),
+          textStep("second summary"),
+          textStep("compacted twice"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...shippedPreset,
+          providerLayer,
+        })
+        const replied = (text: string) =>
+          waitFor(client.message.list({ branchId }), (items) =>
+            items.some((item) =>
+              item.parts.some((part) => part.type === "text" && part.text === text),
+            ),
+          )
+        const turn = (content: string, reply: string) =>
+          Effect.gen(function* () {
+            yield* client.message.send({ sessionId, branchId, content })
+            return yield* replied(reply)
+          })
+        yield* turn("ORIGINAL TASK: list the loaders", "noted")
+        yield* turn("compact once", "compacted once")
+        yield* turn("keep going", "kept going")
+        const messages = yield* turn("compact twice", "compacted twice")
+        const markers = messages.filter(
+          (message) => message.metadata?.customType === "context-window",
+        )
+        expect(markers).toHaveLength(2)
+        const [first, second] = markers.map(partsText)
+        const task = messages.find((message) => partsText(message).startsWith("ORIGINAL TASK"))
+        expect(first).toContain(`- ${task?.id}: ORIGINAL TASK: list the loaders`)
+        // The first marker leads the second list, as the one that lists the messages before it.
+        expect(second).toContain(
+          `The user's messages, oldest first:\n- ${markers[0]?.id}: the earlier handoff; it, or context.history, lists the user's messages before it.\n`,
+        )
+        expect(second).not.toContain(": Context handoff (untrusted data")
+        yield* controls.assertDone
+      }).pipe(Effect.timeout("25 seconds"), Effect.provide(platform)),
+    30_000,
+  )
+
   it.scopedLive(
     "settles a native turn after bounded compaction and preserves the visible history",
     () =>
