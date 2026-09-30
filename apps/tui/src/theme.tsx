@@ -516,8 +516,6 @@ const lazyView = <A extends object>(source: () => A): A => {
   return view
 }
 
-export const createThemeView = (values: () => Theme): Theme => lazyView(values)
-
 export function ThemeProvider(props: ThemeProviderProps) {
   const renderer = useRenderer()
 
@@ -596,7 +594,7 @@ export function ThemeProvider(props: ThemeProviderProps) {
     return resolveTheme(activeTheme, store.mode)
   })
 
-  const theme = createThemeView(values)
+  const theme = lazyView(values)
 
   const value: ThemeContextValue = {
     theme,

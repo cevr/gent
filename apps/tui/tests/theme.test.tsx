@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
-import { describe, expect, it, test } from "effect-bun-test"
-import { createEffect, createRoot, createSignal } from "solid-js"
-import { createThemeView, DEFAULT_THEMES, resolveTheme, type Theme, useTheme } from "../src/theme"
+import { describe, expect, it } from "effect-bun-test"
+import { createEffect } from "solid-js"
+import { DEFAULT_THEMES, resolveTheme, type Theme, useTheme } from "../src/theme"
 import { Effect, Option } from "effect"
 import type { TerminalColors } from "@opentui/core"
 import { useRenderer } from "@opentui/solid"
@@ -23,15 +23,24 @@ const expectViewToMirror = (view: Theme, theme: Theme) => {
   expect(seen.length).toBe(expected.size)
   for (const [key, color] of seen) {
     expect(expected.has(key)).toBe(true)
-    expect(color).toBe(expected.get(key))
+    expect(color).toEqual(expected.get(key))
   }
 }
 
 describe("theme view", () => {
-  test("every resolved theme key is reachable on the view as an enumerable getter", () => {
-    createRoot((dispose) => {
-      const [values] = createSignal(dark)
-      const view = createThemeView(values)
+  // The provider hands out one theme object; each key reads the theme in force.
+  it.live("every theme key is a getter on one object, and a mode switch shows through it", () =>
+    Effect.gen(function* () {
+      let ctx = Option.none<ReturnType<typeof useTheme>>()
+      const Probe = () => {
+        ctx = Option.some(useTheme())
+        return <text>probe</text>
+      }
+      yield* Effect.promise(() => renderWithProviders(() => <Probe />))
+      const context = yield* Effect.fromOption(ctx)
+      context.set("fx")
+      context.setMode("dark")
+      const view = context.theme
       expect(keysOf(view)).toEqual(keysOf(dark))
       for (const key of Object.keys(view)) {
         const descriptor = Object.getOwnPropertyDescriptor(view, key)
@@ -41,22 +50,12 @@ describe("theme view", () => {
         expect(descriptor!.enumerable).toBe(true)
       }
       expectViewToMirror(view, dark)
-      dispose()
-    })
-  })
-
-  test("a theme swap shows through every key on the same view object", () => {
-    createRoot((dispose) => {
-      const [values, setValues] = createSignal(dark)
-      const view = createThemeView(values)
-      expect(view.primary).toBe(dark.primary)
       expect(dark.background).not.toBe(light.background)
-      setValues(light)
+      context.setMode("light")
+      expect(context.theme).toBe(view)
       expectViewToMirror(view, light)
-      expect(view.background).toBe(light.background)
-      dispose()
-    })
-  })
+    }).pipe(Effect.timeout("10 seconds")),
+  )
 })
 
 // ── system theme ────────────────────────────────────────────────────────────
