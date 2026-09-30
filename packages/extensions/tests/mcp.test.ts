@@ -37,7 +37,8 @@ import { shippedPreset } from "./helpers/test-preset.js"
  * this process served. `MCP_FIXTURE_FAIL_ON_START=n` exits the nth start;
  * `MCP_FIXTURE_EXIT_AFTER_CALL` exits once it answered a call;
  * `count` is not listed while `MCP_FIXTURE_HIDE_COUNT` names a file that
- * exists; `MCP_FIXTURE_COLLIDE` adds tools whose names clean to one id.
+ * exists; `MCP_FIXTURE_COLLIDE` adds tools whose names clean to one id;
+ * `MCP_FIXTURE_ENV_TOOL` adds `env`, which reads the server's environment.
  */
 const FIXTURE_SERVER = String.raw`
 const fs = require("node:fs")
@@ -71,6 +72,13 @@ if (process.env.MCP_FIXTURE_COLLIDE) {
     tools.push({ name, description: "Collides as " + name + ".", inputSchema: { type: "object" } })
   }
 }
+if (process.env.MCP_FIXTURE_ENV_TOOL) {
+  tools.push({
+    name: "env",
+    description: "Read a variable of the server's environment.",
+    inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] },
+  })
+}
 for (let index = 0; index < Number(process.env.MCP_FIXTURE_EXTRA ?? 0); index++) {
   tools.push({
     name: "extra_" + String(index).padStart(3, "0"),
@@ -100,6 +108,8 @@ const answer = (request) => {
       return { result: { content: [{ type: "text", text: "fixture failure" }], isError: true } }
     case "count":
       return { result: { content: [{ type: "text", text: String(calls) }] } }
+    case "env":
+      return { result: { content: [{ type: "text", text: process.env[input.name] ?? "unset" }] } }
     default:
       return { result: { content: [{ type: "text", text: "called " + request.params.name }] } }
   }
@@ -949,6 +959,59 @@ describe("mcp tools in the cell", () => {
         })
         expect(yield* fixture.starts).toBe(4)
       }).pipe(Effect.timeout("25 seconds"), Effect.provide(platformLayer)),
+    30_000,
+  )
+
+  it.scopedLive(
+    "a stdio server runs with the host environment, its entry's env winning",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* makeFixture
+        const code = [
+          "const host = await tools.mcp.fixture.env({ name: 'GENT_MCP_HOST_ONLY' })",
+          "const declared = await tools.mcp.fixture.env({ name: 'GENT_MCP_DECLARED' })",
+          "JSON.stringify({ host, declared })",
+        ].join("; ")
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          toolCallStep("cell", { code }),
+          textStep("done"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...shippedPreset,
+          extensionInputs: [
+            ...shippedPreset.extensionInputs,
+            McpServers("@test/mcp-env", {
+              fixture: fixture.stdio({
+                MCP_FIXTURE_ENV_TOOL: "1",
+                GENT_MCP_DECLARED: "from the entry",
+              }),
+            }),
+          ],
+          providerLayer,
+        })
+        yield* client.message.send({ sessionId, branchId, content: "read the environment" })
+        const result = yield* cellResultAfterDone(client, branchId)
+        expect(result).toMatchObject({
+          name: "cell",
+          isFailure: false,
+          result: {
+            display: encodeJson({ host: "from the host", declared: "from the entry" }),
+          },
+        })
+      }).pipe(
+        Effect.timeout("25 seconds"),
+        Effect.provide(
+          Layer.merge(
+            platformLayer,
+            // The gent process's environment, as a proxy or CA variable is in a user's shell.
+            ConfigProvider.layer(
+              ConfigProvider.fromEnv({
+                env: { GENT_MCP_HOST_ONLY: "from the host", GENT_MCP_DECLARED: "from the host" },
+              }),
+            ),
+          ),
+        ),
+      ),
     30_000,
   )
 })

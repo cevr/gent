@@ -1,5 +1,6 @@
 import {
   Config,
+  ConfigProvider,
   Context,
   Duration,
   Effect,
@@ -404,13 +405,46 @@ const failureMessage = (cause: unknown) => {
 
 const timeoutOf = (server: McpServer) => server.config.timeoutMs ?? DEFAULT_TIMEOUT_MS
 
-const transportFor = (server: McpServer) => {
+/**
+ * The environment of this process. A stdio server runs with it, under its
+ * entry's `env`, as bash and the cell do: a proxy or CA variable in the
+ * user's shell reaches the server, and a restricted list would protect
+ * nothing the cell cannot already run (decided by consistency with bash and
+ * the cell; the cell runs full Bun).
+ */
+const hostEnvironment = Effect.gen(function* () {
+  const provider = yield* ConfigProvider.ConfigProvider
+  const environment = new Map<string, string>()
+  // The environment provider nests a name at each `_`; the walk joins the path back.
+  const walk = (path: ReadonlyArray<string>): Effect.Effect<void> =>
+    Effect.gen(function* () {
+      const loaded = yield* provider.load(path).pipe(
+        Effect.map(Option.fromUndefinedOr),
+        Effect.orElseSucceed(() => Option.none()),
+      )
+      if (Option.isNone(loaded)) return
+      const node = loaded.value
+      if (Predicate.isString(node.value) && path.length > 0) {
+        environment.set(path.join("_"), node.value)
+      }
+      let children: ReadonlyArray<string> = []
+      if (node._tag === "Record") children = [...node.keys]
+      if (node._tag === "Array") {
+        children = Array.from({ length: node.length }, (_, index) => String(index))
+      }
+      yield* Effect.forEach(children, (child) => walk([...path, child]), { discard: true })
+    })
+  yield* walk([])
+  return Object.fromEntries(environment)
+})
+
+const transportFor = (server: McpServer, environment: Readonly<Record<string, string>>) => {
   const config = server.config
   if ("command" in config) {
     return new StdioClientTransport({
       command: config.command,
       args: [...(config.args ?? [])],
-      env: { ...config.env },
+      env: { ...environment, ...config.env },
       cwd: server.cwd,
       // The server's own log would land in the terminal gent draws.
       stderr: "ignore",
@@ -432,8 +466,10 @@ const connect = (server: McpServer) =>
       (opened) =>
         Effect.tryPromise(() => opened.close()).pipe(Effect.timeout(CLOSE_TIMEOUT), Effect.ignore),
     )
+    let environment: Readonly<Record<string, string>> = {}
+    if ("command" in server.config) environment = yield* hostEnvironment
     yield* Effect.tryPromise({
-      try: () => client.connect(transportFor(server)),
+      try: () => client.connect(transportFor(server, environment)),
       catch: (cause) =>
         new McpError({ server: server.name, message: `connect: ${failureMessage(cause)}` }),
     }).pipe(
