@@ -544,6 +544,43 @@ describe("mcp config", () => {
   )
 
   it.scopedLive(
+    "a project file's entry is that project's server; the same entry in the user file serves every project",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const fixture = yield* makeFixture
+        const home = path.join(fixture.directory, "home")
+        const projects = [path.join(fixture.directory, "a"), path.join(fixture.directory, "b")]
+        // A script runner such as `bun run mcp` names no path, yet runs each project's own script.
+        for (const project of projects) {
+          yield* fs.makeDirectory(path.join(project, ".gent"), { recursive: true })
+          yield* fs.writeFileString(
+            path.join(project, ".gent", "mcp.json"),
+            encodeJson({ mcpServers: { dev: fixture.stdio() } }),
+          )
+        }
+        yield* fs.makeDirectory(path.join(home, ".gent"), { recursive: true })
+        yield* fs.writeFileString(
+          path.join(home, ".gent", "config.json"),
+          encodeJson({ trustedProjects: projects }),
+        )
+        for (const cwd of projects)
+          yield* collectTestContributions(McpExtension.setup, { home, cwd })
+        expect(yield* fixture.starts).toBe(2)
+        // From the user file, one listing serves both projects.
+        yield* fs.writeFileString(
+          path.join(home, ".gent", "mcp.json"),
+          encodeJson({ mcpServers: { global: fixture.stdio() } }),
+        )
+        for (const cwd of projects)
+          yield* collectTestContributions(McpExtension.setup, { home, cwd })
+        expect(yield* fixture.starts).toBe(3)
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(platformLayer)),
+    30_000,
+  )
+
+  it.scopedLive(
     "setup drops a cached catalog no setup listed or read in 14 days, and keeps the rest",
     () =>
       Effect.gen(function* () {

@@ -107,6 +107,16 @@ const McpConfigFile = Schema.Struct({
   mcpServers: Schema.optional(Schema.Record(Schema.String, McpServerConfig)),
 })
 
+/** The file an entry came from: the user's `~/.gent/mcp.json`, or a project's `.gent/mcp.json`. */
+const McpConfigSource = Schema.Literals(["user", "project"])
+type McpConfigSource = typeof McpConfigSource.Type
+
+/** An entry as written, and the file it came from. */
+interface McpConfigEntry {
+  readonly config: McpServerConfig
+  readonly source: McpConfigSource
+}
+
 /** A configured server under its id segment, with its variables expanded. */
 interface McpServer {
   /** The id segment: `mcp.<name>.<tool>`. */
@@ -143,30 +153,39 @@ const namesRelativePath = (value: string): boolean => {
 
 /**
  * What decides the tools a server lists: the entry as it runs, after
- * expansion, with its transport type, and for a stdio server the directory it
- * runs in when that can change what it runs: the entry names a `cwd`, or its
- * command or an argument names a relative path. The rest run in the session's
- * directory but key without it, so one listing serves every project. The key
- * fields go in a fixed order so key order never matters. It holds secrets, so
- * only its SHA-256 digest is kept.
+ * expansion, with its transport type, and the directory it belongs to when
+ * that can change what it serves. An entry from a project's file belongs to
+ * that project, whatever it names: `bun run mcp` or a local port serves each
+ * project's own tools. A user-file entry keys with its directory only when it
+ * is a stdio entry that names a `cwd`, or whose command or an argument names
+ * a relative path; the rest key without it, so one listing serves every
+ * project. The key fields go in a fixed order so key order never matters. It
+ * holds secrets, so only its SHA-256 digest is kept.
  */
-const serverIdentity = (written: string, config: McpServerConfig, cwd: string) => {
+const serverIdentity = (entry: {
+  readonly written: string
+  readonly config: McpServerConfig
+  readonly source: McpConfigSource
+  readonly cwd: string
+}) => {
+  const { written, config } = entry
+  let located = entry.source === "project"
   if ("command" in config) {
-    let namedCwd = ""
-    if (
+    located ||=
       Predicate.isNotUndefined(config.cwd) ||
       namesRelativePath(config.command) ||
       (config.args ?? []).some(namesRelativePath)
-    ) {
-      namedCwd = cwd
-    }
+  }
+  let cwd = ""
+  if (located) cwd = entry.cwd
+  if ("command" in config) {
     return encodeKeyFields([
       written,
       "stdio",
       config.command,
       config.args ?? [],
       sortedEntries(config.env),
-      namedCwd,
+      cwd,
       config.timeoutMs ?? 0,
     ])
   }
@@ -176,20 +195,16 @@ const serverIdentity = (written: string, config: McpServerConfig, cwd: string) =
     configuredTransport(config),
     config.url,
     sortedEntries(config.headers),
+    cwd,
     config.timeoutMs ?? 0,
   ])
 }
 
 const serverKey = Effect.fn("Mcp.serverKey")(function* (
-  written: string,
-  config: McpServerConfig,
-  cwd: string,
+  entry: Parameters<typeof serverIdentity>[0],
 ) {
   const crypto = yield* Crypto.Crypto
-  const digest = yield* crypto.digest(
-    "SHA-256",
-    new TextEncoder().encode(serverIdentity(written, config, cwd)),
-  )
+  const digest = yield* crypto.digest("SHA-256", new TextEncoder().encode(serverIdentity(entry)))
   return Hex.encode(digest)
 })
 
@@ -326,17 +341,24 @@ const projectTrusted = Effect.fn("Mcp.projectTrusted")(function* (home: string, 
   )
 })
 
+const fromSource = (
+  entries: Readonly<Record<string, McpServerConfig>>,
+  source: McpConfigSource,
+): Readonly<Record<string, McpConfigEntry>> =>
+  Object.fromEntries(Object.entries(entries).map(([name, config]) => [name, { config, source }]))
+
 /**
  * The servers `~/.gent/mcp.json` names, and a trusted project's
- * `.gent/mcp.json` over them by name. A disabled entry, or one whose variables
- * do not expand, is left out with a warning.
+ * `.gent/mcp.json` over them by name, each with the file it came from. A
+ * disabled entry, or one whose variables do not expand, is left out with a
+ * warning.
  */
 const readMcpConfig = Effect.fn("Mcp.readConfig")(function* (home: string, cwd: string) {
   const path = yield* Path.Path
-  const user = yield* readConfigFile(path.join(home, ".gent", "mcp.json"))
-  let project = {}
+  const user = fromSource(yield* readConfigFile(path.join(home, ".gent", "mcp.json")), "user")
+  let project: Readonly<Record<string, McpConfigEntry>> = {}
   if (yield* projectTrusted(home, cwd)) {
-    project = yield* readConfigFile(path.join(cwd, ".gent", "mcp.json"))
+    project = fromSource(yield* readConfigFile(path.join(cwd, ".gent", "mcp.json")), "project")
   }
   return { ...user, ...project }
 })
@@ -353,21 +375,21 @@ interface MisconfiguredServer {
  * or whose key cannot be computed, which are reported and never started.
  */
 const resolveServers = Effect.fn("Mcp.resolveServers")(function* (
-  entries: Readonly<Record<string, McpServerConfig>>,
+  entries: Readonly<Record<string, McpConfigEntry>>,
   sessionCwd: string,
 ) {
   const path = yield* Path.Path
   const servers: Array<McpServer> = []
   const misconfigured: Array<MisconfiguredServer> = []
   const enabled = Object.entries(entries)
-    .filter(([, config]) => config.enabled !== false)
+    .filter(([, entry]) => entry.config.enabled !== false)
     .toSorted(([left], [right]) => compareIds(left, right))
   const names = allocateSegments(
     enabled.map(([written]) => written),
     SERVER_SEGMENT_LIMIT,
     "server",
   )
-  for (const [written, config] of enabled) {
+  for (const [written, { config, source }] of enabled) {
     const name = names.get(written) ?? "server"
     const expanded = yield* Effect.result(expandConfig(config))
     if (Result.isFailure(expanded)) {
@@ -381,7 +403,7 @@ const resolveServers = Effect.fn("Mcp.resolveServers")(function* (
     if ("command" in expanded.success && Predicate.isNotUndefined(expanded.success.cwd)) {
       cwd = path.resolve(sessionCwd, expanded.success.cwd)
     }
-    const key = yield* Effect.result(serverKey(written, expanded.success, cwd))
+    const key = yield* Effect.result(serverKey({ written, config: expanded.success, source, cwd }))
     if (Result.isFailure(key)) {
       yield* Effect.logWarning("mcp.server.key").pipe(
         Effect.annotateLogs({ server: written, error: key.failure.message }),
@@ -2568,7 +2590,7 @@ const McpCommand = request({
  */
 const registerServers = Effect.fn("Mcp.registerServers")(function* (
   extensionId: string,
-  entries: Readonly<Record<string, McpServerConfig>>,
+  entries: Readonly<Record<string, McpConfigEntry>>,
 ) {
   const environment = yield* HostEnvironment
   const host = yield* ExtensionHost
@@ -2635,9 +2657,9 @@ export const McpExtension = defineExtension({
   }),
 })
 
-/** The MCP extension over inline servers instead of the config files. */
+/** The MCP extension over inline servers instead of the config files; they key as user-file entries. */
 export const McpServers = (id: string, entries: Readonly<Record<string, McpServerConfig>>) =>
   defineExtension({
     id,
-    setup: registerServers(id, entries),
+    setup: registerServers(id, fromSource(entries, "user")),
   })
