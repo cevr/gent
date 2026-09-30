@@ -71,12 +71,17 @@ const fixturesBeside = Effect.fn("fixturesBeside")(function* (testFile: URL) {
 /** The bound on one oxlint run over a fixture set; about a second on an idle machine. */
 const OXLINT_RUN_BOUND = "20 seconds"
 
+/** How long an oxlint process may ignore SIGTERM from the closing scope before it gets SIGKILL. */
+const OXLINT_KILL_GRACE = "2 seconds"
+
 const decodeOxlintReport = Schema.decodeUnknownEffect(Schema.fromJsonString(OxlintReportSchema))
 
 /**
  * Lint a fixture set in one oxlint process with a JSON report. Its own bound
  * is the only bound: an overrun is one `OxlintRunError` that names the bound,
- * and the run's scope kills the process, not a test timeout mid-report.
+ * and the run's scope kills the process, not a test timeout mid-report. The
+ * kill escalates to SIGKILL after `OXLINT_KILL_GRACE`, so a process that
+ * ignores SIGTERM cannot hold the scope open.
  */
 const runOxlint = (fixtureFiles: ReadonlyArray<string>) =>
   Effect.scoped(
@@ -85,7 +90,7 @@ const runOxlint = (fixtureFiles: ReadonlyArray<string>) =>
       const handle = yield* ChildProcess.make(
         "bunx",
         ["oxlint", "--format=json", "-c", fixtures.config, ...fixtureFiles],
-        { cwd: fixtures.dir },
+        { cwd: fixtures.dir, forceKillAfter: OXLINT_KILL_GRACE },
       )
       const [exitCode, stdout, stderr] = yield* Effect.all(
         [
