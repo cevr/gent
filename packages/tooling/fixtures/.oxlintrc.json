@@ -22,6 +22,7 @@
     "gent/no-with-wrapper-call": "error",
     "gent/no-inert-it": "error",
     "gent/child-session-writer-admits": "error",
-    "gent/no-lint-evasion": "error"
+    "gent/no-lint-evasion": "error",
+    "gent/no-identity-encode": "error"
   }
 }

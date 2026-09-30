@@ -433,6 +433,19 @@ const CASES: ReadonlyArray<RuleCase> = [
     // a parameter type
     expectedCount: 5,
   },
+  {
+    // Shipped source only: a test may compare whole encodes.
+    rule: "gent/no-identity-encode",
+    invalid: "packages/core/src/runtime/no-identity-encode.invalid.ts",
+    valid: [
+      "packages/core/src/runtime/no-identity-encode.valid.ts",
+      "packages/core/tests/no-identity-encode.valid.ts",
+    ],
+    // four identity names, a comparison, `.has` and `.add`, three arrays that
+    // carry an object, the unsafe side of a mixed comparison, a binding
+    // broken across lines, and an encoder called where it is built
+    expectedCount: 13,
+  },
 ]
 
 /** Each fixture file once: a run lints a path it is given once, however many cases name it. */

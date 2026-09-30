@@ -759,6 +759,133 @@ const specifierImportedName = (specifier: AstNode): string | undefined => {
     : getStringField(imported, "value")
 }
 
+// ── a whole-object encode decides no identity ───────────────────────────────
+
+/**
+ * Name segments that say a value answers "is this the same thing?". A name is
+ * split at camelCase and `_` boundaries, so `messageIdentity`, `dedupeKey`
+ * and `cache_key` all count.
+ */
+const IDENTITY_WORDS: ReadonlySet<string> = new Set([
+  "fingerprint",
+  "identity",
+  "signature",
+  "dedupe",
+  "dedup",
+  "key",
+])
+
+const namesIdentity = (name: string): boolean =>
+  name.split(/(?=[A-Z])|_/).some((segment) => IDENTITY_WORDS.has(segment.toLowerCase()))
+
+/**
+ * `Schema.encodeSync(Schema.fromJsonString(schema))`: an encoder of a whole
+ * value to JSON. A `Schema.Struct({...})` written in place writes its fields
+ * in its own order, whatever the value's key order, so it is not one.
+ */
+const isJsonEncoder = (node: AstNode | undefined): boolean => {
+  if (node?.type !== "CallExpression") return false
+  if (dottedName(getNodeField(node, "callee")) !== "Schema.encodeSync") return false
+  const [json] = callExpressionArgs(node)
+  if (json?.type !== "CallExpression") return false
+  if (dottedName(getNodeField(json, "callee")) !== "Schema.fromJsonString") return false
+  const [schema] = callExpressionArgs(json)
+  return (
+    schema?.type !== "CallExpression" ||
+    dottedName(getNodeField(schema, "callee")) !== "Schema.Struct"
+  )
+}
+
+/** A `…Fingerprint(...)` call, which returns its fields in a fixed order. */
+const isFingerprintCall = (node: AstNode): boolean =>
+  node.type === "CallExpression" &&
+  /^[a-z][\w$]*Fingerprint$/.test(dottedName(getNodeField(node, "callee")) ?? "")
+
+/** A field access such as `call.id` or `call?.id`, rooted at a name. */
+const isFieldAccess = (node: AstNode): boolean => {
+  const access = node.type === "ChainExpression" ? getNodeField(node, "expression") : node
+  return access?.type === "MemberExpression" && dottedName(access) !== undefined
+}
+
+/** A literal, a negative number, or `undefined`. */
+const isPrimitive = (node: AstNode): boolean => {
+  if (node.type === "Literal") return true
+  if (node.type === "Identifier") return getStringField(node, "name") === "undefined"
+  return (
+    node.type === "UnaryExpression" &&
+    getStringField(node, "operator") === "-" &&
+    getNodeField(node, "argument")?.type === "Literal"
+  )
+}
+
+/**
+ * Whether an encoded value already names its fields in a fixed order: a
+ * fingerprint call, or an array literal of field accesses, primitives and
+ * fingerprint calls. `[item]` still carries a whole object.
+ */
+const isFixedOrder = (node: AstNode | undefined): boolean => {
+  if (node === undefined) return false
+  if (isFingerprintCall(node)) return true
+  if (node.type !== "ArrayExpression") return false
+  const elements = getNodeArrayField(node, "elements") ?? []
+  return (
+    elements.length > 0 &&
+    elements.every(
+      (element) => isFieldAccess(element) || isPrimitive(element) || isFingerprintCall(element),
+    )
+  )
+}
+
+const COMPARISON_OPERATORS = new Set(["===", "!==", "==", "!="])
+const COLLECTION_LOOKUPS = new Set(["has", "get", "add"])
+
+/** The method a call names: `add` for `seen.add(x)`. */
+const methodName = (callee: AstNode | undefined): string | undefined => {
+  if (callee?.type !== "MemberExpression") return undefined
+  const property = getNodeField(callee, "property")
+  return property === undefined ? undefined : getStringField(property, "name")
+}
+
+/** The name a binding, a property or an assignment gives the value under it. */
+const bindingName = (node: AstNode): string | undefined => {
+  if (node.type === "VariableDeclarator") return dottedName(getNodeField(node, "id"))
+  if (node.type === "Property" || node.type === "PropertyDefinition") {
+    return dottedName(getNodeField(node, "key"))
+  }
+  if (node.type !== "AssignmentExpression") return undefined
+  const target = getNodeField(node, "left")
+  if (target?.type === "MemberExpression") return methodName(target)
+  return dottedName(target)
+}
+
+/**
+ * Whether the value the encode `call` produces decides identity: it is
+ * compared, looked up or collected where it is produced, or a binding it
+ * sits under in its statement has a name that says identity.
+ */
+const decidesIdentity = (call: AstNode): boolean => {
+  const parent = getNodeField(call, "parent")
+  if (
+    parent?.type === "BinaryExpression" &&
+    COMPARISON_OPERATORS.has(getStringField(parent, "operator") ?? "")
+  ) {
+    return true
+  }
+  if (
+    parent?.type === "CallExpression" &&
+    callExpressionArgs(parent).includes(call) &&
+    COLLECTION_LOOKUPS.has(methodName(getNodeField(parent, "callee")) ?? "")
+  ) {
+    return true
+  }
+  let node = parent
+  while (node !== undefined && !/(?:Statement|Program)$/.test(node.type)) {
+    if (namesIdentity(bindingName(node) ?? "")) return true
+    node = getNodeField(node, "parent")
+  }
+  return false
+}
+
 const plugin: Plugin = {
   meta: {
     name: "gent",
@@ -1803,6 +1930,56 @@ const plugin: Plugin = {
                 "`Schema.Schema.Type<typeof Schema.Unknown>` is `unknown` spelled to pass `effect/noUnknownParameters`. Write `unknown` with a scoped disable and its reason, or name the type the value has.",
               node,
             })
+          },
+        }
+      },
+    },
+
+    /**
+     * A whole-object JSON encode decides no identity.
+     *
+     * JSON carries key order, so two spellings of one value encode to two
+     * strings: a message built `_tag` first by a streaming placeholder and
+     * `_tag` last by a rebuild reads as two messages. So a value encoded by
+     * `Schema.encodeSync(Schema.fromJsonString(...))`, through a bound
+     * encoder or one called where it is built, and of any schema but a
+     * `Schema.Struct` written in place, is reported when it is
+     * compared (`===`, `!==`), looked up or collected (`.has`, `.get`,
+     * `.add`) where it is produced, or bound under a name that says identity
+     * (`fingerprint`, `identity`, `signature`, `dedupe`, `key`). Encode the
+     * compared fields in a fixed order instead: a `…Fingerprint(...)` call,
+     * or an array of field accesses, primitives and fingerprint calls. An
+     * encode for a log line, a file or a display string decides nothing.
+     *
+     * Shipped source only: a test may compare whole encodes.
+     */
+    "no-identity-encode": {
+      create(context) {
+        if (!isShippedSource(ruleSubject(context))) return {}
+        const encoders = new Set<string>()
+        const calls: Array<AstNode> = []
+        return {
+          VariableDeclarator(node) {
+            if (!isAstNode(node) || !isJsonEncoder(getNodeField(node, "init"))) return
+            const name = dottedName(getNodeField(node, "id"))
+            if (name !== undefined) encoders.add(name)
+          },
+          CallExpression(node) {
+            if (isAstNode(node)) calls.push(node)
+          },
+          "Program:exit"() {
+            for (const call of calls) {
+              const callee = getNodeField(call, "callee")
+              const name = dottedName(callee)
+              const encodes = isJsonEncoder(callee) || (name !== undefined && encoders.has(name))
+              if (!encodes) continue
+              const [value] = callExpressionArgs(call)
+              if (isFixedOrder(value) || !decidesIdentity(call)) continue
+              context.report({
+                message: `\`${name ?? "Schema.encodeSync(Schema.fromJsonString(...))"}\` encodes a whole object and the result decides identity here; JSON carries key order, so two spellings of one value compare unequal -- name the compared fields in a fixed order instead`,
+                node: call,
+              })
+            }
           },
         }
       },
