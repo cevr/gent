@@ -708,7 +708,9 @@ export const makeInteractionService = (
       ownership: InteractionOwnership,
     ) {
       if (ownership.sessionId !== branchRef.sessionId || ownership.branchId !== branchRef.branchId)
-        return yield* new EventStoreError({ message: "The owning call belongs to another branch" })
+        return yield* new InteractionOwnerMissingError({
+          message: "The dispatching call that owns this ask runs on another branch",
+        })
       const key = contextKey(branchRef)
       const paramsJson = yield* encodeInteractionParams(params)
       const resumeRequestId = yield* ownership.resumeRequestId

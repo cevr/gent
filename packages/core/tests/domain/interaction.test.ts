@@ -631,6 +631,32 @@ describe("Interaction Request", () => {
     }).pipe(Effect.provide(storageLive)),
   )
 
+  it.live("an inner ask whose dispatching call runs on another branch has no owner here", () =>
+    Effect.gen(function* () {
+      const is = yield* InteractionStorage
+      const interaction = yield* makeInteractionService({
+        onPresent: () => Effect.void,
+        onDismiss: () => Effect.void,
+        storage: callbacksFor(is),
+      })
+      const branch = { sessionId: SessionId.make("s-other"), branchId: BranchId.make("b-asked") }
+      const elsewhere = { ...branch, branchId: BranchId.make("b-dispatcher") }
+      yield* ensureStorageParents(branch)
+      const error = yield* Effect.flip(
+        interaction.present({ text: "Approve?" }, branch).pipe(
+          Effect.provideService(CurrentInteractionOwner, {
+            ...elsewhere,
+            persist: (record) => persistInteraction(is, record),
+            resumeRequestId: Effect.succeedNone,
+            take: () => Effect.void,
+          }),
+        ),
+      )
+      expect(error._tag).toBe("InteractionOwnerMissingError")
+      expect(yield* is.listOpen(branch)).toEqual([])
+    }).pipe(Effect.provide(storageLive), Effect.timeout("4 seconds")),
+  )
+
   it.live("a call whose kept answer no longer fits asks again in its own queued place", () =>
     Effect.gen(function* () {
       const storage = callbacksFor(yield* InteractionStorage)
