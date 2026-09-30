@@ -100,23 +100,46 @@ const plainRunEnd = (text: string, at: number, table: Uint8Array): number => {
   return end
 }
 
+/** What `blankComments` blanks beside the comments. */
+interface Blanking {
+  /** Each quoted string becomes `""`. */
+  readonly quoted: boolean
+  /** A template's own text becomes spaces; its `${}` interpolations stay code. */
+  readonly templateText: boolean
+}
+
+/** `chunk`, or spaces of its shape when `blank` holds. */
+const blankedWhen = (blank: boolean, chunk: string): string => {
+  if (!blank) return chunk
+  return blankKeepingLines(chunk)
+}
+
+/**
+ * One step inside a template's text, blanked when `blank` holds. The `${` that
+ * opens an interpolation and the closing backtick are kept: they are structure.
+ */
+const templateChunk = (text: string, at: number, frames: Array<number>, blank: boolean): string => {
+  const chunk = templateStep(text, at, frames)
+  return blankedWhen(blank && chunk !== "${" && chunk !== "`", chunk)
+}
+
 /**
  * Blank the comments in `text`, line count preserved, read left to right so a
  * `//` inside a string stays a string. Template literals are followed into
- * their `${}` interpolations, so a comment there is blanked too. With
- * `blankStrings`, each quoted string becomes `""`; a template's own text is
- * kept, because an interpolation inside it reads code.
+ * their `${}` interpolations, so a comment there is blanked too. An
+ * interpolation is kept whatever else `blanking` blanks, because it reads code.
  */
-const blankComments = (text: string, blankStrings: boolean): string => {
+const blankComments = (text: string, blanking: Blanking): string => {
   const out: Array<string> = []
   const frames: Array<number> = [0]
   let at = 0
   while (at < text.length) {
+    const inTemplate = frames[frames.length - 1] === IN_TEMPLATE
     // A run no scanner rule reads is copied whole, not one character at a time.
     const table = specialIn(frames)
     const runEnd = plainRunEnd(text, at, table)
     if (runEnd > at) {
-      out.push(text.slice(at, runEnd))
+      out.push(blankedWhen(inTemplate && blanking.templateText, text.slice(at, runEnd)))
       at = runEnd
       continue
     }
@@ -124,8 +147,8 @@ const blankComments = (text: string, blankStrings: boolean): string => {
     const pair = text.slice(at, at + 2)
     let chunk = char
     let end = at + 1
-    if (frames[frames.length - 1] === IN_TEMPLATE) {
-      chunk = templateStep(text, at, frames)
+    if (inTemplate) {
+      chunk = templateChunk(text, at, frames, blanking.templateText)
       end = at + chunk.length
     } else if (pair === "//" || pair === "/*") {
       end = commentEnd(text, at, pair)
@@ -133,7 +156,7 @@ const blankComments = (text: string, blankStrings: boolean): string => {
     } else if (char === '"' || char === "'") {
       end = quotedEnd(text, at)
       chunk = text.slice(at, end)
-      if (blankStrings) chunk = '""'
+      if (blanking.quoted) chunk = '""'
     } else {
       trackCodeFrame(char, frames)
     }
@@ -147,17 +170,22 @@ const blankComments = (text: string, blankStrings: boolean): string => {
  * Each text's blanked forms, keyed by the text: a guards run blanks one
  * file's text for several scans, and the scan is the run's largest cost.
  */
-const blankedTexts = { code: new Map<string, string>(), codeAndStrings: new Map<string, string>() }
+const blankedTexts = {
+  code: new Map<string, string>(),
+  codeOnly: new Map<string, string>(),
+  statements: new Map<string, string>(),
+}
 
-const blankedOnce = (cache: Map<string, string>, text: string, blankStrings: boolean): string =>
+const blankedOnce = (cache: Map<string, string>, text: string, blanking: Blanking): string =>
   Option.getOrElse(Option.fromNullishOr(cache.get(text)), () => {
-    const blanked = blankComments(text, blankStrings)
+    const blanked = blankComments(text, blanking)
     cache.set(text, blanked)
     return blanked
   })
 
 /** The text with comments blanked, line count preserved. */
-const withoutComments = (text: string): string => blankedOnce(blankedTexts.code, text, false)
+const withoutComments = (text: string): string =>
+  blankedOnce(blankedTexts.code, text, { quoted: false, templateText: false })
 
 // ── a lint directive names its rules ────────────────────────────────────────
 
@@ -3079,17 +3107,18 @@ export const findUnusedSuppressionApprovals = (
  *   `packages/extensions/src/`) declares names with
  *   `export const|class|function|interface|type|enum`, or exposes names it
  *   owns through a bare `export { X }` with no `from` clause. A name is consumed
- *   once some file that does not itself declare it mentions the name. Core
+ *   once another file reads it at the module's path: imports it by name,
+ *   re-exports it with `export { X } from`, or reads it off a namespace import
+ *   of the module. A string, a test title, a `@ts-expect-error` line or a
+ *   binding of the reader's own that spells the name is no read. Core
  *   and the SDK are held to the strict reading: a name only its own module
- *   uses should drop the `export` keyword. The extensions package is read
- *   with the Schema-aware rule: a tool's parameter and result schemas sit
- *   beside the tool that reads them, and `Schema.Class` declares a value and
- *   a type under one name, so a reference inside the declaring file counts
- *   -- except the declaration's own self-references (`Schema.Class<X>`, the
- *   `_tag` string, a doc comment), which are not consumption. The tooling and
- *   e2e packages are read the same way, and so is `packages/core/src/test-utils/`,
- *   which is its own surface: a guard's finding type, a fixture's context type
- *   and a test layer's config sit beside the function that returns them.
+ *   uses should drop the `export` keyword, and so are the extensions package
+ *   and the apps. The tooling and e2e packages and
+ *   `packages/core/src/test-utils/`, its own surface, are read with the
+ *   own-file rule: a guard's finding type, a fixture's context type and a test
+ *   layer's config sit beside the function that returns them, so a reference
+ *   in the declaring file's code counts -- except the declaration's own lines,
+ *   and a string, template text or comment naming it.
  *   Support modules -- test helpers, build scripts and a testbed's driver --
  *   are read with the strict rule (`SUPPORT_MODULE`); a test file declares
  *   nothing the scan measures.
@@ -3483,14 +3512,23 @@ const identifiersIn = (text: string): ReadonlySet<string> =>
   new Set(Option.getOrElse(Option.fromNullishOr(text.match(IDENTIFIER)), () => []))
 
 /**
- * The text with comments and string literals blanked, line count preserved.
+ * The text with comments, quoted strings and template text blanked, line count
+ * preserved: only code is left.
  *
- * A doc comment naming a class and the `_tag` string a `Schema.TaggedError`
- * carries are not consumption; blanking them is what lets an own-file
- * reference be read as one.
+ * A doc comment naming a class, the `_tag` string a `Schema.TaggedError`
+ * carries and fixture text in a template are not consumption; blanking them is
+ * what lets an own-file reference be read as one.
  */
-const withoutCommentsAndStrings = (text: string): string =>
-  blankedOnce(blankedTexts.codeAndStrings, text, true)
+const codeOnly = (text: string): string =>
+  blankedOnce(blankedTexts.codeOnly, text, { quoted: true, templateText: true })
+
+/**
+ * The text with comments and template text blanked, quoted strings kept, line
+ * count preserved: an import statement and its specifier survive, and fixture
+ * text holding `import { X } from "./x"` inside a template does not.
+ */
+const statementsOnly = (text: string): string =>
+  blankedOnce(blankedTexts.statements, text, { quoted: false, templateText: true })
 
 /** Lines carrying a `@ts-expect-error`, which assert absence rather than use. */
 const expectErrorLines = (lines: ReadonlyArray<string>): ReadonlySet<number> => {
@@ -3504,19 +3542,46 @@ const expectErrorLines = (lines: ReadonlyArray<string>): ReadonlySet<number> => 
   return marked
 }
 
+/** One `import … from "x"` or `export … from "x"` statement in code. */
+interface ModuleStatement {
+  readonly keyword: "import" | "export"
+  readonly specifier: string
+  /** The 1-based line the statement opens on. */
+  readonly line: number
+  /** The clause between the keyword and `from`: `{ a, b as c }`, `* as NS`, `D, { a }`. */
+  readonly clause: string
+}
+
 /**
- * The statement a specifier belongs to, joined back into one string.
- *
- * An import block is routinely broken across lines, so the specifier and the
- * names it brings in are rarely on the same line. Walking back to the opening
- * `import`/`export` keeps them together.
+ * A statement opens a line of code and names what it brings in before `from`.
+ * The clause shapes are spelled out, so an `export const` followed some lines
+ * later by an import never reads as one statement.
  */
-const statementEndingAt = (lines: ReadonlyArray<string>, end: number): string => {
-  let start = end
-  const opensStatement = (index: number): boolean =>
-    /^\s*(?:import|export)\b/.test(Option.getOrElse(Option.fromNullishOr(lines[index]), () => ""))
-  while (start > 0 && !opensStatement(start)) start--
-  return lines.slice(start, end + 1).join("\n")
+const MODULE_STATEMENT =
+  /^[ \t]*(import|export)[ \t]+(?:type[ \t]+)?(\*(?:\s+as\s+[\w$]+)?|\{[^}]*\}|[\w$]+(?:\s*,\s*(?:\{[^}]*\}|\*\s+as\s+[\w$]+))?)\s*from\s*["']([^"']+)["']/gm
+
+/**
+ * Every import and re-export statement in a file's code.
+ *
+ * Read from the text with comments and template text blanked, so a statement
+ * inside fixture text is no statement; quoted strings are kept for the
+ * specifier. A statement broken across lines is read whole.
+ */
+const moduleStatementsIn = (text: string): ReadonlyArray<ModuleStatement> => {
+  const code = statementsOnly(text)
+  const statements: Array<ModuleStatement> = []
+  for (const match of code.matchAll(MODULE_STATEMENT)) {
+    let keyword: ModuleStatement["keyword"] = "import"
+    if (match[1] === "export") keyword = "export"
+    const opening = match.index + (match[0].length - match[0].trimStart().length)
+    statements.push({
+      keyword,
+      clause: Option.getOrElse(Option.fromNullishOr(match[2]), () => ""),
+      specifier: Option.getOrElse(Option.fromNullishOr(match[3]), () => ""),
+      line: code.slice(0, opening).split("\n").length,
+    })
+  }
+  return statements
 }
 
 /** The one name a `{ ... }` import entry brings in, before any `as` alias. */
@@ -3582,32 +3647,46 @@ const namespaceMembersIn = (
   return found
 }
 
-const specifierPattern = (specifier: string): RegExp =>
-  new RegExp(`["']${specifier.replace(/[/.]/g, "\\$&")}(?:\\.js)?["']`)
+/** The names a file reads through one specifier. */
+interface SpecifierRead {
+  readonly specifier: string
+  readonly names: ReadonlyArray<string>
+}
 
 /**
- * Names a file reaches for through one entry point's specifier.
+ * Every name a file reads, by the specifier it reads it through.
  *
- * A named import credits the *original* name, not the local alias: `X as Y`
- * means the entry point still has to export `X`. A namespace import credits
- * every member the file reads off it.
+ * A named entry credits the *original* name, not the local alias: `X as Y`
+ * means the module still has to export `X`. A re-export `export { X } from`
+ * reads `X` too: it is the chain an entry point is. A namespace import credits
+ * every member the file's code reads off it. A statement or a member read on a
+ * `@ts-expect-error` line asserts absence and reads nothing.
  */
-const importedThrough = (specifier: string, lines: ReadonlyArray<string>): ReadonlySet<string> => {
-  const pattern = specifierPattern(specifier)
-  const skip = expectErrorLines(lines)
-  const names = new Set<string>()
-  const aliases = new Set<string>()
-  for (const [index, line] of lines.entries()) {
-    if (!pattern.test(line)) continue
-    const statement = statementEndingAt(lines, index)
-    for (const alias of namespaceAliasesIn(statement)) aliases.add(alias)
-    for (const name of namedImportsIn(statement)) names.add(name)
-  }
-  for (const alias of aliases) {
-    for (const name of namespaceMembersIn(lines, alias, skip)) names.add(name)
-  }
-  return names
+const specifierReadsIn = (text: string): ReadonlyArray<SpecifierRead> => {
+  const skip = expectErrorLines(text.split("\n"))
+  const codeLines = codeOnly(text).split("\n")
+  return moduleStatementsIn(text)
+    .filter((statement) => !skip.has(statement.line))
+    .map((statement) => {
+      const named = namedImportsIn(statement.clause)
+      if (statement.keyword === "export") return { specifier: statement.specifier, names: named }
+      const members = namespaceAliasesIn(statement.clause).flatMap((alias) =>
+        namespaceMembersIn(codeLines, alias, skip),
+      )
+      return { specifier: statement.specifier, names: [...named, ...members] }
+    })
 }
+
+/** Names a file reads through one entry point's specifier, with or without `.js`. */
+const importedThrough = (
+  specifier: string,
+  reads: ReadonlyArray<SpecifierRead>,
+): ReadonlySet<string> =>
+  new Set(
+    reads
+      .filter((read) => read.specifier === specifier || read.specifier === `${specifier}.js`)
+      .flatMap((read) => read.names),
+  )
 
 /** The last path segment of an import specifier, without its extension. */
 const lastSegment = (specifier: string): string => {
@@ -3630,31 +3709,25 @@ const importTargetsOf = (file: string): ReadonlyArray<string> => {
 }
 
 /**
- * Names this file imports from a path, keyed by that path's last segment.
+ * Names this file reads from a path, keyed by that path's last segment.
  *
- * A `export { X } from "./x.js"` re-export puts `X` at *this* module's path,
- * so only an import naming this path keeps it alive. Whether the tree mentions
- * `X` anywhere says nothing: the file that declared it answers for that.
+ * This is the only read a module surface counts. Whether the tree mentions `X`
+ * in a string, a test title or a binding of its own says nothing: a file
+ * reads a module's `X` only by importing it, re-exporting it, or reading it
+ * off a namespace import of that module.
  */
 const importsByTarget = (
-  lines: ReadonlyArray<string>,
+  reads: ReadonlyArray<SpecifierRead>,
 ): ReadonlyMap<string, ReadonlySet<string>> => {
   const byTarget = new Map<string, Set<string>>()
-  for (const [index, line] of lines.entries()) {
-    const specifier = Option.flatMap(
-      Option.fromNullishOr(/from\s*["']([^"']+)["']/.exec(line)),
-      (found) => Option.fromNullishOr(found[1]),
-    )
-    if (Option.isNone(specifier)) continue
-    const statement = statementEndingAt(lines, index)
-    if (!/^\s*import\b/.test(statement)) continue
-    const key = lastSegment(specifier.value)
+  for (const read of reads) {
+    const key = lastSegment(read.specifier)
     const names = Option.getOrElse(Option.fromNullishOr(byTarget.get(key)), () => {
       const created = new Set<string>()
       byTarget.set(key, created)
       return created
     })
-    for (const name of namedImportsIn(statement)) names.add(name)
+    for (const name of read.names) names.add(name)
   }
   return byTarget
 }
@@ -3662,43 +3735,12 @@ const importsByTarget = (
 /** What one file contributes to the whole-tree answer. */
 export interface ExportFacts {
   readonly declarations: ReadonlyArray<Declaration>
-  /** Every identifier the file mentions outside its comments. */
-  readonly identifiers: ReadonlySet<string>
-  /** Names imported from a path, keyed by that path's last segment. */
+  /** Names read from a path, keyed by that path's last segment. */
   readonly importsByTarget: ReadonlyMap<string, ReadonlySet<string>>
-  /** Identifiers per line with comments and strings blanked; empty unless the file's surface reads its own references. */
+  /** Identifiers per line with only code left; empty unless the file's surface reads its own references. */
   readonly identifiersByLine: ReadonlyArray<ReadonlySet<string>>
-  /** Names imported through each entry-point specifier. */
+  /** Names read through each entry-point specifier. */
   readonly imported: ReadonlyMap<string, ReadonlySet<string>>
-  /**
-   * Names this file binds at its own top level, exported or not, collected for
-   * every tracked file rather than only for a scanned surface.
-   *
-   * A file that declares `isClientFile` itself does not vouch for a core export
-   * of that name: its mention is its own binding. Without this, a namesake
-   * anywhere in the tree — `apps/`, an example, a test helper — fakes coverage
-   * for the declaration being measured.
-   *
-   * A name the file also imports under some spelling is left out: the import is
-   * a real read of someone else's declaration, whatever the file binds beside it.
-   */
-  readonly localNames: ReadonlySet<string>
-}
-
-/** A top-level binding, whether or not it is exported. */
-const LOCAL_BINDING =
-  /^(?:export\s+)?(?:declare\s+)?(?:const|let|var|class|function|interface|type|enum)\s+([A-Za-z_$][\w$]*)/
-
-const localNamesIn = (text: string): ReadonlySet<string> => {
-  const imported = importedNames(text)
-  const names = new Set<string>()
-  for (const line of withoutCommentsAndStrings(text).split("\n")) {
-    const name = Option.flatMap(Option.fromNullishOr(LOCAL_BINDING.exec(line)), (match) =>
-      Option.fromNullishOr(match[1]),
-    )
-    if (Option.isSome(name) && !imported.has(name.value)) names.add(name.value)
-  }
-  return names
 }
 
 const declarationsIn = (surface: ScannedSurface, text: string): ReadonlyArray<Declaration> =>
@@ -3709,13 +3751,13 @@ const declarationsIn = (surface: ScannedSurface, text: string): ReadonlyArray<De
 
 const importsIn = (
   file: string,
-  lines: ReadonlyArray<string>,
+  reads: ReadonlyArray<SpecifierRead>,
 ): ReadonlyMap<string, ReadonlySet<string>> => {
   const imported = new Map<string, ReadonlySet<string>>()
   for (const surface of SCANNED_SURFACES) {
     if (Option.isNone(surface.specifier)) continue
     if (surface.outsideOf.some((prefix) => file.startsWith(prefix))) continue
-    imported.set(surface.specifier.value, importedThrough(surface.specifier.value, lines))
+    imported.set(surface.specifier.value, importedThrough(surface.specifier.value, reads))
   }
   return imported
 }
@@ -3731,16 +3773,15 @@ export const collectExportFacts = (file: string, text: string): ExportFacts => {
     Option.filter(surface, (found) => found.ownFileCounts),
     {
       onNone: (): ReadonlyArray<ReadonlySet<string>> => [],
-      onSome: () => withoutCommentsAndStrings(text).split("\n").map(identifiersIn),
+      onSome: () => codeOnly(text).split("\n").map(identifiersIn),
     },
   )
+  const reads = specifierReadsIn(text)
   return {
     declarations,
-    identifiers: identifiersIn(withoutComments(text)),
-    localNames: localNamesIn(text),
     identifiersByLine,
-    importsByTarget: importsByTarget(text.split("\n")),
-    imported: importsIn(file, text.split("\n")),
+    importsByTarget: importsByTarget(reads),
+    imported: importsIn(file, reads),
   }
 }
 
@@ -3759,12 +3800,30 @@ const referencedInOwnFile = (facts: ExportFacts, name: string): boolean => {
   )
 }
 
-const mentions = (facts: ExportFacts, surface: ScannedSurface, name: string): boolean =>
-  Option.match(surface.specifier, {
-    onNone: () => facts.identifiers.has(name),
+/**
+ * Whether this file reads `name` from the declaring module.
+ *
+ * A module surface is read at its own path: through one of `targets`, the
+ * names that path answers to as an import target. An entry point is read
+ * through its specifier. Either way the read is an import, a re-export or a
+ * namespace member; a mention in a string, a test title or a binding of the
+ * file's own is not.
+ */
+const reads = (
+  facts: ExportFacts,
+  declaration: Declaration,
+  targets: ReadonlyArray<string>,
+): boolean =>
+  Option.match(declaration.surface.specifier, {
+    onNone: () =>
+      targets.some((target) =>
+        Option.exists(Option.fromNullishOr(facts.importsByTarget.get(target)), (names) =>
+          names.has(declaration.name),
+        ),
+      ),
     onSome: (specifier) =>
       Option.exists(Option.fromNullishOr(facts.imported.get(specifier)), (names) =>
-        names.has(name),
+        names.has(declaration.name),
       ),
   })
 
@@ -3796,90 +3855,19 @@ const messageFor = (file: string, declaration: Declaration): string =>
   })
 
 /**
- * Report declared exports nothing that may consume them names.
+ * Report declared exports no file that may consume them reads.
  *
- * `factsByFile` is the whole tree's word sets, so this is one pass over
- * declarations rather than a search per name. Files that declare the same
- * name themselves never vouch for it: two modules exporting `sameName` need
- * a third file to keep either alive.
- *
- * One exception: entry points chain. `@gent/sdk` re-exports names it gets
- * from `@gent/core/protocol`, so it both declares them and consumes them.
- * A re-export that names the upstream specifier is a real consumer — the
- * blanket skip would otherwise call every chained name dead.
+ * `factsByFile` is the whole tree's reads, so this is one pass over
+ * declarations rather than a search per name. A file that declares the same
+ * name reads nothing by declaring it: two modules exporting `sameName` need a
+ * third file importing one of them to keep it alive. Entry points chain the
+ * same way: `@gent/sdk` re-exports names from `@gent/core/protocol`, and the
+ * re-export is the read that keeps the protocol name alive.
  */
-/**
- * Whether this file imports `name` from any of the module's own import targets.
- *
- * A pass-through lives at *this* module's path, so only an import naming that
- * path keeps it alive. Mentioning the name says nothing: the file that declared
- * it answers for that.
- */
-const importsFrom = (facts: ExportFacts, targets: ReadonlyArray<string>, name: string): boolean =>
-  targets.some((target) =>
-    Option.exists(Option.fromNullishOr(facts.importsByTarget.get(target)), (names) =>
-      names.has(name),
-    ),
-  )
-
-/**
- * Which files declare each name, so a peer that merely declares the same name
- * can be told apart from a real consumer. A pass-through site is not a peer
- * declaration: it names the upstream declaration and keeps vouching for it.
- */
-const filesDeclaringEachName = (
-  factsByFile: ReadonlyMap<string, ExportFacts>,
-): ReadonlyMap<string, ReadonlySet<string>> => {
-  const declaringFiles = new Map<string, Set<string>>()
-  for (const [file, facts] of factsByFile) {
-    for (const { name, passthrough } of facts.declarations) {
-      if (passthrough === true) continue
-      const files = Option.getOrElse(Option.fromNullishOr(declaringFiles.get(name)), () => {
-        const created = new Set<string>()
-        declaringFiles.set(name, created)
-        return created
-      })
-      files.add(file)
-    }
-  }
-  return declaringFiles
-}
-
-/**
- * Whether a mentioning file names its own binding rather than this declaration.
- *
- * Two files can export the same name; neither keeps the other alive. Only
- * an entry point's own specifier makes the mention a real read, and a file
- * outside every scanned surface has no `declarations`, so its top-level
- * bindings answer instead.
- */
-const isNamesake = (
-  candidate: string,
-  facts: ExportFacts,
-  declaration: Declaration,
-  declaredIn: ReadonlySet<string>,
-  targets: ReadonlyArray<string>,
-): boolean => {
-  if (Option.isSome(declaration.surface.specifier)) return false
-  // A file that imports from the declaring module reads it, under an alias or
-  // a namespace if not by name, whatever it binds beside the import.
-  if (targets.some((target) => facts.importsByTarget.has(target))) return false
-  // An entry import names the declaration, whatever local alias it binds; a
-  // local namesake beside `import { zeta as _zeta }` does not undo that read.
-  if ([...facts.imported.values()].some((names) => names.has(declaration.name))) return false
-  return declaredIn.has(candidate) || facts.localNames.has(declaration.name)
-}
-
 export const findUnconsumedExports = (
   factsByFile: ReadonlyMap<string, ExportFacts>,
 ): ReadonlyArray<Finding> => {
-  const declaringFiles = filesDeclaringEachName(factsByFile)
-
   const isConsumed = (file: string, declaration: Declaration): boolean => {
-    const declaredIn = Option.getOrElse(
-      Option.fromNullishOr(declaringFiles.get(declaration.name)),
-      () => new Set<string>(),
-    )
     const targets = importTargetsOf(file)
     for (const [candidate, facts] of factsByFile) {
       if (!mayConsume(candidate, declaration.surface)) continue
@@ -3887,13 +3875,7 @@ export const findUnconsumedExports = (
       // The file being measured never vouches for its own export; whether its
       // own references count at all is the `ownFileCounts` rule below.
       if (candidate === file && Option.isNone(declaration.surface.specifier)) continue
-      if (declaration.passthrough === true) {
-        if (!importsFrom(facts, targets, declaration.name)) continue
-        return true
-      }
-      if (!mentions(facts, declaration.surface, declaration.name)) continue
-      if (isNamesake(candidate, facts, declaration, declaredIn, targets)) continue
-      return true
+      if (reads(facts, declaration, targets)) return true
     }
     if (!declaration.surface.ownFileCounts) return false
     return Option.exists(Option.fromNullishOr(factsByFile.get(file)), (facts) =>

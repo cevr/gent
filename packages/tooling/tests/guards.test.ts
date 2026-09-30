@@ -2963,10 +2963,14 @@ export const plantedDeadSdkExport = "nothing imports this"
     ).toEqual([])
   })
 
-  test("a name an unscanned package reaches for is live", () => {
+  test("a name an unscanned package reaches for through the entry point is live", () => {
     expect(
       findingsFor([
         { file: SDK_FILE, text: `export const sharedName = 1\n` },
+        {
+          file: "packages/sdk/src/index.ts",
+          text: `export { sharedName } from "./log-paths.js"\n`,
+        },
         { file: "apps/tui/src/app.tsx", text: `import { sharedName } from "@gent/sdk"\n` },
       ]),
     ).toEqual([])
@@ -2978,7 +2982,7 @@ export const plantedDeadSdkExport = "nothing imports this"
         { file: CORE_FILE, text: `export const retrySchedule = 1\n` },
         {
           file: "packages/core/tests/runtime/provider.test.ts",
-          text: `import { retrySchedule } from "../../src/runtime/retry"\n`,
+          text: `import { retrySchedule } from "../../src/runtime/provider"\n`,
         },
       ]),
     ).toEqual([])
@@ -3037,52 +3041,49 @@ export const plantedDeadSdkExport = "nothing imports this"
     expect(findings[0]?.message).toContain("viaRelative")
   })
 
+  // An own-file surface reads identifiers in its own code, so what the blanking
+  // leaves as code decides these.
+  const OWN_FILE = "packages/tooling/src/check-guardrails.ts"
+  const ownFindings = (text: string) =>
+    findingsFor([{ file: OWN_FILE, text }]).map((finding) => finding.message)
+
   test("a comment inside a template interpolation does not keep a name alive", () => {
-    const findings = findingsFor([
-      { file: SDK_FILE, text: `export const vanished = 1\n` },
-      {
-        file: SDK_CONSUMER,
-        text: "export const shown = `a ${/* vanished */ 1} b ${`c ${2 /* vanished */}`}`\n",
-      },
-    ])
-    expect(findings.map((finding) => finding.message)).toContainEqual(
-      expect.stringContaining("`vanished`"),
-    )
+    expect(
+      ownFindings(
+        "export const vanished = 1\nexport const shown = `a ${/* vanished */ 1} b ${`c ${2 /* vanished */}`}`\nuse(shown)\n",
+      ),
+    ).toEqual([expect.stringContaining("`vanished`")])
+  })
+
+  test("template text naming an export does not keep it alive", () => {
+    expect(
+      ownFindings(
+        "export const fixtureOnly = 1\nconst fixture = `\nimport { fixtureOnly } from './x'\n`\nuse(fixture)\n",
+      ),
+    ).toEqual([expect.stringContaining("`fixtureOnly`")])
   })
 
   test("a name read inside a template interpolation is live", () => {
     expect(
-      findingsFor([
-        { file: SDK_FILE, text: `export const interpolated = 1\n` },
-        {
-          file: "apps/tui/src/app.tsx",
-          text: "const label = `n = ${ { value: interpolated }.value } // not a comment`\nuse(label)\n",
-        },
-      ]),
+      ownFindings(
+        "export const interpolated = 1\nconst label = `n = ${ { value: interpolated }.value } // not a comment`\nuse(label)\n",
+      ),
     ).toEqual([])
   })
 
   test("a name read in an interpolation after template text holding `//` is live", () => {
     expect(
-      findingsFor([
-        { file: SDK_FILE, text: `export const afterSlashes = 1\n` },
-        {
-          file: "apps/tui/src/app.tsx",
-          text: "const label = `${ { value: 1 }.value } // ${ afterSlashes }`\nuse(label)\n",
-        },
-      ]),
+      ownFindings(
+        "export const afterSlashes = 1\nconst label = `${ { value: 1 }.value } // ${ afterSlashes }`\nuse(label)\n",
+      ),
     ).toEqual([])
   })
 
-  test("a name another file reads beside a URL in a string is live", () => {
+  test("a name read beside a URL in a string is live", () => {
     expect(
-      findingsFor([
-        { file: SDK_FILE, text: `export const fetchedName = 1\n` },
-        {
-          file: "apps/tui/src/app.tsx",
-          text: `const url = "https://example.test"; use(fetchedName)\n`,
-        },
-      ]),
+      ownFindings(
+        `export const fetchedName = 1\nconst url = "https://example.test"; use(url, fetchedName)\n`,
+      ),
     ).toEqual([])
   })
 
@@ -3814,6 +3815,10 @@ describe("a namesake does not vouch for an export", () => {
     const findings = findingsFor([
       coreDeclaration,
       {
+        file: "packages/core/src/protocol.ts",
+        text: "export { isClientFile } from './runtime/provider.js'\n",
+      },
+      {
         file: TUI_FILE,
         text: "import { isClientFile } from '@gent/core/protocol'\nexport const use = () => isClientFile('a')\n",
       },
@@ -3848,23 +3853,111 @@ describe("a namesake does not vouch for an export", () => {
     expect(findings).toEqual([])
   })
 
-  test("a plain mention with no local binding still vouches", () => {
+  test("a plain mention with no import does not vouch", () => {
     const findings = findingsFor([
       coreDeclaration,
       { file: TUI_FILE, text: "export const use = () => isClientFile('a')\n" },
       usedElsewhere,
     ])
-    expect(findings).toEqual([])
+    expect(findings.map((finding) => finding.message)).toEqual([
+      expect.stringContaining("`isClientFile` is exported but no file outside"),
+    ])
+  })
+})
+
+describe("an export is read only through an import", () => {
+  const names = (findings: ReadonlyArray<{ readonly message: string }>) =>
+    findings.map((finding) => /`([^`]+)`/.exec(finding.message)?.[1])
+
+  test("fixture text, a _tag string and a test title naming an export do not keep it alive", () => {
+    const findings = findingsFor([
+      { file: "packages/core/src/domain/extension.ts", text: "export const ResourceId = 1\n" },
+      {
+        file: "packages/extensions/src/wake.ts",
+        text: "export interface WakeAlarmsService {}\n",
+      },
+      {
+        file: "packages/tooling/tests/guards.test.ts",
+        text: [
+          "const fixture = `",
+          'import { ResourceId } from "./extension"',
+          "export interface WakeAlarmsService {}",
+          "`",
+          'test("WakeAlarmsService is reported", () => expect(fixture).toContain("ResourceId"))',
+          "",
+        ].join("\n"),
+      },
+    ])
+    expect(names(findings)).toEqual(["ResourceId", "WakeAlarmsService"])
   })
 
-  test("a local binding in a comment does not discount the mention", () => {
+  test("a name on a @ts-expect-error line asserts absence, not a read", () => {
     const findings = findingsFor([
-      coreDeclaration,
       {
-        file: TUI_FILE,
-        text: "// const isClientFile = () => true\nexport const use = () => isClientFile('a')\n",
+        file: "packages/sdk/src/server.ts",
+        text: "export interface StateSpec {}\nexport interface ProviderSpec {}\n",
       },
-      usedElsewhere,
+      {
+        file: "packages/sdk/tests/index.test.ts",
+        text: [
+          'import * as Server from "../src/server"',
+          "// @ts-expect-error — state specs are built through factories",
+          "type _BadStateSpec = Server.StateSpec",
+          "// @ts-expect-error — provider specs are built through factories",
+          "type _BadProviderSpec = Server.ProviderSpec",
+          "",
+        ].join("\n"),
+      },
+    ])
+    expect(names(findings)).toEqual(["StateSpec", "ProviderSpec"])
+  })
+
+  test("an importer's own copy of the name is not a read of the export", () => {
+    const findings = findingsFor([
+      {
+        file: "apps/tui/src/session.tsx",
+        text: "export type SessionView = {}\nexport const currentMillis = () => Date.now()\n",
+      },
+      {
+        file: "apps/tui/src/message-list.tsx",
+        text: [
+          'import type { SessionView } from "./session"',
+          "const currentMillis = () => Date.now()",
+          "export const view = (session: SessionView) => [session, currentMillis()]",
+          "",
+        ].join("\n"),
+      },
+      { file: "apps/tui/src/app.tsx", text: 'import { view } from "./message-list"\nview({})\n' },
+    ])
+    expect(names(findings)).toEqual(["currentMillis"])
+  })
+
+  test("a nested local of the same name is not a read of the export", () => {
+    const findings = findingsFor([
+      {
+        file: "apps/tui/src/extensions/thread-view.client.tsx",
+        text: "export const sessionLabel = (id: string) => id\n",
+      },
+      {
+        file: "apps/tui/src/app.tsx",
+        text: 'export const App = () => {\n  const sessionLabel = "x"\n  return sessionLabel\n}\n',
+      },
+      { file: "apps/tui/src/main.tsx", text: 'import { App } from "./app"\nApp()\n' },
+    ])
+    expect(names(findings)).toEqual(["sessionLabel"])
+  })
+
+  test("a re-export names the upstream declaration, so the chain keeps it alive", () => {
+    const findings = findingsFor([
+      { file: "packages/core/src/domain/queue.ts", text: "export const emptyQueue = 1\n" },
+      {
+        file: "packages/core/src/protocol.ts",
+        text: 'export { emptyQueue } from "./domain/queue.js"\n',
+      },
+      {
+        file: "apps/tui/src/app.tsx",
+        text: 'import { emptyQueue } from "@gent/core/protocol"\nvoid emptyQueue\n',
+      },
     ])
     expect(findings).toEqual([])
   })
