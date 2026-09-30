@@ -910,6 +910,55 @@ export const selectable = <A,>(
   render: (selected: () => boolean, id: string) => JSX.Element,
 ): SelectListRow<A> => ({ value: Option.some(value), render })
 
+interface PlainRowOptions {
+  /** Draws the unselected line in the muted color, for an entry that is not the current one. */
+  readonly muted?: () => boolean
+}
+
+function PlainRowView(props: {
+  readonly id: string
+  readonly selected: boolean
+  readonly muted: boolean
+  readonly line: string
+}) {
+  const { theme } = useTheme()
+  const background = () => {
+    if (props.selected) return theme.primary
+    return "transparent"
+  }
+  const foreground = () => {
+    if (props.selected) return theme.selectedListItemText
+    if (props.muted) return theme.textMuted
+    return theme.text
+  }
+  return (
+    <box id={props.id} backgroundColor={background()} paddingLeft={1}>
+      <text wrapMode="none" style={{ fg: foreground() }}>
+        {props.line}
+      </text>
+    </box>
+  )
+}
+
+/**
+ * A selectable entry drawn as one line of text, filled with the primary color
+ * under the cursor. `line` is read in the row's render, so it follows the
+ * picker's width; the caller fits it to that width.
+ */
+export const plainRow = <A,>(
+  value: A,
+  line: () => string,
+  options: PlainRowOptions = {},
+): SelectListRow<A> =>
+  selectable(value, (selected, id) => (
+    <PlainRowView
+      id={id}
+      selected={selected()}
+      muted={Option.exists(Option.fromUndefinedOr(options.muted), (muted) => muted())}
+      line={line()}
+    />
+  ))
+
 /** A row that draws but cannot be chosen — a section heading, a separator. */
 export const decoration = <A,>(render: () => JSX.Element): SelectListRow<A> => ({
   value: Option.none(),

@@ -62,6 +62,7 @@ export {
   keyHint,
   KeyHints,
   PickerFrame,
+  plainRow,
   selectable,
   SelectList,
   type SelectListApi,

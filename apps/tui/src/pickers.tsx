@@ -5,7 +5,7 @@ import { createEffect, createMemo, createSignal, Show } from "solid-js"
 import {
   KeyHints,
   PickerFrame,
-  selectable,
+  plainRow,
   SelectList,
   type SelectListRow,
   usePickerGeometry,
@@ -202,23 +202,7 @@ export function PromptSearchPalette(props: PromptSearchPaletteProps) {
 
         const rows = (): ReadonlyArray<SelectListRow<PromptSearchItem>> =>
           items().map((entry) =>
-            selectable(entry, (isSelected, id) => {
-              const backgroundColor = () => {
-                if (isSelected()) return theme.primary
-                return "transparent"
-              }
-              const textColor = () => {
-                if (isSelected()) return theme.selectedListItemText
-                return theme.text
-              }
-              return (
-                <box id={id} backgroundColor={backgroundColor()} paddingLeft={1}>
-                  <text wrapMode="none" style={{ fg: textColor() }}>
-                    {truncate(entry.text.replace(/\s+/g, " "), rowWidth())}
-                  </text>
-                </box>
-              )
-            }),
+            plainRow(entry, () => truncate(entry.text.replace(/\s+/g, " "), rowWidth())),
           )
 
         return (
@@ -315,7 +299,6 @@ const collectCounts = (nodes: readonly BranchTreeNode[]): Map<string, number> =>
 }
 
 export function BranchPicker(props: BranchPickerProps) {
-  const { theme } = useTheme()
   const client = useClient()
   const { cast } = useRuntime()
 
@@ -341,29 +324,12 @@ export function BranchPicker(props: BranchPickerProps) {
 
   const rows = (): ReadonlyArray<SelectListRow<Branch>> =>
     props.branches.map((branch) =>
-      selectable(branch, (isSelected, id) => {
-        const count = () => Option.fromNullishOr(messageCounts().get(branch.id))
-        const backgroundColor = () => {
-          if (isSelected()) return theme.primary
-          return "transparent"
-        }
-        const foregroundColor = () => {
-          if (isSelected()) return theme.selectedListItemText
-          return theme.text
-        }
-        const line = () => formatBranchLabel(branch, count())
-        return (
-          <box id={id} backgroundColor={backgroundColor()} paddingLeft={1}>
-            <text
-              style={{
-                fg: foregroundColor(),
-              }}
-            >
-              {truncate(line(), rowWidth())}
-            </text>
-          </box>
-        )
-      }),
+      plainRow(branch, () =>
+        truncate(
+          formatBranchLabel(branch, Option.fromNullishOr(messageCounts().get(branch.id))),
+          rowWidth(),
+        ),
+      ),
     )
 
   return (
@@ -424,30 +390,11 @@ const buildItems = (messages: readonly Message[]): PickerItem[] =>
  * the `PickerFrame` every pane draws. One line per message.
  */
 export function MessagePicker(props: MessagePickerProps) {
-  const { theme } = useTheme()
   const { rowWidth } = usePickerGeometry()
 
   const items = () => buildItems(props.messages)
   const rows = (): ReadonlyArray<SelectListRow<PickerItem>> =>
-    items().map((item) =>
-      selectable(item, (isSelected, id) => {
-        const backgroundColor = () => {
-          if (isSelected()) return theme.primary
-          return "transparent"
-        }
-        const textColor = () => {
-          if (isSelected()) return theme.selectedListItemText
-          return theme.text
-        }
-        return (
-          <box id={id} backgroundColor={backgroundColor()} paddingLeft={1}>
-            <text wrapMode="none" style={{ fg: textColor() }}>
-              {truncate(item.label, rowWidth())}
-            </text>
-          </box>
-        )
-      }),
-    )
+    items().map((item) => plainRow(item, () => truncate(item.label, rowWidth())))
 
   return (
     <Show when={props.open}>
@@ -531,29 +478,11 @@ export function SettingsPicker(props: SettingsPickerProps) {
 
   const rows = (): ReadonlyArray<SelectListRow<PickerRow>> =>
     visible().map((row) =>
-      selectable(row, (isSelected, id) => {
-        const isCurrent = () => Option.exists(props.current, (value) => value === row.id)
-        const backgroundColor = () => {
-          if (isSelected()) return theme.primary
-          return "transparent"
-        }
-        const textColor = () => {
-          if (isSelected()) return theme.selectedListItemText
-          return theme.text
-        }
-        const marker = () => {
-          if (isCurrent()) return "● "
-          return "  "
-        }
-        const label = () => {
-          const gap = Math.max(1, rowWidth() - 2 - row.name.length - row.detail.length)
-          return truncate(`${marker()}${row.name}${" ".repeat(gap)}${row.detail}`, rowWidth())
-        }
-        return (
-          <box id={id} backgroundColor={backgroundColor()} paddingLeft={1}>
-            <text style={{ fg: textColor() }}>{label()}</text>
-          </box>
-        )
+      plainRow(row, () => {
+        let marker = "  "
+        if (Option.exists(props.current, (value) => value === row.id)) marker = "● "
+        const gap = Math.max(1, rowWidth() - 2 - row.name.length - row.detail.length)
+        return truncate(`${marker}${row.name}${" ".repeat(gap)}${row.detail}`, rowWidth())
       }),
     )
 
