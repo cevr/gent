@@ -564,14 +564,19 @@ export function createPasteManager() {
         Option.getOrElse(Option.fromNullishOr(store.get(id)), () => match),
       )
     },
-    /** The chip that ends at string index `index` and still holds its stored text. */
-    chipEndingAt(text: string, index: number): Option.Option<{ start: number; id: string }> {
-      return Option.fromNullishOr(
-        /\[Pasted \d+ (?:lines|chars) #(\d+)\]$/.exec(text.slice(0, index)),
-      ).pipe(
-        Option.map((match) => ({ start: index - match[0].length, id: match[1] ?? "" })),
-        Option.filter((chip) => store.has(chip.id)),
-      )
+    /**
+     * The chip that string index `index` stands inside or at the end of, and
+     * that still holds its stored text.
+     */
+    chipAt(text: string, index: number): Option.Option<{ start: number; end: number }> {
+      for (const match of text.matchAll(/\[Pasted \d+ (?:lines|chars) #(\d+)\]/g)) {
+        const start = match.index
+        const end = start + match[0].length
+        if (start < index && index <= end && store.has(match[1] ?? "")) {
+          return Option.some({ start, end })
+        }
+      }
+      return Option.none()
     },
     clear() {
       store.clear()
@@ -778,17 +783,18 @@ function useComposerController(): ComposerController {
   }
 
   /**
-   * A paste chip is one unit. Backspace or a word delete at its end removes
-   * the whole chip in one undo step; editing it a character at a time would
-   * send the fragment and lose the paste. The stored text stays, so an undo
-   * gives back a chip that still sends its paste.
+   * A paste chip is one unit. Backspace or a word delete at its end or from
+   * inside it removes the whole chip in one undo step; editing it a character
+   * at a time would send the fragment and lose the paste. The stored text
+   * stays, so an undo gives back a chip that still sends its paste.
    *
    * The textarea counts its caret in its own units, which a wide or
    * multi-byte character makes differ from string indices. The text before
    * the caret gives the caret's string index. A chip is all ASCII, one unit
-   * per character in both counts, so the caret moves back by its length.
+   * per character in both counts, so the caret moves back by the part of the
+   * chip before it.
    */
-  const removeChipBeforeCaret = (event: {
+  const removeChipAtCaret = (event: {
     readonly name?: string
     readonly ctrl?: boolean
     readonly preventDefault: () => void
@@ -798,10 +804,10 @@ function useComposerController(): ComposerController {
     const value = inputRef.value.plainText
     const caret = inputRef.value.cursorOffset
     const caretIndex = inputRef.value.getTextRange(0, caret).length
-    const chip = paste.chipEndingAt(value, caretIndex)
+    const chip = paste.chipAt(value, caretIndex)
     if (Option.isNone(chip)) return false
     event.preventDefault()
-    const next = value.slice(0, chip.value.start) + value.slice(caretIndex)
+    const next = value.slice(0, chip.value.start) + value.slice(chip.value.end)
     inputRef.value.replaceText(next)
     inputRef.value.cursorOffset = caret - (caretIndex - chip.value.start)
     sc.onComposerInteraction(ComposerInteractionEvent.cases.DraftChanged.make({ text: next }))
@@ -1226,7 +1232,7 @@ function useComposerController(): ComposerController {
     super?: boolean
     preventDefault: () => void
   }) => {
-    if (removeChipBeforeCaret(event)) return
+    if (removeChipAtCaret(event)) return
     const isEnterKey = event.name === "return" || event.name === "linefeed"
     if (!isEnterKey) return
 

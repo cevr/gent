@@ -782,6 +782,36 @@ describe("Composer renderer", () => {
       }
     }).pipe(Effect.timeout("10 seconds")),
   )
+  // A caret inside a chip is still at the chip: a delete there takes the
+  // whole chip, so no broken placeholder reaches the model.
+  it.scopedLive("backspace or ctrl+w from inside a chip removes the whole chip", () =>
+    Effect.gen(function* () {
+      for (const wordDelete of [false, true]) {
+        const submitted: Array<string> = []
+        const setup = yield* renderScoped(() => (
+          <TestComposer onSubmit={(content) => submitted.push(content)} />
+        ))
+        yield* Effect.promise(() => setup.mockInput.typeText("keep "))
+        yield* Effect.promise(() => setup.mockInput.pasteBracketedText("x".repeat(200)))
+        yield* Effect.promise(() => setup.mockInput.typeText(" tail"))
+        yield* waitForFrame(
+          setup,
+          (frame) => frame.includes("[Pasted 200 chars #1] tail"),
+          "the chip",
+        )
+        // Past " tail", then one step into the chip.
+        for (let i = 0; i < 6; i++) setup.mockInput.pressArrow("left")
+        if (wordDelete) setup.mockInput.pressKey("w", { ctrl: true })
+        else setup.mockInput.pressBackspace()
+        yield* waitForFrame(setup, (frame) => !frame.includes("Pasted"), "the chip deleted")
+        expect(renderFrame(setup)).not.toContain("[")
+        yield* Effect.promise(() => setup.mockInput.typeText("z"))
+        setup.mockInput.pressKey("RETURN")
+        yield* Effect.promise(() => setup.renderOnce())
+        expect(submitted).toEqual(["keep z tail"])
+      }
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   it.live("suspended composer blocks enter submission", () =>
     Effect.gen(function* () {
       const submitted: string[] = []
