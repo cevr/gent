@@ -1594,11 +1594,22 @@ const captured = (match: RegExpMatchArray): ReadonlyArray<string> =>
 /** The guard's own test names variables in its fixtures; those are not call sites either. */
 const GUARDS_TEST_FILE = "packages/tooling/tests/guards.test.ts"
 
+interface GentVariableUses {
+  readonly readers: ReadonlyMap<string, ReadonlyArray<VariableUse>>
+  readonly writers: ReadonlyMap<string, ReadonlyArray<VariableUse>>
+  readonly mentions: ReadonlyMap<string, number>
+}
+
+/** Both variable finders read one scan of one tree: the scan runs once per map. */
+const gentVariableUses = new WeakMap<ReadonlyMap<string, string>, GentVariableUses>()
+
 /**
  * Where each `GENT_*` variable is read and where it is set, in production and
  * in tests, and how many times code or a package script names it at all.
  */
-const collectGentVariableUses = (sourceTexts: ReadonlyMap<string, string>) => {
+const collectGentVariableUses = (sourceTexts: ReadonlyMap<string, string>): GentVariableUses => {
+  const cached = Option.fromNullishOr(gentVariableUses.get(sourceTexts))
+  if (Option.isSome(cached)) return cached.value
   const readers = new Map<string, Array<VariableUse>>()
   const writers = new Map<string, Array<VariableUse>>()
   const mentions = new Map<string, number>()
@@ -1638,7 +1649,9 @@ const collectGentVariableUses = (sourceTexts: ReadonlyMap<string, string>) => {
       record(writers, write.name, { file, line: lineAt(code, write.at), testSupport })
     }
   }
-  return { readers, writers, mentions }
+  const uses = { readers, writers, mentions }
+  gentVariableUses.set(sourceTexts, uses)
+  return uses
 }
 
 /** The uses in `uses` outside test support, for each name that has one. */

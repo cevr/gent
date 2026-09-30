@@ -475,14 +475,16 @@ export const scanTrackedTexts = (
     collectWholeTreeFacts(file, text)
   }
 
+  // The two variable finders share one scan of this map.
+  const variableTexts = new Map([...sourceTexts, ...manifestTexts])
   findings.push(
     ...findUnusedSuppressionApprovals(sourceTexts),
     ...findUnconsumedExports(exportFacts, manifestTexts),
     ...findUnadaptedSeams(sourceTexts, adaptedSeams),
     // A GENT_* variable whose writer left: its reader is a branch nothing takes.
-    ...findReadersWithoutWriters(new Map([...sourceTexts, ...manifestTexts])),
+    ...findReadersWithoutWriters(variableTexts),
     // A GENT_* variable whose reader left: its setter configures nothing.
-    ...findWritersWithoutReaders(new Map([...sourceTexts, ...manifestTexts])),
+    ...findWritersWithoutReaders(variableTexts),
     // A bundled skill file the skills module does not import never ships.
     ...findUnshippedSkillFiles(sourceTexts.get(BUNDLED_SKILLS_MODULE) ?? "", indexFiles),
   )
