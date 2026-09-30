@@ -38,7 +38,8 @@ import { shippedPreset } from "./helpers/test-preset.js"
  * `MCP_FIXTURE_EXIT_AFTER_CALL` exits once it answered a call;
  * `count` is not listed while `MCP_FIXTURE_HIDE_COUNT` names a file that
  * exists; `MCP_FIXTURE_COLLIDE` adds tools whose names clean to one id;
- * `MCP_FIXTURE_ENV_TOOL` adds `env`, which reads the server's environment.
+ * `MCP_FIXTURE_ENV_TOOL` adds `env`, which reads the server's environment;
+ * `tools/list` answers no tools while `MCP_FIXTURE_EMPTY_LIST` names a file that exists.
  */
 const FIXTURE_SERVER = String.raw`
 const fs = require("node:fs")
@@ -95,7 +96,10 @@ const answer = (request) => {
   if (request.method === "initialize") {
     return { result: { protocolVersion: request.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "fixture", version: "1" } } }
   }
-  if (request.method === "tools/list") return { result: { tools } }
+  if (request.method === "tools/list") {
+    if (process.env.MCP_FIXTURE_EMPTY_LIST && fs.existsSync(process.env.MCP_FIXTURE_EMPTY_LIST)) return { result: { tools: [] } }
+    return { result: { tools } }
+  }
   if (request.method !== "tools/call") return { error: { code: -32601, message: "no method " + request.method } }
   calls += 1
   const input = request.params.arguments ?? {}
@@ -880,6 +884,51 @@ describe("mcp tools in the cell", () => {
         })
         expect(toolIds(next)).not.toContain("mcp.fixture.count")
         expect(toolIds(next)).toContain("mcp.fixture.echo")
+        expect(yield* fixture.starts).toBe(2)
+      }).pipe(
+        Effect.timeout("25 seconds"),
+        Effect.provide(Layer.provideMerge(withDataDir, platformLayer)),
+      ),
+    30_000,
+  )
+
+  it.scopedLive(
+    "a relist that answers no tools for a server that had some keeps the cached tools",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const fixture = yield* makeFixture
+        const empty = path.join(fixture.directory, "empty-list")
+        const servers = {
+          fixture: { ...fixture.stdio({ MCP_FIXTURE_EMPTY_LIST: empty }), cwd: fixture.directory },
+        }
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          toolCallStep("cell", { code: "await tools.mcp.fixture.echo({ text: 'kept' })" }),
+          textStep("done"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...shippedPreset,
+          extensionInputs: [
+            ...shippedPreset.extensionInputs,
+            McpServers("@test/mcp-empty", servers),
+          ],
+          providerLayer,
+        })
+        // The server answers an empty list from now on, as one with broken auth can.
+        yield* fs.writeFileString(empty, "")
+        yield* client.message.send({ sessionId, branchId, content: "echo" })
+        const result = yield* cellResultAfterDone(client, branchId)
+        expect(result).toMatchObject({
+          name: "cell",
+          isFailure: false,
+          result: { display: "kept" },
+        })
+        const next = yield* collectTestContributions(McpServers("@test/mcp-empty", servers).setup, {
+          home: path.join(fixture.directory, "home"),
+          cwd: fixture.directory,
+        })
+        expect(toolIds(next)).toHaveLength(5)
         expect(yield* fixture.starts).toBe(2)
       }).pipe(
         Effect.timeout("25 seconds"),

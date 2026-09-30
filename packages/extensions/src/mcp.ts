@@ -620,9 +620,21 @@ const mcpClientsLive = (registered: ReadonlyArray<RegisteredServer>, file: strin
       const runFork = yield* FiberSet.makeRuntime()
       /** The connection each key holds now, so a late close never drops its successor. */
       const live = new Map<string, Connection>()
+      /**
+       * The names the server lists now, written to the cache when they
+       * changed. An empty list from a server registered with tools is not
+       * trusted (a server whose auth broke can answer one): it keeps the
+       * cached tools, as a failed list does.
+       */
       const relist = (entry: RegisteredServer, client: Client) =>
         Effect.gen(function* () {
           const tools = yield* listTools(entry.server, client)
+          if (tools.length === 0 && entry.tools.length > 0) {
+            yield* Effect.logWarning("mcp.server.relist.empty").pipe(
+              Effect.annotateLogs({ server: entry.server.name }),
+            )
+            return new Set(entry.tools.map((listed) => listed.name))
+          }
           if (!Equal.equals(tools, entry.tools)) {
             yield* Semaphore.withPermit(
               writePermit,
