@@ -4111,6 +4111,19 @@ describe("a declared dependency must have a use", () => {
     expect(unusedNames(scope)).toEqual(['devDependencies["ghost"]'])
   })
 
+  test("a config path into node_modules counts as a use of that package", () => {
+    const scope = dependencyScope({
+      packageJson: { devDependencies: { "lint-preset": "1", "@scope/preset": "1", ghost: "1" } },
+      files: new Map([
+        [
+          ".oxlintrc.json",
+          '{ "extends": ["./node_modules/lint-preset/presets/recommended.json", "node_modules/@scope/preset/base.json"] }',
+        ],
+      ]),
+    })
+    expect(unusedNames(scope)).toEqual(['devDependencies["ghost"]'])
+  })
+
   test("a command a dependency installs counts as a use of it", () => {
     const scope = dependencyScope({
       packageJson: { devDependencies: { typescript: "7", "@effect/tsgo": "1", idle: "1" } },

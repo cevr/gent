@@ -4304,8 +4304,13 @@ export interface DependencyScope {
   readonly installed: ReadonlyMap<string, InstalledDependency>
 }
 
-/** The package a module specifier resolves into; a relative path names none. */
+/**
+ * The package a module specifier resolves into. A relative path names none,
+ * unless it reaches into `node_modules/<package>/…` (a config `extends` path).
+ */
 const packageOfSpecifier = (specifier: string): Option.Option<string> => {
+  const installed = /(?:^|\/)node_modules\/(.+)$/.exec(specifier)?.[1]
+  if (Predicate.isNotUndefined(installed)) return packageOfSpecifier(installed)
   if (specifier === "bun" || specifier.startsWith("bun:")) return Option.some("bun")
   if (specifier.startsWith("node:")) return Option.some("node")
   if (!/^(?:@[\w.-]+\/)?[\w.-]+(?:\/|$)/.test(specifier)) return Option.none()
