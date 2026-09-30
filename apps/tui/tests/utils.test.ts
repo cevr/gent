@@ -9,6 +9,8 @@ import { EventStoreError, StorageError } from "@gent/core/extensions/branch-tool
 import { describe, expect, it, test } from "effect-bun-test"
 import { Effect, FileSystem, Option, Schema } from "effect"
 import { lineCount } from "@gent/core/protocol"
+import { RpcClientError } from "effect/rpc/RpcClientError"
+import { SocketCloseError } from "effect/socket/Socket"
 import {
   type ActivityCall,
   ClientError,
@@ -21,6 +23,7 @@ import {
   formatCost,
   formatCellRowLabel,
   formatDuration,
+  formatConnectionIssue,
   formatError,
   formatGenericToolText,
   formatGroupDuration,
@@ -247,13 +250,16 @@ describe("expandFileRefs", () => {
     }),
   )
 
-  fileRefsTest("handles out-of-range line numbers gracefully", () =>
-    // File has 5 lines, requesting lines 10-20
+  // A range past the end names no line, so it stays a reference, as a missing file does.
+  fileRefsTest("a range that starts past the end of the file stays a reference", () =>
     Effect.gen(function* () {
       const testDir = yield* makeFixture
-      const result = yield* expandFileRefs("@src/foo.ts#10-20", testDir)
-      // Should expand but content will be empty or partial
-      expect(result).toContain("```src/foo.ts:10-20")
+      expect(yield* expandFileRefs("@src/foo.ts#10-20", testDir)).toBe("@src/foo.ts#10-20")
+      expect(yield* expandFileRefs("@src/foo.ts#9", testDir)).toBe("@src/foo.ts#9")
+      // A range that starts inside the file keeps the lines it reaches.
+      const partial = yield* expandFileRefs("@src/foo.ts#4-20", testDir)
+      expect(partial).toContain("```src/foo.ts:4-20")
+      expect(partial).toContain("line5")
     }),
   )
 
@@ -477,6 +483,20 @@ describe("formatError", () => {
       reason: "catalog filter failed",
     })
     expect(formatError(err)).toBe("Driver openai: catalog filter failed")
+  })
+})
+
+describe("formatConnectionIssue", () => {
+  // A lost connection is told by the transport's reason, never by words in a message.
+  test("a transport loss reads as lost; an answer reads as an issue", () => {
+    const lost = new RpcClientError({ reason: new SocketCloseError({ code: 1006 }) })
+    expect(formatConnectionIssue(lost)).toBe("connection lost; retrying")
+    expect(formatConnectionIssue(new NotFoundError({ message: "session abc" }))).toBe(
+      "connection issue: Not found: session abc",
+    )
+    expect(formatConnectionIssue(new NotFoundError({ message: "network timeout config" }))).toBe(
+      "connection issue: Not found: network timeout config",
+    )
   })
 })
 

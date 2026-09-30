@@ -316,24 +316,12 @@ const isUiError = Schema.is(
 
 // eslint-disable-next-line effect/noUnknownParameters -- Validate transport and framework errors before applying domain error formatting.
 export const formatConnectionIssue = (error: unknown): string => {
-  let message: string
-  if (isUiError(error)) message = formatError(error)
-  else message = extractUnknownMessage(error)
-
-  const normalized = message.toLowerCase()
-  if (
-    normalized.includes("timed out") ||
-    normalized.includes("timeout") ||
-    normalized.includes("econnreset") ||
-    normalized.includes("socket hang up") ||
-    normalized.includes("connection reset") ||
-    normalized.includes("fetch failed") ||
-    normalized.includes("network")
-  ) {
-    return "connection lost; retrying"
+  if (!isUiError(error)) return `connection issue: ${extractUnknownMessage(error)}`
+  // The transport's reason tells a lost connection from an answer.
+  if (error._tag !== "ClientError" && error._tag !== "@gent/core/GentConnectionError") {
+    if (isConnectionLoss(error)) return "connection lost; retrying"
   }
-
-  return `connection issue: ${message}`
+  return `connection issue: ${formatError(error)}`
 }
 
 // ── tool formatting ─────────────────────────────────────────────────────────
@@ -1016,6 +1004,8 @@ const readFileContent = (
 
     if (Option.isSome(startLine)) {
       const start = Math.max(0, startLine.value - 1) // Convert 1-indexed to 0-indexed
+      // A range that starts past the end names no line: it stays a reference.
+      if (start >= lines.length) return Option.none<string>()
       let end = start + 1
       if (Option.isSome(endLine)) end = Math.min(lines.length, endLine.value)
       lines = lines.slice(start, end)
