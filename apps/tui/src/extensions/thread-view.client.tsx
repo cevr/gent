@@ -279,14 +279,18 @@ export const makeThreadController = (
     const load = (active: { sessionId: SessionId; branchId: BranchId }) =>
       Effect.gen(function* () {
         const chain = threadChain(yield* fetchSessions(active.sessionId), active.sessionId)
-        const perSession = yield* Effect.forEach(chain, (session) =>
-          Option.match(branchFor(session, active), {
-            onNone: () => Effect.succeed<ReadonlyArray<ThreadWindow>>([]),
-            onSome: (branchId) =>
-              Effect.map(fetchMessages(branchId), (messages) =>
-                windowsOf(session, branchId, messages),
-              ),
-          }),
+        // The sessions' reads are independent; a few run at once, in chain order.
+        const perSession = yield* Effect.forEach(
+          chain,
+          (session) =>
+            Option.match(branchFor(session, active), {
+              onNone: () => Effect.succeed<ReadonlyArray<ThreadWindow>>([]),
+              onSome: (branchId) =>
+                Effect.map(fetchMessages(branchId), (messages) =>
+                  windowsOf(session, branchId, messages),
+                ),
+            }),
+          { concurrency: 4 },
         )
         const omitted = yield* fetchOmitted(active)
         const windows = perSession.flat()
