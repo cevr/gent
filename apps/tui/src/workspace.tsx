@@ -207,7 +207,6 @@ export function WorkspaceProvider(props: WorkspaceProviderProps) {
     let watchFiber = Option.none<Fiber.Fiber<void, never>>()
     let fallbackFiber = Option.none<Fiber.Fiber<void, never>>()
 
-    const gitDir = `${props.cwd}/.git`
     const startPollingFallback = (reason: Cause.Cause<unknown>) => {
       Effect.runFork(
         Effect.logDebug("[workspace] git watch failed, falling back to polling").pipe(
@@ -223,10 +222,21 @@ export function WorkspaceProvider(props: WorkspaceProviderProps) {
       )
     }
 
-    // The watch reads `FileSystem` from the services the root provides
-    // (`uiServices` in `main.tsx`); without it the poll stands in.
+    // The watch reads `FileSystem` and the process spawner from the services
+    // the root provides (`uiServices` in `main.tsx`); without them the poll
+    // stands in. Git names the directory that holds this checkout's HEAD and
+    // index: the launch directory may be a subdirectory of the repository, or
+    // a worktree whose `.git` is a file. Outside a repository nothing is
+    // watched.
     const watchProgram = Effect.gen(function* () {
       const fs = yield* Effect.fromOption(Context.getOption(services, FileSystem.FileSystem))
+      const spawner = yield* Effect.fromOption(
+        Context.getOption(services, ChildProcessSpawner.ChildProcessSpawner),
+      )
+      const gitDir = yield* gitCommand(props.cwd, ["rev-parse", "--absolute-git-dir"]).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      )
+      if (gitDir.length === 0) return
       yield* fs.watch(gitDir).pipe(
         Stream.runForEach((event) => {
           const name = Option.getOrElse(Option.fromNullishOr(event.path.split("/").pop()), () => "")
