@@ -408,10 +408,19 @@ const catalogToolOf = (entry: Schema.Json) =>
     }),
   )
 
-/** A server's tools and the `instructions` its `initialize` answer carried, if any. */
+/** The `name` of a listed entry the tool shape refused, when it has one. */
+const NamedEntry = Schema.Struct({ name: Schema.String })
+
+/**
+ * A server's tools, the `instructions` its `initialize` answer carried, if
+ * any, and the names of the entries it listed that were skipped as malformed:
+ * they still take part in id allocation, so a tool's id does not move when a
+ * colliding entry turns malformed.
+ */
 const CatalogServer = Schema.Struct({
   tools: Schema.Array(CatalogTool),
   instructions: Schema.optional(Schema.String),
+  reserved: Schema.optional(Schema.Array(Schema.String)),
 })
 type CatalogServer = typeof CatalogServer.Type
 
@@ -1242,12 +1251,14 @@ const connect = (
  * Every page of `tools/list`. The request goes out with the SDK's loose
  * result schema, not `client.listTools`, whose schema refuses the whole page
  * for one malformed entry; each entry decodes here instead, and one the
- * spec's tool shape refuses is skipped with a warning. So the SDK keeps no
- * output-schema validators, and the tool checks structured content itself.
+ * spec's tool shape refuses is skipped with a warning, its `name`, when it
+ * has one, kept in `reserved`. So the SDK keeps no output-schema validators,
+ * and the tool checks structured content itself.
  */
 const listTools = (server: McpServer, client: Client) =>
   Effect.gen(function* () {
     const tools: Array<CatalogTool> = []
+    const reserved: Array<string> = []
     let cursor = Option.none<string>()
     for (let page = 0; page < 100; page++) {
       const params = Option.match(cursor, {
@@ -1274,6 +1285,8 @@ const listTools = (server: McpServer, client: Client) =>
           tools.push(tool.success)
           continue
         }
+        const named = Schema.decodeUnknownOption(NamedEntry)(entry)
+        if (Option.isSome(named)) reserved.push(named.value.name)
         yield* Effect.logWarning("mcp.tools.skipped").pipe(
           Effect.annotateLogs({ server: server.name, entry: index, error: tool.failure.message }),
         )
@@ -1281,8 +1294,22 @@ const listTools = (server: McpServer, client: Client) =>
       cursor = Option.fromNullishOr(listed.nextCursor)
       if (Option.isNone(cursor)) break
     }
-    return tools
+    return { tools, reserved }
   })
+
+/** A listing as the cache keeps it: `reserved` only when some entry was skipped. */
+const catalogServerOf = (
+  listed: { readonly tools: ReadonlyArray<CatalogTool>; readonly reserved: ReadonlyArray<string> },
+  instructions: Option.Option<string>,
+): CatalogServer => ({
+  tools: listed.tools,
+  ...omitUndefined({
+    instructions: Option.getOrUndefined(instructions),
+    reserved: Option.getOrUndefined(
+      Option.filter(Option.some(listed.reserved), (names) => names.length > 0),
+    ),
+  }),
+})
 
 /** The result fields a call reads; content blocks stay JSON. */
 const CallResult = Schema.Struct({
@@ -1522,7 +1549,8 @@ const mcpClientsLive = ({
       const relist = (server: McpServer, client: Client, instructions: Option.Option<string>) =>
         Effect.gen(function* () {
           const previous = known.get(server.key) ?? { tools: [] }
-          const tools = yield* listTools(server, client)
+          const listed = yield* listTools(server, client)
+          const tools = listed.tools
           if (tools.length === 0 && previous.tools.length > 0) {
             yield* Effect.logWarning("mcp.server.relist.empty").pipe(
               Effect.annotateLogs({ server: server.name }),
@@ -1534,10 +1562,7 @@ const mcpClientsLive = ({
             )
             return namesOf(previous.tools)
           }
-          const next: CatalogServer = {
-            tools,
-            ...omitUndefined({ instructions: Option.getOrUndefined(instructions) }),
-          }
+          const next = catalogServerOf(listed, instructions)
           known.set(server.key, next)
           setHealth(server.key, "healthy", Option.none())
           if (!Equal.equals(next, previous)) {
@@ -1994,11 +2019,13 @@ const toolDescription = (server: McpServer, listed: CatalogTool) => {
 
 /**
  * One host tool per listed MCP tool, each under its own segment (see
- * `allocateSegments`). A name the server lists twice is one tool.
+ * `allocateSegments`), allocated over the tools' names and the `reserved`
+ * names of skipped entries. A name the server lists twice is one tool.
  */
-const toolsFor = (server: McpServer, listed: ReadonlyArray<CatalogTool>) => {
+const toolsFor = (server: McpServer, catalog: CatalogServer) => {
+  const listed = catalog.tools
   const segments = allocateSegments(
-    listed.map((entry) => entry.name),
+    [...listed.map((entry) => entry.name), ...(catalog.reserved ?? [])],
     WIRE_SEGMENTS_LIMIT - server.name.length,
     "tool",
   )
@@ -2088,12 +2115,7 @@ const catalogFor = (server: McpServer, cache: CatalogFile, auth: AuthStore) => {
   return Effect.scoped(
     Effect.gen(function* () {
       const { client, instructions } = yield* connect(server, auth)
-      const tools = yield* listTools(server, client)
-      const catalog: CatalogServer = {
-        tools,
-        ...omitUndefined({ instructions: Option.getOrUndefined(instructions) }),
-      }
-      return catalog
+      return catalogServerOf(yield* listTools(server, client), instructions)
     }),
   ).pipe(
     Effect.map((catalog): SetupCatalog => ({ catalog, listedNow: true, failure: Option.none() })),
@@ -2230,7 +2252,7 @@ const registerServers = Effect.fn("Mcp.registerServers")(function* (
   yield* host.register(
     "tool",
     McpStatusTool,
-    ...registered.flatMap((entry) => toolsFor(entry.server, entry.catalog.tools)),
+    ...registered.flatMap((entry) => toolsFor(entry.server, entry.catalog)),
   )
   yield* host.register("request", McpCommand)
 })

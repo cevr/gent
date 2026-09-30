@@ -51,7 +51,7 @@ import { shippedPreset } from "./helpers/test-preset.js"
  * `MCP_FIXTURE_SDK_UNKNOWN`); `MCP_FIXTURE_COLLIDE` adds tools whose names
  * clean to one id;
  * `MCP_FIXTURE_ENV_TOOL` adds `env`, which reads the server's environment;
- * `MCP_FIXTURE_MALFORMED` adds three entries the spec's tool schema refuses;
+ * `MCP_FIXTURE_MALFORMED` adds four entries the spec's tool schema refuses, one named `a.b`, and `a_b`;
  * `MCP_FIXTURE_BINARY` adds `image`, which returns an image and a blob;
  * `MCP_FIXTURE_TYPED` adds `stats` and `badstats`, which declare an output
  * schema, and only `stats` keeps it;
@@ -109,6 +109,8 @@ if (process.env.MCP_FIXTURE_MALFORMED) {
     { name: "nulldesc", description: null, inputSchema: { type: "object" } },
     { description: "An entry without a name.", inputSchema: { type: "object" } },
     { name: "noschema", description: "An entry without an input schema." },
+    { name: "a.b", description: 5, inputSchema: { type: "object" } },
+    { name: "a_b", description: "Collides with a.b.", inputSchema: { type: "object" } },
   )
 }
 if (process.env.MCP_FIXTURE_BINARY) {
@@ -515,7 +517,7 @@ describe("mcp config", () => {
   )
 
   it.scopedLive(
-    "a malformed tools/list entry is skipped and the rest of the list stays; a null description counts as none",
+    "a malformed tools/list entry is skipped and the rest of the list stays, its name still holding its id; a null description counts as none",
     () =>
       Effect.gen(function* () {
         const path = yield* Path.Path
@@ -530,7 +532,7 @@ describe("mcp config", () => {
           }),
         )
         expect(ids).toEqual(
-          ["count", "echo", "fail", "nulldesc", "repo_search_issues", "structured"].map(
+          ["a_b_2", "count", "echo", "fail", "nulldesc", "repo_search_issues", "structured"].map(
             (name) => `mcp.fixture.${name}`,
           ),
         )
