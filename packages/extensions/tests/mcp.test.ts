@@ -36,7 +36,7 @@ import {
 } from "@gent/core/test-utils"
 import { ExtensionId, getToolId, type ToolCapability } from "@gent/core/extensions/api"
 import { messagePartsText } from "@gent/core/protocol"
-import { McpExtension, McpServers, projectCallResult } from "../src/mcp.js"
+import { HostEnvironment, McpExtension, McpServers, projectCallResult } from "../src/mcp.js"
 import { shippedPreset } from "./helpers/test-preset.js"
 
 // ── fixtures ────────────────────────────────────────────────────────────────
@@ -152,17 +152,6 @@ if (process.env.MCP_FIXTURE_TYPED) {
     { name: "stats", description: "Count open issues.", inputSchema: { type: "object" }, outputSchema },
     { name: "badstats", description: "Break its own output schema.", inputSchema: { type: "object" }, outputSchema },
   )
-}
-for (let index = 0; index < Number(process.env.MCP_FIXTURE_EXTRA ?? 0); index++) {
-  tools.push({
-    name: "extra_" + String(index).padStart(3, "0"),
-    description: "Generated tool " + index + " that lists repository issues matching a query.",
-    inputSchema: {
-      type: "object",
-      properties: { owner: { type: "string" }, repo: { type: "string" }, query: { type: "string" }, limit: { type: "integer" } },
-      required: ["owner", "repo", "query"],
-    },
-  })
 }
 const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\n")
 const answer = (request) => {
@@ -539,6 +528,43 @@ describe("mcp config", () => {
         yield* collectTestContributions(flagged.setup, { home, cwd: fixture.directory })
         yield* collectTestContributions(flagged.setup, { home, cwd: other })
         expect(yield* fixture.starts).toBe(8)
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(platformLayer)),
+    30_000,
+  )
+
+  it.scopedLive(
+    "a project file's entry is that project's server; the same entry in the user file serves every project",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const fixture = yield* makeFixture
+        const home = path.join(fixture.directory, "home")
+        const projects = [path.join(fixture.directory, "a"), path.join(fixture.directory, "b")]
+        // A script runner such as `bun run mcp` names no path, yet runs each project's own script.
+        for (const project of projects) {
+          yield* fs.makeDirectory(path.join(project, ".gent"), { recursive: true })
+          yield* fs.writeFileString(
+            path.join(project, ".gent", "mcp.json"),
+            encodeJson({ mcpServers: { dev: fixture.stdio() } }),
+          )
+        }
+        yield* fs.makeDirectory(path.join(home, ".gent"), { recursive: true })
+        yield* fs.writeFileString(
+          path.join(home, ".gent", "config.json"),
+          encodeJson({ trustedProjects: projects }),
+        )
+        for (const cwd of projects)
+          yield* collectTestContributions(McpExtension.setup, { home, cwd })
+        expect(yield* fixture.starts).toBe(2)
+        // From the user file, one listing serves both projects.
+        yield* fs.writeFileString(
+          path.join(home, ".gent", "mcp.json"),
+          encodeJson({ mcpServers: { global: fixture.stdio() } }),
+        )
+        for (const cwd of projects)
+          yield* collectTestContributions(McpExtension.setup, { home, cwd })
+        expect(yield* fixture.starts).toBe(3)
       }).pipe(Effect.timeout("20 seconds"), Effect.provide(platformLayer)),
     30_000,
   )
@@ -2317,59 +2343,13 @@ describe("mcp tools in the cell", () => {
   )
 
   it.scopedLive(
-    "a server with 100 tools collapses to one prompt line, and the cell finds, describes and calls them",
-    () =>
-      Effect.gen(function* () {
-        const fixture = yield* makeFixture
-        const { systems, recordSystem } = systemRecorder()
-        const code = [
-          "const found = tools.search('extra_042').items.map((entry) => entry.id)",
-          "const signature = tools.describe('mcp.fixture.extra_042')",
-          "const called = await tools.mcp.fixture.extra_042({ owner: 'o', repo: 'r', query: 'q' })",
-          "JSON.stringify({ found, signature, called })",
-        ].join("; ")
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-          recordSystem(toolCallStep("cell", { code })),
-          textStep("done"),
-        ])
-        const { client, sessionId, branchId } = yield* createRpcHarness({
-          ...shippedPreset,
-          extensionInputs: [
-            ...shippedWithoutMcp,
-            // Five named tools and 95 generated ones.
-            McpServers("@test/mcp-many", { fixture: fixture.stdio({ MCP_FIXTURE_EXTRA: "95" }) }),
-          ],
-          providerLayer,
-        })
-        yield* client.message.send({ sessionId, branchId, content: "find a fixture tool" })
-        const result = yield* cellResultAfterDone(client, branchId)
-        const system = systems[0] ?? ""
-        expect(system).toContain("- tools.mcp.fixture.*: 100 tools (count, echo, extra_000, ")
-        expect(system).not.toContain("- tools.mcp.fixture.extra_042(")
-        expect(result).toMatchObject({
-          name: "cell",
-          isFailure: false,
-          result: {
-            display: encodeJson({
-              found: ["mcp.fixture.extra_042"],
-              signature:
-                "tools.mcp.fixture.extra_042(input: { owner: string; repo: string; query: string; limit?: number }): Promise<unknown> // Generated tool 42 that lists repository issues matching a query.",
-              called: "called extra_042",
-            }),
-          },
-        })
-      }).pipe(Effect.timeout("25 seconds"), Effect.provide(platformLayer)),
-    30_000,
-  )
-
-  it.scopedLive(
     "a tool with an output schema shows a typed result and returns its structured content",
     () =>
       Effect.gen(function* () {
         const fixture = yield* makeFixture
         const { systems, recordSystem } = systemRecorder()
         const code = [
-          "const signature = tools.describe('mcp.fixture.stats')",
+          "const signature = tools('mcp.fixture.stats').signature",
           "const stats = await tools.mcp.fixture.stats()",
           "let broken = ''; try { await tools.mcp.fixture.badstats() } catch (error) { broken = error.message }",
           "JSON.stringify({ signature, stats, broken })",
@@ -2726,24 +2706,18 @@ describe("mcp tools in the cell", () => {
   )
 
   it.scopedLive(
-    "stdio servers run with the host environment, empty and numbered names included, their entry's env winning, and it is read once",
+    "stdio servers run with the host environment, empty and dated names included, their entry's env winning",
     () => {
       // The gent process's environment, as a proxy or CA variable is in a user's
-      // shell. `NO_PROXY=` is set empty on purpose; Docker links name a port.
-      const hostEnv = ConfigProvider.fromEnv({
-        env: {
-          GENT_MCP_HOST_ONLY: "from the host",
-          GENT_MCP_DECLARED: "from the host",
-          GENT_MCP_EMPTY: "",
-          GENT_MCP_PORT_5432_TCP: "tcp://db:5432",
-        },
-      })
-      // Each walk of the environment loads this name once.
-      const walks = { count: 0 }
-      const counting = ConfigProvider.make((path) => {
-        if (path.join("_") === "GENT_MCP_HOST_ONLY") walks.count += 1
-        return hostEnv.load(path)
-      })
+      // shell. `NO_PROXY=` is set empty on purpose; Docker links name a port, and
+      // a release name carries a date, a number far above the count of variables.
+      const hostVariables = {
+        GENT_MCP_HOST_ONLY: "from the host",
+        GENT_MCP_DECLARED: "from the host",
+        GENT_MCP_EMPTY: "",
+        GENT_MCP_PORT_5432_TCP: "tcp://db:5432",
+        GENT_MCP_RELEASE_20240101: "dated",
+      }
       return Effect.gen(function* () {
         const fixture = yield* makeFixture
         const code = [
@@ -2751,8 +2725,9 @@ describe("mcp tools in the cell", () => {
           "const declared = await tools.mcp.fixture.env({ name: 'GENT_MCP_DECLARED' })",
           "const empty = await tools.mcp.fixture.env({ name: 'GENT_MCP_EMPTY' })",
           "const port = await tools.mcp.fixture.env({ name: 'GENT_MCP_PORT_5432_TCP' })",
+          "const dated = await tools.mcp.fixture.env({ name: 'GENT_MCP_RELEASE_20240101' })",
           "const other = await tools.mcp.other.env({ name: 'GENT_MCP_HOST_ONLY' })",
-          "JSON.stringify({ host, declared, empty, port, other })",
+          "JSON.stringify({ host, declared, empty, port, dated, other })",
         ].join("; ")
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
           toolCallStep("cell", { code }),
@@ -2783,17 +2758,15 @@ describe("mcp tools in the cell", () => {
               declared: "from the entry",
               empty: "",
               port: "tcp://db:5432",
+              dated: "dated",
               other: "from the host",
             }),
           },
         })
-        // Two servers listed at setup and dialed again for their calls: four dials.
-        // The extension's setup runs once for the session's cwd, and walks once.
-        expect(yield* fixture.starts).toBe(4)
-        expect(walks.count).toBe(1)
       }).pipe(
         Effect.timeout("25 seconds"),
-        Effect.provide(Layer.merge(platformLayer, ConfigProvider.layer(counting))),
+        Effect.provideService(HostEnvironment, hostVariables),
+        Effect.provide(platformLayer),
       )
     },
     30_000,

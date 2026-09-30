@@ -62,10 +62,9 @@ import { FetchHttpClient, Headers, HttpClient, HttpClientRequest } from "effect/
 import { AnthropicClient, AnthropicLanguageModel, Generated } from "@effect/ai-anthropic"
 import { type AiError, Model as AiModel, type Response } from "effect/ai"
 
-// Test seam: only tests read these exports. The model table and its lookups
-// (MODEL_CONFIG, getModelOverride, getModelBetas), the billing header (SYSTEM_IDENTITY_PREFIX,
-// extractFirstUserMessageText, computeCch, computeVersionSuffix,
-// buildBillingHeaderValue), the wire transforms (transformPayload, transformResponseContent, transformStreamEvent)
+// Test seam: only tests read these exports. The model beta lookup
+// (getModelBetas), the billing header (SYSTEM_IDENTITY_PREFIX,
+// extractFirstUserMessageText, buildBillingHeaderValue), the wire transforms (transformPayload, transformResponseContent, transformStreamEvent)
 // and the credential parsers (ClaudeCredentials,
 // updateCredentialBlob, parseOAuthResponse) are pure functions with unit tests.
 // AnthropicKeychainEnv, AnthropicPlatform, AnthropicCredentialIO,
@@ -106,7 +105,7 @@ interface ModelConfig {
  * set; reference at
  * `~/.cache/repo/griffinmartin/opencode-claude-auth/src/model-config.ts`.
  */
-export const MODEL_CONFIG: ModelConfig = {
+const MODEL_CONFIG: ModelConfig = {
   ccVersion: "2.1.280",
   baseBetas: [
     "claude-code-20250219",
@@ -132,7 +131,7 @@ export const MODEL_CONFIG: ModelConfig = {
 }
 
 /** First-match-wins lookup against the override table, in its insertion order. */
-export const getModelOverride = (modelId: string): Option.Option<ModelOverride> => {
+const getModelOverride = (modelId: string): Option.Option<ModelOverride> => {
   const lower = modelId.toLowerCase()
   for (const [pattern, override] of Object.entries(MODEL_CONFIG.modelOverrides)) {
     if (lower.includes(pattern)) return Option.some(override)
@@ -215,10 +214,10 @@ export class AnthropicPlatform extends Context.Service<AnthropicPlatform, Anthro
 ) {
   /**
    * Build from the `ExtensionHost` seen during setup. `home` is sourced from
-   * `host.homeDirectory` (the OS user home), not `ctx.home` (the Gent
-   * configured home): the Claude Code credential file lives at the OS
-   * user's home regardless of a `GENT_HOME` override. This is the one place
-   * that picks the field.
+   * `host.homeDirectory` (the OS user home), not `ctx.home` (the home gent
+   * runs with, which a host may set elsewhere): the Claude Code credential
+   * file lives at the OS user's home whatever `ctx.home` is. This is the one
+   * place that picks the field.
    */
   static readonly fromSetup = (
     ctx: Pick<ExtensionHostService, "host">,
@@ -316,7 +315,7 @@ const sha256Hex = (text: string): Effect.Effect<string, never, Crypto.Crypto> =>
  * doesn't match the first user message we send, so this MUST be
  * recomputed per request.
  */
-export const computeCch = (messageText: string): Effect.Effect<string, never, Crypto.Crypto> =>
+const computeCch = (messageText: string): Effect.Effect<string, never, Crypto.Crypto> =>
   sha256Hex(messageText).pipe(Effect.map((hex) => hex.slice(0, 5)))
 
 /**
@@ -326,7 +325,7 @@ export const computeCch = (messageText: string): Effect.Effect<string, never, Cr
  * then hashes the lot. Anthropic checks this against the version we
  * advertise in the same header.
  */
-export const computeVersionSuffix = (
+const computeVersionSuffix = (
   messageText: string,
   version: string,
 ): Effect.Effect<string, never, Crypto.Crypto> =>
@@ -1251,47 +1250,22 @@ const stripExistingBillingBlocks = (blocks: ReadonlyArray<JsonRecord>): Readonly
   })
 
 /**
- * Split caller-provided system blocks into the identity entry, billing
- * entries (always discarded — re-computed per-request), and everything
- * else (the movable third-party content). Used by the relocator to
- * decide what to pull into the first user message before billing is
- * computed.
+ * The caller's system blocks the relocator moves into the first user
+ * message: every block but the billing entries (re-computed per request)
+ * and the identity prefix, which `buildSystemArray` writes itself.
  *
  * A single block carrying `IDENTITY + "\n\n<rest>"` (the shape
  * OpenCode's `system.transform` hook produces) is split at the identity
- * boundary: identity goes to identityBlocks,
- * the trailing remainder rides along as third-party so the relocator
- * pulls it into the first user message.
+ * boundary, and only the remainder moves.
  */
-type PartitionedSystemBlocks = {
-  readonly identityBlocks: ReadonlyArray<JsonRecord>
-  readonly thirdPartyBlocks: ReadonlyArray<JsonRecord>
-}
-
-const partitionSystemBlocks = (callerSystem: JsonValue): PartitionedSystemBlocks => {
-  const blocks = stripExistingBillingBlocks(normalizeSystemBlocks(callerSystem))
-  const identityBlocks: JsonRecord[] = []
-  const thirdPartyBlocks: JsonRecord[] = []
-  for (const block of blocks) {
+const thirdPartySystemBlocks = (callerSystem: JsonValue): ReadonlyArray<JsonRecord> =>
+  stripExistingBillingBlocks(normalizeSystemBlocks(callerSystem)).flatMap((block) => {
     const text = block["text"]
-    if (Predicate.isString(text) && text.startsWith(SYSTEM_IDENTITY_PREFIX)) {
-      const rest = text.slice(SYSTEM_IDENTITY_PREFIX.length).replace(/^\n+/, "")
-      const { text: _t, cache_control: _cc, ...rest_props } = block
-      // Identity itself rides without cache_control (validator rejects
-      // a marked identity block — counts toward the 4-block limit).
-      identityBlocks.push({ ...rest_props, text: SYSTEM_IDENTITY_PREFIX })
-      if (rest.length > 0) {
-        // Remainder picks back up the original block's `cache_control`
-        // and other props so users can still mark long instructions
-        // for prompt caching.
-        thirdPartyBlocks.push({ ...block, text: rest })
-      }
-    } else {
-      thirdPartyBlocks.push(block)
-    }
-  }
-  return { identityBlocks, thirdPartyBlocks }
-}
+    if (!Predicate.isString(text) || !text.startsWith(SYSTEM_IDENTITY_PREFIX)) return [block]
+    const rest = text.slice(SYSTEM_IDENTITY_PREFIX.length).replace(/^\n+/, "")
+    if (rest.length === 0) return []
+    return [{ ...block, text: rest }]
+  })
 
 /**
  * Build the final `system[]` array with the strict shape Anthropic's
@@ -1332,7 +1306,7 @@ const buildSystemArray = (
  * validates `system[]` against the Claude Code identity prefix.
  * Third-party system content alongside the prefix trips a 400 "out of
  * extra usage" rejection. The relocator takes the third-party blocks
- * (already partitioned by `partitionSystemBlocks`) and folds them into
+ * (`thirdPartySystemBlocks`) and folds them into
  * the first user message as a single text block.
  *
  * Ordering rules:
@@ -1432,7 +1406,7 @@ export const transformPayload = (
       result["tool_choice"] = transformToolChoice(result["tool_choice"])
     }
 
-    const { thirdPartyBlocks } = partitionSystemBlocks(result["system"])
+    const thirdPartyBlocks = thirdPartySystemBlocks(result["system"])
     let messagesAfterRelocate: ReadonlyArray<JsonRecord> = []
     if (isRecordArray(result["messages"])) {
       messagesAfterRelocate = relocateThirdPartyIntoFirstUser(thirdPartyBlocks, result["messages"])
@@ -2441,7 +2415,7 @@ const applyRequestPlan = (payload: JsonRecord, plan: AnthropicRequestPlan): Json
 
 /**
  * API-key path: plain `AnthropicClient.layer` over `FetchHttpClient`.
- * No keychain wrapper — `keychainClient` injects Claude Code OAuth
+ * No keychain wrapper — `buildKeychainTransformClient` injects Claude Code OAuth
  * billing-header system blocks + identity prefix, which API-key users
  * are not on the hook for.
  */
