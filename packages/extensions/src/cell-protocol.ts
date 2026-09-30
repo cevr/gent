@@ -292,10 +292,16 @@ export const CellResponse = Schema.TaggedUnion({
 })
 export type CellResponse = typeof CellResponse.Type
 
+/** Why a frame was refused, when a caller branches on it: past `maximumCellFrameBytes`. */
+export const CellFrameRefusal = Schema.Literal("frame-too-large")
+
 export class CellProtocolError extends Schema.TaggedError<CellProtocolError>()(
   "CellProtocolError",
-  { message: Schema.String },
+  { message: Schema.String, reason: Schema.optional(CellFrameRefusal) },
 ) {}
+
+const frameTooLarge = () =>
+  new CellProtocolError({ message: "Cell frame exceeds the byte limit", reason: "frame-too-large" })
 
 const protocolError = (cause: unknown) => new CellProtocolError({ message: String(cause) })
 const requestCodec = Schema.fromJsonString(CellRequest)
@@ -309,7 +315,7 @@ export const decodeCellResponse = (frame: string) =>
 const frameBytes = (text: string): Effect.Effect<Uint8Array, CellProtocolError> => {
   const bytes = new TextEncoder().encode(text + "\n")
   if (bytes.byteLength - 1 > maximumCellFrameBytes) {
-    return Effect.fail(new CellProtocolError({ message: "Cell frame exceeds the byte limit" }))
+    return Effect.fail(frameTooLarge())
   }
   return Effect.succeed(bytes)
 }
@@ -346,7 +352,7 @@ export const makeCellFrameReader = () => {
             length = 0
           } else {
             if (length === maximumCellFrameBytes) {
-              return yield* new CellProtocolError({ message: "Cell frame exceeds the byte limit" })
+              return yield* frameTooLarge()
             }
             buffer[length++] = byte
           }

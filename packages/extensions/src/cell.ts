@@ -88,6 +88,7 @@ import {
   CellCatalogEntry,
   type CellEvaluation,
   CellEvaluationError,
+  CellFrameRefusal,
   type CellOutputSegment,
   CellRequest,
   cellRequestFd,
@@ -742,6 +743,7 @@ class CellProcessError extends Schema.TaggedError<CellProcessError>()("CellProce
   phase: Schema.Literals(["launch", "io", "exit"]),
   message: Schema.String,
   diagnostics: Schema.String,
+  reason: Schema.optional(CellFrameRefusal),
 }) {}
 
 /**
@@ -1043,7 +1045,17 @@ export const openCellProcess = Effect.fn("CellProcess.open")(function* (input: {
       if (yield* Deferred.isDone(failure)) return yield* Deferred.await(failure)
       // Output nobody claimed, such as late writes from a process a cell spawned, is dropped here.
       if (request._tag === "Evaluate") beginCell(request.outputToken)
-      const bytes = yield* encodeCellRequest(request).pipe(Effect.mapError(ioError))
+      const bytes = yield* encodeCellRequest(request).pipe(
+        Effect.mapError(
+          (error) =>
+            new CellProcessError({
+              phase: "io",
+              message: String(error),
+              diagnostics: diagnostics(),
+              reason: error.reason,
+            }),
+        ),
+      )
       const accepted = yield* Queue.offer(outbound, bytes).pipe(
         Effect.raceFirst(Deferred.await(failure)),
       )
@@ -1064,11 +1076,12 @@ const namingCatalogSize = (error: CellProcessError, catalog: Option.Option<CellC
     Option.map(catalog, (sent) => sent.tools.length),
     () => 0,
   )
-  if (listed === 0 || !error.message.includes("byte limit")) return error
+  if (listed === 0 || error.reason !== "frame-too-large") return error
   return new CellProcessError({
     phase: error.phase,
     message: `${error.message}: the listing of ${listed} host tools does not fit one frame; select fewer tools for this agent`,
     diagnostics: error.diagnostics,
+    reason: error.reason,
   })
 }
 
