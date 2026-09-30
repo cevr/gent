@@ -126,6 +126,14 @@ export const AgentEvent = Schema.TaggedUnion({
      * client that prices part of the step reads this one.
      */
     pricedModel: Schema.optional(ModelId),
+    /**
+     * The step ran in a spawned child session (`isSpawnedSession`), whose
+     * requests ask for the child cache lifetime: a client reads the step's
+     * lifetime with `promptCacheTtlMsFor(model, child)`. Absent on a step
+     * that reported no usage, and on rows written before it; such a step
+     * reads as a root session's.
+     */
+    child: Schema.optional(Schema.Boolean),
     interrupted: Schema.optional(Schema.Boolean),
     /** How the step ended; the step boundary the loop's policy matched on. */
     outcome: Schema.optional(StepOutcomeTag),

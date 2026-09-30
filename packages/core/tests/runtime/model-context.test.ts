@@ -1323,6 +1323,13 @@ const handoffMarkers = (durable: ReadonlyArray<Message>) =>
     ),
   )
 
+/** What each step that reported usage says of its session: a spawned child or not. */
+const settledStepsChild = (events: ReadonlyArray<AgentEvent>) =>
+  events.flatMap((event) => {
+    if (event._tag !== "StreamEnded" || Predicate.isUndefined(event.usage)) return []
+    return [event.child]
+  })
+
 const secondProjection = (events: ReadonlyArray<AgentEvent>) =>
   events.filter((event) => event._tag === "ModelContextProjected").at(1)
 
@@ -1383,6 +1390,8 @@ describe("cold prompt cache", () => {
       expect(result.calls).toBe(3)
       expect(result.requests[1]).toContain("summarize")
       expect(handoffMarkers(result.durable)).toHaveLength(1)
+      // Each step's end says it ran in a child, so a client reads the child lifetime too.
+      expect(settledStepsChild(result.events)).toEqual([true, true])
     }),
   )
 
@@ -1398,6 +1407,7 @@ describe("cold prompt cache", () => {
 
       expect(result.calls).toBe(2)
       expect(handoffMarkers(result.durable)).toHaveLength(0)
+      expect(settledStepsChild(result.events)).toEqual([false, false])
     }),
   )
 

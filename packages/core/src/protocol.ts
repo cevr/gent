@@ -49,7 +49,7 @@ export {
   messagePartsReasoning,
   messagePartsText,
 } from "./domain/message.js"
-export { Model, ModelId, ProviderId } from "./domain/agent.js"
+export { Model, ModelId, promptCacheTtlMsFor, ProviderId } from "./domain/agent.js"
 export { QueueEntryInfo, QueueSnapshot } from "./domain/message.js"
 export {
   initialSessionMetrics,

@@ -2625,6 +2625,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             model: params.resolved.modelId,
             costUsd: Option.getOrUndefined(streamEndedCost),
             pricedModel,
+            child: params.resolved.child,
             outcome: outcome._tag,
           }),
         )

@@ -1,7 +1,12 @@
 /** @jsxImportSource @opentui/solid */
 import { Effect, Option, Schema } from "effect"
 import { type Accessor, createMemo, createRoot, createSignal, type Setter } from "solid-js"
-import { AgentEvent, type EventEnvelope, type Model } from "@gent/core/protocol"
+import {
+  AgentEvent,
+  type EventEnvelope,
+  type Model,
+  promptCacheTtlMsFor,
+} from "@gent/core/protocol"
 import { CHILD_COMPLETION_TYPE, WAKE_MESSAGE_TYPE } from "@gent/extensions/client"
 import {
   type ActiveExtensionSession,
@@ -31,8 +36,9 @@ import {
  * alarm for a moved cache marker. On a provider that caches implicitly and
  * reports reads only, such a miss is no evidence and is not counted.
  *
- * The cache lifetime is the model catalog's (`Model.promptCacheTtlMs`, as the
- * model's driver says), so a miss is judged once the catalog is there. A model
+ * The cache lifetime is the model catalog's (`promptCacheTtlMsFor`, as the
+ * model's driver says, a spawned child's when the step says it ran in one),
+ * so a miss is judged once the catalog is there. A model
  * whose entry names no lifetime counts only a model switch: without a
  * lifetime an expiry cannot be told from a changed prefix.
  *
@@ -109,6 +115,8 @@ interface ScannedMiss extends Omit<CacheMiss, "cause"> {
   readonly explicitCache: boolean
   /** What took that time, if it outlived the lifetime. */
   readonly lapse: CacheMissCause
+  /** The step ran in a spawned child session, whose requests ask for the child lifetime. */
+  readonly child: boolean
 }
 
 /**
@@ -121,7 +129,7 @@ export const resolveMiss = (
   scanned: ScannedMiss,
   lifetimeMs: Option.Option<number>,
 ): Option.Option<CacheMiss> => {
-  const { sinceRefreshMs, modelSwitch, explicitCache, lapse, ...miss } = scanned
+  const { sinceRefreshMs, modelSwitch, explicitCache, lapse, child: _child, ...miss } = scanned
   const cause = Option.flatMap(lifetimeMs, (lifetime) => {
     if (sinceRefreshMs > lifetime) return Option.some(lapse)
     return Option.liftPredicate(CacheMissCause.cases.PrefixChanged.make({}), () => explicitCache)
@@ -281,6 +289,7 @@ export const makeCacheScan = (): CacheScan => {
           modelSwitch: model !== prior.model,
           explicitCache: writers.has(model),
           lapse: expiredCause(refresh, sinceRefreshMs, begun.input),
+          child: event.child ?? false,
         })
       },
     )
@@ -507,9 +516,7 @@ export default defineClientExtension(CACHE_EXTENSION_ID, {
         const known = Option.fromUndefinedOr(born.get(scanned.eventId))
         if (Option.isSome(known)) return known.value
         const model = Option.fromUndefinedOr(catalog.get(scanned.pricedModel))
-        const lifetime = Option.flatMap(model, (entry) =>
-          Option.fromUndefinedOr(entry.promptCacheTtlMs),
-        )
+        const lifetime = Option.flatMap(model, (entry) => promptCacheTtlMsFor(entry, scanned.child))
         const priced = Option.match(resolveMiss(scanned, lifetime), {
           onNone: (): PricedMiss => ({ costUsd: 0, row: Option.none() }),
           onSome: (miss): PricedMiss => {
