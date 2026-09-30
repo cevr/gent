@@ -1020,10 +1020,12 @@ const readFileContent = (
 
     if (Option.isSome(startLine)) {
       const start = Math.max(0, startLine.value - 1) // Convert 1-indexed to 0-indexed
-      // A range that starts past the end names no line: it stays a reference.
+      // A range that starts past the end, or ends before it starts, names no
+      // line: it stays a reference.
       if (start >= lines.length) return Option.none<string>()
       let end = start + 1
       if (Option.isSome(endLine)) end = Math.min(lines.length, endLine.value)
+      if (end <= start) return Option.none<string>()
       lines = lines.slice(start, end)
       whole = lines.join("\n")
     }

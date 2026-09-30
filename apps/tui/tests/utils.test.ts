@@ -161,6 +161,14 @@ describe("expandFileRefs", () => {
     }),
   )
 
+  // A range whose end is before its start names no line either.
+  fileRefsTest("a reversed range stays a reference", () =>
+    Effect.gen(function* () {
+      const testDir = yield* makeFixture
+      expect(yield* expandFileRefs("@src/foo.ts#4-2", testDir)).toBe("@src/foo.ts#4-2")
+    }),
+  )
+
   fileRefsTest("leaves a binary file as a reference", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
