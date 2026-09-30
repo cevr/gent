@@ -22,6 +22,7 @@ import {
   createMockClient,
   createMockRuntime,
   destroyRenderSetup,
+  renderScoped,
   renderWithProviders,
   renderFrame,
 } from "./render-harness-boundary"
@@ -228,7 +229,7 @@ const servicesWithLinkOpener = (
   })
 describe("Auth route", () => {
   const activeSessionId = SessionId.make("session-auth")
-  it.live("loads providers for the selected agent", () =>
+  it.scopedLive("loads providers for the selected agent", () =>
     Effect.gen(function* () {
       const calls: Array<{
         agentName?: string
@@ -244,15 +245,12 @@ describe("Auth route", () => {
         },
       })
       const runtime = createMockRuntime()
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <Auth sessionId={activeSessionId} />, {
-          client,
-          runtime,
-          initialAgent: AgentName.make("helper:google"),
-        }),
-      )
+      yield* renderScoped(() => <Auth sessionId={activeSessionId} />, {
+        client,
+        runtime,
+        initialAgent: AgentName.make("helper:google"),
+      })
       expect(calls).toEqual([{ agentName: "helper:google", sessionId: activeSessionId }])
-      setup.renderer.destroy()
     }),
   )
   // The success flash clears itself after a while. A pane that closes first
@@ -304,7 +302,7 @@ describe("Auth route", () => {
   )
   // Signing out is destructive, so it takes the agents pane's key and ladder:
   // ctrl+x arms the row, a second ctrl+x removes the stored key.
-  it.live("a stored sign-in is removed only on a second ctrl+x", () =>
+  it.scopedLive("a stored sign-in is removed only on a second ctrl+x", () =>
     Effect.gen(function* () {
       const deleted: Array<string> = []
       const client = createMockClient({
@@ -326,12 +324,10 @@ describe("Auth route", () => {
             }),
         },
       })
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <Auth sessionId={activeSessionId} />, {
-          client,
-          runtime: createMockRuntime(),
-        }),
-      )
+      const setup = yield* renderScoped(() => <Auth sessionId={activeSessionId} />, {
+        client,
+        runtime: createMockRuntime(),
+      })
       const list = yield* waitForFrame(setup, (frame) => frame.includes("openai"))
       expect(list).toContain("ctrl+x delete")
       setup.mockInput.pressKey("d")
@@ -348,10 +344,9 @@ describe("Auth route", () => {
       setup.mockInput.pressKey("x", { ctrl: true })
       yield* Effect.promise(() => setup.renderOnce())
       expect(deleted).toEqual(["openai"])
-      setup.renderer.destroy()
     }).pipe(Effect.timeout("10 seconds")),
   )
-  it.live("ignores stale auth loads after the selected agent changes", () =>
+  it.scopedLive("ignores stale auth loads after the selected agent changes", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()
       const pending: Array<{
@@ -379,20 +374,18 @@ describe("Auth route", () => {
         },
       })
       const runtime = createMockRuntime()
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <>
-              <ClientProbe onReady={(c) => (ctx = Option.some(c))} />
-              <Auth sessionId={activeSessionId} />
-            </>
-          ),
-          {
-            client,
-            runtime,
-            initialAgent: AgentName.make("primary"),
-          },
+      const setup = yield* renderScoped(
+        () => (
+          <>
+            <ClientProbe onReady={(c) => (ctx = Option.some(c))} />
+            <Auth sessionId={activeSessionId} />
+          </>
         ),
+        {
+          client,
+          runtime,
+          initialAgent: AgentName.make("primary"),
+        },
       )
       expect(pending.map((entry) => entry.agentName)).toEqual(["primary"])
       const clientContext = yield* requireClient(ctx)
@@ -421,10 +414,9 @@ describe("Auth route", () => {
       )
       expect(frame).toContain("openai")
       expect(frame).not.toContain("anthropic")
-      setup.renderer.destroy()
     }),
   )
-  it.live("ignores stale auth mutations after the selected agent changes", () =>
+  it.scopedLive("ignores stale auth mutations after the selected agent changes", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()
       const oldKeySave = yield* Deferred.make<void>()
@@ -466,20 +458,18 @@ describe("Auth route", () => {
         },
       })
       const runtime = createMockRuntime()
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <>
-              <ClientProbe onReady={(c) => (ctx = Option.some(c))} />
-              <Auth sessionId={activeSessionId} />
-            </>
-          ),
-          {
-            client,
-            runtime,
-            initialAgent: AgentName.make("primary"),
-          },
+      const setup = yield* renderScoped(
+        () => (
+          <>
+            <ClientProbe onReady={(c) => (ctx = Option.some(c))} />
+            <Auth sessionId={activeSessionId} />
+          </>
         ),
+        {
+          client,
+          runtime,
+          initialAgent: AgentName.make("primary"),
+        },
       )
       yield* waitForFrame(setup, (frame) => frame.includes("anthropic"))
       setup.mockInput.pressEnter()
@@ -509,10 +499,9 @@ describe("Auth route", () => {
       )
       expect(frame).toContain("Sign in · openai · API key")
       expect(frame).not.toContain("API key saved for anthropic")
-      setup.renderer.destroy()
     }),
   )
-  it.live("ignores stale oauth callbacks after the selected agent changes", () =>
+  it.scopedLive("ignores stale oauth callbacks after the selected agent changes", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()
       const authorizeDeferred = yield* Deferred.make<
@@ -582,20 +571,18 @@ describe("Auth route", () => {
         },
       })
       const runtime = createMockRuntime()
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <>
-              <ClientProbe onReady={(c) => (ctx = Option.some(c))} />
-              <Auth sessionId={activeSessionId} />
-            </>
-          ),
-          {
-            client,
-            runtime,
-            initialAgent: AgentName.make("primary"),
-          },
+      const setup = yield* renderScoped(
+        () => (
+          <>
+            <ClientProbe onReady={(c) => (ctx = Option.some(c))} />
+            <Auth sessionId={activeSessionId} />
+          </>
         ),
+        {
+          client,
+          runtime,
+          initialAgent: AgentName.make("primary"),
+        },
       )
       yield* waitForFrame(setup, (frame) => frame.includes("anthropic"))
       setup.mockInput.pressEnter()
@@ -616,7 +603,6 @@ describe("Auth route", () => {
         { provider: "anthropic", method: 0, sessionId: activeSessionId },
       ])
       expect(callbackCalls).toEqual([])
-      setup.renderer.destroy()
     }),
   )
   it.scopedLive("threads the active session through successful auto OAuth callbacks", () =>
@@ -670,14 +656,12 @@ describe("Auth route", () => {
       })
       const services = yield* servicesWithLinkOpener(() => Effect.void)
       const runtime = createMockRuntime()
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <Auth sessionId={activeSessionId} />, {
-          client,
-          runtime,
-          services,
-          initialAgent: AgentName.make("primary"),
-        }),
-      )
+      const setup = yield* renderScoped(() => <Auth sessionId={activeSessionId} />, {
+        client,
+        runtime,
+        services,
+        initialAgent: AgentName.make("primary"),
+      })
       yield* waitForFrame(setup, (frame) => frame.includes("anthropic"))
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
@@ -694,7 +678,6 @@ describe("Auth route", () => {
           sessionId: activeSessionId,
         },
       ])
-      setup.renderer.destroy()
     }),
   )
   it.scopedLive("ignores stale oauth opener failures after the selected agent changes", () =>
@@ -759,21 +742,19 @@ describe("Auth route", () => {
         }),
       )
       const runtime = createMockRuntime()
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <>
-              <ClientProbe onReady={(c) => (ctx = Option.some(c))} />
-              <Auth sessionId={activeSessionId} />
-            </>
-          ),
-          {
-            client,
-            runtime,
-            services,
-            initialAgent: AgentName.make("primary"),
-          },
+      const setup = yield* renderScoped(
+        () => (
+          <>
+            <ClientProbe onReady={(c) => (ctx = Option.some(c))} />
+            <Auth sessionId={activeSessionId} />
+          </>
         ),
+        {
+          client,
+          runtime,
+          services,
+          initialAgent: AgentName.make("primary"),
+        },
       )
       yield* waitForFrame(setup, (frame) => frame.includes("anthropic"))
       setup.mockInput.pressEnter()
@@ -797,7 +778,6 @@ describe("Auth route", () => {
       expect(authorizeCalls).toEqual([
         { provider: "anthropic", method: 0, sessionId: activeSessionId },
       ])
-      setup.renderer.destroy()
     }),
   )
   it.scopedLive("ignores stale oauth opener failures after cancelling the same auth flow", () =>
@@ -842,14 +822,12 @@ describe("Auth route", () => {
         }),
       )
       const runtime = createMockRuntime()
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <Auth sessionId={activeSessionId} />, {
-          client,
-          runtime,
-          services,
-          initialAgent: AgentName.make("primary"),
-        }),
-      )
+      const setup = yield* renderScoped(() => <Auth sessionId={activeSessionId} />, {
+        client,
+        runtime,
+        services,
+        initialAgent: AgentName.make("primary"),
+      })
       yield* waitForFrame(setup, (frame) => frame.includes("anthropic"))
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
@@ -876,7 +854,6 @@ describe("Auth route", () => {
       expect(authorizeCalls).toEqual([
         { provider: "anthropic", method: 0, sessionId: activeSessionId },
       ])
-      setup.renderer.destroy()
     }),
   )
 
@@ -928,14 +905,12 @@ describe("Auth route", () => {
         },
       })
       const services = yield* servicesWithLinkOpener(noBrowser)
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <Auth sessionId={activeSessionId} />, {
-          client,
-          runtime: createMockRuntime(),
-          services,
-          initialAgent: AgentName.make("primary"),
-        }),
-      )
+      const setup = yield* renderScoped(() => <Auth sessionId={activeSessionId} />, {
+        client,
+        runtime: createMockRuntime(),
+        services,
+        initialAgent: AgentName.make("primary"),
+      })
       yield* waitForFrame(setup, (frame) => frame.includes("openai"))
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
@@ -953,7 +928,6 @@ describe("Auth route", () => {
       expect(callbackCalls).toEqual([
         expect.objectContaining({ provider: "openai", authorizationId: "auth-device" }),
       ])
-      setup.renderer.destroy()
     }).pipe(Effect.timeout("8 seconds")),
   )
 
@@ -995,21 +969,19 @@ describe("Auth route", () => {
           },
         })
         const services = yield* servicesWithLinkOpener(noBrowser)
-        const setup = yield* Effect.promise(() =>
-          renderWithProviders(
-            () => (
-              <>
-                <ClientProbe onReady={(c) => (ctx = Option.some(c))} />
-                <Auth sessionId={activeSessionId} />
-              </>
-            ),
-            {
-              client,
-              runtime: createMockRuntime(),
-              services,
-              initialAgent: AgentName.make("primary"),
-            },
+        const setup = yield* renderScoped(
+          () => (
+            <>
+              <ClientProbe onReady={(c) => (ctx = Option.some(c))} />
+              <Auth sessionId={activeSessionId} />
+            </>
           ),
+          {
+            client,
+            runtime: createMockRuntime(),
+            services,
+            initialAgent: AgentName.make("primary"),
+          },
         )
         yield* waitForFrame(setup, (frame) => frame.includes("openai"))
         setup.mockInput.pressEnter()
@@ -1036,7 +1008,6 @@ describe("Auth route", () => {
           "the device poll finishes the flow",
         )
         expect(callbackCalls).toHaveLength(1)
-        setup.renderer.destroy()
       }).pipe(Effect.timeout("8 seconds")),
   )
 
@@ -1053,14 +1024,12 @@ describe("Auth route", () => {
         },
       })
       const services = yield* servicesWithLinkOpener(noBrowser)
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <Auth sessionId={activeSessionId} />, {
-          client,
-          runtime: createMockRuntime(),
-          services,
-          initialAgent: AgentName.make("primary"),
-        }),
-      )
+      const setup = yield* renderScoped(() => <Auth sessionId={activeSessionId} />, {
+        client,
+        runtime: createMockRuntime(),
+        services,
+        initialAgent: AgentName.make("primary"),
+      })
       yield* waitForFrame(setup, (frame) => frame.includes("openai"))
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
@@ -1073,7 +1042,6 @@ describe("Auth route", () => {
       expect(panelText(frame)).toContain(longUrl)
       expect(frame).toContain("Paste code:")
       expect(frame).not.toContain("Failed to open URL")
-      setup.renderer.destroy()
     }).pipe(Effect.timeout("8 seconds")),
   )
 
@@ -1106,21 +1074,19 @@ describe("Auth route", () => {
         },
       })
       const services = yield* servicesWithLinkOpener(() => Effect.void)
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <App />, {
-          client,
-          runtime: createMockRuntime(),
-          services,
-          initialAgent: AgentName.make("main"),
-          initialSession: {
-            id: SessionId.make("session-oauth"),
-            activeBranchId: BranchId.make("branch-oauth"),
-            name: "A",
-            createdAt: dateFromMillis(0),
-            updatedAt: dateFromMillis(0),
-          },
-        }),
-      )
+      const setup = yield* renderScoped(() => <App />, {
+        client,
+        runtime: createMockRuntime(),
+        services,
+        initialAgent: AgentName.make("main"),
+        initialSession: {
+          id: SessionId.make("session-oauth"),
+          activeBranchId: BranchId.make("branch-oauth"),
+          name: "A",
+          createdAt: dateFromMillis(0),
+          updatedAt: dateFromMillis(0),
+        },
+      })
       yield* waitForFrame(setup, (frame) => frame.includes("ChatGPT sign-in"), "the methods")
       setup.mockInput.pressEnter()
       yield* waitForFrame(setup, (frame) => frame.includes("Paste code"), "the OAuth screen")
@@ -1153,7 +1119,6 @@ describe("Auth route", () => {
         // Down to 8 rows the pane still holds the code and the URL.
         expect({ height, needs }).toEqual({ height, needs: true })
       }
-      setup.renderer.destroy()
     }).pipe(Effect.timeout("20 seconds")),
   )
 
@@ -1181,7 +1146,6 @@ describe("Auth route", () => {
           paste: false,
         })
       }
-      setup.renderer.destroy()
     }).pipe(Effect.timeout("20 seconds")),
   )
 })

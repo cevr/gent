@@ -488,6 +488,13 @@ export const destroyRenderSetup = (setup: TestRenderSetup) => {
   setup.renderer.destroy()
 }
 
+/** A render the enclosing scope destroys, on success, failure or timeout alike. */
+export const renderScoped = (...args: Parameters<typeof renderWithProviders>) =>
+  Effect.acquireRelease(
+    Effect.promise(() => renderWithProviders(...args)),
+    (setup) => Effect.sync(() => destroyRenderSetup(setup)),
+  )
+
 // eslint-disable-next-line effect/noTestLifecycleHooks -- OpenTUI renderers require synchronous per-test teardown at this shared test boundary.
 afterEach(() => {
   if (Option.isSome(currentSetup)) destroyRenderSetup(currentSetup.value)

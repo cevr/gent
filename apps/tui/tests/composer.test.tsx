@@ -33,6 +33,7 @@ import {
 import {
   createMockClient,
   renderFrame,
+  renderScoped as renderScopedHarness,
   renderWithProviders as renderHarness,
 } from "./render-harness-boundary"
 import { createSignal, ErrorBoundary, type JSX, onMount, Show } from "solid-js"
@@ -65,6 +66,8 @@ const draftSession = {
 }
 const renderWithProviders: typeof renderHarness = (ui, options) =>
   renderHarness(ui, { initialSession: draftSession, ...options })
+const renderScoped: typeof renderScopedHarness = (ui, options) =>
+  renderScopedHarness(ui, { initialSession: draftSession, ...options })
 
 /**
  * Each test runs with its own gent data directory, a scoped temp directory,
@@ -752,17 +755,15 @@ describe("Composer renderer", () => {
       expect(renderFrame(setup)).toContain("┃ hi")
     }),
   )
-  it.live("slash trigger renders the command popup", () =>
+  it.scopedLive("slash trigger renders the command popup", () =>
     Effect.gen(function* () {
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <TestComposer onSubmit={() => {}}>
-              <Composer.Autocomplete />
-            </TestComposer>
-          ),
-          { width: 80, height: 24 },
+      const setup = yield* renderScoped(
+        () => (
+          <TestComposer onSubmit={() => {}}>
+            <Composer.Autocomplete />
+          </TestComposer>
         ),
+        { width: 80, height: 24 },
       )
       yield* Effect.promise(() => setup.mockInput.typeText("/"))
       // The rows arrive through a resource, so the frame is polled rather than
@@ -780,7 +781,6 @@ describe("Composer renderer", () => {
       // runs the command it completes, tab only completes it.
       expect(frame).toContain("enter select")
       expect(frame).toContain("tab complete")
-      setup.renderer.destroy()
     }),
   )
 })

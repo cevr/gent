@@ -40,6 +40,7 @@ import { onMount } from "solid-js"
 import {
   createMockClient,
   createMutableRuntime,
+  renderScoped,
   renderWithProviders,
 } from "./render-harness-boundary"
 import { inRuntime, waitForFrame, waitUntil } from "./helpers-boundary"
@@ -420,7 +421,7 @@ const snapshotOf = (
 })
 
 describe("ClientProvider session metrics", () => {
-  it.live("switching sessions drops the previous session's context projection", () =>
+  it.scopedLive("switching sessions drops the previous session's context projection", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()
       const client = createMockClient({
@@ -431,8 +432,9 @@ describe("ClientProvider session metrics", () => {
             ),
         },
       })
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <ClientProbe onReady={(c) => (ctx = Option.some(c))} />, {
+      const setup = yield* renderScoped(
+        () => <ClientProbe onReady={(c) => (ctx = Option.some(c))} />,
+        {
           client,
           initialSession: {
             id: FIRST.sessionId,
@@ -441,7 +443,7 @@ describe("ClientProvider session metrics", () => {
             createdAt: dateFromMillis(0),
             updatedAt: dateFromMillis(0),
           },
-        }),
+        },
       )
       const clientContext = yield* requireClient(ctx)
 
@@ -461,12 +463,10 @@ describe("ClientProvider session metrics", () => {
       expect(clientContext.cost()).toBe(0)
       expect(clientContext.sessionMetrics().latestInputTokens).toBe(0)
       expect(Option.isNone(clientContext.sessionMetrics().context)).toBe(true)
-
-      setup.renderer.destroy()
     }),
   )
 
-  it.live("a route reply that arrives after a session switch is dropped", () =>
+  it.scopedLive("a route reply that arrives after a session switch is dropped", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()
       const held = yield* Deferred.make<ModelId>()
@@ -490,8 +490,9 @@ describe("ClientProvider session metrics", () => {
             Effect.succeed(snapshotOf(SECOND, { costUsd: 0, lastInputTokens: 0, context: absent })),
         },
       })
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <ClientProbe onReady={(c) => (ctx = Option.some(c))} />, {
+      const setup = yield* renderScoped(
+        () => <ClientProbe onReady={(c) => (ctx = Option.some(c))} />,
+        {
           client,
           initialSession: {
             id: FIRST.sessionId,
@@ -500,7 +501,7 @@ describe("ClientProvider session metrics", () => {
             createdAt: dateFromMillis(0),
             updatedAt: dateFromMillis(0),
           },
-        }),
+        },
       )
       const clientContext = yield* requireClient(ctx)
 
@@ -527,12 +528,10 @@ describe("ClientProvider session metrics", () => {
 
       // The first session's model does not come back.
       expect(clientContext.model()).not.toBe(firstResolvedModel)
-
-      setup.renderer.destroy()
     }),
   )
 
-  it.live("live events move the totals on the snapshot's, with no snapshot read", () =>
+  it.scopedLive("live events move the totals on the snapshot's, with no snapshot read", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()
       let reads = 0
@@ -545,8 +544,9 @@ describe("ClientProvider session metrics", () => {
             }),
         },
       })
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <ClientProbe onReady={(c) => (ctx = Option.some(c))} />, {
+      const setup = yield* renderScoped(
+        () => <ClientProbe onReady={(c) => (ctx = Option.some(c))} />,
+        {
           client,
           initialSession: {
             id: FIRST.sessionId,
@@ -555,7 +555,7 @@ describe("ClientProvider session metrics", () => {
             createdAt: dateFromMillis(0),
             updatedAt: dateFromMillis(0),
           },
-        }),
+        },
       )
       const clientContext = yield* requireClient(ctx)
       clientContext.applySessionSnapshot(
@@ -600,12 +600,10 @@ describe("ClientProvider session metrics", () => {
       expect(clientContext.cost()).toBe(1.5)
       expect(clientContext.sessionMetrics().latestInputTokens).toBe(96_000)
       expect(reads).toBe(readsAfterHydrate)
-
-      setup.renderer.destroy()
     }),
   )
 
-  it.live("a finished turn reads the model the next turn resolves to, once", () =>
+  it.scopedLive("a finished turn reads the model the next turn resolves to, once", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()
       let reads = 0
@@ -635,8 +633,9 @@ describe("ClientProvider session metrics", () => {
             }),
         },
       })
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <ClientProbe onReady={(c) => (ctx = Option.some(c))} />, {
+      const setup = yield* renderScoped(
+        () => <ClientProbe onReady={(c) => (ctx = Option.some(c))} />,
+        {
           client,
           initialSession: {
             id: FIRST.sessionId,
@@ -645,7 +644,7 @@ describe("ClientProvider session metrics", () => {
             createdAt: dateFromMillis(0),
             updatedAt: dateFromMillis(0),
           },
-        }),
+        },
       )
       const clientContext = yield* requireClient(ctx)
       clientContext.applySessionSnapshot(snapshotOf(FIRST, { costUsd: 0, lastInputTokens: 0 }))
@@ -679,8 +678,6 @@ describe("ClientProvider session metrics", () => {
       yield* waitUntil(() => clientContext.model() === configModel, "the next turn's model")
       expect(reads).toBe(readsAfterHydrate + 1)
       expect(snapshotReads).toBe(snapshotReadsAfterHydrate)
-
-      setup.renderer.destroy()
     }).pipe(Effect.timeout("4 seconds")),
   )
 })
