@@ -55,7 +55,7 @@ import {
   QueueWidget,
   resolveInitialState,
   resolveHeadlessMissingProviders,
-  resolveStartupAgent,
+  resolveInteractiveBootstrap,
 } from "../src/app"
 import {
   createMockClient,
@@ -119,6 +119,24 @@ const expectAppBootstrapFailure = (
     return reason.value.error
   })
 
+const sessionA = {
+  id: SessionId.make("session-a"),
+  activeBranchId: BranchId.make("branch-a"),
+  name: "Session A",
+  createdAt: dateFromMillis(0),
+  updatedAt: dateFromMillis(0),
+  cwd: "/nonexistent/gent-test-cwd",
+  reasoningLevel: absent,
+  parentSessionId: absent,
+  parentBranchId: absent,
+}
+
+const branchOf = (id: string, createdAtMs: number) => ({
+  id: BranchId.make(id),
+  sessionId: sessionA.id,
+  createdAt: dateFromMillis(createdAtMs),
+})
+
 describe("startup agent and headless auth", () => {
   it.live("interactive startup uses the session snapshot agent and lists no providers", () =>
     Effect.gen(function* () {
@@ -127,7 +145,9 @@ describe("startup agent and headless auth", () => {
         sessionId?: string
       }> = []
       const client = createMockClient({
+        branch: { list: () => Effect.succeed([branchOf("branch-a", 0)]) },
         session: {
+          get: () => Effect.succeed(sessionA),
           getSnapshot: () =>
             Effect.succeed({
               sessionId: SessionId.make("session-a"),
@@ -163,22 +183,14 @@ describe("startup agent and headless auth", () => {
           },
         },
       })
-      const state: InitialState = {
-        _tag: "session",
-        session: {
-          id: SessionId.make("session-a"),
-          activeBranchId: BranchId.make("branch-a"),
-          name: "Session A",
-          createdAt: dateFromMillis(0),
-          updatedAt: dateFromMillis(0),
-          cwd: "/nonexistent/gent-test-cwd",
-          reasoningLevel: absent,
-          parentSessionId: absent,
-          parentBranchId: absent,
-        },
-      }
-      const agent = yield* resolveStartupAgent({ client, state })
-      expect(agent).toEqual(Option.some(AgentName.make("secondary")))
+      const result = yield* resolveInteractiveBootstrap({
+        client,
+        cwd: "/nonexistent/gent-test-cwd",
+        sessionId: "session-a",
+        continue_: false,
+        debugMode: false,
+      })
+      expect(result.initialAgent).toBe(AgentName.make("secondary"))
       // The session view's auth gate checks the providers itself, once mounted.
       expect(calls).toEqual([])
     }),
@@ -263,21 +275,12 @@ describe("startup agent and headless auth", () => {
         },
       })
       const state: InitialState = {
-        _tag: "session",
-        session: {
-          id: SessionId.make("session-a"),
-          name: "Session A",
-          createdAt: dateFromMillis(0),
-          updatedAt: dateFromMillis(0),
-          cwd: "/nonexistent/gent-test-cwd",
-          reasoningLevel: absent,
-          parentSessionId: absent,
-          parentBranchId: absent,
-        },
+        _tag: "headless",
+        session: { ...sessionA, activeBranchId: absent },
+        prompt: "hi",
       }
-      const agent = yield* resolveStartupAgent({ client, state })
-      expect(agent).toEqual(Option.some(DEFAULT_AGENT_NAME))
-      expect(calls).toEqual([])
+      yield* resolveHeadlessMissingProviders({ client, state })
+      expect(calls).toEqual([{ agentName: DEFAULT_AGENT_NAME, sessionId: sessionA.id }])
     }),
   )
   it.live("names no agent while the user is choosing a branch", () =>
@@ -287,6 +290,10 @@ describe("startup agent and headless auth", () => {
         sessionId?: string
       }> = []
       const client = createMockClient({
+        branch: {
+          list: () => Effect.succeed([branchOf("branch-a", 0), branchOf("branch-b", 1)]),
+        },
+        session: { get: () => Effect.succeed(sessionA) },
         auth: {
           listProviders: (input: { agentName?: AgentName; sessionId?: string }) =>
             Effect.sync(() => {
@@ -295,34 +302,17 @@ describe("startup agent and headless auth", () => {
             }),
         },
       })
-      const state: InitialState = {
-        _tag: "branchPicker",
-        session: {
-          id: SessionId.make("session-a"),
-          activeBranchId: BranchId.make("branch-a"),
-          name: "Session A",
-          createdAt: dateFromMillis(0),
-          updatedAt: dateFromMillis(0),
-          cwd: "/nonexistent/gent-test-cwd",
-          reasoningLevel: absent,
-          parentSessionId: absent,
-          parentBranchId: absent,
-        },
-        branches: [
-          {
-            id: BranchId.make("branch-a"),
-            sessionId: SessionId.make("session-a"),
-            createdAt: dateFromMillis(0),
-          },
-          {
-            id: BranchId.make("branch-b"),
-            sessionId: SessionId.make("session-a"),
-            createdAt: dateFromMillis(1),
-          },
-        ],
-      }
-      const agent = yield* resolveStartupAgent({ client, state })
-      expect(agent).toEqual(Option.none())
+      const result = yield* resolveInteractiveBootstrap({
+        client,
+        cwd: "/nonexistent/gent-test-cwd",
+        sessionId: "session-a",
+        continue_: false,
+        debugMode: false,
+      })
+      expect(Option.map(result.bootstrap.initialBranches, (branches) => branches.length)).toEqual(
+        Option.some(2),
+      )
+      expect(result.initialAgent).toBeUndefined()
       expect(calls).toEqual([])
     }),
   )

@@ -1,4 +1,4 @@
-import { Effect, Match, Option, Predicate, Record, Schema } from "effect"
+import { Effect, Option, Predicate, Record, Schema } from "effect"
 import {
   type AgentName,
   type Branch,
@@ -103,8 +103,7 @@ export type InitialState =
   | { _tag: "headless"; session: DomainSession; prompt: string }
 
 interface AppBootstrap {
-  // eslint-disable-next-line effect/noNullish -- bootstrap API uses absence when no session is selected.
-  readonly initialSession: ClientSession | undefined
+  readonly initialSession: ClientSession
   readonly initialPrompt: Option.Option<string>
   /**
    * The branches to resume from, when the session the startup flags picked
@@ -121,18 +120,18 @@ interface InteractiveBootstrapResult {
   readonly initialAgent: AgentName | undefined
 }
 
-// eslint-disable-next-line effect/noNullish -- bootstrap projection returns absence for an unreadable branch.
-const toSession = (session: DomainSession): ClientSession | undefined => {
+/** The session view's record; none for a record with no active branch to mount. */
+const toSession = (session: DomainSession): Option.Option<ClientSession> => {
   const branchId = Option.fromNullishOr(session.activeBranchId)
-  if (Option.isNone(branchId)) return Option.getOrUndefined(Option.none<ClientSession>())
-  return {
+  if (Option.isNone(branchId)) return Option.none()
+  return Option.some({
     sessionId: session.id,
     branchId: branchId.value,
     name: Option.getOrElse(Option.fromNullishOr(session.name), () => "Unnamed"),
     modelId: session.modelId,
     reasoningLevel: session.reasoningLevel,
     cwd: session.cwd,
-  }
+  })
 }
 
 const createAndLoadSession = (input: {
@@ -163,41 +162,23 @@ const resolveAppBootstrap = (
   options: {
     debugMode: boolean
   },
-): AppBootstrap =>
-  Match.value(state).pipe(
-    Match.tagsExhaustive({
-      session: (state) => {
-        // activeBranchId is always present for sessions created by resolveInitialState.
-        // Guard for corrupt session records from -s <id> with missing branch.
-        const branchId = Option.fromNullishOr(state.session.activeBranchId)
-        if (Option.isNone(branchId)) {
-          // eslint-disable-next-line effect/noThrowStatement -- synchronous render-boundary validation must throw.
-          throw new AppBootstrapError({ sessionId: state.session.id, reason: "missing-branch" })
-        }
-        return {
-          initialSession: toSession(state.session),
-          initialPrompt: Option.fromNullishOr(state.prompt),
-          initialBranches: Option.none<readonly Branch[]>(),
-          debugMode: options.debugMode,
-        }
-      },
-      branchPicker: (state) => {
-        // Same guard as `session`: the picker docks over a mounted session, so
-        // a record with no active branch has nothing to mount under it.
-        const branchId = Option.fromNullishOr(state.session.activeBranchId)
-        if (Option.isNone(branchId)) {
-          // eslint-disable-next-line effect/noThrowStatement -- synchronous render-boundary validation must throw.
-          throw new AppBootstrapError({ sessionId: state.session.id, reason: "missing-branch" })
-        }
-        return {
-          initialSession: toSession(state.session),
-          initialPrompt: Option.fromNullishOr(state.prompt),
-          initialBranches: Option.some(state.branches),
-          debugMode: options.debugMode,
-        }
-      },
-    }),
-  )
+): AppBootstrap => {
+  // A created session always has its branch. A corrupt record from `-s <id>`
+  // may not, and the view (and a picker docked over it) needs one to mount.
+  const initialSession = toSession(state.session)
+  if (Option.isNone(initialSession)) {
+    // eslint-disable-next-line effect/noThrowStatement -- synchronous render-boundary validation must throw.
+    throw new AppBootstrapError({ sessionId: state.session.id, reason: "missing-branch" })
+  }
+  let initialBranches = Option.none<readonly Branch[]>()
+  if (state._tag === "branchPicker") initialBranches = Option.some(state.branches)
+  return {
+    initialSession: initialSession.value,
+    initialPrompt: Option.fromNullishOr(state.prompt),
+    initialBranches,
+    debugMode: options.debugMode,
+  }
+}
 
 export const resolveInteractiveBootstrap = (input: {
   client: Pick<GentNamespacedClient, "branch" | "session">
@@ -230,35 +211,24 @@ export const resolveInteractiveBootstrap = (input: {
     }
   })
 
-const resolveSessionRuntimeAgent = (
-  client: Pick<GentNamespacedClient, "session">,
-  session: DomainSession,
-): Effect.Effect<Option.Option<AgentName>, GentClientRpcError> => {
-  const branchId = Option.fromNullishOr(session.activeBranchId)
-  if (Option.isNone(branchId)) return Effect.succeedNone
-  return client.session
-    .getSnapshot({
-      sessionId: session.id,
-      branchId: branchId.value,
-    })
-    .pipe(Effect.map((snapshot) => Option.some(snapshot.agent)))
-}
-
 /** A session runs as its own agent, which its snapshot names; one with no branch yet runs the default. */
 const sessionAgent = (
   client: Pick<GentNamespacedClient, "session">,
   session: DomainSession,
-): Effect.Effect<AgentName, GentClientRpcError> =>
-  resolveSessionRuntimeAgent(client, session).pipe(
-    Effect.map(Option.getOrElse(() => DEFAULT_AGENT_NAME)),
-  )
+): Effect.Effect<AgentName, GentClientRpcError> => {
+  const branchId = Option.fromNullishOr(session.activeBranchId)
+  if (Option.isNone(branchId)) return Effect.succeed(DEFAULT_AGENT_NAME)
+  return client.session
+    .getSnapshot({ sessionId: session.id, branchId: branchId.value })
+    .pipe(Effect.map((snapshot) => snapshot.agent))
+}
 
 /**
  * The agent the interactive client starts as: the resumed session's own. The
  * boot branch picker names none, because the reader has not chosen a branch.
  * The session view's auth gate checks that agent's providers itself.
  */
-export const resolveStartupAgent = (input: {
+const resolveStartupAgent = (input: {
   client: Pick<GentNamespacedClient, "session">
   state: Exclude<InitialState, { _tag: "headless" }>
 }): Effect.Effect<Option.Option<AgentName>, GentClientRpcError> => {
@@ -286,6 +256,35 @@ export const resolveHeadlessMissingProviders = (input: {
       .map((provider) => provider.provider)
   })
 
+/** The stored session `-s` names, or the startup error that it does not exist. */
+const loadSession = (
+  client: Pick<GentNamespacedClient, "session">,
+  id: string,
+): Effect.Effect<DomainSession, GentClientRpcError | AppBootstrapError> =>
+  Effect.gen(function* () {
+    const sessionId = SessionId.make(id)
+    const stored = Option.fromNullishOr(yield* client.session.get({ sessionId }))
+    if (Option.isNone(stored)) {
+      return yield* new AppBootstrapError({ sessionId, reason: "session-not-found" })
+    }
+    return stored.value
+  })
+
+/** Resume a session: straight in with one branch, through the branch picker with more. */
+const resumeState = (
+  client: Pick<GentNamespacedClient, "branch">,
+  session: DomainSession,
+  prompt: Option.Option<string>,
+): Effect.Effect<InitialState, GentClientRpcError> =>
+  Effect.gen(function* () {
+    const promptText = Option.getOrUndefined(prompt)
+    const branches = yield* client.branch.list({ sessionId: session.id })
+    if (branches.length > 1) {
+      return { _tag: "branchPicker", session, branches, prompt: promptText } satisfies InitialState
+    }
+    return { _tag: "session", session, prompt: promptText } satisfies InitialState
+  })
+
 export const resolveInitialState = (input: {
   client: Pick<GentNamespacedClient, "session" | "branch">
   cwd: string
@@ -305,15 +304,9 @@ export const resolveInitialState = (input: {
         return yield* new AppBootstrapError({ reason: "headless-missing-prompt" })
       }
       if (Option.isSome(session)) {
-        const sessionId = SessionId.make(session.value)
-        const sess = yield* client.session.get({ sessionId })
-        const decodedSession = Option.fromNullishOr(sess)
-        if (Option.isNone(decodedSession)) {
-          return yield* new AppBootstrapError({ sessionId, reason: "session-not-found" })
-        }
         return {
           _tag: "headless",
-          session: decodedSession.value,
+          session: yield* loadSession(client, session.value),
           prompt: promptArg.value,
         } satisfies InitialState
       }
@@ -327,27 +320,7 @@ export const resolveInitialState = (input: {
     }
 
     if (Option.isSome(session)) {
-      const sessionId = SessionId.make(session.value)
-      const sess = yield* client.session.get({ sessionId })
-      const decodedSession = Option.fromNullishOr(sess)
-      if (Option.isNone(decodedSession)) {
-        return yield* new AppBootstrapError({ sessionId, reason: "session-not-found" })
-      }
-      const promptText = Option.getOrUndefined(prompt)
-      const branches = yield* client.branch.list({ sessionId: decodedSession.value.id })
-      if (branches.length > 1) {
-        return {
-          _tag: "branchPicker",
-          session: decodedSession.value,
-          branches,
-          prompt: promptText,
-        } satisfies InitialState
-      }
-      return {
-        _tag: "session",
-        session: decodedSession.value,
-        prompt: promptText,
-      } satisfies InitialState
+      return yield* resumeState(client, yield* loadSession(client, session.value), prompt)
     }
 
     if (continue_) {
@@ -367,24 +340,7 @@ export const resolveInitialState = (input: {
           ),
         ),
       )
-      if (Option.isSome(existing)) {
-        const existingSession = existing.value
-        const promptText = Option.getOrUndefined(prompt)
-        const branches = yield* client.branch.list({ sessionId: existingSession.id })
-        if (branches.length > 1) {
-          return {
-            _tag: "branchPicker",
-            session: existingSession,
-            branches,
-            prompt: promptText,
-          } satisfies InitialState
-        }
-        return {
-          _tag: "session",
-          session: existingSession,
-          prompt: promptText,
-        } satisfies InitialState
-      }
+      if (Option.isSome(existing)) return yield* resumeState(client, existing.value, prompt)
       // No existing session for cwd — fall through to create one
     }
 

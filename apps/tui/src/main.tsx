@@ -368,10 +368,7 @@ const runGent = ({
                   <TerminalDimensionsProvider>
                     <ComposerMemoryProvider
                       initialPrompt={bootstrap.initialPrompt}
-                      initialSessionId={Option.map(
-                        Option.fromNullishOr(bootstrap.initialSession),
-                        (session) => session.sessionId,
-                      )}
+                      initialSessionId={Option.some(bootstrap.initialSession.sessionId)}
                     >
                       <App
                         debugMode={debug}
