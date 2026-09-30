@@ -546,128 +546,99 @@ const storedOAuthFields = (stored: AuthInfo): Option.Option<StoredOAuthCredentia
   return Option.some({ ...fields, accountId: stored.accountId })
 }
 
-interface ProviderAuthService {
-  readonly listMethods: Effect.Effect<Record<string, ReadonlyArray<AuthMethod>>>
-  readonly authorize: (
-    sessionId: SessionId,
-    provider: string,
-    method: number,
-  ) => Effect.Effect<Option.Option<AuthAuthorization>, ProviderAuthError>
-  readonly callback: (
-    sessionId: SessionId,
-    provider: string,
-    method: number,
-    authorizationId: string,
-    code?: string,
-  ) => Effect.Effect<void, ProviderAuthError>
-}
+// ── provider login ──────────────────────────────────────────────────────────
+//
+// Login reads the drivers of the `ExtensionRegistry` in context: the caller
+// provides the registry of the session's own profile.
 
-const makeProviderAuth: Effect.Effect<
-  ProviderAuthService,
-  never,
-  Auth | ExtensionRegistry | GentPlatform
-> = Effect.gen(function* () {
+/** The login methods of each driver that has one. */
+export const listAuthMethods = Effect.fn("ProviderLogin.listMethods")(function* () {
+  const { modelDrivers } = (yield* ExtensionRegistry).getResolved()
+  const result: Record<string, ReadonlyArray<AuthMethod>> = {}
+  for (const provider of modelDrivers.values()) {
+    if (!Predicate.isUndefined(provider.auth) && provider.auth.methods.length > 0) {
+      result[provider.id] = provider.auth.methods
+    }
+  }
+  return result
+})
+
+/** Start a driver's login; none when the method completed without a link. */
+export const authorizeProvider = Effect.fn("ProviderLogin.authorize")(function* (
+  sessionId: SessionId,
+  provider: string,
+  method: number,
+) {
   const { modelDrivers } = (yield* ExtensionRegistry).getResolved()
   const authStore = yield* Auth
   const platform = yield* GentPlatform
-
-  const makePersist = (providerId: string) => persistAuthTo(authStore, providerId)
-
-  const listMethods = Effect.sync(() => {
-    const result: Record<string, ReadonlyArray<AuthMethod>> = {}
-    for (const provider of modelDrivers.values()) {
-      if (!Predicate.isUndefined(provider.auth) && provider.auth.methods.length > 0) {
-        result[provider.id] = provider.auth.methods
-      }
-    }
-    return result
-  })
-
-  const authorize = Effect.fn("ProviderAuth.authorize")(function* (
-    sessionId: SessionId,
-    provider: string,
-    method: number,
-  ) {
-    const extProvider = modelDrivers.get(provider)
-    if (Predicate.isUndefined(extProvider?.auth?.authorize)) {
-      return yield* new ProviderAuthError({
-        message: `Provider "${provider}" does not support authorize`,
-      })
-    }
-    const authorizationId = yield* platform.randomId
-    const extResult = yield* extProvider.auth
-      .authorize({
-        sessionId,
-        methodIndex: method,
-        authorizationId,
-        persist: makePersist(provider),
-      })
-      .pipe(
-        Effect.catchDefect((e) =>
-          Effect.fail(
-            new ProviderAuthError({
-              message: `Provider auth failed: ${causeMessage(e)}`,
-              cause: e,
-            }),
-          ),
+  const extProvider = modelDrivers.get(provider)
+  if (Predicate.isUndefined(extProvider?.auth?.authorize)) {
+    return yield* new ProviderAuthError({
+      message: `Provider "${provider}" does not support authorize`,
+    })
+  }
+  const authorizationId = yield* platform.randomId
+  const extResult = yield* extProvider.auth
+    .authorize({
+      sessionId,
+      methodIndex: method,
+      authorizationId,
+      persist: persistAuthTo(authStore, provider),
+    })
+    .pipe(
+      Effect.catchDefect((e) =>
+        Effect.fail(
+          new ProviderAuthError({
+            message: `Provider auth failed: ${causeMessage(e)}`,
+            cause: e,
+          }),
         ),
-      )
-    if (Option.isNone(extResult)) return Option.none()
-    return Option.some(
-      new AuthAuthorization({
-        authorizationId,
-        url: extResult.value.url,
-        method: extResult.value.method,
-        instructions: extResult.value.instructions,
-      }),
+      ),
     )
-  })
-
-  const callback = Effect.fn("ProviderAuth.callback")(function* (
-    sessionId: SessionId,
-    provider: string,
-    method: number,
-    authorizationId: string,
-    code?: string,
-  ) {
-    const extProvider = modelDrivers.get(provider)
-    if (Predicate.isUndefined(extProvider?.auth?.callback)) {
-      // No callback handler — auth completed during authorize (e.g. "done" method)
-      return
-    }
-    yield* extProvider.auth
-      .callback({
-        sessionId,
-        methodIndex: method,
-        authorizationId,
-        persist: makePersist(provider),
-        code,
-      })
-      .pipe(
-        Effect.catchDefect((e) =>
-          Effect.fail(
-            new ProviderAuthError({
-              message: `Provider auth callback failed: ${causeMessage(e)}`,
-              cause: e,
-            }),
-          ),
-        ),
-      )
-  })
-
-  return ProviderAuth.of({
-    listMethods,
-    authorize,
-    callback,
-  })
+  if (Option.isNone(extResult)) return Option.none()
+  return Option.some(
+    new AuthAuthorization({
+      authorizationId,
+      url: extResult.value.url,
+      method: extResult.value.method,
+      instructions: extResult.value.instructions,
+    }),
+  )
 })
 
-export class ProviderAuth extends Context.Service<ProviderAuth, ProviderAuthService>()(
-  "@gent/core/src/runtime/provider/ProviderAuth",
+/** Finish a driver's login with the code the user brings back. */
+export const completeProviderAuth = Effect.fn("ProviderLogin.callback")(function* (
+  sessionId: SessionId,
+  provider: string,
+  method: number,
+  authorizationId: string,
+  code?: string,
 ) {
-  static Live: Layer.Layer<ProviderAuth, never, Auth | ExtensionRegistry | GentPlatform> =
-    Layer.effect(ProviderAuth, makeProviderAuth)
-}
+  const { modelDrivers } = (yield* ExtensionRegistry).getResolved()
+  const authStore = yield* Auth
+  const extProvider = modelDrivers.get(provider)
+  // A driver without a callback finished its login in authorize (a "done" method).
+  if (Predicate.isUndefined(extProvider?.auth?.callback)) return
+  yield* extProvider.auth
+    .callback({
+      sessionId,
+      methodIndex: method,
+      authorizationId,
+      persist: persistAuthTo(authStore, provider),
+      code,
+    })
+    .pipe(
+      Effect.catchDefect((e) =>
+        Effect.fail(
+          new ProviderAuthError({
+            message: `Provider auth callback failed: ${causeMessage(e)}`,
+            cause: e,
+          }),
+        ),
+      ),
+    )
+})
 
 // ── model-resolver ──────────────────────────────────────────────────────────
 

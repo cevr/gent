@@ -816,6 +816,66 @@ describe("auth persistence RPC failures", () => {
     ),
   )
 })
+describe("provider login", () => {
+  it.live("a session logs in through the drivers of its own profile, not the launch profile", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const profileCwd = yield* makeTempDirectoryScoped("gent-login-")
+        const projectDriver: LoadedExtension = {
+          manifest: { id: ExtensionId.make("@test/project-driver") },
+          scope: "project",
+          sourcePath: "test",
+          contributions: {
+            modelDrivers: [
+              {
+                id: "project-oauth",
+                name: "Project OAuth",
+                resolveModel: () => Effect.succeed(stubModel),
+                auth: {
+                  methods: [AuthMethod.make({ type: "oauth", label: "OAuth" })],
+                  authorize: () =>
+                    Effect.succeedSome({ url: "http://example.com/auth", method: "code" }),
+                  callback: (ctx) => ctx.persist({ type: "api", key: ctx.code ?? "" }),
+                },
+              },
+            ],
+          },
+        }
+        const profile = yield* makeProfile(profileCwd, [projectDriver])
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const { client } = yield* createRpcClient(
+          createE2ELayer({
+            ...e2ePreset,
+            providerLayer,
+            extensions: [],
+            sessionProfileCacheLayer: SessionProfileCache.Test(new Map([[profileCwd, profile]])),
+          }),
+        )
+        const { sessionId } = yield* client.session.create({ cwd: profileCwd })
+
+        expect(Object.keys(yield* client.auth.listMethods({ sessionId }))).toEqual([
+          "project-oauth",
+        ])
+        expect(Object.keys(yield* client.auth.listMethods())).toEqual([])
+        const authorization = yield* client.auth.authorize({
+          sessionId,
+          provider: "project-oauth",
+          method: 0,
+        })
+        if (Predicate.isNull(authorization)) return yield* Effect.die("authorize gave no link")
+        yield* client.auth.callback({
+          sessionId,
+          provider: "project-oauth",
+          method: 0,
+          authorizationId: authorization.authorizationId,
+          code: "sk-project",
+        })
+        const providers = yield* client.auth.listProviders({ sessionId })
+        expect(providers.find((entry) => entry.provider === "project-oauth")?.hasKey).toBe(true)
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+})
 
 // ── interaction commands ────────────────────────────────────────────────────
 

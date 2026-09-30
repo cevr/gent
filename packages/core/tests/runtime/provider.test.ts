@@ -34,7 +34,9 @@ import {
   type AuthService,
   serializeAuthStore,
   ModelResolver,
-  ProviderAuth,
+  authorizeProvider,
+  completeProviderAuth,
+  listAuthMethods,
   retryProviderCall,
   ModelCatalogRecord,
   ModelRegistry,
@@ -1043,21 +1045,17 @@ const failingAuthStoreLayer = Layer.succeed(
     }),
   ),
 )
-describe("ProviderAuth", () => {
+describe("provider login", () => {
   it.live("extension authorize + callback stores credentials", () =>
     Effect.gen(function* () {
       pendingCallbacks.clear()
       const authLayer = Auth.Test()
-      const layer = Layer.provideMerge(
-        ProviderAuth.Live,
-        Layer.mergeAll(authLayer, testRegistry, GentPlatform.Test()),
-      )
+      const layer = Layer.mergeAll(authLayer, testRegistry, GentPlatform.Test())
       const result = yield* Effect.gen(function* () {
-        const auth = yield* ProviderAuth
         const store = yield* Auth
-        const authResult = yield* auth.authorize(SessionId.make("s1"), "openai", 0)
+        const authResult = yield* authorizeProvider(SessionId.make("s1"), "openai", 0)
         if (Option.isNone(authResult)) return { ok: false }
-        yield* auth.callback(
+        yield* completeProviderAuth(
           SessionId.make("s1"),
           "openai",
           0,
@@ -1079,14 +1077,8 @@ describe("ProviderAuth", () => {
   it.live("listMethods returns methods from extension providers", () =>
     Effect.gen(function* () {
       const authLayer = Auth.Test()
-      const layer = Layer.provideMerge(
-        ProviderAuth.Live,
-        Layer.mergeAll(authLayer, testRegistry, GentPlatform.Test()),
-      )
-      const methods = yield* Effect.gen(function* () {
-        const auth = yield* ProviderAuth
-        return yield* auth.listMethods
-      }).pipe(Effect.provide(layer))
+      const layer = Layer.mergeAll(authLayer, testRegistry, GentPlatform.Test())
+      const methods = yield* listAuthMethods().pipe(Effect.provide(layer))
       expect(Object.keys(methods)).toContain("openai")
       expect(Object.keys(methods)).toContain("anthropic")
       expect(Object.keys(methods)).toContain("persisting")
@@ -1095,14 +1087,10 @@ describe("ProviderAuth", () => {
   )
   it.live("authorize surfaces credential persistence failures", () =>
     Effect.gen(function* () {
-      const layer = Layer.provideMerge(
-        ProviderAuth.Live,
-        Layer.mergeAll(failingAuthStoreLayer, testRegistry, GentPlatform.Test()),
-      )
-      const exit = yield* Effect.gen(function* () {
-        const auth = yield* ProviderAuth
-        return yield* Effect.exit(auth.authorize(SessionId.make("s1"), "persisting", 0))
-      }).pipe(Effect.provide(layer))
+      const layer = Layer.mergeAll(failingAuthStoreLayer, testRegistry, GentPlatform.Test())
+      const exit = yield* Effect.exit(
+        authorizeProvider(SessionId.make("s1"), "persisting", 0),
+      ).pipe(Effect.provide(layer))
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
         expect(exit.cause.toString()).toContain("Failed to persist auth")
@@ -1112,16 +1100,12 @@ describe("ProviderAuth", () => {
   it.live("callback surfaces credential persistence failures", () =>
     Effect.gen(function* () {
       pendingCallbacks.clear()
-      const layer = Layer.provideMerge(
-        ProviderAuth.Live,
-        Layer.mergeAll(failingAuthStoreLayer, testRegistry, GentPlatform.Test()),
-      )
+      const layer = Layer.mergeAll(failingAuthStoreLayer, testRegistry, GentPlatform.Test())
       const exit = yield* Effect.gen(function* () {
-        const auth = yield* ProviderAuth
-        const authResult = yield* auth.authorize(SessionId.make("s1"), "openai", 0)
+        const authResult = yield* authorizeProvider(SessionId.make("s1"), "openai", 0)
         if (Option.isNone(authResult)) return yield* Effect.die("auth setup failed")
         return yield* Effect.exit(
-          auth.callback(
+          completeProviderAuth(
             SessionId.make("s1"),
             "openai",
             0,

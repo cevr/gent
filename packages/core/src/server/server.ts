@@ -51,6 +51,7 @@ import {
 } from "../domain/extension.js"
 import {
   type AuthorizeAuthInput,
+  type ListAuthMethodsInput,
   type CallbackAuthInput,
   type ClearDriverOverrideInput,
   type CreateBranchInput,
@@ -111,12 +112,14 @@ import { CurrentWorkspaceId, workspaceIdForCwd, WorkspaceRpcMiddleware } from ".
 import {
   Auth,
   AuthApi,
+  authorizeProvider,
+  completeProviderAuth,
+  listAuthMethods,
   listAuthProviders,
   ModelCatalogRecord,
   ModelRegistry,
   ModelResolver,
   modelCatalog,
-  ProviderAuth,
 } from "../runtime/provider.js"
 import { ProviderAuthError } from "../domain/driver.js"
 import { ConfigService, RuntimeEnvironment } from "../runtime/config.js"
@@ -1227,7 +1230,7 @@ const RpcHandlers = GentRpcs.toLayer(
     const sessionRuntime = yield* SessionRuntime
     const authStore = yield* Auth
     const catalogRecord = yield* ModelCatalogRecord
-    const providerAuth = yield* ProviderAuth
+    const platform = yield* GentPlatform
     const extensionRegistry = yield* ExtensionRegistry
     const sessionStorage = yield* SessionStorage
     const relationshipStorage = yield* RelationshipStorage
@@ -1293,6 +1296,18 @@ const RpcHandlers = GentRpcs.toLayer(
       sessionCwd(sessionId).pipe(
         Effect.flatMap(resolveRegistryForCwd),
         Effect.provideService(ExtensionRegistry, extensionRegistry),
+      )
+
+    /** Provider login runs against the drivers of the session's own profile. */
+    const inSessionProfile = <A, E>(
+      sessionId: Option.Option<string>,
+      effect: Effect.Effect<A, E, ExtensionRegistry | Auth | GentPlatform>,
+    ) =>
+      resolveSessionRegistry(sessionId).pipe(
+        Effect.flatMap((registry) => Effect.provideService(effect, ExtensionRegistry, registry)),
+        Effect.provideService(Auth, authStore),
+        Effect.provideService(GentPlatform, platform),
+        Effect.scoped,
       )
 
     return {
@@ -1515,10 +1530,16 @@ const RpcHandlers = GentRpcs.toLayer(
           .remove(provider)
           .pipe(Effect.mapError((error) => authPersistenceError("delete", provider, error))),
 
-      "auth.listMethods": () => providerAuth.listMethods,
+      "auth.listMethods": (input: ListAuthMethodsInput) => {
+        if (!Predicate.isObject(input)) return inSessionProfile(Option.none(), listAuthMethods())
+        return inSessionProfile(Option.fromUndefinedOr(input.sessionId), listAuthMethods())
+      },
 
       "auth.authorize": ({ sessionId, provider, method }: AuthorizeAuthInput) =>
-        providerAuth.authorize(sessionId, provider, method).pipe(Effect.map(Option.getOrNull)),
+        inSessionProfile(
+          Option.some(sessionId),
+          authorizeProvider(sessionId, provider, method),
+        ).pipe(Effect.map(Option.getOrNull)),
 
       "auth.callback": ({
         sessionId,
@@ -1527,7 +1548,10 @@ const RpcHandlers = GentRpcs.toLayer(
         authorizationId,
         code,
       }: CallbackAuthInput) =>
-        providerAuth.callback(sessionId, provider, method, authorizationId, code),
+        inSessionProfile(
+          Option.some(sessionId),
+          completeProviderAuth(sessionId, provider, method, authorizationId, code),
+        ),
 
       // ----------------------------------------------------------------------
       // Extension transport
@@ -1831,7 +1855,6 @@ export const createDependencies = (config: DependenciesConfig) => {
       Layer.mergeAll(extensionRegistryLive, authLive, modelCatalogRecordLive),
     )
   const authDeps = Layer.mergeAll(authLive, extensionRegistryLive)
-  const providerAuthLive = Layer.provide(ProviderAuth.Live, authDeps)
   const fileLockServiceLive = FileLockService.layer
 
   const modelResolverLive = makeModelResolverLayer(config, authDeps)
@@ -1846,7 +1869,6 @@ export const createDependencies = (config: DependenciesConfig) => {
       clusterRunnerLive,
       baseEventStoreLive,
       authLive,
-      providerAuthLive,
       configServiceLive,
       modelCatalogRecordLive,
       modelRegistryLive,

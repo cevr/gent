@@ -235,6 +235,16 @@ export const DeleteAuthKeyInput = Schema.Struct({
 })
 export type DeleteAuthKeyInput = typeof DeleteAuthKeyInput.Type
 
+/**
+ * The session whose profile's drivers answer; the launch profile without one.
+ * A caller may send no payload at all.
+ */
+const ListAuthMethodsInput = Schema.Union([
+  Schema.Struct({ sessionId: Schema.optional(SessionId) }),
+  Schema.Void,
+])
+export type ListAuthMethodsInput = typeof ListAuthMethodsInput.Type
+
 const ListAuthMethodsSuccess = Schema.Record(Schema.String, Schema.Array(AuthMethod))
 
 export const AuthorizeAuthInput = Schema.Struct({
@@ -514,6 +524,7 @@ class AuthRpcs extends RpcGroup.make(
     error: GentRpcError,
   }),
   Rpc.make("listMethods", {
+    payload: ListAuthMethodsInput,
     success: ListAuthMethodsSuccess,
     error: GentRpcError,
   }),
