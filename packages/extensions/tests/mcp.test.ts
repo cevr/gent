@@ -2349,7 +2349,7 @@ describe("mcp tools in the cell", () => {
         const fixture = yield* makeFixture
         const { systems, recordSystem } = systemRecorder()
         const code = [
-          "const signature = tools.describe('mcp.fixture.stats')",
+          "const signature = tools('mcp.fixture.stats').signature",
           "const stats = await tools.mcp.fixture.stats()",
           "let broken = ''; try { await tools.mcp.fixture.badstats() } catch (error) { broken = error.message }",
           "JSON.stringify({ signature, stats, broken })",

@@ -776,23 +776,19 @@ describe("Bun cell evaluation", () => {
         expect(yield* Ref.get(described)).toEqual(["read"])
         // The tool itself, not its details, until awaited.
         const tool = yield* kernel.evaluate(
-          "const t = tools('read'); [t.id, t.signature === tools.describe('read')]",
+          "const t = tools('read'); JSON.stringify([t.id, t.signature])",
         )
-        expect(tool.display).toBe("[ 'read', true ]")
+        expect(tool.display).toBe(
+          '["read","tools.read(input: { path?: string }): Promise<unknown> // Read a file"]',
+        )
         expect(yield* Ref.get(described)).toEqual(["read"])
         const missing = yield* kernel.evaluate("tools('bash')").pipe(Effect.flip)
         expect(missing.message).toContain("tools.bash is not a host tool selected for this turn")
-        const signature = yield* kernel.evaluate("tools.describe('read')")
-        expect(signature.display).toBe(
-          "tools.read(input: { path?: string }): Promise<unknown> // Read a file",
-        )
         // A two-word query needs both words: `write` holds only "file".
         const found = yield* kernel.evaluate("JSON.stringify(tools.search('file read'))")
         expect(found.display).toBe(
           '{"items":[{"id":"read","description":"Read a file"}],"total":1,"hasMore":false}',
         )
-        const unknownDescribe = yield* kernel.evaluate("tools.describe('bash')").pipe(Effect.flip)
-        expect(unknownDescribe.message).toContain("tools.bash is not a host tool")
         // Catalog reads never become tool calls.
         expect(yield* Ref.get(calls)).toBe(0)
         // A reset clears the bindings, not the catalog.
@@ -918,24 +914,25 @@ describe("Bun cell evaluation", () => {
         const kernel = yield* makeKernel(
           { call: (name) => Ref.update(sent, (seen) => [...seen, name]).pipe(Effect.as(0)) },
           "describe",
-          "describe.run",
           "search",
+          "search.run",
           "fs.search",
         )
         yield* kernel.evaluate(
-          "await tools('describe')({}); await tools('describe.run')({}); await tools('search')({}); await tools.fs.search({})",
+          "await tools('search')({}); await tools('search.run')({}); await tools.fs.search({}); await tools.describe({})",
         )
-        expect(yield* Ref.get(sent)).toEqual(["describe", "describe.run", "search", "fs.search"])
-        // The root keys stay discovery functions and never call the colliding tools.
+        expect(yield* Ref.get(sent)).toEqual(["search", "search.run", "fs.search", "describe"])
+        // The root key stays the discovery function and never calls the colliding tools;
+        // `describe` is an ordinary path.
         const discovery = yield* kernel.evaluate(
-          "[typeof tools.search, typeof tools.describe, Object.keys(tools).join(',')]",
+          "[typeof tools.search, Object.keys(tools).join(',')]",
         )
-        expect(discovery.display).toBe("[ 'function', 'function', 'fs' ]")
+        expect(discovery.display).toBe("[ 'function', 'describe,fs' ]")
         expect(yield* Ref.get(sent)).toHaveLength(4)
         const entry = yield* kernel.evaluate(
-          "const spec = await tools('describe.run'); [spec.id, spec.description, typeof spec.parameters]",
+          "const spec = await tools('search.run'); [spec.id, spec.description, typeof spec.parameters]",
         )
-        expect(entry.display).toBe("[ 'describe.run', 'describe.run', 'object' ]")
+        expect(entry.display).toBe("[ 'search.run', 'search.run', 'object' ]")
       }),
   )
 

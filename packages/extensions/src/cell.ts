@@ -3114,7 +3114,7 @@ const CELL_WORK_SECTION = {
 
 const HOST_TOOLS_HEADING = `## Host Tools
 
-Inside \`cell\`, each host tool id is a function path under \`tools\`: id \`a.b\` is \`await tools.a.b(input)\`. Every host tool is callable, listed below or not. A line \`tools.a.*: N tools\` stands for a namespace listed by name only, and a \`more\` line counts tools not listed. \`tools.search(query)\` ranks the ids by their segments and one-line description and returns one page, \`{ items: { id, description }[], total, hasMore, nextOffset }\`; a second argument \`{ namespace, limit, offset }\` narrows or pages it. \`tools.describe(id)\` returns one tool's typed signature. \`tools(id)\` returns the tool and reaches an id with a JavaScript built-in segment such as \`then\` or \`name\`; \`await tools(id)\` returns its full input schema (\`parameters\`), \`guidelines\` and description. \`tools.search\`, \`tools.describe\` and \`tools(id)\` are local and synchronous, and these calls grant no permission to execute. \`Object.keys(tools)\` lists the top-level names.`
+Inside \`cell\`, each host tool id is a function path under \`tools\`: id \`a.b\` is \`await tools.a.b(input)\`. Every host tool is callable, listed below or not. A line \`tools.a.*: N tools\` stands for a namespace listed by name only, and a \`more\` line counts tools not listed. \`tools.search(query)\` ranks the ids by their segments and one-line description and returns one page, \`{ items: { id, description }[], total, hasMore, nextOffset }\`; a second argument \`{ namespace, limit, offset }\` narrows or pages it. \`tools(id)\` returns the tool, whose \`signature\` is its typed call line, and reaches an id with a JavaScript built-in segment such as \`then\` or \`name\`; \`await tools(id)\` returns its full input schema (\`parameters\`), \`guidelines\` and description. \`tools.search\` and \`tools(id)\` are local and synchronous, and these calls grant no permission to execute. \`Object.keys(tools)\` lists the top-level names.`
 
 /**
  * The characters the Host Tools signature lines may take. The shipped tool set
@@ -3611,7 +3611,7 @@ const joinSignature = (signature: string, summary: string) => {
  * One prompt line per host tool: the callable path with its input and result
  * types, then the first line of its snippet or description.
  * `- tools.wake.cancel(input?: { wakeId?: string }): Promise<{ cancelled: string[] }> // Cancel ...`
- * `tools.describe(id)` in the kernel returns the same line without the `- `.
+ * `tools(id).signature` in the kernel holds the same line without the `- `.
  */
 export const renderToolSignature = Effect.fn("CellCatalog.renderToolSignature")(function* (
   tool: ToolCapability,

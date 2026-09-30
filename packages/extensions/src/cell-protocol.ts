@@ -105,10 +105,10 @@ export const reservedToolSegments: ReadonlySet<string> = new Set([
 
 /**
  * Root keys of `tools` that are discovery functions, not tool paths:
- * `tools.search(query)` and `tools.describe(id)`. An id whose first segment is
- * one of them is reached through `tools(id)`; deeper segments stay paths.
+ * `tools.search(query)`. An id whose first segment is one of them is reached
+ * through `tools(id)`; deeper segments stay paths.
  */
-export const toolDiscoveryKeys: ReadonlySet<string> = new Set(["search", "describe"])
+export const toolDiscoveryKeys: ReadonlySet<string> = new Set(["search"])
 
 /**
  * The one order for tool ids: by UTF-16 code unit. It is total and does not
@@ -151,7 +151,7 @@ export const CellCatalogEntry = Schema.Struct({
   description: Schema.String,
   guidelines: Schema.Array(Schema.String),
   parameters: Schema.Json,
-  /** The typed call line the host renders, which `tools.describe(id)` returns. */
+  /** The typed call line the host renders, which `tools(id).signature` holds. */
   signature: Schema.String,
   /** The description's first line, which `tools.search(query)` returns. */
   summary: Schema.String,
