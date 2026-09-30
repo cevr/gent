@@ -140,19 +140,52 @@ const serverKey = Effect.fn("Mcp.serverKey")(function* (
 const DEFAULT_TIMEOUT_MS = 30_000
 /** A connection nobody used for this long closes; the next call opens it again. */
 const IDLE_TIME_TO_LIVE = Duration.minutes(5)
-/** Server and tool id segments are cut here, so `mcp__<server>__<tool>` stays within 128 characters. */
-const SERVER_SEGMENT_LIMIT = 32
-const TOOL_SEGMENT_LIMIT = 64
+/**
+ * The wire name `mcp__<server>__<tool>` must fit in 64 characters (the
+ * limit every provider accepts), so server and tool segments share 57.
+ */
+const WIRE_SEGMENTS_LIMIT = 64 - "mcp____".length
+const SERVER_SEGMENT_LIMIT = 20
+
+const trimUnderscores = (text: string) => text.replace(/^_+/, "").replace(/_+$/, "")
 
 /**
- * An id segment a provider wire name can carry once `.` is encoded:
- * `[A-Za-z0-9_-]` only, no `__` (the encoding's separator), and bounded.
+ * A name as an id segment in the host's tool id grammar: runs of
+ * `[A-Za-z0-9-]` joined by one `_` (so no `__`, the wire separator, and no
+ * `_` at either end), cut to `limit`, and `fallback` when nothing is left.
  */
-const idSegment = (name: string, limit: number) =>
-  name
-    .replaceAll(/[^A-Za-z0-9_-]/g, "_")
-    .replaceAll(/_{2,}/g, "_")
-    .slice(0, limit)
+const idSegment = (name: string, limit: number, fallback: string) => {
+  const segment = trimUnderscores(
+    trimUnderscores(name.replaceAll(/[^A-Za-z0-9-]+/g, "_")).slice(0, limit),
+  )
+  if (segment === "") return fallback
+  return segment
+}
+
+/**
+ * A distinct segment for each name. Names take their segments in code-unit
+ * order; a name whose segment is taken gets the first free `_2`, `_3`, ...,
+ * cut so the whole stays within `limit`. The same names always get the same
+ * segments, and no name is dropped.
+ */
+const allocateSegments = (
+  names: ReadonlyArray<string>,
+  limit: number,
+  fallback: string,
+): ReadonlyMap<string, string> => {
+  const allocated = new Map<string, string>()
+  const taken = new Set<string>()
+  for (const name of [...new Set(names)].toSorted(compareCodeUnits)) {
+    const base = idSegment(name, limit, fallback)
+    let segment = base
+    for (let suffix = 2; taken.has(segment); suffix++) {
+      segment = `${trimUnderscores(base.slice(0, limit - `_${suffix}`.length))}_${suffix}`
+    }
+    taken.add(segment)
+    allocated.set(name, segment)
+  }
+  return allocated
+}
 
 const VARIABLE = /\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}/g
 
@@ -257,18 +290,16 @@ const resolveServers = Effect.fn("Mcp.resolveServers")(function* (
 ) {
   const path = yield* Path.Path
   const servers: Array<McpServer> = []
-  const names = new Set<string>()
-  for (const [written, config] of Object.entries(entries).toSorted(([left], [right]) =>
-    compareCodeUnits(left, right),
-  )) {
-    if (config.enabled === false) continue
-    const name = idSegment(written, SERVER_SEGMENT_LIMIT)
-    if (name === "" || names.has(name)) {
-      yield* Effect.logWarning("mcp.server.name-taken").pipe(
-        Effect.annotateLogs({ server: written }),
-      )
-      continue
-    }
+  const enabled = Object.entries(entries)
+    .filter(([, config]) => config.enabled !== false)
+    .toSorted(([left], [right]) => compareCodeUnits(left, right))
+  const names = allocateSegments(
+    enabled.map(([written]) => written),
+    SERVER_SEGMENT_LIMIT,
+    "server",
+  )
+  for (const [written, config] of enabled) {
+    const name = names.get(written) ?? "server"
     const expanded = yield* Effect.result(expandConfig(config))
     if (Result.isFailure(expanded)) {
       yield* Effect.logWarning("mcp.server.config").pipe(
@@ -287,7 +318,6 @@ const resolveServers = Effect.fn("Mcp.resolveServers")(function* (
       )
       continue
     }
-    names.add(name)
     servers.push({ name, key: key.success, config: expanded.success, cwd })
   }
   return servers
@@ -696,13 +726,21 @@ const toolDescription = (server: McpServer, listed: CatalogTool) => {
   return `${listed.name} on the ${server.name} MCP server`
 }
 
-/** One host tool per listed MCP tool; a name that collides after cleaning is left out. */
+/**
+ * One host tool per listed MCP tool, each under its own segment (see
+ * `allocateSegments`). A name the server lists twice is one tool.
+ */
 const toolsFor = (server: McpServer, listed: ReadonlyArray<CatalogTool>) => {
+  const segments = allocateSegments(
+    listed.map((entry) => entry.name),
+    WIRE_SEGMENTS_LIMIT - server.name.length,
+    "tool",
+  )
   const seen = new Set<string>()
   return listed.flatMap((entry) => {
-    const segment = idSegment(entry.name, TOOL_SEGMENT_LIMIT)
-    if (segment === "" || seen.has(segment)) return []
-    seen.add(segment)
+    const segment = segments.get(entry.name) ?? "tool"
+    if (seen.has(entry.name)) return []
+    seen.add(entry.name)
     return [
       tool({
         id: `mcp.${server.name}.${segment}`,

@@ -66,7 +66,7 @@ if (process.env.MCP_FIXTURE_HIDE_COUNT && fs.existsSync(process.env.MCP_FIXTURE_
   tools.splice(tools.findIndex((entry) => entry.name === "count"), 1)
 }
 if (process.env.MCP_FIXTURE_COLLIDE) {
-  for (const name of ["a/b", "a.b", "a_b_2", "x".repeat(70) + "1", "x".repeat(70) + "2"]) {
+  for (const name of ["a/b", "a.b", "a_b_2", "get__x", "_x", "x_", "x".repeat(70) + "1", "x".repeat(70) + "2"]) {
     tools.push({ name, description: "Collides as " + name + ".", inputSchema: { type: "object" } })
   }
 }
@@ -362,6 +362,53 @@ describe("mcp config", () => {
         // So is the same entry run from another directory.
         yield* setup(other, "one")
         expect(yield* fixture.starts).toBe(3)
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(platformLayer)),
+    30_000,
+  )
+
+  it.scopedLive(
+    "every server and tool gets its own tool id in the wire grammar, colliding names by suffix",
+    () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path
+        const fixture = yield* makeFixture
+        const extension = McpServers("@test/mcp-names", {
+          "my.server": fixture.stdio({ MCP_FIXTURE_COLLIDE: "1" }),
+          my_server: fixture.stdio(),
+        })
+        const ids = toolIds(
+          yield* collectTestContributions(extension.setup, {
+            home: path.join(fixture.directory, "home"),
+            cwd: fixture.directory,
+          }),
+        )
+        // Code-unit order of the names decides who keeps the plain id.
+        expect(ids.filter((id) => id.startsWith("mcp.my_server."))).toEqual(
+          [
+            "a_b",
+            "a_b_2",
+            "a_b_2_2",
+            "count",
+            "echo",
+            "fail",
+            "get_x",
+            "repo_search_issues",
+            "structured",
+            "x",
+            "x_2",
+            "x".repeat(48),
+            `${"x".repeat(46)}_2`,
+          ]
+            .map((name) => `mcp.my_server.${name}`)
+            .toSorted(),
+        )
+        expect(ids.filter((id) => id.startsWith("mcp.my_server_2."))).toHaveLength(5)
+        // Each id is dot-joined segments of `[A-Za-z0-9-]` runs joined by one `_`,
+        // and its wire name (`.` as `__`) fits in 64 characters.
+        const grammar = /^[a-zA-Z0-9-]+(?:_[a-zA-Z0-9-]+)*(?:\.[a-zA-Z0-9-]+(?:_[a-zA-Z0-9-]+)*)*$/
+        expect(
+          ids.filter((id) => !grammar.test(id) || id.replaceAll(".", "__").length > 64),
+        ).toEqual([])
       }).pipe(Effect.timeout("20 seconds"), Effect.provide(platformLayer)),
     30_000,
   )

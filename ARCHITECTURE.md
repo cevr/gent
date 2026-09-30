@@ -1295,9 +1295,11 @@ is its joined text, and one of `structuredContent` alone (its text only
 repeating it) is that value; any other result is an object of
 `structuredContent`, `text`, the other blocks as `content`, and `omitted`,
 which names each image, audio, or blob block the cell does not receive with its
-MIME type and size, beside a `note`. `isError` fails the call as `{ error }`. Server and tool names are
-cut to `[A-Za-z0-9_-]` with no `__`, 32 and 64 characters, so the provider
-wire name stays within 128. Many MCP tools collapse in the prompt catalog by
+MIME type and size, beside a `note`. `isError` fails the call as `{ error }`. Server and tool names become id segments in the tool id grammar:
+runs of `[A-Za-z0-9-]` joined by one `_`, no `_` at either end, and the wire
+name `mcp__<server>__<tool>` within 64 characters (a server takes at most 20).
+Names that clean to one segment all stay: in code-unit order of the original
+names, the first keeps it and the next take `_2`, `_3`, and so on. Many MCP tools collapse in the prompt catalog by
 the host tool catalog budget; the model reaches them with `tools.search` and
 `tools.describe`.
 
