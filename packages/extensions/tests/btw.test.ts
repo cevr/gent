@@ -1,6 +1,7 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import {
   Cause,
+  Clock,
   Deferred,
   Effect,
   Exit,
@@ -681,18 +682,23 @@ describe("btw pulses", () => {
           )
           const harness = yield* createRpcHarness({ ...e2ePreset, providerLayer })
           const pane = btw(harness)
+          const started = yield* Clock.currentTimeMillis
           yield* pane.fork("Explain the whole plan")
           const replied = yield* pane.replied(1)
+          const elapsed = (yield* Clock.currentTimeMillis) - started
           // The last text lands: the pane reads the whole answer.
           expect(Option.map(replied, (fork) => fork.turns.at(-1)?.answer)).toEqual(
             Option.some(chunks.join("")),
           )
           // One pulse per view change (the fork, done) plus streamed text at most
-          // once per interval: a handful, not one per chunk, and none for
-          // an event that leaves the view as it was.
+          // once per interval, and none for an event that leaves the view as it
+          // was. The intervals follow the wall time the answer took, which a
+          // loaded machine stretches; each is 250 ms.
           const pulses = yield* storedPulses(harness)
           expect(pulses).toBeGreaterThan(0)
-          expect(pulses).toBeLessThanOrEqual(6)
+          expect(pulses).toBeLessThanOrEqual(2 + Math.ceil(elapsed / 250) + 1)
+          // Not one per chunk.
+          expect(pulses).toBeLessThan(chunks.length / 10)
         }).pipe(Effect.timeout("8 seconds")),
       ),
     10_000,
