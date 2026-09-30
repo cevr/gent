@@ -866,6 +866,31 @@ describe("mcp over sse", () => {
   )
 
   it.scopedLive(
+    "an entry that changes its type lists again instead of reading the other transport's catalog",
+    () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path
+        const fs = yield* FileSystem.FileSystem
+        const { port, counts } = yield* serveSseFixture
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-mcp-sse-type-" })
+        const entry = { ...httpEntry(port), url: `http://127.0.0.1:${port}/sse` }
+        const setup = (type: "sse" | "http") =>
+          collectTestContributions(
+            McpServers("@test/mcp-sse-type", { server: { ...entry, type } }).setup,
+            { home: path.join(directory, "home"), cwd: directory },
+          ).pipe(Effect.map(toolIds))
+        expect(yield* setup("sse")).toContain("mcp.server.whoami")
+        // Streamable HTTP at the same URL is refused, so it registers nothing.
+        expect(yield* setup("http")).toEqual([])
+        expect(counts.refusedPosts).toBe(1)
+      }).pipe(
+        Effect.timeout("20 seconds"),
+        Effect.provide(Layer.merge(platformLayer, withFixtureToken)),
+      ),
+    25_000,
+  )
+
+  it.scopedLive(
     "auto does not try SSE when streamable HTTP is refused for the credential",
     () =>
       Effect.gen(function* () {

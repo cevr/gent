@@ -126,7 +126,8 @@ const sortedEntries = (record: Readonly<Record<string, string>> = {}) =>
 
 /**
  * What decides the tools a server lists: the entry as it runs, after
- * expansion, and for a stdio server the directory it runs in, in a fixed
+ * expansion, with its transport type, and for a stdio server the directory
+ * it runs in, in a fixed
  * order so key order never matters. It holds secrets, so only its SHA-256
  * digest is kept.
  */
@@ -142,9 +143,10 @@ const serverIdentity = (written: string, config: McpServerConfig, cwd: string) =
       config.timeoutMs ?? 0,
     ])
   }
+  // The transport as configured: `auto` is its own identity, whichever transport it reaches.
   return encodeKeyFields([
     written,
-    "http",
+    configuredTransport(config),
     config.url,
     sortedEntries(config.headers),
     config.timeoutMs ?? 0,
