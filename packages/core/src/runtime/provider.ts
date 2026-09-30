@@ -907,6 +907,22 @@ export const driverRetryPolicy = Effect.fn("Retry.driverRetryPolicy")(function* 
   return driver.retry
 })
 
+/**
+ * A response's cache writes split by lifetime, as the driver a turn called
+ * reads them from its finish part's metadata; empty for a driver that does
+ * not split them, or no driver at all.
+ */
+export const driverCacheWritesByLifetime = Effect.fn("Provider.driverCacheWritesByLifetime")(
+  function* (driverId: Option.Option<string>, metadata: Response.ProviderMetadata) {
+    if (Option.isNone(driverId)) return []
+    const driver = (yield* ExtensionRegistry).getResolved().modelDrivers.get(driverId.value)
+    if (Predicate.isUndefined(driver) || Predicate.isUndefined(driver.cacheWritesByLifetime)) {
+      return []
+    }
+    return driver.cacheWritesByLifetime(metadata)
+  },
+)
+
 type ProviderOrAuthError = ProviderError | ProviderAuthError
 
 /**
@@ -1061,6 +1077,8 @@ export const reasoningDeltaPart = (
 
 export const finishPart = (params: {
   finishReason: Response.FinishReason
+  /** The provider metadata the finish part carries, as a driver's own usage detail. */
+  metadata?: Response.ProviderMetadata
   usage?: {
     inputTokens: number
     outputTokens: number
@@ -1088,6 +1106,7 @@ export const finishPart = (params: {
     }),
     // oxlint-disable-next-line effect/noNullish -- Effect AI requires the absent response in this wire fixture.
     response: undefined,
+    metadata: params.metadata ?? {},
   })
 
 const makeEncodingToolkit = <Tools extends Record<string, AiTool.Any>>(

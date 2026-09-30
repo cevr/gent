@@ -129,6 +129,7 @@ import {
   actorTestRoot,
   helperAgent,
   makeAgentLoopService,
+  makeCountingEventStore,
   makeLayer,
   makeLayerWithEvents,
   makeMessage,
@@ -2097,6 +2098,89 @@ describe("native model compaction integration", () => {
         expect(
           observedHints.map((hints) => Option.fromUndefinedOr(hints.supportsReasoning)),
         ).toEqual([Option.some(false), Option.none()])
+      }),
+    ).pipe(Effect.provide(layer), Effect.timeout("15 seconds"))
+  })
+
+  it.live("a step's cache writes cost the rate of the lifetime each one lives", () => {
+    const sessionId = SessionId.make("lifetime-cost-session")
+    const branchId = BranchId.make("lifetime-cost-branch")
+    const modelId = ModelId.make("lifetime-driver/model")
+    // The driver's own usage detail: 6,000 tokens written for 5 minutes, 4,000 for 1 hour.
+    const providerLayer = LanguageModelLayers.testStream(() =>
+      Effect.succeed(
+        Stream.fromIterable([
+          textDeltaPart("ok"),
+          finishPart({
+            finishReason: "stop",
+            usage: { inputTokens: 10_000, outputTokens: 0, cacheWriteTokens: 10_000 },
+            metadata: { "lifetime-driver": { fiveMinutes: 6_000, oneHour: 4_000 } },
+          }),
+        ]),
+      ),
+    )
+    const LifetimeWrites = Schema.Struct({
+      "lifetime-driver": Schema.Struct({ fiveMinutes: Schema.Finite, oneHour: Schema.Finite }),
+    })
+    const driver: ModelDriverContribution = {
+      id: "lifetime-driver",
+      name: "Lifetime driver",
+      resolveModel: () => Effect.succeed(AiModel.make("lifetime-driver", "model", providerLayer)),
+      cacheWritesByLifetime: (metadata) =>
+        Option.match(Schema.decodeUnknownOption(LifetimeWrites)(metadata), {
+          onNone: () => [],
+          onSome: ({ "lifetime-driver": writes }) => [
+            { ttlMs: 300_000, tokens: writes.fiveMinutes },
+            { ttlMs: 3_600_000, tokens: writes.oneHour },
+          ],
+        }),
+    }
+    const events = Ref.makeUnsafe<Array<AgentEvent>>([])
+    const layer = actorTestRoot({
+      resolver: ModelResolver.Live.pipe(Layer.provide(Auth.Test())),
+      eventStore: makeCountingEventStore(events),
+      registry: ExtensionRegistry.fromResolved(
+        resolveExtensions([
+          {
+            manifest: { id: ExtensionId.make("lifetime-driver") },
+            scope: "builtin",
+            sourcePath: "test",
+            contributions: { agents: testAgents, modelDrivers: [driver] },
+          },
+        ]),
+      ),
+      models: [
+        Model.make({
+          id: modelId,
+          name: "Lifetime model",
+          provider: ProviderId.make("lifetime-driver"),
+          contextLength: 128_000,
+          // Dollars per million tokens: a 1-hour write costs 2x input, a 5-minute one 1.25x.
+          pricing: {
+            input: 5,
+            output: 25,
+            cacheWrite: 10,
+            cacheWriteByLifetime: [
+              { ttlMs: 300_000, price: 6.25 },
+              { ttlMs: 3_600_000, price: 10 },
+            ],
+          },
+        }),
+      ],
+    })
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const agentLoop = yield* makeAgentLoopService
+        const admission: SessionAdmission = { runSpec: { overrides: { modelId } } }
+        yield* ensureStorageParents({ sessionId, branchId, admission })
+        yield* runAgentLoop(agentLoop, makeMessage(sessionId, branchId, "hello"), admission)
+        const costs = (yield* Ref.get(events))
+          .filter((event) => event._tag === "StreamEnded")
+          .map((event) => event.costUsd)
+        // 6,000 x $6.25 + 4,000 x $10 per million, not 10,000 x $10.
+        expect(costs).toHaveLength(1)
+        expect(costs[0]).toBeCloseTo((6_000 * 6.25 + 4_000 * 10) / 1_000_000, 12)
       }),
     ).pipe(Effect.provide(layer), Effect.timeout("15 seconds"))
   })

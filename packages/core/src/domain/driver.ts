@@ -13,8 +13,8 @@
  * @module
  */
 import { Context, Effect, Option, Predicate, Schema, type Layer } from "effect"
-import { AiError, type LanguageModel, type Model as AiModel } from "effect/ai"
-import type { Model } from "./agent.js"
+import { AiError, type LanguageModel, type Model as AiModel, type Response } from "effect/ai"
+import type { CacheWriteByLifetime, Model } from "./agent.js"
 import type { AuthAuthorizationMethod, AuthMethod } from "../runtime/provider.js"
 import type { SessionId } from "./ids.js"
 
@@ -337,4 +337,14 @@ export interface ModelDriverContribution {
   readonly envCredential?: string
   /** Retry policy for this driver's transient failures; `DEFAULT_RETRY_POLICY` when absent. */
   readonly retry?: RetryPolicy
+  /**
+   * A response's cache writes split by the lifetime of the entries they wrote,
+   * read from its finish part's provider metadata. A driver whose request
+   * mixes lifetimes names it, so each part is priced at its own rate
+   * (`ModelPricing.cacheWriteByLifetime`). Absent, every write takes the
+   * catalog's `cacheWrite` rate.
+   */
+  readonly cacheWritesByLifetime?: (
+    metadata: Response.ProviderMetadata,
+  ) => ReadonlyArray<CacheWriteByLifetime>
 }

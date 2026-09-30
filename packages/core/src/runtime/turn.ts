@@ -140,6 +140,7 @@ import {
 import { ConfigService, type UserConfig } from "./config.js"
 import { asAgentLoopError, type RunningState } from "../domain/agent-loop.js"
 import {
+  driverCacheWritesByLifetime,
   driverRetryPolicy,
   ModelRegistry,
   ModelResolver,
@@ -2594,11 +2595,25 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       // A settled step: cost frozen into the boundary event, metrics folded,
       // parts persisted with their bindings.
       const settleStep = Effect.gen(function* () {
+        // The driver splits the cache writes by lifetime when their rates differ.
+        const finishMetadata = collected.responseParts
+          .filter((part): part is Response.FinishPart => part.type === "finish")
+          .reduce<Response.ProviderMetadata>(
+            (merged, part) => ({ ...merged, ...part.metadata }),
+            {},
+          )
+        const cacheWritesByLifetime = yield* driverCacheWritesByLifetime(
+          params.resolved.modelDriver.driverId,
+          finishMetadata,
+        )
         const usage = Option.fromUndefinedOr(collected.messageProjection.usage)
         // Priced by the catalog id, the same one the context window reads: a
         // driver override routes `provider/model` to `driver/model`.
         const pricedModel = params.resolved.modelDriver.contextModelId
-        const streamEndedCost = yield* computeStreamEndedCost({ modelId: pricedModel, usage })
+        const streamEndedCost = yield* computeStreamEndedCost({
+          modelId: pricedModel,
+          usage: Option.map(usage, (counts) => ({ ...counts, cacheWritesByLifetime })),
+        })
         yield* publishEventOrDie(
           StreamEnded.make({
             messageId: params.messageId,

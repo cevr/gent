@@ -1,4 +1,4 @@
-import { Option, Schema, SchemaGetter } from "effect"
+import { Option, Predicate, Schema, SchemaGetter } from "effect"
 import { SessionId } from "./ids.js"
 import { omitUndefined } from "./guards.js"
 
@@ -23,8 +23,23 @@ export const ModelPricing = Schema.Struct({
   cacheRead: Schema.optional(Schema.Finite),
   /** Input written to the prompt cache; priced as `input` when absent. */
   cacheWrite: Schema.optional(Schema.Finite),
+  /**
+   * The price of a cache write by the lifetime of the entry it writes, for a
+   * driver whose writes cost more the longer they live. A write the driver
+   * splits by lifetime (`ModelDriverContribution.cacheWritesByLifetime`)
+   * takes the rate of its lifetime; any other write takes `cacheWrite`.
+   */
+  cacheWriteByLifetime: Schema.optional(
+    Schema.Array(Schema.Struct({ ttlMs: Schema.Finite, price: Schema.Finite })),
+  ),
 })
 export type ModelPricing = typeof ModelPricing.Type
+
+/** The input tokens one response wrote to cache entries of one lifetime. */
+export interface CacheWriteByLifetime {
+  readonly ttlMs: number
+  readonly tokens: number
+}
 
 // Model - individual model from a provider (built-in or custom)
 
@@ -102,7 +117,9 @@ export const byReleaseDateDesc = (models: readonly Model[]): readonly Model[] =>
 /**
  * The USD cost of one step. `inputTokens` counts every input token, cached or
  * not; the tokens read from or written to the prompt cache take their own
- * price when the catalog has one.
+ * price when the catalog has one. The part of the cache writes the driver
+ * splits by lifetime (`cacheWritesByLifetime`) takes the rate the catalog
+ * names for that lifetime; the rest takes `cacheWrite`.
  */
 export const calculateCost = (
   usage: {
@@ -110,6 +127,7 @@ export const calculateCost = (
     readonly outputTokens: number
     readonly cacheReadTokens?: number
     readonly cacheWriteTokens?: number
+    readonly cacheWritesByLifetime?: ReadonlyArray<CacheWriteByLifetime>
   },
   pricing: Option.Option<ModelPricing>,
 ): number => {
@@ -118,10 +136,19 @@ export const calculateCost = (
   const cacheRead = usage.cacheReadTokens ?? 0
   const cacheWrite = usage.cacheWriteTokens ?? 0
   const uncached = Math.max(0, usage.inputTokens - cacheRead - cacheWrite)
+  const rates = price.cacheWriteByLifetime ?? []
+  const pricedWrites = (usage.cacheWritesByLifetime ?? []).flatMap((write) => {
+    const rate = rates.find((entry) => entry.ttlMs === write.ttlMs)
+    if (Predicate.isUndefined(rate)) return []
+    return [{ tokens: write.tokens, cost: write.tokens * rate.price }]
+  })
+  const pricedTokens = pricedWrites.reduce((sum, write) => sum + write.tokens, 0)
+  const otherWrites = Math.max(0, cacheWrite - pricedTokens)
   const inputCost =
     uncached * price.input +
     cacheRead * (price.cacheRead ?? price.input) +
-    cacheWrite * (price.cacheWrite ?? price.input)
+    pricedWrites.reduce((sum, write) => sum + write.cost, 0) +
+    otherWrites * (price.cacheWrite ?? price.input)
   return (inputCost + usage.outputTokens * price.output) / 1_000_000
 }
 

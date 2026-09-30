@@ -60,7 +60,7 @@ import {
 import { ChildProcessSpawner } from "effect/process"
 import { FetchHttpClient, Headers, HttpClient, HttpClientRequest } from "effect/http"
 import { AnthropicClient, AnthropicLanguageModel, Generated } from "@effect/ai-anthropic"
-import { type AiError, Model as AiModel } from "effect/ai"
+import { type AiError, Model as AiModel, type Response } from "effect/ai"
 
 // Test seam: only tests read these exports. The model table and its lookups
 // (MODEL_CONFIG, getModelOverride, getModelBetas), the billing header (SYSTEM_IDENTITY_PREFIX,
@@ -1519,9 +1519,13 @@ const SHARED_PREFIX_MIN_CHARS = 4_096
  * lifetime up to it and the request lifetime after it (`CacheLifetimes`), a
  * marker the SDK rendered from a message's own `cacheControl` option too.
  *
- * The catalog prices a write at one `cacheWrite` rate, the multiple of input
- * the session lifetime costs. A child's 5-minute writes cost less than that
- * rate says.
+ * A write's price follows the lifetime of the entry it wrote, not the
+ * session's: the catalog names a rate for each lifetime
+ * (`ModelPricing.cacheWriteByLifetime`), and the driver splits each
+ * response's writes by lifetime from the usage the API reports
+ * (`cache_creation`), so a child's 5-minute writes and a mixed request's
+ * 1-hour shared part each cost their own rate. `cacheWrite` stays the session
+ * lifetime's rate, for a response that reports no split.
  */
 type PromptCacheTtl = NonNullable<Generated.CacheControlEphemeral["ttl"]>
 
@@ -1568,15 +1572,60 @@ const PROMPT_CACHE_WRITE_INPUT_MULTIPLE = {
   "1h": 2,
 } satisfies Record<PromptCacheTtl, number>
 
-/** The models with each cache write priced at the rate of the lifetime `ttl` names. */
+const PROMPT_CACHE_TTLS: ReadonlyArray<PromptCacheTtl> = ["5m", "1h"]
+
+/**
+ * The models with a cache write priced at the rate of each lifetime, and at
+ * the rate of the lifetime `ttl` names when a response reports no split.
+ */
 const withPromptCacheWritePrice =
   (ttl: PromptCacheTtl) =>
   (models: ReadonlyArray<Model>): ReadonlyArray<Model> =>
     models.map((model) => {
       if (Predicate.isUndefined(model.pricing)) return model
-      const cacheWrite = model.pricing.input * PROMPT_CACHE_WRITE_INPUT_MULTIPLE[ttl]
-      return Model.make({ ...model, pricing: { ...model.pricing, cacheWrite } })
+      const input = model.pricing.input
+      const cacheWrite = input * PROMPT_CACHE_WRITE_INPUT_MULTIPLE[ttl]
+      const cacheWriteByLifetime = PROMPT_CACHE_TTLS.map((lifetime) => ({
+        ttlMs: Duration.toMillis(PROMPT_CACHE_LIFETIME[lifetime]),
+        price: input * PROMPT_CACHE_WRITE_INPUT_MULTIPLE[lifetime],
+      }))
+      return Model.make({
+        ...model,
+        pricing: { ...model.pricing, cacheWrite, cacheWriteByLifetime },
+      })
     })
+
+/** The split of a response's cache writes the Messages API reports in its usage. */
+const AnthropicCacheCreation = Schema.Struct({
+  anthropic: Schema.Struct({
+    usage: Schema.Struct({
+      cache_creation: Schema.Struct({
+        ephemeral_5m_input_tokens: Schema.Finite,
+        ephemeral_1h_input_tokens: Schema.Finite,
+      }),
+    }),
+  }),
+})
+const decodeAnthropicCacheCreation = Schema.decodeUnknownOption(AnthropicCacheCreation)
+
+/** A response's cache writes by lifetime; empty when its usage reports no split. */
+const anthropicCacheWritesByLifetime = (metadata: Response.ProviderMetadata) =>
+  Option.match(decodeAnthropicCacheCreation(metadata), {
+    onNone: () => [],
+    onSome: ({ anthropic }) => {
+      const creation = anthropic.usage.cache_creation
+      return [
+        {
+          ttlMs: Duration.toMillis(PROMPT_CACHE_LIFETIME["5m"]),
+          tokens: creation.ephemeral_5m_input_tokens,
+        },
+        {
+          ttlMs: Duration.toMillis(PROMPT_CACHE_LIFETIME["1h"]),
+          tokens: creation.ephemeral_1h_input_tokens,
+        },
+      ]
+    },
+  })
 
 /** The `ANTHROPIC_PROMPT_CACHE_TTL` switch; a value other than `5m` or `1h` is reported and ignored. */
 export const readPromptCacheTtl: Effect.Effect<PromptCacheTtl> = Effect.gen(function* () {
@@ -2461,6 +2510,7 @@ export const buildAnthropicModelDriver = (
       Effect.map(withChildPromptCacheLifetime(promptCacheTtl)),
       Effect.map(withPromptCacheWritePrice(promptCacheTtl)),
     ),
+  cacheWritesByLifetime: anthropicCacheWritesByLifetime,
   retry: {
     ...DEFAULT_RETRY_POLICY,
     // An accepted request can still end with an error event inside the stream; Anthropic names its type.
