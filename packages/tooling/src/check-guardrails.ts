@@ -14,7 +14,7 @@ import {
   findEffectVersionDrift,
   findRepoTempDirectories,
   findSharedTestHomes,
-  findHookWithoutGuards,
+  findPreCommitHookFindings,
   findIdentityEncodes,
   findPackageSurfaceFindings,
   findPlatformDuplicationViolations,
@@ -269,7 +269,7 @@ const ANY_FILE_FINDERS: ReadonlyArray<FileFinder> = [
   findBlanketEslintDisables,
   findBannedEslintDisableBlocks,
   findSuppressionInventoryFindings,
-  findHookWithoutGuards,
+  findPreCommitHookFindings,
   findRetiredSurfaces,
 ]
 

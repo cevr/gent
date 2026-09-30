@@ -13,7 +13,11 @@ export interface Finding {
 /** This file: the guards name what they look for, so several scans skip it. */
 const GUARDS_FILE = "packages/tooling/src/guards.ts"
 
-const blankKeepingLines = (text: string): string => text.replace(/[^\n]/g, " ")
+const blankKeepingLines = (text: string): string =>
+  text
+    .split("\n")
+    .map((line) => " ".repeat(line.length))
+    .join("\n")
 
 /**
  * A scanner frame: `IN_TEMPLATE` inside a template's text, otherwise the count
@@ -66,6 +70,36 @@ const trackCodeFrame = (char: string, frames: Array<number>): void => {
   else frames[top] = Math.max(depth - 1, 0)
 }
 
+/** A lookup of the character codes in `chars`, for a scan that stops on any of them. */
+const charTable = (chars: string): Uint8Array => {
+  const table = new Uint8Array(128)
+  for (const char of chars) table[char.charCodeAt(0)] = 1
+  return table
+}
+
+/** The characters a scanner rule reads in code: comment and string openers, braces, backticks. */
+const CODE_SPECIAL = charTable("/\"'`{}")
+
+/** The characters a scanner rule reads in a template's text: `${`, escapes, the closing backtick. */
+const TEMPLATE_SPECIAL = charTable("$\\`")
+
+/** The characters the scanner reads in the frame it is in. */
+const specialIn = (frames: ReadonlyArray<number>): Uint8Array => {
+  if (frames[frames.length - 1] === IN_TEMPLATE) return TEMPLATE_SPECIAL
+  return CODE_SPECIAL
+}
+
+/** The end of the run from `at` that holds none of `table`'s characters. */
+const plainRunEnd = (text: string, at: number, table: Uint8Array): number => {
+  let end = at
+  while (end < text.length) {
+    const code = text.charCodeAt(end)
+    if (code < 128 && table[code] === 1) return end
+    end += 1
+  }
+  return end
+}
+
 /**
  * Blank the comments in `text`, line count preserved, read left to right so a
  * `//` inside a string stays a string. Template literals are followed into
@@ -78,6 +112,14 @@ const blankComments = (text: string, blankStrings: boolean): string => {
   const frames: Array<number> = [0]
   let at = 0
   while (at < text.length) {
+    // A run no scanner rule reads is copied whole, not one character at a time.
+    const table = specialIn(frames)
+    const runEnd = plainRunEnd(text, at, table)
+    if (runEnd > at) {
+      out.push(text.slice(at, runEnd))
+      at = runEnd
+      continue
+    }
     const char = text[at] ?? ""
     const pair = text.slice(at, at + 2)
     let chunk = char
@@ -101,8 +143,21 @@ const blankComments = (text: string, blankStrings: boolean): string => {
   return out.join("")
 }
 
+/**
+ * Each text's blanked forms, keyed by the text: a guards run blanks one
+ * file's text for several scans, and the scan is the run's largest cost.
+ */
+const blankedTexts = { code: new Map<string, string>(), codeAndStrings: new Map<string, string>() }
+
+const blankedOnce = (cache: Map<string, string>, text: string, blankStrings: boolean): string =>
+  Option.getOrElse(Option.fromNullishOr(cache.get(text)), () => {
+    const blanked = blankComments(text, blankStrings)
+    cache.set(text, blanked)
+    return blanked
+  })
+
 /** The text with comments blanked, line count preserved. */
-const withoutComments = (text: string): string => blankComments(text, false)
+const withoutComments = (text: string): string => blankedOnce(blankedTexts.code, text, false)
 
 // ── a lint directive names its rules ────────────────────────────────────────
 
@@ -1029,15 +1084,24 @@ export const findSharedTestHomes = (file: string, text: string): ReadonlyArray<F
     .map((line) => ({ file, line, message: SHARED_TEMP_HOME_MESSAGE }))
 }
 
-// ── the pre-commit hook runs the guards ─────────────────────────────────────
+// ── the pre-commit hook: the guards, and staged files only ─────────────────
 
 /**
- * Guard: the pre-commit hook runs the guards.
+ * Guard: the pre-commit hook runs the guards, and only its fast commands.
  *
- * The hook's other jobs are oxlint, the formatter, typecheck, build and tests.
- * None of them reads what the guards read, so a hook without a
- * `bun run guards` job commits a guard violation that only the gate would
- * catch later. The job is found by the command it runs, not by its name.
+ * The hook's other jobs lint and format the staged files. None of them reads
+ * what the guards read, so a hook without a `bun run guards` job commits a
+ * guard violation that only the gate would catch later.
+ *
+ * The hook finishes in under 10 s. Typecheck, build, the whole-tree lint and
+ * format, and the tests take minutes; they are `bun run gate`'s, and CI runs
+ * the gate. A slow step has many spellings (`bun gate`, `turbo run test`,
+ * `env NO_COLOR=1 bun run gate`), so the rule names the fast commands instead:
+ * every step of a `pre-commit` job's `run:` is the guards script, or oxlint
+ * or oxfmt with flags on `{staged_files}` alone, after optional `env`
+ * settings. Anything else is a finding on its line.
+ *
+ * A job is found by the command it runs, not by its name.
  *
  * @module
  */
@@ -1046,52 +1110,85 @@ export const HOOK_FILE = "lefthook.yml"
 
 const GUARD_COMMAND = "bun run guards"
 
+/**
+ * oxlint or oxfmt through `bunx`, after optional `env` settings, with flags
+ * and the staged files as its only operand.
+ */
+const STAGED_FILES_COMMAND =
+  /^(?:env(?: -u \S+| [A-Za-z_][A-Za-z0-9_]*=\S*)* )?bunx (?:oxlint|oxfmt)(?: --?[A-Za-z][\w-]*(?:=\S+)?)* \{staged_files\}$/
+
+/** The commands the hook may run: each one finishes in seconds. */
+const isFastCommand = (command: string): boolean =>
+  command === GUARD_COMMAND || STAGED_FILES_COMMAND.test(command)
+
 /** The `pre-commit` hook's own key, at the top level of the file. */
 const PRE_COMMIT = /^pre-commit:/
 
 /** Any other top-level key closes the `pre-commit` block. */
 const TOP_LEVEL_KEY = /^\S/
 
+/** One line of the hook file: its 1-based number and its text. */
+interface HookLine {
+  readonly line: number
+  readonly text: string
+}
+
 /** The lines under `pre-commit:`, up to the next top-level key. */
-const preCommitBlock = (text: string): string => {
+const preCommitLines = (text: string): ReadonlyArray<HookLine> => {
   const lines = text.split("\n")
   const start = lines.findIndex((line) => PRE_COMMIT.test(line))
-  if (start === -1) return ""
-  const rest = lines.slice(start + 1)
-  const end = rest.findIndex((line) => TOP_LEVEL_KEY.test(line))
-  if (end === -1) return rest.join("\n")
-  return rest.slice(0, end).join("\n")
+  if (start === -1) return []
+  const rest = lines
+    .slice(start + 1)
+    .map((line, index) => ({ line: start + 2 + index, text: line }))
+  const end = rest.findIndex((line) => TOP_LEVEL_KEY.test(line.text))
+  if (end === -1) return rest
+  return rest.slice(0, end)
 }
 
 /** A job's `run:` entry; a comment line never matches. */
 const RUN_ENTRY = /^\s*(?:-\s+)?run:\s*(.*)$/
 
-/** The commands a `run:` value executes, with its trailing comment and quotes removed. */
+/**
+ * The commands a `run:` value executes, with its trailing comment and quotes
+ * removed and each run of whitespace read as one space.
+ */
 const runCommands = (value: string): ReadonlyArray<string> =>
   value
     .replace(/\s+#.*$/, "")
     .replace(/^(["'])(.*)\1$/, "$2")
     .split(/&&|\|\||;/)
-    .map((command) => command.trim())
+    .map((command) => command.trim().replace(/\s+/g, " "))
 
-/** Whether a `pre-commit` job runs the guards command as one of its steps. */
-const runsGuards = (block: string): boolean =>
-  block.split("\n").some((line) =>
-    Option.match(Option.fromNullishOr(RUN_ENTRY.exec(line)?.[1]), {
-      onNone: () => false,
-      onSome: (value) => runCommands(value).includes(GUARD_COMMAND),
+/** Each `run:` entry of the `pre-commit` hook: its line and the commands it executes. */
+const preCommitSteps = (text: string) =>
+  preCommitLines(text).flatMap(({ line, text: lineText }) =>
+    Option.match(Option.fromNullishOr(RUN_ENTRY.exec(lineText)?.[1]), {
+      onNone: () => [],
+      onSome: (value) => [{ line, commands: runCommands(value) }],
     }),
   )
 
-export const findHookWithoutGuards = (file: string, text: string): ReadonlyArray<Finding> => {
+export const findPreCommitHookFindings = (file: string, text: string): ReadonlyArray<Finding> => {
   if (file !== HOOK_FILE) return []
-  if (runsGuards(preCommitBlock(text))) return []
+  const steps = preCommitSteps(text)
+  const findings: Array<Finding> = steps.flatMap(({ line, commands }) =>
+    commands
+      .filter((command) => !isFastCommand(command))
+      .map((command) => ({
+        file,
+        line,
+        message: `\`${command}\` is not one of the hook's fast commands (\`${GUARD_COMMAND}\`, or \`bunx oxlint\` or \`bunx oxfmt\` on \`{staged_files}\`); the hook finishes in under 10 s -- leave whole-tree steps to \`bun run gate\` and CI`,
+      })),
+  )
+  if (steps.some(({ commands }) => commands.includes(GUARD_COMMAND))) return findings
   return [
     {
       file,
       line: 1,
       message: `the pre-commit hook runs no \`${GUARD_COMMAND}\` job -- the guards then reach a commit only through the gate`,
     },
+    ...findings,
   ]
 }
 
@@ -1270,122 +1367,6 @@ export const findUnmatchedTsconfigOverrides = (
         },
       ]
     })
-
-// ---------------------------------------------------------------------------
-// (a2) An "off" that suppresses nothing
-// ---------------------------------------------------------------------------
-
-/** One diagnostic of a lint run: the file it names and its `plugin(rule)` code. */
-export interface LintDiagnostic {
-  readonly file: string
-  readonly code: string
-}
-
-/** The code oxlint reports for a configured rule: `effect/noAs` is `effect(noAs)`. */
-const diagnosticCode = (rule: string): string => {
-  const slash = rule.indexOf("/")
-  if (slash === -1) return `eslint(${rule})`
-  return `${rule.slice(0, slash)}(${rule.slice(slash + 1)})`
-}
-
-const isOff = Schema.is(Schema.Literals(["off", 0]))
-
-const offsIn = (entries: ReadonlyArray<readonly [string, unknown]>): ReadonlyArray<string> =>
-  entries.filter(([, severity]) => isOff(severity)).map(([rule]) => rule)
-
-/** Each rule the root `rules` block turns off. */
-export const rootOffs = (config: OxlintConfig): ReadonlyArray<string> =>
-  offsIn(Object.entries(config.rules ?? {}))
-
-/** Each rule an override turns off, keyed by the override's index. */
-export const overrideOffs = (config: OxlintConfig): ReadonlyArray<ReadonlyArray<string>> =>
-  (config.overrides ?? []).map((override) => offsIn(Object.entries(override.rules ?? {})))
-
-/** The line of `rule`'s key in the root `rules` block, which precedes the overrides. */
-const lineOfRootRule = (configText: string, rule: string): number => {
-  const lines = configText.split("\n")
-  const start = Math.max(
-    lines.findIndex((line) => line.includes('"rules":')),
-    0,
-  )
-  const offset = lines.slice(start).findIndex((line) => line.includes(`"${rule}":`))
-  return start + Math.max(offset, 0) + 1
-}
-
-/** The line of `rule`'s key inside the override whose first glob is `glob`. */
-const lineOfOverrideRule = (configText: string, glob: string, rule: string): number => {
-  const lines = configText.split("\n")
-  const start = lineOfGlob(configText, glob) - 1
-  const offset = lines.slice(start).findIndex((line) => line.includes(`"${rule}":`))
-  return start + Math.max(offset, 0) + 1
-}
-
-/**
- * An "off" is a suppression: it must hide at least one diagnostic.
- * `diagnostics` come from a run of the same config with every "off" removed,
- * root and override. A diagnostic belongs to an override "off" when the
- * override's globs match its file and no other override turns the same rule
- * off for that file: removing that override alone would bring it back. It
- * belongs to a root "off" when no override sets the rule for its file. An
- * "off" that owns no diagnostic suppresses nothing today, and it would hide
- * the next real hit without review.
- */
-export const findUnneededOffs = (
-  configFile: string,
-  configText: string,
-  config: OxlintConfig,
-  diagnostics: ReadonlyArray<LintDiagnostic>,
-): ReadonlyArray<Finding> => {
-  const overrides = (config.overrides ?? []).map((override, index) => ({
-    globs: override.files ?? [],
-    matchers: (override.files ?? []).map(globMatcher),
-    offs: new Set(overrideOffs(config)[index] ?? []),
-    named: new Set(Object.keys(override.rules ?? {})),
-  }))
-  const matches = (matchers: ReadonlyArray<RegExp>, file: string): boolean =>
-    matchers.some((matcher) => matcher.test(file))
-  const findings: Array<Finding> = []
-  for (const [index, override] of overrides.entries()) {
-    for (const rule of override.offs) {
-      const code = diagnosticCode(rule)
-      const owned = diagnostics.some(
-        (diagnostic) =>
-          diagnostic.code === code &&
-          matches(override.matchers, diagnostic.file) &&
-          !overrides.some(
-            (other, otherIndex) =>
-              otherIndex !== index &&
-              other.offs.has(rule) &&
-              matches(other.matchers, diagnostic.file),
-          ),
-      )
-      if (owned) continue
-      const firstGlob = override.globs[0] ?? ""
-      findings.push({
-        file: configFile,
-        line: lineOfOverrideRule(configText, firstGlob, rule),
-        message: `oxlint override for "${firstGlob}" turns off \`${rule}\`, which reports nothing in its files; delete the "off"`,
-      })
-    }
-  }
-  for (const rule of rootOffs(config)) {
-    const code = diagnosticCode(rule)
-    const owned = diagnostics.some(
-      (diagnostic) =>
-        diagnostic.code === code &&
-        !overrides.some(
-          (override) => override.named.has(rule) && matches(override.matchers, diagnostic.file),
-        ),
-    )
-    if (owned) continue
-    findings.push({
-      file: configFile,
-      line: lineOfRootRule(configText, rule),
-      message: `oxlint root config turns off \`${rule}\`, which reports nothing; delete the "off"`,
-    })
-  }
-  return findings
-}
 
 // ---------------------------------------------------------------------------
 // (b) A plugin rule the root config never enables
@@ -3508,7 +3489,8 @@ const identifiersIn = (text: string): ReadonlySet<string> =>
  * carries are not consumption; blanking them is what lets an own-file
  * reference be read as one.
  */
-const withoutCommentsAndStrings = (text: string): string => blankComments(text, true)
+const withoutCommentsAndStrings = (text: string): string =>
+  blankedOnce(blankedTexts.codeAndStrings, text, true)
 
 /** Lines carrying a `@ts-expect-error`, which assert absence rather than use. */
 const expectErrorLines = (lines: ReadonlyArray<string>): ReadonlySet<number> => {
