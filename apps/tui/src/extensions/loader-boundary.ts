@@ -410,6 +410,22 @@ interface AffordanceHolder {
 }
 
 /**
+ * The key a holder is filed under. A keybind files by what it parses to, so
+ * `shift+ctrl+k` and `ctrl+shift+k`, or `control+k` and `ctrl+k`, are one key.
+ */
+const affordanceKey = (field: CommandAffordance, value: string): string => {
+  const spelled = value.toLowerCase()
+  if (field !== "keybind") return spelled
+  return Option.match(parseKeybind(value), {
+    onNone: () => spelled,
+    onSome: (keybind) =>
+      [keybind.ctrl && "ctrl", keybind.shift && "shift", keybind.meta && "meta", keybind.key]
+        .filter((part) => part !== false)
+        .join("+"),
+  })
+}
+
+/**
  * Whether a command of the same scope already holds `entry`'s `field`
  * (keybind or slash). A collision is recorded as a failure.
  */
@@ -422,7 +438,7 @@ const affordanceCollides = (
 ): boolean => {
   const value = Option.fromNullishOr(entry[field])
   if (Option.isNone(value)) return false
-  const held = Option.fromNullishOr(holders.get(value.value.toLowerCase()))
+  const held = Option.fromNullishOr(holders.get(affordanceKey(field, value.value)))
   const heldClaim = Option.map(held, (holder) => holder.claim)
   return collides(heldClaim, source, field, value.value, failures)
 }
@@ -437,7 +453,7 @@ const takeAffordance = (
 ): void => {
   const value = Option.fromNullishOr(entry[field])
   if (Option.isNone(value)) return
-  const key = value.value.toLowerCase()
+  const key = affordanceKey(field, value.value)
   const held = Option.fromNullishOr(holders.get(key))
   if (Option.isSome(held)) {
     const previous = Option.fromNullishOr(kept.get(held.value.commandId))

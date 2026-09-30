@@ -429,6 +429,36 @@ describe("resolveTuiExtensions", () => {
     expect(byTitle.has("B")).toBe(false)
     expect(failures.map((failure) => failure.id)).toEqual(["b"])
   })
+
+  // `shift+ctrl+k` and `ctrl+shift+k` are one key, and so are `control+k` and `ctrl+k`.
+  test("a same-scope keybind in another spelling of a held key collides", () => {
+    for (const [held, respelled] of [
+      ["ctrl+shift+k", "shift+ctrl+k"],
+      ["ctrl+k", "control+k"],
+      ["meta+k", "cmd+k"],
+    ]) {
+      const resolved = resolveTuiExtensions([
+        make(
+          "first",
+          "user",
+          clientCommandContribution({ id: "one", title: "One", keybind: held, onSelect: () => {} }),
+        ),
+        make(
+          "second",
+          "user",
+          clientCommandContribution({
+            id: "two",
+            title: "Two",
+            keybind: respelled,
+            onSelect: () => {},
+          }),
+        ),
+      ])
+      const { commands, failures } = resolveCommands(resolved.commandSources)
+      expect(commands.map((command) => command.title)).toEqual(["One"])
+      expect(failures.map((failure) => failure.id)).toEqual(["second"])
+    }
+  })
 })
 
 // ── extension effect setup ──────────────────────────────────────────────────
