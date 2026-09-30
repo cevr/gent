@@ -86,6 +86,8 @@ describe("session notes reference extension", () => {
           input: {},
         })
         expect(otherSummary).toBe("No session notes yet.")
+        // Deleting a session runs the example's sessionDeleted hook, which drops its notes.
+        yield* client.session.delete({ sessionId: other.sessionId })
 
         // The event stream replays the first turn, so the second completion is the second one seen.
         const second = yield* turnCompleted(2)
