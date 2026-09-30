@@ -3,6 +3,7 @@ import { Effect, Option, Schema } from "effect"
 import { type Accessor, createMemo, createRoot, createSignal, type Setter } from "solid-js"
 import {
   AgentEvent,
+  cacheWriteRate,
   type EventEnvelope,
   type Model,
   promptCacheTtlMsFor,
@@ -391,18 +392,23 @@ type ModelPricing = NonNullable<Model["pricing"]>
 /**
  * What the miss cost over a cache hit. The re-billed prefix was written to
  * the cache again, so the missed tokens fill this step's cache writes first,
- * at the write rate; the rest paid the uncached input rate. Each part is
- * priced over the cache-read rate it would have paid. A provider that bills
- * no writes (OpenAI) reports none, so every missed token paid the input rate.
- * An unbilled step, or a model the catalog does not price, cost nothing.
+ * at the write rate of the step's cache lifetime (a child writes at its own);
+ * the rest paid the uncached input rate. Each part is priced over the
+ * cache-read rate it would have paid. A provider that bills no writes
+ * (OpenAI) reports none, so every missed token paid the input rate. An
+ * unbilled step, or a model the catalog does not price, cost nothing.
  */
-export const missCostUsd = (miss: CacheMiss, pricing: Option.Option<ModelPricing>): number => {
+export const missCostUsd = (
+  miss: CacheMiss,
+  pricing: Option.Option<ModelPricing>,
+  lifetimeMs: Option.Option<number>,
+): number => {
   if (!miss.billed || Option.isNone(pricing)) return 0
   const price = pricing.value
   const readRate = price.cacheRead ?? price.input
   const rewritten = Math.min(miss.missedTokens, miss.cacheWriteTokens)
   const uncached = Math.max(0, miss.missedTokens - rewritten)
-  const writeWaste = rewritten * Math.max(0, (price.cacheWrite ?? price.input) - readRate)
+  const writeWaste = rewritten * Math.max(0, cacheWriteRate(price, lifetimeMs) - readRate)
   const inputWaste = uncached * Math.max(0, price.input - readRate)
   return (writeWaste + inputWaste) / 1_000_000
 }
@@ -523,6 +529,7 @@ export default defineClientExtension(CACHE_EXTENSION_ID, {
             const costUsd = missCostUsd(
               miss,
               Option.flatMap(model, (entry) => Option.fromUndefinedOr(entry.pricing)),
+              lifetime,
             )
             const row = Option.some<NoticeRow>({
               key: String(miss.eventId),

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { Option, Schema } from "effect"
 import {
+  cacheWriteRate,
   calculateCost,
   DriverRef,
   effectiveModelDriver,
@@ -138,5 +139,37 @@ describe("step cost", () => {
 
   test("no price costs nothing", () => {
     expect(calculateCost(usage, Option.none())).toBe(0)
+  })
+
+  // Anthropic prices a 5-minute write at 1.25x input and a 1-hour write at 2x.
+  const byLifetime = {
+    input: 2,
+    output: 10,
+    cacheRead: 0.2,
+    cacheWrite: 4,
+    cacheWriteByLifetime: [{ ttlMs: 300_000, price: 2.5 }],
+  }
+  const writes = (ttlMs: number, tokens: number) => ({
+    inputTokens: 1000,
+    outputTokens: 0,
+    cacheWriteTokens: 1000,
+    cacheWritesByLifetime: [{ ttlMs, tokens }],
+  })
+
+  test("a write split by lifetime takes its lifetime's rate, the rest takes cacheWrite", () => {
+    const cost = calculateCost(writes(300_000, 600), Option.some(byLifetime))
+    expect(cost).toBeCloseTo((600 * 2.5 + 400 * 4) / 1_000_000, 12)
+  })
+
+  test("a lifetime the catalog does not price takes cacheWrite", () => {
+    const cost = calculateCost(writes(3_600_000, 1000), Option.some(byLifetime))
+    expect(cost).toBeCloseTo((1000 * 4) / 1_000_000, 12)
+  })
+
+  test("the write rate reads the lifetime's rate, then cacheWrite, then input", () => {
+    expect(cacheWriteRate(byLifetime, Option.some(300_000))).toBe(2.5)
+    expect(cacheWriteRate(byLifetime, Option.some(3_600_000))).toBe(4)
+    expect(cacheWriteRate(byLifetime, Option.none())).toBe(4)
+    expect(cacheWriteRate({ input: 2, output: 10 }, Option.some(300_000))).toBe(2)
   })
 })

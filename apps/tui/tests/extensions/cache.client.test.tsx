@@ -52,6 +52,8 @@ const MINUTE = 60 * SECOND
 
 /** The cache lifetime both drivers name for their models. */
 const CACHE_LIFETIME_MS = 5 * MINUTE
+/** The lifetime a root step writes at; these models price every write alike. */
+const ROOT_LIFETIME = Option.some(CACHE_LIFETIME_MS)
 
 /** $/M: sonnet-5 as the catalog prices it; gpt with reads only, as OpenAI bills. */
 const models = [
@@ -295,8 +297,11 @@ describe("scanCacheMisses", () => {
       )
       expect(miss.missedTokens).toBe(30_000)
       // The step wrote the prefix again at 2.5 $/M where a hit reads it at 0.2 $/M.
-      expect(missCostUsd(miss, priceOf(SONNET))).toBeCloseTo((30_000 * 2.3) / 1_000_000, 10)
-      expect(missText(miss, missCostUsd(miss, priceOf(SONNET)))).toBe(
+      expect(missCostUsd(miss, priceOf(SONNET), ROOT_LIFETIME)).toBeCloseTo(
+        (30_000 * 2.3) / 1_000_000,
+        10,
+      )
+      expect(missText(miss, missCostUsd(miss, priceOf(SONNET), ROOT_LIFETIME))).toBe(
         "cache expired during 7m cell · 30k tokens re-billed ~$0.07",
       )
     }),
@@ -646,7 +651,10 @@ describe("cache miss price", () => {
       const miss = onlyMiss(scanCacheMisses(history.envelopes))
       expect(miss.missedTokens).toBe(31_000)
       // No write billing: the missed tokens paid the input rate instead of the read rate.
-      expect(missCostUsd(miss, priceOf(GPT))).toBeCloseTo((31_000 * (1.25 - 0.125)) / 1_000_000, 10)
+      expect(missCostUsd(miss, priceOf(GPT), ROOT_LIFETIME)).toBeCloseTo(
+        (31_000 * (1.25 - 0.125)) / 1_000_000,
+        10,
+      )
     }),
   )
 
@@ -664,12 +672,11 @@ describe("cache miss price", () => {
       const miss = onlyMiss(scanCacheMisses(history.envelopes))
       expect(miss.missedTokens).toBe(20_000)
       // All 20k were written again at 2.50 $/M where a hit reads them at 0.20 $/M.
-      expect(missCostUsd(miss, priceOf(SONNET))).toBeCloseTo(0.046, 10)
+      expect(missCostUsd(miss, priceOf(SONNET), ROOT_LIFETIME)).toBeCloseTo(0.046, 10)
       // Past the writes, the rest paid the input rate.
-      expect(missCostUsd({ ...miss, missedTokens: 25_000 }, priceOf(SONNET))).toBeCloseTo(
-        (20_000 * 2.3 + 5000 * 1.8) / 1_000_000,
-        10,
-      )
+      expect(
+        missCostUsd({ ...miss, missedTokens: 25_000 }, priceOf(SONNET), ROOT_LIFETIME),
+      ).toBeCloseTo((20_000 * 2.3 + 5000 * 1.8) / 1_000_000, 10)
     }),
   )
 
@@ -713,8 +720,8 @@ describe("cache miss price", () => {
         costUsd: 0,
       })
       const miss = onlyMiss(scanCacheMisses(history.envelopes))
-      expect(missCostUsd(miss, priceOf(SONNET))).toBe(0)
-      expect(missCostUsd({ ...miss, billed: true }, Option.none())).toBe(0)
+      expect(missCostUsd(miss, priceOf(SONNET), ROOT_LIFETIME)).toBe(0)
+      expect(missCostUsd({ ...miss, billed: true }, Option.none(), ROOT_LIFETIME)).toBe(0)
     }),
   )
 
@@ -838,10 +845,25 @@ describe("cache client extension", () => {
 
   it.scopedLive("a child's step is judged by the child lifetime, a root's by the root's", () =>
     Effect.gen(function* () {
-      // A root keeps its prompt an hour, a child 5 minutes.
+      // A root keeps its prompt an hour and writes it at 4 $/M, a child
+      // 5 minutes at 2.5 $/M.
       const lifetimes = models.map(
         (model) =>
-          new Model({ ...model, promptCacheTtlMs: 60 * MINUTE, childPromptCacheTtlMs: 5 * MINUTE }),
+          new Model({
+            ...model,
+            promptCacheTtlMs: 60 * MINUTE,
+            childPromptCacheTtlMs: 5 * MINUTE,
+            pricing: {
+              input: 2,
+              output: 10,
+              cacheRead: 0.2,
+              cacheWrite: 4,
+              cacheWriteByLifetime: [
+                { ttlMs: 5 * MINUTE, price: 2.5 },
+                { ttlMs: 60 * MINUTE, price: 4 },
+              ],
+            },
+          }),
       )
       // Two steps of one turn with a 6-minute approval wait between them.
       const waitedHistory = (child: boolean) => {
@@ -870,11 +892,12 @@ describe("cache client extension", () => {
           extension.deliver(waitedHistory(child).envelopes)
           return rowsOf(extension.rows()).map((row) => row.text)
         })
+      // Each rewrote 30k tokens at its own lifetime's write rate: 2.3 and 3.8 $/M over a read.
       expect(yield* rowsFor(true)).toEqual([
         "cache expired waiting 6m for approval · 30k tokens re-billed ~$0.07",
       ])
       expect(yield* rowsFor(false)).toEqual([
-        "cache miss: prefix changed · 30k tokens re-billed ~$0.07",
+        "cache miss: prefix changed · 30k tokens re-billed ~$0.11",
       ])
     }).pipe(Effect.timeout("4 seconds")),
   )
@@ -951,7 +974,10 @@ describe("cache client extension", () => {
       expect(label?.produce()).toEqual([{ text: "cache waste $0.07", color: "textMuted" }])
       const misses = scanCacheMisses(history.envelopes)
       expect(misses.length).toBe(2)
-      const total = misses.reduce((sum, miss) => sum + missCostUsd(miss, priceOf(SONNET)), 0)
+      const total = misses.reduce(
+        (sum, miss) => sum + missCostUsd(miss, priceOf(SONNET), ROOT_LIFETIME),
+        0,
+      )
       expect(total).toBeCloseTo((32_000 * 2.3) / 1_000_000, 10)
       expect(notices?.id).toBe("cache.misses")
       expect(CACHE_EXTENSION_ID).toBe("@gent/cache")

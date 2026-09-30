@@ -1,4 +1,4 @@
-import { Option, Predicate, Schema, SchemaGetter } from "effect"
+import { Option, Schema, SchemaGetter } from "effect"
 import { SessionId } from "./ids.js"
 import { omitUndefined } from "./guards.js"
 
@@ -115,6 +115,23 @@ export const byReleaseDateDesc = (models: readonly Model[]): readonly Model[] =>
 // Calculate cost from token usage
 
 /**
+ * The $/M price of a cache write whose entry lives `ttlMs`: the catalog's
+ * rate for that lifetime, else `cacheWrite`, else `input`. The one reading
+ * of the write rate, for step cost and the TUI's cache-miss cost.
+ */
+export const cacheWriteRate = (pricing: ModelPricing, ttlMs: Option.Option<number>): number => {
+  const byLifetime = Option.flatMap(ttlMs, (lifetime) =>
+    Option.fromUndefinedOr(
+      (pricing.cacheWriteByLifetime ?? []).find((entry) => entry.ttlMs === lifetime),
+    ),
+  )
+  return Option.match(byLifetime, {
+    onSome: (entry) => entry.price,
+    onNone: () => pricing.cacheWrite ?? pricing.input,
+  })
+}
+
+/**
  * The USD cost of one step. `inputTokens` counts every input token, cached or
  * not; the tokens read from or written to the prompt cache take their own
  * price when the catalog has one. The part of the cache writes the driver
@@ -136,19 +153,17 @@ export const calculateCost = (
   const cacheRead = usage.cacheReadTokens ?? 0
   const cacheWrite = usage.cacheWriteTokens ?? 0
   const uncached = Math.max(0, usage.inputTokens - cacheRead - cacheWrite)
-  const rates = price.cacheWriteByLifetime ?? []
-  const pricedWrites = (usage.cacheWritesByLifetime ?? []).flatMap((write) => {
-    const rate = rates.find((entry) => entry.ttlMs === write.ttlMs)
-    if (Predicate.isUndefined(rate)) return []
-    return [{ tokens: write.tokens, cost: write.tokens * rate.price }]
-  })
-  const pricedTokens = pricedWrites.reduce((sum, write) => sum + write.tokens, 0)
-  const otherWrites = Math.max(0, cacheWrite - pricedTokens)
+  const splitWrites = usage.cacheWritesByLifetime ?? []
+  const splitTokens = splitWrites.reduce((sum, write) => sum + write.tokens, 0)
+  const otherWrites = Math.max(0, cacheWrite - splitTokens)
   const inputCost =
     uncached * price.input +
     cacheRead * (price.cacheRead ?? price.input) +
-    pricedWrites.reduce((sum, write) => sum + write.cost, 0) +
-    otherWrites * (price.cacheWrite ?? price.input)
+    splitWrites.reduce(
+      (sum, write) => sum + write.tokens * cacheWriteRate(price, Option.some(write.ttlMs)),
+      0,
+    ) +
+    otherWrites * cacheWriteRate(price, Option.none())
   return (inputCost + usage.outputTokens * price.output) / 1_000_000
 }
 
