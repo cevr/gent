@@ -1904,17 +1904,24 @@ const utf8Bytes = (text: string) => new TextEncoder().encode(text).byteLength
 /** The call that pages an inner tool call's stored result from the cell. */
 const readPointer = (toolCallId: string) => `context.read("${toolCallId}", { offset, limit })`
 
+/** A reply fits when its JSON, the bytes the frame carries, fits `maximumCellReplyBytes`. */
+const fitsFrame = (reply: Schema.Json) => utf8Bytes(encodeJson(reply)) <= maximumCellReplyBytes
+
 /**
- * The largest reply `make` builds from a head and tail of at most `chars`
- * characters whose JSON fits `maximumCellReplyBytes`. It starts at one
- * `context.read` page and halves: escapes can make a character take several
- * bytes.
+ * The one bound for every host reply, success value and failure message
+ * alike: `reply` when it fits the frame, or else the largest reply `cut`
+ * builds from a head and tail of at most `chars` characters that fits. It
+ * starts at one `context.read` page and halves: JSON escapes can make one
+ * character take six bytes.
  */
-const fitReply = <A>(make: (chars: number) => A, chars = MAXIMUM_READ_CHARS): A => {
-  const reply = make(chars)
-  const bytes = utf8Bytes(encodeJson(reply))
-  if (chars === 0 || bytes <= maximumCellReplyBytes) return reply
-  return fitReply(make, Math.floor(chars / 2))
+const boundReply = <A extends Schema.Json>(reply: A, cut: (chars: number) => A): A => {
+  if (fitsFrame(reply)) return reply
+  const fit = (chars: number): A => {
+    const shorter = cut(chars)
+    if (chars === 0 || fitsFrame(shorter)) return shorter
+    return fit(Math.floor(chars / 2))
+  }
+  return fit(MAXIMUM_READ_CHARS)
 }
 
 /**
@@ -1922,8 +1929,9 @@ const fitReply = <A>(make: (chars: number) => A, chars = MAXIMUM_READ_CHARS): A 
  * pipe in one frame, so a result whose JSON passes `maximumCellReplyBytes`
  * crosses bounded: its JSON text's head and tail, its size, and a `read`
  * pointer, the shape the model sees for a large result. A failure message
- * past the bound is cut the same way and names the pointer. The full result
- * stays stored under the inner tool call id, where `context.read` pages it.
+ * whose JSON passes the bound is cut the same way and names the pointer. The
+ * full result stays stored under the inner tool call id, where
+ * `context.read` pages it.
  */
 export const cellToolResultValue = Effect.fn("CellToolCall.resultValue")(function* (
   result: Prompt.ToolResultPart,
@@ -1935,8 +1943,9 @@ export const cellToolResultValue = Effect.fn("CellToolCall.resultValue")(functio
       output: "",
     })
   const text = yield* Schema.encodeEffect(UnknownText)(result.result).pipe(Effect.mapError(notJson))
-  if (!result.isFailure && utf8Bytes(text) > maximumCellReplyBytes) {
-    return fitReply((chars): Schema.Json => {
+  const value = yield* Schema.decodeEffect(JsonText)(text).pipe(Effect.mapError(notJson))
+  if (!result.isFailure) {
+    return boundReply(value, (chars): Schema.Json => {
       const cut = headTailChars(text, chars)
       return {
         truncated: true,
@@ -1947,17 +1956,14 @@ export const cellToolResultValue = Effect.fn("CellToolCall.resultValue")(functio
       }
     })
   }
-  const value = yield* Schema.decodeEffect(JsonText)(text).pipe(Effect.mapError(notJson))
-  if (!result.isFailure) return value
   const message = Option.match(decodeErrorOnly(value), {
     onSome: ({ error }) => error,
     onNone: () => text,
   })
-  if (utf8Bytes(message) <= maximumCellReplyBytes)
-    return yield* new CellEvaluationError({ phase: "execute", message, output: "" })
   return yield* new CellEvaluationError({
     phase: "execute",
-    message: fitReply(
+    message: boundReply(
+      message,
       (chars) =>
         `${headTailChars(message, chars).text}\n\nThe failure is ${message.length} characters; ${readPointer(result.id)} pages the stored result.`,
     ),

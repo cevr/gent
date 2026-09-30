@@ -3364,6 +3364,20 @@ describe("large host replies", () => {
                   execute: () =>
                     Effect.fail(new ToolResultFailure({ message: large, result: large })),
                 }),
+                // Each NUL takes one byte raw and six bytes as JSON: the frame carries JSON.
+                tool({
+                  id: "escapedFailure",
+                  description: "Fail with an error whose JSON escapes grow past the frame cap",
+                  params: Schema.Struct({}),
+                  output: Schema.String,
+                  execute: () =>
+                    Effect.fail(
+                      new ToolResultFailure({
+                        message: "escaped",
+                        result: { error: "\u0000".repeat(200_000) },
+                      }),
+                    ),
+                }),
               ],
             },
           },
@@ -3379,6 +3393,9 @@ describe("large host replies", () => {
           }),
           toolCallStep("cell", {
             code: "let failure; try { await tools.largeFailure({}) } catch (e) { failure = e.message }\nJSON.stringify([failure.length < 1_000_000, failure.includes('context.read('), kept])",
+          }),
+          toolCallStep("cell", {
+            code: "let failure; try { await tools.escapedFailure({}) } catch (e) { failure = e.message }\nJSON.stringify([failure.length < 200_000, failure.includes('context.read('), kept])",
           }),
           textStep("Read the large results"),
         ])
@@ -3398,13 +3415,14 @@ describe("large host replies", () => {
         const results = (yield* client.message.list({ branchId }))
           .flatMap((message) => message.parts)
           .filter((part) => part.type === "tool-result" && part.name === "cell")
-        expect(results).toHaveLength(3)
+        expect(results).toHaveLength(4)
         // The JSON text of the string result is its characters plus two quotes;
         // its last page ends in ten characters and the closing quote.
         expect(results[1]).toMatchObject({
           result: { display: '[true,1100002,true,"xxxxxxxxxx\\"",7]' },
         })
         expect(results[2]).toMatchObject({ result: { display: "[true,true,7]" } })
+        expect(results[3]).toMatchObject({ result: { display: "[true,true,7]" } })
       }).pipe(
         Effect.timeout("25 seconds"),
         Effect.provide(Layer.merge(BunServices.layer, BunGentPlatformLive)),
