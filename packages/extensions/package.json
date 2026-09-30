@@ -16,6 +16,7 @@
     "@effect/ai-anthropic": "catalog:",
     "@effect/ai-openai": "catalog:",
     "@gent/core": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.31.0",
     "effect-encore": "catalog:",
     "picomatch": "catalog:"
   },
