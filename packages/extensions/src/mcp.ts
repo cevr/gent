@@ -41,7 +41,11 @@ import {
   StreamableHTTPClientTransport,
   StreamableHTTPError,
 } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
-import { ErrorCode, McpError as ProtocolError } from "@modelcontextprotocol/sdk/types.js"
+import {
+  ErrorCode,
+  McpError as ProtocolError,
+  ResultSchema,
+} from "@modelcontextprotocol/sdk/types.js"
 import { type SdkFetch, sdkFetch } from "./mcp-boundary.js"
 import {
   defineExtension,
@@ -383,10 +387,31 @@ const CatalogTool = Schema.Struct({
 })
 type CatalogTool = typeof CatalogTool.Type
 
+/**
+ * One page of `tools/list` before its entries are read. Each entry decodes on
+ * its own, so one malformed entry never drops the page.
+ */
 const ListToolsPage = Schema.Struct({
-  tools: Schema.Array(CatalogTool),
-  nextCursor: Schema.optional(Schema.String),
+  tools: Schema.Array(Schema.Json),
+  nextCursor: Schema.optional(Schema.NullOr(Schema.String)),
 })
+
+/** A listed entry: `CatalogTool`, with a `null` description read as none. */
+const ListedTool = Schema.Struct({
+  ...CatalogTool.fields,
+  description: Schema.optional(Schema.NullOr(Schema.String)),
+})
+
+/** The listed entry as a `CatalogTool`, or why the spec's tool shape refuses it. */
+const catalogToolOf = (entry: Schema.Json) =>
+  Schema.decodeUnknownEffect(ListedTool)(entry).pipe(
+    Effect.map(({ description, ...rest }): CatalogTool => {
+      if (Predicate.isNotNull(description) && Predicate.isNotUndefined(description)) {
+        return { ...rest, description }
+      }
+      return rest
+    }),
+  )
 
 /** A server's tools and the `instructions` its `initialize` answer carried, if any. */
 const CatalogServer = Schema.Struct({
@@ -1218,7 +1243,13 @@ const connect = (
     }),
   )
 
-/** Every page of `tools/list`. */
+/**
+ * Every page of `tools/list`. The request goes out with the SDK's loose
+ * result schema, not `client.listTools`, whose schema refuses the whole page
+ * for one malformed entry; each entry decodes here instead, and one the
+ * spec's tool shape refuses is skipped with a warning. So the SDK keeps no
+ * output-schema validators, and the tool checks structured content itself.
+ */
 const listTools = (server: McpServer, client: Client) =>
   Effect.gen(function* () {
     const tools: Array<CatalogTool> = []
@@ -1229,7 +1260,11 @@ const listTools = (server: McpServer, client: Client) =>
         onSome: (value) => ({ cursor: value }),
       })
       const listed = yield* Effect.tryPromise({
-        try: (signal) => client.listTools(params, { signal, timeout: timeoutOf(server) }),
+        try: (signal) =>
+          client.request({ method: "tools/list", params }, ResultSchema, {
+            signal,
+            timeout: timeoutOf(server),
+          }),
         catch: (cause) =>
           new McpError({ server: server.name, message: `tools/list: ${failureMessage(cause)}` }),
       }).pipe(
@@ -1238,8 +1273,17 @@ const listTools = (server: McpServer, client: Client) =>
           (error) => new McpError({ server: server.name, message: failureMessage(error) }),
         ),
       )
-      tools.push(...listed.tools)
-      cursor = Option.fromUndefinedOr(listed.nextCursor)
+      for (const [index, entry] of listed.tools.entries()) {
+        const tool = yield* Effect.result(catalogToolOf(entry))
+        if (Result.isSuccess(tool)) {
+          tools.push(tool.success)
+          continue
+        }
+        yield* Effect.logWarning("mcp.tools.skipped").pipe(
+          Effect.annotateLogs({ server: server.name, entry: index, error: tool.failure.message }),
+        )
+      }
+      cursor = Option.fromNullishOr(listed.nextCursor)
       if (Option.isNone(cursor)) break
     }
     return tools

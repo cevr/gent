@@ -51,6 +51,7 @@ import { shippedPreset } from "./helpers/test-preset.js"
  * `MCP_FIXTURE_SDK_UNKNOWN`); `MCP_FIXTURE_COLLIDE` adds tools whose names
  * clean to one id;
  * `MCP_FIXTURE_ENV_TOOL` adds `env`, which reads the server's environment;
+ * `MCP_FIXTURE_MALFORMED` adds three entries the spec's tool schema refuses;
  * `MCP_FIXTURE_BINARY` adds `image`, which returns an image and a blob;
  * `MCP_FIXTURE_TYPED` adds `stats` and `badstats`, which declare an output
  * schema, and only `stats` keeps it;
@@ -102,6 +103,13 @@ if (process.env.MCP_FIXTURE_ENV_TOOL) {
     description: "Read a variable of the server's environment.",
     inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] },
   })
+}
+if (process.env.MCP_FIXTURE_MALFORMED) {
+  tools.push(
+    { name: "nulldesc", description: null, inputSchema: { type: "object" } },
+    { description: "An entry without a name.", inputSchema: { type: "object" } },
+    { name: "noschema", description: "An entry without an input schema." },
+  )
 }
 if (process.env.MCP_FIXTURE_BINARY) {
   tools.push({ name: "image", description: "Return an image and a blob.", inputSchema: { type: "object" } })
@@ -493,6 +501,30 @@ describe("mcp config", () => {
         expect(
           ids.filter((id) => !grammar.test(id) || id.replaceAll(".", "__").length > 64),
         ).toEqual([])
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(platformLayer)),
+    30_000,
+  )
+
+  it.scopedLive(
+    "a malformed tools/list entry is skipped and the rest of the list stays; a null description counts as none",
+    () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path
+        const fixture = yield* makeFixture
+        const extension = McpServers("@test/mcp-malformed", {
+          fixture: fixture.stdio({ MCP_FIXTURE_MALFORMED: "1" }),
+        })
+        const ids = toolIds(
+          yield* collectTestContributions(extension.setup, {
+            home: path.join(fixture.directory, "home"),
+            cwd: fixture.directory,
+          }),
+        )
+        expect(ids).toEqual(
+          ["count", "echo", "fail", "nulldesc", "repo_search_issues", "structured"].map(
+            (name) => `mcp.fixture.${name}`,
+          ),
+        )
       }).pipe(Effect.timeout("20 seconds"), Effect.provide(platformLayer)),
     30_000,
   )
