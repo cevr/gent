@@ -1330,10 +1330,15 @@ token is always stored and the lock never outlives its 30 seconds.
 Setup reads each server's tool list from `<data dir>/mcp-catalog.json`, keyed
 by the SHA-256 digest of the entry as it runs (its expanded values, for a
 `url` entry its configured `type`, with `http` and `streamable-http` one
-value, and for stdio its resolved directory), so an edited entry, a changed
-variable, or another project lists again; the file holds only the digest and
-the server's `initialize` instructions, never a token. On a miss setup connects once and
-lists; every server setup listed goes to the cache in one write. A server
+value, and for stdio the resolved directory its `cwd` names), so an edited
+entry or a changed variable lists again. A stdio entry that names no `cwd`
+runs in the session directory but keys without it, so a new project does not
+spawn every server at setup; a server whose tools depend on the directory is
+corrected by the relist on its first connection. The file holds only the
+digest, the server's `initialize` instructions and a `listedAt` stamp, never a
+token. On a miss setup connects once and lists; every server setup listed, and
+every cached entry it read whose stamp is over a day old, goes to the cache in
+one write, stamped now. A write drops each entry stamped over 14 days ago. A server
 that cannot list is logged and contributes nothing. `tools/list` goes out with
 the SDK's loose result schema and each entry decodes on its own: an entry the
 spec's tool shape refuses is skipped with a warning, and a `null` description

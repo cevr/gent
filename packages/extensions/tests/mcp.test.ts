@@ -480,7 +480,7 @@ describe("mcp config", () => {
   )
 
   it.scopedLive(
-    "the cache key is the entry as it runs: its expanded values and its directory",
+    "the cache key is the entry as it runs: its expanded values and the directory it names",
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
@@ -503,9 +503,73 @@ describe("mcp config", () => {
         // Another value behind the same written entry is another server.
         yield* setup(fixture.directory, "two")
         expect(yield* fixture.starts).toBe(2)
-        // So is the same entry run from another directory.
+        // An entry that names no directory is one server from every session directory.
         yield* setup(other, "one")
-        expect(yield* fixture.starts).toBe(3)
+        expect(yield* fixture.starts).toBe(2)
+        // An entry that names a directory relative to the session is one server per directory.
+        const pinned = McpServers("@test/mcp-identity", { fixture: { ...entry, cwd: "." } })
+        yield* collectTestContributions(pinned.setup, { home, cwd: fixture.directory })
+        yield* collectTestContributions(pinned.setup, { home, cwd: other })
+        expect(yield* fixture.starts).toBe(4)
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(platformLayer)),
+    30_000,
+  )
+
+  it.scopedLive(
+    "setup drops a cached catalog no setup listed or read in 14 days, and keeps the rest",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const fixture = yield* makeFixture
+        const home = path.join(fixture.directory, "home")
+        const dataDir = path.join(home, ".gent")
+        yield* fs.makeDirectory(dataDir, { recursive: true })
+        const catalogFile = path.join(dataDir, "mcp-catalog.json")
+        const now = yield* Clock.currentTimeMillis
+        const day = 24 * 60 * 60 * 1000
+        yield* fs.writeFileString(
+          catalogFile,
+          encodeJson({
+            servers: {
+              abandoned: { tools: [], listedAt: now - 15 * day },
+              recent: { tools: [], listedAt: now - 2 * day },
+            },
+          }),
+        )
+        const extension = McpServers("@test/mcp-prune", { fixture: fixture.stdio() })
+        const readStamps = fs.readFileString(catalogFile).pipe(
+          Effect.flatMap(
+            Schema.decodeEffect(
+              Schema.fromJsonString(
+                Schema.Struct({
+                  servers: Schema.Record(
+                    Schema.String,
+                    Schema.Struct({ tools: Schema.Array(Schema.Json), listedAt: Schema.Finite }),
+                  ),
+                }),
+              ),
+            ),
+          ),
+          Effect.map((file) => file.servers),
+        )
+        yield* collectTestContributions(extension.setup, { home, cwd: fixture.directory })
+        const listed = yield* readStamps
+        expect(Object.keys(listed)).toContain("recent")
+        expect(Object.keys(listed)).not.toContain("abandoned")
+        expect(Object.keys(listed)).toHaveLength(2)
+        // A setup that reads an entry stamped days ago stamps it again, so a used server stays.
+        const [fixtureKey = ""] = Object.keys(listed).filter((key) => key !== "recent")
+        yield* fs.writeFileString(
+          catalogFile,
+          encodeJson({
+            servers: { [fixtureKey]: { ...listed[fixtureKey], listedAt: now - 13 * day } },
+          }),
+        )
+        yield* collectTestContributions(extension.setup, { home, cwd: fixture.directory })
+        expect(yield* fixture.starts).toBe(1)
+        const restamped = yield* readStamps
+        expect(restamped[fixtureKey]?.listedAt ?? 0).toBeGreaterThanOrEqual(now)
       }).pipe(Effect.timeout("20 seconds"), Effect.provide(platformLayer)),
     30_000,
   )

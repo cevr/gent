@@ -126,20 +126,24 @@ const sortedEntries = (record: Readonly<Record<string, string>> = {}) =>
 
 /**
  * What decides the tools a server lists: the entry as it runs, after
- * expansion, with its transport type, and for a stdio server the directory
- * it runs in, in a fixed
- * order so key order never matters. It holds secrets, so only its SHA-256
- * digest is kept.
+ * expansion, with its transport type, and for a stdio server that names a
+ * `cwd` the directory it resolves to, in a fixed order so key order never
+ * matters. A stdio entry that names no `cwd` runs in the session's directory
+ * but keys without it: one listing serves every project, and a server whose
+ * tools depend on its directory is corrected by the relist on its first
+ * connection. It holds secrets, so only its SHA-256 digest is kept.
  */
 const serverIdentity = (written: string, config: McpServerConfig, cwd: string) => {
   if ("command" in config) {
+    let namedCwd = ""
+    if (Predicate.isNotUndefined(config.cwd)) namedCwd = cwd
     return encodeKeyFields([
       written,
       "stdio",
       config.command,
       config.args ?? [],
       sortedEntries(config.env),
-      cwd,
+      namedCwd,
       config.timeoutMs ?? 0,
     ])
   }
@@ -417,11 +421,37 @@ const CatalogServer = Schema.Struct({
 })
 type CatalogServer = typeof CatalogServer.Type
 
+/** A server's cached catalog, and when a setup last listed or read it (epoch ms). */
+const CachedServer = Schema.Struct({
+  ...CatalogServer.fields,
+  listedAt: Schema.optional(Schema.Finite),
+})
+type CachedServer = typeof CachedServer.Type
+
 /** Each server's entry, keyed by the hash of its config, so an edited entry lists again. */
 const CatalogFile = Schema.fromJsonString(
-  Schema.Struct({ servers: Schema.Record(Schema.String, CatalogServer) }),
+  Schema.Struct({ servers: Schema.Record(Schema.String, CachedServer) }),
 )
 type CatalogFile = typeof CatalogFile.Type
+
+/** A cached entry no setup listed or read for this long is dropped at the next write. */
+const CATALOG_MAX_AGE = Duration.days(14)
+/** A setup that reads an entry stamped longer ago than this stamps it again. */
+const CATALOG_RESTAMP_AGE = Duration.days(1)
+
+/** The cached entry's catalog, without its stamp. */
+const catalogOf = (cached: CachedServer): CatalogServer => {
+  const catalog: CatalogServer = { tools: cached.tools }
+  if (Predicate.isUndefined(cached.instructions)) return catalog
+  return { ...catalog, instructions: cached.instructions }
+}
+
+/** The entry has no stamp, or one older than `CATALOG_RESTAMP_AGE`. */
+const needsRestamp = (cached: CachedServer, now: number) =>
+  !Option.exists(
+    Option.fromUndefinedOr(cached.listedAt),
+    (at) => now - at < Duration.toMillis(CATALOG_RESTAMP_AGE),
+  )
 
 const catalogPath = Effect.fn("Mcp.catalogPath")(function* (home: string) {
   const path = yield* Path.Path
@@ -441,6 +471,11 @@ const readCatalog = Effect.fn("Mcp.readCatalog")(function* (file: string) {
  * writes every server it listed at once, and the connections write under one
  * permit, so no entry is lost to another's write in this process. A write
  * another gent process races can still lose an entry; that costs one relist.
+ *
+ * Each written entry is stamped now. An entry stamped longer ago than
+ * `CATALOG_MAX_AGE` is dropped, so the file holds only servers a setup used
+ * lately (one for each project directory a stdio entry names). An entry with
+ * no stamp is stamped now and ages from this write.
  */
 const writeCatalogEntries = Effect.fn("Mcp.writeCatalogEntries")(function* (
   file: string,
@@ -449,9 +484,16 @@ const writeCatalogEntries = Effect.fn("Mcp.writeCatalogEntries")(function* (
   if (entries.length === 0) return
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
+  const now = yield* Clock.currentTimeMillis
   const current = yield* readCatalog(file)
-  const servers = { ...current.servers }
-  for (const [key, server] of entries) servers[key] = server
+  const servers: Record<string, CachedServer> = {}
+  for (const [key, cached] of Object.entries(current.servers)) {
+    const listedAt = cached.listedAt ?? now
+    if (now - listedAt <= Duration.toMillis(CATALOG_MAX_AGE)) {
+      servers[key] = { ...cached, listedAt }
+    }
+  }
+  for (const [key, server] of entries) servers[key] = { ...server, listedAt: now }
   yield* fs.makeDirectory(path.dirname(file), { recursive: true })
   yield* writeFileAtomic(file, yield* Schema.encodeEffect(CatalogFile)({ servers }))
 })
@@ -2339,12 +2381,14 @@ const toolsFor = (server: McpServer, catalog: CatalogServer) => {
 }
 
 /**
- * A server's catalog entry, whether setup listed it now (so it goes to the
- * cache), and the failure of a setup listing that did not work.
+ * A server's catalog entry, whether setup listed it now, whether a cached
+ * entry is stamped again (either goes to the cache), and the failure of a
+ * setup listing that did not work.
  */
 interface SetupCatalog {
   readonly catalog: CatalogServer
   readonly listedNow: boolean
+  readonly restamp: boolean
   readonly failure: Option.Option<McpError>
 }
 
@@ -2353,12 +2397,13 @@ interface SetupCatalog {
  * setup that lists them. A server that cannot list is reported and
  * contributes nothing; the other servers are unaffected.
  */
-const catalogFor = (server: McpServer, cache: CatalogFile, auth: AuthStore) => {
+const catalogFor = (server: McpServer, cache: CatalogFile, auth: AuthStore, now: number) => {
   const cached = cache.servers[server.key]
   if (Predicate.isNotUndefined(cached)) {
     return Effect.succeed<SetupCatalog>({
-      catalog: cached,
+      catalog: catalogOf(cached),
       listedNow: false,
+      restamp: needsRestamp(cached, now),
       failure: Option.none(),
     })
   }
@@ -2368,6 +2413,7 @@ const catalogFor = (server: McpServer, cache: CatalogFile, auth: AuthStore) => {
       Effect.as<SetupCatalog>({
         catalog: { tools: [] },
         listedNow: false,
+        restamp: false,
         failure: Option.some(error),
       }),
     )
@@ -2377,7 +2423,12 @@ const catalogFor = (server: McpServer, cache: CatalogFile, auth: AuthStore) => {
       return catalogServerOf(yield* listTools(server, client), instructions)
     }),
   ).pipe(
-    Effect.map((catalog): SetupCatalog => ({ catalog, listedNow: true, failure: Option.none() })),
+    Effect.map((catalog): SetupCatalog => ({
+      catalog,
+      listedNow: true,
+      restamp: false,
+      failure: Option.none(),
+    })),
     Effect.catchTag("McpError", unlisted),
     Effect.catchCause((cause) =>
       unlisted(new McpError({ server: server.name, message: String(Cause.squash(cause)) })),
@@ -2482,16 +2533,18 @@ const registerServers = Effect.fn("Mcp.registerServers")(function* (
   const file = yield* catalogPath(host.home)
   const cache = yield* readCatalog(file)
   const auth = yield* makeAuthStore(host.home)
+  const now = yield* Clock.currentTimeMillis
   const registered = yield* Effect.forEach(
     servers,
-    (server) => Effect.map(catalogFor(server, cache, auth), (catalog) => ({ server, ...catalog })),
+    (server) =>
+      Effect.map(catalogFor(server, cache, auth, now), (catalog) => ({ server, ...catalog })),
     { concurrency: 8 },
   )
-  // One write for every server listed now; a failed write only costs a relist.
+  // One write for every server listed now or stamped again; a failed write only costs a relist.
   yield* writeCatalogEntries(
     file,
     registered
-      .filter((entry) => entry.listedNow)
+      .filter((entry) => entry.listedNow || entry.restamp)
       .map((entry): readonly [string, CatalogServer] => [entry.server.key, entry.catalog]),
   ).pipe(Effect.ignore)
   yield* host.register(
