@@ -2668,9 +2668,9 @@ describe("the guards' lexer", () => {
         {
           file: "packages/e2e/src/probe.ts",
           text: [
-            "export const helper = () => 1",
+            "export type Helper = number",
             `const RE = ${regex}`,
-            "export const used = () => helper() + Number(RE.test('x'))",
+            "export const used = (): Helper => Number(RE.test('x'))",
           ].join("\n"),
         },
         consumer,
@@ -3128,8 +3128,8 @@ export const plantedDeadSdkExport = "nothing imports this"
     expect(findings[0]?.message).toContain("viaRelative")
   })
 
-  // An own-file surface reads identifiers in its own code, so what the blanking
-  // leaves as code decides these.
+  // An own-file surface reads a type's identifiers in its own code, so what the
+  // blanking leaves as code decides these.
   const OWN_FILE = "packages/tooling/src/check-guardrails.ts"
   const ownFindings = (text: string) =>
     findingsFor([{ file: OWN_FILE, text }]).map((finding) => finding.message)
@@ -3137,7 +3137,7 @@ export const plantedDeadSdkExport = "nothing imports this"
   test("a comment inside a template interpolation does not keep a name alive", () => {
     expect(
       ownFindings(
-        "export const vanished = 1\nexport const shown = `a ${/* vanished */ 1} b ${`c ${2 /* vanished */}`}`\nuse(shown)\n",
+        "export type vanished = 1\nconst shown = `a ${/* vanished */ 1} b ${`c ${2 /* vanished */}`}`\nuse(shown)\n",
       ),
     ).toEqual([expect.stringContaining("`vanished`")])
   })
@@ -3145,7 +3145,7 @@ export const plantedDeadSdkExport = "nothing imports this"
   test("template text naming an export does not keep it alive", () => {
     expect(
       ownFindings(
-        "export const fixtureOnly = 1\nconst fixture = `\nimport { fixtureOnly } from './x'\n`\nuse(fixture)\n",
+        "export type fixtureOnly = 1\nconst fixture = `\nimport { fixtureOnly } from './x'\n`\nuse(fixture)\n",
       ),
     ).toEqual([expect.stringContaining("`fixtureOnly`")])
   })
@@ -3153,7 +3153,7 @@ export const plantedDeadSdkExport = "nothing imports this"
   test("a name read inside a template interpolation is live", () => {
     expect(
       ownFindings(
-        "export const interpolated = 1\nconst label = `n = ${ { value: interpolated }.value } // not a comment`\nuse(label)\n",
+        "export type interpolated = 1\nconst label = `n = ${ { value: interpolated }.value } // not a comment`\nuse(label)\n",
       ),
     ).toEqual([])
   })
@@ -3161,7 +3161,7 @@ export const plantedDeadSdkExport = "nothing imports this"
   test("a name read in an interpolation after template text holding `//` is live", () => {
     expect(
       ownFindings(
-        "export const afterSlashes = 1\nconst label = `${ { value: 1 }.value } // ${ afterSlashes }`\nuse(label)\n",
+        "export type afterSlashes = 1\nconst label = `${ { value: 1 }.value } // ${ afterSlashes }`\nuse(label)\n",
       ),
     ).toEqual([])
   })
@@ -3169,9 +3169,32 @@ export const plantedDeadSdkExport = "nothing imports this"
   test("a name read beside a URL in a string is live", () => {
     expect(
       ownFindings(
-        `export const fetchedName = 1\nconst url = "https://example.test"; use(url, fetchedName)\n`,
+        `export type fetchedName = 1\nconst url = "https://example.test"; use(url, fetchedName)\n`,
       ),
     ).toEqual([])
+  })
+
+  test("an own-file read keeps a type alive, never a value", () => {
+    const text = [
+      "export interface Options { readonly size: number }",
+      "export type Handle = { readonly close: () => void }",
+      "export const parseGrid = (options: Options): Handle => ({ close: () => options.size })",
+      "export class SettleError extends Error {}",
+      "export const build = () => { if (Math.random() > 2) throw new SettleError(); return parseGrid({ size: 1 }) }",
+    ].join("\n")
+    const consumer = {
+      file: "packages/tooling/tests/probe.test.ts",
+      text: 'import { build } from "../src/check-guardrails"\nbuild()\n',
+    }
+    expect(
+      findingsFor([{ file: OWN_FILE, text }, consumer]).map((finding) => [
+        finding.line,
+        finding.message.includes("drop the `export` keyword"),
+      ]),
+    ).toEqual([
+      [3, true],
+      [4, true],
+    ])
   })
 
   test("a name only its own module reads is still reported", () => {

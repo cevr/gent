@@ -3204,7 +3204,11 @@ interface ScannedSurface {
   readonly outsideOf: ReadonlyArray<string>
   /** Whether a test file's mention keeps a name alive. */
   readonly testsCount: boolean
-  /** Whether a reference inside the declaring file, off the declaration lines, keeps a name alive. */
+  /**
+   * Whether a reference inside the declaring file, off the declaration lines,
+   * keeps a type alive: a builder's config or handle type sits beside the
+   * builder that returns it. A value is always read from another file.
+   */
   readonly ownFileCounts: boolean
   /** The import specifier an entry point is consumed through; `None` for a module surface. */
   readonly specifier: Option.Option<string>
@@ -3381,6 +3385,8 @@ interface Declaration {
   readonly name: string
   readonly line: number
   readonly surface: ScannedSurface
+  /** True for an `export type` or `export interface`: a type, not a value. */
+  readonly typeOnly?: boolean
   /**
    * True when the name reaches this file through `export { X } from "..."`.
    * Such a file both exposes the name and names the upstream declaration, so
@@ -3390,7 +3396,7 @@ interface Declaration {
 }
 
 const DECLARATION =
-  /^export\s+(?:declare\s+)?(?:const|class|function|interface|type|enum)\s+([A-Za-z_$][\w$]*)/
+  /^export\s+(?:declare\s+)?(const|class|function|interface|type|enum)\s+([A-Za-z_$][\w$]*)/
 
 /**
  * `(name, line)` for every export a module surface file declares.
@@ -3411,14 +3417,16 @@ const declaredNames = (
 ): ReadonlyArray<{
   readonly name: string
   readonly line: number
+  readonly typeOnly?: boolean
   readonly passthrough?: boolean
 }> => {
-  const found: Array<{ name: string; line: number }> = []
+  const found: Array<{ name: string; line: number; typeOnly: boolean }> = []
   for (const [index, line] of text.split("\n").entries()) {
-    const name = Option.flatMap(Option.fromNullishOr(DECLARATION.exec(line)), (match) =>
-      Option.fromNullishOr(match[1]),
-    )
-    if (Option.isSome(name)) found.push({ name: name.value, line: index + 1 })
+    const match = DECLARATION.exec(line)
+    const name = match?.[2] ?? ""
+    if (name === "") continue
+    const keyword = match?.[1] ?? ""
+    found.push({ name, line: index + 1, typeOnly: keyword === "type" || keyword === "interface" })
   }
   // A bare block exposes names; only the ones this file also imports are its
   // own surface. A name it imported is another file's declaration being passed
@@ -3912,7 +3920,7 @@ const withinLeaf = (file: string, surface: ScannedSurface): boolean =>
 const messageFor = (file: string, declaration: Declaration): string =>
   Option.match(declaration.surface.specifier, {
     onNone: () => {
-      if (declaration.surface.ownFileCounts) {
+      if (declaration.surface.ownFileCounts && declaration.typeOnly === true) {
         return `\`${declaration.name}\` is exported but nothing names it, not even ${file} off its own declaration; delete it`
       }
       return `\`${declaration.name}\` is exported but no file outside ${file} names it; drop the \`export\` keyword, or delete it if nothing uses it at all`
@@ -4001,7 +4009,7 @@ export const findUnconsumedExports = (
       })
       if (reads(facts, byModule, declaration, targets)) return true
     }
-    if (!declaration.surface.ownFileCounts) return false
+    if (!declaration.surface.ownFileCounts || declaration.typeOnly !== true) return false
     return Option.exists(Option.fromNullishOr(factsByFile.get(file)), (facts) =>
       referencedInOwnFile(facts, declaration.name),
     )
