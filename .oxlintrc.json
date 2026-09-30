@@ -131,12 +131,6 @@
       }
     },
     {
-      "files": ["packages/tooling/src/fixture-runner.ts"],
-      "rules": {
-        "effect/noGlobals": "off"
-      }
-    },
-    {
       // The TUI build is an Effect program run by `bun scripts/build.ts`. Only
       // its `Bun.build` call needs the exemption; every other rule, the
       // workspace imports included, still reads it.

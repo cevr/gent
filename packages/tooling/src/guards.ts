@@ -238,7 +238,7 @@ const blanketDisableDirective =
 
 const blockDisableDirective = /(?:\/\*|\/\/)\s*(?:es|ox)lint-disable(?:\s|$)/
 
-/** A file inside a fixture directory; a basename such as `fixture-runner.ts` is not one. */
+/** A file inside a fixture directory; a basename such as `pty-fixture.ts` is not one. */
 const fixtureFilePattern = /(?:^|\/)(?:fixtures?|__fixtures__)\//
 
 const isExplicitFixtureFile = (file: string): boolean => fixtureFilePattern.test(file)
@@ -2318,6 +2318,13 @@ export const RETIRED_SURFACES: ReadonlyArray<RetiredSurface> = [
     scope: "shipped",
     message:
       "server-root.ts is folded away; the SDK root and the test harness build the routes and RPC handlers from createDependencies",
+  },
+  {
+    on: "line",
+    match: /\ball-errors-are-tagged\b/,
+    scope: "shipped-and-tests",
+    message:
+      "the all-errors-are-tagged lint rule is removed; the Effect language service's extendsNativeError diagnostic, an error in tsconfig.json, rejects a native Error subclass",
   },
   {
     // A core file or directory whose name has `cell` as a whole word.

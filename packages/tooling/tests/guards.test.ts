@@ -140,7 +140,7 @@ describe("blanket eslint disable checker", () => {
     const block = `/* ${directive} @typescript-eslint/no-unsafe-type-assertion -- probe */`
     expect(
       [
-        "packages/tooling/src/fixture-runner.ts",
+        "packages/tooling/src/fixture-loader.ts",
         "packages/e2e/src/pty-fixture.ts",
         "packages/sdk/src/fixtures.ts",
       ].map((file) => findBannedEslintDisableBlocks(file, block).length),
@@ -1895,6 +1895,11 @@ const RETIRED_CASES: ReadonlyArray<readonly [string, string, string]> = [
   ["packages/core/src/runtime/x.ts", "scope.inbox.releaseStart(item)", "inbox.releaseStart"],
   ["packages/sdk/src/x.ts", 'import { x } from "./server/server-root.js"', "server-root"],
   ["packages/core/tests/x.test.ts", "yield* buildServerRoot(deps)", "buildServerRoot"],
+  [
+    "packages/sdk/src/x.ts",
+    "// oxlint-disable-next-line gent/all-errors-are-tagged",
+    "all-errors-are-tagged",
+  ],
   ["AGENTS.md", "the `ExtensionStatePublisher` publishes state", "ExtensionStatePublisher"],
   ["docs/extensions.md", "yield* ProcessRunner", "ProcessRunner"],
   ["packages/core/AGENTS.md", "Runtime code yields `EventPublisher`", "EventPublisher"],
