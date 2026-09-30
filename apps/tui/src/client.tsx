@@ -7,6 +7,7 @@ import {
   Fiber,
   type FileSystem,
   type Logger,
+  Match,
   Option,
   type PlatformError,
   Predicate,
@@ -244,13 +245,9 @@ const SessionSchema: Schema.Schema<Session> = Schema.Struct({
 
 export type SessionState =
   | { readonly status: "none" }
-  | { readonly status: "creating" }
   | { readonly status: "active"; readonly session: Session }
 
 export const SessionStateEvent = Schema.TaggedUnion({
-  CreateRequested: {},
-  CreateSucceeded: { session: SessionSchema },
-  CreateFailed: {},
   Activated: { session: SessionSchema },
   Clear: {},
   UpdateName: { name: Schema.String },
@@ -265,7 +262,6 @@ export type SessionStateEvent = Schema.Schema.Type<typeof SessionStateEvent>
 
 export const SessionState = {
   none: (): SessionState => ({ status: "none" }),
-  creating: (): SessionState => ({ status: "creating" }),
   active: (session: Session): SessionState => ({ status: "active", session }),
 }
 
@@ -278,29 +274,24 @@ export function transitionSessionState(
   state: SessionState,
   event: SessionStateEvent,
 ): SessionState {
-  switch (event._tag) {
-    case "CreateRequested":
-      return SessionState.creating()
-    case "CreateSucceeded":
-    case "Activated":
-      return SessionState.active(event.session)
-    case "CreateFailed":
-    case "Clear":
-      return SessionState.none()
-    case "UpdateName":
-      return mapActive(state, (session) => ({ ...session, name: event.name }))
-    case "UpdateCwd":
-      return mapActive(state, (session) => {
-        if (session.sessionId !== event.sessionId) return session
-        return { ...session, cwd: event.cwd }
-      })
-    case "UpdateSettings":
-      return mapActive(state, (session) => ({
-        ...session,
-        modelId: event.modelId,
-        reasoningLevel: event.reasoningLevel,
-      }))
-  }
+  return Match.value(event).pipe(
+    Match.tagsExhaustive({
+      Activated: (activated) => SessionState.active(activated.session),
+      Clear: () => SessionState.none(),
+      UpdateName: (update) => mapActive(state, (session) => ({ ...session, name: update.name })),
+      UpdateCwd: (update) =>
+        mapActive(state, (session) => {
+          if (session.sessionId !== update.sessionId) return session
+          return { ...session, cwd: update.cwd }
+        }),
+      UpdateSettings: (update) =>
+        mapActive(state, (session) => ({
+          ...session,
+          modelId: update.modelId,
+          reasoningLevel: update.reasoningLevel,
+        })),
+    }),
+  )
 }
 
 // ── event hub ───────────────────────────────────────────────────────────────
@@ -532,7 +523,6 @@ interface ClientSessionValue {
   /** The active session's id alone, for consumers that never read the branch. */
   activeSessionId: () => Option.Option<SessionId>
   isActive: () => boolean
-  isLoading: () => boolean
   /**
    * The directory `@file` and `!cmd` resolve against: the active session's
    * cwd, read from the server when the record does not carry it yet. The
@@ -765,7 +755,6 @@ export function ClientProvider(props: ClientProviderProps) {
     { equals: Option.makeEquivalence<SessionId>((left, right) => left === right) },
   )
   const isActive = () => sessionState().status === "active"
-  const isLoading = () => sessionState().status === "creating"
 
   const cwdOf = (sessionId: SessionId): Effect.Effect<string, GentClientRpcError> =>
     Effect.suspend(() => {
@@ -1262,7 +1251,8 @@ export function ClientProvider(props: ClientProviderProps) {
       "parentSessionId" | "parentBranchId" | "continueThread" | "initialPrompt"
     >,
   ) => {
-    dispatchSession(SessionStateEvent.cases.CreateRequested.make({}))
+    // The current session stays in view until the server answers: a create
+    // it refuses leaves the reader where they were, with the reason.
     const createSessionEffect = Effect.fn("TUI.createSession")(function* () {
       const requestId = yield* randomId
       yield* Effect.sync(() => {
@@ -1274,13 +1264,13 @@ export function ClientProvider(props: ClientProviderProps) {
       createSessionEffect().pipe(
         Effect.tap((result) =>
           Effect.sync(() => {
-            // Create always transitions out of a prior session (or from
-            // "none"), so extension health is cleared unconditionally. The
-            // session's snapshot names its agent: a handoff inherits its
-            // parent's, so assuming the default would flicker.
+            // A new session is never the one in view, so extension health is
+            // cleared unconditionally. The session's snapshot names its agent:
+            // a handoff inherits its parent's, so assuming the default would
+            // flicker.
             resetForSession({ agent: Option.none(), clearExtensionHealth: true })
             dispatchSession(
-              SessionStateEvent.cases.CreateSucceeded.make({
+              SessionStateEvent.cases.Activated.make({
                 session: {
                   sessionId: result.sessionId,
                   branchId: result.branchId,
@@ -1296,7 +1286,6 @@ export function ClientProvider(props: ClientProviderProps) {
         Effect.catchEager((err) =>
           Effect.sync(() => {
             log.error("createSession.failed", { error: String(err) })
-            dispatchSession(SessionStateEvent.cases.CreateFailed.make({}))
             showError(Option.some(formatError(err)))
           }),
         ),
@@ -1311,7 +1300,6 @@ export function ClientProvider(props: ClientProviderProps) {
     sessionIdentity,
     activeSessionId,
     isActive,
-    isLoading,
     sessionCwd,
     cwdOf,
     pathPlace,

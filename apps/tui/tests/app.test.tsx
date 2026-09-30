@@ -1480,6 +1480,60 @@ describe("App auth gate", () => {
       unmount()
     }).pipe(Effect.timeout("10 seconds")),
   )
+  // `/new` keeps the session in view until the server answers. A create the
+  // server refuses leaves the reader where they were, with the reason.
+  it.live("a /new the server refuses keeps the session in view and shows why", () =>
+    Effect.gen(function* () {
+      let ctx: Option.Option<ClientContextValue> = Option.none()
+      const release = yield* Deferred.make<void>()
+      const client = createMockClient({
+        auth: { listProviders: () => Effect.succeed([]) },
+        branch: { getTree: () => Effect.succeed([]) },
+        session: {
+          create: () =>
+            Deferred.await(release).pipe(
+              Effect.andThen(Effect.fail(new ProviderAuthError({ message: "create refused" }))),
+            ),
+        },
+      })
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <>
+              <App />
+              <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
+            </>
+          ),
+          {
+            client,
+            initialSession: {
+              id: SessionId.make("session-kept"),
+              activeBranchId: BranchId.make("branch-kept"),
+              name: "Kept",
+              createdAt: dateFromMillis(0),
+              updatedAt: dateFromMillis(0),
+            },
+          },
+        ),
+      )
+      const clientContext = yield* requireClient(ctx)
+      yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
+      yield* typeCommand("/new")(setup)
+      // While the create is in flight, the session stays mounted.
+      yield* waitForFrame(setup, (frame) => !frame.includes("/new"), "command sent")
+      expect(clientContext.session()?.sessionId).toBe(SessionId.make("session-kept"))
+      expect(renderFrame(setup)).toContain("ready ·")
+      yield* Deferred.succeed(release, void 0)
+      const frame = yield* waitForFrame(
+        setup,
+        (current) => current.includes("create refused"),
+        "the refusal on the status row",
+      )
+      expect(frame).toContain("┃")
+      expect(clientContext.session()?.sessionId).toBe(SessionId.make("session-kept"))
+      setup.renderer.destroy()
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   // Esc never quits: on a draft the first press arms and says so, and the
   // second clears the draft.
   it.live("Esc Esc on a draft clears it and never quits", () =>

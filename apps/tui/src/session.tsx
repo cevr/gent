@@ -2959,7 +2959,7 @@ export function createSessionController(props: {
   ext.setActivityProvider(() => {
     const session = Option.fromNullishOr(client.session())
     const sessionId = Option.getOrUndefined(Option.map(session, (value) => value.sessionId))
-    if (client.isLoading() || client.isReconnecting()) return { sessionId, state: "unknown" }
+    if (client.isReconnecting()) return { sessionId, state: "unknown" }
     if (isBlockingAuthGate(authGateState()) || composerState()._tag === "interaction") {
       return { sessionId, state: "blocked" }
     }
