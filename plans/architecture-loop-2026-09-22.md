@@ -898,3 +898,29 @@ Loop changes this pass (owner): the ui sweep (`ui.md`), a per-package review for
 ## Pass 22 (sweep of main at `e1e5bfb1d`)
 
 Baseline (TypeScript source lines, files): core 32,347 / 33; tui 27,063 / 34; extensions 25,675 / 27; tooling 7,262 / 6; sdk 1,621 / 5; e2e 451 / 2. Tests: core 45,037 / 31; extensions 36,105 / 31; tui 32,255 / 37; tooling 5,048 / 4; sdk 1,615 / 4; e2e 557 / 3; examples 305 / 4. Coverage: every source directory was swept in an earlier pass (`mcp.ts`, `mcp-boundary.ts` are new files in a swept directory; the areas read them first). New this pass: one review agent per package (`review.md`), core, extensions and the TUI split in two by directory.
+
+### Pass 22 findings
+
+Reports in `~/.cache/gent-pass22/`: six areas (`pass22-<area>.md`) and seven reviews (`pass22-review-<name>.md`). No area or review reported polish only. Two P1s, both TUI: UI22-1 a CR-separated paste of 10+ lines then ↑ crashes the TUI (`Failed to register memory buffer`); R22-tui-b-1 the mermaid viewer overflows the stack on open. The guard blind spots from Pass 21 are sized: unused named imports 0 (oxlint already reports them), `export * as NS` 0, object members read only by tests 1 (`FileLockApi.currentSize`; no type-aware guard without a TS 7 program API, kept as a pass-time probe).
+
+- Core: C22-1 `sessionDeleted` carries no branch ids, so goal/wake/delegate branch files outlive a delete; R22-core-runtime-1 `ProviderAuth` reads the launch registry, so login fails for a project-scoped provider; R22-core-rest-1 `latestAssistantText` keeps the first text part (truncated or reasoning child answers); failed RPC wide events lack session/branch; `RecordingEventStore` re-implements the store; the delete rule has two owners; single-consumer test fragments; ~45 framework-only or stale tests.
+- Extensions: X22-1/2 OAuth token loss across processes and on a cut refresh; X22-3 stdio catalog key includes cwd (every new cwd lists every server at setup; no prune); X22-4 every Evaluate carries the whole catalog in one 1 MiB frame; the bash foreground timeout waits 3 s more for a TERM-ignoring command; Claude Code credentials written in place then chmodded; `cell.test.ts` (42.6 s) is the extensions critical path.
+- TUI: UI22-2 the fatal screen has no exit; UI22-3 a paste chip breaks on one backspace and drops the text; a failed `/new` leaves a blank screen; merged autocomplete picks go through the first contribution; edit rows show wrong +/- counts; git watch from a subdirectory or worktree; tool calls stored twice; silent server-command failures; unbounded headless readiness wait; TUI22-1 a full snapshot read per turn for two resolved fields.
+- Tooling: TL22-1 the `export *` closure has no consumer (ban both star forms instead); `shortPause` hides 12 fixed e2e sleeps; `fixture-runner.ts` has one consumer; no guard for an env var written but never read; e2e shell-mode tests pass on the composer echo.
+- Efficiency (baseline: first request 7,374 tokens, +228; Host Tools 1,383 tokens for today's 20 tools; 107 MCP tools add 256): EF22-1 the compaction summary request writes an unread 1 h cache entry (a cold handoff 39% cheaper without it); EF22-2 1 h costs 1.04× of 5 m on subagents (owner decision); EF22-3 a cold handoff can lose the original task.
+
+### Pass 22 decisions
+
+- EF22-3 (owner, 2026-09-30): the handoff leans on discovery. The notice lists the history's user messages by id with one-line previews and tells the agent to read the original task and page history (`context.history`, `context.read`, `session.read`) before continuing; the summary becomes a short bridge. No extra summary input.
+- R22-tui-b-1: the mermaid viewer is deleted; mermaid keeps rendering inline (decided by the owner rule "docked panes, not modal overlays" and subtract-before-you-add; closes TUI20-10).
+- EF22-2 stays an owner question: measuring it spends money.
+- Test-file splits by feature area (`cell.test.ts` into six, `agent-loop.test.ts` turn describes into `turn.test.ts`) follow the testing rule "one file per feature area"; they are not fragmentation.
+
+### Pass 22 triage
+
+| Batch   | Rift          | Items                                                                                                              |
+| ------- | ------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Core    | `p22-core`    | C22-1 … C22-8, R22-core-runtime-_, R22-core-rest-_, EF22-1, EF22-4, EF22-6, core test rows                         |
+| Ext     | `p22-ext`     | X22-1 … X22-9, R22-extensions-cell-mcp-*, R22-extensions-rest (R22-1 … R22-7), EF22-3, EF22-5, extension test rows |
+| TUI     | `p22-tui`     | UI22-1 … UI22-9, TUI22-1 … TUI22-9, R22-tui-a-_, R22-tui-b-_, TUI test rows                                        |
+| Tooling | `p22-tooling` | TL22-1 … TL22-4, the small-packages review (tooling, sdk, e2e, gamut)                                              |
