@@ -1319,8 +1319,9 @@ const measuredUnits = (
 /**
  * The context compaction seam.
  *
- * The loop decides when a window hands off: on overflow, or when the model
- * asks. It gives the history that leaves the window to whichever extension
+ * The loop decides when a window hands off: on overflow, when the model
+ * asks, or when a turn starts on a large window whose prompt cache went
+ * cold. It gives the history that leaves the window to whichever extension
  * installs a `ModelContextCompactor` as a process resource and gets back the
  * notice the handoff marker carries. With none installed, an overflowing
  * transcript is simply truncated. The loop owns the marker, its ids, and the
@@ -1559,13 +1560,40 @@ export const projectCurrentWindow = (params: {
 }
 
 /**
+ * The branch's last model call and how long the provider keeps a prompt
+ * cached after one.
+ */
+export interface PromptCache {
+  /** When the newest `StreamEnded` of the branch was stored, in epoch milliseconds. */
+  readonly lastCallAtMillis: number
+  /** `Model.promptCacheTtlMs` of the model the turn calls. */
+  readonly ttlMs: number
+}
+
+/**
+ * The smallest window a cold start hands off. A cold resend of N tokens is a
+ * cache write, 1.25 × N on Anthropic; the summary call reads at most ~33k
+ * (the compactor's 32k input cap and its prompt) and the next call resends
+ * only the summary and the new prompt. That breaks even near 34k; from 64k
+ * the handoff saves at least half the resend, which pays for the detail a
+ * summary loses. A window whose input budget is under 128k hands off at half
+ * that budget instead, so a small-window model can hand off at all.
+ */
+const COLD_HANDOFF_MAX_THRESHOLD_TOKENS = 64_000
+
+const coldHandoffThresholdTokens = (availableInputTokens: number): number =>
+  Math.min(COLD_HANDOFF_MAX_THRESHOLD_TOKENS, Math.floor(availableInputTokens / 2))
+
+/**
  * The window the model sees this step. A fresh window puts the issuer's notice
  * at the head; a handoff moves the history before the newest user message
  * behind one marker that summarizes it and names the ids it replaced. The
- * loop hands off when the window overflows, when the model asked, or when
- * the provider refused the last request as too long (`overflowed`). That last
- * handoff happens even with no summary: the history is then dropped behind a
- * marker that says so, since the same window would be refused again.
+ * loop hands off when the window overflows, when the model asked, when the
+ * provider refused the last request as too long (`overflowed`), or when a
+ * turn starts on a large window whose prompt cache lapsed (cold). The
+ * refusal handoff happens even with no summary: the history is then dropped
+ * behind a marker that says so, since the same window would be refused
+ * again. The others need a compactor; without one the window stays whole.
  */
 export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow")(function* <
   PersistR = never,
@@ -1580,6 +1608,10 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
   /** The provider refused the last request of this turn as too long. */
   readonly overflowed: boolean
   readonly directive: Option.Option<ContextDirective>
+  /** This projection comes before the turn's first model call. */
+  readonly turnStart: boolean
+  /** The branch's last model call and its provider's cache lifetime; none when either is unknown. */
+  readonly promptCache: Option.Option<PromptCache>
   readonly persist: (
     message: Message,
   ) => Effect.Effect<Message, StorageError | EventStoreError | EventStorageError, PersistR>
@@ -1634,6 +1666,24 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
   const kept = window.slice(anchorIndex)
   const requested = params.directive.pipe(Option.exists((value) => value._tag === "Compact"))
   const overflowing = plan.overflowing
+  // A turn that starts after the provider's prompt cache lapsed resends the
+  // whole window at the uncached price. On a large window a summary call
+  // plus a small window cost less, so the window hands off first, anchored
+  // at the new prompt. Only the turn's first call hands off: a later step
+  // continues the work of the step before it, whatever its tools took. The
+  // first projection holds no directive, since the loop discards what an
+  // earlier turn left. Keeping the cache warm with idle pings is not done:
+  // each costs a cache read per lifetime with no knowledge the user
+  // returns, and a cache already cold cannot be warmed for less than one
+  // resend.
+  const cold =
+    params.turnStart &&
+    Option.exists(
+      params.promptCache,
+      (cache) => now.getTime() - cache.lastCallAtMillis >= cache.ttlMs,
+    ) &&
+    Result.isSuccess(fit) &&
+    fit.success.estimatedTokens >= coldHandoffThresholdTokens(fit.success.availableInputTokens)
   // A history that is only an earlier marker has nothing new to summarize: a
   // second handoff to the same anchor would reuse that marker's id, spend a
   // summary call, and report a compaction that changed nothing.
@@ -1662,7 +1712,7 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
       summary: Option.none(),
     } satisfies WindowProjection
   }
-  if (!(requested || overflowing) || !summarizable) {
+  if (!(requested || overflowing || cold) || !summarizable) {
     return { durableMessages, compacted: false, summary: Option.none() } satisfies WindowProjection
   }
   // The window the provider refused is not sent again: without a summary, the

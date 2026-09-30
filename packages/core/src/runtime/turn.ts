@@ -157,6 +157,7 @@ import {
   modelChangeNotice,
   projectContextWindow,
   projectCurrentWindow,
+  type PromptCache,
   type StepMeasure,
   toPrompt,
   turnNoticesText,
@@ -1496,6 +1497,8 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   activeStream: ActiveStreamHandle
   /** What the provider reported the branch's last settled step took. */
   measure: Option.Option<StepMeasure>
+  /** When the branch's last model call ended, in epoch milliseconds. */
+  lastCallAtMillis: Option.Option<number>
   /**
    * The provider refused this turn's last request as too long: this step
    * hands the window off first, and a second refusal ends the turn.
@@ -1581,6 +1584,14 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       }),
     })
   }
+  // A model whose catalog entry names no cache lifetime never goes cold.
+  const promptCache = Option.map(
+    Option.all([
+      params.lastCallAtMillis,
+      Option.fromUndefinedOr(modelOption.value.promptCacheTtlMs),
+    ]),
+    ([lastCallAtMillis, ttlMs]): PromptCache => ({ lastCallAtMillis, ttlMs }),
+  )
   // The catalog's input cap binds whatever window the agent names: a provider
   // refuses input past it however large the window is.
   const inputLimit = Option.fromUndefinedOr(modelOption.value.inputLimit).pipe(
@@ -1643,6 +1654,8 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
     measure: params.measure,
     overflowed: params.overflowed,
     directive,
+    turnStart: params.step <= 1,
+    promptCache,
     persist: persistDurableMessage,
     // The summary is plain text under a small output cap. Reasoning tokens
     // count against that cap on some providers, so the summary asks for none
@@ -2046,6 +2059,10 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
      * before that reply at that size (derived from the log, never kept beside
      * it). A row with no recorded overhead measures nothing.
      *
+     * The newest `StreamEnded` also says when the branch last called a model:
+     * the time it was stored. A turn that starts after its model's prompt
+     * cache lapsed may hand a large window off first.
+     *
      * The cursor only bounds the read to the events since the last one it
      * saw; the values are always re-derived from the log.
      */
@@ -2069,16 +2086,20 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         })),
       )
     }
+    const knownStepEnd = ({ event, createdAt }: EventEnvelope): Option.Option<number> =>
+      Option.liftPredicate(createdAt, () => event._tag === "StreamEnded")
     interface KnownSteps {
       readonly cursor: number
       readonly model: Option.Option<ModelIdType>
       readonly measure: Option.Option<StepMeasure>
+      readonly lastCallAtMillis: Option.Option<number>
     }
-    const lastKnownStep = yield* Ref.make<KnownSteps>({
-      cursor: 0,
-      model: Option.none(),
-      measure: Option.none(),
-    })
+    const unknownSteps = {
+      model: Option.none<ModelIdType>(),
+      measure: Option.none<StepMeasure>(),
+      lastCallAtMillis: Option.none<number>(),
+    }
+    const lastKnownStep = yield* Ref.make<KnownSteps>({ cursor: 0, ...unknownSteps })
     const newest = <A>(
       events: ReadonlyArray<EventEnvelope>,
       read: (envelope: EventEnvelope) => Option.Option<A>,
@@ -2104,6 +2125,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         }),
         model: newest(events, knownStepModel, known.model),
         measure: newest(events, knownStepMeasure, known.measure),
+        lastCallAtMillis: newest(events, knownStepEnd, known.lastCallAtMillis),
       }
       yield* Ref.set(lastKnownStep, current)
       return current
@@ -2445,6 +2467,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       resolved: ResolvedTurnContext
       activeStream: ActiveStreamHandle
       measure: Option.Option<StepMeasure>
+      lastCallAtMillis: Option.Option<number>
       overflowed: boolean
     }) {
       const persistAssistantPartsWithBindingsAt = (
@@ -2492,6 +2515,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         branchId: scope.branchId,
         activeStream: params.activeStream,
         measure: params.measure,
+        lastCallAtMillis: params.lastCallAtMillis,
         overflowed: params.overflowed,
       })
       if (Option.isSome(source.compaction))
@@ -3310,7 +3334,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         Effect.catch((cause) =>
           Effect.logWarning("turn.model-change-read-failed").pipe(
             Effect.annotateLogs({ error: String(cause) }),
-            Effect.as({ model: Option.none<ModelIdType>(), measure: Option.none<StepMeasure>() }),
+            Effect.as(unknownSteps),
           ),
         ),
       )
@@ -3387,6 +3411,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             resolved,
             activeStream,
             measure: knownSteps.measure,
+            lastCallAtMillis: knownSteps.lastCallAtMillis,
             overflowed: params.overflowed,
           })
         }).pipe(Effect.ensuring(Ref.set(scope.activeStreamRef, Option.none()))),
