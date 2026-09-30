@@ -1251,47 +1251,22 @@ const stripExistingBillingBlocks = (blocks: ReadonlyArray<JsonRecord>): Readonly
   })
 
 /**
- * Split caller-provided system blocks into the identity entry, billing
- * entries (always discarded — re-computed per-request), and everything
- * else (the movable third-party content). Used by the relocator to
- * decide what to pull into the first user message before billing is
- * computed.
+ * The caller's system blocks the relocator moves into the first user
+ * message: every block but the billing entries (re-computed per request)
+ * and the identity prefix, which `buildSystemArray` writes itself.
  *
  * A single block carrying `IDENTITY + "\n\n<rest>"` (the shape
  * OpenCode's `system.transform` hook produces) is split at the identity
- * boundary: identity goes to identityBlocks,
- * the trailing remainder rides along as third-party so the relocator
- * pulls it into the first user message.
+ * boundary, and only the remainder moves.
  */
-type PartitionedSystemBlocks = {
-  readonly identityBlocks: ReadonlyArray<JsonRecord>
-  readonly thirdPartyBlocks: ReadonlyArray<JsonRecord>
-}
-
-const partitionSystemBlocks = (callerSystem: JsonValue): PartitionedSystemBlocks => {
-  const blocks = stripExistingBillingBlocks(normalizeSystemBlocks(callerSystem))
-  const identityBlocks: JsonRecord[] = []
-  const thirdPartyBlocks: JsonRecord[] = []
-  for (const block of blocks) {
+const thirdPartySystemBlocks = (callerSystem: JsonValue): ReadonlyArray<JsonRecord> =>
+  stripExistingBillingBlocks(normalizeSystemBlocks(callerSystem)).flatMap((block) => {
     const text = block["text"]
-    if (Predicate.isString(text) && text.startsWith(SYSTEM_IDENTITY_PREFIX)) {
-      const rest = text.slice(SYSTEM_IDENTITY_PREFIX.length).replace(/^\n+/, "")
-      const { text: _t, cache_control: _cc, ...rest_props } = block
-      // Identity itself rides without cache_control (validator rejects
-      // a marked identity block — counts toward the 4-block limit).
-      identityBlocks.push({ ...rest_props, text: SYSTEM_IDENTITY_PREFIX })
-      if (rest.length > 0) {
-        // Remainder picks back up the original block's `cache_control`
-        // and other props so users can still mark long instructions
-        // for prompt caching.
-        thirdPartyBlocks.push({ ...block, text: rest })
-      }
-    } else {
-      thirdPartyBlocks.push(block)
-    }
-  }
-  return { identityBlocks, thirdPartyBlocks }
-}
+    if (!Predicate.isString(text) || !text.startsWith(SYSTEM_IDENTITY_PREFIX)) return [block]
+    const rest = text.slice(SYSTEM_IDENTITY_PREFIX.length).replace(/^\n+/, "")
+    if (rest.length === 0) return []
+    return [{ ...block, text: rest }]
+  })
 
 /**
  * Build the final `system[]` array with the strict shape Anthropic's
@@ -1332,7 +1307,7 @@ const buildSystemArray = (
  * validates `system[]` against the Claude Code identity prefix.
  * Third-party system content alongside the prefix trips a 400 "out of
  * extra usage" rejection. The relocator takes the third-party blocks
- * (already partitioned by `partitionSystemBlocks`) and folds them into
+ * (`thirdPartySystemBlocks`) and folds them into
  * the first user message as a single text block.
  *
  * Ordering rules:
@@ -1432,7 +1407,7 @@ export const transformPayload = (
       result["tool_choice"] = transformToolChoice(result["tool_choice"])
     }
 
-    const { thirdPartyBlocks } = partitionSystemBlocks(result["system"])
+    const thirdPartyBlocks = thirdPartySystemBlocks(result["system"])
     let messagesAfterRelocate: ReadonlyArray<JsonRecord> = []
     if (isRecordArray(result["messages"])) {
       messagesAfterRelocate = relocateThirdPartyIntoFirstUser(thirdPartyBlocks, result["messages"])
