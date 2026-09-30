@@ -2991,6 +2991,18 @@ export const plantedDeadSdkExport = "nothing imports this"
     ).toEqual([])
   })
 
+  test("a name read in an interpolation after template text holding `//` is live", () => {
+    expect(
+      findingsFor([
+        { file: SDK_FILE, text: `export const afterSlashes = 1\n` },
+        {
+          file: "apps/tui/src/app.tsx",
+          text: "const label = `${ { value: 1 }.value } // ${ afterSlashes }`\nuse(label)\n",
+        },
+      ]),
+    ).toEqual([])
+  })
+
   test("a name another file reads beside a URL in a string is live", () => {
     expect(
       findingsFor([

@@ -13,7 +13,11 @@ export interface Finding {
 /** This file: the guards name what they look for, so several scans skip it. */
 const GUARDS_FILE = "packages/tooling/src/guards.ts"
 
-const blankKeepingLines = (text: string): string => text.replace(/[^\n]/g, " ")
+const blankKeepingLines = (text: string): string =>
+  text
+    .split("\n")
+    .map((line) => " ".repeat(line.length))
+    .join("\n")
 
 /**
  * A scanner frame: `IN_TEMPLATE` inside a template's text, otherwise the count
@@ -66,6 +70,36 @@ const trackCodeFrame = (char: string, frames: Array<number>): void => {
   else frames[top] = Math.max(depth - 1, 0)
 }
 
+/** A lookup of the character codes in `chars`, for a scan that stops on any of them. */
+const charTable = (chars: string): Uint8Array => {
+  const table = new Uint8Array(128)
+  for (const char of chars) table[char.charCodeAt(0)] = 1
+  return table
+}
+
+/** The characters a scanner rule reads in code: comment and string openers, braces, backticks. */
+const CODE_SPECIAL = charTable("/\"'`{}")
+
+/** The characters a scanner rule reads in a template's text: `${`, escapes, the closing backtick. */
+const TEMPLATE_SPECIAL = charTable("$\\`")
+
+/** The characters the scanner reads in the frame it is in. */
+const specialIn = (frames: ReadonlyArray<number>): Uint8Array => {
+  if (frames[frames.length - 1] === IN_TEMPLATE) return TEMPLATE_SPECIAL
+  return CODE_SPECIAL
+}
+
+/** The end of the run from `at` that holds none of `table`'s characters. */
+const plainRunEnd = (text: string, at: number, table: Uint8Array): number => {
+  let end = at
+  while (end < text.length) {
+    const code = text.charCodeAt(end)
+    if (code < 128 && table[code] === 1) return end
+    end += 1
+  }
+  return end
+}
+
 /**
  * Blank the comments in `text`, line count preserved, read left to right so a
  * `//` inside a string stays a string. Template literals are followed into
@@ -78,6 +112,14 @@ const blankComments = (text: string, blankStrings: boolean): string => {
   const frames: Array<number> = [0]
   let at = 0
   while (at < text.length) {
+    // A run no scanner rule reads is copied whole, not one character at a time.
+    const table = specialIn(frames)
+    const runEnd = plainRunEnd(text, at, table)
+    if (runEnd > at) {
+      out.push(text.slice(at, runEnd))
+      at = runEnd
+      continue
+    }
     const char = text[at] ?? ""
     const pair = text.slice(at, at + 2)
     let chunk = char
@@ -101,8 +143,21 @@ const blankComments = (text: string, blankStrings: boolean): string => {
   return out.join("")
 }
 
+/**
+ * Each text's blanked forms, keyed by the text: a guards run blanks one
+ * file's text for several scans, and the scan is the run's largest cost.
+ */
+const blankedTexts = { code: new Map<string, string>(), codeAndStrings: new Map<string, string>() }
+
+const blankedOnce = (cache: Map<string, string>, text: string, blankStrings: boolean): string =>
+  Option.getOrElse(Option.fromNullishOr(cache.get(text)), () => {
+    const blanked = blankComments(text, blankStrings)
+    cache.set(text, blanked)
+    return blanked
+  })
+
 /** The text with comments blanked, line count preserved. */
-const withoutComments = (text: string): string => blankComments(text, false)
+const withoutComments = (text: string): string => blankedOnce(blankedTexts.code, text, false)
 
 // ── a lint directive names its rules ────────────────────────────────────────
 
@@ -3392,7 +3447,8 @@ const identifiersIn = (text: string): ReadonlySet<string> =>
  * carries are not consumption; blanking them is what lets an own-file
  * reference be read as one.
  */
-const withoutCommentsAndStrings = (text: string): string => blankComments(text, true)
+const withoutCommentsAndStrings = (text: string): string =>
+  blankedOnce(blankedTexts.codeAndStrings, text, true)
 
 /** Lines carrying a `@ts-expect-error`, which assert absence rather than use. */
 const expectErrorLines = (lines: ReadonlyArray<string>): ReadonlySet<number> => {
