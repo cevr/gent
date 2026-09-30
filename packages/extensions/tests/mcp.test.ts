@@ -1211,6 +1211,8 @@ interface OAuthFixtureState {
   readonly redirects: Array<string>
   /** Open until the test lets registrations answer. */
   readonly registerGate: Deferred.Deferred<void>
+  /** Never opened: a slow refresh answers when its wait on it times out. */
+  readonly refreshGate: Deferred.Deferred<void>
 }
 
 /**
@@ -1218,18 +1220,21 @@ interface OAuthFixtureState {
  * `WWW-Authenticate` names, and the authorization server lives under `/as`,
  * so only a client that reads the header finds it. `overlapRefreshes`: a
  * refresh grant is held until a second one arrives, or a second passes.
- * `holdRegister`: a registration waits for `registerGate`.
+ * `holdRegister`: a registration waits for `registerGate`. `slowRefreshes`:
+ * a refresh grant rotates the token at once but answers a second later.
  */
 interface OAuthFixtureOptions {
   readonly headerOnly: boolean
   readonly overlapRefreshes: boolean
   readonly holdRegister: boolean
+  readonly slowRefreshes: boolean
 }
 
 const defaultOAuthFixture: OAuthFixtureOptions = {
   headerOnly: false,
   overlapRefreshes: false,
   holdRegister: false,
+  slowRefreshes: false,
 }
 
 /** Where the authorization server lives: the origin, or `/as` under `headerOnly`. */
@@ -1342,7 +1347,13 @@ const exchangeToken = (state: OAuthFixtureState, request: OAuthRequest) =>
     if (form.grant_type === "refresh_token" && state.refreshTokens.has(refresh)) {
       state.refreshTokens.delete(refresh)
       state.refreshes += 1
-      return issueTokens(state)
+      const answer = issueTokens(state)
+      // The spent refresh token is gone before the answer leaves: a client
+      // that stops waiting has lost it.
+      if (state.options.slowRefreshes) {
+        yield* Deferred.await(state.refreshGate).pipe(Effect.timeout("1 second"), Effect.ignore)
+      }
+      return answer
     }
     if (form.grant_type === "refresh_token") state.failedRefreshes += 1
     return fixtureJson({ error: "invalid_grant" }, 400)
@@ -1451,6 +1462,7 @@ const serveOAuthFixtureWith = Effect.fnUntraced(function* (options: OAuthFixture
     secondRefresh: yield* Deferred.make<void>(),
     redirects: [],
     registerGate: yield* Deferred.make<void>(),
+    refreshGate: yield* Deferred.make<void>(),
   }
   const context = yield* Layer.build(
     HttpServer.serve(oauthFixtureApp(state)).pipe(
@@ -1731,6 +1743,30 @@ describe("mcp oauth", () => {
         const stored = yield* fs.readFileString(authFile)
         expect(stored).not.toContain('"refresh_token":"refresh-alpha"')
         expect(stored).not.toContain('"refresh_token":"refresh-beta"')
+      }).pipe(Effect.timeout("40 seconds"), Effect.provide(platformLayer)),
+    45_000,
+  )
+
+  it.scopedLive(
+    "a refresh slower than the entry's timeout still stores the rotated token",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const oauth = yield* serveOAuthFixtureWith({ ...defaultOAuthFixture, slowRefreshes: true })
+        const data = yield* makeDataDir
+        yield* storeExpiringLogin(oauth, data.directory)
+        const home = path.join(data.directory, "home")
+        // The dial gives up after 200 ms; the authorization server answers the refresh after 1 s.
+        yield* collectTestContributions(
+          McpServers("@test/mcp-oauth", { secure: { url: `${oauth.origin}/mcp`, timeoutMs: 200 } })
+            .setup,
+          { home, cwd: data.directory },
+        ).pipe(Effect.provide(data.layer))
+        expect(oauth.refreshes).toBe(1)
+        // refresh-0 is spent at the server, so the store must hold what replaced it.
+        const stored = yield* fs.readFileString(path.join(data.directory, "mcp-auth.json"))
+        expect(stored).toContain('"refresh_token":"refresh-1"')
       }).pipe(Effect.timeout("40 seconds"), Effect.provide(platformLayer)),
     45_000,
   )

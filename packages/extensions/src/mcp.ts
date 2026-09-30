@@ -897,7 +897,16 @@ const refreshLogin = (
       Option.none(),
     )
     const metadata = Option.orElse(named, () => storedMetadata(login))
-    const result = yield* Effect.tryPromise(() => auth(provider, authOptions(config, metadata)))
+    // The step this runs in is not interrupted (`refreshUnlessFresh`), so this
+    // signal is what ends every request of the refresh by `REFRESH_BOUND`.
+    const signal = AbortSignal.timeout(Duration.toMillis(REFRESH_BOUND))
+    const fetchWeb = yield* FetchHttpClient.Fetch
+    const result = yield* Effect.tryPromise(() =>
+      auth(provider, {
+        ...authOptions(config, metadata),
+        fetchFn: (url, init) => fetchWeb(url, { ...init, signal }),
+      }),
+    )
     if (result !== "AUTHORIZED" || Option.isNone(flow.tokens)) return Option.none<StoredLogin>()
     const refreshed = loginFrom(
       flow.tokens.value,
@@ -946,6 +955,13 @@ const nearExpiry = (login: StoredLogin, now: number) =>
  * process or another, the second finds the token the first stored and uses
  * it; it never redeems the refresh token the first already spent. None when
  * there is no login, or the refresh or the lock failed.
+ *
+ * The token request and the stored login are one step that is not
+ * interrupted: a dial that times out, or a request the SDK aborts, waits for
+ * it, since a refresh token the server spent is lost unless the new one is
+ * stored. `REFRESH_BOUND` ends the step well inside `AUTH_LOCK_STALE`, so no
+ * other process takes the lock over while it runs. The wait for the lock is
+ * interrupted as usual.
  */
 const refreshUnlessFresh = (
   server: McpServer,
@@ -962,7 +978,7 @@ const refreshUnlessFresh = (
       if (fresh(login.value, yield* Clock.currentTimeMillis)) return login
       return yield* refreshLogin(server, config, store, login.value, named)
     })
-    return yield* refresh.pipe(underAuthLock(store))
+    return yield* Effect.uninterruptible(refresh).pipe(underAuthLock(store))
   }).pipe(
     Effect.catchCause((cause) =>
       Effect.logWarning("mcp.oauth.refresh.failed").pipe(
@@ -974,6 +990,8 @@ const refreshUnlessFresh = (
 
 /** An auth lock older than this was left by a holder that died; no refresh takes this long. */
 const AUTH_LOCK_STALE = Duration.seconds(30)
+/** The longest a refresh's requests run: well inside `AUTH_LOCK_STALE`. */
+const REFRESH_BOUND = Duration.seconds(20)
 /** How often a writer tries a held lock again, and how many times before it gives up. */
 const AUTH_LOCK_RETRY = { schedule: Schedule.spaced("50 millis"), times: 1200 }
 
@@ -1000,10 +1018,13 @@ const underAuthLock =
       const path = yield* Path.Path
       const file = `${store.file}.lock`
       yield* fs.makeDirectory(path.dirname(file), { recursive: true })
+      // One try is not interrupted between the create and its answer, so an
+      // interrupted wait never leaves a lock it made; the wait between tries is.
       const take = Effect.gen(function* () {
         const taken = yield* fs.writeFileString(file, "", { flag: "wx", mode: 0o600 }).pipe(
           Effect.as(true),
           Effect.orElseSucceed(() => false),
+          Effect.uninterruptible,
         )
         if (taken) return
         const now = yield* Clock.currentTimeMillis
@@ -1016,7 +1037,7 @@ const underAuthLock =
         return yield* new AuthLockBusy({ message: `the auth lock ${file} stays held` })
       })
       return yield* Effect.acquireUseRelease(
-        Effect.retry(take, AUTH_LOCK_RETRY),
+        Effect.interruptible(Effect.retry(take, AUTH_LOCK_RETRY)),
         () => effect,
         () => Effect.ignore(fs.remove(file)),
       )

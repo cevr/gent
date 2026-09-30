@@ -1322,7 +1322,10 @@ holds the login file's one lock, `<data dir>/mcp-auth.json.lock` (created with
 processes that write different logins never drop each other's token. A
 refresh reads the login again under the lock: when another refresh, in this
 process or another, already stored a new token, it uses that token and never
-redeems the spent refresh token.
+redeems the spent refresh token. The token request and the stored login are
+one step that is not interrupted, and its requests end within 20 seconds: a
+dial that times out, or a request the SDK aborts, waits for it, so a rotated
+token is always stored and the lock never outlives its 30 seconds.
 
 Setup reads each server's tool list from `<data dir>/mcp-catalog.json`, keyed
 by the SHA-256 digest of the entry as it runs (its expanded values, for a
