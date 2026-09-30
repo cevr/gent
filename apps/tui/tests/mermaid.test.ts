@@ -1,5 +1,6 @@
 import { describe, expect, test } from "effect-bun-test"
-import { extractMermaidBlocks, MermaidViewerState, transitionMermaidViewer } from "../src/mermaid"
+import { Option } from "effect"
+import { createMermaidCache, extractMermaidBlocks, replaceMermaidBlocks } from "../src/mermaid"
 
 // ── mermaid blocks ──────────────────────────────────────────────────────────
 
@@ -66,51 +67,41 @@ describe("extractMermaidBlocks", () => {
   })
 })
 
-// ── mermaid viewer state ────────────────────────────────────────────────────
+describe("inline mermaid replace", () => {
+  const diagram = "before\n```mermaid\ngraph LR\n  Alpha-->Beta\n```\nafter"
+  const uncached = replaceMermaidBlocks(Option.none())
 
-describe("transitionMermaidViewer", () => {
-  test("open resets viewer state", () => {
-    const state = transitionMermaidViewer(
-      {
-        diagramIndex: 2,
-        panX: 40,
-        panY: 12,
-      },
-      { _tag: "Open" },
-    )
+  const widest = (text: string): number => Math.max(...text.split("\n").map((line) => line.length))
 
-    expect(state).toEqual(MermaidViewerState.initial())
+  test("a diagram is drawn in place of its code block, inside the width", () => {
+    const drawn = uncached(diagram, 80)
+    expect(drawn.startsWith("before\n")).toBe(true)
+    expect(drawn.endsWith("\nafter")).toBe(true)
+    expect(drawn).not.toContain("```mermaid")
+    expect(drawn).toContain("Alpha")
+    expect(widest(drawn)).toBeLessThanOrEqual(80)
   })
 
-  test("panning clamps left and up at zero", () => {
-    const state = transitionMermaidViewer(
-      {
-        diagramIndex: 0,
-        panX: 2,
-        panY: 1,
-      },
-      { _tag: "PanLeft", step: 10 },
-    )
-    const up = transitionMermaidViewer(state, { _tag: "PanUp", step: 5 })
-
-    expect(state.panX).toBe(0)
-    expect(up.panY).toBe(0)
+  test("a width no preset fits keeps the tightest drawing", () => {
+    const narrow = uncached(diagram, 4)
+    expect(narrow).not.toContain("```mermaid")
+    expect(widest(narrow)).toBeLessThan(widest(uncached(diagram, 200)))
   })
 
-  test("changing diagrams resets pan", () => {
-    const next = transitionMermaidViewer(
-      {
-        diagramIndex: 0,
-        panX: 30,
-        panY: 8,
-      },
-      { _tag: "NextDiagram", diagramCount: 3 },
-    )
+  test("a source that does not parse stays as its code block", () => {
+    const broken = "```mermaid\nnot a diagram {{{\n```"
+    expect(uncached(broken, 80)).toBe(broken)
+  })
 
-    expect(next).toEqual({
-      diagramIndex: 1,
-      panX: 0,
-      panY: 0,
-    })
+  test("the session view's cache serves a second draw of the same diagram", () => {
+    const cache = createMermaidCache()
+    const cached = replaceMermaidBlocks(Option.some(cache))
+    const first = cached(diagram, 80)
+    expect(first).toBe(uncached(diagram, 80))
+    expect(cache.renders.size).toBe(1)
+    expect(cached(diagram, 80)).toBe(first)
+    expect(cache.renders.size).toBe(1)
+    cached(diagram, 60)
+    expect(cache.renders.size).toBe(2)
   })
 })

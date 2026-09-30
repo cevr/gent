@@ -1,5 +1,5 @@
 import { describe, expect, it, test } from "effect-bun-test"
-import { Clock, Deferred, Effect, Fiber, FileSystem, Option } from "effect"
+import { Clock, Deferred, Effect, Fiber, FileSystem, Option, Exit, Predicate, Stream } from "effect"
 import { TestClock } from "effect/testing"
 import {
   beginAuthCheck,
@@ -28,6 +28,8 @@ import {
   mergeRefused,
   noticeRowItems,
   runWithReconnect,
+  slashAutocompleteItems,
+  useSessionFeed,
 } from "../src/session"
 import type { AutocompleteContribution, NoticeRow } from "../src/extensions/client-facets"
 import {
@@ -39,9 +41,38 @@ import {
   ModelId,
   ProviderId,
   type QueueEntryInfo,
+  type ActiveInteraction,
+  AgentEvent,
+  AgentName,
+  assistantMessageIdForTurn,
+  dateFromMillis,
+  EventEnvelope,
+  Message,
+  projectMessage,
+  type SessionSnapshot,
+  ToolCallId,
+  ToolInteraction,
+  OutputCut,
 } from "@gent/core/protocol"
 import { BunServices } from "@effect/platform-bun"
 import { RGBA } from "@opentui/core"
+import type { Command } from "../src/commands"
+import { emptyFrecencyStore, frecencyLookup, recordPick } from "../src/autocomplete"
+import { emptyQueueSnapshot, EventId, type SessionRuntimeState } from "@gent/core/test-utils"
+import type { GentRuntime } from "@gent/sdk"
+import { ExtensionId } from "@gent/core/extensions/api"
+import { type Session } from "../src/client"
+import { createRoot, createSignal } from "solid-js"
+import { createMockClient, createMockRuntime } from "./render-harness-boundary"
+import { waitUntil, waitUntilAdvancing } from "./helpers-boundary"
+import * as Prompt from "effect/ai/Prompt"
+import { InteractionRequestId } from "@gent/core/extensions/branch-tools"
+import {
+  getSessionEventLabel,
+  type Message as FeedMessage,
+  messageToolCalls,
+} from "../src/message-list"
+import { RpcClientDefect, RpcClientError } from "effect/rpc/RpcClientError"
 
 // ── composer interaction state ──────────────────────────────────────────────
 
@@ -384,132 +415,6 @@ describe("canNavigateAtCursor", () => {
   })
 })
 
-/**
- * The store itself lives in `ComposerMemoryProvider` (session.tsx), so the
- * index/saved-entry bookkeeping is modeled here while the cursor gate under test
- * is the real `canNavigateAtCursor`.
- */
-describe("prompt history navigation", () => {
-  type NavigationResult =
-    | { readonly handled: false }
-    | { readonly handled: true; readonly text: string; readonly cursor: "start" | "end" }
-
-  function createHistory(initialEntries: string[] = []) {
-    const entries = [...initialEntries]
-    let historyIndex = -1
-    let savedEntry: Option.Option<string> = Option.none()
-
-    const navigate = (
-      direction: "up" | "down",
-      currentText: string,
-      cursorPos: number,
-      textLength: number,
-    ): NavigationResult => {
-      const inHistory = historyIndex >= 0
-      if (!canNavigateAtCursor(direction, cursorPos, textLength, inHistory)) {
-        return { handled: false }
-      }
-      if (entries.length === 0 && direction === "up") return { handled: false }
-
-      if (direction === "up") {
-        if (historyIndex === -1) {
-          const firstEntry = Option.fromNullishOr(entries[0])
-          if (Option.isNone(firstEntry)) return { handled: false }
-          savedEntry = Option.some(currentText)
-          historyIndex = 0
-          return { handled: true, text: firstEntry.value, cursor: "start" }
-        }
-        if (historyIndex < entries.length - 1) {
-          historyIndex += 1
-          const entry = Option.fromNullishOr(entries[historyIndex])
-          if (Option.isNone(entry)) return { handled: false }
-          return { handled: true, text: entry.value, cursor: "start" }
-        }
-        return { handled: false }
-      }
-
-      if (historyIndex > 0) {
-        historyIndex -= 1
-        const entry = Option.fromNullishOr(entries[historyIndex])
-        if (Option.isNone(entry)) return { handled: false }
-        return { handled: true, text: entry.value, cursor: "end" }
-      }
-      if (historyIndex === 0) {
-        historyIndex = -1
-        const restored = Option.getOrElse(savedEntry, () => "")
-        savedEntry = Option.none()
-        return { handled: true, text: restored, cursor: "end" }
-      }
-      return { handled: false }
-    }
-
-    const add = (text: string) => {
-      if (text.trim().length === 0) return
-      if (entries[0] === text.trim()) return
-      entries.unshift(text.trim())
-      if (entries.length > 100) entries.length = 100
-      historyIndex = -1
-      savedEntry = Option.none()
-    }
-
-    return { navigate, add, getIndex: () => historyIndex }
-  }
-
-  test("up with no history → not handled", () => {
-    const h = createHistory()
-    expect(h.navigate("up", "", 0, 0)).toEqual({ handled: false })
-  })
-
-  test("up recalls first entry", () => {
-    const h = createHistory(["first", "second"])
-    const result = h.navigate("up", "current", 0, 7)
-    expect(result).toEqual({ handled: true, text: "first", cursor: "start" })
-  })
-
-  test("up twice recalls second entry", () => {
-    const h = createHistory(["first", "second"])
-    h.navigate("up", "current", 0, 7)
-    const result = h.navigate("up", "first", 0, 5)
-    expect(result).toEqual({ handled: true, text: "second", cursor: "start" })
-  })
-
-  test("up then down restores saved", () => {
-    const h = createHistory(["first"])
-    h.navigate("up", "my input", 0, 8)
-    const result = h.navigate("down", "first", 5, 5)
-    expect(result).toEqual({ handled: true, text: "my input", cursor: "end" })
-  })
-
-  test("down with no history browsing → not handled", () => {
-    const h = createHistory(["first"])
-    expect(h.navigate("down", "text", 4, 4)).toEqual({ handled: false })
-  })
-
-  test("up at non-zero cursor → not handled", () => {
-    const h = createHistory(["first"])
-    expect(h.navigate("up", "text", 2, 4)).toEqual({ handled: false })
-  })
-
-  test("add deduplicates against last", () => {
-    const h = createHistory()
-    h.add("hello")
-    h.add("hello") // should not add
-    const r1 = h.navigate("up", "", 0, 0)
-    expect(r1).toEqual({ handled: true, text: "hello", cursor: "start" })
-    const r2 = h.navigate("up", "hello", 0, 5)
-    expect(r2).toEqual({ handled: false }) // only 1 entry
-  })
-
-  test("add resets history index", () => {
-    const h = createHistory(["old"])
-    h.navigate("up", "", 0, 0) // now browsing
-    h.add("new")
-    // After add, index is reset, next up should get "new"
-    const result = h.navigate("up", "", 0, 0)
-    expect(result).toEqual({ handled: true, text: "new", cursor: "start" })
-  })
-})
-
 // ── prompt history store ────────────────────────────────────────────────────
 
 /**
@@ -630,7 +535,7 @@ describe("session controller state", () => {
 
   test("manual auth close invalidates pending checks and stores the current agent", () => {
     const checking = beginAuthCheck(initialSessionControllerState())
-    const closed = closeAuthGateState(checking, "deep")
+    const closed = closeAuthGateState(checking, Option.some("deep"))
     const staleResult = completeAuthCheck(closed, {
       version: checking.authCheckVersion,
       agent: "fast",
@@ -638,7 +543,7 @@ describe("session controller state", () => {
     })
 
     expect(closed.authGate).toBe("closed")
-    expect(closed.validatedAgent).toBe("deep")
+    expect(closed.validatedAgent).toEqual(Option.some("deep"))
     expect(closed.authCheckVersion).toBe(checking.authCheckVersion + 1)
     expect(staleResult).toBe(closed)
   })
@@ -655,14 +560,17 @@ describe("session controller state", () => {
     const withQueue = setQueue(initialSessionControllerState(), queue)
     const cleared = clearQueue(withQueue)
 
-    expect(queuedDraftText(withQueue.queue)).toBe("switch agents\nthen continue\nand summarize")
-    expect(queuedDraftText(cleared.queue)).toBeUndefined()
+    expect(queuedDraftText(withQueue.queue)).toEqual(
+      Option.some("switch agents\nthen continue\nand summarize"),
+    )
+    expect(queuedDraftText(cleared.queue)).toEqual(Option.none())
   })
 })
 
 // ── session labels ──────────────────────────────────────────────────────────
 
-const absent = Option.getOrUndefined(Option.none())
+// eslint-disable-next-line effect/noNullish -- a wire field the server leaves unset is present and undefined.
+const absent = undefined
 
 const theme = {
   textMuted: RGBA.fromHex("#888888"),
@@ -849,89 +757,6 @@ describe("formatCwdGit", () => {
   })
 })
 
-// ── session labels order ────────────────────────────────────────────────────
-
-/**
- * The status row reads left to right as: where you are, what you are running
- * it with, how full it is, what it cost. Each label's neighbours are the
- * specification, not an accident of which builder happened to push first.
- *
- * Effort belongs beside the model because the two together name what is
- * answering — "Sonnet 5 at medium" is one fact — while the context gauge
- * belongs with the running total, since both describe the session's spend
- * rather than its configuration.
- */
-
-const themeOrder = {
-  textMuted: RGBA.fromInts(138, 138, 138, 255),
-  error: RGBA.fromInts(255, 0, 0, 255),
-  warning: RGBA.fromInts(255, 200, 0, 255),
-  info: RGBA.fromInts(0, 200, 255, 255),
-}
-
-const texts = (items: ReadonlyArray<{ text: string }>) => items.map((item) => item.text)
-
-// `buildContextLabels` mirrors the client snapshot's optional fields, so its
-// absent values are genuinely undefined at this boundary. Naming them keeps
-// the intent readable where the signature cannot use Option.
-// eslint-disable-next-line effect/noNullish -- matches the helper's optional parameters.
-const NO_CONTEXT_LENGTH: number | undefined = undefined
-// eslint-disable-next-line effect/noNullish -- matches the helper's optional parameters.
-const NO_CONTEXT: undefined = undefined
-
-const contextLabelsOrder = (
-  latestInputTokens: number,
-  // eslint-disable-next-line effect/noNullish -- matches the helper's optional parameter.
-  contextLength: number | undefined,
-  context?: ModelContextMetrics,
-) =>
-  buildContextLabels({
-    metrics: { latestInputTokens, context: Option.fromNullishOr(context) },
-    model: Option.some({ contextLength }),
-    theme: themeOrder,
-  })
-
-describe("effort sits with the model and the gauge anchors right", () => {
-  test("reports the effort without the context gauge", () => {
-    const labels = buildModelLabels({
-      reasoningLevel: Option.some("medium"),
-      theme: themeOrder,
-      debugMode: false,
-    })
-    expect(texts(labels)).toEqual(["medium"])
-  })
-
-  test("reports no effort when none is set", () => {
-    const labels = buildModelLabels({
-      reasoningLevel: Option.none(),
-      theme: themeOrder,
-      debugMode: false,
-    })
-    expect(texts(labels)).toEqual([])
-  })
-
-  test("reports a projected context percentage on its own", () => {
-    const labels = contextLabelsOrder(0, NO_CONTEXT_LENGTH, {
-      estimatedTokens: 2_000,
-      availableInputTokens: 8_000,
-      contextLimitTokens: 10_000,
-      omittedMessages: 0,
-      compactions: 0,
-    })
-    expect(texts(labels)).toEqual(["ctx 25%"])
-  })
-
-  test("falls back to a usage-derived percentage", () => {
-    // A 10k window keeps a quarter for the reply: 7.5k of input.
-    const labels = contextLabelsOrder(3_750, 10_000, NO_CONTEXT)
-    expect(texts(labels)[0]).toContain("50%")
-  })
-
-  test("reports nothing when there is no context to report", () => {
-    expect(texts(contextLabelsOrder(0, NO_CONTEXT_LENGTH, NO_CONTEXT))).toEqual([])
-  })
-})
-
 // ── session ui state ────────────────────────────────────────────────────────
 
 describe("transcript disclosure", () => {
@@ -1005,7 +830,6 @@ describe("one pane slot", () => {
     const opens: ReadonlyArray<Parameters<typeof transitionSessionUi>[1]> = [
       { _tag: "OpenPane", id: "agents.pane" },
       { _tag: "OpenFork", messages: [] },
-      { _tag: "OpenMermaid" },
       { _tag: "OpenAuth", enforceAuth: false },
       { _tag: "OpenSettingsPicker", picker: "model" },
       { _tag: "OpenBranches", branches: [] },
@@ -1100,7 +924,6 @@ describe("prompt search overlay", () => {
     const replacers: ReadonlyArray<Parameters<typeof transitionSessionUi>[1]> = [
       { _tag: "OpenPane", id: "agents.pane" },
       { _tag: "OpenFork", messages: [] },
-      { _tag: "OpenMermaid" },
       { _tag: "OpenAuth", enforceAuth: false },
       { _tag: "OpenSettingsPicker", picker: "model" },
       { _tag: "OpenBranches", branches: [] },
@@ -1186,5 +1009,1854 @@ describe("reconnect", () => {
       // served stream retries after 1 s again, not after the grown delay.
       expect(starts).toEqual([0, 1_000, 3_000, 7_000, 15_000, 16_000])
     }).pipe(Effect.provide(TestClock.layer()), Effect.timeout("4 seconds")),
+  )
+})
+
+// ── slash autocomplete ──────────────────────────────────────────────────────
+
+/**
+ * The `/` items a reader's keystrokes reach, ranked by the session registry.
+ *
+ * The scorer has its own tests, but a scorer nobody calls ranks nothing, and a
+ * pick history nobody passes through changes no popup. These drive
+ * `slashAutocompleteItems` and assert the order a reader would see, so
+ * disconnecting it from the ranking or from the history fails here.
+ */
+
+/**
+ * A registration order that a substring filter gets wrong: `/fork` and
+ * `/auth` carry "ag" in their titles and register before `/agents` carries it
+ * in its name.
+ */
+const commands: ReadonlyArray<Command> = [
+  { id: "message.fork", title: "Fork from Message", slash: "fork", onSelect: () => {} },
+  { id: "auth.manage", title: "Manage API Keys", slash: "auth", onSelect: () => {} },
+  { id: "agents.view", title: "Agents", slash: "agents", aliases: ["tree"], onSelect: () => {} },
+  { id: "session.model", title: "Set Model", slash: "model", onSelect: () => {} },
+  { id: "session.think", title: "Set Reasoning", slash: "think", onSelect: () => {} },
+]
+
+const ids = (items: ReadonlyArray<{ readonly id: string }>): ReadonlyArray<string> =>
+  items.map((item) => item.id)
+
+describe("slash autocomplete contribution", () => {
+  test("puts the command named by the filter first", () => {
+    // Registration order would answer `fork, auth, agents`, and the
+    // preselected row is the one Tab completes and Enter runs.
+    expect(ids(slashAutocompleteItems(commands, "ag"))[0]).toBe("agents")
+  })
+
+  test("drops commands that match only through their title", () => {
+    const ranked = ids(slashAutocompleteItems(commands, "ag"))
+    expect(ranked).not.toContain("fork")
+    expect(ranked).not.toContain("auth")
+  })
+
+  test("still offers aliases", () => {
+    expect(ids(slashAutocompleteItems(commands, "tre"))).toContain("tree")
+  })
+
+  test("ranks a partially typed name onto its command", () => {
+    expect(ids(slashAutocompleteItems(commands, "mod"))[0]).toBe("model")
+    expect(ids(slashAutocompleteItems(commands, "thi"))[0]).toBe("think")
+  })
+
+  test("offers every command when nothing is typed yet", () => {
+    // One row per slash name plus the alias.
+    expect(ids(slashAutocompleteItems(commands, ""))).toEqual([
+      "fork",
+      "auth",
+      "agents",
+      "tree",
+      "model",
+      "think",
+    ])
+  })
+
+  test("offers nothing for a filter no command matches", () => {
+    expect(slashAutocompleteItems(commands, "zzzz")).toEqual([])
+  })
+})
+
+const NOW = 1_800_000_000_000
+
+/** `/think` and `/thread` tie on everything the matcher can see but length. */
+const commandsSeam: ReadonlyArray<Command> = [
+  { id: "session.think", title: "Set Reasoning", slash: "think", onSelect: () => {} },
+  { id: "session.thread", title: "Thread over sessions", slash: "thread", onSelect: () => {} },
+]
+
+describe("slash autocomplete reads pick history", () => {
+  test("answers /t with think for a reader who has picked nothing", () => {
+    expect(ids(slashAutocompleteItems(commandsSeam, "t"))[0]).toBe("think")
+  })
+
+  test("answers /thr with thread once the reader has picked it", () => {
+    // The seam: the contribution has to pass the history through to the
+    // ranker. A build that drops the third argument still answers `think`.
+    //
+    // Three characters, not one: ranking ignores pick history below
+    // FRECENCY_MIN_FILTER, so a one-character filter would pass this test for
+    // the wrong reason — it would answer `think` whether or not the history
+    // reached the ranker at all.
+    const store = recordPick(emptyFrecencyStore(), "/", "thread", NOW)
+    expect(ids(slashAutocompleteItems(commandsSeam, "thr", frecencyLookup(store, NOW)))[0]).toBe(
+      "thread",
+    )
+  })
+
+  test("keeps a picked command out of a filter it does not match", () => {
+    const store = recordPick(emptyFrecencyStore(), "/", "thread", NOW)
+    expect(ids(slashAutocompleteItems(commandsSeam, "think", frecencyLookup(store, NOW)))[0]).toBe(
+      "think",
+    )
+  })
+})
+
+// ── session feed ────────────────────────────────────────────────────────────
+
+type FeedClient = Parameters<typeof useSessionFeed>[2]
+
+/** A feed client whose every member a test does not name does nothing. */
+const feedClientStub = (
+  parts: Pick<FeedClient, "sessionIdentity" | "client" | "runtime"> & Partial<FeedClient>,
+): FeedClient => ({
+  log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
+  setConnectionIssue: () => {},
+  waitForTransportReady: Effect.void,
+  applySessionRuntime: () => {},
+  applySessionSnapshot: () => {},
+  applySessionEvent: () => {},
+  resetSessionEvents: () => {},
+  applyBufferedSessionEvent: () => {},
+  finishReplay: () => {},
+  pathPlace: () => ({ cwd: "/work/proj", home: "/home/test" }),
+  ...parts,
+})
+
+const snapshotFor = (
+  sessionId: SessionId,
+  branchId: BranchId,
+  lastEventId?: number,
+): SessionSnapshot => ({
+  sessionId,
+  branchId,
+  messages: [],
+  lastEventId: Option.getOrNull(Option.fromNullishOr(lastEventId)),
+  resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
+  agent: AgentName.make("primary"),
+  runtime: {
+    _tag: "Idle",
+    queue: emptyQueueSnapshot(),
+  },
+  metrics: {
+    turns: 0,
+    durationMs: 0,
+    costUsd: 0,
+    lastInputTokens: 0,
+  },
+})
+
+const runtimeSnapshot = (): SessionRuntimeState => ({
+  _tag: "Idle",
+  queue: emptyQueueSnapshot(),
+})
+
+const makeEnvelope = (id: number, event: AgentEvent, createdAt = 0): EventEnvelope =>
+  EventEnvelope.make({
+    id: EventId.make(id),
+    event,
+    createdAt,
+  })
+
+const makeUserMessage = (sessionId: SessionId, branchId: BranchId): Message =>
+  Message.cases.regular.make({
+    id: MessageId.make("message-feed-duplicate-user"),
+    sessionId,
+    branchId,
+    role: "user",
+    parts: [],
+    createdAt: dateFromMillis(0),
+  })
+
+const makeCompactionMessage = (sessionId: SessionId, branchId: BranchId): Message =>
+  Message.cases.regular.make({
+    id: MessageId.make("context-handoff:branch-feed-compaction:anchor"),
+    sessionId,
+    branchId,
+    role: "user",
+    parts: [Prompt.textPart({ text: "Context handoff: stored summary" })],
+    metadata: {
+      customType: "context-window",
+      details: {
+        keepFromMessageId: "anchor",
+        summarized: { firstMessageId: "m1", lastMessageId: "m3", count: 3 },
+      },
+    },
+    createdAt: dateFromMillis(0),
+  })
+
+const makeSession = (sessionId: SessionId, branchId: BranchId): Session => ({
+  sessionId,
+  branchId,
+  name: "Test Session",
+})
+
+/** The feed reads only which session is active, so the probe supplies only that. */
+const identityOf = (active: () => Session) => () =>
+  Option.some({ sessionId: active().sessionId, branchId: active().branchId })
+
+const isSessionEvent = Predicate.or(
+  Predicate.isTagged("turn-ended"),
+  Predicate.or(Predicate.isTagged("retrying"), Predicate.isTagged("error")),
+)
+
+/** A message's tool calls; none for a message that is not there. */
+const toolCallsOf = (message: Option.Option<FeedMessage>): ReturnType<typeof messageToolCalls> =>
+  Option.match(message, { onNone: () => [], onSome: messageToolCalls })
+
+describe("useSessionFeed", () => {
+  it.live("an unmount interrupts the feed fiber", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("feed-unmount-session")
+      const branchId = BranchId.make("feed-unmount-branch")
+      const base = createMockRuntime()
+      const forked: Array<Fiber.Fiber<unknown, unknown>> = []
+      const runtime: GentRuntime = {
+        ...base,
+        fork: (effect) => {
+          const fiber = base.fork(effect)
+          forked.push(fiber)
+          return fiber
+        },
+      }
+      const dispose = createRoot((disposeRoot) => {
+        const [active] = createSignal(makeSession(sessionId, branchId))
+        useSessionFeed(
+          () => sessionId,
+          () => branchId,
+          feedClientStub({
+            sessionIdentity: identityOf(active),
+            // The feed waits on its snapshot forever: only an interrupt ends it.
+            client: createMockClient({ session: { getSnapshot: () => Effect.never } }),
+            runtime,
+          }),
+          {
+            onInteraction: () => {},
+            onInteractionDismissed: () => {},
+            onQueueSnapshot: () => {},
+            onBranchSwitch: () => {},
+          },
+        )
+        return disposeRoot
+      })
+      expect(forked.length).toBe(1)
+      dispose()
+      const exits = yield* Effect.forEach(forked, (fiber) => Fiber.await(fiber))
+      expect(exits.map(Exit.hasInterrupts)).toEqual([true])
+    }).pipe(Effect.timeout("5 seconds")),
+  )
+
+  it.live("changes route when a branch event changes the active client identity", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("branch-navigation-session")
+      const branchId = BranchId.make("branch-navigation-first")
+      const nextBranchId = BranchId.make("branch-navigation-second")
+      const switched = yield* Deferred.make<void>()
+      let snapshotCount = 0
+      const dispose = createRoot((disposeRoot) => {
+        const [active, setActive] = createSignal(makeSession(sessionId, branchId))
+        const runtime = createMockRuntime()
+        const client = feedClientStub({
+          sessionIdentity: identityOf(active),
+          client: createMockClient({
+            session: {
+              getSnapshot: () => Effect.succeed(snapshotFor(sessionId, branchId)),
+              events: () =>
+                Stream.concat(
+                  Stream.make(
+                    makeEnvelope(
+                      1,
+                      AgentEvent.cases.BranchSwitched.make({
+                        sessionId,
+                        fromBranchId: branchId,
+                        toBranchId: nextBranchId,
+                      }),
+                    ),
+                  ),
+                  Stream.never,
+                ),
+              watchRuntime: () => Stream.concat(Stream.make(runtimeSnapshot()), Stream.never),
+            },
+          }),
+          runtime,
+          applySessionSnapshot: () => {
+            snapshotCount += 1
+            setActive(makeSession(sessionId, branchId))
+          },
+          applySessionEvent: () => setActive(makeSession(sessionId, nextBranchId)),
+        })
+        useSessionFeed(
+          () => sessionId,
+          () => branchId,
+          client,
+          {
+            onInteraction: () => {},
+            onInteractionDismissed: () => {},
+            onQueueSnapshot: () => {},
+            onBranchSwitch: (nextSession, nextBranch) => {
+              expect(nextSession).toBe(sessionId)
+              expect(nextBranch).toBe(nextBranchId)
+              runtime.cast(Deferred.succeed(switched, void 0))
+            },
+          },
+        )
+        return disposeRoot
+      })
+      yield* Deferred.await(switched).pipe(
+        Effect.timeout("1 second"),
+        Effect.ensuring(Effect.sync(dispose)),
+      )
+      expect(snapshotCount).toBe(1)
+    }),
+  )
+
+  /**
+   * Mount a feed on a test clock whose events stream delivers `served` and
+   * then fails, while the runtime watch delivers its current state and stays
+   * open. Answers the test-clock time of the first five snapshot fetches and
+   * the most runtime watches open at once.
+   */
+  const failingFeedFetches = (served: ReadonlyArray<EventEnvelope>) =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-feed-hot-loop")
+      const branchId = BranchId.make("branch-feed-hot-loop")
+      const fetches: Array<number> = []
+      let openWatches = 0
+      let mostWatches = 0
+      let watchDelivered = yield* Deferred.make<void>()
+      // The feed runs on a test clock, so the backoff runs in test time.
+      const clock = yield* TestClock.make()
+      const withClock = createMockRuntime(new Map([[Clock.Clock.key, clock]]))
+      const runtime: GentRuntime = {
+        ...createMockRuntime(),
+        cast: withClock.cast,
+        fork: withClock.fork,
+      }
+      const dispose = createRoot((disposeRoot) => {
+        const [active] = createSignal(makeSession(sessionId, branchId))
+        const client = feedClientStub({
+          sessionIdentity: identityOf(active),
+          client: createMockClient({
+            session: {
+              getSnapshot: () =>
+                Effect.gen(function* () {
+                  fetches.push(yield* Clock.currentTimeMillis)
+                  watchDelivered = yield* Deferred.make<void>()
+                  return snapshotFor(sessionId, branchId)
+                }),
+              // The events stream fails once the watch delivered, as a
+              // decode failure does on a live connection.
+              events: () =>
+                Stream.concat(
+                  Stream.fromEffect(Deferred.await(watchDelivered)).pipe(
+                    Stream.drain,
+                    Stream.concat(Stream.fromIterable(served)),
+                  ),
+                  Stream.fail(
+                    new RpcClientError({
+                      reason: new RpcClientDefect({
+                        message: "Error decoding message",
+                        cause: "bad frame",
+                      }),
+                    }),
+                  ),
+                ),
+              watchRuntime: () =>
+                Stream.make(runtimeSnapshot()).pipe(
+                  Stream.concat(
+                    Stream.fromEffect(Deferred.succeed(watchDelivered, void 0)).pipe(Stream.drain),
+                  ),
+                  Stream.concat(Stream.never),
+                  Stream.onStart(
+                    Effect.sync(() => {
+                      openWatches += 1
+                      mostWatches = Math.max(mostWatches, openWatches)
+                    }),
+                  ),
+                  Stream.ensuring(Effect.sync(() => (openWatches -= 1))),
+                ),
+            },
+          }),
+          runtime,
+        })
+        useSessionFeed(
+          () => sessionId,
+          () => branchId,
+          client,
+          {
+            onInteraction: () => {},
+            onInteractionDismissed: () => {},
+            onQueueSnapshot: () => {},
+            onBranchSwitch: () => {},
+          },
+        )
+        return disposeRoot
+      })
+      yield* waitUntilAdvancing(
+        clock.adjust("1 second"),
+        () => fetches.length >= 5,
+        "five snapshot fetches",
+        3_000,
+      ).pipe(Effect.ensuring(Effect.sync(dispose)))
+      return { fetches: fetches.slice(0, 5), mostWatches }
+    })
+
+  // A feed that fails right after it opens (an envelope the client cannot
+  // decode, a failing branch stream) never served, so it backs off instead
+  // of refetching the snapshot every second.
+  it.scopedLive("a feed that fails before its replay arrives backs off", () =>
+    Effect.gen(function* () {
+      const { fetches, mostWatches } = yield* failingFeedFetches([])
+      // Unserved attempts back off 1 s, 2 s, 4 s, 8 s.
+      expect(fetches).toEqual([0, 1_000, 3_000, 7_000, 15_000])
+      // Each attempt's runtime watch closes with it.
+      expect(mostWatches).toBe(1)
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
+  it.scopedLive("a feed that served its replay retries a second after it drops", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-feed-hot-loop")
+      const branchId = BranchId.make("branch-feed-hot-loop")
+      const { fetches } = yield* failingFeedFetches([
+        makeEnvelope(
+          0,
+          AgentEvent.cases.StreamSynchronized.make({
+            sessionId,
+            branchId,
+            lastEventId: EventId.make(0),
+          }),
+        ),
+      ])
+      // Each attempt served, so each drop starts a fresh sequence.
+      expect(fetches).toEqual([0, 1_000, 2_000, 3_000, 4_000])
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
+  it.live("displays repeated events and resumed tool calls once with their final status", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-feed-duplicates")
+      const branchId = BranchId.make("branch-feed-duplicates")
+      const toolCallId = ToolCallId.make("tool-call-feed-duplicates")
+      const messageEnvelope = makeEnvelope(
+        1,
+        AgentEvent.cases.MessageReceived.make({ message: makeUserMessage(sessionId, branchId) }),
+      )
+      const streamStartedEnvelope = makeEnvelope(
+        2,
+        AgentEvent.cases.StreamStarted.make({ sessionId, branchId }),
+      )
+      const streamChunkEnvelope = makeEnvelope(
+        3,
+        AgentEvent.cases.StreamChunk.make({
+          sessionId,
+          branchId,
+          chunk: "assistant text",
+        }),
+      )
+      const toolStartedEnvelope = makeEnvelope(
+        4,
+        AgentEvent.cases.ToolCallStarted.make({
+          sessionId,
+          branchId,
+          toolCallId,
+          toolName: "bash",
+          input: { command: "printf hi" },
+        }),
+        10_000,
+      )
+      const toolSucceededEnvelope = makeEnvelope(
+        6,
+        AgentEvent.cases.ToolCallSucceeded.make({
+          sessionId,
+          branchId,
+          toolCallId,
+          toolName: "bash",
+          summary: "printed hi",
+          output: "hi",
+        }),
+        11_200,
+      )
+      const streamEndedEnvelope = makeEnvelope(
+        7,
+        AgentEvent.cases.StreamEnded.make({
+          sessionId,
+          branchId,
+          outcome: "ToolCalls",
+          costUsd: 0.01,
+        }),
+      )
+      const turnCompletedEnvelope = makeEnvelope(
+        8,
+        AgentEvent.cases.TurnCompleted.make({
+          sessionId,
+          branchId,
+          durationMs: 1_000,
+        }),
+      )
+      const retryEnvelope = makeEnvelope(
+        9,
+        AgentEvent.cases.ProviderRetrying.make({
+          sessionId,
+          branchId,
+          attempt: 1,
+          maxAttempts: 3,
+          delayMs: 100,
+          error: "temporary provider failure",
+        }),
+      )
+      const errorEnvelope = makeEnvelope(
+        10,
+        AgentEvent.cases.ErrorOccurred.make({
+          sessionId,
+          branchId,
+          error: "provider failed",
+        }),
+      )
+      const uniqueEnvelopes = [
+        messageEnvelope,
+        streamStartedEnvelope,
+        streamChunkEnvelope,
+        toolStartedEnvelope,
+        makeEnvelope(5, toolStartedEnvelope.event),
+        toolSucceededEnvelope,
+        streamEndedEnvelope,
+        turnCompletedEnvelope,
+        retryEnvelope,
+        errorEnvelope,
+      ]
+      const errorSeen = yield* Deferred.make<void>()
+      let appliedEvents = 0
+      let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
+
+      const dispose = createRoot((disposeRoot) => {
+        const [active] = createSignal(makeSession(sessionId, branchId))
+        const client = feedClientStub({
+          sessionIdentity: identityOf(active),
+          client: createMockClient({
+            session: {
+              getSnapshot: () => Effect.succeed(snapshotFor(sessionId, branchId)),
+              events: () =>
+                Stream.concat(
+                  Stream.make(...uniqueEnvelopes.flatMap((envelope) => [envelope, envelope])),
+                  Stream.never,
+                ),
+              watchRuntime: () => Stream.concat(Stream.make(runtimeSnapshot()), Stream.never),
+            },
+          }),
+          runtime: createMockRuntime(),
+          log: {
+            debug: () => {},
+            info: () => {},
+            warn: () => {},
+            error: (message: string) => {
+              if (message === "sessionFeed.error")
+                client.runtime.cast(Deferred.succeed(errorSeen, void 0))
+            },
+          },
+          applySessionEvent: () => {
+            appliedEvents += 1
+          },
+        })
+
+        feed = Option.some(
+          useSessionFeed(
+            () => sessionId,
+            () => branchId,
+            client,
+            {
+              onInteraction: () => {},
+              onInteractionDismissed: () => {},
+              onBranchSwitch: () => {},
+              onQueueSnapshot: () => {},
+            },
+          ),
+        )
+        return disposeRoot
+      })
+
+      yield* Deferred.await(errorSeen)
+      yield* waitUntil(
+        () =>
+          Option.isSome(feed) &&
+          feed.value.messages().some((message) => message.role === "assistant") &&
+          feed.value.items().some((item) => item._tag === "error"),
+      )
+      yield* Effect.sync(() => {
+        if (Option.isNone(feed)) return
+        const messages = feed.value.messages()
+        const userMessages = messages.filter((message) => message.role === "user")
+        const assistantMessage = messages.find((message) => message.role === "assistant")
+        const events = feed.value.items().filter(isSessionEvent)
+        expect(appliedEvents).toBe(uniqueEnvelopes.length)
+        expect(userMessages).toHaveLength(1)
+        expect(assistantMessage?.content).toBe("assistant text")
+        expect(toolCallsOf(Option.fromUndefinedOr(assistantMessage))).toHaveLength(1)
+        expect(toolCallsOf(Option.fromUndefinedOr(assistantMessage))[0]?.status).toBe("completed")
+        // The duration is the gap between the started and terminal envelope times.
+        expect(toolCallsOf(Option.fromUndefinedOr(assistantMessage))[0]?.durationMs).toBe(1_200)
+        const toolSegments = assistantMessage?.segments?.filter(
+          (segment) => segment._tag === "tool-call",
+        )
+        expect(toolSegments).toHaveLength(1)
+        expect(toolSegments?.[0]?.toolCall.status).toBe("completed")
+        expect(toolSegments?.[0]?.toolCall.durationMs).toBe(1_200)
+        expect(events.map((event) => event._tag)).toEqual(["turn-ended", "retrying", "error"])
+        // The single StreamEnded before TurnCompleted is the turn's only step.
+        expect(events[0]).toMatchObject({
+          _tag: "turn-ended",
+          steps: { count: 1, toolCalls: 1, costUsd: 0.01 },
+        })
+        // The retry ran and failed; the error row says how the turn ended.
+        const retry = events.find((event) => event._tag === "retrying")
+        expect(retry?._tag === "retrying" && retry.outcome).toBe("retried")
+        dispose()
+      })
+    }),
+  )
+
+  it.live("a notice draws a notice row, not an error row", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("notice-session")
+      const branchId = BranchId.make("notice-branch")
+      const envelopes = [
+        makeEnvelope(
+          1,
+          AgentEvent.cases.ProviderRetrying.make({
+            sessionId,
+            branchId,
+            attempt: 1,
+            maxAttempts: 3,
+            delayMs: 100,
+            error: "temporary provider failure",
+          }),
+        ),
+        makeEnvelope(
+          2,
+          AgentEvent.cases.ErrorOccurred.make({
+            sessionId,
+            branchId,
+            error: "compaction fell back to a trimmed window",
+            notice: true,
+          }),
+        ),
+      ]
+      let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
+      const dispose = createRoot((disposeRoot) => {
+        const [active] = createSignal(makeSession(sessionId, branchId))
+        const client = feedClientStub({
+          sessionIdentity: identityOf(active),
+          client: createMockClient({
+            session: {
+              getSnapshot: () => Effect.succeed(snapshotFor(sessionId, branchId)),
+              events: () => Stream.concat(Stream.make(...envelopes), Stream.never),
+              watchRuntime: () => Stream.concat(Stream.make(runtimeSnapshot()), Stream.never),
+            },
+          }),
+          runtime: createMockRuntime(),
+        })
+        feed = Option.some(
+          useSessionFeed(
+            () => sessionId,
+            () => branchId,
+            client,
+            {
+              onInteraction: () => {},
+              onInteractionDismissed: () => {},
+              onBranchSwitch: () => {},
+              onQueueSnapshot: () => {},
+            },
+          ),
+        )
+        return disposeRoot
+      })
+      yield* waitUntil(
+        () => Option.isSome(feed) && feed.value.items().some((item) => item._tag === "notice"),
+      )
+      yield* Effect.sync(() => {
+        if (Option.isNone(feed)) return
+        const events = feed.value
+          .items()
+          .filter(Predicate.or(isSessionEvent, Predicate.isTagged("notice")))
+        expect(events.map((event) => event._tag)).toEqual(["retrying", "notice"])
+        const notice = events[1]
+        expect(notice?._tag === "notice" && notice.text).toBe(
+          "compaction fell back to a trimmed window",
+        )
+        dispose()
+      })
+    }),
+  )
+
+  it.live("a retry row sits above the answer of the attempt it waited for, and says why", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("retry-order-session")
+      const branchId = BranchId.make("retry-order-branch")
+      // The step opens its answer, the first attempt fails, and the retry answers.
+      const envelopes = [
+        makeEnvelope(1, AgentEvent.cases.StreamStarted.make({ sessionId, branchId })),
+        makeEnvelope(
+          2,
+          AgentEvent.cases.ProviderRetrying.make({
+            sessionId,
+            branchId,
+            attempt: 1,
+            maxAttempts: 3,
+            delayMs: 2_000,
+            error: "overloaded (529)\nretry-after: 2",
+          }),
+        ),
+        makeEnvelope(
+          3,
+          AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk: "the answer" }),
+        ),
+      ]
+      let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
+      const dispose = createRoot((disposeRoot) => {
+        const [active] = createSignal(makeSession(sessionId, branchId))
+        const client = feedClientStub({
+          sessionIdentity: identityOf(active),
+          client: createMockClient({
+            session: {
+              getSnapshot: () => Effect.succeed(snapshotFor(sessionId, branchId)),
+              events: () => Stream.concat(Stream.make(...envelopes), Stream.never),
+              watchRuntime: () => Stream.concat(Stream.make(runtimeSnapshot()), Stream.never),
+            },
+          }),
+          runtime: createMockRuntime(),
+        })
+        feed = Option.some(
+          useSessionFeed(
+            () => sessionId,
+            () => branchId,
+            client,
+            {
+              onInteraction: () => {},
+              onInteractionDismissed: () => {},
+              onBranchSwitch: () => {},
+              onQueueSnapshot: () => {},
+            },
+          ),
+        )
+        return disposeRoot
+      })
+      yield* waitUntil(
+        () =>
+          Option.isSome(feed) &&
+          feed.value.messages().some((message) => message.content === "the answer"),
+      )
+      yield* Effect.sync(() => {
+        if (Option.isNone(feed)) return
+        const items = feed.value.items()
+        expect(items.map((item) => item._tag)).toEqual(["retrying", "regular-message"])
+        const retry = items[0]
+        if (retry?._tag !== "retrying") return
+        // The answer streams, so the retry ran; its row names the provider's reason.
+        expect(retry.outcome).toBe("retried")
+        expect(getSessionEventLabel(retry)).toBe("Retried 1/3 · overloaded (529)")
+        dispose()
+      })
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
+  /** The retry row a feed shows once a cancel during the backoff ended the turn. */
+  const retryRowAfterBackoffCancel = (lastEventId: Option.Option<number>) =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("retry-cancel-session")
+      const branchId = BranchId.make("retry-cancel-branch")
+      // Core ends the cut stream before it completes the turn.
+      const envelopes = [
+        makeEnvelope(1, AgentEvent.cases.StreamStarted.make({ sessionId, branchId })),
+        makeEnvelope(
+          2,
+          AgentEvent.cases.ProviderRetrying.make({
+            sessionId,
+            branchId,
+            attempt: 1,
+            maxAttempts: 3,
+            delayMs: 2_000,
+            error: "overloaded (529)",
+          }),
+        ),
+        makeEnvelope(
+          3,
+          AgentEvent.cases.StreamEnded.make({
+            sessionId,
+            branchId,
+            interrupted: true,
+            outcome: "Interrupted",
+          }),
+        ),
+        makeEnvelope(
+          4,
+          AgentEvent.cases.TurnCompleted.make({
+            sessionId,
+            branchId,
+            durationMs: 1_000,
+            interrupted: true,
+          }),
+        ),
+      ]
+      let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
+      const dispose = createRoot((disposeRoot) => {
+        const [active] = createSignal(makeSession(sessionId, branchId))
+        const client = feedClientStub({
+          sessionIdentity: identityOf(active),
+          client: createMockClient({
+            session: {
+              getSnapshot: () =>
+                Effect.succeed(
+                  snapshotFor(sessionId, branchId, Option.getOrUndefined(lastEventId)),
+                ),
+              events: () => Stream.concat(Stream.make(...envelopes), Stream.never),
+              watchRuntime: () => Stream.concat(Stream.make(runtimeSnapshot()), Stream.never),
+            },
+          }),
+          runtime: createMockRuntime(),
+        })
+        feed = Option.some(
+          useSessionFeed(
+            () => sessionId,
+            () => branchId,
+            client,
+            {
+              onInteraction: () => {},
+              onInteractionDismissed: () => {},
+              onBranchSwitch: () => {},
+              onQueueSnapshot: () => {},
+            },
+          ),
+        )
+        return disposeRoot
+      })
+      yield* waitUntil(
+        () =>
+          Option.isSome(feed) && feed.value.items().some((item) => item._tag === "interruption"),
+      )
+      const retry = Option.flatMap(feed, (value) =>
+        Option.fromNullishOr(value.items().find((item) => item._tag === "retrying")),
+      )
+      dispose()
+      return retry
+    })
+
+  it.live("a cancel during the backoff reads cancelled, live and on replay", () =>
+    Effect.gen(function* () {
+      for (const lastEventId of [Option.none<number>(), Option.some(4)]) {
+        const retry = yield* retryRowAfterBackoffCancel(lastEventId)
+        expect(Option.isSome(retry)).toBe(true)
+        if (Option.isNone(retry) || retry.value._tag !== "retrying") continue
+        expect(getSessionEventLabel(retry.value)).toBe("Retry 1/3 cancelled · overloaded (529)")
+      }
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
+  const expectNestedCellOperation = (
+    feed: ReturnType<typeof useSessionFeed>,
+    innerId: ToolCallId,
+  ) => {
+    const assistant = feed.messages().find((message) => message.role === "assistant")
+    // The inner read is not a transcript sibling of the cell.
+    expect(toolCallsOf(Option.fromUndefinedOr(assistant)).map((call) => call.toolName)).toEqual([
+      "cell",
+    ])
+    const operation = toolCallsOf(Option.fromUndefinedOr(assistant))[0]?.operations?.[0]
+    expect(toolCallsOf(Option.fromUndefinedOr(assistant))[0]?.operations).toHaveLength(1)
+    expect(operation?.id).toBe(innerId)
+    expect(operation?.toolName).toBe("read")
+    expect(operation?.status).toBe("error")
+    expect(operation?.summary).toBe("missing file")
+    const segment = assistant?.segments?.find((entry) => entry._tag === "tool-call")
+    expect(segment?._tag === "tool-call" && segment.toolCall.operations?.[0]?.status).toBe("error")
+    expect(feed.activeTool()).toBeUndefined()
+  }
+
+  const cellNestingEnvelopes = (
+    sessionId: SessionId,
+    branchId: BranchId,
+    cellId: ToolCallId,
+    innerId: ToolCallId,
+  ): EventEnvelope[] => [
+    makeEnvelope(1, AgentEvent.cases.StreamStarted.make({ sessionId, branchId })),
+    makeEnvelope(
+      2,
+      AgentEvent.cases.ToolCallStarted.make({
+        sessionId,
+        branchId,
+        toolCallId: cellId,
+        toolName: "cell",
+        input: { code: "await tools.read({path: 'a.txt'})" },
+      }),
+    ),
+    makeEnvelope(
+      3,
+      AgentEvent.cases.ToolCallStarted.make({
+        sessionId,
+        branchId,
+        toolCallId: innerId,
+        toolName: "read",
+        input: { path: "a.txt" },
+        parentToolCallId: cellId,
+      }),
+    ),
+    makeEnvelope(
+      4,
+      AgentEvent.cases.ToolCallFailed.make({
+        sessionId,
+        branchId,
+        toolCallId: innerId,
+        toolName: "read",
+        summary: "missing file",
+        parentToolCallId: cellId,
+      }),
+    ),
+    makeEnvelope(
+      5,
+      AgentEvent.cases.ToolCallSucceeded.make({
+        sessionId,
+        branchId,
+        toolCallId: cellId,
+        toolName: "cell",
+        summary: "done",
+        output: "{}",
+      }),
+    ),
+    makeEnvelope(6, AgentEvent.cases.TurnCompleted.make({ sessionId, branchId, durationMs: 1 })),
+  ]
+
+  it.live("nests cell-admitted tool calls under their cell with final status", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-feed-cell")
+      const branchId = BranchId.make("branch-feed-cell")
+      const cellId = ToolCallId.make("tool-call-cell")
+      const innerId = ToolCallId.make("tool-call-cell-read")
+      const envelopes = cellNestingEnvelopes(sessionId, branchId, cellId, innerId)
+      let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
+      const dispose = createRoot((disposeRoot) => {
+        const [active] = createSignal(makeSession(sessionId, branchId))
+        const client = feedClientStub({
+          sessionIdentity: identityOf(active),
+          client: createMockClient({
+            session: {
+              getSnapshot: () => Effect.succeed(snapshotFor(sessionId, branchId)),
+              events: () => Stream.concat(Stream.make(...envelopes), Stream.never),
+              watchRuntime: () => Stream.concat(Stream.make(runtimeSnapshot()), Stream.never),
+            },
+          }),
+          runtime: createMockRuntime(),
+        })
+        feed = Option.some(
+          useSessionFeed(
+            () => sessionId,
+            () => branchId,
+            client,
+            {
+              onInteraction: () => {},
+              onInteractionDismissed: () => {},
+              onBranchSwitch: () => {},
+              onQueueSnapshot: () => {},
+            },
+          ),
+        )
+        return disposeRoot
+      })
+
+      yield* waitUntil(
+        () =>
+          Option.isSome(feed) &&
+          feed.value
+            .messages()
+            .some(
+              (message) => toolCallsOf(Option.fromUndefinedOr(message))[0]?.status === "completed",
+            ),
+      )
+      yield* Effect.sync(() => {
+        if (Option.isNone(feed)) return
+        expectNestedCellOperation(feed.value, innerId)
+        dispose()
+      })
+    }),
+  )
+
+  /** A feed over one snapshot and a live event stream. */
+  const openFeed = (snapshot: SessionSnapshot, envelopes: ReadonlyArray<EventEnvelope>) => {
+    let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
+    const dispose = createRoot((disposeRoot) => {
+      const [active] = createSignal(makeSession(snapshot.sessionId, snapshot.branchId))
+      const client = feedClientStub({
+        sessionIdentity: identityOf(active),
+        client: createMockClient({
+          session: {
+            getSnapshot: () => Effect.succeed(snapshot),
+            events: () => Stream.concat(Stream.make(...envelopes), Stream.never),
+            watchRuntime: () => Stream.concat(Stream.make(runtimeSnapshot()), Stream.never),
+          },
+        }),
+        runtime: createMockRuntime(),
+      })
+      feed = Option.some(
+        useSessionFeed(
+          () => snapshot.sessionId,
+          () => snapshot.branchId,
+          client,
+          {
+            onInteraction: () => {},
+            onInteractionDismissed: () => {},
+            onBranchSwitch: () => {},
+            onQueueSnapshot: () => {},
+          },
+        ),
+      )
+      return disposeRoot
+    })
+    const cellOf = () =>
+      Option.flatMap(feed, (value) =>
+        Option.fromNullishOr(
+          toolCallsOf(
+            Option.fromUndefinedOr(
+              value.messages().find((message) => message.role === "assistant"),
+            ),
+          )[0],
+        ),
+      )
+    const activeTool = () =>
+      Option.flatMap(feed, (value) => Option.fromUndefinedOr(value.activeTool()))
+    return { cellOf, activeTool, dispose }
+  }
+
+  it.live("a cell's running ops show side by side while one of them waits", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-feed-sibling-ops")
+      const branchId = BranchId.make("branch-feed-sibling-ops")
+      const cellId = ToolCallId.make("tool-call-sibling-cell")
+      const opStarted = (id: string, command: string) =>
+        AgentEvent.cases.ToolCallStarted.make({
+          sessionId,
+          branchId,
+          toolCallId: ToolCallId.make(id),
+          toolName: "bash",
+          input: { command },
+          parentToolCallId: cellId,
+        })
+      const { activeTool, dispose } = openFeed(snapshotFor(sessionId, branchId), [
+        makeEnvelope(1, AgentEvent.cases.StreamStarted.make({ sessionId, branchId })),
+        makeEnvelope(
+          2,
+          AgentEvent.cases.ToolCallStarted.make({
+            sessionId,
+            branchId,
+            toolCallId: cellId,
+            toolName: "cell",
+            input: { code: "await Promise.all([tools.bash(a), tools.bash(b)])" },
+          }),
+        ),
+        makeEnvelope(3, opStarted("tool-call-ticks", "sleep 2; echo SLEPT")),
+        makeEnvelope(4, opStarted("tool-call-asks", "git checkout HEAD -- README.md")),
+      ])
+      yield* waitUntil(() =>
+        Option.exists(activeTool(), (label) => label.includes("git checkout")),
+      ).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            // The asking op does not hide the one that runs on; the cell waits on both.
+            const label = Option.getOrElse(activeTool(), () => "")
+            expect(label).toContain("sleep 2")
+            expect(label).toContain("git checkout")
+            expect(label).not.toContain("cell")
+          }),
+        ),
+        Effect.ensuring(Effect.sync(dispose)),
+      )
+    }),
+  )
+
+  it.live("a running read names its file from the cwd, as its row does", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-feed-running-read")
+      const branchId = BranchId.make("branch-feed-running-read")
+      const { activeTool, dispose } = openFeed(snapshotFor(sessionId, branchId), [
+        makeEnvelope(1, AgentEvent.cases.StreamStarted.make({ sessionId, branchId })),
+        makeEnvelope(
+          2,
+          AgentEvent.cases.ToolCallStarted.make({
+            sessionId,
+            branchId,
+            toolCallId: ToolCallId.make("tool-call-running-read"),
+            toolName: "read",
+            input: { path: "/work/proj/src/app.tsx" },
+          }),
+        ),
+      ])
+      yield* waitUntil(() => Option.isSome(activeTool())).pipe(
+        Effect.andThen(
+          Effect.sync(() =>
+            expect(Option.getOrElse(activeTool(), () => "")).toBe("read(src/app.tsx)"),
+          ),
+        ),
+        Effect.ensuring(Effect.sync(dispose)),
+      )
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.live("an op still running when its cell fails reads as failed, as a reload draws it", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-feed-interrupted-cell")
+      const branchId = BranchId.make("branch-feed-interrupted-cell")
+      const cellId = ToolCallId.make("tool-call-interrupted-cell")
+      const opId = ToolCallId.make("tool-call-interrupted-op")
+      const { cellOf, dispose } = openFeed(snapshotFor(sessionId, branchId), [
+        makeEnvelope(1, AgentEvent.cases.StreamStarted.make({ sessionId, branchId })),
+        makeEnvelope(
+          2,
+          AgentEvent.cases.ToolCallStarted.make({
+            sessionId,
+            branchId,
+            toolCallId: cellId,
+            toolName: "cell",
+            input: { code: "await tools.bash({command: 'sleep 60'})" },
+          }),
+        ),
+        makeEnvelope(
+          3,
+          AgentEvent.cases.ToolCallStarted.make({
+            sessionId,
+            branchId,
+            toolCallId: opId,
+            toolName: "bash",
+            input: { command: "sleep 60" },
+            parentToolCallId: cellId,
+          }),
+        ),
+        makeEnvelope(
+          4,
+          AgentEvent.cases.ToolCallFailed.make({
+            sessionId,
+            branchId,
+            toolCallId: cellId,
+            toolName: "cell",
+            summary: "The tool did not finish: the turn was interrupted.",
+          }),
+        ),
+      ])
+      yield* waitUntil(() => Option.exists(cellOf(), (cell) => cell.status === "error")).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            const cell = Option.getOrUndefined(cellOf())
+            expect(cell?.operations?.map((operation) => operation.status)).toEqual(["error"])
+          }),
+        ),
+        Effect.ensuring(Effect.sync(dispose)),
+      )
+    }),
+  )
+
+  it.live("a live result on a reloaded op drops the cuts of the output it replaces", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-feed-stale-cuts")
+      const branchId = BranchId.make("branch-feed-stale-cuts")
+      const cellId = ToolCallId.make("tool-call-stale-cuts-cell")
+      const opId = ToolCallId.make("tool-call-stale-cuts-op")
+      const cutOperation: NonNullable<ToolInteraction["operations"]>[number] = {
+        id: opId,
+        toolName: "bash",
+        status: "running",
+        input: { command: "seq 3000" },
+        summary: absent,
+        output: '{"stdout":"1\\n…\\n3000","stderr":"","exitCode":0}',
+        durationMs: absent,
+        cuts: [
+          OutputCut.cases.Text.make({ field: "stdout", lines: 3000, tailLine: 3000, chars: 9 }),
+        ],
+      }
+      const snapshot: SessionSnapshot = {
+        ...snapshotFor(sessionId, branchId, 1),
+        messages: [
+          projectMessage(
+            Message.cases.regular.make({
+              id: MessageId.make("stale-cuts-assistant"),
+              sessionId,
+              branchId,
+              role: "assistant",
+              // A stored interaction projects from the call part the assistant wrote.
+              parts: [
+                Prompt.textPart({ text: "" }),
+                Prompt.toolCallPart({
+                  id: cellId,
+                  name: "cell",
+                  params: {},
+                  providerExecuted: false,
+                }),
+              ],
+              createdAt: dateFromMillis(0),
+            }),
+            [
+              new ToolInteraction({
+                id: cellId,
+                toolName: "cell",
+                status: "running",
+                input: {},
+                summary: absent,
+                output: absent,
+                durationMs: absent,
+                operations: [cutOperation],
+              }),
+            ],
+          ),
+        ],
+      }
+      const wholeOutput = '{"stdout":"done","stderr":"","exitCode":0}'
+      const { cellOf, dispose } = openFeed(snapshot, [
+        makeEnvelope(
+          2,
+          AgentEvent.cases.ToolCallSucceeded.make({
+            sessionId,
+            branchId,
+            toolCallId: opId,
+            toolName: "bash",
+            summary: "exit 0 · 1 line",
+            output: wholeOutput,
+            parentToolCallId: cellId,
+          }),
+        ),
+      ])
+      yield* waitUntil(() =>
+        Option.exists(cellOf(), (cell) => cell.operations?.[0]?.status === "completed"),
+      ).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            const operation = Option.getOrUndefined(cellOf())?.operations?.[0]
+            expect(operation?.output).toBe(wholeOutput)
+            expect(operation?.cuts).toBeUndefined()
+          }),
+        ),
+        Effect.ensuring(Effect.sync(dispose)),
+      )
+    }),
+  )
+
+  it.live("replays buffered event-only state before the snapshot cursor", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-feed-buffered")
+      const branchId = BranchId.make("branch-feed-buffered")
+      const extensionId = ExtensionId.make("buffered-extension")
+      const bufferedPulse = makeEnvelope(
+        1,
+        AgentEvent.cases.ExtensionStateChanged.make({ sessionId, branchId, extensionId }),
+      )
+      const bufferedInteraction = makeEnvelope(
+        2,
+        AgentEvent.cases.InteractionPresented.make({
+          sessionId,
+          branchId,
+          requestId: InteractionRequestId.make("interaction-buffered"),
+          text: "approve this",
+          metadata: absent,
+        }),
+      )
+      const bufferedBranchSwitch = makeEnvelope(
+        3,
+        AgentEvent.cases.BranchSwitched.make({
+          sessionId,
+          fromBranchId: branchId,
+          toBranchId: BranchId.make("historical-other-branch"),
+        }),
+      )
+      const liveEvent = makeEnvelope(
+        4,
+        AgentEvent.cases.TurnCompleted.make({ sessionId, branchId, durationMs: 1 }),
+      )
+      const interactionSeen = yield* Deferred.make<ActiveInteraction>()
+      const liveSeen = yield* Deferred.make<void>()
+      let requestedAfter: Option.Option<number> = Option.none()
+      const bufferedTags: string[] = []
+      const branchSwitches: Array<{ sessionId: SessionId; branchId: BranchId }> = []
+
+      const dispose = createRoot((disposeRoot) => {
+        const [active] = createSignal(makeSession(sessionId, branchId))
+        const client = feedClientStub({
+          sessionIdentity: identityOf(active),
+          client: createMockClient({
+            session: {
+              getSnapshot: () => Effect.succeed(snapshotFor(sessionId, branchId, 3)),
+              events: ({ after }: { readonly after?: number }) => {
+                requestedAfter = Option.fromNullishOr(after)
+                return Stream.concat(
+                  Stream.make(bufferedPulse, bufferedInteraction, bufferedBranchSwitch, liveEvent),
+                  Stream.never,
+                )
+              },
+              watchRuntime: () => Stream.concat(Stream.make(runtimeSnapshot()), Stream.never),
+            },
+          }),
+          runtime: createMockRuntime(),
+          applySessionEvent: (envelope) => {
+            if (envelope.id === liveEvent.id)
+              client.runtime.cast(Deferred.succeed(liveSeen, void 0))
+          },
+          applyBufferedSessionEvent: (envelope) => {
+            bufferedTags.push(envelope.event._tag)
+          },
+        })
+
+        useSessionFeed(
+          () => sessionId,
+          () => branchId,
+          client,
+          {
+            onInteraction: (interaction) => {
+              client.runtime.cast(Deferred.succeed(interactionSeen, interaction))
+            },
+            onInteractionDismissed: () => {},
+            onBranchSwitch: (nextSessionId, nextBranchId) => {
+              branchSwitches.push({ sessionId: nextSessionId, branchId: nextBranchId })
+            },
+            onQueueSnapshot: () => {},
+          },
+        )
+        return disposeRoot
+      })
+
+      const interaction = yield* Deferred.await(interactionSeen)
+      yield* Deferred.await(liveSeen)
+      yield* Effect.sync(() => {
+        expect(Option.getOrElse(requestedAfter, () => -1)).toBe(0)
+        expect(bufferedTags).toEqual(["ExtensionStateChanged", "InteractionPresented"])
+        expect(interaction.requestId).toBe(InteractionRequestId.make("interaction-buffered"))
+        expect(branchSwitches).toEqual([])
+        dispose()
+      })
+    }),
+  )
+
+  for (const saved of [false, true]) {
+    it.live(`keeps answers and tools with their owning message (saved: ${saved})`, () =>
+      Effect.gen(function* () {
+        const sessionId = SessionId.make("session-feed-compaction-live")
+        const branchId = BranchId.make("branch-feed-compaction-live")
+        const inputId = MessageId.make("first-input")
+        const nextInputId = MessageId.make("follow-up-input")
+        const toolCallId = ToolCallId.make("first-stream-tool")
+        const events = [
+          AgentEvent.cases.StreamStarted.make({ sessionId, branchId, messageId: inputId, step: 1 }),
+          AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk: "First " }),
+          AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk: "answer" }),
+          AgentEvent.cases.ToolCallStarted.make({
+            sessionId,
+            branchId,
+            toolCallId,
+            toolName: "cell",
+            input: {},
+          }),
+          AgentEvent.cases.StreamEnded.make({ sessionId, branchId }),
+          AgentEvent.cases.StreamStarted.make({ sessionId, branchId, messageId: inputId, step: 2 }),
+          AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk: "Next step" }),
+          AgentEvent.cases.ToolCallSucceeded.make({
+            sessionId,
+            branchId,
+            toolCallId,
+            toolName: "cell",
+            summary: "done",
+            output: "result",
+          }),
+          AgentEvent.cases.TurnCompleted.make({
+            sessionId,
+            branchId,
+            messageId: inputId,
+            durationMs: 0,
+          }),
+          AgentEvent.cases.StreamStarted.make({
+            sessionId,
+            branchId,
+            messageId: nextInputId,
+            step: 1,
+          }),
+          AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk: "Follow-up " }),
+          AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk: "answer" }),
+          AgentEvent.cases.TurnCompleted.make({
+            sessionId,
+            branchId,
+            messageId: nextInputId,
+            durationMs: 0,
+          }),
+        ]
+        // The snapshot projects a cell's operations from the branch's stored receipts.
+        const savedOperation: NonNullable<ToolInteraction["operations"]>[number] = {
+          id: ToolCallId.make("saved-read-op"),
+          toolName: "read",
+          status: "completed",
+          input: { path: "a.md" },
+          summary: "3 lines",
+          output: "one",
+          durationMs: 30,
+        }
+        let snapshot = snapshotFor(sessionId, branchId)
+        if (saved) {
+          const messages = [
+            { id: assistantMessageIdForTurn(inputId, 1), text: "First answer" },
+            { id: assistantMessageIdForTurn(inputId, 2), text: "Next step" },
+            { id: assistantMessageIdForTurn(nextInputId, 1), text: "Follow-up answer" },
+          ].map(({ id, text }, index) => {
+            const calls: ToolInteraction[] = []
+            if (index === 0)
+              calls.push(
+                new ToolInteraction({
+                  id: toolCallId,
+                  toolName: "cell",
+                  status: "completed",
+                  input: {},
+                  summary: "done",
+                  output: "result",
+                  durationMs: 1_200,
+                  operations: [savedOperation],
+                }),
+              )
+            // A stored interaction projects from the call part the assistant wrote.
+            const parts: Array<Prompt.Part> = [Prompt.textPart({ text })]
+            if (calls.length > 0)
+              parts.push(
+                Prompt.toolCallPart({
+                  id: toolCallId,
+                  name: "cell",
+                  params: {},
+                  providerExecuted: false,
+                }),
+              )
+            return projectMessage(
+              Message.cases.regular.make({
+                id,
+                sessionId,
+                branchId,
+                role: "assistant",
+                parts,
+                createdAt: dateFromMillis(index),
+              }),
+              calls,
+            )
+          })
+          snapshot = { ...snapshot, lastEventId: events.length, messages }
+        }
+        let applied = 0
+        let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
+        const dispose = createRoot((disposeRoot) => {
+          const [active] = createSignal(makeSession(sessionId, branchId))
+          const client = feedClientStub({
+            sessionIdentity: identityOf(active),
+            client: createMockClient({
+              session: {
+                getSnapshot: () => Effect.succeed(snapshot),
+                events: () =>
+                  Stream.concat(
+                    Stream.make(
+                      ...events.map((event, index) => makeEnvelope(index + 1, event, index * 300)),
+                    ),
+                    Stream.never,
+                  ),
+                watchRuntime: () => Stream.concat(Stream.make(runtimeSnapshot()), Stream.never),
+              },
+            }),
+            runtime: createMockRuntime(),
+            applySessionEvent: () => {
+              applied += 1
+            },
+            applyBufferedSessionEvent: () => {
+              applied += 1
+            },
+          })
+          feed = Option.some(
+            useSessionFeed(
+              () => sessionId,
+              () => branchId,
+              client,
+              {
+                onInteraction: () => {},
+                onInteractionDismissed: () => {},
+                onBranchSwitch: () => {},
+                onQueueSnapshot: () => {},
+              },
+            ),
+          )
+          return disposeRoot
+        })
+
+        yield* waitUntil(
+          () =>
+            applied === events.length &&
+            Option.isSome(feed) &&
+            feed.value.messages().some((message) => message.content.includes("Follow-up answer")),
+        ).pipe(
+          Effect.andThen(
+            Effect.sync(() => {
+              if (Option.isNone(feed)) return
+              const messages = feed.value.messages()
+              expect(messages.map((message) => message.content)).toEqual([
+                "First answer",
+                "Next step",
+                "Follow-up answer",
+              ])
+              expect(messages.map((message) => message.id)).toEqual([
+                assistantMessageIdForTurn(inputId, 1),
+                assistantMessageIdForTurn(inputId, 2),
+                assistantMessageIdForTurn(nextInputId, 1),
+              ])
+              expect(toolCallsOf(Option.fromUndefinedOr(messages[0]))[0]?.status).toBe("completed")
+              // A saved interaction keeps the duration the snapshot projected from receipts.
+              expect(toolCallsOf(Option.fromUndefinedOr(messages[0]))[0]?.durationMs).toBe(1_200)
+              if (saved) {
+                // After a reload the cell draws its operations, not only its receipts.
+                expect(toolCallsOf(Option.fromUndefinedOr(messages[0]))[0]?.operations).toEqual([
+                  savedOperation,
+                ])
+              }
+              expect(toolCallsOf(Option.fromUndefinedOr(messages[1]))).toEqual([])
+              expect(toolCallsOf(Option.fromUndefinedOr(messages[2]))).toEqual([])
+            }),
+          ),
+          Effect.ensuring(Effect.sync(dispose)),
+        )
+      }),
+    )
+  }
+
+  it.live("starts a late tool call on the message the event names, not the newest one", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-feed-late-tool")
+      const branchId = BranchId.make("branch-feed-late-tool")
+      const inputId = MessageId.make("late-tool-input")
+      const firstAnswerId = assistantMessageIdForTurn(inputId, 1)
+      const secondAnswerId = assistantMessageIdForTurn(inputId, 2)
+      const lateToolCallId = ToolCallId.make("late-tool-call")
+      const events = [
+        AgentEvent.cases.StreamStarted.make({ sessionId, branchId, messageId: inputId, step: 1 }),
+        AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk: "First answer" }),
+        AgentEvent.cases.StreamEnded.make({ sessionId, branchId }),
+        AgentEvent.cases.StreamStarted.make({ sessionId, branchId, messageId: inputId, step: 2 }),
+        AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk: "Second answer" }),
+        // The first step's tool receipt arrives after the second step began.
+        AgentEvent.cases.ToolCallStarted.make({
+          sessionId,
+          branchId,
+          toolCallId: lateToolCallId,
+          toolName: "read",
+          input: {},
+          assistantMessageId: firstAnswerId,
+        }),
+      ]
+      let applied = 0
+      let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
+      const dispose = createRoot((disposeRoot) => {
+        const [active] = createSignal(makeSession(sessionId, branchId))
+        const client = feedClientStub({
+          sessionIdentity: identityOf(active),
+          client: createMockClient({
+            session: {
+              getSnapshot: () => Effect.succeed(snapshotFor(sessionId, branchId)),
+              events: () =>
+                Stream.concat(
+                  Stream.make(
+                    ...events.map((event, index) => makeEnvelope(index + 1, event, index * 100)),
+                  ),
+                  Stream.never,
+                ),
+              watchRuntime: () => Stream.concat(Stream.make(runtimeSnapshot()), Stream.never),
+            },
+          }),
+          runtime: createMockRuntime(),
+          applySessionEvent: () => {
+            applied += 1
+          },
+          applyBufferedSessionEvent: () => {
+            applied += 1
+          },
+        })
+        feed = Option.some(
+          useSessionFeed(
+            () => sessionId,
+            () => branchId,
+            client,
+            {
+              onInteraction: () => {},
+              onInteractionDismissed: () => {},
+              onBranchSwitch: () => {},
+              onQueueSnapshot: () => {},
+            },
+          ),
+        )
+        return disposeRoot
+      })
+
+      yield* waitUntil(
+        () =>
+          applied === events.length &&
+          Option.isSome(feed) &&
+          feed.value.messages().length === 2 &&
+          feed.value
+            .messages()
+            .some((message) => toolCallsOf(Option.fromUndefinedOr(message)).length > 0),
+      ).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            if (Option.isNone(feed)) return
+            const messages = feed.value.messages()
+            const first = messages.find((message) => message.id === firstAnswerId)
+            const second = messages.find((message) => message.id === secondAnswerId)
+            expect(toolCallsOf(Option.fromUndefinedOr(first)).map((call) => call.id)).toEqual([
+              lateToolCallId,
+            ])
+            expect(toolCallsOf(Option.fromUndefinedOr(second))).toEqual([])
+          }),
+        ),
+        Effect.ensuring(Effect.sync(dispose)),
+      )
+    }),
+  )
+
+  it.live("shows a live compaction message as soon as its event arrives", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-feed-compaction-live")
+      const branchId = BranchId.make("branch-feed-compaction-live")
+      const messageEnvelope = makeEnvelope(
+        1,
+        AgentEvent.cases.MessageReceived.make({
+          message: makeCompactionMessage(sessionId, branchId),
+        }),
+      )
+      const streamStartedEnvelope = makeEnvelope(
+        2,
+        AgentEvent.cases.StreamStarted.make({ sessionId, branchId }),
+      )
+      const streamChunkEnvelope = makeEnvelope(
+        3,
+        AgentEvent.cases.StreamChunk.make({
+          sessionId,
+          branchId,
+          chunk: "native response",
+        }),
+      )
+      let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
+      const dispose = createRoot((disposeRoot) => {
+        const [active] = createSignal(makeSession(sessionId, branchId))
+        const client = feedClientStub({
+          sessionIdentity: identityOf(active),
+          client: createMockClient({
+            session: {
+              getSnapshot: () => Effect.succeed(snapshotFor(sessionId, branchId)),
+              events: () =>
+                Stream.concat(
+                  Stream.make(messageEnvelope, streamStartedEnvelope, streamChunkEnvelope),
+                  Stream.never,
+                ),
+              watchRuntime: () => Stream.concat(Stream.make(runtimeSnapshot()), Stream.never),
+            },
+          }),
+          runtime: createMockRuntime(),
+        })
+        feed = Option.some(
+          useSessionFeed(
+            () => sessionId,
+            () => branchId,
+            client,
+            {
+              onInteraction: () => {},
+              onInteractionDismissed: () => {},
+              onBranchSwitch: () => {},
+              onQueueSnapshot: () => {},
+            },
+          ),
+        )
+        return disposeRoot
+      })
+
+      yield* waitUntil(
+        () =>
+          Option.isSome(feed) &&
+          feed.value.messages().some((message) => message.content.includes("native response")),
+      )
+      if (Option.isNone(feed)) return yield* Effect.die("feed did not initialize")
+      expect(feed.value.messages()).toHaveLength(2)
+      const summary = feed.value
+        .messages()
+        .find((message) => message.metadata?.customType === "context-window")
+      const response = feed.value
+        .messages()
+        .find((message) => message.content.includes("native response"))
+      expect(summary?.content).toBe("Context handoff: stored summary")
+      expect(response?.id).toBeDefined()
+      expect(response?.id).not.toBe(summary?.id)
+      expect(response?.content).toBe("native response")
+      dispose()
+    }),
+  )
+
+  it.live("shows a live notice separately from later model output", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-feed-compaction-live")
+      const branchId = BranchId.make("branch-feed-compaction-live")
+      const messageEnvelope = makeEnvelope(
+        1,
+        AgentEvent.cases.MessageReceived.make({
+          message: {
+            ...makeCompactionMessage(sessionId, branchId),
+            metadata: { customType: "prompt-present", hidden: true },
+          },
+        }),
+      )
+      const streamStartedEnvelope = makeEnvelope(
+        2,
+        AgentEvent.cases.StreamStarted.make({ sessionId, branchId }),
+      )
+      const streamChunkEnvelope = makeEnvelope(
+        3,
+        AgentEvent.cases.StreamChunk.make({
+          sessionId,
+          branchId,
+          chunk: "native response",
+        }),
+      )
+      let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
+      const dispose = createRoot((disposeRoot) => {
+        const [active] = createSignal(makeSession(sessionId, branchId))
+        const client = feedClientStub({
+          sessionIdentity: identityOf(active),
+          client: createMockClient({
+            session: {
+              getSnapshot: () => Effect.succeed(snapshotFor(sessionId, branchId)),
+              events: () =>
+                Stream.concat(
+                  Stream.make(messageEnvelope, streamStartedEnvelope, streamChunkEnvelope),
+                  Stream.never,
+                ),
+              watchRuntime: () => Stream.concat(Stream.make(runtimeSnapshot()), Stream.never),
+            },
+          }),
+          runtime: createMockRuntime(),
+        })
+        feed = Option.some(
+          useSessionFeed(
+            () => sessionId,
+            () => branchId,
+            client,
+            {
+              onInteraction: () => {},
+              onInteractionDismissed: () => {},
+              onBranchSwitch: () => {},
+              onQueueSnapshot: () => {},
+            },
+          ),
+        )
+        return disposeRoot
+      })
+
+      yield* waitUntil(
+        () =>
+          Option.isSome(feed) &&
+          feed.value.messages().some((message) => message.content.includes("native response")),
+      )
+      if (Option.isNone(feed)) return yield* Effect.die("feed did not initialize")
+      expect(feed.value.messages()).toHaveLength(2)
+      const summary = feed.value
+        .messages()
+        .find((message) => message.metadata?.customType === "prompt-present")
+      const response = feed.value
+        .messages()
+        .find((message) => message.content.includes("native response"))
+      expect(summary?.content).toBe("Context handoff: stored summary")
+      expect(response?.id).toBeDefined()
+      expect(response?.id).not.toBe(summary?.id)
+      expect(response?.content).toBe("native response")
+      dispose()
+    }),
+  )
+
+  it.live("reconstructs retry history and completion state during reload", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-feed-compaction-reload")
+      const branchId = BranchId.make("branch-feed-compaction-reload")
+      const retryEnvelope = makeEnvelope(
+        1,
+        AgentEvent.cases.ProviderRetrying.make({
+          sessionId,
+          branchId,
+          attempt: 1,
+          maxAttempts: 3,
+          delayMs: 100,
+          error: "temporary provider failure",
+        }),
+      )
+      const interruptedEnvelope = makeEnvelope(
+        2,
+        AgentEvent.cases.TurnCompleted.make({
+          sessionId,
+          branchId,
+          durationMs: 1_000,
+          interrupted: true,
+        }),
+      )
+      // The handoff marker is a durable user message, so a reload reads it
+      // from the snapshot rather than from the buffered event stream.
+      let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
+      const dispose = createRoot((disposeRoot) => {
+        const [active] = createSignal(makeSession(sessionId, branchId))
+        const client = feedClientStub({
+          sessionIdentity: identityOf(active),
+          client: createMockClient({
+            session: {
+              getSnapshot: () =>
+                Effect.succeed({
+                  ...snapshotFor(sessionId, branchId, 3),
+                  messages: [projectMessage(makeCompactionMessage(sessionId, branchId), [])],
+                }),
+              events: () =>
+                Stream.concat(Stream.make(retryEnvelope, interruptedEnvelope), Stream.never),
+              watchRuntime: () => Stream.concat(Stream.make(runtimeSnapshot()), Stream.never),
+            },
+          }),
+          runtime: createMockRuntime(),
+        })
+        feed = Option.some(
+          useSessionFeed(
+            () => sessionId,
+            () => branchId,
+            client,
+            {
+              onInteraction: () => {},
+              onInteractionDismissed: () => {},
+              onBranchSwitch: () => {},
+              onQueueSnapshot: () => {},
+            },
+          ),
+        )
+        return disposeRoot
+      })
+
+      yield* waitUntil(
+        () =>
+          Option.isSome(feed) &&
+          feed.value.items().some((item) => item._tag === "interruption") &&
+          feed.value
+            .messages()
+            .some((message) => message.metadata?.customType === "context-window"),
+      )
+      if (Option.isNone(feed)) return yield* Effect.die("feed did not initialize")
+      const retry = feed.value.items().find((item) => item._tag === "retrying")
+      // The cancel cut the retry short: it did not finish.
+      expect(retry?._tag === "retrying" && retry.outcome).toBe("cancelled")
+      if (retry?._tag === "retrying") {
+        expect(getSessionEventLabel(retry)).toBe("Retry 1/3 cancelled · temporary provider failure")
+      }
+      expect(feed.value.items().some((item) => item._tag === "interruption")).toBe(true)
+      expect(feed.value.messages()[0]?.content).toContain("stored summary")
+      dispose()
+    }),
   )
 })

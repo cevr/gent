@@ -3,37 +3,6 @@ import { GentPlatform } from "@gent/core/host"
 import { runProcess } from "@gent/core/extensions/api"
 import type { ChildProcessSpawner } from "effect/process"
 
-// ── operating system service ────────────────────────────────────────────────
-
-type OsPlatform = "darwin" | "win32" | "linux" | "other"
-
-const resolvePlatform = (platform: string): OsPlatform => {
-  if (platform === "darwin") return "darwin"
-  if (platform === "win32") return "win32"
-  if (platform === "linux") return "linux"
-  return "other"
-}
-
-interface OsServiceDefinition {
-  readonly platform: OsPlatform
-}
-
-export class OsService extends Context.Service<OsService, OsServiceDefinition>()(
-  "@gent/tui/src/os/OsService",
-) {
-  static Live: Layer.Layer<OsService, never, GentPlatform> = Layer.effect(
-    OsService,
-    Effect.gen(function* () {
-      const platform = yield* GentPlatform
-      const info = yield* platform.osInfo
-      return OsService.of({ platform: resolvePlatform(info.platform) })
-    }),
-  )
-
-  static Test = (platform: OsPlatform): Layer.Layer<OsService> =>
-    Layer.succeed(OsService, OsService.of({ platform }))
-}
-
 // ── link opening ────────────────────────────────────────────────────────────
 
 export class LinkOpenerError extends Schema.TaggedError<LinkOpenerError>()("LinkOpenerError", {
@@ -70,43 +39,25 @@ const makeOpener = (command: string, argsForUrl: (url: string) => string[]): Lin
   ),
 })
 
+/** The command that opens a URL on the platform, when the platform has one. */
+const openerFor = (platform: string): LinkOpenerService => {
+  if (platform === "darwin") return makeOpener("open", (url) => [url])
+  if (platform === "win32") return makeOpener("cmd", (url) => ["/c", "start", "", url])
+  if (platform === "linux") return makeOpener("xdg-open", (url) => [url])
+  return {
+    open: (url) =>
+      Effect.fail(new LinkOpenerError({ message: `Unsupported OS for opening URL: ${url}` })),
+  }
+}
+
 export class LinkOpener extends Context.Service<LinkOpener, LinkOpenerService>()(
   "@gent/tui/src/os/LinkOpener",
 ) {
-  static LiveDarwin: Layer.Layer<LinkOpener> = Layer.succeed(
+  static Live: Layer.Layer<LinkOpener, never, GentPlatform> = Layer.effect(
     LinkOpener,
-    makeOpener("open", (url) => [url]),
-  )
-
-  static LiveWindows: Layer.Layer<LinkOpener> = Layer.succeed(
-    LinkOpener,
-    makeOpener("cmd", (url) => ["/c", "start", "", url]),
-  )
-
-  static LiveLinux: Layer.Layer<LinkOpener> = Layer.succeed(
-    LinkOpener,
-    makeOpener("xdg-open", (url) => [url]),
-  )
-
-  static LiveOther: Layer.Layer<LinkOpener> = Layer.succeed(
-    LinkOpener,
-    LinkOpener.of({
-      open: (url) =>
-        Effect.fail(
-          new LinkOpenerError({
-            message: `Unsupported OS for opening URL: ${url}`,
-          }),
-        ),
-    }),
-  )
-
-  static Live: Layer.Layer<LinkOpener, never, OsService> = Layer.unwrap(
     Effect.gen(function* () {
-      const os = yield* OsService
-      if (os.platform === "darwin") return LinkOpener.LiveDarwin
-      if (os.platform === "win32") return LinkOpener.LiveWindows
-      if (os.platform === "linux") return LinkOpener.LiveLinux
-      return LinkOpener.LiveOther
+      const info = yield* (yield* GentPlatform).osInfo
+      return LinkOpener.of(openerFor(info.platform))
     }),
   )
 

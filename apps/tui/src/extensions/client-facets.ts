@@ -245,7 +245,7 @@ const transportFacet = (payload: ClientShellTransport): ClientTransport => ({
 
 // ── request helper ────────────────────────────────────────────────────────
 
-export class NoActiveSessionError extends Schema.TaggedError<NoActiveSessionError>()(
+class NoActiveSessionError extends Schema.TaggedError<NoActiveSessionError>()(
   "NoActiveSessionError",
   {},
 ) {}

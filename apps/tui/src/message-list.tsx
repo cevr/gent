@@ -61,7 +61,7 @@ import {
   lineCount,
   MODEL_CHANGE_MESSAGE_TYPE,
 } from "@gent/core/protocol"
-import { replaceMermaidBlocks } from "./mermaid"
+import { useMermaidBlocks } from "./mermaid"
 import type { DisclosureLevel } from "./session"
 import { insert, RendererContext, useRenderer } from "@opentui/solid"
 
@@ -222,9 +222,12 @@ function SessionEventIndicator(props: SessionEventIndicatorProps) {
   const { theme } = useTheme()
   const tick = useSpinnerClock()
 
+  // Only a pending retry counts down; every other row's label is fixed, so
+  // only that row reads the clock.
   const content = () => {
-    tick()
-    return getSessionEventLabel(props.event, currentMillis())
+    const event = props.event
+    if (event._tag === "retrying" && event.outcome === "pending") tick()
+    return getSessionEventLabel(event, currentMillis())
   }
 
   const color = () => {
@@ -364,15 +367,13 @@ interface MessageBase {
   id: string
   role: "user" | "assistant" | "system" | "tool"
   pendingMode?: "queued" | "steer"
-  /** Concatenated text content (derived — used by picker, mermaid, search) */
+  /** Concatenated text content (derived — used by picker, search) */
   content: string
   /** Concatenated reasoning (derived) */
   reasoning: string
   images: ReadonlyArray<ImagePartProjection>
   createdAt: number
-  // eslint-disable-next-line effect/noNullish -- snapshot messages preserve absent tool-call data.
-  toolCalls: ToolCall[] | undefined
-  /** Ordered parts for interleaved rendering */
+  /** Ordered parts for interleaved rendering; the one owner of the message's tool calls. */
   segments?: AssistantSegment[]
   metadata?: MessageMetadataInfo
 }
@@ -387,11 +388,21 @@ interface InterjectionMessage extends MessageBase {
 }
 
 export type Message = RegularMessage | InterjectionMessage
+
+/** The tool calls a message shows inline, in segment order. */
+export const messageToolCalls = (message: Pick<MessageBase, "segments">): ReadonlyArray<ToolCall> =>
+  Option.getOrElse(Option.fromNullishOr(message.segments), (): AssistantSegment[] => []).flatMap(
+    (segment) => {
+      if (segment._tag === "tool-call") return [segment.toolCall]
+      return []
+    },
+  )
 export type SessionItem = Message | SessionEvent
 
 type TerminalDimensions = { readonly width: number; readonly height: number }
 
-const isMessageItem = Predicate.or(
+/** A transcript item that is a message, not a session event row. */
+export const isMessageItem = Predicate.or(
   Predicate.isTagged("regular-message"),
   Predicate.isTagged("interjection-message"),
 )
@@ -447,8 +458,6 @@ function AssistantMessage(props: {
   content: string
   reasoning: string
   images: ReadonlyArray<ImagePartProjection>
-  // eslint-disable-next-line effect/noNullish -- snapshot messages preserve absent tool-call data.
-  toolCalls: ToolCall[] | undefined
   segments?: AssistantSegment[]
   disclosure: DisclosureLevel
   fullDetail: boolean
@@ -457,12 +466,13 @@ function AssistantMessage(props: {
   dimensions: Accessor<TerminalDimensions>
 }) {
   const { theme } = useTheme()
+  const replaceMermaidBlocks = useMermaidBlocks()
 
   const hasContent = () => {
     if (props.content.length > 0) return true
     if (props.reasoning.length > 0) return true
     if (props.images.length > 0) return true
-    return (props.toolCalls ?? []).length > 0
+    return messageToolCalls(props).length > 0
   }
 
   const contentMargin = () => {
@@ -741,7 +751,6 @@ export function MessageList(props: MessageListProps) {
                     content={item.content}
                     reasoning={item.reasoning}
                     images={item.images}
-                    toolCalls={item.toolCalls}
                     segments={item.segments}
                     disclosure={props.disclosure}
                     fullDetail={props.fullDetail === true}
@@ -828,7 +837,6 @@ export const transcriptFingerprint = (item: SessionItem): string => {
       item.images.length,
       item.createdAt,
       item.pendingMode,
-      (item.toolCalls ?? []).map(toolFingerprint),
       (item.segments ?? []).map(segmentFingerprint),
       item.metadata?.customType,
       item.metadata?.hidden,
@@ -863,10 +871,6 @@ export const transcriptFingerprint = (item: SessionItem): string => {
 
 // ── transcript display ──────────────────────────────────────────────────────
 
-const isMessage = Predicate.or(
-  Predicate.isTagged("regular-message"),
-  Predicate.isTagged("interjection-message"),
-)
 const isTextSegment = Predicate.or(Predicate.isTagged("text"), Predicate.isTagged("reasoning"))
 
 interface MessageBoundary {
@@ -883,7 +887,7 @@ interface TranscriptDisplayBoundary {
 }
 
 const itemKey = (item: SessionItem): string => {
-  if (isMessage(item)) return item.id
+  if (isMessageItem(item)) return item.id
   if (item._tag === "notice") return `notice:${item.key}`
   return `${item._tag}:${item.createdAt}:${item.seq}`
 }
@@ -896,13 +900,13 @@ const segmentContent = (segment: AssistantSegment): string => {
 function captureTranscriptDisplay(items: SessionItem[]): TranscriptDisplayBoundary {
   const messages = new Map<string, MessageBoundary>()
   for (const item of items) {
-    if (!isMessage(item)) continue
+    if (!isMessageItem(item)) continue
     messages.set(item.id, {
       content: item.content,
       reasoning: item.reasoning,
       imageCount: item.images.length,
       segments: (item.segments ?? []).map(segmentContent),
-      tools: new Map((item.toolCalls ?? []).map((tool) => [tool.id, toolIdentity(tool)])),
+      tools: new Map(messageToolCalls(item).map((tool) => [tool.id, toolIdentity(tool)])),
     })
   }
   return { items: new Set(items.map(itemKey)), messages }
@@ -924,9 +928,6 @@ function projectMessage(message: Message, boundary: MessageBoundary): Message {
       segments.push(segment)
     }
   }
-  const toolCalls = Option.map(Option.fromNullishOr(message.toolCalls), (tools) =>
-    tools.filter((tool) => boundary.tools.get(tool.id) !== toolIdentity(tool)),
-  )
   return {
     ...message,
     content: afterPrefix(message.content, boundary.content),
@@ -935,7 +936,6 @@ function projectMessage(message: Message, boundary: MessageBoundary): Message {
     segments: Option.getOrUndefined(
       Option.map(Option.fromNullishOr(message.segments), () => segments),
     ),
-    toolCalls: Option.getOrUndefined(toolCalls),
   }
 }
 
@@ -949,7 +949,7 @@ function projectTranscriptDisplay(
       visible.push(item)
       continue
     }
-    if (!isMessage(item)) continue
+    if (!isMessageItem(item)) continue
     const cleared = Option.fromNullishOr(boundary.messages.get(item.id))
     if (Option.isSome(cleared)) visible.push(projectMessage(item, cleared.value))
   }

@@ -1,4 +1,4 @@
-import { Effect, Match, Option, Predicate, Record, Schema } from "effect"
+import { Effect, Option, Predicate, Record, Schema } from "effect"
 import {
   type AgentName,
   type Branch,
@@ -26,8 +26,9 @@ import {
 } from "./terminal"
 import type { RGBA } from "@opentui/core"
 import { MessageList, NativeTranscript, splitFooterHeight } from "./message-list"
+import { createMermaidCache, MermaidCacheContext } from "./mermaid"
 import { Composer, ComposerFrame, StatusRow } from "./composer"
-import { DockFooter, DockProvider, useDockSpacer } from "./ui"
+import { DockFooter, DockProvider, keyHint, KeyHints, keyHintsLine, useDockSpacer } from "./ui"
 import { CommandPalette, CommandProvider, useCommand } from "./commands"
 import {
   BranchPicker,
@@ -38,7 +39,6 @@ import {
   reasoningRows,
   SettingsPicker,
 } from "./pickers"
-import { collectDiagrams, MermaidViewer } from "./mermaid"
 import { useEnv, useWorkspace } from "./workspace"
 import {
   type StatusRowLabel,
@@ -104,8 +104,7 @@ export type InitialState =
   | { _tag: "headless"; session: DomainSession; prompt: string }
 
 interface AppBootstrap {
-  // eslint-disable-next-line effect/noNullish -- bootstrap API uses absence when no session is selected.
-  readonly initialSession: ClientSession | undefined
+  readonly initialSession: ClientSession
   readonly initialPrompt: Option.Option<string>
   /**
    * The branches to resume from, when the session the startup flags picked
@@ -122,18 +121,18 @@ interface InteractiveBootstrapResult {
   readonly initialAgent: AgentName | undefined
 }
 
-// eslint-disable-next-line effect/noNullish -- bootstrap projection returns absence for an unreadable branch.
-const toSession = (session: DomainSession): ClientSession | undefined => {
+/** The session view's record; none for a record with no active branch to mount. */
+const toSession = (session: DomainSession): Option.Option<ClientSession> => {
   const branchId = Option.fromNullishOr(session.activeBranchId)
-  if (Option.isNone(branchId)) return Option.getOrUndefined(Option.none<ClientSession>())
-  return {
+  if (Option.isNone(branchId)) return Option.none()
+  return Option.some({
     sessionId: session.id,
     branchId: branchId.value,
     name: Option.getOrElse(Option.fromNullishOr(session.name), () => "Unnamed"),
     modelId: session.modelId,
     reasoningLevel: session.reasoningLevel,
     cwd: session.cwd,
-  }
+  })
 }
 
 const createAndLoadSession = (input: {
@@ -164,41 +163,23 @@ const resolveAppBootstrap = (
   options: {
     debugMode: boolean
   },
-): AppBootstrap =>
-  Match.value(state).pipe(
-    Match.tagsExhaustive({
-      session: (state) => {
-        // activeBranchId is always present for sessions created by resolveInitialState.
-        // Guard for corrupt session records from -s <id> with missing branch.
-        const branchId = Option.fromNullishOr(state.session.activeBranchId)
-        if (Option.isNone(branchId)) {
-          // eslint-disable-next-line effect/noThrowStatement -- synchronous render-boundary validation must throw.
-          throw new AppBootstrapError({ sessionId: state.session.id, reason: "missing-branch" })
-        }
-        return {
-          initialSession: toSession(state.session),
-          initialPrompt: Option.fromNullishOr(state.prompt),
-          initialBranches: Option.none<readonly Branch[]>(),
-          debugMode: options.debugMode,
-        }
-      },
-      branchPicker: (state) => {
-        // Same guard as `session`: the picker docks over a mounted session, so
-        // a record with no active branch has nothing to mount under it.
-        const branchId = Option.fromNullishOr(state.session.activeBranchId)
-        if (Option.isNone(branchId)) {
-          // eslint-disable-next-line effect/noThrowStatement -- synchronous render-boundary validation must throw.
-          throw new AppBootstrapError({ sessionId: state.session.id, reason: "missing-branch" })
-        }
-        return {
-          initialSession: toSession(state.session),
-          initialPrompt: Option.fromNullishOr(state.prompt),
-          initialBranches: Option.some(state.branches),
-          debugMode: options.debugMode,
-        }
-      },
-    }),
-  )
+): AppBootstrap => {
+  // A created session always has its branch. A corrupt record from `-s <id>`
+  // may not, and the view (and a picker docked over it) needs one to mount.
+  const initialSession = toSession(state.session)
+  if (Option.isNone(initialSession)) {
+    // eslint-disable-next-line effect/noThrowStatement -- synchronous render-boundary validation must throw.
+    throw new AppBootstrapError({ sessionId: state.session.id, reason: "missing-branch" })
+  }
+  let initialBranches = Option.none<readonly Branch[]>()
+  if (state._tag === "branchPicker") initialBranches = Option.some(state.branches)
+  return {
+    initialSession: initialSession.value,
+    initialPrompt: Option.fromNullishOr(state.prompt),
+    initialBranches,
+    debugMode: options.debugMode,
+  }
+}
 
 export const resolveInteractiveBootstrap = (input: {
   client: Pick<GentNamespacedClient, "branch" | "session">
@@ -231,35 +212,24 @@ export const resolveInteractiveBootstrap = (input: {
     }
   })
 
-const resolveSessionRuntimeAgent = (
-  client: Pick<GentNamespacedClient, "session">,
-  session: DomainSession,
-): Effect.Effect<Option.Option<AgentName>, GentClientRpcError> => {
-  const branchId = Option.fromNullishOr(session.activeBranchId)
-  if (Option.isNone(branchId)) return Effect.succeedNone
-  return client.session
-    .getSnapshot({
-      sessionId: session.id,
-      branchId: branchId.value,
-    })
-    .pipe(Effect.map((snapshot) => Option.some(snapshot.agent)))
-}
-
 /** A session runs as its own agent, which its snapshot names; one with no branch yet runs the default. */
 const sessionAgent = (
   client: Pick<GentNamespacedClient, "session">,
   session: DomainSession,
-): Effect.Effect<AgentName, GentClientRpcError> =>
-  resolveSessionRuntimeAgent(client, session).pipe(
-    Effect.map(Option.getOrElse(() => DEFAULT_AGENT_NAME)),
-  )
+): Effect.Effect<AgentName, GentClientRpcError> => {
+  const branchId = Option.fromNullishOr(session.activeBranchId)
+  if (Option.isNone(branchId)) return Effect.succeed(DEFAULT_AGENT_NAME)
+  return client.session
+    .getSnapshot({ sessionId: session.id, branchId: branchId.value })
+    .pipe(Effect.map((snapshot) => snapshot.agent))
+}
 
 /**
  * The agent the interactive client starts as: the resumed session's own. The
  * boot branch picker names none, because the reader has not chosen a branch.
  * The session view's auth gate checks that agent's providers itself.
  */
-export const resolveStartupAgent = (input: {
+const resolveStartupAgent = (input: {
   client: Pick<GentNamespacedClient, "session">
   state: Exclude<InitialState, { _tag: "headless" }>
 }): Effect.Effect<Option.Option<AgentName>, GentClientRpcError> => {
@@ -287,6 +257,35 @@ export const resolveHeadlessMissingProviders = (input: {
       .map((provider) => provider.provider)
   })
 
+/** The stored session `-s` names, or the startup error that it does not exist. */
+const loadSession = (
+  client: Pick<GentNamespacedClient, "session">,
+  id: string,
+): Effect.Effect<DomainSession, GentClientRpcError | AppBootstrapError> =>
+  Effect.gen(function* () {
+    const sessionId = SessionId.make(id)
+    const stored = Option.fromNullishOr(yield* client.session.get({ sessionId }))
+    if (Option.isNone(stored)) {
+      return yield* new AppBootstrapError({ sessionId, reason: "session-not-found" })
+    }
+    return stored.value
+  })
+
+/** Resume a session: straight in with one branch, through the branch picker with more. */
+const resumeState = (
+  client: Pick<GentNamespacedClient, "branch">,
+  session: DomainSession,
+  prompt: Option.Option<string>,
+): Effect.Effect<InitialState, GentClientRpcError> =>
+  Effect.gen(function* () {
+    const promptText = Option.getOrUndefined(prompt)
+    const branches = yield* client.branch.list({ sessionId: session.id })
+    if (branches.length > 1) {
+      return { _tag: "branchPicker", session, branches, prompt: promptText } satisfies InitialState
+    }
+    return { _tag: "session", session, prompt: promptText } satisfies InitialState
+  })
+
 export const resolveInitialState = (input: {
   client: Pick<GentNamespacedClient, "session" | "branch">
   cwd: string
@@ -306,15 +305,9 @@ export const resolveInitialState = (input: {
         return yield* new AppBootstrapError({ reason: "headless-missing-prompt" })
       }
       if (Option.isSome(session)) {
-        const sessionId = SessionId.make(session.value)
-        const sess = yield* client.session.get({ sessionId })
-        const decodedSession = Option.fromNullishOr(sess)
-        if (Option.isNone(decodedSession)) {
-          return yield* new AppBootstrapError({ sessionId, reason: "session-not-found" })
-        }
         return {
           _tag: "headless",
-          session: decodedSession.value,
+          session: yield* loadSession(client, session.value),
           prompt: promptArg.value,
         } satisfies InitialState
       }
@@ -328,27 +321,7 @@ export const resolveInitialState = (input: {
     }
 
     if (Option.isSome(session)) {
-      const sessionId = SessionId.make(session.value)
-      const sess = yield* client.session.get({ sessionId })
-      const decodedSession = Option.fromNullishOr(sess)
-      if (Option.isNone(decodedSession)) {
-        return yield* new AppBootstrapError({ sessionId, reason: "session-not-found" })
-      }
-      const promptText = Option.getOrUndefined(prompt)
-      const branches = yield* client.branch.list({ sessionId: decodedSession.value.id })
-      if (branches.length > 1) {
-        return {
-          _tag: "branchPicker",
-          session: decodedSession.value,
-          branches,
-          prompt: promptText,
-        } satisfies InitialState
-      }
-      return {
-        _tag: "session",
-        session: decodedSession.value,
-        prompt: promptText,
-      } satisfies InitialState
+      return yield* resumeState(client, yield* loadSession(client, session.value), prompt)
     }
 
     if (continue_) {
@@ -368,24 +341,7 @@ export const resolveInitialState = (input: {
           ),
         ),
       )
-      if (Option.isSome(existing)) {
-        const existingSession = existing.value
-        const promptText = Option.getOrUndefined(prompt)
-        const branches = yield* client.branch.list({ sessionId: existingSession.id })
-        if (branches.length > 1) {
-          return {
-            _tag: "branchPicker",
-            session: existingSession,
-            branches,
-            prompt: promptText,
-          } satisfies InitialState
-        }
-        return {
-          _tag: "session",
-          session: existingSession,
-          prompt: promptText,
-        } satisfies InitialState
-      }
+      if (Option.isSome(existing)) return yield* resumeState(client, existing.value, prompt)
       // No existing session for cwd — fall through to create one
     }
 
@@ -406,7 +362,7 @@ export function ConnectionWidget() {
   const client = useClient()
   const ext = useExtensionUI()
   const { theme } = useTheme()
-  const connectionIssue = () => Option.fromNullishOr(client.connectionIssue())
+  const connectionIssue = () => client.connectionIssue()
   const degradedExtensions = () => {
     const health = client.extensionHealth()
     if (health._tag === "Degraded") return health.degradedExtensions
@@ -589,12 +545,6 @@ export function Session(props: SessionProps) {
     if (overlay._tag === "auth") return Option.some(overlay)
     return Option.none()
   }
-  const mermaidDiagrams = createMemo(() => {
-    if (controller.uiState().overlay._tag === "mermaid") {
-      return collectDiagrams(controller.messages(), dimensions().width)
-    }
-    return []
-  })
 
   // Map semantic color names from extensions to resolved theme colors
   const resolveColor = (color: StatusLabelColor): RGBA => resolveThemeColor(theme, color)
@@ -611,11 +561,11 @@ export function Session(props: SessionProps) {
     const items: StatusRowLabel[] = []
 
     // Core chrome: connection/restart status
-    const conn = client.connectionState()
+    const restart = Option.filter(client.connectedGeneration(), (generation) => generation > 0)
     if (client.isReconnecting()) {
       items.push({ text: "reconnecting", color: theme.warning })
-    } else if (conn?._tag === "Connected" && conn.generation > 0) {
-      items.push({ text: `restart ${conn.generation}`, color: theme.textMuted })
+    } else if (Option.isSome(restart)) {
+      items.push({ text: `restart ${restart.value}`, color: theme.textMuted })
     }
 
     return items
@@ -635,12 +585,12 @@ export function Session(props: SessionProps) {
   }
 
   const modelLabels = (): StatusRowLabel[] => {
-    const model = Option.fromNullishOr(client.modelInfo())
+    const model = client.modelInfo()
     const items: StatusRowLabel[] = []
     if (Option.isSome(model)) items.push({ text: model.value.name, color: theme.textMuted })
     return items.concat(
       buildModelLabels({
-        reasoningLevel: Option.fromNullishOr(client.reasoningLevel()),
+        reasoningLevel: client.reasoningLevel(),
         theme,
         debugMode: props.debugMode === true,
       }),
@@ -655,7 +605,7 @@ export function Session(props: SessionProps) {
   const rightAnchoredLabels = (): StatusRowLabel[] =>
     buildContextLabels({
       metrics: client.sessionMetrics(),
-      model: Option.fromNullishOr(client.modelInfo()),
+      model: client.modelInfo(),
       theme,
     }).concat(costLabels())
 
@@ -663,7 +613,10 @@ export function Session(props: SessionProps) {
     const a = controller.activity()
     const items: StatusRowLabel[] = []
     if (controller.uiState().transcriptExpanded) {
-      items.push({ text: "transcript · Esc to return", color: theme.textMuted })
+      items.push({
+        text: `transcript · ${keyHintsLine([keyHint("esc", "return")], 80)}`,
+        color: theme.textMuted,
+      })
     }
     // One footer line, one owner. An armed key's cue (`ctrl+c again to exit`)
     // comes first: it answers the key just pressed and lasts a second. A
@@ -671,7 +624,7 @@ export function Session(props: SessionProps) {
     // replaces the phase word until the next turn clears it; an extension
     // notice shows when no error stands, and a notice never replaces an error.
     const armedCue = controller.armedCue()
-    const localError = Option.fromNullishOr(client.error())
+    const localError = client.error()
     const notice = client.notice()
     if (Option.isSome(armedCue)) {
       items.push({ text: armedCue.value, color: theme.warning })
@@ -694,8 +647,8 @@ export function Session(props: SessionProps) {
     items.push({
       text: formatCwdGit(
         sessionCwd,
-        Option.filter(Option.fromNullishOr(workspace.gitRoot()), () => atLaunchCwd),
-        Option.filter(Option.fromNullishOr(workspace.gitStatus()?.branch), () => atLaunchCwd),
+        Option.filter(workspace.gitRoot(), () => atLaunchCwd),
+        Option.filter(workspace.gitBranch(), () => atLaunchCwd),
       ),
       color: theme.textMuted,
     })
@@ -705,156 +658,159 @@ export function Session(props: SessionProps) {
 
   return (
     <SessionControllerContext.Provider value={controller}>
-      <box flexDirection="column" flexGrow={1}>
-        {/* Messages */}
-        <NativeTranscript
-          items={controller.items()}
-          settled={controller.itemsSettled()}
-          streaming={controller.activity().phase !== "idle"}
-          footerHeight={footerHeight()}
-          expanded={controller.uiState().transcriptExpanded}
-          disclosure={controller.uiState().disclosure}
-          displayRevision={controller.uiState().displayRevision}
-          overlayOpen={command.paletteOpen() || overlayHoldsComposer(controller.uiState().overlay)}
-          renderItems={(items, streaming) => (
-            <MessageList
-              items={items}
-              disclosure={controller.uiState().disclosure}
-              fullDetail={controller.uiState().transcriptExpanded}
-              syntaxStyle={syntaxStyle}
-              streaming={streaming}
-            />
-          )}
-        >
-          <Show when={controller.items().length === 0}>
-            <box height={1} flexShrink={0}>
-              <text>
-                <span style={{ fg: theme.primary, bold: true }}>gent</span>
-                <span style={{ fg: theme.textMuted }}> · Ctrl+P for commands</span>
-              </text>
-            </box>
-          </Show>
-          <ConnectionWidget />
-          <ExtensionWidgets slot="below-messages" />
-          {/* QueueWidget stays hardwired because its data comes from session controller
+      <MermaidCacheContext.Provider value={Option.some(createMermaidCache())}>
+        <box flexDirection="column" flexGrow={1}>
+          {/* Messages */}
+          <NativeTranscript
+            items={controller.items()}
+            settled={controller.itemsSettled()}
+            streaming={controller.activity().phase !== "idle"}
+            footerHeight={footerHeight()}
+            expanded={controller.uiState().transcriptExpanded}
+            disclosure={controller.uiState().disclosure}
+            displayRevision={controller.uiState().displayRevision}
+            overlayOpen={
+              command.paletteOpen() || overlayHoldsComposer(controller.uiState().overlay)
+            }
+            renderItems={(items, streaming) => (
+              <MessageList
+                items={items}
+                disclosure={controller.uiState().disclosure}
+                fullDetail={controller.uiState().transcriptExpanded}
+                syntaxStyle={syntaxStyle}
+                streaming={streaming}
+              />
+            )}
+          >
+            <Show when={controller.items().length === 0}>
+              <box height={1} flexShrink={0}>
+                <text>
+                  <span style={{ fg: theme.primary, bold: true }}>gent</span>
+                  <span style={{ fg: theme.textMuted }}>
+                    {" "}
+                    · {keyHintsLine([keyHint("ctrl+p", "commands")], 80)}
+                  </span>
+                </text>
+              </box>
+            </Show>
+            <ConnectionWidget />
+            <ExtensionWidgets slot="below-messages" />
+            {/* QueueWidget stays hardwired because its data comes from session controller
               state that is not exposed through the extension context. */}
-          <QueueWidget
-            queuedMessages={controller.queueState().followUp}
-            steerMessages={controller.queueState().steering}
-          />
-        </NativeTranscript>
+            <QueueWidget
+              queuedMessages={controller.queueState().followUp}
+              steerMessages={controller.queueState().steering}
+            />
+          </NativeTranscript>
 
-        {/* The footer never outgrows the split-footer region: past it, the
+          {/* The footer never outgrows the split-footer region: past it, the
             last rows (a docked pane's newest lines, its ask line) fall below
             the terminal. While a docked pane is open the trays hide
             (`TrayFrame`), the blank rows give way (`useDockSpacer`), and the
             pane gives way in whole rows (`PickerFrame`); the composer keeps
             its rows. */}
-        <DockFooter
-          maxHeight={splitFooterHeight(dimensions().height, dimensions().height)}
-          onSizeChange={setFooterHeight}
-        >
-          <ExtensionWidgets slot="above-input" />
+          <DockFooter
+            maxHeight={splitFooterHeight(dimensions().height, dimensions().height)}
+            onSizeChange={setFooterHeight}
+          >
+            <ExtensionWidgets slot="above-input" />
 
-          <Show when={controller.activity().phase !== "idle"}>
-            <ActivityRow>
-              <text wrapMode="none" style={{ fg: theme.textMuted }}>
-                {(() => {
-                  let label = "Generating"
-                  if (controller.activity().phase === "tool") label = controller.phaseLabel()
-                  if (controller.elapsed() >= 1000)
-                    label += ` (${formatDuration(controller.elapsed(), "compact")})`
-                  return truncate(label, Math.max(1, dimensions().width - 2))
-                })()}
-              </text>
-            </ActivityRow>
-          </Show>
+            <Show when={controller.activity().phase !== "idle"}>
+              <ActivityRow>
+                <text wrapMode="none" style={{ fg: theme.textMuted }}>
+                  {(() => {
+                    let label = "Generating"
+                    if (controller.activity().phase === "tool") label = controller.phaseLabel()
+                    if (controller.elapsed() >= 1000)
+                      label += ` (${formatDuration(controller.elapsed(), "compact")})`
+                    return truncate(label, Math.max(1, dimensions().width - 2))
+                  })()}
+                </text>
+              </ActivityRow>
+            </Show>
 
-          {/* One dock slot: every pane (the popup and the palette inside the
+            {/* One dock slot: every pane (the popup and the palette inside the
               composer, the panes after it) docks under the status row. */}
-          <ComposerFrame>
-            <Composer
-              statusRow={
-                <StatusRow
-                  labels={[
-                    ...phaseLabels(),
-                    ...connectionLabels(),
-                    ...modelLabels(),
-                    ...extensionLabels(),
-                    ...rightAnchoredLabels(),
-                  ]}
-                  rightLabels={rightAnchoredLabels().length}
+            <ComposerFrame>
+              <Composer
+                statusRow={
+                  <StatusRow
+                    labels={[
+                      ...phaseLabels(),
+                      ...connectionLabels(),
+                      ...modelLabels(),
+                      ...extensionLabels(),
+                      ...rightAnchoredLabels(),
+                    ]}
+                    rightLabels={rightAnchoredLabels().length}
+                  />
+                }
+              >
+                <Composer.Autocomplete />
+                <CommandPalette />
+              </Composer>
+            </ComposerFrame>
+            <SettingsPicker
+              open={controller.uiState().overlay._tag === "model"}
+              title="Model"
+              rows={modelRows(client.models())}
+              current={Option.some(client.model())}
+              onSelect={(id) => controller.onModelSelect(ModelId.make(id))}
+              onClose={controller.closeOverlay}
+            />
+            <SettingsPicker
+              open={controller.uiState().overlay._tag === "reasoning"}
+              title="Reasoning"
+              rows={reasoningRows(client.resolvedReasoningLevel())}
+              current={Option.some(
+                Option.getOrElse(
+                  Option.flatMap(client.session(), (session) =>
+                    Option.fromUndefinedOr(session.reasoningLevel),
+                  ),
+                  () => DEFAULT_ROW_ID,
+                ),
+              )}
+              onSelect={(id) => controller.onReasoningSelect(parseReasoningRow(id))}
+              onClose={controller.closeOverlay}
+            />
+            {(() => {
+              const overlay = controller.uiState().overlay
+              if (overlay._tag !== "branches") return <></>
+              return (
+                <BranchPicker
+                  open={true}
+                  sessionId={props.sessionId}
+                  sessionName={controller.currentSessionName()}
+                  branches={overlay.branches}
+                  onSelect={controller.onBranchPickerSelect}
                 />
-              }
-            >
-              <Composer.Autocomplete />
-              <CommandPalette />
-            </Composer>
-          </ComposerFrame>
-          <SettingsPicker
-            open={controller.uiState().overlay._tag === "model"}
-            title="Model"
-            rows={modelRows(client.models())}
-            current={Option.some(client.model())}
-            onSelect={(id) => controller.onModelSelect(ModelId.make(id))}
-            onClose={controller.closeOverlay}
-          />
-          <SettingsPicker
-            open={controller.uiState().overlay._tag === "reasoning"}
-            title="Reasoning"
-            rows={reasoningRows(client.resolvedReasoningLevel())}
-            current={Option.some(
-              Option.getOrElse(
-                Option.fromUndefinedOr(client.session()?.reasoningLevel),
-                () => DEFAULT_ROW_ID,
-              ),
-            )}
-            onSelect={(id) => controller.onReasoningSelect(parseReasoningRow(id))}
-            onClose={controller.closeOverlay}
-          />
-          {(() => {
-            const overlay = controller.uiState().overlay
-            if (overlay._tag !== "branches") return <></>
-            return (
-              <BranchPicker
-                open={true}
-                sessionId={props.sessionId}
-                sessionName={controller.currentSessionName()}
-                branches={overlay.branches}
-                onSelect={controller.onBranchPickerSelect}
-              />
-            )
-          })()}
-          <MessagePicker
-            open={controller.uiState().overlay._tag === "fork"}
-            messages={controller.forkMessages()}
-            onSelect={controller.onForkSelect}
-            onClose={controller.closeOverlay}
-          />
-          <PromptSearchPalette
-            state={controller.promptSearch.state()}
-            entries={controller.promptSearch.entries()}
-            onEvent={controller.promptSearch.onEvent}
-          />
-          <Show when={Option.getOrUndefined(authOverlay())}>
-            {(overlay) => (
-              <Auth
-                sessionId={props.sessionId}
-                enforceAuth={overlay().enforceAuth}
-                onResolved={controller.resolveAuthGate}
-                onClose={controller.closeOverlay}
-              />
-            )}
-          </Show>
-          <ExtensionWidgets slot="below-input" />
-        </DockFooter>
-
-        <MermaidViewer
-          open={controller.uiState().overlay._tag === "mermaid"}
-          diagrams={mermaidDiagrams()}
-          onClose={controller.closeOverlay}
-        />
-      </box>
+              )
+            })()}
+            <MessagePicker
+              open={controller.uiState().overlay._tag === "fork"}
+              messages={controller.forkMessages()}
+              onSelect={controller.onForkSelect}
+              onClose={controller.closeOverlay}
+            />
+            <PromptSearchPalette
+              state={controller.promptSearch.state()}
+              entries={controller.promptSearch.entries()}
+              onEvent={controller.promptSearch.onEvent}
+            />
+            <Show when={Option.getOrUndefined(authOverlay())}>
+              {(overlay) => (
+                <Auth
+                  sessionId={props.sessionId}
+                  enforceAuth={overlay().enforceAuth}
+                  onResolved={controller.resolveAuthGate}
+                  onClose={controller.closeOverlay}
+                />
+              )}
+            </Show>
+            <ExtensionWidgets slot="below-input" />
+          </DockFooter>
+        </box>
+      </MermaidCacheContext.Provider>
     </SessionControllerContext.Provider>
   )
 }
@@ -872,14 +828,6 @@ interface AppProps {
 }
 
 function AppContent(props: AppProps) {
-  const renderer = useRenderer()
-  const env = useEnv()
-  useScopedKeyboard((event) => {
-    if (event.ctrl !== true || event.name !== "c") return false
-    renderer.destroy()
-    env.shutdown()
-    return true
-  })
   useCopyOnSelect()
 
   // Which session shows is the client's to say. `switchSession` is the one
@@ -907,7 +855,7 @@ function AppContent(props: AppProps) {
 
   return (
     <box flexDirection="column" width="100%" height="100%">
-      <Show when={active()} keyed fallback={<CommandPalette />}>
+      <Show when={active()} keyed>
         {(session) => {
           const branches = bootBranches()
           setBootBranches(Option.none())
@@ -925,23 +873,54 @@ function AppContent(props: AppProps) {
   )
 }
 
-export function App(props: AppProps) {
-  const decodeError = Schema.decodeUnknownOption(Schema.instanceOf(Error))
-  const errorMessage = (error: Parameters<typeof decodeError>[0]): string =>
-    Option.match(decodeError(error), {
-      onNone: () => String(error),
-      onSome: (cause) => cause.message,
-    })
+const decodeError = Schema.decodeUnknownOption(Schema.instanceOf(Error))
 
+/**
+ * What a render throw leaves on screen. The session view is gone with its
+ * keys, so this screen keeps one way out: ctrl+c or ctrl+d exits. The error
+ * goes to the client log with its stack, since the screen shows only the
+ * message.
+ */
+function FatalScreen(props: { readonly error: unknown }) {
+  const renderer = useRenderer()
+  const env = useEnv()
+  const client = useClient()
+  const cause = decodeError(props.error)
+  const message = Option.match(cause, {
+    onNone: () => String(props.error),
+    onSome: (error) => error.message,
+  })
+  client.log.error("app.fatal", {
+    error: message,
+    stack: Option.getOrElse(
+      Option.flatMap(cause, (error) => Option.fromNullishOr(error.stack)),
+      () => "",
+    ),
+  })
+  useScopedKeyboard((event) => {
+    if (event.ctrl !== true || (event.name !== "c" && event.name !== "d")) return false
+    renderer.destroy()
+    env.shutdown()
+    return true
+  })
+  return (
+    <box flexDirection="column" paddingLeft={1} paddingTop={1}>
+      <text>
+        <span style={{ fg: "red", bold: true }}>Fatal error</span>
+      </text>
+      <text>{message}</text>
+      <text>{keyHintsLine([KeyHints.exit], 80)}</text>
+    </box>
+  )
+}
+
+export function App(props: AppProps) {
   return (
     <ErrorBoundary
-      fallback={(err) => (
-        <box flexDirection="column" paddingLeft={1} paddingTop={1}>
-          <text>
-            <span style={{ fg: "red", bold: true }}>Fatal error</span>
-          </text>
-          <text>{errorMessage(err)}</text>
-        </box>
+      fallback={(error) => (
+        <KeyboardScopeProvider>
+          <FatalScreen error={error} />
+        </KeyboardScopeProvider>
       )}
     >
       <ThemeProvider mode={props.initialThemeMode}>

@@ -18,8 +18,8 @@ import {
   formatAge,
   KeyHints,
   PickerFrame,
+  plainRow,
   plural,
-  selectable,
   SelectList,
   type SelectListRow,
   sessionQuery,
@@ -279,14 +279,18 @@ export const makeThreadController = (
     const load = (active: { sessionId: SessionId; branchId: BranchId }) =>
       Effect.gen(function* () {
         const chain = threadChain(yield* fetchSessions(active.sessionId), active.sessionId)
-        const perSession = yield* Effect.forEach(chain, (session) =>
-          Option.match(branchFor(session, active), {
-            onNone: () => Effect.succeed<ReadonlyArray<ThreadWindow>>([]),
-            onSome: (branchId) =>
-              Effect.map(fetchMessages(branchId), (messages) =>
-                windowsOf(session, branchId, messages),
-              ),
-          }),
+        // The sessions' reads are independent; a few run at once, in chain order.
+        const perSession = yield* Effect.forEach(
+          chain,
+          (session) =>
+            Option.match(branchFor(session, active), {
+              onNone: () => Effect.succeed<ReadonlyArray<ThreadWindow>>([]),
+              onSome: (branchId) =>
+                Effect.map(fetchMessages(branchId), (messages) =>
+                  windowsOf(session, branchId, messages),
+                ),
+            }),
+          { concurrency: 4 },
         )
         const omitted = yield* fetchOmitted(active)
         const windows = perSession.flat()
@@ -406,21 +410,8 @@ export function ThreadPane(props: {
           </box>
         ))
       }
-      return selectable(item.window, (selected, id) => {
-        const background = () => {
-          if (selected()) return theme.primary
-          return "transparent"
-        }
-        const color = () => {
-          if (selected()) return theme.selectedListItemText
-          if (isCurrent(item.window)) return theme.text
-          return theme.textMuted
-        }
-        return (
-          <box id={id} backgroundColor={background()} paddingLeft={1}>
-            <text style={{ fg: color() }}>{rowLine(item.window)}</text>
-          </box>
-        )
+      return plainRow(item.window, () => rowLine(item.window), {
+        muted: () => !isCurrent(item.window),
       })
     })
 

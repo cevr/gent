@@ -45,7 +45,7 @@ interface HeadlessToolCall {
 }
 
 /** Draws one call; paths in its arguments read from `place`, as the TUI spells them. */
-type HeadlessToolRenderer = (toolCall: HeadlessToolCall, place: PathPlace) => Option.Option<string>
+type HeadlessToolRenderer = (toolCall: HeadlessToolCall, place: PathPlace) => string
 
 const inputSummary = (
   toolName: string,
@@ -76,26 +76,24 @@ const getString = (record: Schema.JsonObject, key: string): string =>
 const renderGeneric: HeadlessToolRenderer = (toolCall, place) => {
   const summary = inputSummary(toolCall.toolName, toolCall.input, place)
   if (toolCall.status === "running") {
-    if (summary.length > 0) return Option.some(`[tool: ${toolCall.toolName}] ${summary}`)
-    return Option.some(`[tool: ${toolCall.toolName}]`)
+    if (summary.length > 0) return `[tool: ${toolCall.toolName}] ${summary}`
+    return `[tool: ${toolCall.toolName}]`
   }
 
   const text = outputText(toolCall)
   let suffix = ""
   if (toolCall.status === "error") suffix = " (error)"
   if (Option.isNone(text) || text.value.trim().length === 0) {
-    return Option.some(`[tool done: ${toolCall.toolName}${suffix}]`)
+    return `[tool done: ${toolCall.toolName}${suffix}]`
   }
-  return Option.some(
-    `[tool done: ${toolCall.toolName}${suffix}]\n${formatHeadTail(text.value.split("\n"), 12)}`,
-  )
+  return `[tool done: ${toolCall.toolName}${suffix}]\n${formatHeadTail(text.value.split("\n"), 12)}`
 }
 
 const BashHeadlessToolRenderer: HeadlessToolRenderer = (toolCall, place) => {
   const command = inputSummary("bash", toolCall.input, place)
   if (toolCall.status === "running") {
-    if (command.length > 0) return Option.some(`[tool: bash] ${command}`)
-    return Option.some("[tool: bash]")
+    if (command.length > 0) return `[tool: bash] ${command}`
+    return "[tool: bash]"
   }
 
   const parsed = parseBashOutput(Option.getOrUndefined(toolCall.output))
@@ -112,8 +110,8 @@ const BashHeadlessToolRenderer: HeadlessToolRenderer = (toolCall, place) => {
   if (toolCall.status === "error") status = "error"
   const renderedOutput = formatHeadTail(lines, 12)
 
-  if (renderedOutput.length === 0) return Option.some(`[tool ${status}: bash${exit}]`)
-  return Option.some(`[tool ${status}: bash${exit}]\n${renderedOutput}`)
+  if (renderedOutput.length === 0) return `[tool ${status}: bash${exit}]`
+  return `[tool ${status}: bash${exit}]\n${renderedOutput}`
 }
 
 const decodeReceipts = Schema.decodeUnknownOption(CellOperationReceipts)
@@ -127,8 +125,8 @@ const receiptGlyph = (outcome: "succeeded" | "failed" | "incomplete") => {
 const CellHeadlessToolRenderer: HeadlessToolRenderer = (toolCall, place) => {
   const firstLine = inputSummary("cell", toolCall.input, place)
   if (toolCall.status === "running") {
-    if (firstLine.length > 0) return Option.some(`[tool: cell] ${firstLine}`)
-    return Option.some("[tool: cell]")
+    if (firstLine.length > 0) return `[tool: cell] ${firstLine}`
+    return "[tool: cell]"
   }
 
   const parsed = parseJsonObject(toolCall.output)
@@ -153,7 +151,7 @@ const CellHeadlessToolRenderer: HeadlessToolRenderer = (toolCall, place) => {
     .split("\n")
     .filter((line) => line.length > 0)
   if (display.length > 0) lines.push(formatHeadTail(display, 12))
-  return Option.some(lines.join("\n"))
+  return lines.join("\n")
 }
 
 /** Tools with a dedicated headless line; every other tool renders generically. */
@@ -167,10 +165,7 @@ export const renderHeadlessToolCall = (toolCall: HeadlessToolCall, place: PathPl
     Option.fromNullishOr(HEADLESS_TOOL_RENDERERS.get(toolCall.toolName.toLowerCase())),
     () => renderGeneric,
   )
-  return renderer(toolCall, place).pipe(
-    Option.orElse(() => renderGeneric(toolCall, place)),
-    Option.getOrElse(() => `[tool: ${toolCall.toolName}]`),
-  )
+  return renderer(toolCall, place)
 }
 
 // ── headless run loop ───────────────────────────────────────────────────────
@@ -249,6 +244,27 @@ const turnEnd = (
 
 /** An error the run reports on one stderr line. */
 const oneLine = (text: string): string => text.replace(/\s*\n\s*/g, " ").trim()
+
+/**
+ * The one wait for the connection a headless run needs, before its first
+ * request. A server that never becomes ready ends the run with a connection
+ * error at the bound; a scripted caller never waits forever.
+ */
+export const waitForHeadlessReady = (waitForReady: Effect.Effect<void>) =>
+  waitForReady.pipe(
+    Effect.timeoutOption("15 seconds"),
+    Effect.flatMap(
+      Option.match({
+        onNone: () =>
+          Effect.fail(
+            new GentConnectionError({
+              message: "connection did not become ready within 15 seconds",
+            }),
+          ),
+        onSome: () => Effect.void,
+      }),
+    ),
+  )
 
 export const runHeadless = (
   client: GentNamespacedClient,

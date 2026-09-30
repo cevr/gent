@@ -8,10 +8,11 @@ import {
 import { EventStoreError, StorageError } from "@gent/core/extensions/branch-tools"
 import { describe, expect, it, test } from "effect-bun-test"
 import { Effect, FileSystem, Option, Schema } from "effect"
-import { lineCount } from "@gent/core/protocol"
+import { GentRpcError, lineCount } from "@gent/core/protocol"
+import { RpcClientError } from "effect/rpc/RpcClientError"
+import { SocketCloseError } from "effect/socket/Socket"
 import {
   type ActivityCall,
-  ClientError,
   describeCellCode,
   expandFileRefs,
   fitWidth,
@@ -21,6 +22,7 @@ import {
   formatCost,
   formatCellRowLabel,
   formatDuration,
+  formatConnectionIssue,
   formatError,
   formatGenericToolText,
   formatGroupDuration,
@@ -40,91 +42,6 @@ import {
 import { BunServices } from "@effect/platform-bun"
 import { ProviderAuthError } from "@gent/core/extensions/api"
 import os from "node:os"
-
-// ── context window ──────────────────────────────────────────────────────────
-
-// ── Context window % computation (extracted logic) ───────────────────
-
-type ContextPct = { pct: number; label: string; severity: "muted" | "warning" | "error" }
-
-function computeContextPct(
-  inputTokens: number,
-  contextLength: Option.Option<number>,
-): Option.Option<ContextPct> {
-  if (inputTokens <= 0) return Option.none()
-  return Option.map(contextLength, (length) => {
-    const pct = Math.min(100, Math.round((inputTokens / length) * 100))
-    let severity: ContextPct["severity"] = "muted"
-    if (pct >= 90) severity = "error"
-    else if (pct >= 70) severity = "warning"
-    return { pct, label: `${formatTokens(inputTokens)} (${pct}%)`, severity }
-  })
-}
-
-const absentContextPct: ContextPct = { pct: -1, label: "", severity: "muted" }
-const requireContextPct = (inputTokens: number, contextLength: number): ContextPct =>
-  Option.getOrElse(
-    computeContextPct(inputTokens, Option.some(contextLength)),
-    () => absentContextPct,
-  )
-
-describe("context window utilization", () => {
-  test("0% when no tokens", () => {
-    expect(Option.isNone(computeContextPct(0, Option.some(200000)))).toBe(true)
-  })
-
-  test("hidden when contextLength is absent", () => {
-    expect(Option.isNone(computeContextPct(50000, Option.none()))).toBe(true)
-  })
-
-  test("50% — muted", () => {
-    const result = requireContextPct(100000, 200000)
-    expect(result.pct).toBe(50)
-    expect(result.severity).toBe("muted")
-    expect(result.label).toBe("100k (50%)")
-  })
-
-  test("70% threshold — warning", () => {
-    const result = requireContextPct(140000, 200000)
-    expect(result.pct).toBe(70)
-    expect(result.severity).toBe("warning")
-  })
-
-  test("69% — still muted", () => {
-    const result = requireContextPct(138000, 200000)
-    expect(result.pct).toBe(69)
-    expect(result.severity).toBe("muted")
-  })
-
-  test("90% threshold — error", () => {
-    const result = requireContextPct(180000, 200000)
-    expect(result.pct).toBe(90)
-    expect(result.severity).toBe("error")
-  })
-
-  test("100% — clamped", () => {
-    const result = requireContextPct(200000, 200000)
-    expect(result.pct).toBe(100)
-    expect(result.severity).toBe("error")
-  })
-
-  test("over 100% — clamped to 100", () => {
-    const result = requireContextPct(250000, 200000)
-    expect(result.pct).toBe(100)
-  })
-
-  test("small token count formats correctly", () => {
-    const result = requireContextPct(500, 200000)
-    expect(result.label).toBe("500 (0%)")
-    expect(result.severity).toBe("muted")
-  })
-
-  test("large token count formats with M suffix", () => {
-    const result = requireContextPct(1500000, 2000000)
-    expect(result.label).toBe("1.5M (75%)")
-    expect(result.severity).toBe("warning")
-  })
-})
 
 // ── file refs ───────────────────────────────────────────────────────────────
 
@@ -247,13 +164,16 @@ describe("expandFileRefs", () => {
     }),
   )
 
-  fileRefsTest("handles out-of-range line numbers gracefully", () =>
-    // File has 5 lines, requesting lines 10-20
+  // A range past the end names no line, so it stays a reference, as a missing file does.
+  fileRefsTest("a range that starts past the end of the file stays a reference", () =>
     Effect.gen(function* () {
       const testDir = yield* makeFixture
-      const result = yield* expandFileRefs("@src/foo.ts#10-20", testDir)
-      // Should expand but content will be empty or partial
-      expect(result).toContain("```src/foo.ts:10-20")
+      expect(yield* expandFileRefs("@src/foo.ts#10-20", testDir)).toBe("@src/foo.ts#10-20")
+      expect(yield* expandFileRefs("@src/foo.ts#9", testDir)).toBe("@src/foo.ts#9")
+      // A range that starts inside the file keeps the lines it reaches.
+      const partial = yield* expandFileRefs("@src/foo.ts#4-20", testDir)
+      expect(partial).toContain("```src/foo.ts:4-20")
+      expect(partial).toContain("line5")
     }),
   )
 
@@ -404,9 +324,9 @@ describe("formatDuration", () => {
       expect(formatDuration(125_000, "compact")).toBe("2m 5s")
     })
 
-    test("minutes past the hour stay minutes", () => {
-      expect(formatDuration(3_600_000, "compact")).toBe("60m 0s")
-      expect(formatDuration(3_661_000, "compact")).toBe("61m 1s")
+    test("an hour or more reads in hours and minutes", () => {
+      expect(formatDuration(3_600_000, "compact")).toBe("1h 0m")
+      expect(formatDuration(3_720_000, "compact")).toBe("1h 2m")
     })
   })
 
@@ -421,6 +341,10 @@ describe("formatDuration", () => {
       expect(formatDuration(125_000, "padded")).toBe("2m05s")
       expect(formatDuration(754_000, "padded")).toBe("12m34s")
     })
+
+    test("an hour or more reads in hours and two-digit minutes", () => {
+      expect(formatDuration(3_720_000, "padded")).toBe("1h02m")
+    })
   })
 
   describe("precise", () => {
@@ -430,6 +354,7 @@ describe("formatDuration", () => {
       expect(formatDuration(1_250, "precise")).toBe("1.3s")
       expect(formatDuration(59_940, "precise")).toBe("59.9s")
       expect(formatDuration(65_000, "precise")).toBe("1m 5s")
+      expect(formatDuration(3_720_000, "precise")).toBe("1h 2m")
     })
   })
 })
@@ -437,10 +362,6 @@ describe("formatDuration", () => {
 // ── format error ────────────────────────────────────────────────────────────
 
 describe("formatError", () => {
-  test("ClientError → message", () => {
-    expect(formatError(ClientError("connection lost"))).toBe("connection lost")
-  })
-
   test("StorageError → prefixed", () => {
     const err = new StorageError({ message: "disk full" })
     expect(formatError(err)).toBe("Storage: disk full")
@@ -478,12 +399,57 @@ describe("formatError", () => {
     })
     expect(formatError(err)).toBe("Driver openai: catalog filter failed")
   })
+
+  // Each error the server can answer with says what failed, never "Unknown error".
+  test("config and interaction errors read by their own words", () => {
+    const decode = Schema.decodeUnknownSync(GentRpcError)
+    const cases: ReadonlyArray<readonly [unknown, string]> = [
+      [
+        { _tag: "ConfigLoadError", path: "/nonexistent/gent-probe-x/config.json", message: "bad" },
+        "Config /nonexistent/gent-probe-x/config.json: bad",
+      ],
+      [
+        { _tag: "ConfigWriteError", path: "/nonexistent/gent-probe-x/config.json", message: "ro" },
+        "Config /nonexistent/gent-probe-x/config.json: ro",
+      ],
+      [
+        { _tag: "InteractionDecisionConflictError", message: "answered", requestId: "req-1" },
+        "Interaction: answered",
+      ],
+      [
+        {
+          _tag: "InteractionRequestMismatchError",
+          message: "not the open request",
+          actualRequestId: "req-2",
+          sessionId: "session-1",
+          branchId: "branch-1",
+        },
+        "Interaction: not the open request",
+      ],
+    ]
+    for (const [input, expected] of cases) expect(formatError(decode(input))).toBe(expected)
+  })
+})
+
+describe("formatConnectionIssue", () => {
+  // A lost connection is told by the transport's reason, never by words in a message.
+  test("a transport loss reads as lost; an answer reads as an issue", () => {
+    const lost = new RpcClientError({ reason: new SocketCloseError({ code: 1006 }) })
+    expect(formatConnectionIssue(lost)).toBe("connection lost; retrying")
+    expect(formatConnectionIssue(new NotFoundError({ message: "session abc" }))).toBe(
+      "connection issue: Not found: session abc",
+    )
+    expect(formatConnectionIssue(new NotFoundError({ message: "network timeout config" }))).toBe(
+      "connection issue: Not found: network timeout config",
+    )
+  })
 })
 
 // ── format tool ─────────────────────────────────────────────────────────────
 
 const HOME = os.homedir()
-const absent = Option.getOrUndefined(Option.none())
+// eslint-disable-next-line effect/noNullish -- a wire field the server leaves unset is present and undefined.
+const absent = undefined
 const nullValue = Option.getOrNull(Option.none())
 
 describe("formatTokens", () => {
@@ -591,51 +557,49 @@ describe("toolArgSummary", () => {
   test("bash: first line of command", () => {
     expect(toolArgSummary("bash", { command: "ls -la" }, PLACE)).toBe("ls -la")
     expect(toolArgSummary("bash", { command: "echo hello\necho world" }, PLACE)).toBe("echo hello")
-    expect(toolArgSummary("bash", { cmd: "git status" }, PLACE)).toBe("git status")
     expect(toolArgSummary("bash", {}, PLACE)).toBe("")
   })
 
   test("read: path with optional range", () => {
-    expect(toolArgSummary("read", { file_path: "/tmp/foo.ts" }, PLACE)).toBe("/tmp/foo.ts")
-    expect(toolArgSummary("read", { file_path: "/tmp/foo.ts", offset: 10 }, PLACE)).toBe(
+    expect(toolArgSummary("read", { path: "/tmp/foo.ts" }, PLACE)).toBe("/tmp/foo.ts")
+    expect(toolArgSummary("read", { path: "/tmp/foo.ts", offset: 10 }, PLACE)).toBe(
       "/tmp/foo.ts:10",
     )
-    expect(toolArgSummary("read", { file_path: "/tmp/foo.ts", offset: 10, limit: 20 }, PLACE)).toBe(
+    expect(toolArgSummary("read", { path: "/tmp/foo.ts", offset: 10, limit: 20 }, PLACE)).toBe(
       "/tmp/foo.ts:10-29",
     )
-    expect(toolArgSummary("read", { file_path: "/tmp/foo.ts", limit: 50 }, PLACE)).toBe(
+    expect(toolArgSummary("read", { path: "/tmp/foo.ts", limit: 50 }, PLACE)).toBe(
       "/tmp/foo.ts:1-50",
     )
-    expect(toolArgSummary("read", { path: "/tmp/bar.ts" }, PLACE)).toBe("/tmp/bar.ts")
     expect(toolArgSummary("read", {}, PLACE)).toBe("")
   })
 
   test("read: shortens home paths", () => {
-    expect(toolArgSummary("read", { file_path: `${HOME}/src/app.ts` }, PLACE)).toBe("~/src/app.ts")
+    expect(toolArgSummary("read", { path: `${HOME}/src/app.ts` }, PLACE)).toBe("~/src/app.ts")
   })
 
   test("write: path with line count", () => {
-    expect(toolArgSummary("write", { file_path: "/tmp/foo.ts", content: "a\nb\nc" }, PLACE)).toBe(
+    expect(toolArgSummary("write", { path: "/tmp/foo.ts", content: "a\nb\nc" }, PLACE)).toBe(
       "/tmp/foo.ts (3 lines)",
     )
-    expect(toolArgSummary("write", { file_path: "/tmp/foo.ts", content: "single" }, PLACE)).toBe(
+    expect(toolArgSummary("write", { path: "/tmp/foo.ts", content: "single" }, PLACE)).toBe(
       "/tmp/foo.ts",
     )
-    expect(toolArgSummary("write", { file_path: "/tmp/foo.ts" }, PLACE)).toBe("/tmp/foo.ts")
+    expect(toolArgSummary("write", { path: "/tmp/foo.ts" }, PLACE)).toBe("/tmp/foo.ts")
     expect(toolArgSummary("write", {}, PLACE)).toBe("")
   })
 
   test("write: a final newline ends the last line, it does not start one", () => {
-    expect(toolArgSummary("write", { file_path: "/tmp/foo.ts", content: "a\nb\n" }, PLACE)).toBe(
+    expect(toolArgSummary("write", { path: "/tmp/foo.ts", content: "a\nb\n" }, PLACE)).toBe(
       "/tmp/foo.ts (2 lines)",
     )
-    expect(toolArgSummary("write", { file_path: "/tmp/foo.ts", content: "single\n" }, PLACE)).toBe(
+    expect(toolArgSummary("write", { path: "/tmp/foo.ts", content: "single\n" }, PLACE)).toBe(
       "/tmp/foo.ts",
     )
   })
 
   test("edit: shortened path", () => {
-    expect(toolArgSummary("edit", { file_path: `${HOME}/src/app.ts` }, PLACE)).toBe("~/src/app.ts")
+    expect(toolArgSummary("edit", { path: `${HOME}/src/app.ts` }, PLACE)).toBe("~/src/app.ts")
     expect(toolArgSummary("edit", {}, PLACE)).toBe("")
   })
 
@@ -672,10 +636,10 @@ describe("toolArgSummary", () => {
   test("degrades gracefully on bad input types", () => {
     expect(toolArgSummary("grep", { pattern: "ok", path: {} }, PLACE)).toBe("/ok/ in .")
     expect(
-      toolArgSummary("read", { file_path: "/tmp/f.ts", offset: "bad", limit: nullValue }, PLACE),
+      toolArgSummary("read", { path: "/tmp/f.ts", offset: "bad", limit: nullValue }, PLACE),
     ).toBe("/tmp/f.ts")
     expect(toolArgSummary("bash", { command: 123 }, PLACE)).toBe("")
-    expect(toolArgSummary("read", { file_path: nullValue }, PLACE)).toBe("")
+    expect(toolArgSummary("read", { path: nullValue }, PLACE)).toBe("")
   })
 
   test("a tool with no formatter shows its leading argument", () => {

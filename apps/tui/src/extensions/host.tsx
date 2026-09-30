@@ -30,7 +30,8 @@ import {
   on,
   onMount,
 } from "solid-js"
-import { isConnectionLoss, useRequiredContext } from "../utils"
+import { formatError, isConnectionLoss, useRequiredContext } from "../utils"
+// A static import: Bun's bundler reaches the builtins only through it in the compiled binary.
 import { builtinClientModules } from "./builtins"
 import { ToolRenderersProvider } from "../tool-renderers"
 import type { Command } from "../commands"
@@ -74,8 +75,6 @@ export const makeClientRuntime = (
  * `transport.onExtensionStateChanged`; see the goal label in
  * `builtins.tsx` and the wake tray in `wake.client.tsx`.
  */
-
-// Static builtin imports — Bun's bundler needs these reachable for compiled binary
 
 interface ExtensionUIContextValue {
   /**
@@ -298,7 +297,7 @@ export function ExtensionUIProvider(props: {
               const byExtension = new Map<string, Array<Command>>()
               for (const c of cmds) {
                 const run = (args: string) => {
-                  const activeSession = Option.fromNullishOr(client.session())
+                  const activeSession = client.session()
                   if (Option.isNone(activeSession)) return
                   const sid = activeSession.value.sessionId
                   const bid = activeSession.value.branchId
@@ -312,8 +311,16 @@ export function ExtensionUIProvider(props: {
                         branchId: bid,
                       })
                       .pipe(
+                        // The reader ran the command, so a failure shows on the
+                        // status row of the session it ran in.
                         Effect.catchEager((error) =>
-                          Effect.logWarning("slash.command.failed").pipe(
+                          Effect.sync(() =>
+                            client.setErrorIn(
+                              { sessionId: sid, branchId: bid },
+                              `/${c.name} failed: ${formatError(error)}`,
+                            ),
+                          ).pipe(
+                            Effect.andThen(Effect.logWarning("slash.command.failed")),
                             Effect.annotateLogs({
                               extensionId: c.extensionId,
                               capabilityId: c.capabilityId,

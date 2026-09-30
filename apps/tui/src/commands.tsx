@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { Array, Match, Option, Predicate, Schema } from "effect"
+import { Array, Option, Predicate } from "effect"
 import {
   type Accessor,
   createContext,
@@ -23,7 +23,7 @@ import {
   type SelectListApi,
   type SelectListRow,
 } from "./ui"
-import { textWidth } from "./text-width-adapter"
+import { textWidth } from "./bun-adapter"
 import { useTheme } from "./theme"
 import { useExtensionUI } from "./extensions/host"
 import { type Keybind, parseKeybind } from "./extensions/loader-boundary"
@@ -262,68 +262,8 @@ interface CommandPaletteState {
   readonly category: string
 }
 
-const PaletteSourceSchema = Schema.declare<PaletteLevel["source"]>(
-  (value): value is PaletteLevel["source"] => Predicate.isFunction(value),
-)
-const PaletteOnEnterSchema = Schema.declare<() => void>((value): value is () => void =>
-  Predicate.isFunction(value),
-)
-const PaletteLevelSchema = Schema.Struct({
-  id: Schema.String,
-  title: Schema.String,
-  source: PaletteSourceSchema,
-  onEnter: Schema.optionalKey(PaletteOnEnterSchema),
-})
-
-const CommandPaletteEvent = Schema.TaggedUnion({
-  Open: { rootLevel: PaletteLevelSchema },
-  Close: {},
-  PushLevel: { level: PaletteLevelSchema },
-  PopLevel: {},
-  SelectCategory: { category: Schema.String },
-})
-type CommandPaletteEvent = Schema.Schema.Type<typeof CommandPaletteEvent>
-
-const initial = (): CommandPaletteState => ({
-  levelStack: [],
-  category: "",
-})
-
-const currentLevel = (state: CommandPaletteState): Option.Option<PaletteLevel> =>
-  Array.last(state.levelStack)
-
-const pushLevel = (state: CommandPaletteState, level: PaletteLevel): CommandPaletteState => ({
-  levelStack: [...state.levelStack, level],
-  category: "",
-})
-
-const popLevel = (state: CommandPaletteState): CommandPaletteState => {
-  if (state.levelStack.length <= 1) return state
-  return {
-    levelStack: state.levelStack.slice(0, -1),
-    category: "",
-  }
-}
-
-const CommandPaletteState = {
-  initial,
-  currentLevel,
-}
-
-function transitionCommandPalette(
-  state: CommandPaletteState,
-  event: CommandPaletteEvent,
-): CommandPaletteState {
-  return Match.value(event).pipe(
-    Match.tagsExhaustive({
-      Open: (event) => ({ ...initial(), levelStack: [event.rootLevel] }),
-      Close: () => initial(),
-      PushLevel: (event) => pushLevel(state, event.level),
-      PopLevel: () => popLevel(state),
-      SelectCategory: (event) => ({ ...state, category: event.category }),
-    }),
-  )
-}
+/** A closed palette: no level open, no category lens. */
+const closedPalette: CommandPaletteState = { levelStack: [], category: "" }
 
 // ── command palette ─────────────────────────────────────────────────────────
 
@@ -345,7 +285,7 @@ export function CommandPalette() {
   const { theme, selected, set, all, mode, setMode } = useTheme()
   const client = useClient()
   const dimensions = useTerminalDimensions()
-  const [state, setState] = createSignal(CommandPaletteState.initial())
+  const [state, setState] = createSignal(closedPalette)
   // The list owns the query and the cursor; the palette keeps a copy of the
   // query to filter with and a handle to reset the list when a level changes.
   const [searchQuery, setSearchQuery] = createSignal("")
@@ -353,12 +293,8 @@ export function CommandPalette() {
   const resetList = () => Option.match(list, { onNone: () => {}, onSome: (api) => api.reset() })
   const listToTop = () => Option.match(list, { onNone: () => {}, onSome: (api) => api.moveTo(0) })
 
-  const dispatch = (event: Parameters<typeof transitionCommandPalette>[1]) => {
-    setState((current) => transitionCommandPalette(current, event))
-  }
-
   const closePalette = () => {
-    dispatch(CommandPaletteEvent.cases.Close.make({}))
+    setState(closedPalette)
     command.closePalette()
   }
 
@@ -429,10 +365,11 @@ export function CommandPalette() {
               id: `branch.${branch.id}`,
               title: selectedTitle(
                 branch.name ?? `Branch ${shortId(branch.id)}`,
-                client.session()?.branchId === branch.id,
+                Option.exists(client.session(), (session) => session.branchId === branch.id),
               ),
               onSelect: () => {
-                if (client.session()?.branchId !== branch.id) client.switchBranch(branch.id)
+                if (!Option.exists(client.session(), (session) => session.branchId === branch.id))
+                  client.switchBranch(branch.id)
                 closePalette()
               },
             })),
@@ -442,7 +379,7 @@ export function CommandPalette() {
   }
 
   const pushLevel = (level: PaletteLevel) => {
-    dispatch(CommandPaletteEvent.cases.PushLevel.make({ level }))
+    setState((current) => ({ levelStack: [...current.levelStack, level], category: "" }))
     resetList()
     level.onEnter?.()
   }
@@ -488,7 +425,7 @@ export function CommandPalette() {
 
   // ── Derived state ──
 
-  const currentLevel = () => CommandPaletteState.currentLevel(state())
+  const currentLevel = () => Array.last(state().levelStack)
 
   /** `None` while the level's request is pending. */
   const levelSource = createMemo(() =>
@@ -526,7 +463,7 @@ export function CommandPalette() {
       closePalette()
       return
     }
-    dispatch(CommandPaletteEvent.cases.PopLevel.make({}))
+    setState((current) => ({ levelStack: current.levelStack.slice(0, -1), category: "" }))
     resetList()
   }
 
@@ -540,11 +477,8 @@ export function CommandPalette() {
     let step = 1
     if (backward) step = -1
     const index = (items.indexOf(category()) + step + items.length) % items.length
-    dispatch(
-      CommandPaletteEvent.cases.SelectCategory.make({
-        category: Option.getOrElse(Option.fromNullishOr(items[index]), () => ""),
-      }),
-    )
+    const next = Option.getOrElse(Option.fromNullishOr(items[index]), () => "")
+    setState((current) => ({ ...current, category: next }))
     listToTop()
   }
 
@@ -561,7 +495,7 @@ export function CommandPalette() {
 
   createEffect(() => {
     if (command.paletteOpen()) {
-      dispatch(CommandPaletteEvent.cases.Open.make({ rootLevel: rootLevel() }))
+      setState({ levelStack: [rootLevel()], category: "" })
     }
   })
 

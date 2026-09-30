@@ -1,5 +1,5 @@
 import type { JSX } from "@opentui/solid"
-import { createPatch } from "diff"
+import { createPatch, structuredPatch } from "diff"
 import { Match, Option, Schema } from "effect"
 import { createContext, createMemo, For, type JSX as SolidJSX, Show, useContext } from "solid-js"
 import { buildSyntaxStyle, useTheme } from "./theme"
@@ -25,7 +25,9 @@ import {
   formatGenericToolInput,
   formatGenericToolText,
   formatOperationLabels,
+  formatPreviewFooter,
   getString,
+  formatBytes,
   isAbsPath,
   parseBashOutput,
   plural,
@@ -44,10 +46,10 @@ export interface ToolCall {
   status: "running" | "completed" | "error"
   // eslint-disable-next-line effect/noNullish -- Renderer payloads preserve omitted tool fields from the event stream.
   input: unknown | undefined
-  // eslint-disable-next-line effect/noNullish -- Renderer payloads preserve omitted tool fields from the event stream.
-  summary: string | undefined
-  // eslint-disable-next-line effect/noNullish -- Renderer payloads preserve omitted tool fields from the event stream.
-  output: string | undefined
+  /** Absent until the tool reports one. */
+  summary?: string
+  /** Absent until the tool returns. */
+  output?: string
   /**
    * Inner calls a cell admitted, from the live feed or, after a reload, from
    * the branch's stored tool receipts. Absent on a fork, whose saved result's
@@ -131,29 +133,26 @@ export function getFiletype(path: string): string | undefined {
 }
 
 /**
- * Count lines added/removed from old and new strings
+ * The lines a patch adds and removes, read from its hunks: a rewrite removes
+ * every old line and adds every new one, and a shifted edit counts only the
+ * lines that moved. A final newline ends the last line (the core line rule),
+ * so a missing one is no change of its own.
  */
-interface DiffLineCount {
-  readonly added: number
-  readonly removed: number
+const withFinalNewline = (text: string) => {
+  if (text.length === 0 || text.endsWith("\n")) return text
+  return `${text}\n`
 }
-
-export function countDiffLines(oldStr: string, newStr: string): DiffLineCount {
-  const oldLines = lineCount(oldStr)
-  const newLines = lineCount(newStr)
-  if (newLines > oldLines) {
-    return { added: newLines - oldLines, removed: 0 }
-  } else if (oldLines > newLines) {
-    return { added: 0, removed: oldLines - newLines }
+const patchLineCounts = (oldStr: string, newStr: string) => {
+  let added = 0
+  let removed = 0
+  const patch = structuredPatch("", "", withFinalNewline(oldStr), withFinalNewline(newStr))
+  for (const hunk of patch.hunks) {
+    for (const line of hunk.lines) {
+      if (line.startsWith("+")) added++
+      else if (line.startsWith("-")) removed++
+    }
   }
-  // Same line count - count actual changed lines
-  const oldArr = oldStr.split("\n")
-  const newArr = newStr.split("\n")
-  let changed = 0
-  for (let i = 0; i < oldArr.length; i++) {
-    if (oldArr[i] !== newArr[i]) changed++
-  }
-  return { added: changed, removed: changed }
+  return { added, removed }
 }
 
 interface EditDiffResult {
@@ -183,7 +182,7 @@ export function getEditUnifiedDiff(input: EditInput) {
     )
     const diff = createPatch(path, oldStr, newStr)
     const filetype = getFiletype(path)
-    const { added, removed } = countDiffLines(oldStr, newStr)
+    const { added, removed } = patchLineCounts(oldStr, newStr)
     return { diff, filetype, added, removed } satisfies EditDiffResult
   })
   return Option.getOrNull(result)
@@ -225,10 +224,7 @@ export function GenericToolRenderer(props: ToolRendererProps) {
               <text style={{ fg: theme.textMuted }}>{summaryText()}</text>
             </Show>
             <Show when={isTruncated()}>
-              <text style={{ fg: theme.textMuted }}>
-                ... ({remainingLines()} more lines, <span style={{ fg: theme.info }}>ctrl+o</span>{" "}
-                to expand)
-              </text>
+              <text style={{ fg: theme.textMuted }}>{formatPreviewFooter(remainingLines())}</text>
             </Show>
           </box>
         </Show>
@@ -1046,10 +1042,8 @@ export function EditToolRenderer(props: ToolRendererProps) {
 
   const editData = () => getEditUnifiedDiff(props.toolCall.input)
   const path = () => getPath(props.toolCall.input)
-  const subtitleHref = () => {
-    if (isAbsPath(path())) return fileUrl(path())
-    return Option.getOrUndefined(Option.none<string>())
-  }
+  const subtitleHref = () =>
+    Option.getOrUndefined(Option.some(path()).pipe(Option.filter(isAbsPath), Option.map(fileUrl)))
 
   const collapsedDiffLines = createMemo((): DiffLine[] => {
     const data = editData()
@@ -1141,22 +1135,27 @@ const WriteOutputSchema = Schema.Struct({
   bytesWritten: Schema.Finite,
 })
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes}B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`
-}
-
 function WriteToolRenderer(props: ToolRendererProps) {
   const { pathPlace } = useClient()
   const { theme } = useTheme()
 
   const data = createMemo(() => decodeToolOutput(WriteOutputSchema, props.toolCall.output))
-  const path = createMemo(() => data()?.path ?? "")
-  const subtitleHref = () => {
-    if (isAbsPath(path())) return fileUrl(path())
-    return Option.getOrUndefined(Option.none<string>())
-  }
+  // The input names the file, so the header shows it while the write runs.
+  const path = createMemo(() => getPath(props.toolCall.input))
+  const subtitleHref = () =>
+    Option.getOrUndefined(Option.some(path()).pipe(Option.filter(isAbsPath), Option.map(fileUrl)))
+
+  // The header names the file, so the body, open or closed, says what the write did.
+  const Written = () => (
+    <Show when={data()}>
+      {(d) => (
+        <text>
+          <span style={{ fg: theme.success }}>{formatBytes(d().bytesWritten)}</span>
+          <span style={{ fg: theme.textMuted }}> written</span>
+        </text>
+      )}
+    </Show>
+  )
 
   return (
     <ToolFrame
@@ -1165,27 +1164,9 @@ function WriteToolRenderer(props: ToolRendererProps) {
       subtitleHref={subtitleHref()}
       status={props.toolCall.status}
       expanded={props.expanded}
-      collapsedContent={
-        <Show when={data()}>
-          {(d) => (
-            <text>
-              <span style={{ fg: theme.success }}>{formatBytes(d().bytesWritten)}</span>
-              <span style={{ fg: theme.textMuted }}> written</span>
-            </text>
-          )}
-        </Show>
-      }
+      collapsedContent={<Written />}
     >
-      <Show when={data()}>
-        {(d) => (
-          <text>
-            <span style={{ fg: theme.text }}>{d().path}</span>
-            <span style={{ fg: theme.textMuted }}> · </span>
-            <span style={{ fg: theme.success }}>{formatBytes(d().bytesWritten)}</span>
-            <span style={{ fg: theme.textMuted }}> written</span>
-          </text>
-        )}
-      </Show>
+      <Written />
     </ToolFrame>
   )
 }
@@ -1288,6 +1269,7 @@ function groupByFile(matches: ReadonlyArray<GrepMatch>): Map<string, GrepMatch[]
 
 function GrepToolRenderer(props: ToolRendererProps) {
   const { theme } = useTheme()
+  const { pathPlace } = useClient()
 
   const data = createMemo(() => parseGrepOutput(props.toolCall))
   const pattern = createMemo(() => getPattern(props.toolCall.input))
@@ -1330,7 +1312,12 @@ function GrepToolRenderer(props: ToolRendererProps) {
             <box flexDirection="column">
               <Totals output={d()} />
               <For each={collapsedFiles()}>
-                {(file) => <text style={{ fg: theme.textMuted }}> {truncatePath(file)}</text>}
+                {(file) => (
+                  <text style={{ fg: theme.textMuted }}>
+                    {" "}
+                    {truncatePath(displayPath(file, pathPlace()))}
+                  </text>
+                )}
               </For>
               <Show when={d().files > collapsedFiles().length}>
                 <text style={{ fg: theme.textMuted }}>
@@ -1370,7 +1357,7 @@ function GrepToolRenderer(props: ToolRendererProps) {
                       <box flexDirection="column" marginBottom={1}>
                         <text>
                           <span style={{ fg: theme.info, bold: true }}>
-                            {truncatePath(run.file, 60)}
+                            {truncatePath(displayPath(run.file, pathPlace()), 60)}
                           </span>
                         </text>
                         <For each={run.matches}>
@@ -1416,11 +1403,8 @@ function ReadSessionToolRenderer(props: ToolRendererProps) {
 
   const output = () => decodeToolOutputOption(ReadSessionOutputSchema, props.toolCall.output)
 
-  const subtitle = () => {
-    const sid = getInputField(props.toolCall.input, "sessionId")
-    if (Option.isNone(sid)) return Option.getOrUndefined(Option.none<string>())
-    return shortId(sid.value)
-  }
+  const subtitle = () =>
+    Option.getOrUndefined(Option.map(getInputField(props.toolCall.input, "sessionId"), shortId))
 
   const summary = (): Option.Option<string> => {
     const o = output()
@@ -1440,13 +1424,8 @@ function ReadSessionToolRenderer(props: ToolRendererProps) {
     return value
   }
 
-  return (
-    <ToolFrame
-      title="read_session"
-      subtitle={subtitle()}
-      status={props.toolCall.status}
-      expanded={props.expanded}
-    >
+  const Status = () => (
+    <>
       <Show when={props.toolCall.status === "running"}>
         <text style={{ fg: theme.textMuted }}>
           <span style={{ fg: theme.warning }}>⋯</span> Loading session…
@@ -1458,8 +1437,22 @@ function ReadSessionToolRenderer(props: ToolRendererProps) {
           <span style={{ fg: theme.success }}>✓</span> {Option.getOrElse(summary(), () => "")}
         </text>
       </Show>
+    </>
+  )
 
-      <Show when={props.expanded && Option.getOrUndefined(content())}>
+  // The frame picks the body: the status line when closed, and the content
+  // under it when open, by the caller's flag or by a click on the header.
+  return (
+    <ToolFrame
+      title="read_session"
+      subtitle={subtitle()}
+      status={props.toolCall.status}
+      expanded={props.expanded}
+      collapsedContent={<Status />}
+    >
+      <Status />
+
+      <Show when={Option.getOrUndefined(content())}>
         <box paddingLeft={2}>
           <text style={{ fg: theme.textMuted }}>
             {Option.match(content(), { onNone: () => "", onSome: renderContent })}

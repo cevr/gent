@@ -815,7 +815,7 @@ const builtinInteractions = defineClientExtension("@gent/interaction-tools", {
   ),
 })
 
-// ── builtin module registry ─────────────────────────────────────────────────
+// ── skills extension ────────────────────────────────────────────────────────
 
 export const builtinSkills = defineClientExtension("@gent/skills-ui", {
   setup: Effect.gen(function* () {
@@ -833,11 +833,8 @@ export const builtinSkills = defineClientExtension("@gent/skills-ui", {
     return autocompleteContribution({
       prefix: "$",
       title: "Skills",
-      // Skills were filtered by a plain substring test and left in whatever
-      // order the host returned them, so `$te` answered with the first skill
-      // whose name happened to contain those letters rather than the closest
-      // one. Ranking puts the nearest name first, which is also the completion
-      // the composer's ghost line offers.
+      // Ranked, not filtered: `$te` puts the nearest name first, which is
+      // also the completion the composer's ghost line offers.
       // The store is read from disk per request rather than from the shared
       // in-memory snapshot. This runs in an extension setup's Effect, which
       // may await, and the file is a few KB opened on a keystroke, so the read
@@ -877,6 +874,8 @@ export const builtinSkills = defineClientExtension("@gent/skills-ui", {
 
 // Builtins keep their precise `R` locally; the load membrane erases them in
 // one place when `loader-boundary.ts` runs `runtime.runPromise(...)`.
+// ── builtin module registry ─────────────────────────────────────────────────
+
 export const builtinClientModules: ReadonlyArray<AnyExtensionClientModule> = [
   builtinAgentsView,
   builtinBtw,

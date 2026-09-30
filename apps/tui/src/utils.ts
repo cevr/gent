@@ -10,7 +10,7 @@ import {
   Schema,
 } from "effect"
 import { type Context, useContext } from "solid-js"
-import { textWidth } from "./text-width-adapter"
+import { textWidth } from "./bun-adapter"
 import {
   GentConnectionError,
   GentRpcError,
@@ -155,34 +155,51 @@ export const getString = (input: ToolInput, key: string, fallback = ""): string 
     () => fallback,
   )
 
+// ── size formatting ─────────────────────────────────────────────────────────
+
+/** `512 B`, `7.2 KB`, `1.5 MB`: the doctor's database size and a write's receipt. */
+export const formatBytes = (bytes: number): string => {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
 // ── duration formatting ─────────────────────────────────────────────────────
 
 /**
- * - `compact`: whole seconds under a minute, then `2m 5s` (status lines, turn summaries).
- * - `padded`: whole seconds under a minute, then `2m05s` (fixed-width detail rows).
- * - `precise`: `12ms` under a second, tenths under a minute, then `2m 5s` (tool receipts).
+ * - `compact`: whole seconds under a minute, then `2m 5s`, then `1h 2m`
+ *   (status lines, turn summaries, the agents pane and the wake tray).
+ * - `padded`: whole seconds under a minute, then `2m05s`, then `1h02m` (fixed-width detail rows).
+ * - `precise`: `12ms` under a second, tenths under a minute, then as `compact` (tool receipts).
  */
 type DurationStyle = "compact" | "padded" | "precise"
 
 const wholeSeconds = (ms: number): number => Math.floor(ms / 1000)
 
+/** From one hour the seconds drop and the minutes follow the hours. */
+const hours = (secs: number, separator: string, pad: number): string =>
+  `${Math.floor(secs / 3600)}h${separator}${String(Math.floor((secs % 3600) / 60)).padStart(pad, "0")}m`
+
 const compact = (ms: number): string => {
   const secs = wholeSeconds(ms)
   if (secs < 60) return `${secs}s`
-  return `${Math.floor(secs / 60)}m ${secs % 60}s`
+  if (secs < 3600) return `${Math.floor(secs / 60)}m ${secs % 60}s`
+  return hours(secs, " ", 1)
 }
 
 const padded = (ms: number): string => {
   const secs = wholeSeconds(ms)
   if (secs < 60) return `${secs}s`
-  return `${Math.floor(secs / 60)}m${String(secs % 60).padStart(2, "0")}s`
+  if (secs < 3600) return `${Math.floor(secs / 60)}m${String(secs % 60).padStart(2, "0")}s`
+  return hours(secs, "", 2)
 }
 
 const precise = (ms: number): string => {
   if (ms < 1000) return `${Math.round(ms)}ms`
   const secs = ms / 1000
   if (secs < 60) return `${secs.toFixed(1)}s`
-  return `${Math.floor(secs / 60)}m ${Math.round(secs % 60)}s`
+  if (secs < 3600) return `${Math.floor(secs / 60)}m ${Math.round(secs % 60)}s`
+  return hours(Math.floor(secs), " ", 1)
 }
 
 export const formatDuration = (ms: number, style: DurationStyle): string =>
@@ -195,18 +212,8 @@ export const formatDuration = (ms: number, style: DurationStyle): string =>
 
 // ── error formatting ────────────────────────────────────────────────────────
 
-export interface ClientError {
-  readonly _tag: "ClientError"
-  readonly message: string
-}
-
-export const ClientError = (message: string): ClientError => ({
-  _tag: "ClientError",
-  message,
-})
-
-/** What the TUI shows: a call's error, a connection setup failure, or its own. */
-export type UiError = GentClientRpcError | GentConnectionError | ClientError
+/** What the TUI shows: a call's error or a connection setup failure. */
+export type UiError = GentClientRpcError | GentConnectionError
 
 /**
  * The `RpcClientError` reasons that mean the bytes did not make the round
@@ -264,8 +271,6 @@ export const SEND_RETRY = {
 
 export const formatError = (error: UiError): string => {
   switch (error._tag) {
-    case "ClientError":
-      return error.message
     case "StorageError":
       return `Storage: ${error.message}`
     case "SessionRuntimeError":
@@ -290,13 +295,19 @@ export const formatError = (error: UiError): string => {
       return `Connection: ${error.message}`
     case "@gent/core/GentConnectionError":
       return `Connection: ${error.message}`
-    default:
-      return "Unknown error"
+    case "ConfigLoadError":
+    case "ConfigWriteError":
+      return `Config ${error.path}: ${error.message}`
+    case "InteractionDecisionConflictError":
+    case "InteractionRequestMismatchError":
+      return `Interaction: ${error.message}`
+    case "WorkspaceHeaderError":
+      return `Workspace: ${error.message}`
   }
 }
 
-// eslint-disable-next-line effect/noUnknownParameters -- Connection failures cross framework boundaries; inspect only their message property.
-const extractUnknownMessage = (error: unknown): string => {
+// eslint-disable-next-line effect/noUnknownParameters -- Connection and auth failures cross framework boundaries; inspect only their message property.
+export const extractUnknownMessage = (error: unknown): string => {
   if (error instanceof Error) return error.message
   if (Predicate.isString(error)) return error
   if (Predicate.isObject(error) && "message" in error) {
@@ -305,35 +316,16 @@ const extractUnknownMessage = (error: unknown): string => {
   return String(error)
 }
 
-const isUiError = Schema.is(
-  Schema.Union([
-    GentRpcError,
-    GentConnectionError,
-    RpcClientError,
-    Schema.TaggedStruct("ClientError", { message: Schema.String }),
-  ]),
-)
+const isUiError = Schema.is(Schema.Union([GentRpcError, GentConnectionError, RpcClientError]))
 
 // eslint-disable-next-line effect/noUnknownParameters -- Validate transport and framework errors before applying domain error formatting.
 export const formatConnectionIssue = (error: unknown): string => {
-  let message: string
-  if (isUiError(error)) message = formatError(error)
-  else message = extractUnknownMessage(error)
-
-  const normalized = message.toLowerCase()
-  if (
-    normalized.includes("timed out") ||
-    normalized.includes("timeout") ||
-    normalized.includes("econnreset") ||
-    normalized.includes("socket hang up") ||
-    normalized.includes("connection reset") ||
-    normalized.includes("fetch failed") ||
-    normalized.includes("network")
-  ) {
-    return "connection lost; retrying"
+  if (!isUiError(error)) return `connection issue: ${extractUnknownMessage(error)}`
+  // The transport's reason tells a lost connection from an answer.
+  if (error._tag !== "@gent/core/GentConnectionError") {
+    if (isConnectionLoss(error)) return "connection lost; retrying"
   }
-
-  return `connection issue: ${message}`
+  return `connection issue: ${formatError(error)}`
 }
 
 // ── tool formatting ─────────────────────────────────────────────────────────
@@ -419,12 +411,8 @@ function getNumberArg(args: Schema.JsonObject, key: string) {
   return decodeNumber(args[key])
 }
 
-function getPathArg(args: Schema.JsonObject): string {
-  return getStringArg(args, "file_path", "path")
-}
-
 function summarizeRead(args: Schema.JsonObject, place: PathPlace): string {
-  const rawPath = getPathArg(args)
+  const rawPath = getStringArg(args, "path")
   if (rawPath.length === 0) return ""
 
   let text = displayPath(rawPath, place)
@@ -441,7 +429,7 @@ function summarizeRead(args: Schema.JsonObject, place: PathPlace): string {
 }
 
 function summarizeWrite(args: Schema.JsonObject, place: PathPlace): string {
-  const rawPath = getPathArg(args)
+  const rawPath = getStringArg(args, "path")
   if (rawPath.length === 0) return ""
 
   const lines = lineCount(getStringArg(args, "content"))
@@ -465,7 +453,7 @@ type ToolArgFormatter = (args: Schema.JsonObject, place: PathPlace) => string
 
 const toolArgFormatters = {
   bash: (args) => {
-    const command = getStringArg(args, "command", "cmd")
+    const command = getStringArg(args, "command")
     if (command.length === 0) return ""
     return command.split("\n")[0] ?? command
   },
@@ -476,7 +464,7 @@ const toolArgFormatters = {
   read: summarizeRead,
   write: summarizeWrite,
   edit: (args, place) => {
-    const rawPath = getPathArg(args)
+    const rawPath = getStringArg(args, "path")
     if (rawPath.length > 0) {
       return displayPath(rawPath, place)
     }
@@ -516,7 +504,7 @@ const leadingArg = (args: Schema.JsonObject, place: PathPlace): string => {
 
 /**
  * The one label of a call's arguments: the tool's own formatter, else its
- * leading argument. Paths read from `place` when one is given.
+ * leading argument. Paths read from `place`: the cwd and home they are shown against.
  */
 export function toolArgSummary(toolName: string, input: ToolInput, place: PathPlace): string {
   const args = decodeToolArgs(input)
@@ -971,8 +959,25 @@ const matchFileRefs = (text: string): FileRefMatch[] => {
  * The most text a composer insert puts inline: `!cmd` output and an `@file`
  * both stop at this many lines or characters, whichever comes first.
  */
-export const INLINE_MAX_LINES = 2000
-export const INLINE_MAX_BYTES = 50 * 1024
+const INLINE_MAX_LINES = 2000
+const INLINE_MAX_BYTES = 50 * 1024
+
+/**
+ * The head of `lines` that fits the inline cap: whole lines, at most
+ * INLINE_MAX_LINES of them and INLINE_MAX_BYTES of UTF-8 with their breaks.
+ */
+export const inlineHead = (lines: ReadonlyArray<string>): ReadonlyArray<string> => {
+  const encoder = new TextEncoder()
+  const kept: Array<string> = []
+  let size = 0
+  for (const line of lines) {
+    const lineBytes = encoder.encode(line).length
+    if (kept.length >= INLINE_MAX_LINES || size + lineBytes > INLINE_MAX_BYTES) break
+    kept.push(line)
+    size += lineBytes + 1
+  }
+  return kept
+}
 
 /** ripgrep's rule, as grep keeps it: a NUL byte in the first 8 KB marks a file binary. */
 const BINARY_PROBE_BYTES = 8192
@@ -999,21 +1004,15 @@ const readFileContent = (
 
     if (Option.isSome(startLine)) {
       const start = Math.max(0, startLine.value - 1) // Convert 1-indexed to 0-indexed
+      // A range that starts past the end names no line: it stays a reference.
+      if (start >= lines.length) return Option.none<string>()
       let end = start + 1
       if (Option.isSome(endLine)) end = Math.min(lines.length, endLine.value)
       lines = lines.slice(start, end)
       whole = lines.join("\n")
     }
 
-    const encoder = new TextEncoder()
-    const kept: Array<string> = []
-    let size = 0
-    for (const line of lines) {
-      const lineBytes = encoder.encode(line).length
-      if (kept.length >= INLINE_MAX_LINES || size + lineBytes > INLINE_MAX_BYTES) break
-      kept.push(line)
-      size += lineBytes + 1
-    }
+    const kept = inlineHead(lines)
     if (kept.length === lines.length) return Option.some(whole)
     return Option.some(
       `${kept.join("\n")}\n[${label} cut at ${kept.length} lines of ${lines.length}; read the rest with the read tool]`,

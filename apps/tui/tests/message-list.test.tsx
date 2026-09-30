@@ -4,6 +4,7 @@ import { type CliRenderer, type CliRendererExternalOutputEvent, SyntaxStyle } fr
 import { describe, expect, it, test } from "effect-bun-test"
 import {
   addStep,
+  currentMillis,
   emptyTurnSteps,
   getSessionEventLabel,
   type Message as ListMessage,
@@ -55,6 +56,7 @@ import {
   BUILTIN_TOOL_RENDERERS,
   ToolRenderersProvider,
   EditToolRenderer,
+  GenericToolRenderer,
   ReadToolRenderer,
   useToolRenderers,
 } from "../src/tool-renderers"
@@ -216,6 +218,38 @@ describe("session event labels", () => {
     expect(getSessionEventLabel({ ...event, reason: "" }, createdAt)).toBe("Retrying in 2s... 1/3")
   })
 
+  // A pending retry's row is the one row that follows the clock.
+  it.live("a pending retry row counts down to now", () =>
+    Effect.gen(function* () {
+      const event: SessionEvent = {
+        _tag: "retrying",
+        attempt: 1,
+        maxAttempts: 3,
+        delayMs: 1000,
+        outcome: "pending",
+        reason: "",
+        createdAt: currentMillis(),
+        seq: 1,
+      }
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <MessageList
+              items={[event]}
+              disclosure="collapsed"
+              syntaxStyle={syntaxStyle}
+              streaming={true}
+            />
+          ),
+          { width: 80, height: 10 },
+        ),
+      )
+      yield* waitForFrame(setup, (frame) => frame.includes("Retrying in 1s... 1/3"), "countdown")
+      yield* waitForFrame(setup, (frame) => frame.includes("Retrying now... 1/3"), "now", 3000)
+      destroyRenderSetup(setup)
+    }).pipe(Effect.timeout("8 seconds")),
+  )
+
   test("a retry the turn's cancel cut short is not called finished", () => {
     const event: SessionEvent = {
       _tag: "retrying",
@@ -277,7 +311,8 @@ describe("worked-for row", () => {
 
 // ── tool interaction projection ─────────────────────────────────────────────
 
-const absent = Option.getOrUndefined(Option.none())
+// eslint-disable-next-line effect/noNullish -- a wire field the server leaves unset is present and undefined.
+const absent = undefined
 let messageIndex = 0
 
 describe("projectMessagesWithToolInteractions", () => {
@@ -517,7 +552,6 @@ const userMessage = (
       reasoning: "",
       images: [...images],
       createdAt: 0,
-      toolCalls: absent,
     }
   }
   return {
@@ -529,16 +563,13 @@ const userMessage = (
     reasoning: "",
     images: [...images],
     createdAt: 0,
-    toolCalls: absent,
   }
 }
 
 /**
  * One assistant message carrying one tool call.
  *
- * The feed writes `segments` for every assistant message, so a fixture that
- * carries only `toolCalls` draws nothing. Both fields name the same call here,
- * the way the feed spells it.
+ * The segments own a message's tool calls, as the feed writes them.
  */
 const assistantToolMessage = (id: string, toolCall: ToolCall): ListMessage => ({
   _tag: "regular-message",
@@ -548,7 +579,6 @@ const assistantToolMessage = (id: string, toolCall: ToolCall): ListMessage => ({
   reasoning: "",
   images: [],
   createdAt: 0,
-  toolCalls: [toolCall],
   segments: [{ _tag: "tool-call", toolCall }],
 })
 
@@ -648,7 +678,6 @@ const compactionMessage = (): ListMessage => ({
   reasoning: "",
   images: [],
   createdAt: 0,
-  toolCalls: absent,
   metadata: {
     customType: "context-window",
     details: {
@@ -828,7 +857,7 @@ const drawnCell = (
     return frame
   })
 
-describe("FX transcript treatment", () => {
+describe("transcript message rows", () => {
   it.live("shows information excluded from model context in the transcript", () =>
     Effect.gen(function* () {
       const message: ListMessage = {
@@ -896,7 +925,6 @@ describe("FX transcript treatment", () => {
           reasoning: "",
           images: [],
           createdAt: 0,
-          toolCalls: absent,
           segments: [{ _tag: "text", content: "ANSWER-END" }],
         }
         const items: SessionItem[] = [
@@ -989,195 +1017,6 @@ describe("FX transcript treatment", () => {
       }),
     )
   }
-
-  it.live(
-    "native history holds rows until client extensions load, then commits them rendered",
-    () =>
-      Effect.gen(function* () {
-        const release = yield* Deferred.make<void>()
-        const held = defineClientExtension("@test/held-load", {
-          setup: Deferred.await(release).pipe(Effect.as(clientContributions())),
-        })
-        const savedText: string[] = []
-        const goalMessage: ListMessage = {
-          ...userMessage("regular-message", "goal-held", "RAW-GOAL-TEXT keep going.", "queued"),
-          pendingMode: absent,
-          metadata: { customType: "goal-context" },
-        }
-        const items: SessionItem[] = [
-          goalMessage,
-          ...Array.from({ length: 6 }, (_, index) =>
-            userMessage(
-              "regular-message",
-              `filler-${index}`,
-              `filler ${index}\nsecond line\nthird line`,
-              "queued",
-            ),
-          ),
-        ]
-        const setup = yield* Effect.promise(() =>
-          renderWithProviders(
-            () => {
-              const renderer = useRenderer()
-              const capture = (event: CliRendererExternalOutputEvent) => {
-                savedText.push(new TextDecoder().decode(event.snapshot.getRealCharBytes(false)))
-              }
-              renderer.on("external_output", capture)
-              onCleanup(() => renderer.off("external_output", capture))
-              return (
-                <NativeTranscript
-                  items={items}
-                  settled
-                  streaming={false}
-                  footerHeight={3}
-                  expanded={false}
-                  disclosure="collapsed"
-                  displayRevision={0}
-                  overlayOpen={false}
-                  renderItems={(visible) => (
-                    <MessageList
-                      items={visible}
-                      disclosure="collapsed"
-                      syntaxStyle={syntaxStyle}
-                      streaming={false}
-                    />
-                  )}
-                >
-                  <box />
-                </NativeTranscript>
-              )
-            },
-            { width: 60, height: 14, builtins: [...builtinClientModules, held] },
-          ),
-        )
-        // Held: the live view overflows, but nothing may reach scrollback yet.
-        for (let pass = 0; pass < 20; pass++) {
-          yield* Effect.promise(() => setup.flush())
-          yield* Effect.yieldNow
-        }
-        expect(savedText.join("")).toBe("")
-        yield* Deferred.complete(release, Effect.void)
-        yield* waitForFrame(
-          setup,
-          () => savedText.join("").includes("goal continuation"),
-          "goal row in scrollback",
-        )
-        expect(savedText.join("")).not.toContain("RAW-GOAL-TEXT")
-      }),
-  )
-
-  it.live("native history holds rows while a notice-row source is still deriving", () =>
-    Effect.gen(function* () {
-      const [settled, setSettled] = createSignal(false)
-      let extensionsLoaded = () => false
-      const savedText: string[] = []
-      const items: SessionItem[] = Array.from({ length: 8 }, (_, index) =>
-        userMessage(
-          "regular-message",
-          `unsettled-${index}`,
-          `unsettled ${index}\nsecond line\nthird line`,
-          "queued",
-        ),
-      )
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => {
-            const renderer = useRenderer()
-            extensionsLoaded = useExtensionUI().loaded
-            const capture = (event: CliRendererExternalOutputEvent) => {
-              savedText.push(new TextDecoder().decode(event.snapshot.getRealCharBytes(false)))
-            }
-            renderer.on("external_output", capture)
-            onCleanup(() => renderer.off("external_output", capture))
-            return (
-              <NativeTranscript
-                items={items}
-                settled={settled()}
-                streaming={false}
-                footerHeight={3}
-                expanded={false}
-                disclosure="collapsed"
-                displayRevision={0}
-                overlayOpen={false}
-                renderItems={(visible) => (
-                  <MessageList
-                    items={visible}
-                    disclosure="collapsed"
-                    syntaxStyle={syntaxStyle}
-                    streaming={false}
-                  />
-                )}
-              >
-                <box />
-              </NativeTranscript>
-            )
-          },
-          { width: 60, height: 14 },
-        ),
-      )
-      yield* Effect.promise(() => setup.flush()).pipe(
-        Effect.repeat({ until: () => extensionsLoaded() }),
-        Effect.timeout("5 seconds"),
-      )
-      // The live view overflows, but a source that has not answered holds every commit.
-      for (let pass = 0; pass < 20; pass++) {
-        yield* Effect.promise(() => setup.flush())
-        yield* Effect.yieldNow
-      }
-      expect(savedText.join("")).toBe("")
-      setSettled(true)
-      yield* waitForFrame(
-        setup,
-        () => savedText.join("").includes("unsettled 0"),
-        "first row in scrollback",
-      )
-    }),
-  )
-
-  it.live("goal continuations collapse to one line until full detail is on", () =>
-    Effect.gen(function* () {
-      const goalMessage: ListMessage = {
-        ...userMessage(
-          "regular-message",
-          "goal-1",
-          "Continue working toward the active goal.",
-          "queued",
-        ),
-        pendingMode: absent,
-        metadata: { customType: "goal-context" },
-      }
-      const collapsedFrame = yield* renderLoaded([goalMessage])
-      expect(collapsedFrame).toContain("goal continuation")
-      expect(collapsedFrame).not.toContain("Continue working")
-      const expandedFrame = yield* renderLoaded([goalMessage], true)
-      expect(expandedFrame).toContain("Continue working")
-      expect(expandedFrame).not.toContain("goal continuation")
-    }),
-  )
-
-  it.live("a fired alarm collapses to its note until full detail is on", () =>
-    Effect.gen(function* () {
-      const wakeMessage: ListMessage = {
-        ...userMessage(
-          "regular-message",
-          "wake-1",
-          "Alarm w1 fired at 2026-09-15T05:51:35.262Z. Run bun test and report.",
-          "queued",
-        ),
-        pendingMode: absent,
-        metadata: {
-          customType: "wake",
-          details: { outcome: "fired", note: "Run bun test and report." },
-        },
-      }
-      const collapsedFrame = yield* renderLoaded([wakeMessage])
-      expect(collapsedFrame).toContain("alarm fired · Run bun test and report.")
-      expect(collapsedFrame).not.toContain("fired at 2026")
-      const expandedFrame = yield* renderLoaded([wakeMessage], true)
-      expect(expandedFrame).toContain("fired at 2026")
-      expect(expandedFrame).not.toContain("alarm fired ·")
-    }),
-  )
 
   it.live("a message from another session names its sender above the text", () =>
     Effect.gen(function* () {
@@ -1343,7 +1182,266 @@ describe("FX transcript treatment", () => {
       expect(setup.renderer.listenerCount("resize")).toBe(1)
     }),
   )
+})
 
+describe("native history before the client extensions load", () => {
+  it.live(
+    "native history holds rows until client extensions load, then commits them rendered",
+    () =>
+      Effect.gen(function* () {
+        const release = yield* Deferred.make<void>()
+        const held = defineClientExtension("@test/held-load", {
+          setup: Deferred.await(release).pipe(Effect.as(clientContributions())),
+        })
+        const savedText: string[] = []
+        const goalMessage: ListMessage = {
+          ...userMessage("regular-message", "goal-held", "RAW-GOAL-TEXT keep going.", "queued"),
+          pendingMode: absent,
+          metadata: { customType: "goal-context" },
+        }
+        const items: SessionItem[] = [
+          goalMessage,
+          ...Array.from({ length: 6 }, (_, index) =>
+            userMessage(
+              "regular-message",
+              `filler-${index}`,
+              `filler ${index}\nsecond line\nthird line`,
+              "queued",
+            ),
+          ),
+        ]
+        const setup = yield* Effect.promise(() =>
+          renderWithProviders(
+            () => {
+              const renderer = useRenderer()
+              const capture = (event: CliRendererExternalOutputEvent) => {
+                savedText.push(new TextDecoder().decode(event.snapshot.getRealCharBytes(false)))
+              }
+              renderer.on("external_output", capture)
+              onCleanup(() => renderer.off("external_output", capture))
+              return (
+                <NativeTranscript
+                  items={items}
+                  settled
+                  streaming={false}
+                  footerHeight={3}
+                  expanded={false}
+                  disclosure="collapsed"
+                  displayRevision={0}
+                  overlayOpen={false}
+                  renderItems={(visible) => (
+                    <MessageList
+                      items={visible}
+                      disclosure="collapsed"
+                      syntaxStyle={syntaxStyle}
+                      streaming={false}
+                    />
+                  )}
+                >
+                  <box />
+                </NativeTranscript>
+              )
+            },
+            { width: 60, height: 14, builtins: [...builtinClientModules, held] },
+          ),
+        )
+        // Held: the live view overflows, but nothing may reach scrollback yet.
+        for (let pass = 0; pass < 20; pass++) {
+          yield* Effect.promise(() => setup.flush())
+          yield* Effect.yieldNow
+        }
+        expect(savedText.join("")).toBe("")
+        yield* Deferred.complete(release, Effect.void)
+        yield* waitForFrame(
+          setup,
+          () => savedText.join("").includes("goal continuation"),
+          "goal row in scrollback",
+        )
+        expect(savedText.join("")).not.toContain("RAW-GOAL-TEXT")
+      }),
+  )
+
+  it.live("native history holds rows while a notice-row source is still deriving", () =>
+    Effect.gen(function* () {
+      const [settled, setSettled] = createSignal(false)
+      let extensionsLoaded = () => false
+      const savedText: string[] = []
+      const items: SessionItem[] = Array.from({ length: 8 }, (_, index) =>
+        userMessage(
+          "regular-message",
+          `unsettled-${index}`,
+          `unsettled ${index}\nsecond line\nthird line`,
+          "queued",
+        ),
+      )
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => {
+            const renderer = useRenderer()
+            extensionsLoaded = useExtensionUI().loaded
+            const capture = (event: CliRendererExternalOutputEvent) => {
+              savedText.push(new TextDecoder().decode(event.snapshot.getRealCharBytes(false)))
+            }
+            renderer.on("external_output", capture)
+            onCleanup(() => renderer.off("external_output", capture))
+            return (
+              <NativeTranscript
+                items={items}
+                settled={settled()}
+                streaming={false}
+                footerHeight={3}
+                expanded={false}
+                disclosure="collapsed"
+                displayRevision={0}
+                overlayOpen={false}
+                renderItems={(visible) => (
+                  <MessageList
+                    items={visible}
+                    disclosure="collapsed"
+                    syntaxStyle={syntaxStyle}
+                    streaming={false}
+                  />
+                )}
+              >
+                <box />
+              </NativeTranscript>
+            )
+          },
+          { width: 60, height: 14 },
+        ),
+      )
+      yield* Effect.promise(() => setup.flush()).pipe(
+        Effect.repeat({ until: () => extensionsLoaded() }),
+        Effect.timeout("5 seconds"),
+      )
+      // The live view overflows, but a source that has not answered holds every commit.
+      for (let pass = 0; pass < 20; pass++) {
+        yield* Effect.promise(() => setup.flush())
+        yield* Effect.yieldNow
+      }
+      expect(savedText.join("")).toBe("")
+      setSettled(true)
+      yield* waitForFrame(
+        setup,
+        () => savedText.join("").includes("unsettled 0"),
+        "first row in scrollback",
+      )
+    }),
+  )
+})
+
+describe("rows that fold until full detail is on", () => {
+  it.live("goal continuations collapse to one line until full detail is on", () =>
+    Effect.gen(function* () {
+      const goalMessage: ListMessage = {
+        ...userMessage(
+          "regular-message",
+          "goal-1",
+          "Continue working toward the active goal.",
+          "queued",
+        ),
+        pendingMode: absent,
+        metadata: { customType: "goal-context" },
+      }
+      const collapsedFrame = yield* renderLoaded([goalMessage])
+      expect(collapsedFrame).toContain("goal continuation")
+      expect(collapsedFrame).not.toContain("Continue working")
+      const expandedFrame = yield* renderLoaded([goalMessage], true)
+      expect(expandedFrame).toContain("Continue working")
+      expect(expandedFrame).not.toContain("goal continuation")
+    }),
+  )
+
+  it.live("a fired alarm collapses to its note until full detail is on", () =>
+    Effect.gen(function* () {
+      const wakeMessage: ListMessage = {
+        ...userMessage(
+          "regular-message",
+          "wake-1",
+          "Alarm w1 fired at 2026-09-15T05:51:35.262Z. Run bun test and report.",
+          "queued",
+        ),
+        pendingMode: absent,
+        metadata: {
+          customType: "wake",
+          details: { outcome: "fired", note: "Run bun test and report." },
+        },
+      }
+      const collapsedFrame = yield* renderLoaded([wakeMessage])
+      expect(collapsedFrame).toContain("alarm fired · Run bun test and report.")
+      expect(collapsedFrame).not.toContain("fired at 2026")
+      const expandedFrame = yield* renderLoaded([wakeMessage], true)
+      expect(expandedFrame).toContain("fired at 2026")
+      expect(expandedFrame).not.toContain("alarm fired ·")
+    }),
+  )
+
+  it.live("a context handoff folds to one line until full detail is on", () =>
+    Effect.gen(function* () {
+      const items: SessionItem[] = [compactionMessage()]
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <>
+              <MessageList
+                items={items}
+                disclosure="collapsed"
+                syntaxStyle={syntaxStyle}
+                streaming={false}
+              />
+              <MessageList
+                items={items}
+                disclosure="full"
+                syntaxStyle={syntaxStyle}
+                streaming={false}
+              />
+              <MessageList
+                items={items}
+                disclosure="collapsed"
+                fullDetail={true}
+                syntaxStyle={syntaxStyle}
+                streaming={false}
+              />
+            </>
+          ),
+          { width: 100, height: 20 },
+        ),
+      )
+      const frame = renderFrame(setup)
+      expect(frame.match(/⇣ context handoff · 3 messages summarized/g)?.length).toBe(2)
+      expect(frame.match(/renamed the loader/g)?.length).toBe(1)
+    }),
+  )
+
+  it.live("the runtime's model-change notice folds to one line", () =>
+    Effect.gen(function* () {
+      const notice: ListMessage = {
+        ...compactionMessage(),
+        id: "model-change:b1:m5",
+        content: "MODEL-NOTICE-BODY",
+        metadata: { customType: MODEL_CHANGE_MESSAGE_TYPE },
+      }
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <MessageList
+              items={[notice]}
+              disclosure="collapsed"
+              syntaxStyle={syntaxStyle}
+              streaming={false}
+            />
+          ),
+          { width: 100, height: 10 },
+        ),
+      )
+      const frame = renderFrame(setup)
+      expect(frame).toContain("⇄ model changed")
+      expect(frame).not.toContain("MODEL-NOTICE-BODY")
+    }),
+  )
+})
+
+describe("tool frame identity", () => {
   it.live("keeps tool identity and failure status on direct compact and expanded frames", () =>
     Effect.gen(function* () {
       const setup = yield* Effect.promise(() =>
@@ -1373,6 +1471,36 @@ describe("FX transcript treatment", () => {
       expect(frame.match(/failed/g)?.length).toBeGreaterThanOrEqual(2)
       expect(frame).toContain("compact failure")
       expect(frame).toContain("expanded failure")
+    }),
+  )
+
+  it.live("a click toggles a tool frame, and a new expanded from its owner starts over", () =>
+    Effect.gen(function* () {
+      const [expanded, setExpanded] = createSignal(false)
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => (
+          <ToolFrame
+            title="read"
+            status="completed"
+            expanded={expanded()}
+            collapsedContent={<text>FRAME-CLOSED</text>}
+          >
+            <text>FRAME-OPEN</text>
+          </ToolFrame>
+        )),
+      )
+      const closed = yield* waitForFrame(setup, (next) => next.includes("FRAME-CLOSED"), "closed")
+      const row = closed.split("\n").findIndex((line) => line.includes("read"))
+      yield* Effect.promise(() => setup.mockMouse.click(2, row))
+      yield* waitForFrame(setup, (next) => next.includes("FRAME-OPEN"), "opened by the click")
+      setExpanded(true)
+      yield* Effect.promise(() => setup.mockMouse.click(2, row))
+      yield* waitForFrame(setup, (next) => next.includes("FRAME-CLOSED"), "closed by a click")
+      setExpanded(false)
+      yield* waitForFrame(setup, (next) => next.includes("FRAME-CLOSED"), "the owner's value")
+      setExpanded(true)
+      yield* waitForFrame(setup, (next) => next.includes("FRAME-OPEN"), "the owner's new value")
+      destroyRenderSetup(setup)
     }),
   )
 
@@ -1467,7 +1595,9 @@ describe("FX transcript treatment", () => {
       expect(frame.match(/Its source was not replayed/g)?.length).toBe(3)
     }),
   )
+})
 
+describe("reloaded cell ops", () => {
   it.live("a reloaded cell draws its ops as the live feed drew them", () =>
     Effect.gen(function* () {
       const sessionId = SessionId.make("session-reloaded-ops")
@@ -1605,8 +1735,8 @@ describe("FX transcript treatment", () => {
       expect(frame).toBe(liveFrame)
       // A failed command reads as failed after a reload, not as a bare success header.
       expect(frame).toContain("exit 1")
-      // The diff is built from the whole strings: the new text adds a line.
-      expect(frame).toContain("+1 -0")
+      // The diff is built from the whole strings: the new text changes the line and adds one.
+      expect(frame).toContain("+2 -1")
       expect(frame).toContain("+export const other = 1")
     }),
   )
@@ -1929,7 +2059,9 @@ describe("FX transcript treatment", () => {
         expect(frame).not.toContain("exit 0")
       }),
   )
+})
 
+describe("cell rows", () => {
   it.live("shows cell operation receipts in tree and detail frames", () =>
     Effect.gen(function* () {
       const setup = yield* Effect.promise(() =>
@@ -2077,6 +2209,31 @@ describe("FX transcript treatment", () => {
     }),
   )
 
+  it.live("collapsed keeps the group header and hides finished rows and output", () =>
+    Effect.gen(function* () {
+      const items: SessionItem[] = [bashMessage("call-bash-8", 25)]
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <MessageList
+              items={items}
+              disclosure="collapsed"
+              syntaxStyle={syntaxStyle}
+              streaming={false}
+            />
+          ),
+          { width: 80, height: 20 },
+        ),
+      )
+      const frame = renderFrame(setup)
+      expect(frame).toContain("1 tool call · 1 bash")
+      expect(frame).not.toContain("└ bash")
+      expect(frame).not.toContain("row 1")
+    }),
+  )
+})
+
+describe("bash row line counts", () => {
   it.live("a bash row counts lines as its body does: a final newline ends a line", () =>
     Effect.gen(function* () {
       const items: SessionItem[] = [
@@ -2148,96 +2305,34 @@ describe("FX transcript treatment", () => {
       expect(renderFrame(body)).toContain("1000 lines")
     }),
   )
-
-  it.live("collapsed keeps the group header and hides finished rows and output", () =>
-    Effect.gen(function* () {
-      const items: SessionItem[] = [bashMessage("call-bash-8", 25)]
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <MessageList
-              items={items}
-              disclosure="collapsed"
-              syntaxStyle={syntaxStyle}
-              streaming={false}
-            />
-          ),
-          { width: 80, height: 20 },
-        ),
-      )
-      const frame = renderFrame(setup)
-      expect(frame).toContain("1 tool call · 1 bash")
-      expect(frame).not.toContain("└ bash")
-      expect(frame).not.toContain("row 1")
-    }),
-  )
-
-  it.live("a context handoff folds to one line until full detail is on", () =>
-    Effect.gen(function* () {
-      const items: SessionItem[] = [compactionMessage()]
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <>
-              <MessageList
-                items={items}
-                disclosure="collapsed"
-                syntaxStyle={syntaxStyle}
-                streaming={false}
-              />
-              <MessageList
-                items={items}
-                disclosure="full"
-                syntaxStyle={syntaxStyle}
-                streaming={false}
-              />
-              <MessageList
-                items={items}
-                disclosure="collapsed"
-                fullDetail={true}
-                syntaxStyle={syntaxStyle}
-                streaming={false}
-              />
-            </>
-          ),
-          { width: 100, height: 20 },
-        ),
-      )
-      const frame = renderFrame(setup)
-      expect(frame.match(/⇣ context handoff · 3 messages summarized/g)?.length).toBe(2)
-      expect(frame.match(/renamed the loader/g)?.length).toBe(1)
-    }),
-  )
-
-  it.live("the runtime's model-change notice folds to one line", () =>
-    Effect.gen(function* () {
-      const notice: ListMessage = {
-        ...compactionMessage(),
-        id: "model-change:b1:m5",
-        content: "MODEL-NOTICE-BODY",
-        metadata: { customType: MODEL_CHANGE_MESSAGE_TYPE },
-      }
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <MessageList
-              items={[notice]}
-              disclosure="collapsed"
-              syntaxStyle={syntaxStyle}
-              streaming={false}
-            />
-          ),
-          { width: 100, height: 10 },
-        ),
-      )
-      const frame = renderFrame(setup)
-      expect(frame).toContain("⇄ model changed")
-      expect(frame).not.toContain("MODEL-NOTICE-BODY")
-    }),
-  )
 })
 
 describe("compact file tool bodies", () => {
+  // One owner spells the "more lines" footer, in the preview rows and in a closed frame.
+  it.live("a closed generic frame names its hidden lines as the preview does", () =>
+    Effect.gen(function* () {
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <GenericToolRenderer
+              expanded={false}
+              toolCall={{
+                id: "call-generic-footer",
+                toolName: "unknown_fx_tool",
+                status: "completed",
+                input: absent,
+                summary: "first line",
+                output: "first line\nsecond line\nthird line",
+              }}
+            />
+          ),
+          { width: 80, height: 10 },
+        ),
+      )
+      expect(renderFrame(setup)).toContain("… +2 lines (ctrl+o)")
+      destroyRenderSetup(setup)
+    }),
+  )
   it.live("keeps the first and last read lines with the omitted count", () =>
     Effect.gen(function* () {
       const lines = Array.from({ length: 10 }, (_, i) => `read-line-${i + 1}`)
@@ -2398,7 +2493,6 @@ describe("transcript block spacing", () => {
       reasoning: "",
       images: [],
       createdAt: index,
-      toolCalls: [toolCall],
       segments: [{ _tag: "tool-call", toolCall }],
     }
   }
@@ -2410,7 +2504,6 @@ describe("transcript block spacing", () => {
     reasoning: "",
     images: [],
     createdAt: 9,
-    toolCalls: absent,
     segments: [{ _tag: "text", content: "done" }],
   }
   const items: SessionItem[] = [
@@ -2689,6 +2782,83 @@ describe("expanded grep body", () => {
       expect(renderFrame(setup)).toContain("900 matches for one")
     }),
   )
+
+  // Grep reports absolute paths; the body names each file from the cwd, as the group row does.
+  it.live("file headings read from the cwd, collapsed and expanded", () =>
+    Effect.gen(function* () {
+      const cwd = "/work/proj"
+      const output = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.JsonObject))({
+        matches: [{ file: `${cwd}/apps/tui/src/ops.ts`, line: 3, content: "match here" }],
+        truncated: false,
+      })
+      const frames = yield* Effect.forEach([false, true], (expanded) =>
+        Effect.gen(function* () {
+          const setup = yield* Effect.promise(() =>
+            renderWithProviders(
+              () => (
+                <GrepToolRenderer
+                  expanded={expanded}
+                  toolCall={{
+                    id: "grep-abs",
+                    toolName: "grep",
+                    status: "completed",
+                    input: { pattern: "match" },
+                    summary: absent,
+                    output,
+                  }}
+                />
+              ),
+              { width: 100, height: 20, cwd },
+            ),
+          )
+          const frame = renderFrame(setup)
+          destroyRenderSetup(setup)
+          return frame
+        }),
+      )
+      for (const frame of frames) {
+        expect(frame).toContain("apps/tui/src/ops.ts")
+        expect(frame).not.toContain(cwd)
+      }
+    }),
+  )
+})
+
+describe("write body", () => {
+  // The header names the file, so the open body says only what the write did.
+  it.live("an open write frame draws no raw path under its header", () =>
+    Effect.gen(function* () {
+      const cwd = "/work/proj"
+      const path = `${cwd}/apps/tui/src/ops.ts`
+      const output = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.JsonObject))({
+        path,
+        bytesWritten: 7373,
+      })
+      const WriteToolRenderer = builtinRenderer("write")
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <WriteToolRenderer
+              expanded={true}
+              toolCall={{
+                id: "write-abs",
+                toolName: "write",
+                status: "completed",
+                input: { path, content: "x" },
+                summary: absent,
+                output,
+              }}
+            />
+          ),
+          { width: 100, height: 10, cwd },
+        ),
+      )
+      const frame = renderFrame(setup)
+      expect(frame).toContain("write apps/tui/src/ops.ts")
+      expect(frame).toContain("7.2 KB written")
+      expect(frame).not.toContain(cwd)
+    }),
+  )
 })
 
 describe("read_session row", () => {
@@ -2731,6 +2901,118 @@ describe("read_session row", () => {
       expect(frame).toContain("✓ 4 messages, 2 branches")
     }),
   )
+
+  // A cell draws each op as a collapsed sub-row. A click on the row's header
+  // opens it, and the open row shows what the read returned.
+  it.live("a read_session op opened by a click shows the session it read", () =>
+    Effect.gen(function* () {
+      const output = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.JsonObject))({
+        sessionId: "session-read-1234",
+        content: "READ-SESSION-TREE",
+        messageCount: 4,
+        branchCount: 2,
+      })
+      const cell: ToolCall = {
+        id: "call-cell-read",
+        toolName: "cell",
+        status: "completed",
+        input: { code: "await tools.read_session({sessionId: 'session-read-1234'})" },
+        summary: absent,
+        output: absent,
+        operations: [
+          {
+            id: "op-read-session",
+            toolName: "read_session",
+            status: "completed",
+            input: { sessionId: "session-read-1234" },
+            summary: "done",
+            output,
+          },
+        ],
+      }
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <MessageList
+              items={[assistantToolMessage("assistant-cell-read", cell)]}
+              disclosure="full"
+              syntaxStyle={syntaxStyle}
+              streaming={false}
+            />
+          ),
+          { width: 100, height: 40 },
+        ),
+      )
+      const closed = yield* waitForFrame(
+        setup,
+        (next) => next.includes("4 messages"),
+        "the collapsed read_session op",
+      )
+      expect(closed).toContain("✓ 4 messages, 2 branches")
+      expect(closed).not.toContain("READ-SESSION-TREE")
+      const rows = closed.split("\n")
+      const row = rows.findIndex((line) => line.includes("read_session") && line.includes("▸"))
+      expect(row).toBeGreaterThanOrEqual(0)
+      const column = (rows[row] ?? "").indexOf("read_session")
+      yield* Effect.promise(() => setup.mockMouse.click(column, row))
+      const open = yield* waitForFrame(
+        setup,
+        (next) => next.includes("READ-SESSION-TREE"),
+        "the opened read_session op",
+      )
+      expect(open).toContain("✓ 4 messages, 2 branches")
+      destroyRenderSetup(setup)
+    }),
+  )
+})
+
+describe("write row", () => {
+  // The path is the call's input, so the header names the file before the write lands.
+  it.live("a running write op names its file", () =>
+    Effect.gen(function* () {
+      const cell: ToolCall = {
+        id: "call-cell-write",
+        toolName: "cell",
+        status: "running",
+        input: { code: "await tools.write({path: '/workspace/src/fresh-file.ts'})" },
+        summary: absent,
+        output: absent,
+        operations: [
+          {
+            id: "op-write",
+            toolName: "write",
+            status: "running",
+            input: { path: "/workspace/src/fresh-file.ts", content: "export {}" },
+            summary: absent,
+            output: absent,
+          },
+        ],
+      }
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <MessageList
+              items={[assistantToolMessage("assistant-cell-write", cell)]}
+              disclosure="full"
+              syntaxStyle={syntaxStyle}
+              streaming={true}
+            />
+          ),
+          { width: 100, height: 40 },
+        ),
+      )
+      // The op's own header row, apart from the cell row that also names the file.
+      const opRow = (next: string) =>
+        next.split("\n").find((line) => line.includes("#op-write")) ?? ""
+      const frame = yield* waitForFrame(
+        setup,
+        (next) => opRow(next).includes("fresh-file.ts"),
+        "the running write op header",
+      )
+      expect(opRow(frame)).toContain("fresh-file.ts")
+      destroyRenderSetup(setup)
+    }),
+  )
 })
 
 // ── native transcript markdown ──────────────────────────────────────────────
@@ -2743,7 +3025,6 @@ const assistant = (id: string, content: string): ListMessage => ({
   reasoning: "",
   images: [],
   createdAt: 0,
-  toolCalls: absent,
   segments: [{ _tag: "text", content }],
 })
 
@@ -2978,8 +3259,6 @@ describe("native transcript mouse tracking", () => {
  * fingerprint therefore names the drawn fields in a fixed order.
  */
 
-const noToolCalls = Option.getOrUndefined(Option.none<ToolCall[]>())
-
 /** The streaming path writes `_tag` first and carries no metadata. */
 const streamedMessage = (id: string, content: string): ListMessage => ({
   _tag: "regular-message",
@@ -2989,7 +3268,6 @@ const streamedMessage = (id: string, content: string): ListMessage => ({
   reasoning: "",
   images: [],
   createdAt: 0,
-  toolCalls: noToolCalls,
   segments: [{ _tag: "text", content }],
 })
 
@@ -3002,7 +3280,6 @@ const rebuiltMessage = (id: string, content: string): ListMessage => {
     reasoning: "",
     images: [],
     createdAt: 0,
-    toolCalls: noToolCalls,
     segments: [{ _tag: "text", content }],
     metadata: absent,
   }
@@ -3035,10 +3312,10 @@ describe("transcript fingerprint", () => {
       output: absent,
     }
     const base = rebuiltMessage("m1", "hello")
-    const running: ListMessage = { ...base, toolCalls: [call] }
+    const running: ListMessage = { ...base, segments: [{ _tag: "tool-call", toolCall: call }] }
     const done: ListMessage = {
       ...base,
-      toolCalls: [{ ...call, status: "completed", output: "ok" }],
+      segments: [{ _tag: "tool-call", toolCall: { ...call, status: "completed", output: "ok" } }],
     }
     expect(transcriptFingerprint(running)).not.toBe(transcriptFingerprint(done))
   })
@@ -3378,7 +3655,6 @@ describe("sticky last prompt", () => {
       reasoning: "",
       images: [],
       createdAt: 0,
-      toolCalls: absent,
       segments: [{ _tag: "text", content: text }],
     }
   }

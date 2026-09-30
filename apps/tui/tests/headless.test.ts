@@ -8,7 +8,8 @@ import {
   TurnCompleted,
 } from "@gent/core/test-utils"
 import { describe, it, expect, test } from "effect-bun-test"
-import { Cause, Deferred, Effect, Exit, Option, Schema, Sink, Stdio, Stream } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Option, Schema, Sink, Stdio, Stream } from "effect"
+import { TestClock } from "effect/testing"
 import * as Prompt from "effect/ai/Prompt"
 import {
   AgentEvent,
@@ -27,6 +28,7 @@ import {
   makeCliTeardown,
   renderHeadlessToolCall,
   runHeadless,
+  waitForHeadlessReady,
 } from "../src/headless"
 import { createMockClient } from "./render-harness-boundary"
 import { RpcClientError } from "effect/rpc/RpcClientError"
@@ -174,7 +176,7 @@ const run = (client: ReturnType<typeof createMockClient>, options: HeadlessOptio
   runHeadless(client, sessionId, branchId, PROMPT, options).pipe(Effect.timeout("2 seconds"))
 
 describe("runHeadless", () => {
-  headlessTest("an error notice does not end the turn; the answer after it prints", () =>
+  headlessTest("an error before the answer does not end the turn; the answer after it prints", () =>
     Effect.gen(function* () {
       const client = branchClient({
         ownTurn: [
@@ -190,16 +192,19 @@ describe("runHeadless", () => {
     }),
   )
 
-  headlessTest("an error notice alone leaves the run waiting for its turn", () =>
+  headlessTest("an error alone, plain or a notice, leaves the run waiting for its turn", () =>
     Effect.gen(function* () {
-      const client = branchClient({
-        ownTurn: [errorOccurred("Context compaction failed; continuing")],
-      })
-      // Absence of an end: the run is still open when the bound expires.
-      const outcome = yield* runHeadless(client, sessionId, branchId, PROMPT, noUser).pipe(
-        Effect.timeoutOption("150 millis"),
-      )
-      expect(Option.isNone(outcome)).toBe(true)
+      for (const event of [
+        errorOccurred("Context compaction failed; continuing"),
+        errorNotice("compaction fell back"),
+      ]) {
+        const client = branchClient({ ownTurn: [event] })
+        // Absence of an end: the run is still open when the bound expires.
+        const outcome = yield* runHeadless(client, sessionId, branchId, PROMPT, noUser).pipe(
+          Effect.timeoutOption("150 millis"),
+        )
+        expect(Option.isNone(outcome)).toBe(true)
+      }
     }),
   )
 
@@ -212,18 +217,6 @@ describe("runHeadless", () => {
       const exit = yield* Effect.exit(run(client))
       expect(exit._tag).toBe("Success")
       expect(capturedErrors.join("")).toBe("Warning: compaction fell back to truncation\n")
-    }),
-  )
-
-  headlessTest("a notice alone leaves the run waiting for its turn", () =>
-    Effect.gen(function* () {
-      const client = branchClient({
-        ownTurn: [errorNotice("compaction fell back")],
-      })
-      const outcome = yield* runHeadless(client, sessionId, branchId, PROMPT, noUser).pipe(
-        Effect.timeoutOption("150 millis"),
-      )
-      expect(Option.isNone(outcome)).toBe(true)
     }),
   )
 
@@ -704,6 +697,19 @@ const exitCodeOf = (
 
 const interruptedBy = (signal: Option.Option<"SIGINT" | "SIGTERM">, headless: boolean) =>
   makeCliTeardown({ signal: () => signal, interactive: () => !headless })
+
+describe("headless readiness", () => {
+  // A scripted caller never waits forever: a connection that never becomes
+  // ready ends the run at the bound, as a connection error.
+  it.live("a connection that never becomes ready ends the run at the bound", () =>
+    Effect.gen(function* () {
+      const waiting = yield* waitForHeadlessReady(Effect.never).pipe(Effect.flip, Effect.forkChild)
+      yield* TestClock.adjust("15 seconds")
+      const error = yield* Fiber.join(waiting)
+      expect(error).toBeInstanceOf(GentConnectionError)
+    }).pipe(Effect.provide(TestClock.layer()), Effect.timeout("4 seconds")),
+  )
+})
 
 describe("CLI teardown", () => {
   test("a signal ends a headless run non-zero: 130 for SIGINT, 143 for SIGTERM", () => {

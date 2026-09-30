@@ -2,10 +2,11 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Option } from "effect"
 import { onMount } from "solid-js"
-import { App, resolveInteractiveBootstrap } from "../src/app"
+import { App, resolveInitialState, resolveInteractiveBootstrap } from "../src/app"
 import { type ClientContextValue, useClient } from "../src/client"
 import { destroyRenderSetup, renderWithProviders } from "../tests/render-harness-boundary"
 import {
+  baseLocalLayer,
   baseLocalLayerWithProvider as _baseLocalLayerWithProvider,
   LanguageModelLayers,
   testAgent,
@@ -15,6 +16,7 @@ import { repoRoot } from "./helpers"
 import { waitForFrame } from "../tests/helpers-boundary"
 const baseLocalLayerWithProvider = (p: Parameters<typeof _baseLocalLayerWithProvider>[0]) =>
   _baseLocalLayerWithProvider(p, { agents: [testAgent] })
+const localLayer = () => baseLocalLayer({ agents: [testAgent] })
 function StateProbe(props: { readonly onReady: (ctx: { client: ClientContextValue }) => void }) {
   const client = useClient()
   onMount(() => {
@@ -22,6 +24,59 @@ function StateProbe(props: { readonly onReady: (ctx: { client: ClientContextValu
   })
   return <box />
 }
+describe("app bootstrap", () => {
+  it.live(
+    "continue mode resumes the latest session for cwd",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { client } = yield* Gent.test(localLayer())
+          const first = yield* client.session.create({ cwd: repoRoot })
+          // gent/no-sleep: allow real-clock gap so the second session's createdAt sorts strictly after the first
+          yield* Effect.sleep("5 millis")
+          const second = yield* client.session.create({ cwd: repoRoot })
+          const state = yield* resolveInitialState({
+            client,
+            cwd: repoRoot,
+            session: Option.none(),
+            continue_: true,
+            headless: false,
+            prompt: Option.none(),
+            promptArg: Option.none(),
+          })
+          expect(state._tag).toBe("session")
+          if (state._tag !== "session") return
+          expect(state.session.id).toBe(second.sessionId)
+          expect(state.session.id).not.toBe(first.sessionId)
+        }),
+      ),
+    5000,
+  )
+  it.live(
+    "continue mode creates a session from prompt when none exists",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { client } = yield* Gent.test(localLayer())
+          const state = yield* resolveInitialState({
+            client,
+            cwd: repoRoot,
+            session: Option.none(),
+            continue_: true,
+            headless: false,
+            prompt: Option.some("bootstrap prompt"),
+            promptArg: Option.none(),
+          })
+          expect(state._tag).toBe("session")
+          if (state._tag !== "session") return
+          expect(state.prompt).toBe("bootstrap prompt")
+          expect(state.session.activeBranchId).toBeDefined()
+        }),
+      ),
+    5000,
+  )
+})
+
 describe("session lifecycle", () => {
   it.live(
     "bootstrap to session renders composer",
@@ -39,6 +94,8 @@ describe("session lifecycle", () => {
             continue_: false,
             debugMode: false,
           })
+          expect(bootstrap.initialSession).toBeDefined()
+          expect(Option.isNone(bootstrap.initialBranches)).toBe(true)
           const setup = yield* Effect.promise(() =>
             renderWithProviders(
               () => (
@@ -64,7 +121,7 @@ describe("session lifecycle", () => {
           if (Option.isNone(ctx)) return
           // The shell mounts whatever the client says is active; the bootstrap
           // handed it a session, so that is what shows.
-          expect(Option.isSome(Option.fromNullishOr(ctx.value.client.session()))).toBe(true)
+          expect(Option.isSome(ctx.value.client.session())).toBe(true)
           // waitForFrame polls until the composer renders — no pre-sleep
           // needed; the visible "ready/idle/❯" marker is the readiness signal.
           const frame = yield* waitForFrame(
@@ -126,7 +183,7 @@ describe("session lifecycle", () => {
           // the response itself confirms the feed fiber was subscribed.
           expect(Option.isSome(ctx)).toBe(true)
           if (Option.isNone(ctx)) return
-          const session = Option.fromNullishOr(ctx.value.client.session())
+          const session = ctx.value.client.session()
           expect(Option.isSome(session)).toBe(true)
           if (Option.isNone(session)) return
           yield* client.message

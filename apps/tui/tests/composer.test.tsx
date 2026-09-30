@@ -7,7 +7,6 @@ import {
   createPasteManager,
   executeShell,
   isLargePaste,
-  shellOutputDirectory,
 } from "../src/composer"
 import { ConfigProvider, Deferred, Effect, FileSystem, Layer, Option, Schema } from "effect"
 import {
@@ -34,9 +33,10 @@ import {
 import {
   createMockClient,
   renderFrame,
+  renderScoped as renderScopedHarness,
   renderWithProviders as renderHarness,
 } from "./render-harness-boundary"
-import { createSignal, type JSX, onMount, Show } from "solid-js"
+import { createSignal, ErrorBoundary, type JSX, onMount, Show } from "solid-js"
 import { PromptSearchState } from "../src/pickers"
 import { type ClientContextValue, type SessionIdentity, useClient } from "../src/client"
 import { useExtensionUI } from "../src/extensions/host"
@@ -44,6 +44,7 @@ import { type RenderWaitTimeoutError, waitForFrame } from "./helpers-boundary"
 import { useScopedKeyboard } from "../src/terminal"
 import {
   type AutocompleteItem,
+  autocompleteContribution,
   clientContributions,
   defineClientExtension,
 } from "../src/extensions/client-facets"
@@ -59,12 +60,11 @@ const draftSession = {
   sessionId: SessionId.make("draft-session"),
   branchId: BranchId.make("draft-branch"),
   name: "Draft",
-  modelId: Option.getOrUndefined(Option.none()),
-  reasoningLevel: Option.getOrUndefined(Option.none()),
-  cwd: Option.getOrUndefined(Option.none()),
 }
 const renderWithProviders: typeof renderHarness = (ui, options) =>
   renderHarness(ui, { initialSession: draftSession, ...options })
+const renderScoped: typeof renderScopedHarness = (ui, options) =>
+  renderScopedHarness(ui, { initialSession: draftSession, ...options })
 
 /**
  * Each test runs with its own gent data directory, a scoped temp directory,
@@ -172,9 +172,7 @@ describe("executeShell", () => {
       expect(lineCount).toBeLessThanOrEqual(2001)
       // The spill lands in this test's own data directory, not the real home.
       const savedPath = yield* Effect.fromOption(result.savedPath)
-      const directory = yield* shellOutputDirectory()
-      expect(directory).toContain("/gent-composer-data-")
-      expect(savedPath.startsWith(`${directory}/`)).toBe(true)
+      expect(savedPath).toMatch(/\/gent-composer-data-[^/]*\/shell-output\/shell_[^/]*\.txt$/)
     }),
   )
 
@@ -191,8 +189,23 @@ describe("executeShell", () => {
       // Output should be under 50KB
       expect(result.output.length).toBeLessThanOrEqual(50 * 1024)
       const savedPath = yield* Effect.fromOption(result.savedPath)
-      expect(savedPath.startsWith(`${yield* shellOutputDirectory()}/`)).toBe(true)
-      expect(savedPath).toContain("/gent-composer-data-")
+      expect(savedPath).toMatch(/\/gent-composer-data-[^/]*\/shell-output\/shell_[^/]*\.txt$/)
+    }),
+  )
+
+  // The cap counts UTF-8 bytes, as the `@file` cap does, and cuts at a whole line.
+  shellTest("multi-byte output past the byte cap is cut at a whole line", () =>
+    Effect.gen(function* () {
+      const testDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
+      // 600 lines of 50 `é`: about 30,000 UTF-16 units, but 60,600 bytes of UTF-8.
+      const result = yield* executeShell(
+        "for i in $(seq 1 600); do printf 'é%.0s' {1..50}; echo; done",
+        testDir,
+      )
+      expect(result.truncated).toBe(true)
+      expect(new TextEncoder().encode(result.output).length).toBeLessThanOrEqual(50 * 1024)
+      expect(result.output.split("\n").every((line) => line === "é".repeat(50))).toBe(true)
+      expect(Option.isSome(result.savedPath)).toBe(true)
     }),
   )
 
@@ -223,9 +236,7 @@ describe("executeShell", () => {
 
       // The reader is handed a path, not just a stump of the output.
       const savedPath = yield* Effect.fromOption(result.savedPath)
-      const directory = yield* shellOutputDirectory().pipe(inDataDir)
-      expect(directory).toBe(`${dataDir}/shell-output`)
-      expect(savedPath.startsWith(directory)).toBe(true)
+      expect(savedPath.startsWith(`${dataDir}/shell-output/`)).toBe(true)
 
       const saved = yield* fs.readFileString(savedPath)
       // The whole output survives: the head the cap kept and the tail it cut.
@@ -245,147 +256,55 @@ describe("executeShell", () => {
 // The paste manager is per-controller: each composer owns its id counter and
 // store, so every test makes its own rather than resetting shared state.
 
-describe("isLargePaste", () => {
-  test("returns false for short single-line text", () => {
-    expect(isLargePaste("hello")).toBe(false)
-    expect(isLargePaste("short text")).toBe(false)
+describe("paste placeholders", () => {
+  test("a paste is large from three lines or 150 characters", () => {
+    const cases: ReadonlyArray<readonly [string, boolean]> = [
+      ["hello", false],
+      ["line1\nline2", false],
+      ["x".repeat(149), false],
+      ["a\nb\nc", true],
+      ["x".repeat(150), true],
+      ["function example() {\n  return 1\n}", true],
+    ]
+    for (const [paste, large] of cases) {
+      expect([paste, isLargePaste(paste)]).toEqual([paste, large])
+    }
   })
 
-  test("returns true for text with 3+ lines", () => {
-    expect(isLargePaste("a\nb\nc")).toBe(true)
-    expect(isLargePaste("line1\nline2\nline3")).toBe(true)
-  })
-
-  test("returns false for 2 lines", () => {
-    expect(isLargePaste("line1\nline2")).toBe(false)
-  })
-
-  test("returns true for long text even if single line", () => {
-    const longText = "x".repeat(150)
-    expect(isLargePaste(longText)).toBe(true)
-  })
-
-  test("returns false for text just under threshold", () => {
-    const shortText = "x".repeat(149)
-    expect(isLargePaste(shortText)).toBe(false)
-  })
-
-  test("returns true if either condition is met", () => {
-    expect(isLargePaste("a\nb\nc")).toBe(true)
-    expect(isLargePaste("x".repeat(150))).toBe(true)
-  })
-})
-
-describe("createPlaceholder", () => {
-  test("creates placeholder with line count", () => {
-    const paste = createPasteManager()
-    const placeholder = paste.createPlaceholder("line1\nline2\nline3")
-    expect(placeholder).toMatch(/\[Pasted 3 lines #\d+\]/)
-  })
-
-  test("stores original text for later retrieval", () => {
-    const paste = createPasteManager()
-    const text = "original content\nwith lines"
-    const placeholder = paste.createPlaceholder(text)
-    expect(placeholder).toBe("[Pasted 2 lines #1]")
-    expect(paste.expandPlaceholders(placeholder)).toBe(text)
-  })
-
-  test("increments ID for each placeholder", () => {
+  // The count follows the shared line rule: a final newline ends the last
+  // line and starts none, as every other count in gent reads it.
+  test("a placeholder names the paste's size, and each manager counts its own ids", () => {
+    const cases: ReadonlyArray<readonly [string, string]> = [
+      ["line1\nline2\nline3", "[Pasted 3 lines #1]"],
+      ["a\nb\nc\n", "[Pasted 3 lines #1]"],
+      ["original content\nwith lines", "[Pasted 2 lines #1]"],
+      ["x".repeat(200), "[Pasted 200 chars #1]"],
+    ]
+    for (const [paste, placeholder] of cases) {
+      expect(createPasteManager().createPlaceholder(paste)).toBe(placeholder)
+    }
     const paste = createPasteManager()
     expect(paste.createPlaceholder("a\nb\nc")).toBe("[Pasted 3 lines #1]")
     expect(paste.createPlaceholder("x\ny\nz")).toBe("[Pasted 3 lines #2]")
   })
 
-  test("each manager owns its own id sequence", () => {
-    expect(createPasteManager().createPlaceholder("a\nb\nc")).toBe("[Pasted 3 lines #1]")
-    expect(createPasteManager().createPlaceholder("a\nb\nc")).toBe("[Pasted 3 lines #1]")
-  })
-
-  // The count follows the shared line rule: a final newline ends the last
-  // line and starts none, as every other count in gent reads it.
-  test("a trailing newline does not count as a line", () => {
-    expect(createPasteManager().createPlaceholder("a\nb\nc\n")).toBe("[Pasted 3 lines #1]")
-  })
-
-  test("a one-line paste counts its characters, exactly", () => {
+  test("each placeholder expands to its paste until the store clears; other text passes through", () => {
     const paste = createPasteManager()
+    const first = "first\npaste\ncontent"
     const line = "x".repeat(200)
-    const placeholder = paste.createPlaceholder(line)
-    expect(placeholder).toBe("[Pasted 200 chars #1]")
-    expect(paste.expandPlaceholders(`see ${placeholder}`)).toBe(`see ${line}`)
-  })
-})
-
-describe("expandPlaceholders", () => {
-  test("expands single placeholder", () => {
-    const paste = createPasteManager()
-    const original = "line1\nline2\nline3"
-    const placeholder = paste.createPlaceholder(original)
-
-    expect(paste.expandPlaceholders(`Before ${placeholder} after`)).toBe(`Before ${original} after`)
-  })
-
-  test("expands multiple placeholders", () => {
-    const paste = createPasteManager()
-    const text1 = "first\npaste\ncontent"
-    const text2 = "second\npaste\nhere"
-    const p1 = paste.createPlaceholder(text1)
-    const p2 = paste.createPlaceholder(text2)
-
+    const p1 = paste.createPlaceholder(first)
+    const p2 = paste.createPlaceholder(line)
     expect(paste.expandPlaceholders(`Start ${p1} middle ${p2} end`)).toBe(
-      `Start ${text1} middle ${text2} end`,
+      `Start ${first} middle ${line} end`,
     )
-  })
-
-  test("removes placeholder from store after expansion", () => {
-    const paste = createPasteManager()
-    const placeholder = paste.createPlaceholder("a\nb\nc")
-
-    expect(paste.expandPlaceholders(placeholder)).toBe("a\nb\nc")
-    // Second expansion finds nothing left to substitute.
-    expect(paste.expandPlaceholders(placeholder)).toBe(placeholder)
-  })
-
-  test("preserves unknown placeholders", () => {
-    const paste = createPasteManager()
-    const input = "text with [Pasted 5 lines #99] placeholder"
-    expect(paste.expandPlaceholders(input)).toBe(input)
-  })
-
-  test("handles text without placeholders", () => {
-    const paste = createPasteManager()
-    const input = "just regular text without any placeholders"
-    expect(paste.expandPlaceholders(input)).toBe(input)
-  })
-
-  test("handles empty string", () => {
-    expect(createPasteManager().expandPlaceholders("")).toBe("")
-  })
-
-  test("clear drops stored pastes", () => {
-    const paste = createPasteManager()
-    const placeholder = paste.createPlaceholder("a\nb\nc")
+    // An undo can bring a chip back, so a second expansion still finds its paste.
+    expect(paste.expandPlaceholders(p1)).toBe(first)
+    for (const input of ["text with [Pasted 5 lines #99] placeholder", "plain text", ""]) {
+      expect(paste.expandPlaceholders(input)).toBe(input)
+    }
+    const cleared = paste.createPlaceholder("a\nb\nc")
     paste.clear()
-    expect(paste.expandPlaceholders(placeholder)).toBe(placeholder)
-  })
-})
-
-describe("paste workflow integration", () => {
-  test("full paste and expand cycle", () => {
-    const paste = createPasteManager()
-    const pastedCode = `function example() {
-  const x = 1
-  const y = 2
-  return x + y
-}`
-    expect(isLargePaste(pastedCode)).toBe(true)
-
-    const placeholder = paste.createPlaceholder(pastedCode)
-    expect(placeholder).toMatch(/\[Pasted 5 lines #\d+\]/)
-
-    const userInput = `Check this code: ${placeholder}`
-    expect(paste.expandPlaceholders(userInput)).toBe(`Check this code: ${pastedCode}`)
+    expect(paste.expandPlaceholders(cleared)).toBe(cleared)
   })
 })
 
@@ -477,6 +396,17 @@ function Contribute() {
   ])
   return <box />
 }
+/** Draws a marker once the client extensions contribute `count` sources on `prefix`. */
+function SourcesLoaded(props: { readonly prefix: string; readonly count: number }) {
+  const ui = useExtensionUI()
+  const loaded = () =>
+    ui.autocompleteItems().filter((c) => c.prefix === props.prefix).length >= props.count
+  return (
+    <Show when={loaded()}>
+      <text>sources loaded</text>
+    </Show>
+  )
+}
 function TestComposer(props: {
   readonly suspended?: boolean
   readonly onSubmit: (
@@ -552,6 +482,55 @@ function TestComposer(props: {
   )
 }
 describe("Composer renderer", () => {
+  // Two extensions may contribute rows under one prefix. The row the reader
+  // picks inserts and records through the extension that offered it.
+  it.live("a pick from the second contribution on a prefix uses that contribution's hooks", () =>
+    Effect.gen(function* () {
+      const picks: Array<string> = []
+      const source = (name: string, id: string) =>
+        defineClientExtension(`@test/pick-${name}`, {
+          setup: Effect.succeed(
+            clientContributions(
+              autocompleteContribution({
+                prefix: "%",
+                title: `Source ${name}`,
+                items: () => [{ id, label: `%${id}` }],
+                formatInsertion: (picked) => `<${name}:${picked}> `,
+                onSelect: (picked) => {
+                  picks.push(`${name}:${picked}`)
+                },
+              }),
+            ),
+          ),
+        })
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <TestComposer onSubmit={() => {}}>
+              <Composer.Autocomplete />
+              <SourcesLoaded prefix="%" count={2} />
+            </TestComposer>
+          ),
+          {
+            builtins: [...builtinClientModules, source("first", "alpha"), source("second", "beta")],
+          },
+        ),
+      )
+      yield* waitForFrame(setup, (frame) => frame.includes("sources loaded"), "both sources")
+      yield* Effect.promise(() => setup.mockInput.typeText("%"))
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("%alpha") && frame.includes("%beta"),
+        "rows from both sources",
+      )
+      setup.mockInput.pressArrow("down")
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressKey("RETURN")
+      const frame = yield* waitForFrame(setup, (next) => next.includes("┃ <"), "the inserted pick")
+      expect(frame).toContain("┃ <second:beta>")
+      expect(picks).toEqual(["second:beta"])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   it.live("a pending interaction waits for client extensions instead of being denied", () =>
     Effect.gen(function* () {
       const release = yield* Deferred.make<void>()
@@ -651,6 +630,188 @@ describe("Composer renderer", () => {
       expect(submitted).toEqual([`hello ${pasted}`])
     }).pipe(Effect.timeout("10 seconds")),
   )
+  // A terminal that sends Enter as CR pastes CR-separated lines. The paste is
+  // the one place raw terminal bytes reach the draft, so the lines, the chip's
+  // count, what the model reads and the ↑ recall all see `\n`.
+  it.live("a large paste with CR line breaks sends real lines and recalls with ↑", () =>
+    Effect.gen(function* () {
+      const submitted: Array<string> = []
+      const thrown: Array<unknown> = []
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => (
+          <ErrorBoundary
+            fallback={(error) => {
+              thrown.push(error)
+              return <text>render threw</text>
+            }}
+          >
+            <TestComposer onSubmit={(content) => submitted.push(content)} />
+          </ErrorBoundary>
+        )),
+      )
+      const lines = Array.from(
+        { length: 10 },
+        (_, i) => `pasted line ${i + 1} from a terminal that sends CR`,
+      )
+      yield* Effect.promise(() => setup.mockInput.pasteBracketedText(lines.join("\r")))
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(renderFrame(setup)).toContain("[Pasted 10 lines #1]")
+      setup.mockInput.pressKey("RETURN")
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(submitted).toEqual([lines.join("\n")])
+      setup.mockInput.pressArrow("up")
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(thrown).toEqual([])
+      expect(renderFrame(setup)).toContain("┃ pasted line 2 from")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  // Up and down walk the prompts sent before, newest first; a prompt sent
+  // twice in a row is one entry. Down past the newest gives back the draft
+  // the walk started from.
+  it.live("up recalls earlier prompts and down gives back the draft", () =>
+    Effect.gen(function* () {
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <TestComposer onSubmit={() => {}} />),
+      )
+      const send = (text: string) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() => setup.mockInput.typeText(text))
+          setup.mockInput.pressKey("RETURN")
+          yield* waitForFrame(setup, (frame) => !frame.includes(`┃ ${text}`), `sent ${text}`)
+        })
+      yield* send("alpha")
+      yield* send("beta")
+      yield* send("beta")
+      const press = (direction: "up" | "down", shown: string) =>
+        Effect.gen(function* () {
+          setup.mockInput.pressArrow(direction)
+          return yield* waitForFrame(setup, (frame) => frame.includes(shown), shown)
+        })
+      yield* press("up", "┃ beta")
+      yield* press("up", "┃ alpha")
+      // The oldest entry stays; there is no third.
+      setup.mockInput.pressArrow("up")
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(renderFrame(setup)).toContain("┃ alpha")
+      yield* press("down", "┃ beta")
+      const restored = yield* press("down", "┃")
+      expect(restored).not.toContain("┃ beta")
+      expect(restored).not.toContain("┃ alpha")
+      yield* Effect.promise(() => setup.mockInput.typeText("draft"))
+      yield* waitForFrame(setup, (frame) => frame.includes("┃ draft"), "the draft")
+      // Up recalls only from the draft's start; elsewhere it moves the cursor.
+      setup.mockInput.pressKey("a", { ctrl: true })
+      yield* press("up", "┃ beta")
+      yield* press("down", "┃ draft")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  // A chip is one unit: a delete at its end takes the whole chip and its
+  // stored text, so no fragment of it reaches the model.
+  it.live("backspace or ctrl+w at a paste chip's end removes the whole chip", () =>
+    Effect.gen(function* () {
+      const submitted: Array<string> = []
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <TestComposer onSubmit={(content) => submitted.push(content)} />),
+      )
+      const chip = "x".repeat(200)
+      yield* Effect.promise(() => setup.mockInput.typeText("keep "))
+      yield* Effect.promise(() => setup.mockInput.pasteBracketedText(chip))
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(renderFrame(setup)).toContain("┃ keep [Pasted 200 chars #1]")
+      setup.mockInput.pressBackspace()
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(renderFrame(setup)).not.toContain("Pasted")
+      yield* Effect.promise(() => setup.mockInput.pasteBracketedText(chip))
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(renderFrame(setup)).toContain("┃ keep [Pasted 200 chars #2]")
+      setup.mockInput.pressKey("w", { ctrl: true })
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(renderFrame(setup)).not.toContain("Pasted")
+      setup.mockInput.pressKey("RETURN")
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(submitted).toEqual(["keep"])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  // The chip delete is one undo step. An undo brings the chip back, and the
+  // chip still sends the paste it stands for.
+  it.scopedLive("an undone chip delete sends the paste again", () =>
+    Effect.gen(function* () {
+      const submitted: Array<string> = []
+      // ctrl+- (undo) has a spelling only in the kitty keyboard protocol.
+      const setup = yield* renderScoped(
+        () => <TestComposer onSubmit={(content) => submitted.push(content)} />,
+        { kittyKeyboard: true },
+      )
+      const chip = "x".repeat(200)
+      yield* Effect.promise(() => setup.mockInput.typeText("keep "))
+      yield* Effect.promise(() => setup.mockInput.pasteBracketedText(chip))
+      yield* waitForFrame(setup, (frame) => frame.includes("[Pasted 200 chars #1]"), "the chip")
+      setup.mockInput.pressBackspace()
+      yield* waitForFrame(setup, (frame) => !frame.includes("Pasted"), "the chip deleted")
+      setup.mockInput.pressKey("-", { ctrl: true })
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("[Pasted 200 chars #1]"),
+        "the chip back",
+      )
+      setup.mockInput.pressKey("RETURN")
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(submitted).toEqual([`keep ${chip}`])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  // The textarea counts its caret in its own units, not in string indices. A
+  // wide or multi-byte character before the chip must not shift the delete.
+  it.scopedLive("a chip after a wide or accented character deletes whole", () =>
+    Effect.gen(function* () {
+      for (const prefix of ["界 ", "é "]) {
+        const submitted: Array<string> = []
+        const setup = yield* renderScoped(() => (
+          <TestComposer onSubmit={(content) => submitted.push(content)} />
+        ))
+        yield* Effect.promise(() => setup.mockInput.pasteBracketedText(prefix))
+        yield* Effect.promise(() => setup.mockInput.pasteBracketedText("x".repeat(200)))
+        yield* waitForFrame(setup, (frame) => frame.includes("[Pasted 200 chars #1]"), "the chip")
+        setup.mockInput.pressBackspace()
+        yield* waitForFrame(setup, (frame) => !frame.includes("[Pasted"), "the chip deleted")
+        expect(renderFrame(setup)).not.toContain("[")
+        // The caret stands where the chip began.
+        yield* Effect.promise(() => setup.mockInput.typeText("z"))
+        setup.mockInput.pressKey("RETURN")
+        yield* Effect.promise(() => setup.renderOnce())
+        expect(submitted).toEqual([`${prefix}z`])
+      }
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  // A caret inside a chip is still at the chip: a delete there takes the
+  // whole chip, so no broken placeholder reaches the model.
+  it.scopedLive("backspace or ctrl+w from inside a chip removes the whole chip", () =>
+    Effect.gen(function* () {
+      for (const wordDelete of [false, true]) {
+        const submitted: Array<string> = []
+        const setup = yield* renderScoped(() => (
+          <TestComposer onSubmit={(content) => submitted.push(content)} />
+        ))
+        yield* Effect.promise(() => setup.mockInput.typeText("keep "))
+        yield* Effect.promise(() => setup.mockInput.pasteBracketedText("x".repeat(200)))
+        yield* Effect.promise(() => setup.mockInput.typeText(" tail"))
+        yield* waitForFrame(
+          setup,
+          (frame) => frame.includes("[Pasted 200 chars #1] tail"),
+          "the chip",
+        )
+        // Past " tail", then one step into the chip.
+        for (let i = 0; i < 6; i++) setup.mockInput.pressArrow("left")
+        if (wordDelete) setup.mockInput.pressKey("w", { ctrl: true })
+        else setup.mockInput.pressBackspace()
+        yield* waitForFrame(setup, (frame) => !frame.includes("Pasted"), "the chip deleted")
+        expect(renderFrame(setup)).not.toContain("[")
+        yield* Effect.promise(() => setup.mockInput.typeText("z"))
+        setup.mockInput.pressKey("RETURN")
+        yield* Effect.promise(() => setup.renderOnce())
+        expect(submitted).toEqual(["keep z tail"])
+      }
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   it.live("suspended composer blocks enter submission", () =>
     Effect.gen(function* () {
       const submitted: string[] = []
@@ -671,17 +832,15 @@ describe("Composer renderer", () => {
       expect(renderFrame(setup)).toContain("┃ hi")
     }),
   )
-  it.live("slash trigger renders the command popup", () =>
+  it.scopedLive("slash trigger renders the command popup", () =>
     Effect.gen(function* () {
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <TestComposer onSubmit={() => {}}>
-              <Composer.Autocomplete />
-            </TestComposer>
-          ),
-          { width: 80, height: 24 },
+      const setup = yield* renderScoped(
+        () => (
+          <TestComposer onSubmit={() => {}}>
+            <Composer.Autocomplete />
+          </TestComposer>
         ),
+        { width: 80, height: 24 },
       )
       yield* Effect.promise(() => setup.mockInput.typeText("/"))
       // The rows arrive through a resource, so the frame is polled rather than
@@ -699,7 +858,6 @@ describe("Composer renderer", () => {
       // runs the command it completes, tab only completes it.
       expect(frame).toContain("enter select")
       expect(frame).toContain("tab complete")
-      setup.renderer.destroy()
     }),
   )
 })
@@ -753,9 +911,6 @@ describe("Composer submit", () => {
               sessionId: SessionId.make("session-elsewhere"),
               branchId: BranchId.make("branch-elsewhere"),
               name: "Elsewhere",
-              modelId: Option.getOrUndefined(Option.none()),
-              reasoningLevel: Option.getOrUndefined(Option.none()),
-              cwd: Option.getOrUndefined(Option.none()),
             },
           },
         ),
@@ -834,8 +989,6 @@ describe("Composer submit", () => {
               sessionId: SessionId.make("session-elsewhere"),
               branchId: BranchId.make("branch-elsewhere"),
               name: "Elsewhere",
-              modelId: Option.getOrUndefined(Option.none()),
-              reasoningLevel: Option.getOrUndefined(Option.none()),
               cwd: sessionDir,
             },
           },
@@ -875,8 +1028,6 @@ describe("Composer submit", () => {
               sessionId: SessionId.make("session-gone"),
               branchId: BranchId.make("branch-gone"),
               name: "Gone",
-              modelId: Option.getOrUndefined(Option.none()),
-              reasoningLevel: Option.getOrUndefined(Option.none()),
               cwd: "/nonexistent/gent-probe-x",
             },
           },
@@ -888,10 +1039,7 @@ describe("Composer submit", () => {
       setup.mockInput.pressEnter()
       yield* waitForFrame(
         setup,
-        () =>
-          Option.exists(client, (c) =>
-            Option.exists(Option.fromNullishOr(c.error()), (m) => m.startsWith("Shell:")),
-          ),
+        () => Option.exists(client, (c) => Option.exists(c.error(), (m) => m.startsWith("Shell:"))),
         "error shown",
       )
       yield* waitForFrame(setup, (frame) => frame.includes("echo hi"), "draft restored")
@@ -923,8 +1071,6 @@ describe("Composer submit", () => {
               sessionId: SessionId.make("session-gone-long"),
               branchId: BranchId.make("branch-gone-long"),
               name: "Gone",
-              modelId: Option.getOrUndefined(Option.none()),
-              reasoningLevel: Option.getOrUndefined(Option.none()),
               cwd: "/nonexistent/gent-probe-x",
             },
           },
@@ -936,10 +1082,7 @@ describe("Composer submit", () => {
       setup.mockInput.pressEnter()
       yield* waitForFrame(
         setup,
-        () =>
-          Option.exists(client, (c) =>
-            Option.exists(Option.fromNullishOr(c.error()), (m) => m.startsWith("Shell:")),
-          ),
+        () => Option.exists(client, (c) => Option.exists(c.error(), (m) => m.startsWith("Shell:"))),
         "error shown",
       )
       const frame = yield* waitForFrame(
@@ -1021,13 +1164,11 @@ describe("Composer submit", () => {
       yield* waitForFrame(
         setup,
         () =>
-          Option.exists(client, (c) =>
-            Option.exists(Option.fromNullishOr(c.error()), (m) => m.includes("send refused")),
-          ),
+          Option.exists(client, (c) => Option.exists(c.error(), (m) => m.includes("send refused"))),
         "error shown",
       )
       // The reason says the command ran, so the reader does not run it again.
-      const reason = Option.flatMap(client, (c) => Option.fromNullishOr(c.error()))
+      const reason = Option.flatMap(client, (c) => c.error())
       expect(Option.exists(reason, (m) => m.includes("ran"))).toBe(true)
       // The output is as large as a paste, so it comes back as a placeholder.
       yield* waitForFrame(setup, (frame) => frame.includes("[Pasted 3 lines"), "output restored")
@@ -1069,9 +1210,7 @@ describe("Composer submit", () => {
       yield* waitForFrame(
         setup,
         () =>
-          Option.exists(client, (c) =>
-            Option.exists(Option.fromNullishOr(c.error()), (m) => m.includes("send refused")),
-          ),
+          Option.exists(client, (c) => Option.exists(c.error(), (m) => m.includes("send refused"))),
         "error shown",
       )
       yield* waitForFrame(setup, (frame) => frame.includes("keep me"), "draft restored")
@@ -1364,7 +1503,7 @@ describe("AutocompletePopup renderer", () => {
     }),
   )
 
-  it.live("wraps the cursor at both ends through the shared list", () =>
+  it.live("enter picks the row under the cursor and tab completes it", () =>
     Effect.gen(function* () {
       const picked: Array<string> = []
       const completed: Array<string> = []
@@ -1375,8 +1514,8 @@ describe("AutocompletePopup renderer", () => {
               <ContributePopup items={slashItems} />
               <AutocompletePopup
                 state={{ type: "/", filter: "", triggerPos: 0 }}
-                onSelect={(value) => picked.push(value)}
-                onComplete={(value) => completed.push(value)}
+                onSelect={(pick) => picked.push(pick.item.id)}
+                onComplete={(pick) => completed.push(pick.item.id)}
                 onClose={() => {}}
                 onGhostChange={() => {}}
               />
@@ -1386,18 +1525,14 @@ describe("AutocompletePopup renderer", () => {
         ),
       )
       yield* waitForFrame(setup, (frame) => frame.includes("/gamma"), "items")
-      // Up from the first row lands on the last.
-      setup.mockInput.pressArrow("up")
-      yield* Effect.promise(() => setup.renderOnce())
-      setup.mockInput.pressEnter()
-      expect(picked).toEqual(["gamma"])
-      // Down from the last row lands on the first. Tab acts on the same row as
-      // enter would, and reports through the completion prop instead.
+      // Tab acts on the row enter would, and reports through the completion prop.
       setup.mockInput.pressArrow("down")
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressTab()
-      expect(completed).toEqual(["alpha"])
-      expect(picked).toEqual(["gamma"])
+      expect(completed).toEqual(["beta"])
+      expect(picked).toEqual([])
+      setup.mockInput.pressEnter()
+      expect(picked).toEqual(["beta"])
     }),
   )
 
@@ -1417,7 +1552,7 @@ describe("AutocompletePopup renderer", () => {
               <AutocompletePopup
                 state={{ type: "/", filter: "mo", triggerPos: 0 }}
                 onSelect={() => {}}
-                onComplete={(value) => completed.push(value)}
+                onComplete={(pick) => completed.push(pick.item.id)}
                 onClose={() => {}}
                 onGhostChange={(ghost) => ghosts.push(Option.getOrElse(ghost, () => ""))}
               />
@@ -1459,7 +1594,7 @@ describe("AutocompletePopup renderer", () => {
             return (
               <AutocompletePopup
                 state={{ type: "/", filter: filter(), triggerPos: 0 }}
-                onSelect={(value) => picked.push(value)}
+                onSelect={(pick) => picked.push(pick.item.id)}
                 onComplete={() => {}}
                 onClose={() => {}}
                 onGhostChange={() => {}}
@@ -1494,8 +1629,8 @@ describe("AutocompletePopup renderer", () => {
               <ContributePopup items={[]} />
               <AutocompletePopup
                 state={{ type: "/", filter: "zzz", triggerPos: 0 }}
-                onSelect={(value) => picked.push(value)}
-                onComplete={(value) => picked.push(value)}
+                onSelect={(pick) => picked.push(pick.item.id)}
+                onComplete={(pick) => picked.push(pick.item.id)}
                 onClose={() => {
                   closed += 1
                 }}

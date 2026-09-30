@@ -13,6 +13,7 @@ import { AskUserRenderer, HandoffRenderer, PromptRenderer } from "../src/interac
 import {
   createMockClient,
   destroyRenderSetup,
+  renderFrame,
   renderWithProviders,
 } from "./render-harness-boundary"
 import { waitForFrame } from "./helpers-boundary"
@@ -94,8 +95,116 @@ describe("AskUserRenderer", () => {
       expect(frame).toContain("Do you want to proceed")
       expect(frame).toContain("Yes")
       expect(frame).toContain("No")
+      setup.mockInput.pressArrow("down")
+      setup.mockInput.pressEnter()
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(results).toEqual([{ approved: false }])
       destroyRenderSetup(setup)
     }),
+  )
+})
+
+/**
+ * The answer the ask tool decodes: `approved`, and for structured questions
+ * one array of picks per question, JSON-encoded in `notes`.
+ */
+describe("AskUserRenderer answers", () => {
+  const color = {
+    header: "Pick a color",
+    question: "Choose your favorite",
+    options: [{ label: "Red" }, { label: "Blue" }],
+  }
+
+  const ask = (questions: ReadonlyArray<typeof color & { multiple?: boolean }>) =>
+    Effect.gen(function* () {
+      const results: ApprovalResult[] = []
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <AskUserRenderer
+              event={
+                {
+                  ...interaction("fallback question"),
+                  metadata: { type: "ask-user", questions },
+                } satisfies ActiveInteraction
+              }
+              resolve={(r) => results.push(r)}
+            />
+          ),
+          { width: 80, height: 24 },
+        ),
+      )
+      yield* waitForFrame(setup, (f) => f.includes("Pick a color"), "the question")
+      return { setup, results }
+    })
+
+  it.live("enter on a single choice sends that choice", () =>
+    Effect.gen(function* () {
+      const { setup, results } = yield* ask([color])
+      setup.mockInput.pressArrow("down")
+      setup.mockInput.pressEnter()
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(results).toEqual([{ approved: true, notes: '[["Blue"]]' }])
+      destroyRenderSetup(setup)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.live("space toggles each choice of a multiple choice and enter sends them", () =>
+    Effect.gen(function* () {
+      const { setup, results } = yield* ask([{ ...color, multiple: true }])
+      setup.mockInput.pressKey(" ")
+      setup.mockInput.pressArrow("down")
+      setup.mockInput.pressKey(" ")
+      setup.mockInput.pressEnter()
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(results).toEqual([{ approved: true, notes: '[["Red","Blue"]]' }])
+      destroyRenderSetup(setup)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.live("a typed answer past the choices is sent as the answer", () =>
+    Effect.gen(function* () {
+      const { setup, results } = yield* ask([color])
+      setup.mockInput.pressArrow("down")
+      setup.mockInput.pressArrow("down")
+      yield* Effect.promise(() => setup.mockInput.typeText("Green"))
+      yield* waitForFrame(setup, (f) => f.includes("Green"), "the typed answer")
+      setup.mockInput.pressEnter()
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(results).toEqual([{ approved: true, notes: '[["Green"]]' }])
+      destroyRenderSetup(setup)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.live("several questions send one array of picks per question", () =>
+    Effect.gen(function* () {
+      const size = {
+        header: "Pick a size",
+        question: "Choose a size",
+        options: [{ label: "Small" }, { label: "Large" }],
+      }
+      const { setup, results } = yield* ask([color, size])
+      expect(renderFrame(setup)).toContain("(1/2)")
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, (f) => f.includes("Pick a size"), "the second question")
+      expect(results).toEqual([])
+      setup.mockInput.pressArrow("down")
+      setup.mockInput.pressEnter()
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(results).toEqual([{ approved: true, notes: '[["Red"],["Large"]]' }])
+      destroyRenderSetup(setup)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.live("escape declines the question", () =>
+    Effect.gen(function* () {
+      const { setup, results } = yield* ask([color])
+      setup.mockInput.pressEscape()
+      // A lone escape byte is told from an escape sequence after a short wait.
+      yield* waitForFrame(setup, () => results.length > 0, "the decline")
+      expect(results).toEqual([{ approved: false }])
+      destroyRenderSetup(setup)
+    }).pipe(Effect.timeout("10 seconds")),
   )
 })
 
@@ -157,9 +266,6 @@ describe("HandoffRenderer", () => {
               sessionId: SessionId.make("parent-session"),
               branchId: BranchId.make("parent-branch"),
               name: "Parent",
-              modelId: Option.getOrUndefined(Option.none()),
-              reasoningLevel: Option.getOrUndefined(Option.none()),
-              cwd: Option.getOrUndefined(Option.none()),
             },
           },
         ),

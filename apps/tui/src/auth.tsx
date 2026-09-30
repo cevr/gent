@@ -6,7 +6,16 @@ import {
   AuthProviderInfo,
   type SessionId,
 } from "@gent/core/protocol"
-import { createEffect, createSignal, For, Match as SolidMatch, on, Show, Switch } from "solid-js"
+import {
+  createEffect,
+  createSignal,
+  For,
+  Match as SolidMatch,
+  on,
+  onCleanup,
+  Show,
+  Switch,
+} from "solid-js"
 import { omitUndefined } from "@gent/core/extensions/api"
 import { LinkOpener } from "./os"
 import { useTheme } from "./theme"
@@ -114,7 +123,7 @@ export const AuthState = {
 }
 
 /** What the pane draws with: the loaded catalog, or nothing yet. */
-export const catalogOf = (state: AuthState): AuthCatalog =>
+const catalogOf = (state: AuthState): AuthCatalog =>
   Option.getOrElse(state.catalog, () => emptyCatalog)
 
 export const AuthEvent = Schema.TaggedUnion({
@@ -230,21 +239,18 @@ export function transitionAuth(state: AuthState, event: AuthEvent): AuthState {
 }
 
 /** The methods the server offers for a provider, empty when it offers none. */
-export const methodsFor = (catalog: AuthCatalog, provider: string): ReadonlyArray<AuthMethod> =>
+const methodsFor = (catalog: AuthCatalog, provider: string): ReadonlyArray<AuthMethod> =>
   Option.getOrElse(
     Option.fromNullishOr(catalog.methods[provider]),
     (): ReadonlyArray<AuthMethod> => [],
   )
 
 /** The provider a screen is about, looked up in the live catalog. */
-export const providerFor = (
-  catalog: AuthCatalog,
-  provider: string,
-): Option.Option<AuthProviderInfo> =>
+const providerFor = (catalog: AuthCatalog, provider: string): Option.Option<AuthProviderInfo> =>
   Option.fromNullishOr(catalog.providers.find((entry) => entry.provider === provider))
 
 /** The required providers that still have no credentials. */
-export const missingRequired = (catalog: AuthCatalog): ReadonlyArray<AuthProviderInfo> =>
+const missingRequired = (catalog: AuthCatalog): ReadonlyArray<AuthProviderInfo> =>
   catalog.providers.filter((entry) => entry.required && !entry.hasKey)
 
 // ── auth view ───────────────────────────────────────────────────────────────
@@ -302,11 +308,16 @@ export function Auth(props: AuthProps) {
   let version = 0
   let successTimer = Option.none<Fiber.Fiber<void, never>>()
 
-  const clearSuccess = () => {
-    if (Option.isSome(successTimer)) clientCtx.runtime.cast(Fiber.interrupt(successTimer.value))
+  const stopSuccessTimer = () => {
+    if (Option.isSome(successTimer)) cast(Fiber.interrupt(successTimer.value))
     successTimer = Option.none()
+  }
+  const clearSuccess = () => {
+    stopSuccessTimer()
     setSuccessMessage(Option.none())
   }
+  // A pane that closes stops the flash's clock with it.
+  onCleanup(stopSuccessTimer)
 
   /** Start an action: everything already in flight stops counting. */
   const begin = () => {
@@ -348,7 +359,7 @@ export function Auth(props: AuthProps) {
   const loadAuth = (token: number) => {
     clientCtx.log.info("auth:load-start")
     const request = omitUndefined({
-      agentName: Option.getOrUndefined(Option.fromNullishOr(clientCtx.agent())),
+      agentName: Option.getOrUndefined(clientCtx.agent()),
       sessionId: Option.getOrUndefined(sessionId),
     })
     cast(
@@ -412,6 +423,20 @@ export function Auth(props: AuthProps) {
   })
 
   // ── Actions ───────────────────────────────────────────────────────
+
+  // Signing out is destructive: the first ctrl+x arms the row, the second
+  // removes the stored key, as the agents pane deletes a session.
+  const [armed, setArmed] = createSignal(Option.none<string>())
+  const armOrDelete = (selected: Option.Option<AuthProviderInfo>): boolean => {
+    if (Option.isNone(selected) || selected.value.source !== "stored") return true
+    if (Option.contains(armed(), selected.value.provider)) {
+      setArmed(Option.none())
+      deleteProvider(selected.value)
+      return true
+    }
+    setArmed(Option.some(selected.value.provider))
+    return true
+  }
 
   const deleteProvider = (provider: AuthProviderInfo) => {
     if (provider.source !== "stored") return
@@ -665,12 +690,21 @@ export function Auth(props: AuthProps) {
           paddingLeft={1}
           flexDirection="row"
         >
-          <text style={{ fg: rowForeground(isSelected(), theme.text) }}>{provider.provider}</text>
-          <text style={{ fg: rowForeground(isSelected(), statusColor(provider)) }}>
-            {" "}
-            {authLabel(provider)}
-            {requiredLabel(provider)}
-          </text>
+          <Show
+            when={!Option.contains(armed(), provider.provider)}
+            fallback={
+              <text style={{ fg: theme.error }}>
+                ctrl+x again to delete {provider.provider} login
+              </text>
+            }
+          >
+            <text style={{ fg: rowForeground(isSelected(), theme.text) }}>{provider.provider}</text>
+            <text style={{ fg: rowForeground(isSelected(), statusColor(provider)) }}>
+              {" "}
+              {authLabel(provider)}
+              {requiredLabel(provider)}
+            </text>
+          </Show>
         </box>
       )),
     )
@@ -714,12 +748,12 @@ export function Auth(props: AuthProps) {
   // it would only open it again), and the way out is ctrl+c.
   const enforced = () => props.enforceAuth === true
   const listLeave = () => {
-    if (enforced()) return KeyHints.quit
+    if (enforced()) return KeyHints.exit
     return KeyHints.close
   }
   const listKeys = () => {
     if (Option.isSome(state().error)) return [keyHint("r", "retry"), listLeave()]
-    return [KeyHints.move, KeyHints.select, keyHint("d", "delete"), listLeave()]
+    return [KeyHints.move, KeyHints.select, KeyHints.delete, listLeave()]
   }
   const dismissList = () => {
     if (enforced()) return
@@ -837,12 +871,13 @@ export function Auth(props: AuthProps) {
             onDismiss={dismissList}
             empty={emptyList}
             extraKeys={(event, selected) => {
+              if (event.ctrl === true && event.name === "x") return armOrDelete(selected)
+              // Any other key steps back from an armed row; Esc does only that.
+              const wasArmed = Option.isSome(armed())
+              setArmed(Option.none())
+              if (event.name === "escape" && wasArmed) return true
               if (event.name === "r" && Option.isSome(state().error)) {
                 loadAuth(begin())
-                return true
-              }
-              if (event.name === "d") {
-                Option.map(selected, deleteProvider)
                 return true
               }
               return false

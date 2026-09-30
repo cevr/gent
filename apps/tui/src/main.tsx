@@ -12,7 +12,6 @@ import {
   Predicate,
   Record,
   Runtime,
-  Scope,
 } from "effect"
 import {
   clearClientLog,
@@ -21,8 +20,8 @@ import {
   createClientLog,
   shutdownLog,
 } from "./client"
-import { LinkOpener, OsService } from "./os"
-import { AgentName, GentConnectionError } from "@gent/core/protocol"
+import { LinkOpener } from "./os"
+import { AgentName } from "@gent/core/protocol"
 
 import { render } from "@opentui/solid"
 import { createCliRenderer, type CliRenderer } from "@opentui/core"
@@ -35,14 +34,23 @@ import {
   resolveHeadlessMissingProviders,
 } from "./app"
 import { TerminalDimensionsProvider } from "./terminal"
+import { SpinnerClockProvider } from "./ui"
 import { ComposerMemoryProvider } from "./session"
 import { detectColorScheme } from "./theme"
 import { EnvProvider, WorkspaceProvider } from "./workspace"
 import { ExtensionUIProvider } from "./extensions/host"
-import { type ExitSignal, type HeadlessOptions, makeCliTeardown, runHeadless } from "./headless"
+import {
+  type ExitSignal,
+  type HeadlessOptions,
+  makeCliTeardown,
+  runHeadless,
+  waitForHeadlessReady,
+} from "./headless"
 import { type GentClientBundle } from "@gent/sdk"
 import {
   CliStartupError,
+  connectFlag,
+  isolateFlag,
   reportFailureOnStderr,
   doctor,
   readHome,
@@ -79,18 +87,14 @@ const waitForRendererDestroy = (renderer: CliRenderer) =>
     })
   })
 
-// Platform layer — `BunPlatformLive` bundles `BunServices.layer`
-// (FileSystem, Path, ChildProcessSpawner, …) with `BunGentPlatformLive`
-// so callers can yield `GentPlatform` alongside the standard primitives.
-const PlatformLayer = BunPlatformLive
-
-const LinkLayer = Layer.provide(LinkOpener.Live, OsService.Live)
-
-// `OsService.Live` and `LinkLayer` depend on `GentPlatform`, which
-// `PlatformLayer` provides. `Layer.mergeAll` builds in parallel, so use
+// `BunPlatformLive` bundles `BunServices.layer` (FileSystem, Path,
+// ChildProcessSpawner, …) with `BunGentPlatformLive`, so callers can yield
+// `GentPlatform` alongside the standard primitives.
+// `LinkOpener.Live` depends on `GentPlatform`, which
+// `BunPlatformLive` provides. `Layer.mergeAll` builds in parallel, so use
 // `provideMerge` to thread `GentPlatform` into the dependents while
 // keeping it in the output context for downstream consumers.
-const makeUiLayer = () => Layer.provideMerge(LinkLayer, PlatformLayer)
+const makeUiLayer = () => Layer.provideMerge(LinkOpener.Live, BunPlatformLive)
 
 const runHeadlessTurn = (
   bundle: GentClientBundle,
@@ -104,40 +108,14 @@ const runHeadlessTurn = (
     )
   }
 
-  const resolvedBranchId = branchId.value
-
-  return Effect.gen(function* () {
-    yield* bundle.runtime.lifecycle.waitForReady.pipe(
-      Effect.timeoutOption("15 seconds"),
-      Effect.flatMap((ready) =>
-        Option.match(ready, {
-          onNone: () =>
-            Effect.fail(
-              new GentConnectionError({
-                message: "connection did not become ready within 15 seconds",
-              }),
-            ),
-          onSome: () => Effect.void,
-        }),
-      ),
-    )
-
-    yield* runHeadless(
-      bundle.client,
-      state.session.id,
-      resolvedBranchId,
-      state.prompt,
-      options,
-    ).pipe(Effect.withSpan("Headless.run"))
-  })
+  return runHeadless(bundle.client, state.session.id, branchId.value, state.prompt, options).pipe(
+    Effect.withSpan("Headless.run"),
+  )
 }
 
 // The inputs the TUI/headless entry takes. `resume` reuses them.
 const gentFlags = {
-  connect: Flag.String("connect").pipe(
-    Flag.withDescription("Connect to an existing gent server"),
-    Flag.optional,
-  ),
+  connect: connectFlag,
   session: Flag.String("session").pipe(
     Flag.withAlias("s"),
     Flag.withDescription("Session ID to continue"),
@@ -148,12 +126,11 @@ const gentFlags = {
     Flag.withDescription("Run in headless mode (no TUI, streams to stdout)"),
     Flag.withDefault(false),
   ),
-  isolate: Flag.Boolean("isolate").pipe(
-    Flag.withDescription("Keep state in memory: no data-directory database or lock"),
-    Flag.withDefault(false),
-  ),
+  isolate: isolateFlag,
   debug: Flag.Boolean("debug").pipe(
-    Flag.withDescription("Launch TUI renderer playground for widgets and tool renderers"),
+    Flag.withDescription(
+      "Start an in-memory server with a seeded session on the scripted model, to exercise the TUI",
+    ),
     Flag.withDefault(false),
   ),
   mockEmpty: Flag.Boolean("mock-empty").pipe(
@@ -254,15 +231,14 @@ const runGent = ({
     }
 
     // Create Effect-backed logger from captured services
-    const logServices = yield* Effect.context<never>()
-    const log = createClientLog(Context.makeUnsafe<unknown>(logServices.mapUnsafe))
+    const mainServices = yield* Effect.context<never>()
+    const log = createClientLog(Context.makeUnsafe<unknown>(mainServices.mapUnsafe))
     let mainFiber: Option.Option<Fiber.Fiber<unknown, unknown>> = Option.none()
     yield* Effect.withFiber((fiber) =>
       Effect.sync(() => {
         mainFiber = Option.some(fiber)
       }),
     )
-    const mainServices = yield* Effect.context<never>()
     const interruptMain = () => {
       shutdownLog("shutdown.interrupt-fiber")
       if (Option.isSome(mainFiber)) {
@@ -289,7 +265,7 @@ const runGent = ({
           message: "--agent applies to a new session; drop --session to use it",
         })
       }
-      yield* bundle.runtime.lifecycle.waitForReady
+      yield* waitForHeadlessReady(bundle.runtime.lifecycle.waitForReady)
       const state = yield* resolveInitialState({
         client: bundle.client,
         cwd,
@@ -366,7 +342,6 @@ const runGent = ({
       },
     }
 
-    const uiScope = yield* Scope.Scope
     const renderer = yield* Effect.promise(() =>
       createCliRenderer({
         exitOnCtrlC: false,
@@ -388,21 +363,20 @@ const runGent = ({
                 initialSession={bootstrap.initialSession}
                 initialAgent={initialAgent}
               >
-                <ExtensionUIProvider scope={uiScope}>
+                <ExtensionUIProvider scope={scope}>
                   <TerminalDimensionsProvider>
-                    <ComposerMemoryProvider
-                      initialPrompt={bootstrap.initialPrompt}
-                      initialSessionId={Option.map(
-                        Option.fromNullishOr(bootstrap.initialSession),
-                        (session) => session.sessionId,
-                      )}
-                    >
-                      <App
-                        debugMode={debug}
-                        initialBranches={bootstrap.initialBranches}
-                        initialThemeMode={initialThemeMode}
-                      />
-                    </ComposerMemoryProvider>
+                    <SpinnerClockProvider>
+                      <ComposerMemoryProvider
+                        initialPrompt={bootstrap.initialPrompt}
+                        initialSessionId={Option.some(bootstrap.initialSession.sessionId)}
+                      >
+                        <App
+                          debugMode={debug}
+                          initialBranches={bootstrap.initialBranches}
+                          initialThemeMode={initialThemeMode}
+                        />
+                      </ComposerMemoryProvider>
+                    </SpinnerClockProvider>
                   </TerminalDimensionsProvider>
                 </ExtensionUIProvider>
               </ClientProvider>
@@ -482,7 +456,7 @@ const TraceLoggerLayer = Layer.unwrap(
  */
 const mainEffect = Effect.scoped(
   Effect.gen(function* () {
-    const platformContext = yield* Layer.build(PlatformLayer)
+    const platformContext = yield* Layer.build(BunPlatformLive)
     const platform = Context.makeUnsafe<unknown>(platformContext.mapUnsafe)
     const runCli = Effect.gen(function* () {
       const loggerContext = yield* Layer.build(TraceLoggerLayer)

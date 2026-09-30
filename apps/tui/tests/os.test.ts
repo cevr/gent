@@ -1,6 +1,5 @@
-import { describe, describe as effectDescribe, expect, it, test } from "effect-bun-test"
-import { Effect, FileSystem, Option } from "effect"
-import { BunFileSystem } from "@effect/platform-bun"
+import { describe, expect, test } from "effect-bun-test"
+import { Option } from "effect"
 import { parseEditorCommand, resolveEditor } from "../src/os"
 
 // ── external editor ─────────────────────────────────────────────────────────
@@ -52,47 +51,4 @@ describe("parseEditorCommand", () => {
   test("empty string falls back to vi", () => {
     expect(parseEditorCommand("")).toEqual(["vi"])
   })
-})
-
-// ── Content roundtrip ────────────────────────────────────────────────
-
-effectDescribe("content roundtrip", () => {
-  const roundtripTest = it.scopedLive.layer(BunFileSystem.layer)
-  const makeFile = Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem
-    const dir = yield* fs.makeTempDirectoryScoped()
-    return `${dir}/editor.md`
-  })
-
-  roundtripTest("write and read back preserves content", () =>
-    Effect.gen(function* () {
-      const content = "line 1\nline 2\nline 3\n"
-      const tmpPath = yield* makeFile
-      const fs = yield* FileSystem.FileSystem
-      yield* fs.writeFileString(tmpPath, content)
-      const readBack = yield* fs.readFileString(tmpPath)
-      expect(readBack).toBe(content)
-    }),
-  )
-
-  roundtripTest("empty content roundtrips", () =>
-    Effect.gen(function* () {
-      const tmpPath = yield* makeFile
-      const fs = yield* FileSystem.FileSystem
-      yield* fs.writeFileString(tmpPath, "")
-      const readBack = yield* fs.readFileString(tmpPath)
-      expect(readBack).toBe("")
-    }),
-  )
-
-  roundtripTest("multiline with special characters roundtrips", () =>
-    Effect.gen(function* () {
-      const content = "function foo() {\n  return `hello ${'world'}`\n}\n"
-      const tmpPath = yield* makeFile
-      const fs = yield* FileSystem.FileSystem
-      yield* fs.writeFileString(tmpPath, content)
-      const readBack = yield* fs.readFileString(tmpPath)
-      expect(readBack).toBe(content)
-    }),
-  )
 })

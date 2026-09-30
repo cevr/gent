@@ -4,7 +4,6 @@ import {
   createContext,
   createMemo,
   createEffect,
-  createRoot,
   createSignal,
   For,
   type JSX,
@@ -23,13 +22,19 @@ import {
   useTerminalDimensions,
 } from "./terminal"
 import { useTheme } from "./theme"
-import { truncate } from "./utils"
-import { textWidth } from "./text-width-adapter"
+import { truncate, useRequiredContext } from "./utils"
+import { textWidth } from "./bun-adapter"
 import type { MessageRowProps } from "./extensions/client-facets"
 
 // ── spinner clock ───────────────────────────────────────────────────────────
 
-const ticker = createRoot(() => {
+const SpinnerClockContext = createContext<Accessor<number>>()
+
+/**
+ * The 60 ms clock every spinner and pending-retry row reads. One clock for
+ * the tree; it stops when the tree unmounts, with the renderer.
+ */
+export function SpinnerClockProvider(props: { children: JSX.Element }) {
   const [tick, setTick] = createSignal(0)
   const fiber = Effect.runFork(
     Effect.sync(() => {
@@ -39,10 +44,14 @@ const ticker = createRoot(() => {
   onCleanup(() => {
     Effect.runFork(Fiber.interrupt(fiber))
   })
-  return tick
-})
+  return <SpinnerClockContext.Provider value={tick}>{props.children}</SpinnerClockContext.Provider>
+}
 
-export const useSpinnerClock = (): Accessor<number> => ticker
+export const useSpinnerClock = (): Accessor<number> =>
+  useRequiredContext(
+    SpinnerClockContext,
+    "useSpinnerClock must be used within SpinnerClockProvider",
+  )
 
 // ── wait helper ─────────────────────────────────────────────────────────────
 
@@ -88,27 +97,22 @@ const waitFor = <A,>(
  * Finds elements by ID and scrolls to keep them visible in the viewport.
  */
 
-interface ScrollSyncOptions {
-  /** Synchronize only while the target list is mounted. */
-  enabled?: Accessor<boolean>
-  /** The scrollbox ref getter */
-  // eslint-disable-next-line effect/noNullish -- OpenTUI refs are absent before attachment and after cleanup.
-  getRef: () => ScrollBoxRenderable | undefined
-  /** Number of retries when element not found (default: 15) */
-  retries?: number
-  /** Delay between retries in ms (default: 30) */
-  retryDelay?: number
-}
+/** How often, and how far apart, the sync looks for a row that has not laid out yet. */
+const SCROLL_SYNC_TRIES = 15
+const SCROLL_SYNC_INTERVAL_MS = 30
 
 /**
- * ID-based scroll sync - finds element by ID and scrolls to keep it visible
+ * ID-based scroll sync - finds element by ID and scrolls to keep it visible.
+ * The scrollbox is absent before it attaches and after cleanup.
  */
-function useScrollSync(selectedId: Accessor<string>, options: ScrollSyncOptions) {
-  const { getRef, retries = 15, retryDelay = 30 } = options
+function useScrollSync(
+  selectedId: Accessor<string>,
+  getRef: () => Option.Option<ScrollBoxRenderable>,
+) {
   const renderer = useRenderer()
 
   const syncScroll = (id: string): Option.Option<true> => {
-    const scrollRef = Option.fromNullishOr(getRef())
+    const scrollRef = getRef()
     if (Option.isNone(scrollRef)) return Option.none()
 
     const children = scrollRef.value.getChildren()
@@ -128,7 +132,6 @@ function useScrollSync(selectedId: Accessor<string>, options: ScrollSyncOptions)
   }
 
   createEffect(() => {
-    if (options.enabled && !options.enabled()) return
     const id = selectedId()
     let fiber = Option.none<Fiber.Fiber<void>>()
     const afterLayout = () => {
@@ -136,8 +139,8 @@ function useScrollSync(selectedId: Accessor<string>, options: ScrollSyncOptions)
         Effect.runFork(
           waitFor(() => syncScroll(id), {
             label: `scroll-target ${id}`,
-            intervalMs: retryDelay,
-            timeoutMs: retries * retryDelay,
+            intervalMs: SCROLL_SYNC_INTERVAL_MS,
+            timeoutMs: SCROLL_SYNC_TRIES * SCROLL_SYNC_INTERVAL_MS,
           }).pipe(Effect.ignore),
         ),
       )
@@ -523,7 +526,7 @@ interface KeyHint {
  * The one vocabulary of the key-hint rows: lowercase keys, one verb per key.
  * Enter picks a row (`select`) or sends typed text (`submit`). Esc closes a
  * pane and goes `back` from a sub-screen. A pane with a key of its own
- * (`tab complete`, `d delete`) names it with {@link keyHint}.
+ * (`tab complete`, `ctrl+t hide`) names it with {@link keyHint}.
  */
 export const KeyHints = {
   move: { key: "↑↓", verb: "move" },
@@ -532,7 +535,9 @@ export const KeyHints = {
   submit: { key: "enter", verb: "submit" },
   close: { key: "esc", verb: "close" },
   back: { key: "esc", verb: "back" },
-  quit: { key: "ctrl+c", verb: "quit" },
+  /** Arms the row; a second press deletes it. */
+  delete: { key: "ctrl+x", verb: "delete" },
+  exit: { key: "ctrl+c", verb: "exit" },
 } satisfies Record<string, KeyHint>
 
 export const keyHint = (key: string, verb: string): KeyHint => ({ key, verb })
@@ -914,6 +919,55 @@ export const selectable = <A,>(
   render: (selected: () => boolean, id: string) => JSX.Element,
 ): SelectListRow<A> => ({ value: Option.some(value), render })
 
+interface PlainRowOptions {
+  /** Draws the unselected line in the muted color, for an entry that is not the current one. */
+  readonly muted?: () => boolean
+}
+
+function PlainRowView(props: {
+  readonly id: string
+  readonly selected: boolean
+  readonly muted: boolean
+  readonly line: string
+}) {
+  const { theme } = useTheme()
+  const background = () => {
+    if (props.selected) return theme.primary
+    return "transparent"
+  }
+  const foreground = () => {
+    if (props.selected) return theme.selectedListItemText
+    if (props.muted) return theme.textMuted
+    return theme.text
+  }
+  return (
+    <box id={props.id} backgroundColor={background()} paddingLeft={1}>
+      <text wrapMode="none" style={{ fg: foreground() }}>
+        {props.line}
+      </text>
+    </box>
+  )
+}
+
+/**
+ * A selectable entry drawn as one line of text, filled with the primary color
+ * under the cursor. `line` is read in the row's render, so it follows the
+ * picker's width; the caller fits it to that width.
+ */
+export const plainRow = <A,>(
+  value: A,
+  line: () => string,
+  options: PlainRowOptions = {},
+): SelectListRow<A> =>
+  selectable(value, (selected, id) => (
+    <PlainRowView
+      id={id}
+      selected={selected()}
+      muted={Option.exists(Option.fromUndefinedOr(options.muted), (muted) => muted())}
+      line={line()}
+    />
+  ))
+
 /** A row that draws but cannot be chosen — a section heading, a separator. */
 export const decoration = <A,>(render: () => JSX.Element): SelectListRow<A> => ({
   value: Option.none(),
@@ -1108,9 +1162,10 @@ export function SelectList<A>(props: SelectListProps<A>) {
     }),
   )
 
-  useScrollSync(() => `${props.id}-row-${state().selectedIndex}`, {
-    getRef: () => Option.getOrUndefined(scrollRef),
-  })
+  useScrollSync(
+    () => `${props.id}-row-${state().selectedIndex}`,
+    () => scrollRef,
+  )
 
   // Report the cursor, closed panes included: a pane that fetches for the
   // selected row has to be told to stop when it closes. A pane that unmounts
@@ -1375,11 +1430,13 @@ export function ToolFrame(props: ToolFrameProps) {
   const { theme } = useTheme()
   const callIdentity = useContext(ToolCallIdentityContext)
   const bodyOnly = useContext(ToolFrameBodyContext)
-  const [localExpanded, setLocalExpanded] = createSignal(props.expanded)
-
-  createEffect(() => {
-    setLocalExpanded(props.expanded)
+  // A click toggles the frame; a new `expanded` from the owner starts over
+  // from it. Each value of the prop gets its own toggle signal.
+  const toggle = createMemo(() => {
+    const [open, setOpen] = createSignal(props.expanded)
+    return { open, setOpen }
   })
+  const localExpanded = () => toggle().open()
 
   const statusIcon = () => {
     if (props.status === "running") return "⋯"
@@ -1405,7 +1462,7 @@ export function ToolFrame(props: ToolFrameProps) {
   return (
     <box flexDirection="column">
       <Show when={!bodyOnly}>
-        <box flexDirection="row" onMouseDown={() => setLocalExpanded((prev) => !prev)}>
+        <box flexDirection="row" onMouseDown={() => toggle().setOpen((prev) => !prev)}>
           <text flexGrow={1} flexShrink={1} wrapMode="none" truncate>
             <span style={{ fg: statusColor() }}>{statusIcon()} </span>
             <Show when={props.status === "error"}>

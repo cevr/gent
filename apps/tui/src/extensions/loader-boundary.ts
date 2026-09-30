@@ -47,11 +47,7 @@ import {
   type WidgetSlot,
   unknownContributionKey,
 } from "./client-facets.js"
-import {
-  bindModuleSource,
-  buildClientExtension,
-  type ClientBuildNames,
-} from "../client-extension-build-adapter"
+import { bindModuleSource, buildClientExtension, type ClientBuildNames } from "../bun-adapter"
 import type { ToolRenderer } from "../tool-renderers"
 import type { Command } from "../commands"
 
@@ -398,7 +394,8 @@ const withoutRefusedKeybinds = (
       id: source.id,
       reason: `keybind "${Option.getOrElse(keybind, () => "")}" of command "${entry.id}" ${refusal.value}`,
     })
-    return { ...entry, keybind: Option.getOrUndefined(Option.none<string>()) }
+    const { keybind: _refused, ...rest } = entry
+    return rest
   }),
 })
 
@@ -407,6 +404,22 @@ type CommandAffordance = "keybind" | "slash"
 interface AffordanceHolder {
   readonly commandId: string
   readonly claim: Claim
+}
+
+/**
+ * The key a holder is filed under. A keybind files by what it parses to, so
+ * `shift+ctrl+k` and `ctrl+shift+k`, or `control+k` and `ctrl+k`, are one key.
+ */
+const affordanceKey = (field: CommandAffordance, value: string): string => {
+  const spelled = value.toLowerCase()
+  if (field !== "keybind") return spelled
+  return Option.match(parseKeybind(value), {
+    onNone: () => spelled,
+    onSome: (keybind) =>
+      [keybind.ctrl && "ctrl", keybind.shift && "shift", keybind.meta && "meta", keybind.key]
+        .filter((part) => part !== false)
+        .join("+"),
+  })
 }
 
 /**
@@ -422,7 +435,7 @@ const affordanceCollides = (
 ): boolean => {
   const value = Option.fromNullishOr(entry[field])
   if (Option.isNone(value)) return false
-  const held = Option.fromNullishOr(holders.get(value.value.toLowerCase()))
+  const held = Option.fromNullishOr(holders.get(affordanceKey(field, value.value)))
   const heldClaim = Option.map(held, (holder) => holder.claim)
   return collides(heldClaim, source, field, value.value, failures)
 }
@@ -437,15 +450,13 @@ const takeAffordance = (
 ): void => {
   const value = Option.fromNullishOr(entry[field])
   if (Option.isNone(value)) return
-  const key = value.value.toLowerCase()
+  const key = affordanceKey(field, value.value)
   const held = Option.fromNullishOr(holders.get(key))
   if (Option.isSome(held)) {
     const previous = Option.fromNullishOr(kept.get(held.value.commandId))
     if (Option.isSome(previous)) {
-      kept.set(held.value.commandId, {
-        ...previous.value,
-        [field]: Option.getOrUndefined(Option.none()),
-      })
+      const { [field]: _released, ...rest } = previous.value
+      kept.set(held.value.commandId, rest)
     }
   }
   holders.set(key, { commandId: entry.id, claim: { scope: source.scope, source: source.source } })
@@ -927,12 +938,21 @@ const toAutocompleteEffect = (
   return Effect.succeed(items)
 }
 
+/**
+ * A merged row and the contribution that offered it. Several contributions
+ * may share a prefix; a pick inserts and records through its own source.
+ */
+export interface SourcedAutocompleteItem {
+  readonly item: AutocompleteItem
+  readonly source: AutocompleteContribution
+}
+
 export const runAutocompleteContributions = (
   contributions: ReadonlyArray<AutocompleteContribution>,
   filter: string,
   clientRuntime: ClientRuntime,
   onFailure: (prefix: string, reason: string) => void,
-): Promise<AutocompleteItem[]> =>
+): Promise<SourcedAutocompleteItem[]> =>
   clientRuntime.runPromise(
     Effect.forEach(
       contributions,
@@ -942,10 +962,11 @@ export const runAutocompleteContributions = (
           catch: String,
         }).pipe(
           Effect.flatMap(toAutocompleteEffect),
+          Effect.map((items) => items.map((item) => ({ item, source: contribution }))),
           Effect.catch((reason) =>
             Effect.sync(() => {
               onFailure(contribution.prefix, reason)
-              return [] satisfies AutocompleteItem[]
+              return [] satisfies SourcedAutocompleteItem[]
             }),
           ),
         ),
@@ -953,12 +974,12 @@ export const runAutocompleteContributions = (
     ).pipe(
       Effect.map((results) => {
         const seen = new Set<string>()
-        const deduped: AutocompleteItem[] = []
+        const deduped: SourcedAutocompleteItem[] = []
         for (const batch of results) {
-          for (const item of batch) {
-            if (seen.has(item.id)) continue
-            seen.add(item.id)
-            deduped.push(item)
+          for (const entry of batch) {
+            if (seen.has(entry.item.id)) continue
+            seen.add(entry.item.id)
+            deduped.push(entry)
           }
         }
         return deduped

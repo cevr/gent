@@ -1,10 +1,12 @@
 /** @jsxImportSource @opentui/solid */
-import { describe, expect, it, test } from "effect-bun-test"
-import { createEffect, createRoot, createSignal } from "solid-js"
-import { createThemeView, DEFAULT_THEMES, resolveTheme, type Theme } from "../src/theme"
-import { Effect } from "effect"
+import { describe, expect, it } from "effect-bun-test"
+import { createEffect } from "solid-js"
+import { DEFAULT_THEMES, resolveTheme, type Theme, useTheme } from "../src/theme"
+import { Effect, Option } from "effect"
+import type { TerminalColors } from "@opentui/core"
+import { useRenderer } from "@opentui/solid"
 import { CommandPalette, useCommand } from "../src/commands"
-import { renderFrame, renderWithProviders } from "./render-harness-boundary"
+import { answerPalette, renderFrame, renderWithProviders } from "./render-harness-boundary"
 import { waitForFrame } from "./helpers-boundary"
 
 // ── theme view ──────────────────────────────────────────────────────────────
@@ -21,15 +23,24 @@ const expectViewToMirror = (view: Theme, theme: Theme) => {
   expect(seen.length).toBe(expected.size)
   for (const [key, color] of seen) {
     expect(expected.has(key)).toBe(true)
-    expect(color).toBe(expected.get(key))
+    expect(color).toEqual(expected.get(key))
   }
 }
 
 describe("theme view", () => {
-  test("every resolved theme key is reachable on the view as an enumerable getter", () => {
-    createRoot((dispose) => {
-      const [values] = createSignal(dark)
-      const view = createThemeView(values)
+  // The provider hands out one theme object; each key reads the theme in force.
+  it.live("every theme key is a getter on one object, and a mode switch shows through it", () =>
+    Effect.gen(function* () {
+      let ctx = Option.none<ReturnType<typeof useTheme>>()
+      const Probe = () => {
+        ctx = Option.some(useTheme())
+        return <text>probe</text>
+      }
+      yield* Effect.promise(() => renderWithProviders(() => <Probe />))
+      const context = yield* Effect.fromOption(ctx)
+      context.set("fx")
+      context.setMode("dark")
+      const view = context.theme
       expect(keysOf(view)).toEqual(keysOf(dark))
       for (const key of Object.keys(view)) {
         const descriptor = Object.getOwnPropertyDescriptor(view, key)
@@ -39,22 +50,57 @@ describe("theme view", () => {
         expect(descriptor!.enumerable).toBe(true)
       }
       expectViewToMirror(view, dark)
-      dispose()
-    })
-  })
-
-  test("a theme swap shows through every key on the same view object", () => {
-    createRoot((dispose) => {
-      const [values, setValues] = createSignal(dark)
-      const view = createThemeView(values)
-      expect(view.primary).toBe(dark.primary)
       expect(dark.background).not.toBe(light.background)
-      setValues(light)
+      context.setMode("light")
+      expect(context.theme).toBe(view)
       expectViewToMirror(view, light)
-      expect(view.background).toBe(light.background)
-      dispose()
-    })
-  })
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+})
+
+// ── system theme ────────────────────────────────────────────────────────────
+
+describe("system theme", () => {
+  // The terminal's palette is read once; the theme drawn from it is the one
+  // for the mode in force, so a mode switch redraws it for that mode.
+  it.live("the terminal-derived theme follows a mode switch", () =>
+    Effect.gen(function* () {
+      const palette = Array.from(
+        { length: 16 },
+        (_, i) => `#${(i * 16).toString(16).padStart(2, "0").repeat(3)}`,
+      )
+      const colors = {
+        palette,
+        defaultForeground: "#dddddd",
+        defaultBackground: "#202020",
+        cursorColor: "#000000",
+        mouseForeground: "#000000",
+        mouseBackground: "#000000",
+        tekForeground: "#000000",
+        tekBackground: "#000000",
+        highlightBackground: "#000000",
+        highlightForeground: "#000000",
+      } satisfies TerminalColors
+      let ctx = Option.none<ReturnType<typeof useTheme>>()
+      const Probe = () => {
+        const renderer = useRenderer()
+        answerPalette(renderer, colors)
+        ctx = Option.some(useTheme())
+        return <text>probe</text>
+      }
+      const setup = yield* Effect.promise(() => renderWithProviders(() => <Probe />))
+      const theme = yield* Effect.fromOption(ctx)
+      // The palette read on SIGUSR2 is the one a terminal with this palette answers.
+      process.emit("SIGUSR2")
+      yield* waitForFrame(setup, () => "system" in theme.all(), "the system theme")
+      theme.set("system")
+      theme.setMode("dark")
+      const dark = theme.theme.backgroundElement
+      theme.setMode("light")
+      yield* waitForFrame(setup, () => true)
+      expect(theme.theme.backgroundElement).not.toEqual(dark)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
 })
 
 // ── theme picker ────────────────────────────────────────────────────────────
@@ -75,46 +121,52 @@ function OpenPaletteOnMount() {
   return <CommandPalette />
 }
 
-/** Every key the app reads off a theme; a hole here renders as a missing color. */
-const THEME_KEYS: ReadonlyArray<keyof Theme> = [
-  "primary",
-  "error",
-  "warning",
-  "success",
-  "info",
-  "text",
-  "textMuted",
-  "selectedListItemText",
-  "background",
-  "backgroundElement",
-  "backgroundMenu",
-  "border",
-  "borderSubtle",
-  "diffAdded",
-  "diffRemoved",
-  "diffAddedBg",
-  "diffRemovedBg",
-  "diffContextBg",
-  "diffAddedLineNumberBg",
-  "diffRemovedLineNumberBg",
-  "markdownHeading",
-  "markdownLink",
-  "markdownLinkText",
-  "markdownCode",
-  "markdownBlockQuote",
-  "markdownEmph",
-  "markdownStrong",
-  "markdownListItem",
-  "syntaxComment",
-  "syntaxKeyword",
-  "syntaxFunction",
-  "syntaxVariable",
-  "syntaxString",
-  "syntaxNumber",
-  "syntaxType",
-  "syntaxOperator",
-  "syntaxPunctuation",
-]
+/**
+ * Every key the app reads off a theme; a hole here renders as a missing color.
+ * The `satisfies` makes a new `Theme` key a type error until it is listed.
+ */
+const THEME_KEY_SET = {
+  primary: true,
+  error: true,
+  warning: true,
+  success: true,
+  info: true,
+  text: true,
+  textMuted: true,
+  selectedListItemText: true,
+  background: true,
+  backgroundElement: true,
+  backgroundMenu: true,
+  border: true,
+  borderSubtle: true,
+  diffAdded: true,
+  diffRemoved: true,
+  diffAddedBg: true,
+  diffRemovedBg: true,
+  diffContextBg: true,
+  diffAddedLineNumberBg: true,
+  diffRemovedLineNumberBg: true,
+  markdownHeading: true,
+  markdownLink: true,
+  markdownLinkText: true,
+  markdownCode: true,
+  markdownBlockQuote: true,
+  markdownEmph: true,
+  markdownStrong: true,
+  markdownListItem: true,
+  syntaxComment: true,
+  syntaxKeyword: true,
+  syntaxFunction: true,
+  syntaxVariable: true,
+  syntaxString: true,
+  syntaxNumber: true,
+  syntaxType: true,
+  syntaxOperator: true,
+  syntaxPunctuation: true,
+} satisfies Record<keyof Theme, true>
+const THEME_KEYS = Object.keys(THEME_KEY_SET).filter(
+  (key): key is keyof Theme => key in THEME_KEY_SET,
+)
 
 describe("bundled theme catalog", () => {
   it.live("every bundled theme resolves both variants with no missing color", () =>

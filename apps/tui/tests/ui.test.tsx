@@ -686,14 +686,14 @@ describe("picker height rule", () => {
 })
 
 describe("key hints", () => {
-  const keys = [KeyHints.move, KeyHints.select, keyHint("d", "delete"), KeyHints.close]
+  const keys = [KeyHints.move, KeyHints.select, KeyHints.delete, KeyHints.close]
 
   test("one spelling: lowercase keys joined by one separator", () => {
-    expect(keyHintsLine(keys, 80)).toBe("↑↓ move · enter select · d delete · esc close")
+    expect(keyHintsLine(keys, 80)).toBe("↑↓ move · enter select · ctrl+x delete · esc close")
   })
 
   test("a narrow row drops the move hint first, then from the right, and keeps the way out", () => {
-    expect(keyHintsLine(keys, 36)).toBe("enter select · d delete · esc close")
+    expect(keyHintsLine(keys, 40)).toBe("enter select · ctrl+x delete · esc close")
     expect(keyHintsLine(keys, 26)).toBe("enter select · esc close")
     expect(keyHintsLine(keys, 4)).toBe("esc close")
   })

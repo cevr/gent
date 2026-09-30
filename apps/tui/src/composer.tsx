@@ -29,12 +29,11 @@ import {
 } from "./session"
 import { useTheme } from "./theme"
 import { useScopedKeyboard, useTerminalDimensions } from "./terminal"
-import { textWidth } from "./text-width-adapter"
+import { textWidth } from "./bun-adapter"
 import {
   expandFileRefs,
   formatError,
-  INLINE_MAX_BYTES,
-  INLINE_MAX_LINES,
+  inlineHead,
   lostRequest,
   randomId,
   truncate,
@@ -56,11 +55,13 @@ import { useExtensionUI } from "./extensions/host"
 import { type SessionIdentity, useClient, useRuntime } from "./client"
 import type {
   AutocompleteContribution,
-  AutocompleteItem,
   InteractionRendererComponent,
 } from "./extensions/client-facets.js"
 import { PromptRenderer } from "./interaction-renderers"
-import { runAutocompleteContributions } from "./extensions/loader-boundary"
+import {
+  runAutocompleteContributions,
+  type SourcedAutocompleteItem,
+} from "./extensions/loader-boundary"
 import { ghostCompletion } from "./autocomplete"
 import {
   decodePasteBytes,
@@ -78,6 +79,7 @@ import {
   type ApprovalResult,
   type GentClientRpcError,
   lineCount,
+  splitLines,
 } from "@gent/core/protocol"
 
 // ── shell execution ─────────────────────────────────────────────────────────
@@ -95,13 +97,13 @@ import {
  * Spill files live beside the rest of the gent data, not in a temp directory.
  * A run with its own `GENT_DATA_DIR` keeps them there, off the real home.
  */
-export const shellOutputDirectory = (home: string = homedir()): Effect.Effect<string> =>
-  Effect.map(dataPaths(home), ({ dataDir }) => `${dataDir}/shell-output`)
+const shellOutputDirectory = (): Effect.Effect<string> =>
+  Effect.map(dataPaths(homedir()), ({ dataDir }) => `${dataDir}/shell-output`)
 
 /**
- * Execute a shell command, capped at INLINE_MAX_LINES lines and INLINE_MAX_BYTES bytes.
- * The caller sees `truncated` when the cap drops output, and `savedPath` names
- * the file holding the whole of it.
+ * Execute a shell command. The inline copy keeps the whole lines that fit the
+ * `@file` cap (`inlineHead`). The caller sees `truncated` when the cap drops
+ * output, and `savedPath` names the file holding the whole of it.
  */
 export const executeShell = (command: string, cwd: string) =>
   Effect.gen(function* () {
@@ -109,25 +111,16 @@ export const executeShell = (command: string, cwd: string) =>
     let fullOutput = stdout
     if (stderr.length > 0) fullOutput = `${stdout}\n${stderr}`
 
-    const lines = fullOutput.split("\n")
-    const needsTruncation = lines.length > INLINE_MAX_LINES || fullOutput.length > INLINE_MAX_BYTES
+    const lines = splitLines(fullOutput)
+    const kept = inlineHead(lines)
 
-    if (!needsTruncation) {
+    if (kept.length === lines.length) {
       return { output: fullOutput.trim(), truncated: false, savedPath: Option.none<string>() }
     }
 
     const savedPath = yield* saveFullOutput(command, fullOutput)
-
-    let truncated: string = fullOutput
-    if (lines.length > INLINE_MAX_LINES) {
-      truncated = lines.slice(0, INLINE_MAX_LINES).join("\n")
-    }
-    if (truncated.length > INLINE_MAX_BYTES) {
-      truncated = truncated.slice(0, INLINE_MAX_BYTES)
-    }
-
     return {
-      output: truncated.trim(),
+      output: kept.join("\n").trim(),
       truncated: true,
       savedPath,
     }
@@ -186,11 +179,9 @@ interface StatusRowProps {
    * How many of `labels`, counted from the end, are laid out from the right
    * edge inward instead of after the left group.
    *
-   * The row had one left-to-right budget, so a label added anywhere earlier
-   * pushed the last ones off the end and they vanished with no indication —
-   * adding the cwd silently dropped the effort, context and cost. The reader
-   * glances at the right-hand labels without reading the row, so their
-   * position has to be fixed and the left group is what gives way.
+   * The reader glances at the right-hand labels (effort, context, cost)
+   * without reading the row, so their position is fixed and the left group
+   * is what gives way when the row runs out of columns.
    */
   rightLabels?: number
 }
@@ -330,9 +321,9 @@ interface AutocompletePopupProps {
    * Enter on the selected row. A slash command name completed this way runs;
    * see the composer controller for why the two keys differ.
    */
-  onSelect: (value: string) => void
+  onSelect: (pick: SourcedAutocompleteItem) => void
   /** Tab on the selected row: completes the text and stops there. */
-  onComplete: (value: string) => void
+  onComplete: (pick: SourcedAutocompleteItem) => void
   onClose: () => void
   /**
    * The completion the composer may offer as ghost text, or none.
@@ -373,7 +364,7 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
   // Fetch items from all contributions for this prefix, keyed on [prefix, filter]
   const [items] = createResource(
     (): readonly [string, string] => [props.state.type, props.state.filter],
-    ([prefix, filter]): Promise<AutocompleteItem[]> => {
+    ([prefix, filter]): Promise<SourcedAutocompleteItem[]> => {
       openOn(prefix)
       return runAutocompleteContributions(
         contributions(),
@@ -399,12 +390,12 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
    * It is cleared when the popup unmounts — a ghost outliving its popup would
    * offer a completion the composer can no longer perform.
    */
-  const [cursor, setCursor] = createSignal<Option.Option<AutocompleteItem>>(Option.none())
+  const [cursor, setCursor] = createSignal<Option.Option<SourcedAutocompleteItem>>(Option.none())
   createEffect(() => {
     const top = Option.fromNullishOr(visibleItems()[0])
     props.onGhostChange(
       ghostCompletion(
-        Option.orElse(cursor(), () => top),
+        Option.orElse(cursor(), () => top).pipe(Option.map((entry) => entry.item)),
         props.state.filter,
       ),
     )
@@ -448,9 +439,10 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
 
   const keys = [KeyHints.move, KeyHints.select, keyHint("tab", "complete"), KeyHints.close]
 
-  const rows = (): ReadonlyArray<SelectListRow<AutocompleteItem>> =>
-    visibleItems().map((item) =>
-      selectable(item, (isSelected, id) => {
+  const rows = (): ReadonlyArray<SelectListRow<SourcedAutocompleteItem>> =>
+    visibleItems().map((entry) =>
+      selectable(entry, (isSelected, id) => {
+        const item = entry.item
         const textColor = () => {
           if (isSelected()) return theme.primary
           return theme.text
@@ -517,7 +509,7 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
         )}
         open={hasItems()}
         rows={rows}
-        rowKey={(item) => item.id}
+        rowKey={(entry) => entry.item.id}
         sticky={() => Option.some(0)}
         api={(api) => (list = Option.some(api))}
         empty={emptyRow}
@@ -529,11 +521,11 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
           if (event.name !== "tab") return false
           Option.match(selected, {
             onNone: () => {},
-            onSome: (item) => props.onComplete(item.id),
+            onSome: (entry) => props.onComplete(entry),
           })
           return true
         }}
-        onSelect={(item) => props.onSelect(item.id)}
+        onSelect={(entry) => props.onSelect(entry)}
         onDismiss={props.onClose}
       />
     </PickerFrame>
@@ -549,7 +541,11 @@ export function isLargePaste(inserted: string): boolean {
   return lineCount(inserted) >= PASTE_THRESHOLD_LINES || inserted.length >= PASTE_THRESHOLD_LENGTH
 }
 
-/** Per-controller: each composer owns its placeholder ids and store. */
+/**
+ * Per-controller: each composer owns its placeholder ids and store. A paste
+ * stays stored while the textarea's undo history can bring its chip back; the
+ * store clears only with that history, when the draft is reset.
+ */
 export function createPasteManager() {
   let idCounter = 0
   const store = new Map<string, string>()
@@ -564,14 +560,23 @@ export function createPasteManager() {
       return `[Pasted ${text.length} chars #${id}]`
     },
     expandPlaceholders(text: string): string {
-      return text.replace(/\[Pasted \d+ (?:lines|chars) #(\d+)\]/g, (match, id) => {
-        const content = Option.fromNullishOr(store.get(id))
-        if (Option.isSome(content)) {
-          store.delete(id)
-          return content.value
+      return text.replace(/\[Pasted \d+ (?:lines|chars) #(\d+)\]/g, (match, id) =>
+        Option.getOrElse(Option.fromNullishOr(store.get(id)), () => match),
+      )
+    },
+    /**
+     * The chip that string index `index` stands inside or at the end of, and
+     * that still holds its stored text.
+     */
+    chipAt(text: string, index: number): Option.Option<{ start: number; end: number }> {
+      for (const match of text.matchAll(/\[Pasted \d+ (?:lines|chars) #(\d+)\]/g)) {
+        const start = match.index
+        const end = start + match[0].length
+        if (start < index && index <= end && store.has(match[1] ?? "")) {
+          return Option.some({ start, end })
         }
-        return match
-      })
+      }
+      return Option.none()
     },
     clear() {
       store.clear()
@@ -597,9 +602,9 @@ interface ComposerController {
   readonly handleSubmitFromTextarea: () => void
   readonly resolveInteraction: (result: ApprovalResult) => void
   /** Enter on a row: completes, and dispatches when the row names a command. */
-  readonly handleAutocompleteSelect: (value: string) => void
+  readonly handleAutocompleteSelect: (pick: SourcedAutocompleteItem) => void
   /** Tab on a row: completes only, never dispatches. */
-  readonly handleAutocompleteComplete: (value: string) => void
+  readonly handleAutocompleteComplete: (pick: SourcedAutocompleteItem) => void
   readonly handleAutocompleteClose: () => void
 }
 
@@ -659,7 +664,9 @@ function useComposerController(): ComposerController {
   }
 
   const clearInput = () => {
+    // setText drops the undo history, so no chip can come back for its paste.
     if (Option.isSome(inputRef)) inputRef.value.setText("")
+    paste.clear()
     resolvedTokens.length = 0
     sc.onComposerInteraction(ComposerInteractionEvent.cases.ClearDraft.make({}))
   }
@@ -687,23 +694,17 @@ function useComposerController(): ComposerController {
    * the caret back so the argument can be typed. A tab that dispatched would
    * leave no way to reach an argument at all.
    */
-  const completeAutocomplete = (value: string, dispatch: boolean) => {
+  const completeAutocomplete = (pick: SourcedAutocompleteItem, dispatch: boolean) => {
     const state = autocompleteOption()
     if (Option.isNone(state) || Option.isNone(inputRef)) return
 
-    const contribution = Option.fromNullishOr(
-      extensionUI.autocompleteItems().find((c) => c.prefix === state.value.type),
-    )
-    // Notify contribution of selection (frecency tracking, etc.)
-    if (Option.isSome(contribution)) {
-      const onSelect = Option.fromNullishOr(contribution.value.onSelect)
-      if (Option.isSome(onSelect)) onSelect.value(value, state.value.filter)
-    }
+    // The row's own source records the pick (frecency) and formats its insertion.
+    const value = pick.item.id
+    const onSelect = Option.fromNullishOr(pick.source.onSelect)
+    if (Option.isSome(onSelect)) onSelect.value(value, state.value.filter)
     const beforeTrigger = inputRef.value.plainText.slice(0, state.value.triggerPos)
     let insertion = `${state.value.type}${value} `
-    const formatInsertion = Option.flatMap(contribution, (c) =>
-      Option.fromNullishOr(c.formatInsertion),
-    )
+    const formatInsertion = Option.fromNullishOr(pick.source.formatInsertion)
     if (Option.isSome(formatInsertion)) insertion = formatInsertion.value(value)
 
     // Completing a slash command name runs it, rather than parking it in the
@@ -749,12 +750,12 @@ function useComposerController(): ComposerController {
     focusTextarea()
   }
 
-  const handleAutocompleteSelect = (value: string) => {
-    completeAutocomplete(value, true)
+  const handleAutocompleteSelect = (pick: SourcedAutocompleteItem) => {
+    completeAutocomplete(pick, true)
   }
 
-  const handleAutocompleteComplete = (value: string) => {
-    completeAutocomplete(value, false)
+  const handleAutocompleteComplete = (pick: SourcedAutocompleteItem) => {
+    completeAutocomplete(pick, false)
   }
 
   const handleAutocompleteClose = () => {
@@ -767,13 +768,50 @@ function useComposerController(): ComposerController {
    * the pasted text, and the textarea's own insert puts the placeholder where
    * the paste would have gone: at the caret, over any selection. Reading the
    * paste back from the changed draft cannot tell where it landed.
+   *
+   * The paste is where raw terminal bytes enter the draft. A terminal that
+   * sends Enter as CR pastes CR line breaks, so they become `\n` here: the
+   * chip counts the lines, the model reads them, and ↑ recalls text the
+   * textarea holds unchanged.
    */
   const handlePaste = (event: PasteEvent) => {
     if (Option.isNone(inputRef)) return
-    const pasted = stripAnsiSequences(decodePasteBytes(event.bytes))
+    const pasted = stripAnsiSequences(decodePasteBytes(event.bytes)).replace(/\r\n?/g, "\n")
     if (!isLargePaste(pasted)) return
     event.preventDefault()
     inputRef.value.insertText(paste.createPlaceholder(pasted))
+  }
+
+  /**
+   * A paste chip is one unit. Backspace or a word delete at its end or from
+   * inside it removes the whole chip in one undo step; editing it a character
+   * at a time would send the fragment and lose the paste. The stored text
+   * stays, so an undo gives back a chip that still sends its paste.
+   *
+   * The textarea counts its caret in its own units, which a wide or
+   * multi-byte character makes differ from string indices. The text before
+   * the caret gives the caret's string index. A chip is all ASCII, one unit
+   * per character in both counts, so the caret moves back by the part of the
+   * chip before it.
+   */
+  const removeChipAtCaret = (event: {
+    readonly name?: string
+    readonly ctrl?: boolean
+    readonly preventDefault: () => void
+  }): boolean => {
+    const deletesBack = event.name === "backspace" || (event.name === "w" && event.ctrl === true)
+    if (!deletesBack || Option.isNone(inputRef) || inputRef.value.hasSelection()) return false
+    const value = inputRef.value.plainText
+    const caret = inputRef.value.cursorOffset
+    const caretIndex = inputRef.value.getTextRange(0, caret).length
+    const chip = paste.chipAt(value, caretIndex)
+    if (Option.isNone(chip)) return false
+    event.preventDefault()
+    const next = value.slice(0, chip.value.start) + value.slice(chip.value.end)
+    inputRef.value.replaceText(next)
+    inputRef.value.cursorOffset = caret - (caretIndex - chip.value.start)
+    sc.onComposerInteraction(ComposerInteractionEvent.cases.DraftChanged.make({ text: next }))
+    return true
   }
 
   const handleContentChange = () => {
@@ -1055,11 +1093,10 @@ function useComposerController(): ComposerController {
     const keyName = Option.getOrElse(Option.fromNullishOr(event.name), () => "")
     // Enter is deliberately absent from this list. A popup holding rows binds
     // its keys after this handler and consumes enter before the composer sees
-    // it, so an enter arriving here is one the popup already declined for want
-    // of a row to select. Claiming it anyway is what swallowed `/xyz`: the
-    // popup opened on zero rows, so nothing selected the key and nothing
-    // submitted the draft. The navigation keys stay claimed — while a popup is
-    // open the cursor is its business, rows or no rows.
+    // it, so an enter arriving here is one the popup declined for want of a
+    // row to select, and it submits the draft (`/xyz` on zero rows). The
+    // navigation keys stay claimed: while a popup is open the cursor is its
+    // business, rows or no rows.
     if (["up", "down", "tab"].includes(keyName)) {
       return Option.some(false)
     }
@@ -1195,6 +1232,7 @@ function useComposerController(): ComposerController {
     super?: boolean
     preventDefault: () => void
   }) => {
+    if (removeChipAtCaret(event)) return
     const isEnterKey = event.name === "return" || event.name === "linefeed"
     if (!isEnterKey) return
 
@@ -1272,8 +1310,8 @@ function useComposerController(): ComposerController {
 interface ComposerContextValue {
   // eslint-disable-next-line effect/noNullish -- AutocompletePopup uses null for its closed Solid state.
   autocomplete: Accessor<AutocompleteState | null>
-  handleAutocompleteSelect: (value: string) => void
-  handleAutocompleteComplete: (value: string) => void
+  handleAutocompleteSelect: (pick: SourcedAutocompleteItem) => void
+  handleAutocompleteComplete: (pick: SourcedAutocompleteItem) => void
   handleAutocompleteClose: () => void
   setGhost: (ghost: Option.Option<string>) => void
 }

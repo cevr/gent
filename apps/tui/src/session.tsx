@@ -12,7 +12,6 @@ import {
   untrack,
 } from "solid-js"
 import {
-  type Array as Arr,
   Clock,
   Deferred,
   Duration,
@@ -24,7 +23,6 @@ import {
   Option,
   Path,
   Predicate,
-  Random,
   Schedule,
   Schema,
   Semaphore,
@@ -60,6 +58,7 @@ import {
 } from "@gent/core/protocol"
 import {
   formatConnectionIssue,
+  extractUnknownMessage,
   formatError,
   formatTokens,
   type PathPlace,
@@ -106,7 +105,9 @@ import {
   type AssistantSegment,
   currentMillis,
   emptyTurnSteps,
+  isMessageItem,
   type Message,
+  messageToolCalls,
   type RetryOutcome,
   type SessionEvent,
   type SessionItem,
@@ -716,14 +717,13 @@ interface PromptSearchOverlayState {
 type SessionOverlayState =
   | { readonly _tag: "none" }
   | { readonly _tag: "fork"; readonly messages: readonly DurableMessage[] }
-  | { readonly _tag: "mermaid" }
   | { readonly _tag: "auth"; readonly enforceAuth: boolean }
   | { readonly _tag: "model" }
   | { readonly _tag: "reasoning" }
   /**
    * The branch picker. The boot flow is the only thing that opens it, so
-   * escape quits: a reader who never chose a branch has nowhere to fall back
-   * to.
+   * escape does nothing: a reader who never chose a branch has nowhere to
+   * fall back to, and ctrl+c still quits.
    */
   | { readonly _tag: "branches"; readonly branches: readonly Branch[] }
   | PromptSearchOverlayState
@@ -776,7 +776,6 @@ const SessionUiEvent = Schema.TaggedUnion({
   ToggleTranscript: {},
   ClearDisplay: {},
   OpenFork: { messages: Schema.Array(DurableMessage) },
-  OpenMermaid: {},
   OpenAuth: { enforceAuth: Schema.Boolean },
   OpenSettingsPicker: { picker: Schema.Literals(["model", "reasoning"]) },
   OpenBranches: { branches: Schema.Array(Branch) },
@@ -803,7 +802,6 @@ interface SessionUiTransitionResult {
  */
 const SLOT_OPENERS: ReadonlySet<SessionUiEvent["_tag"]> = new Set([
   "OpenFork",
-  "OpenMermaid",
   "OpenAuth",
   "OpenSettingsPicker",
   "OpenBranches",
@@ -869,13 +867,6 @@ function transitionSlot(state: SessionUiState, event: SessionUiEvent): SessionUi
         state: {
           ...state,
           overlay: { _tag: "fork", messages: event.messages },
-        },
-        effects: [],
-      }),
-      OpenMermaid: (): SessionUiTransitionResult => ({
-        state: {
-          ...state,
-          overlay: { _tag: "mermaid" },
         },
         effects: [],
       }),
@@ -954,7 +945,8 @@ type AuthGateState = "checking" | "open" | "closed" | "error"
 
 interface SessionControllerState {
   readonly authGate: AuthGateState
-  readonly validatedAgent?: string
+  /** The agent the last auth check answered for; None before one answers. */
+  readonly validatedAgent: Option.Option<string>
   readonly authCheckVersion: number
   readonly queue: QueueState
   readonly elapsed: number
@@ -968,6 +960,7 @@ const emptyQueueState = (): QueueState => ({ steering: [], followUp: [] })
  */
 export const initialSessionControllerState = (): SessionControllerState => ({
   authGate: "closed",
+  validatedAgent: Option.none(),
   authCheckVersion: 0,
   queue: emptyQueueState(),
   elapsed: 0,
@@ -990,7 +983,7 @@ export const completeAuthCheck = (
   if (input.version !== state.authCheckVersion) return state
   let authGate: AuthGateState = "closed"
   if (input.missing) authGate = "open"
-  return { ...state, validatedAgent: input.agent, authGate }
+  return { ...state, validatedAgent: Option.some(input.agent), authGate }
 }
 
 export const failAuthCheck = (
@@ -1000,19 +993,18 @@ export const failAuthCheck = (
   if (version !== state.authCheckVersion) return state
   return {
     ...state,
-    validatedAgent: Option.getOrUndefined(Option.none()),
+    validatedAgent: Option.none(),
     authGate: "error",
   }
 }
 
 export const closeAuthGateState = (
   state: SessionControllerState,
-  // eslint-disable-next-line effect/noNullish -- auth gate closure may omit an agent override.
-  agent: string | undefined,
+  agent: Option.Option<string>,
 ): SessionControllerState => ({
   ...state,
   authCheckVersion: state.authCheckVersion + 1,
-  validatedAgent: Option.getOrUndefined(Option.fromNullishOr(agent)),
+  validatedAgent: agent,
   authGate: "closed",
 })
 
@@ -1035,51 +1027,16 @@ const setControllerElapsed = (
   elapsed,
 })
 
-// eslint-disable-next-line effect/noNullish -- queue projection omits text when the queue is empty.
-export const queuedDraftText = (queue: QueueState): string | undefined => {
+/** The queued prompts as one draft; none when the queue is empty. */
+export const queuedDraftText = (queue: QueueState): Option.Option<string> => {
   const all = [...queue.steering, ...queue.followUp]
-  if (all.length === 0) return Option.getOrUndefined(Option.none())
-  return all.map((entry) => entry.content).join("\n")
+  if (all.length === 0) return Option.none()
+  return Option.some(all.map((entry) => entry.content).join("\n"))
 }
 
 const isBlockingAuthGate = (state: AuthGateState): boolean => state === "open" || state === "error"
 
-// eslint-disable-next-line effect/noUnknownParameters -- auth failures cross the Effect and UI boundary.
-const formatAuthGateError = (error: unknown): string => {
-  if (error instanceof Error) return error.message
-  if (Predicate.isObject(error) && "message" in error) {
-    const message = error["message"]
-    if (Predicate.isString(message)) return message
-  }
-  return String(error)
-}
-
 // ── controller activity ─────────────────────────────────────────────────────
-
-const THINKING_WORDS = [
-  "thinking",
-  "pondering",
-  "reasoning",
-  "analyzing",
-  "processing",
-  "evaluating",
-  "reflecting",
-  "deliberating",
-  "considering",
-  "contemplating",
-  "mulling",
-  "deducing",
-  "inferring",
-  "examining",
-  "synthesizing",
-  "assessing",
-  "ruminating",
-] satisfies Arr.NonEmptyReadonlyArray<string>
-
-const pickThinkingWord = (random: number): string => {
-  const word = THINKING_WORDS[Math.floor(random * THINKING_WORDS.length)]
-  return Option.getOrElse(Option.fromNullishOr(word), () => THINKING_WORDS[0])
-}
 
 // ── prompt history ──────────────────────────────────────────────────────────
 
@@ -1199,11 +1156,20 @@ type PromptHistoryStore = {
   historyIndex: number
   savedEntry: Option.Option<string>
   loaded: boolean
+  /** Counts the adds; only the newest add's write sets the merged list. */
+  adds: number
 }
 
 function makePromptHistoryStore(): PromptHistoryStore {
   const [entries, setEntries] = createSignal<string[]>([])
-  return { entries, setEntries, historyIndex: -1, savedEntry: Option.none(), loaded: false }
+  return {
+    entries,
+    setEntries,
+    historyIndex: -1,
+    savedEntry: Option.none(),
+    loaded: false,
+    adds: 0,
+  }
 }
 
 export function usePromptHistory(): PromptHistory {
@@ -1236,11 +1202,19 @@ export function usePromptHistory(): PromptHistory {
       if (trimmed.length === 0) return
 
       // The local fold answers the next up-arrow at once; the merged list
-      // from disk replaces it when the write lands.
+      // from disk replaces it when the write lands. The writes run in order,
+      // so the newest add's write holds every prompt; an older one that lands
+      // after a newer add would drop that add, and is not applied.
       store.setEntries((prev) => foldPrompt(prev, trimmed))
+      store.adds += 1
+      const add = store.adds
       cast(
         recordPrompt(workspace.home, trimmed).pipe(
-          Effect.tap((merged) => Effect.sync(() => store.setEntries(merged))),
+          Effect.tap((merged) =>
+            Effect.sync(() => {
+              if (add === store.adds) store.setEntries(merged)
+            }),
+          ),
         ),
       )
       store.historyIndex = -1
@@ -1667,6 +1641,7 @@ type SessionFeedClient = Pick<
   | "applySessionSnapshot"
   | "applySessionEvent"
   | "applyBufferedSessionEvent"
+  | "finishReplay"
   | "resetSessionEvents"
   | "pathPlace"
 >
@@ -1676,17 +1651,12 @@ type SessionFeedStore = {
   events: SessionEvent[]
 }
 
-const isMessage = Predicate.or(
-  Predicate.isTagged("regular-message"),
-  Predicate.isTagged("interjection-message"),
-)
-
 /** Transcript order: by time; a message before an event row at the same time; event rows by seq. */
 const compareSessionItems = (a: SessionItem, b: SessionItem): number => {
   if (a.createdAt !== b.createdAt) return a.createdAt - b.createdAt
-  if (!isMessage(a) && !isMessage(b)) return a.seq - b.seq
+  if (!isMessageItem(a) && !isMessageItem(b)) return a.seq - b.seq
   if (a._tag === b._tag) return 0
-  if (isMessage(a)) return -1
+  if (isMessageItem(a)) return -1
   return 1
 }
 
@@ -1776,11 +1746,10 @@ const buildMessages = (msgs: readonly ProjectedMessage[]): Message[] => {
   const filteredMsgs = msgs.filter((m) => m.role !== "tool")
 
   return filteredMsgs.map((m) => {
-    const toolCalls = m.toolInteractions.map(toToolCall)
-    let toolCallsOption = Option.none<typeof toolCalls>()
-    if (toolCalls.length > 0) toolCallsOption = Option.some(toolCalls)
+    // Only an assistant message calls tools, and its segments name every call it made.
     let segments = Option.none<AssistantSegment[]>()
-    if (m.role === "assistant") segments = Option.some(buildSegments(m.segments, toolCalls))
+    if (m.role === "assistant")
+      segments = Option.some(buildSegments(m.segments, m.toolInteractions.map(toToolCall)))
     if (m._tag === "interjection")
       return {
         _tag: "interjection-message",
@@ -1790,7 +1759,6 @@ const buildMessages = (msgs: readonly ProjectedMessage[]): Message[] => {
         reasoning: messagePartsReasoning(m.parts),
         images: messagePartsImages(m.parts),
         createdAt: m.createdAt.getTime(),
-        toolCalls: Option.getOrUndefined(toolCallsOption),
         segments: Option.getOrUndefined(segments),
         metadata: m.metadata,
       }
@@ -1802,7 +1770,6 @@ const buildMessages = (msgs: readonly ProjectedMessage[]): Message[] => {
       reasoning: messagePartsReasoning(m.parts),
       images: messagePartsImages(m.parts),
       createdAt: m.createdAt.getTime(),
-      toolCalls: Option.getOrUndefined(toolCallsOption),
       segments: Option.getOrUndefined(segments),
       metadata: m.metadata,
     }
@@ -1858,8 +1825,7 @@ const dateAnswerFromRetry = (
     produce((draft) => {
       const answer = Option.fromNullishOr(draft.messages.find((message) => message.id === id))
       if (Option.isNone(answer) || answer.value.content !== "") return
-      const calls = Option.fromNullishOr(answer.value.toolCalls)
-      if (Option.isSome(calls) && calls.value.length > 0) return
+      if (messageToolCalls(answer.value).length > 0) return
       answer.value.createdAt = requestAt
     }),
   )
@@ -1921,9 +1887,7 @@ const ensureAssistantMessage = (
         reasoning: "",
         images: [],
         createdAt,
-        toolCalls: Option.getOrUndefined(Option.none<ToolCall[]>()),
         segments: [{ _tag: "text", content }],
-        metadata: Option.getOrUndefined(Option.none<Message["metadata"]>()),
       })
     }),
   )
@@ -1947,30 +1911,23 @@ const updateToolMessage = (
 
 /** Find a tool call by id among direct calls and cell-admitted operations. */
 const locateToolCall = (
-  calls: Option.Option<ReadonlyArray<ToolCall>>,
+  calls: ReadonlyArray<ToolCall>,
   toolCallId: string,
 ): Option.Option<ToolCall> => {
-  if (Option.isNone(calls)) return Option.none()
-  for (const call of calls.value) {
+  for (const call of calls) {
     if (call.id === toolCallId) return Option.some(call)
-    const nested = locateToolCall(Option.fromNullishOr(call.operations), toolCallId)
+    const nested = locateToolCall(
+      Option.getOrElse(Option.fromNullishOr(call.operations), (): ToolCall[] => []),
+      toolCallId,
+    )
     if (Option.isSome(nested)) return nested
   }
   return Option.none()
 }
 
-/** The tool calls a message shows inline, in segment order. */
-const segmentToolCalls = (message: Message): Option.Option<ReadonlyArray<ToolCall>> =>
-  Option.map(Option.fromNullishOr(message.segments), (segments) =>
-    segments.flatMap((segment) => {
-      if (segment._tag === "tool-call") return [segment.toolCall]
-      return []
-    }),
-  )
-
 /** Attach a cell-admitted call under its parent instead of the transcript top level. */
 const attachOperation = (
-  calls: Option.Option<ReadonlyArray<ToolCall>>,
+  calls: ReadonlyArray<ToolCall>,
   parentToolCallId: string,
   operation: ToolCall,
 ) => {
@@ -2020,23 +1977,14 @@ const handleToolCallResult = (
   setRunningCalls((calls) => endCall(calls, toolEvent.toolCallId))
   updateToolMessage(
     setStore,
-    (message) => {
-      applyToolCallResult(
-        locateToolCall(Option.fromNullishOr(message.toolCalls), toolEvent.toolCallId),
-        status,
-        toolEvent,
-        completedAt,
-      )
-      // The same call also renders inline as a segment.
-      applyToolCallResult(
-        locateToolCall(segmentToolCalls(message), toolEvent.toolCallId),
-        status,
-        toolEvent,
-        completedAt,
-      )
-    },
     (message) =>
-      Option.isSome(locateToolCall(Option.fromNullishOr(message.toolCalls), toolEvent.toolCallId)),
+      applyToolCallResult(
+        locateToolCall(messageToolCalls(message), toolEvent.toolCallId),
+        status,
+        toolEvent,
+        completedAt,
+      ),
+    (message) => Option.isSome(locateToolCall(messageToolCalls(message), toolEvent.toolCallId)),
   )
 }
 
@@ -2123,8 +2071,6 @@ const startToolCall = (
     toolName: event.toolName,
     status: "running",
     input: event.input,
-    summary: Option.getOrUndefined(Option.none<string>()),
-    output: Option.getOrUndefined(Option.none<string>()),
     startedAt,
   } satisfies ToolCall
   const parentToolCallId = Option.fromUndefinedOr(event.parentToolCallId)
@@ -2132,25 +2078,17 @@ const startToolCall = (
     setStore,
     (message) => {
       if (Option.isSome(parentToolCallId)) {
-        attachOperation(Option.fromNullishOr(message.toolCalls), parentToolCallId.value, toolCall)
-        attachOperation(segmentToolCalls(message), parentToolCallId.value, { ...toolCall })
+        attachOperation(messageToolCalls(message), parentToolCallId.value, toolCall)
         return
       }
-      const existing = Option.fromNullishOr(message.toolCalls)
       // Cold interaction resume starts the same call again, not a new call.
-      if (Option.isSome(existing) && existing.value.some((call) => call.id === event.toolCallId))
-        return
-      if (Option.isNone(existing)) message.toolCalls = []
-      message.toolCalls?.push(toolCall)
-      // Also push to segments for interleaved rendering.
+      if (messageToolCalls(message).some((call) => call.id === event.toolCallId)) return
       if (Option.isNone(Option.fromNullishOr(message.segments))) message.segments = []
       message.segments?.push({ _tag: "tool-call", toolCall })
     },
     (message) => {
       if (Option.isSome(parentToolCallId)) {
-        return Option.isSome(
-          locateToolCall(Option.fromNullishOr(message.toolCalls), parentToolCallId.value),
-        )
+        return Option.isSome(locateToolCall(messageToolCalls(message), parentToolCallId.value))
       }
       // A late receipt names the message it belongs to; it must not land on a newer one.
       if (Predicate.isNotUndefined(event.assistantMessageId))
@@ -2166,7 +2104,6 @@ export function useSessionFeed(
   sessionId: () => SessionId,
   branchId: () => BranchId,
   client: SessionFeedClient,
-  cast: <A, E>(effect: Effect.Effect<A, E, never>) => void,
   callbacks: SessionFeedCallbacks,
   /** Read at send time, so the owner decides whether the prompt is still unsent. */
   takeInitialPrompt?: () => Option.Option<StartupPrompt>,
@@ -2338,11 +2275,13 @@ export function useSessionFeed(
       seq: eventSeq++,
     })
   }
-  const lastSeenEventIdByKey = new Map<string, number>()
+  // The session view mounts keyed on the identity (app.tsx), so one feed
+  // serves one session and branch: a switch remounts it, and the cleanup
+  // interrupts this feed's fiber. A reactivation of the same identity (the
+  // client's identity went none and came back) resumes from the cursor.
+  let lastSeenEventId = 0
   let processedEnvelopeIds = new Set<EventEnvelope["id"]>()
-
-  // Track the active key to guard against stale async writes and reset prompt state
-  let currentKey = Option.none<string>()
+  let activated = false
   const takeInitialPromptValue = Option.fromNullishOr(takeInitialPrompt)
   const canSendPromptValue = Option.fromNullishOr(canSendPrompt)
 
@@ -2426,10 +2365,10 @@ export function useSessionFeed(
     on([activeSessionKey, feedKey], ([active, key]) => {
       if (Option.isNone(active) || active.value !== key) return
 
-      // Reset all projection state on identity change
-      if (Option.isNone(currentKey) || currentKey.value !== key) {
+      // The first activation clears what the client held for another session.
+      if (!activated) {
         resetProjection()
-        currentKey = Option.some(key)
+        activated = true
       }
 
       const branch = branchId()
@@ -2454,19 +2393,13 @@ export function useSessionFeed(
                 lastEventId: snapshot.lastEventId,
               })
 
-              const snapshotApplied = yield* Effect.sync(() => {
-                if (Option.isNone(currentKey) || currentKey.value !== key) return false
+              yield* Effect.sync(() => {
                 client.applySessionSnapshot(snapshot)
                 callbacks.onQueueSnapshot(snapshot.runtime.queue)
                 setStore("messages", buildMessages(snapshot.messages))
-                return true
               })
-              if (!snapshotApplied) return yield* Effect.never
 
-              const after = Option.getOrElse(
-                Option.fromNullishOr(lastSeenEventIdByKey.get(key)),
-                () => 0,
-              )
+              const after = lastSeenEventId
 
               const eventStream = client.client.session.events({
                 sessionId: session,
@@ -2492,8 +2425,7 @@ export function useSessionFeed(
                     if (envelope.event._tag === "StreamSynchronized") {
                       yield* Deferred.succeed(eventsServed, void 0)
                     }
-                    if (Option.isNone(currentKey) || currentKey.value !== key) return
-                    client.setConnectionIssue(Option.getOrNull(Option.none()))
+                    client.setConnectionIssue(Option.none())
                     yield* processEnvelope(
                       envelope,
                       branch,
@@ -2514,8 +2446,7 @@ export function useSessionFeed(
                     Deferred.succeed(runtimeServed, void 0).pipe(
                       Effect.andThen(
                         Effect.sync(() => {
-                          if (Option.isNone(currentKey) || currentKey.value !== key) return
-                          client.setConnectionIssue(Option.getOrNull(Option.none()))
+                          client.setConnectionIssue(Option.none())
                           // The turn's own end, when it arrives, says how a stopped retry ended.
                           if (next._tag === "Idle") settleRetryingEvents(setStore, "stopped")
                           client.applySessionRuntime({
@@ -2531,10 +2462,7 @@ export function useSessionFeed(
                   Effect.forkScoped,
                 )
 
-              yield* Effect.sync(() => {
-                if (Option.isNone(currentKey) || currentKey.value !== key) return
-                setStreamReadyKey(Option.some(key))
-              })
+              yield* Effect.sync(() => setStreamReadyKey(Option.some(key)))
 
               return yield* Effect.raceFirst(Fiber.join(eventsFiber), Fiber.join(runtimeFiber))
             }).pipe(
@@ -2547,12 +2475,11 @@ export function useSessionFeed(
             label: "feed.events",
             log: client.log,
             onError: (err) => {
-              if (Option.isNone(currentKey) || currentKey.value !== key) return
               client.log.error("feed.error", {
                 key,
                 error: formatConnectionIssue(err),
               })
-              client.setConnectionIssue(formatConnectionIssue(err))
+              client.setConnectionIssue(Option.some(formatConnectionIssue(err)))
             },
             waitForRetry: () => client.waitForTransportReady,
           },
@@ -2573,16 +2500,11 @@ export function useSessionFeed(
     snapshotLastEventId: Option.Option<number>,
   ): Effect.Effect<void> =>
     Effect.gen(function* () {
-      // Drop events if identity changed
-      if (Option.isNone(currentKey) || currentKey.value !== key) return
       if (envelope.event._tag === "StreamSynchronized") {
         // Replay is complete; later envelopes are live. The marker shares the cursor id
         // with the last replayed event, so it must not enter the duplicate set.
-        const lastSeen = Option.getOrElse(
-          Option.fromNullishOr(lastSeenEventIdByKey.get(key)),
-          () => 0,
-        )
-        lastSeenEventIdByKey.set(key, Math.max(lastSeen, envelope.event.lastEventId))
+        lastSeenEventId = Math.max(lastSeenEventId, envelope.event.lastEventId)
+        client.finishReplay()
         client.log.info("feed.stream.synchronized", {
           key,
           lastEventId: envelope.event.lastEventId,
@@ -2594,11 +2516,7 @@ export function useSessionFeed(
         return
       }
       processedEnvelopeIds.add(envelope.id)
-      const lastSeen = Option.getOrElse(
-        Option.fromNullishOr(lastSeenEventIdByKey.get(key)),
-        () => 0,
-      )
-      lastSeenEventIdByKey.set(key, Math.max(lastSeen, envelope.id))
+      lastSeenEventId = Math.max(lastSeenEventId, envelope.id)
       if (Option.isSome(snapshotLastEventId) && envelope.id <= snapshotLastEventId.value) {
         // Historical navigation must not replace the branch selected for this snapshot.
         if (envelope.event._tag === "BranchSwitched") return
@@ -2638,7 +2556,6 @@ export function useSessionFeed(
   ): Effect.Effect<void> =>
     Effect.gen(function* () {
       const event = envelope.event
-      if (Option.isNone(currentKey) || currentKey.value !== key) return
       const live = pass === "live"
       if (live) client.log.debug("feed.event", { key, tag: event._tag })
       // A replayed row keeps the time it happened; a live row takes the clock.
@@ -2780,7 +2697,7 @@ export function createSessionController(props: {
     // about to leave the screen. Printed after the renderer is destroyed so it
     // lands in the terminal the reader keeps, not in the alternate screen.
     // An in-memory store ends with the process, so it has nothing to resume.
-    const leaving = Option.fromNullishOr(client.session()).pipe(Option.filter(() => env.resumable))
+    const leaving = client.session().pipe(Option.filter(() => env.resumable))
     shutdownLog("exit.renderer-destroy")
     renderer.destroy()
     Option.match(leaving, {
@@ -2834,9 +2751,7 @@ export function createSessionController(props: {
 
   const currentSessionName = (): string =>
     Option.getOrElse(
-      Option.flatMap(Option.fromNullishOr(client.session()), (value) =>
-        Option.fromNullishOr(value.name),
-      ),
+      Option.flatMap(client.session(), (value) => Option.fromNullishOr(value.name)),
       () => "Unnamed",
     )
 
@@ -2875,7 +2790,7 @@ export function createSessionController(props: {
       ([agentName, pickerOpen]) => {
         if (props.debugMode) return
         if (pickerOpen) return
-        Option.match(Option.fromNullishOr(agentName), {
+        Option.match(agentName, {
           onNone: () => {},
           onSome: (resolvedAgent) => {
             const version = controllerState().authCheckVersion + 1
@@ -2899,7 +2814,9 @@ export function createSessionController(props: {
                   Effect.catchEager((error) =>
                     Effect.sync(() => {
                       updateControllerState((state) => failAuthCheck(state, version))
-                      client.setError(`Authentication check failed: ${formatAuthGateError(error)}`)
+                      client.setError(
+                        `Authentication check failed: ${extractUnknownMessage(error)}`,
+                      )
                     }),
                   ),
                 ),
@@ -2912,7 +2829,8 @@ export function createSessionController(props: {
   )
 
   const authGatePending = () =>
-    !props.debugMode && (authGateState() !== "closed" || validatedAgent() !== client.agent())
+    !props.debugMode &&
+    (authGateState() !== "closed" || !Equal.equals(validatedAgent(), client.agent()))
 
   const [composerState, setComposerState] = createSignal<ComposerState>(ComposerState.idle())
   const drafts = useComposerDrafts()
@@ -2967,9 +2885,9 @@ export function createSessionController(props: {
   onCleanup(() => ext.setPaneOwner(Option.none()))
 
   ext.setActivityProvider(() => {
-    const session = Option.fromNullishOr(client.session())
+    const session = client.session()
     const sessionId = Option.getOrUndefined(Option.map(session, (value) => value.sessionId))
-    if (client.isLoading() || client.isReconnecting()) return { sessionId, state: "unknown" }
+    if (client.isReconnecting()) return { sessionId, state: "unknown" }
     if (isBlockingAuthGate(authGateState()) || composerState()._tag === "interaction") {
       return { sessionId, state: "blocked" }
     }
@@ -3027,7 +2945,6 @@ export function createSessionController(props: {
     () => props.sessionId,
     () => props.branchId,
     client,
-    cast,
     {
       onInteraction,
       onInteractionDismissed: (requestId) => {
@@ -3153,25 +3070,7 @@ export function createSessionController(props: {
     })
   })
 
-  let thinkingWord = "thinking"
-  createEffect(
-    on(
-      () => activity().phase,
-      (phase) => {
-        if (phase !== "idle") {
-          client.runtime.cast(
-            Effect.gen(function* () {
-              const wordRandom = yield* Random.next
-              yield* Effect.sync(() => {
-                thinkingWord = pickThinkingWord(wordRandom)
-              })
-            }),
-          )
-        }
-      },
-    ),
-  )
-
+  // The status row reads the label while idle, the activity row while a tool runs.
   const phaseLabel = createMemo(() => {
     const nextActivity = activity()
     switch (nextActivity.phase) {
@@ -3179,20 +3078,17 @@ export function createSessionController(props: {
         if (Option.exists(client.turnsStarted(), (turns) => turns > 0)) return "idle"
         return "ready"
       case "thinking":
-        return thinkingWord
+        return "thinking"
       case "tool":
         return nextActivity.toolInfo
     }
   })
 
   const openForkPicker = () => {
-    const sessionId = props.sessionId
-    const branchId = props.branchId
     cast(
-      client.client.message.list({ branchId }).pipe(
+      client.client.message.list({ branchId: props.branchId }).pipe(
         Effect.tap((messages) =>
           Effect.sync(() => {
-            if (props.sessionId !== sessionId || props.branchId !== branchId) return
             if (messages.length === 0) {
               client.setError("No messages to fork")
               return
@@ -3225,7 +3121,7 @@ export function createSessionController(props: {
       client.drainQueuedMessages.pipe(
         Effect.tap(({ steering, followUp }) =>
           Effect.sync(() => {
-            const text = Option.fromNullishOr(queuedDraftText({ steering, followUp }))
+            const text = queuedDraftText({ steering, followUp })
             if (Option.isNone(text)) return
             onComposerInteraction(
               ComposerInteractionEvent.cases.RestoreDraft.make({
@@ -3454,23 +3350,24 @@ export function createSessionController(props: {
     paste: disarm,
   })
 
-  // A bare keybind (`left` opens the agents pane) fires only here: an empty
-  // editing draft, and no overlay, pane, interaction or full transcript that
-  // reads the key first or hides the composer.
-  const composerIdle = (): boolean =>
+  // The composer is empty and nothing sits over it: no overlay, pane,
+  // interaction or full transcript that reads a key first or hides it.
+  const composerEmpty = (): boolean =>
     interactionState().draft.length === 0 &&
-    interactionState().mode === "editing" &&
     uiState().overlay._tag === "none" &&
     !uiState().transcriptExpanded &&
     composerState()._tag !== "interaction"
 
-  // ctrl+d on an empty composer exits; on a draft it deletes forward in the
-  // composer. An ask or an open pane or palette keeps it.
+  // A bare keybind (`left` opens the agents pane) fires only on an empty
+  // editing draft: shell mode reads the key itself.
+  const composerIdle = (): boolean => composerEmpty() && interactionState().mode === "editing"
+
+  // ctrl+d on an empty composer exits, in shell mode too; on a draft it
+  // deletes forward in the composer. An ask, an open pane or palette, and the
+  // expanded transcript are layers over it, as for Esc and ctrl+c.
   const handleEmptyComposerExit = (event: ScopedKeyboardEvent): boolean => {
     if (event.ctrl !== true || event.name !== "d") return false
-    if (interactionState().draft.length > 0) return false
-    if (uiState().overlay._tag !== "none" || command.paletteOpen()) return false
-    if (composerState()._tag === "interaction") return false
+    if (!composerEmpty() || command.paletteOpen()) return false
     exit()
     return true
   }
@@ -3517,11 +3414,6 @@ export function createSessionController(props: {
     }
 
     if (handleTranscriptKey(event)) return true
-
-    if (event.ctrl === true && event.shift === true && event.name === "m") {
-      dispatchSessionUi(SessionUiEvent.cases.OpenMermaid.make({}))
-      return true
-    }
 
     return false
   })

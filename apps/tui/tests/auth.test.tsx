@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it, test } from "effect-bun-test"
-import { Context, Deferred, Effect, Layer, Option, Scope } from "effect"
+import { Context, Deferred, Effect, Exit, Fiber, Layer, Option, Scope } from "effect"
+import type { GentRuntime } from "@gent/sdk"
 import {
   AgentName,
   BranchId,
@@ -11,16 +12,7 @@ import {
   ProviderId,
   SessionId,
 } from "@gent/core/protocol"
-import {
-  Auth,
-  type AuthEvent,
-  AuthState,
-  catalogOf,
-  methodsFor,
-  missingRequired,
-  providerFor,
-  transitionAuth,
-} from "../src/auth"
+import { Auth, type AuthEvent, AuthState, transitionAuth } from "../src/auth"
 import { BunServices } from "@effect/platform-bun"
 import { App } from "../src/app"
 import { LinkOpener, LinkOpenerError } from "../src/os"
@@ -29,6 +21,8 @@ import {
   applySnapshotAgent,
   createMockClient,
   createMockRuntime,
+  destroyRenderSetup,
+  renderScoped,
   renderWithProviders,
   renderFrame,
 } from "./render-harness-boundary"
@@ -40,14 +34,6 @@ import { onMount } from "solid-js"
 const provider = {
   provider: ProviderId.make("anthropic"),
   hasKey: false,
-  required: true,
-} satisfies AuthProviderInfo
-
-const satisfied = {
-  provider: ProviderId.make("openai"),
-  hasKey: true,
-  source: "stored",
-  authType: "api",
   required: true,
 } satisfies AuthProviderInfo
 
@@ -118,7 +104,9 @@ describe("auth-state", () => {
 
     expect(state.screen).toEqual({ _tag: "List" })
     expect(state.error).toEqual(Option.some("bad key"))
-    expect(catalogOf(state).providers).toEqual([provider])
+    expect(Option.map(state.catalog, (catalog) => catalog.providers)).toEqual(
+      Option.some([provider]),
+    )
   })
 
   test("choosing a provider then an api method opens an empty key field", () => {
@@ -194,23 +182,16 @@ describe("auth-state", () => {
 
     expect(closed.screen).toEqual({ _tag: "List" })
     expect(closed.error).toEqual(Option.none())
-    expect(catalogOf(closed).providers).toEqual([provider])
-  })
-
-  test("the catalog answers which methods, which provider, and what is missing", () => {
-    const state = loaded([provider, satisfied])
-
-    expect(methodsFor(catalogOf(state), "anthropic")).toEqual([apiMethod, oauthMethod])
-    expect(methodsFor(catalogOf(state), "unknown")).toEqual([])
-    expect(providerFor(catalogOf(state), "openai")).toEqual(Option.some(satisfied))
-    expect(providerFor(catalogOf(state), "unknown")).toEqual(Option.none())
-    expect(missingRequired(catalogOf(state))).toEqual([provider])
+    expect(Option.map(closed.catalog, (catalog) => catalog.providers)).toEqual(
+      Option.some([provider]),
+    )
   })
 })
 
 // ── auth route ──────────────────────────────────────────────────────────────
 
-const absent = Option.getOrUndefined(Option.none())
+// eslint-disable-next-line effect/noNullish -- a wire field the server leaves unset is present and undefined.
+const absent = undefined
 const nullValue = Option.getOrNull(Option.none())
 const apiMethodRoute = { label: "API key", type: "api" } satisfies { label: string; type: "api" }
 const oauthMethodRoute = { label: "Browser OAuth", type: "oauth" } satisfies {
@@ -249,7 +230,7 @@ const servicesWithLinkOpener = (
   })
 describe("Auth route", () => {
   const activeSessionId = SessionId.make("session-auth")
-  it.live("loads providers for the selected agent", () =>
+  it.scopedLive("loads providers for the selected agent", () =>
     Effect.gen(function* () {
       const calls: Array<{
         agentName?: string
@@ -265,18 +246,108 @@ describe("Auth route", () => {
         },
       })
       const runtime = createMockRuntime()
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <Auth sessionId={activeSessionId} />, {
-          client,
-          runtime,
-          initialAgent: AgentName.make("helper:google"),
-        }),
-      )
+      yield* renderScoped(() => <Auth sessionId={activeSessionId} />, {
+        client,
+        runtime,
+        initialAgent: AgentName.make("helper:google"),
+      })
       expect(calls).toEqual([{ agentName: "helper:google", sessionId: activeSessionId }])
-      setup.renderer.destroy()
     }),
   )
-  it.live("reads the sign-in methods of the session's own drivers", () =>
+  // The success flash clears itself after a while. A pane that closes first
+  // stops that clock with it, so nothing writes to the closed pane later.
+  it.live("closing the pane stops its success flash", () =>
+    Effect.gen(function* () {
+      const forked: Array<Fiber.Fiber<unknown, unknown>> = []
+      const base = createMockRuntime()
+      const runtime: GentRuntime = {
+        ...base,
+        fork: (effect) => {
+          const fiber = base.fork(effect)
+          forked.push(fiber)
+          return fiber
+        },
+      }
+      const client = createMockClient({
+        auth: {
+          listProviders: () =>
+            Effect.succeed([
+              {
+                provider: ProviderId.make("anthropic"),
+                hasKey: false,
+                required: false,
+                source: "none",
+                authType: absent,
+              },
+            ]),
+          listMethods: () => Effect.succeed({ anthropic: [apiMethodRoute] }),
+          setKey: () => Effect.void,
+        },
+      })
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <Auth sessionId={activeSessionId} />, { client, runtime }),
+      )
+      yield* waitForFrame(setup, (frame) => frame.includes("anthropic"))
+      setup.mockInput.pressEnter()
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, (frame) => frame.includes("Sign in · anthropic · API key"))
+      yield* Effect.promise(() => setup.mockInput.typeText("new-key"))
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, (frame) => frame.includes("API key saved for anthropic"))
+      const flash = yield* Effect.fromOption(Option.fromNullishOr(forked.at(-1)))
+      destroyRenderSetup(setup)
+      const exit = yield* Fiber.await(flash).pipe(Effect.timeout("1 second"))
+      expect(Exit.hasInterrupts(exit)).toBe(true)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  // Signing out is destructive, so it takes the agents pane's key and ladder:
+  // ctrl+x arms the row, a second ctrl+x removes the stored key.
+  it.scopedLive("a stored sign-in is removed only on a second ctrl+x", () =>
+    Effect.gen(function* () {
+      const deleted: Array<string> = []
+      const client = createMockClient({
+        auth: {
+          listProviders: () =>
+            Effect.succeed([
+              {
+                provider: ProviderId.make("openai"),
+                hasKey: true,
+                required: false,
+                source: "stored",
+                authType: "api",
+              },
+            ]),
+          listMethods: () => Effect.succeed({ openai: [apiMethodRoute] }),
+          deleteKey: ({ provider }: { provider: string }) =>
+            Effect.sync(() => {
+              deleted.push(provider)
+            }),
+        },
+      })
+      const setup = yield* renderScoped(() => <Auth sessionId={activeSessionId} />, {
+        client,
+        runtime: createMockRuntime(),
+      })
+      const list = yield* waitForFrame(setup, (frame) => frame.includes("openai"))
+      expect(list).toContain("ctrl+x delete")
+      setup.mockInput.pressKey("d")
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(deleted).toEqual([])
+      setup.mockInput.pressKey("x", { ctrl: true })
+      yield* waitForFrame(setup, (frame) => frame.includes("ctrl+x again to delete openai login"))
+      expect(deleted).toEqual([])
+      // Any other key steps back from the armed row.
+      setup.mockInput.pressKey("ESCAPE")
+      yield* waitForFrame(setup, (frame) => !frame.includes("ctrl+x again"))
+      setup.mockInput.pressKey("x", { ctrl: true })
+      yield* waitForFrame(setup, (frame) => frame.includes("ctrl+x again to delete openai login"))
+      setup.mockInput.pressKey("x", { ctrl: true })
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(deleted).toEqual(["openai"])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  it.scopedLive("reads the sign-in methods of the session's own drivers", () =>
     Effect.gen(function* () {
       const methodCalls: Array<{ sessionId?: string } | void> = []
       const client = createMockClient({
@@ -288,23 +359,21 @@ describe("Auth route", () => {
           },
         },
       })
-      const runtime = createMockRuntime()
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <Auth sessionId={activeSessionId} />, {
-          client,
-          runtime,
-          initialAgent: AgentName.make("helper:google"),
-        }),
-      )
+      yield* renderScoped(() => <Auth sessionId={activeSessionId} />, {
+        client,
+        runtime: createMockRuntime(),
+        initialAgent: AgentName.make("helper:google"),
+      })
       expect(methodCalls).toEqual([{ sessionId: activeSessionId }])
-      setup.renderer.destroy()
     }).pipe(Effect.timeout("10 seconds")),
   )
-  it.live("ignores stale auth loads after the selected agent changes", () =>
+  it.scopedLive("ignores stale auth loads after the selected agent changes", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()
       const pending: Array<{
         agentName?: string
+        /** The load's own fiber: its end is the end of the pane's handling of the reply. */
+        fiber: Fiber.Fiber<unknown, unknown>
         deferred: Deferred.Deferred<
           ReadonlyArray<{
             provider: string
@@ -321,27 +390,26 @@ describe("Auth route", () => {
                 yield* Deferred.make<
                   ReadonlyArray<{ provider: string; hasKey: boolean; required: boolean }>
                 >()
-              pending.push({ agentName: input.agentName, deferred })
+              const fiber = yield* Effect.withFiber((current) => Effect.succeed(current))
+              pending.push({ agentName: input.agentName, fiber, deferred })
               return yield* Deferred.await(deferred)
             }),
           listMethods: () => Effect.succeed({}),
         },
       })
       const runtime = createMockRuntime()
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <>
-              <ClientProbe onReady={(c) => (ctx = Option.some(c))} />
-              <Auth sessionId={activeSessionId} />
-            </>
-          ),
-          {
-            client,
-            runtime,
-            initialAgent: AgentName.make("primary"),
-          },
+      const setup = yield* renderScoped(
+        () => (
+          <>
+            <ClientProbe onReady={(c) => (ctx = Option.some(c))} />
+            <Auth sessionId={activeSessionId} />
+          </>
         ),
+        {
+          client,
+          runtime,
+          initialAgent: AgentName.make("primary"),
+        },
       )
       expect(pending.map((entry) => entry.agentName)).toEqual(["primary"])
       const clientContext = yield* requireClient(ctx)
@@ -363,17 +431,16 @@ describe("Auth route", () => {
         yield* Deferred.succeed(firstPending.value.deferred, [
           { provider: "anthropic", hasKey: false, required: false },
         ])
+        // The stale reply has been handled, dropped or not, before the frame is read.
+        yield* Fiber.await(firstPending.value.fiber).pipe(Effect.timeout("2 seconds"))
       }
-      const frame = yield* waitForFrame(
-        setup,
-        (next) => next.includes("openai") && !next.includes("anthropic"),
-      )
+      yield* Effect.promise(() => setup.renderOnce())
+      const frame = renderFrame(setup)
       expect(frame).toContain("openai")
       expect(frame).not.toContain("anthropic")
-      setup.renderer.destroy()
     }),
   )
-  it.live("ignores stale auth mutations after the selected agent changes", () =>
+  it.scopedLive("ignores stale auth mutations after the selected agent changes", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()
       const oldKeySave = yield* Deferred.make<void>()
@@ -415,20 +482,18 @@ describe("Auth route", () => {
         },
       })
       const runtime = createMockRuntime()
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <>
-              <ClientProbe onReady={(c) => (ctx = Option.some(c))} />
-              <Auth sessionId={activeSessionId} />
-            </>
-          ),
-          {
-            client,
-            runtime,
-            initialAgent: AgentName.make("primary"),
-          },
+      const setup = yield* renderScoped(
+        () => (
+          <>
+            <ClientProbe onReady={(c) => (ctx = Option.some(c))} />
+            <Auth sessionId={activeSessionId} />
+          </>
         ),
+        {
+          client,
+          runtime,
+          initialAgent: AgentName.make("primary"),
+        },
       )
       yield* waitForFrame(setup, (frame) => frame.includes("anthropic"))
       setup.mockInput.pressEnter()
@@ -458,10 +523,9 @@ describe("Auth route", () => {
       )
       expect(frame).toContain("Sign in · openai · API key")
       expect(frame).not.toContain("API key saved for anthropic")
-      setup.renderer.destroy()
     }),
   )
-  it.live("ignores stale oauth callbacks after the selected agent changes", () =>
+  it.scopedLive("ignores stale oauth callbacks after the selected agent changes", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()
       const authorizeDeferred = yield* Deferred.make<
@@ -531,20 +595,18 @@ describe("Auth route", () => {
         },
       })
       const runtime = createMockRuntime()
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <>
-              <ClientProbe onReady={(c) => (ctx = Option.some(c))} />
-              <Auth sessionId={activeSessionId} />
-            </>
-          ),
-          {
-            client,
-            runtime,
-            initialAgent: AgentName.make("primary"),
-          },
+      const setup = yield* renderScoped(
+        () => (
+          <>
+            <ClientProbe onReady={(c) => (ctx = Option.some(c))} />
+            <Auth sessionId={activeSessionId} />
+          </>
         ),
+        {
+          client,
+          runtime,
+          initialAgent: AgentName.make("primary"),
+        },
       )
       yield* waitForFrame(setup, (frame) => frame.includes("anthropic"))
       setup.mockInput.pressEnter()
@@ -565,7 +627,6 @@ describe("Auth route", () => {
         { provider: "anthropic", method: 0, sessionId: activeSessionId },
       ])
       expect(callbackCalls).toEqual([])
-      setup.renderer.destroy()
     }),
   )
   it.scopedLive("threads the active session through successful auto OAuth callbacks", () =>
@@ -619,14 +680,12 @@ describe("Auth route", () => {
       })
       const services = yield* servicesWithLinkOpener(() => Effect.void)
       const runtime = createMockRuntime()
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <Auth sessionId={activeSessionId} />, {
-          client,
-          runtime,
-          services,
-          initialAgent: AgentName.make("primary"),
-        }),
-      )
+      const setup = yield* renderScoped(() => <Auth sessionId={activeSessionId} />, {
+        client,
+        runtime,
+        services,
+        initialAgent: AgentName.make("primary"),
+      })
       yield* waitForFrame(setup, (frame) => frame.includes("anthropic"))
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
@@ -643,7 +702,6 @@ describe("Auth route", () => {
           sessionId: activeSessionId,
         },
       ])
-      setup.renderer.destroy()
     }),
   )
   it.scopedLive("ignores stale oauth opener failures after the selected agent changes", () =>
@@ -708,21 +766,19 @@ describe("Auth route", () => {
         }),
       )
       const runtime = createMockRuntime()
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <>
-              <ClientProbe onReady={(c) => (ctx = Option.some(c))} />
-              <Auth sessionId={activeSessionId} />
-            </>
-          ),
-          {
-            client,
-            runtime,
-            services,
-            initialAgent: AgentName.make("primary"),
-          },
+      const setup = yield* renderScoped(
+        () => (
+          <>
+            <ClientProbe onReady={(c) => (ctx = Option.some(c))} />
+            <Auth sessionId={activeSessionId} />
+          </>
         ),
+        {
+          client,
+          runtime,
+          services,
+          initialAgent: AgentName.make("primary"),
+        },
       )
       yield* waitForFrame(setup, (frame) => frame.includes("anthropic"))
       setup.mockInput.pressEnter()
@@ -746,7 +802,6 @@ describe("Auth route", () => {
       expect(authorizeCalls).toEqual([
         { provider: "anthropic", method: 0, sessionId: activeSessionId },
       ])
-      setup.renderer.destroy()
     }),
   )
   it.scopedLive("ignores stale oauth opener failures after cancelling the same auth flow", () =>
@@ -791,14 +846,12 @@ describe("Auth route", () => {
         }),
       )
       const runtime = createMockRuntime()
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <Auth sessionId={activeSessionId} />, {
-          client,
-          runtime,
-          services,
-          initialAgent: AgentName.make("primary"),
-        }),
-      )
+      const setup = yield* renderScoped(() => <Auth sessionId={activeSessionId} />, {
+        client,
+        runtime,
+        services,
+        initialAgent: AgentName.make("primary"),
+      })
       yield* waitForFrame(setup, (frame) => frame.includes("anthropic"))
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
@@ -825,7 +878,6 @@ describe("Auth route", () => {
       expect(authorizeCalls).toEqual([
         { provider: "anthropic", method: 0, sessionId: activeSessionId },
       ])
-      setup.renderer.destroy()
     }),
   )
 
@@ -877,14 +929,12 @@ describe("Auth route", () => {
         },
       })
       const services = yield* servicesWithLinkOpener(noBrowser)
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <Auth sessionId={activeSessionId} />, {
-          client,
-          runtime: createMockRuntime(),
-          services,
-          initialAgent: AgentName.make("primary"),
-        }),
-      )
+      const setup = yield* renderScoped(() => <Auth sessionId={activeSessionId} />, {
+        client,
+        runtime: createMockRuntime(),
+        services,
+        initialAgent: AgentName.make("primary"),
+      })
       yield* waitForFrame(setup, (frame) => frame.includes("openai"))
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
@@ -902,7 +952,6 @@ describe("Auth route", () => {
       expect(callbackCalls).toEqual([
         expect.objectContaining({ provider: "openai", authorizationId: "auth-device" }),
       ])
-      setup.renderer.destroy()
     }).pipe(Effect.timeout("8 seconds")),
   )
 
@@ -944,21 +993,19 @@ describe("Auth route", () => {
           },
         })
         const services = yield* servicesWithLinkOpener(noBrowser)
-        const setup = yield* Effect.promise(() =>
-          renderWithProviders(
-            () => (
-              <>
-                <ClientProbe onReady={(c) => (ctx = Option.some(c))} />
-                <Auth sessionId={activeSessionId} />
-              </>
-            ),
-            {
-              client,
-              runtime: createMockRuntime(),
-              services,
-              initialAgent: AgentName.make("primary"),
-            },
+        const setup = yield* renderScoped(
+          () => (
+            <>
+              <ClientProbe onReady={(c) => (ctx = Option.some(c))} />
+              <Auth sessionId={activeSessionId} />
+            </>
           ),
+          {
+            client,
+            runtime: createMockRuntime(),
+            services,
+            initialAgent: AgentName.make("primary"),
+          },
         )
         yield* waitForFrame(setup, (frame) => frame.includes("openai"))
         setup.mockInput.pressEnter()
@@ -985,7 +1032,6 @@ describe("Auth route", () => {
           "the device poll finishes the flow",
         )
         expect(callbackCalls).toHaveLength(1)
-        setup.renderer.destroy()
       }).pipe(Effect.timeout("8 seconds")),
   )
 
@@ -1002,14 +1048,12 @@ describe("Auth route", () => {
         },
       })
       const services = yield* servicesWithLinkOpener(noBrowser)
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <Auth sessionId={activeSessionId} />, {
-          client,
-          runtime: createMockRuntime(),
-          services,
-          initialAgent: AgentName.make("primary"),
-        }),
-      )
+      const setup = yield* renderScoped(() => <Auth sessionId={activeSessionId} />, {
+        client,
+        runtime: createMockRuntime(),
+        services,
+        initialAgent: AgentName.make("primary"),
+      })
       yield* waitForFrame(setup, (frame) => frame.includes("openai"))
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
@@ -1022,7 +1066,6 @@ describe("Auth route", () => {
       expect(panelText(frame)).toContain(longUrl)
       expect(frame).toContain("Paste code:")
       expect(frame).not.toContain("Failed to open URL")
-      setup.renderer.destroy()
     }).pipe(Effect.timeout("8 seconds")),
   )
 
@@ -1055,21 +1098,19 @@ describe("Auth route", () => {
         },
       })
       const services = yield* servicesWithLinkOpener(() => Effect.void)
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <App />, {
-          client,
-          runtime: createMockRuntime(),
-          services,
-          initialAgent: AgentName.make("main"),
-          initialSession: {
-            id: SessionId.make("session-oauth"),
-            activeBranchId: BranchId.make("branch-oauth"),
-            name: "A",
-            createdAt: dateFromMillis(0),
-            updatedAt: dateFromMillis(0),
-          },
-        }),
-      )
+      const setup = yield* renderScoped(() => <App />, {
+        client,
+        runtime: createMockRuntime(),
+        services,
+        initialAgent: AgentName.make("main"),
+        initialSession: {
+          id: SessionId.make("session-oauth"),
+          activeBranchId: BranchId.make("branch-oauth"),
+          name: "A",
+          createdAt: dateFromMillis(0),
+          updatedAt: dateFromMillis(0),
+        },
+      })
       yield* waitForFrame(setup, (frame) => frame.includes("ChatGPT sign-in"), "the methods")
       setup.mockInput.pressEnter()
       yield* waitForFrame(setup, (frame) => frame.includes("Paste code"), "the OAuth screen")
@@ -1102,7 +1143,6 @@ describe("Auth route", () => {
         // Down to 8 rows the pane still holds the code and the URL.
         expect({ height, needs }).toEqual({ height, needs: true })
       }
-      setup.renderer.destroy()
     }).pipe(Effect.timeout("20 seconds")),
   )
 
@@ -1130,7 +1170,6 @@ describe("Auth route", () => {
           paste: false,
         })
       }
-      setup.renderer.destroy()
     }).pipe(Effect.timeout("20 seconds")),
   )
 })

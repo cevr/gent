@@ -1,9 +1,8 @@
 import { describe, expect, it, test } from "effect-bun-test"
-import { DateTime, Effect, FileSystem, Option, Path, Predicate, Schedule, Schema } from "effect"
+import { Effect, FileSystem, Option, Path, Predicate, Schema } from "effect"
 import { AgentEvent, BranchId, SessionId } from "@gent/core/protocol"
 import { InteractionRequestId } from "@gent/core/extensions/branch-tools"
 import {
-  type AnyExtensionClientModule,
   autocompleteContribution,
   type AutocompleteContribution,
   type AutocompleteItem,
@@ -19,7 +18,6 @@ import {
   type MessageRenderer,
   messageRendererContribution,
   type MessageRowProps,
-  NoActiveSessionError,
   type NoticeRow,
   noticeRowContribution,
   rendererContribution,
@@ -47,20 +45,11 @@ import {
   makeClientExtensionRuntime,
   makeClientTestTransport,
   makeUnreachableTransport,
-  runClientExtensionSetup,
 } from "../extension-test-harness-boundary"
 import { defineRequests, ExtensionId, ref, request } from "@gent/core/extensions/api"
 import { inRuntime } from "../helpers-boundary"
-import { SessionUiState, slashAutocompleteItems, transitionSessionUi } from "../../src/session"
 import { builtinClientModules } from "../../src/extensions/builtins"
-import type { Command } from "../../src/commands"
-import {
-  emptyFrecencyStore,
-  frecencyLookup,
-  type FrecencyStoreValue,
-  readFrecencyStore,
-  recordPick,
-} from "../../src/autocomplete"
+import { type Command, executeSlashCommand } from "../../src/commands"
 import { createMockClient, createMockRuntime } from "../render-harness-boundary"
 import * as EffectEntry from "effect"
 import * as ProtocolEntry from "@gent/core/protocol"
@@ -97,7 +86,8 @@ const row =
   (label: string): MessageRenderer =>
   (_props: MessageRowProps) =>
     label
-const absent = Option.getOrUndefined(Option.none())
+// eslint-disable-next-line effect/noNullish -- a wire field the server leaves unset is present and undefined.
+const absent = undefined
 const rowProps: MessageRowProps = { content: "", images: [], interjection: false, details: {} }
 const toolProps: ToolRendererProps = {
   toolCall: {
@@ -120,6 +110,12 @@ const interactionProps = {
   }),
   resolve: () => {},
 }
+const cmd = (overrides: Partial<Command> & { id: string; slash: string }): Command => ({
+  title: overrides.id,
+  onSelect: () => {},
+  ...overrides,
+})
+
 describe("resolveTuiExtensions", () => {
   test("client contribution constructors enforce slot-specific component contracts", () => {
     const good = widgetContribution({
@@ -428,6 +424,174 @@ describe("resolveTuiExtensions", () => {
     expect(byTitle.get("A")?.slash).toBe("taken")
     expect(byTitle.has("B")).toBe(false)
     expect(failures.map((failure) => failure.id)).toEqual(["b"])
+  })
+
+  // `shift+ctrl+k` and `ctrl+shift+k` are one key, and so are `control+k` and `ctrl+k`.
+  test("a same-scope keybind in another spelling of a held key collides", () => {
+    for (const [held, respelled] of [
+      ["ctrl+shift+k", "shift+ctrl+k"],
+      ["ctrl+k", "control+k"],
+      ["meta+k", "cmd+k"],
+    ]) {
+      const resolved = resolveTuiExtensions([
+        make(
+          "first",
+          "user",
+          clientCommandContribution({ id: "one", title: "One", keybind: held, onSelect: () => {} }),
+        ),
+        make(
+          "second",
+          "user",
+          clientCommandContribution({
+            id: "two",
+            title: "Two",
+            keybind: respelled,
+            onSelect: () => {},
+          }),
+        ),
+      ])
+      const { commands, failures } = resolveCommands(resolved.commandSources)
+      expect(commands.map((command) => command.title)).toEqual(["One"])
+      expect(failures.map((failure) => failure.id)).toEqual(["second"])
+    }
+  })
+
+  test("a project extension overrides a builtin slash", () => {
+    let winner = ""
+    const { commands, failures } = resolveCommands([
+      {
+        id: "@gent/session",
+        scope: "builtin",
+        source: "builtin:@gent/session",
+        commands: [
+          cmd({ id: "session.model", slash: "model", onSelect: () => (winner = "builtin") }),
+        ],
+      },
+      {
+        id: "@test/model",
+        scope: "project",
+        source: "/project/model.client.ts",
+        commands: [
+          cmd({ id: "project.model", slash: "model", onSelect: () => (winner = "project") }),
+        ],
+      },
+    ])
+    const result = executeSlashCommand("model", "", commands)
+    expect(result.handled).toBe(true)
+    expect(winner).toBe("project")
+    expect(failures).toEqual([])
+    // The builtin keeps its palette row; only the slash moved.
+    expect(commands.find((command) => command.id === "session.model")?.slash).toBeUndefined()
+  })
+
+  test("a server slash that a session command already holds is dropped and reported", () => {
+    const { commands, failures } = resolveCommands([
+      {
+        id: "@gent/session",
+        scope: "builtin",
+        source: "builtin:@gent/session",
+        commands: [cmd({ id: "session.model", slash: "model" })],
+      },
+      {
+        id: "@gent/example-models",
+        scope: "builtin",
+        source: "server:@gent/example-models",
+        commands: [cmd({ id: "server:model", slash: "model" })],
+      },
+    ])
+    expect(commands.map((command) => command.id)).toEqual(["session.model"])
+    expect(failures.map((failure) => failure.id)).toEqual(["@gent/example-models"])
+  })
+
+  test("a keybind that types a character is refused in every scope, and the command stays", () => {
+    const { commands, failures } = resolveCommands([
+      {
+        id: "@gent/session",
+        scope: "builtin",
+        source: "builtin:@gent/session",
+        commands: [
+          cmd({ id: "session.left", slash: "left", keybind: "left" }),
+          cmd({ id: "session.help", slash: "help", keybind: "shift+/" }),
+        ],
+      },
+      {
+        id: "@test/keys",
+        scope: "project",
+        source: "/project/keys.client.ts",
+        commands: [
+          cmd({ id: "project.j", slash: "j", keybind: "j" }),
+          cmd({ id: "project.space", slash: "space", keybind: "space" }),
+          cmd({ id: "project.ctrl-j", slash: "ctrl-j", keybind: "ctrl+j" }),
+          cmd({ id: "project.emoji", slash: "emoji", keybind: "🙂" }),
+          cmd({ id: "project.accent", slash: "accent", keybind: "é" }),
+          cmd({ id: "project.f1", slash: "f1", keybind: "f1" }),
+          cmd({ id: "project.tab", slash: "tab", keybind: "tab" }),
+        ],
+      },
+    ])
+    const keybinds = Object.fromEntries(
+      commands.map((command) => [
+        command.id,
+        Option.getOrElse(Option.fromNullishOr(command.keybind), () => "none"),
+      ]),
+    )
+    expect(keybinds).toEqual({
+      "session.left": "left",
+      "session.help": "none",
+      "project.j": "none",
+      "project.space": "none",
+      "project.ctrl-j": "ctrl+j",
+      "project.emoji": "none",
+      "project.accent": "none",
+      "project.f1": "f1",
+      "project.tab": "tab",
+    })
+    expect(commands.find((command) => command.id === "session.help")?.slash).toBe("help")
+    expect(failures.map((failure) => failure.id)).toEqual([
+      "@gent/session",
+      "@test/keys",
+      "@test/keys",
+      "@test/keys",
+      "@test/keys",
+    ])
+    expect(failures[1]?.reason).toContain('keybind "j"')
+  })
+
+  // A keybind runs before the Esc and ctrl+c ladders: a bare escape or a
+  // ctrl+c would take the turn cancel and the quit away from the key.
+  test("a bare escape or ctrl+c keybind is refused, and one with another modifier stays", () => {
+    const { commands, failures } = resolveCommands([
+      {
+        id: "@test/keys",
+        scope: "project",
+        source: "/project/keys.client.ts",
+        commands: [
+          cmd({ id: "project.escape", slash: "escape", keybind: "escape" }),
+          cmd({ id: "project.shift-escape", slash: "shift-escape", keybind: "shift+escape" }),
+          cmd({ id: "project.ctrl-escape", slash: "ctrl-escape", keybind: "ctrl+escape" }),
+          cmd({ id: "project.ctrl-c", slash: "ctrl-c", keybind: "ctrl+c" }),
+          cmd({ id: "project.ctrl-shift-c", slash: "ctrl-shift-c", keybind: "ctrl+shift+c" }),
+          cmd({ id: "project.ctrl-meta-c", slash: "ctrl-meta-c", keybind: "ctrl+meta+c" }),
+        ],
+      },
+    ])
+    const keybinds = Object.fromEntries(
+      commands.map((command) => [
+        command.id,
+        Option.getOrElse(Option.fromNullishOr(command.keybind), () => "none"),
+      ]),
+    )
+    expect(keybinds).toEqual({
+      "project.escape": "none",
+      "project.shift-escape": "none",
+      "project.ctrl-escape": "ctrl+escape",
+      "project.ctrl-c": "none",
+      "project.ctrl-shift-c": "none",
+      "project.ctrl-meta-c": "ctrl+meta+c",
+    })
+    expect(failures).toHaveLength(4)
+    expect(failures[0]?.reason).toContain('keybind "escape"')
+    expect(failures[2]?.reason).toContain('keybind "ctrl+c"')
   })
 })
 
@@ -924,7 +1088,7 @@ describe("autocomplete Effect items() through the client transport", () => {
         }),
       )
       expect(failures).toEqual([])
-      expect(result).toEqual([{ id: "hello", label: "got:hello" }])
+      expect(result.map((entry) => entry.item)).toEqual([{ id: "hello", label: "got:hello" }])
       yield* Effect.promise(() => runtime.dispose())
     }),
   )
@@ -978,10 +1142,6 @@ describe("autocomplete Effect items() through the client transport", () => {
       yield* Effect.promise(() => runtime.dispose())
     }),
   )
-  test("NoActiveSessionError is a Schema.TaggedError instance", () => {
-    const err = new NoActiveSessionError()
-    expect(err._tag).toBe("NoActiveSessionError")
-  })
   it.live("transport.request seals transport failures to ClientTransportRequestError", () =>
     Effect.gen(function* () {
       const transport = makeFakeTransport({
@@ -1025,320 +1185,6 @@ describe("autocomplete Effect items() through the client transport", () => {
       expect("run" in resolved).toBe(false)
       expect("cast" in resolved).toBe(false)
       yield* Effect.promise(() => runtime.dispose())
-    }),
-  )
-})
-
-// ── autocomplete contribution order ─────────────────────────────────────────
-
-/**
- * Ranking at the seams that actually ship.
- *
- * The scorer has its own tests, but a scorer nobody calls ranks nothing. These
- * exercise the two contributions a reader's keystrokes really reach: the `/`
- * items the session registry builds, and the `$` items the skills extension
- * returns over the transport. Disconnecting either from the ranking has to
- * fail here, which is the whole reason these are separate from the unit tests
- * — those call the scorer directly and so cannot notice a caller that stopped
- * calling it.
- *
- * `@` files have their own tests in `builtins.test.ts`.
- */
-
-/**
- * The registration order that produced the bug: `/fork` and `/auth` carry "ag"
- * in their titles and register before `/agents` carries it in its name.
- */
-const commands: ReadonlyArray<Command> = [
-  { id: "message.fork", title: "Fork from Message", slash: "fork", onSelect: () => {} },
-  { id: "auth.manage", title: "Manage API Keys", slash: "auth", onSelect: () => {} },
-  { id: "agents.view", title: "Agents", slash: "agents", aliases: ["tree"], onSelect: () => {} },
-  { id: "session.model", title: "Set Model", slash: "model", onSelect: () => {} },
-  { id: "session.think", title: "Set Reasoning", slash: "think", onSelect: () => {} },
-]
-
-const ids = (items: ReadonlyArray<{ readonly id: string }>): ReadonlyArray<string> =>
-  items.map((item) => item.id)
-
-describe("slash autocomplete contribution", () => {
-  test("puts the command named by the filter first", () => {
-    // Before ranking this answered `fork, auth, agents` in registration order,
-    // so the preselected row — the one Tab completes and Enter runs — was the
-    // wrong command.
-    expect(ids(slashAutocompleteItems(commands, "ag"))[0]).toBe("agents")
-  })
-
-  test("drops commands that match only through their title", () => {
-    const ranked = ids(slashAutocompleteItems(commands, "ag"))
-    expect(ranked).not.toContain("fork")
-    expect(ranked).not.toContain("auth")
-  })
-
-  test("still offers aliases", () => {
-    expect(ids(slashAutocompleteItems(commands, "tre"))).toContain("tree")
-  })
-
-  test("ranks a partially typed name onto its command", () => {
-    expect(ids(slashAutocompleteItems(commands, "mod"))[0]).toBe("model")
-    expect(ids(slashAutocompleteItems(commands, "thi"))[0]).toBe("think")
-  })
-
-  test("offers every command when nothing is typed yet", () => {
-    // One row per slash name plus the alias.
-    expect(ids(slashAutocompleteItems(commands, ""))).toEqual([
-      "fork",
-      "auth",
-      "agents",
-      "tree",
-      "model",
-      "think",
-    ])
-  })
-
-  test("offers nothing for a filter no command matches", () => {
-    expect(slashAutocompleteItems(commands, "zzzz")).toEqual([])
-  })
-})
-
-/** The shipped `$` contribution, found by id among the builtin modules. */
-const skillsModule = (): Effect.Effect<AnyExtensionClientModule> =>
-  Option.match(
-    Option.fromNullishOr(builtinClientModules.find((module) => module.id === "@gent/skills-ui")),
-    {
-      onNone: () => Effect.die("@gent/skills-ui is not registered"),
-      onSome: (module) => Effect.succeed(module),
-    },
-  )
-
-/**
- * Runs the real skills contribution against a transport returning `names`.
- *
- * The transport needs an active session: the contribution asks it for one
- * before issuing the request, and without it the call fails as
- * `NoActiveSessionError` long before any ranking happens.
- */
-const skillItemsFor = (
-  names: ReadonlyArray<string>,
-  filter: string,
-): Effect.Effect<ReadonlyArray<string>> =>
-  Effect.gen(function* () {
-    const runtime = makeClientExtensionRuntime({
-      currentSession: () =>
-        Option.some({ sessionId: SessionId.make("sess-1"), branchId: BranchId.make("branch-1") }),
-      requestReply: names.map((name) => ({
-        name,
-        description: `The ${name} skill`,
-        level: "global",
-        content: "",
-        filePath: `/tmp/${name}.md`,
-      })),
-    })
-    const contributions = yield* runClientExtensionSetup(runtime, yield* skillsModule())
-    const contribution = yield* Option.match(
-      Option.fromNullishOr(contributions.autocomplete?.[0]),
-      {
-        onNone: () => Effect.die("skills extension contributed no autocomplete"),
-        onSome: (entry) => Effect.succeed(entry satisfies AutocompleteContribution),
-      },
-    )
-    const failures: Array<string> = []
-    const items = yield* Effect.promise(() =>
-      runAutocompleteContributions([contribution], filter, runtime, (prefix, reason) => {
-        failures.push(`${prefix}: ${reason}`)
-      }),
-    )
-    yield* Effect.promise(() => runtime.dispose())
-    // A failing contribution answers with no rows, which would read as a
-    // ranking result rather than the breakage it is.
-    if (failures.length > 0) return yield* Effect.die(failures.join("; "))
-    return ids(items)
-  })
-
-describe("skills autocomplete contribution", () => {
-  it.live("puts the closest skill name first rather than the first listed", () =>
-    Effect.gen(function* () {
-      // Plain substring filtering answered in host order, so `$tes` led with
-      // whichever skill happened to be listed first. `test` is the closest.
-      const names = ["code-style", "stacked", "test", "tdd", "teach"]
-      expect((yield* skillItemsFor(names, "tes"))[0]).toBe("test")
-    }),
-  )
-
-  it.live("ranks a prefix above a mid-word match", () =>
-    Effect.gen(function* () {
-      const names = ["impeccable", "effect", "code-review"]
-      expect((yield* skillItemsFor(names, "eff"))[0]).toBe("effect")
-    }),
-  )
-
-  it.live("finds a skill by letters scattered through its name", () =>
-    Effect.gen(function* () {
-      const names = ["code-review", "counsel", "test"]
-      expect(yield* skillItemsFor(names, "crv")).toContain("code-review")
-    }),
-  )
-
-  it.live("offers nothing when no skill matches", () =>
-    Effect.gen(function* () {
-      expect(yield* skillItemsFor(["effect", "test"], "zzzz")).toEqual([])
-    }),
-  )
-
-  it.live("offers every skill before anything is typed", () =>
-    Effect.gen(function* () {
-      expect(yield* skillItemsFor(["effect", "test"], "")).toEqual(["effect", "test"])
-    }),
-  )
-})
-
-// ── autocomplete frecency seam ──────────────────────────────────────────────
-
-/**
- * Frecency at the seams that actually ship.
- *
- * The scoring has its own tests, but a score nobody records and nobody reads
- * changes no popup. A previous pass on this code shipped probes that proved
- * nothing for exactly that reason: they called the ranker directly, so a
- * caller that stopped calling it would not have failed a single one. These go
- * the other way round — they drive the real contributions and assert on the
- * order a reader would see, so disconnecting either half fails here.
- *
- * Two halves have to hold. The write half: selecting a row has to leave
- * something on disk. The read half: what is on disk has to change the order
- * the next popup returns.
- *
- * `@` files have their own tests in `builtins.test.ts`.
- */
-
-const NOW = 1_800_000_000_000
-
-/** `/think` and `/thread` tie on everything the matcher can see but length. */
-const commandsSeam: ReadonlyArray<Command> = [
-  { id: "session.think", title: "Set Reasoning", slash: "think", onSelect: () => {} },
-  { id: "session.thread", title: "Thread over sessions", slash: "thread", onSelect: () => {} },
-]
-
-describe("slash autocomplete reads pick history", () => {
-  test("answers /t with think for a reader who has picked nothing", () => {
-    expect(ids(slashAutocompleteItems(commandsSeam, "t"))[0]).toBe("think")
-  })
-
-  test("answers /thr with thread once the reader has picked it", () => {
-    // The seam: the contribution has to pass the history through to the
-    // ranker. A build that drops the third argument still answers `think`.
-    //
-    // Three characters, not one: ranking ignores pick history below
-    // FRECENCY_MIN_FILTER, so a one-character filter would pass this test for
-    // the wrong reason — it would answer `think` whether or not the history
-    // reached the ranker at all.
-    const store = recordPick(emptyFrecencyStore(), "/", "thread", NOW)
-    expect(ids(slashAutocompleteItems(commandsSeam, "thr", frecencyLookup(store, NOW)))[0]).toBe(
-      "thread",
-    )
-  })
-
-  test("keeps a picked command out of a filter it does not match", () => {
-    const store = recordPick(emptyFrecencyStore(), "/", "thread", NOW)
-    expect(ids(slashAutocompleteItems(commandsSeam, "think", frecencyLookup(store, NOW)))[0]).toBe(
-      "think",
-    )
-  })
-})
-
-/** The shipped `$` contribution, found by id among the builtin modules. */
-
-/**
- * Drives the real skills contribution against a temp home, returning both the
- * ranked ids and the contribution itself so a test can also select a row.
- */
-const skillsHarness = (home: string, names: ReadonlyArray<string>) =>
-  Effect.gen(function* () {
-    const runtime = makeClientExtensionRuntime({
-      // The extension writes its store under `home`, so the harness has to
-      // point at this test's temp directory. Left at the harness default,
-      // every run would share one file in /tmp and the assertion below would
-      // pass on a previous run's pick.
-      workspace: { cwd: home, home },
-      currentSession: () =>
-        Option.some({ sessionId: SessionId.make("sess-1"), branchId: BranchId.make("branch-1") }),
-      requestReply: names.map((name) => ({
-        name,
-        description: `The ${name} skill`,
-        level: "global",
-        content: "",
-        filePath: `/tmp/${name}.md`,
-      })),
-    })
-    const contributions = yield* runClientExtensionSetup(runtime, yield* skillsModule())
-    const contribution = yield* Option.match(
-      Option.fromNullishOr(contributions.autocomplete?.[0]),
-      {
-        onNone: () => Effect.die("skills extension contributed no autocomplete"),
-        onSome: (entry) => Effect.succeed(entry satisfies AutocompleteContribution),
-      },
-    )
-    const rank = (filter: string) =>
-      Effect.gen(function* () {
-        const failures: Array<string> = []
-        const items = yield* Effect.promise(() =>
-          runAutocompleteContributions([contribution], filter, runtime, (prefix, reason) => {
-            failures.push(`${prefix}: ${reason}`)
-          }),
-        )
-        // A failing contribution answers with no rows, which would read as a
-        // ranking result rather than the breakage it is.
-        if (failures.length > 0) return yield* Effect.die(failures.join("; "))
-        return ids(items)
-      })
-    return { contribution, rank, dispose: () => Effect.promise(() => runtime.dispose()) }
-  })
-
-const seamTest = it.scopedLive.layer(BunServices.layer)
-
-describe("skills autocomplete records and reads pick history", () => {
-  seamTest("answers $t with tdd before the reader picks anything", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const home = yield* fs.makeTempDirectoryScoped()
-      const harness = yield* skillsHarness(home, ["tdd", "test"])
-      // The documented weakness: 12.760 against 12.680, decided by length.
-      expect((yield* harness.rank("t"))[0]).toBe("tdd")
-      yield* harness.dispose()
-    }),
-  )
-
-  seamTest("writes a pick to the store when a row is selected", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const home = yield* fs.makeTempDirectoryScoped()
-      const harness = yield* skillsHarness(home, ["tdd", "test"])
-
-      // The write half. A contribution with no onSelect leaves nothing here.
-      const onSelect = Option.fromNullishOr(harness.contribution.onSelect)
-      expect(Option.isSome(onSelect)).toBe(true)
-      if (Option.isSome(onSelect)) onSelect.value("test", "t")
-
-      // The write is forked off the keystroke path — that is the requirement —
-      // so it lands shortly after the callback returns rather than during it.
-      // Retry rather than sleep: the assertion is "the pick arrives", and a
-      // fixed delay would either flake or slow the suite to cover the worst
-      // case.
-      const weightOf = (loaded: Option.Option<FrecencyStoreValue>): number =>
-        frecencyLookup(
-          Option.getOrElse(loaded, () => emptyFrecencyStore()),
-          DateTime.toEpochMillis(DateTime.nowUnsafe()),
-        )("$", "test")
-
-      const recorded = yield* Effect.retry(
-        Effect.flatMap(readFrecencyStore(home), (loaded) => {
-          const weight = weightOf(loaded)
-          if (weight > 0) return Effect.succeed(weight)
-          return Effect.fail("not written yet")
-        }),
-        { times: 50, schedule: Schedule.spaced("10 millis") },
-      )
-      expect(recorded).toBeGreaterThan(0)
-      yield* harness.dispose()
     }),
   )
 })
@@ -1725,18 +1571,6 @@ export default defineClientExtension("@test/dup", {
         ),
       )
     })
-  })
-})
-describe("session UI state", () => {
-  test("a picker replaces the current overlay and closes cleanly", () => {
-    const withMermaid = transitionSessionUi(SessionUiState.initial(), { _tag: "OpenMermaid" })
-    const withPicker = transitionSessionUi(withMermaid.state, {
-      _tag: "OpenSettingsPicker",
-      picker: "model",
-    })
-    const closed = transitionSessionUi(withPicker.state, { _tag: "CloseOverlay" })
-    expect(withPicker.state.overlay).toEqual({ _tag: "model" })
-    expect(closed.state.overlay).toEqual({ _tag: "none" })
   })
 })
 

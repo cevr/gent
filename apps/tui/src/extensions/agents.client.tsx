@@ -96,18 +96,8 @@ const nameFor = (row: AgentRowEntry): string =>
  * the row and the name is cut to what is left, so a long task never pushes
  * what the child is doing off the row.
  */
-const trayText = (row: AgentRowEntry, width: number): string => {
-  const head = "working · "
-  return Option.fromUndefinedOr(row.activity).pipe(
-    Option.map((activity) => {
-      const doing = truncate(activity, Math.floor(width / 2))
-      const nameWidth = width - textWidth(head) - textWidth(" · ") - textWidth(doing)
-      return `${head}${truncate(nameFor(row), nameWidth)} · ${doing}`
-    }),
-    Option.getOrElse(() => `${head}${nameFor(row)}`),
-    (text) => truncate(text, width),
-  )
-}
+const trayText = (row: AgentRowEntry, width: number): string =>
+  truncate(rowLabel("working · ", nameFor(row), row.activity ?? "", width), width)
 
 /**
  * Rows in the order their sessions were created. The listing orders by last
@@ -730,7 +720,7 @@ export function AgentsPane(props: {
         keys={[
           KeyHints.move,
           KeyHints.select,
-          keyHint("ctrl+x", "delete"),
+          KeyHints.delete,
           keyHint("ctrl+t", "hide"),
           KeyHints.close,
         ]}
@@ -851,9 +841,12 @@ export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
             onDelete={(row) =>
               shell.cast(
                 transport.deleteSession(row.sessionId).pipe(
-                  Effect.catchCause((cause) =>
-                    Effect.logWarning("agents.delete failed").pipe(
-                      Effect.annotateLogs({ sessionId: row.sessionId, error: String(cause) }),
+                  // The reader asked for the delete, so a refusal shows on the
+                  // status row; the row stays in the listing.
+                  Effect.catch((error) =>
+                    Effect.sync(() => shell.notify(error.message)).pipe(
+                      Effect.andThen(Effect.logWarning("agents.delete failed")),
+                      Effect.annotateLogs({ sessionId: row.sessionId, error: error.message }),
                     ),
                   ),
                   // The pane is open and may be filtered, so the listing is

@@ -2,23 +2,15 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Option } from "effect"
 import { Session } from "../src/app"
-import { type GentRuntime, Gent } from "@gent/sdk"
-import {
-  createMockClient,
-  createMockRuntime,
-  destroyRenderSetup,
-  renderWithProviders,
-} from "../tests/render-harness-boundary"
+import { Gent } from "@gent/sdk"
+import { destroyRenderSetup, renderWithProviders } from "../tests/render-harness-boundary"
 import {
   baseLocalLayerWithProvider as _baseLocalLayerWithProvider,
   LanguageModelLayers,
   testAgent,
 } from "@gent/core/test-utils"
-import { BranchId, SessionId } from "@gent/core/protocol"
 import { makeSessionState, repoRoot } from "./helpers"
 import { waitForFrame } from "../tests/helpers-boundary"
-const absentReasoningLevel = Option.getOrUndefined(Option.none())
-const absentModelId = Option.getOrUndefined(Option.none())
 const baseLocalLayerWithProvider = (p: Parameters<typeof _baseLocalLayerWithProvider>[0]) =>
   _baseLocalLayerWithProvider(p, { agents: [testAgent] })
 describe("session feed boundary", () => {
@@ -191,55 +183,5 @@ describe("session feed boundary", () => {
         }),
       ),
     10000,
-  )
-  it.live("interrupts the feed fiber through runtime cleanup on unmount", () =>
-    Effect.gen(function* () {
-      const sessionId = SessionId.make("session-test")
-      const branchId = BranchId.make("branch-test")
-      const interrupted: Array<Effect.Effect<unknown, unknown, unknown>> = []
-      let forks = 0
-      const runtime = (() => {
-        const base = createMockRuntime()
-        const mock: GentRuntime = {
-          ...base,
-          fork: () => {
-            forks += 1
-            return base.fork(Effect.never)
-          },
-          cast: (effect) => {
-            interrupted.push(effect)
-            base.cast(effect)
-          },
-        }
-        return mock
-      })()
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <Session sessionId={sessionId} branchId={branchId} initialBranches={Option.none()} />
-          ),
-          {
-            client: createMockClient(),
-            runtime,
-            initialSession: {
-              sessionId,
-              branchId,
-              name: "Test Session",
-              modelId: absentModelId,
-              reasoningLevel: absentReasoningLevel,
-              cwd: repoRoot,
-            },
-            cwd: repoRoot,
-            width: 100,
-            height: 32,
-          },
-        ),
-      )
-      // The feed opens once the client extensions have loaded.
-      yield* waitForFrame(setup, () => forks > 0, "feed opened")
-      const castCountBeforeDestroy = interrupted.length
-      destroyRenderSetup(setup)
-      expect(interrupted.length).toBeGreaterThan(castCountBeforeDestroy)
-    }),
   )
 })

@@ -3,10 +3,12 @@ import {
   Context,
   DateTime,
   Effect,
+  Equal,
   Exit,
   Fiber,
   type FileSystem,
   type Logger,
+  Match,
   Option,
   type PlatformError,
   Predicate,
@@ -37,12 +39,10 @@ import {
   DEFAULT_MODEL_ID,
   resolveAgentModel,
   type Branch,
-  type BranchTreeNode,
   ConnectionState,
   type ExtensionHealthSnapshot,
   type GentClientRpcError,
   type GentNamespacedClient,
-  type Message,
   initialSessionMetrics,
   type QueueSnapshot,
   type UpdateSessionSettingsInput,
@@ -217,17 +217,16 @@ export interface Session {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly name: string
-  // eslint-disable-next-line effect/noNullish -- RPC session snapshots omit an unset model.
-  readonly modelId: ModelId | undefined
-  // eslint-disable-next-line effect/noNullish -- RPC session snapshots omit an unset reasoning level.
-  readonly reasoningLevel: ReasoningEffort | undefined
+  /** Absent until the session names a model: RPC session snapshots omit an unset one. */
+  readonly modelId?: ModelId
+  /** Absent until the session sets one. */
+  readonly reasoningLevel?: ReasoningEffort
   /**
    * The directory the session is rooted in, which is not always the TUI's
    * launch directory: `gent resume <id>` and a session switch reach sessions
    * rooted elsewhere. Absent until read when a switch named only the ids.
    */
-  // eslint-disable-next-line effect/noNullish -- a switch by id carries no cwd until the session is read.
-  readonly cwd: string | undefined
+  readonly cwd?: string
 }
 
 /** A change to the session's settings: a field left out stays as the server stores it. */
@@ -237,22 +236,17 @@ const SessionSchema: Schema.Schema<Session> = Schema.Struct({
   sessionId: SessionId,
   branchId: BranchId,
   name: Schema.String,
-  modelId: Schema.UndefinedOr(ModelId),
-  reasoningLevel: Schema.UndefinedOr(ReasoningEffort),
-  cwd: Schema.UndefinedOr(Schema.String),
+  modelId: Schema.optional(ModelId),
+  reasoningLevel: Schema.optional(ReasoningEffort),
+  cwd: Schema.optional(Schema.String),
 })
 
 export type SessionState =
   | { readonly status: "none" }
-  | { readonly status: "creating" }
   | { readonly status: "active"; readonly session: Session }
 
 export const SessionStateEvent = Schema.TaggedUnion({
-  CreateRequested: {},
-  CreateSucceeded: { session: SessionSchema },
-  CreateFailed: {},
   Activated: { session: SessionSchema },
-  Clear: {},
   UpdateName: { name: Schema.String },
   /** The session's cwd, read after a switch; ignored once the shell left that session. */
   UpdateCwd: { sessionId: SessionId, cwd: Schema.String },
@@ -265,7 +259,6 @@ export type SessionStateEvent = Schema.Schema.Type<typeof SessionStateEvent>
 
 export const SessionState = {
   none: (): SessionState => ({ status: "none" }),
-  creating: (): SessionState => ({ status: "creating" }),
   active: (session: Session): SessionState => ({ status: "active", session }),
 }
 
@@ -278,29 +271,23 @@ export function transitionSessionState(
   state: SessionState,
   event: SessionStateEvent,
 ): SessionState {
-  switch (event._tag) {
-    case "CreateRequested":
-      return SessionState.creating()
-    case "CreateSucceeded":
-    case "Activated":
-      return SessionState.active(event.session)
-    case "CreateFailed":
-    case "Clear":
-      return SessionState.none()
-    case "UpdateName":
-      return mapActive(state, (session) => ({ ...session, name: event.name }))
-    case "UpdateCwd":
-      return mapActive(state, (session) => {
-        if (session.sessionId !== event.sessionId) return session
-        return { ...session, cwd: event.cwd }
-      })
-    case "UpdateSettings":
-      return mapActive(state, (session) => ({
-        ...session,
-        modelId: event.modelId,
-        reasoningLevel: event.reasoningLevel,
-      }))
-  }
+  return Match.value(event).pipe(
+    Match.tagsExhaustive({
+      Activated: (activated) => SessionState.active(activated.session),
+      UpdateName: (update) => mapActive(state, (session) => ({ ...session, name: update.name })),
+      UpdateCwd: (update) =>
+        mapActive(state, (session) => {
+          if (session.sessionId !== update.sessionId) return session
+          return { ...session, cwd: update.cwd }
+        }),
+      UpdateSettings: (update) =>
+        mapActive(state, (session) => ({
+          ...session,
+          modelId: update.modelId,
+          reasoningLevel: update.reasoningLevel,
+        })),
+    }),
+  )
 }
 
 // ── event hub ───────────────────────────────────────────────────────────────
@@ -469,18 +456,15 @@ interface ClientTransportValue {
   /** Structured logger — flows through Effect's logger layer */
   log: ClientLog
 
-  // eslint-disable-next-line effect/noNullish -- RPC transport exposes an absent state before startup.
-  connectionState: () => ConnectionState | undefined
   waitForTransportReady: Effect.Effect<void>
   /** The generation of the open connection; None while it is not connected. */
   connectedGeneration: () => Option.Option<number>
   isReconnecting: () => boolean
-  // eslint-disable-next-line effect/noNullish -- UI transport exposes null when no issue is present.
-  connectionIssue: () => string | null
+  connectionIssue: () => Option.Option<string>
   extensionHealth: () => ExtensionHealthSnapshot
 
-  // eslint-disable-next-line effect/noNullish -- UI transport accepts null to clear its issue.
-  setConnectionIssue: (error: string | null) => void
+  /** None clears the issue. */
+  setConnectionIssue: (issue: Option.Option<string>) => void
 
   // Extension state-change pulse subscription. Fires once per
   // `ExtensionStateChanged` event seen on the active session for each
@@ -502,6 +486,8 @@ interface ClientTransportValue {
   applySessionSnapshot: (snapshot: SessionSnapshot) => void
   applySessionEvent: (envelope: EventEnvelope) => void
   applyBufferedSessionEvent: (envelope: EventEnvelope) => void
+  /** The feed's replay reached live delivery (`StreamSynchronized`). */
+  finishReplay: () => void
 }
 
 /**
@@ -523,16 +509,13 @@ export const sameIdentity = (left: SessionIdentity, right: SessionIdentity): boo
   left.sessionId === right.sessionId && left.branchId === right.branchId
 
 interface ClientSessionValue {
-  // Session state (union)
-  sessionState: () => SessionState
-  // eslint-disable-next-line effect/noNullish -- UI session accessors expose null while no session is active.
-  session: () => Session | null
+  /** None while no session is active. */
+  session: () => Option.Option<Session>
   /** The active session's ids; a new record with the same ids is the same value. */
   sessionIdentity: () => Option.Option<SessionIdentity>
   /** The active session's id alone, for consumers that never read the branch. */
   activeSessionId: () => Option.Option<SessionId>
   isActive: () => boolean
-  isLoading: () => boolean
   /**
    * The directory `@file` and `!cmd` resolve against: the active session's
    * cwd, read from the server when the record does not carry it yet. The
@@ -554,7 +537,6 @@ interface ClientSessionValue {
   /** Open the session a confirmed handoff produces: linked to the current one, seeded with the summary. */
   openHandoffSession: (summary: string) => void
   switchSession: (sessionId: SessionId, branchId: BranchId, name: string) => void
-  clearSession: () => void
   /**
    * Change the session's settings. Only the fields the change names are sent;
    * the server merges them into what it stores, and its reply is folded back.
@@ -562,13 +544,10 @@ interface ClientSessionValue {
   updateSessionSettings: (change: SessionSettingsChange) => Effect.Effect<void, GentClientRpcError>
 
   // Sync data fetching helpers (return Effects for caller to run)
-  listMessages: Effect.Effect<readonly Message[], GentClientRpcError>
   listBranches: Effect.Effect<readonly Branch[], GentClientRpcError>
   createBranch: (name?: string) => Effect.Effect<BranchId, GentClientRpcError>
-  getBranchTree: Effect.Effect<readonly BranchTreeNode[], GentClientRpcError>
   forkBranch: (messageId: MessageId, name?: string) => Effect.Effect<BranchId, GentClientRpcError>
   drainQueuedMessages: Effect.Effect<QueueSnapshot, GentClientRpcError>
-  getQueuedMessages: Effect.Effect<QueueSnapshot, GentClientRpcError>
 
   // Branch navigation (fire-and-forget)
   switchBranch: (branchId: BranchId) => void
@@ -590,13 +569,13 @@ export interface SessionMetrics {
 
 interface ClientAgentValue {
   // Agent state (derived from events)
-  // eslint-disable-next-line effect/noNullish -- UI agent accessors expose absence before hydration.
-  agent: () => AgentName | undefined
+  /** None until a snapshot names the session's agent. */
+  agent: () => Option.Option<AgentName>
   cost: () => number
   /** The model the next turn would use: session setting, else the server-resolved default. */
   model: () => string
-  // eslint-disable-next-line effect/noNullish -- UI agent accessors expose absence before hydration.
-  reasoningLevel: () => ReasoningEffort | undefined
+  /** The session's level, else the resolved one; None before either is known. */
+  reasoningLevel: () => Option.Option<ReasoningEffort>
   /** The reasoning level config/agent would apply without a session override. */
   resolvedReasoningLevel: () => Option.Option<ReasoningEffort>
   // Derived accessors
@@ -605,12 +584,12 @@ interface ClientAgentValue {
   /** How many turns the branch in view has started; None until its first snapshot lands. */
   turnsStarted: () => Option.Option<number>
   isError: () => boolean
-  // eslint-disable-next-line effect/noNullish -- UI agent accessors expose null outside the error state.
-  error: () => string | null
+  /** The error on screen; None outside the error state. */
+  error: () => Option.Option<string>
   /** What the last turn spent: the provider's token count and the model-context projection. */
   sessionMetrics: () => SessionMetrics
-  // eslint-disable-next-line effect/noNullish -- model metadata is absent until the model registry loads.
-  modelInfo: () => Model | undefined
+  /** None until the model registry loads the model in use. */
+  modelInfo: () => Option.Option<Model>
   /** The models a registered driver can run, in registry order; empty until both load. */
   models: () => readonly Model[]
   /** `models`, or `None` until the catalog's first load settles; a failed load settles empty. */
@@ -667,9 +646,7 @@ export type ClientContextValue = ClientTransportValue &
  * The four interfaces above name the facets of the client — transport,
  * session, agent, actions — but they are not four seams. They share one
  * provider, one lifetime, and one set of signals, and every consumer wants
- * them together. Splitting them into four Solid contexts only forced each
- * call site to spread them back into a single object, which allocated a new
- * value per read and let a stale copy outlive the seam it came from.
+ * them together, so they are one context value.
  */
 const ClientContext = createContext<ClientContextValue>()
 
@@ -742,8 +719,6 @@ export function ClientProvider(props: ClientProviderProps) {
     if (current.status === "active") return Option.some(current.session)
     return Option.none()
   }
-  // eslint-disable-next-line effect/noNullish -- UI session accessors use null for inactive state.
-  const session = (): Session | null => Option.getOrNull(sessionOption())
   // The one place the session's identity is derived. Held as a memo with an
   // equivalence on the ids so a rename or a settings change — both of which
   // rebuild the record — leaves this value untouched, and the effects keyed on
@@ -765,7 +740,6 @@ export function ClientProvider(props: ClientProviderProps) {
     { equals: Option.makeEquivalence<SessionId>((left, right) => left === right) },
   )
   const isActive = () => sessionState().status === "active"
-  const isLoading = () => sessionState().status === "creating"
 
   const cwdOf = (sessionId: SessionId): Effect.Effect<string, GentClientRpcError> =>
     Effect.suspend(() => {
@@ -837,14 +811,11 @@ export function ClientProvider(props: ClientProviderProps) {
   const [connectionState, setConnectionState] = createSignal<Option.Option<ConnectionState>>(
     Option.fromNullishOr(runtime.lifecycle.getState()),
   )
-  const connectionStateValue = () => Option.getOrUndefined(connectionState())
   const [connectionIssue, setConnectionIssueState] = createSignal<Option.Option<string>>(
     Option.none(),
   )
-  const connectionIssueValue = () => Option.getOrNull(connectionIssue())
-  // eslint-disable-next-line effect/noNullish -- UI transport uses null to clear an issue.
-  const setConnectionIssue = (error: string | null): void => {
-    setConnectionIssueState(Option.fromNullishOr(error))
+  const setConnectionIssue = (issue: Option.Option<string>): void => {
+    setConnectionIssueState(issue)
   }
   const clearConnectionIssue = (): void => {
     setConnectionIssueState(Option.none())
@@ -1067,23 +1038,13 @@ export function ClientProvider(props: ClientProviderProps) {
   )
 
   const applySessionRuntime: ClientTransportValue["applySessionRuntime"] = (input) => {
-    const current = sessionOption()
-    if (Option.isNone(current)) return
-    if (current.value.sessionId !== input.sessionId || current.value.branchId !== input.branchId)
-      return
+    if (!Option.exists(sessionOption(), (current) => sameIdentity(current, input))) return
     setRunning(input.runtime._tag !== "Idle")
   }
 
   const applySessionSnapshot = (snapshot: SessionSnapshot): void => {
     const currentSession = sessionOption()
-    if (Option.isSome(currentSession)) {
-      if (
-        currentSession.value.sessionId !== snapshot.sessionId ||
-        currentSession.value.branchId !== snapshot.branchId
-      ) {
-        return
-      }
-    }
+    if (Option.isSome(currentSession) && !sameIdentity(currentSession.value, snapshot)) return
     clearConnectionIssue()
     const nextSession = {
       sessionId: snapshot.sessionId,
@@ -1130,27 +1091,28 @@ export function ClientProvider(props: ClientProviderProps) {
    * A settings change moves them, and so can a project config edit, which
    * the server reads each turn; the server alone resolves the fallback. It
    * runs on a settings change and at a turn's end, never per step; the
-   * totals come from the fold.
+   * totals come from the fold. `session.get` answers the route without the
+   * conversation, so the read does not grow with the session's history.
    */
   const refreshResolvedSettings = (): void => {
     const currentSession = sessionOption()
     if (Option.isNone(currentSession)) return
     const s = currentSession.value
     cast(
-      client.session.getSnapshot({ sessionId: s.sessionId, branchId: s.branchId }).pipe(
-        Effect.tap((snapshot) =>
+      client.session.get({ sessionId: s.sessionId }).pipe(
+        Effect.tap((reply) =>
           Effect.sync(() => {
             // The session can change while this reply is in flight. Writing it
             // blind would restore the previous session's model over the new
-            // session's reset values, so a reply that no longer names the
-            // active branch is dropped.
+            // session's reset values, so a reply for a session the reader
+            // left, or for a session that is gone, is dropped.
+            const view = Option.fromNullishOr(reply)
             const active = sessionOption()
-            if (Option.isNone(active)) return
+            if (Option.isNone(view) || Option.isNone(active)) return
             if (active.value.sessionId !== s.sessionId) return
-            if (active.value.branchId !== s.branchId) return
             setAgentStore({
-              resolvedModelId: Option.some(snapshot.resolvedModelId),
-              resolvedReasoningLevel: Option.fromUndefinedOr(snapshot.resolvedReasoningLevel),
+              resolvedModelId: Option.fromUndefinedOr(view.value.resolvedModelId),
+              resolvedReasoningLevel: Option.fromUndefinedOr(view.value.resolvedReasoningLevel),
             })
           }),
         ),
@@ -1204,9 +1166,17 @@ export function ClientProvider(props: ClientProviderProps) {
   }
 
   // An extension that has news may report another health: read it again.
+  const isActivePulse = (event: EventEnvelope["event"]): boolean =>
+    event._tag === "ExtensionStateChanged" && Option.contains(activeSessionId(), event.sessionId)
   const invalidateHealthOn = (event: EventEnvelope["event"]): void => {
-    if (event._tag !== "ExtensionStateChanged") return
-    if (!Option.contains(activeSessionId(), event.sessionId)) return
+    if (isActivePulse(event)) setExtensionPulses((count) => count + 1)
+  }
+  // A replayed pulse is history, and a long session replays many. They read
+  // health once, when the replay ends.
+  let replayedPulse = false
+  const finishReplay = (): void => {
+    if (!replayedPulse) return
+    replayedPulse = false
     setExtensionPulses((count) => count + 1)
   }
 
@@ -1230,7 +1200,7 @@ export function ClientProvider(props: ClientProviderProps) {
     // Snapshot replay owns lifecycle, metadata, and metrics; buffered events
     // may still invalidate extension subscribers, which must stay idempotent.
     eventHub.notifyExtensionStateChanged(event)
-    invalidateHealthOn(event)
+    if (isActivePulse(event)) replayedPulse = true
   }
 
   const transportValue: ClientTransportValue = {
@@ -1239,12 +1209,11 @@ export function ClientProvider(props: ClientProviderProps) {
     services,
     log,
 
-    connectionState: connectionStateValue,
     waitForTransportReady: runtime.lifecycle.waitForReady,
     connectedGeneration,
     isReconnecting,
     extensionHealth,
-    connectionIssue: connectionIssueValue,
+    connectionIssue,
     setConnectionIssue,
     onExtensionStateChanged: eventHub.onExtensionStateChanged,
     onSessionEvent: eventHub.onSessionEvent,
@@ -1253,7 +1222,13 @@ export function ClientProvider(props: ClientProviderProps) {
     applySessionSnapshot,
     applySessionEvent,
     applyBufferedSessionEvent,
+    finishReplay,
   }
+
+  // Each navigation (a create sent, a session switch) takes the next number.
+  // A create answers late, so it takes the view only while its number is the
+  // latest: a later /new or switch has overtaken it otherwise.
+  let navigation = 0
 
   const createSessionWith = (
     input: Pick<
@@ -1261,7 +1236,9 @@ export function ClientProvider(props: ClientProviderProps) {
       "parentSessionId" | "parentBranchId" | "continueThread" | "initialPrompt"
     >,
   ) => {
-    dispatchSession(SessionStateEvent.cases.CreateRequested.make({}))
+    const ownNavigation = ++navigation
+    // The current session stays in view until the server answers: a create
+    // it refuses leaves the reader where they were, with the reason.
     const createSessionEffect = Effect.fn("TUI.createSession")(function* () {
       const requestId = yield* randomId
       yield* Effect.sync(() => {
@@ -1273,19 +1250,21 @@ export function ClientProvider(props: ClientProviderProps) {
       createSessionEffect().pipe(
         Effect.tap((result) =>
           Effect.sync(() => {
-            // Create always transitions out of a prior session (or from
-            // "none"), so extension health is cleared unconditionally. The
-            // session's snapshot names its agent: a handoff inherits its
-            // parent's, so assuming the default would flicker.
+            if (ownNavigation !== navigation) {
+              log.info("createSession.overtaken", { sessionId: result.sessionId })
+              return
+            }
+            // A new session is never the one in view, so extension health is
+            // cleared unconditionally. The session's snapshot names its agent:
+            // a handoff inherits its parent's, so assuming the default would
+            // flicker.
             resetForSession({ agent: Option.none(), clearExtensionHealth: true })
             dispatchSession(
-              SessionStateEvent.cases.CreateSucceeded.make({
+              SessionStateEvent.cases.Activated.make({
                 session: {
                   sessionId: result.sessionId,
                   branchId: result.branchId,
                   name: result.name,
-                  modelId: Option.getOrUndefined(Option.none()),
-                  reasoningLevel: Option.getOrUndefined(Option.none()),
                   cwd: workspace.cwd,
                 },
               }),
@@ -1295,7 +1274,6 @@ export function ClientProvider(props: ClientProviderProps) {
         Effect.catchEager((err) =>
           Effect.sync(() => {
             log.error("createSession.failed", { error: String(err) })
-            dispatchSession(SessionStateEvent.cases.CreateFailed.make({}))
             showError(Option.some(formatError(err)))
           }),
         ),
@@ -1304,13 +1282,10 @@ export function ClientProvider(props: ClientProviderProps) {
   }
 
   const sessionValue: ClientSessionValue = {
-    // Session state
-    sessionState,
-    session,
+    session: sessionOption,
     sessionIdentity,
     activeSessionId,
     isActive,
-    isLoading,
     sessionCwd,
     cwdOf,
     pathPlace,
@@ -1330,7 +1305,10 @@ export function ClientProvider(props: ClientProviderProps) {
 
     switchSession: (sessionId, branchId, name) => {
       const current = sessionOption()
-      // Choosing the session already in view changes nothing. A reset here
+      // A switch overtakes any create still waiting, even a switch to the
+      // session already in view: the reader chose where to be.
+      navigation++
+      // Choosing the session already in view changes nothing else. A reset here
       // would clear its status, metrics and settings, and no snapshot comes to
       // restore them: the identity did not change, so the feed does not re-run.
       if (Option.exists(current, (value) => sameIdentity(value, { sessionId, branchId }))) return
@@ -1356,24 +1334,11 @@ export function ClientProvider(props: ClientProviderProps) {
             sessionId,
             branchId,
             name,
-            modelId: Option.getOrUndefined(Option.none()),
-            reasoningLevel: Option.getOrUndefined(Option.none()),
             cwd,
           },
         }),
       )
     },
-
-    clearSession: () => {
-      dispatchSession(SessionStateEvent.cases.Clear.make({}))
-      resetForSession({ agent: Option.some(DEFAULT_AGENT_NAME), clearExtensionHealth: true })
-    },
-
-    listMessages: Effect.gen(function* () {
-      const currentSession = sessionOption()
-      if (Option.isNone(currentSession)) return [] satisfies readonly Message[]
-      return yield* client.message.list({ branchId: currentSession.value.branchId })
-    }),
 
     listBranches: Effect.gen(function* () {
       const currentSession = sessionOption()
@@ -1411,14 +1376,6 @@ export function ClientProvider(props: ClientProviderProps) {
       })
     },
 
-    getBranchTree: Effect.gen(function* () {
-      const currentSession = sessionOption()
-      if (Option.isNone(currentSession)) {
-        return [] satisfies readonly BranchTreeNode[]
-      }
-      return yield* client.branch.getTree({ sessionId: currentSession.value.sessionId })
-    }),
-
     forkBranch: (messageId, name) => {
       const currentSession = sessionOption()
       if (Option.isNone(currentSession)) return Effect.succeed(BranchId.make(""))
@@ -1446,17 +1403,6 @@ export function ClientProvider(props: ClientProviderProps) {
         sessionId: currentSession.value.sessionId,
         branchId: currentSession.value.branchId,
         requestId,
-      })
-    }),
-
-    getQueuedMessages: Effect.gen(function* () {
-      const currentSession = sessionOption()
-      if (Option.isNone(currentSession)) {
-        return { steering: [], followUp: [] } satisfies QueueSnapshot
-      }
-      return yield* client.queue.get({
-        sessionId: currentSession.value.sessionId,
-        branchId: currentSession.value.branchId,
       })
     }),
 
@@ -1488,7 +1434,7 @@ export function ClientProvider(props: ClientProviderProps) {
   // `Option` for the agent (a reconnect refetches one), and a write of the
   // same name is not a new agent: the effects keyed on it (the auth gate, the
   // auth pane's catalog) must not run again and reset an open sign-in.
-  const agentName = createMemo(() => Option.getOrUndefined(agentStore.agent))
+  const agentName = createMemo(() => agentStore.agent, Option.none(), { equals: Equal.equals })
   const agentValue: ClientAgentValue = {
     agent: agentName,
     cost: () => runtimeMetrics().costUsd,
@@ -1508,20 +1454,18 @@ export function ClientProvider(props: ClientProviderProps) {
       return DEFAULT_MODEL_ID
     },
     reasoningLevel: () =>
-      Option.getOrUndefined(
-        Option.orElse(
-          Option.flatMap(sessionOption(), (s) => Option.fromUndefinedOr(s.reasoningLevel)),
-          () => agentStore.resolvedReasoningLevel,
-        ),
+      Option.orElse(
+        Option.flatMap(sessionOption(), (s) => Option.fromUndefinedOr(s.reasoningLevel)),
+        () => agentStore.resolvedReasoningLevel,
       ),
     resolvedReasoningLevel: () => agentStore.resolvedReasoningLevel,
     // Derived accessors
     isStreaming: () => agentStore.running,
     turnsStarted: () => agentStore.turnsStarted,
     isError: () => Option.isSome(agentStore.error),
-    error: () => Option.getOrNull(agentStore.error),
+    error: () => agentStore.error,
     sessionMetrics,
-    modelInfo: () => modelStore.modelsById[agentValue.model()],
+    modelInfo: () => Option.fromNullishOr(modelStore.modelsById[agentValue.model()]),
     models: runnableModels,
     modelCatalog: () => {
       if (!modelStore.settled) return Option.none()

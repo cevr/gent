@@ -4,11 +4,7 @@ import { Effect, Option, Queue } from "effect"
 import { createSignal } from "solid-js"
 import { WAKE_EXTENSION_ID, type WakePendingType } from "@gent/extensions/client"
 import { BranchId, SessionId } from "@gent/core/extensions/api"
-import wakeExtension, {
-  formatRemaining,
-  WakeTray,
-  wakeTrayLines,
-} from "../../src/extensions/wake.client"
+import wakeExtension, { WakeTray, wakeTrayLines } from "../../src/extensions/wake.client"
 import { makeClientTestTransport, provideClientServices } from "../extension-test-harness-boundary"
 import { renderFrame, renderWithProviders } from "../render-harness-boundary"
 import { waitForFrame } from "../helpers-boundary"
@@ -36,12 +32,24 @@ const pending: WakePendingType = {
 }
 
 describe("wakeTrayLines", () => {
-  it.live("formats remaining time in the largest two units", () =>
+  it.live("an hour left reads as the agents pane spells an hour", () =>
     Effect.sync(() => {
-      expect(formatRemaining(0)).toBe("now")
-      expect(formatRemaining(45_000)).toBe("45s")
-      expect(formatRemaining(95_000)).toBe("1m 35s")
-      expect(formatRemaining(3_720_000)).toBe("1h 02m")
+      const long: WakePendingType = {
+        now: 0,
+        entries: [
+          {
+            _tag: "monitor",
+            wakeId: "m",
+            command: "true",
+            everySeconds: 45,
+            deadline: 3_720_000,
+            note: "soak",
+          },
+        ],
+      }
+      expect(wakeTrayLines(long, 0, 80)).toEqual([
+        { glyph: "◉", text: "monitor every 45s · 1h 2m left · soak" },
+      ])
     }),
   )
 
@@ -49,7 +57,7 @@ describe("wakeTrayLines", () => {
     Effect.sync(() => {
       expect(wakeTrayLines(pending, 1_000_000, 80)).toEqual([
         { glyph: "◷", text: "alarm in 1m 35s · check the deploy" },
-        { glyph: "◉", text: "monitor every 1m 00s · 25m 00s left · merge when green" },
+        { glyph: "◉", text: "monitor every 1m 0s · 25m 0s left · merge when green" },
       ])
       const many: WakePendingType = {
         now: 0,
@@ -77,7 +85,7 @@ describe("wakeTrayLines", () => {
         ],
       }
       expect(wakeTrayLines(repeating, 0, 80)).toEqual([
-        { glyph: "◷", text: "alarm (notify) in 1m 00s · every 5m 00s · stretch" },
+        { glyph: "◷", text: "alarm (notify) in 1m 0s · every 5m 0s · stretch" },
       ])
       const noticed: WakePendingType = {
         now: 120_000,
@@ -94,7 +102,7 @@ describe("wakeTrayLines", () => {
         ],
       }
       expect(wakeTrayLines(noticed, 120_000, 80)).toEqual([
-        { glyph: "◆", text: "fired 2m 00s ago · stand up" },
+        { glyph: "◆", text: "fired 2m 0s ago · stand up" },
         { glyph: "◷", text: "alarm in 10s · later" },
       ])
       expect(wakeTrayLines(pending, 1_000_000, 20)[0]?.text).toBe("alarm in 1m 35s · c…")
@@ -132,7 +140,7 @@ describe("Wake tray", () => {
       yield* waitForFrame(setup, () => renderFrame(setup).includes("alarm in"), "tray")
       const frame = renderFrame(setup)
       expect(frame).toContain("◷ alarm in 1m 35s · check the deploy")
-      expect(frame).toContain("◉ monitor every 1m 00s")
+      expect(frame).toContain("◉ monitor every 1m 0s")
       setValue(Option.some({ now: 1_000_000, entries: [] }))
       yield* waitForFrame(setup, () => !renderFrame(setup).includes("alarm in"), "tray hidden")
     }),
