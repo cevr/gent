@@ -10,7 +10,7 @@ import {
   type SessionRuntimeState,
 } from "@gent/core/test-utils"
 import { describe, expect, it, test } from "effect-bun-test"
-import { Clock, Context, Deferred, Effect, Option, Predicate, Schema, Stream } from "effect"
+import { Clock, Deferred, Effect, Option, Predicate, Schema, Stream } from "effect"
 import { TestClock } from "effect/testing"
 import type { GentRuntime } from "@gent/sdk"
 import {
@@ -1928,14 +1928,11 @@ describe("useSessionFeed", () => {
       let watchDelivered = yield* Deferred.make<void>()
       // The feed runs on a test clock, so the backoff runs in test time.
       const clock = yield* TestClock.make()
-      const withClock = <R,>() =>
-        Context.makeUnsafe<R>(new Map<string, unknown>([[Clock.Clock.key, clock]]))
+      const withClock = createMockRuntime(new Map([[Clock.Clock.key, clock]]))
       const runtime: GentRuntime = {
         ...createMockRuntime(),
-        cast: (effect) => {
-          Effect.runForkWith(withClock())(effect)
-        },
-        fork: (effect) => Effect.runForkWith(withClock())(effect),
+        cast: withClock.cast,
+        fork: withClock.fork,
       }
       const dispose = createRoot((disposeRoot) => {
         const [active] = createSignal(makeSession(sessionId, branchId))

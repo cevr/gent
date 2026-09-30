@@ -966,11 +966,7 @@ describe("user configuration", () => {
     })
 
     const expectDriverOverride = (cfg: UserConfig, agent: string, expectedId: string): void => {
-      const override = cfg.driverOverrides?.[AgentName.make(agent)]
-      if (Predicate.isUndefined(override)) {
-        return Effect.runSync(Effect.die(new Error(`expected ${agent} override`)))
-      }
-      expect(override.id).toBe(expectedId)
+      expect(cfg.driverOverrides?.[AgentName.make(agent)]?.id).toBe(expectedId)
     }
 
     // A read that failed is not a decode: the stat does not change when a

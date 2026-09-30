@@ -46,7 +46,7 @@ import { collectTestContributions } from "@gent/core/test-utils"
 import {
   makeClientExtensionRuntime,
   makeClientTestTransport,
-  makePaneSlot,
+  makeUnreachableTransport,
   runClientExtensionSetup,
 } from "../extension-test-harness-boundary"
 import { defineRequests, ExtensionId, ref, request } from "@gent/core/extensions/api"
@@ -61,7 +61,6 @@ import {
   readFrecencyStore,
   recordPick,
 } from "../../src/autocomplete"
-import { makeClientRuntime } from "../../src/extensions/host"
 import { createMockClient, createMockRuntime } from "../render-harness-boundary"
 import * as EffectEntry from "effect"
 import * as ProtocolEntry from "@gent/core/protocol"
@@ -452,8 +451,12 @@ const clientEntries = {
   "solid-js/store": SolidStoreEntry,
   "@opentui/solid": OpenTuiSolidEntry,
 }
-/** Where a probe extension leaves the modules it imported, for the test to compare. */
-const PROBE_GLOBAL = "__gentClientEntriesProbe"
+/** The modules a probe extension imported, as it hands them to the shell for the test to compare. */
+const EntriesProbe = Schema.Struct({
+  bound: Schema.Record(Schema.String, Schema.Record(Schema.String, Schema.Unknown)),
+  helperSessionId: Schema.Unknown,
+  packageCreateSignal: Schema.Unknown,
+})
 // gent/no-dynamic-imports: allow the test imports a server-style file as the server loader does
 const importFile = (file: string) => Effect.tryPromise(() => import(file))
 const runtime = makeClientExtensionRuntime()
@@ -623,8 +626,9 @@ const bound = {
 const Probe = () => <Label text="entries probe" />
 
 export default tui.defineClientExtension("@user/client-entries", {
-  setup: effect.Effect.sync(() => {
-    Reflect.set(globalThis, ${encode(PROBE_GLOBAL)}, { bound, helperSessionId, packageCreateSignal })
+  setup: effect.Effect.gen(function* () {
+    const { shell } = yield* tui.ClientContext
+    shell.cast(effect.Effect.succeed({ bound, helperSessionId, packageCreateSignal }))
     return tui.clientContributions(
       tui.widgetContribution({ id: "entries-probe", slot: "below-input", component: Probe }),
       tui.clientCommandContribution({ id: "entries-probe", title: "Entries probe", onSelect: () => {} }),
@@ -633,24 +637,32 @@ export default tui.defineClientExtension("@user/client-entries", {
 })
 `,
         )
-        yield* Effect.addFinalizer(() =>
-          Effect.sync(() => Reflect.deleteProperty(globalThis, PROBE_GLOBAL)),
-        )
-        const result = yield* loadTuiExtensions({ userDir, projectDir, runtime })
+        // The probe extension casts its imports to the shell; the test keeps the cast.
+        const casts: Array<Effect.Effect<unknown>> = []
+        const probeRuntime = makeClientExtensionRuntime({
+          shell: {
+            cast: (cast) => {
+              casts.push(Effect.orDie(cast))
+            },
+          },
+        })
+        yield* Effect.addFinalizer(() => Effect.promise(() => probeRuntime.dispose()))
+        const result = yield* loadTuiExtensions({ userDir, projectDir, runtime: probeRuntime })
         expect(result.failures).toEqual([])
         expect(result.widgets.map((entry) => entry.id)).toContain("entries-probe")
         expect(
           result.commandSources.flatMap((source) => source.commands.map((command) => command.id)),
         ).toContain("entries-probe")
 
-        const probe: object = Reflect.get(globalThis, PROBE_GLOBAL)
-        expect(Reflect.get(probe, "helperSessionId")).toBe(ProtocolEntry.SessionId)
-        expect(Reflect.get(probe, "packageCreateSignal")).toBe(SolidEntry.createSignal)
-        const bound: object = Reflect.get(probe, "bound")
+        expect(casts).toHaveLength(1)
+        const probe = yield* Schema.decodeUnknownEffect(EntriesProbe)(
+          yield* Option.getOrThrow(Option.fromNullishOr(casts[0])),
+        )
+        expect(probe.helperSessionId).toBe(ProtocolEntry.SessionId)
+        expect(probe.packageCreateSignal).toBe(SolidEntry.createSignal)
         for (const [specifier, entryModule] of Object.entries(clientEntries)) {
-          const imported: object = Reflect.get(bound, specifier)
           for (const [name, value] of Object.entries(entryModule)) {
-            const same = Reflect.get(imported, name) === value
+            const same = probe.bound[specifier]?.[name] === value
             expect({ specifier, name, same }).toEqual({
               specifier,
               name,
@@ -1340,37 +1352,7 @@ describe("skills autocomplete records and reads pick history", () => {
  * discovery, override precedence, disabled gating, invalid-file tolerance,
  * overlay state, autocomplete visibility, and startup with an active session.
  */
-const throwOnAccess = (label: string): never =>
-  Effect.runSync(Effect.die(`unexpected transport call in pure load test: ${label}`))
-const stubClient = new Proxy(createMockClient(), {
-  get: (_target, prop) =>
-    new Proxy(
-      {},
-      {
-        get: (_target2, method) => () => throwOnAccess(`client.${String(prop)}.${String(method)}`),
-      },
-    ),
-})
-const stubRuntime = new Proxy(createMockRuntime(), {
-  get: (_target, method) => () => throwOnAccess(`runtime.${String(method)}`),
-})
-
-const castTestShellEffect = <A, E>(effect: Effect.Effect<A, E, never>): void => {
-  Effect.runFork(effect)
-}
-
-const testRuntime = makeClientRuntime(BunServices.layer, {
-  transport: {
-    client: stubClient,
-    runtime: stubRuntime,
-    currentSession: () => Option.none(),
-    onExtensionStateChanged: () => () => {},
-    onSessionEvent: () => () => {},
-    modelCatalog: () => Option.none(),
-  },
-  workspace: { cwd: "/nonexistent/test-cwd", home: "/nonexistent/test-home" },
-  shell: { cast: castTestShellEffect, pane: makePaneSlot() },
-})
+const testRuntime = makeClientExtensionRuntime({ transport: makeUnreachableTransport() })
 /** Run the loader on a client runtime, the stub one unless the test gives its own. */
 const loadTuiExtensions = (
   opts: Parameters<typeof _loadTuiExtensions>[0] & { readonly runtime?: ClientRuntime },

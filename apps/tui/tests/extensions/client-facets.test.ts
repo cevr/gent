@@ -20,7 +20,8 @@ import { inRuntime, waitUntil } from "../helpers-boundary"
 
 // ── extension lifecycle ─────────────────────────────────────────────────────
 
-const throwCleanup = (): never => Effect.runSync(Effect.die("boom"))
+/** A cleanup that throws, as a widget disposer can: reading an absent Option throws. */
+const throwCleanup = (): never => Option.getOrThrow(Option.none())
 
 describe("transport-only extension widgets", () => {
   test("cleanups fire in registration order", () => {

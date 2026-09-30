@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { Effect, Option, Schema } from "effect"
+import { Option, Schema } from "effect"
 import {
   AgentName,
   calculateCost,
@@ -21,19 +21,19 @@ describe("AgentName brand", () => {
 
   test("plain string fails the brand predicate at the schema boundary", () => {
     expect(Schema.is(AgentName)("cowork")).toBe(true) // brand-only filter accepts strings at runtime
-    const decoded = Effect.runSync(Schema.decodeEffect(AgentName)("research"))
+    const decoded = Schema.decodeSync(AgentName)("research")
     expect(decoded).toBe(AgentName.make("research"))
   })
 })
 
 describe("ApprovalRequest / ApprovalDecision schemas", () => {
   test("ApprovalRequest accepts text + optional metadata", () => {
-    const decoded = Effect.runSync(Schema.decodeEffect(ApprovalRequestSchema)({ text: "approve?" }))
+    const decoded = Schema.decodeSync(ApprovalRequestSchema)({ text: "approve?" })
     expect(decoded.text).toBe("approve?")
   })
 
   test("ApprovalDecision requires approved boolean", () => {
-    const decoded = Effect.runSync(Schema.decodeEffect(ApprovalDecisionSchema)({ approved: true }))
+    const decoded = Schema.decodeSync(ApprovalDecisionSchema)({ approved: true })
     expect(decoded.approved).toBe(true)
   })
 })

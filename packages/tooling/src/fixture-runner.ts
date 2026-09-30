@@ -67,10 +67,7 @@ const spawnOxlint = Effect.fn("Tooling.spawnOxlint")(function* (
   return { report, exitCode: proc.exitCode, stderr }
 })
 
-/**
- * Lint a fixture set in one oxlint process. The run is synchronous, so a test
- * file can lint its fixtures while it registers its tests.
- */
+/** Lint a fixture set in one oxlint process. */
 export const runOxlint = (fixtureFiles: ReadonlyArray<string>) =>
   spawnOxlint(
     ["-c", FIXTURES_CONFIG, ...fixtureFiles],

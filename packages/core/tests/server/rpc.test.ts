@@ -118,9 +118,8 @@ import { type LogEvent, WideEventLogger } from "effect-wide-event"
 
 // ── rpc contract schemas ────────────────────────────────────────────────────
 
-const decodeSuccess = (key: string, value: Readonly<Record<string, string>>): unknown => {
-  const rpc = GentRpcs.requests.get(key)
-  if (Predicate.isUndefined(rpc)) return Effect.runSync(Effect.die(new Error(`Missing RPC ${key}`)))
+const decodeSuccess = (key: string, value: Readonly<Record<string, string>>) => {
+  const rpc = Option.getOrThrow(Option.fromUndefinedOr(GentRpcs.requests.get(key)))
   return Schema.decodeSync(rpc.successSchema)(value)
 }
 

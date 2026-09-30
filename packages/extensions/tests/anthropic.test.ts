@@ -90,13 +90,10 @@ const testPlatformLayer = Layer.succeed(
 const JsonRecordSchema = Schema.Record(Schema.String, Schema.Unknown)
 type JsonRecord = Schema.Schema.Type<typeof JsonRecordSchema>
 
-// Synchronously run a transformPayload effect — `BunCrypto.layer` hashes
-// with `node:crypto` `createHash`, which is synchronous.
-const transformPayload = (payload: JsonRecord): JsonRecord =>
-  Effect.runSync(
-    transformPayloadEffect(payload, "1h").pipe(
-      Effect.provide(Layer.merge(BunCrypto.layer, testPlatformLayer)),
-    ),
+/** The payload transform with the host's crypto and platform provided. */
+const transformPayload = (payload: JsonRecord) =>
+  transformPayloadEffect(payload, "1h").pipe(
+    Effect.provide(Layer.merge(BunCrypto.layer, testPlatformLayer)),
   )
 
 const WireContentBlock = Schema.Struct({
@@ -129,108 +126,122 @@ describe("transformPayload", () => {
   // billing validator rejects lowercase-after-prefix tool names when
   // multiple tools are present (matches Claude Code's PascalCase
   // convention; opencode-claude-auth issue notes).
-  test("prefixes tool names in tools[] with PascalCase", () => {
-    const payload = {
-      model: "claude-opus-4-6",
-      max_tokens: 4096,
-      messages: [],
-      tools: [
-        { type: "custom", name: "echo", input_schema: { type: "object" } },
-        { type: "custom", name: "search", input_schema: { type: "object" } },
-      ],
-    }
-    const result = transformPayload(payload)
-    const tools = decodeNamedTools(result["tools"])
-    expect(tools[0]!.name).toBe("mcp_Echo")
-    expect(tools[1]!.name).toBe("mcp_Search")
-  })
+  it.effect("prefixes tool names in tools[] with PascalCase", () =>
+    Effect.gen(function* () {
+      const payload = {
+        model: "claude-opus-4-6",
+        max_tokens: 4096,
+        messages: [],
+        tools: [
+          { type: "custom", name: "echo", input_schema: { type: "object" } },
+          { type: "custom", name: "search", input_schema: { type: "object" } },
+        ],
+      }
+      const result = yield* transformPayload(payload)
+      const tools = decodeNamedTools(result["tools"])
+      expect(tools[0]!.name).toBe("mcp_Echo")
+      expect(tools[1]!.name).toBe("mcp_Search")
+    }),
+  )
 
-  test("prefixes tool_use names in historical messages with PascalCase", () => {
-    const payload = {
-      model: "claude-opus-4-6",
-      max_tokens: 4096,
-      messages: [
-        {
-          role: "assistant",
-          content: [
-            { type: "text", text: "Let me check." },
-            { type: "tool_use", id: "tc-1", name: "echo", input: { text: "hi" } },
-          ],
-        },
-        {
-          role: "user",
-          content: [{ type: "tool_result", tool_use_id: "tc-1", content: "echoed" }],
-        },
-      ],
-    }
-    const result = transformPayload(payload)
-    const msgs = decodeMessagesWithBlocks(result["messages"])
-    const toolUse = msgs[0]!.content[1]!
-    expect(toolUse["name"]).toBe("mcp_Echo")
-  })
+  it.effect("prefixes tool_use names in historical messages with PascalCase", () =>
+    Effect.gen(function* () {
+      const payload = {
+        model: "claude-opus-4-6",
+        max_tokens: 4096,
+        messages: [
+          {
+            role: "assistant",
+            content: [
+              { type: "text", text: "Let me check." },
+              { type: "tool_use", id: "tc-1", name: "echo", input: { text: "hi" } },
+            ],
+          },
+          {
+            role: "user",
+            content: [{ type: "tool_result", tool_use_id: "tc-1", content: "echoed" }],
+          },
+        ],
+      }
+      const result = yield* transformPayload(payload)
+      const msgs = decodeMessagesWithBlocks(result["messages"])
+      const toolUse = msgs[0]!.content[1]!
+      expect(toolUse["name"]).toBe("mcp_Echo")
+    }),
+  )
 
-  test("does not prefix non-tool_use blocks", () => {
-    const payload = {
-      model: "claude-opus-4-6",
-      max_tokens: 4096,
-      messages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "hello" }],
-        },
-      ],
-    }
-    const result = transformPayload(payload)
-    const msgs = decodeMessagesWithBlocks(result["messages"])
-    expect(msgs[0]!.content[0]!["type"]).toBe("text")
-    expect(msgs[0]!.content[0]!["text"]).toBe("hello")
-  })
+  it.effect("does not prefix non-tool_use blocks", () =>
+    Effect.gen(function* () {
+      const payload = {
+        model: "claude-opus-4-6",
+        max_tokens: 4096,
+        messages: [
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "hello" }],
+          },
+        ],
+      }
+      const result = yield* transformPayload(payload)
+      const msgs = decodeMessagesWithBlocks(result["messages"])
+      expect(msgs[0]!.content[0]!["type"]).toBe("text")
+      expect(msgs[0]!.content[0]!["text"]).toBe("hello")
+    }),
+  )
 
-  test("prefixes tool_choice name with PascalCase when type is tool", () => {
-    const payload = {
-      model: "claude-opus-4-6",
-      max_tokens: 4096,
-      messages: [],
-      tool_choice: { type: "tool", name: "echo" },
-    }
-    const result = transformPayload(payload)
-    const tc = decodeToolChoice(result["tool_choice"])
-    expect(tc.name).toBe("mcp_Echo")
-  })
+  it.effect("prefixes tool_choice name with PascalCase when type is tool", () =>
+    Effect.gen(function* () {
+      const payload = {
+        model: "claude-opus-4-6",
+        max_tokens: 4096,
+        messages: [],
+        tool_choice: { type: "tool", name: "echo" },
+      }
+      const result = yield* transformPayload(payload)
+      const tc = decodeToolChoice(result["tool_choice"])
+      expect(tc.name).toBe("mcp_Echo")
+    }),
+  )
 
-  test("does not modify tool_choice when type is auto", () => {
-    const payload = {
-      model: "claude-opus-4-6",
-      max_tokens: 4096,
-      messages: [],
-      tool_choice: { type: "auto" },
-    }
-    const result = transformPayload(payload)
-    expect(result["tool_choice"]).toEqual({ type: "auto" })
-  })
+  it.effect("does not modify tool_choice when type is auto", () =>
+    Effect.gen(function* () {
+      const payload = {
+        model: "claude-opus-4-6",
+        max_tokens: 4096,
+        messages: [],
+        tool_choice: { type: "auto" },
+      }
+      const result = yield* transformPayload(payload)
+      expect(result["tool_choice"]).toEqual({ type: "auto" })
+    }),
+  )
 
-  test("unconditionally prefixes — mcp_foo becomes mcp_Mcp_foo", () => {
-    const payload = {
-      model: "claude-opus-4-6",
-      max_tokens: 4096,
-      messages: [],
-      tools: [{ type: "custom", name: "mcp_foo", input_schema: { type: "object" } }],
-    }
-    const result = transformPayload(payload)
-    const tools = decodeNamedTools(result["tools"])
-    expect(tools[0]!.name).toBe("mcp_Mcp_foo")
-  })
+  it.effect("unconditionally prefixes — mcp_foo becomes mcp_Mcp_foo", () =>
+    Effect.gen(function* () {
+      const payload = {
+        model: "claude-opus-4-6",
+        max_tokens: 4096,
+        messages: [],
+        tools: [{ type: "custom", name: "mcp_foo", input_schema: { type: "object" } }],
+      }
+      const result = yield* transformPayload(payload)
+      const tools = decodeNamedTools(result["tools"])
+      expect(tools[0]!.name).toBe("mcp_Mcp_foo")
+    }),
+  )
 
-  test("passes through payload without tools/messages", () => {
-    const payload = {
-      model: "claude-opus-4-6",
-      max_tokens: 4096,
-      messages: [],
-    }
-    const result = transformPayload(payload)
-    expect(result["model"]).toBe("claude-opus-4-6")
-    expect(result["max_tokens"]).toBe(4096)
-  })
+  it.effect("passes through payload without tools/messages", () =>
+    Effect.gen(function* () {
+      const payload = {
+        model: "claude-opus-4-6",
+        max_tokens: 4096,
+        messages: [],
+      }
+      const result = yield* transformPayload(payload)
+      expect(result["model"]).toBe("claude-opus-4-6")
+      expect(result["max_tokens"]).toBe(4096)
+    }),
+  )
 })
 
 // ── transformResponseContent ──
@@ -320,155 +331,169 @@ describe("transformStreamEvent", () => {
 // ── system relocation (opencode parity A) ──
 
 describe("transformPayload — system content relocation", () => {
-  test("moves third-party system blocks into the first user message", () => {
-    const payload = {
-      model: "claude-opus-4-6",
-      max_tokens: 4096,
-      system: [
-        { type: "text", text: "third-party system instructions" },
-        { type: "text", text: "additional rules" },
-      ],
-      messages: [{ role: "user", content: [{ type: "text", text: "hello" }] }],
-    }
-    const result = transformPayload(payload)
-    const system = decodeSystemBlocks(result["system"])
-    // After relocation, system[] holds only billing + identity entries.
-    expect(system).toHaveLength(2)
-    const systemTexts = system.map((b) => b.text ?? "")
-    expect(systemTexts.some((t) => t.startsWith("x-anthropic-billing-header"))).toBe(true)
-    expect(systemTexts.some((t) => t.startsWith(SYSTEM_IDENTITY_PREFIX))).toBe(true)
-    // Relocated content is prepended to the first user message.
-    const messages = decodeMessagesWithBlocks(result["messages"])
-    const firstUserContent = messages[0]!.content
-    expect(firstUserContent[0]!["type"]).toBe("text")
-    expect(firstUserContent[0]!["text"]).toContain("third-party system instructions")
-    expect(firstUserContent[0]!["text"]).toContain("additional rules")
-    // Original user text survives at the tail.
-    expect(firstUserContent[1]!["text"]).toBe("hello")
-  })
+  it.effect("moves third-party system blocks into the first user message", () =>
+    Effect.gen(function* () {
+      const payload = {
+        model: "claude-opus-4-6",
+        max_tokens: 4096,
+        system: [
+          { type: "text", text: "third-party system instructions" },
+          { type: "text", text: "additional rules" },
+        ],
+        messages: [{ role: "user", content: [{ type: "text", text: "hello" }] }],
+      }
+      const result = yield* transformPayload(payload)
+      const system = decodeSystemBlocks(result["system"])
+      // After relocation, system[] holds only billing + identity entries.
+      expect(system).toHaveLength(2)
+      const systemTexts = system.map((b) => b.text ?? "")
+      expect(systemTexts.some((t) => t.startsWith("x-anthropic-billing-header"))).toBe(true)
+      expect(systemTexts.some((t) => t.startsWith(SYSTEM_IDENTITY_PREFIX))).toBe(true)
+      // Relocated content is prepended to the first user message.
+      const messages = decodeMessagesWithBlocks(result["messages"])
+      const firstUserContent = messages[0]!.content
+      expect(firstUserContent[0]!["type"]).toBe("text")
+      expect(firstUserContent[0]!["text"]).toContain("third-party system instructions")
+      expect(firstUserContent[0]!["text"]).toContain("additional rules")
+      // Original user text survives at the tail.
+      expect(firstUserContent[1]!["text"]).toBe("hello")
+    }),
+  )
 
-  test("relocates into a string-content user message", () => {
-    const payload = {
-      model: "claude-opus-4-6",
-      max_tokens: 4096,
-      system: [{ type: "text", text: "third-party prefix" }],
-      messages: [{ role: "user", content: "hello" }],
-    }
-    const result = transformPayload(payload)
-    const messages = decodeMessagesWithText(result["messages"])
-    expect(messages[0]!.content).toContain("third-party prefix")
-    expect(messages[0]!.content.endsWith("hello")).toBe(true)
-  })
+  it.effect("relocates into a string-content user message", () =>
+    Effect.gen(function* () {
+      const payload = {
+        model: "claude-opus-4-6",
+        max_tokens: 4096,
+        system: [{ type: "text", text: "third-party prefix" }],
+        messages: [{ role: "user", content: "hello" }],
+      }
+      const result = yield* transformPayload(payload)
+      const messages = decodeMessagesWithText(result["messages"])
+      expect(messages[0]!.content).toContain("third-party prefix")
+      expect(messages[0]!.content.endsWith("hello")).toBe(true)
+    }),
+  )
 
-  test("leaves system unchanged when there are no third-party blocks", () => {
-    const payload = {
-      model: "claude-opus-4-6",
-      max_tokens: 4096,
-      system: [],
-      messages: [{ role: "user", content: [{ type: "text", text: "hello" }] }],
-    }
-    const result = transformPayload(payload)
-    const system = decodeSystemBlocks(result["system"])
-    // billing + identity only — no extras to move.
-    expect(system).toHaveLength(2)
-    const messages = decodeMessagesWithBlocks(result["messages"])
-    expect(messages[0]!.content).toHaveLength(1)
-  })
+  it.effect("leaves system unchanged when there are no third-party blocks", () =>
+    Effect.gen(function* () {
+      const payload = {
+        model: "claude-opus-4-6",
+        max_tokens: 4096,
+        system: [],
+        messages: [{ role: "user", content: [{ type: "text", text: "hello" }] }],
+      }
+      const result = yield* transformPayload(payload)
+      const system = decodeSystemBlocks(result["system"])
+      // billing + identity only — no extras to move.
+      expect(system).toHaveLength(2)
+      const messages = decodeMessagesWithBlocks(result["messages"])
+      expect(messages[0]!.content).toHaveLength(1)
+    }),
+  )
 
-  test("splits IDENTITY+rest blocks so the rest gets relocated", () => {
-    // OpenCode's system.transform hook produces a single block of
-    // shape `IDENTITY + "\n\n<real instructions>"`. Pre-fix, the
-    // partition treated the whole block as identity-only and silently
-    // dropped <real instructions>. The remainder must survive into
-    // the first user message via relocation.
-    const payload = {
-      model: "claude-opus-4-6",
-      max_tokens: 4096,
-      system: [{ type: "text", text: `${SYSTEM_IDENTITY_PREFIX}\n\nDO-NOT-DROP these rules.` }],
-      messages: [{ role: "user", content: "hello" }],
-    }
-    const result = transformPayload(payload)
-    const system = decodeSystemBlocks(result["system"])
-    // System still holds [billing, identity] — identity is the bare
-    // prefix without the trailing rules.
-    expect(system[1]!.text).toBe(SYSTEM_IDENTITY_PREFIX)
-    // The rules survived: relocated into the first user message.
-    const messages = decodeMessagesWithText(result["messages"])
-    expect(messages[0]!.content).toContain("DO-NOT-DROP these rules.")
-    expect(messages[0]!.content.endsWith("hello")).toBe(true)
-  })
+  it.effect("splits IDENTITY+rest blocks so the rest gets relocated", () =>
+    Effect.gen(function* () {
+      // OpenCode's system.transform hook produces a single block of
+      // shape `IDENTITY + "\n\n<real instructions>"`. Pre-fix, the
+      // partition treated the whole block as identity-only and silently
+      // dropped <real instructions>. The remainder must survive into
+      // the first user message via relocation.
+      const payload = {
+        model: "claude-opus-4-6",
+        max_tokens: 4096,
+        system: [{ type: "text", text: `${SYSTEM_IDENTITY_PREFIX}\n\nDO-NOT-DROP these rules.` }],
+        messages: [{ role: "user", content: "hello" }],
+      }
+      const result = yield* transformPayload(payload)
+      const system = decodeSystemBlocks(result["system"])
+      // System still holds [billing, identity] — identity is the bare
+      // prefix without the trailing rules.
+      expect(system[1]!.text).toBe(SYSTEM_IDENTITY_PREFIX)
+      // The rules survived: relocated into the first user message.
+      const messages = decodeMessagesWithText(result["messages"])
+      expect(messages[0]!.content).toContain("DO-NOT-DROP these rules.")
+      expect(messages[0]!.content.endsWith("hello")).toBe(true)
+    }),
+  )
 
-  test("billing hash matches the post-relocation first-user text", () => {
-    // The prior order computed billing before relocation, so the hash
-    // on the wire didn't match what the API actually saw. Compare
-    // against a control payload with the same POST-relocation
-    // first-user text but no system to relocate — the billing hash
-    // header must be identical.
-    const relocatedPayload = transformPayload({
-      model: "claude-opus-4-6",
-      max_tokens: 4096,
-      system: [{ type: "text", text: "third-party prefix" }],
-      messages: [{ role: "user", content: "hello" }],
-    })
-    const controlPayload = transformPayload({
-      model: "claude-opus-4-6",
-      max_tokens: 4096,
-      system: [],
-      // The control directly carries what the relocator would produce.
-      messages: [{ role: "user", content: "third-party prefix\n\nhello" }],
-    })
-    const relocatedBilling = decodeSystemBlocks(relocatedPayload["system"])[0]?.text
-    const controlBilling = decodeSystemBlocks(controlPayload["system"])[0]?.text
-    expect(relocatedBilling).toBe(controlBilling)
-  })
+  it.effect("billing hash matches the post-relocation first-user text", () =>
+    Effect.gen(function* () {
+      // The prior order computed billing before relocation, so the hash
+      // on the wire didn't match what the API actually saw. Compare
+      // against a control payload with the same POST-relocation
+      // first-user text but no system to relocate — the billing hash
+      // header must be identical.
+      const relocatedPayload = yield* transformPayload({
+        model: "claude-opus-4-6",
+        max_tokens: 4096,
+        system: [{ type: "text", text: "third-party prefix" }],
+        messages: [{ role: "user", content: "hello" }],
+      })
+      const controlPayload = yield* transformPayload({
+        model: "claude-opus-4-6",
+        max_tokens: 4096,
+        system: [],
+        // The control directly carries what the relocator would produce.
+        messages: [{ role: "user", content: "third-party prefix\n\nhello" }],
+      })
+      const relocatedBilling = decodeSystemBlocks(relocatedPayload["system"])[0]?.text
+      const controlBilling = decodeSystemBlocks(controlPayload["system"])[0]?.text
+      expect(relocatedBilling).toBe(controlBilling)
+    }),
+  )
 
-  test("inserts relocated text after a leading tool_result run (preserves Anthropic ordering)", () => {
-    // Anthropic requires tool_result blocks to be the FIRST blocks of
-    // a user message that carries any. Counsel  follow-up: relocator
-    // must splice the prefix in AFTER the leading tool_result run,
-    // not at index 0, otherwise the API returns 400.
-    const payload = {
-      model: "claude-opus-4-6",
-      max_tokens: 4096,
-      system: [{ type: "text", text: "third-party prefix" }],
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "tool_result", tool_use_id: "tc-1", content: "ok" },
-            { type: "tool_result", tool_use_id: "tc-2", content: "ok" },
-            { type: "text", text: "follow-up" },
+  it.effect(
+    "inserts relocated text after a leading tool_result run (preserves Anthropic ordering)",
+    () =>
+      Effect.gen(function* () {
+        // Anthropic requires tool_result blocks to be the FIRST blocks of
+        // a user message that carries any. Counsel  follow-up: relocator
+        // must splice the prefix in AFTER the leading tool_result run,
+        // not at index 0, otherwise the API returns 400.
+        const payload = {
+          model: "claude-opus-4-6",
+          max_tokens: 4096,
+          system: [{ type: "text", text: "third-party prefix" }],
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "tool_result", tool_use_id: "tc-1", content: "ok" },
+                { type: "tool_result", tool_use_id: "tc-2", content: "ok" },
+                { type: "text", text: "follow-up" },
+              ],
+            },
           ],
-        },
-      ],
-      tools: [],
-    }
-    // A valid history: each tool_result has its tool_use upstream.
-    const payloadWithPair = {
-      ...payload,
-      messages: [
-        {
-          role: "assistant",
-          content: [
-            { type: "tool_use", id: "tc-1", name: "echo", input: {} },
-            { type: "tool_use", id: "tc-2", name: "echo", input: {} },
+          tools: [],
+        }
+        // A valid history: each tool_result has its tool_use upstream.
+        const payloadWithPair = {
+          ...payload,
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                { type: "tool_use", id: "tc-1", name: "echo", input: {} },
+                { type: "tool_use", id: "tc-2", name: "echo", input: {} },
+              ],
+            },
+            ...payload.messages,
           ],
-        },
-        ...payload.messages,
-      ],
-    }
-    const result = transformPayload(payloadWithPair)
-    const messages = decodeMessagesWithBlocks(result["messages"])
-    const userMsg = Option.fromNullishOr(messages.find((message) => message.role === "user"))
-    expect(Option.isSome(userMsg)).toBe(true)
-    if (Option.isNone(userMsg)) return
-    expect(userMsg.value.content[0]?.type).toBe("tool_result")
-    expect(userMsg.value.content[1]?.type).toBe("tool_result")
-    expect(userMsg.value.content[2]?.type).toBe("text")
-    expect(userMsg.value.content[2]?.text).toBe("third-party prefix")
-    expect(userMsg.value.content[3]?.type).toBe("text")
-    expect(userMsg.value.content[3]?.text).toBe("follow-up")
-  })
+        }
+        const result = yield* transformPayload(payloadWithPair)
+        const messages = decodeMessagesWithBlocks(result["messages"])
+        const userMsg = Option.fromNullishOr(messages.find((message) => message.role === "user"))
+        expect(Option.isSome(userMsg)).toBe(true)
+        if (Option.isNone(userMsg)) return
+        expect(userMsg.value.content[0]?.type).toBe("tool_result")
+        expect(userMsg.value.content[1]?.type).toBe("tool_result")
+        expect(userMsg.value.content[2]?.type).toBe("text")
+        expect(userMsg.value.content[2]?.text).toBe("third-party prefix")
+        expect(userMsg.value.content[3]?.type).toBe("text")
+        expect(userMsg.value.content[3]?.text).toBe("follow-up")
+      }),
+  )
 })
 
 // ── keychain transform client ───────────────────────────────────────────────
@@ -1376,24 +1401,16 @@ describe("updateCredentialBlob", () => {
  * validator on every request, surfacing as `InvalidKey` from the SDK.
  */
 
-// `BunCrypto.layer` hashes synchronously, so each helper can run via
-// `Effect.runSync`.
-const runSync = <A>(effect: Effect.Effect<A, never, never>): A => Effect.runSync(effect)
-
-const computeCch = (text: string): string =>
-  runSync(computeCchEffect(text).pipe(Effect.provide(BunCrypto.layer)))
-const computeVersionSuffix = (text: string, version: string): string =>
-  runSync(computeVersionSuffixEffect(text, version).pipe(Effect.provide(BunCrypto.layer)))
+// Each helper provides the host's crypto to the signing step it names.
+const computeCch = (text: string) => computeCchEffect(text).pipe(Effect.provide(BunCrypto.layer))
+const computeVersionSuffix = (text: string, version: string) =>
+  computeVersionSuffixEffect(text, version).pipe(Effect.provide(BunCrypto.layer))
 const buildBillingHeaderValue = (
   messages: Parameters<typeof buildBillingHeaderValueEffect>[0],
   version: string,
   entrypoint: string,
-): string =>
-  runSync(
-    buildBillingHeaderValueEffect(messages, version, entrypoint).pipe(
-      Effect.provide(BunCrypto.layer),
-    ),
-  )
+) =>
+  buildBillingHeaderValueEffect(messages, version, entrypoint).pipe(Effect.provide(BunCrypto.layer))
 
 describe("extractFirstUserMessageText", () => {
   test("returns the empty string when no messages", () => {
@@ -1435,79 +1452,105 @@ describe("extractFirstUserMessageText", () => {
 })
 
 describe("computeCch", () => {
-  test("returns the first 5 hex chars of sha256(text)", () => {
-    const text = "hello"
-    // sha256("hello") = 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824
-    const expected = "2cf24"
-    expect(computeCch(text)).toBe(expected)
-  })
+  it.effect("returns the first 5 hex chars of sha256(text)", () =>
+    Effect.gen(function* () {
+      const text = "hello"
+      // sha256("hello") = 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824
+      const expected = "2cf24"
+      expect(yield* computeCch(text)).toBe(expected)
+    }),
+  )
 
-  test("is stable across calls — same text → same hash", () => {
-    expect(computeCch("hi")).toBe(computeCch("hi"))
-  })
+  it.effect("is stable across calls — same text → same hash", () =>
+    Effect.gen(function* () {
+      expect(yield* computeCch("hi")).toBe(yield* computeCch("hi"))
+    }),
+  )
 
-  test("differs for different text — single-char change flips the hash", () => {
-    expect(computeCch("hi")).not.toBe(computeCch("hj"))
-  })
+  it.effect("differs for different text — single-char change flips the hash", () =>
+    Effect.gen(function* () {
+      expect(yield* computeCch("hi")).not.toBe(yield* computeCch("hj"))
+    }),
+  )
 })
 
 describe("computeVersionSuffix", () => {
-  test("samples chars 4, 7, 20 (zero-padded when shorter) and hashes with the salt + version", () => {
-    // Short message: every sample falls back to "0".
-    const suffix = computeVersionSuffix("hi", "2.1.80")
-    expect(suffix).toMatch(/^[0-9a-f]{3}$/)
-  })
+  it.effect(
+    "samples chars 4, 7, 20 (zero-padded when shorter) and hashes with the salt + version",
+    () =>
+      Effect.gen(function* () {
+        // Short message: every sample falls back to "0".
+        const suffix = yield* computeVersionSuffix("hi", "2.1.80")
+        expect(suffix).toMatch(/^[0-9a-f]{3}$/)
+      }),
+  )
 
-  test("differs when the version string changes", () => {
-    expect(computeVersionSuffix("hello", "2.1.80")).not.toBe(
-      computeVersionSuffix("hello", "2.1.81"),
-    )
-  })
+  it.effect("differs when the version string changes", () =>
+    Effect.gen(function* () {
+      expect(yield* computeVersionSuffix("hello", "2.1.80")).not.toBe(
+        yield* computeVersionSuffix("hello", "2.1.81"),
+      )
+    }),
+  )
 
-  test("is stable for the same (text, version) pair", () => {
-    expect(computeVersionSuffix("hello world here is more", "2.1.80")).toBe(
-      computeVersionSuffix("hello world here is more", "2.1.80"),
-    )
-  })
+  it.effect("is stable for the same (text, version) pair", () =>
+    Effect.gen(function* () {
+      expect(yield* computeVersionSuffix("hello world here is more", "2.1.80")).toBe(
+        yield* computeVersionSuffix("hello world here is more", "2.1.80"),
+      )
+    }),
+  )
 })
 
 describe("buildBillingHeaderValue", () => {
-  test("formats `x-anthropic-billing-header: cc_version=V.S; cc_entrypoint=E; cch=H;`", () => {
-    const messages = [{ role: "user", content: "hi" }]
-    const value = buildBillingHeaderValue(messages, "2.1.80", "cli")
-    expect(value).toMatch(
-      /^x-anthropic-billing-header: cc_version=2\.1\.80\.[0-9a-f]{3}; cc_entrypoint=cli; cch=[0-9a-f]{5};$/,
-    )
-  })
+  it.effect("formats `x-anthropic-billing-header: cc_version=V.S; cc_entrypoint=E; cch=H;`", () =>
+    Effect.gen(function* () {
+      const messages = [{ role: "user", content: "hi" }]
+      const value = yield* buildBillingHeaderValue(messages, "2.1.80", "cli")
+      expect(value).toMatch(
+        /^x-anthropic-billing-header: cc_version=2\.1\.80\.[0-9a-f]{3}; cc_entrypoint=cli; cch=[0-9a-f]{5};$/,
+      )
+    }),
+  )
 
-  test("computes cch from the first user message text", () => {
-    const value = buildBillingHeaderValue(
-      [
-        { role: "assistant", content: "preamble" },
-        { role: "user", content: "the prompt" },
-      ],
-      "2.1.80",
-      "cli",
-    )
-    const expectedCch = computeCch("the prompt")
-    expect(value).toContain(`cch=${expectedCch};`)
-  })
+  it.effect("computes cch from the first user message text", () =>
+    Effect.gen(function* () {
+      const value = yield* buildBillingHeaderValue(
+        [
+          { role: "assistant", content: "preamble" },
+          { role: "user", content: "the prompt" },
+        ],
+        "2.1.80",
+        "cli",
+      )
+      const expectedCch = yield* computeCch("the prompt")
+      expect(value).toContain(`cch=${expectedCch};`)
+    }),
+  )
 
-  test("matches a fixed vector byte for byte", () => {
-    const value = buildBillingHeaderValue(
-      [{ role: "user", content: "Fix the flaky test in the billing module, please." }],
-      "2.1.80",
-      "cli",
-    )
-    expect(value).toBe(
-      "x-anthropic-billing-header: cc_version=2.1.80.764; cc_entrypoint=cli; cch=cb258;",
-    )
-  })
+  it.effect("matches a fixed vector byte for byte", () =>
+    Effect.gen(function* () {
+      const value = yield* buildBillingHeaderValue(
+        [{ role: "user", content: "Fix the flaky test in the billing module, please." }],
+        "2.1.80",
+        "cli",
+      )
+      expect(value).toBe(
+        "x-anthropic-billing-header: cc_version=2.1.80.764; cc_entrypoint=cli; cch=cb258;",
+      )
+    }),
+  )
 
-  test("uses the entrypoint verbatim", () => {
-    const value = buildBillingHeaderValue([{ role: "user", content: "hi" }], "2.1.80", "test-entry")
-    expect(value).toContain("cc_entrypoint=test-entry;")
-  })
+  it.effect("uses the entrypoint verbatim", () =>
+    Effect.gen(function* () {
+      const value = yield* buildBillingHeaderValue(
+        [{ role: "user", content: "hi" }],
+        "2.1.80",
+        "test-entry",
+      )
+      expect(value).toContain("cc_entrypoint=test-entry;")
+    }),
+  )
 })
 
 // ── model config ────────────────────────────────────────────────────────────
