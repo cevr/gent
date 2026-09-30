@@ -1393,11 +1393,8 @@ const feedClientStub = (
   applySessionEvent: () => {},
   resetSessionEvents: () => {},
   applyBufferedSessionEvent: () => {},
+  pathPlace: () => ({ cwd: "/work/proj", home: "/home/test" }),
   ...parts,
-  place: Option.getOrElse(Option.fromNullishOr(parts.place), () => ({
-    cwd: "/work/proj",
-    home: "/home/test",
-  })),
 })
 
 const snapshotFor = (

@@ -3783,7 +3783,19 @@ describe("tool group rows", () => {
     summary: absent,
     output: "one\ntwo",
   })
-  const groupRows = (items: SessionItem[], width: number) =>
+  /** A session in view rooted at `sessionCwd`, while the TUI launched in `cwd`. */
+  const sessionAt = (sessionCwd: string) => ({
+    initialSession: {
+      id: SessionId.make("session-elsewhere"),
+      activeBranchId: BranchId.make("branch-elsewhere"),
+      name: "Elsewhere",
+      cwd: sessionCwd,
+      createdAt: dateFromMillis(0),
+      updatedAt: dateFromMillis(0),
+    },
+  })
+  // The session in view runs where the TUI launched unless a test says otherwise.
+  const groupRows = (items: SessionItem[], width: number, sessionCwd = cwd) =>
     Effect.promise(() =>
       renderWithProviders(
         () => (
@@ -3794,7 +3806,12 @@ describe("tool group rows", () => {
             streaming={false}
           />
         ),
-        { width, height: 20, cwd },
+        {
+          width,
+          height: 20,
+          cwd,
+          ...sessionAt(sessionCwd),
+        },
       ),
     ).pipe(
       Effect.map((setup) =>
@@ -3824,6 +3841,32 @@ describe("tool group rows", () => {
       const header = renderFrame(frame).split("\n")[0] ?? ""
       expect(header).toContain("read apps/tui/src/app.tsx")
       expect(header).not.toContain(cwd)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.live("paths read from the cwd of the session in view, not the launch cwd", () =>
+    Effect.gen(function* () {
+      const inLaunch = readCall("call-read-launch", `${cwd}/config.ts`)
+      const inSession = readCall("call-read-session", "/work/other/src/app.tsx")
+      const rows = yield* groupRows(
+        [
+          assistantToolMessage("assistant-read-launch", inLaunch),
+          assistantToolMessage("assistant-read-session", inSession),
+        ],
+        80,
+        "/work/other",
+      )
+      expect(callLabels(rows)).toEqual([`└ read ${cwd}/config.ts`, "└ read src/app.tsx"])
+      const ReadToolRenderer = builtinRenderer("read")
+      const frame = yield* Effect.promise(() =>
+        renderWithProviders(() => <ReadToolRenderer expanded={false} toolCall={inSession} />, {
+          width: 80,
+          height: 10,
+          cwd,
+          ...sessionAt("/work/other"),
+        }),
+      )
+      expect(renderFrame(frame).split("\n")[0]).toContain("read src/app.tsx")
     }).pipe(Effect.timeout("10 seconds")),
   )
 

@@ -689,12 +689,7 @@ export function Session(props: SessionProps) {
     // distinguishes them.
     // The git facts are the launch directory's; a session rooted elsewhere
     // shows its directory alone rather than borrow them.
-    const sessionCwd = Option.getOrElse(
-      Option.flatMap(Option.fromNullishOr(client.session()), (session) =>
-        Option.fromUndefinedOr(session.cwd),
-      ),
-      () => workspace.cwd,
-    )
+    const sessionCwd = client.pathPlace().cwd
     const atLaunchCwd = sessionCwd === workspace.cwd
     items.push({
       text: formatCwdGit(

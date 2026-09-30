@@ -19,7 +19,7 @@ import {
 } from "./utils"
 import { DateTime, Effect, Fiber, Match, Option, Predicate, Schema } from "effect"
 import { resolveThemeColor, useTheme } from "./theme"
-import { useWorkspace } from "./workspace"
+import { useClient } from "./client"
 import {
   CollapsedRow,
   formatToolCallIdentity,
@@ -528,7 +528,7 @@ function ToolCallGroup(props: {
   fullDetail: boolean
 }) {
   const { theme } = useTheme()
-  const workspace = useWorkspace()
+  const { pathPlace } = useClient()
   const failed = () => props.calls.some((call) => call.status === "error")
   const running = () => props.calls.some((call) => call.status === "running")
   const tick = useSpinnerClock()
@@ -542,7 +542,7 @@ function ToolCallGroup(props: {
     return theme.textMuted
   }
   const header = createMemo(() =>
-    formatActivityHeader(props.calls.map((call) => toActivityCall(call, workspace))),
+    formatActivityHeader(props.calls.map((call) => toActivityCall(call, pathPlace()))),
   )
   // The transcript view and the full level both open every row; collapsed keeps only failures.
   const rowsOpen = () => props.fullDetail || props.disclosure === "full"
@@ -589,13 +589,13 @@ function ToolCallGroup(props: {
               const label = () => {
                 if (call.toolName === "cell") {
                   const result = cellResultText(call)
-                  return formatCellRowLabel(toActivityCall(call, workspace), {
+                  return formatCellRowLabel(toActivityCall(call, pathPlace()), {
                     code: getString(call.input, "code"),
                     display: result.display,
                     error: result.error,
                   })
                 }
-                const args = toolArgSummary(call.toolName, call.input, workspace)
+                const args = toolArgSummary(call.toolName, call.input, pathPlace())
                 if (args.length > 0) return args
                 const summary = (call.summary ?? "").trim()
                 if (summary.startsWith("{") || summary.startsWith("[")) return ""

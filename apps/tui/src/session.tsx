@@ -1669,10 +1669,8 @@ type SessionFeedClient = Pick<
   | "applySessionEvent"
   | "applyBufferedSessionEvent"
   | "resetSessionEvents"
-> & {
-  /** Where tool paths in the running-call label read from. */
-  readonly place: PathPlace
-}
+  | "pathPlace"
+>
 
 type SessionFeedStore = {
   messages: Message[]
@@ -2193,7 +2191,7 @@ export function useSessionFeed(
         return
 
       case "ToolCallStarted":
-        setRunningCalls((calls) => startCall(calls, event, client.place))
+        setRunningCalls((calls) => startCall(calls, event, client.pathPlace()))
         startToolCall(setStore, event, receivedAt)
         return
 
@@ -2736,7 +2734,6 @@ export function createSessionController(props: {
   const { cast } = useRuntime()
   const renderer = useRenderer()
   const env = useEnv()
-  const workspace = useWorkspace()
   const exit = () => {
     // The session id is the only way back into this conversation, and it is
     // about to leave the screen. Printed after the renderer is destroyed so it
@@ -2988,7 +2985,7 @@ export function createSessionController(props: {
   const feed = useSessionFeed(
     () => props.sessionId,
     () => props.branchId,
-    { ...client, place: workspace },
+    client,
     cast,
     {
       onInteraction,

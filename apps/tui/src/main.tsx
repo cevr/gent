@@ -325,7 +325,12 @@ const runGent = ({
         })
       }
 
-      yield* runHeadlessTurn(bundle, state, { approveAll })
+      // Tool paths read from the session's own cwd, as the TUI spells them.
+      const place = {
+        cwd: Option.getOrElse(Option.fromNullishOr(state.session.cwd), () => cwd),
+        home,
+      }
+      yield* runHeadlessTurn(bundle, state, { approveAll, place })
       return
     }
 

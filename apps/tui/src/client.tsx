@@ -59,7 +59,14 @@ import {
 } from "solid-js"
 import { createStore } from "solid-js/store"
 import { omitUndefined } from "@gent/core/extensions/api"
-import { formatError, randomId, SEND_RETRY, type UiError, useRequiredContext } from "./utils"
+import {
+  formatError,
+  type PathPlace,
+  randomId,
+  SEND_RETRY,
+  type UiError,
+  useRequiredContext,
+} from "./utils"
 import { useWorkspace } from "./workspace"
 
 // ── client logging ──────────────────────────────────────────────────────────
@@ -532,6 +539,11 @@ interface ClientSessionValue {
   sessionCwd: Effect.Effect<string, GentClientRpcError>
   /** The directory a given session resolves against, whether or not it is active. */
   cwdOf: (sessionId: SessionId) => Effect.Effect<string, GentClientRpcError>
+  /**
+   * Where the session in view runs, for spelling tool paths: its cwd when the
+   * record carries one, else the launch directory.
+   */
+  pathPlace: () => PathPlace
 
   // Session actions (fire-and-forget, update state internally)
   /** Create a session and make it the active one. */
@@ -787,6 +799,13 @@ export function ClientProvider(props: ClientProviderProps) {
       onSome: (current) => cwdOf(current.sessionId),
     }),
   )
+  const pathPlace = (): PathPlace => ({
+    cwd: Option.getOrElse(
+      Option.flatMap(sessionOption(), (current) => Option.fromUndefinedOr(current.cwd)),
+      () => workspace.cwd,
+    ),
+    home: workspace.home,
+  })
 
   // A session reached by id alone reads its cwd once, so the status row names
   // where it is rooted before anything is submitted.
@@ -1255,6 +1274,7 @@ export function ClientProvider(props: ClientProviderProps) {
     isLoading,
     sessionCwd,
     cwdOf,
+    pathPlace,
 
     createSession: () => createSessionWith({}),
 

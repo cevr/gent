@@ -393,21 +393,16 @@ const isUnder = (p: string, root: string) =>
 
 /**
  * The one spelling of a tool path: relative to the cwd when under it,
- * else `~`-abbreviated when under home, else as given.
+ * else `~`-abbreviated when under home, else as given. A cwd of `/` holds
+ * every absolute path; a home of `/` abbreviates nothing.
  */
 export function displayPath(p: string, place: PathPlace): string {
   if (p === place.cwd) return "."
+  if (place.cwd === "/" && p.startsWith("/")) return p.slice(1)
   if (isUnder(p, place.cwd)) return p.slice(place.cwd.length + 1)
   if (isUnder(p, place.home)) return `~${p.slice(place.home.length)}`
   return p
 }
-
-/** A path as `displayPath` spells it; with no place (headless), as given. */
-const placedPath = (p: string, place?: PathPlace) =>
-  Option.match(Option.fromNullishOr(place), {
-    onNone: () => p,
-    onSome: (value) => displayPath(p, value),
-  })
 
 const decodeToolArgs = Schema.decodeUnknownOption(Schema.JsonObject)
 const decodeNumber = Schema.decodeUnknownOption(Schema.Finite)
@@ -428,11 +423,11 @@ function getPathArg(args: Schema.JsonObject): string {
   return getStringArg(args, "file_path", "path")
 }
 
-function summarizeRead(args: Schema.JsonObject, place?: PathPlace): string {
+function summarizeRead(args: Schema.JsonObject, place: PathPlace): string {
   const rawPath = getPathArg(args)
   if (rawPath.length === 0) return ""
 
-  let text = placedPath(rawPath, place)
+  let text = displayPath(rawPath, place)
   const offset = getNumberArg(args, "offset")
   const limit = getNumberArg(args, "limit")
   if (Option.isNone(offset) && Option.isNone(limit)) return text
@@ -445,28 +440,28 @@ function summarizeRead(args: Schema.JsonObject, place?: PathPlace): string {
   return text
 }
 
-function summarizeWrite(args: Schema.JsonObject, place?: PathPlace): string {
+function summarizeWrite(args: Schema.JsonObject, place: PathPlace): string {
   const rawPath = getPathArg(args)
   if (rawPath.length === 0) return ""
 
   const lines = lineCount(getStringArg(args, "content"))
-  let text = placedPath(rawPath, place)
+  let text = displayPath(rawPath, place)
   if (lines > 1) text += ` (${lines} lines)`
   return text
 }
 
-function summarizeGrep(args: Schema.JsonObject, place?: PathPlace): string {
+function summarizeGrep(args: Schema.JsonObject, place: PathPlace): string {
   const pattern = getStringArg(args, "pattern")
   if (pattern.length === 0) return ""
   const rawPath = getStringArg(args, "path") || "."
-  return `/${pattern}/ in ${placedPath(rawPath, place)}`
+  return `/${pattern}/ in ${displayPath(rawPath, place)}`
 }
 
 function summarizeDelegate(args: Schema.JsonObject): string {
   return truncate(getStringArg(args, "todo"), 40)
 }
 
-type ToolArgFormatter = (args: Schema.JsonObject, place?: PathPlace) => string
+type ToolArgFormatter = (args: Schema.JsonObject, place: PathPlace) => string
 
 const toolArgFormatters = {
   bash: (args) => {
@@ -483,7 +478,7 @@ const toolArgFormatters = {
   edit: (args, place) => {
     const rawPath = getPathArg(args)
     if (rawPath.length > 0) {
-      return placedPath(rawPath, place)
+      return displayPath(rawPath, place)
     }
     return ""
   },
@@ -508,12 +503,12 @@ const LEADING_ARG_KEYS = [
   "agent",
 ]
 
-const leadingArg = (args: Schema.JsonObject, place?: PathPlace): string => {
+const leadingArg = (args: Schema.JsonObject, place: PathPlace): string => {
   for (const key of LEADING_ARG_KEYS) {
     const value = getStringArg(args, key)
     if (value.length === 0) continue
     const line = value.split("\n")[0] ?? ""
-    if (key === "path") return placedPath(line, place)
+    if (key === "path") return displayPath(line, place)
     return line
   }
   return ""
@@ -523,7 +518,7 @@ const leadingArg = (args: Schema.JsonObject, place?: PathPlace): string => {
  * The one label of a call's arguments: the tool's own formatter, else its
  * leading argument. Paths read from `place` when one is given.
  */
-export function toolArgSummary(toolName: string, input: ToolInput, place?: PathPlace): string {
+export function toolArgSummary(toolName: string, input: ToolInput, place: PathPlace): string {
   const args = decodeToolArgs(input)
   if (Option.isNone(args)) return ""
   const formatter = toolArgFormattersByName.get(toolName.toLowerCase())
