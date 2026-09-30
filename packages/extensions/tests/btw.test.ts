@@ -623,6 +623,25 @@ describe("btw forks", () => {
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )
+  it.live("forks requested at once leave one open fork, and it follows its session", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("sure")])
+        const harness = yield* createRpcHarness({ ...e2ePreset, providerLayer })
+        const pane = btw(harness)
+        const opened = yield* Effect.forEach(["", "", "", ""], pane.fork, {
+          concurrency: "unbounded",
+        })
+        const shown = yield* pane.progress
+        expect(opened.some((fork) => fork.sessionId === shown.fork?.sessionId)).toBe(true)
+        yield* pane.ask("Still there?")
+        const replied = yield* pane.replied(1)
+        expect(Option.map(replied, (view) => view.turns)).toEqual(
+          Option.some([{ question: "Still there?", answer: "sure" }]),
+        )
+      }).pipe(Effect.timeout("6 seconds")),
+    ),
+  )
 })
 
 // ── pulses ──────────────────────────────────────────────────────────────────

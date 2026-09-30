@@ -499,18 +499,25 @@ export const BtwRpc = defineRequests(BTW_EXTENSION_ID, {
         error: Option.none(),
         follower: Option.none(),
       }
-      yield* forks.set(parentBranchId, fork)
-      // The follower outlives this request; it carries the context it needs.
-      const follower = yield* forks.spawn(
-        followFork(parentBranchId, created).pipe(
-          Effect.provideService(ExtensionContext, ctx),
-          Effect.provideService(OpenForks, forks),
-        ),
+      // The follower outlives this request; it carries the context it needs. It
+      // starts first and the fork opens with it in one step, so a fork opened
+      // at the same moment on this branch always finds a follower to stop.
+      // Until then it applies nothing, since the open fork is another one, and
+      // it reads its session's events from the start, so it misses none.
+      yield* Effect.uninterruptible(
+        forks
+          .spawn(
+            followFork(parentBranchId, created).pipe(
+              Effect.provideService(ExtensionContext, ctx),
+              Effect.provideService(OpenForks, forks),
+            ),
+          )
+          .pipe(
+            Effect.flatMap((follower) =>
+              forks.set(parentBranchId, { ...fork, follower: Option.some(follower) }),
+            ),
+          ),
       )
-      yield* forks.update(parentBranchId, (current) => {
-        if (current.sessionId !== fork.sessionId) return current
-        return { ...current, follower: Option.some(follower) }
-      })
       if (question.length > 0) yield* sendToFork(parentBranchId, fork, question)
       yield* ctx.State.changed().pipe(Effect.ignore)
       return { sessionId: created.sessionId, branchId: created.branchId }
