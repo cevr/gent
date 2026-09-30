@@ -37,6 +37,7 @@ import {
   extensionHealthFromSnapshot,
   formatDoctorReport,
   formatServerStatus,
+  formatSessionList,
   inspectLogs,
   inspectServer,
   inspectStorage,
@@ -51,7 +52,13 @@ import {
 import { SqliteClient as BunSqliteClient } from "@effect/sql-sqlite-bun"
 import { SqlClient } from "effect/sql"
 import { GentPlatform } from "@gent/core/host"
-import { ExtensionHealthIssue, ExtensionHealthSnapshot } from "@gent/core/protocol"
+import {
+  dateFromMillis,
+  ExtensionHealthIssue,
+  ExtensionHealthSnapshot,
+  Session,
+  SessionId,
+} from "@gent/core/protocol"
 
 // ── client logs ─────────────────────────────────────────────────────────────
 
@@ -395,6 +402,46 @@ describe("local health", () => {
     }
     expect(row).toContain(` ${longPathEntry.dbPath} `)
     expect(rule.length).toBe(row.length)
+  })
+
+  // `gent sessions` lists what `gent resume` can pick: the conversations,
+  // newest first, each with the directory it runs in. A delegate or `/btw`
+  // child is the agent's work; a handoff joins its parent's thread and stays.
+  test("the sessions listing shows conversations, newest first, with their cwd", () => {
+    const session = (
+      id: string,
+      updatedMs: number,
+      extra: Partial<ConstructorParameters<typeof Session>[0]> = {},
+    ) =>
+      new Session({
+        id: SessionId.make(id),
+        name: id,
+        cwd: `/work/${id}`,
+        createdAt: dateFromMillis(0),
+        updatedAt: dateFromMillis(updatedMs),
+        ...extra,
+      })
+    const child = session("child", 3_000, {
+      parentSessionId: SessionId.make("older"),
+      threadId: SessionId.make("child"),
+    })
+    const listing = formatSessionList([
+      session("older", 1_000),
+      child,
+      session("newer", 2_000),
+      session("handoff", 1_500, {
+        parentSessionId: SessionId.make("older"),
+        threadId: SessionId.make("older"),
+      }),
+    ])
+    const [header = "", , ...rows] = listing.split("\n")
+    expect(header.split(/\s+/)).toEqual(["ID", "NAME", "CWD", "UPDATED"])
+    expect(rows.map((row) => row.split(/\s+/).slice(0, 3))).toEqual([
+      ["newer", "newer", "/work/newer"],
+      ["handoff", "handoff", "/work/handoff"],
+      ["older", "older", "/work/older"],
+    ])
+    expect(formatSessionList([child])).toBe("No sessions found.")
   })
 
   test("server status wider than the terminal prints one field per line", () => {

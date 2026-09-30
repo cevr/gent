@@ -16,6 +16,7 @@ import {
   GentConnectionError,
   GentRpcError,
   lineCount,
+  type Session,
   splitLines,
   type GentClientRpcError,
 } from "@gent/core/protocol"
@@ -155,6 +156,17 @@ export const getString = (input: ToolInput, key: string, fallback = ""): string 
     decodeJsonObject(input).pipe(Option.flatMap((record) => decodeString(record[key]))),
     () => fallback,
   )
+
+// ── sessions ────────────────────────────────────────────────────────────────
+
+/**
+ * A session the reader can return to. A delegate or `/btw` child has a
+ * parent and its own thread: it is the agent's work, not a conversation the
+ * reader left. A handoff has a parent but joins its thread, so it is one.
+ */
+export const isConversation = (
+  session: Pick<Session, "id" | "parentSessionId" | "threadId">,
+): boolean => Predicate.isUndefined(session.parentSessionId) || session.threadId !== session.id
 
 // ── size formatting ─────────────────────────────────────────────────────────
 

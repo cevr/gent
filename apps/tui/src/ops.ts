@@ -38,7 +38,7 @@ import {
 import { BranchStorage, GentPlatform, MessageStorage, SessionStorage } from "@gent/core/host"
 import * as Prompt from "effect/ai/Prompt"
 import { Command, Flag } from "effect/cli"
-import { formatBytes } from "./utils"
+import { formatBytes, isConversation } from "./utils"
 import * as Terminal from "effect/Terminal"
 
 // ── local health report ─────────────────────────────────────────────────────
@@ -780,26 +780,29 @@ export const sessions = Command.make("sessions", { connect: connectFlag }, ({ co
       authDirectory: Option.none(),
     })
     yield* bundle.runtime.lifecycle.waitForReady
-    const allSessions = yield* bundle.client.session.list()
-
-    if (allSessions.length === 0) {
-      yield* Console.log("No sessions found.")
-      return
-    }
-
-    yield* Console.log("Sessions:")
-    for (const s of allSessions) {
-      const date = DateTime.make(s.updatedAt).pipe(
-        Option.match({
-          onNone: () => "unknown",
-          onSome: DateTime.formatIso,
-        }),
-      )
-      const name = Option.getOrElse(Option.fromNullishOr(s.name), () => "Unnamed")
-      yield* Console.log(`  ${s.id} - ${name} (${date})`)
-    }
+    yield* Console.log(formatSessionList(yield* bundle.client.session.list()))
   }),
 )
+
+/**
+ * The `gent sessions` listing: what `gent resume` can pick. The conversations
+ * (`isConversation`), newest first, each with the directory it runs in.
+ */
+export const formatSessionList = (sessions: ReadonlyArray<Session>): string => {
+  const rows = sessions
+    .filter(isConversation)
+    .toSorted((left, right) => right.updatedAt.getTime() - left.updatedAt.getTime())
+    .map((s) => [
+      s.id,
+      Option.getOrElse(Option.fromNullishOr(s.name), () => "Unnamed"),
+      Option.getOrElse(Option.fromNullishOr(s.cwd), () => "-"),
+      DateTime.make(s.updatedAt).pipe(
+        Option.match({ onNone: () => "unknown", onSome: DateTime.formatIso }),
+      ),
+    ])
+  if (rows.length === 0) return "No sessions found."
+  return formatTable(["ID", "NAME", "CWD", "UPDATED"], rows)
+}
 
 /**
  * Lay out a table: each column is as wide as its widest cell, one space apart,

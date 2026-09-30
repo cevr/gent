@@ -15,7 +15,7 @@ import {
   type Session as DomainSession,
 } from "@gent/core/protocol"
 import { type Session as ClientSession, useClient } from "./client"
-import { formatCost, formatDuration, randomId, truncate } from "./utils"
+import { formatCost, formatDuration, isConversation, randomId, truncate } from "./utils"
 import { createMemo, createSignal, ErrorBoundary, For, type JSX, Show } from "solid-js"
 import { buildSyntaxStyle, resolveThemeColor, ThemeProvider, useTheme } from "./theme"
 import {
@@ -330,13 +330,7 @@ export const resolveInitialState = (input: {
           Option.fromNullishOr(
             sessions
               .filter((candidate) => candidate.cwd === cwd)
-              // A delegate or `/btw` child has a parent and its own thread.
-              // It is the agent's work, not a conversation the user left.
-              .filter(
-                (candidate) =>
-                  Predicate.isUndefined(candidate.parentSessionId) ||
-                  candidate.threadId !== candidate.id,
-              )
+              .filter(isConversation)
               .sort((left, right) => right.updatedAt.getTime() - left.updatedAt.getTime())[0],
           ),
         ),
