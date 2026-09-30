@@ -15,6 +15,7 @@ import {
   clientContributions,
   CollapsedRow,
   defineClientExtension,
+  formatDuration,
   messageRendererContribution,
   sessionQuery,
   TrayFrame,
@@ -38,16 +39,10 @@ import {
 
 const TRAY_MAX_ROWS = 3
 
-/** `1h 02m`, `4m 20s`, `45s`, or `now`. */
-export const formatRemaining = (millis: number): string => {
-  const seconds = Math.max(0, Math.round(millis / 1000))
-  if (seconds === 0) return "now"
-  const hours = Math.floor(seconds / 3600)
-  const minutes = Math.floor((seconds % 3600) / 60)
-  const rest = seconds % 60
-  if (hours > 0) return `${hours}h ${String(minutes).padStart(2, "0")}m`
-  if (minutes > 0) return `${minutes}m ${String(rest).padStart(2, "0")}s`
-  return `${rest}s`
+/** `1h 2m`, `4m 20s`, `45s` as the agents pane spells them, or `now` under a second. */
+const formatRemaining = (millis: number): string => {
+  if (millis < 1000) return "now"
+  return formatDuration(millis, "compact")
 }
 
 interface WakeTrayLine {

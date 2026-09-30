@@ -409,9 +409,9 @@ describe("formatDuration", () => {
       expect(formatDuration(125_000, "compact")).toBe("2m 5s")
     })
 
-    test("minutes past the hour stay minutes", () => {
-      expect(formatDuration(3_600_000, "compact")).toBe("60m 0s")
-      expect(formatDuration(3_661_000, "compact")).toBe("61m 1s")
+    test("an hour or more reads in hours and minutes", () => {
+      expect(formatDuration(3_600_000, "compact")).toBe("1h 0m")
+      expect(formatDuration(3_720_000, "compact")).toBe("1h 2m")
     })
   })
 
@@ -426,6 +426,10 @@ describe("formatDuration", () => {
       expect(formatDuration(125_000, "padded")).toBe("2m05s")
       expect(formatDuration(754_000, "padded")).toBe("12m34s")
     })
+
+    test("an hour or more reads in hours and two-digit minutes", () => {
+      expect(formatDuration(3_720_000, "padded")).toBe("1h02m")
+    })
   })
 
   describe("precise", () => {
@@ -435,6 +439,7 @@ describe("formatDuration", () => {
       expect(formatDuration(1_250, "precise")).toBe("1.3s")
       expect(formatDuration(59_940, "precise")).toBe("59.9s")
       expect(formatDuration(65_000, "precise")).toBe("1m 5s")
+      expect(formatDuration(3_720_000, "precise")).toBe("1h 2m")
     })
   })
 })

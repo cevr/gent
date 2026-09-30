@@ -158,31 +158,39 @@ export const getString = (input: ToolInput, key: string, fallback = ""): string 
 // ── duration formatting ─────────────────────────────────────────────────────
 
 /**
- * - `compact`: whole seconds under a minute, then `2m 5s` (status lines, turn summaries).
- * - `padded`: whole seconds under a minute, then `2m05s` (fixed-width detail rows).
- * - `precise`: `12ms` under a second, tenths under a minute, then `2m 5s` (tool receipts).
+ * - `compact`: whole seconds under a minute, then `2m 5s`, then `1h 2m`
+ *   (status lines, turn summaries, the agents pane and the wake tray).
+ * - `padded`: whole seconds under a minute, then `2m05s`, then `1h02m` (fixed-width detail rows).
+ * - `precise`: `12ms` under a second, tenths under a minute, then as `compact` (tool receipts).
  */
 type DurationStyle = "compact" | "padded" | "precise"
 
 const wholeSeconds = (ms: number): number => Math.floor(ms / 1000)
 
+/** From one hour the seconds drop and the minutes follow the hours. */
+const hours = (secs: number, separator: string, pad: number): string =>
+  `${Math.floor(secs / 3600)}h${separator}${String(Math.floor((secs % 3600) / 60)).padStart(pad, "0")}m`
+
 const compact = (ms: number): string => {
   const secs = wholeSeconds(ms)
   if (secs < 60) return `${secs}s`
-  return `${Math.floor(secs / 60)}m ${secs % 60}s`
+  if (secs < 3600) return `${Math.floor(secs / 60)}m ${secs % 60}s`
+  return hours(secs, " ", 1)
 }
 
 const padded = (ms: number): string => {
   const secs = wholeSeconds(ms)
   if (secs < 60) return `${secs}s`
-  return `${Math.floor(secs / 60)}m${String(secs % 60).padStart(2, "0")}s`
+  if (secs < 3600) return `${Math.floor(secs / 60)}m${String(secs % 60).padStart(2, "0")}s`
+  return hours(secs, "", 2)
 }
 
 const precise = (ms: number): string => {
   if (ms < 1000) return `${Math.round(ms)}ms`
   const secs = ms / 1000
   if (secs < 60) return `${secs.toFixed(1)}s`
-  return `${Math.floor(secs / 60)}m ${Math.round(secs % 60)}s`
+  if (secs < 3600) return `${Math.floor(secs / 60)}m ${Math.round(secs % 60)}s`
+  return hours(Math.floor(secs), " ", 1)
 }
 
 export const formatDuration = (ms: number, style: DurationStyle): string =>
