@@ -37,7 +37,11 @@ import { shippedPreset } from "./helpers/test-preset.js"
  * this process served. `MCP_FIXTURE_FAIL_ON_START=n` exits the nth start;
  * `MCP_FIXTURE_EXIT_AFTER_CALL` exits once it answered a call;
  * `count` is not listed while `MCP_FIXTURE_HIDE_COUNT` names a file that
- * exists; `MCP_FIXTURE_COLLIDE` adds tools whose names clean to one id;
+ * exists, and with it `hide` writes that file and sends `list_changed`, and
+ * `drop` writes it silently; a call to a tool not listed is answered with the
+ * spec's unknown-tool error (the TypeScript SDK server's `isError` shape with
+ * `MCP_FIXTURE_SDK_UNKNOWN`); `MCP_FIXTURE_COLLIDE` adds tools whose names
+ * clean to one id;
  * `MCP_FIXTURE_ENV_TOOL` adds `env`, which reads the server's environment;
  * `tools/list` answers no tools while `MCP_FIXTURE_EMPTY_LIST` names a file that exists.
  */
@@ -65,8 +69,16 @@ const tools = [
   { name: "count", description: "Count calls this process served.", inputSchema: { type: "object", properties: {} } },
   { name: "repo.search/issues", description: "A name with separators.", inputSchema: { type: "object" } },
 ]
-if (process.env.MCP_FIXTURE_HIDE_COUNT && fs.existsSync(process.env.MCP_FIXTURE_HIDE_COUNT)) {
-  tools.splice(tools.findIndex((entry) => entry.name === "count"), 1)
+const hideFile = process.env.MCP_FIXTURE_HIDE_COUNT
+if (hideFile) {
+  tools.push(
+    { name: "hide", description: "Stop listing count, and say so.", inputSchema: { type: "object" } },
+    { name: "drop", description: "Stop listing count silently.", inputSchema: { type: "object" } },
+  )
+}
+const listedTools = () => {
+  if (hideFile && fs.existsSync(hideFile)) return tools.filter((entry) => entry.name !== "count")
+  return tools
 }
 if (process.env.MCP_FIXTURE_COLLIDE) {
   for (const name of ["a/b", "a.b", "a_b_2", "get__x", "_x", "x_", "x".repeat(70) + "1", "x".repeat(70) + "2"]) {
@@ -94,16 +106,24 @@ for (let index = 0; index < Number(process.env.MCP_FIXTURE_EXTRA ?? 0); index++)
 const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\n")
 const answer = (request) => {
   if (request.method === "initialize") {
-    return { result: { protocolVersion: request.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "fixture", version: "1" } } }
+    return { result: { protocolVersion: request.params.protocolVersion, capabilities: { tools: { listChanged: true } }, serverInfo: { name: "fixture", version: "1" } } }
   }
   if (request.method === "tools/list") {
     if (process.env.MCP_FIXTURE_EMPTY_LIST && fs.existsSync(process.env.MCP_FIXTURE_EMPTY_LIST)) return { result: { tools: [] } }
-    return { result: { tools } }
+    return { result: { tools: listedTools() } }
   }
   if (request.method !== "tools/call") return { error: { code: -32601, message: "no method " + request.method } }
+  if (!listedTools().some((entry) => entry.name === request.params.name)) {
+    if (process.env.MCP_FIXTURE_SDK_UNKNOWN) return { result: { content: [{ type: "text", text: "Tool " + request.params.name + " not found" }], isError: true } }
+    return { error: { code: -32602, message: "Unknown tool: " + request.params.name } }
+  }
   calls += 1
   const input = request.params.arguments ?? {}
   switch (request.params.name) {
+    case "hide":
+    case "drop":
+      fs.writeFileSync(hideFile, "")
+      return { result: { content: [{ type: "text", text: "count hidden" }] } }
     case "echo":
       return { result: { content: [{ type: "text", text: String(input.text).repeat(input.times ?? 1) }] } }
     case "structured":
@@ -136,6 +156,9 @@ process.stdin.on("data", (chunk) => {
       return
     }
     send({ id: request.id, ...answered })
+    if (request.method === "tools/call" && request.params.name === "hide") {
+      send({ method: "notifications/tools/list_changed" })
+    }
   }
 })
 `
@@ -936,6 +959,109 @@ describe("mcp tools in the cell", () => {
       ),
     30_000,
   )
+
+  it.scopedLive(
+    "a list_changed notification on an open connection relists and writes the cache",
+    () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path
+        const fixture = yield* makeFixture
+        const hide = path.join(fixture.directory, "hide-count")
+        const servers = {
+          fixture: { ...fixture.stdio({ MCP_FIXTURE_HIDE_COUNT: hide }), cwd: fixture.directory },
+        }
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          toolCallStep("cell", { code: "await tools.mcp.fixture.hide()" }),
+          textStep("done"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...shippedPreset,
+          extensionInputs: [
+            ...shippedPreset.extensionInputs,
+            McpServers("@test/mcp-changed", servers),
+          ],
+          providerLayer,
+        })
+        yield* client.message.send({ sessionId, branchId, content: "hide count" })
+        expect(yield* cellResultAfterDone(client, branchId)).toMatchObject({
+          name: "cell",
+          isFailure: false,
+        })
+        const next = yield* waitFor(
+          collectTestContributions(McpServers("@test/mcp-changed", servers).setup, {
+            home: path.join(fixture.directory, "home"),
+            cwd: fixture.directory,
+          }).pipe(Effect.map(toolIds)),
+          (ids) => !ids.includes("mcp.fixture.count"),
+          10_000,
+          "the cache drops count",
+        )
+        expect(next).toContain("mcp.fixture.echo")
+        // The open connection relisted; no server started for it.
+        expect(yield* fixture.starts).toBe(2)
+      }).pipe(
+        Effect.timeout("25 seconds"),
+        Effect.provide(Layer.provideMerge(withDataDir, platformLayer)),
+      ),
+    30_000,
+  )
+
+  const unknownToolAnswers: ReadonlyArray<readonly [string, Readonly<Record<string, string>>]> = [
+    ["the spec's -32602 error", {}],
+    ["the TypeScript SDK server's isError result", { MCP_FIXTURE_SDK_UNKNOWN: "1" }],
+  ]
+  for (const [answer, answerEnv] of unknownToolAnswers) {
+    it.scopedLive(
+      `a call the server answers as an unknown tool (${answer}) names the stale catalog and relists`,
+      () =>
+        Effect.gen(function* () {
+          const path = yield* Path.Path
+          const fixture = yield* makeFixture
+          const hide = path.join(fixture.directory, "hide-count")
+          const servers = {
+            fixture: {
+              ...fixture.stdio({ MCP_FIXTURE_HIDE_COUNT: hide, ...answerEnv }),
+              cwd: fixture.directory,
+            },
+          }
+          const code = [
+            "await tools.mcp.fixture.drop()",
+            "let stale = ''; try { await tools.mcp.fixture.count() } catch (error) { stale = error.message }",
+            "stale",
+          ].join("; ")
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            toolCallStep("cell", { code }),
+            textStep("done"),
+          ])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...shippedPreset,
+            extensionInputs: [
+              ...shippedPreset.extensionInputs,
+              McpServers("@test/mcp-unknown", servers),
+            ],
+            providerLayer,
+          })
+          yield* client.message.send({ sessionId, branchId, content: "count" })
+          const result = yield* cellResultAfterDone(client, branchId)
+          expect(String(Reflect.get(Object(result?.result), "display"))).toContain(
+            "no longer lists count",
+          )
+          yield* waitFor(
+            collectTestContributions(McpServers("@test/mcp-unknown", servers).setup, {
+              home: path.join(fixture.directory, "home"),
+              cwd: fixture.directory,
+            }).pipe(Effect.map(toolIds)),
+            (ids) => !ids.includes("mcp.fixture.count"),
+            10_000,
+            "the cache drops count",
+          )
+        }).pipe(
+          Effect.timeout("25 seconds"),
+          Effect.provide(Layer.provideMerge(withDataDir, platformLayer)),
+        ),
+      30_000,
+    )
+  }
 
   it.scopedLive(
     "a failed connect is not kept: the next call connects again",

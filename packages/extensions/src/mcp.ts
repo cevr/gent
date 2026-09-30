@@ -458,11 +458,21 @@ const transportFor = (server: McpServer, environment: Readonly<Record<string, st
 /** A close that has not finished within this long is abandoned. */
 const CLOSE_TIMEOUT = Duration.seconds(2)
 
-/** An initialized client; closing its scope closes the transport, and a stdio server with it. */
-const connect = (server: McpServer) =>
+/**
+ * An initialized client; closing its scope closes the transport, and a stdio
+ * server with it. `onToolsChanged` runs on each `notifications/tools/list_changed`
+ * of a server that declares it sends them.
+ */
+const connect = (server: McpServer, onToolsChanged: Option.Option<() => void> = Option.none()) =>
   Effect.gen(function* () {
+    const listChanged = Option.match(onToolsChanged, {
+      onNone: () => ({}),
+      onSome: (onChanged) => ({
+        listChanged: { tools: { autoRefresh: false, onChanged: () => onChanged() } },
+      }),
+    })
     const client = yield* Effect.acquireRelease(
-      Effect.sync(() => new Client({ name: "gent", version: "1.0.0" })),
+      Effect.sync(() => new Client({ name: "gent", version: "1.0.0" }, listChanged)),
       (opened) =>
         Effect.tryPromise(() => opened.close()).pipe(Effect.timeout(CLOSE_TIMEOUT), Effect.ignore),
     )
@@ -528,10 +538,28 @@ type CallResult = typeof CallResult.Type
  * session the server no longer knows, so it ran nothing. `dead`: the
  * transport failed (the connection closed, the call timed out, HTTP 400, 401
  * or 408, a network error). `kept`: any other HTTP status, which says nothing
- * about the connection.
+ * about the connection. `stale`: the server answered that it has no such
+ * tool, so the catalog is out of date.
  */
-const CallFailureKind = Schema.Literals(["answered", "expired", "dead", "kept"])
+const CallFailureKind = Schema.Literals(["answered", "expired", "dead", "kept", "stale"])
 type CallFailureKind = typeof CallFailureKind.Type
+
+const staleMessage = (name: string) =>
+  `the server no longer lists ${name}; the tool catalog was stale, and the next session registers the current list`
+
+const escapeRegExp = (text: string) => text.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&")
+
+/**
+ * Whether a server's answer says it has no tool `name`: the spec's
+ * `Unknown tool: name` (a -32602 error), or the TypeScript SDK server's
+ * `Tool name not found` (an `isError` result). The name is matched exactly,
+ * so a tool error that only mentions "not found" does not match.
+ */
+const isUnknownToolMessage = (message: string, name: string) =>
+  new RegExp(
+    `(?:unknown tool:?\\s*"?${escapeRegExp(name)}"?|tool\\s+"?${escapeRegExp(name)}"?\\s+(?:not found|is not available|does not exist))`,
+    "i",
+  ).test(message)
 
 /** HTTP statuses that end a connection: the request, the credential, or the session is bad. */
 const DEAD_STATUSES: ReadonlySet<number> = new Set([400, 401, 408])
@@ -541,10 +569,12 @@ const CLIENT_RAISED: ReadonlySet<number> = new Set<number>([
   ErrorCode.ConnectionClosed,
   ErrorCode.RequestTimeout,
 ])
+const INVALID_PARAMS: number = ErrorCode.InvalidParams
 
-const failureKind = (cause: unknown): CallFailureKind => {
+const failureKind = (cause: unknown, name: string): CallFailureKind => {
   if (cause instanceof ProtocolError) {
     if (CLIENT_RAISED.has(cause.code)) return "dead"
+    if (cause.code === INVALID_PARAMS && isUnknownToolMessage(cause.message, name)) return "stale"
     return "answered"
   }
   if (cause instanceof StreamableHTTPError) {
@@ -586,10 +616,10 @@ interface RegisteredServer {
   readonly tools: ReadonlyArray<CatalogTool>
 }
 
-/** An open connection and the tool names the server listed when it opened. */
+/** An open connection and the tool names the server listed last. */
 interface Connection {
   readonly client: Client
-  readonly listed: ReadonlySet<string>
+  listed: ReadonlySet<string>
   /** Set when the transport closed: the stdio server exited, or the HTTP transport ended. */
   closed: boolean
   /** Calls started on this connection. */
@@ -598,11 +628,13 @@ interface Connection {
 
 /**
  * The connections of `registered`, each under its cache key, which names one
- * entry. Opening a connection lists the server's tools again: a tool it no
- * longer lists fails its call by name, and a list that differs from the one
- * registered is written to the cache, so the next session registers it. The
- * current session keeps the tools it registered; changing them live needs a
- * host seam to re-register an extension's tools.
+ * entry. The server's tools are listed again when a connection opens, when
+ * the server sends `notifications/tools/list_changed`, and when it answers a
+ * call as an unknown tool: a tool it no longer lists fails its call by name,
+ * and a list that differs from the last one is written to the cache, so the
+ * next session registers it. The current session keeps the tools it
+ * registered; changing them live needs a host seam to re-register an
+ * extension's tools.
  *
  * A connection is dropped when its transport closes and when a call on it
  * fails in the transport (see `failureKind`); a JSON-RPC error leaves it
@@ -617,32 +649,54 @@ const mcpClientsLive = (registered: ReadonlyArray<RegisteredServer>, file: strin
     Effect.gen(function* () {
       const byKey = new Map(registered.map((entry) => [entry.server.key, entry]))
       const writePermit = yield* Semaphore.make(1)
-      const runFork = yield* FiberSet.makeRuntime()
+      const runFork = yield* FiberSet.makeRuntime<FileSystem.FileSystem | Path.Path>()
       /** The connection each key holds now, so a late close never drops its successor. */
       const live = new Map<string, Connection>()
+      /** Each server's last accepted list, which a new list is compared with. */
+      const known = new Map(registered.map((entry) => [entry.server.key, entry.tools]))
+      const namesOf = (tools: ReadonlyArray<CatalogTool>) =>
+        new Set(tools.map((listed) => listed.name))
       /**
        * The names the server lists now, written to the cache when they
-       * changed. An empty list from a server registered with tools is not
-       * trusted (a server whose auth broke can answer one): it keeps the
-       * cached tools, as a failed list does.
+       * changed. An empty list from a server that had tools is not trusted (a
+       * server whose auth broke can answer one), and a failed list is not
+       * either: both keep the last list and the cached tools.
        */
-      const relist = (entry: RegisteredServer, client: Client) =>
+      const relist = (server: McpServer, client: Client) =>
         Effect.gen(function* () {
-          const tools = yield* listTools(entry.server, client)
-          if (tools.length === 0 && entry.tools.length > 0) {
+          const previous = known.get(server.key) ?? []
+          const tools = yield* listTools(server, client)
+          if (tools.length === 0 && previous.length > 0) {
             yield* Effect.logWarning("mcp.server.relist.empty").pipe(
-              Effect.annotateLogs({ server: entry.server.name }),
+              Effect.annotateLogs({ server: server.name }),
             )
-            return new Set(entry.tools.map((listed) => listed.name))
+            return namesOf(previous)
           }
-          if (!Equal.equals(tools, entry.tools)) {
+          known.set(server.key, tools)
+          if (!Equal.equals(tools, previous)) {
             yield* Semaphore.withPermit(
               writePermit,
-              writeCatalogEntries(file, [[entry.server.key, tools]]),
+              writeCatalogEntries(file, [[server.key, tools]]),
             )
           }
-          return new Set(tools.map((listed) => listed.name))
-        })
+          return namesOf(tools)
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("mcp.server.relist.failed").pipe(
+              Effect.annotateLogs({ server: server.name, error: String(cause) }),
+              Effect.as(namesOf(known.get(server.key) ?? [])),
+            ),
+          ),
+        )
+      /** Lists an open connection's tools again, off the call that asked. */
+      const refresh = (server: McpServer, connection: Connection) =>
+        runFork(
+          relist(server, connection.client).pipe(
+            Effect.map((listed) => {
+              connection.listed = listed
+            }),
+          ),
+        )
       const clients = yield* RcMap.make({
         lookup: (key: string) =>
           Effect.gen(function* () {
@@ -650,12 +704,19 @@ const mcpClientsLive = (registered: ReadonlyArray<RegisteredServer>, file: strin
             if (Predicate.isUndefined(entry)) {
               return yield* new McpError({ server: key, message: "not configured" })
             }
-            const client = yield* connect(entry.server)
-            // A server that cannot list again keeps the registered list.
-            const listed = yield* relist(entry, client).pipe(
-              Effect.orElseSucceed(() => new Set(entry.tools.map((listed) => listed.name))),
+            // The notification can only arrive once the connection below exists.
+            let onToolsChanged = () => {}
+            const client = yield* connect(
+              entry.server,
+              Option.some(() => onToolsChanged()),
             )
-            const connection: Connection = { client, listed, closed: false, calls: 0 }
+            const connection: Connection = {
+              client,
+              listed: yield* relist(entry.server, client),
+              closed: false,
+              calls: 0,
+            }
+            onToolsChanged = () => refresh(entry.server, connection)
             live.set(key, connection)
             // Runs before the client closes, so its own close event finds nothing to drop.
             yield* Effect.addFinalizer(() => Effect.sync(() => forget(key, connection)))
@@ -691,6 +752,7 @@ const mcpClientsLive = (registered: ReadonlyArray<RegisteredServer>, file: strin
           yield* evict(server.key, connection)
           return yield* acquire(server)
         })
+      /** One `tools/call` on the key's connection, which the failure's kind then drops or relists. */
       const callOnce = (
         server: McpServer,
         name: string,
@@ -699,31 +761,46 @@ const mcpClientsLive = (registered: ReadonlyArray<RegisteredServer>, file: strin
         Effect.gen(function* () {
           const connection = yield* open(server)
           if (!connection.listed.has(name)) {
-            return yield* new McpError({
-              server: server.name,
-              message: `the server no longer lists ${name}; the tool catalog was stale, and the next session registers the current list`,
-            })
+            return yield* new McpError({ server: server.name, message: staleMessage(name) })
           }
           const reused = connection.calls > 0
           connection.calls += 1
-          return yield* Effect.tryPromise({
-            try: (signal) =>
-              // oxlint-disable-next-line effect/noNullish -- the SDK takes its default result schema positionally
-              connection.client.callTool({ name, arguments: input }, undefined, {
-                signal,
-                timeout: timeoutOf(server),
-              }),
-            catch: (cause) =>
-              new CallFailed({
-                kind: failureKind(cause),
-                reused,
-                message: `${name}: ${failureMessage(cause)}`,
-              }),
-          }).pipe(
+          const send = Effect.gen(function* () {
+            const value = yield* Effect.tryPromise({
+              try: (signal) =>
+                // oxlint-disable-next-line effect/noNullish -- the SDK takes its default result schema positionally
+                connection.client.callTool({ name, arguments: input }, undefined, {
+                  signal,
+                  timeout: timeoutOf(server),
+                }),
+              catch: (cause) => {
+                const kind = failureKind(cause, name)
+                let message = `${name}: ${failureMessage(cause)}`
+                if (kind === "stale") message = staleMessage(name)
+                return new CallFailed({ kind, reused, message })
+              },
+            })
+            const result = yield* Schema.decodeUnknownEffect(CallResult)(value).pipe(
+              Effect.mapError(
+                (error) =>
+                  new CallFailed({
+                    kind: "answered",
+                    reused,
+                    message: `${name}: ${error.message}`,
+                  }),
+              ),
+            )
+            if (result.isError === true && isUnknownToolMessage(resultText(result), name)) {
+              return yield* new CallFailed({ kind: "stale", reused, message: staleMessage(name) })
+            }
+            return result
+          })
+          return yield* send.pipe(
             Effect.tapError((failed) => {
               if (failed.kind === "dead" || failed.kind === "expired") {
                 return evict(server.key, connection)
               }
+              if (failed.kind === "stale") return Effect.sync(() => refresh(server, connection))
               return Effect.void
             }),
           )
@@ -739,14 +816,6 @@ const mcpClientsLive = (registered: ReadonlyArray<RegisteredServer>, file: strin
               if (error._tag === "McpError") return error
               return new McpError({ server: server.name, message: error.message })
             }),
-            Effect.flatMap((value) =>
-              Schema.decodeUnknownEffect(CallResult)(value).pipe(
-                Effect.mapError(
-                  (error) =>
-                    new McpError({ server: server.name, message: `${name}: ${error.message}` }),
-                ),
-              ),
-            ),
             Effect.scoped,
           ),
       })
@@ -783,6 +852,14 @@ const base64Bytes = (data: string) => {
 }
 
 const isTextBlock = Schema.is(Schema.Struct({ type: Schema.Literal("text"), text: Schema.String }))
+
+/** A result's text blocks, joined. */
+const resultText = (result: CallResult) =>
+  (result.content ?? [])
+    .filter(isTextBlock)
+    .map((block) => block.text)
+    .join("\n")
+
 const isMediaBlock = Schema.is(
   Schema.Struct({
     type: Schema.Literals(["image", "audio"]),
