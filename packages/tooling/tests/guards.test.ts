@@ -1557,7 +1557,9 @@ describe("a set variable must have a reader", () => {
       [
         "packages/sdk/tests/server.test.ts",
         2,
-        expect.stringContaining("`GENT_GONE` is set but nothing in the tree reads it"),
+        expect.stringContaining(
+          "`GENT_GONE` is set but nothing in the tree names it apart from its setters",
+        ),
       ],
     ])
   })
@@ -1578,6 +1580,30 @@ describe("a set variable must have a reader", () => {
       ["packages/sdk/src/boot.ts", 2, "GENT_S3"],
       ["apps/tui/package.json", 2, "GENT_S4"],
     ])
+  })
+
+  test("a child shell or an expanded config string that names the variable reads it", () => {
+    const findings = findWritersWithoutReaders(
+      new Map([
+        [
+          "apps/tui/package.json",
+          `{ "scripts": { "probe": "GENT_SH1=1 sh -c 'printf %s \\"$GENT_SH1\\"'" } }\n`,
+        ],
+        [
+          "packages/sdk/src/spawn.ts",
+          `Bun.spawn(["sh", "-c", "echo $GENT_SH2"], { env: { GENT_SH2: "1" } })\n`,
+        ],
+        [
+          "packages/extensions/tests/mcp.test.ts",
+          [
+            `ConfigProvider.fromEnvRecord({ GENT_KEYED: "v" })`,
+            // The server reads Bun.env[key], with the key taken from this string.
+            `const args = ["\${GENT_KEYED}"]`,
+          ].join("\n"),
+        ],
+      ]),
+    )
+    expect(findings).toEqual([])
   })
 
   test("a set variable read in production or in a fixture is silent", () => {

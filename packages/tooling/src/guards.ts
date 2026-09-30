@@ -1553,15 +1553,15 @@ const decodeManifestScripts = Schema.decodeUnknownOption(
   ),
 )
 
-/** The names a manifest's `scripts` set by a shell prefix; a description that shows one sets nothing. */
-const namesScriptsSet = (text: string): ReadonlyArray<string> =>
+/** A manifest's script bodies: the only field that runs a shell. */
+const manifestScripts = (text: string): ReadonlyArray<string> =>
   Option.match(decodeManifestScripts(text), {
     onNone: () => [],
-    onSome: (manifest) =>
-      Object.values(manifest.scripts ?? {}).flatMap((script) =>
-        namesMatching(script, SCRIPT_PREFIX),
-      ),
+    onSome: (manifest) => Object.values(manifest.scripts ?? {}),
   })
+
+/** Every `GENT_*` token: a shell's `$GENT_X`, a config string's `${GENT_X}`, a key, a read. */
+const GENT_NAME = /\bGENT_[A-Z0-9_]+\b/g
 
 interface VariableUse {
   readonly file: string
@@ -1581,28 +1581,40 @@ const captured = (match: RegExpMatchArray): ReadonlyArray<string> =>
 /** The guard's own test names variables in its fixtures; those are not call sites either. */
 const GUARDS_TEST_FILE = "packages/tooling/tests/guards.test.ts"
 
-/** Where each `GENT_*` variable is read and where it is set, in production and in tests. */
+/**
+ * Where each `GENT_*` variable is read and where it is set, in production and
+ * in tests, and how many times code or a package script names it at all.
+ */
 const collectGentVariableUses = (sourceTexts: ReadonlyMap<string, string>) => {
   const readers = new Map<string, Array<VariableUse>>()
   const writers = new Map<string, Array<VariableUse>>()
+  const mentions = new Map<string, number>()
   const record = (uses: Map<string, Array<VariableUse>>, name: string, use: VariableUse) => {
     const found = uses.get(name) ?? []
     found.push(use)
     uses.set(name, found)
   }
+  const mention = (text: string) => {
+    for (const [name] of text.matchAll(GENT_NAME)) mentions.set(name, (mentions.get(name) ?? 0) + 1)
+  }
   for (const [file, text] of sourceTexts) {
     // The finder and its test name variables to describe themselves; they are not call sites.
     if (file === GUARDS_FILE || file === GUARDS_TEST_FILE) continue
     const testSupport = isTestSupport(file)
-    // A manifest reads nothing; only its scripts write.
+    // A manifest's scripts set a variable by a shell prefix and read one by `$GENT_X`.
     if (isManifest(file)) {
-      for (const name of namesScriptsSet(text)) {
-        record(writers, name, { file, line: lineAt(text, text.indexOf(`${name}=`)), testSupport })
+      for (const script of manifestScripts(text)) {
+        mention(script)
+        for (const name of namesMatching(script, SCRIPT_PREFIX)) {
+          const line = lineAt(text, text.indexOf(`${name}=`))
+          record(writers, name, { file, line, testSupport })
+        }
       }
       continue
     }
     // A comment that shows `GENT_X=1` documents a variable; it sets nothing.
     const code = withoutComments(text)
+    mention(code)
     for (const [index, line] of code.split("\n").entries()) {
       for (const name of [...quotedReads(line), ...namesMatching(line, DIRECT_READ)]) {
         record(readers, name, { file, line: index + 1, testSupport })
@@ -1612,7 +1624,7 @@ const collectGentVariableUses = (sourceTexts: ReadonlyMap<string, string>) => {
       record(writers, write.name, { file, line: lineAt(code, write.at), testSupport })
     }
   }
-  return { readers, writers }
+  return { readers, writers, mentions }
 }
 
 /** The uses in `uses` outside test support, for each name that has one. */
@@ -1669,21 +1681,30 @@ export const findReadersWithoutWriters = (
 }
 
 /**
- * A variable set, in production or in a test, that nothing reads: the setter
- * configures nothing, and a test that sets it tests a knob that is gone. A read
- * in test support counts, since a fixture may read what its test sets.
+ * A variable set, in production or in a test, that nothing but its setters
+ * names: the setter configures nothing, and a test that sets it tests a knob
+ * that is gone.
+ *
+ * A read is not always visible as one. A child shell reads `$GENT_X` from the
+ * environment it inherits, and code may read `Bun.env[key]` with the key taken
+ * from data such as a config string's `${GENT_X}`. So the guard does not ask
+ * for a read it can recognise; it asks whether code or a package script names
+ * the variable anywhere other than where it is set, in production or in tests.
+ * Only then can no read exist, save one that builds the name from parts
+ * (`"GENT_" + suffix`), which this guard cannot see and the tree should not
+ * write. The finding says so.
  */
 export const findWritersWithoutReaders = (
   sourceTexts: ReadonlyMap<string, string>,
 ): ReadonlyArray<Finding> => {
-  const { readers, writers } = collectGentVariableUses(sourceTexts)
+  const { writers, mentions } = collectGentVariableUses(sourceTexts)
   return [...writers]
-    .filter(([name]) => !readers.has(name))
+    .filter(([name, sites]) => (mentions.get(name) ?? 0) <= sites.length)
     .flatMap(([name, sites]) =>
       sites.map((site) => ({
         file: site.file,
         line: site.line,
-        message: `\`${name}\` is set but nothing in the tree reads it; delete the setter`,
+        message: `\`${name}\` is set but nothing in the tree names it apart from its setters, so nothing reads it (a read by a name built from parts is invisible here; spell the name out); delete the setter`,
       })),
     )
 }
