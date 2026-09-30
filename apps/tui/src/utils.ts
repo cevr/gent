@@ -9,6 +9,7 @@ import {
   Schedule,
   Schema,
 } from "effect"
+import { pathToFileURL } from "node:url"
 import { type Context, useContext } from "solid-js"
 import { textWidth } from "./bun-adapter"
 import {
@@ -913,13 +914,16 @@ export const formatFileRef = (path: string): string => {
   return `@${path}`
 }
 
-export function isAbsPath(path: string): boolean {
-  return path.startsWith("/")
-}
-
-export function fileUrl(path: string): string {
-  return `file://${path}`
-}
+/**
+ * The `file://` link a tool row gives an absolute path. A terminal opens it
+ * as a URL, so the path is percent-encoded as `pathToFileURL` encodes it: a
+ * space, `#` or `%` stays part of the name. A relative path has no link.
+ */
+export const fileHref = (path: string): Option.Option<string> =>
+  Option.some(path).pipe(
+    Option.filter((p) => p.startsWith("/")),
+    Option.map((p) => pathToFileURL(p).href),
+  )
 
 /**
  * The file references in `text`, with the span each was written at.

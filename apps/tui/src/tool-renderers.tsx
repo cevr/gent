@@ -20,7 +20,7 @@ import {
   decodeToolOutputOption,
   describeCellCode,
   displayPath,
-  fileUrl,
+  fileHref,
   formatGenericToolDetail,
   formatGenericToolInput,
   formatGenericToolText,
@@ -28,7 +28,6 @@ import {
   formatPreviewFooter,
   getString,
   formatBytes,
-  isAbsPath,
   parseBashOutput,
   plural,
   shortId,
@@ -920,9 +919,7 @@ export function ReadToolRenderer(props: ToolRendererProps) {
     <ToolFrame
       title="read"
       subtitle={displayPath(path(), pathPlace())}
-      subtitleHref={Option.getOrUndefined(
-        Option.some(path()).pipe(Option.filter(isAbsPath), Option.map(fileUrl)),
-      )}
+      subtitleHref={Option.getOrUndefined(fileHref(path()))}
       status={props.toolCall.status}
       expanded={props.expanded}
       collapsedContent={
@@ -1042,8 +1039,7 @@ export function EditToolRenderer(props: ToolRendererProps) {
 
   const editData = () => getEditUnifiedDiff(props.toolCall.input)
   const path = () => getPath(props.toolCall.input)
-  const subtitleHref = () =>
-    Option.getOrUndefined(Option.some(path()).pipe(Option.filter(isAbsPath), Option.map(fileUrl)))
+  const subtitleHref = () => Option.getOrUndefined(fileHref(path()))
 
   const collapsedDiffLines = createMemo((): DiffLine[] => {
     const data = editData()
@@ -1142,8 +1138,7 @@ function WriteToolRenderer(props: ToolRendererProps) {
   const data = createMemo(() => decodeToolOutput(WriteOutputSchema, props.toolCall.output))
   // The input names the file, so the header shows it while the write runs.
   const path = createMemo(() => getPath(props.toolCall.input))
-  const subtitleHref = () =>
-    Option.getOrUndefined(Option.some(path()).pipe(Option.filter(isAbsPath), Option.map(fileUrl)))
+  const subtitleHref = () => Option.getOrUndefined(fileHref(path()))
 
   // The header names the file, so the body, open or closed, says what the write did.
   const Written = () => (

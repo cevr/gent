@@ -16,7 +16,7 @@ import {
   describeCellCode,
   expandFileRefs,
   fitWidth,
-  fileUrl,
+  fileHref,
   formatActivityHeader,
   formatAge,
   formatCost,
@@ -31,7 +31,6 @@ import {
   formatTokens,
   formatUsageStats,
   displayPath,
-  isAbsPath,
   previewOutput,
   toolArgSummary,
   truncate,
@@ -45,40 +44,25 @@ import os from "node:os"
 
 // ── file refs ───────────────────────────────────────────────────────────────
 
-describe("fileUrl", () => {
-  test("converts absolute path to file:// URL", () => {
-    expect(fileUrl("/Users/cvr/foo.ts")).toBe("file:///Users/cvr/foo.ts")
-  })
-
-  test("handles root path", () => {
-    expect(fileUrl("/")).toBe("file:///")
-  })
-
-  test("handles path with spaces", () => {
-    expect(fileUrl("/Users/cvr/my project/foo.ts")).toBe("file:///Users/cvr/my project/foo.ts")
-  })
-})
-
-describe("isAbsPath", () => {
-  test("/foo is absolute", () => {
-    expect(isAbsPath("/foo")).toBe(true)
-  })
-
-  test("foo is not absolute", () => {
-    expect(isAbsPath("foo")).toBe(false)
-  })
-
-  test("~/foo is not absolute", () => {
-    expect(isAbsPath("~/foo")).toBe(false)
-  })
-
-  test("empty string is not absolute", () => {
-    expect(isAbsPath("")).toBe(false)
-  })
-
-  test("./foo is not absolute", () => {
-    expect(isAbsPath("./foo")).toBe(false)
-  })
+// A terminal opens the href as a URL: a space, `#` or `%` in the path is
+// encoded, or the link names another file. Only an absolute path has one.
+describe("fileHref", () => {
+  const cases: ReadonlyArray<readonly [string, Option.Option<string>]> = [
+    ["/Users/cvr/foo.ts", Option.some("file:///Users/cvr/foo.ts")],
+    ["/", Option.some("file:///")],
+    ["/Users/cvr/my project/foo.ts", Option.some("file:///Users/cvr/my%20project/foo.ts")],
+    ["/tmp/issue #4/a.ts", Option.some("file:///tmp/issue%20%234/a.ts")],
+    ["/tmp/100%/a.ts", Option.some("file:///tmp/100%25/a.ts")],
+    ["foo", Option.none()],
+    ["./foo", Option.none()],
+    ["~/foo", Option.none()],
+    ["", Option.none()],
+  ]
+  for (const [path, href] of cases) {
+    test(`"${path}" links to ${Option.getOrElse(href, () => "nothing")}`, () => {
+      expect(fileHref(path)).toEqual(href)
+    })
+  }
 })
 
 describe("expandFileRefs", () => {
