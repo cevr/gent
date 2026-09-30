@@ -88,6 +88,7 @@ import {
   CellCatalogEntry,
   type CellEvaluation,
   CellEvaluationError,
+  CellFrameRefusal,
   type CellOutputSegment,
   CellRequest,
   cellRequestFd,
@@ -742,6 +743,7 @@ class CellProcessError extends Schema.TaggedError<CellProcessError>()("CellProce
   phase: Schema.Literals(["launch", "io", "exit"]),
   message: Schema.String,
   diagnostics: Schema.String,
+  reason: Schema.optional(CellFrameRefusal),
 }) {}
 
 /**
@@ -1043,7 +1045,17 @@ export const openCellProcess = Effect.fn("CellProcess.open")(function* (input: {
       if (yield* Deferred.isDone(failure)) return yield* Deferred.await(failure)
       // Output nobody claimed, such as late writes from a process a cell spawned, is dropped here.
       if (request._tag === "Evaluate") beginCell(request.outputToken)
-      const bytes = yield* encodeCellRequest(request).pipe(Effect.mapError(ioError))
+      const bytes = yield* encodeCellRequest(request).pipe(
+        Effect.mapError(
+          (error) =>
+            new CellProcessError({
+              phase: "io",
+              message: String(error),
+              diagnostics: diagnostics(),
+              reason: error.reason,
+            }),
+        ),
+      )
       const accepted = yield* Queue.offer(outbound, bytes).pipe(
         Effect.raceFirst(Deferred.await(failure)),
       )
@@ -1064,11 +1076,12 @@ const namingCatalogSize = (error: CellProcessError, catalog: Option.Option<CellC
     Option.map(catalog, (sent) => sent.tools.length),
     () => 0,
   )
-  if (listed === 0 || !error.message.includes("byte limit")) return error
+  if (listed === 0 || error.reason !== "frame-too-large") return error
   return new CellProcessError({
     phase: error.phase,
     message: `${error.message}: the listing of ${listed} host tools does not fit one frame; select fewer tools for this agent`,
     diagnostics: error.diagnostics,
+    reason: error.reason,
   })
 }
 
@@ -2732,7 +2745,7 @@ export const CellTool = tool({
     "The value of the last expression is the cell result; an undefined value shows nothing. Top-level await works; a top-level return does not.",
     "Return a summary, not the data. You see at most 8,000 characters of any tool result (head and tail); a larger result is spilled and its `read` field says how to page the rest with context.read. Slice arrays, count instead of listing, and keep the full value in a binding for the next cell.",
     "Bun.$`cmd`.text() returns stdout only, and Bun.$ pipes stderr away; test runners and many tools report on stderr. Use Bun.spawn with inherited stdio so the output returns with the cell, or .quiet() and read .stderr.",
-    "The whole session stays reachable from the cell. context.history({ offset, limit }) lists this branch's durable messages in order (id, role, chars, preview, kind), 50 per page with nextOffset. context.read(id, { offset, limit }) returns durable text by message id or tool call id, paged by character offset and limit (nextOffset continues); receipts in a cell result carry the ids of inner calls. context.status() reports what the model sees: tokens, limit, percent, omittedMessages, handoffMessageId. When the window overflows, the history before the current turn is handed off: one durable notice summarizes it and names the session, branch, and message-id range it replaced, so read it back with context.history and context.read instead of guessing. context.compact(instructions?) asks for that handoff before the next turn, focused on the instructions. context.newWindow() drops older history from the model view without a summary. All five are awaited host calls.",
+    "The whole session stays reachable from the cell. context.history({ offset, limit }) lists this branch's durable messages in order (id, role, chars, preview, kind), 50 per page with nextOffset. context.read(id, { offset, limit }) returns durable text by message id or tool call id, paged by character offset and limit (nextOffset continues); receipts in a cell result carry the ids of inner calls. context.status() reports what the model sees: tokens, limit, percent, omittedMessages, handoffMessageId. When the window overflows, the history before the current turn is handed off: one durable notice summarizes it and names the session, branch, and message-id range it replaced, so read it back with context.history and context.read instead of guessing. context.compact(instructions?) asks for that handoff at the next step of this turn, focused on the instructions (a turn that ends first drops it). context.newWindow() drops older history from the model view without a summary. All five are awaited host calls.",
     "Set reset: true to discard retained values and the saved namespace before running new code.",
     "A failed cell may have completed effects. Do not replay source to recover unknown outcomes.",
   ],
@@ -3101,7 +3114,7 @@ const CELL_WORK_SECTION = {
 
 const HOST_TOOLS_HEADING = `## Host Tools
 
-Inside \`cell\`, each host tool id is a function path under \`tools\`: id \`a.b\` is \`await tools.a.b(input)\`. Every host tool is callable, listed below or not. A line \`tools.a.*: N tools\` stands for a namespace listed by name only, and a \`more\` line counts tools not listed. \`tools.search(query)\` ranks the ids by their segments and one-line description and returns one page, \`{ items: { id, description }[], total, hasMore, nextOffset }\`; a second argument \`{ namespace, limit, offset }\` narrows or pages it. \`tools.describe(id)\` returns one tool's typed signature. \`tools(id)\` returns the tool and reaches an id with a JavaScript built-in segment such as \`then\` or \`name\`; \`await tools(id)\` returns its full input schema (\`parameters\`), \`guidelines\` and description. \`tools.search\`, \`tools.describe\` and \`tools(id)\` are local and synchronous, and these calls grant no permission to execute. \`Object.keys(tools)\` lists the top-level names.`
+Inside \`cell\`, each host tool id is a function path under \`tools\`: id \`a.b\` is \`await tools.a.b(input)\`. Every host tool is callable, listed below or not. A line \`tools.a.*: N tools\` stands for a namespace listed by name only, and a \`more\` line counts tools not listed. \`tools.search(query)\` ranks the ids by their segments and one-line description and returns one page, \`{ items: { id, description }[], total, hasMore, nextOffset }\`; a second argument \`{ namespace, limit, offset }\` narrows or pages it. \`tools(id)\` returns the tool, whose \`signature\` is its typed call line, and reaches an id with a JavaScript built-in segment such as \`then\` or \`name\`; \`await tools(id)\` returns its full input schema (\`parameters\`), \`guidelines\` and description. \`tools.search\` and \`tools(id)\` are local and synchronous, and these calls grant no permission to execute. \`Object.keys(tools)\` lists the top-level names.`
 
 /**
  * The characters the Host Tools signature lines may take. The shipped tool set
@@ -3578,7 +3591,11 @@ const firstLine = (text: string) => {
   return `${line.slice(0, DESCRIPTION_LIMIT - 3)}...`
 }
 
-/** A schema the renderer cannot derive renders as `unknown` instead of failing the prompt. */
+/**
+ * Load validation (core `hasWireParameters`) checks a tool's input schema, not
+ * its output: an output schema with no JSON Schema (a symbol-keyed struct)
+ * renders as `unknown` instead of failing the prompt.
+ */
 const jsonSchemaOf = (derive: () => JsonSchema.JsonSchema) =>
   Effect.try({ try: derive, catch: () => "underivable" }).pipe(
     Effect.orElseSucceed((): JsonSchema.JsonSchema => ({})),
@@ -3594,7 +3611,7 @@ const joinSignature = (signature: string, summary: string) => {
  * One prompt line per host tool: the callable path with its input and result
  * types, then the first line of its snippet or description.
  * `- tools.wake.cancel(input?: { wakeId?: string }): Promise<{ cancelled: string[] }> // Cancel ...`
- * `tools.describe(id)` in the kernel returns the same line without the `- `.
+ * `tools(id).signature` in the kernel holds the same line without the `- `.
  */
 export const renderToolSignature = Effect.fn("CellCatalog.renderToolSignature")(function* (
   tool: ToolCapability,
@@ -3607,7 +3624,8 @@ export const renderToolSignature = Effect.fn("CellCatalog.renderToolSignature")(
 const toolSignatureParts = Effect.fn("CellCatalog.toolSignatureParts")(function* (
   tool: ToolCapability,
 ) {
-  const parameters = yield* jsonSchemaOf(() => AiTool.getJsonSchema(tool))
+  // Extension validation loads only tools whose input has a JSON Schema (core `hasWireParameters`).
+  const parameters = AiTool.getJsonSchema(tool)
   const output = getToolMetadata(tool).output
   let result: JsonSchema.JsonSchema = {}
   if (Schema.isSchema(output)) {

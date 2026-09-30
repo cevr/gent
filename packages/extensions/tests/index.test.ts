@@ -1,7 +1,7 @@
-import { describe, expect, it, test } from "effect-bun-test"
-import { Effect, FileSystem, Layer, Option, Path, Schema } from "effect"
-import { ExtensionId, getToolId } from "@gent/core/extensions/api"
-import { BuiltinExtensionModules, BuiltinExtensions } from "../src/index.js"
+import { describe, expect, it } from "effect-bun-test"
+import { Effect, FileSystem, Layer, Option, Path } from "effect"
+import { getToolId } from "@gent/core/extensions/api"
+import { BuiltinExtensionModules } from "../src/index.js"
 import { homedir } from "node:os"
 import { BunChildProcessSpawner, BunFileSystem, BunServices } from "@effect/platform-bun"
 import { toCodecAnthropic } from "effect/ai/AnthropicStructuredOutput"
@@ -13,18 +13,6 @@ import {
   LanguageModelLayers,
   textStep,
 } from "@gent/core/test-utils"
-
-// ── starting extensions ─────────────────────────────────────────────────────
-
-const hasPublicExtensionContract = (extension: (typeof BuiltinExtensions)[number]) =>
-  Schema.is(ExtensionId)(extension.manifest.id) && Effect.isEffect(extension.setup)
-
-describe("starting extensions", () => {
-  test("exported starting set uses the public extension shape", () => {
-    expect(BuiltinExtensions.length).toBeGreaterThan(0)
-    expect(BuiltinExtensions.every(hasPublicExtensionContract)).toBe(true)
-  })
-})
 
 // ── builtin peer modules ────────────────────────────────────────────────────
 

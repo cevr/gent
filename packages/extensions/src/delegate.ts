@@ -328,8 +328,6 @@ const childMessages = (entry: DelegateEntry) =>
     return startTurnMessages(branch?.messages ?? [], startMessageId(entry.requestId))
   })
 
-const childName = (prompt: string) => `${DELEGATE_AGENT_NAME}: ${prompt.slice(0, 60)}`
-
 /** Children never spend the parent's patience on a broken model. */
 const childRunSpec = (base: RunSpec): RunSpec =>
   makeRunSpec({
@@ -1021,7 +1019,10 @@ const onParentTurnAfter = Effect.fn("Delegate.parentTurnAfter")(function* (input
   yield* ctx.State.changed().pipe(Effect.ignore)
 })
 
-/** A stop notice names the task by its first line, cut here; the registry keeps the whole prompt. */
+/**
+ * A stop notice and a child's session name name the task by its first line,
+ * cut here by code point; the registry keeps the whole prompt.
+ */
 const maximumNoticeTaskChars = 80
 
 /** The children one notice names; the rest are counted, and named once these are read. */
@@ -1032,6 +1033,9 @@ const noticeTask = (prompt: string) => {
   if (chars.length <= maximumNoticeTaskChars) return chars.join("")
   return `${chars.slice(0, maximumNoticeTaskChars - 1).join("")}…`
 }
+
+/** One line, so the tray and the agents view show it whole. */
+const childName = (prompt: string) => `${DELEGATE_AGENT_NAME}: ${noticeTask(prompt)}`
 
 /** One unread stop notice: a row, at the stop that wrote it. A later stop of the same row is a new notice. */
 const stopNoticeKey = (row: DelegateEntry) => `${row.requestId}@${row.stopNoticeAt}`

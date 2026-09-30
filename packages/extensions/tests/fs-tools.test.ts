@@ -189,6 +189,22 @@ describe("ReadTool", () => {
     }),
   )
 
+  readTest("an offset past the last line reads nothing and reports the line count", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const tmpDir = yield* fs.makeTempDirectoryScoped()
+      yield* fs.writeFileString(`${tmpDir}/two.txt`, "a\nb\n")
+
+      const result = yield* runToolWithCtx(ReadTool, { path: `${tmpDir}/two.txt`, offset: 10 }, ctx)
+      expect(result).toEqual({
+        content: "",
+        path: `${tmpDir}/two.txt`,
+        lineCount: 2,
+        truncated: false,
+      })
+    }),
+  )
+
   readTest("a trailing newline ends the last line; an empty file has no lines", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem

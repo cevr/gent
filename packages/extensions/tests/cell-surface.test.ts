@@ -1948,7 +1948,7 @@ describe("host tool catalog budget", () => {
   })
 
   it.scopedLive(
-    "a 100-tool namespace collapses in a stable prompt, and the cell searches, describes, and calls its tools",
+    "a 100-tool namespace collapses in a stable prompt, and the cell searches, signs, and calls its tools",
     () =>
       Effect.gen(function* () {
         const systems: Array<string> = []
@@ -1965,7 +1965,7 @@ describe("host tool catalog budget", () => {
         })
         const code = [
           "const found = tools.search('tool_042').items.map((entry) => entry.id)",
-          "const signature = tools.describe('mcp.fixture.tool_007')",
+          "const signature = tools('mcp.fixture.tool_007').signature",
           "const called = await tools.mcp.fixture.tool_003({ query: 'x' })",
           "JSON.stringify({ found, signature, called })",
         ].join("; ")

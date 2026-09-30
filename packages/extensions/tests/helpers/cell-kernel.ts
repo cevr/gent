@@ -115,12 +115,6 @@ export const testLayer = Layer.provideMerge(
   SqliteStorage.MemoryWithSql(CellBranchTools.storage, CellBranchTools.migrations),
 ).pipe(Layer.provideMerge(platform))
 
-/** A worker the test never launches: the cell settles before it needs one. */
-export const unusedWorker = CellWorker.cases.Script.make({
-  runtimePath: "/nonexistent/bun",
-  scriptPath: "/nonexistent/worker.js",
-})
-
 /** A catalog that selects the named host tools, hashed by their names. */
 export const hostCatalog = (...names: ReadonlyArray<string>) => ({
   hash: names.join(","),

@@ -190,6 +190,10 @@ export const SESSION_TOOLS_EXTENSION_ID = ExtensionId.make("@gent/session-tools"
 /** `metadata.customType` on the interjection `session.send` lands on the receiver. */
 export const SESSION_MESSAGE_TYPE = "session-message"
 
+/** How one session stands to another. */
+const Relation = Schema.Literals(["parent", "child", "session"])
+type Relation = typeof Relation.Type
+
 /** The sender, as the receiving client sees it. */
 export const SessionMessageDetails = Schema.Struct({
   from: Schema.Struct({
@@ -198,7 +202,7 @@ export const SessionMessageDetails = Schema.Struct({
     branchId: Schema.optional(BranchId),
     name: Schema.optional(Schema.String),
     /** How the sender stands to the receiver. */
-    relation: Schema.Literals(["parent", "child", "session"]),
+    relation: Relation,
   }),
 })
 export type SessionMessageDetails = typeof SessionMessageDetails.Type
@@ -213,22 +217,19 @@ const SendSessionParams = Schema.Struct({
 const SendSessionResult = Schema.Struct({
   sessionId: SessionId,
   /** What the receiver is to the sender. */
-  relation: Schema.Literals(["parent", "child", "session"]),
+  relation: Relation,
 })
 
 type RelatedSession = Parameters<typeof isSpawnedSession>[0]
 
 /** Parent and child only across a spawn; a handoff continues its predecessor's thread. */
-const relationOf = (
-  sender: RelatedSession,
-  receiver: RelatedSession,
-): "parent" | "child" | "session" => {
+const relationOf = (sender: RelatedSession, receiver: RelatedSession): Relation => {
   if (sender.parentSessionId === receiver.id && isSpawnedSession(sender)) return "parent"
   if (receiver.parentSessionId === sender.id && isSpawnedSession(receiver)) return "child"
   return "session"
 }
 
-const inverse = (relation: "parent" | "child" | "session"): "parent" | "child" | "session" => {
+const inverse = (relation: Relation): Relation => {
   if (relation === "parent") return "child"
   if (relation === "child") return "parent"
   return "session"
@@ -238,7 +239,7 @@ const inverse = (relation: "parent" | "child" | "session"): "parent" | "child" |
 type SessionMessageSender = {
   readonly sessionId: SessionId
   readonly name?: string
-  readonly relation: string
+  readonly relation: Relation
 }
 
 /** The first header line: who wrote it, and what they are to the reader. */

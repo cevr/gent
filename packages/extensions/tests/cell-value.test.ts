@@ -185,7 +185,7 @@ describe("cell value display", () => {
     })
 
   for (const [name, value, expected] of differentValues)
-    test(`${name} shows without running cell code`, () => {
+    test(`${name} shows less than inspect would`, () => {
       expect(shown(value)).toContain(expected)
     })
 

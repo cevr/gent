@@ -2,7 +2,6 @@ import {
   Cause,
   Clock,
   Config,
-  ConfigProvider,
   Context,
   Deferred,
   Duration,
@@ -62,8 +61,9 @@ import {
   writeFileAtomic,
 } from "@gent/core/extensions/api"
 
-// Test seam: `McpServers` (the extension over inline servers) and the config
-// and catalog schemas are read by tests; the shipped extension is
+// Test seam: `McpServers` (the extension over inline servers),
+// `HostEnvironment` (the environment a stdio server inherits) and
+// `projectCallResult` are read by tests; the shipped extension is
 // `McpExtension`, which reads the `mcp.json` files.
 
 // ── config ──────────────────────────────────────────────────────────────────
@@ -107,6 +107,16 @@ const McpConfigFile = Schema.Struct({
   mcpServers: Schema.optional(Schema.Record(Schema.String, McpServerConfig)),
 })
 
+/** The file an entry came from: the user's `~/.gent/mcp.json`, or a project's `.gent/mcp.json`. */
+const McpConfigSource = Schema.Literals(["user", "project"])
+type McpConfigSource = typeof McpConfigSource.Type
+
+/** An entry as written, and the file it came from. */
+interface McpConfigEntry {
+  readonly config: McpServerConfig
+  readonly source: McpConfigSource
+}
+
 /** A configured server under its id segment, with its variables expanded. */
 interface McpServer {
   /** The id segment: `mcp.<name>.<tool>`. */
@@ -143,30 +153,39 @@ const namesRelativePath = (value: string): boolean => {
 
 /**
  * What decides the tools a server lists: the entry as it runs, after
- * expansion, with its transport type, and for a stdio server the directory it
- * runs in when that can change what it runs: the entry names a `cwd`, or its
- * command or an argument names a relative path. The rest run in the session's
- * directory but key without it, so one listing serves every project. The key
- * fields go in a fixed order so key order never matters. It holds secrets, so
- * only its SHA-256 digest is kept.
+ * expansion, with its transport type, and the directory it belongs to when
+ * that can change what it serves. An entry from a project's file belongs to
+ * that project, whatever it names: `bun run mcp` or a local port serves each
+ * project's own tools. A user-file entry keys with its directory only when it
+ * is a stdio entry that names a `cwd`, or whose command or an argument names
+ * a relative path; the rest key without it, so one listing serves every
+ * project. The key fields go in a fixed order so key order never matters. It
+ * holds secrets, so only its SHA-256 digest is kept.
  */
-const serverIdentity = (written: string, config: McpServerConfig, cwd: string) => {
+const serverIdentity = (entry: {
+  readonly written: string
+  readonly config: McpServerConfig
+  readonly source: McpConfigSource
+  readonly cwd: string
+}) => {
+  const { written, config } = entry
+  let located = entry.source === "project"
   if ("command" in config) {
-    let namedCwd = ""
-    if (
+    located ||=
       Predicate.isNotUndefined(config.cwd) ||
       namesRelativePath(config.command) ||
       (config.args ?? []).some(namesRelativePath)
-    ) {
-      namedCwd = cwd
-    }
+  }
+  let cwd = ""
+  if (located) cwd = entry.cwd
+  if ("command" in config) {
     return encodeKeyFields([
       written,
       "stdio",
       config.command,
       config.args ?? [],
       sortedEntries(config.env),
-      namedCwd,
+      cwd,
       config.timeoutMs ?? 0,
     ])
   }
@@ -176,20 +195,16 @@ const serverIdentity = (written: string, config: McpServerConfig, cwd: string) =
     configuredTransport(config),
     config.url,
     sortedEntries(config.headers),
+    cwd,
     config.timeoutMs ?? 0,
   ])
 }
 
 const serverKey = Effect.fn("Mcp.serverKey")(function* (
-  written: string,
-  config: McpServerConfig,
-  cwd: string,
+  entry: Parameters<typeof serverIdentity>[0],
 ) {
   const crypto = yield* Crypto.Crypto
-  const digest = yield* crypto.digest(
-    "SHA-256",
-    new TextEncoder().encode(serverIdentity(written, config, cwd)),
-  )
+  const digest = yield* crypto.digest("SHA-256", new TextEncoder().encode(serverIdentity(entry)))
   return Hex.encode(digest)
 })
 
@@ -326,17 +341,24 @@ const projectTrusted = Effect.fn("Mcp.projectTrusted")(function* (home: string, 
   )
 })
 
+const fromSource = (
+  entries: Readonly<Record<string, McpServerConfig>>,
+  source: McpConfigSource,
+): Readonly<Record<string, McpConfigEntry>> =>
+  Object.fromEntries(Object.entries(entries).map(([name, config]) => [name, { config, source }]))
+
 /**
  * The servers `~/.gent/mcp.json` names, and a trusted project's
- * `.gent/mcp.json` over them by name. A disabled entry, or one whose variables
- * do not expand, is left out with a warning.
+ * `.gent/mcp.json` over them by name, each with the file it came from. A
+ * disabled entry, or one whose variables do not expand, is left out with a
+ * warning.
  */
 const readMcpConfig = Effect.fn("Mcp.readConfig")(function* (home: string, cwd: string) {
   const path = yield* Path.Path
-  const user = yield* readConfigFile(path.join(home, ".gent", "mcp.json"))
-  let project = {}
+  const user = fromSource(yield* readConfigFile(path.join(home, ".gent", "mcp.json")), "user")
+  let project: Readonly<Record<string, McpConfigEntry>> = {}
   if (yield* projectTrusted(home, cwd)) {
-    project = yield* readConfigFile(path.join(cwd, ".gent", "mcp.json"))
+    project = fromSource(yield* readConfigFile(path.join(cwd, ".gent", "mcp.json")), "project")
   }
   return { ...user, ...project }
 })
@@ -353,21 +375,21 @@ interface MisconfiguredServer {
  * or whose key cannot be computed, which are reported and never started.
  */
 const resolveServers = Effect.fn("Mcp.resolveServers")(function* (
-  entries: Readonly<Record<string, McpServerConfig>>,
+  entries: Readonly<Record<string, McpConfigEntry>>,
   sessionCwd: string,
 ) {
   const path = yield* Path.Path
   const servers: Array<McpServer> = []
   const misconfigured: Array<MisconfiguredServer> = []
   const enabled = Object.entries(entries)
-    .filter(([, config]) => config.enabled !== false)
+    .filter(([, entry]) => entry.config.enabled !== false)
     .toSorted(([left], [right]) => compareIds(left, right))
   const names = allocateSegments(
     enabled.map(([written]) => written),
     SERVER_SEGMENT_LIMIT,
     "server",
   )
-  for (const [written, config] of enabled) {
+  for (const [written, { config, source }] of enabled) {
     const name = names.get(written) ?? "server"
     const expanded = yield* Effect.result(expandConfig(config))
     if (Result.isFailure(expanded)) {
@@ -381,7 +403,7 @@ const resolveServers = Effect.fn("Mcp.resolveServers")(function* (
     if ("command" in expanded.success && Predicate.isNotUndefined(expanded.success.cwd)) {
       cwd = path.resolve(sessionCwd, expanded.success.cwd)
     }
-    const key = yield* Effect.result(serverKey(written, expanded.success, cwd))
+    const key = yield* Effect.result(serverKey({ written, config: expanded.success, source, cwd }))
     if (Result.isFailure(key)) {
       yield* Effect.logWarning("mcp.server.key").pipe(
         Effect.annotateLogs({ server: written, error: key.failure.message }),
@@ -824,13 +846,24 @@ const loginFrom = (
   }),
 })
 
-/** The options an SDK `auth()` run takes for `config`, with the resource metadata URL when known. */
-const authOptions = (config: HttpServerConfig, metadata: Option.Option<URL>) => ({
-  serverUrl: config.url,
-  ...Option.match(metadata, {
-    onNone: () => ({}),
-    onSome: (resourceMetadataUrl) => ({ resourceMetadataUrl }),
-  }),
+/**
+ * The options an SDK `auth()` run takes for `config`, with the resource
+ * metadata URL when known. Every run sends its requests through the Effect
+ * `Fetch` service, each one ended by the run's `signal`.
+ */
+const authOptions = Effect.fn("Mcp.authOptions")(function* (
+  config: HttpServerConfig,
+  metadata: Option.Option<URL>,
+) {
+  const fetchWeb = yield* FetchHttpClient.Fetch
+  return (signal: AbortSignal) => ({
+    serverUrl: config.url,
+    ...Option.match(metadata, {
+      onNone: () => ({}),
+      onSome: (resourceMetadataUrl) => ({ resourceMetadataUrl }),
+    }),
+    fetchFn: (url: string | URL, init?: RequestInit) => fetchWeb(url, { ...init, signal }),
+  })
 })
 
 /** The stored resource metadata URL of `login`, when it has a valid one. */
@@ -965,13 +998,8 @@ const refreshLogin = (
     // The step this runs in is not interrupted (`refreshUnlessFresh`), so this
     // signal is what ends every request of the refresh by `REFRESH_BOUND`.
     const signal = AbortSignal.timeout(Duration.toMillis(REFRESH_BOUND))
-    const fetchWeb = yield* FetchHttpClient.Fetch
-    const result = yield* Effect.tryPromise(() =>
-      auth(provider, {
-        ...authOptions(config, metadata),
-        fetchFn: (url, init) => fetchWeb(url, { ...init, signal }),
-      }),
-    )
+    const options = yield* authOptions(config, metadata)
+    const result = yield* Effect.tryPromise(() => auth(provider, options(signal)))
     if (result !== "AUTHORIZED" || Option.isNone(flow.tokens)) return Option.none<StoredLogin>()
     const refreshed = loginFrom(
       flow.tokens.value,
@@ -1233,8 +1261,9 @@ const startLogin = (
     const metadata = yield* namedMetadata(config)
     const provider = flowProvider(server.name, redirectUri, flow, Option.none(), Option.some(state))
     const fail = (message: string) => new McpError({ server: server.name, message })
+    const options = yield* authOptions(config, metadata)
     yield* Effect.tryPromise({
-      try: () => auth(provider, authOptions(config, metadata)),
+      try: (signal) => auth(provider, options(signal)),
       catch: (cause) => fail(`login: ${failureMessage(cause)}`),
     })
     if (Option.isNone(flow.authorizationUrl)) {
@@ -1248,8 +1277,7 @@ const startLogin = (
         }),
       )
       yield* Effect.tryPromise({
-        try: () =>
-          auth(provider, { ...authOptions(config, metadata), authorizationCode: received }),
+        try: (signal) => auth(provider, { ...options(signal), authorizationCode: received }),
         catch: (cause) => fail(`login: ${failureMessage(cause)}`),
       })
       if (Option.isNone(flow.tokens) || Option.isNone(flow.client)) {
@@ -1352,50 +1380,23 @@ const timeoutOf = (server: McpServer) => server.config.timeoutMs ?? DEFAULT_TIME
  * nothing the cell cannot already run (decided by consistency with bash and
  * the cell; the cell runs full Bun).
  *
- * It is read from the ambient `ConfigProvider`, the environment seam every
- * other read here uses. Each setup reads it at most once (see
- * `HostEnvironment`): a name with a numeric segment (`DB_PORT_5432_TCP`)
- * makes its parent an array node, and the walk loads every index below the
- * largest one.
+ * It is the process's own flat name→value map, the store the spawner and the
+ * MCP SDK read too (decided by use-the-platform), so reading it is one pass
+ * over the variables, whatever numbers their names hold. An empty value stays
+ * `""`. The value is read once, at the first setup; a test provides its own.
  */
-const hostEnvironment = Effect.gen(function* () {
-  const provider = yield* ConfigProvider.ConfigProvider
-  const environment = new Map<string, string>()
-  // The environment provider nests a name at each `_`; the walk joins the path back.
-  const walk = (path: ReadonlyArray<string>, listed: boolean): Effect.Effect<void> =>
-    Effect.gen(function* () {
-      const loaded = yield* Effect.option(provider.load(path))
-      if (Option.isNone(loaded)) return
-      const node = loaded.value
-      if (Predicate.isUndefined(node)) {
-        // A record lists only names the environment holds, and the provider reads
-        // an empty value as missing: a listed name that loads nothing is set empty.
-        // An array node keeps only its length, so its missing and empty indices look alike.
-        if (listed) environment.set(path.join("_"), "")
-        return
-      }
-      if (Predicate.isString(node.value) && path.length > 0) {
-        environment.set(path.join("_"), node.value)
-      }
-      let children: ReadonlyArray<string> = []
-      if (node._tag === "Record") children = [...node.keys]
-      if (node._tag === "Array") {
-        children = Array.from({ length: node.length }, (_, index) => String(index))
-      }
-      const listsChildren = node._tag === "Record"
-      yield* Effect.forEach(children, (child) => walk([...path, child], listsChildren), {
-        discard: true,
-      })
-    })
-  yield* walk([], false)
-  return Object.fromEntries(environment)
-})
-
-/**
- * The host environment as setup hands it to every stdio dial: `hostEnvironment`
- * under `Effect.cached`, so each setup walks the environment once.
- */
-type HostEnvironment = Effect.Effect<Readonly<Record<string, string>>>
+export const HostEnvironment = Context.Reference<Readonly<Record<string, string>>>(
+  "@gent/extensions/mcp/HostEnvironment",
+  {
+    defaultValue: () =>
+      Object.fromEntries(
+        // oxlint-disable-next-line effect/noGlobals, node/no-process-env -- the process environment is the platform's own store, and Effect reads it only by name
+        Object.entries(process.env).filter((entry): entry is [string, string] =>
+          Predicate.isString(entry[1]),
+        ),
+      ),
+  },
+)
 
 /** The transport a connection runs over. */
 const TransportKind = Schema.Literals(["stdio", "streamable-http", "sse"])
@@ -1494,13 +1495,13 @@ const dial = (
 const connect = (
   server: McpServer,
   auth: AuthStore,
-  environment: HostEnvironment,
+  environment: Readonly<Record<string, string>>,
   onToolsChanged: Option.Option<() => void> = Option.none(),
 ) =>
   Effect.gen(function* () {
     const config = server.config
     if ("command" in config) {
-      return yield* dial(server, "stdio", yield* environment, Option.none(), onToolsChanged)
+      return yield* dial(server, "stdio", environment, Option.none(), onToolsChanged)
     }
     const oauth = yield* oauthTransport(server, config, auth)
     const type = config.type ?? "auto"
@@ -1825,7 +1826,7 @@ const mcpClientsLive = ({
   /** The directory binary blocks are written to. */
   readonly blobs: string
   readonly auth: AuthStore
-  readonly environment: HostEnvironment
+  readonly environment: Readonly<Record<string, string>>
 }) =>
   Layer.effect(
     McpClients,
@@ -2457,7 +2458,7 @@ const catalogFor = (
   server: McpServer,
   cache: CatalogFile,
   auth: AuthStore,
-  environment: HostEnvironment,
+  environment: Readonly<Record<string, string>>,
   now: number,
 ) => {
   const cached = cache.servers[server.key]
@@ -2595,9 +2596,9 @@ const McpCommand = request({
  */
 const registerServers = Effect.fn("Mcp.registerServers")(function* (
   extensionId: string,
-  entries: Readonly<Record<string, McpServerConfig>>,
-  environment: HostEnvironment,
+  entries: Readonly<Record<string, McpConfigEntry>>,
 ) {
+  const environment = yield* HostEnvironment
   const host = yield* ExtensionHost
   const { servers, misconfigured } = yield* resolveServers(entries, host.cwd)
   // No server: `/mcp` still answers, and the model gets no status tool with nothing to report.
@@ -2658,15 +2659,13 @@ export const McpExtension = defineExtension({
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
     const entries = yield* readMcpConfig(host.home, host.cwd)
-    yield* registerServers("@gent/mcp", entries, yield* Effect.cached(hostEnvironment))
+    yield* registerServers("@gent/mcp", entries)
   }),
 })
 
-/** The MCP extension over inline servers instead of the config files. */
+/** The MCP extension over inline servers instead of the config files; they key as user-file entries. */
 export const McpServers = (id: string, entries: Readonly<Record<string, McpServerConfig>>) =>
   defineExtension({
     id,
-    setup: Effect.gen(function* () {
-      yield* registerServers(id, entries, yield* Effect.cached(hostEnvironment))
-    }),
+    setup: registerServers(id, fromSource(entries, "user")),
   })

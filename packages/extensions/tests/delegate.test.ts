@@ -1316,6 +1316,33 @@ const turnEnd = (harness: Harness, count: number) =>
  */
 
 describe("a start nobody waits for", () => {
+  it.live("a child is named by its task's first line, cut between characters", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        // The emoji straddles the 60th UTF-16 unit, and the task goes on below its first line.
+        const firstLine = `CHILD-NAME ${"a".repeat(48)}🙂 then more`
+        const todo = `${firstLine}\n\nContext: the rest of the task.`
+        let parentCalls = 0
+        const providerLayer = LanguageModelLayers.testStream((options) => {
+          if (promptTexts(options.prompt)[0]?.includes("CHILD-NAME") === true) {
+            return Effect.succeed(reply("named"))
+          }
+          parentCalls += 1
+          if (parentCalls === 1) {
+            return Effect.succeed(toolStep("delegate.start", { todo }, "named-child"))
+          }
+          return Effect.succeed(reply("started"))
+        })
+        const harness = yield* harnessWithHome(providerLayer)
+        yield* sendPrompt(harness, "delegate a named task")
+        const child = yield* childOf(harness)
+        const sessions = yield* harness.client.session.list()
+        const name = sessions.find((session) => session.id === child.sessionId)?.name
+        expect(name).toBe(`${DELEGATE_AGENT_NAME}: ${firstLine}`)
+      }).pipe(Effect.timeout("10 seconds")),
+    ),
+  )
+
   it.live(
     "returns the handle under the tool call id; the completion lands on the parent branch and wakes it",
     () =>
