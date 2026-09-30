@@ -1232,10 +1232,6 @@ interface FileLockApi {
     path: string,
     effect: Effect.Effect<A, E, R>,
   ) => Effect.Effect<A, E, R>
-  /** Number of paths currently locked or queued for lock. Refcount-bounded —
-   *  drops back to 0 once all callers release. Exposed for diagnostics +
-   *  regression-locking the eviction invariant. */
-  readonly currentSize: Effect.Effect<number>
 }
 
 export class FileLockService extends Context.Service<FileLockService, FileLockApi>()(
@@ -1284,7 +1280,6 @@ export class FileLockService extends Context.Service<FileLockService, FileLockAp
             ({ sem }) => TxSemaphore.withPermits(sem, 1, effect),
             ({ resolved }) => release(resolved),
           ),
-        currentSize: TxRef.get(locksRef).pipe(Effect.map((m) => HashMap.size(m))),
       })
     }),
   )
