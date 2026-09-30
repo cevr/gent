@@ -28,6 +28,7 @@ import {
   ExtensionId,
   getToolId,
   getToolPrompt,
+  headTailChars,
   InteractionPendingError,
   isSpawnedSession,
   type Message,
@@ -100,6 +101,7 @@ import {
   makeCellFrameReader,
   makeCellOutputScanner,
   maximumCallsPerCell,
+  maximumCellReplyBytes,
   maximumCellDisplayHeadLength,
   maximumCellDisplayLength,
   maximumCellSourceLength,
@@ -1056,6 +1058,11 @@ export class CellOperationHost extends Context.Service<
   {
     /** Selected host tools for the `tools` namespace. Absent leaves the worker's catalog unchanged. */
     readonly catalog?: CellCatalog
+    /**
+     * Answer one host call. The value and a failure's message each fit
+     * `maximumCellReplyBytes` as JSON: the reply crosses to the worker in one
+     * frame, and a frame past the cap ends the worker.
+     */
     readonly call: (
       request: Extract<CellResponse, { _tag: "HostCall" }>,
     ) => Effect.Effect<Schema.Json, CellEvaluationError>
@@ -1892,34 +1899,70 @@ export const executeBoundCellTool = Effect.fn("CellToolCall.executeBound")(funct
     )
 })
 
+const utf8Bytes = (text: string) => new TextEncoder().encode(text).byteLength
+
+/** The call that pages an inner tool call's stored result from the cell. */
+const readPointer = (toolCallId: string) => `context.read("${toolCallId}", { offset, limit })`
+
+/**
+ * The largest reply `make` builds from a head and tail of at most `chars`
+ * characters whose JSON fits `maximumCellReplyBytes`. It starts at one
+ * `context.read` page and halves: escapes can make a character take several
+ * bytes.
+ */
+const fitReply = <A>(make: (chars: number) => A, chars = MAXIMUM_READ_CHARS): A => {
+  const reply = make(chars)
+  const bytes = utf8Bytes(encodeJson(reply))
+  if (chars === 0 || bytes <= maximumCellReplyBytes) return reply
+  return fitReply(make, Math.floor(chars / 2))
+}
+
+/**
+ * The value a host tool reply carries to the worker. The reply crosses the
+ * pipe in one frame, so a result whose JSON passes `maximumCellReplyBytes`
+ * crosses bounded: its JSON text's head and tail, its size, and a `read`
+ * pointer, the shape the model sees for a large result. A failure message
+ * past the bound is cut the same way and names the pointer. The full result
+ * stays stored under the inner tool call id, where `context.read` pages it.
+ */
 export const cellToolResultValue = Effect.fn("CellToolCall.resultValue")(function* (
   result: Prompt.ToolResultPart,
 ) {
-  const value = yield* Schema.encodeEffect(UnknownText)(result.result).pipe(
-    Effect.flatMap(Schema.decodeEffect(JsonText)),
-    Effect.mapError(
-      (cause) =>
-        new CellEvaluationError({
-          phase: "execute",
-          message: `Tool result is not JSON: ${String(cause)}`,
-          output: "",
-        }),
-    ),
-  )
-  if (result.isFailure) {
-    const message = yield* Option.match(decodeErrorOnly(value), {
-      onSome: ({ error }) => Effect.succeed(error),
-      onNone: () =>
-        Schema.encodeEffect(JsonText)(value).pipe(
-          Effect.mapError(
-            (cause) =>
-              new CellEvaluationError({ phase: "execute", message: String(cause), output: "" }),
-          ),
-        ),
+  const notJson = (cause: unknown) =>
+    new CellEvaluationError({
+      phase: "execute",
+      message: `Tool result is not JSON: ${String(cause)}`,
+      output: "",
     })
-    return yield* new CellEvaluationError({ phase: "execute", message, output: "" })
+  const text = yield* Schema.encodeEffect(UnknownText)(result.result).pipe(Effect.mapError(notJson))
+  if (!result.isFailure && utf8Bytes(text) > maximumCellReplyBytes) {
+    return fitReply((chars): Schema.Json => {
+      const cut = headTailChars(text, chars)
+      return {
+        truncated: true,
+        totalChars: text.length,
+        read: readPointer(result.id),
+        omittedChars: cut.omittedChars,
+        text: cut.text,
+      }
+    })
   }
-  return value
+  const value = yield* Schema.decodeEffect(JsonText)(text).pipe(Effect.mapError(notJson))
+  if (!result.isFailure) return value
+  const message = Option.match(decodeErrorOnly(value), {
+    onSome: ({ error }) => error,
+    onNone: () => text,
+  })
+  if (utf8Bytes(message) <= maximumCellReplyBytes)
+    return yield* new CellEvaluationError({ phase: "execute", message, output: "" })
+  return yield* new CellEvaluationError({
+    phase: "execute",
+    message: fitReply(
+      (chars) =>
+        `${headTailChars(message, chars).text}\n\nThe failure is ${message.length} characters; ${readPointer(result.id)} pages the stored result.`,
+    ),
+    output: "",
+  })
 })
 
 /** A failure that is only `{ error }` throws that text; any other value throws as JSON. */

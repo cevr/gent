@@ -75,6 +75,8 @@ export const maximumCellSourceLength = 256 * 1024
 export const maximumCellDisplayLength = 64 * 1024
 export const maximumCellBindings = 1024
 export const maximumCellFrameBytes = 1024 * 1024
+/** The bytes a host reply's value or failure message may take; the rest of its frame is the envelope. */
+export const maximumCellReplyBytes = maximumCellFrameBytes - 4 * 1024
 export const maximumCellDisplayHeadLength = 48 * 1024
 export const maximumPendingCellCalls = 32
 export const maximumCallsPerCell = 4096

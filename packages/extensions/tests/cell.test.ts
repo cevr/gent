@@ -3326,6 +3326,85 @@ describe("cell receipts", () => {
   )
 })
 
+describe("large host replies", () => {
+  it.scopedLive(
+    "a tool result past the frame cap reaches the cell bounded with a read pointer, and the worker keeps its bindings",
+    () =>
+      Effect.gen(function* () {
+        const large = "x".repeat(1_100_000)
+        const extensions: ReadonlyArray<LoadedExtension> = [
+          {
+            manifest: { id: ExtensionId.make("cell-large-reply") },
+            scope: "builtin",
+            sourcePath: "cell-large-reply",
+            artifactIdentity: LoadedArtifactIdentity.make("cell-large-reply-source"),
+            contributions: {
+              tools: [
+                CellTool,
+                tool({
+                  id: "large",
+                  description: "Return a large text",
+                  params: Schema.Struct({}),
+                  output: Schema.String,
+                  execute: () => Effect.succeed(large),
+                }),
+                tool({
+                  id: "largeFailure",
+                  description: "Fail with a large message",
+                  params: Schema.Struct({}),
+                  output: Schema.String,
+                  execute: () =>
+                    Effect.fail(new ToolResultFailure({ message: large, result: large })),
+                }),
+              ],
+            },
+          },
+        ]
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          toolCallStep("cell", { code: "var kept = 7; kept" }),
+          toolCallStep("cell", {
+            code: [
+              "const r = await tools.large({})",
+              'const page = await context.read(r.read.match(/"(.+?)"/)[1], { offset: 1_099_991 })',
+              "JSON.stringify([r.truncated, r.totalChars, r.text.length < 1_000_000, page.text, kept])",
+            ].join("\n"),
+          }),
+          toolCallStep("cell", {
+            code: "let failure; try { await tools.largeFailure({}) } catch (e) { failure = e.message }\nJSON.stringify([failure.length < 1_000_000, failure.includes('context.read('), kept])",
+          }),
+          textStep("Read the large results"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          extensions,
+          providerLayer,
+          extensionInputs: [],
+          branchTools: CellBranchTools,
+          agents: [new AgentDefinition({ name: DEFAULT_AGENT_NAME })],
+        })
+        yield* client.message.send({ sessionId, branchId, content: "Read large results" })
+        yield* client.session.events({ sessionId, branchId }).pipe(
+          Stream.filter((envelope) => envelope.event._tag === "TurnCompleted"),
+          Stream.take(1),
+          Stream.runDrain,
+        )
+        const results = (yield* client.message.list({ branchId }))
+          .flatMap((message) => message.parts)
+          .filter((part) => part.type === "tool-result" && part.name === "cell")
+        expect(results).toHaveLength(3)
+        // The JSON text of the string result is its characters plus two quotes;
+        // its last page ends in ten characters and the closing quote.
+        expect(results[1]).toMatchObject({
+          result: { display: '[true,1100002,true,"xxxxxxxxxx\\"",7]' },
+        })
+        expect(results[2]).toMatchObject({ result: { display: "[true,true,7]" } })
+      }).pipe(
+        Effect.timeout("25 seconds"),
+        Effect.provide(Layer.merge(BunServices.layer, BunGentPlatformLive)),
+      ),
+    30000,
+  )
+})
+
 // ── bound cell tool calls ───────────────────────────────────────────────────
 
 const extensionId = ExtensionId.make("cell-test")
