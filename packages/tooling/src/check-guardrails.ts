@@ -363,7 +363,10 @@ const dependencyScopes = Effect.fn("Tooling.dependencyScopes")(function* (
     files: useTexts,
     commands: [
       ...[root, ...manifests.values()].flatMap((read) => scriptsOf(read.value)),
-      ...[...useTexts].filter(([file]) => /\.ya?ml$/.test(file)).map(([, text]) => text),
+      ...useTexts
+        .entries()
+        .filter(([file]) => /\.ya?ml$/.test(file))
+        .map(([, text]) => text),
     ],
     installed: yield* installedOf([""], root.value),
   }

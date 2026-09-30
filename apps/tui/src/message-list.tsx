@@ -291,8 +291,10 @@ const rowOutputText = (call: ToolCall): string => {
       // holds as many lines as the two streams do.
       onSome: (value) =>
         [value.stdout, value.stderr]
+          .values()
           .filter((text) => text.length > 0)
           .map((text) => text.replace(/\n$/, ""))
+          .toArray()
           .join("\n"),
     })
   }

@@ -22,9 +22,11 @@ const sessionNotesSourceUrl = new URL("../extensions/session-notes.ts", import.m
 
 /** The system text a model call received: where turn projections land. */
 const systemText = (prompt: Prompt.RawInput): string =>
-  [...Prompt.make(prompt).content]
+  Prompt.make(prompt)
+    .content.values()
     .filter((message): message is Prompt.SystemMessage => message.role === "system")
     .map((message) => message.content)
+    .toArray()
     .join("\n")
 
 describe("session notes reference extension", () => {

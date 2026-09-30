@@ -3351,11 +3351,13 @@ const withoutNull = (schema: JsonSchema.JsonSchema): Option.Option<JsonSchema.Js
   if (alternatives.length > 0) {
     // A nullable member is itself a union; its `null` is still top-level.
     const members = alternatives
+      .values()
       .filter((member) => !isNullSchema(member))
       .map((member) => {
         const inner = withoutNull(member)
         return { schema: Option.getOrElse(inner, () => member), stripped: Option.isSome(inner) }
       })
+      .toArray()
     const kept = members.map((member) => member.schema)
     const changed = kept.length < alternatives.length || members.some((member) => member.stripped)
     if (!changed || kept.length === 0) return Option.none()

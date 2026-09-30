@@ -199,8 +199,10 @@ export const buildTurnPromptSections = (
   // Tool list — tools with promptSnippet get listed explicitly. It follows
   // the tool set, which differs by agent, so it is the agent's own part.
   const snippets = toolsWithMetadata
+    .values()
     .filter((tool) => !Predicate.isUndefined(tool.metadata.promptSnippet))
     .map((tool) => `- **${tool.id}**: ${tool.metadata.promptSnippet}`)
+    .toArray()
   if (snippets.length > 0) {
     sections.push({
       id: "tool-list",

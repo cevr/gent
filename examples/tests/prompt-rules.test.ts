@@ -17,9 +17,11 @@ import PromptRulesExtension from "../extensions/prompt-rules.js"
 
 /** The system text a model call received. */
 const systemText = (prompt: Prompt.RawInput): string =>
-  [...Prompt.make(prompt).content]
+  Prompt.make(prompt)
+    .content.values()
     .filter((message): message is Prompt.SystemMessage => message.role === "system")
     .map((message) => message.content)
+    .toArray()
     .join("\n")
 
 describe("prompt rules example extension", () => {

@@ -1419,12 +1419,14 @@ export const findUnenabledPluginRules = (
   rootRules: ReadonlySet<string>,
 ): ReadonlyArray<Finding> =>
   ruleNames
+    .values()
     .filter((rule) => !rootRules.has(`gent/${rule}`))
     .map((rule) => ({
       file: pluginFile,
       line: lineOfRule(pluginText, rule),
       message: `lint rule \`gent/${rule}\` is defined but the root config never enables it; enable it, or delete the rule and its fixtures`,
     }))
+    .toArray()
 
 // ---------------------------------------------------------------------------
 // (c) A GENT_* variable with a reader but nothing to set it
@@ -1758,7 +1760,11 @@ interface PlatformBunBindings {
 
 /** `A|B` of the escaped names, or nothing when there are none. */
 const alternation = (names: ReadonlyArray<string>): ReadonlyArray<string> =>
-  [names].filter((list) => list.length > 0).map((list) => list.map(escapeRegExp).join("|"))
+  [names]
+    .values()
+    .filter((list) => list.length > 0)
+    .map((list) => list.map(escapeRegExp).join("|"))
+    .toArray()
 
 /** A member access, plain or optional: `BunCrypto.layer` and `BunCrypto?.layer` read the same member. */
 const MEMBER = String.raw`\s*\??\.\s*`
@@ -1916,7 +1922,10 @@ export const findPlatformDuplicationViolations = (
 ): ReadonlyArray<Finding> => {
   if (!isShippedSource(file) || platformProviderRoots.has(file)) return []
   const allowed = new Set(
-    platformLayerAllowances.filter((entry) => entry.file === file).map((entry) => entry.layer),
+    platformLayerAllowances
+      .values()
+      .filter((entry) => entry.file === file)
+      .map((entry) => entry.layer),
   )
   const code = withoutComments(text)
   const bindings = platformBunBindings(code)
@@ -1925,16 +1934,18 @@ export const findPlatformDuplicationViolations = (
     spans.some((span) => index >= span.start && index < span.end)
   const provisions = [
     ...code.matchAll(GENT_PLATFORM_LAYER),
-    ...Array.from(code.matchAll(platformBunLayerPattern(bindings))).filter(
-      (match) => !inBindingSpan(match.index),
-    ),
+    ...code
+      .matchAll(platformBunLayerPattern(bindings))
+      .filter((match) => !inBindingSpan(match.index)),
   ]
+    .values()
     .map((match) => ({ index: match.index, name: collapsedText(match[0]) }))
     .filter((provision) => !allowed.has(provision.name))
     .map((provision) => ({
       index: provision.index,
       message: `\`${provision.name}\` provides a Bun platform layer outside the platform roots; yield the service the root provides, or record why no root can provide it in platformLayerAllowances`,
     }))
+    .toArray()
   const reExports = platformBunReExports(code, bindings).map((match) => ({
     index: match.index,
     message: `\`${collapsedText(match[0].replace(/\s+/g, " "))}\` re-exports @effect/platform-bun outside the platform roots, which hands its layers to any importer; import from the package where it is used, or yield the service the root provides`,
@@ -2459,7 +2470,9 @@ const danglingLinkTargets = (
   tracked: ReadonlySet<string>,
   prefixes: ReadonlySet<string>,
 ): ReadonlyArray<string> =>
-  [...line.replace(BACKTICKED, "").matchAll(MARKDOWN_LINK)]
+  line
+    .replace(BACKTICKED, "")
+    .matchAll(MARKDOWN_LINK)
     .map((match) => Option.getOrElse(Option.fromNullishOr(match[1]), () => ""))
     .filter((target) => !NOT_REPO_TARGET.test(target))
     .filter((target) =>
@@ -2468,6 +2481,7 @@ const danglingLinkTargets = (
         onSome: (resolved) => !existsInTree(resolved, tracked, prefixes),
       }),
     )
+    .toArray()
 
 export const findSteeringFilePaths = (
   file: string,
@@ -2551,6 +2565,7 @@ export const findUnshippedSkillFiles = (
   for (const match of code.matchAll(BUNDLED_ROW)) rows.set(match[2] ?? "", match[1] ?? "")
   const importedPaths = new Set([...imported.values()].map((entry) => entry.path))
   const findings: Array<Finding> = trackedFiles
+    .values()
     .filter((file) => file.startsWith(BUNDLED_SKILLS_DIRECTORY) && file.endsWith(".md"))
     .filter((file) => !importedPaths.has(file.slice(BUNDLED_SKILLS_DIRECTORY.length)))
     .map((file) => ({
@@ -2558,6 +2573,7 @@ export const findUnshippedSkillFiles = (
       line: 1,
       message: `a bundled skill file that \`${BUNDLED_SKILLS_MODULE}\` does not import never ships; import it as text and list it in \`bundledSkillFiles\`, or delete it`,
     }))
+    .toArray()
   for (const [name, entry] of imported) {
     const listed = Option.fromNullishOr(rows.get(name))
     if (Option.isSome(listed) && listed.value === entry.path) continue
@@ -2604,10 +2620,16 @@ export const findUnhashedSteeringFiles = (
     if (input.startsWith("../")) return globMatcher(input.slice(3))
     return globMatcher(packageDirectory + input)
   }
-  const included = inputs.filter((input) => !input.startsWith("!")).map(repoGlob)
+  const included = inputs
+    .values()
+    .filter((input) => !input.startsWith("!"))
+    .map((input) => repoGlob(input))
+    .toArray()
   const excluded = inputs
+    .values()
     .filter((input) => input.startsWith("!"))
     .map((input) => repoGlob(input.slice(1)))
+    .toArray()
   const hashed = (path: string): boolean =>
     included.some((glob) => glob.test(path)) && !excluded.some((glob) => glob.test(path))
   const message = (path: string): string => {
@@ -2617,8 +2639,10 @@ export const findUnhashedSteeringFiles = (
     return `the typecheck inputs read \`${path}\`, which is not steering prose, so a change to it reruns the guide check for nothing; make the inputs match \`isSteeringFile\``
   }
   return trackedFiles
+    .values()
     .filter((path) => path.endsWith(".md") && hashed(path) !== isSteeringFile(path))
     .map((path) => ({ file, line: 1, message: message(path) }))
+    .toArray()
 }
 
 // ── the steering prose's code compiles ──────────────────────────────────────
@@ -3046,7 +3070,8 @@ export const findUnusedSuppressionApprovals = (
     const nth = (listed.get(key) ?? 0) + 1
     listed.set(key, nth)
     const at = (): number => {
-      const lines = [...entryLines.entries()]
+      const lines = entryLines
+        .entries()
         .filter(
           ([index, text]) =>
             text.includes(`file: "${entry.file}"`) &&
@@ -3055,6 +3080,7 @@ export const findUnusedSuppressionApprovals = (
               .some((next) => next.includes(`text: "${entry.text}"`)),
         )
         .map(([index]) => index + 1)
+        .toArray()
       return Option.getOrElse(Option.fromNullishOr(lines.at(nth - 1)), () => 1)
     }
     if (nth > 1) {
@@ -4232,13 +4258,15 @@ export const findPackageSurfaceFindings = (
   tsconfigs: ReadonlyMap<string, TsConfigJson>,
 ): ReadonlyArray<Finding> => {
   const rows = new Set(PACKAGE_SURFACES.map((surface) => surface.packageJson))
-  const unlisted = [...packageJsons.keys()]
+  const unlisted = packageJsons
+    .keys()
     .filter((file) => !rows.has(file))
     .map((file) => ({
       file,
       line: 1,
       message: `a workspace package with no package-surface row in guards.ts; add one naming its entry points (none for a leaf)`,
     }))
+    .toArray()
   const checked = PACKAGE_SURFACES.flatMap((surface) =>
     Option.match(Option.fromNullishOr(packageJsons.get(surface.packageJson)), {
       onNone: (): ReadonlyArray<Finding> => [
@@ -4421,6 +4449,7 @@ const scopeUse = (scope: DependencyScope, providedPeers: ReadonlySet<string>): S
   const installed = (name: string) => Option.fromNullishOr(scope.installed.get(name))
   const used = new Set(
     declared
+      .values()
       .map(({ name }) => name)
       .filter(
         (name) =>
@@ -4494,10 +4523,11 @@ export const findUnusedCatalogEntries = (
 ): ReadonlyArray<Finding> => {
   const taken = new Set(
     [root.packageJson, ...manifests].flatMap((manifest) =>
-      DEPENDENCY_FIELDS.map((field) => manifest[field])
-        .flatMap((versions) => Object.entries(versions ?? {}))
+      DEPENDENCY_FIELDS.values()
+        .flatMap((field) => Object.entries(manifest[field] ?? {}))
         .filter(([, version]) => version.startsWith("catalog:"))
-        .map(([name]) => name),
+        .map(([name]) => name)
+        .toArray(),
     ),
   )
   const lines = root.text.split("\n")
@@ -4616,12 +4646,14 @@ export const findEffectVersionDrift = (
     }),
   ]
   const drift = pins
+    .values()
     .filter((pin) => isEffectPackage(pin.name) && pin.pinned !== version)
     .map((pin) => ({
       file: root.manifest,
       line: lineInBlock(root.text, pin.block, pin.needle),
       message: `${pin.block}["${pin.name}"] pins ${pin.pinned}, but catalog["effect"] is ${version}; the Effect packages release together, so pin every one at ${version}`,
     }))
+    .toArray()
   const literals = [root, ...manifests].flatMap((read) =>
     DEPENDENCY_FIELDS.flatMap((field) =>
       Object.entries(read.packageJson[field] ?? {})

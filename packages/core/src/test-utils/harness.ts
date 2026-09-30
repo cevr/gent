@@ -821,8 +821,10 @@ const extensionInputsForConfig = (
 ): ReadonlyArray<GentExtension<ExtensionSetupServices>> => {
   // No agents, no extension: a health or registry listing sees only what the test loads.
   const agents = [config.agents]
+    .values()
     .filter((list) => list.length > 0)
     .map((list) => testAgentsExtension(list))
+    .toArray()
   if (Predicate.isUndefined(config.extensions)) {
     return [
       ...agents,

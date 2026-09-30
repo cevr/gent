@@ -1450,8 +1450,10 @@ describe("AutocompletePopup renderer", () => {
                 title: "Commands",
                 items: (typed) =>
                   names
+                    .values()
                     .filter((name) => name.startsWith(typed))
-                    .map((name) => ({ id: name, label: `/${name}` })),
+                    .map((name) => ({ id: name, label: `/${name}` }))
+                    .toArray(),
               },
             ])
             return (

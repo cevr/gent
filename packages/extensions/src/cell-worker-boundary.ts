@@ -679,9 +679,11 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
   let reported = new Map<string, unknown>()
   const reportBindings = () => {
     const current = namespace()
-    const named = [...current.entries()]
+    const named = current
+      .entries()
       .filter(([name, value]) => !reported.has(name) || !Object.is(reported.get(name), value))
       .map(([name]) => name)
+      .toArray()
       .sort()
       .slice(0, maximumCellBindings)
     reported = current

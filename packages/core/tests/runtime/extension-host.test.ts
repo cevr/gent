@@ -4856,8 +4856,10 @@ const makeMutationsLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageMod
 }
 const eventTags = (calls: ReadonlyArray<CallRecord>) =>
   calls
+    .values()
     .filter((call) => call.service === "EventStore" && call.method === "append")
     .map((call) => Schema.decodeUnknownSync(AgentEvent)(call.args)._tag)
+    .toArray()
 describe("session agent", () => {
   it.scopedLive("every turn of a session runs as the agent it was created with", () =>
     Effect.gen(function* () {

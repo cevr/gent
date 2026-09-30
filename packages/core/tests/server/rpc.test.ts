@@ -556,7 +556,11 @@ describe("auth.listProviders", () => {
         )
         const session = yield* client.session.create({ cwd: process.cwd() })
         const required = (providers: ReadonlyArray<{ provider: string; required: boolean }>) =>
-          providers.filter((entry) => entry.required).map((entry) => entry.provider)
+          providers
+            .values()
+            .filter((entry) => entry.required)
+            .map((entry) => entry.provider)
+            .toArray()
         expect(
           required(yield* client.auth.listProviders({ sessionId: session.sessionId })),
         ).toEqual(["anthropic"])
@@ -581,7 +585,11 @@ describe("auth.listProviders", () => {
           createE2ELayer({ ...e2ePreset, providerLayer, extensions: [authDriversExtension] }),
         )
         const required = (providers: ReadonlyArray<{ provider: string; required: boolean }>) =>
-          providers.filter((entry) => entry.required).map((entry) => entry.provider)
+          providers
+            .values()
+            .filter((entry) => entry.required)
+            .map((entry) => entry.provider)
+            .toArray()
         expect(required(yield* client.auth.listProviders({}))).toEqual(["anthropic"])
         expect(
           required(yield* client.auth.listProviders({ agentName: AgentName.make("helper") })),
@@ -3739,8 +3747,10 @@ describe("extension command RPCs", () => {
             messages: ReadonlyArray<{ role: string; parts: Message["parts"] }>,
           ) =>
             messages
+              .values()
               .filter((message) => message.role === "assistant")
               .map((message) => messagePartsText(message.parts))
+              .toArray()
           yield* client.message.send({ sessionId, branchId, content: "warm the branch" })
           yield* waitFor(
             client.message.list({ branchId }),
