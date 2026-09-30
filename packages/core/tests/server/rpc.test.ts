@@ -108,7 +108,13 @@ import {
   type SessionProfile,
   SessionProfileCache,
 } from "../../src/runtime/extension-host"
-import { InteractionStorage, MessageStorage, SqliteStorage } from "../../src/storage/storage"
+import {
+  InteractionStorage,
+  MessageStorage,
+  SessionStorage,
+  SqliteStorage,
+} from "../../src/storage/storage"
+import { StorageError } from "../../src/domain/errors"
 import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
 import { CurrentInteractionOwner, encodeInteractionDecision } from "../../src/domain/interaction.js"
 import { EventStoreError } from "../../src/domain/event"
@@ -5229,6 +5235,37 @@ describe("rpc wide events", () => {
         expect(event?.annotations["branchId"]).toBe(missingBranchId)
       }).pipe(Effect.timeout("4 seconds")),
     ),
+  )
+})
+
+describe("session profile lookup", () => {
+  it.live(
+    "a storage failure while reading the session fails the call, not the launch profile",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+          const base = createE2ELayer({ ...e2ePreset, providerLayer })
+          const unreadable = Layer.effect(
+            SessionStorage,
+            Effect.map(SessionStorage, (storage) =>
+              SessionStorage.of({
+                ...storage,
+                getSession: () => Effect.fail(new StorageError({ message: "session unreadable" })),
+              }),
+            ),
+          )
+          const { client } = yield* createRpcClient(unreadable.pipe(Layer.provideMerge(base)))
+          const sessionId = SessionId.make("unreadable-session")
+          const tags = [
+            (yield* Effect.flip(client.model.list({ sessionId })))._tag,
+            (yield* Effect.flip(client.driver.list({ sessionId })))._tag,
+            (yield* Effect.flip(client.extension.listStatus({ sessionId })))._tag,
+            (yield* Effect.flip(client.extension.listSlashCommands({ sessionId })))._tag,
+          ]
+          expect(tags).toEqual(["StorageError", "StorageError", "StorageError", "StorageError"])
+        }).pipe(Effect.timeout("4 seconds")),
+      ),
   )
 })
 

@@ -1164,7 +1164,8 @@ const respondInteraction = Effect.fn("InteractionCommands.respond")(function* (
     branchId: input.branchId,
     requestId: input.requestId,
   })
-  // 3. Publish resolution event
+  // 3. Publish the resolution. The answer is stored and delivered already, so
+  //    a failed publish costs only the event; it is logged, not raised.
   yield* eventStore
     .publish(
       InteractionResolved.make({
@@ -1174,7 +1175,13 @@ const respondInteraction = Effect.fn("InteractionCommands.respond")(function* (
         ...decision,
       }),
     )
-    .pipe(Effect.catchEager(() => Effect.void))
+    .pipe(
+      Effect.catchEager((error) =>
+        Effect.logWarning("InteractionResolved publish failed").pipe(
+          Effect.annotateLogs({ requestId: input.requestId, error: String(error) }),
+        ),
+      ),
+    )
 })
 
 // ── rpc handler helpers ─────────────────────────────────────────────────────
@@ -1287,36 +1294,33 @@ const RpcHandlers = GentRpcs.toLayer(
       keyOf: (input) => Option.fromUndefinedOr(input.requestId),
     })
 
-    const loadSession = (sessionId: string) =>
-      sessionStorage.getSession(SessionId.make(sessionId)).pipe(
-        Effect.map(Option.fromUndefinedOr),
-        Effect.orElseSucceed(() => Option.none()),
-      )
-
-    /** The stored cwd of a session; none without a session or a stored cwd. */
-    const sessionCwd = (sessionId: Option.Option<string>): Effect.Effect<Option.Option<string>> =>
+    // A storage failure fails the call: an answer from the launch profile
+    // would be another profile's models, drivers or commands.
+    const loadSession = (sessionId: Option.Option<SessionId>) =>
       Option.match(sessionId, {
         onNone: () => Effect.succeedNone,
-        onSome: (id) =>
-          loadSession(id).pipe(
-            Effect.map((session) =>
-              Option.flatMap(session, (value) => Option.fromUndefinedOr(value.cwd)),
-            ),
-          ),
+        onSome: (id) => sessionStorage.getSession(id).pipe(Effect.map(Option.fromUndefinedOr)),
       })
 
+    const cwdOf = (session: Option.Option<Session>) =>
+      Option.flatMap(session, (value) => Option.fromUndefinedOr(value.cwd))
+
+    /** The stored cwd of a session; none without a session or a stored cwd. */
+    const sessionCwd = (sessionId: Option.Option<SessionId>) =>
+      loadSession(sessionId).pipe(Effect.map(cwdOf))
+
     // The caller's scope holds the profile's lease while it reads the registry.
+    const registryForCwd = (cwd: Option.Option<string>) =>
+      resolveRegistryForCwd(cwd).pipe(Effect.provideService(ExtensionRegistry, extensionRegistry))
+
     const resolveSessionRegistry = (
-      sessionId: Option.Option<string>,
-    ): Effect.Effect<ExtensionRegistryService, never, Scope.Scope> =>
-      sessionCwd(sessionId).pipe(
-        Effect.flatMap(resolveRegistryForCwd),
-        Effect.provideService(ExtensionRegistry, extensionRegistry),
-      )
+      sessionId: Option.Option<SessionId>,
+    ): Effect.Effect<ExtensionRegistryService, StorageError, Scope.Scope> =>
+      sessionCwd(sessionId).pipe(Effect.flatMap(registryForCwd))
 
     /** Provider login runs against the drivers of the session's own profile. */
     const inSessionProfile = <A, E>(
-      sessionId: Option.Option<string>,
+      sessionId: Option.Option<SessionId>,
       effect: Effect.Effect<A, E, ExtensionRegistry | Auth | GentPlatform>,
     ) =>
       resolveSessionRegistry(sessionId).pipe(
@@ -1491,26 +1495,16 @@ const RpcHandlers = GentRpcs.toLayer(
 
       "auth.listProviders": ({ agentName, sessionId }: ListAuthProvidersPayload) =>
         Effect.gen(function* () {
-          const session = yield* Option.match(Option.fromUndefinedOr(sessionId), {
-            onNone: () => Effect.succeedNone,
-            onSome: (id) =>
-              sessionStorage.getSession(SessionId.make(id)).pipe(
-                Effect.flatMap((found) => {
-                  if (Predicate.isUndefined(found)) {
-                    return Effect.fail(new NotFoundError({ message: "Session not found" }))
-                  }
-                  return Effect.succeedSome(found)
-                }),
-              ),
-          })
+          const requested = Option.fromUndefinedOr(sessionId)
+          const session = yield* loadSession(requested)
+          if (Option.isSome(requested) && Option.isNone(session)) {
+            return yield* new NotFoundError({ message: "Session not found" })
+          }
           // The models a turn in this session would run: the session's
           // registry and config, then its model override, as the turn does.
-          const registry = yield* resolveSessionRegistry(Option.fromUndefinedOr(sessionId))
-          const config = yield* configService.get(
-            Option.getOrUndefined(
-              Option.flatMap(session, (found) => Option.fromUndefinedOr(found.cwd)),
-            ),
-          )
+          const cwd = cwdOf(session)
+          const registry = yield* registryForCwd(cwd)
+          const config = yield* configService.get(Option.getOrUndefined(cwd))
           const agents = [...registry.getResolved().agents.values()]
           // The driver a turn routes through: the agent's driver, else the
           // config override, else the model id's provider segment.
@@ -1573,9 +1567,7 @@ const RpcHandlers = GentRpcs.toLayer(
       "extension.listStatus": ({ sessionId }: OptionalSessionPayload) =>
         Effect.gen(function* () {
           const cwd = yield* sessionCwd(Option.fromUndefinedOr(sessionId))
-          const registry = yield* resolveRegistryForCwd(cwd).pipe(
-            Effect.provideService(ExtensionRegistry, extensionRegistry),
-          )
+          const registry = yield* registryForCwd(cwd)
           const resolved = registry.getResolved()
           // Config files are read on each call, so a fixed file clears here
           // without a restart.
@@ -1935,7 +1927,14 @@ export const createDependencies = (config: DependenciesConfig) => {
                   branchId: record.branchId,
                   requestId: record.requestId,
                 })
-                .pipe(Effect.catchEager(() => Effect.void))
+                .pipe(
+                  // One branch that cannot wake does not stop the others.
+                  Effect.catchEager((error) =>
+                    Effect.logWarning("Recovered interaction could not wake its branch").pipe(
+                      Effect.annotateLogs({ requestId: record.requestId, error: String(error) }),
+                    ),
+                  ),
+                )
             }
             recovered++
           }
