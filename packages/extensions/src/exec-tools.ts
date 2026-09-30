@@ -712,6 +712,15 @@ const commandOutputText = (ends: OutputEnds): string => {
 }
 
 /**
+ * One stream's text as memory kept it, with no marker: the whole text, or
+ * its head and its tail as two pieces, since the middle between them is gone.
+ */
+const keptOutputPieces = (ends: OutputEnds): ReadonlyArray<string> => {
+  if (ends.totalChars === ends.head.length + ends.tail.length) return [ends.head + ends.tail]
+  return [ends.head, ends.tail]
+}
+
+/**
  * The output within `maxChars`, the file line included. A cut output keeps
  * its head and tail and names the file that holds all of it; the cut marker
  * states the one omitted count.
@@ -735,6 +744,11 @@ interface OutputFile {
   readonly write: (text: string) => Effect.Effect<void>
   /** The file, when it holds all the output so far. */
   readonly written: () => Option.Option<string>
+  /**
+   * Removes the file, and writes no more: for a command that ended with no
+   * result to name it (a timeout, an interrupt), so nothing stays on disk.
+   */
+  readonly discard: Effect.Effect<void>
 }
 
 /**
@@ -794,6 +808,23 @@ const makeOutputFile = (file: string, openAfter: number) =>
         if (failed) return Option.none()
         return Option.as(sink, file)
       },
+      discard: Effect.gen(function* () {
+        const opened = Option.isSome(sink)
+        failed = true
+        pending = ""
+        sink = Option.none()
+        if (!opened) return
+        // The scope still closes the handle; removing the path first is safe.
+        yield* fs
+          .remove(file, { force: true })
+          .pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("exec-tools.output.discard.failed").pipe(
+                Effect.annotateLogs({ file, cause: Cause.pretty(cause) }),
+              ),
+            ),
+          )
+      }),
     }
     return output
   })
@@ -858,8 +889,15 @@ const spawnBashCommand = (command: string, cwd: Option.Option<string>, sinks: Ou
 /** A command run to its end: each stream as the result keeps it, and the file with all of it. */
 interface CommandOutput {
   readonly exitCode: number
+  /** The display text: whole, or the ends around a marker that counts the middle. */
   readonly stdout: string
   readonly stderr: string
+  /**
+   * The stdout data memory kept, with no marker: one piece when whole, else
+   * its head and its tail. A monitor tests `until` on these, never on the
+   * display text.
+   */
+  readonly stdoutPieces: ReadonlyArray<string>
   /**
    * The file with all the output, stdout and stderr in arrival order, and
    * its length; none until the output passed what memory keeps whole, or
@@ -872,8 +910,8 @@ interface CommandOutput {
  * Run a command to its end: a foreground call, or a monitor check. Each
  * stream comes back whole up to `2 * commandOutputEndChars` characters, else
  * as its ends around a marker that counts the middle. Given a `spill` file,
- * output past that also goes to the file, whole. The scope owns the process
- * and the file.
+ * output past that also goes to the file, whole, and a run that ends
+ * without a result removes it. The scope owns the process and the file.
  */
 export const runBashCommand = (
   command: string,
@@ -900,11 +938,18 @@ export const runBashCommand = (
           stderr = appendOutput(stderr, text, commandOutputEndChars)
           return toFile(text)
         }),
-    })
+    }).pipe(
+      // Only a result names the file: a run that ends without one (a
+      // timeout, an interrupt, a spawn failure) removes it.
+      Effect.onError(() =>
+        Option.match(file, { onNone: () => Effect.void, onSome: (output) => output.discard }),
+      ),
+    )
     const output: CommandOutput = {
       exitCode,
       stdout: commandOutputText(stdout),
       stderr: commandOutputText(stderr),
+      stdoutPieces: keptOutputPieces(stdout),
       spilled: Option.map(
         Option.flatMap(file, (opened) => opened.written()),
         (written) => ({ file: written, totalChars: stdout.totalChars + stderr.totalChars }),

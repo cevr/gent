@@ -422,10 +422,13 @@ const alarmWork = (
 
 const matches = (
   entry: Extract<WakeEntry, { readonly _tag: "monitor" }>,
-  result: { readonly exitCode: number; readonly stdout: string },
+  result: { readonly exitCode: number; readonly stdoutPieces: ReadonlyArray<string> },
 ): boolean => {
   if (Predicate.isUndefined(entry.until)) return result.exitCode === 0
-  return new RegExp(entry.until).test(result.stdout)
+  // The data, never the display: a cut display holds a marker `until` could
+  // match, and a match must not span the gap between the head and the tail.
+  const until = new RegExp(entry.until)
+  return result.stdoutPieces.some((piece) => until.test(piece))
 }
 
 const monitorWork = (
@@ -461,12 +464,19 @@ const monitorWork = (
             Effect.succeed({
               exitCode: 1,
               stdout: "",
+              stdoutPieces: [],
               stderr: "check still running at deadline",
               cut: true,
             }),
         }),
         Effect.catch((error) =>
-          Effect.succeed({ exitCode: 1, stdout: "", stderr: error.message, cut: false }),
+          Effect.succeed({
+            exitCode: 1,
+            stdout: "",
+            stdoutPieces: [],
+            stderr: error.message,
+            cut: false,
+          }),
         ),
       )
       lastOutput = [result.stdout, result.stderr].filter((text) => text.length > 0).join("\n")
@@ -732,7 +742,7 @@ const MonitorParams = Schema.Struct({
   ),
   until: Schema.optionalKey(
     Schema.String.annotate({
-      description: `Regular expression; when it matches the command's stdout the monitor is done. A stdout past ${wholeCommandOutputText} characters is matched on its head and tail.`,
+      description: `Regular expression; when it matches the command's stdout the monitor is done. A stdout past ${wholeCommandOutputText} characters is matched on its head and on its tail, each apart.`,
     }),
   ),
   timeoutSeconds: Schema.optionalKey(

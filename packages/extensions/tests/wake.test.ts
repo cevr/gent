@@ -749,6 +749,42 @@ describe("wake", () => {
   )
 
   it.live(
+    "until never matches the cut marker that the display puts in a long check's output",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            toolCallStep("monitor", {
+              command: "head -c 600000 /dev/zero | tr '\\0' x",
+              everySeconds: 0.1,
+              timeoutSeconds: 0.5,
+              until: "truncated",
+              note: "read the cut check",
+            }),
+            textStep("watching the cut check"),
+            textStep("saw the cut check"),
+          ])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+          })
+          yield* client.message.send({ sessionId, branchId, content: "watch the cut check" })
+          const woken = yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              current.runtime._tag === "Idle" &&
+              hasWake(current.messages) &&
+              answered(current.messages, "saw the cut check"),
+            8_000,
+            "the monitor woke the loop",
+          )
+          expect(textOf(wakeOf(woken.messages))).toContain("timed out after")
+        }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+      ),
+    15_000,
+  )
+
+  it.live(
     "a monitor that never matches wakes at its deadline and says so",
     () =>
       Effect.scoped(

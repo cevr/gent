@@ -1623,6 +1623,61 @@ describe("foreground command output", () => {
       }).pipe(Effect.timeout("40 seconds")),
     45_000,
   )
+
+  it.scopedLive.layer(BunFileSystem.layer)(
+    "a foreground command that spilled and then timed out leaves no file",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-fg-timeout-" })
+        const command = "head -c 600000 /dev/zero | tr '\\0' x; sleep 30"
+        const toolCallId = ToolCallId.make("fg-timeout-call")
+        const calls = yield* Ref.make(0)
+        const providerLayer = LanguageModelLayers.testStream(() =>
+          Ref.updateAndGet(calls, (n) => n + 1).pipe(
+            Effect.map((call) => {
+              if (call === 1) {
+                return Stream.fromIterable([
+                  toolCallPart("bash", { command, timeout: 3000 }, { toolCallId }),
+                  finishPart({ finishReason: "tool-calls" }),
+                ])
+              }
+              return Stream.fromIterable([
+                textDeltaPart(`reply ${call}`),
+                finishPart({ finishReason: "stop" }),
+              ])
+            }),
+          ),
+        )
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+          cwd: directory,
+          extraLayers: [RuntimeEnvironment.Live({ cwd: directory, home: directory })],
+        })
+        const file = `${directory}/.gent/background-bash/${sessionId}/${branchId}/${toolCallId}.txt`
+        yield* client.message.send({ sessionId, branchId, content: "run the command" })
+        // The output passes what memory keeps whole, so the file holds it while the command runs.
+        yield* waitFor(fs.exists(file), (exists) => exists, 10_000, "the output file")
+        const settled = yield* waitFor(
+          client.session.getSnapshot({ sessionId, branchId }),
+          (snapshot) =>
+            snapshot.runtime._tag === "Idle" &&
+            snapshot.messages.some((message) =>
+              message.parts.some((part) => part.type === "text" && part.text === "reply 2"),
+            ),
+          10_000,
+          "the timed-out result",
+        )
+        const stored = settled.messages
+          .flatMap((message) => message.parts)
+          .find((part) => part.type === "tool-result" && part.id === toolCallId)
+        expect(stored).toMatchObject({ isFailure: true })
+        // A timed-out call returns no pointer, so no file stays behind for it.
+        expect(yield* fs.exists(file)).toBe(false)
+      }).pipe(Effect.timeout("25 seconds")),
+    30_000,
+  )
 })
 
 describe("background bash after session deletion", () => {
