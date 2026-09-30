@@ -1,8 +1,8 @@
 import { makeTempDirectoryScoped, seedAuthKeys, waitFor } from "@gent/core/test-utils"
 import { Terminal } from "@xterm/headless"
-import { Clock, Effect, FileSystem, Predicate, Schema, type Scope } from "effect"
+import { Clock, Effect, FileSystem, Option, Predicate, Schema, type Scope } from "effect"
 import { spawn, type IPty } from "zigpty"
-import { waitForProcessExit } from "./server-process-fixture"
+import { exitWithin } from "./server-process-fixture"
 
 const CTRL_C = "\x03"
 const repoRoot = decodeURIComponent(new URL("../../..", import.meta.url).pathname).replace(
@@ -84,12 +84,10 @@ const spawnWithDir = (
     }),
     ({ pty }) =>
       Effect.gen(function* () {
-        const pid = pty.pid
         yield* ignoreSyncDefect(() => pty.write(CTRL_C))
-        const exited = yield* waitForProcessExit(pid, 1_000)
-        if (!exited) {
-          yield* ignoreSyncDefect(() => process.kill(pid, "SIGKILL"))
-          yield* waitForProcessExit(pid, 2_000)
+        if (Option.isNone(yield* exitWithin(pty.exited, "1 second"))) {
+          yield* ignoreSyncDefect(() => process.kill(pty.pid, "SIGKILL"))
+          yield* exitWithin(pty.exited, "2 seconds")
         }
         yield* ignoreSyncDefect(() => pty.close())
       }),

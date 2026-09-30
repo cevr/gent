@@ -1,39 +1,19 @@
-import { Clock, type Duration, Effect, Schema, type Scope } from "effect"
+import { Duration, Effect, Option, Schema, type Scope } from "effect"
 
-// ── wait-for-process-exit ───────────────────────────────────────────────────
+// ── process exit ────────────────────────────────────────────────────────────
 
 /**
- * Wait for a process to leave the process table.
- *
- * Both subprocess fixtures need the same answer — did this pid go away
- * before the deadline — so they ask it once here. The result is that
- * question and nothing more: `true` for exited, `false` for timed out. It
- * carries no exit code, because `process.kill(pid, 0)` never reports one.
+ * The exit code of a process that exits within `within`, or none if it
+ * outlives it. Both subprocess fixtures ask this one question. The answer
+ * comes from the process's own exit promise (`Bun.Subprocess.exited`, a
+ * pty's `exited`), so a pid the kernel has given to another process cannot
+ * answer for it.
  */
-
-/** A pid that was never valid cannot be alive, and must not be probed. */
-const isPidAlive = (pid: number): Effect.Effect<boolean> => {
-  if (!Number.isInteger(pid) || pid <= 0) return Effect.succeed(false)
-  return Effect.try(() => process.kill(pid, 0)).pipe(
-    Effect.as(true),
-    Effect.catchEager(() => Effect.succeed(false)),
-  )
-}
-
-/** `true` once the pid is gone; `false` if it outlived `timeoutMs`. */
-export const waitForProcessExit = (pid: number, timeoutMs: number): Effect.Effect<boolean> =>
-  Effect.gen(function* () {
-    const deadline = (yield* Clock.currentTimeMillis) + timeoutMs
-    const loop: Effect.Effect<boolean> = Effect.gen(function* () {
-      if (!(yield* isPidAlive(pid))) return true
-      const now = yield* Clock.currentTimeMillis
-      if (now >= deadline) return false
-      // gent/no-sleep: allow OS-level wait while polling for the kernel to reap the subprocess
-      yield* Effect.sleep("50 millis")
-      return yield* loop
-    })
-    return yield* loop
-  })
+export const exitWithin = (
+  exited: Promise<number>,
+  within: Duration.Input,
+): Effect.Effect<Option.Option<number>> =>
+  Effect.promise(() => exited).pipe(Effect.timeoutOption(within))
 
 // ── server-process-fixture ──────────────────────────────────────────────────
 
@@ -157,9 +137,9 @@ export const killProcess = (proc: Bun.Subprocess, signal?: NodeJS.Signals): Effe
 export const stopProcess = (proc: Bun.Subprocess, graceMs: number): Effect.Effect<void> =>
   Effect.gen(function* () {
     yield* killProcess(proc)
-    if (yield* waitForProcessExit(proc.pid, graceMs)) return
+    if (Option.isSome(yield* exitWithin(proc.exited, Duration.millis(graceMs)))) return
     yield* killProcess(proc, "SIGKILL")
-    if (yield* waitForProcessExit(proc.pid, graceMs)) return
+    if (Option.isSome(yield* exitWithin(proc.exited, Duration.millis(graceMs)))) return
     yield* Effect.logWarning("process outlived SIGTERM and SIGKILL").pipe(
       Effect.annotateLogs({ pid: proc.pid, graceMs }),
     )
