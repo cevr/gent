@@ -162,6 +162,28 @@ const gentFlags = {
 }
 
 /**
+ * The TUI starts sessions from the composer, which names no agent and asks
+ * the reader, and takes its startup prompt from -p; the positional prompt is
+ * headless input. A headless-only input the TUI cannot honour fails here
+ * instead of being dropped.
+ */
+const refuseHeadlessInput = (given: {
+  readonly agent: boolean
+  readonly approveAll: boolean
+  readonly promptArg: boolean
+}): Effect.Effect<void, CliStartupError> => {
+  const refusals: ReadonlyArray<readonly [boolean, string]> = [
+    [given.agent, "--agent applies to headless mode; add -H with a prompt"],
+    [given.approveAll, "--approve-all applies to headless mode; add -H with a prompt"],
+    [given.promptArg, "a prompt argument needs -H; use -p to start the TUI with a prompt"],
+  ]
+  return Option.match(Option.fromUndefinedOr(refusals.find(([isGiven]) => isGiven)), {
+    onNone: () => Effect.void,
+    onSome: ([, message]) => Effect.fail(new CliStartupError({ message })),
+  })
+}
+
+/**
  * Launch the TUI, or run one headless turn.
  *
  * `gent` and `gent resume` differ only in how they name the session to open, so
@@ -196,16 +218,11 @@ const runGent = ({
   Effect.gen(function* () {
     // The server checks the name against its roster when the session starts.
     const requestedAgent = Option.map(agent, (name) => AgentName.make(name))
-    // The TUI starts sessions from the composer, which names no agent, so a
-    // flag it cannot honour fails here instead of being dropped.
-    if (Option.isSome(requestedAgent) && !headless) {
-      return yield* new CliStartupError({
-        message: "--agent applies to headless mode; add -H with a prompt",
-      })
-    }
-    if (approveAll && !headless) {
-      return yield* new CliStartupError({
-        message: "--approve-all applies to headless mode; add -H with a prompt",
+    if (!headless) {
+      yield* refuseHeadlessInput({
+        agent: Option.isSome(requestedAgent),
+        approveAll,
+        promptArg: Option.isSome(promptArg),
       })
     }
 
