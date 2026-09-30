@@ -33,11 +33,18 @@ import { shippedPreset } from "./helpers/test-preset.js"
 /**
  * A stdio MCP server: newline-delimited JSON-RPC on stdin and stdout, with
  * no SDK, so the test owns every byte it answers. Each start appends a line
- * to `MCP_FIXTURE_LOG`, and `count` returns the calls this process served.
+ * to `MCP_FIXTURE_LOG` with its extra arguments, and `count` returns the calls
+ * this process served. `MCP_FIXTURE_FAIL_ON_START=n` exits the nth start;
+ * `count` is not listed while `MCP_FIXTURE_HIDE_COUNT` names a file that
+ * exists; `MCP_FIXTURE_COLLIDE` adds tools whose names clean to one id.
  */
 const FIXTURE_SERVER = String.raw`
 const fs = require("node:fs")
-if (process.env.MCP_FIXTURE_LOG) fs.appendFileSync(process.env.MCP_FIXTURE_LOG, "start\n")
+if (process.env.MCP_FIXTURE_LOG) fs.appendFileSync(process.env.MCP_FIXTURE_LOG, JSON.stringify(process.argv.slice(2)) + "\n")
+if (process.env.MCP_FIXTURE_FAIL_ON_START) {
+  const started = fs.readFileSync(process.env.MCP_FIXTURE_LOG, "utf8").split("\n").filter((line) => line !== "").length
+  if (started === Number(process.env.MCP_FIXTURE_FAIL_ON_START)) process.exit(1)
+}
 let calls = 0
 const tools = [
   {
@@ -55,6 +62,16 @@ const tools = [
   { name: "count", description: "Count calls this process served.", inputSchema: { type: "object", properties: {} } },
   { name: "repo.search/issues", description: "A name with separators.", inputSchema: { type: "object" } },
 ]
+if (process.env.MCP_FIXTURE_HIDE_COUNT && fs.existsSync(process.env.MCP_FIXTURE_HIDE_COUNT)) {
+  tools.splice(tools.findIndex((entry) => entry.name === "count"), 1)
+}
+if (process.env.MCP_FIXTURE_COLLIDE) {
+  for (const name of ["a/b", "a.b", "a_b_2", "x".repeat(70) + "1", "x".repeat(70) + "2"]) {
+    tools.push({ name, description: "Collides as " + name + ".", inputSchema: { type: "object" } })
+  }
+  tools.push({ name: "mixed", description: "Structured content with other content.", inputSchema: { type: "object" } })
+  tools.push({ name: "picture", description: "An image only.", inputSchema: { type: "object" } })
+}
 for (let index = 0; index < Number(process.env.MCP_FIXTURE_EXTRA ?? 0); index++) {
   tools.push({
     name: "extra_" + String(index).padStart(3, "0"),
@@ -79,7 +96,20 @@ const answer = (request) => {
     case "echo":
       return { result: { content: [{ type: "text", text: String(input.text).repeat(input.times ?? 1) }] } }
     case "structured":
-      return { result: { content: [{ type: "text", text: "{}" }], structuredContent: { ok: true, items: [1, 2] } } }
+      return { result: { content: [{ type: "text", text: JSON.stringify({ ok: true, items: [1, 2] }) }], structuredContent: { ok: true, items: [1, 2] } } }
+    case "mixed":
+      return {
+        result: {
+          content: [
+            { type: "text", text: "a caption" },
+            { type: "image", data: "AAAA", mimeType: "image/png" },
+            { type: "resource", resource: { uri: "file:///r", mimeType: "x/y", blob: "AAAAAAAA" } },
+          ],
+          structuredContent: { ok: true },
+        },
+      }
+    case "picture":
+      return { result: { content: [{ type: "image", data: "AAAA", mimeType: "image/png" }] } }
     case "fail":
       return { result: { content: [{ type: "text", text: "fixture failure" }], isError: true } }
     case "count":
@@ -115,16 +145,19 @@ const makeFixture = Effect.gen(function* () {
   const server = path.join(directory, "server.cjs")
   const log = path.join(directory, "starts.log")
   yield* fs.writeFileString(server, FIXTURE_SERVER)
-  const starts = fs.readFileString(log).pipe(
-    Effect.map((text) => text.split("\n").filter((line) => line !== "").length),
-    Effect.orElseSucceed(() => 0),
+  const startLines = fs.readFileString(log).pipe(
+    Effect.map((text) => text.split("\n").filter((line) => line !== "")),
+    Effect.orElseSucceed((): ReadonlyArray<string> => []),
   )
+  const starts = Effect.map(startLines, (lines) => lines.length)
+  /** Each start's extra arguments, as JSON. */
+  const startArgs = startLines
   const stdio = (env: Readonly<Record<string, string>> = {}) => ({
     command: process.execPath,
     args: [server],
     env: { MCP_FIXTURE_LOG: log, ...env },
   })
-  return { directory, starts, stdio }
+  return { directory, server, starts, startArgs, stdio }
 })
 
 const toolList = (contributions: { readonly tools?: ReadonlyArray<ToolCapability> }) =>
@@ -139,6 +172,10 @@ const toolIds = (contributions: { readonly tools?: ReadonlyArray<ToolCapability>
     .toSorted()
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Json))
+
+/** An environment with `GENT_MCP_VALUE` set to `value`. */
+const withVariable = (value: string) =>
+  ConfigProvider.layer(ConfigProvider.fromUnknown({ GENT_MCP_VALUE: value }))
 
 /** A model step that records the system prompt it was sent. */
 const systemRecorder = () => {
@@ -252,6 +289,56 @@ describe("mcp config", () => {
         const edited = McpServers("@test/mcp-cache", { fixture: fixture.stdio({ EDITED: "1" }) })
         yield* collectTestContributions(edited.setup, { home, cwd: fixture.directory })
         expect(yield* fixture.starts).toBe(2)
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(platformLayer)),
+    30_000,
+  )
+
+  it.scopedLive(
+    "a variable's value is taken literally, replacement patterns and all",
+    () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path
+        const fixture = yield* makeFixture
+        const entry = fixture.stdio()
+        const extension = McpServers("@test/mcp-expand", {
+          fixture: { ...entry, args: [...entry.args, "${GENT_MCP_VALUE}", "${GENT_MCP_VALUE}"] },
+        })
+        yield* collectTestContributions(extension.setup, {
+          home: path.join(fixture.directory, "home"),
+          cwd: fixture.directory,
+        }).pipe(Effect.provide(withVariable("a$&b$'c$$d$1")))
+        expect(yield* fixture.startArgs).toEqual([encodeJson(["a$&b$'c$$d$1", "a$&b$'c$$d$1"])])
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(platformLayer)),
+    30_000,
+  )
+
+  it.scopedLive(
+    "the cache key is the entry as it runs: its expanded values and its directory",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const fixture = yield* makeFixture
+        const home = path.join(fixture.directory, "home")
+        const other = path.join(fixture.directory, "other")
+        yield* fs.makeDirectory(other)
+        const entry = fixture.stdio()
+        const extension = McpServers("@test/mcp-identity", {
+          fixture: { ...entry, args: [...entry.args, "${GENT_MCP_VALUE}"] },
+        })
+        const setup = (cwd: string, value: string) =>
+          collectTestContributions(extension.setup, { home, cwd }).pipe(
+            Effect.provide(withVariable(value)),
+          )
+        yield* setup(fixture.directory, "one")
+        yield* setup(fixture.directory, "one")
+        expect(yield* fixture.starts).toBe(1)
+        // Another value behind the same written entry is another server.
+        yield* setup(fixture.directory, "two")
+        expect(yield* fixture.starts).toBe(2)
+        // So is the same entry run from another directory.
+        yield* setup(other, "one")
+        expect(yield* fixture.starts).toBe(3)
       }).pipe(Effect.timeout("20 seconds"), Effect.provide(platformLayer)),
     30_000,
   )

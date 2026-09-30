@@ -4,7 +4,8 @@ import {
   Duration,
   Effect,
   FileSystem,
-  Hash,
+  Crypto,
+  Encoding,
   JsonSchema,
   Layer,
   Option,
@@ -74,48 +75,63 @@ const McpConfigFile = Schema.Struct({
 interface McpServer {
   /** The id segment: `mcp.<name>.<tool>`. */
   readonly name: string
-  /** The catalog cache key: a hash of the entry as written, before expansion. */
+  /** The catalog cache key and connection key: the digest of `serverIdentity`. */
   readonly key: string
   readonly config: McpServerConfig
+  /** The directory a stdio server runs in: its `cwd` resolved against the session's. */
+  readonly cwd: string
 }
 
 const encodeKeyFields = Schema.encodeSync(Schema.fromJsonString(Schema.Json))
 
+const compareCodeUnits = (left: string, right: string) => {
+  if (left < right) return -1
+  if (left > right) return 1
+  return 0
+}
+
 const sortedEntries = (record: Readonly<Record<string, string>> = {}) =>
-  Object.entries(record).toSorted(([left], [right]) => left.localeCompare(right))
+  Object.entries(record).toSorted(([left], [right]) => compareCodeUnits(left, right))
 
 /**
- * The catalog cache key: the fields that decide what a server lists, in a
- * fixed order, so an edit to any of them relists and key order never does.
+ * What decides the tools a server lists: the entry as it runs, after
+ * expansion, and for a stdio server the directory it runs in, in a fixed
+ * order so key order never matters. It holds secrets, so only its SHA-256
+ * digest is kept.
  */
-const serverKey = (written: string, config: McpServerConfig) => {
+const serverIdentity = (written: string, config: McpServerConfig, cwd: string) => {
   if ("command" in config) {
-    return String(
-      Hash.string(
-        encodeKeyFields([
-          written,
-          "stdio",
-          config.command,
-          config.args ?? [],
-          sortedEntries(config.env),
-          config.cwd ?? "",
-          config.timeoutMs ?? 0,
-        ]),
-      ),
-    )
+    return encodeKeyFields([
+      written,
+      "stdio",
+      config.command,
+      config.args ?? [],
+      sortedEntries(config.env),
+      cwd,
+      config.timeoutMs ?? 0,
+    ])
   }
-  return String(
-    Hash.string(
-      encodeKeyFields([
-        written,
-        "http",
-        config.url,
-        sortedEntries(config.headers),
-        config.timeoutMs ?? 0,
-      ]),
-    ),
-  )
+  return encodeKeyFields([
+    written,
+    "http",
+    config.url,
+    sortedEntries(config.headers),
+    config.timeoutMs ?? 0,
+  ])
 }
+
+const serverKey = Effect.fn("Mcp.serverKey")(function* (
+  written: string,
+  config: McpServerConfig,
+  cwd: string,
+) {
+  const crypto = yield* Crypto.Crypto
+  const digest = yield* crypto.digest(
+    "SHA-256",
+    new TextEncoder().encode(serverIdentity(written, config, cwd)),
+  )
+  return Encoding.encodeHex(digest)
+})
 
 /** Default bound on connecting to a server and on each call. */
 const DEFAULT_TIMEOUT_MS = 30_000
@@ -139,7 +155,7 @@ const VARIABLE = /\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}/g
 
 /** `${NAME}` and `${NAME:-default}` from the environment; an unset one without a default is a failure. */
 const expandVariables = Effect.fn("Mcp.expandVariables")(function* (text: string) {
-  let expanded = text
+  const values = new Map<string, string>()
   for (const [match, name = "", fallback] of text.matchAll(VARIABLE)) {
     const value = yield* Config.option(Config.string(name)).pipe(
       Effect.orElseSucceed(() => Option.none<string>()),
@@ -147,9 +163,10 @@ const expandVariables = Effect.fn("Mcp.expandVariables")(function* (text: string
     const resolved = Option.orElse(value, () => Option.fromUndefinedOr(fallback))
     if (Option.isNone(resolved))
       return yield* Effect.fail(`environment variable ${name} is not set`)
-    expanded = expanded.replace(match, resolved.value)
+    values.set(match, resolved.value)
   }
-  return expanded
+  // A callback, so a value's `$&` or `$1` is text, not a replacement pattern.
+  return text.replaceAll(VARIABLE, (match) => values.get(match) ?? match)
 })
 
 const expandRecord = (record: Option.Option<Readonly<Record<string, string>>>) =>
@@ -233,11 +250,13 @@ const readMcpConfig = Effect.fn("Mcp.readConfig")(function* (home: string, cwd: 
 
 const resolveServers = Effect.fn("Mcp.resolveServers")(function* (
   entries: Readonly<Record<string, McpServerConfig>>,
+  sessionCwd: string,
 ) {
+  const path = yield* Path.Path
   const servers: Array<McpServer> = []
   const names = new Set<string>()
   for (const [written, config] of Object.entries(entries).toSorted(([left], [right]) =>
-    left.localeCompare(right),
+    compareCodeUnits(left, right),
   )) {
     if (config.enabled === false) continue
     const name = idSegment(written, SERVER_SEGMENT_LIMIT)
@@ -254,12 +273,19 @@ const resolveServers = Effect.fn("Mcp.resolveServers")(function* (
       )
       continue
     }
+    let cwd = sessionCwd
+    if ("command" in expanded.success && Predicate.isNotUndefined(expanded.success.cwd)) {
+      cwd = path.resolve(sessionCwd, expanded.success.cwd)
+    }
+    const key = yield* Effect.result(serverKey(written, expanded.success, cwd))
+    if (Result.isFailure(key)) {
+      yield* Effect.logWarning("mcp.server.key").pipe(
+        Effect.annotateLogs({ server: written, error: key.failure.message }),
+      )
+      continue
+    }
     names.add(name)
-    servers.push({
-      name,
-      key: serverKey(written, config),
-      config: expanded.success,
-    })
+    servers.push({ name, key: key.success, config: expanded.success, cwd })
   }
   return servers
 })
@@ -334,14 +360,14 @@ const failureMessage = (cause: unknown) => {
 
 const timeoutOf = (server: McpServer) => server.config.timeoutMs ?? DEFAULT_TIMEOUT_MS
 
-const transportFor = (server: McpServer, cwd: string) => {
+const transportFor = (server: McpServer) => {
   const config = server.config
   if ("command" in config) {
     return new StdioClientTransport({
       command: config.command,
       args: [...(config.args ?? [])],
       env: { ...config.env },
-      cwd: config.cwd ?? cwd,
+      cwd: server.cwd,
       // The server's own log would land in the terminal gent draws.
       stderr: "ignore",
     })
@@ -352,14 +378,14 @@ const transportFor = (server: McpServer, cwd: string) => {
 }
 
 /** An initialized client; closing its scope closes the transport, and a stdio server with it. */
-const connect = (server: McpServer, cwd: string) =>
+const connect = (server: McpServer) =>
   Effect.gen(function* () {
     const client = yield* Effect.acquireRelease(
       Effect.sync(() => new Client({ name: "gent", version: "1.0.0" })),
       (opened) => Effect.promise(() => opened.close()).pipe(Effect.ignore),
     )
     yield* Effect.tryPromise({
-      try: () => client.connect(transportFor(server, cwd)),
+      try: () => client.connect(transportFor(server)),
       catch: (cause) =>
         new McpError({ server: server.name, message: `connect: ${failureMessage(cause)}` }),
     }).pipe(
@@ -431,7 +457,7 @@ class McpClients extends Context.Service<McpClients, McpClientsService>()(
 ) {}
 
 /** The connections of `servers`, each under its cache key, which names one entry. */
-const mcpClientsLive = (cwd: string, servers: ReadonlyArray<McpServer>) =>
+const mcpClientsLive = (servers: ReadonlyArray<McpServer>) =>
   Layer.effect(
     McpClients,
     Effect.gen(function* () {
@@ -442,7 +468,7 @@ const mcpClientsLive = (cwd: string, servers: ReadonlyArray<McpServer>) =>
           if (Predicate.isUndefined(server)) {
             return Effect.fail(new McpError({ server: key, message: "not configured" }))
           }
-          return connect(server, cwd)
+          return connect(server)
         },
         idleTimeToLive: IDLE_TIME_TO_LIVE,
       })
@@ -579,11 +605,11 @@ const toolsFor = (server: McpServer, listed: ReadonlyArray<CatalogTool>) => {
  * setup that lists them and writes the cache. A server that cannot list is
  * reported and contributes nothing; the other servers are unaffected.
  */
-const catalogFor = (server: McpServer, cache: CatalogFile, file: string, cwd: string) => {
+const catalogFor = (server: McpServer, cache: CatalogFile, file: string) => {
   const cached = cache.servers[server.key]
   if (Predicate.isNotUndefined(cached)) return Effect.succeed(cached.tools)
   return Effect.scoped(
-    connect(server, cwd).pipe(Effect.flatMap((client) => listTools(server, client))),
+    connect(server).pipe(Effect.flatMap((client) => listTools(server, client))),
   ).pipe(
     Effect.tap((tools) => writeCatalogEntry(file, server.key, tools).pipe(Effect.ignore)),
     Effect.catchCause((cause) =>
@@ -607,21 +633,19 @@ const registerServers = Effect.fn("Mcp.registerServers")(function* (
   entries: Readonly<Record<string, McpServerConfig>>,
 ) {
   const host = yield* ExtensionHost
-  const servers = yield* resolveServers(entries)
+  const servers = yield* resolveServers(entries, host.cwd)
   if (servers.length === 0) return
   const file = yield* catalogPath(host.home)
   const cache = yield* readCatalog(file)
-  const catalogs = yield* Effect.forEach(
-    servers,
-    (server) => catalogFor(server, cache, file, host.cwd),
-    { concurrency: 8 },
-  )
+  const catalogs = yield* Effect.forEach(servers, (server) => catalogFor(server, cache, file), {
+    concurrency: 8,
+  })
   yield* host.register(
     "resource",
     defineResource({
       id: `${extensionId}/clients`,
       scope: "process",
-      layer: mcpClientsLive(host.cwd, servers),
+      layer: mcpClientsLive(servers),
     }),
   )
   yield* host.register(

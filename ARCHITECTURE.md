@@ -1272,11 +1272,14 @@ recovery. It uses only `@gent/core/extensions/api` and the client subpaths of
 `<project>/.gent/mcp.json` (a project entry wins by name). A `command` entry
 runs over stdio (its stderr is ignored, so it never draws on the TUI); a `url`
 entry runs over streamable HTTP with its `headers`. Strings expand `${NAME}`
-and `${NAME:-default}`; an entry whose variable is unset is skipped with a
-warning. Bearer tokens travel as headers; OAuth needs a credentials seam core
-does not have. Setup reads each server's tool list from
-`<data dir>/mcp-catalog.json`, keyed by a hash of the entry as written, so an
-edited entry lists again; on a miss setup connects once, lists, and writes the
+and `${NAME:-default}`, and a value is taken literally; an entry whose variable
+is unset is skipped with a warning. A stdio `cwd` resolves against the
+session's cwd. Bearer tokens travel as headers; OAuth needs a credentials seam
+core does not have. Setup reads each server's tool list from
+`<data dir>/mcp-catalog.json`, keyed by the SHA-256 digest of the entry as it
+runs (its expanded values and, for stdio, its resolved directory), so an edited
+entry, a changed variable, or another project lists again; the file holds only
+the digest, never a token. On a miss setup connects once, lists, and writes the
 cache. A server that cannot list is logged and contributes nothing. Calls
 share one process Resource (`McpClients`): an `RcMap` opens a server's
 connection on its first call and closes it after five idle minutes. Each
