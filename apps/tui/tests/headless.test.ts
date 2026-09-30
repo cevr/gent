@@ -9,7 +9,7 @@ import {
 } from "@gent/core/test-utils"
 import { describe, it, expect, test } from "effect-bun-test"
 import { Cause, Deferred, Effect, Exit, Option, Schema, Sink, Stdio, Stream } from "effect"
-import * as Prompt from "effect/unstable/ai/Prompt"
+import * as Prompt from "effect/ai/Prompt"
 import {
   AgentEvent,
   BranchId,
@@ -29,8 +29,8 @@ import {
   runHeadless,
 } from "../src/headless"
 import { createMockClient } from "./render-harness-boundary"
-import { RpcClientError } from "effect/unstable/rpc/RpcClientError"
-import { SocketCloseError } from "effect/unstable/socket/Socket"
+import { RpcClientError } from "effect/rpc/RpcClientError"
+import { SocketCloseError } from "effect/socket/Socket"
 class HeadlessRunnerTestError extends Schema.TaggedError<HeadlessRunnerTestError>()(
   "HeadlessRunnerTestError",
   { message: Schema.String },

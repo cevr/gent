@@ -95,7 +95,7 @@ import {
   type ProviderAuthError,
   type ProviderAuthInfo,
 } from "../domain/driver.js"
-import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
+import { ChildProcessSpawner } from "effect/process/ChildProcessSpawner"
 import { GentPlatform, type RuntimeModuleSource } from "./gent-platform.js"
 import {
   type ConfigLoadError,
@@ -132,8 +132,8 @@ import {
   RelationshipStorage,
   SessionStorage,
 } from "../storage/storage.js"
-import { SqlClient } from "effect/unstable/sql"
-import * as Prompt from "effect/unstable/ai/Prompt"
+import { SqlClient } from "effect/sql"
+import * as Prompt from "effect/ai/Prompt"
 import * as EffectEntry from "effect"
 import { ActorStateRegistry, listStateEntityIds, stateOf } from "effect-encore"
 import {
@@ -222,12 +222,12 @@ const sealErasedEffect = <A, E>(
   // Callers use this ONLY at host boundaries where the extension runtime has
   // already provided the required services.
 ): Effect.Effect<A, E> => {
-  // @effect-diagnostics-next-line anyUnknownInErrorContext:off
+  // @effect-diagnostics-next-line anyUnknownInErrorContext:off -- the extension membrane erases the author effect channels and seals them here.
   const sealed = Effect.suspend(effect).pipe(
     Effect.catchEager(handlers.onFailure),
     Effect.catchDefect(handlers.onDefect),
   )
-  // @effect-diagnostics-next-line anyUnknownInErrorContext:off
+  // @effect-diagnostics-next-line anyUnknownInErrorContext:off -- the extension membrane erases the author effect channels and seals them here.
   return sealed as Effect.Effect<A, E> // oxlint-disable-line effect/noAs, typescript/no-unsafe-type-assertion -- The membrane re-seals the extension effect after erasing its runtime channels. // eslint-disable-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
 }
 
@@ -238,9 +238,9 @@ const sealErasedEffect = <A, E>(
 const exitErasedEffect = <A>(
   effect: () => Effect.Effect<A, unknown, unknown>,
 ): Effect.Effect<Exit.Exit<A, unknown>> => {
-  // @effect-diagnostics-next-line anyUnknownInErrorContext:off
+  // @effect-diagnostics-next-line anyUnknownInErrorContext:off -- the extension membrane erases the author effect channels and seals them here.
   const exit = Effect.exit(Effect.suspend(effect))
-  // @effect-diagnostics-next-line anyUnknownInErrorContext:off
+  // @effect-diagnostics-next-line anyUnknownInErrorContext:off -- the extension membrane erases the author effect channels and seals them here.
   return exit as Effect.Effect<Exit.Exit<A, unknown>> // oxlint-disable-line effect/noAs, typescript/no-unsafe-type-assertion -- The membrane exposes the raw exit after erasing the extension effect channels. // eslint-disable-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
 }
 
@@ -335,7 +335,7 @@ interface RegisteredHook<Input> {
 const runHook = <Input>(input: Input, registered: RegisteredHook<Input>) =>
   Effect.gen(function* () {
     const exit = yield* exitErasedEffect(() =>
-      // @effect-diagnostics-next-line anyUnknownInErrorContext:off
+      // @effect-diagnostics-next-line anyUnknownInErrorContext:off -- the extension membrane erases the author effect channels and seals them here.
       registered.handler(input).pipe(provideExtensionLeaf({ extensionId: registered.extensionId })),
     )
     if (exit._tag === "Success") return
@@ -362,7 +362,7 @@ const collectTurnProjection = (
 const runTurnProjectionHook = (slot: HookTurnProjectionSlot, input: TurnProjectionInput) =>
   sealErasedEffect<Option.Option<ExtensionTurnProjection>, never>(
     () =>
-      // @effect-diagnostics-next-line anyUnknownInErrorContext:off
+      // @effect-diagnostics-next-line anyUnknownInErrorContext:off -- the extension membrane erases the author effect channels and seals them here.
       slot
         .handler(input)
         .pipe(
@@ -488,7 +488,7 @@ export const compileExtensionHooks = (
         for (const slot of systemPromptSlots) {
           current = yield* sealErasedEffect(
             () =>
-              // @effect-diagnostics-next-line anyUnknownInErrorContext:off
+              // @effect-diagnostics-next-line anyUnknownInErrorContext:off -- the extension membrane erases the author effect channels and seals them here.
               slot
                 .handler({ ...input, basePrompt: current })
                 .pipe(provideExtensionLeaf({ extensionId: slot.extensionId })),
@@ -758,7 +758,7 @@ const runExtensionCapability = (
 
     const output = yield* sealErasedEffect(
       () =>
-        // @effect-diagnostics-next-line anyUnknownInErrorContext:off
+        // @effect-diagnostics-next-line anyUnknownInErrorContext:off -- the extension membrane erases the author effect channels and seals them here.
         capability.effect(decodedInput),
       {
         onFailure: (error) => {
@@ -1042,7 +1042,7 @@ const buildResourceLayer = (
 
   return entries.reduce<ErasedResourceLayer>(
     (acc, { resource }) =>
-      // @effect-diagnostics-next-line anyUnknownInErrorContext:off — heterogeneous Resource layer enters the explicit eraseResourceLayer membrane.
+      // @effect-diagnostics-next-line anyUnknownInErrorContext:off -- heterogeneous Resource layer enters the explicit eraseResourceLayer membrane.
       Layer.merge(acc, eraseResourceLayer(resource.layer)),
     emptyErasedResourceLayer,
   )
@@ -1371,14 +1371,17 @@ const extensionDirectories = (
  * The gent entries re-export this module, so they are read on first use: a
  * static import here would evaluate them inside their own import cycle.
  */
+// gent/no-dynamic-imports: allow the entry imports this module; read it after both evaluate
+const loadExtensionApiEntry: RuntimeModuleSource = () => import("../extensions/api.js")
+// gent/no-dynamic-imports: allow the entry imports this module; read it after both evaluate
+const loadBranchToolsEntry: RuntimeModuleSource = () => import("../extensions/branch-tools.js")
+
 export const extensionEntryModules: ReadonlyMap<string, RuntimeModuleSource> = new Map<
   string,
   RuntimeModuleSource
 >([
-  // gent/no-dynamic-imports: allow the entry imports this module; read it after both evaluate
-  ["@gent/core/extensions/api", () => import("../extensions/api.js")],
-  // gent/no-dynamic-imports: allow the entry imports this module; read it after both evaluate
-  ["@gent/core/extensions/branch-tools", () => import("../extensions/branch-tools.js")],
+  ["@gent/core/extensions/api", loadExtensionApiEntry],
+  ["@gent/core/extensions/branch-tools", loadBranchToolsEntry],
   ["effect", () => EffectEntry],
 ])
 
@@ -1473,7 +1476,6 @@ const GentExtensionContract = Schema.Struct({
 const decodeGentExtensionContract = Schema.decodeUnknownOption(GentExtensionContract)
 
 /** Type guard for GentExtension shape */
-// oxlint-disable-next-line effect/noUnknownParameters -- Runtime module exports enter as untyped values.
 const isGentExtension = (value: unknown): value is LoadedUserExtension => {
   const decoded = decodeGentExtensionContract(value)
   return Option.isSome(decoded) && Effect.isEffect(decoded.value.setup)

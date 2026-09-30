@@ -32,9 +32,9 @@ import {
   HttpClient,
   HttpClientRequest,
   HttpClientResponse,
-} from "effect/unstable/http"
-import { EncodeError, HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
-import { AiError } from "effect/unstable/ai"
+} from "effect/http"
+import { EncodeError, HttpClientError, TransportError } from "effect/http/HttpClientError"
+import { AiError } from "effect/ai"
 
 // Test seam: only a test reads modelsDevCatalog, the catalog loader, which it
 // runs against a scratch home.
@@ -954,7 +954,7 @@ export const driverListModels =
           Model.make({ ...model, promptCacheTtlMs: Duration.toMillis(promptCacheTtl) }),
         ),
       ),
-      // @effect-diagnostics-next-line strictEffectProvide:off The catalog owns its own HTTP client at the driver boundary; it outlives no scope.
+      // @effect-diagnostics-next-line strictEffectProvide:off -- The catalog owns its own HTTP client at the driver boundary; it outlives no scope.
       Effect.provide(FetchHttpClient.layer),
       Effect.provideContext(source.platform),
     )
@@ -978,13 +978,13 @@ export const hostContextUpdateText = (content: string): string =>
 
 /** True for a text block that carries a later system message. */
 export const isHostContextUpdateText = Schema.is(
-  Schema.String.check(Schema.isStartsWith(HOST_CONTEXT_UPDATE_OPEN)),
+  Schema.String.check(Schema.isStartingWith(HOST_CONTEXT_UPDATE_OPEN)),
 )
 
 // ── api keys ────────────────────────────────────────────────────────────────
 
 export const readOptionalEnv = (name: string): Effect.Effect<Option.Option<string>> =>
-  Config.option(Config.nonEmptyString(name)).pipe(Effect.orElseSucceed(() => Option.none()))
+  Config.option(Config.NonEmptyString(name)).pipe(Effect.orElseSucceed(() => Option.none()))
 
 /** The API key a driver sends: a stored key first, then its env variable. */
 export const apiKeyFrom = (

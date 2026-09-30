@@ -36,8 +36,8 @@ import {
   type ServerLockStatus,
 } from "@gent/sdk"
 import { BranchStorage, GentPlatform, MessageStorage, SessionStorage } from "@gent/core/host"
-import * as Prompt from "effect/unstable/ai/Prompt"
-import { Command, Flag } from "effect/unstable/cli"
+import * as Prompt from "effect/ai/Prompt"
+import { Command, Flag } from "effect/cli"
 import * as Terminal from "effect/Terminal"
 
 // ── local health report ─────────────────────────────────────────────────────
@@ -709,7 +709,7 @@ const failureText = <E>(cause: Cause.Cause<E>): string => {
 
 /** Where the server lock and the storage live. `/tmp` when the shell has no HOME. */
 export const readHome = Effect.map(
-  Config.option(Config.string("HOME")),
+  Config.option(Config.String("HOME")),
   Option.getOrElse(() => "/tmp"),
 )
 
@@ -765,11 +765,11 @@ export const resumableSessions = (options: {
 export const sessions = Command.make(
   "sessions",
   {
-    connect: Flag.string("connect").pipe(
+    connect: Flag.String("connect").pipe(
       Flag.withDescription("Connect to an existing gent server"),
       Flag.optional,
     ),
-    isolate: Flag.boolean("isolate").pipe(
+    isolate: Flag.Boolean("isolate").pipe(
       Flag.withDescription("Keep state in memory: no data-directory database or lock"),
       Flag.withDefault(false),
     ),
@@ -880,7 +880,7 @@ const serverStatus = Command.make("status", {}, () =>
 const serverStop = Command.make(
   "stop",
   {
-    all: Flag.boolean("all").pipe(
+    all: Flag.Boolean("all").pipe(
       Flag.withDescription("Also remove the lock of a server that is no longer running"),
       Flag.withDefault(false),
     ),
@@ -916,15 +916,12 @@ const serverStop = Command.make(
 const serverStart = Command.make(
   "start",
   {
-    port: Flag.integer("port").pipe(
-      Flag.withDescription("Bind this TCP port"),
-      Flag.withDefault(3000),
-    ),
-    isolate: Flag.boolean("isolate").pipe(
+    port: Flag.Int("port").pipe(Flag.withDescription("Bind this TCP port"), Flag.withDefault(3000)),
+    isolate: Flag.Boolean("isolate").pipe(
       Flag.withDescription("Keep state in memory: no data-directory database or lock"),
       Flag.withDefault(false),
     ),
-    mock: Flag.boolean("mock").pipe(
+    mock: Flag.Boolean("mock").pipe(
       Flag.withDescription("Serve the scripted model instead of a real provider"),
       Flag.withDefault(false),
     ),
@@ -939,7 +936,7 @@ const serverStart = Command.make(
           inMemory: isolate,
           debug: false,
           mock: scripted,
-          authDirectory: yield* Config.option(Config.string("GENT_AUTH_DIRECTORY")),
+          authDirectory: yield* Config.option(Config.String("GENT_AUTH_DIRECTORY")),
         })
         const started = yield* Gent.server({ ...options, port })
         // Process fixtures parse this raw stdout line.

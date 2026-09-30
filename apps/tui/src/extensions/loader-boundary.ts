@@ -604,14 +604,15 @@ export const resolveTuiExtensions = (
 // eslint-disable-next-line effect/noUnknownParameters -- dynamic imports are parsed at this module boundary.
 const clientModuleProblem = (value: unknown): Option.Option<string> => {
   if (!Predicate.isObject(value)) return Option.some("module must export an object")
-  const id = Reflect.get(value, "id")
-  if (!Predicate.isString(id)) return Option.some("missing id")
-  const setup = Reflect.get(value, "setup")
-  if (!Effect.isEffect(setup)) return Option.some("setup must be an Effect value")
+  if (!Predicate.hasProperty(value, "id") || !Predicate.isString(value.id)) {
+    return Option.some("missing id")
+  }
+  if (!Predicate.hasProperty(value, "setup") || !Effect.isEffect(value.setup)) {
+    return Option.some("setup must be an Effect value")
+  }
   return Option.none()
 }
 
-// eslint-disable-next-line effect/noUnknownParameters -- dynamic imports are parsed at this module boundary.
 const isExtensionClientModule = (value: unknown): value is AnyExtensionClientModule =>
   Option.isNone(clientModuleProblem(value))
 
@@ -723,6 +724,10 @@ const clientOnlyModules: ReadonlyMap<string, RuntimeModuleSource> = new Map<
   ["solid-js/store", () => SolidStoreEntry],
 ])
 
+/** Import a built client file under the name its source was bound to. */
+// gent/no-dynamic-imports: allow TUI extension modules are discovered from user/project files at runtime
+const importBoundClientModule = (moduleId: string) => import(moduleId)
+
 /**
  * Bind the names every extension file reads (the two authoring entries and
  * `effect`) under their own names, and the client names under a prefix drawn
@@ -771,8 +776,7 @@ const provideClientExtensionModules = Effect.gen(function* () {
       )
       yield* bindModuleSource(name, contents)
       return yield* Effect.tryPromise({
-        // gent/no-dynamic-imports: allow TUI extension modules are discovered from user/project files at runtime
-        try: () => import(name),
+        try: () => importBoundClientModule(name),
         catch: (cause) =>
           new TuiExtensionImportError({ message: `Failed to load ${filePath}`, cause }),
       })

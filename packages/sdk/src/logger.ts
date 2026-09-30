@@ -30,8 +30,8 @@ import { CurrentLogAnnotations, CurrentLogSpans, MinimumLogLevel } from "effect/
  * Otherwise the Effect default Tracer (a no-op) is left in place.
  */
 
-const otlpEndpoint = Config.option(Config.string("OTEL_EXPORTER_OTLP_ENDPOINT"))
-const otlpServiceName = Config.option(Config.string("OTEL_SERVICE_NAME"))
+const otlpEndpoint = Config.option(Config.String("OTEL_EXPORTER_OTLP_ENDPOINT"))
+const otlpServiceName = Config.option(Config.String("OTEL_SERVICE_NAME"))
 
 export const GentTracerLive: Layer.Layer<never> = Layer.unwrap(
   Effect.gen(function* () {
@@ -88,18 +88,13 @@ const formatStartTs = (timeOrigin: number): string =>
     }),
   ) // YYYYMMDDHHMMSS
 
-let cachedStartTs: Option.Option<string> = Option.none()
 /**
- * Read the process-start timestamp, formatted YYYYMMDDHHMMSS. Lazy and
- * memoized so module import has no platform side effect, and so synchronous
- * callers (TUI logger module init) share the same value as Effect callers.
+ * Read the process-start timestamp, formatted YYYYMMDDHHMMSS. It is read on
+ * call, so module import has no platform side effect. The process's time
+ * origin never changes, so synchronous callers (TUI logger module init) and
+ * Effect callers read the same value.
  */
-const processStartTs = (): string => {
-  if (Option.isSome(cachedStartTs)) return cachedStartTs.value
-  const startTs = formatStartTs(performance.timeOrigin)
-  cachedStartTs = Option.some(startTs)
-  return startTs
-}
+const processStartTs = (): string => formatStartTs(performance.timeOrigin)
 
 interface LogPaths {
   readonly dir: string
@@ -244,11 +239,12 @@ const formatJsonLogger: Logger.Logger<unknown, string> = Logger.make(
       annots,
     )
 
-    if (!Predicate.isUndefined(fiber.currentSpan)) {
-      entry["traceId"] = fiber.currentSpan.traceId
-      entry["spanId"] = fiber.currentSpan.spanId
-      if (fiber.currentSpan._tag === "Span") {
-        entry["spanName"] = fiber.currentSpan.name
+    const span = fiber.cache.span
+    if (!Predicate.isUndefined(span)) {
+      entry["traceId"] = span.traceId
+      entry["spanId"] = span.spanId
+      if (span._tag === "Span") {
+        entry["spanName"] = span.name
       }
     }
 
@@ -349,7 +345,7 @@ const LOG_LEVEL_NAMES: ReadonlyArray<LogLevelName> = [
  * Minimum log level from `GENT_LOG_LEVEL`. Unset keeps the Debug floor; a
  * name outside {@link LOG_LEVEL_NAMES} fails with a config error.
  */
-export const GentLogLevel: Config.Config<LogLevel> = Config.literals(
+export const GentLogLevel: Config.Config<LogLevel> = Config.Literals(
   LOG_LEVEL_NAMES,
   "GENT_LOG_LEVEL",
 ).pipe(Config.withDefault<LogLevelName>("debug"), Config.map(levelOf))

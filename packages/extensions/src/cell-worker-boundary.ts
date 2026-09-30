@@ -122,11 +122,13 @@ const searchCatalog = (entries: ReadonlyArray<CellCatalogEntry>, query: string) 
     .split(/[^a-z0-9_]+/)
     .filter((word) => word !== "")
   return entries
+    .values()
     .map((entry) => {
       const text = `${entry.name} ${entry.description}`.toLowerCase()
       return { entry, score: words.filter((word) => text.includes(word)).length }
     })
     .filter((match) => words.length === 0 || match.score > 0)
+    .toArray()
     .toSorted(
       (left, right) => right.score - left.score || compareIds(left.entry.name, right.entry.name),
     )
@@ -645,7 +647,7 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
   }
   installHostNamespace("tools", toolsNamespace)
   installHostNamespace("context", context)
-  if (!Predicate.isFunction(Reflect.get(globalThis, "require"))) {
+  if (!(Predicate.hasProperty(globalThis, "require") && Predicate.isFunction(globalThis.require))) {
     Object.defineProperty(globalThis, "require", {
       value: createRequire(`${environment.workingDirectory}/`),
       writable: true,
@@ -724,9 +726,11 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
   let reported = new Map<string, unknown>()
   const reportBindings = () => {
     const current = namespace()
-    const named = [...current.entries()]
+    const named = current
+      .entries()
       .filter(([name, value]) => !reported.has(name) || !Object.is(reported.get(name), value))
       .map(([name]) => name)
+      .toArray()
       .sort()
       .slice(0, maximumCellBindings)
     reported = current

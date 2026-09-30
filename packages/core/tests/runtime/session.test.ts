@@ -9,7 +9,7 @@ import {
 } from "../../src/domain/agent"
 import { BunCrypto, BunServices } from "@effect/platform-bun"
 import { describe, expect, it } from "effect-bun-test"
-import type { LanguageModel } from "effect/unstable/ai"
+import type { LanguageModel } from "effect/ai"
 import {
   Cause,
   Context,
@@ -23,8 +23,8 @@ import {
   Schema,
   Stream,
 } from "effect"
-import * as Prompt from "effect/unstable/ai/Prompt"
-import { SingleRunner } from "effect/unstable/cluster"
+import * as Prompt from "effect/ai/Prompt"
+import { SingleRunner } from "effect/cluster"
 import {
   Branch,
   dateFromMillis,

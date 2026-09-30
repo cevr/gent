@@ -1,5 +1,5 @@
 import { Effect, Option, Predicate, Schema } from "effect"
-import { HttpClient, HttpClientRequest } from "effect/unstable/http"
+import { HttpClient, HttpClientRequest } from "effect/http"
 import { defineExtension, ExtensionHost, tool } from "@gent/core/extensions/api"
 
 // ── websearch ───────────────────────────────────────────────────────────────

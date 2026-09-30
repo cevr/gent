@@ -1,6 +1,6 @@
 import { createContext, createSignal, type JSX, onCleanup, onMount } from "solid-js"
 import { useRequiredContext } from "./utils"
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
+import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import { type Cause, Context, Effect, Fiber, FileSystem, Option, Stream } from "effect"
 
 // ── environment provider ────────────────────────────────────────────────────

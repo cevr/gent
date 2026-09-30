@@ -36,8 +36,8 @@ import {
   WorkspaceId,
 } from "../../src/server/workspace-rpc"
 import { describe, expect, it } from "effect-bun-test"
-import { RpcClient } from "effect/unstable/rpc"
-import { SqlClient } from "effect/unstable/sql"
+import { RpcClient } from "effect/rpc"
+import { SqlClient } from "effect/sql"
 import {
   finishPart,
   textDeltaPart,
@@ -77,7 +77,7 @@ import {
   RequestId,
   SessionId,
 } from "../../src/domain/ids"
-import { Model as AiModel, LanguageModel } from "effect/unstable/ai"
+import { Model as AiModel, LanguageModel } from "effect/ai"
 import { BunServices } from "@effect/platform-bun"
 import type { ModelDriverContribution } from "../../src/domain/driver.js"
 import { type ExtensionHealthSnapshot, SetDriverOverrideInput } from "../../src/server/rpc.js"
@@ -119,9 +119,8 @@ import { type LogEvent, WideEventLogger } from "effect-wide-event"
 
 // ── rpc contract schemas ────────────────────────────────────────────────────
 
-const decodeSuccess = (key: string, value: Readonly<Record<string, string>>): unknown => {
-  const rpc = GentRpcs.requests.get(key)
-  if (Predicate.isUndefined(rpc)) return Effect.runSync(Effect.die(new Error(`Missing RPC ${key}`)))
+const decodeSuccess = (key: string, value: Readonly<Record<string, string>>) => {
+  const rpc = Option.getOrThrow(Option.fromUndefinedOr(GentRpcs.requests.get(key)))
   return Schema.decodeSync(rpc.successSchema)(value)
 }
 
@@ -557,7 +556,11 @@ describe("auth.listProviders", () => {
         )
         const session = yield* client.session.create({ cwd: process.cwd() })
         const required = (providers: ReadonlyArray<{ provider: string; required: boolean }>) =>
-          providers.filter((entry) => entry.required).map((entry) => entry.provider)
+          providers
+            .values()
+            .filter((entry) => entry.required)
+            .map((entry) => entry.provider)
+            .toArray()
         expect(
           required(yield* client.auth.listProviders({ sessionId: session.sessionId })),
         ).toEqual(["anthropic"])
@@ -582,7 +585,11 @@ describe("auth.listProviders", () => {
           createE2ELayer({ ...e2ePreset, providerLayer, extensions: [authDriversExtension] }),
         )
         const required = (providers: ReadonlyArray<{ provider: string; required: boolean }>) =>
-          providers.filter((entry) => entry.required).map((entry) => entry.provider)
+          providers
+            .values()
+            .filter((entry) => entry.required)
+            .map((entry) => entry.provider)
+            .toArray()
         expect(required(yield* client.auth.listProviders({}))).toEqual(["anthropic"])
         expect(
           required(yield* client.auth.listProviders({ agentName: AgentName.make("helper") })),
@@ -3742,8 +3749,10 @@ describe("extension command RPCs", () => {
             messages: ReadonlyArray<{ role: string; parts: Message["parts"] }>,
           ) =>
             messages
+              .values()
               .filter((message) => message.role === "assistant")
               .map((message) => messagePartsText(message.parts))
+              .toArray()
           yield* client.message.send({ sessionId, branchId, content: "warm the branch" })
           yield* waitFor(
             client.message.list({ branchId }),

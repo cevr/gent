@@ -17,10 +17,10 @@ import {
 } from "effect"
 import { Model, ModelId, ProviderId } from "@gent/core/extensions/api"
 import { makeTempDirectoryScoped } from "@gent/core/test-utils"
-import { HttpClient, HttpClientResponse } from "effect/unstable/http"
+import { HttpClient, HttpClientResponse } from "effect/http"
 import { TestClock } from "effect/testing"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
-import type { ChildProcessSpawner } from "effect/unstable/process"
+import type { ChildProcessSpawner } from "effect/process"
 import {
   catalogSource,
   type CredentialCacheCell,

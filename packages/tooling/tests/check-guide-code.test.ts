@@ -1,6 +1,6 @@
 import { BunServices } from "@effect/platform-bun"
 import { Config, Effect, FileSystem, Path } from "effect"
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
+import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import { describe, expect, it } from "effect-bun-test"
 import { fileSet } from "../src/check-guardrails"
 import { requireContextModules, steeringFiles, steeringFilesAmong } from "../src/check-guide-code"
@@ -71,7 +71,7 @@ describe("the steering files the check reads", () => {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
       const repoRoot = yield* fs.makeTempDirectoryScoped({ prefix: "gent-guide-root-" })
       // Git's whole environment: no hook's `GIT_INDEX_FILE`, no user config.
-      const env = { PATH: yield* Config.string("PATH"), HOME: repoRoot }
+      const env = { PATH: yield* Config.String("PATH"), HOME: repoRoot }
       const git = (args: ReadonlyArray<string>) =>
         spawner.exitCode(ChildProcess.make("git", args, { cwd: repoRoot, env, extendEnv: false }))
       yield* fs.writeFileString(path.join(repoRoot, "AGENTS.md"), "# Agents\n")

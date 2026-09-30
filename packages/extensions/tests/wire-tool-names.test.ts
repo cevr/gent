@@ -21,8 +21,8 @@ import {
   SynchronizedRef,
 } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import type { ChildProcessSpawner } from "effect/unstable/process"
-import type { LanguageModel } from "effect/unstable/ai"
+import type { ChildProcessSpawner } from "effect/process"
+import type { LanguageModel } from "effect/ai"
 import {
   AnthropicPlatform,
   buildAnthropicModelDriver,

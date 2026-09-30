@@ -85,7 +85,7 @@ import { useWorkspace } from "./workspace"
  *   directory `clientTraceLogger` creates in scope at startup.
  */
 
-// @effect-diagnostics-next-line nodeBuiltinImport:off
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- synchronous shutdown logging runs after the Effect runtime closes.
 import { appendFileSync, writeFileSync } from "node:fs" // eslint-disable-line effect/noNodeBuiltinImport -- Synchronous shutdown logging runs after the Effect runtime closes.
 import { homedir } from "os"
 

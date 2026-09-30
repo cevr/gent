@@ -1,5 +1,5 @@
 import { describe, expect, it, test } from "effect-bun-test"
-import * as Prompt from "effect/unstable/ai/Prompt"
+import * as Prompt from "effect/ai/Prompt"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { SqliteClient as BunSqliteClient } from "@effect/sql-sqlite-bun"
 import {
@@ -14,7 +14,7 @@ import {
   Ref,
   Schema,
 } from "effect"
-import { SqlClient } from "effect/unstable/sql"
+import { SqlClient } from "effect/sql"
 import {
   AgentLoopQueueStorage,
   BranchStorage,

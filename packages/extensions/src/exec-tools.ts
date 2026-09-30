@@ -1,4 +1,5 @@
 import {
+  ByteSize,
   Cause,
   Context,
   DateTime,
@@ -16,7 +17,7 @@ import {
   Semaphore,
   Stream,
 } from "effect"
-import { SqlClient } from "effect/unstable/sql"
+import { SqlClient } from "effect/sql"
 import { countOf } from "./fs-tools.js"
 import {
   type BranchId,
@@ -35,7 +36,7 @@ import {
   ToolCallId,
   type TurnAfterInput,
 } from "@gent/core/extensions/api"
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
+import { ChildProcess, ChildProcessSpawner } from "effect/process"
 
 // Test seam: only tests read these exports. BackgroundBashStorage, its error,
 // BackgroundBashSupervisorLive and BackgroundBashLayer let a test inject a
@@ -1104,7 +1105,7 @@ const savedOutput = (file: string) =>
     const fs = yield* FileSystem.FileSystem
     const info = yield* fs.stat(file).pipe(Effect.option)
     if (Option.isNone(info)) return "no output was saved"
-    if (info.value.size === FileSystem.Size(0)) return "it wrote no output before the stop"
+    if (info.value.size === ByteSize.zero) return "it wrote no output before the stop"
     return `output up to the stop is in ${file}`
   })
 

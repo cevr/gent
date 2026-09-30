@@ -5,7 +5,6 @@ import {
   Effect,
   FileSystem,
   Crypto,
-  Encoding,
   Equal,
   JsonSchema,
   Layer,
@@ -18,6 +17,7 @@ import {
   SchemaRepresentation,
   Semaphore,
 } from "effect"
+import { Hex } from "effect/encoding"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
@@ -133,7 +133,7 @@ const serverKey = Effect.fn("Mcp.serverKey")(function* (
     "SHA-256",
     new TextEncoder().encode(serverIdentity(written, config, cwd)),
   )
-  return Encoding.encodeHex(digest)
+  return Hex.encode(digest)
 })
 
 /** Default bound on connecting to a server and on each call. */
@@ -193,7 +193,7 @@ const VARIABLE = /\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}/g
 const expandVariables = Effect.fn("Mcp.expandVariables")(function* (text: string) {
   const values = new Map<string, string>()
   for (const [match, name = "", fallback] of text.matchAll(VARIABLE)) {
-    const value = yield* Config.option(Config.string(name)).pipe(
+    const value = yield* Config.option(Config.String(name)).pipe(
       Effect.orElseSucceed(() => Option.none<string>()),
     )
     const resolved = Option.orElse(value, () => Option.fromUndefinedOr(fallback))

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
 import {
+  ByteSize,
   ConfigProvider,
   Effect,
   FileSystem,
@@ -12,7 +13,7 @@ import {
   Schema,
   Scope,
 } from "effect"
-import * as ChildProcessSpawnerNs from "effect/unstable/process/ChildProcessSpawner"
+import * as ChildProcessSpawnerNs from "effect/process/ChildProcessSpawner"
 import { dateFromMillis } from "@gent/core/protocol"
 import { BunGentPlatformLive } from "@gent/core/test-utils"
 import { GentPlatform } from "@gent/core/host"
@@ -88,7 +89,7 @@ const makeCountingFs = (counter: Ref.Ref<number>): Layer.Layer<FileSystem.FileSy
           uid: Option.none(),
           gid: Option.none(),
           rdev: Option.none(),
-          size: FileSystem.Size(0),
+          size: ByteSize.zero,
           blksize: Option.none(),
           blocks: Option.none(),
         })),
@@ -133,8 +134,6 @@ describe("BuildFingerprint", () => {
 })
 
 // ── server lock ─────────────────────────────────────────────────────────────
-
-// @effect-diagnostics nodeBuiltinImport:off
 
 const PlatformBaseLayer = Layer.mergeAll(BunServices.layer, BunGentPlatformLive)
 const PlatformLayer = Layer.merge(
@@ -195,6 +194,8 @@ describe("Build Fingerprint", () => {
 /**
  * Trap SIGTERM to this process and run `onSigterm` in its place. A server that
  * exits on SIGTERM releases its kernel lock there; the default ignores it.
+ * Every signal goes through `GentPlatform.signal`, so the trap wraps the
+ * platform the test provides; any other signal or pid reaches it unchanged.
  */
 const signalTrap =
   (onSigterm: Effect.Effect<void> = Effect.void) =>
@@ -203,32 +204,18 @@ const signalTrap =
   ): Effect.Effect<
     { readonly result: A; readonly signals: ReadonlyArray<string | number> },
     E,
-    R | Scope.Scope
+    Exclude<R, GentPlatform> | GentPlatform
   > =>
     Effect.gen(function* () {
       const signals: Array<string | number> = []
-      const runSync = Effect.runSyncWith(yield* Effect.context<never>())
-      // oxlint-disable-next-line typescript/unbound-method -- this test restores the exact host function after its signal trap
-      const originalKill = process.kill
-      const replacement: typeof process.kill = (pid: number, signal?: string | number) => {
-        if (pid !== process.pid) return originalKill(pid, signal)
-        if (signal === "SIGTERM") {
-          signals.push(signal)
-          runSync(onSigterm)
-          return true
-        }
-        return originalKill(pid, signal)
+      const platform = yield* GentPlatform
+      const signal: GentPlatform["Service"]["signal"] = (pid, sent) => {
+        if (pid !== process.pid || sent !== "SIGTERM") return platform.signal(pid, sent)
+        return Effect.sync(() => signals.push(sent)).pipe(Effect.andThen(onSigterm))
       }
-      yield* Effect.acquireRelease(
-        Effect.sync(() => {
-          process.kill = replacement
-        }),
-        () =>
-          Effect.sync(() => {
-            process.kill = originalKill
-          }),
+      const result = yield* effect.pipe(
+        Effect.provideService(GentPlatform, GentPlatform.of({ ...platform, signal })),
       )
-      const result = yield* effect
       return { result, signals }
     })
 

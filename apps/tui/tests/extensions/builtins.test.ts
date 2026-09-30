@@ -360,10 +360,10 @@ describe("files popup page budget", () => {
   const page = (paths: ReadonlyArray<string>, totalMatched: number) => ({ paths, totalMatched })
   const unlistedPage = Array.from({ length: 200 }, (_, index) => `ignored/${index}.ts`)
 
-  test("sparse matches stop at the page budget and report the ranking incomplete", () => {
-    let pagesRead = 0
-    const result = Effect.runSync(
-      rankListed(
+  it.effect("sparse matches stop at the page budget and report the ranking incomplete", () =>
+    Effect.gen(function* () {
+      let pagesRead = 0
+      const result = yield* rankListed(
         () =>
           Effect.sync(() => {
             pagesRead++
@@ -371,16 +371,16 @@ describe("files popup page budget", () => {
           }),
         new Set(["src/kept.ts"]),
         50,
-      ),
-    )
-    expect(pagesRead).toBe(FINDER_PAGE_BUDGET)
-    expect(result).toEqual({ kept: [], complete: false })
-  })
+      )
+      expect(pagesRead).toBe(FINDER_PAGE_BUDGET)
+      expect(result).toEqual({ kept: [], complete: false })
+    }),
+  )
 
-  test("matches that end inside the budget are complete", () => {
-    let pagesRead = 0
-    const result = Effect.runSync(
-      rankListed(
+  it.effect("matches that end inside the budget are complete", () =>
+    Effect.gen(function* () {
+      let pagesRead = 0
+      const result = yield* rankListed(
         () =>
           Effect.sync(() => {
             pagesRead++
@@ -388,11 +388,11 @@ describe("files popup page budget", () => {
           }),
         new Set(["src/kept.ts"]),
         50,
-      ),
-    )
-    expect(pagesRead).toBe(1)
-    expect(result).toEqual({ kept: ["src/kept.ts"], complete: true })
-  })
+      )
+      expect(pagesRead).toBe(1)
+      expect(result).toEqual({ kept: ["src/kept.ts"], complete: true })
+    }),
+  )
 })
 
 describe("files popup", () => {

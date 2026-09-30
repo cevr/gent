@@ -11,7 +11,7 @@ import {
   Schema,
   type Scope,
 } from "effect"
-import * as Prompt from "effect/unstable/ai/Prompt"
+import * as Prompt from "effect/ai/Prompt"
 import {
   encodeToolOutput,
   headTailChars,
@@ -26,7 +26,7 @@ import { type BranchId, MessageId, type SessionId, ToolCallId } from "../domain/
 import { ModelId } from "../domain/agent.js"
 import type { ToolCapability } from "../domain/capability.js"
 import type { TurnNotice } from "../domain/extension.js"
-import type { LanguageModel } from "effect/unstable/ai"
+import type { LanguageModel } from "effect/ai"
 import type { ProviderAuthError } from "../domain/driver.js"
 import type { ProviderError, StorageError } from "../domain/errors.js"
 import type { EventStorageError } from "../storage/storage.js"
@@ -1362,7 +1362,7 @@ export interface CompactionRequest {
   /** The admitted model for a summary bounded to `maxOutputTokens`. */
   readonly summaryModel: (
     maxOutputTokens: number,
-  ) => Effect.Effect<LanguageModel.Service, ProviderError | ProviderAuthError, Scope.Scope>
+  ) => Effect.Effect<LanguageModel.LanguageModel, ProviderError | ProviderAuthError, Scope.Scope>
 }
 
 interface ModelContextCompactorService {

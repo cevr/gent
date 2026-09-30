@@ -1,10 +1,10 @@
 import { Context, Effect, Layer, Option, Schema } from "effect"
-import { Headers } from "effect/unstable/http"
-import { RpcMiddleware } from "effect/unstable/rpc"
-// @effect-diagnostics nodeBuiltinImport:off — the workspace id is a wire constant, see workspaceIdForCwd
+import { Headers } from "effect/http"
+import { RpcMiddleware } from "effect/rpc"
+// @effect-diagnostics nodeBuiltinImport:off -- the workspace id is a wire constant, see workspaceIdForCwd
 // oxlint-disable-next-line gent/no-bun-outside-adapter -- a client and its server derive the wire id in separate processes; it is pinned to node:crypto sha256, not an adapter's hash
 import { createHash } from "node:crypto"
-// @effect-diagnostics nodeBuiltinImport:off — the workspace id canonicalizes its cwd before hashing
+// @effect-diagnostics nodeBuiltinImport:off -- the workspace id canonicalizes its cwd before hashing
 // oxlint-disable-next-line effect/noNodeBuiltinImport -- sync, context-free canonicalization: the wire id must not depend on a Path layer being wired
 import { resolve as resolvePath } from "node:path"
 
@@ -38,16 +38,15 @@ export const workspaceIdForCwd = (cwd: string): WorkspaceId =>
 
 /**
  * The header set a client sends for `cwd`. `Headers.fromInput` and the RPC
- * client both want a plain string record, so this widens deliberately at the
- * transport edge; `workspaceIdForCwd` keeps the branded value for callers
- * that need it.
+ * client both want plain string values, so the id goes out unbranded; the
+ * set is still a plain string record wherever one is wanted.
+ * `workspaceIdForCwd` keeps the branded value for callers that need it.
  */
-type WorkspaceHeaders = Record<string, string>
+type WorkspaceHeaders = { readonly [WORKSPACE_ID_HEADER]: string }
 
-export const workspaceHeadersForCwd = (cwd: string): WorkspaceHeaders => {
-  const headers = { [WORKSPACE_ID_HEADER]: String(workspaceIdForCwd(cwd)) }
-  return headers satisfies WorkspaceHeaders
-}
+export const workspaceHeadersForCwd = (cwd: string): WorkspaceHeaders => ({
+  [WORKSPACE_ID_HEADER]: String(workspaceIdForCwd(cwd)),
+})
 
 export const CurrentWorkspaceId = Context.Reference<WorkspaceId>(
   "@gent/core/src/server/workspace-rpc/CurrentWorkspaceId",

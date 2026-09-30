@@ -5,7 +5,6 @@ import {
   Crypto,
   Duration,
   Effect,
-  Encoding,
   Exit,
   FileSystem,
   Layer,
@@ -17,6 +16,7 @@ import {
   Stream,
   SynchronizedRef,
 } from "effect"
+import { Hex } from "effect/encoding"
 import {
   AuthMethod,
   DEFAULT_RETRY_POLICY,
@@ -56,10 +56,10 @@ import {
   readOptionalEnv,
   withHeaders,
 } from "./providers.js"
-import { ChildProcessSpawner } from "effect/unstable/process"
-import { FetchHttpClient, Headers, HttpClient, HttpClientRequest } from "effect/unstable/http"
+import { ChildProcessSpawner } from "effect/process"
+import { FetchHttpClient, Headers, HttpClient, HttpClientRequest } from "effect/http"
 import { AnthropicClient, AnthropicLanguageModel, Generated } from "@effect/ai-anthropic"
-import { type AiError, Model as AiModel } from "effect/unstable/ai"
+import { type AiError, Model as AiModel } from "effect/ai"
 
 // Test seam: only tests read these exports. The model table and its lookups
 // (MODEL_CONFIG, getModelOverride, getModelBetas), the billing header (SYSTEM_IDENTITY_PREFIX,
@@ -307,7 +307,7 @@ const sha256Hex = (text: string): Effect.Effect<string, never, Crypto.Crypto> =>
     const digest = yield* crypto
       .digest("SHA-256", new TextEncoder().encode(text))
       .pipe(Effect.orDie)
-    return Encoding.encodeHex(digest)
+    return Hex.encode(digest)
   })
 
 /**
@@ -885,7 +885,7 @@ const refreshViaOAuth = (
     }
     return creds.value
   }).pipe(
-    // @effect-diagnostics-next-line strictEffectProvide:off
+    // @effect-diagnostics-next-line strictEffectProvide:off -- the credential read owns its HTTP client at the extension boundary; it outlives no scope.
     Effect.provide(FetchHttpClient.layer),
   )
 

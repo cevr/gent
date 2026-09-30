@@ -17,7 +17,7 @@ import {
   Sink,
   Stream,
 } from "effect"
-import { ChildProcessSpawner } from "effect/unstable/process"
+import { ChildProcessSpawner } from "effect/process"
 import { BunServices } from "@effect/platform-bun"
 import {
   finishPart,
@@ -59,7 +59,7 @@ import {
   WakeTool,
 } from "../src/wake.js"
 import { TestClock } from "effect/testing"
-import type { LanguageModel } from "effect/unstable/ai"
+import type { LanguageModel } from "effect/ai"
 import { toolResultSummary } from "@gent/core/extensions/branch-tools"
 import { BranchId, MessageId, SessionId, ToolCallId, SteerCommand } from "@gent/core/protocol"
 import {

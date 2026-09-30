@@ -83,7 +83,7 @@ import {
   sessionRuntimeLayer,
   testRuntimeEnvironment,
 } from "./session-mutations"
-import * as Prompt from "effect/unstable/ai/Prompt"
+import * as Prompt from "effect/ai/Prompt"
 import { SessionMutations } from "../../src/domain/extension"
 import {
   AgentDefinition,
@@ -94,7 +94,7 @@ import {
 import { type EventEnvelope, EventStore, SessionStarted } from "../../src/domain/event"
 import { BunServices } from "@effect/platform-bun"
 import { TestClock } from "effect/testing"
-import { SqlClient } from "effect/unstable/sql"
+import { SqlClient } from "effect/sql"
 import { ModelResolver } from "../../src/runtime/provider"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
 

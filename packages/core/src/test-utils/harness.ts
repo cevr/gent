@@ -112,7 +112,7 @@ import {
   getEventSessionId,
   matchesEventFilter,
 } from "../domain/event.js"
-import { type LanguageModel, Model as AiModel } from "effect/unstable/ai"
+import { type LanguageModel, Model as AiModel } from "effect/ai"
 import { GentPlatform } from "../runtime/gent-platform.js"
 import { BunCrypto } from "@effect/platform-bun"
 import type { FeatureMigrations } from "../storage/schema.js"
@@ -821,8 +821,10 @@ const extensionInputsForConfig = (
 ): ReadonlyArray<GentExtension<ExtensionSetupServices>> => {
   // No agents, no extension: a health or registry listing sees only what the test loads.
   const agents = [config.agents]
+    .values()
     .filter((list) => list.length > 0)
     .map((list) => testAgentsExtension(list))
+    .toArray()
   if (Predicate.isUndefined(config.extensions)) {
     return [
       ...agents,

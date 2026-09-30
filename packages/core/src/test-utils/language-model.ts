@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off — test fixture lifecycle comes from bun:test
+// @effect-diagnostics nodeBuiltinImport:off -- test fixture lifecycle comes from bun:test
 import {
   Cause,
   Clock,
@@ -15,16 +15,16 @@ import {
   Stream,
 } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import { LanguageModel } from "effect/unstable/ai"
-import { FetchHttpClient } from "effect/unstable/http"
+import { LanguageModel } from "effect/ai"
+import { FetchHttpClient } from "effect/http"
 // oxlint-disable-next-line effect/noNodeBuiltinImport -- This synchronous fixture adapter creates worker files before the child runtime starts.
 import * as fs from "node:fs"
 import * as os from "node:os"
 // oxlint-disable-next-line effect/noNodeBuiltinImport -- This synchronous fixture adapter builds worker paths before the child runtime starts.
 import * as path from "node:path"
-import type { ProviderOptions } from "effect/unstable/ai/LanguageModel"
-import type * as AiError from "effect/unstable/ai/AiError"
-import type * as Prompt from "effect/unstable/ai/Prompt"
+import type { ProviderOptions } from "effect/ai/LanguageModel"
+import type * as AiError from "effect/ai/AiError"
+import type * as Prompt from "effect/ai/Prompt"
 import { ProviderStopReason, reportProviderStopReason } from "../domain/driver.js"
 import { omitUndefined } from "../domain/guards.js"
 import { ToolCallId } from "../domain/ids.js"
@@ -190,7 +190,7 @@ export const oneGenerate = (
 ): Effect.Effect<void> =>
   LanguageModel.generateText({ prompt }).pipe(
     Effect.asVoid,
-    // @effect-diagnostics-next-line strictEffectProvide:off test entry point
+    // @effect-diagnostics-next-line strictEffectProvide:off -- test entry point: the probe owns its fake fetch layer.
     Effect.provide(Layer.provideMerge(layer, fakeFetchLayer(state, responder))),
     Effect.scoped,
     Effect.catchCause((cause) => Effect.die(cause)),
@@ -363,18 +363,11 @@ const testStream = (
     generateText: () => Effect.succeed("test response"),
   })
 
-let failingCache = Option.none<Layer.Layer<LanguageModel.LanguageModel>>()
-const failing = () => {
-  if (Option.isNone(failingCache)) {
-    const layer = makeLanguageModelLayer({
-      streamText: () => Stream.fail(aiError("Failing.streamText", "provider exploded")),
-      generateText: () => Effect.fail(aiError("Failing.generateText", "provider exploded")),
-    })
-    failingCache = Option.some(layer)
-    return layer
-  }
-  return failingCache.value
-}
+/** One layer value, so every test that provides it shares its memoized build. */
+const failingLayer = makeLanguageModelLayer({
+  streamText: () => Stream.fail(aiError("Failing.streamText", "provider exploded")),
+  generateText: () => Effect.fail(aiError("Failing.generateText", "provider exploded")),
+})
 
 const signal = (reply: string, options?: { inputTokens?: number; outputTokens?: number }) =>
   Effect.gen(function* () {
@@ -572,7 +565,7 @@ export const LanguageModelLayers = {
     return ScriptedLanguageModel.empty
   },
   get failing() {
-    return failing()
+    return failingLayer
   },
   sequence,
   signal,

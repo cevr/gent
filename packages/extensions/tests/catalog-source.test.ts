@@ -1,7 +1,7 @@
 import { BunServices } from "@effect/platform-bun"
 import { Config, Effect, FileSystem, Path, Stream } from "effect"
 import { describe, expect, it } from "effect-bun-test"
-import { ChildProcess } from "effect/unstable/process"
+import { ChildProcess } from "effect/process"
 
 /**
  * The drivers' empty catalog home (`helpers/catalog-source.ts`) is gone once
@@ -33,7 +33,7 @@ describe("the drivers' catalog home", () => {
       yield* fs.writeFileString(file, READ_ONCE)
       const handle = yield* ChildProcess.make("bun", ["test", "--preload", PRELOAD, file], {
         cwd: PACKAGE_DIR,
-        env: { PATH: yield* Config.string("PATH"), TMPDIR: sandbox, HOME: sandbox, NO_COLOR: "1" },
+        env: { PATH: yield* Config.String("PATH"), TMPDIR: sandbox, HOME: sandbox, NO_COLOR: "1" },
         extendEnv: false,
       })
       const [exitCode, output] = yield* Effect.all(

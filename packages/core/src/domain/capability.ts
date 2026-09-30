@@ -7,7 +7,7 @@ import {
   ToolCallId,
   ToolId,
 } from "./ids.js"
-import * as AiTool from "effect/unstable/ai/Tool"
+import * as AiTool from "effect/ai/Tool"
 import { clipSummary, summarizeOutput } from "./message.js"
 
 // ── prompt ──────────────────────────────────────────────────────────────────
@@ -342,12 +342,10 @@ export function request(input: {
     output: input.output,
   }
   // CapabilityRef requires `Schema.Decoder<X, never>` for sync decoding at the
-  // dispatcher boundary. Author-supplied schemas always satisfy this — the
-  // overload signatures (above) constrain Input/Output to `Schema.Schema<X>`
-  // which has `DecodingServices: never`. The cast is at the implementation
-  // signature only; type-safety is restored by the public overloads.
-  // oxlint-disable-next-line effect/noAs, effect/noChainedTypeAssertions, typescript/no-unsafe-type-assertion -- The implementation overload erases the author schema types; public overloads restore them.
-  const refValue = {
+  // dispatcher boundary. The implementation signature erases Input/Output to
+  // `unknown`, and a `Schema.Codec<unknown, unknown, never, never>` is such a
+  // decoder; the public overloads restore the author types.
+  const refValue: CapabilityRef = {
     get extensionId() {
       if (Option.isNone(refState.extensionId)) {
         // oxlint-disable-next-line effect/noThrowStatement, effect/noNewError -- Reading an unbound capability reference is programmer misuse.
@@ -360,7 +358,7 @@ export function request(input: {
     capabilityId: refState.capabilityId,
     input: refState.input,
     output: refState.output,
-  } as unknown as CapabilityRef
+  }
   // A handler's own error becomes the wire error under the ids this factory
   // and the binding already hold; an unbound request leaves the error to the
   // registry, which names the ids it routed by.
@@ -373,9 +371,11 @@ export function request(input: {
       },
     })
   const effect: ErasedCapabilityEffect<RequestFailure> = (value) =>
-    // @effect-diagnostics-next-line anyUnknownInErrorContext:off — the erased handler crosses the runtime membrane; the public overloads keep authors typed.
+    // @effect-diagnostics-next-line anyUnknownInErrorContext:off -- the erased handler crosses the runtime membrane; the public overloads keep authors typed.
     Effect.mapError(input.execute(value), asCapabilityError)
-  const capability: RequestCapabilityApi = {
+  // The factory applies its private brand and typed reference here; the
+  // public overload restores the author's Input/Output.
+  const capability: RequestCapability = {
     _tag: "request",
     id: rpcId,
     slash: input.slash,
@@ -385,13 +385,11 @@ export function request(input: {
     output: input.output,
     effect,
     ref: refValue,
-  }
-  // oxlint-disable-next-line effect/noAs, effect/noChainedTypeAssertions, typescript/no-unsafe-type-assertion -- The factory applies its private brand and typed reference at the runtime membrane.
-  return Object.assign(capability, {
     [RequestCapabilityBrand]: true,
     [REQUEST_REF]: refValue,
     [REQUEST_REF_STATE]: refState,
-  }) as unknown as RequestCapability
+  }
+  return capability
 }
 
 export const bindRequestCapabilityExtension = <Input, Output>(
@@ -483,7 +481,7 @@ export const GentToolMetadataTag = Context.Reference<GentToolMetadata | undefine
  * tools annotated with Gent execution metadata. Runtime code reads Gent-only
  * fields from the annotation instead of widening Effect's tool surface.
  */
-type GentParametersSchema = Schema.Decoder<unknown, never>
+type GentParametersSchema = Schema.Codec<unknown, unknown, never, never>
 type GentResultSchema = Schema.Encoder<unknown, never>
 type GentFailureSchema = Schema.Codec<Error, unknown, never, never>
 
@@ -511,7 +509,6 @@ export type ToolCapability<Input = unknown, Output = unknown, Error = unknown> =
 const getToolMetadataOption = (tool: AiTool.Any): GentToolMetadata | undefined =>
   Context.get(tool.annotations, GentToolMetadataTag)
 
-// oxlint-disable-next-line effect/noUnknownParameters -- Native Effect tools are narrowed by their runtime predicates below.
 export const isToolCapability = (value: unknown): value is ToolCapability => {
   if (
     !(AiTool.isUserDefined(value) || AiTool.isDynamic(value) || AiTool.isProviderDefined(value)) ||
@@ -588,12 +585,12 @@ export const getToolPrompt = (
 /** Author-facing input to `tool(...)`. Mirrors the LLM-tool fields as a
  *  standalone leaf with no shared capability parent.
  *
- *  `Params` is a `Schema.Decoder<I, never>` — the tool adapter needs to
- *  decode JSON synchronously without resolving services, so the decoder
- *  may not have a context requirement. */
+ *  `Params` is a `Schema.Codec<I, E, never, never>` — the tool adapter
+ *  decodes JSON synchronously, and Effect AI encodes the streamed tool-call
+ *  parameters, so neither direction may have a context requirement. */
 export interface ToolInput<
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
-  Params extends Schema.Decoder<any, never> = Schema.Decoder<any, never>,
+  Params extends Schema.Codec<any, any, never, never> = Schema.Codec<any, any, never, never>,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
   Output extends Schema.Encoder<any, never> = Schema.Encoder<any, never>,
   Error = never,
@@ -610,9 +607,9 @@ export interface ToolInput<
   /** Marks a write tool as destructive for Effect AI provider metadata. */
   readonly destructive?: boolean
   /**
-   * Schema for `execute` input. Must have no context requirement so the
-   * tool adapter can decode JSON synchronously without resolving services.
-   * `Schema.Decoder<I, never>` ⊆ `Schema.Schema<I, _, never>`.
+   * Schema for `execute` input. Must have no context requirement in either
+   * direction: the tool adapter decodes JSON synchronously, and Effect AI
+   * encodes the streamed tool-call parameters.
    */
   readonly params: Params
   /** Schema for successful `execute` output. Effect AI owns result encoding
@@ -641,7 +638,7 @@ export interface ToolInput<
  */
 export const tool = <
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
-  Params extends Schema.Decoder<any, never>,
+  Params extends Schema.Codec<any, any, never, never>,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
   Output extends Schema.Encoder<any, never>,
   Error,

@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off — the test preload runs in bun's test host before any Effect runtime
+// @effect-diagnostics nodeBuiltinImport:off -- the test preload runs in bun's test host before any Effect runtime
 /**
  * Defaults every gent test suite shares. Every `test` and `test:e2e` script
  * preloads this file, so the suites agree on them.

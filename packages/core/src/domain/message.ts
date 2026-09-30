@@ -1,9 +1,9 @@
 import { Option, Predicate, Result, Schema } from "effect"
-import * as Prompt from "effect/unstable/ai/Prompt"
+import * as Prompt from "effect/ai/Prompt"
 import { BranchId, MessageId, RequestId, SessionId, ToolCallId } from "./ids.js"
 import { AgentName, ModelId, ReasoningEffort, RunSpecSchema } from "./agent.js"
 import type { EventEnvelope, ToolCallStarted, Usage } from "./event.js"
-import * as Response from "effect/unstable/ai/Response"
+import * as Response from "effect/ai/Response"
 
 // ── head-tail ───────────────────────────────────────────────────────────────
 
@@ -1142,7 +1142,6 @@ const boundedInput = (input: unknown, budget: number): BoundedInput => {
   return kept
 }
 
-// oxlint-disable-next-line effect/noUnknownParameters -- A decoded JSON field is an external value; only scalars are kept.
 const isScalar = (value: unknown): value is Scalar =>
   Predicate.isString(value) || Predicate.isNumber(value) || Predicate.isBoolean(value)
 

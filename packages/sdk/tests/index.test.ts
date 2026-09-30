@@ -25,23 +25,23 @@ describe("SDK public surface", () => {
   })
 
   test("does not expose unstable or redundant type aliases", () => {
-    // @ts-expect-error — session.create result is read from the namespaced client method
+    // @ts-expect-error -- session.create result is read from the namespaced client method
     type _BadCreateSessionResult = RuntimePublicSdk.CreateSessionResult
-    // @ts-expect-error — client options are an inline constructor parameter, not a named API
+    // @ts-expect-error -- client options are an inline constructor parameter, not a named API
     type _BadGentClientOptions = RuntimePublicSdk.GentClientOptions
-    // @ts-expect-error — state specs are constructed through Gent.state factories
+    // @ts-expect-error -- state specs are constructed through Gent.state factories
     type _BadStateSpec = RuntimePublicSdk.StateSpec
-    // @ts-expect-error — provider specs are constructed through Gent.provider factories
+    // @ts-expect-error -- provider specs are constructed through Gent.provider factories
     type _BadProviderSpec = RuntimePublicSdk.ProviderSpec
-    // @ts-expect-error — the TUI's `--debug` seeds its own session through `seed`
+    // @ts-expect-error -- the TUI's `--debug` seeds its own session through `seed`
     type _BadDebugOption = Parameters<typeof RuntimePublicSdk.Gent.server>[0]["debug"]
-    // @ts-expect-error — prompt part aliases come from Effect AI, not the SDK
+    // @ts-expect-error -- prompt part aliases come from Effect AI, not the SDK
     type _BadTextPart = RuntimePublicSdk.TextPart
-    // @ts-expect-error — prompt part aliases come from Effect AI, not the SDK
+    // @ts-expect-error -- prompt part aliases come from Effect AI, not the SDK
     type _BadReasoningPart = RuntimePublicSdk.ReasoningPart
-    // @ts-expect-error — prompt part aliases come from Effect AI, not the SDK
+    // @ts-expect-error -- prompt part aliases come from Effect AI, not the SDK
     type _BadToolCallPart = RuntimePublicSdk.ToolCallPart
-    // @ts-expect-error — prompt part aliases come from Effect AI, not the SDK
+    // @ts-expect-error -- prompt part aliases come from Effect AI, not the SDK
     type _BadToolResultPart = RuntimePublicSdk.ToolResultPart
 
     expect(true).toBe(true)

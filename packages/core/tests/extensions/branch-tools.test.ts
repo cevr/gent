@@ -1,6 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Layer } from "effect"
-import { SqlClient } from "effect/unstable/sql"
+import { SqlClient } from "effect/sql"
 import { MessageStorage } from "../../src/storage/storage"
 import {
   type BranchToolFeature,
@@ -71,6 +71,6 @@ describe("branch tool feature", () => {
     Effect.gen(function* () {
       const feature = yield* CurrentBranchToolFeature
       expect(feature).toBe(widgetTools)
-    }).pipe(Effect.provide(Layer.succeed(CurrentBranchToolFeature, widgetTools))),
+    }).pipe(Effect.provideService(CurrentBranchToolFeature, widgetTools)),
   )
 })

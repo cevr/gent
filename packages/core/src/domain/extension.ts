@@ -32,7 +32,7 @@ import {
   type ToolCapability,
 } from "./capability.js"
 import type { ModelDriverContribution } from "./driver.js"
-import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
+import type { ChildProcessSpawner } from "effect/process/ChildProcessSpawner"
 import type { GentPlatform, GentPlatformOsInfo } from "../runtime/gent-platform.js"
 import {
   ActorCommandId,
@@ -1078,7 +1078,7 @@ export const sealRuntimeLoadedEffect = <A, R = never>(opts: {
   readonly failureMessage: (cause: unknown) => string
   readonly defectMessage: (cause: unknown) => string
 }): Effect.Effect<A, ExtensionLoadError, R> => {
-  // @effect-diagnostics-next-line anyUnknownInErrorContext:off
+  // @effect-diagnostics-next-line anyUnknownInErrorContext:off -- extension setup is untyped until this membrane maps its failures to ExtensionLoadError.
   const sealed = Effect.suspend(opts.effect).pipe(
     Effect.catchEager((cause) =>
       Effect.fail(

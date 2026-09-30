@@ -15,7 +15,7 @@ import {
   Schema,
   Stream,
 } from "effect"
-import { ChildProcess, type ChildProcessSpawner } from "effect/unstable/process"
+import { ChildProcess, type ChildProcessSpawner } from "effect/process"
 import { causeMessage } from "../domain/guards.js"
 
 // ── gent-platform ───────────────────────────────────────────────────────────
@@ -427,7 +427,7 @@ const stagingName = (basename: string, suffix: string): string => {
  * still applies.
  */
 export const resolveDataDir = (home: string): Effect.Effect<string> =>
-  Config.option(Config.string("GENT_DATA_DIR")).pipe(
+  Config.option(Config.String("GENT_DATA_DIR")).pipe(
     Effect.orElseSucceed(() => Option.none<string>()),
     Effect.map(Option.getOrElse(() => `${home}/.gent`)),
   )

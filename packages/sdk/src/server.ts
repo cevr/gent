@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off — server primitive owns filesystem path resolution for gent's data directory
+// @effect-diagnostics nodeBuiltinImport:off -- server primitive owns filesystem path resolution for gent's data directory
 import {
   Clock,
   Context,
@@ -15,7 +15,7 @@ import {
 } from "effect"
 import { join as pathJoin, resolve as pathResolve } from "node:path"
 import { Database } from "bun:sqlite"
-import type { ChildProcessSpawner } from "effect/unstable/process"
+import type { ChildProcessSpawner } from "effect/process"
 import { dateFromMillis, GentConnectionError } from "@gent/core/protocol"
 import {
   GentPlatform,
@@ -36,10 +36,10 @@ import {
 } from "@gent/core/host"
 import { runProcess, type GentExtension } from "@gent/core/extensions/api"
 import { BunHttpServer } from "@effect/platform-bun"
-import { FetchHttpClient, Headers, HttpClient, HttpRouter, HttpServer } from "effect/unstable/http"
+import { FetchHttpClient, Headers, HttpClient, HttpRouter, HttpServer } from "effect/http"
 import { BuiltinExtensionModules, BuiltinExtensions, CellBranchTools } from "@gent/extensions"
 import type { BranchToolFeature } from "@gent/core/extensions/branch-tools"
-import type { LanguageModel } from "effect/unstable/ai"
+import type { LanguageModel } from "effect/ai"
 import { GentLogLevel, GentObservability } from "./logger.js"
 
 // ── data-paths ──────────────────────────────────────────────────────────────
@@ -674,7 +674,7 @@ const buildOwnedServer = (
     )
     const httpServer = Context.get(httpServerCtx, HttpServer.HttpServer)
     const port = Match.value(httpServer.address).pipe(
-      Match.tag("TcpAddress", (address) => address.port),
+      Match.tag("InetAddressV4", "InetAddressV6", (address) => address.port),
       Match.orElse(() => 0),
     )
     if (port === 0) {
@@ -807,7 +807,7 @@ const probeServerLockEntryIdentity = (entry: ServerLockEntry): Effect.Effect<boo
   }).pipe(
     // One bound over the request and the body: a server can send headers and stall its body.
     Effect.timeout(IDENTITY_PROBE_TIMEOUT),
-    // @effect-diagnostics-next-line strictEffectProvide:off self-contained probe, no scope lifetime
+    // @effect-diagnostics-next-line strictEffectProvide:off -- self-contained probe, no scope lifetime
     Effect.provide(FetchHttpClient.layer),
     Effect.catchEager(() => Effect.succeed(false)),
   )
@@ -836,7 +836,7 @@ const holderBlocksMessage = (
 export const resolveServer = (
   options: GentServerOptions,
 ): Effect.Effect<GentServer, GentConnectionError, Scope.Scope> =>
-  // @effect-diagnostics-next-line strictEffectProvide:off
+  // @effect-diagnostics-next-line strictEffectProvide:off -- the public entry point provides the local platform it resolves on.
   Effect.provide(resolveServerInternal(options), LocalPlatformLayer)
 
 const resolveServerInternal = (
