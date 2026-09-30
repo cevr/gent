@@ -1,5 +1,6 @@
 import {
   Cause,
+  Clock,
   Config,
   ConfigProvider,
   Context,
@@ -420,6 +421,116 @@ const writeCatalogEntries = Effect.fn("Mcp.writeCatalogEntries")(function* (
   yield* writeFileAtomic(file, yield* Schema.encodeEffect(CatalogFile)({ servers }))
 })
 
+// ── binary files ────────────────────────────────────────────────────────────
+
+/** A binary block larger than this is not written; its entry keeps its size and has no path. */
+const BLOB_FILE_LIMIT_MIB = 20
+const BLOB_FILE_LIMIT = BLOB_FILE_LIMIT_MIB * 1024 * 1024
+/** A file in `mcp-blobs` last written longer ago than this is removed, once per process. */
+const BLOB_MAX_AGE = Duration.days(14)
+
+const BLOB_EXTENSIONS: ReadonlyMap<string, string> = new Map([
+  ["image/png", "png"],
+  ["image/jpeg", "jpg"],
+  ["image/gif", "gif"],
+  ["image/webp", "webp"],
+  ["image/svg+xml", "svg"],
+  ["audio/mpeg", "mp3"],
+  ["audio/wav", "wav"],
+  ["audio/ogg", "ogg"],
+  ["application/pdf", "pdf"],
+  ["application/json", "json"],
+  ["text/plain", "txt"],
+])
+
+/** The file extension of a MIME type; any other type is `bin`. */
+const blobExtension = (mimeType: Option.Option<string>) =>
+  Option.getOrElse(
+    Option.flatMap(mimeType, (type) =>
+      Option.fromUndefinedOr(BLOB_EXTENSIONS.get(type.split(";")[0]?.trim().toLowerCase() ?? "")),
+    ),
+    () => "bin",
+  )
+
+const blobDirectory = Effect.fn("Mcp.blobDirectory")(function* (home: string) {
+  const path = yield* Path.Path
+  return path.join(yield* resolveDataDir(home), "mcp-blobs")
+})
+
+/** Removes the files in `directory` last written more than `BLOB_MAX_AGE` ago. */
+const pruneBlobs = Effect.fn("Mcp.pruneBlobs")(function* (directory: string) {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const now = yield* Clock.currentTimeMillis
+  const names = yield* fs
+    .readDirectory(directory)
+    .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []))
+  for (const name of names) {
+    const file = path.join(directory, name)
+    const written = Option.flatMap(yield* Effect.option(fs.stat(file)), (info) => info.mtime)
+    if (Option.isSome(written) && now - written.value.getTime() > Duration.toMillis(BLOB_MAX_AGE)) {
+      yield* fs.remove(file).pipe(Effect.ignore)
+    }
+  }
+})
+
+/**
+ * Writes the binary blocks of a call result to `directory`, each once, as
+ * `<sha256>.<ext>`, so the cell reads them with Bun. A block past
+ * `BLOB_FILE_LIMIT`, or one that cannot be decoded or written, gets no file.
+ * The first write of the process removes files older than `BLOB_MAX_AGE`.
+ */
+const makeBlobStore = (directory: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+    const crypto = yield* Crypto.Crypto
+    const prune = yield* Effect.cached(
+      pruneBlobs(directory).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("mcp.blobs.prune.failed").pipe(
+            Effect.annotateLogs({ error: String(cause) }),
+          ),
+        ),
+      ),
+    )
+    const saveOne = (data: string, mimeType: Option.Option<string>) =>
+      Effect.gen(function* () {
+        if (base64Bytes(data) > BLOB_FILE_LIMIT) return Option.none<string>()
+        const bytes = Encoding.decodeBase64(data)
+        if (Result.isFailure(bytes) || bytes.success.length > BLOB_FILE_LIMIT) {
+          return Option.none<string>()
+        }
+        yield* prune
+        const digest = Encoding.encodeHex(yield* crypto.digest("SHA-256", bytes.success))
+        const file = path.join(directory, `${digest}.${blobExtension(mimeType)}`)
+        if (!(yield* fs.exists(file))) {
+          yield* fs.makeDirectory(directory, { recursive: true })
+          yield* writeFileAtomic(file, bytes.success)
+        }
+        return Option.some(file)
+      }).pipe(
+        Effect.provideService(FileSystem.FileSystem, fs),
+        Effect.provideService(Path.Path, path),
+        Effect.catchCause((cause) =>
+          Effect.logWarning("mcp.blob.unwritten").pipe(
+            Effect.annotateLogs({ error: String(cause) }),
+            Effect.as(Option.none<string>()),
+          ),
+        ),
+      )
+    return {
+      /** Each content block's file by index; none for a block that is not binary or was not written. */
+      save: (content: ReadonlyArray<Schema.Json>) =>
+        Effect.forEach(content, (block) =>
+          Option.match(binaryOf(block), {
+            onNone: () => Effect.succeed(Option.none<string>()),
+            onSome: (binary) => saveOne(binary.data, Option.fromUndefinedOr(binary.mimeType)),
+          }),
+        ),
+    }
+  })
+
 // ── connections ─────────────────────────────────────────────────────────────
 
 class McpError extends Schema.TaggedError<McpError>()("McpError", {
@@ -732,6 +843,10 @@ interface McpClientsService {
   ) => Effect.Effect<CallResult, McpError>
   /** Every configured server as this process sees it now, by name. */
   readonly status: Effect.Effect<McpStatus>
+  /** Writes a result's binary blocks to files (see `makeBlobStore`); each block's file by index. */
+  readonly saveBlobs: (
+    content: ReadonlyArray<Schema.Json>,
+  ) => Effect.Effect<ReadonlyArray<Option.Option<string>>>
 }
 
 /**
@@ -806,10 +921,12 @@ const mcpClientsLive = (
   registered: ReadonlyArray<RegisteredServer>,
   misconfigured: ReadonlyArray<MisconfiguredServer>,
   file: string,
+  blobs: string,
 ) =>
   Layer.effect(
     McpClients,
     Effect.gen(function* () {
+      const blobStore = yield* makeBlobStore(blobs)
       const byKey = new Map(registered.map((entry) => [entry.server.key, entry]))
       const writePermit = yield* Semaphore.make(1)
       const runFork = yield* FiberSet.makeRuntime<FileSystem.FileSystem | Path.Path>()
@@ -1050,6 +1167,7 @@ const mcpClientsLive = (
             servers: servers.toSorted((left, right) => compareCodeUnits(left.name, right.name)),
           }
         }),
+        saveBlobs: blobStore.save,
       })
     }),
   )
@@ -1130,29 +1248,51 @@ const isResource = Schema.is(
   }),
 )
 
-/** A call's content blocks sorted into text, other blocks, and binary data left out. */
+/** A block's binary data and MIME type, when it is an image, audio, or blob block. */
+const binaryOf = (block: Schema.Json) => {
+  if (isMediaBlock(block)) {
+    return Option.some({ data: block.data ?? "", mimeType: block.mimeType })
+  }
+  if (isBlobResource(block)) {
+    return Option.some({ data: block.resource.blob, mimeType: block.resource.mimeType })
+  }
+  return Option.none()
+}
+
+/** A call's content blocks sorted into text, other blocks, and binary blocks the cell reads from a file or not at all. */
 interface ProjectedContent {
   readonly texts: Array<string>
   readonly blocks: Array<Schema.Json>
-  readonly omitted: Array<Schema.Json>
+  readonly binary: Array<Schema.Json>
+  /** Binary blocks with no file: past the cap, or not written. */
+  unsaved: number
 }
 
-const projectContent = (content: ReadonlyArray<Schema.Json>): ProjectedContent => {
-  const projected: ProjectedContent = { texts: [], blocks: [], omitted: [] }
-  for (const block of content) {
+/** `saved` holds the file of each content block by index, where one was written. */
+const projectContent = (
+  content: ReadonlyArray<Schema.Json>,
+  saved: ReadonlyArray<Option.Option<string>>,
+): ProjectedContent => {
+  const projected: ProjectedContent = { texts: [], blocks: [], binary: [], unsaved: 0 }
+  for (const [index, block] of content.entries()) {
+    const path = Option.flatten(Option.fromUndefinedOr(saved[index]))
+    if (Option.isSome(binaryOf(block)) && Option.isNone(path)) projected.unsaved += 1
+    const file = omitUndefined({ path: Option.getOrUndefined(path) })
     if (isTextBlock(block)) {
       projected.texts.push(block.text)
     } else if (isMediaBlock(block)) {
-      projected.omitted.push({
+      projected.binary.push({
         type: block.type,
         ...omitUndefined({ mimeType: block.mimeType }),
         bytes: base64Bytes(block.data ?? ""),
+        ...file,
       })
     } else if (isBlobResource(block)) {
-      projected.omitted.push({
+      projected.binary.push({
         type: "resource",
         ...omitUndefined({ uri: block.resource.uri, mimeType: block.resource.mimeType }),
         bytes: base64Bytes(block.resource.blob),
+        ...file,
       })
     } else if (isResource(block)) {
       projected.blocks.push({ type: "resource", ...block.resource })
@@ -1172,24 +1312,34 @@ const repeats = (text: string, value: Schema.Json) =>
     onSome: (parsed) => Equal.equals(parsed, value),
   })
 
-const omittedNote = (count: number) => {
-  let noun = "blocks"
-  if (count === 1) noun = "block"
-  return `${count} binary ${noun} omitted: the cell receives no image, audio or blob data`
+const blockCount = (count: number) => {
+  if (count === 1) return "1 binary block"
+  return `${count} binary blocks`
+}
+
+const binaryNote = (count: number, unsaved: number) => {
+  if (unsaved === 0) return `${blockCount(count)} saved to files: read each one from its path`
+  const omitted = `${blockCount(unsaved)} without a path omitted (over the ${BLOB_FILE_LIMIT_MIB} MiB file cap, or not written): the cell does not receive that data`
+  if (unsaved === count) return omitted
+  return `${omitted}; read the others from their paths`
 }
 
 /**
  * The value a call returns. Text alone is its joined text; structured content
  * alone (its text only repeating it) is that value. Anything else is an
  * object: `structuredContent`, `text`, the other blocks as `content`, and
- * `omitted` naming each image, audio, or blob block the cell does not
- * receive, with its MIME type and size, and a `note` saying so.
+ * `omitted` naming each image, audio, or blob block with its MIME type and
+ * size, and the `path` of the file it was saved to (see `saveBlobs`) when
+ * `saved` names one, and a `note` saying which the cell can read.
  */
-export const projectCallResult = (result: CallResult): Schema.Json => {
-  const { texts, blocks, omitted } = projectContent(result.content ?? [])
+export const projectCallResult = (
+  result: CallResult,
+  saved: ReadonlyArray<Option.Option<string>> = [],
+): Schema.Json => {
+  const { texts, blocks, binary, unsaved } = projectContent(result.content ?? [], saved)
   const text = texts.join("\n")
   const structured = Option.fromUndefinedOr(result.structuredContent)
-  if (blocks.length === 0 && omitted.length === 0) {
+  if (blocks.length === 0 && binary.length === 0) {
     if (Option.isNone(structured)) return text
     if (texts.length === 0 || repeats(text, structured.value)) return structured.value
   }
@@ -1197,9 +1347,9 @@ export const projectCallResult = (result: CallResult): Schema.Json => {
   if (Option.isSome(structured)) value["structuredContent"] = structured.value
   if (texts.length > 0) value["text"] = text
   if (blocks.length > 0) value["content"] = blocks
-  if (omitted.length > 0) {
-    value["omitted"] = omitted
-    value["note"] = omittedNote(omitted.length)
+  if (binary.length > 0) {
+    value["omitted"] = binary
+    value["note"] = binaryNote(binary.length, unsaved)
   }
   return value
 }
@@ -1239,7 +1389,7 @@ const toolsFor = (server: McpServer, listed: ReadonlyArray<CatalogTool>) => {
         execute: Effect.fn("Mcp.call")(function* (input) {
           const clients = yield* McpClients
           const result = yield* clients.call(server, entry.name, input)
-          const value = projectCallResult(result)
+          const value = projectCallResult(result, yield* clients.saveBlobs(result.content ?? []))
           if (result.isError === true) {
             // The host shape for a failed call, `{ error }`, with any non-text content beside it.
             if (Predicate.isString(value) && value.length > 0) {
@@ -1414,7 +1564,7 @@ const registerServers = Effect.fn("Mcp.registerServers")(function* (
     defineResource({
       id: `${extensionId}/clients`,
       scope: "process",
-      layer: mcpClientsLive(registered, misconfigured, file),
+      layer: mcpClientsLive(registered, misconfigured, file, yield* blobDirectory(host.home)),
     }),
   )
   yield* host.register(

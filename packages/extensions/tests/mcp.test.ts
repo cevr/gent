@@ -1,5 +1,6 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import {
+  Clock,
   ConfigProvider,
   Context,
   Effect,
@@ -44,6 +45,7 @@ import { shippedPreset } from "./helpers/test-preset.js"
  * `MCP_FIXTURE_SDK_UNKNOWN`); `MCP_FIXTURE_COLLIDE` adds tools whose names
  * clean to one id;
  * `MCP_FIXTURE_ENV_TOOL` adds `env`, which reads the server's environment;
+ * `MCP_FIXTURE_BINARY` adds `image`, which returns an image and a blob;
  * `MCP_FIXTURE_TYPED` adds `stats` and `badstats`, which declare an output
  * schema, and only `stats` keeps it;
  * `tools/list` answers no tools while `MCP_FIXTURE_EMPTY_LIST` names a file that exists.
@@ -94,6 +96,9 @@ if (process.env.MCP_FIXTURE_ENV_TOOL) {
     description: "Read a variable of the server's environment.",
     inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] },
   })
+}
+if (process.env.MCP_FIXTURE_BINARY) {
+  tools.push({ name: "image", description: "Return an image and a blob.", inputSchema: { type: "object" } })
 }
 if (process.env.MCP_FIXTURE_TYPED) {
   const outputSchema = {
@@ -146,6 +151,16 @@ const answer = (request) => {
       return { result: { content: [{ type: "text", text: "fixture failure" }], isError: true } }
     case "count":
       return { result: { content: [{ type: "text", text: String(calls) }] } }
+    case "image":
+      return {
+        result: {
+          content: [
+            { type: "text", text: "a picture" },
+            { type: "image", data: Buffer.from("PNGDATA-1").toString("base64"), mimeType: "image/png" },
+            { type: "resource", resource: { uri: "file:///x.bin", mimeType: "application/octet-stream", blob: Buffer.from("BLOB").toString("base64") } },
+          ],
+        },
+      }
     case "stats":
       return { result: { content: [{ type: "text", text: "3 open" }], structuredContent: { open: 3, labels: ["bug"] } } }
     case "badstats":
@@ -597,6 +612,23 @@ const answerHttp = (
           description: "Drop every session.",
           inputSchema: { type: "object", properties: {} },
         },
+        {
+          name: "huge",
+          description: "Return an image one byte past 20 MiB.",
+          inputSchema: { type: "object", properties: {} },
+        },
+      ],
+    }
+  }
+  const name = Option.flatMap(params, (value) => Option.fromUndefinedOr(value["name"]))
+  if (Option.contains(name, "huge")) {
+    return {
+      content: [
+        {
+          type: "image",
+          data: Buffer.alloc(20 * 1024 * 1024 + 1).toString("base64"),
+          mimeType: "image/png",
+        },
       ],
     }
   }
@@ -908,6 +940,125 @@ describe("mcp status", () => {
   )
 })
 
+// ── binary content ──────────────────────────────────────────────────────────
+
+const BinaryDisplay = Schema.fromJsonString(
+  Schema.Struct({
+    text: Schema.String,
+    omitted: Schema.Array(
+      Schema.Struct({
+        type: Schema.String,
+        mimeType: Schema.String,
+        bytes: Schema.Int,
+        path: Schema.optional(Schema.String),
+      }),
+    ),
+    note: Schema.String,
+    contents: Schema.Array(Schema.String),
+    named: Schema.Boolean,
+    again: Schema.String,
+    huge: Schema.Struct({
+      omitted: Schema.Array(
+        Schema.Struct({
+          type: Schema.String,
+          mimeType: Schema.String,
+          bytes: Schema.Int,
+          path: Schema.optional(Schema.String),
+        }),
+      ),
+      note: Schema.String,
+    }),
+    files: Schema.Array(Schema.String),
+  }),
+)
+
+describe("mcp binary content", () => {
+  it.scopedLive(
+    "image and blob blocks are written once under the data directory, and the result names each file",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const fixture = yield* makeFixture
+        const { port } = yield* serveHttpFixture
+        const dataDir = path.join(fixture.directory, "data")
+        const blobs = path.join(dataDir, "mcp-blobs")
+        // One file past the 14-day prune age and one inside it.
+        yield* fs.makeDirectory(blobs, { recursive: true })
+        const stale = path.join(blobs, "stale.png")
+        const recent = path.join(blobs, "recent.png")
+        yield* fs.writeFileString(stale, "old")
+        yield* fs.writeFileString(recent, "new")
+        // In seconds, as `utimes` reads a number.
+        const fifteenDaysAgo = ((yield* Clock.currentTimeMillis) - 15 * 24 * 60 * 60 * 1000) / 1000
+        yield* fs.utimes(stale, fifteenDaysAgo, fifteenDaysAgo)
+        const code = [
+          "const result = await tools.mcp.fixture.image()",
+          "const contents = await Promise.all(result.omitted.map((entry) => Bun.file(entry.path).text()))",
+          "const hash = (text) => new Bun.CryptoHasher('sha256').update(text).digest('hex')",
+          "const named = result.omitted.every((entry, index) => entry.path.endsWith('/' + hash(contents[index]) + (index === 0 ? '.png' : '.bin')))",
+          "const again = (await tools.mcp.fixture.image()).omitted[0].path",
+          // Over stdio the SDK refuses a message past 10 MiB, so the cap is reached over HTTP.
+          "const huge = await tools.mcp.remote.huge()",
+          `const files = require('node:fs').readdirSync(${encodeJson(blobs)}).sort()`,
+          "JSON.stringify({ ...result, contents, named, again, huge: { omitted: huge.omitted, note: huge.note }, files })",
+        ].join("; ")
+        const result = yield* Effect.gen(function* () {
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            toolCallStep("cell", { code }),
+            textStep("done"),
+          ])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...shippedPreset,
+            extensionInputs: [
+              ...shippedPreset.extensionInputs,
+              McpServers("@test/mcp-binary", {
+                fixture: fixture.stdio({ MCP_FIXTURE_BINARY: "1" }),
+                remote: httpEntry(port),
+              }),
+            ],
+            providerLayer,
+          })
+          yield* client.message.send({ sessionId, branchId, content: "fetch the picture" })
+          return yield* cellResultAfterDone(client, branchId)
+        }).pipe(
+          Effect.provide(
+            ConfigProvider.layer(
+              ConfigProvider.fromUnknown({
+                GENT_DATA_DIR: dataDir,
+                GENT_MCP_FIXTURE_TOKEN: "fixture-token",
+              }),
+            ),
+          ),
+        )
+        expect(result).toMatchObject({ name: "cell", isFailure: false })
+        const shown = yield* Schema.decodeUnknownEffect(BinaryDisplay)(
+          Reflect.get(result?.result ?? {}, "display"),
+        )
+        expect(shown.text).toBe("a picture")
+        expect(shown.omitted.map((entry) => [entry.type, entry.mimeType, entry.bytes])).toEqual([
+          ["image", "image/png", 9],
+          ["resource", "application/octet-stream", 4],
+        ])
+        expect(shown.omitted.every((entry) => entry.path?.startsWith(`${blobs}/`))).toBe(true)
+        expect(shown.contents).toEqual(["PNGDATA-1", "BLOB"])
+        expect(shown.named).toBe(true)
+        expect(shown.again).toBe(shown.omitted[0]?.path ?? "")
+        expect(shown.note).toBe("2 binary blocks saved to files: read each one from its path")
+        // Past the cap: the size and no file.
+        expect(shown.huge.omitted).toEqual([
+          { type: "image", mimeType: "image/png", bytes: 20 * 1024 * 1024 + 1 },
+        ])
+        expect(shown.huge.note).toContain("over the 20 MiB file cap")
+        // The stale file is pruned, the recent one kept, and each block is one file.
+        expect(shown.files).toHaveLength(3)
+        expect(shown.files).toContain("recent.png")
+        expect(shown.files).not.toContain("stale.png")
+      }).pipe(Effect.timeout("40 seconds"), Effect.provide(platformLayer)),
+    45_000,
+  )
+})
+
 // ── results ─────────────────────────────────────────────────────────────────
 
 describe("mcp results", () => {
@@ -944,23 +1095,33 @@ describe("mcp results", () => {
     })
   })
 
-  test("binary blocks are named as omitted, with their type, MIME type and size", () => {
+  test("binary blocks keep their type, MIME type and size, and name the file each was saved to", () => {
+    const content: ReadonlyArray<Schema.Json> = [
+      { type: "text", text: "see" },
+      { type: "image", data: "AAAA", mimeType: "image/png" },
+      { type: "resource", resource: { uri: "file:///x", blob: "AAAAAA==", mimeType: "x/y" } },
+    ]
     expect(
-      projectCallResult({
-        content: [
-          { type: "text", text: "see" },
-          { type: "image", data: "AAAA", mimeType: "image/png" },
-          { type: "resource", resource: { uri: "file:///x", blob: "AAAAAA==", mimeType: "x/y" } },
-        ],
-      }),
+      projectCallResult({ content }, [
+        Option.none(),
+        Option.some("/nonexistent/gent-probe-x/a.png"),
+        Option.none(),
+      ]),
     ).toEqual({
       text: "see",
       omitted: [
-        { type: "image", mimeType: "image/png", bytes: 3 },
+        { type: "image", mimeType: "image/png", bytes: 3, path: "/nonexistent/gent-probe-x/a.png" },
         { type: "resource", uri: "file:///x", mimeType: "x/y", bytes: 4 },
       ],
-      note: "2 binary blocks omitted: the cell receives no image, audio or blob data",
+      note: "1 binary block without a path omitted (over the 20 MiB file cap, or not written): the cell does not receive that data; read the others from their paths",
     })
+    expect(
+      projectCallResult({ content }, [
+        Option.none(),
+        Option.some("/nonexistent/gent-probe-x/a.png"),
+        Option.some("/nonexistent/gent-probe-x/b.bin"),
+      ]),
+    ).toMatchObject({ note: "2 binary blocks saved to files: read each one from its path" })
     expect(
       projectCallResult({
         content: [{ type: "audio", data: "AAAA", mimeType: "audio/wav" }],
@@ -969,7 +1130,7 @@ describe("mcp results", () => {
     ).toEqual({
       structuredContent: { ok: true },
       omitted: [{ type: "audio", mimeType: "audio/wav", bytes: 3 }],
-      note: "1 binary block omitted: the cell receives no image, audio or blob data",
+      note: "1 binary block without a path omitted (over the 20 MiB file cap, or not written): the cell does not receive that data",
     })
   })
 })
