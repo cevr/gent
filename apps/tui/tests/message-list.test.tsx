@@ -2689,6 +2689,83 @@ describe("expanded grep body", () => {
       expect(renderFrame(setup)).toContain("900 matches for one")
     }),
   )
+
+  // Grep reports absolute paths; the body names each file from the cwd, as the group row does.
+  it.live("file headings read from the cwd, collapsed and expanded", () =>
+    Effect.gen(function* () {
+      const cwd = "/work/proj"
+      const output = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.JsonObject))({
+        matches: [{ file: `${cwd}/apps/tui/src/ops.ts`, line: 3, content: "match here" }],
+        truncated: false,
+      })
+      const frames = yield* Effect.forEach([false, true], (expanded) =>
+        Effect.gen(function* () {
+          const setup = yield* Effect.promise(() =>
+            renderWithProviders(
+              () => (
+                <GrepToolRenderer
+                  expanded={expanded}
+                  toolCall={{
+                    id: "grep-abs",
+                    toolName: "grep",
+                    status: "completed",
+                    input: { pattern: "match" },
+                    summary: absent,
+                    output,
+                  }}
+                />
+              ),
+              { width: 100, height: 20, cwd },
+            ),
+          )
+          const frame = renderFrame(setup)
+          destroyRenderSetup(setup)
+          return frame
+        }),
+      )
+      for (const frame of frames) {
+        expect(frame).toContain("apps/tui/src/ops.ts")
+        expect(frame).not.toContain(cwd)
+      }
+    }),
+  )
+})
+
+describe("write body", () => {
+  // The header names the file, so the open body says only what the write did.
+  it.live("an open write frame draws no raw path under its header", () =>
+    Effect.gen(function* () {
+      const cwd = "/work/proj"
+      const path = `${cwd}/apps/tui/src/ops.ts`
+      const output = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.JsonObject))({
+        path,
+        bytesWritten: 7373,
+      })
+      const WriteToolRenderer = builtinRenderer("write")
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <WriteToolRenderer
+              expanded={true}
+              toolCall={{
+                id: "write-abs",
+                toolName: "write",
+                status: "completed",
+                input: { path, content: "x" },
+                summary: absent,
+                output,
+              }}
+            />
+          ),
+          { width: 100, height: 10, cwd },
+        ),
+      )
+      const frame = renderFrame(setup)
+      expect(frame).toContain("write apps/tui/src/ops.ts")
+      expect(frame).toContain("7.2KB written")
+      expect(frame).not.toContain(cwd)
+    }),
+  )
 })
 
 describe("read_session row", () => {

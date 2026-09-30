@@ -1156,6 +1156,18 @@ function WriteToolRenderer(props: ToolRendererProps) {
     return Option.getOrUndefined(Option.none<string>())
   }
 
+  // The header names the file, so the body, open or closed, says what the write did.
+  const Written = () => (
+    <Show when={data()}>
+      {(d) => (
+        <text>
+          <span style={{ fg: theme.success }}>{formatBytes(d().bytesWritten)}</span>
+          <span style={{ fg: theme.textMuted }}> written</span>
+        </text>
+      )}
+    </Show>
+  )
+
   return (
     <ToolFrame
       title="write"
@@ -1163,27 +1175,9 @@ function WriteToolRenderer(props: ToolRendererProps) {
       subtitleHref={subtitleHref()}
       status={props.toolCall.status}
       expanded={props.expanded}
-      collapsedContent={
-        <Show when={data()}>
-          {(d) => (
-            <text>
-              <span style={{ fg: theme.success }}>{formatBytes(d().bytesWritten)}</span>
-              <span style={{ fg: theme.textMuted }}> written</span>
-            </text>
-          )}
-        </Show>
-      }
+      collapsedContent={<Written />}
     >
-      <Show when={data()}>
-        {(d) => (
-          <text>
-            <span style={{ fg: theme.text }}>{d().path}</span>
-            <span style={{ fg: theme.textMuted }}> · </span>
-            <span style={{ fg: theme.success }}>{formatBytes(d().bytesWritten)}</span>
-            <span style={{ fg: theme.textMuted }}> written</span>
-          </text>
-        )}
-      </Show>
+      <Written />
     </ToolFrame>
   )
 }
@@ -1286,6 +1280,7 @@ function groupByFile(matches: ReadonlyArray<GrepMatch>): Map<string, GrepMatch[]
 
 function GrepToolRenderer(props: ToolRendererProps) {
   const { theme } = useTheme()
+  const { pathPlace } = useClient()
 
   const data = createMemo(() => parseGrepOutput(props.toolCall))
   const pattern = createMemo(() => getPattern(props.toolCall.input))
@@ -1328,7 +1323,12 @@ function GrepToolRenderer(props: ToolRendererProps) {
             <box flexDirection="column">
               <Totals output={d()} />
               <For each={collapsedFiles()}>
-                {(file) => <text style={{ fg: theme.textMuted }}> {truncatePath(file)}</text>}
+                {(file) => (
+                  <text style={{ fg: theme.textMuted }}>
+                    {" "}
+                    {truncatePath(displayPath(file, pathPlace()))}
+                  </text>
+                )}
               </For>
               <Show when={d().files > collapsedFiles().length}>
                 <text style={{ fg: theme.textMuted }}>
@@ -1368,7 +1368,7 @@ function GrepToolRenderer(props: ToolRendererProps) {
                       <box flexDirection="column" marginBottom={1}>
                         <text>
                           <span style={{ fg: theme.info, bold: true }}>
-                            {truncatePath(run.file, 60)}
+                            {truncatePath(displayPath(run.file, pathPlace()), 60)}
                           </span>
                         </text>
                         <For each={run.matches}>
