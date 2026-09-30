@@ -699,34 +699,6 @@ export const makeCollectingExtensionHost = (
   return { service, seal: Effect.sync((): ExtensionContributions => ({ ...collected })) }
 }
 
-/** Re-registers one compiled slot; the switch restores the kind/handler correlation. */
-const replayHook = (host: ExtensionHostService, slot: AnyExtensionHook): Effect.Effect<void> => {
-  switch (slot.kind) {
-    case "systemPrompt":
-      return host.on(slot.kind, slot.hook.handler)
-    case "turnProjection":
-      return host.on(slot.kind, slot.hook.handler)
-    case "turnAfter":
-      return host.on(slot.kind, slot.hook.handler)
-    case "loopOpen":
-      return host.on(slot.kind, slot.hook.handler)
-    case "sessionDeleted":
-      return host.on(slot.kind, slot.hook.handler)
-  }
-}
-
-/** Re-registers an already compiled record; used by test harnesses that wrap loaded extensions. */
-export const registerContributions = (contributions: ExtensionContributions) =>
-  Effect.gen(function* () {
-    const host = yield* ExtensionHost
-    yield* host.register("resource", ...(contributions.resources ?? []))
-    yield* host.register("tool", ...(contributions.tools ?? []))
-    yield* host.register("request", ...(contributions.requests ?? []))
-    yield* host.register("agent", ...(contributions.agents ?? []))
-    yield* host.register("modelDriver", ...(contributions.modelDrivers ?? []))
-    for (const slot of contributions.hooks ?? []) yield* replayHook(host, slot)
-  })
-
 // ── extension-services ──────────────────────────────────────────────────────
 
 export class ExtensionServiceError extends Schema.TaggedError<ExtensionServiceError>()(

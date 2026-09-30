@@ -60,7 +60,7 @@ class WorkspaceHeaderError extends Schema.TaggedError<WorkspaceHeaderError>()(
   },
 ) {}
 
-export const validateWorkspaceId = (
+const validateWorkspaceId = (
   workspaceId: string,
 ): Effect.Effect<WorkspaceId, WorkspaceHeaderError> =>
   Schema.decodeEffect(WorkspaceId)(workspaceId).pipe(

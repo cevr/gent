@@ -92,11 +92,7 @@ export const hasProjectScope = Effect.fn("ExtensionLoader.projectScope")(functio
  * Read disabled extensions from user + project config.
  * Same merge semantics as ConfigService: union of user + project lists.
  */
-export const readDisabledExtensions = (params: {
-  home: string
-  cwd: string
-  extra?: ReadonlyArray<string>
-}) =>
+export const readDisabledExtensions = (params: { home: string; cwd: string }) =>
   Effect.gen(function* () {
     const path = yield* Path.Path
     const userConfigPath = path.join(params.home, GENT_CONFIG_DIRECTORY, GENT_CONFIG_FILENAME)
@@ -105,7 +101,7 @@ export const readDisabledExtensions = (params: {
     let projectDisabled: ReadonlyArray<string> = []
     if (yield* hasProjectScope({ user: params.home, project: params.cwd }))
       projectDisabled = yield* readDisabledFromFile(projectConfigPath)
-    return new Set([...(params.extra ?? []), ...userDisabled, ...projectDisabled])
+    return new Set([...userDisabled, ...projectDisabled])
   })
 
 // ── config-service ──────────────────────────────────────────────────────────
@@ -639,7 +635,7 @@ export const isProjectExtensionDirectoryTrusted = Effect.fn("ExtensionLoader.pro
   function* (directories: { readonly userDir: string; readonly projectDir: string }) {
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
-    const configPath = path.resolve(directories.userDir, "../config.json")
+    const configPath = path.resolve(directories.userDir, "..", GENT_CONFIG_FILENAME)
     const trustedProjects = yield* fs.readFileString(configPath).pipe(
       Effect.flatMap(Schema.decodeEffect(TrustConfig)),
       Effect.map((config) => config.trustedProjects ?? []),

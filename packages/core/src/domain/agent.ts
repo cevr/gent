@@ -1,17 +1,17 @@
 import { Option, Schema, SchemaGetter } from "effect"
-import { branded, SessionId } from "./ids.js"
+import { SessionId } from "./ids.js"
 import { omitUndefined } from "./guards.js"
 
 // ── model ───────────────────────────────────────────────────────────────────
 
 // Model ID - provider/model format
 
-export const ModelId = Schema.String.pipe(branded("ModelId"))
+export const ModelId = Schema.String.pipe(Schema.brand("ModelId"))
 export type ModelId = typeof ModelId.Type
 
 // Provider - AI provider identifier (open, branded string — extensible via extensions)
 
-export const ProviderId = Schema.String.pipe(branded("ProviderId"))
+export const ProviderId = Schema.String.pipe(Schema.brand("ProviderId"))
 export type ProviderId = typeof ProviderId.Type
 
 // Model pricing per million tokens (USD)
@@ -106,12 +106,6 @@ export const calculateCost = (
   return (inputCost + usage.outputTokens * price.output) / 1_000_000
 }
 
-export const parseModelProvider = (modelId: string): Option.Option<ProviderId> => {
-  const slash = modelId.indexOf("/")
-  if (slash <= 0 || slash === modelId.length - 1) return Option.none()
-  return Option.some(ProviderId.make(modelId.slice(0, slash)))
-}
-
 export const parseModelId = (modelId: string): Option.Option<readonly [ProviderId, string]> => {
   const slash = modelId.indexOf("/")
   if (slash <= 0 || slash === modelId.length - 1) return Option.none()
@@ -122,7 +116,7 @@ export const parseModelId = (modelId: string): Option.Option<readonly [ProviderI
 
 // Agent definitions
 
-export const AgentName = Schema.String.pipe(branded("AgentName"))
+export const AgentName = Schema.String.pipe(Schema.brand("AgentName"))
 export type AgentName = typeof AgentName.Type
 
 export const ReasoningEffort = Schema.Literals([

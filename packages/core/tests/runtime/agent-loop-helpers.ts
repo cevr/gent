@@ -39,7 +39,8 @@ import { testAgents } from "../helpers/test-preset"
 import { type ToolCapability } from "@gent/core/extensions/api"
 import type { AnyResourceContribution } from "../../src/domain/extension"
 import { type AgentEvent, EventEnvelope, EventId, EventStore } from "../../src/domain/event"
-import { BranchStorage, SessionStorage, type StorageError } from "../../src/storage/storage"
+import { BranchStorage, SessionStorage } from "../../src/storage/storage"
+import type { StorageError } from "../../src/domain/errors"
 import {
   RecordingEventStore,
   SequenceRecorder,

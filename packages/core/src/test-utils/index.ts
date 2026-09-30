@@ -12,6 +12,7 @@ export {
   createRpcClient,
   createRpcHarness,
   type E2ELayerConfig,
+  emptyQueueSnapshot,
   ensureStorageParents,
   plantInFlightTurn,
   plantToolCallBinding,
@@ -71,7 +72,6 @@ export {
   TurnCompleted,
 } from "../domain/event.js"
 export {
-  emptyQueueSnapshot,
   MessagePart,
   projectMessagesWithToolInteractions,
   toolResultMessageIdForTurn,

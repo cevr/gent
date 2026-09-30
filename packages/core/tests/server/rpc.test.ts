@@ -66,6 +66,7 @@ import {
   createE2ELayer,
   createRpcClient,
   createRpcHarness,
+  registerContributions,
   testTurnExtension,
 } from "../../src/test-utils/harness"
 import { e2ePreset, testAgent } from "../helpers/test-preset"
@@ -88,7 +89,6 @@ import {
   hook,
   LoadedArtifactIdentity,
   type LoadedExtension,
-  registerContributions,
 } from "../../src/domain/extension.js"
 import { failingLanguageModel } from "../helpers/failing-language-model"
 import * as ExtensionApi from "@gent/core/extensions/api"

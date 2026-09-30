@@ -447,9 +447,9 @@ const sequence = (steps: ReadonlyArray<SequenceStep>) =>
             )
           }
 
-          const step = steps[idx] ?? steps[0]
-          const started = callStarted[idx] ?? callStarted[0]
-          const gate = emitGates[idx] ?? emitGates[0]
+          const step = steps[idx]
+          const started = callStarted[idx]
+          const gate = emitGates[idx]
 
           if (!Predicate.isUndefined(started)) yield* Deferred.succeed(started, void 0)
 
@@ -482,7 +482,7 @@ const sequence = (steps: ReadonlyArray<SequenceStep>) =>
       Option.some((request: ResolveModelRequest) =>
         Effect.gen(function* () {
           const idx = yield* Ref.getAndUpdate(requestIndexRef, (n) => n + 1)
-          const step = steps[idx] ?? steps[0]
+          const step = steps[idx]
           if (Predicate.isUndefined(step?.assertRequest)) return
           yield* Effect.try({
             try: () =>

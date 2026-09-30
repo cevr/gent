@@ -1551,18 +1551,9 @@ export const configHealthStatuses = Effect.fn("ExtensionHealth.configHealthStatu
 })
 
 /**
- * The profile's discovery over explicit directories: the same scan and load
- * `SessionProfileCache` runs. Only tests call it, to reach discovery without
- * building a profile. Per-file isolation: one broken file does not suppress
- * its siblings.
+ * Load the extensions one scan found. Per-file isolation: one broken file
+ * does not suppress its siblings.
  */
-export const discoverExtensions = Effect.fn("ExtensionLoader.discoverExtensions")(function* (
-  dirs: ExtensionDirectories,
-) {
-  return yield* loadExtensionScan(yield* scanExtensions(dirs))
-})
-
-/** Load the extensions one scan found; see `discoverExtensions`. */
 const loadExtensionScan = Effect.fn("ExtensionLoader.loadExtensionScan")(function* (
   scan: ExtensionScan,
 ) {

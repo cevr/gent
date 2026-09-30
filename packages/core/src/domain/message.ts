@@ -1717,9 +1717,6 @@ export class QueueSnapshot extends Schema.Class<QueueSnapshot>("QueueSnapshot")(
   followUp: Schema.Array(QueueEntryInfo),
 }) {}
 
-export const emptyQueueSnapshot = (): QueueSnapshot =>
-  new QueueSnapshot({ steering: [], followUp: [] })
-
 // ── Persisted queue ──
 //
 // The on-disk format of `agent_loop_queues.queue_json`. A row written by any

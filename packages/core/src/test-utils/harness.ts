@@ -13,6 +13,7 @@ import {
   Stream,
 } from "effect"
 import {
+  type AnyExtensionHook,
   defineResource,
   ExtensionContext,
   type ExtensionContextService,
@@ -21,6 +22,7 @@ import {
   ExtensionHost,
   type ExtensionHostContext,
   type ExtensionHostPlatform,
+  type ExtensionHostService,
   type ExtensionInteractionService,
   type ExtensionSessionService,
   type ExtensionSetupServices,
@@ -29,7 +31,6 @@ import {
   type LoadedExtension,
   makeCollectingExtensionHost,
   provideExtensionServices,
-  registerContributions,
 } from "../domain/extension.js"
 import {
   BranchId,
@@ -92,7 +93,13 @@ import {
   StateLocation,
 } from "../server/server.js"
 import { workspaceHeadersForCwd } from "../server/workspace-rpc.js"
-import { Branch, type Message, Session, SessionAdmission } from "../domain/message.js"
+import {
+  Branch,
+  type Message,
+  QueueSnapshot,
+  Session,
+  SessionAdmission,
+} from "../domain/message.js"
 import type { StorageError } from "../domain/errors.js"
 import {
   AgentLoopQueueStorage,
@@ -218,6 +225,10 @@ export const testAgent = AgentDefinition.make({
   name: DEFAULT_AGENT_NAME,
   description: "Test agent",
 })
+
+/** A queue with no steering and no follow-up entries. */
+export const emptyQueueSnapshot = (): QueueSnapshot =>
+  new QueueSnapshot({ steering: [], followUp: [] })
 
 const [defaultProviderId, defaultModelName] = Option.getOrThrow(parseModelId(DEFAULT_MODEL_ID))
 
@@ -784,6 +795,34 @@ const applyLayerOverride = (
     resources: [...otherResources, layerOverride],
   }
 }
+
+/** Re-registers one compiled slot; the switch restores the kind/handler correlation. */
+const replayHook = (host: ExtensionHostService, slot: AnyExtensionHook): Effect.Effect<void> => {
+  switch (slot.kind) {
+    case "systemPrompt":
+      return host.on(slot.kind, slot.hook.handler)
+    case "turnProjection":
+      return host.on(slot.kind, slot.hook.handler)
+    case "turnAfter":
+      return host.on(slot.kind, slot.hook.handler)
+    case "loopOpen":
+      return host.on(slot.kind, slot.hook.handler)
+    case "sessionDeleted":
+      return host.on(slot.kind, slot.hook.handler)
+  }
+}
+
+/** Re-registers an already compiled record, so a test can wrap a loaded extension. */
+export const registerContributions = (contributions: ExtensionContributions) =>
+  Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register("resource", ...(contributions.resources ?? []))
+    yield* host.register("tool", ...(contributions.tools ?? []))
+    yield* host.register("request", ...(contributions.requests ?? []))
+    yield* host.register("agent", ...(contributions.agents ?? []))
+    yield* host.register("modelDriver", ...(contributions.modelDrivers ?? []))
+    for (const slot of contributions.hooks ?? []) yield* replayHook(host, slot)
+  })
 
 const fromLoadedExtension = (
   extension: LoadedExtension,

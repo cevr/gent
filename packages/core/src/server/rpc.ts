@@ -8,8 +8,7 @@ import {
   ReasoningEffort,
   SessionDepthLimitError,
 } from "../domain/agent.js"
-import { InvalidStateError, NotFoundError, ProviderError } from "../domain/errors.js"
-import { StorageError } from "../storage/storage.js"
+import { InvalidStateError, NotFoundError, ProviderError, StorageError } from "../domain/errors.js"
 import { EventEnvelope, EventStoreError } from "../domain/event.js"
 import {
   BranchId,
@@ -640,28 +639,24 @@ const rpcKeys = (): ReadonlyArray<string> => [...GentRpcs.requests.keys()]
 /** A key the flat client answers: every request `GentRpcs` declares. */
 const isClientKey = (key: string): key is keyof GentRpcClient & string => GentRpcs.requests.has(key)
 
+/** Every `GentRpcs` key is `namespace.method`. */
 const splitRpcKey = (key: string) => {
   const separator = key.indexOf(".")
-  if (separator === -1) return { namespace: key, method: Option.none<string>() }
-  return {
-    namespace: key.slice(0, separator),
-    method: Option.some(key.slice(separator + 1)),
-  }
+  return { namespace: key.slice(0, separator), method: key.slice(separator + 1) }
 }
 
 const namespaceMethods = (namespace: string): ReadonlyArray<string> =>
-  rpcKeys().flatMap((key) => {
-    const parsed = splitRpcKey(key)
-    if (parsed.namespace === namespace && Option.isSome(parsed.method)) {
-      return [parsed.method.value]
-    }
-    return []
-  })
+  rpcKeys()
+    .map(splitRpcKey)
+    .filter((parsed) => parsed.namespace === namespace)
+    .map((parsed) => parsed.method)
+
+// oxlint-disable-next-line effect/noNullish -- A Proxy trap answers an absent property with undefined.
+const absent = undefined
 
 const makeNamespace = (flat: GentRpcClient, namespace: string, headers?: Headers.Input) => {
   const methods = namespaceMethods(namespace)
   const headersOption = Option.fromNullishOr(headers)
-  const absent = Option.getOrUndefined(Option.none())
   return new Proxy(Object.create(null), {
     get: (_target, property) => {
       const key = `${namespace}.${String(property)}`
@@ -698,16 +693,7 @@ export const makeNamespacedClient = (
   headers?: Headers.Input,
 ): GentNamespacedClient => {
   const namespaceCache = new Map<string, object>()
-  const namespaces = [
-    ...new Set(
-      rpcKeys().flatMap((key) => {
-        const { namespace } = splitRpcKey(key)
-        if (namespace === "") return []
-        return [namespace]
-      }),
-    ),
-  ]
-  const absent = Option.getOrUndefined(Option.none())
+  const namespaces = [...new Set(rpcKeys().map((key) => splitRpcKey(key).namespace))]
   return new Proxy(Object.create(null), {
     get: (_target, property) => {
       if (!Predicate.isString(property) || !namespaces.includes(property)) return absent

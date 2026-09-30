@@ -44,7 +44,7 @@ import { BranchId, InteractionRequestId, SessionId, ToolCallId } from "./ids.js"
 // ============================================================================
 
 /** Request params for ctx.interaction.approve() */
-export const ApprovalRequestSchema = Schema.Struct({
+const ApprovalRequestSchema = Schema.Struct({
   text: Schema.String,
   metadata: Schema.optional(Schema.Unknown),
 })

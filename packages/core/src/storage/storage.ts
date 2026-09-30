@@ -1998,8 +1998,6 @@ export const turnRecordAtStep = (params: {
 
 // ── sqlite-storage ──────────────────────────────────────────────────────────
 
-export { StorageError }
-
 export type StorageTransaction = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
 ) => Effect.Effect<A, E | StorageError, R>

@@ -1,42 +1,14 @@
 import { describe, expect, test } from "bun:test"
-import { Option, Schema } from "effect"
+import { Option } from "effect"
 import {
-  AgentName,
   calculateCost,
-  DEFAULT_AGENT_NAME,
   DriverRef,
   effectiveModelDriver,
   makeRunSpec,
   ModelId,
   parseModelId,
-  parseModelProvider,
   ProviderId,
 } from "../../src/domain/agent"
-import { ApprovalDecisionSchema, ApprovalRequestSchema } from "../../src/domain/interaction"
-
-describe("AgentName brand", () => {
-  test("DEFAULT_AGENT_NAME is branded as AgentName", () => {
-    expect(Schema.is(AgentName)(DEFAULT_AGENT_NAME)).toBe(true)
-  })
-
-  test("plain string fails the brand predicate at the schema boundary", () => {
-    expect(Schema.is(AgentName)("primary")).toBe(true) // brand-only filter accepts strings at runtime
-    const decoded = Schema.decodeSync(AgentName)("research")
-    expect(decoded).toBe(AgentName.make("research"))
-  })
-})
-
-describe("ApprovalRequest / ApprovalDecision schemas", () => {
-  test("ApprovalRequest accepts text + optional metadata", () => {
-    const decoded = Schema.decodeSync(ApprovalRequestSchema)({ text: "approve?" })
-    expect(decoded.text).toBe("approve?")
-  })
-
-  test("ApprovalDecision requires approved boolean", () => {
-    const decoded = Schema.decodeSync(ApprovalDecisionSchema)({ approved: true })
-    expect(decoded.approved).toBe(true)
-  })
-})
 
 // ── agent driver routing ────────────────────────────────────────────────────
 
@@ -122,18 +94,12 @@ describe("run spec construction", () => {
 
 describe("model id parsing", () => {
   test("extracts provider and model segments", () => {
-    expect(parseModelProvider("anthropic/claude-sonnet")).toEqual(
-      Option.some(ProviderId.make("anthropic")),
-    )
     expect(parseModelId("anthropic/claude-sonnet")).toEqual(
       Option.some([ProviderId.make("anthropic"), "claude-sonnet"]),
     )
   })
 
   test("rejects missing provider or model segment", () => {
-    expect(parseModelProvider("anthropic")).toEqual(Option.none())
-    expect(parseModelProvider("/claude-sonnet")).toEqual(Option.none())
-    expect(parseModelProvider("anthropic/")).toEqual(Option.none())
     expect(parseModelId("anthropic")).toEqual(Option.none())
     expect(parseModelId("/claude-sonnet")).toEqual(Option.none())
     expect(parseModelId("anthropic/")).toEqual(Option.none())

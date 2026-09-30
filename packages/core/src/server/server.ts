@@ -36,11 +36,11 @@ import {
   SessionOperationStorage,
   SessionStorage,
   SqliteStorage,
-  type StorageError,
   type StoredBranchResult,
   type StoredCreateSessionResult,
   type StoredSwitchBranchResult,
 } from "../storage/storage.js"
+import type { StorageError } from "../domain/errors.js"
 import {
   type ExtensionSetupServices,
   type ExtensionStatusInfo,

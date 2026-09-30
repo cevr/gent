@@ -4,7 +4,7 @@ import { SqlClient, type SqlError } from "effect/sql"
 import { LanguageModelLayers, textStep } from "../../src/test-utils/language-model"
 import { ExtensionRegistry } from "../../src/runtime/extension-host.js"
 import type { BranchId, SessionId } from "../../src/domain/ids"
-import { Branch, dateFromMillis, emptyQueueSnapshot, Session } from "../../src/domain/message"
+import { Branch, dateFromMillis, Session } from "../../src/domain/message"
 import { AgentName } from "../../src/domain/agent"
 import { EventStore, EventStoreError } from "../../src/domain/event"
 import { GentPlatform } from "../../src/runtime/gent-platform"
@@ -19,9 +19,14 @@ import {
   type BranchStorageService,
   SessionStorage,
   type SessionStorageService,
-  StorageError,
 } from "../../src/storage/storage"
-import { createE2ELayer, createRpcClient, testSqliteStorage } from "../../src/test-utils/harness"
+import { StorageError } from "../../src/domain/errors"
+import {
+  createE2ELayer,
+  createRpcClient,
+  emptyQueueSnapshot,
+  testSqliteStorage,
+} from "../../src/test-utils/harness"
 import { e2ePreset } from "../helpers/test-preset"
 
 export const FIXED_NOW = dateFromMillis(1_767_225_600_000)

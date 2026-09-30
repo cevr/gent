@@ -199,7 +199,6 @@ interface RequestCapabilityApi {
   readonly description?: string
   /** See `RequestInput.answersDuringTurn`. */
   readonly answersDuringTurn?: boolean
-  readonly ref: unknown
 }
 
 /**
@@ -384,7 +383,6 @@ export function request(input: {
     input: input.input,
     output: input.output,
     effect,
-    ref: refValue,
     [RequestCapabilityBrand]: true,
     [REQUEST_REF]: refValue,
     [REQUEST_REF_STATE]: refState,
@@ -510,10 +508,7 @@ const getToolMetadataOption = (tool: AiTool.Any): GentToolMetadata | undefined =
   Context.get(tool.annotations, GentToolMetadataTag)
 
 export const isToolCapability = (value: unknown): value is ToolCapability => {
-  if (
-    !(AiTool.isUserDefined(value) || AiTool.isDynamic(value) || AiTool.isProviderDefined(value)) ||
-    !(ToolCapabilityBrand in value)
-  ) {
+  if (!AiTool.isDynamic(value) || !(ToolCapabilityBrand in value)) {
     return false
   }
   return !Predicate.isUndefined(getToolMetadataOption(value))

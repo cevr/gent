@@ -24,7 +24,6 @@ import {
   ModelId,
   type ModelPricing,
   parseModelId,
-  parseModelProvider,
   ProviderId,
 } from "../domain/agent.js"
 import { SessionId, ToolCallId } from "../domain/ids.js"
@@ -674,7 +673,6 @@ export class ProviderAuth extends Context.Service<ProviderAuth, ProviderAuthServ
 
 export interface ResolveModelRequest {
   readonly modelId: ModelId | string
-  readonly agentName?: AgentName
   readonly hints?: ProviderHints
   /** Per-agent model driver override from `agent.driver`. */
   readonly driverId?: string
@@ -905,8 +903,9 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
           const existing = Option.fromUndefinedOr(models.find((model) => model.id === modelId))
           if (Option.isSome(existing)) return Effect.succeedSome(existing.value)
           if (models.length > 0) return Effect.succeedNone
-          const provider = Option.getOrElse(parseModelProvider(modelId), () =>
-            ProviderId.make("test"),
+          const provider = Option.getOrElse(
+            Option.map(parseModelId(modelId), ([providerId]) => providerId),
+            () => ProviderId.make("test"),
           )
           return Effect.succeedSome(
             Model.make({
@@ -1200,22 +1199,12 @@ const retryBudgetFor = (text: string): number => {
   return 0
 }
 
-const buildReply = (latestUserText: string): string => {
-  const lineCount = latestUserText.split("\n").filter((line) => line.trim().length > 0).length
-  if (lineCount > 1) {
-    return [
-      "gent processed a merged queued turn.",
-      `Received ${lineCount} lines in one message block.`,
-      `Tail: ${latestUserText.split("\n").at(-1) ?? latestUserText}`,
-    ].join(" ")
-  }
-
-  return [
+const buildReply = (latestUserText: string): string =>
+  [
     "gent debug response.",
     `Latest user message: ${latestUserText || "(empty)"}.`,
     "This turn is flowing through the real agent loop with a scripted language model.",
   ].join(" ")
-}
 
 const makeReplyStream = (latestUserText: string, reply: string, delayMs = 0) => {
   const parts = reply.split(/(?<=[.!?])\s+/).filter((chunk) => chunk.length > 0)

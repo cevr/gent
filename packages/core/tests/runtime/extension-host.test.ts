@@ -29,6 +29,7 @@ import {
   type CallRecord,
   createRpcHarness,
   RecordingEventStore,
+  registerContributions,
   runToolWithCtx,
   SequenceRecorder,
   testExtensionHostContext,
@@ -60,7 +61,6 @@ import {
   configHealthStatuses,
   CurrentExtensionHostContext,
   type DiscoveredExtension,
-  discoverExtensions,
   ExtensionRegistry,
   listModelCatalog,
   makeExtensionHostContextProvider,
@@ -91,9 +91,9 @@ import {
   SessionStorage,
   type SessionStorageService,
   SqliteStorage,
-  StorageError,
   BranchStorage,
 } from "../../src/storage/storage"
+import { StorageError } from "../../src/domain/errors"
 import { CurrentWorkspaceId, WorkspaceId, workspaceIdForCwd } from "../../src/server/workspace-rpc"
 import {
   ActorCommandId,
@@ -151,7 +151,6 @@ import {
   type ExtensionLoadError,
   hook,
   LoadedArtifactIdentity,
-  registerContributions,
   type SystemPromptInput,
   sortExtensionsByScope,
   type TurnAfterInput,
@@ -1707,6 +1706,36 @@ const fsLayer = Layer.provideMerge(
   childProcessSpawnerLive,
 )
 
+/**
+ * The extensions a profile for `home` and `cwd` activates: the scan, load,
+ * setup and validation `SessionProfileCache` runs, with no builtins. User
+ * extension files live in `<home>/.gent/extensions`, project files in
+ * `<cwd>/.gent/extensions`.
+ */
+const discoverProfileExtensions = (dirs: { readonly home: string; readonly cwd: string }) =>
+  Effect.gen(function* () {
+    const scan = yield* scanRuntimeProfileExtensions(dirs)
+    const declarations = yield* loadRuntimeProfileDeclarations(
+      { ...dirs, platform: "test", extensions: [] },
+      scan,
+    )
+    return declarations.extensionDeclarations
+  })
+
+/** A fresh home with an empty user extension directory. */
+const makeExtensionHome = (prefix: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+    const home = yield* fs.realPath(yield* fs.makeTempDirectoryScoped({ prefix }))
+    const userDir = path.join(home, ".gent", "extensions")
+    yield* fs.makeDirectory(userDir, { recursive: true })
+    return { home, userDir }
+  })
+
+/** A cwd with no project extensions. */
+const noProjectCwd = "/nonexistent/gent-loader-project"
+
 const builtin = (extension: ReturnType<typeof makeBuiltin>): DiscoveredExtension => ({
   extension,
   scope: "builtin",
@@ -3195,16 +3224,10 @@ describe("extension entries", () => {
           ].join("\n"),
         )
 
-        const discovered = yield* discoverExtensions({
-          userDir,
-          projectDir: "/nonexistent/gent-entries-project",
-        })
+        const discovered = yield* discoverProfileExtensions({ home, cwd: noProjectCwd })
         expect(discovered.failed).toEqual([])
-        const loaded = yield* Effect.forEach(discovered.loaded, (entry) =>
-          setupExtension(entry, home, home),
-        )
         expect(
-          loaded.map((extension) => ({
+          discovered.active.map((extension) => ({
             id: String(extension.manifest.id),
             tools: extension.contributions.tools?.map((tool) => String(getToolId(tool))),
           })),
@@ -3250,11 +3273,8 @@ describe("extension entries", () => {
         )
       yield* writeImporter("host.ts", "@gent/core/host", "BunPlatformLive")
       yield* writeImporter("protocol.ts", "@gent/core/protocol", "SessionId")
-      const discovered = yield* discoverExtensions({
-        userDir,
-        projectDir: "/nonexistent/gent-entries-project",
-      })
-      expect(discovered.loaded).toEqual([])
+      const discovered = yield* discoverProfileExtensions({ home, cwd: noProjectCwd })
+      expect(discovered.active).toEqual([])
       expect(discovered.failed.map((failure) => failure.error)).toEqual([
         expect.stringContaining("Cannot find package '@gent/core'"),
         expect.stringContaining("Cannot find package '@gent/core'"),
@@ -3288,19 +3308,20 @@ export default { manifest: { id: "trusted-project" }, setup: Effect.void };`,
       )
       const grant = encodeJson({ trustedProjects: [projectRoot] })
       yield* fs.writeFileString(path.join(projectDir, "../config.json"), grant)
-      const denied = yield* discoverExtensions({ userDir, projectDir })
-      expect(denied.loaded).toHaveLength(0)
+      const dirs = { home: path.join(directory, "home"), cwd: path.join(directory, "project") }
+      const denied = yield* discoverProfileExtensions(dirs)
+      expect(denied.active).toHaveLength(0)
       expect(denied.failed[0]?.error).toContain("not trusted")
       expect(yield* fs.exists(marker)).toBe(false)
       yield* fs.writeFileString(path.join(userDir, "../config.json"), grant)
-      const allowed = yield* discoverExtensions({ userDir, projectDir })
-      expect(allowed.loaded.map((entry) => entry.extension.manifest.id)).toEqual([
+      const allowed = yield* discoverProfileExtensions(dirs)
+      expect(allowed.active.map((extension) => extension.manifest.id)).toEqual([
         ExtensionId.make("trusted-project"),
       ])
       expect(yield* fs.readFileString(marker)).toBe("ran")
       yield* fs.writeFileString(path.join(userDir, "../config.json"), "invalid JSON")
-      const revoked = yield* discoverExtensions({ userDir, projectDir })
-      expect(revoked.loaded).toHaveLength(0)
+      const revoked = yield* discoverProfileExtensions(dirs)
+      expect(revoked.active).toHaveLength(0)
     }).pipe(Effect.provide(fsLayer)),
   )
 
@@ -3319,10 +3340,10 @@ export default { manifest: { id: "trusted-project" }, setup: Effect.void };`,
         `import { Effect } from "effect";
 export default { manifest: { id: "home-user" }, setup: Effect.void };`,
       )
-      const loadedAs = (result: Effect.Success<ReturnType<typeof discoverExtensions>>) =>
-        result.loaded.map((entry) => `${entry.scope}:${entry.extension.manifest.id}`)
+      const loadedAs = (result: Effect.Success<ReturnType<typeof discoverProfileExtensions>>) =>
+        result.active.map((extension) => `${extension.scope}:${extension.manifest.id}`)
       // Untrusted (the default): no "not trusted" failure for the user's own files.
-      const untrusted = yield* discoverExtensions({ userDir, projectDir: userDir })
+      const untrusted = yield* discoverProfileExtensions({ home, cwd: home })
       expect(loadedAs(untrusted)).toEqual(["user:home-user"])
       expect(untrusted.failed).toEqual([])
       // Trusted: still one copy, as user.
@@ -3330,7 +3351,7 @@ export default { manifest: { id: "home-user" }, setup: Effect.void };`,
         path.join(userDir, "../config.json"),
         encodeJson({ trustedProjects: [home] }),
       )
-      const trusted = yield* discoverExtensions({ userDir, projectDir: userDir })
+      const trusted = yield* discoverProfileExtensions({ home, cwd: home })
       expect(loadedAs(trusted)).toEqual(["user:home-user"])
       expect(trusted.failed).toEqual([])
     }).pipe(Effect.provide(fsLayer)),
@@ -3418,9 +3439,7 @@ export default { manifest: { id: "home-user" }, setup: Effect.void };`,
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
-      const packageDir = yield* fs.makeTempDirectoryScoped({
-        prefix: "gent-loader-package-",
-      })
+      const { home, userDir: packageDir } = yield* makeExtensionHome("gent-loader-package-")
       yield* fs.writeFileString(
         path.join(packageDir, "package.json"),
         encodeJson({ name: "@gent/test-pinned", version: "1.2.3" }),
@@ -3431,12 +3450,9 @@ export default { manifest: { id: "home-user" }, setup: Effect.void };`,
         'import { Effect } from "effect"\nexport default { manifest: { id: "@gent/test-pinned-v1" }, setup: Effect.void }\n',
       )
 
-      const first = yield* discoverExtensions({
-        userDir: packageDir,
-        projectDir: "/nonexistent-project-dir-loader-test",
-      })
-      expect(first.loaded).toHaveLength(1)
-      expect(first.loaded[0]?.extension.artifactIdentity).toBeUndefined()
+      const first = yield* discoverProfileExtensions({ home, cwd: noProjectCwd })
+      expect(first.active).toHaveLength(1)
+      expect(first.active[0]?.artifactIdentity).toBeUndefined()
 
       // An edited file is imported again under its new version. The loader
       // still attaches no identity to what it imported.
@@ -3444,11 +3460,8 @@ export default { manifest: { id: "home-user" }, setup: Effect.void };`,
         extensionPath,
         'import { Effect } from "effect"\nexport default { manifest: { id: "@gent/test-pinned-v2" }, setup: Effect.void }\n',
       )
-      const second = yield* discoverExtensions({
-        userDir: packageDir,
-        projectDir: "/nonexistent-project-dir-loader-test",
-      })
-      expect(second.loaded[0]?.extension.artifactIdentity).toBeUndefined()
+      const second = yield* discoverProfileExtensions({ home, cwd: noProjectCwd })
+      expect(second.active[0]?.artifactIdentity).toBeUndefined()
 
       // A changed manifest is also not a proof that the already imported
       // module changed. Replay remains explicitly unsupported.
@@ -3456,11 +3469,8 @@ export default { manifest: { id: "home-user" }, setup: Effect.void };`,
         path.join(packageDir, "package.json"),
         encodeJson({ name: "@gent/test-pinned", version: "2.0.0" }),
       )
-      const third = yield* discoverExtensions({
-        userDir: packageDir,
-        projectDir: "/nonexistent-project-dir-loader-test",
-      })
-      expect(third.loaded[0]?.extension.artifactIdentity).toBeUndefined()
+      const third = yield* discoverProfileExtensions({ home, cwd: noProjectCwd })
+      expect(third.active[0]?.artifactIdentity).toBeUndefined()
     }).pipe(Effect.provide(fsLayer)),
   )
 
@@ -3583,7 +3593,7 @@ export default { manifest: { id: "home-user" }, setup: Effect.void };`,
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
-      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "gent-loader-test-" })
+      const { home, userDir: dir } = yield* makeExtensionHome("gent-loader-test-")
 
       const fnSetupPath = path.join(dir, "fn-setup.ts")
       const objectSetupPath = path.join(dir, "object-setup.ts")
@@ -3608,14 +3618,11 @@ export default { manifest: { id: "home-user" }, setup: Effect.void };`,
       // Sanity sibling: a no-extension file is also skipped but for a different reason.
       yield* fs.writeFileString(validPath, `export const notAnExtension = 42`)
 
-      const result = yield* discoverExtensions({
-        userDir: dir,
-        projectDir: "/nonexistent-project-dir-loader-test",
-      })
+      const result = yield* discoverProfileExtensions({ home, cwd: noProjectCwd })
 
       // None of the malformed files load — they hit `loadExtensionFile`'s
       // `candidates.length === 0` branch via the `isGentExtension` guard.
-      expect(result.loaded).toHaveLength(0)
+      expect(result.active).toHaveLength(0)
       expect(result.failed.length).toBeGreaterThanOrEqual(4)
       for (const target of [fnSetupPath, objectSetupPath, nullSetupPath, validPath]) {
         const entry = result.failed.find((s) => s.sourcePath === target)
@@ -3631,9 +3638,7 @@ export default { manifest: { id: "home-user" }, setup: Effect.void };`,
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
-      const dir = yield* fs.makeTempDirectoryScoped({
-        prefix: "gent-loader-order-",
-      })
+      const { home, userDir: dir } = yield* makeExtensionHome("gent-loader-order-")
       for (const id of ["alpha", "Zeta"]) {
         yield* fs.writeFileString(
           path.join(dir, `${id}.ts`),
@@ -3641,12 +3646,9 @@ export default { manifest: { id: "home-user" }, setup: Effect.void };`,
         )
       }
 
-      const result = yield* discoverExtensions({
-        userDir: dir,
-        projectDir: "/nonexistent-project-dir-loader-test",
-      })
+      const result = yield* discoverProfileExtensions({ home, cwd: noProjectCwd })
 
-      expect(result.loaded.map((entry) => entry.extension.manifest.id)).toEqual([
+      expect(result.active.map((extension) => extension.manifest.id)).toEqual([
         ExtensionId.make("Zeta"),
         ExtensionId.make("alpha"),
       ])
@@ -3657,9 +3659,7 @@ export default { manifest: { id: "home-user" }, setup: Effect.void };`,
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
-      const dir = yield* fs.makeTempDirectoryScoped({
-        prefix: "gent-loader-dangling-",
-      })
+      const { home, userDir: dir } = yield* makeExtensionHome("gent-loader-dangling-")
       yield* fs.writeFileString(
         path.join(dir, "good.ts"),
         'import { Effect } from "effect"\nexport default { manifest: { id: "good" }, setup: Effect.void }\n',
@@ -3667,12 +3667,9 @@ export default { manifest: { id: "home-user" }, setup: Effect.void };`,
       const danglingPath = path.join(dir, "zz-dangling.ts")
       yield* fs.symlink(path.join(dir, "nowhere.ts"), danglingPath)
 
-      const result = yield* discoverExtensions({
-        userDir: dir,
-        projectDir: "/nonexistent-project-dir-loader-test",
-      })
+      const result = yield* discoverProfileExtensions({ home, cwd: noProjectCwd })
 
-      expect(result.loaded.map((entry) => entry.extension.manifest.id)).toEqual([
+      expect(result.active.map((extension) => extension.manifest.id)).toEqual([
         ExtensionId.make("good"),
       ])
       expect(result.failed).toMatchObject([

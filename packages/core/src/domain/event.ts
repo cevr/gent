@@ -18,7 +18,6 @@ import {
 import { Message } from "./message.js"
 import {
   BranchId,
-  branded,
   ExtensionId,
   InteractionRequestId,
   MessageId,
@@ -68,7 +67,7 @@ export type Question = typeof QuestionSchema.Type
 // unchanged. Wire shape: `{ _tag: "VariantName", ...fields }`.
 // ============================================================================
 
-export const EventId = Schema.Finite.pipe(branded("EventId"))
+export const EventId = Schema.Finite.pipe(Schema.brand("EventId"))
 export type EventId = typeof EventId.Type
 
 /**
