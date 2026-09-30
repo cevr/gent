@@ -81,7 +81,7 @@ import { Model as AiModel } from "effect/ai"
 // Test seam: only tests read these exports. OAuthError, authorizeOpenAIDevice,
 // OpenAICredentials, OpenAICredentialIO and makeOpenAICredentialCache let a test
 // run the device login and the credential cache against fake I/O;
-// buildCodexTransformClient and buildOpenAIModelDriver let it run the wire
+// buildCodexClient and buildOpenAIModelDriver let it run the wire
 // against a fake HTTP client; OAuthRedirectPort lets it run the browser login
 // on a free port.
 
@@ -1177,20 +1177,15 @@ const codexSessionId = (req: HttpClientRequest.HttpClientRequest): Option.Option
  * Build the OAuth header set for a Codex request: Bearer over the
  * access token, ChatGPT-Account-Id when known, plus polite-default
  * `originator` and `User-Agent` if the upstream didn't set them.
- *
- * The SDK's baseline does NOT inject `Authorization` because we omit
- * `apiKey` from the client config. The defensive `Headers.remove`
- * for `authorization` here is belt-and-suspenders: if a future SDK
- * version starts injecting a placeholder header without an explicit
- * `apiKey`, this middleware still supplies the right value.
+ * `Headers.set` replaces any `authorization` the request already
+ * carries (the client config has no `apiKey`, so the SDK sets none).
  */
 const buildOauthHeaders = (
   req: HttpClientRequest.HttpClientRequest,
   accessToken: string,
   accountId: Option.Option<string>,
 ): Headers.Headers => {
-  let headers = Headers.remove(req.headers, "authorization")
-  headers = Headers.set(headers, "authorization", `Bearer ${accessToken}`)
+  let headers = Headers.set(req.headers, "authorization", `Bearer ${accessToken}`)
   if (Option.isSome(accountId) && accountId.value.length > 0) {
     headers = Headers.set(headers, "chatgpt-account-id", accountId.value)
   }
@@ -1203,13 +1198,12 @@ const buildOauthHeaders = (
   return headers
 }
 
-// ── transformClient factory ──
+// ── codex client ──
 
 /**
- * Build the Codex `HttpClient` middleware the OAuth path's client runs over.
- *
- * Takes the credential cache as a closure argument for the type reasons
- * documented above.
+ * The Codex `HttpClient` the OAuth path's SDK client runs over, under the
+ * SDK's base URL: auth headers, then the `/responses` rewrite; a 401
+ * invalidates the credential cache and retries once (`authorizedClient`).
  *
  * Per-request semantics are preserved: each request invokes
  * `creds.getFresh` which consults the live `Ref` cache (the cell-
@@ -1227,12 +1221,12 @@ const buildOauthHeaders = (
  *      Other paths pass through unchanged after auth headers.
  *
  * Response side:
- *   - 401 recovery (outermost transformResponse): on HTTP 401 invalidate
+ *   - 401 recovery: on HTTP 401 invalidate
  *     the credential cache and retry once. A second 401 surfaces the
  *     response to the caller so user-facing recovery (re-run
  *     authorization from the auth picker) can kick in.
  */
-export const buildCodexTransformClient = (
+export const buildCodexClient = (
   creds: CredentialCache<OpenAICredentials>,
 ): ((client: HttpClient.HttpClient) => HttpClient.HttpClient) =>
   authorizedClient(creds, (req, fresh) => {
@@ -1668,9 +1662,7 @@ const makeOauthOpenAILayer = (
     HttpClient.HttpClient,
     Effect.gen(function* () {
       const client = yield* HttpClient.HttpClient
-      return buildCodexTransformClient(creds)(
-        undecryptableReasoningClient(rejectedReasoning)(client),
-      )
+      return buildCodexClient(creds)(undecryptableReasoningClient(rejectedReasoning)(client))
     }),
   ).pipe(Layer.provide(FetchHttpClient.layer))
   const clientLayer = OpenAiResponsesClient.layer({

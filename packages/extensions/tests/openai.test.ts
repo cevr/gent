@@ -18,7 +18,7 @@ import {
 import { TestClock } from "effect/testing"
 import {
   authorizeOpenAIDevice,
-  buildCodexTransformClient,
+  buildCodexClient,
   buildOpenAIModelDriver,
   type OAuthError,
   type OpenAICredentialIO,
@@ -1030,7 +1030,7 @@ describe("OpenAI device-code login", () => {
 // ── codex transform client ──────────────────────────────────────────────────
 
 /**
- * codexTransformClient — auth-headers middleware.
+ * codexClient — auth-headers middleware.
  *
  * Builds a fake `HttpClient` (via `HttpClient.make`) that captures
  * incoming requests and returns canned responses. The transform under
@@ -1139,7 +1139,7 @@ const noopRefreshIO = (): OpenAICredentialIO => ({
 const jsonBody = (payload: JsonRecord) => HttpBody.jsonUnsafe(payload)
 const runOk = <A, E, R>(eff: Effect.Effect<A, E, R>) => Effect.scoped(eff.pipe(Effect.orDie))
 // ── Tests ──
-describe("codexTransformClient — auth headers", () => {
+describe("codexClient — auth headers", () => {
   it.scopedLive("injects Authorization Bearer from credential service", () =>
     Effect.gen(function* () {
       const creds = yield* credentialCache(noopRefreshIO(), validAuthInfo({ access: "k1-access" }))
@@ -1147,7 +1147,7 @@ describe("codexTransformClient — auth headers", () => {
         captured: [],
         responder: () => new Response("ok", { status: 200 }),
       }
-      const transform = buildCodexTransformClient(creds)
+      const transform = buildCodexClient(creds)
       const wrapped = underCodexBase(transform(makeFakeClient(fakeState)))
       yield* runOk(
         wrapped.post("/responses", {
@@ -1167,7 +1167,7 @@ describe("codexTransformClient — auth headers", () => {
         captured: [],
         responder: () => new Response("ok", { status: 200 }),
       }
-      const transform = buildCodexTransformClient(creds)
+      const transform = buildCodexClient(creds)
       const wrapped = underCodexBase(transform(makeFakeClient(fakeState)))
       yield* runOk(
         wrapped.post("/responses", {
@@ -1188,7 +1188,7 @@ describe("codexTransformClient — auth headers", () => {
         captured: [],
         responder: () => new Response("ok", { status: 200 }),
       }
-      const transform = buildCodexTransformClient(creds)
+      const transform = buildCodexClient(creds)
       const wrapped = underCodexBase(transform(makeFakeClient(fakeState)))
       yield* runOk(
         wrapped.post("/responses", {
@@ -1205,7 +1205,7 @@ describe("codexTransformClient — auth headers", () => {
         captured: [],
         responder: () => new Response("ok", { status: 200 }),
       }
-      const transform = buildCodexTransformClient(creds)
+      const transform = buildCodexClient(creds)
       const wrapped = underCodexBase(transform(makeFakeClient(fakeState)))
       yield* runOk(
         wrapped.post("/responses", {
@@ -1222,7 +1222,7 @@ describe("codexTransformClient — auth headers", () => {
         captured: [],
         responder: () => new Response("ok", { status: 200 }),
       }
-      const transform = buildCodexTransformClient(creds)
+      const transform = buildCodexClient(creds)
       const wrapped = underCodexBase(transform(makeFakeClient(fakeState)))
       yield* runOk(
         wrapped.post("/responses", {
@@ -1240,7 +1240,7 @@ describe("codexTransformClient — auth headers", () => {
         captured: [],
         responder: () => new Response("ok", { status: 200 }),
       }
-      const transform = buildCodexTransformClient(creds)
+      const transform = buildCodexClient(creds)
       const wrapped = underCodexBase(transform(makeFakeClient(fakeState)))
       yield* runOk(
         wrapped.post("/responses", {
@@ -1263,7 +1263,7 @@ describe("codexTransformClient — auth headers", () => {
         captured: [],
         responder: () => new Response("ok", { status: 200 }),
       }
-      const transform = buildCodexTransformClient(creds)
+      const transform = buildCodexClient(creds)
       const wrapped = underCodexBase(transform(makeFakeClient(fakeState)))
       yield* runOk(
         wrapped.post("/embeddings", {
@@ -1301,7 +1301,7 @@ describe("codexTransformClient — auth headers", () => {
         captured: [],
         responder: () => new Response("ok", { status: 200 }),
       }
-      const transform = buildCodexTransformClient(creds)
+      const transform = buildCodexClient(creds)
       const wrapped = underCodexBase(transform(makeFakeClient(fakeState)))
       const result = yield* Effect.scoped(
         wrapped
@@ -1372,7 +1372,7 @@ describe("codexTransformClient — auth headers", () => {
         captured: [],
         responder: () => new Response("ok", { status: 200 }),
       }
-      const transform = buildCodexTransformClient(creds)
+      const transform = buildCodexClient(creds)
       const wrapped = underCodexBase(transform(makeFakeClient(fakeState)))
       yield* runOk(
         wrapped.post("/responses", {
@@ -1391,7 +1391,7 @@ describe("codexTransformClient — auth headers", () => {
     }),
   )
 })
-describe("codexTransformClient — URL/body/beta rewrite", () => {
+describe("codexClient — URL/body/beta rewrite", () => {
   // Helpers local to the rewrite tests — keep the auth-header tests above untouched.
   const okResponse = (): FakeClientState => ({
     captured: [],
@@ -1400,7 +1400,7 @@ describe("codexTransformClient — URL/body/beta rewrite", () => {
   const buildWrapped = (state: FakeClientState) =>
     Effect.gen(function* () {
       const creds = yield* credentialCache(noopRefreshIO(), validAuthInfo({ access: "k1-access" }))
-      return underCodexBase(buildCodexTransformClient(creds)(makeFakeClient(state)))
+      return underCodexBase(buildCodexClient(creds)(makeFakeClient(state)))
     })
   it.scopedLive("does NOT rewrite paths that are not exactly responses", () =>
     Effect.gen(function* () {
@@ -1659,7 +1659,7 @@ describe("codexTransformClient — URL/body/beta rewrite", () => {
         validAuthInfo({ access: "k1-access", accountId: "acc-123" }),
       )
       const state = okResponse()
-      const wrapped = underCodexBase(buildCodexTransformClient(creds)(makeFakeClient(state)))
+      const wrapped = underCodexBase(buildCodexClient(creds)(makeFakeClient(state)))
       yield* runOk(
         wrapped.post("/responses", {
           body: jsonBody({ model: "gpt-5.4" }),
@@ -1671,7 +1671,7 @@ describe("codexTransformClient — URL/body/beta rewrite", () => {
     }),
   )
 })
-describe("codexTransformClient — 401 recovery", () => {
+describe("codexClient — 401 recovery", () => {
   // The credential cache TTL (30s) can outlive a token's last minute,
   // and OAuth tokens can be revoked server-side between cache fill and
   // wire send. On 401: invalidate the cache + retry once. A second 401
@@ -1719,7 +1719,7 @@ describe("codexTransformClient — 401 recovery", () => {
           new Response("ok", { status: 200 }),
         ),
       }
-      const wrapped = underCodexBase(buildCodexTransformClient(creds)(makeFakeClient(state)))
+      const wrapped = underCodexBase(buildCodexClient(creds)(makeFakeClient(state)))
       const response = yield* runOk(
         wrapped.post("/responses", {
           body: jsonBody({ model: "gpt-5.4" }),
@@ -1757,7 +1757,7 @@ describe("codexTransformClient — 401 recovery", () => {
         captured: [],
         responder: () => new Response("unauthorized", { status: 401 }),
       }
-      const wrapped = underCodexBase(buildCodexTransformClient(creds)(makeFakeClient(state)))
+      const wrapped = underCodexBase(buildCodexClient(creds)(makeFakeClient(state)))
       const response = yield* runOk(
         wrapped.post("/responses", {
           body: jsonBody({ model: "gpt-5.4" }),
@@ -1781,7 +1781,7 @@ describe("codexTransformClient — 401 recovery", () => {
         captured: [],
         responder: () => new Response("server error", { status: 500 }),
       }
-      const wrapped = underCodexBase(buildCodexTransformClient(creds)(makeFakeClient(state)))
+      const wrapped = underCodexBase(buildCodexClient(creds)(makeFakeClient(state)))
       const response = yield* runOk(
         wrapped.post("/responses", {
           body: jsonBody({ model: "gpt-5.4" }),
@@ -1802,7 +1802,7 @@ describe("codexTransformClient — 401 recovery", () => {
         captured: [],
         responder: () => new Response("ok", { status: 200 }),
       }
-      const wrapped = underCodexBase(buildCodexTransformClient(creds)(makeFakeClient(state)))
+      const wrapped = underCodexBase(buildCodexClient(creds)(makeFakeClient(state)))
       const response = yield* runOk(
         wrapped.post("/responses", {
           body: jsonBody({ model: "gpt-5.4" }),
@@ -1849,7 +1849,7 @@ describe("codexTransformClient — 401 recovery", () => {
           captured: [],
           responder: () => new Response("unauthorized", { status: 401 }),
         }
-        const wrapped = underCodexBase(buildCodexTransformClient(creds)(makeFakeClient(state)))
+        const wrapped = underCodexBase(buildCodexClient(creds)(makeFakeClient(state)))
         const result = yield* Effect.scoped(
           wrapped
             .post("/responses", {
