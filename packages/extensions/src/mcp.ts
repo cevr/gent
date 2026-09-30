@@ -2508,8 +2508,12 @@ const firstLine = (text: string) => text.trim().split("\n")[0] ?? ""
  * `/mcp` shows `mcp.status` to the user. `/mcp login <server>` starts that
  * server's OAuth login and shows the URL to open; the login finishes in the
  * background, and `/mcp` shows the result. The URL is shown, not opened: the
- * gent server may run on another machine than the browser.
+ * gent server may run on another machine than the browser. With no server
+ * configured there is no pool, and `/mcp` says where to add one.
  */
+const NO_SERVERS =
+  "No MCP servers are configured. Add one to ~/.gent/mcp.json, or to .gent/mcp.json in a trusted project."
+
 const McpCommand = request({
   id: "mcp-command",
   description: "Show the MCP servers, or log in to one",
@@ -2524,7 +2528,11 @@ const McpCommand = request({
   execute: (input: string) =>
     Effect.gen(function* () {
       const ctx = yield* ExtensionContext
-      const clients = yield* McpClients
+      const pool = yield* Effect.serviceOption(McpClients)
+      if (Option.isNone(pool)) {
+        return yield* ctx.Interaction.present({ title: "MCP servers", content: NO_SERVERS })
+      }
+      const clients = pool.value
       const words = input.trim().split(/\s+/)
       if (words[0] === "login") {
         const name = words[1] ?? ""
@@ -2559,7 +2567,10 @@ const registerServers = Effect.fn("Mcp.registerServers")(function* (
 ) {
   const host = yield* ExtensionHost
   const { servers, misconfigured } = yield* resolveServers(entries, host.cwd)
-  if (servers.length === 0 && misconfigured.length === 0) return
+  // No server: `/mcp` still answers, and the model gets no status tool with nothing to report.
+  if (servers.length === 0 && misconfigured.length === 0) {
+    return yield* host.register("request", McpCommand)
+  }
   const file = yield* catalogPath(host.home)
   const cache = yield* readCatalog(file)
   const auth = yield* makeAuthStore(host.home)

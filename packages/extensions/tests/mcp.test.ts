@@ -262,6 +262,11 @@ process.stdin.on("data", (chunk) => {
 
 const platformLayer = Layer.merge(BunServices.layer, BunGentPlatformLive)
 
+/** The shipped extensions without `@gent/mcp`: a test's inline servers stand in for it, and both would claim `/mcp`. */
+const shippedWithoutMcp = shippedPreset.extensionInputs.filter(
+  (extension) => extension.manifest.id !== McpExtension.manifest.id,
+)
+
 /** A scratch directory holding the fixture server and the file its starts are logged to. */
 const makeFixture = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
@@ -870,7 +875,7 @@ describe("mcp over streamable http", () => {
         const { client, sessionId, branchId } = yield* createRpcHarness({
           ...shippedPreset,
           extensionInputs: [
-            ...shippedPreset.extensionInputs,
+            ...shippedWithoutMcp,
             McpServers("@test/mcp-http", { remote: httpEntry(port) }),
           ],
           providerLayer,
@@ -907,7 +912,7 @@ describe("mcp over streamable http", () => {
         const { client, sessionId, branchId } = yield* createRpcHarness({
           ...shippedPreset,
           extensionInputs: [
-            ...shippedPreset.extensionInputs,
+            ...shippedWithoutMcp,
             McpServers("@test/mcp-http-session", { remote: httpEntry(port) }),
           ],
           providerLayer,
@@ -1001,10 +1006,7 @@ const runHttpCell = (port: number, code: string, other?: number) =>
     })
     const { client, sessionId, branchId } = yield* createRpcHarness({
       ...shippedPreset,
-      extensionInputs: [
-        ...shippedPreset.extensionInputs,
-        McpServers("@test/mcp-http-cell", servers),
-      ],
+      extensionInputs: [...shippedWithoutMcp, McpServers("@test/mcp-http-cell", servers)],
       providerLayer,
     })
     yield* client.message.send({ sessionId, branchId, content: "run" })
@@ -1089,7 +1091,7 @@ describe("mcp over sse", () => {
         const { client, sessionId, branchId } = yield* createRpcHarness({
           ...shippedPreset,
           extensionInputs: [
-            ...shippedPreset.extensionInputs,
+            ...shippedWithoutMcp,
             McpServers("@test/mcp-sse", { pinned: { ...sse, type: "sse" }, auto: sse }),
           ],
           providerLayer,
@@ -1194,7 +1196,7 @@ describe("mcp status", () => {
         const { client, sessionId, branchId } = yield* createRpcHarness({
           ...shippedPreset,
           extensionInputs: [
-            ...shippedPreset.extensionInputs,
+            ...shippedWithoutMcp,
             McpServers("@test/mcp-status", {
               dead: { command: "/nonexistent/gent-probe-x", timeoutMs: 2000 },
               fixture: fixture.stdio(),
@@ -1251,6 +1253,47 @@ describe("mcp status", () => {
         )
         expect(report).toContain(
           "- missing (auto): misconfigured, 0 tools, not connected\n  environment variable GENT_MCP_UNSET is not set",
+        )
+      }).pipe(Effect.timeout("25 seconds"), Effect.provide(platformLayer)),
+    30_000,
+  )
+
+  it.scopedLive(
+    "/mcp with no server configured says where to add one, and the model gets no status tool",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        // A home with no mcp.json: the shipped extension registers /mcp and no tool.
+        const home = yield* fs.makeTempDirectoryScoped({ prefix: "gent-mcp-none-" })
+        const zero = yield* collectTestContributions(McpExtension.setup, { home, cwd: home })
+        expect(toolList(zero)).toEqual([])
+        expect(zero.requests?.map((capability) => String(capability.id))).toEqual(["mcp-command"])
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...shippedPreset,
+          providerLayer,
+        })
+        const commands = yield* client.extension.listSlashCommands({ sessionId })
+        expect(commands.filter((command) => command.extensionId === "@gent/mcp")).toMatchObject([
+          { name: "mcp", capabilityId: "mcp-command" },
+        ])
+        yield* client.extension.request({
+          sessionId,
+          branchId,
+          extensionId: ExtensionId.make("@gent/mcp"),
+          capabilityId: "mcp-command",
+          input: "",
+        })
+        const shown = yield* waitFor(
+          client.message.list({ branchId }),
+          (all) => all.some((message) => messagePartsText(message.parts).includes("mcp.json")),
+          10_000,
+          "the /mcp report",
+        )
+        expect(shown.map((message) => messagePartsText(message.parts))).toContainEqual(
+          expect.stringContaining(
+            "No MCP servers are configured. Add one to ~/.gent/mcp.json, or to .gent/mcp.json in a trusted project.",
+          ),
         )
       }).pipe(Effect.timeout("25 seconds"), Effect.provide(platformLayer)),
     30_000,
@@ -1570,7 +1613,7 @@ const runOAuthCell = (oauth: OAuthFixtureState, code: string) =>
     ])
     const { client, sessionId, branchId } = yield* createRpcHarness({
       ...shippedPreset,
-      extensionInputs: [...shippedPreset.extensionInputs, oauthServers(oauth)],
+      extensionInputs: [...shippedWithoutMcp, oauthServers(oauth)],
       providerLayer,
     })
     yield* client.message.send({ sessionId, branchId, content: "who am I" })
@@ -1583,7 +1626,7 @@ const commandSession = (oauth: OAuthFixtureState) =>
     const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
     const harness = yield* createRpcHarness({
       ...shippedPreset,
-      extensionInputs: [...shippedPreset.extensionInputs, oauthServers(oauth)],
+      extensionInputs: [...shippedWithoutMcp, oauthServers(oauth)],
       providerLayer,
     })
     const request = (input: string) =>
@@ -1978,7 +2021,7 @@ describe("mcp binary content", () => {
           const { client, sessionId, branchId } = yield* createRpcHarness({
             ...shippedPreset,
             extensionInputs: [
-              ...shippedPreset.extensionInputs,
+              ...shippedWithoutMcp,
               McpServers("@test/mcp-binary", {
                 fixture: fixture.stdio({ MCP_FIXTURE_BINARY: "1" }),
                 remote: httpEntry(port),
@@ -2122,7 +2165,7 @@ describe("mcp tools in the cell", () => {
         const { client, sessionId, branchId } = yield* createRpcHarness({
           ...shippedPreset,
           extensionInputs: [
-            ...shippedPreset.extensionInputs,
+            ...shippedWithoutMcp,
             McpServers("@test/mcp-many", { fixture: fixture.stdio({ MCP_FIXTURE_MANY: "600" }) }),
           ],
           providerLayer,
@@ -2164,7 +2207,7 @@ describe("mcp tools in the cell", () => {
         const { client, sessionId, branchId } = yield* createRpcHarness({
           ...shippedPreset,
           extensionInputs: [
-            ...shippedPreset.extensionInputs,
+            ...shippedWithoutMcp,
             McpServers("@test/mcp-cell", { fixture: fixture.stdio() }),
           ],
           providerLayer,
@@ -2240,7 +2283,7 @@ describe("mcp tools in the cell", () => {
         const { client, sessionId, branchId } = yield* createRpcHarness({
           ...shippedPreset,
           extensionInputs: [
-            ...shippedPreset.extensionInputs,
+            ...shippedWithoutMcp,
             // Five named tools and 95 generated ones.
             McpServers("@test/mcp-many", { fixture: fixture.stdio({ MCP_FIXTURE_EXTRA: "95" }) }),
           ],
@@ -2286,7 +2329,7 @@ describe("mcp tools in the cell", () => {
         const { client, sessionId, branchId } = yield* createRpcHarness({
           ...shippedPreset,
           extensionInputs: [
-            ...shippedPreset.extensionInputs,
+            ...shippedWithoutMcp,
             McpServers("@test/mcp-typed", { fixture: fixture.stdio({ MCP_FIXTURE_TYPED: "1" }) }),
           ],
           providerLayer,
@@ -2336,10 +2379,7 @@ describe("mcp tools in the cell", () => {
         ])
         const { client, sessionId, branchId } = yield* createRpcHarness({
           ...shippedPreset,
-          extensionInputs: [
-            ...shippedPreset.extensionInputs,
-            McpServers("@test/mcp-stale", servers),
-          ],
+          extensionInputs: [...shippedWithoutMcp, McpServers("@test/mcp-stale", servers)],
           providerLayer,
         })
         expect(yield* fixture.starts).toBe(1)
@@ -2385,10 +2425,7 @@ describe("mcp tools in the cell", () => {
         ])
         const { client, sessionId, branchId } = yield* createRpcHarness({
           ...shippedPreset,
-          extensionInputs: [
-            ...shippedPreset.extensionInputs,
-            McpServers("@test/mcp-empty", servers),
-          ],
+          extensionInputs: [...shippedWithoutMcp, McpServers("@test/mcp-empty", servers)],
           providerLayer,
         })
         // The server answers an empty list from now on, as one with broken auth can.
@@ -2429,10 +2466,7 @@ describe("mcp tools in the cell", () => {
         ])
         const { client, sessionId, branchId } = yield* createRpcHarness({
           ...shippedPreset,
-          extensionInputs: [
-            ...shippedPreset.extensionInputs,
-            McpServers("@test/mcp-changed", servers),
-          ],
+          extensionInputs: [...shippedWithoutMcp, McpServers("@test/mcp-changed", servers)],
           providerLayer,
         })
         yield* client.message.send({ sessionId, branchId, content: "hide count" })
@@ -2480,10 +2514,7 @@ describe("mcp tools in the cell", () => {
         ])
         const { client, sessionId, branchId } = yield* createRpcHarness({
           ...shippedPreset,
-          extensionInputs: [
-            ...shippedPreset.extensionInputs,
-            McpServers("@test/mcp-swap", servers),
-          ],
+          extensionInputs: [...shippedWithoutMcp, McpServers("@test/mcp-swap", servers)],
           providerLayer,
         })
         yield* client.message.send({ sessionId, branchId, content: "swap" })
@@ -2543,10 +2574,7 @@ describe("mcp tools in the cell", () => {
           ])
           const { client, sessionId, branchId } = yield* createRpcHarness({
             ...shippedPreset,
-            extensionInputs: [
-              ...shippedPreset.extensionInputs,
-              McpServers("@test/mcp-unknown", servers),
-            ],
+            extensionInputs: [...shippedWithoutMcp, McpServers("@test/mcp-unknown", servers)],
             providerLayer,
           })
           yield* client.message.send({ sessionId, branchId, content: "count" })
@@ -2586,7 +2614,7 @@ describe("mcp tools in the cell", () => {
         const { client, sessionId, branchId } = yield* createRpcHarness({
           ...shippedPreset,
           extensionInputs: [
-            ...shippedPreset.extensionInputs,
+            ...shippedWithoutMcp,
             // Setup is start 1; the first call's connect is start 2, which exits.
             McpServers("@test/mcp-retry", {
               fixture: { ...fixture.stdio({ MCP_FIXTURE_FAIL_ON_START: "2" }), timeoutMs: 5000 },
@@ -2625,7 +2653,7 @@ describe("mcp tools in the cell", () => {
         const { client, sessionId, branchId } = yield* createRpcHarness({
           ...shippedPreset,
           extensionInputs: [
-            ...shippedPreset.extensionInputs,
+            ...shippedWithoutMcp,
             McpServers("@test/mcp-exit", {
               fixture: { ...fixture.stdio({ MCP_FIXTURE_EXIT_AFTER_CALL: "1" }), timeoutMs: 5000 },
             }),
@@ -2681,7 +2709,7 @@ describe("mcp tools in the cell", () => {
         const { client, sessionId, branchId } = yield* createRpcHarness({
           ...shippedPreset,
           extensionInputs: [
-            ...shippedPreset.extensionInputs,
+            ...shippedWithoutMcp,
             McpServers("@test/mcp-env", {
               fixture: fixture.stdio({
                 MCP_FIXTURE_ENV_TOOL: "1",

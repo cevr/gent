@@ -1375,7 +1375,8 @@ server's transport, tool count, connection, and health: `healthy` (listed or
 connected), `expired` (the server refused the credential; the reason names
 `/mcp login`), `misconfigured` (the entry cannot run: an unset variable),
 `degraded` (a connect, list or call failed in the transport), or `unknown`
-(read from the cache, not yet connected).
+(read from the cache, not yet connected). With no server configured, only
+`/mcp` is registered, and it says where to add one.
 
 Each tool's input schema is imported from its JSON Schema (patterns ignored),
 so the host checks input and the catalog shows its types. A tool with an
