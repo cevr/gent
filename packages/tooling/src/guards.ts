@@ -3727,15 +3727,18 @@ const namespaceMembersIn = (
   // `const { beta, gamma: g } = TU` reads each key off the namespace.
   const kept = lines.filter((_, index) => !skip.has(index + 1)).join("\n")
   const destructure = new RegExp(`\\b(?:const|let|var)\\s*\\{([^}]*)\\}\\s*=\\s*${alias}\\b`, "g")
-  for (const match of kept.matchAll(destructure)) {
-    const inner = match[1] ?? ""
-    for (const part of inner.split(",")) {
-      const key = Option.fromNullishOr(/^\s*([A-Za-z_$][\w$]*)/.exec(part)?.[1])
-      if (Option.isSome(key)) found.push(key.value)
-    }
-  }
+  for (const match of kept.matchAll(destructure)) found.push(...destructuredKeys(match[1] ?? ""))
   return found
 }
+
+/** The keys a `{ beta, gamma: g }` destructure reads, before any rename. */
+const destructuredKeys = (inner: string): ReadonlyArray<string> =>
+  inner.split(",").flatMap((part) =>
+    Option.match(Option.fromNullishOr(/^\s*([A-Za-z_$][\w$]*)/.exec(part)?.[1]), {
+      onNone: (): ReadonlyArray<string> => [],
+      onSome: (key) => [key],
+    }),
+  )
 
 /** The names a file reads through one specifier. */
 interface SpecifierRead {
@@ -3755,7 +3758,7 @@ interface SpecifierRead {
 const specifierReadsIn = (text: string, syntax: Syntax): ReadonlyArray<SpecifierRead> => {
   const skip = expectErrorLines(text.split("\n"))
   const codeLines = codeOnly(text, syntax).split("\n")
-  return moduleStatementsIn(text, syntax)
+  const statementReads = moduleStatementsIn(text, syntax)
     .filter((statement) => !skip.has(statement.line))
     .map((statement) => {
       const named = namedImportsIn(statement.clause)
@@ -3765,6 +3768,59 @@ const specifierReadsIn = (text: string, syntax: Syntax): ReadonlyArray<Specifier
       )
       return { specifier: statement.specifier, names: [...named, ...members] }
     })
+  return [...statementReads, ...dynamicImportReadsIn(text, syntax, codeLines, skip)]
+}
+
+/** `import("<literal>")`, optionally awaited: a load a static read can follow. */
+const LITERAL_DYNAMIC_IMPORT = String.raw`(?:await\s+)?import\s*\(\s*["']([^"'\s]+)["']\s*\)`
+
+/** `import("./m").x`, `(await import("./m")).x`, `typeof import("./m").X`. */
+const DYNAMIC_IMPORT_MEMBER = new RegExp(
+  String.raw`${LITERAL_DYNAMIC_IMPORT}\s*\)?\s*\??\.\s*([A-Za-z_$][\w$]*)`,
+  "g",
+)
+/** `const { x, y: z } = await import("./m")`. */
+const DYNAMIC_IMPORT_DESTRUCTURE = new RegExp(
+  String.raw`\b(?:const|let|var)\s*\{([^}]*)\}\s*=\s*${LITERAL_DYNAMIC_IMPORT}`,
+  "g",
+)
+/** `const M = await import("./m")`: a namespace its members are read off. */
+const DYNAMIC_IMPORT_NAMESPACE = new RegExp(
+  String.raw`\b(?:const|let|var)\s+([A-Za-z_][\w]*)\s*=\s*${LITERAL_DYNAMIC_IMPORT}`,
+  "g",
+)
+
+/**
+ * The names a file reads through a literal dynamic import (allowed where a
+ * `gent/no-dynamic-imports` comment says why): a member read off the
+ * import, a destructured key, or a member read off the binding it is
+ * stored in. A read on a `@ts-expect-error` line reads nothing.
+ */
+const dynamicImportReadsIn = (
+  text: string,
+  syntax: Syntax,
+  codeLines: ReadonlyArray<string>,
+  skip: ReadonlySet<number>,
+): ReadonlyArray<SpecifierRead> => {
+  const code = withoutComments(text, syntax)
+  if (!code.includes("import")) return []
+  const lineOf = (index: number) => code.slice(0, index).split("\n").length
+  const found: Array<SpecifierRead> = []
+  for (const match of code.matchAll(DYNAMIC_IMPORT_MEMBER)) {
+    if (skip.has(lineOf(match.index))) continue
+    found.push({ specifier: match[1] ?? "", names: [match[2] ?? ""] })
+  }
+  for (const match of code.matchAll(DYNAMIC_IMPORT_DESTRUCTURE)) {
+    if (skip.has(lineOf(match.index))) continue
+    found.push({ specifier: match[2] ?? "", names: destructuredKeys(match[1] ?? "") })
+  }
+  for (const match of code.matchAll(DYNAMIC_IMPORT_NAMESPACE)) {
+    found.push({
+      specifier: match[2] ?? "",
+      names: namespaceMembersIn(codeLines, match[1] ?? "", skip),
+    })
+  }
+  return found
 }
 
 /** `*` or `* as NS`: the clause of a star import or re-export. */

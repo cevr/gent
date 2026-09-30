@@ -4036,6 +4036,39 @@ describe("an export is read only through an import", () => {
     expect(names(findings)).toEqual(["ResourceId", "WakeAlarmsService"])
   })
 
+  test("a member read through a literal dynamic import is a read", () => {
+    const declaring = {
+      file: "packages/tooling/src/probe.ts",
+      text: [
+        "export const probe = () => 1",
+        "export const unread = () => 2",
+        "export const run = () => probe() + unread()",
+        "",
+      ].join("\n"),
+    }
+    const allow = "// gent/no-dynamic-imports: allow the probe loads late"
+    const readers = [
+      `${allow}\nconst direct = (await import("../src/probe")).probe`,
+      `${allow}\nconst { probe: late, run } = await import("../src/probe")`,
+      `${allow}\nconst Probe = await import("../src/probe")\nProbe.probe()\nProbe.run()`,
+      `type Late = typeof import("../src/probe").probe`,
+    ]
+    expect(
+      readers.map((text) =>
+        names(
+          findingsFor([
+            declaring,
+            { file: "packages/tooling/tests/probe.test.ts", text: `${text}\n` },
+            {
+              file: "packages/tooling/tests/run.test.ts",
+              text: 'import { run } from "../src/probe"\nrun()\n',
+            },
+          ]),
+        ),
+      ),
+    ).toEqual([["unread"], ["unread"], ["unread"], ["unread"]])
+  })
+
   test("a name on a @ts-expect-error line asserts absence, not a read", () => {
     const findings = findingsFor([
       {
