@@ -1570,7 +1570,7 @@ export interface PromptCache {
    * a long response uses it up as idle time does.
    */
   readonly lastCallAtMillis: number
-  /** `Model.promptCacheTtlMs` of the model the turn calls. */
+  /** The lifetime `promptCacheTtlMsFor` reads for the model the turn calls and its session. */
   readonly ttlMs: number
 }
 

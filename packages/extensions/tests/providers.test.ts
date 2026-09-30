@@ -297,7 +297,7 @@ describe("models.dev catalog", () => {
   )
 
   it.scopedLive(
-    "the Anthropic catalog names the lifetime its markers ask for, 1 hour or 5 minutes with the switch, and prices a cache write by it",
+    "the Anthropic catalog names the lifetimes its markers ask for, 1 hour or 5 minutes with the switch, 5 minutes for a child, and prices a cache write by the session lifetime",
     () =>
       Effect.gen(function* () {
         const home = yield* freshHome("anthropic-cache-lifetime")
@@ -338,13 +338,18 @@ describe("models.dev catalog", () => {
             const listModels = Option.getOrThrow(Option.fromUndefinedOr(driver.listModels))
             return (yield* listModels()).map((model) => ({
               lifetimeMs: model.promptCacheTtlMs,
+              childLifetimeMs: model.childPromptCacheTtlMs,
               // 10,000 tokens written to the cache, in USD.
               writeCostUsd: (10_000 * (model.pricing?.cacheWrite ?? 0)) / 1_000_000,
             }))
           })
-        // A 1-hour write costs 2x input, a 5-minute one 1.25x.
-        expect(yield* lifetimes("1h")).toEqual([{ lifetimeMs: 60 * 60_000, writeCostUsd: 0.1 }])
-        expect(yield* lifetimes("5m")).toEqual([{ lifetimeMs: 5 * 60_000, writeCostUsd: 0.0625 }])
+        // A 1-hour write costs 2x input, a 5-minute one 1.25x. A child asks for 5 minutes.
+        expect(yield* lifetimes("1h")).toEqual([
+          { lifetimeMs: 60 * 60_000, childLifetimeMs: 5 * 60_000, writeCostUsd: 0.1 },
+        ])
+        expect(yield* lifetimes("5m")).toEqual([
+          { lifetimeMs: 5 * 60_000, childLifetimeMs: 5 * 60_000, writeCostUsd: 0.0625 },
+        ])
       }).pipe(Effect.timeout("5 seconds"), Effect.provide(BunServices.layer)),
   )
 

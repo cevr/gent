@@ -87,6 +87,12 @@ export interface ProviderHints {
    */
   readonly cacheKey?: string
   /**
+   * The request is a spawned child session's (`isSpawnedSession`). A child
+   * runs its steps back to back, so a driver may give its prompt cache a
+   * shorter lifetime; the catalog names it as `Model.childPromptCacheTtlMs`.
+   */
+  readonly child?: boolean
+  /**
    * The catalog's `Model.reasoning` for the resolved model. A driver sends no
    * reasoning effort to a model the catalog says does not reason; absent when
    * the catalog does not say.

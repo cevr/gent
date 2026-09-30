@@ -59,7 +59,26 @@ export class Model extends Schema.Class<Model>("Model")({
    * happens.
    */
   promptCacheTtlMs: Schema.optional(Schema.Finite),
+  /**
+   * The lifetime a spawned child session's requests ask for, when the driver
+   * gives children a shorter one (`ProviderHints.child`); absent, a child's
+   * requests keep `promptCacheTtlMs`. Read through `promptCacheTtlMsFor`.
+   */
+  childPromptCacheTtlMs: Schema.optional(Schema.Finite),
 }) {}
+
+/**
+ * How long a request's prompt stays cached: the one reading of the two
+ * catalog lifetimes, for the loop's cold handoff and the TUI's cache notice.
+ */
+export const promptCacheTtlMsFor = (
+  model: Pick<Model, "promptCacheTtlMs" | "childPromptCacheTtlMs">,
+  child: boolean,
+): Option.Option<number> => {
+  const own = Option.fromUndefinedOr(model.promptCacheTtlMs)
+  if (!child) return own
+  return Option.orElse(Option.fromUndefinedOr(model.childPromptCacheTtlMs), () => own)
+}
 
 /**
  * Newest release first; models without a date sort last.

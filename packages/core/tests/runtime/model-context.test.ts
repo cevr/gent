@@ -1110,14 +1110,23 @@ describe("provider overflow recovery", () => {
 
 // ── cold prompt cache ───────────────────────────────────────────────────────
 
-/** A 1M window whose provider keeps a prompt cached for `promptCacheTtlMs`, when it says. */
-const coldCacheModel = (promptCacheTtlMs: Option.Option<number>) =>
+/**
+ * A 1M window whose provider keeps a prompt cached for `promptCacheTtlMs`, when
+ * it says, and a child session's prompt for `childPromptCacheTtlMs`.
+ */
+const coldCacheModel = (
+  promptCacheTtlMs: Option.Option<number>,
+  childPromptCacheTtlMs: Option.Option<number>,
+) =>
   Model.make({
     id: ModelId.make("cold-cache/wide-window"),
     name: "Wide window, cached prompts",
     provider: ProviderId.make("cold-cache"),
     contextLength: 1_000_000,
-    ...omitUndefined({ promptCacheTtlMs: Option.getOrUndefined(promptCacheTtlMs) }),
+    ...omitUndefined({
+      promptCacheTtlMs: Option.getOrUndefined(promptCacheTtlMs),
+      childPromptCacheTtlMs: Option.getOrUndefined(childPromptCacheTtlMs),
+    }),
   })
 const FIRST_PROMPT_MARK = "first-prompt-text"
 
@@ -1173,7 +1182,8 @@ const measuredReply = (text: string, inputTokens: number): SequenceStep => ({
  * after its request started. With `firstCallRateLimitedMs`, the first call
  * is refused with that retry delay and the retry streams the first reply.
  * With `switchModel`, the session moves to another model with the same
- * lifetime before the second turn.
+ * lifetime before the second turn. With `spawned`, the turns run in a child
+ * session of the harness session, whose lifetime is `childPromptCacheTtlMs`.
  */
 const runColdCacheTurns = (params: {
   readonly promptCacheTtlMs: Option.Option<number>
@@ -1183,6 +1193,8 @@ const runColdCacheTurns = (params: {
   readonly firstReplyHoldMs?: number
   readonly firstCallRateLimitedMs?: number
   readonly switchModel?: boolean
+  readonly childPromptCacheTtlMs?: number
+  readonly spawned?: boolean
 }) =>
   Effect.gen(function* () {
     const hold = Option.fromUndefinedOr(params.firstReplyHoldMs)
@@ -1236,14 +1248,26 @@ const runColdCacheTurns = (params: {
       onSome: () => Ref.get(played),
     })
     const compactor = [rangeCompactorExtension].filter(() => params.compactor)
-    const model = coldCacheModel(params.promptCacheTtlMs)
+    const model = coldCacheModel(
+      params.promptCacheTtlMs,
+      Option.fromUndefinedOr(params.childPromptCacheTtlMs),
+    )
     const otherModel = Model.make({ ...model, id: ModelId.make("cold-cache/other-window") })
-    const { client, sessionId, branchId } = yield* createRpcHarness({
+    const harness = yield* createRpcHarness({
       providerLayer,
       agents: [AgentDefinition.make({ name: DEFAULT_AGENT_NAME, model: model.id })],
       extensionInputs: [waitToolExtension, ...compactor],
       extraLayers: [ModelRegistry.Test([model, otherModel])],
     })
+    const { client } = harness
+    let target = { sessionId: harness.sessionId, branchId: harness.branchId }
+    if (params.spawned === true) {
+      target = yield* client.session.create({
+        parentSessionId: harness.sessionId,
+        parentBranchId: harness.branchId,
+      })
+    }
+    const { sessionId, branchId } = target
     for (const content of [`${FIRST_PROMPT_MARK} one`, "second prompt"]) {
       if (content === "second prompt" && params.switchModel === true) {
         yield* client.session.updateSettings({
@@ -1340,6 +1364,40 @@ describe("cold prompt cache", () => {
       expect(handoffMarkers(result.durable)).toHaveLength(0)
       const projected = secondProjection(result.events)
       expect(projected?._tag === "ModelContextProjected" && projected.compacted).toBe(false)
+    }),
+  )
+
+  it.live("a child session's large window is cold past the child lifetime, not the root's", () =>
+    Effect.gen(function* () {
+      // The catalog keeps a root's prompt an hour and a child's not at all
+      // (a stand-in for a child idle past its 5 minutes).
+      const result = yield* runColdCacheTurns({
+        promptCacheTtlMs: Option.some(60 * 60_000),
+        childPromptCacheTtlMs: 0,
+        spawned: true,
+        firstInputTokens: 100_000,
+        compactor: true,
+        steps: [textStep("the summary of the first turn"), textStep("second reply")],
+      })
+
+      expect(result.calls).toBe(3)
+      expect(result.requests[1]).toContain("summarize")
+      expect(handoffMarkers(result.durable)).toHaveLength(1)
+    }),
+  )
+
+  it.live("a root session keeps the root lifetime when the child lifetime has lapsed", () =>
+    Effect.gen(function* () {
+      const result = yield* runColdCacheTurns({
+        promptCacheTtlMs: Option.some(60 * 60_000),
+        childPromptCacheTtlMs: 0,
+        firstInputTokens: 100_000,
+        compactor: true,
+        steps: [textStep("second reply")],
+      })
+
+      expect(result.calls).toBe(2)
+      expect(handoffMarkers(result.durable)).toHaveLength(0)
     }),
   )
 

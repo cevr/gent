@@ -10,6 +10,7 @@ import {
   type EffectiveModelDriver,
   type ModelId,
   type ModelId as ModelIdType,
+  promptCacheTtlMsFor,
   type ReasoningEffort,
   resolveAgentModel,
 } from "../domain/agent.js"
@@ -31,6 +32,7 @@ import {
   encodeToolOutput,
   Message,
   messagePartsToolCallParts,
+  isSpawnedSession,
   normalizeResponseParts,
   projectResponsePartsToMessageParts,
   responseUsage,
@@ -1195,6 +1197,8 @@ interface ResolvedTurnContext {
   hostToolBindings: ReadonlyMap<string, ResolvedToolCapability>
   /** Sent after the conversation, never in `systemPrompt`: see `toPrompt`. */
   notices: ReadonlyArray<ExtensionTurnNotice>
+  /** The session is a spawned child (`isSpawnedSession`): its requests say so to the driver. */
+  child: boolean
 }
 
 const mergeSystemPromptAddendum = (
@@ -1444,6 +1448,7 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
     temperature: dispatchAgent.temperature,
     modelDriver: route.modelDriver,
     notices: projEval.notices,
+    child: Option.exists(session, isSpawnedSession),
   }
 })
 
@@ -1598,7 +1603,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   const promptCache = Option.map(
     Option.all([
       Option.filter(params.lastCallAtMillis, () => sameModel),
-      Option.fromUndefinedOr(modelOption.value.promptCacheTtlMs),
+      promptCacheTtlMsFor(modelOption.value, resolved.child),
     ]),
     ([lastCallAtMillis, ttlMs]): PromptCache => ({ lastCallAtMillis, ttlMs }),
   )
@@ -1627,6 +1632,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
     temperature: resolved.temperature,
     reasoning: resolved.reasoning,
     // The driver reads the catalog's word on reasoning, not the model name.
+    child: resolved.child,
     supportsReasoning: modelOption.value.reasoning,
     // The request asks for no more output than the budget keeps free, so
     // input within the budget plus the reply never passes the window.

@@ -92,7 +92,7 @@ type JsonRecord = Schema.Schema.Type<typeof JsonRecordSchema>
 
 /** The payload transform with the host's crypto and platform provided. */
 const transformPayload = (payload: JsonRecord) =>
-  transformPayloadEffect(payload, Option.some("1h")).pipe(
+  transformPayloadEffect(payload, Option.some({ request: "1h", shared: "1h" })).pipe(
     Effect.provide(Layer.merge(BunCrypto.layer, testPlatformLayer)),
   )
 
@@ -2048,9 +2048,16 @@ describe("Anthropic chronological context", () => {
       }),
   )
 })
-/** Every `cache_control` marker in a request body, in wire order. */
-const cacheMarkers = (body: string): ReadonlyArray<string> =>
-  Array.from(body.matchAll(/"cache_control":\{[^}]*\}/g), (match) => match[0])
+/** Every `cache_control` marker in a request body, in prefix order (tools, system, messages) whatever the order of its keys. */
+const cacheMarkers = (body: string): ReadonlyArray<string> => {
+  const payload = Schema.decodeSync(Schema.fromJsonString(JsonRecordSchema))(body)
+  const toJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
+  return ["tools", "system", "messages"]
+    .filter((key) => key in payload)
+    .flatMap((key) =>
+      Array.from(toJson(payload[key]).matchAll(/"cache_control":\{[^}]*\}/g), (match) => match[0]),
+    )
+}
 
 describe("Anthropic prompt-cache lifetime", () => {
   const conversation = Prompt.make([
@@ -2126,6 +2133,43 @@ describe("Anthropic prompt-cache lifetime", () => {
           for (const marker of markers) {
             expect(marker).toBe('"cache_control":{"type":"ephemeral","ttl":"1h"}')
           }
+        }
+      }).pipe(Effect.timeout("5 seconds")),
+  )
+
+  it.live(
+    "a child's markers ask for 5 minutes, its shared part 1 hour; a root's ask for 1 hour",
+    () =>
+      Effect.gen(function* () {
+        const sharedPart = `# Shared\n\n${"Instructions every agent reads. ".repeat(160)}`
+        const sharedPrompt = Prompt.fromMessages([
+          Prompt.makeMessage("system", { content: sharedPart }),
+          Prompt.makeMessage("system", { content: "# Children\n\n- Delegate independent work." }),
+          Prompt.makeMessage("user", {
+            content: [Prompt.makePart("text", { text: "Run a cell." })],
+          }),
+        ])
+        const hour = '"cache_control":{"type":"ephemeral","ttl":"1h"}'
+        const minutes = '"cache_control":{"type":"ephemeral","ttl":"5m"}'
+        const [childApiKey, childClaudeCode] = yield* renderedMarkers("1h", sharedPrompt, {
+          cacheKey: "child-session",
+          child: true,
+        })
+        // A fresh child still reads the shared part its parent wrote; the longer
+        // lifetime renders first, as the ordering rule asks.
+        expect(childApiKey).toEqual([hour, minutes, minutes])
+        expect(childClaudeCode?.length).toBeGreaterThanOrEqual(2)
+        for (const marker of childClaudeCode ?? []) expect(marker).toBe(minutes)
+        for (const markers of yield* renderedMarkers("1h", sharedPrompt)) {
+          expect(markers.length).toBeGreaterThanOrEqual(2)
+          for (const marker of markers) expect(marker).toBe(hour)
+        }
+        // The 5-minute switch still sets every marker, a child's shared part too.
+        for (const markers of yield* renderedMarkers("5m", sharedPrompt, {
+          cacheKey: "child-session",
+          child: true,
+        })) {
+          for (const marker of markers) expect(marker).toBe(minutes)
         }
       }).pipe(Effect.timeout("5 seconds")),
   )
