@@ -2739,6 +2739,58 @@ const consumedThroughApi = (file: string, text: string): ReadonlySet<string> =>
     () => new Set<string>(),
   )
 
+// ── the lexer every scan reads through ──────────────────────────────────────
+
+describe("the guards' lexer", () => {
+  test("a regex literal that holds a backtick or `/*` hides no read after it", () => {
+    const consumer = {
+      file: "packages/e2e/tests/probe.test.ts",
+      text: 'import { used } from "../src/probe"\nused()\n',
+    }
+    const findingsAfter = (regex: string) =>
+      findingsFor([
+        {
+          file: "packages/e2e/src/probe.ts",
+          text: [
+            "export const helper = () => 1",
+            `const RE = ${regex}`,
+            "export const used = () => helper() + Number(RE.test('x'))",
+          ].join("\n"),
+        },
+        consumer,
+      ]).length
+    expect(["/[a]/", "/[`]/", "/`/", "/[/*]/"].map(findingsAfter)).toEqual([0, 0, 0, 0])
+  })
+
+  test("JSX in a .tsx file is neither a string nor a regex", () => {
+    const homes = (source: string) =>
+      findSharedTestHomes("apps/tui/tests/probe.test.tsx", source).length
+    expect(
+      [
+        'mount({ cwd: pick(dir), note: "/tmp/log" })',
+        'mount({ cwd: pick(<box></box>, dir), note: "/tmp/log" })',
+        'mount({ cwd: pick(<text>it\'s</text>, dir), note: "/tmp/log" })',
+        'mount({ cwd: pick(<box title="a/b" />, dir), note: "/tmp/log" })',
+        'mount({ cwd: pick(<><text>{`it\'s`}</text></>, dir), note: "/tmp/log" })',
+      ].map(homes),
+    ).toEqual([0, 0, 0, 0, 0])
+  })
+
+  test("a type parameter list is code, in a .tsx and a .ts file", () => {
+    const homes = (file: string, source: string) => findSharedTestHomes(file, source).length
+    const tsx = "apps/tui/tests/probe.test.tsx"
+    expect([
+      homes(tsx, 'const f = <A,>(a: A) => a; const env = { cwd: "/tmp" }'),
+      homes(tsx, 'const f = <A extends object>(a: A) => a; const env = { cwd: "/tmp" }'),
+      homes(tsx, 'const f = <A>(a: A) => a; const env = { cwd: "/tmp" }'),
+      homes(
+        "apps/tui/tests/probe.test.ts",
+        'const f = <Row>(a: Row) => a; const env = { cwd: "/tmp" }',
+      ),
+    ]).toEqual([1, 1, 1, 1])
+  })
+})
+
 describe("module surface declarations", () => {
   test("reads declared exports from a scanned core file", () => {
     const source = `export const retrySchedule = 1
