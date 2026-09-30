@@ -1048,23 +1048,13 @@ export function ClientProvider(props: ClientProviderProps) {
   )
 
   const applySessionRuntime: ClientTransportValue["applySessionRuntime"] = (input) => {
-    const current = sessionOption()
-    if (Option.isNone(current)) return
-    if (current.value.sessionId !== input.sessionId || current.value.branchId !== input.branchId)
-      return
+    if (!Option.exists(sessionOption(), (current) => sameIdentity(current, input))) return
     setRunning(input.runtime._tag !== "Idle")
   }
 
   const applySessionSnapshot = (snapshot: SessionSnapshot): void => {
     const currentSession = sessionOption()
-    if (Option.isSome(currentSession)) {
-      if (
-        currentSession.value.sessionId !== snapshot.sessionId ||
-        currentSession.value.branchId !== snapshot.branchId
-      ) {
-        return
-      }
-    }
+    if (Option.isSome(currentSession) && !sameIdentity(currentSession.value, snapshot)) return
     clearConnectionIssue()
     const nextSession = {
       sessionId: snapshot.sessionId,
