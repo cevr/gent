@@ -33,8 +33,7 @@ import { textWidth } from "./text-width-adapter"
 import {
   expandFileRefs,
   formatError,
-  INLINE_MAX_BYTES,
-  INLINE_MAX_LINES,
+  inlineHead,
   lostRequest,
   randomId,
   truncate,
@@ -80,6 +79,7 @@ import {
   type ApprovalResult,
   type GentClientRpcError,
   lineCount,
+  splitLines,
 } from "@gent/core/protocol"
 
 // ── shell execution ─────────────────────────────────────────────────────────
@@ -101,9 +101,9 @@ export const shellOutputDirectory = (home: string = homedir()): Effect.Effect<st
   Effect.map(dataPaths(home), ({ dataDir }) => `${dataDir}/shell-output`)
 
 /**
- * Execute a shell command, capped at INLINE_MAX_LINES lines and INLINE_MAX_BYTES bytes.
- * The caller sees `truncated` when the cap drops output, and `savedPath` names
- * the file holding the whole of it.
+ * Execute a shell command. The inline copy keeps the whole lines that fit the
+ * `@file` cap (`inlineHead`). The caller sees `truncated` when the cap drops
+ * output, and `savedPath` names the file holding the whole of it.
  */
 export const executeShell = (command: string, cwd: string) =>
   Effect.gen(function* () {
@@ -111,25 +111,16 @@ export const executeShell = (command: string, cwd: string) =>
     let fullOutput = stdout
     if (stderr.length > 0) fullOutput = `${stdout}\n${stderr}`
 
-    const lines = fullOutput.split("\n")
-    const needsTruncation = lines.length > INLINE_MAX_LINES || fullOutput.length > INLINE_MAX_BYTES
+    const lines = splitLines(fullOutput)
+    const kept = inlineHead(lines)
 
-    if (!needsTruncation) {
+    if (kept.length === lines.length) {
       return { output: fullOutput.trim(), truncated: false, savedPath: Option.none<string>() }
     }
 
     const savedPath = yield* saveFullOutput(command, fullOutput)
-
-    let truncated: string = fullOutput
-    if (lines.length > INLINE_MAX_LINES) {
-      truncated = lines.slice(0, INLINE_MAX_LINES).join("\n")
-    }
-    if (truncated.length > INLINE_MAX_BYTES) {
-      truncated = truncated.slice(0, INLINE_MAX_BYTES)
-    }
-
     return {
-      output: truncated.trim(),
+      output: kept.join("\n").trim(),
       truncated: true,
       savedPath,
     }

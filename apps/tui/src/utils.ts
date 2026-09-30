@@ -971,8 +971,25 @@ const matchFileRefs = (text: string): FileRefMatch[] => {
  * The most text a composer insert puts inline: `!cmd` output and an `@file`
  * both stop at this many lines or characters, whichever comes first.
  */
-export const INLINE_MAX_LINES = 2000
-export const INLINE_MAX_BYTES = 50 * 1024
+const INLINE_MAX_LINES = 2000
+const INLINE_MAX_BYTES = 50 * 1024
+
+/**
+ * The head of `lines` that fits the inline cap: whole lines, at most
+ * INLINE_MAX_LINES of them and INLINE_MAX_BYTES of UTF-8 with their breaks.
+ */
+export const inlineHead = (lines: ReadonlyArray<string>): ReadonlyArray<string> => {
+  const encoder = new TextEncoder()
+  const kept: Array<string> = []
+  let size = 0
+  for (const line of lines) {
+    const lineBytes = encoder.encode(line).length
+    if (kept.length >= INLINE_MAX_LINES || size + lineBytes > INLINE_MAX_BYTES) break
+    kept.push(line)
+    size += lineBytes + 1
+  }
+  return kept
+}
 
 /** ripgrep's rule, as grep keeps it: a NUL byte in the first 8 KB marks a file binary. */
 const BINARY_PROBE_BYTES = 8192
@@ -1005,15 +1022,7 @@ const readFileContent = (
       whole = lines.join("\n")
     }
 
-    const encoder = new TextEncoder()
-    const kept: Array<string> = []
-    let size = 0
-    for (const line of lines) {
-      const lineBytes = encoder.encode(line).length
-      if (kept.length >= INLINE_MAX_LINES || size + lineBytes > INLINE_MAX_BYTES) break
-      kept.push(line)
-      size += lineBytes + 1
-    }
+    const kept = inlineHead(lines)
     if (kept.length === lines.length) return Option.some(whole)
     return Option.some(
       `${kept.join("\n")}\n[${label} cut at ${kept.length} lines of ${lines.length}; read the rest with the read tool]`,

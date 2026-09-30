@@ -197,6 +197,22 @@ describe("executeShell", () => {
     }),
   )
 
+  // The cap counts UTF-8 bytes, as the `@file` cap does, and cuts at a whole line.
+  shellTest("multi-byte output past the byte cap is cut at a whole line", () =>
+    Effect.gen(function* () {
+      const testDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
+      // 600 lines of 50 `é`: about 30,000 UTF-16 units, but 60,600 bytes of UTF-8.
+      const result = yield* executeShell(
+        "for i in $(seq 1 600); do printf 'é%.0s' {1..50}; echo; done",
+        testDir,
+      )
+      expect(result.truncated).toBe(true)
+      expect(new TextEncoder().encode(result.output).length).toBeLessThanOrEqual(50 * 1024)
+      expect(result.output.split("\n").every((line) => line === "é".repeat(50))).toBe(true)
+      expect(Option.isSome(result.savedPath)).toBe(true)
+    }),
+  )
+
   shellTest("a command inside the cap spills nothing", () =>
     Effect.gen(function* () {
       const testDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
