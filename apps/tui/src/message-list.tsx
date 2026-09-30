@@ -156,10 +156,27 @@ export type SessionEvent =
       attempt: number
       maxAttempts: number
       delayMs: number
-      resolved: boolean
+      outcome: RetryOutcome
+      /** The provider failure that caused the retry, as the core reported it. */
+      reason: string
       createdAt: number
       seq: number
     }
+
+/**
+ * How a retry ended, as far as the feed saw. `retried`: the retry ran (it
+ * streamed, failed again, or its step ended). `cancelled`: the turn was cut
+ * short before the retry answered. `stopped`: the runtime went idle before
+ * the feed saw an outcome.
+ */
+export type RetryOutcome = "pending" | "retried" | "cancelled" | "stopped"
+
+/** The first line of the retry's reason, after a separator; an empty reason adds nothing. */
+const retryReason = (reason: string): string => {
+  const line = (reason.split("\n")[0] ?? "").trim()
+  if (line === "") return ""
+  return ` · ${line}`
+}
 
 export const currentMillis = () => DateTime.toEpochMillis(DateTime.nowUnsafe())
 
@@ -182,15 +199,17 @@ export const getSessionEventLabel = (event: SessionEvent, now = currentMillis())
   if (event._tag === "interruption") return "Interrupted - what do you want to do instead?"
   if (event._tag === "error") return event.error
   if (event._tag === "notice") return event.text
-  if (event.resolved) return `Retry ${event.attempt}/${event.maxAttempts} finished`
+  const count = `${event.attempt}/${event.maxAttempts}`
+  const reason = retryReason(event.reason)
+  if (event.outcome === "retried") return `Retried ${count}${reason}`
+  if (event.outcome === "cancelled") return `Retry ${count} cancelled${reason}`
+  if (event.outcome === "stopped") return `Retry ${count} stopped${reason}`
 
   const retryAt = event.createdAt + event.delayMs
   const remainingMs = Math.max(0, retryAt - now)
   const seconds = Math.ceil(remainingMs / 1000)
-  if (seconds <= 0) {
-    return `Retrying now... ${event.attempt}/${event.maxAttempts}`
-  }
-  return `Retrying in ${seconds}s... ${event.attempt}/${event.maxAttempts}`
+  if (seconds <= 0) return `Retrying now... ${count}${reason}`
+  return `Retrying in ${seconds}s... ${count}${reason}`
 }
 
 // ── session event indicator ─────────────────────────────────────────────────
@@ -836,7 +855,8 @@ export const transcriptFingerprint = (item: SessionItem): string => {
       item.attempt,
       item.maxAttempts,
       item.delayMs,
-      item.resolved,
+      item.outcome,
+      item.reason,
     ])
   return encodeFingerprint([item._tag, item.createdAt, item.seq])
 }

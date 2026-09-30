@@ -50,7 +50,12 @@ export {
 } from "./domain/message.js"
 export { Model, ModelId, ProviderId } from "./domain/agent.js"
 export { QueueEntryInfo, QueueSnapshot } from "./domain/message.js"
-export { type ModelContextMetrics } from "./domain/agent-loop.js"
+export {
+  initialSessionMetrics,
+  type ModelContextMetrics,
+  type SessionRuntimeMetrics,
+  stepSessionMetrics,
+} from "./domain/agent-loop.js"
 export {
   CONTEXT_WINDOW_MESSAGE_TYPE,
   MODEL_CHANGE_MESSAGE_TYPE,

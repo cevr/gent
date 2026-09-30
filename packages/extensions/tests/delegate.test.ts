@@ -512,7 +512,7 @@ describe("a child's completion", () => {
           // Four steps over three turns: the start (wake call, then pong), the wake, the send.
           expect(models).toEqual([childModel, childModel, childModel, childModel])
           expect(childTools).toHaveLength(4)
-          for (const tools of childTools) expect(tools).not.toContain("delegate.start")
+          for (const tools of childTools) expect(tools).not.toContain("delegate__start")
           expect(snapshot.agent).toBe(DELEGATE_AGENT_NAME)
           expect(snapshot.resolvedModelId).toBe(childModel)
         }).pipe(Effect.timeout("20 seconds")),
@@ -706,7 +706,7 @@ describe("a child's completion", () => {
         yield* sendPrompt(harness, "delegate this task")
         const tools = yield* Deferred.await(childTools)
         expect(tools).toContain("bash")
-        expect(tools.filter((name) => name.startsWith("delegate."))).toEqual([])
+        expect(tools.filter((name) => name.startsWith("delegate__"))).toEqual([])
         // Nobody answers a non-interactive child: a confirm or a handoff would park it for good.
         const waitsOnUser = ["ask_user", "prompt", "handoff"]
         expect(tools.filter((name) => waitsOnUser.includes(name))).toEqual([])
@@ -1822,7 +1822,10 @@ describe("starts over the pending cap", () => {
 const correction = "CORRECTION: only look at src/store"
 const question = "QUESTION: which store, sqlite or memory?"
 
-/** The child session the parent's `delegate.start` result named, once the prompt carries it. */
+/**
+ * The child session the parent's `delegate.start` result named, once the
+ * prompt carries it. The model's prompt names the tool by its wire name.
+ */
 const startedSessionId = (prompt: Prompt.Prompt): Option.Option<string> =>
   Option.fromUndefinedOr(
     prompt.content
@@ -1831,7 +1834,7 @@ const startedSessionId = (prompt: Prompt.Prompt): Option.Option<string> =>
         return message.content
       })
       .flatMap((part) => {
-        if (part.type !== "tool-result" || part.name !== "delegate.start") return []
+        if (part.type !== "tool-result" || part.name !== "delegate__start") return []
         const decoded = Schema.decodeUnknownOption(Schema.Struct({ sessionId: Schema.String }))(
           part.result,
         )

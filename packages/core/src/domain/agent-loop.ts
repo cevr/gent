@@ -137,48 +137,73 @@ export type SessionRuntimeMetrics = typeof SessionRuntimeMetrics.Type
 
 // ── State builders ──
 
-/** Session totals read off the branch's event log; one pass, no storage. */
-export const foldSessionMetrics = (
-  events: ReadonlyArray<{ readonly event: AgentEvent }>,
+/** The totals of a branch with no events. */
+export const initialSessionMetrics: SessionRuntimeMetrics = {
+  turns: 0,
+  durationMs: 0,
+  costUsd: 0,
+  lastInputTokens: 0,
+}
+
+/**
+ * The totals after one more event. The server folds a branch's stored log
+ * with it (`foldSessionMetrics`); a client applies it to each live event on
+ * top of the snapshot it hydrated, so both read one fold (decided by
+ * derive-dont-sync).
+ */
+export const stepSessionMetrics = (
+  metrics: SessionRuntimeMetrics,
+  event: AgentEvent,
 ): SessionRuntimeMetrics => {
-  let turns = 0
-  let durationMs = 0
-  let costUsd = 0
-  let lastInputTokens = 0
-  let compactions = 0
-  let context = Option.none<ModelContextMetrics>()
-  for (const { event } of events) {
-    switch (event._tag) {
-      case "TurnCompleted":
-        turns++
-        durationMs += event.durationMs
-        break
-      case "ModelContextProjected":
+  const addCost = (costUsd: Option.Option<number>) =>
+    metrics.costUsd + Option.getOrElse(costUsd, () => 0)
+  switch (event._tag) {
+    case "TurnCompleted":
+      return {
+        ...metrics,
+        turns: metrics.turns + 1,
+        durationMs: metrics.durationMs + event.durationMs,
+      }
+    case "ModelContextProjected": {
+      let compactions = Option.getOrElse(
+        Option.map(Option.fromUndefinedOr(metrics.context), (context) => context.compactions),
+        () => 0,
+      )
+      if (event.compacted) compactions += 1
+      return {
+        ...metrics,
+        costUsd: addCost(Option.fromUndefinedOr(event.costUsd)),
         // A new step's projection: the last count belongs to the step before it.
-        lastInputTokens = 0
-        if (event.compacted) compactions++
-        if (Predicate.isNotUndefined(event.costUsd)) costUsd += event.costUsd
-        context = Option.some({
+        lastInputTokens: 0,
+        context: {
           estimatedTokens: event.estimatedTokens,
           availableInputTokens: event.availableInputTokens,
           contextLimitTokens: event.contextLimitTokens,
           omittedMessages: event.omittedMessages,
           handoffMessageId: event.handoffMessageId,
           compactions,
-        })
-        break
-      case "StreamEnded":
-        if (Predicate.isNotUndefined(event.usage)) lastInputTokens = event.usage.inputTokens
-        if (Predicate.isNotUndefined(event.costUsd)) costUsd += event.costUsd
-        break
+        },
+      }
     }
+    case "StreamEnded":
+      return {
+        ...metrics,
+        costUsd: addCost(Option.fromUndefinedOr(event.costUsd)),
+        lastInputTokens: Option.match(Option.fromUndefinedOr(event.usage), {
+          onNone: () => metrics.lastInputTokens,
+          onSome: (usage) => usage.inputTokens,
+        }),
+      }
+    default:
+      return metrics
   }
-  const metrics = { turns, durationMs, costUsd, lastInputTokens }
-  return Option.match(context, {
-    onNone: () => metrics,
-    onSome: (value) => ({ ...metrics, context: value }),
-  })
 }
+
+/** Session totals read off the branch's event log; one pass, no storage. */
+export const foldSessionMetrics = (
+  events: ReadonlyArray<{ readonly event: AgentEvent }>,
+): SessionRuntimeMetrics =>
+  events.reduce((metrics, { event }) => stepSessionMetrics(metrics, event), initialSessionMetrics)
 
 export const buildIdleState = (): IdleState => LoopState.cases.Idle.make({})
 

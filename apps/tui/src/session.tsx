@@ -107,6 +107,7 @@ import {
   currentMillis,
   emptyTurnSteps,
   type Message,
+  type RetryOutcome,
   type SessionEvent,
   type SessionItem,
 } from "./message-list"
@@ -1827,12 +1828,39 @@ const upsertReceivedMessage = (
   )
 }
 
-const resolveRetryingEvents = (setStore: SetStoreFunction<SessionFeedStore>) => {
+/** Give every retry row still in one of the `from` outcomes the outcome the feed just learned. */
+const settleRetryingEvents = (
+  setStore: SetStoreFunction<SessionFeedStore>,
+  outcome: RetryOutcome,
+  from: ReadonlyArray<RetryOutcome> = ["pending"],
+) => {
   setStore(
     produce((draft) => {
       for (const event of draft.events) {
-        if (event._tag === "retrying") event.resolved = true
+        if (event._tag === "retrying" && from.includes(event.outcome)) event.outcome = outcome
       }
+    }),
+  )
+}
+
+/**
+ * The retry's request goes out `delayMs` after its row; the answer the retry
+ * gives dates from then, so the row sits above it. An answer the failed
+ * attempt already wrote into keeps its place. Core's own clock readers date
+ * the request the same way (`knownRequestStart` in turn.ts).
+ */
+const dateAnswerFromRetry = (
+  setStore: SetStoreFunction<SessionFeedStore>,
+  id: string,
+  requestAt: number,
+) => {
+  setStore(
+    produce((draft) => {
+      const answer = Option.fromNullishOr(draft.messages.find((message) => message.id === id))
+      if (Option.isNone(answer) || answer.value.content !== "") return
+      const calls = Option.fromNullishOr(answer.value.toolCalls)
+      if (Option.isSome(calls) && calls.value.length > 0) return
+      answer.value.createdAt = requestAt
     }),
   )
 }
@@ -2179,12 +2207,18 @@ export function useSessionFeed(
 
       case "StreamEnded":
         streamMessageId = Option.none()
+        // A cut stream ends a retry that had not answered; a settled one means it ran.
+        if (event.interrupted === true) settleRetryingEvents(setStore, "cancelled")
+        else settleRetryingEvents(setStore, "retried")
         turnSteps = addStep(turnSteps, event)
         return
 
       case "TurnCompleted":
         streamMessageId = Option.none()
-        resolveRetryingEvents(setStore)
+        // A cancel ends a retry that had not answered; any other end means it ran.
+        if (event.interrupted === true)
+          settleRetryingEvents(setStore, "cancelled", ["pending", "stopped"])
+        else settleRetryingEvents(setStore, "retried", ["pending", "stopped"])
         appendTurnEndRow(event, stampedAt)
         return
 
@@ -2194,16 +2228,20 @@ export function useSessionFeed(
         return
 
       case "ProviderRetrying":
-        if (live) resolveRetryingEvents(setStore)
+        // A new retry means the one before it ran and failed again.
+        settleRetryingEvents(setStore, "retried")
         appendSessionEvent(setStore, {
           _tag: "retrying",
           attempt: event.attempt,
           maxAttempts: event.maxAttempts,
           delayMs: event.delayMs,
-          resolved: false,
+          outcome: "pending",
+          reason: event.error,
           createdAt: stampedAt,
           seq: eventSeq++,
         })
+        if (Option.isSome(streamMessageId))
+          dateAnswerFromRetry(setStore, streamMessageId.value, stampedAt + event.delayMs)
         return
 
       case "ErrorOccurred":
@@ -2222,7 +2260,8 @@ export function useSessionFeed(
           })
           return
         }
-        resolveRetryingEvents(setStore)
+        // The retry ran and failed; the error row says how the turn ended.
+        settleRetryingEvents(setStore, "retried")
         if (live) client.log.error("sessionFeed.error", { error: event.error, seq: eventSeq })
         appendSessionEvent(setStore, {
           _tag: "error",
@@ -2477,7 +2516,8 @@ export function useSessionFeed(
                         Effect.sync(() => {
                           if (Option.isNone(currentKey) || currentKey.value !== key) return
                           client.setConnectionIssue(Option.getOrNull(Option.none()))
-                          if (next._tag === "Idle") resolveRetryingEvents(setStore)
+                          // The turn's own end, when it arrives, says how a stopped retry ended.
+                          if (next._tag === "Idle") settleRetryingEvents(setStore, "stopped")
                           client.applySessionRuntime({
                             sessionId: session,
                             branchId: branch,
@@ -2618,13 +2658,16 @@ export function useSessionFeed(
 
       switch (event._tag) {
         case "StreamStarted":
-          resolveRetryingEvents(setStore)
+          // A new step means the last step's retries ran.
+          settleRetryingEvents(setStore, "retried")
           if (!live) break
           setRunningCalls([])
           yield* openStreamedAnswer(event, stampedAt)
           break
 
         case "StreamChunk":
+          // The answer streams: the retry ran.
+          settleRetryingEvents(setStore, "retried")
           yield* appendStreamedChunk(event.chunk, stampedAt)
           break
 

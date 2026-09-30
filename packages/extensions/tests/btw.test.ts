@@ -299,7 +299,7 @@ describe("btw forks", () => {
                 // The delegate agent denies delegation; the default agent would offer it.
                 const tools = options.tools.map((entry) => entry.name)
                 expect(tools.length).toBeGreaterThan(0)
-                expect(tools).not.toContain("delegate.start")
+                expect(tools).not.toContain("delegate__start")
               },
             },
           ])

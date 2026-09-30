@@ -20,7 +20,7 @@ describe("AgentName brand", () => {
   })
 
   test("plain string fails the brand predicate at the schema boundary", () => {
-    expect(Schema.is(AgentName)("cowork")).toBe(true) // brand-only filter accepts strings at runtime
+    expect(Schema.is(AgentName)("primary")).toBe(true) // brand-only filter accepts strings at runtime
     const decoded = Schema.decodeSync(AgentName)("research")
     expect(decoded).toBe(AgentName.make("research"))
   })

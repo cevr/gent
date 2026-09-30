@@ -242,14 +242,14 @@ describe("session route driver", () => {
   })
 
   test("a config override routes an agent that names no driver", () => {
-    const agent = AgentDefinition.make({ name: AgentName.make("cowork") })
-    const route = routeOf(agent, { cowork: DriverRef.make({ id: "openai" }) })
+    const agent = AgentDefinition.make({ name: AgentName.make("primary") })
+    const route = routeOf(agent, { primary: DriverRef.make({ id: "openai" }) })
     expect(route.modelDriver.driverId).toEqual(Option.some("openai"))
     expect(route.modelDriver.contextModelId).toBe(ModelId.make("openai/claude-sonnet-5"))
   })
 
   test("no driver and no override route through the model id's provider", () => {
-    const agent = AgentDefinition.make({ name: AgentName.make("cowork") })
+    const agent = AgentDefinition.make({ name: AgentName.make("primary") })
     for (const route of [routeOf(agent), routeOf(agent, {})]) {
       expect(route.modelDriver.driverId).toEqual(Option.some("anthropic"))
       expect(route.modelDriver.contextModelId).toBe(modelId)
@@ -257,8 +257,8 @@ describe("session route driver", () => {
   })
 
   test("an override for another agent does not route this one", () => {
-    const agent = AgentDefinition.make({ name: AgentName.make("cowork") })
-    const route = routeOf(agent, { deepwork: DriverRef.make({ id: "openai" }) })
+    const agent = AgentDefinition.make({ name: AgentName.make("primary") })
+    const route = routeOf(agent, { secondary: DriverRef.make({ id: "openai" }) })
     expect(route.modelDriver.driverId).toEqual(Option.some("anthropic"))
   })
 })

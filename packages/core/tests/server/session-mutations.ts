@@ -8,6 +8,7 @@ import { Branch, dateFromMillis, emptyQueueSnapshot, Session } from "../../src/d
 import { AgentName } from "../../src/domain/agent"
 import { EventStore, EventStoreError } from "../../src/domain/event"
 import { GentPlatform } from "../../src/runtime/gent-platform"
+import { RuntimeEnvironment } from "../../src/runtime/config"
 import { SessionRuntime, type SessionRuntimeService } from "../../src/runtime/session"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
 import { GentRpcs } from "../../src/server/rpc"
@@ -24,6 +25,12 @@ import { createE2ELayer, createRpcClient, testSqliteStorage } from "../../src/te
 import { e2ePreset } from "../helpers/test-preset"
 
 export const FIXED_NOW = dateFromMillis(1_767_225_600_000)
+
+/** The host environment `SessionMutations` builds its deleted-session host context from. */
+export const testRuntimeEnvironment = RuntimeEnvironment.Live({
+  cwd: "/nonexistent/gent-test-cwd",
+  home: "/nonexistent/gent-test-home",
+})
 
 export const makeClient = (reply = "ok") =>
   Effect.gen(function* () {
@@ -101,7 +108,7 @@ export const sessionRuntimeLayer = (
       getState: () =>
         Effect.succeed({
           _tag: "Idle",
-          agent: AgentName.make("cowork"),
+          agent: AgentName.make("primary"),
           queue: emptyQueueSnapshot(),
         }),
       watchState: () => Effect.succeed(Stream.empty),
@@ -121,6 +128,7 @@ const buildFailingSessionMutationsLayer = () => {
     LanguageModelLayers.debug(),
     LanguageModelLayers.resolver(LanguageModelLayers.debug()),
     GentPlatform.Test(),
+    testRuntimeEnvironment,
     ExtensionRegistry.Test(),
   )
   return Layer.provideMerge(SessionMutationsLive, deps)
@@ -170,6 +178,7 @@ const buildSessionMutationsLayer = () => {
     LanguageModelLayers.debug(),
     LanguageModelLayers.resolver(LanguageModelLayers.debug()),
     GentPlatform.Test(),
+    testRuntimeEnvironment,
     ExtensionRegistry.Test(),
   )
   return Layer.provideMerge(SessionMutationsLive, deps)
@@ -218,6 +227,7 @@ export const sessionMutationsLayerWithMachineProbe = (
     LanguageModelLayers.debug(),
     LanguageModelLayers.resolver(LanguageModelLayers.debug()),
     GentPlatform.Test(),
+    testRuntimeEnvironment,
     ExtensionRegistry.Test(),
   )
   return Layer.provideMerge(SessionMutationsLive, deps)
@@ -248,6 +258,7 @@ export const failingDeleteSessionMutationsLayerWithMachineProbe = (
     LanguageModelLayers.debug(),
     LanguageModelLayers.resolver(LanguageModelLayers.debug()),
     GentPlatform.Test(),
+    testRuntimeEnvironment,
     ExtensionRegistry.Test(),
   )
   return Layer.provideMerge(SessionMutationsLive, deps)
@@ -310,6 +321,7 @@ export const racySessionMutationsLayer = (params: {
     LanguageModelLayers.debug(),
     LanguageModelLayers.resolver(LanguageModelLayers.debug()),
     GentPlatform.Test(),
+    testRuntimeEnvironment,
     ExtensionRegistry.Test(),
   )
   return Layer.provideMerge(SessionMutationsLive, deps)
@@ -355,6 +367,7 @@ export const interleavedSessionMutationsLayer = (params: {
     LanguageModelLayers.debug(),
     LanguageModelLayers.resolver(LanguageModelLayers.debug()),
     GentPlatform.Test(),
+    testRuntimeEnvironment,
     ExtensionRegistry.Test(),
   )
   return Layer.provideMerge(SessionMutationsLive, deps)

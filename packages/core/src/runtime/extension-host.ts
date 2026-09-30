@@ -3,6 +3,7 @@ import {
   Context,
   Crypto,
   DateTime,
+  Duration,
   Effect,
   Exit,
   FileSystem,
@@ -56,6 +57,7 @@ import {
   sortExtensionsByScope,
   type SystemPromptInput,
   type ToolPolicyFragment,
+  type SessionDeletedInput,
   type TurnAfterInput,
   validateExtensionPackage,
 } from "../domain/extension.js"
@@ -298,6 +300,9 @@ interface CompiledExtensionHooks {
     readNotices: ReadonlyMap<ExtensionId, ReadonlySet<string>>,
   ) => Effect.Effect<void, never, CurrentExtensionHostContext>
   readonly emitLoopOpen: Effect.Effect<void, never, CurrentExtensionHostContext>
+  readonly emitSessionDeleted: (
+    input: SessionDeletedInput,
+  ) => Effect.Effect<void, never, CurrentExtensionHostContext>
 }
 
 /** A notice with the extension whose projection returned it. */
@@ -412,6 +417,7 @@ const collectHookSlot = (
     turnProjection: HookTurnProjectionSlot[]
     turnAfter: RegisteredHook<TurnAfterInput>[]
     loopOpen: RegisteredHook<void>[]
+    sessionDeleted: RegisteredHook<SessionDeletedInput>[]
   },
 ) => {
   switch (slot.kind) {
@@ -436,8 +442,21 @@ const collectHookSlot = (
         handler: slot.hook.handler,
       })
       return
+    case "sessionDeleted":
+      slots.sessionDeleted.push({
+        extensionId: ext.manifest.id,
+        handler: slot.hook.handler,
+      })
+      return
   }
 }
+
+/**
+ * How long a delete waits for one extension's `sessionDeleted` handler. The
+ * rows are already gone, so a handler that never returns must not hold the
+ * delete RPC; past the bound it is interrupted and a warning is logged.
+ */
+export const SESSION_DELETED_HOOK_TIMEOUT = Duration.seconds(30)
 
 export const compileExtensionHooks = (
   extensions: ReadonlyArray<LoadedExtension>,
@@ -447,11 +466,13 @@ export const compileExtensionHooks = (
   const turnProjectionSlots: HookTurnProjectionSlot[] = []
   const turnAfterSlots: RegisteredHook<TurnAfterInput>[] = []
   const loopOpenSlots: RegisteredHook<void>[] = []
+  const sessionDeletedSlots: RegisteredHook<SessionDeletedInput>[] = []
   const hookSlots = {
     systemPrompt: systemPromptSlots,
     turnProjection: turnProjectionSlots,
     turnAfter: turnAfterSlots,
     loopOpen: loopOpenSlots,
+    sessionDeleted: sessionDeletedSlots,
   }
 
   for (const ext of sorted) {
@@ -533,6 +554,31 @@ export const compileExtensionHooks = (
       concurrency: Math.max(loopOpenSlots.length, 1),
       discard: true,
     }),
+
+    // Each extension removes its own data, so no handler waits for another.
+    // Each runs up to its bound; one that never returns is cut and logged.
+    emitSessionDeleted: (input) =>
+      Effect.forEach(
+        sessionDeletedSlots,
+        (slot) =>
+          runHook(input, slot).pipe(
+            Effect.timeoutOption(SESSION_DELETED_HOOK_TIMEOUT),
+            Effect.flatMap(
+              Option.match({
+                onSome: () => Effect.void,
+                onNone: () =>
+                  Effect.logWarning("extension.hook.session-deleted.timeout").pipe(
+                    Effect.annotateLogs({
+                      extensionId: slot.extensionId,
+                      sessionId: input.sessionId,
+                      timeout: Duration.format(SESSION_DELETED_HOOK_TIMEOUT),
+                    }),
+                  ),
+              }),
+            ),
+          ),
+        { concurrency: Math.max(sessionDeletedSlots.length, 1), discard: true },
+      ),
   }
 }
 
@@ -3206,14 +3252,13 @@ export const resolveTurnProfile = (params: {
     )
     if (Option.isNone(profile)) {
       return {
-        turnExtensionRegistry: launchRegistry,
         turnBaseSections: params.defaults.baseSections,
         turnHostCtx: hostProvider.forRun(runInfo),
         turnInteractive: interactive,
+        turnCapabilityContext: Context.make(ExtensionRegistry, launchRegistry),
       }
     }
     return {
-      turnExtensionRegistry: profile.value.registryService,
       turnBaseSections: profile.value.baseSections,
       turnHostCtx: hostProvider.forRun(runInfo),
       turnInteractive: interactive,

@@ -43,10 +43,13 @@ import {
   type GentClientRpcError,
   type GentNamespacedClient,
   type Message,
+  initialSessionMetrics,
   type QueueSnapshot,
   type UpdateSessionSettingsInput,
+  type SessionRuntimeMetrics,
   type SessionSnapshot,
   type SteerCommand,
+  stepSessionMetrics,
 } from "@gent/core/protocol"
 import {
   createContext,
@@ -199,7 +202,6 @@ interface AgentState {
   turnsStarted: Option.Option<number>
   /** The error on screen. A turn start clears it. */
   error: Option.Option<string>
-  cost: number
   /**
    * What the next turn would use, resolved by the server from session
    * settings, config, and the agent definition (`SessionSnapshot.resolved*`).
@@ -676,14 +678,9 @@ const EMPTY_EXTENSION_HEALTH: ExtensionHealthSnapshot = {
   extensions: [],
 }
 
-const EMPTY_SESSION_METRICS: SessionMetrics = {
-  latestInputTokens: 0,
-  context: Option.none(),
-}
-
-const metricsOf = (snapshot: SessionSnapshot): SessionMetrics => ({
-  latestInputTokens: snapshot.metrics.lastInputTokens,
-  context: Option.fromUndefinedOr(snapshot.metrics.context),
+const metricsOf = (metrics: SessionRuntimeMetrics): SessionMetrics => ({
+  latestInputTokens: metrics.lastInputTokens,
+  context: Option.fromUndefinedOr(metrics.context),
 })
 
 /** The client. One value, provided once, read the same way everywhere. */
@@ -824,11 +821,17 @@ export function ClientProvider(props: ClientProviderProps) {
     running: false,
     turnsStarted: Option.none(),
     error: Option.none(),
-    cost: 0,
     resolvedModelId: Option.none(),
     resolvedReasoningLevel: Option.none(),
   })
-  const [sessionMetrics, setSessionMetrics] = createSignal<SessionMetrics>(EMPTY_SESSION_METRICS)
+  /**
+   * The branch's totals: the snapshot's fold, then each live event stepped on
+   * top with core's own step (`stepSessionMetrics`), so the gauge moves at a
+   * step's `ModelContextProjected` and no step re-reads the snapshot.
+   */
+  const [runtimeMetrics, setRuntimeMetrics] =
+    createSignal<SessionRuntimeMetrics>(initialSessionMetrics)
+  const sessionMetrics = createMemo(() => metricsOf(runtimeMetrics()))
   const [notice, setNoticeState] = createSignal<Option.Option<string>>(Option.none())
 
   const [connectionState, setConnectionState] = createSignal<Option.Option<ConnectionState>>(
@@ -896,7 +899,7 @@ export function ClientProvider(props: ClientProviderProps) {
    * Drop everything the previous session left behind.
    *
    * All three session changes go through here so none can reset a subset.
-   * {@link SessionMetrics} is one value for the same reason: its two halves
+   * The totals are one value for the same reason: cost, tokens and context
    * cannot be cleared apart.
    *
    * Extension health belongs to the session rather than the branch, so a
@@ -911,11 +914,10 @@ export function ClientProvider(props: ClientProviderProps) {
       running: false,
       turnsStarted: Option.none(),
       error: Option.none(),
-      cost: 0,
       resolvedModelId: Option.none(),
       resolvedReasoningLevel: Option.none(),
     })
-    setSessionMetrics(EMPTY_SESSION_METRICS)
+    setRuntimeMetrics(initialSessionMetrics)
     setNoticeState(Option.none())
     clearConnectionIssue()
     if (input.clearExtensionHealth) setExtensionHealth(EMPTY_EXTENSION_HEALTH)
@@ -1117,14 +1119,20 @@ export function ClientProvider(props: ClientProviderProps) {
       running,
       turnsStarted: Option.some(turnsStarted),
       error: heldErrorFor(snapshot, turnsStarted),
-      cost: snapshot.metrics.costUsd,
       resolvedModelId: Option.some(snapshot.resolvedModelId),
       resolvedReasoningLevel: Option.fromUndefinedOr(snapshot.resolvedReasoningLevel),
     })
-    setSessionMetrics(metricsOf(snapshot))
+    setRuntimeMetrics(snapshot.metrics)
   }
 
-  const refreshSessionMetrics = (): void => {
+  /**
+   * Read what the server resolves the next turn's model and reasoning to.
+   * A settings change moves them, and so can a project config edit, which
+   * the server reads each turn; the server alone resolves the fallback. It
+   * runs on a settings change and at a turn's end, never per step; the
+   * totals come from the fold.
+   */
+  const refreshResolvedSettings = (): void => {
     const currentSession = sessionOption()
     if (Option.isNone(currentSession)) return
     const s = currentSession.value
@@ -1133,19 +1141,17 @@ export function ClientProvider(props: ClientProviderProps) {
         Effect.tap((snapshot) =>
           Effect.sync(() => {
             // The session can change while this reply is in flight. Writing it
-            // blind would restore the previous session's cost, model, tokens
-            // and context over the new session's reset values, so a reply that
-            // no longer names the active branch is dropped.
+            // blind would restore the previous session's model over the new
+            // session's reset values, so a reply that no longer names the
+            // active branch is dropped.
             const active = sessionOption()
             if (Option.isNone(active)) return
             if (active.value.sessionId !== s.sessionId) return
             if (active.value.branchId !== s.branchId) return
             setAgentStore({
-              cost: snapshot.metrics.costUsd,
               resolvedModelId: Option.some(snapshot.resolvedModelId),
               resolvedReasoningLevel: Option.fromUndefinedOr(snapshot.resolvedReasoningLevel),
             })
-            setSessionMetrics(metricsOf(snapshot))
           }),
         ),
         Effect.catchEager(() => Effect.void),
@@ -1183,8 +1189,15 @@ export function ClientProvider(props: ClientProviderProps) {
             }),
           )
           // The server resolves what the cleared/changed settings fall back to.
-          refreshSessionMetrics()
+          refreshResolvedSettings()
         }
+        break
+      }
+
+      // The turn read the project config again, which no event reports: read
+      // what the next turn resolves to, once per turn, not once per step.
+      case "TurnCompleted": {
+        if (Option.contains(activeSessionId(), event.sessionId)) refreshResolvedSettings()
         break
       }
     }
@@ -1202,9 +1215,8 @@ export function ClientProvider(props: ClientProviderProps) {
     eventHub.notifySessionEvent(envelope)
     eventHub.notifyExtensionStateChanged(event)
     invalidateHealthOn(event)
-    if (event._tag === "StreamEnded" && Option.isSome(Option.fromNullishOr(event.usage))) {
-      refreshSessionMetrics()
-    }
+    // A live event lands on the snapshot's totals; a buffered one is in them already.
+    setRuntimeMetrics((metrics) => stepSessionMetrics(metrics, event))
     if (event._tag === "ErrorOccurred") {
       log.error("agent.error", { error: event.error, eventId: envelope.id })
     }
@@ -1377,7 +1389,7 @@ export function ClientProvider(props: ClientProviderProps) {
         Effect.tap((result) =>
           Effect.sync(() => {
             dispatchSession(SessionStateEvent.cases.UpdateSettings.make(result))
-            refreshSessionMetrics()
+            refreshResolvedSettings()
           }),
         ),
         Effect.asVoid,
@@ -1479,7 +1491,7 @@ export function ClientProvider(props: ClientProviderProps) {
   const agentName = createMemo(() => Option.getOrUndefined(agentStore.agent))
   const agentValue: ClientAgentValue = {
     agent: agentName,
-    cost: () => agentStore.cost,
+    cost: () => runtimeMetrics().costUsd,
     model: () => {
       // The session setting applies before the snapshot refresh lands; the
       // server-resolved id covers config and agent defaults. The agent

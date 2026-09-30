@@ -135,7 +135,7 @@ describe("tool execution", () => {
                 sessionId: SessionId.make("s"),
                 branchId: BranchId.make("b"),
                 toolCallId,
-                agentName: AgentName.make("cowork"),
+                agentName: AgentName.make("primary"),
               }),
             ),
           )
@@ -209,7 +209,7 @@ describe("tool execution", () => {
                   sessionId,
                   branchId,
                   toolCallId: ToolCallId.make(toolCallId),
-                  agentName: AgentName.make("cowork"),
+                  agentName: AgentName.make("primary"),
                 }),
               ),
             )
@@ -225,7 +225,7 @@ describe("tool execution", () => {
           assistantMessageId: MessageId.make("outer-message"),
           sessionId,
           branchId,
-          currentTurnAgent: AgentName.make("cowork"),
+          currentTurnAgent: AgentName.make("primary"),
           toolCalls: [
             Prompt.toolCallPart({
               id: "outer-hidden",
@@ -308,7 +308,7 @@ describe("tool execution", () => {
           sessionId: SessionId.make("s"),
           branchId: BranchId.make("b"),
           toolCallId,
-          agentName: AgentName.make("cowork"),
+          agentName: AgentName.make("primary"),
         })
         return yield* runner
           .capture({ toolName: "probe" })
@@ -374,7 +374,7 @@ describe("tool execution", () => {
                 sessionId: SessionId.make("s"),
                 branchId: BranchId.make("b"),
                 toolCallId,
-                agentName: AgentName.make("cowork"),
+                agentName: AgentName.make("primary"),
               }),
             ),
           )
@@ -428,7 +428,7 @@ describe("tool execution", () => {
                 sessionId: SessionId.make("s"),
                 branchId: BranchId.make("b"),
                 toolCallId,
-                agentName: AgentName.make("cowork"),
+                agentName: AgentName.make("primary"),
               }),
             ),
           )
@@ -494,7 +494,7 @@ describe("tool execution", () => {
                 sessionId: SessionId.make("session-inspect"),
                 branchId: BranchId.make("branch-inspect"),
                 toolCallId,
-                agentName: AgentName.make("deepwork"),
+                agentName: AgentName.make("secondary"),
                 cwd: "/runtime/cwd",
                 home: "/runtime/home",
               }),
@@ -507,7 +507,7 @@ describe("tool execution", () => {
         home: "/runtime/home",
         sessionId: SessionId.make("session-inspect"),
         branchId: BranchId.make("branch-inspect"),
-        agentName: AgentName.make("deepwork"),
+        agentName: AgentName.make("secondary"),
       })
     }))
   test("provides the selected capability context while executing the tool", () =>
@@ -565,7 +565,7 @@ describe("tool execution", () => {
                 sessionId: SessionId.make("session-context"),
                 branchId: BranchId.make("branch-context"),
                 toolCallId,
-                agentName: AgentName.make("cowork"),
+                agentName: AgentName.make("primary"),
               }),
             ),
             provideCurrentCapabilityContext(erasedCapabilityContext),
@@ -638,7 +638,7 @@ describe("tool execution", () => {
                 sessionId: SessionId.make("session-read-context"),
                 branchId: BranchId.make("branch-read-context"),
                 toolCallId,
-                agentName: AgentName.make("cowork"),
+                agentName: AgentName.make("primary"),
               }),
             ),
             provideCurrentCapabilityContext(erasedCapabilityContext),
@@ -711,7 +711,7 @@ describe("tool execution", () => {
                 sessionId: SessionId.make("session-read-extension-context"),
                 branchId: BranchId.make("branch-read-extension-context"),
                 toolCallId,
-                agentName: AgentName.make("cowork"),
+                agentName: AgentName.make("primary"),
               }),
             ),
           )
@@ -793,7 +793,7 @@ describe("tool execution", () => {
                   sessionId: SessionId.make("session-pending"),
                   branchId: BranchId.make("branch-pending"),
                   toolCallId,
-                  agentName: AgentName.make("cowork"),
+                  agentName: AgentName.make("primary"),
                 }),
               ),
             ),
@@ -874,7 +874,7 @@ describe("tool execution", () => {
                 sessionId: SessionId.make("session-summary"),
                 branchId: BranchId.make("branch-summary"),
                 toolCallId,
-                agentName: AgentName.make("cowork"),
+                agentName: AgentName.make("primary"),
               }),
             ),
           )
@@ -1034,7 +1034,7 @@ describe("compileToolPolicy", () => {
     tools.map((t) => String(getToolId(t))).sort()
 
   test("model selection leaves admitted host tools available", () => {
-    const agent = AgentDefinition.make({ name: AgentName.make("cowork") })
+    const agent = AgentDefinition.make({ name: AgentName.make("primary") })
     const result = compileToolPolicy(allTools, agent, {}, [{ toolPolicy: { modelSet: ["read"] } }])
     expect(names(result.tools)).toEqual(names(allTools))
     expect(names(result.modelTools)).toEqual(["read"])
@@ -1042,7 +1042,7 @@ describe("compileToolPolicy", () => {
   })
 
   test("model selection cannot restore unknown, denied, or non-interactive tools", () => {
-    const agent = AgentDefinition.make({ name: AgentName.make("cowork"), deniedTools: ["bash"] })
+    const agent = AgentDefinition.make({ name: AgentName.make("primary"), deniedTools: ["bash"] })
     const result = compileToolPolicy(
       [...allTools, makeInteractiveTool("question")],
       agent,
@@ -1053,7 +1053,7 @@ describe("compileToolPolicy", () => {
   })
 
   test("the last explicit model selection wins and an empty set advertises no tools", () => {
-    const agent = AgentDefinition.make({ name: AgentName.make("cowork") })
+    const agent = AgentDefinition.make({ name: AgentName.make("primary") })
     const result = compileToolPolicy(allTools, agent, {}, [
       { toolPolicy: { modelSet: ["read"] } },
       { toolPolicy: { modelSet: [] } },
@@ -1064,7 +1064,7 @@ describe("compileToolPolicy", () => {
   })
 
   test("a cell name has no special allowance without an extension policy", () => {
-    const agent = AgentDefinition.make({ name: AgentName.make("cowork"), allowedTools: ["read"] })
+    const agent = AgentDefinition.make({ name: AgentName.make("primary"), allowedTools: ["read"] })
     const tools = [makeTool("cell"), ...allTools]
     const direct = compileToolPolicy(tools, agent, {}, [])
     expect(names(direct.modelTools)).toEqual(["read"])
@@ -1076,14 +1076,14 @@ describe("compileToolPolicy", () => {
   })
 
   test("no allow-list → all tools", () => {
-    const agent = AgentDefinition.make({ name: AgentName.make("cowork") })
+    const agent = AgentDefinition.make({ name: AgentName.make("primary") })
     const { tools } = compileToolPolicy(allTools, agent, {}, [])
     expect(names(tools)).toEqual(names(allTools))
   })
 
   test("allowedTools restricts to exact set", () => {
     const agent = AgentDefinition.make({
-      name: AgentName.make("cowork"),
+      name: AgentName.make("primary"),
       allowedTools: ["bash", "read"],
     })
     const { tools } = compileToolPolicy(allTools, agent, {}, [])
@@ -1091,14 +1091,14 @@ describe("compileToolPolicy", () => {
   })
 
   test("allowedTools: [] means no tools", () => {
-    const agent = AgentDefinition.make({ name: AgentName.make("cowork"), allowedTools: [] })
+    const agent = AgentDefinition.make({ name: AgentName.make("primary"), allowedTools: [] })
     const { tools } = compileToolPolicy(allTools, agent, {}, [])
     expect(tools).toEqual([])
   })
 
   test("extension projection include adds tools when they are allowed", () => {
     const agent = AgentDefinition.make({
-      name: AgentName.make("cowork"),
+      name: AgentName.make("primary"),
       allowedTools: ["read", "grep", "lookup"],
     })
     const projections = [{ toolPolicy: { include: ["bash"] } }]
@@ -1109,7 +1109,7 @@ describe("compileToolPolicy", () => {
 
   test("denied tools cannot be re-added by extension projection include", () => {
     const agent = AgentDefinition.make({
-      name: AgentName.make("cowork"),
+      name: AgentName.make("primary"),
       deniedTools: ["bash"],
     })
     const projections = [{ toolPolicy: { include: ["bash"] } }]
@@ -1118,7 +1118,7 @@ describe("compileToolPolicy", () => {
   })
 
   test("extension prompt sections collected", () => {
-    const agent = AgentDefinition.make({ name: AgentName.make("cowork") })
+    const agent = AgentDefinition.make({ name: AgentName.make("primary") })
     const projections = [
       { promptSections: [{ id: "ext-a", content: "Section A", priority: 90 }] },
       { promptSections: [{ id: "ext-b", content: "Section B", priority: 91 }] },
@@ -1131,7 +1131,7 @@ describe("compileToolPolicy", () => {
   test("interactive tools filtered when context.interactive is false", () => {
     const interactiveTool = makeInteractiveTool("ask_user")
     const nonInteractiveTool = makeTool("read")
-    const agent = AgentDefinition.make({ name: AgentName.make("cowork") })
+    const agent = AgentDefinition.make({ name: AgentName.make("primary") })
     const { tools } = compileToolPolicy(
       [interactiveTool, nonInteractiveTool],
       agent,
@@ -1144,7 +1144,7 @@ describe("compileToolPolicy", () => {
 
   test("interactive tools remain available when the run is interactive", () => {
     const interactiveTool = makeInteractiveTool("ask_user")
-    const agent = AgentDefinition.make({ name: AgentName.make("cowork") })
+    const agent = AgentDefinition.make({ name: AgentName.make("primary") })
     const { tools } = compileToolPolicy([interactiveTool], agent, {}, [])
     expect(names(tools)).toContain("ask_user")
   })

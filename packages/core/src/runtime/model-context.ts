@@ -315,16 +315,17 @@ export const turnNoticesText = (notices: ReadonlyArray<TurnNotice>): Option.Opti
 
 /**
  * The request a step sends: the system prompt (a system message per cache
- * block; the OpenAI-compatible drivers join them into one), the conversation,
- * then the turn's notices as one system message after the last message.
+ * block; the OpenAI driver's Codex path joins the leading ones into one
+ * `instructions` text), the conversation, then the turn's notices as one
+ * system message after the last message.
  *
  * The notices change from turn to turn and the rest does not, so they go
  * last: the system prompt and the conversation stay one cacheable prefix
  * whether a notice comes or goes. A later system message is the host
  * speaking, not the user: a driver sends it as a context update after the
- * conversation (the Anthropic and OpenAI-compatible drivers as a
- * `<host-context-update>` user message, which takes no cache marker; the
- * OpenAI driver as a developer message). Both rank below the system prompt,
+ * conversation (the Anthropic driver as a `<host-context-update>` user
+ * message, which takes no cache marker; the OpenAI driver as a developer
+ * message). Both rank below the system prompt,
  * so a user instruction wins over a notice, and `TURN_NOTICES_HEADING` says
  * the text is the host's.
  */

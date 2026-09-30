@@ -590,7 +590,7 @@ export const captureTurnTools = Effect.fn("test.captureTurnTools")(function* (ru
   })
   const turnProfile: AgentLoopTurnProfile = {
     turnGenerationId: profile.generationId,
-    turnExtensionRegistry: profile.registryService,
+    turnCapabilityContext: profile.layerContext,
     turnBaseSections: profile.baseSections,
     turnHostCtx: hostProvider.forRun(hostRun(run)),
     turnInteractive: hostRun(run).interactive,

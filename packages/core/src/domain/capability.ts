@@ -705,6 +705,37 @@ export const tool = <
   return branded
 }
 
+// ── tool-wire-name ──────────────────────────────────────────────────────────
+
+/**
+ * The name a model provider sees for a tool. Provider APIs take only
+ * `^[a-zA-Z0-9_-]+$`: Anthropic up to 128 characters, OpenAI up to 64. A
+ * tool id may name a namespace with dots (`session.send`, `delegate.start`),
+ * so each dot goes on the wire as `__`. `isWireToolId` keeps the mapping
+ * reversible: an id is dot-separated segments of letters, digits and `-`
+ * joined by single `_`, so no segment holds `__` or starts or ends with `_`.
+ * Only the provider request and its reply use the wire name; events,
+ * messages and tool dispatch keep the id. Extension validation rejects any
+ * other id, so no loaded tool has a name the mapping cannot carry back
+ * (decided by make-impossible-states-unrepresentable; the mapping sits at the
+ * model boundary, decided by boundary-discipline).
+ */
+const WIRE_NAMESPACE_SEPARATOR = "__"
+
+/** The longest wire name every provider accepts (OpenAI's limit). */
+const WIRE_TOOL_NAME_MAX = 64
+
+const TOOL_ID_PATTERN = /^[a-zA-Z0-9-]+(?:_[a-zA-Z0-9-]+)*(?:\.[a-zA-Z0-9-]+(?:_[a-zA-Z0-9-]+)*)*$/
+
+export const wireToolName = (id: string): string => id.replaceAll(".", WIRE_NAMESPACE_SEPARATOR)
+
+export const toolIdFromWire = (name: string): string =>
+  name.replaceAll(WIRE_NAMESPACE_SEPARATOR, ".")
+
+/** True when `id` has a wire name every provider accepts and that decodes back to it. */
+export const isWireToolId = (id: string): boolean =>
+  TOOL_ID_PATTERN.test(id) && wireToolName(id).length <= WIRE_TOOL_NAME_MAX
+
 // ── tool-binding ────────────────────────────────────────────────────────────
 
 /** Revision of the loaded source snapshot that produced a tool binding. */

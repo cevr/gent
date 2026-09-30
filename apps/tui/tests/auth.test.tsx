@@ -315,15 +315,15 @@ describe("Auth route", () => {
           {
             client,
             runtime,
-            initialAgent: AgentName.make("cowork"),
+            initialAgent: AgentName.make("primary"),
           },
         ),
       )
-      expect(pending.map((entry) => entry.agentName)).toEqual(["cowork"])
+      expect(pending.map((entry) => entry.agentName)).toEqual(["primary"])
       const clientContext = yield* requireClient(ctx)
-      applySnapshotAgent(clientContext, AgentName.make("deepwork"))
+      applySnapshotAgent(clientContext, AgentName.make("secondary"))
       yield* Effect.promise(() => setup.renderOnce())
-      expect(pending.map((entry) => entry.agentName)).toEqual(["cowork", "deepwork"])
+      expect(pending.map((entry) => entry.agentName)).toEqual(["primary", "secondary"])
       const secondPending = Option.fromNullishOr(pending[1])
       if (Option.isSome(secondPending)) {
         yield* Deferred.succeed(secondPending.value.deferred, [
@@ -356,7 +356,7 @@ describe("Auth route", () => {
       const client = createMockClient({
         auth: {
           listProviders: (input: { agentName?: string }) => {
-            if (input.agentName === "deepwork") {
+            if (input.agentName === "secondary") {
               return Effect.succeed([
                 {
                   provider: "openai",
@@ -402,7 +402,7 @@ describe("Auth route", () => {
           {
             client,
             runtime,
-            initialAgent: AgentName.make("cowork"),
+            initialAgent: AgentName.make("primary"),
           },
         ),
       )
@@ -417,7 +417,7 @@ describe("Auth route", () => {
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
       const clientContext = yield* requireClient(ctx)
-      applySnapshotAgent(clientContext, AgentName.make("deepwork"))
+      applySnapshotAgent(clientContext, AgentName.make("secondary"))
       const reloaded = yield* waitForFrame(setup, (frame) => frame.includes("openai"))
       expect(reloaded).toContain("openai")
       setup.mockInput.pressEnter()
@@ -463,7 +463,7 @@ describe("Auth route", () => {
       const client = createMockClient({
         auth: {
           listProviders: (input: { agentName?: string }) => {
-            if (input.agentName === "deepwork") {
+            if (input.agentName === "secondary") {
               return Effect.succeed([
                 {
                   provider: "openai",
@@ -518,7 +518,7 @@ describe("Auth route", () => {
           {
             client,
             runtime,
-            initialAgent: AgentName.make("cowork"),
+            initialAgent: AgentName.make("primary"),
           },
         ),
       )
@@ -528,7 +528,7 @@ describe("Auth route", () => {
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
       const clientContext = yield* requireClient(ctx)
-      applySnapshotAgent(clientContext, AgentName.make("deepwork"))
+      applySnapshotAgent(clientContext, AgentName.make("secondary"))
       yield* waitForFrame(setup, (frame) => frame.includes("openai"))
       yield* Deferred.succeed(authorizeDeferred, {
         authorizationId: "auth-old",
@@ -600,7 +600,7 @@ describe("Auth route", () => {
           client,
           runtime,
           services,
-          initialAgent: AgentName.make("cowork"),
+          initialAgent: AgentName.make("primary"),
         }),
       )
       yield* waitForFrame(setup, (frame) => frame.includes("anthropic"))
@@ -640,7 +640,7 @@ describe("Auth route", () => {
           listProviders: (input: { agentName?: string; sessionId?: string }) =>
             Effect.sync(() => {
               calls.push(input)
-              if (input.agentName === "deepwork") {
+              if (input.agentName === "secondary") {
                 return [
                   {
                     provider: "openai",
@@ -696,7 +696,7 @@ describe("Auth route", () => {
             client,
             runtime,
             services,
-            initialAgent: AgentName.make("cowork"),
+            initialAgent: AgentName.make("primary"),
           },
         ),
       )
@@ -707,10 +707,10 @@ describe("Auth route", () => {
       yield* Effect.promise(() => setup.renderOnce())
       yield* waitForFrame(setup, (frame) => frame.includes("Open the URL below"))
       const clientContext = yield* requireClient(ctx)
-      applySnapshotAgent(clientContext, AgentName.make("deepwork"))
+      applySnapshotAgent(clientContext, AgentName.make("secondary"))
       yield* Effect.yieldNow
       yield* Effect.promise(() => setup.renderOnce())
-      expect(calls.at(-1)).toEqual({ agentName: "deepwork", sessionId: activeSessionId })
+      expect(calls.at(-1)).toEqual({ agentName: "secondary", sessionId: activeSessionId })
       if (Option.isSome(rejectOpen))
         rejectOpen.value(new LinkOpenerError({ message: "open failed" }))
       const frame = yield* waitForFrame(
@@ -772,7 +772,7 @@ describe("Auth route", () => {
           client,
           runtime,
           services,
-          initialAgent: AgentName.make("cowork"),
+          initialAgent: AgentName.make("primary"),
         }),
       )
       yield* waitForFrame(setup, (frame) => frame.includes("anthropic"))
@@ -858,7 +858,7 @@ describe("Auth route", () => {
           client,
           runtime: createMockRuntime(),
           services,
-          initialAgent: AgentName.make("cowork"),
+          initialAgent: AgentName.make("primary"),
         }),
       )
       yield* waitForFrame(setup, (frame) => frame.includes("openai"))
@@ -932,7 +932,7 @@ describe("Auth route", () => {
               client,
               runtime: createMockRuntime(),
               services,
-              initialAgent: AgentName.make("cowork"),
+              initialAgent: AgentName.make("primary"),
             },
           ),
         )
@@ -946,7 +946,7 @@ describe("Auth route", () => {
           "device flow waits for the poll",
         )
 
-        applySnapshotAgent(yield* requireClient(ctx), AgentName.make("cowork"))
+        applySnapshotAgent(yield* requireClient(ctx), AgentName.make("primary"))
         yield* Effect.yieldNow
         const reconnected = yield* waitForFrame(setup, () => true)
         expect(reconnected).toContain("Sign in · openai ·")
@@ -983,7 +983,7 @@ describe("Auth route", () => {
           client,
           runtime: createMockRuntime(),
           services,
-          initialAgent: AgentName.make("cowork"),
+          initialAgent: AgentName.make("primary"),
         }),
       )
       yield* waitForFrame(setup, (frame) => frame.includes("openai"))

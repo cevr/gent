@@ -394,6 +394,38 @@ describe("defineExtension", () => {
       }
     }))
 
+  test("a tool id the wire mapping cannot carry back is rejected at package validation", () =>
+    Effect.gen(function* () {
+      const idsOf = (ids: ReadonlyArray<string>) =>
+        ids.map((id) =>
+          tool({
+            id,
+            description: "wire",
+            params: Schema.Unknown,
+            output: Schema.Void,
+            execute: () => Effect.void,
+          }),
+        )
+      const accepted = yield* Effect.exit(
+        validateExtensionPackage(
+          { id: ExtensionId.make("wire-ok") },
+          {
+            tools: idsOf(["session.send", "delegate.start", "fs_read", "a-b.c_d"]),
+          },
+        ),
+      )
+      expect(accepted._tag).toBe("Success")
+      for (const id of ["@scope/tool", "a__b", "a..b", ".a", "a b", `${"x".repeat(60)}.abc`]) {
+        const exit = yield* Effect.exit(
+          validateExtensionPackage({ id: ExtensionId.make("wire-bad") }, { tools: idsOf([id]) }),
+        )
+        expect(exit._tag).toBe("Failure")
+        if (exit._tag === "Failure") {
+          expect(Cause.pretty(exit.cause)).toContain(`tools[0] (${id}): tool id must be`)
+        }
+      }
+    }))
+
   test("a model tool with an empty description is rejected at package validation", () =>
     Effect.gen(function* () {
       const exit = yield* Effect.exit(

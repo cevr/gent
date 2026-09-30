@@ -81,6 +81,7 @@ import {
   sessionMutationsLayer,
   sessionMutationsLayerWithMachineProbe,
   sessionRuntimeLayer,
+  testRuntimeEnvironment,
 } from "./session-mutations"
 import * as Prompt from "effect/ai/Prompt"
 import { SessionMutations } from "../../src/domain/extension"
@@ -2040,6 +2041,7 @@ describe("requestId idempotency", () => {
       LanguageModelLayers.debug(),
       ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
       GentPlatform.Test(),
+      testRuntimeEnvironment,
       ExtensionRegistry.Test(),
     )
     return Layer.provideMerge(SessionMutationsLive, deps)
@@ -2090,6 +2092,7 @@ describe("requestId idempotency", () => {
             LanguageModelLayers.debug(),
             ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
             GentPlatform.Test(),
+            testRuntimeEnvironment,
           ),
         )
         const create = (registry: Layer.Layer<ExtensionRegistry>, requestId: string) =>
@@ -2152,6 +2155,7 @@ describe("requestId idempotency", () => {
           LanguageModelLayers.debug(),
           ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
           GentPlatform.Test(),
+          testRuntimeEnvironment,
           ExtensionRegistry.Test(),
           profiles,
         )
@@ -2742,6 +2746,7 @@ describe("requestId idempotency", () => {
           LanguageModelLayers.debug(),
           ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
           GentPlatform.Test(),
+          testRuntimeEnvironment,
           ExtensionRegistry.Test(),
         )
         return Layer.provideMerge(SessionMutationsLive, deps)

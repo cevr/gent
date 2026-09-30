@@ -106,6 +106,7 @@ import {
   maximumCellDisplayLength,
   maximumCellSourceLength,
   maximumPendingCellCalls,
+  compareIds,
   type SnapshotBinding,
   toolPath,
 } from "./cell-protocol.js"
@@ -1490,13 +1491,18 @@ const buildCellCatalog = Effect.fn("CellCatalog.build")(function* (
 ) {
   const selected = [...bindings.entries()]
     .filter(([name]) => name !== "cell")
-    .sort(([left], [right]) => left.localeCompare(right))
+    .sort(([left], [right]) => compareIds(left, right))
   const tools = yield* Effect.forEach(selected, ([name, entry]) =>
-    decodeEntry({
-      name,
-      description: entry.capability.description,
-      guidelines: getToolMetadata(entry.capability).promptGuidelines ?? [],
-      parameters: AiTool.getJsonSchema(entry.capability),
+    Effect.gen(function* () {
+      const { signature, summary } = yield* toolSignatureParts(entry.capability)
+      return yield* decodeEntry({
+        name,
+        description: entry.capability.description,
+        guidelines: getToolMetadata(entry.capability).promptGuidelines ?? [],
+        parameters: AiTool.getJsonSchema(entry.capability),
+        signature: joinSignature(signature, summary),
+        summary,
+      })
     }),
   )
   return CellCatalog.make({ hash: String(Hash.string(encodeEntries(tools))), tools })
@@ -2683,7 +2689,7 @@ export const CellTool = tool({
     "The value of the last expression is the cell result; an undefined value shows nothing. Top-level await works; a top-level return does not.",
     "Return a summary, not the data. You see at most 8,000 characters of any tool result (head and tail); a larger result is spilled and its `read` field says how to page the rest with context.read. Slice arrays, count instead of listing, and keep the full value in a binding for the next cell.",
     "Bun.$`cmd`.text() returns stdout only, and Bun.$ pipes stderr away; test runners and many tools report on stderr. Use Bun.spawn with inherited stdio so the output returns with the cell, or .quiet() and read .stderr.",
-    "The Host Tools section lists every host tool selected for this turn with its signature. tools(id) returns the tool as a function carrying its full input schema (parameters) and guidelines; it is local and synchronous and does not grant permission to execute. Object.keys(tools) lists the top-level names.",
+    "The Host Tools section lists the host tools selected for this turn with their signatures, up to a size budget; a namespace past it shows as one `tools.a.*: N tools` line, and its tools are still callable. tools.search(query) returns matching ids with one-line descriptions, tools.describe(id) returns one tool's typed signature, and tools(id) returns the tool as a function carrying its full input schema (parameters) and guidelines. All three are local and synchronous and do not grant permission to execute. Object.keys(tools) lists the top-level names.",
     "The whole session stays reachable from the cell. context.history({ offset, limit }) lists this branch's durable messages in order (id, role, chars, preview, kind), 50 per page with nextOffset. context.read(id, { offset, limit }) returns durable text by message id or tool call id, paged by character offset and limit (nextOffset continues); receipts in a cell result carry the ids of inner calls. context.status() reports what the model sees: tokens, limit, percent, omittedMessages, handoffMessageId. When the window overflows, the history before the current turn is handed off: one durable notice summarizes it and names the session, branch, and message-id range it replaced, so read it back with context.history and context.read instead of guessing. context.compact(instructions?) asks for that handoff before the next turn, focused on the instructions. context.newWindow() drops older history from the model view without a summary. All five are awaited host calls.",
     "Set reset: true to discard retained values and the saved namespace before running new code.",
     "A failed cell may have completed effects. Do not replay source to recover unknown outcomes.",
@@ -3012,12 +3018,12 @@ export const CellExtension = defineExtension({
         const entries = yield* Effect.forEach(
           (input.hostTools ?? [])
             .filter((tool) => getToolId(tool) !== "cell")
-            .toSorted((left, right) => getToolId(left).localeCompare(getToolId(right))),
-          renderToolSignature,
+            .toSorted((left, right) => compareIds(getToolId(left), getToolId(right))),
+          (tool) =>
+            renderToolSignature(tool).pipe(Effect.map((line) => ({ id: getToolId(tool), line }))),
         )
         if (entries.length === 0) return input.basePrompt
-        const catalog = `## Host Tools\n\nInside \`cell\`, each host tool id is a function path under \`tools\`: id \`a.b\` is \`await tools.a.b(input)\`. \`tools(id)\` returns the tool with its full input schema (\`parameters\`) and \`guidelines\`, and reaches an id with a JavaScript built-in segment such as \`then\` or \`name\`.\n\n${entries.join("\n")}`
-        return `${input.basePrompt}\n\n${catalog}`
+        return `${input.basePrompt}\n\n${HOST_TOOLS_HEADING}\n\n${renderHostToolCatalog(entries)}`
       }),
     )
   }),
@@ -3046,6 +3052,133 @@ const CELL_WORK_SECTION = {
   id: "cell-work",
   priority: AGENT_PROMPT_PRIORITY + 6,
   content: CELL_WORK,
+}
+
+// ── host tool catalog ───────────────────────────────────────────────────────
+
+const HOST_TOOLS_HEADING = `## Host Tools
+
+Inside \`cell\`, each host tool id is a function path under \`tools\`: id \`a.b\` is \`await tools.a.b(input)\`. Every host tool is callable, listed below or not. A line \`tools.a.*: N tools\` stands for a namespace listed by name only, and a \`more\` line counts tools not listed. \`tools.search(query)\` returns \`{ id, description }[]\` for the ids whose id or description holds a query word. \`tools.describe(id)\` returns one tool's typed signature. \`tools(id)\` returns the tool with its full input schema (\`parameters\`) and \`guidelines\`, and reaches an id with a JavaScript built-in segment such as \`then\` or \`name\`.`
+
+/**
+ * The characters the Host Tools signature lines may take. The shipped tool set
+ * takes about 4,900, so it lists whole; a large MCP server collapses.
+ */
+export const HOST_TOOL_CATALOG_BUDGET = 8000
+
+/** A collapsed line names its tools up to this many characters, then `…`. */
+const COLLAPSED_NAMES_LIMIT = 100
+
+/**
+ * The budget kept for the two tail lines: `- more tools: <names>` (at most
+ * 14 + COLLAPSED_NAMES_LIMIT + 1 characters) and the hidden namespace count
+ * (under 90). Every other line, a collapsed namespace included, is charged
+ * against the rest.
+ */
+const CATALOG_TAIL_RESERVE = 220
+
+interface HostToolLine {
+  readonly id: string
+  readonly line: string
+}
+
+/** A group lists whole or collapses whole. */
+interface HostToolGroup {
+  /** The parent path of a dotted id; none for a top-level id, which is its own group. */
+  readonly namespace: Option.Option<string>
+  readonly lines: ReadonlyArray<HostToolLine>
+}
+
+const namespaceOf = (id: string): Option.Option<string> => {
+  const at = id.lastIndexOf(".")
+  if (at === -1) return Option.none()
+  return Option.some(id.slice(0, at))
+}
+
+const namesUpTo = (names: ReadonlyArray<string>) => {
+  const joined = names.join(", ")
+  if (joined.length <= COLLAPSED_NAMES_LIMIT) return joined
+  return `${joined.slice(0, COLLAPSED_NAMES_LIMIT)}…`
+}
+
+/**
+ * The Host Tools listing under a character budget.
+ *
+ * The rule: a top-level id (read, edit, write, bash, grep, ...) is the host's
+ * own high-frequency tool and fills the budget first, in id order. Then each
+ * namespace (a dotted id's parent path: `mcp.github.search` is in `mcp.github`)
+ * lists whole, in id order, while the running total stays within
+ * `HOST_TOOL_CATALOG_BUDGET`. A namespace past it collapses to
+ * `- tools.mcp.github.*: 42 tools (a, b, …)` while that line fits; a namespace
+ * whose line does not fit is counted in one last line,
+ * `- N more namespaces (M tools), listed by tools.search(query)`. Top-level ids
+ * past the budget share one `- more tools: …` line. Every line counts against
+ * the budget, so the listing never exceeds it. Ids order by code unit
+ * (`compareIds`), not by locale. The text depends only on the tool set, so the
+ * listing, and the cached prompt prefix it is part of, is byte-stable while the
+ * set stays the same.
+ */
+export const renderHostToolCatalog = (entries: ReadonlyArray<HostToolLine>): string => {
+  const sorted = entries.toSorted((left, right) => compareIds(left.id, right.id))
+  const topLevel: Array<HostToolGroup> = []
+  const namespaces = new Map<string, Array<HostToolLine>>()
+  for (const entry of sorted) {
+    const namespace = namespaceOf(entry.id)
+    if (Option.isNone(namespace)) {
+      topLevel.push({ namespace, lines: [entry] })
+      continue
+    }
+    const lines = namespaces.get(namespace.value) ?? []
+    lines.push(entry)
+    namespaces.set(namespace.value, lines)
+  }
+  const groups: ReadonlyArray<HostToolGroup> = [
+    ...topLevel,
+    ...[...namespaces.entries()].map(([namespace, lines]) => ({
+      namespace: Option.some(namespace),
+      lines,
+    })),
+  ]
+  const listed: Array<HostToolLine> = []
+  const collapsedTopLevel: Array<string> = []
+  let hiddenNamespaces = 0
+  let hiddenTools = 0
+  let total = 0
+  const budget = HOST_TOOL_CATALOG_BUDGET - CATALOG_TAIL_RESERVE
+  const fits = (size: number) => total + size <= budget
+  for (const group of groups) {
+    const size = group.lines.reduce((sum, entry) => sum + entry.line.length + 1, 0)
+    if (fits(size)) {
+      total += size
+      listed.push(...group.lines)
+      continue
+    }
+    if (Option.isNone(group.namespace)) {
+      collapsedTopLevel.push(...group.lines.map((entry) => entry.id))
+      continue
+    }
+    const namespace = group.namespace.value
+    const names = group.lines.map((entry) => entry.id.slice(namespace.length + 1))
+    const line = `- ${toolPath(namespace)}.*: ${names.length} tools (${namesUpTo(names)})`
+    if (fits(line.length + 1)) {
+      total += line.length + 1
+      listed.push({ id: namespace, line })
+      continue
+    }
+    hiddenNamespaces += 1
+    hiddenTools += names.length
+  }
+  const lines = listed
+    .toSorted((left, right) => compareIds(left.id, right.id))
+    .map((entry) => entry.line)
+  // The tail lines are bounded, and CATALOG_TAIL_RESERVE holds both.
+  if (collapsedTopLevel.length > 0) lines.push(`- more tools: ${namesUpTo(collapsedTopLevel)}`)
+  if (hiddenNamespaces > 0) {
+    lines.push(
+      `- ${hiddenNamespaces} more namespaces (${hiddenTools} tools), listed by tools.search(query)`,
+    )
+  }
+  return lines.join("\n")
 }
 
 // ── tool signatures ─────────────────────────────────────────────────────────
@@ -3408,12 +3541,27 @@ const jsonSchemaOf = (derive: () => JsonSchema.JsonSchema) =>
     Effect.orElseSucceed((): JsonSchema.JsonSchema => ({})),
   )
 
+/** A typed call with its summary as a trailing comment, when it has one. */
+const joinSignature = (signature: string, summary: string) => {
+  if (summary.length === 0) return signature
+  return `${signature} // ${summary}`
+}
+
 /**
  * One prompt line per host tool: the callable path with its input and result
  * types, then the first line of its snippet or description.
  * `- tools.wake.cancel(input?: { wakeId?: string }): Promise<{ cancelled: string[] }> // Cancel ...`
+ * `tools.describe(id)` in the kernel returns the same line without the `- `.
  */
 export const renderToolSignature = Effect.fn("CellCatalog.renderToolSignature")(function* (
+  tool: ToolCapability,
+) {
+  const { signature, summary } = yield* toolSignatureParts(tool)
+  return `- ${joinSignature(signature, summary)}`
+})
+
+/** The typed call path and the one-line summary a signature line joins. */
+const toolSignatureParts = Effect.fn("CellCatalog.toolSignatureParts")(function* (
   tool: ToolCapability,
 ) {
   const parameters = yield* jsonSchemaOf(() => AiTool.getJsonSchema(tool))
@@ -3430,6 +3578,5 @@ export const renderToolSignature = Effect.fn("CellCatalog.renderToolSignature")(
   const resultType = boundedSchemaType(result, SIGNATURE_TYPE_LIMIT)
   const signature = `${toolPath(getToolId(tool))}(${input}): Promise<${resultType}>`
   const summary = firstLine(getToolPrompt(tool).promptSnippet ?? tool.description)
-  if (summary.length === 0) return `- ${signature}`
-  return `- ${signature} // ${summary}`
+  return { signature, summary }
 })
