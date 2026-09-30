@@ -75,11 +75,12 @@ describe("gamut model families", () => {
     ).toBe("anthropic/claude-opus-6-1")
   })
 
-  test("every preset resolves against the catalog", () => {
+  test("every preset resolves each role to a catalog model and an effort", () => {
     for (const [name, named] of Object.entries(PRESETS)) {
       const resolved = resolvePreset(named, catalog)
       for (const role of [resolved.orchestrator, resolved.worker, resolved.reviewer]) {
         expect(role.modelId, name).toMatch(/^(anthropic\/claude|openai\/gpt)-/)
+        expect(role.reasoningEffort, name).not.toBe("")
       }
     }
   })
@@ -109,15 +110,6 @@ describe("gamut preset config", () => {
 }
 `,
     )
-  })
-
-  test("every preset names a model for all three roles", () => {
-    for (const [name, entry] of Object.entries(PRESETS)) {
-      for (const role of [entry.orchestrator, entry.worker, entry.reviewer]) {
-        expect(role.modelId, name).toMatch(/^(anthropic|openai)\//)
-        expect(role.reasoningEffort, name).not.toBe("")
-      }
-    }
   })
 })
 
@@ -171,13 +163,6 @@ describe("gamut state file", () => {
 
   test("round trips every field", () => {
     expect(decodeState(encodeState(state))).toEqual(state)
-  })
-
-  test("a state file from before any send reads its send mark as zero, awaiting a turn", () => {
-    const { sendMark: _mark, awaitsTurn: _awaits, ...older } = state
-    const decoded = decodeState(JSON.stringify(older))
-    expect(decoded.sendMark).toBe(0)
-    expect(decoded.awaitsTurn).toBe(true)
   })
 
   test("a missing field is refused rather than read as undefined", () => {

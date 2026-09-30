@@ -15,6 +15,7 @@
  */
 import { describe, expect, it } from "effect-bun-test"
 import { Effect } from "effect"
+import { waitFor } from "@gent/core/test-utils"
 import {
   countRows,
   gridText,
@@ -22,7 +23,7 @@ import {
   ptyWaitFor,
   seedAndSpawn,
   settleAndCapture,
-  shortPause,
+  settlePty,
   type TestContext,
 } from "../src/pty-fixture"
 
@@ -36,34 +37,35 @@ const SHORT_SCREEN = { cols: 80, rows: 14 }
 
 const SETTLE = { quietMs: 800, timeoutMs: 25_000 }
 
+/** The typed text is drawn once the child writes nothing for this long. */
+const TYPED = { quietMs: 200, timeoutMs: 5_000 }
+
 const messageText = (index: number) => `scrollback probe ${index}`
 
 /**
  * Submit `count` messages and let each turn finish.
  *
  * `--mock-empty` answers every turn from a scripted model, so the transcript
- * is deterministic and no network is involved.
+ * is deterministic and no network is involved. A running turn animates its
+ * footer, so the output going quiet is the turn finishing.
  */
 const submitMessages = (ctx: TestContext, count: number) =>
   Effect.gen(function* () {
     yield* ptyWaitFor(ctx, "ready", { timeout: 25_000 })
     for (let index = 1; index <= count; index++) {
       ctx.pty.write(messageText(index))
-      yield* shortPause(250)
+      yield* settlePty(ctx, TYPED)
       ctx.pty.write(ENTER)
-      yield* shortPause(2_500)
+      yield* settlePty(ctx, SETTLE)
     }
   })
-
-const acquire = <R>(ctx: Effect.Effect<TestContext, never, R>) =>
-  Effect.acquireRelease(ctx, (acquired) => acquired.cleanup)
 
 describe("E2E: Scrollback ownership", () => {
   it.scopedLive(
     "a transcript taller than the screen leaves history from the first message on",
     () =>
       Effect.gen(function* () {
-        const ctx = yield* acquire(seedAndSpawn(["--mock-empty"], SHORT_SCREEN))
+        const ctx = yield* seedAndSpawn(["--mock-empty"], SHORT_SCREEN)
         yield* submitMessages(ctx, 5)
 
         const grid = yield* settleAndCapture(ctx, SETTLE)
@@ -92,7 +94,7 @@ describe("E2E: Scrollback ownership", () => {
     "committed rows are written to history once, not repainted into it twice",
     () =>
       Effect.gen(function* () {
-        const ctx = yield* acquire(seedAndSpawn(["--mock-empty"], SHORT_SCREEN))
+        const ctx = yield* seedAndSpawn(["--mock-empty"], SHORT_SCREEN)
         yield* submitMessages(ctx, 4)
 
         const grid = yield* settleAndCapture(ctx, SETTLE)
@@ -111,14 +113,20 @@ describe("E2E: Scrollback ownership", () => {
     "a resize replay keeps every message, still in order",
     () =>
       Effect.gen(function* () {
-        const ctx = yield* acquire(seedAndSpawn(["--mock-empty"], SHORT_SCREEN))
+        const ctx = yield* seedAndSpawn(["--mock-empty"], SHORT_SCREEN)
         yield* submitMessages(ctx, 4)
-        yield* settleAndCapture(ctx, SETTLE)
+        yield* settlePty(ctx, SETTLE)
 
         // A resize re-lays out the transcript and replays it. The replay must
         // not drop rows, and must not add a second copy of any of them.
+        const beforeResize = ctx.output.length
         ctx.resize({ cols: SHORT_SCREEN.cols, rows: 24 })
-        yield* shortPause(1_500)
+        yield* waitFor(
+          Effect.sync(() => ctx.output.length),
+          (length) => length > beforeResize,
+          10_000,
+          "the repaint after the resize",
+        )
 
         const grid = yield* settleAndCapture(ctx, SETTLE)
         const rows = gridText(grid)
@@ -138,5 +146,23 @@ describe("E2E: Scrollback ownership", () => {
         expect(historyText(grid).length).toBeGreaterThan(0)
       }).pipe(Effect.timeout(EFFECT_TIMEOUT)),
     TEST_TIMEOUT,
+  )
+})
+
+describe("E2E: Settle then capture", () => {
+  it.live("the capture reads what the child wrote while it waited for quiet", () =>
+    Effect.gen(function* () {
+      let output = "first frame\r\n"
+      const child = {
+        get output() {
+          return output
+        },
+        size: { cols: 40, rows: 6 },
+      }
+      const capture = settleAndCapture(child, { quietMs: 100, timeoutMs: 2_000 })
+      // A repaint lands after the capture is built and before it runs.
+      output += "second frame\r\n"
+      expect(gridText(yield* capture)).toEqual(["first frame", "second frame"])
+    }).pipe(Effect.timeout("5 seconds")),
   )
 })
