@@ -1634,6 +1634,7 @@ const makeAgentLoopResidency = Effect.gen(function* () {
 const makeAgentLoopBehavior = (
   sessionId: SessionId,
   branchId: BranchId,
+  loopScope: Scope.Closeable,
   sideMutationSemaphore: Semaphore.Semaphore,
   baseSections: ReadonlyArray<PromptSection>,
   initialQueue: LoopQueueState = emptyLoopQueueState(),
@@ -1751,7 +1752,6 @@ const makeAgentLoopBehavior = (
         }).pipe(Effect.provideService(ExtensionRegistry, extensionRegistry)),
       )
 
-    const loopScope = yield* Effect.scope
     const turnInterruption = yield* makeTurnInterruption
     // Branch-owned turn services: the cell kernel, the model context ledger, and
     // every extension Resource declared with `scope: "branch"`. All three share
@@ -2697,6 +2697,7 @@ const buildAgentLoopActorHandlers = (config: {
           makeAgentLoopBehavior(
             sessionId,
             branchId,
+            loopScope,
             sideMutationSemaphore,
             config.baseSections,
             initialQueue,
