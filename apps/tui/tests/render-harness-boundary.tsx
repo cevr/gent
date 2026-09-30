@@ -4,6 +4,7 @@ import { afterEach } from "bun:test"
 import { Writable } from "node:stream" // eslint-disable-line effect/noNodeBuiltinImport -- the renderer writes to a Node stream; a test terminal must be one.
 import { BunServices } from "@effect/platform-bun"
 import { Config, Context, Effect, FileSystem, Layer, Option, Path, Scope, Stream } from "effect"
+import type { CliRenderer, TerminalColors } from "@opentui/core"
 import { render } from "@opentui/solid"
 import { createTestRenderer, type TestRendererOptions } from "@opentui/core/testing"
 import type { JSX } from "solid-js"
@@ -471,6 +472,12 @@ export const renderWithProviders = (
 
 export const renderFrame = (setup: TestRenderSetup) =>
   setup.captureCharFrame().replaceAll("\u00a0", " ")
+
+/** The terminal answers the palette query with `colors`, as a terminal with that palette does. */
+export const answerPalette = (renderer: CliRenderer, colors: TerminalColors) => {
+  renderer.getPalette = () => Effect.runPromise(Effect.succeed(colors))
+  renderer.clearPaletteCache = () => {}
+}
 
 export const destroyRenderSetup = (setup: TestRenderSetup) => {
   if (Option.isSome(currentSetup) && currentSetup.value === setup) currentSetup = Option.none()

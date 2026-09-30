@@ -2,7 +2,15 @@ import { RGBA, SyntaxStyle, type TerminalColors } from "@opentui/core"
 import { Config, Effect, Fiber, Option, Predicate, Record } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import { GentPlatform } from "@gent/core/host"
-import { createContext, createMemo, type JSX, onCleanup, onMount, untrack } from "solid-js"
+import {
+  createContext,
+  createMemo,
+  createSignal,
+  type JSX,
+  onCleanup,
+  onMount,
+  untrack,
+} from "solid-js"
 import { useRequiredContext } from "./utils"
 import { createStore } from "solid-js/store"
 import { useRenderer } from "@opentui/solid"
@@ -480,13 +488,8 @@ interface ThemeContextValue {
 
 const ThemeContext = createContext<ThemeContextValue>()
 
-/**
- * The provider's own state. `themes` stays an open dictionary because the
- * terminal-derived `system` theme is added at runtime, alongside the shipped
- * catalogue.
- */
+/** The provider's own state: the mode and the theme picked by name. */
 interface ThemeStore {
-  themes: Record<string, ThemeJson>
   mode: "dark" | "light"
   active: string
 }
@@ -527,16 +530,21 @@ export function ThemeProvider(props: ThemeProviderProps) {
   }
 
   const [store, setStore] = createStore<ThemeStore>({
-    themes: { ...DEFAULT_THEMES },
     mode: initialMode(),
     active: "fx",
   })
 
-  function init() {
-    resolveSystemTheme()
-  }
+  // The terminal's palette, once read. The `system` theme is drawn from it
+  // for the mode in force, so a mode switch redraws it.
+  const [systemColors, setSystemColors] = createSignal(Option.none<TerminalColors>())
+  const themes = createMemo((): Record<string, ThemeJson> =>
+    Option.match(systemColors(), {
+      onNone: () => DEFAULT_THEMES,
+      onSome: (colors) => ({ ...DEFAULT_THEMES, system: generateSystemTheme(colors, store.mode) }),
+    }),
+  )
 
-  onMount(init)
+  onMount(() => resolveSystemTheme())
 
   // One palette read at a time: a new read (SIGUSR2) replaces the one in
   // flight, and unmount stops it, so a late reply never writes the store.
@@ -562,7 +570,7 @@ export function ThemeProvider(props: ThemeProviderProps) {
             onSuccess: (colors) => {
               // Keep the default when the terminal does not report its palette.
               if (Option.isNone(Option.fromNullishOr(colors.palette[0]))) return keepDefault()
-              setStore("themes", "system", generateSystemTheme(colors, store.mode))
+              setSystemColors(Option.some(colors))
             },
           }),
         ),
@@ -573,15 +581,15 @@ export function ThemeProvider(props: ThemeProviderProps) {
   // Listen for SIGUSR2 to refresh palette
   const sigusr2Handler = () => {
     renderer.clearPaletteCache()
-    init()
+    resolveSystemTheme()
   }
   process.on("SIGUSR2", sigusr2Handler)
   onCleanup(() => process.off("SIGUSR2", sigusr2Handler))
 
   const values = createMemo(() => {
     const activeTheme = Option.getOrElse(
-      Option.orElse(Option.fromNullishOr(store.themes[store.active]), () =>
-        Option.fromNullishOr(store.themes["fx"]),
+      Option.orElse(Option.fromNullishOr(themes()[store.active]), () =>
+        Option.fromNullishOr(themes()["fx"]),
       ),
       () => DEFAULT_THEMES.fx,
     )
@@ -593,7 +601,7 @@ export function ThemeProvider(props: ThemeProviderProps) {
   const value: ThemeContextValue = {
     theme,
     selected: () => store.active,
-    all: () => store.themes,
+    all: themes,
     mode: () => store.mode,
     setMode: (mode: "dark" | "light") => {
       setStore("mode", mode)

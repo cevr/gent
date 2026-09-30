@@ -1,10 +1,12 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it, test } from "effect-bun-test"
 import { createEffect, createRoot, createSignal } from "solid-js"
-import { createThemeView, DEFAULT_THEMES, resolveTheme, type Theme } from "../src/theme"
-import { Effect } from "effect"
+import { createThemeView, DEFAULT_THEMES, resolveTheme, type Theme, useTheme } from "../src/theme"
+import { Effect, Option } from "effect"
+import type { TerminalColors } from "@opentui/core"
+import { useRenderer } from "@opentui/solid"
 import { CommandPalette, useCommand } from "../src/commands"
-import { renderFrame, renderWithProviders } from "./render-harness-boundary"
+import { answerPalette, renderFrame, renderWithProviders } from "./render-harness-boundary"
 import { waitForFrame } from "./helpers-boundary"
 
 // ── theme view ──────────────────────────────────────────────────────────────
@@ -55,6 +57,51 @@ describe("theme view", () => {
       dispose()
     })
   })
+})
+
+// ── system theme ────────────────────────────────────────────────────────────
+
+describe("system theme", () => {
+  // The terminal's palette is read once; the theme drawn from it is the one
+  // for the mode in force, so a mode switch redraws it for that mode.
+  it.live("the terminal-derived theme follows a mode switch", () =>
+    Effect.gen(function* () {
+      const palette = Array.from(
+        { length: 16 },
+        (_, i) => `#${(i * 16).toString(16).padStart(2, "0").repeat(3)}`,
+      )
+      const colors = {
+        palette,
+        defaultForeground: "#dddddd",
+        defaultBackground: "#202020",
+        cursorColor: "#000000",
+        mouseForeground: "#000000",
+        mouseBackground: "#000000",
+        tekForeground: "#000000",
+        tekBackground: "#000000",
+        highlightBackground: "#000000",
+        highlightForeground: "#000000",
+      } satisfies TerminalColors
+      let ctx = Option.none<ReturnType<typeof useTheme>>()
+      const Probe = () => {
+        const renderer = useRenderer()
+        answerPalette(renderer, colors)
+        ctx = Option.some(useTheme())
+        return <text>probe</text>
+      }
+      const setup = yield* Effect.promise(() => renderWithProviders(() => <Probe />))
+      const theme = yield* Effect.fromOption(ctx)
+      // The palette read on SIGUSR2 is the one a terminal with this palette answers.
+      process.emit("SIGUSR2")
+      yield* waitForFrame(setup, () => "system" in theme.all(), "the system theme")
+      theme.set("system")
+      theme.setMode("dark")
+      const dark = theme.theme.backgroundElement
+      theme.setMode("light")
+      yield* waitForFrame(setup, () => true)
+      expect(theme.theme.backgroundElement).not.toEqual(dark)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
 })
 
 // ── theme picker ────────────────────────────────────────────────────────────
