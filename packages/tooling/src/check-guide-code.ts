@@ -15,21 +15,120 @@
  * `CLAUDE.md`, a symlink to `AGENTS.md`, is read once. In a pre-commit hook
  * the text is the staged text: the check compiles the commit being made.
  *
+ * A block that cannot compile on its own is marked by the line
+ * `<!-- illustrative: <why> -->` directly above its fence and is skipped. The
+ * reason is required: a mark without one marks nothing, and the block
+ * compiles.
+ *
  * @module
  */
 
 import { BunRuntime, BunServices } from "@effect/platform-bun"
-import { Console, Effect, FileSystem, Layer, Path, Schema, Stream } from "effect"
+import { Console, Effect, FileSystem, Option, Path, Schema, Stream } from "effect"
 import { ChildProcess } from "effect/process"
-import {
-  type GuideCodeContext,
-  guideBlockFile,
-  guideCodeBlocks,
-  guideCodeContextOf,
-  guideDiagnosticLine,
-  isSteeringFile,
-} from "./guards"
+import { isSteeringFile } from "./guards"
 import { fileSet } from "./check-guardrails"
+
+// ── the blocks and their compile contexts ───────────────────────────────────
+
+/**
+ * Where a block compiles: the tsconfig it extends and the `node_modules` it
+ * resolves from. A block under `apps/tui/` compiles with the TUI tsconfig and
+ * the TUI's dependencies (Solid JSX from `@opentui/solid`); every other block
+ * with the root tsconfig and the examples package's dependencies (`effect`,
+ * `@gent/core` and its entries), the way an extension resolves them.
+ */
+interface GuideCodeContext {
+  readonly name: string
+  readonly tsconfig: string
+  readonly modules: string
+}
+
+const EXTENSION_CONTEXT: GuideCodeContext = {
+  name: "extension",
+  tsconfig: "tsconfig.json",
+  modules: "examples/node_modules",
+}
+
+const TUI_CONTEXT: GuideCodeContext = {
+  name: "tui",
+  tsconfig: "apps/tui/tsconfig.json",
+  modules: "apps/tui/node_modules",
+}
+
+export const guideCodeContextOf = (file: string): GuideCodeContext => {
+  if (file.startsWith("apps/tui/")) return TUI_CONTEXT
+  return EXTENSION_CONTEXT
+}
+
+/** One code block: its file, the file line of its first code line, and its code. */
+interface GuideBlock {
+  readonly file: string
+  readonly line: number
+  readonly code: string
+  readonly extension: "ts" | "tsx"
+}
+
+/** The fence languages that compile, and the module extension each is written with. */
+const BLOCK_EXTENSION = new Map<string, GuideBlock["extension"]>([
+  ["ts", "ts"],
+  ["typescript", "ts"],
+  ["tsx", "tsx"],
+])
+const FENCE_OPEN = /^```\S*\s*$/
+const FENCE_CLOSE = /^```\s*$/
+const ILLUSTRATIVE_MARK = /^<!--\s*illustrative:\s*\S.*-->\s*$/
+
+/** Whether the line above the fence at `fence` marks its block illustrative. */
+const markedIllustrative = (lines: ReadonlyArray<string>, fence: number): boolean =>
+  fence > 0 && ILLUSTRATIVE_MARK.test(lines[fence - 1] ?? "")
+
+export const guideCodeBlocks = (file: string, text: string): ReadonlyArray<GuideBlock> => {
+  const blocks: Array<GuideBlock> = []
+  const lines = text.split("\n")
+  let open = Option.none<{ readonly start: number; readonly language: string }>()
+  for (const [index, line] of lines.entries()) {
+    if (Option.isNone(open)) {
+      if (!FENCE_OPEN.test(line)) continue
+      open = Option.some({ start: index + 1, language: line.slice(3).trim() })
+      continue
+    }
+    if (!FENCE_CLOSE.test(line)) continue
+    const { start, language } = open.value
+    open = Option.none()
+    const extension = Option.fromNullishOr(BLOCK_EXTENSION.get(language))
+    if (Option.isNone(extension) || markedIllustrative(lines, start - 1)) continue
+    blocks.push({
+      file,
+      line: start + 1,
+      code: lines.slice(start, index).join("\n"),
+      extension: extension.value,
+    })
+  }
+  return blocks
+}
+
+/** The module file a block is written to: `b1.ts` for the first, `b2.tsx` for a TSX second. */
+export const guideBlockFile = (index: number, block: GuideBlock): string =>
+  `b${index + 1}.${block.extension}`
+
+const BLOCK_DIAGNOSTIC = /(?:^|[/\\])b(\d+)\.tsx?\((\d+),(\d+)\)/
+
+/** A `tsc` output line with its block position replaced by the position in the block's file. */
+export const guideDiagnosticLine = (line: string, blocks: ReadonlyArray<GuideBlock>): string =>
+  Option.fromNullishOr(BLOCK_DIAGNOSTIC.exec(line)).pipe(
+    Option.flatMap((match) =>
+      Option.fromNullishOr(blocks.at(Number(match[1]) - 1)).pipe(
+        Option.map(
+          (block) =>
+            `${block.file}:${block.line + Number(match[2]) - 1}:${match[3]}${line.slice(match.index + match[0].length)}`,
+        ),
+      ),
+    ),
+    Option.getOrElse(() => line),
+  )
+
+// ── the check ───────────────────────────────────────────────────────────────
 
 class GuideCodeError extends Schema.TaggedError<GuideCodeError>()("GuideCodeError", {
   message: Schema.String,
@@ -160,14 +259,12 @@ const program = checkGuideCode().pipe(
   ),
 )
 
-// The layer runs the check once as it is built; the scope closes after it.
 if (import.meta.main)
   BunRuntime.runMain(
-    Effect.scoped(
-      Layer.build(
-        Layer.effectDiscard(program.pipe(Effect.scoped, Effect.timeout("60 seconds"))).pipe(
-          Layer.provide(BunServices.layer),
-        ),
-      ),
+    program.pipe(
+      Effect.scoped,
+      Effect.timeout("60 seconds"),
+      // @effect-diagnostics-next-line strictEffectProvide:off -- the script's process entry provides the platform once.
+      Effect.provide(BunServices.layer),
     ),
   )
