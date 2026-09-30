@@ -63,7 +63,7 @@ import { AnthropicClient, AnthropicLanguageModel, Generated } from "@effect/ai-a
 import { type AiError, Model as AiModel, type Response } from "effect/ai"
 
 // Test seam: only tests read these exports. The model table and its lookups
-// (MODEL_CONFIG, getModelOverride, getModelBetas), the billing header (SYSTEM_IDENTITY_PREFIX,
+// (MODEL_CONFIG, getModelBetas), the billing header (SYSTEM_IDENTITY_PREFIX,
 // extractFirstUserMessageText, buildBillingHeaderValue), the wire transforms (transformPayload, transformResponseContent, transformStreamEvent)
 // and the credential parsers (ClaudeCredentials,
 // updateCredentialBlob, parseOAuthResponse) are pure functions with unit tests.
@@ -131,7 +131,7 @@ export const MODEL_CONFIG: ModelConfig = {
 }
 
 /** First-match-wins lookup against the override table, in its insertion order. */
-export const getModelOverride = (modelId: string): Option.Option<ModelOverride> => {
+const getModelOverride = (modelId: string): Option.Option<ModelOverride> => {
   const lower = modelId.toLowerCase()
   for (const [pattern, override] of Object.entries(MODEL_CONFIG.modelOverrides)) {
     if (lower.includes(pattern)) return Option.some(override)

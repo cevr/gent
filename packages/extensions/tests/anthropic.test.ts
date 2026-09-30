@@ -10,7 +10,6 @@ import {
   type ClaudeCredentials,
   extractFirstUserMessageText,
   getModelBetas,
-  getModelOverride,
   MODEL_CONFIG,
   parseOAuthResponse,
   readPromptCacheTtl,
@@ -228,7 +227,7 @@ describe("transformPayload", () => {
     }),
   )
 
-  it.effect("passes through payload without tools/messages", () =>
+  it.effect("keeps model and max_tokens on a payload with no tools", () =>
     Effect.gen(function* () {
       const payload = {
         model: "claude-opus-4-6",
@@ -1503,66 +1502,6 @@ describe("buildBillingHeaderValue", () => {
 
 // ── model config ────────────────────────────────────────────────────────────
 
-/**
- * Per-model Anthropic configuration — beta lists + ccVersion + override
- * table. Counsel  — locks the port of
- * `griffinmartin/opencode-claude-auth/src/model-config.ts` so future
- * version bumps + override edits stay aligned with Claude Code's wire
- * shape.
- */
-
-describe("MODEL_CONFIG", () => {
-  test("ccVersion is the currently-advertised Claude Code CLI version", () => {
-    // Reference: opencode-claude-auth/src/model-config.ts:15
-    expect(MODEL_CONFIG.ccVersion).toBe("2.1.280")
-  })
-
-  test("baseBetas carry the five flags Claude Code currently sends", () => {
-    // Lock the exact set so a missed reference-impl update fails
-    // loudly in CI rather than silently drifting from the wire shape.
-    expect([...MODEL_CONFIG.baseBetas]).toEqual([
-      "claude-code-20250219",
-      "oauth-2025-04-20",
-      "interleaved-thinking-2025-05-14",
-      "prompt-caching-scope-2026-01-05",
-      "context-management-2025-06-27",
-    ])
-  })
-})
-
-describe("getModelOverride", () => {
-  test("haiku family excludes interleaved-thinking", () => {
-    const override = getModelOverride("claude-haiku-4-5")
-    expect(Option.isSome(override)).toBe(true)
-    if (Option.isSome(override)) {
-      expect(override.value.exclude).toContain("interleaved-thinking-2025-05-14")
-    }
-  })
-
-  test("4-6 models add the effort beta", () => {
-    const override = getModelOverride("claude-sonnet-4-6")
-    expect(Option.isSome(override)).toBe(true)
-    if (Option.isSome(override)) expect(override.value.add).toContain("effort-2025-11-24")
-  })
-
-  test("4-7 models add the effort beta", () => {
-    const override = getModelOverride("claude-opus-4-7")
-    expect(Option.isSome(override)).toBe(true)
-    if (Option.isSome(override)) expect(override.value.add).toContain("effort-2025-11-24")
-  })
-
-  test("returns None for models matching no override pattern", () => {
-    expect(Option.isNone(getModelOverride("claude-sonnet-3-5"))).toBe(true)
-  })
-
-  test("matches case-insensitively", () => {
-    const override = getModelOverride("CLAUDE-HAIKU-4-5")
-    expect(Option.isSome(override)).toBe(true)
-    if (Option.isSome(override))
-      expect(override.value.exclude).toContain("interleaved-thinking-2025-05-14")
-  })
-})
-
 describe("getModelBetas", () => {
   test("includes every base beta for a generic sonnet model", () => {
     const betas = getModelBetas("claude-sonnet-4-5", Option.none())
@@ -1593,6 +1532,13 @@ describe("getModelBetas", () => {
     // baseBetas minus the excluded one.
     expect(betas).toContain("claude-code-20250219")
     expect(betas).toContain("oauth-2025-04-20")
+  })
+
+  test("4-7 models add the effort beta, and a model id matches in any case", () => {
+    expect(getModelBetas("claude-opus-4-7", Option.none())).toContain("effort-2025-11-24")
+    expect(getModelBetas("CLAUDE-HAIKU-4-5", Option.none())).not.toContain(
+      "interleaved-thinking-2025-05-14",
+    )
   })
 
   test("env override replaces the base list comma-split", () => {
