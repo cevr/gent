@@ -1663,6 +1663,20 @@ interface Connection {
   calls: number
 }
 
+/** What this process holds for one registered server; `status` is a projection of it. */
+interface ServerState {
+  readonly entry: RegisteredServer
+  /** Its lists run one at a time, so an older list never lands last. */
+  readonly listPermit: Semaphore.Semaphore
+  /** The connection it holds now, so a late close never drops its successor. */
+  connection: Option.Option<Connection>
+  /** The last accepted listing, which a new list is compared with. */
+  catalog: CatalogServer
+  health: ServerHealth
+  /** The login it waits for, so a second `/mcp login` replaces the first. */
+  pendingLogin: Option.Option<Fiber.Fiber<void>>
+}
+
 /**
  * The connections of `registered`, each under its cache key, which names one
  * entry. The server's tools are listed again when a connection opens, when
@@ -1703,29 +1717,32 @@ const mcpClientsLive = ({
     Effect.gen(function* () {
       const crypto = yield* Crypto.Crypto
       const blobStore = yield* makeBlobStore(blobs)
-      const byKey = new Map(registered.map((entry) => [entry.server.key, entry]))
       const writePermit = yield* Semaphore.make(1)
-      /** One permit per server: its lists run one at a time, so an older list never lands last. */
-      const listPermits = new Map(
+      /** Each registered server's state, under its cache key. */
+      const states = new Map(
         yield* Effect.forEach(registered, (entry) =>
-          Effect.map(Semaphore.make(1), (permit) => [entry.server.key, permit] as const),
+          Effect.map(Semaphore.make(1), (listPermit) => {
+            const state: ServerState = {
+              entry,
+              listPermit,
+              connection: Option.none(),
+              catalog: entry.catalog,
+              health: setupHealth(entry),
+              pendingLogin: Option.none(),
+            }
+            return [entry.server.key, state] as const
+          }),
         ),
       )
+      const stateOf = (server: McpServer) =>
+        Effect.fromOption(Option.fromUndefinedOr(states.get(server.key))).pipe(
+          Effect.mapError(() => new McpError({ server: server.name, message: "not configured" })),
+        )
       const runFork = yield* FiberSet.makeRuntime<FileSystem.FileSystem | Path.Path>()
       /** The layer's scope: each login's listener lives in a child of it. */
       const layerScope = yield* Scope.Scope
-      /** The login each server waits for, so a second `/mcp login` replaces the first. */
-      const pendingLogins = new Map<string, Fiber.Fiber<void>>()
-      /** The connection each key holds now, so a late close never drops its successor. */
-      const live = new Map<string, Connection>()
-      /** Each server's last accepted entry, which a new list is compared with. */
-      const known = new Map(registered.map((entry) => [entry.server.key, entry.catalog]))
-      const health = new Map(registered.map((entry) => [entry.server.key, setupHealth(entry)]))
-      const setHealth = (key: string, state: McpHealth, reason: Option.Option<string>) => {
-        health.set(key, { health: state, reason })
-      }
-      const setFailed = (key: string, error: McpError) => {
-        health.set(key, failureHealth(error))
+      const setHealth = (state: ServerState, health: McpHealth, reason: Option.Option<string>) => {
+        state.health = { health, reason }
       }
       const namesOf = (tools: ReadonlyArray<CatalogTool>) =>
         new Set(tools.map((listed) => listed.name))
@@ -1736,24 +1753,25 @@ const mcpClientsLive = ({
        * and a failed list is not either: both keep the last list and the
        * cached tools, and leave the server `degraded`.
        */
-      const listNames = (server: McpServer, client: Client, instructions: Option.Option<string>) =>
+      const listNames = (state: ServerState, client: Client, instructions: Option.Option<string>) =>
         Effect.gen(function* () {
-          const previous = known.get(server.key) ?? { tools: [] }
+          const { server } = state.entry
+          const previous = state.catalog
           const tools = yield* listTools(server, client)
           if (tools.length === 0 && previous.tools.length > 0) {
             yield* Effect.logWarning("mcp.server.relist.empty").pipe(
               Effect.annotateLogs({ server: server.name }),
             )
             setHealth(
-              server.key,
+              state,
               "degraded",
               Option.some(`listed no tools; kept the ${previous.tools.length} listed before`),
             )
             return namesOf(previous.tools)
           }
           const next = catalogServerOf(tools, instructions)
-          known.set(server.key, next)
-          setHealth(server.key, "healthy", Option.none())
+          state.catalog = next
+          setHealth(state, "healthy", Option.none())
           if (!Equal.equals(next, previous)) {
             yield* Semaphore.withPermit(
               writePermit,
@@ -1764,10 +1782,10 @@ const mcpClientsLive = ({
         }).pipe(
           Effect.catchCause((cause) => {
             const message = failureMessage(Cause.squash(cause))
-            setHealth(server.key, "degraded", Option.some(message))
+            setHealth(state, "degraded", Option.some(message))
             return Effect.logWarning("mcp.server.relist.failed").pipe(
-              Effect.annotateLogs({ server: server.name, error: message }),
-              Effect.as(namesOf(known.get(server.key)?.tools ?? [])),
+              Effect.annotateLogs({ server: state.entry.server.name, error: message }),
+              Effect.as(namesOf(state.catalog.tools)),
             )
           }),
         )
@@ -1777,37 +1795,33 @@ const mcpClientsLive = ({
        * land in the order they were asked for.
        */
       const relist = (
-        server: McpServer,
+        state: ServerState,
         client: Client,
         instructions: Option.Option<string>,
         apply: (names: ReadonlySet<string>) => void,
       ) =>
-        Option.match(Option.fromUndefinedOr(listPermits.get(server.key)), {
-          onNone: () => Effect.void,
-          onSome: (permit) =>
-            Semaphore.withPermit(
-              permit,
-              listNames(server, client, instructions).pipe(Effect.map((names) => apply(names))),
-            ),
-        })
+        Semaphore.withPermit(
+          state.listPermit,
+          listNames(state, client, instructions).pipe(Effect.map((names) => apply(names))),
+        )
       /** Lists an open connection's tools again, off the call that asked. */
-      const refresh = (server: McpServer, connection: Connection) =>
+      const refresh = (state: ServerState, connection: Connection) =>
         runFork(
-          relist(server, connection.client, connection.instructions, (names) => {
+          relist(state, connection.client, connection.instructions, (names) => {
             connection.listed = names
           }),
         )
       const clients = yield* RcMap.make({
         lookup: (key: string) =>
           Effect.gen(function* () {
-            const entry = byKey.get(key)
-            if (Predicate.isUndefined(entry)) {
+            const state = Option.fromUndefinedOr(states.get(key))
+            if (Option.isNone(state)) {
               return yield* new McpError({ server: key, message: "not configured" })
             }
             // The notification can only arrive once the connection below exists.
             let onToolsChanged = () => {}
             const { client, transport, instructions } = yield* connect(
-              entry.server,
+              state.value.entry.server,
               auth,
               Option.some(() => onToolsChanged()),
             )
@@ -1819,61 +1833,64 @@ const mcpClientsLive = ({
               closed: false,
               calls: 0,
             }
-            yield* relist(entry.server, client, instructions, (names) => {
+            yield* relist(state.value, client, instructions, (names) => {
               connection.listed = names
             })
-            onToolsChanged = () => refresh(entry.server, connection)
-            live.set(key, connection)
+            onToolsChanged = () => refresh(state.value, connection)
+            state.value.connection = Option.some(connection)
             // Runs before the client closes, so its own close event finds nothing to drop.
-            yield* Effect.addFinalizer(() => Effect.sync(() => forget(key, connection)))
+            yield* Effect.addFinalizer(() => Effect.sync(() => forget(state.value, connection)))
             client.onclose = () => {
               connection.closed = true
-              if (live.get(key) === connection) {
-                setHealth(key, "degraded", Option.some("the connection closed"))
+              if (Option.contains(state.value.connection, connection)) {
+                setHealth(state.value, "degraded", Option.some("the connection closed"))
               }
-              runFork(evict(key, connection))
+              runFork(evict(state.value, connection))
             }
             return connection
           }),
         idleTimeToLive: IDLE_TIME_TO_LIVE,
       })
-      /** Whether `connection` was the key's current one; it no longer is. */
-      const forget = (key: string, connection: Connection) => {
-        if (live.get(key) !== connection) return false
-        live.delete(key)
+      /** Whether `connection` was the server's current one; it no longer is. */
+      const forget = (state: ServerState, connection: Connection) => {
+        if (!Option.contains(state.connection, connection)) return false
+        state.connection = Option.none()
         return true
       }
-      const evict = (key: string, connection: Connection) =>
+      const evict = (state: ServerState, connection: Connection) =>
         Effect.suspend(() => {
-          if (!forget(key, connection)) return Effect.void
-          return RcMap.invalidate(clients, key)
+          if (!forget(state, connection)) return Effect.void
+          return RcMap.invalidate(clients, state.entry.server.key)
         })
-      const acquire = (server: McpServer) =>
-        RcMap.get(clients, server.key).pipe(
+      const acquire = (state: ServerState) =>
+        RcMap.get(clients, state.entry.server.key).pipe(
           // RcMap keeps a failed lookup until it idles out; drop it so the next call connects.
           Effect.tapError((error) =>
             Effect.andThen(
-              Effect.sync(() => setFailed(server.key, error)),
-              RcMap.invalidate(clients, server.key),
+              Effect.sync(() => {
+                state.health = failureHealth(error)
+              }),
+              RcMap.invalidate(clients, state.entry.server.key),
             ),
           ),
         )
-      /** The key's connection; one whose transport already closed ran nothing, so it is replaced. */
-      const open = (server: McpServer) =>
+      /** The server's connection; one whose transport already closed ran nothing, so it is replaced. */
+      const open = (state: ServerState) =>
         Effect.gen(function* () {
-          const connection = yield* acquire(server)
+          const connection = yield* acquire(state)
           if (!connection.closed) return connection
-          yield* evict(server.key, connection)
-          return yield* acquire(server)
+          yield* evict(state, connection)
+          return yield* acquire(state)
         })
-      /** One `tools/call` on the key's connection, which the failure's kind then drops or relists. */
+      /** One `tools/call` on the server's connection, which the failure's kind then drops or relists. */
       const callOnce = (
-        server: McpServer,
+        state: ServerState,
         name: string,
         input: Readonly<Record<string, Schema.Json>>,
       ) =>
         Effect.gen(function* () {
-          const connection = yield* open(server)
+          const { server } = state.entry
+          const connection = yield* open(state)
           if (!connection.listed.has(name)) {
             return yield* new McpError({ server: server.name, message: staleMessage(name) })
           }
@@ -1914,38 +1931,41 @@ const mcpClientsLive = ({
           return yield* send.pipe(
             Effect.tapError((failed) => {
               if (failed.kind === "dead") {
-                setHealth(server.key, "degraded", Option.some(failed.message))
+                setHealth(state, "degraded", Option.some(failed.message))
               }
               if (failed.kind === "refused") {
-                setHealth(server.key, "expired", Option.some(failed.message))
+                setHealth(state, "expired", Option.some(failed.message))
               }
-              if (DROPPING_FAILURES.has(failed.kind)) return evict(server.key, connection)
-              if (failed.kind === "stale") return Effect.sync(() => refresh(server, connection))
+              if (DROPPING_FAILURES.has(failed.kind)) return evict(state, connection)
+              if (failed.kind === "stale") return Effect.sync(() => refresh(state, connection))
               return Effect.void
             }),
           )
         })
       /** Waits for a started login's redirect, then connects with its token; closes `scope` at the end. */
-      const finishLogin = (server: McpServer, started: LoginStart, scope: Scope.Closeable) =>
+      const finishLogin = (state: ServerState, started: LoginStart, scope: Scope.Closeable) =>
         Effect.gen(function* () {
           yield* started.finish
           // A connection opened before the login sends no token; the next one does.
-          const current = Option.fromUndefinedOr(live.get(server.key))
-          if (Option.isSome(current)) yield* evict(server.key, current.value)
-          yield* Effect.scoped(acquire(server))
+          if (Option.isSome(state.connection)) yield* evict(state, state.connection.value)
+          yield* Effect.scoped(acquire(state))
           yield* Effect.logInfo("mcp.oauth.login.done").pipe(
-            Effect.annotateLogs({ server: server.name }),
+            Effect.annotateLogs({ server: state.entry.server.name }),
           )
         }).pipe(
           Effect.catchCause((cause) => {
             const message = failureMessage(Cause.squash(cause))
-            setHealth(server.key, "expired", Option.some(message))
+            setHealth(state, "expired", Option.some(message))
             return Effect.logWarning("mcp.oauth.login.failed").pipe(
-              Effect.annotateLogs({ server: server.name, error: message }),
+              Effect.annotateLogs({ server: state.entry.server.name, error: message }),
             )
           }),
           Effect.ensuring(Scope.close(scope, Exit.void)),
-          Effect.ensuring(Effect.sync(() => pendingLogins.delete(server.name))),
+          Effect.ensuring(
+            Effect.sync(() => {
+              state.pendingLogin = Option.none()
+            }),
+          ),
         )
       /**
        * Starts a login to the server named `name` and returns its URL at
@@ -1955,12 +1975,15 @@ const mcpClientsLive = ({
        */
       const login = (name: string) =>
         Effect.gen(function* () {
-          const entry = Option.fromUndefinedOr(
-            registered.find(
-              (candidate) => candidate.server.name === name && usesOAuth(candidate.server.config),
-            ),
+          const found = Option.fromUndefinedOr(
+            [...states.values()].find((candidate) => candidate.entry.server.name === name),
           )
-          if (Option.isNone(entry) || !usesOAuth(entry.value.server.config)) {
+          const config = Option.flatMap(found, (candidate) => {
+            const entry = candidate.entry.server.config
+            if (usesOAuth(entry)) return Option.some(entry)
+            return Option.none()
+          })
+          if (Option.isNone(found) || Option.isNone(config)) {
             const names = registered
               .filter((candidate) => usesOAuth(candidate.server.config))
               .map((candidate) => candidate.server.name)
@@ -1969,10 +1992,8 @@ const mcpClientsLive = ({
               message: `no MCP server named ${name} signs in with OAuth; these do: ${names.join(", ") || "none"}`,
             })
           }
-          const { server } = entry.value
-          const config = entry.value.server.config
-          const previous = Option.fromUndefinedOr(pendingLogins.get(name))
-          if (Option.isSome(previous)) yield* Fiber.interrupt(previous.value)
+          const state = found.value
+          if (Option.isSome(state.pendingLogin)) yield* Fiber.interrupt(state.pendingLogin.value)
           // The listener's scope is a child of the layer's from its creation. A
           // start that fails or is interrupted closes it; a start that
           // succeeds hands it to the finishing fiber in the same
@@ -1981,7 +2002,7 @@ const mcpClientsLive = ({
             Effect.gen(function* () {
               const scope = yield* Scope.fork(layerScope)
               const started = yield* restore(
-                startLogin(server, config, auth, scope).pipe(
+                startLogin(state.entry.server, config.value, auth, scope).pipe(
                   Effect.provideService(Crypto.Crypto, crypto),
                   Effect.mapError((error) => {
                     if (error._tag === "McpError") return error
@@ -1989,7 +2010,7 @@ const mcpClientsLive = ({
                   }),
                 ),
               ).pipe(Effect.onExit((exit) => closeOnFailure(scope, exit)))
-              pendingLogins.set(name, runFork(finishLogin(server, started, scope)))
+              state.pendingLogin = Option.some(runFork(finishLogin(state, started, scope)))
               return started.url
             }),
           )
@@ -1997,11 +2018,15 @@ const mcpClientsLive = ({
       return McpClients.of({
         login,
         call: (server, name, input) =>
-          callOnce(server, name, input).pipe(
-            Effect.catchTag("CallFailed", (failed) => {
-              if (failed.kind === "expired" && failed.reused) return callOnce(server, name, input)
-              return Effect.fail(failed)
-            }),
+          Effect.gen(function* () {
+            const state = yield* stateOf(server)
+            return yield* callOnce(state, name, input).pipe(
+              Effect.catchTag("CallFailed", (failed) => {
+                if (failed.kind === "expired" && failed.reused) return callOnce(state, name, input)
+                return Effect.fail(failed)
+              }),
+            )
+          }).pipe(
             Effect.mapError((error) => {
               if (error._tag === "McpError") return error
               return new McpError({ server: server.name, message: error.message })
@@ -2009,24 +2034,21 @@ const mcpClientsLive = ({
             Effect.scoped,
           ),
         status: Effect.sync(() => {
-          const servers = registered.map(({ server }): McpServerStatus => {
-            const state = health.get(server.key) ?? { health: "unknown", reason: Option.none() }
-            const connection = Option.fromUndefinedOr(live.get(server.key)).pipe(
-              Option.filter((open) => !open.closed),
-            )
-            const catalog = known.get(server.key) ?? { tools: [] }
+          const servers = [...states.values()].map((state): McpServerStatus => {
+            const { server } = state.entry
+            const connection = Option.filter(state.connection, (open) => !open.closed)
             return {
               name: server.name,
               transport: Option.match(connection, {
                 onNone: () => configuredTransport(server.config),
                 onSome: (open) => open.transport,
               }),
-              health: state.health,
+              health: state.health.health,
               connected: Option.isSome(connection),
-              tools: catalog.tools.length,
+              tools: state.catalog.tools.length,
               ...omitUndefined({
-                description: catalog.instructions,
-                reason: Option.getOrUndefined(state.reason),
+                description: state.catalog.instructions,
+                reason: Option.getOrUndefined(state.health.reason),
               }),
             }
           })
