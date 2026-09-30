@@ -12,16 +12,7 @@ import {
   ProviderId,
   SessionId,
 } from "@gent/core/protocol"
-import {
-  Auth,
-  type AuthEvent,
-  AuthState,
-  catalogOf,
-  methodsFor,
-  missingRequired,
-  providerFor,
-  transitionAuth,
-} from "../src/auth"
+import { Auth, type AuthEvent, AuthState, transitionAuth } from "../src/auth"
 import { BunServices } from "@effect/platform-bun"
 import { App } from "../src/app"
 import { LinkOpener, LinkOpenerError } from "../src/os"
@@ -42,14 +33,6 @@ import { onMount } from "solid-js"
 const provider = {
   provider: ProviderId.make("anthropic"),
   hasKey: false,
-  required: true,
-} satisfies AuthProviderInfo
-
-const satisfied = {
-  provider: ProviderId.make("openai"),
-  hasKey: true,
-  source: "stored",
-  authType: "api",
   required: true,
 } satisfies AuthProviderInfo
 
@@ -120,7 +103,9 @@ describe("auth-state", () => {
 
     expect(state.screen).toEqual({ _tag: "List" })
     expect(state.error).toEqual(Option.some("bad key"))
-    expect(catalogOf(state).providers).toEqual([provider])
+    expect(Option.map(state.catalog, (catalog) => catalog.providers)).toEqual(
+      Option.some([provider]),
+    )
   })
 
   test("choosing a provider then an api method opens an empty key field", () => {
@@ -196,17 +181,9 @@ describe("auth-state", () => {
 
     expect(closed.screen).toEqual({ _tag: "List" })
     expect(closed.error).toEqual(Option.none())
-    expect(catalogOf(closed).providers).toEqual([provider])
-  })
-
-  test("the catalog answers which methods, which provider, and what is missing", () => {
-    const state = loaded([provider, satisfied])
-
-    expect(methodsFor(catalogOf(state), "anthropic")).toEqual([apiMethod, oauthMethod])
-    expect(methodsFor(catalogOf(state), "unknown")).toEqual([])
-    expect(providerFor(catalogOf(state), "openai")).toEqual(Option.some(satisfied))
-    expect(providerFor(catalogOf(state), "unknown")).toEqual(Option.none())
-    expect(missingRequired(catalogOf(state))).toEqual([provider])
+    expect(Option.map(closed.catalog, (catalog) => catalog.providers)).toEqual(
+      Option.some([provider]),
+    )
   })
 })
 

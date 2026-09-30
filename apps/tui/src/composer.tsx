@@ -97,8 +97,8 @@ import {
  * Spill files live beside the rest of the gent data, not in a temp directory.
  * A run with its own `GENT_DATA_DIR` keeps them there, off the real home.
  */
-export const shellOutputDirectory = (home: string = homedir()): Effect.Effect<string> =>
-  Effect.map(dataPaths(home), ({ dataDir }) => `${dataDir}/shell-output`)
+const shellOutputDirectory = (): Effect.Effect<string> =>
+  Effect.map(dataPaths(homedir()), ({ dataDir }) => `${dataDir}/shell-output`)
 
 /**
  * Execute a shell command. The inline copy keeps the whole lines that fit the

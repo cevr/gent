@@ -7,7 +7,6 @@ import {
   createPasteManager,
   executeShell,
   isLargePaste,
-  shellOutputDirectory,
 } from "../src/composer"
 import { ConfigProvider, Deferred, Effect, FileSystem, Layer, Option, Schema } from "effect"
 import {
@@ -173,9 +172,7 @@ describe("executeShell", () => {
       expect(lineCount).toBeLessThanOrEqual(2001)
       // The spill lands in this test's own data directory, not the real home.
       const savedPath = yield* Effect.fromOption(result.savedPath)
-      const directory = yield* shellOutputDirectory()
-      expect(directory).toContain("/gent-composer-data-")
-      expect(savedPath.startsWith(`${directory}/`)).toBe(true)
+      expect(savedPath).toMatch(/\/gent-composer-data-[^/]*\/shell-output\/shell_[^/]*\.txt$/)
     }),
   )
 
@@ -192,8 +189,7 @@ describe("executeShell", () => {
       // Output should be under 50KB
       expect(result.output.length).toBeLessThanOrEqual(50 * 1024)
       const savedPath = yield* Effect.fromOption(result.savedPath)
-      expect(savedPath.startsWith(`${yield* shellOutputDirectory()}/`)).toBe(true)
-      expect(savedPath).toContain("/gent-composer-data-")
+      expect(savedPath).toMatch(/\/gent-composer-data-[^/]*\/shell-output\/shell_[^/]*\.txt$/)
     }),
   )
 
@@ -240,9 +236,7 @@ describe("executeShell", () => {
 
       // The reader is handed a path, not just a stump of the output.
       const savedPath = yield* Effect.fromOption(result.savedPath)
-      const directory = yield* shellOutputDirectory().pipe(inDataDir)
-      expect(directory).toBe(`${dataDir}/shell-output`)
-      expect(savedPath.startsWith(directory)).toBe(true)
+      expect(savedPath.startsWith(`${dataDir}/shell-output/`)).toBe(true)
 
       const saved = yield* fs.readFileString(savedPath)
       // The whole output survives: the head the cap kept and the tail it cut.

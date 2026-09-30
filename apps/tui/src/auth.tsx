@@ -123,7 +123,7 @@ export const AuthState = {
 }
 
 /** What the pane draws with: the loaded catalog, or nothing yet. */
-export const catalogOf = (state: AuthState): AuthCatalog =>
+const catalogOf = (state: AuthState): AuthCatalog =>
   Option.getOrElse(state.catalog, () => emptyCatalog)
 
 export const AuthEvent = Schema.TaggedUnion({
@@ -239,21 +239,18 @@ export function transitionAuth(state: AuthState, event: AuthEvent): AuthState {
 }
 
 /** The methods the server offers for a provider, empty when it offers none. */
-export const methodsFor = (catalog: AuthCatalog, provider: string): ReadonlyArray<AuthMethod> =>
+const methodsFor = (catalog: AuthCatalog, provider: string): ReadonlyArray<AuthMethod> =>
   Option.getOrElse(
     Option.fromNullishOr(catalog.methods[provider]),
     (): ReadonlyArray<AuthMethod> => [],
   )
 
 /** The provider a screen is about, looked up in the live catalog. */
-export const providerFor = (
-  catalog: AuthCatalog,
-  provider: string,
-): Option.Option<AuthProviderInfo> =>
+const providerFor = (catalog: AuthCatalog, provider: string): Option.Option<AuthProviderInfo> =>
   Option.fromNullishOr(catalog.providers.find((entry) => entry.provider === provider))
 
 /** The required providers that still have no credentials. */
-export const missingRequired = (catalog: AuthCatalog): ReadonlyArray<AuthProviderInfo> =>
+const missingRequired = (catalog: AuthCatalog): ReadonlyArray<AuthProviderInfo> =>
   catalog.providers.filter((entry) => entry.required && !entry.hasKey)
 
 // ── auth view ───────────────────────────────────────────────────────────────
