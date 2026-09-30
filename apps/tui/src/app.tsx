@@ -15,7 +15,7 @@ import {
   type Session as DomainSession,
 } from "@gent/core/protocol"
 import { type Session as ClientSession, useClient } from "./client"
-import { formatDuration, randomId, truncate } from "./utils"
+import { formatCost, formatDuration, randomId, truncate } from "./utils"
 import { createMemo, createSignal, ErrorBoundary, For, type JSX, Show } from "solid-js"
 import { buildSyntaxStyle, resolveThemeColor, ThemeProvider, useTheme } from "./theme"
 import {
@@ -26,7 +26,7 @@ import {
 } from "./terminal"
 import type { RGBA } from "@opentui/core"
 import { MessageList, NativeTranscript, splitFooterHeight } from "./message-list"
-import { Composer, ComposerFrame } from "./composer"
+import { Composer, ComposerFrame, StatusRow } from "./composer"
 import { DockFooter, DockProvider, useDockSpacer } from "./ui"
 import { CommandPalette, CommandProvider, useCommand } from "./commands"
 import {
@@ -631,7 +631,7 @@ export function Session(props: SessionProps) {
   const costLabels = (): StatusRowLabel[] => {
     const c = client.cost()
     if (c <= 0) return []
-    return [{ text: `$${c.toFixed(2)}`, color: theme.textMuted }]
+    return [{ text: formatCost(c), color: theme.textMuted }]
   }
 
   const modelLabels = (): StatusRowLabel[] => {
@@ -665,13 +665,17 @@ export function Session(props: SessionProps) {
     if (controller.uiState().transcriptExpanded) {
       items.push({ text: "transcript · Esc to return", color: theme.textMuted })
     }
-    // One footer line, one owner. A local error (a slash command that could
-    // not apply, a failed RPC) replaces the phase word until the next turn
-    // clears it; an extension notice shows when no error stands, and a
-    // notice never replaces an error.
+    // One footer line, one owner. An armed key's cue (`ctrl+c again to exit`)
+    // comes first: it answers the key just pressed and lasts a second. A
+    // local error (a slash command that could not apply, a failed RPC)
+    // replaces the phase word until the next turn clears it; an extension
+    // notice shows when no error stands, and a notice never replaces an error.
+    const armedCue = controller.armedCue()
     const localError = Option.fromNullishOr(client.error())
     const notice = client.notice()
-    if (Option.isSome(localError)) {
+    if (Option.isSome(armedCue)) {
+      items.push({ text: armedCue.value, color: theme.warning })
+    } else if (Option.isSome(localError)) {
       items.push({ text: localError.value, color: theme.error })
     } else if (Option.isSome(notice)) {
       items.push({ text: notice.value, color: theme.warning })
@@ -685,12 +689,7 @@ export function Session(props: SessionProps) {
     // distinguishes them.
     // The git facts are the launch directory's; a session rooted elsewhere
     // shows its directory alone rather than borrow them.
-    const sessionCwd = Option.getOrElse(
-      Option.flatMap(Option.fromNullishOr(client.session()), (session) =>
-        Option.fromUndefinedOr(session.cwd),
-      ),
-      () => workspace.cwd,
-    )
+    const sessionCwd = client.pathPlace().cwd
     const atLaunchCwd = sessionCwd === workspace.cwd
     items.push({
       text: formatCwdGit(
@@ -771,17 +770,23 @@ export function Session(props: SessionProps) {
             </ActivityRow>
           </Show>
 
-          <ComposerFrame
-            labels={[
-              ...phaseLabels(),
-              ...connectionLabels(),
-              ...modelLabels(),
-              ...extensionLabels(),
-              ...rightAnchoredLabels(),
-            ]}
-            rightLabels={rightAnchoredLabels().length}
-          >
-            <Composer>
+          {/* One dock slot: every pane (the popup and the palette inside the
+              composer, the panes after it) docks under the status row. */}
+          <ComposerFrame>
+            <Composer
+              statusRow={
+                <StatusRow
+                  labels={[
+                    ...phaseLabels(),
+                    ...connectionLabels(),
+                    ...modelLabels(),
+                    ...extensionLabels(),
+                    ...rightAnchoredLabels(),
+                  ]}
+                  rightLabels={rightAnchoredLabels().length}
+                />
+              }
+            >
               <Composer.Autocomplete />
               <CommandPalette />
             </Composer>
@@ -817,7 +822,6 @@ export function Session(props: SessionProps) {
                 sessionName={controller.currentSessionName()}
                 branches={overlay.branches}
                 onSelect={controller.onBranchPickerSelect}
-                onClose={controller.onBranchPickerDismiss}
               />
             )
           })()}

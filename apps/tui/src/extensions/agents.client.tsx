@@ -18,7 +18,10 @@ import {
   type ExtensionAgentDetail,
   fitWidth,
   formatAge,
+  formatCost,
   formatDuration,
+  keyHint,
+  KeyHints,
   PickerFrame,
   selectable,
   SelectList,
@@ -73,7 +76,7 @@ const subtreeRows = (
   }
 }
 
-const TRAY_HINT = "^t agents"
+const TRAY_HINT = "ctrl+t agents"
 const TRAY_MAX_ROWS = 3
 
 /** What a row is called: its session name, else its cwd, else its id. */
@@ -492,9 +495,6 @@ const currentMarker = (current: boolean): string => {
   return "  "
 }
 
-/** Sub-cent costs still deserve a number, so keep three decimals throughout. */
-const formatCost = (usd: number): string => `$${usd.toFixed(3)}`
-
 /**
  * Drop the provider prefix from a model id: `anthropic/claude-sonnet-5` becomes
  * `claude-sonnet-5`. The detail line is the widest content in the panel, and
@@ -635,7 +635,7 @@ export function AgentsPane(props: {
   const rowLine = (row: AgentRowEntry, selected: boolean): RowLine => {
     if (Option.contains(armed(), row.sessionId)) {
       return {
-        left: "^x again to delete this session and its children",
+        left: "ctrl+x again to delete this session and its children",
         glyphAt: Option.none(),
         right: "",
       }
@@ -727,7 +727,13 @@ export function AgentsPane(props: {
           has rows; the frame adds the detail line under them. */}
       <PickerFrame
         title={`Agents · ${countsLabel(visible())}`}
-        footer={"↑↓ move   ↵ → open   ← esc close   ^x delete   ^t hide"}
+        keys={[
+          KeyHints.move,
+          KeyHints.select,
+          keyHint("ctrl+x", "delete"),
+          keyHint("ctrl+t", "hide"),
+          KeyHints.close,
+        ]}
         detail={Option.liftPredicate(
           detailLabel(props.controller.detail()),
           () => visible().length > 0,

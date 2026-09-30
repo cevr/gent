@@ -133,7 +133,7 @@ describe("refused submissions", () => {
   // The composer on screen writes a text as large as a paste as a placeholder.
   const placeholder = (text: string) => {
     if (text.length < 150) return text
-    return `[Pasted ~1 lines #${text.length}]`
+    return `[Pasted ${text.length} chars #1]`
   }
   const longCommand = `echo ${"x".repeat(200)}`
   const longMessage = "y".repeat(200)
@@ -612,7 +612,7 @@ const queueEntry = (tag: QueueEntryInfo["_tag"], id: string, content: string): Q
 
 describe("session controller state", () => {
   test("auth checks ignore stale success and failure results", () => {
-    const initial = initialSessionControllerState({ agent: "fast" })
+    const initial = initialSessionControllerState()
     const first = beginAuthCheck(initial)
     const second = beginAuthCheck(first)
 
@@ -629,7 +629,7 @@ describe("session controller state", () => {
   })
 
   test("manual auth close invalidates pending checks and stores the current agent", () => {
-    const checking = beginAuthCheck(initialSessionControllerState({ agent: "fast" }))
+    const checking = beginAuthCheck(initialSessionControllerState())
     const closed = closeAuthGateState(checking, "deep")
     const staleResult = completeAuthCheck(closed, {
       version: checking.authCheckVersion,
@@ -652,7 +652,7 @@ describe("session controller state", () => {
       ],
     }
 
-    const withQueue = setQueue(initialSessionControllerState({ agent: "fast" }), queue)
+    const withQueue = setQueue(initialSessionControllerState(), queue)
     const cleared = clearQueue(withQueue)
 
     expect(queuedDraftText(withQueue.queue)).toBe("switch agents\nthen continue\nand summarize")

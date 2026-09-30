@@ -14,7 +14,15 @@ import { shortId, truncate, truncateStart, useRequiredContext } from "./utils"
 import { useTerminalDimensions } from "./terminal"
 import { matchSorter } from "match-sorter"
 import { useClient } from "./client"
-import { PickerFrame, selectable, SelectList, type SelectListApi, type SelectListRow } from "./ui"
+import {
+  keyHint,
+  KeyHints,
+  PickerFrame,
+  selectable,
+  SelectList,
+  type SelectListApi,
+  type SelectListRow,
+} from "./ui"
 import { textWidth } from "./text-width-adapter"
 import { useTheme } from "./theme"
 import { useExtensionUI } from "./extensions/host"
@@ -564,11 +572,10 @@ export function CommandPalette() {
     return Math.max(8, Math.min(24, Math.floor(dimensions().width * 0.28)))
   }
 
-  const footerHint = () => {
-    let close = "Close"
-    if (state().levelStack.length > 1) close = "Back"
-    if (dimensions().width < 56) return `↑↓ Move · Tab Group · ↵ Open · Esc ${close}`
-    return `↑↓ Navigate     Tab Category     Enter Open     Esc ${close}`
+  const keys = () => {
+    let leave = KeyHints.close
+    if (state().levelStack.length > 1) leave = KeyHints.back
+    return [KeyHints.move, keyHint("tab", "category"), KeyHints.select, leave]
   }
 
   const breadcrumb = () => {
@@ -652,7 +659,7 @@ export function CommandPalette() {
 
   return (
     <Show when={command.paletteOpen()}>
-      <PickerFrame title={paletteTitle()} footer={footerHint()}>
+      <PickerFrame title={paletteTitle()} keys={keys()}>
         <SelectList
           id="command-palette"
           queryRow={() => (

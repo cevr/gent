@@ -22,7 +22,12 @@ import {
   GentConnectionError,
 } from "@gent/core/protocol"
 import { InteractionRequestId } from "@gent/core/extensions/branch-tools"
-import { makeCliTeardown, renderHeadlessToolCall, runHeadless } from "../src/headless"
+import {
+  type HeadlessOptions,
+  makeCliTeardown,
+  renderHeadlessToolCall,
+  runHeadless,
+} from "../src/headless"
 import { createMockClient } from "./render-harness-boundary"
 import { RpcClientError } from "effect/unstable/rpc/RpcClientError"
 import { SocketCloseError } from "effect/unstable/socket/Socket"
@@ -54,7 +59,9 @@ const stderr = Sink.forEach((chunk: string | Uint8Array): Effect.Effect<void> =>
   }),
 )
 const headlessTest = it.live.layer(Stdio.layerTest({ stdout: () => stdout, stderr: () => stderr }))
-const noUser = { approveAll: false }
+/** Where the headless session runs: its tool paths read from here. */
+const PLACE = { cwd: "/work/proj", home: "/home/test" }
+const noUser: HeadlessOptions = { approveAll: false, place: PLACE }
 
 const sessionId = SessionId.make("session-headless")
 const branchId = BranchId.make("branch-headless")
@@ -163,10 +170,8 @@ const captureStdout = <A, E>(
     return { result, stdout: capturedWrites.join("") }
   })
 
-const run = (
-  client: ReturnType<typeof createMockClient>,
-  options: { readonly approveAll: boolean } = noUser,
-) => runHeadless(client, sessionId, branchId, PROMPT, options).pipe(Effect.timeout("2 seconds"))
+const run = (client: ReturnType<typeof createMockClient>, options: HeadlessOptions = noUser) =>
+  runHeadless(client, sessionId, branchId, PROMPT, options).pipe(Effect.timeout("2 seconds"))
 
 describe("runHeadless", () => {
   headlessTest("an error notice does not end the turn; the answer after it prints", () =>
@@ -386,7 +391,7 @@ describe("runHeadless", () => {
     requestId: InteractionRequestId.make("req-headless"),
     text: "Run a destructive command?",
   })
-  const answerInteraction = (options: { readonly approveAll: boolean }) =>
+  const answerInteraction = (options: HeadlessOptions) =>
     Effect.gen(function* () {
       const answers: Array<{ readonly approved: boolean; readonly notes?: string }> = []
       const client = branchClient({
@@ -402,7 +407,10 @@ describe("runHeadless", () => {
 
   headlessTest("an interaction is declined when no flag approves it", () =>
     Effect.gen(function* () {
-      const { answers, stdout: printed } = yield* answerInteraction({ approveAll: false })
+      const { answers, stdout: printed } = yield* answerInteraction({
+        approveAll: false,
+        place: PLACE,
+      })
       expect(answers).toHaveLength(1)
       expect(answers[0]?.approved).toBe(false)
       expect(answers[0]?.notes).toContain("--approve-all")
@@ -412,7 +420,10 @@ describe("runHeadless", () => {
 
   headlessTest("--approve-all approves an interaction", () =>
     Effect.gen(function* () {
-      const { answers, stdout: printed } = yield* answerInteraction({ approveAll: true })
+      const { answers, stdout: printed } = yield* answerInteraction({
+        approveAll: true,
+        place: PLACE,
+      })
       expect(answers).toHaveLength(1)
       expect(answers[0]?.approved).toBe(true)
       expect(answers[0]?.notes).toBeUndefined()
@@ -548,28 +559,34 @@ describe("runHeadless", () => {
 
   headlessTest("a background bash command prints as in background, not as an exit code", () =>
     Effect.sync(() => {
-      const background = renderHeadlessToolCall({
-        toolName: "bash",
-        status: "completed",
-        input: Option.some({ command: "sleep 100" }),
-        output: Option.some(
-          encodeBashOutput({ stdout: "", stderr: "", exitCode: 0, status: "background" }),
-        ),
-        summary: Option.none(),
-      })
+      const background = renderHeadlessToolCall(
+        {
+          toolName: "bash",
+          status: "completed",
+          input: Option.some({ command: "sleep 100" }),
+          output: Option.some(
+            encodeBashOutput({ stdout: "", stderr: "", exitCode: 0, status: "background" }),
+          ),
+          summary: Option.none(),
+        },
+        PLACE,
+      )
       expect(background).toContain("[tool done: bash in background]")
     }),
   )
 
   headlessTest("renders non-special tools through the generic fallback", () =>
     Effect.sync(() => {
-      const rendered = renderHeadlessToolCall({
-        toolName: "read",
-        status: "completed",
-        input: Option.some({ path: "/tmp/example.txt" }),
-        output: Option.some("plain output"),
-        summary: Option.none(),
-      })
+      const rendered = renderHeadlessToolCall(
+        {
+          toolName: "read",
+          status: "completed",
+          input: Option.some({ path: "/tmp/example.txt" }),
+          output: Option.some("plain output"),
+          summary: Option.none(),
+        },
+        PLACE,
+      )
 
       expect(rendered).toContain("[tool done: read]")
       expect(rendered).toContain("plain output")
@@ -578,20 +595,44 @@ describe("runHeadless", () => {
 
   headlessTest("renders cell operation receipts under the cell", () =>
     Effect.sync(() => {
-      const rendered = renderHeadlessToolCall({
-        toolName: "cell",
-        status: "completed",
-        input: Option.some({ code: "await tools.read({path: 'a.txt'})" }),
-        output: Option.some(
-          encodeCellOutput({
-            display: "ok",
-            operations: [{ tool: "read", outcome: "succeeded", summary: "12 lines" }],
-          }),
-        ),
-        summary: Option.none(),
-      })
+      const rendered = renderHeadlessToolCall(
+        {
+          toolName: "cell",
+          status: "completed",
+          input: Option.some({ code: "await tools.read({path: 'a.txt'})" }),
+          output: Option.some(
+            encodeCellOutput({
+              display: "ok",
+              operations: [{ tool: "read", outcome: "succeeded", summary: "12 lines" }],
+            }),
+          ),
+          summary: Option.none(),
+        },
+        PLACE,
+      )
 
       expect(rendered).toBe("[tool done: cell]\n  ✓ read 12 lines\nok")
+    }),
+  )
+
+  headlessTest("a running tool names its path from the session cwd, as the TUI does", () =>
+    Effect.gen(function* () {
+      const read = ToolCallId.make("read-in-session")
+      const client = branchClient({
+        ownTurn: [
+          ToolCallStarted.make({
+            sessionId,
+            branchId,
+            toolCallId: read,
+            toolName: "read",
+            input: { path: `${PLACE.cwd}/src/app.ts` },
+          }),
+          completed(),
+        ],
+      })
+      const { stdout: printed } = yield* captureStdout(run(client))
+      expect(printed).toContain("[tool: read] src/app.ts")
+      expect(printed).not.toContain(PLACE.cwd)
     }),
   )
 

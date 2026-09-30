@@ -9,6 +9,7 @@ import {
   onCleanup,
   type ParentProps,
   type Setter,
+  untrack,
 } from "solid-js"
 import {
   type Array as Arr,
@@ -62,7 +63,8 @@ import {
   formatConnectionIssue,
   formatError,
   formatTokens,
-  formatToolInput,
+  type PathPlace,
+  toolArgSummary,
   lostRequest,
   randomId,
   SEND_RETRY,
@@ -960,24 +962,15 @@ interface SessionControllerState {
 const emptyQueueState = (): QueueState => ({ steering: [], followUp: [] })
 
 /**
- * The gate starts closed: the session's first auth check runs at mount and
- * holds the startup prompt while it checks.
+ * The gate starts closed with no agent checked: the session's first auth check
+ * runs at mount and holds the startup prompt until it answers for the agent.
  */
-export const initialSessionControllerState = (input: {
-  readonly agent?: string
-}): SessionControllerState => {
-  const state: SessionControllerState = {
-    authGate: "closed",
-    authCheckVersion: 0,
-    queue: emptyQueueState(),
-    elapsed: 0,
-  }
-  const agent = Option.fromNullishOr(input.agent)
-  return Option.match(agent, {
-    onNone: () => state,
-    onSome: (value) => ({ ...state, validatedAgent: value }),
-  })
-}
+export const initialSessionControllerState = (): SessionControllerState => ({
+  authGate: "closed",
+  authCheckVersion: 0,
+  queue: emptyQueueState(),
+  elapsed: 0,
+})
 
 export const beginAuthCheck = (state: SessionControllerState): SessionControllerState => ({
   ...state,
@@ -1582,8 +1575,8 @@ const createSessionCommandRegistry = (props: SessionCommandRegistryProps): void 
  * Session feed — keyed projection of server events into UI state.
  *
  * Takes explicit (sessionId, branchId) and subscribes exactly once per identity.
- * No dependency on client.session() or machine state — immune to the
- * UpdateBypass/UpdateSettings re-run footgun.
+ * It reads neither client.session() nor machine state, so a settings or name
+ * change on the session record never opens it again.
  */
 
 interface ReconnectOptions<E> {
@@ -1659,7 +1652,6 @@ type ToolResultEvent = Extract<AgentEvent, { _tag: "ToolCallSucceeded" | "ToolCa
 interface SessionFeed {
   items: () => SessionItem[]
   messages: () => Message[]
-  turnCount: () => number
   // eslint-disable-next-line effect/noNullish -- Solid accessor omits an inactive tool.
   activeTool: () => string | undefined
 }
@@ -1677,6 +1669,7 @@ type SessionFeedClient = Pick<
   | "applySessionEvent"
   | "applyBufferedSessionEvent"
   | "resetSessionEvents"
+  | "pathPlace"
 >
 
 type SessionFeedStore = {
@@ -2046,8 +2039,8 @@ const isToolResultEvent = Predicate.or(
 type ToolStartedEvent = Extract<AgentEvent, { _tag: "ToolCallStarted" }>
 
 /** The status-line label for a running tool: its name plus a short input. */
-const activeToolLabel = (event: ToolStartedEvent): string => {
-  const inputSummary = formatToolInput(event.toolName, event.input)
+const activeToolLabel = (event: ToolStartedEvent, place: PathPlace): string => {
+  const inputSummary = toolArgSummary(event.toolName, event.input, place)
   if (inputSummary.length === 0) return event.toolName
   return `${event.toolName}(${inputSummary})`
 }
@@ -2063,6 +2056,7 @@ interface RunningCall {
 const startCall = (
   calls: ReadonlyArray<RunningCall>,
   event: ToolStartedEvent,
+  place: PathPlace,
 ): ReadonlyArray<RunningCall> => {
   if (calls.some((call) => call.id === event.toolCallId)) return calls
   return [
@@ -2070,7 +2064,7 @@ const startCall = (
     {
       id: event.toolCallId,
       parent: Option.fromUndefinedOr(event.parentToolCallId),
-      label: activeToolLabel(event),
+      label: activeToolLabel(event, place),
     },
   ]
 }
@@ -2156,7 +2150,6 @@ export function useSessionFeed(
     messages: [],
     events: [],
   })
-  const [turnCount, setTurnCount] = createSignal(0)
   const [runningCalls, setRunningCalls] = createSignal<ReadonlyArray<RunningCall>>([])
   const [streamReadyKey, setStreamReadyKey] = createSignal<Option.Option<string>>(Option.none())
   let streamMessageId = Option.none<string>()
@@ -2198,7 +2191,7 @@ export function useSessionFeed(
         return
 
       case "ToolCallStarted":
-        setRunningCalls((calls) => startCall(calls, event))
+        setRunningCalls((calls) => startCall(calls, event, client.pathPlace()))
         startToolCall(setStore, event, receivedAt)
         return
 
@@ -2318,7 +2311,6 @@ export function useSessionFeed(
 
   const resetProjection = () => {
     setStore({ messages: [], events: [] })
-    setTurnCount(0)
     setRunningCalls([])
     setStreamReadyKey(Option.none())
     streamMessageId = Option.none()
@@ -2630,7 +2622,6 @@ export function useSessionFeed(
         case "StreamStarted":
           resolveRetryingEvents(setStore)
           if (!live) break
-          setTurnCount((n) => n + 1)
           setRunningCalls([])
           yield* openStreamedAnswer(event, stampedAt)
           break
@@ -2648,7 +2639,6 @@ export function useSessionFeed(
   return {
     items,
     messages: () => store.messages,
-    turnCount,
     activeTool: () => Option.getOrUndefined(runningLabel(runningCalls())),
   }
 }
@@ -2678,11 +2668,10 @@ export interface SessionController {
   uiState: () => ReturnType<typeof SessionUiState.initial>
   /** The `ctrl+r` palette: its state, its entries, and its key handling. */
   promptSearch: PromptSearchController
-  activity: () =>
-    | { phase: "idle"; turn: number }
-    | { phase: "thinking"; turn: number }
-    | { phase: "tool"; turn: number; toolInfo: string }
+  activity: () => { phase: "idle" } | { phase: "thinking" } | { phase: "tool"; toolInfo: string }
   phaseLabel: () => string
+  /** The status row's cue while a key's second press is armed (`esc again to clear`). */
+  armedCue: () => Option.Option<string>
   elapsed: () => number
   onComposerInteraction: (event: ComposerInteractionEvent) => void
   /**
@@ -2710,14 +2699,21 @@ export interface SessionController {
   closeOverlay: () => void
   /** The name the picker shows, and the name a branch switch keeps. */
   currentSessionName: () => string
-  /** Escape in the branch picker: close it, or quit if the boot flow opened it. */
-  onBranchPickerDismiss: () => void
   onBranchPickerSelect: (branchId: BranchId) => void
   onForkSelect: (messageId: MessageId) => void
   onModelSelect: (modelId: ModelId) => void
   /** `None` clears the session override so config/agent defaults apply. */
   onReasoningSelect: (level: Option.Option<ReasoningEffort>) => void
 }
+
+/** The key whose second press is armed: Esc clears a draft, ctrl+c exits. */
+type ArmedKey = "escape" | "interrupt"
+
+/** What the status row says while a key is armed. */
+const ARMED_CUE = {
+  escape: "esc again to clear",
+  interrupt: "ctrl+c again to exit",
+} satisfies Record<ArmedKey, string>
 
 export function createSessionController(props: {
   sessionId: SessionId
@@ -2742,46 +2738,56 @@ export function createSessionController(props: {
     // The session id is the only way back into this conversation, and it is
     // about to leave the screen. Printed after the renderer is destroyed so it
     // lands in the terminal the reader keeps, not in the alternate screen.
-    const leaving = Option.fromNullishOr(client.session())
+    // An in-memory store ends with the process, so it has nothing to resume.
+    const leaving = Option.fromNullishOr(client.session()).pipe(Option.filter(() => env.resumable))
     shutdownLog("exit.renderer-destroy")
     renderer.destroy()
     Option.match(leaving, {
       onNone: () => {},
-      onSome: (session) => {
-        // eslint-disable-next-line effect/noGlobals -- The line must reach the real terminal after the renderer is destroyed, outside any Effect.
-        process.stdout.write(`\nto resume: gent resume ${session.sessionId}\n`)
-      },
+      onSome: (session) => env.writeTerminal(`\nto resume: gent resume ${session.sessionId}\n`),
     })
     shutdownLog("exit.shutdown-signal")
     env.shutdown()
   }
-  // The same key twice within a second quits. Escape arms the quit (and clears
-  // a draft); ctrl+c arms it when it cancels a turn, so a second ctrl+c quits
-  // even when a new turn started in between (children that keep waking the
-  // session). The arm is per key: a ctrl+c then an escape is two gestures. A
-  // keybind, any other key between two ctrl+c presses, or any other use of
-  // either key disarms it.
-  const QUIT_WINDOW_MS = 1_000
-  type QuitKey = "escape" | "interrupt"
-  let quitArmed = Option.none<{ readonly key: QuitKey; readonly at: number }>()
-  const disarmQuit = () => {
-    quitArmed = Option.none()
+  // ── exit and cancel ladder: the armed key ──
+  //
+  // A destructive second press is armed by the first, and the status row says
+  // so (`armedCue`): Esc on a draft arms its clear, ctrl+c on an idle empty
+  // composer arms the exit, and so does a ctrl+c that cancels a turn, so a
+  // second ctrl+c exits even when a new turn started in between (children
+  // that keep waking the session). The arm is per key: a ctrl+c then an Esc
+  // is two gestures. Any other key (an Esc included, when ctrl+c is armed), a
+  // paste, a keybind, or the window running out disarms it; the window runs on
+  // the runtime's clock, and its timer ends with the arm or with the view.
+  const ARM_WINDOW = Duration.seconds(1)
+  const [armedKey, setArmedKey] = createSignal(Option.none<ArmedKey>())
+  let armTimer = Option.none<Fiber.Fiber<void>>()
+  const stopArmTimer = () => {
+    if (Option.isSome(armTimer)) client.runtime.cast(Fiber.interrupt(armTimer.value))
+    armTimer = Option.none()
   }
-  const armQuit = (key: QuitKey, at: number) => {
-    quitArmed = Option.some({ key, at })
+  const disarm = () => {
+    stopArmTimer()
+    if (Option.isSome(untrack(armedKey))) setArmedKey(Option.none())
   }
-  const quitArmedFor = (key: QuitKey, now: number) =>
-    Option.exists(quitArmed, (armed) => armed.key === key && now - armed.at < QUIT_WINDOW_MS)
-  const pressQuit = (first: () => void) => {
-    const now = DateTime.toEpochMillis(DateTime.nowUnsafe())
-    if (quitArmedFor("escape", now)) {
-      disarmQuit()
-      exit()
-      return
-    }
-    armQuit("escape", now)
-    first()
+  const arm = (key: ArmedKey) => {
+    stopArmTimer()
+    setArmedKey(Option.some(key))
+    armTimer = Option.some(
+      client.runtime.fork(
+        Effect.sleep(ARM_WINDOW).pipe(
+          Effect.andThen(
+            Effect.sync(() => {
+              armTimer = Option.none()
+              setArmedKey(Option.none())
+            }),
+          ),
+        ),
+      ),
+    )
   }
+  onCleanup(stopArmTimer)
+  const armedFor = (key: ArmedKey) => Option.contains(untrack(armedKey), key)
   const history = usePromptHistory()
   const frecency = useAutocompleteFrecency()
 
@@ -2814,11 +2820,7 @@ export function createSessionController(props: {
   const branchPickerOpen = createMemo(() => uiState().overlay._tag === "branches")
 
   // ── Auth gate ──
-  const [controllerState, setControllerState] = createSignal(
-    initialSessionControllerState({
-      agent: client.agent(),
-    }),
-  )
+  const [controllerState, setControllerState] = createSignal(initialSessionControllerState())
   const authGateState = () => controllerState().authGate
   const validatedAgent = () => controllerState().validatedAgent
   const queueState = () => controllerState().queue
@@ -2895,15 +2897,6 @@ export function createSessionController(props: {
     const result = transitionSessionUi(uiState(), event)
     setUiState(result.state)
     for (const effect of result.effects) handleSessionUiEffect(effect)
-  }
-
-  /**
-   * Escape leaves the picker, not the list. The boot flow is where a session
-   * with several branches starts, so with no branch chosen the only way out
-   * is to quit — the same exit the picker route had.
-   */
-  const onBranchPickerDismiss = () => {
-    exit()
   }
 
   const onBranchPickerSelect = (branchId: BranchId) => {
@@ -3092,12 +3085,12 @@ export function createSessionController(props: {
   })
 
   const activity = (): ReturnType<SessionController["activity"]> => {
-    if (!client.isStreaming()) return { phase: "idle", turn: feed.turnCount() }
+    if (!client.isStreaming()) return { phase: "idle" }
     const tool = Option.fromNullishOr(feed.activeTool())
     if (Option.isSome(tool)) {
-      return { phase: "tool", turn: feed.turnCount(), toolInfo: tool.value }
+      return { phase: "tool", toolInfo: tool.value }
     }
-    return { phase: "thinking", turn: feed.turnCount() }
+    return { phase: "thinking" }
   }
 
   createEffect(() => {
@@ -3142,7 +3135,7 @@ export function createSessionController(props: {
     const nextActivity = activity()
     switch (nextActivity.phase) {
       case "idle":
-        if (nextActivity.turn > 0) return "idle"
+        if (Option.exists(client.turnsStarted(), (turns) => turns > 0)) return "idle"
         return "ready"
       case "thinking":
         return thinkingWord
@@ -3337,24 +3330,26 @@ export function createSessionController(props: {
   }
 
   /**
-   * ctrl+c undoes the nearest thing, then quits. A press that cancels a turn
-   * arms the quit, and a second press in the window quits whatever started
-   * since: a session that children keep waking has a new turn running at
-   * every press, and cancelling each one would never let the reader leave.
-   * Something nearer that appeared since (a draft, an expanded transcript)
-   * still comes first: the press clears it and never quits over it.
+   * ctrl+c undoes the nearest thing, then exits on a second press. A press
+   * that cancels a turn arms the exit, and a second press in the window exits
+   * whatever started since: a session that children keep waking has a new
+   * turn running at every press, and cancelling each one would never let the
+   * reader leave. Something nearer that appeared since (a draft, an expanded
+   * transcript) still comes first: the press clears it and never exits over
+   * it. On an idle empty composer the first press only arms the exit.
    */
   const handleInterrupt = () => {
-    const now = DateTime.toEpochMillis(DateTime.nowUnsafe())
-    const second = quitArmedFor("interrupt", now)
-    disarmQuit()
+    const second = armedFor("interrupt")
+    disarm()
     const overlay = uiState().overlay
     if (overlayHoldsComposer(overlay)) {
       // The boot branch picker and an enforced sign-in hold the slot: there
-      // is nothing behind them to fall back to, so ctrl+c quits. Any other
-      // held pane is the nearest thing, and ctrl+c closes it as Esc does.
+      // is nothing behind them to fall back to, so ctrl+c arms the exit as on
+      // an empty composer (Esc does nothing over them). Any other held pane
+      // is the nearest thing, and ctrl+c closes it as Esc does.
       if (slotHeld(overlay)) {
-        exit()
+        if (second) exit()
+        else arm("interrupt")
         return
       }
       closeOverlay()
@@ -3368,57 +3363,54 @@ export function createSessionController(props: {
       onComposerInteraction(ComposerInteractionEvent.cases.ClearDraft.make({}))
       return
     }
-    if (client.isStreaming() && !second) {
-      cancelTurn()
-      armQuit("interrupt", now)
+    if (second) {
+      exit()
       return
     }
-    exit()
+    if (client.isStreaming()) cancelTurn()
+    arm("interrupt")
   }
 
-  // Escape steps back one layer: transcript, palette, disclosure, turn, then
-  // the draft; a second escape within the window quits.
+  // Esc steps back one layer: transcript, palette, disclosure, turn, then the
+  // draft, which the first press arms and the second clears. Esc never exits.
   const handleEscape = () => {
+    const second = armedFor("escape")
+    disarm()
     if (uiState().transcriptExpanded && !command.paletteOpen()) {
       dispatchSessionUi(SessionUiEvent.cases.ToggleTranscript.make({}))
-      disarmQuit()
       return
     }
     if (command.paletteOpen()) {
       command.closePalette()
-      disarmQuit()
       return
     }
     if (uiState().disclosure !== "collapsed") {
       dispatchSessionUi(SessionUiEvent.cases.CollapseDisclosure.make({}))
-      disarmQuit()
       return
     }
-
     if (client.isStreaming()) {
       cancelTurn()
-      disarmQuit()
       return
     }
-
-    pressQuit(() => {
-      if (interactionState().draft.length === 0) return
+    if (interactionState().draft.length === 0) return
+    if (second) {
       onComposerInteraction(ComposerInteractionEvent.cases.ClearDraft.make({}))
-    })
+      return
+    }
+    arm("escape")
   }
 
-  // Any key or paste between two ctrl+c presses is another gesture (a keybind,
-  // a transcript toggle, a typed character, also one a docked pane takes), so
-  // it disarms their quit. Escape keeps its own arm, which its branch reads.
-  const disarmInterruptQuit = () => {
-    if (Option.exists(quitArmed, (armed) => armed.key === "interrupt")) disarmQuit()
-  }
+  // Any other key or a paste disarms (a keybind, a transcript toggle, a typed
+  // character, also one a docked pane takes, or the other armed key: an Esc
+  // that leaves shell mode disarms a ctrl+c). The armed key reads its own arm
+  // in its branch.
   useInputWatch({
     key: (event) => {
-      if (event.ctrl === true && event.name === "c") return
-      disarmInterruptQuit()
+      if (event.name === "escape" && armedFor("escape")) return
+      if (event.ctrl === true && event.name === "c" && armedFor("interrupt")) return
+      disarm()
     },
-    paste: disarmInterruptQuit,
+    paste: disarm,
   })
 
   // A bare keybind (`left` opens the agents pane) fires only here: an empty
@@ -3431,11 +3423,22 @@ export function createSessionController(props: {
     !uiState().transcriptExpanded &&
     composerState()._tag !== "interaction"
 
+  // ctrl+d on an empty composer exits; on a draft it deletes forward in the
+  // composer. An ask or an open pane or palette keeps it.
+  const handleEmptyComposerExit = (event: ScopedKeyboardEvent): boolean => {
+    if (event.ctrl !== true || event.name !== "d") return false
+    if (interactionState().draft.length > 0) return false
+    if (uiState().overlay._tag !== "none" || command.paletteOpen()) return false
+    if (composerState()._tag === "interaction") return false
+    exit()
+    return true
+  }
+
   useScopedKeyboard((event) => {
     const interrupt = event.ctrl === true && event.name === "c"
-    // A keybind between two escapes is a different gesture, so it disarms the quit.
+    // A keybind is another gesture, so it disarms an armed key.
     if (command.handleKeybind(event, ext.commands(), composerIdle())) {
-      disarmQuit()
+      disarm()
       return true
     }
     if (interrupt) {
@@ -3454,7 +3457,7 @@ export function createSessionController(props: {
       } else {
         closeOverlay()
       }
-      disarmQuit()
+      disarm()
       return true
     }
     if (overlayHoldsComposer(overlay)) return false
@@ -3464,9 +3467,11 @@ export function createSessionController(props: {
       return true
     }
 
+    if (handleEmptyComposerExit(event)) return true
+
     if (event.ctrl === true && event.name === "r") {
       promptSearch.open()
-      disarmQuit()
+      disarm()
       return true
     }
 
@@ -3497,6 +3502,7 @@ export function createSessionController(props: {
     promptSearch,
     activity,
     phaseLabel,
+    armedCue: () => Option.map(armedKey(), (key) => ARMED_CUE[key]),
     elapsed,
     onComposerInteraction,
     onSubmit,
@@ -3509,7 +3515,6 @@ export function createSessionController(props: {
     onModelSelect,
     onReasoningSelect,
     currentSessionName,
-    onBranchPickerDismiss,
     onBranchPickerSelect,
   }
 }
