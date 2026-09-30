@@ -448,7 +448,8 @@ describe("formatConnectionIssue", () => {
 // ── format tool ─────────────────────────────────────────────────────────────
 
 const HOME = os.homedir()
-const absent = Option.getOrUndefined(Option.none())
+// eslint-disable-next-line effect/noNullish -- a wire field the server leaves unset is present and undefined.
+const absent = undefined
 const nullValue = Option.getOrNull(Option.none())
 
 describe("formatTokens", () => {

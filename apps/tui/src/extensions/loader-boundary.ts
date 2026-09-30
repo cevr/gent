@@ -454,10 +454,8 @@ const takeAffordance = (
   if (Option.isSome(held)) {
     const previous = Option.fromNullishOr(kept.get(held.value.commandId))
     if (Option.isSome(previous)) {
-      kept.set(held.value.commandId, {
-        ...previous.value,
-        [field]: Option.getOrUndefined(Option.none()),
-      })
+      const { [field]: _released, ...rest } = previous.value
+      kept.set(held.value.commandId, rest)
     }
   }
   holders.set(key, { commandId: entry.id, claim: { scope: source.scope, source: source.source } })

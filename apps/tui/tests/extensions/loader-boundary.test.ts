@@ -86,7 +86,8 @@ const row =
   (label: string): MessageRenderer =>
   (_props: MessageRowProps) =>
     label
-const absent = Option.getOrUndefined(Option.none())
+// eslint-disable-next-line effect/noNullish -- a wire field the server leaves unset is present and undefined.
+const absent = undefined
 const rowProps: MessageRowProps = { content: "", images: [], interjection: false, details: {} }
 const toolProps: ToolRendererProps = {
   toolCall: {

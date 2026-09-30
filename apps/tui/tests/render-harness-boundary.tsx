@@ -72,7 +72,8 @@ type NamespaceOverrides = Partial<Record<string, Partial<MockNamespace>>>
 
 export const createMockClient = (overrides?: NamespaceOverrides): GentNamespacedClient => {
   const noRpcError = <A,>(value: A) => Effect.succeed(value)
-  const absent = Option.getOrUndefined(Option.none())
+  // eslint-disable-next-line effect/noNullish -- a wire field the server leaves unset is present and undefined.
+  const absent = undefined
   const nullValue = Option.getOrNull(Option.none())
 
   const mocks = {

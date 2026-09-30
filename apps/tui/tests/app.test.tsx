@@ -97,7 +97,8 @@ import { seedDebugSession } from "../src/ops"
 
 // ── app bootstrap ───────────────────────────────────────────────────────────
 
-const absent = Option.getOrUndefined(Option.none())
+// eslint-disable-next-line effect/noNullish -- a wire field the server leaves unset is present and undefined.
+const absent = undefined
 const nullValue = Option.getOrNull(Option.none())
 const idleTag = "Idle" satisfies "Idle"
 const refusedInA = Schema.decodeSync(GentRpcError)({

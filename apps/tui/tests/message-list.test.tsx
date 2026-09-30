@@ -311,7 +311,8 @@ describe("worked-for row", () => {
 
 // ── tool interaction projection ─────────────────────────────────────────────
 
-const absent = Option.getOrUndefined(Option.none())
+// eslint-disable-next-line effect/noNullish -- a wire field the server leaves unset is present and undefined.
+const absent = undefined
 let messageIndex = 0
 
 describe("projectMessagesWithToolInteractions", () => {

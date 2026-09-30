@@ -560,14 +560,17 @@ describe("session controller state", () => {
     const withQueue = setQueue(initialSessionControllerState(), queue)
     const cleared = clearQueue(withQueue)
 
-    expect(queuedDraftText(withQueue.queue)).toBe("switch agents\nthen continue\nand summarize")
-    expect(queuedDraftText(cleared.queue)).toBeUndefined()
+    expect(queuedDraftText(withQueue.queue)).toEqual(
+      Option.some("switch agents\nthen continue\nand summarize"),
+    )
+    expect(queuedDraftText(cleared.queue)).toEqual(Option.none())
   })
 })
 
 // ── session labels ──────────────────────────────────────────────────────────
 
-const absent = Option.getOrUndefined(Option.none())
+// eslint-disable-next-line effect/noNullish -- a wire field the server leaves unset is present and undefined.
+const absent = undefined
 
 const theme = {
   textMuted: RGBA.fromHex("#888888"),
@@ -1140,8 +1143,6 @@ const snapshotFor = (
   branchId,
   messages: [],
   lastEventId: Option.getOrNull(Option.fromNullishOr(lastEventId)),
-  modelId: Option.getOrUndefined(Option.none()),
-  reasoningLevel: Option.getOrUndefined(Option.none()),
   resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
   agent: AgentName.make("primary"),
   runtime: {
@@ -1199,9 +1200,6 @@ const makeSession = (sessionId: SessionId, branchId: BranchId): Session => ({
   sessionId,
   branchId,
   name: "Test Session",
-  modelId: Option.getOrUndefined(Option.none()),
-  reasoningLevel: Option.getOrUndefined(Option.none()),
-  cwd: Option.getOrUndefined(Option.none()),
 })
 
 /** The feed reads only which session is active, so the probe supplies only that. */
@@ -2174,9 +2172,9 @@ describe("useSessionFeed", () => {
         toolName: "bash",
         status: "running",
         input: { command: "seq 3000" },
-        summary: Option.getOrUndefined(Option.none()),
+        summary: absent,
         output: '{"stdout":"1\\n…\\n3000","stderr":"","exitCode":0}',
-        durationMs: Option.getOrUndefined(Option.none()),
+        durationMs: absent,
         cuts: [
           OutputCut.cases.Text.make({ field: "stdout", lines: 3000, tailLine: 3000, chars: 9 }),
         ],
@@ -2208,9 +2206,9 @@ describe("useSessionFeed", () => {
                 toolName: "cell",
                 status: "running",
                 input: {},
-                summary: Option.getOrUndefined(Option.none()),
-                output: Option.getOrUndefined(Option.none()),
-                durationMs: Option.getOrUndefined(Option.none()),
+                summary: absent,
+                output: absent,
+                durationMs: absent,
                 operations: [cutOperation],
               }),
             ],

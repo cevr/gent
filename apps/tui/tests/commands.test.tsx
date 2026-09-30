@@ -114,7 +114,8 @@ describe("executeSlashCommand", () => {
 
 // ── command palette ─────────────────────────────────────────────────────────
 
-const absent = Option.getOrUndefined(Option.none())
+// eslint-disable-next-line effect/noNullish -- a wire field the server leaves unset is present and undefined.
+const absent = undefined
 
 function OpenPaletteOnMount() {
   const command = useCommand()

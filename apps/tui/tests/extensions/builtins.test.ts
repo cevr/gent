@@ -711,7 +711,8 @@ class DriverRejected extends Schema.TaggedError<DriverRejected>()("DriverRejecte
   driverId: Schema.String,
 }) {}
 
-const absent = Option.getOrUndefined(Option.none())
+// eslint-disable-next-line effect/noNullish -- a wire field the server leaves unset is present and undefined.
+const absent = undefined
 const agentName = AgentName.make("main")
 const session = { sessionId: SessionId.make("sess-1"), branchId: BranchId.make("branch-1") }
 

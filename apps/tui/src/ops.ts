@@ -387,7 +387,7 @@ export const formatDoctorReport = (report: DoctorReport): string => {
  * surface without a live model.
  */
 
-type DebugValue = Schema.Schema.Type<typeof Schema.Unknown>
+type DebugValue = Schema.Json
 
 const makeText = (text: string) => Prompt.textPart({ text })
 

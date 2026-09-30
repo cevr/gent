@@ -33,9 +33,6 @@ const parentSession: Session = {
   sessionId: SessionId.make("session-parent"),
   branchId: BranchId.make("branch-parent"),
   name: "parent",
-  modelId: Option.getOrUndefined(Option.none()),
-  reasoningLevel: Option.getOrUndefined(Option.none()),
-  cwd: Option.getOrUndefined(Option.none()),
 }
 
 const startOp: ToolCall = {

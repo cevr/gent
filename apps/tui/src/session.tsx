@@ -1027,11 +1027,11 @@ const setControllerElapsed = (
   elapsed,
 })
 
-// eslint-disable-next-line effect/noNullish -- queue projection omits text when the queue is empty.
-export const queuedDraftText = (queue: QueueState): string | undefined => {
+/** The queued prompts as one draft; none when the queue is empty. */
+export const queuedDraftText = (queue: QueueState): Option.Option<string> => {
   const all = [...queue.steering, ...queue.followUp]
-  if (all.length === 0) return Option.getOrUndefined(Option.none())
-  return all.map((entry) => entry.content).join("\n")
+  if (all.length === 0) return Option.none()
+  return Option.some(all.map((entry) => entry.content).join("\n"))
 }
 
 const isBlockingAuthGate = (state: AuthGateState): boolean => state === "open" || state === "error"
@@ -3124,7 +3124,7 @@ export function createSessionController(props: {
       client.drainQueuedMessages.pipe(
         Effect.tap(({ steering, followUp }) =>
           Effect.sync(() => {
-            const text = Option.fromNullishOr(queuedDraftText({ steering, followUp }))
+            const text = queuedDraftText({ steering, followUp })
             if (Option.isNone(text)) return
             onComposerInteraction(
               ComposerInteractionEvent.cases.RestoreDraft.make({

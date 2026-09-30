@@ -190,7 +190,8 @@ describe("auth-state", () => {
 
 // ── auth route ──────────────────────────────────────────────────────────────
 
-const absent = Option.getOrUndefined(Option.none())
+// eslint-disable-next-line effect/noNullish -- a wire field the server leaves unset is present and undefined.
+const absent = undefined
 const nullValue = Option.getOrNull(Option.none())
 const apiMethodRoute = { label: "API key", type: "api" } satisfies { label: string; type: "api" }
 const oauthMethodRoute = { label: "Browser OAuth", type: "oauth" } satisfies {

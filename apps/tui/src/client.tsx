@@ -217,17 +217,16 @@ export interface Session {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly name: string
-  // eslint-disable-next-line effect/noNullish -- RPC session snapshots omit an unset model.
-  readonly modelId: ModelId | undefined
-  // eslint-disable-next-line effect/noNullish -- RPC session snapshots omit an unset reasoning level.
-  readonly reasoningLevel: ReasoningEffort | undefined
+  /** Absent until the session names a model: RPC session snapshots omit an unset one. */
+  readonly modelId?: ModelId
+  /** Absent until the session sets one. */
+  readonly reasoningLevel?: ReasoningEffort
   /**
    * The directory the session is rooted in, which is not always the TUI's
    * launch directory: `gent resume <id>` and a session switch reach sessions
    * rooted elsewhere. Absent until read when a switch named only the ids.
    */
-  // eslint-disable-next-line effect/noNullish -- a switch by id carries no cwd until the session is read.
-  readonly cwd: string | undefined
+  readonly cwd?: string
 }
 
 /** A change to the session's settings: a field left out stays as the server stores it. */
@@ -237,9 +236,9 @@ const SessionSchema: Schema.Schema<Session> = Schema.Struct({
   sessionId: SessionId,
   branchId: BranchId,
   name: Schema.String,
-  modelId: Schema.UndefinedOr(ModelId),
-  reasoningLevel: Schema.UndefinedOr(ReasoningEffort),
-  cwd: Schema.UndefinedOr(Schema.String),
+  modelId: Schema.optional(ModelId),
+  reasoningLevel: Schema.optional(ReasoningEffort),
+  cwd: Schema.optional(Schema.String),
 })
 
 export type SessionState =
@@ -1256,8 +1255,6 @@ export function ClientProvider(props: ClientProviderProps) {
                   sessionId: result.sessionId,
                   branchId: result.branchId,
                   name: result.name,
-                  modelId: Option.getOrUndefined(Option.none()),
-                  reasoningLevel: Option.getOrUndefined(Option.none()),
                   cwd: workspace.cwd,
                 },
               }),
@@ -1324,8 +1321,6 @@ export function ClientProvider(props: ClientProviderProps) {
             sessionId,
             branchId,
             name,
-            modelId: Option.getOrUndefined(Option.none()),
-            reasoningLevel: Option.getOrUndefined(Option.none()),
             cwd,
           },
         }),

@@ -125,7 +125,8 @@ describe("reduceAgentLifecycle", () => {
 
 // ── session settings state ──────────────────────────────────────────────────
 
-const absent = Option.getOrUndefined(Option.none())
+// eslint-disable-next-line effect/noNullish -- a wire field the server leaves unset is present and undefined.
+const absent = undefined
 
 const active = SessionState.active({
   sessionId: SessionId.make("s"),

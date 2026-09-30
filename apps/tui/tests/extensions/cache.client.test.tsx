@@ -1009,7 +1009,6 @@ const renderResumed = (opts: {
             branchId,
             messages: [],
             lastEventId,
-            reasoningLevel: Option.getOrUndefined(Option.none()),
             resolvedModelId: SONNET,
             agent: AgentName.make("main"),
             runtime: { _tag: "Idle" satisfies "Idle", queue: emptyQueueSnapshot() },
