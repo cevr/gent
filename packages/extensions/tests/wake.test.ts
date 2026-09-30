@@ -38,7 +38,7 @@ import {
   turnRequestText,
   RuntimeEnvironment,
 } from "@gent/core/test-utils"
-import { builtinAgent } from "./helpers/builtin-agents"
+import { main as builtinAgent } from "../src/agents.js"
 import { e2ePreset } from "./helpers/test-preset"
 import {
   CancelTool,

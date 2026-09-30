@@ -8,12 +8,8 @@ import {
   buildBillingHeaderValue as buildBillingHeaderValueEffect,
   buildKeychainTransformClient,
   type ClaudeCredentials,
-  computeCch as computeCchEffect,
-  computeVersionSuffix as computeVersionSuffixEffect,
   extractFirstUserMessageText,
   getModelBetas,
-  getModelOverride,
-  MODEL_CONFIG,
   parseOAuthResponse,
   readPromptCacheTtl,
   SYSTEM_IDENTITY_PREFIX,
@@ -230,7 +226,7 @@ describe("transformPayload", () => {
     }),
   )
 
-  it.effect("passes through payload without tools/messages", () =>
+  it.effect("keeps model and max_tokens on a payload with no tools", () =>
     Effect.gen(function* () {
       const payload = {
         model: "claude-opus-4-6",
@@ -448,7 +444,7 @@ describe("transformPayload — system content relocation", () => {
     () =>
       Effect.gen(function* () {
         // Anthropic requires tool_result blocks to be the FIRST blocks of
-        // a user message that carries any. Counsel  follow-up: relocator
+        // a user message that carries any. The relocator
         // must splice the prefix in AFTER the leading tool_result run,
         // not at index 0, otherwise the API returns 400.
         const payload = {
@@ -696,7 +692,7 @@ describe("keychainTransformClient — auth headers", () => {
       const betas = beta!.split(",").map((s) => s.trim())
       // Incoming preserved
       expect(betas).toContain("incoming-beta-1")
-      // Model default present (oauth-2025-04-20 is in MODEL_CONFIG.baseBetas)
+      // Model default present (oauth-2025-04-20 is a base beta)
       expect(betas).toContain("oauth-2025-04-20")
       // Per-model-override present (effort-2025-11-24 is added for "4-6")
       expect(betas).toContain("effort-2025-11-24")
@@ -1260,10 +1256,8 @@ void Ref
  * keychain write-back. The HTTP path itself is exercised through the
  * Live integration (and gated by a real keychain entry); these tests
  * cover the deterministic transformations that decide whether a
- * refresh succeeds and what the keychain blob ends up containing.
- *
- * Counsel keychain alignment K1 + K2 — pulled in from
- * `griffinmartin/opencode-claude-auth`'s reference implementation.
+ * refresh succeeds and what the keychain blob ends up containing, as
+ * `griffinmartin/opencode-claude-auth`'s reference implementation does.
  */
 
 const WrappedCredentialBlob = Schema.Struct({
@@ -1401,9 +1395,6 @@ describe("updateCredentialBlob", () => {
  */
 
 // Each helper provides the host's crypto to the signing step it names.
-const computeCch = (text: string) => computeCchEffect(text).pipe(Effect.provide(BunCrypto.layer))
-const computeVersionSuffix = (text: string, version: string) =>
-  computeVersionSuffixEffect(text, version).pipe(Effect.provide(BunCrypto.layer))
 const buildBillingHeaderValue = (
   messages: Parameters<typeof buildBillingHeaderValueEffect>[0],
   version: string,
@@ -1450,81 +1441,37 @@ describe("extractFirstUserMessageText", () => {
   })
 })
 
-describe("computeCch", () => {
-  it.effect("returns the first 5 hex chars of sha256(text)", () =>
-    Effect.gen(function* () {
-      const text = "hello"
-      // sha256("hello") = 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824
-      const expected = "2cf24"
-      expect(yield* computeCch(text)).toBe(expected)
-    }),
-  )
-
-  it.effect("is stable across calls — same text → same hash", () =>
-    Effect.gen(function* () {
-      expect(yield* computeCch("hi")).toBe(yield* computeCch("hi"))
-    }),
-  )
-
-  it.effect("differs for different text — single-char change flips the hash", () =>
-    Effect.gen(function* () {
-      expect(yield* computeCch("hi")).not.toBe(yield* computeCch("hj"))
-    }),
-  )
-})
-
-describe("computeVersionSuffix", () => {
-  it.effect(
-    "samples chars 4, 7, 20 (zero-padded when shorter) and hashes with the salt + version",
-    () =>
-      Effect.gen(function* () {
-        // Short message: every sample falls back to "0".
-        const suffix = yield* computeVersionSuffix("hi", "2.1.80")
-        expect(suffix).toMatch(/^[0-9a-f]{3}$/)
-      }),
-  )
-
-  it.effect("differs when the version string changes", () =>
-    Effect.gen(function* () {
-      expect(yield* computeVersionSuffix("hello", "2.1.80")).not.toBe(
-        yield* computeVersionSuffix("hello", "2.1.81"),
-      )
-    }),
-  )
-
-  it.effect("is stable for the same (text, version) pair", () =>
-    Effect.gen(function* () {
-      expect(yield* computeVersionSuffix("hello world here is more", "2.1.80")).toBe(
-        yield* computeVersionSuffix("hello world here is more", "2.1.80"),
-      )
-    }),
-  )
-})
-
 describe("buildBillingHeaderValue", () => {
-  it.effect("formats `x-anthropic-billing-header: cc_version=V.S; cc_entrypoint=E; cch=H;`", () =>
+  it.effect("signs the first user message: cch is the first 5 hex digits of its sha256", () =>
     Effect.gen(function* () {
-      const messages = [{ role: "user", content: "hi" }]
-      const value = yield* buildBillingHeaderValue(messages, "2.1.80", "cli")
-      expect(value).toMatch(
-        /^x-anthropic-billing-header: cc_version=2\.1\.80\.[0-9a-f]{3}; cc_entrypoint=cli; cch=[0-9a-f]{5};$/,
-      )
-    }),
-  )
-
-  it.effect("computes cch from the first user message text", () =>
-    Effect.gen(function* () {
+      // sha256("hello") = 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824
       const value = yield* buildBillingHeaderValue(
         [
           { role: "assistant", content: "preamble" },
-          { role: "user", content: "the prompt" },
+          { role: "user", content: "hello" },
         ],
         "2.1.80",
         "cli",
       )
-      const expectedCch = yield* computeCch("the prompt")
-      expect(value).toContain(`cch=${expectedCch};`)
+      expect(value).toBe(
+        "x-anthropic-billing-header: cc_version=2.1.80.e14; cc_entrypoint=cli; cch=2cf24;",
+      )
     }),
+  )
+
+  it.effect(
+    "a message shorter than the sampled indices pads them, and the version is hashed in",
+    () =>
+      Effect.gen(function* () {
+        const sign = (version: string) =>
+          buildBillingHeaderValue([{ role: "user", content: "hi" }], version, "cli")
+        expect(yield* sign("2.1.80")).toBe(
+          "x-anthropic-billing-header: cc_version=2.1.80.7aa; cc_entrypoint=cli; cch=8f434;",
+        )
+        expect(yield* sign("2.1.81")).toBe(
+          "x-anthropic-billing-header: cc_version=2.1.81.c43; cc_entrypoint=cli; cch=8f434;",
+        )
+      }),
   )
 
   it.effect("matches a fixed vector byte for byte", () =>
@@ -1554,72 +1501,17 @@ describe("buildBillingHeaderValue", () => {
 
 // ── model config ────────────────────────────────────────────────────────────
 
-/**
- * Per-model Anthropic configuration — beta lists + ccVersion + override
- * table. Counsel  — locks the port of
- * `griffinmartin/opencode-claude-auth/src/model-config.ts` so future
- * version bumps + override edits stay aligned with Claude Code's wire
- * shape.
- */
-
-describe("MODEL_CONFIG", () => {
-  test("ccVersion is the currently-advertised Claude Code CLI version", () => {
-    // Reference: opencode-claude-auth/src/model-config.ts:15
-    expect(MODEL_CONFIG.ccVersion).toBe("2.1.280")
-  })
-
-  test("baseBetas carry the five flags Claude Code currently sends", () => {
-    // Lock the exact set so a missed reference-impl update fails
-    // loudly in CI rather than silently drifting from the wire shape.
-    expect([...MODEL_CONFIG.baseBetas]).toEqual([
+describe("getModelBetas", () => {
+  test("a generic sonnet model sends the five betas Claude Code sends", () => {
+    // Written out, not read from MODEL_CONFIG: a beta dropped from the table
+    // must fail here.
+    expect(getModelBetas("claude-sonnet-4-5", Option.none())).toEqual([
       "claude-code-20250219",
       "oauth-2025-04-20",
       "interleaved-thinking-2025-05-14",
       "prompt-caching-scope-2026-01-05",
       "context-management-2025-06-27",
     ])
-  })
-})
-
-describe("getModelOverride", () => {
-  test("haiku family excludes interleaved-thinking", () => {
-    const override = getModelOverride("claude-haiku-4-5")
-    expect(Option.isSome(override)).toBe(true)
-    if (Option.isSome(override)) {
-      expect(override.value.exclude).toContain("interleaved-thinking-2025-05-14")
-    }
-  })
-
-  test("4-6 models add the effort beta", () => {
-    const override = getModelOverride("claude-sonnet-4-6")
-    expect(Option.isSome(override)).toBe(true)
-    if (Option.isSome(override)) expect(override.value.add).toContain("effort-2025-11-24")
-  })
-
-  test("4-7 models add the effort beta", () => {
-    const override = getModelOverride("claude-opus-4-7")
-    expect(Option.isSome(override)).toBe(true)
-    if (Option.isSome(override)) expect(override.value.add).toContain("effort-2025-11-24")
-  })
-
-  test("returns None for models matching no override pattern", () => {
-    expect(Option.isNone(getModelOverride("claude-sonnet-3-5"))).toBe(true)
-  })
-
-  test("matches case-insensitively", () => {
-    const override = getModelOverride("CLAUDE-HAIKU-4-5")
-    expect(Option.isSome(override)).toBe(true)
-    if (Option.isSome(override))
-      expect(override.value.exclude).toContain("interleaved-thinking-2025-05-14")
-  })
-})
-
-describe("getModelBetas", () => {
-  test("includes every base beta for a generic sonnet model", () => {
-    const betas = getModelBetas("claude-sonnet-4-5", Option.none())
-    for (const beta of MODEL_CONFIG.baseBetas) {
-      expect(betas).toContain(beta)
-    }
   })
 
   test("no model gets the context-1m beta: a 1M window is the default", () => {
@@ -1646,6 +1538,13 @@ describe("getModelBetas", () => {
     expect(betas).toContain("oauth-2025-04-20")
   })
 
+  test("4-7 models add the effort beta, and a model id matches in any case", () => {
+    expect(getModelBetas("claude-opus-4-7", Option.none())).toContain("effort-2025-11-24")
+    expect(getModelBetas("CLAUDE-HAIKU-4-5", Option.none())).not.toContain(
+      "interleaved-thinking-2025-05-14",
+    )
+  })
+
   test("env override replaces the base list comma-split", () => {
     const betas = getModelBetas("claude-sonnet-4-5", Option.some("alpha,beta,gamma"))
     expect(betas).toEqual(["alpha", "beta", "gamma"])
@@ -1668,14 +1567,10 @@ describe("getModelBetas", () => {
  * AnthropicPlatform.fromSetup invariant lock.
  *
  * `platform.home` must source from `host.homeDirectory` (the OS user home),
- * NOT `ctx.home` (the Gent-configured home). The Claude Code credential
+ * NOT `ctx.home` (the home gent runs with). The Claude Code credential
  * file is read from `~/.config/claude/.credentials.json` at the real OS
- * home regardless of any `GENT_HOME` override.
- *
- * This is a regression lock: an earlier refactor in W33-C4 briefly used
- * `ctx.home`, which would have redirected credential lookup to the
- * configured Gent home and broken Anthropic OAuth for any setup with a
- * non-default `GENT_HOME`.
+ * home whatever `ctx.home` is: reading it under `ctx.home` would break
+ * Anthropic OAuth for a host whose `ctx.home` is not the OS home.
  */
 
 type SetupFacts = Pick<ExtensionHostService, "host">
@@ -1736,8 +1631,8 @@ describe("AnthropicPlatform.fromSetup", () => {
  *      Allocating `Ref<CredentialCacheCell>` inside
  *      `makeOauthAnthropicLayer` gave each request a fresh empty
  *      cache — credential reuse was silently dead.
- *   2. **API-key path wrapped in keychainClient**: only OAuth should
- *      flow through `keychainClient` (which injects Claude Code OAuth
+ *   2. **API-key path wrapped in buildKeychainTransformClient**: only OAuth should
+ *      flow through `buildKeychainTransformClient` (which injects Claude Code OAuth
  *      billing-header system blocks + identity prefix). Extending the
  *      wrapper to the API-key branch is incorrect.
  *
@@ -2240,7 +2135,7 @@ describe("buildAnthropicModelDriver — OAuth path uses the external credential 
     }),
   )
   it.live(
-    "OAuth resolveModel layer applies keychainClient transforms (system identity prefix)",
+    "OAuth resolveModel layer applies buildKeychainTransformClient transforms (system identity prefix)",
     () =>
       Effect.gen(function* () {
         const credentialCellRef =
@@ -2258,7 +2153,7 @@ describe("buildAnthropicModelDriver — OAuth path uses the external credential 
         const payload = parsePayload(
           Option.getOrThrow(Option.fromUndefinedOr(fetchState.captured.at(-1)!.body)),
         )
-        // keychainClient injects the SYSTEM_IDENTITY_PREFIX block. If the
+        // buildKeychainTransformClient injects the SYSTEM_IDENTITY_PREFIX block. If the
         // OAuth path stops being wrapped, the system block disappears.
         const systemBlocks = payload["system"]
         expect(Array.isArray(systemBlocks)).toBe(true)
@@ -3371,7 +3266,7 @@ describe("buildAnthropicModelDriver — API-key path is plain SDK", () => {
     }),
   )
   it.live(
-    "API-key resolveModel does NOT inject keychainClient transforms (no SYSTEM_IDENTITY_PREFIX)",
+    "API-key resolveModel does NOT inject buildKeychainTransformClient transforms (no SYSTEM_IDENTITY_PREFIX)",
     () =>
       Effect.gen(function* () {
         const credentialCellRef =
@@ -3383,7 +3278,7 @@ describe("buildAnthropicModelDriver — API-key path is plain SDK", () => {
         const payload = parsePayload(
           Option.getOrThrow(Option.fromUndefinedOr(fetchState.captured.at(-1)!.body)),
         )
-        // No keychainClient wrapper → no system block, no identity prefix
+        // No buildKeychainTransformClient wrapper → no system block, no identity prefix
         // injection. The API-key branch must not wrap.
         expect(Bun.inspect(payload["system"] ?? "")).not.toContain(SYSTEM_IDENTITY_PREFIX)
       }),

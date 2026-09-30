@@ -158,11 +158,12 @@ export const WebSearchTool = tool({
 
             // The endpoint answers either as one JSON object or as an SSE
             // stream of `data:` frames. Scan for frames first; a body with
-            // none is the whole-object form.
+            // none is the whole-object form. As SSE reads a field, one space
+            // after the colon is optional and not part of the value.
             const frames = responseText
               .split("\n")
-              .filter((line) => line.startsWith("data: "))
-              .map((line) => line.substring(6))
+              .filter((line) => line.startsWith("data:"))
+              .map((line) => line.slice("data:".length).replace(/^ /, ""))
 
             const mcpFailure = (error: Option.Option<{ readonly message: string }>) =>
               new WebSearchError({

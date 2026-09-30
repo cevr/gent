@@ -105,10 +105,10 @@ export const reservedToolSegments: ReadonlySet<string> = new Set([
 
 /**
  * Root keys of `tools` that are discovery functions, not tool paths:
- * `tools.search(query)` and `tools.describe(id)`. An id whose first segment is
- * one of them is reached through `tools(id)`; deeper segments stay paths.
+ * `tools.search(query)`. An id whose first segment is one of them is reached
+ * through `tools(id)`; deeper segments stay paths.
  */
-export const toolDiscoveryKeys: ReadonlySet<string> = new Set(["search", "describe"])
+export const toolDiscoveryKeys: ReadonlySet<string> = new Set(["search"])
 
 /**
  * The one order for tool ids: by UTF-16 code unit. It is total and does not
@@ -151,7 +151,7 @@ export const CellCatalogEntry = Schema.Struct({
   description: Schema.String,
   guidelines: Schema.Array(Schema.String),
   parameters: Schema.Json,
-  /** The typed call line the host renders, which `tools.describe(id)` returns. */
+  /** The typed call line the host renders, which `tools(id).signature` holds. */
   signature: Schema.String,
   /** The description's first line, which `tools.search(query)` returns. */
   summary: Schema.String,
@@ -292,10 +292,16 @@ export const CellResponse = Schema.TaggedUnion({
 })
 export type CellResponse = typeof CellResponse.Type
 
+/** Why a frame was refused, when a caller branches on it: past `maximumCellFrameBytes`. */
+export const CellFrameRefusal = Schema.Literal("frame-too-large")
+
 export class CellProtocolError extends Schema.TaggedError<CellProtocolError>()(
   "CellProtocolError",
-  { message: Schema.String },
+  { message: Schema.String, reason: Schema.optional(CellFrameRefusal) },
 ) {}
+
+const frameTooLarge = () =>
+  new CellProtocolError({ message: "Cell frame exceeds the byte limit", reason: "frame-too-large" })
 
 const protocolError = (cause: unknown) => new CellProtocolError({ message: String(cause) })
 const requestCodec = Schema.fromJsonString(CellRequest)
@@ -309,7 +315,7 @@ export const decodeCellResponse = (frame: string) =>
 const frameBytes = (text: string): Effect.Effect<Uint8Array, CellProtocolError> => {
   const bytes = new TextEncoder().encode(text + "\n")
   if (bytes.byteLength - 1 > maximumCellFrameBytes) {
-    return Effect.fail(new CellProtocolError({ message: "Cell frame exceeds the byte limit" }))
+    return Effect.fail(frameTooLarge())
   }
   return Effect.succeed(bytes)
 }
@@ -346,7 +352,7 @@ export const makeCellFrameReader = () => {
             length = 0
           } else {
             if (length === maximumCellFrameBytes) {
-              return yield* new CellProtocolError({ message: "Cell frame exceeds the byte limit" })
+              return yield* frameTooLarge()
             }
             buffer[length++] = byte
           }

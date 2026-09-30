@@ -107,7 +107,7 @@ type ToolNode = ReturnType<typeof nodeTarget>
 interface ToolCatalogView {
   readonly entries: () => ReadonlyArray<CellCatalogListing>
   readonly ids: () => ReadonlyArray<string>
-  readonly describe: (id: string) => Option.Option<CellCatalogListing>
+  readonly find: (id: string) => Option.Option<CellCatalogListing>
   /** The tool's full description, which the host holds: `await tools(id)`. */
   readonly details: (id: string) => Promise<Schema.Json>
   // oxlint-disable-next-line effect/noUnknownParameters -- model code passes any JavaScript value to the tool namespace
@@ -276,10 +276,9 @@ const isToolKey = (key: string | symbol): key is string =>
  * for the tool's `{ id, description, guidelines, parameters, signature }`,
  * which the worker does not hold.
  *
- * The root also holds the discovery functions: `tools.search(query, options?)`
- * returns one ranked page of `{ id, description }` (see `searchCatalog`), and
- * `tools.describe(id)` returns the tool's typed signature. Every id in the
- * catalog is callable, listed in the prompt or not.
+ * The root also holds the one discovery function: `tools.search(query, options?)`
+ * returns one ranked page of `{ id, description }` (see `searchCatalog`).
+ * Every id in the catalog is callable, listed in the prompt or not.
  */
 const makeToolNamespace = (catalog: ToolCatalogView): ToolNode => {
   const nodes = new Map<string, ToolNode>()
@@ -302,7 +301,7 @@ const makeToolNamespace = (catalog: ToolCatalogView): ToolNode => {
       `${toolPath(path)} is not a host tool selected for this turn. Close ids: ${closeIds(path, catalog.ids()) || "none"}`,
     )
   const lookup = (id: string) => {
-    const entry = Option.getOrThrowWith(catalog.describe(id), () => unknown(id))
+    const entry = Option.getOrThrowWith(catalog.find(id), () => unknown(id))
     // oxlint-disable-next-line effect/noUnknownParameters -- model code passes any JavaScript value to the tool namespace
     return Object.assign((input?: unknown) => catalog.call(entry.name, input), {
       id: entry.name,
@@ -319,11 +318,6 @@ const makeToolNamespace = (catalog: ToolCatalogView): ToolNode => {
     // oxlint-disable-next-line effect/noUnknownParameters -- model code passes any JavaScript value to the tool namespace
     search: (query = "", options?: unknown) =>
       searchCatalog(catalog.entries(), String(query), options),
-    describe: (id: string) =>
-      Option.getOrThrowWith(
-        Option.map(catalog.describe(String(id)), (entry) => entry.signature),
-        () => unknown(String(id)),
-      ),
   }
   const isDiscoveryKey = (path: string, key: string | symbol): key is keyof typeof discovery =>
     path === "" && Predicate.isString(key) && toolDiscoveryKeys.has(key)
@@ -738,7 +732,7 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
   const toolsNamespace = makeToolNamespace({
     entries: () => catalog,
     ids: () => catalog.map((entry) => entry.name),
-    describe: (id) => Option.fromUndefinedOr(catalog.find((candidate) => candidate.name === id)),
+    find: (id) => Option.fromUndefinedOr(catalog.find((candidate) => candidate.name === id)),
     details: (id) => runPromise(host.describe(id)),
     call: (id, input) =>
       runPromise(
