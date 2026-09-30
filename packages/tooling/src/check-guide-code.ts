@@ -191,7 +191,7 @@ export const requireContextModules = Effect.fn("Tooling.requireContextModules")(
 })
 
 /** Compile one context's blocks in `directory`; the lines of any failure. */
-const compileContext = Effect.fn("Tooling.compileContext")(function* (
+export const compileContext = Effect.fn("Tooling.compileContext")(function* (
   repoRoot: string,
   directory: string,
   context: GuideCodeContext,

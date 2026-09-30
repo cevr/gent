@@ -20,7 +20,7 @@
 
 import { describe, expect, test } from "bun:test"
 import { BunServices } from "@effect/platform-bun"
-import { Effect, FileSystem, Option, Path, Schema, Stream } from "effect"
+import { Effect, Option, Path, Schema, Stream } from "effect"
 import { ChildProcess } from "effect/process"
 import { describe as effectDescribe, it } from "effect-bun-test"
 import gentRules, {
@@ -146,30 +146,6 @@ const countViolations = (diagnostics: ReadonlyArray<Diagnostic>, ruleId: string)
     return code === codeForm || code === ruleId || code.endsWith(`(${tail})`)
   }).length
 }
-
-const readTextFile = Effect.fn("Tooling.readTextFile")(function* (relativePath: string) {
-  const fs = yield* FileSystem.FileSystem
-  const path = yield* Path.Path
-  return yield* fs.readFileString(path.resolve(import.meta.dir, "..", "..", "..", relativePath))
-})
-
-const TypeScriptConfig = Schema.Struct({
-  compilerOptions: Schema.Struct({
-    plugins: Schema.Array(
-      Schema.Struct({
-        name: Schema.optional(Schema.String),
-        diagnosticSeverity: Schema.optional(
-          Schema.Struct({ extendsNativeError: Schema.optional(Schema.String) }),
-        ),
-      }),
-    ),
-  }),
-})
-
-const readTypeScriptConfig = (relativePath: string) =>
-  readTextFile(relativePath).pipe(
-    Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(TypeScriptConfig))),
-  )
 
 interface RuleCase {
   readonly rule: string
@@ -520,33 +496,13 @@ effectDescribe("custom lint rules", () => {
     }).pipe(Effect.provide(BunServices.layer)),
   )
 
-  it.live("every rule the plugin defines has a positive and a negative fixture", () =>
-    Effect.gen(function* () {
-      const covered = new Set(CASES.map((c) => c.rule))
-      const uncovered = Object.keys(gentRules.rules)
-        .map((name) => `gent/${name}`)
-        .filter((rule) => !covered.has(rule))
-      expect(uncovered).toEqual([])
-      yield* Effect.void
-    }),
-  )
-
-  it.live("native Error subclasses fail typecheck", () =>
-    Effect.gen(function* () {
-      const tsconfigJson = yield* readTypeScriptConfig("tsconfig.json")
-      const effectPlugin = Option.fromNullishOr(
-        tsconfigJson.compilerOptions.plugins.find(
-          (plugin) => plugin.name === "@effect/language-service",
-        ),
-      )
-      const extendsNativeError = Option.flatMap(effectPlugin, (plugin) =>
-        Option.flatMap(Option.fromNullishOr(plugin.diagnosticSeverity), (severity) =>
-          Option.fromNullishOr(severity.extendsNativeError),
-        ),
-      )
-      expect(Option.getOrElse(extendsNativeError, () => "missing")).toBe("error")
-    }).pipe(Effect.provide(BunServices.layer)),
-  )
+  test("every rule the plugin defines has a positive and a negative fixture", () => {
+    const covered = new Set(CASES.map((c) => c.rule))
+    const uncovered = Object.keys(gentRules.rules)
+      .map((name) => `gent/${name}`)
+      .filter((rule) => !covered.has(rule))
+    expect(uncovered).toEqual([])
+  })
 })
 
 // ── what is a test ──────────────────────────────────────────────────────────

@@ -5,6 +5,7 @@ import { test } from "bun:test"
 import { describe, expect, it } from "effect-bun-test"
 import { fileSet } from "../src/check-guardrails"
 import {
+  compileContext,
   guideBlockFile,
   guideCodeBlocks,
   guideCodeContextOf,
@@ -41,6 +42,25 @@ describe("a compile context's dependencies", () => {
       yield* fs.makeDirectory(path.join(repoRoot, "examples", "node_modules"), { recursive: true })
       yield* requireContextModules(repoRoot, extension)
     }),
+  )
+})
+
+describe("the repo's compiler options", () => {
+  // The block compiles the way an extension author's file does: the root
+  // tsconfig with its Effect diagnostics, the examples package's modules.
+  contextTest("a native Error subclass fails the compile with extendsNativeError", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const repoRoot = path.resolve(import.meta.dir, "..", "..", "..")
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-native-error-" })
+      yield* fs.writeFileString(
+        path.join(directory, "b1.ts"),
+        "export class Boom extends Error {}\n",
+      )
+      const failure = yield* compileContext(repoRoot, directory, extension, ["b1.ts"])
+      expect(failure.some((line) => line.includes("extendsNativeError"))).toBe(true)
+    }).pipe(Effect.timeout("25 seconds")),
   )
 })
 
