@@ -34,6 +34,7 @@ import {
   resolveHeadlessMissingProviders,
 } from "./app"
 import { TerminalDimensionsProvider } from "./terminal"
+import { SpinnerClockProvider } from "./ui"
 import { ComposerMemoryProvider } from "./session"
 import { detectColorScheme } from "./theme"
 import { EnvProvider, WorkspaceProvider } from "./workspace"
@@ -362,16 +363,18 @@ const runGent = ({
               >
                 <ExtensionUIProvider scope={scope}>
                   <TerminalDimensionsProvider>
-                    <ComposerMemoryProvider
-                      initialPrompt={bootstrap.initialPrompt}
-                      initialSessionId={Option.some(bootstrap.initialSession.sessionId)}
-                    >
-                      <App
-                        debugMode={debug}
-                        initialBranches={bootstrap.initialBranches}
-                        initialThemeMode={initialThemeMode}
-                      />
-                    </ComposerMemoryProvider>
+                    <SpinnerClockProvider>
+                      <ComposerMemoryProvider
+                        initialPrompt={bootstrap.initialPrompt}
+                        initialSessionId={Option.some(bootstrap.initialSession.sessionId)}
+                      >
+                        <App
+                          debugMode={debug}
+                          initialBranches={bootstrap.initialBranches}
+                          initialThemeMode={initialThemeMode}
+                        />
+                      </ComposerMemoryProvider>
+                    </SpinnerClockProvider>
                   </TerminalDimensionsProvider>
                 </ExtensionUIProvider>
               </ClientProvider>

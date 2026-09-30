@@ -9,6 +9,7 @@ import { render } from "@opentui/solid"
 import { createTestRenderer, type TestRendererOptions } from "@opentui/core/testing"
 import type { JSX } from "solid-js"
 import { KeyboardScopeProvider, TerminalDimensionsProvider } from "../src/terminal"
+import { SpinnerClockProvider } from "../src/ui"
 import { ThemeProvider } from "../src/theme"
 import { CommandProvider } from "../src/commands"
 import { EnvProvider, WorkspaceProvider } from "../src/workspace"
@@ -410,55 +411,58 @@ export const renderWithProviders = (
         render(
           () => (
             <TerminalDimensionsProvider>
-              <ComposerMemoryProvider
-                initialPrompt={Option.getOrElse(Option.fromNullishOr(options?.initialPrompt), () =>
-                  Option.none<string>(),
-                )}
-                initialSessionId={Option.map(
-                  toInitialSession(Option.fromNullishOr(options?.initialSession)),
-                  (session) => session.sessionId,
-                )}
-              >
-                <KeyboardScopeProvider>
-                  <ThemeProvider mode="dark">
-                    <EnvProvider
-                      env={{
-                        visual: Option.none(),
-                        editor: Option.none(),
-                        shutdown: () => {},
-                        resumable: options?.resumable ?? true,
-                        writeTerminal: options?.writeTerminal ?? (() => {}),
-                      }}
-                    >
-                      <CommandProvider>
-                        <WorkspaceProvider
-                          cwd={options?.cwd ?? defaultWorkspaceCwd}
-                          home={home}
-                          services={services}
-                        >
-                          <ClientProvider
-                            client={client}
-                            runtime={runtime}
+              <SpinnerClockProvider>
+                <ComposerMemoryProvider
+                  initialPrompt={Option.getOrElse(
+                    Option.fromNullishOr(options?.initialPrompt),
+                    () => Option.none<string>(),
+                  )}
+                  initialSessionId={Option.map(
+                    toInitialSession(Option.fromNullishOr(options?.initialSession)),
+                    (session) => session.sessionId,
+                  )}
+                >
+                  <KeyboardScopeProvider>
+                    <ThemeProvider mode="dark">
+                      <EnvProvider
+                        env={{
+                          visual: Option.none(),
+                          editor: Option.none(),
+                          shutdown: () => {},
+                          resumable: options?.resumable ?? true,
+                          writeTerminal: options?.writeTerminal ?? (() => {}),
+                        }}
+                      >
+                        <CommandProvider>
+                          <WorkspaceProvider
+                            cwd={options?.cwd ?? defaultWorkspaceCwd}
+                            home={home}
                             services={services}
-                            log={options?.log ?? noopLog}
-                            initialSession={Option.getOrUndefined(
-                              toInitialSession(Option.fromNullishOr(options?.initialSession)),
-                            )}
-                            initialAgent={options?.initialAgent}
                           >
-                            <ExtensionUIProvider
-                              builtins={options?.builtins}
-                              scope={options?.uiScope}
+                            <ClientProvider
+                              client={client}
+                              runtime={runtime}
+                              services={services}
+                              log={options?.log ?? noopLog}
+                              initialSession={Option.getOrUndefined(
+                                toInitialSession(Option.fromNullishOr(options?.initialSession)),
+                              )}
+                              initialAgent={options?.initialAgent}
                             >
-                              {node()}
-                            </ExtensionUIProvider>
-                          </ClientProvider>
-                        </WorkspaceProvider>
-                      </CommandProvider>
-                    </EnvProvider>
-                  </ThemeProvider>
-                </KeyboardScopeProvider>
-              </ComposerMemoryProvider>
+                              <ExtensionUIProvider
+                                builtins={options?.builtins}
+                                scope={options?.uiScope}
+                              >
+                                {node()}
+                              </ExtensionUIProvider>
+                            </ClientProvider>
+                          </WorkspaceProvider>
+                        </CommandProvider>
+                      </EnvProvider>
+                    </ThemeProvider>
+                  </KeyboardScopeProvider>
+                </ComposerMemoryProvider>
+              </SpinnerClockProvider>
             </TerminalDimensionsProvider>
           ),
           setup.renderer,

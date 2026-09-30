@@ -4,7 +4,6 @@ import {
   createContext,
   createMemo,
   createEffect,
-  createRoot,
   createSignal,
   For,
   type JSX,
@@ -23,13 +22,19 @@ import {
   useTerminalDimensions,
 } from "./terminal"
 import { useTheme } from "./theme"
-import { truncate } from "./utils"
+import { truncate, useRequiredContext } from "./utils"
 import { textWidth } from "./bun-adapter"
 import type { MessageRowProps } from "./extensions/client-facets"
 
 // ── spinner clock ───────────────────────────────────────────────────────────
 
-const ticker = createRoot(() => {
+const SpinnerClockContext = createContext<Accessor<number>>()
+
+/**
+ * The 60 ms clock every spinner and pending-retry row reads. One clock for
+ * the tree; it stops when the tree unmounts, with the renderer.
+ */
+export function SpinnerClockProvider(props: { children: JSX.Element }) {
   const [tick, setTick] = createSignal(0)
   const fiber = Effect.runFork(
     Effect.sync(() => {
@@ -39,10 +44,14 @@ const ticker = createRoot(() => {
   onCleanup(() => {
     Effect.runFork(Fiber.interrupt(fiber))
   })
-  return tick
-})
+  return <SpinnerClockContext.Provider value={tick}>{props.children}</SpinnerClockContext.Provider>
+}
 
-export const useSpinnerClock = (): Accessor<number> => ticker
+export const useSpinnerClock = (): Accessor<number> =>
+  useRequiredContext(
+    SpinnerClockContext,
+    "useSpinnerClock must be used within SpinnerClockProvider",
+  )
 
 // ── wait helper ─────────────────────────────────────────────────────────────
 
@@ -1421,11 +1430,13 @@ export function ToolFrame(props: ToolFrameProps) {
   const { theme } = useTheme()
   const callIdentity = useContext(ToolCallIdentityContext)
   const bodyOnly = useContext(ToolFrameBodyContext)
-  const [localExpanded, setLocalExpanded] = createSignal(props.expanded)
-
-  createEffect(() => {
-    setLocalExpanded(props.expanded)
+  // A click toggles the frame; a new `expanded` from the owner starts over
+  // from it. Each value of the prop gets its own toggle signal.
+  const toggle = createMemo(() => {
+    const [open, setOpen] = createSignal(props.expanded)
+    return { open, setOpen }
   })
+  const localExpanded = () => toggle().open()
 
   const statusIcon = () => {
     if (props.status === "running") return "⋯"
@@ -1451,7 +1462,7 @@ export function ToolFrame(props: ToolFrameProps) {
   return (
     <box flexDirection="column">
       <Show when={!bodyOnly}>
-        <box flexDirection="row" onMouseDown={() => setLocalExpanded((prev) => !prev)}>
+        <box flexDirection="row" onMouseDown={() => toggle().setOpen((prev) => !prev)}>
           <text flexGrow={1} flexShrink={1} wrapMode="none" truncate>
             <span style={{ fg: statusColor() }}>{statusIcon()} </span>
             <Show when={props.status === "error"}>

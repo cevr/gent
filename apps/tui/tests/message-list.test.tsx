@@ -1403,6 +1403,36 @@ describe("FX transcript treatment", () => {
     }),
   )
 
+  it.live("a click toggles a tool frame, and a new expanded from its owner starts over", () =>
+    Effect.gen(function* () {
+      const [expanded, setExpanded] = createSignal(false)
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => (
+          <ToolFrame
+            title="read"
+            status="completed"
+            expanded={expanded()}
+            collapsedContent={<text>FRAME-CLOSED</text>}
+          >
+            <text>FRAME-OPEN</text>
+          </ToolFrame>
+        )),
+      )
+      const closed = yield* waitForFrame(setup, (next) => next.includes("FRAME-CLOSED"), "closed")
+      const row = closed.split("\n").findIndex((line) => line.includes("read"))
+      yield* Effect.promise(() => setup.mockMouse.click(2, row))
+      yield* waitForFrame(setup, (next) => next.includes("FRAME-OPEN"), "opened by the click")
+      setExpanded(true)
+      yield* Effect.promise(() => setup.mockMouse.click(2, row))
+      yield* waitForFrame(setup, (next) => next.includes("FRAME-CLOSED"), "closed by a click")
+      setExpanded(false)
+      yield* waitForFrame(setup, (next) => next.includes("FRAME-CLOSED"), "the owner's value")
+      setExpanded(true)
+      yield* waitForFrame(setup, (next) => next.includes("FRAME-OPEN"), "the owner's new value")
+      destroyRenderSetup(setup)
+    }),
+  )
+
   it.live("keeps unknown tool failure identity in both MessageList projections", () =>
     Effect.gen(function* () {
       const items: SessionItem[] = [unknownFailureMessage("call-unknown-7")]
