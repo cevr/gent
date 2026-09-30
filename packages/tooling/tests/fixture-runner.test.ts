@@ -74,6 +74,12 @@ const OXLINT_RUN_BOUND = "20 seconds"
 /** How long an oxlint process may ignore SIGTERM from the closing scope before it gets SIGKILL. */
 const OXLINT_KILL_GRACE = "2 seconds"
 
+/** The bound on both fixture runs together, past one run's bound plus its kill grace. */
+const FIXTURE_LINT_BOUND = "25 seconds"
+
+/** Bun's timeout for the fixture lint test, past `FIXTURE_LINT_BOUND`. */
+const FIXTURE_LINT_BACKSTOP_MS = 30_000
+
 const decodeOxlintReport = Schema.decodeUnknownEffect(Schema.fromJsonString(OxlintReportSchema))
 
 /**
@@ -463,25 +469,32 @@ const expectedRows = CASES.map((c) => ({
 }))
 
 effectDescribe("custom lint rules", () => {
-  it.live("each rule fires on its invalid fixture and stays silent on its valid ones", () =>
-    Effect.gen(function* () {
-      const [invalidRun, validRun] = yield* Effect.all([
-        runOxlint(INVALID_FIXTURES),
-        runOxlint(VALID_FIXTURES),
-      ])
-      // oxlint exits non-zero when any fixture has violations, and the
-      // invalid set always does.
-      expect(invalidRun.exitCode).not.toBe(0)
-      expect(ruleRows(invalidRun, validRun)).toEqual(expectedRows)
-      // A valid fixture reports nothing either way; only the file count shows
-      // that oxlint read it instead of ignoring or missing the path.
-      expect(
-        [invalidRun.report.number_of_files, validRun.report.number_of_files],
-        `stderr:\n${invalidRun.stderr}\n${validRun.stderr}`,
-      ).toEqual([INVALID_FIXTURES.length, VALID_FIXTURES.length])
-      expect(validRun.exitCode).toBe(0)
-      expect(validRun.report.diagnostics.length).toBe(0)
-    }).pipe(Effect.provide(BunServices.layer)),
+  // The two runs go together: each is bounded by OXLINT_RUN_BOUND plus
+  // OXLINT_KILL_GRACE, the test by FIXTURE_LINT_BOUND, and bun by
+  // FIXTURE_LINT_BACKSTOP_MS, each longer than the one before, so a stuck run
+  // fails inside Effect with its finalizers run, never at the bun backstop.
+  it.live(
+    "each rule fires on its invalid fixture and stays silent on its valid ones",
+    () =>
+      Effect.gen(function* () {
+        const [invalidRun, validRun] = yield* Effect.all(
+          [runOxlint(INVALID_FIXTURES), runOxlint(VALID_FIXTURES)],
+          { concurrency: 2 },
+        )
+        // oxlint exits non-zero when any fixture has violations, and the
+        // invalid set always does.
+        expect(invalidRun.exitCode).not.toBe(0)
+        expect(ruleRows(invalidRun, validRun)).toEqual(expectedRows)
+        // A valid fixture reports nothing either way; only the file count shows
+        // that oxlint read it instead of ignoring or missing the path.
+        expect(
+          [invalidRun.report.number_of_files, validRun.report.number_of_files],
+          `stderr:\n${invalidRun.stderr}\n${validRun.stderr}`,
+        ).toEqual([INVALID_FIXTURES.length, VALID_FIXTURES.length])
+        expect(validRun.exitCode).toBe(0)
+        expect(validRun.report.diagnostics.length).toBe(0)
+      }).pipe(Effect.timeout(FIXTURE_LINT_BOUND), Effect.provide(BunServices.layer)),
+    FIXTURE_LINT_BACKSTOP_MS,
   )
 
   it.live("the fixtures are found from a checkout whose path has a space", () =>
