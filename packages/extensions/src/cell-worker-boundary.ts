@@ -225,7 +225,8 @@ const searchCatalog = (
   const limit = Math.max(1, countOption(searchOption(options, "limit"), defaultSearchLimit))
   const offset = countOption(searchOption(options, "offset"), 0)
   const phrase = searchText(query)
-  const words = searchTokens(query)
+  // A word the query repeats counts once toward coverage.
+  const words = [...new Set(searchTokens(query))]
   const ranked = entries
     .filter((entry) => namespace === "" || entry.name.startsWith(`${namespace}.`))
     .flatMap((entry) => {

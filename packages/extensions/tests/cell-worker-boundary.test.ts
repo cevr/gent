@@ -704,6 +704,8 @@ describe("Bun cell evaluation", () => {
         expect(yield* ids("tools.search('issue')")).toBe(
           '["mcp.github.createIssue","mcp.linear.create_issue","mcp.github.listIssues","mcp.linear.list_issues","mcp.docs.lookup"]',
         )
+        // A word the query repeats counts once, so the repeat finds what the word finds.
+        expect(yield* ids("tools.search('issue issue')")).toBe(yield* ids("tools.search('issue')"))
         // A one-character word is no prefix: `0` in "Filler operation 0." misses `042`.
         expect(yield* ids("tools.search('tool_042')")).toBe('["mcp.filler.tool_042"]')
         // The whole id ranks first.
