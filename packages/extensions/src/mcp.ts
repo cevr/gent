@@ -21,6 +21,7 @@ import {
   Semaphore,
 } from "effect"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
+import { SSEClientTransport, SseError } from "@modelcontextprotocol/sdk/client/sse.js"
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import {
   StreamableHTTPClientTransport,
@@ -49,8 +50,8 @@ import {
 /**
  * One MCP server in the `mcpServers` shape Claude Code, Cursor, pi and
  * opencode share, so an entry pasted from any of them works. A `command`
- * entry runs over stdio; a `url` entry over streamable HTTP. Strings may name
- * environment variables as `${NAME}` or `${NAME:-default}`.
+ * entry runs over stdio; a `url` entry over streamable HTTP or SSE. Strings
+ * may name environment variables as `${NAME}` or `${NAME:-default}`.
  */
 const Shared = {
   /** `false` keeps the entry without starting it. */
@@ -70,6 +71,11 @@ const StdioServerConfig = Schema.Struct({
 const HttpServerConfig = Schema.Struct({
   url: Schema.String,
   headers: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+  /**
+   * The transport, as Claude Code writes it: `http` (or `streamable-http`)
+   * or `sse`. Absent or `auto`, streamable HTTP is tried first, then SSE.
+   */
+  type: Schema.optional(Schema.Literals(["http", "streamable-http", "sse", "auto"])),
   ...Shared,
 })
 
@@ -396,6 +402,8 @@ const writeCatalogEntries = Effect.fn("Mcp.writeCatalogEntries")(function* (
 class McpError extends Schema.TaggedError<McpError>()("McpError", {
   server: Schema.String,
   message: Schema.String,
+  /** The HTTP status the server answered a connect with, when it did. */
+  status: Schema.optional(Schema.Int),
 }) {}
 
 const failureMessage = (cause: unknown) => {
@@ -438,7 +446,15 @@ const hostEnvironment = Effect.gen(function* () {
   return Object.fromEntries(environment)
 })
 
-const transportFor = (server: McpServer, environment: Readonly<Record<string, string>>) => {
+/** The transport a connection runs over. */
+const TransportKind = Schema.Literals(["stdio", "streamable-http", "sse"])
+type TransportKind = typeof TransportKind.Type
+
+const transportFor = (
+  server: McpServer,
+  kind: TransportKind,
+  environment: Readonly<Record<string, string>>,
+) => {
   const config = server.config
   if ("command" in config) {
     return new StdioClientTransport({
@@ -450,20 +466,36 @@ const transportFor = (server: McpServer, environment: Readonly<Record<string, st
       stderr: "ignore",
     })
   }
-  return new StreamableHTTPClientTransport(new URL(config.url), {
-    requestInit: { headers: { ...config.headers } },
-  })
+  const options = { requestInit: { headers: { ...config.headers } } }
+  if (kind === "sse") return new SSEClientTransport(new URL(config.url), options)
+  return new StreamableHTTPClientTransport(new URL(config.url), options)
 }
+
+/** The HTTP status a failed connect was answered with, when it has one. */
+const statusOf = (cause: unknown): Option.Option<number> => {
+  if (cause instanceof StreamableHTTPError || cause instanceof SseError) {
+    return Option.fromUndefinedOr(cause.code)
+  }
+  return Option.none()
+}
+
+/**
+ * Statuses that say the server does not speak streamable HTTP at this URL,
+ * so `auto` tries SSE. 401 and 403 are about the credential, which SSE
+ * would refuse too, so they never fall back.
+ */
+const SSE_FALLBACK_STATUSES: ReadonlySet<number> = new Set([400, 404, 405, 406, 415, 422, 501])
 
 /** A close that has not finished within this long is abandoned. */
 const CLOSE_TIMEOUT = Duration.seconds(2)
 
-/**
- * An initialized client; closing its scope closes the transport, and a stdio
- * server with it. `onToolsChanged` runs on each `notifications/tools/list_changed`
- * of a server that declares it sends them.
- */
-const connect = (server: McpServer, onToolsChanged: Option.Option<() => void> = Option.none()) =>
+/** An initialized client over `kind`; closing its scope closes the transport. */
+const dial = (
+  server: McpServer,
+  kind: TransportKind,
+  environment: Readonly<Record<string, string>>,
+  onToolsChanged: Option.Option<() => void>,
+) =>
   Effect.gen(function* () {
     const listChanged = Option.match(onToolsChanged, {
       onNone: () => ({}),
@@ -476,26 +508,63 @@ const connect = (server: McpServer, onToolsChanged: Option.Option<() => void> = 
       (opened) =>
         Effect.tryPromise(() => opened.close()).pipe(Effect.timeout(CLOSE_TIMEOUT), Effect.ignore),
     )
-    let environment: Readonly<Record<string, string>> = {}
-    if ("command" in server.config) environment = yield* hostEnvironment
     yield* Effect.tryPromise({
-      try: () => client.connect(transportFor(server, environment)),
+      try: () => client.connect(transportFor(server, kind, environment)),
       catch: (cause) =>
-        new McpError({ server: server.name, message: `connect: ${failureMessage(cause)}` }),
-    }).pipe(
-      Effect.timeoutOrElse({
-        duration: timeoutOf(server),
-        orElse: () =>
-          Effect.fail(
-            new McpError({
-              server: server.name,
-              message: `connect timed out after ${timeoutOf(server)} ms`,
-            }),
+        new McpError({
+          server: server.name,
+          message: `connect: ${failureMessage(cause)}`,
+          ...omitUndefined({ status: Option.getOrUndefined(statusOf(cause)) }),
+        }),
+    })
+    return { client, transport: kind }
+  })
+
+/**
+ * An initialized client and the transport it runs over; closing its scope
+ * closes the transport, and a stdio server with it. A `url` entry's `type`
+ * picks the transport: `http` (or `streamable-http`) and `sse` pin one, and
+ * `auto`, the default, tries streamable HTTP and then SSE when the server
+ * answers with a status in `SSE_FALLBACK_STATUSES`. `onToolsChanged` runs on
+ * each `notifications/tools/list_changed` of a server that declares it sends
+ * them.
+ */
+const connect = (server: McpServer, onToolsChanged: Option.Option<() => void> = Option.none()) =>
+  Effect.gen(function* () {
+    const config = server.config
+    if ("command" in config) {
+      return yield* dial(server, "stdio", yield* hostEnvironment, onToolsChanged)
+    }
+    const type = config.type ?? "auto"
+    if (type === "sse") return yield* dial(server, "sse", {}, onToolsChanged)
+    const streamable = dial(server, "streamable-http", {}, onToolsChanged)
+    if (type !== "auto") return yield* streamable
+    return yield* streamable.pipe(
+      Effect.catchTag("McpError", (error) => {
+        if (!SSE_FALLBACK_STATUSES.has(error.status ?? 0)) return Effect.fail(error)
+        return dial(server, "sse", {}, onToolsChanged).pipe(
+          Effect.mapError(
+            (sse) =>
+              new McpError({
+                server: server.name,
+                message: `streamable HTTP ${error.message}; SSE ${sse.message}`,
+              }),
           ),
+        )
       }),
     )
-    return client
-  })
+  }).pipe(
+    Effect.timeoutOrElse({
+      duration: timeoutOf(server),
+      orElse: () =>
+        Effect.fail(
+          new McpError({
+            server: server.name,
+            message: `connect timed out after ${timeoutOf(server)} ms`,
+          }),
+        ),
+    }),
+  )
 
 /** Every page of `tools/list`. */
 const listTools = (server: McpServer, client: Client) =>
@@ -619,6 +688,7 @@ interface RegisteredServer {
 /** An open connection and the tool names the server listed last. */
 interface Connection {
   readonly client: Client
+  readonly transport: TransportKind
   listed: ReadonlySet<string>
   /** Set when the transport closed: the stdio server exited, or the HTTP transport ended. */
   closed: boolean
@@ -706,12 +776,13 @@ const mcpClientsLive = (registered: ReadonlyArray<RegisteredServer>, file: strin
             }
             // The notification can only arrive once the connection below exists.
             let onToolsChanged = () => {}
-            const client = yield* connect(
+            const { client, transport } = yield* connect(
               entry.server,
               Option.some(() => onToolsChanged()),
             )
             const connection: Connection = {
               client,
+              transport,
               listed: yield* relist(entry.server, client),
               closed: false,
               calls: 0,
@@ -1027,7 +1098,7 @@ const catalogFor = (server: McpServer, cache: CatalogFile): Effect.Effect<SetupC
     return Effect.succeed({ tools: cached.tools, listedNow: false })
   }
   return Effect.scoped(
-    connect(server).pipe(Effect.flatMap((client) => listTools(server, client))),
+    connect(server).pipe(Effect.flatMap(({ client }) => listTools(server, client))),
   ).pipe(
     Effect.map((tools): SetupCatalog => ({ tools, listedNow: true })),
     Effect.catchCause((cause) =>

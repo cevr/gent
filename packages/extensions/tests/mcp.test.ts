@@ -7,6 +7,7 @@ import {
   Layer,
   Option,
   Path,
+  Queue,
   Schema,
   Stream,
 } from "effect"
@@ -661,6 +662,130 @@ describe("mcp over streamable http", () => {
         Effect.timeout("20 seconds"),
         Effect.provide(Layer.merge(platformLayer, withFixtureToken)),
       ),
+    25_000,
+  )
+})
+
+// ── sse ─────────────────────────────────────────────────────────────────────
+
+/** What the SSE fixture saw: event streams asked for (with any token), and streamable HTTP posts it refused. */
+interface SseCounts {
+  streamRequests: number
+  streams: number
+  refusedPosts: number
+}
+
+/**
+ * An in-process server that speaks only the older SSE transport: `GET /sse`
+ * opens an event stream whose first event names the endpoint to post to, and
+ * each answer arrives on that stream. A streamable HTTP `POST /sse` is
+ * answered 405. Every request needs the fixture's bearer token.
+ */
+const serveSseFixture = Effect.gen(function* () {
+  const counts: SseCounts = { streamRequests: 0, streams: 0, refusedPosts: 0 }
+  const streams = new Map<string, Queue.Queue<string>>()
+  const app = Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest
+    const url = new URL(request.url, "http://127.0.0.1")
+    if (url.pathname === "/sse" && request.method === "GET") counts.streamRequests += 1
+    if (request.headers["authorization"] !== "Bearer fixture-token") {
+      return HttpServerResponse.text("unauthorized", { status: 401 })
+    }
+    if (url.pathname === "/sse" && request.method === "GET") {
+      counts.streams += 1
+      const session = `sse-${counts.streams}`
+      const queue = yield* Queue.unbounded<string>()
+      streams.set(session, queue)
+      yield* Queue.offer(queue, `event: endpoint\ndata: /messages?session=${session}\n\n`)
+      return HttpServerResponse.stream(Stream.fromQueue(queue).pipe(Stream.encodeText), {
+        contentType: "text/event-stream",
+      })
+    }
+    const queue = Option.fromUndefinedOr(streams.get(url.searchParams.get("session") ?? ""))
+    if (url.pathname !== "/messages" || request.method !== "POST" || Option.isNone(queue)) {
+      counts.refusedPosts += 1
+      return HttpServerResponse.empty({ status: 405 })
+    }
+    const message = yield* Effect.flatMap(request.text, decodeRequest)
+    const id = Option.fromUndefinedOr(message.id)
+    if (Option.isSome(id)) {
+      const result = answerHttp(message.method, Option.fromUndefinedOr(message.params))
+      const data = encodeJson({ jsonrpc: "2.0", id: id.value, result })
+      yield* Queue.offer(queue.value, `event: message\ndata: ${data}\n\n`)
+    }
+    return HttpServerResponse.empty({ status: 202 })
+  }).pipe(Effect.orElseSucceed(() => HttpServerResponse.text("bad request", { status: 400 })))
+  const context = yield* Layer.build(
+    HttpServer.serve(app).pipe(
+      Layer.provideMerge(BunHttpServer.layerServer({ port: 0, hostname: "127.0.0.1" })),
+    ),
+  )
+  const address = Context.get(context, HttpServer.HttpServer).address
+  if (address._tag !== "TcpAddress") return yield* Effect.die("expected a TCP address")
+  return { port: address.port, counts }
+})
+
+describe("mcp over sse", () => {
+  it.scopedLive(
+    "an SSE server works pinned by type, and auto reaches it after streamable HTTP is refused",
+    () =>
+      Effect.gen(function* () {
+        const { port, counts } = yield* serveSseFixture
+        const sse = { ...httpEntry(port), url: `http://127.0.0.1:${port}/sse` }
+        const code = [
+          "const pinned = await tools.mcp.pinned.whoami()",
+          "const auto = await tools.mcp.auto.whoami()",
+          "JSON.stringify({ pinned, auto })",
+        ].join("; ")
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          toolCallStep("cell", { code }),
+          textStep("done"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...shippedPreset,
+          extensionInputs: [
+            ...shippedPreset.extensionInputs,
+            McpServers("@test/mcp-sse", { pinned: { ...sse, type: "sse" }, auto: sse }),
+          ],
+          providerLayer,
+        })
+        yield* client.message.send({ sessionId, branchId, content: "ask both" })
+        const result = yield* cellResultAfterDone(client, branchId)
+        expect(result).toMatchObject({
+          name: "cell",
+          isFailure: false,
+          result: { display: encodeJson({ pinned: "http caller", auto: "http caller" }) },
+        })
+        // Setup and the calls each open one stream per server; only auto posts first.
+        expect(counts).toEqual({ streamRequests: 4, streams: 4, refusedPosts: 2 })
+      }).pipe(
+        Effect.timeout("20 seconds"),
+        Effect.provide(Layer.merge(platformLayer, withFixtureToken)),
+      ),
+    25_000,
+  )
+
+  it.scopedLive(
+    "auto does not try SSE when streamable HTTP is refused for the credential",
+    () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path
+        const fs = yield* FileSystem.FileSystem
+        const { port, counts } = yield* serveSseFixture
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-mcp-sse-" })
+        const extension = McpServers("@test/mcp-sse-401", {
+          auto: {
+            url: `http://127.0.0.1:${port}/sse`,
+            headers: { Authorization: "Bearer wrong-token" },
+          },
+        })
+        const contributions = yield* collectTestContributions(extension.setup, {
+          home: path.join(directory, "home"),
+          cwd: directory,
+        })
+        expect(toolIds(contributions)).toEqual([])
+        expect(counts).toEqual({ streamRequests: 0, streams: 0, refusedPosts: 0 })
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(platformLayer)),
     25_000,
   )
 })
