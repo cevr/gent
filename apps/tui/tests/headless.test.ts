@@ -8,7 +8,8 @@ import {
   TurnCompleted,
 } from "@gent/core/test-utils"
 import { describe, it, expect, test } from "effect-bun-test"
-import { Cause, Deferred, Effect, Exit, Option, Schema, Sink, Stdio, Stream } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Option, Schema, Sink, Stdio, Stream } from "effect"
+import { TestClock } from "effect/testing"
 import * as Prompt from "effect/ai/Prompt"
 import {
   AgentEvent,
@@ -27,6 +28,7 @@ import {
   makeCliTeardown,
   renderHeadlessToolCall,
   runHeadless,
+  waitForHeadlessReady,
 } from "../src/headless"
 import { createMockClient } from "./render-harness-boundary"
 import { RpcClientError } from "effect/rpc/RpcClientError"
@@ -704,6 +706,19 @@ const exitCodeOf = (
 
 const interruptedBy = (signal: Option.Option<"SIGINT" | "SIGTERM">, headless: boolean) =>
   makeCliTeardown({ signal: () => signal, interactive: () => !headless })
+
+describe("headless readiness", () => {
+  // A scripted caller never waits forever: a connection that never becomes
+  // ready ends the run at the bound, as a connection error.
+  it.live("a connection that never becomes ready ends the run at the bound", () =>
+    Effect.gen(function* () {
+      const waiting = yield* waitForHeadlessReady(Effect.never).pipe(Effect.flip, Effect.forkChild)
+      yield* TestClock.adjust("15 seconds")
+      const error = yield* Fiber.join(waiting)
+      expect(error).toBeInstanceOf(GentConnectionError)
+    }).pipe(Effect.provide(TestClock.layer()), Effect.timeout("4 seconds")),
+  )
+})
 
 describe("CLI teardown", () => {
   test("a signal ends a headless run non-zero: 130 for SIGINT, 143 for SIGTERM", () => {

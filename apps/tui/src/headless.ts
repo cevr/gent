@@ -250,6 +250,27 @@ const turnEnd = (
 /** An error the run reports on one stderr line. */
 const oneLine = (text: string): string => text.replace(/\s*\n\s*/g, " ").trim()
 
+/**
+ * The one wait for the connection a headless run needs, before its first
+ * request. A server that never becomes ready ends the run with a connection
+ * error at the bound; a scripted caller never waits forever.
+ */
+export const waitForHeadlessReady = (waitForReady: Effect.Effect<void>) =>
+  waitForReady.pipe(
+    Effect.timeoutOption("15 seconds"),
+    Effect.flatMap(
+      Option.match({
+        onNone: () =>
+          Effect.fail(
+            new GentConnectionError({
+              message: "connection did not become ready within 15 seconds",
+            }),
+          ),
+        onSome: () => Effect.void,
+      }),
+    ),
+  )
+
 export const runHeadless = (
   client: GentNamespacedClient,
   sessionId: SessionId,

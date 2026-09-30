@@ -22,7 +22,7 @@ import {
   shutdownLog,
 } from "./client"
 import { LinkOpener, OsService } from "./os"
-import { AgentName, GentConnectionError } from "@gent/core/protocol"
+import { AgentName } from "@gent/core/protocol"
 
 import { render } from "@opentui/solid"
 import { createCliRenderer, type CliRenderer } from "@opentui/core"
@@ -39,7 +39,13 @@ import { ComposerMemoryProvider } from "./session"
 import { detectColorScheme } from "./theme"
 import { EnvProvider, WorkspaceProvider } from "./workspace"
 import { ExtensionUIProvider } from "./extensions/host"
-import { type ExitSignal, type HeadlessOptions, makeCliTeardown, runHeadless } from "./headless"
+import {
+  type ExitSignal,
+  type HeadlessOptions,
+  makeCliTeardown,
+  runHeadless,
+  waitForHeadlessReady,
+} from "./headless"
 import { type GentClientBundle } from "@gent/sdk"
 import {
   CliStartupError,
@@ -104,32 +110,9 @@ const runHeadlessTurn = (
     )
   }
 
-  const resolvedBranchId = branchId.value
-
-  return Effect.gen(function* () {
-    yield* bundle.runtime.lifecycle.waitForReady.pipe(
-      Effect.timeoutOption("15 seconds"),
-      Effect.flatMap((ready) =>
-        Option.match(ready, {
-          onNone: () =>
-            Effect.fail(
-              new GentConnectionError({
-                message: "connection did not become ready within 15 seconds",
-              }),
-            ),
-          onSome: () => Effect.void,
-        }),
-      ),
-    )
-
-    yield* runHeadless(
-      bundle.client,
-      state.session.id,
-      resolvedBranchId,
-      state.prompt,
-      options,
-    ).pipe(Effect.withSpan("Headless.run"))
-  })
+  return runHeadless(bundle.client, state.session.id, branchId.value, state.prompt, options).pipe(
+    Effect.withSpan("Headless.run"),
+  )
 }
 
 // The inputs the TUI/headless entry takes. `resume` reuses them.
@@ -289,7 +272,7 @@ const runGent = ({
           message: "--agent applies to a new session; drop --session to use it",
         })
       }
-      yield* bundle.runtime.lifecycle.waitForReady
+      yield* waitForHeadlessReady(bundle.runtime.lifecycle.waitForReady)
       const state = yield* resolveInitialState({
         client: bundle.client,
         cwd,
