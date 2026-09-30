@@ -21,7 +21,7 @@ import {
   createClientLog,
   shutdownLog,
 } from "./client"
-import { LinkOpener, OsService } from "./os"
+import { LinkOpener } from "./os"
 import { AgentName } from "@gent/core/protocol"
 
 import { render } from "@opentui/solid"
@@ -90,13 +90,11 @@ const waitForRendererDestroy = (renderer: CliRenderer) =>
 // so callers can yield `GentPlatform` alongside the standard primitives.
 const PlatformLayer = BunPlatformLive
 
-const LinkLayer = Layer.provide(LinkOpener.Live, OsService.Live)
-
-// `OsService.Live` and `LinkLayer` depend on `GentPlatform`, which
+// `LinkOpener.Live` depends on `GentPlatform`, which
 // `PlatformLayer` provides. `Layer.mergeAll` builds in parallel, so use
 // `provideMerge` to thread `GentPlatform` into the dependents while
 // keeping it in the output context for downstream consumers.
-const makeUiLayer = () => Layer.provideMerge(LinkLayer, PlatformLayer)
+const makeUiLayer = () => Layer.provideMerge(LinkOpener.Live, PlatformLayer)
 
 const runHeadlessTurn = (
   bundle: GentClientBundle,
