@@ -1,16 +1,14 @@
 import { describe, expect, it, test } from "effect-bun-test"
-import { Crypto, Effect, Layer, Predicate, Random, Schema } from "effect"
-import { BunChildProcessSpawner, BunServices } from "@effect/platform-bun"
-import { defineExtension, ExtensionHost, getToolId, request } from "@gent/core/extensions/api"
+import { Crypto, Effect, Random, Schema } from "effect"
+import { defineExtension, ExtensionHost, request } from "@gent/core/extensions/api"
 import { BuiltinExtensions } from "@gent/extensions"
 import {
-  collectTestContributions,
   makeTempDirectoryScoped,
   waitFor,
   projectMessagesWithToolInteractions,
 } from "@gent/core/test-utils"
 import {
-  GentPlatform,
+  SessionStorage,
   WORKSPACE_ID_HEADER,
   workspaceHeadersForCwd,
   workspaceIdForCwd,
@@ -21,6 +19,7 @@ import type { Message as DomainMessage } from "@gent/core/protocol"
 import {
   BranchId,
   MessageId,
+  Session,
   SessionId,
   ToolCallId,
   dateFromMillis,
@@ -167,45 +166,6 @@ describe("Gent.server options", () => {
   )
 })
 
-interface SeededCall {
-  readonly name: string
-  readonly params: unknown
-}
-
-/**
- * The seeded calls no shipped tool accepts: an unknown tool id, or params the
- * tool's own schema rejects. Tools come from the builtin extensions' setup.
- */
-const rejectedCalls = (calls: ReadonlyArray<SeededCall>) =>
-  Effect.gen(function* () {
-    const tools = new Map<string, Schema.Constraint>()
-    for (const extension of BuiltinExtensions) {
-      const contributions = yield* collectTestContributions(extension.setup)
-      for (const tool of contributions.tools ?? []) {
-        tools.set(getToolId(tool), tool.parametersSchema)
-      }
-    }
-    const rejected: string[] = []
-    for (const call of calls) {
-      const schema = tools.get(call.name)
-      if (Predicate.isUndefined(schema)) {
-        rejected.push(`${call.name}: no shipped tool has this id`)
-        continue
-      }
-      // The seeded tools' params are plain structs: their type side is their JSON.
-      if (!Schema.is(schema)(call.params)) rejected.push(`${call.name}: params do not fit`)
-    }
-    return rejected
-  }).pipe(
-    Effect.provide(
-      Layer.mergeAll(
-        BunServices.layer,
-        BunChildProcessSpawner.layer.pipe(Layer.provide(BunServices.layer)),
-        GentPlatform.Test(),
-      ),
-    ),
-  )
-
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 // A user-shaped extension whose setup mints an id with Effect `Crypto`. The
@@ -253,28 +213,35 @@ describe("Gent.server extension setup", () => {
   )
 })
 
-describe("Gent.server debug playground", () => {
+describe("Gent.server seed", () => {
   it.live(
-    "seeds only calls to shipped tools, with params those tools accept",
+    "a seed writes to the server's storage in its workspace before the server returns",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const cwd = yield* makeTempDirectoryScoped("gent-debug-seed-")
+          const cwd = yield* makeTempDirectoryScoped("gent-server-seed-")
+          const at = dateFromMillis(1_000)
+          const seed = Effect.gen(function* () {
+            const sessions = yield* SessionStorage
+            yield* sessions.createSession(
+              new Session({
+                id: SessionId.make("seeded-session"),
+                name: "seeded",
+                cwd,
+                createdAt: at,
+                updatedAt: at,
+              }),
+            )
+          }).pipe(Effect.orDie)
           const server = yield* Gent.server({
             cwd,
-            debug: true,
+            seed,
             state: Gent.state.memory(),
             provider: Gent.provider.mock(),
           })
           const { client } = yield* Gent.client(server, { cwd })
-          const [session] = yield* client.session.list()
-          const branchId = yield* Effect.fromNullishOr(session?.activeBranchId)
-          const messages = yield* client.message.list({ branchId })
-          const calls = messages.flatMap((message) =>
-            message.parts.filter((part) => part.type === "tool-call"),
-          )
-          expect(calls.length).toBeGreaterThan(0)
-          expect(yield* rejectedCalls(calls)).toEqual([])
+          const listed = yield* client.session.list()
+          expect(listed.map((session) => session.name)).toEqual(["seeded"])
         }).pipe(Effect.timeout("20 seconds")),
       ),
     30_000,

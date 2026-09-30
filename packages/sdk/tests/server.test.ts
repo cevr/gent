@@ -16,7 +16,13 @@ import * as ChildProcessSpawnerNs from "effect/unstable/process/ChildProcessSpaw
 import { dateFromMillis } from "@gent/core/protocol"
 import { BunGentPlatformLive } from "@gent/core/test-utils"
 import { GentPlatform } from "@gent/core/host"
-import { BuildFingerprint, dataPaths, serverLock, ServerLockEntry } from "../src/server"
+import {
+  BuildFingerprint,
+  dataPaths,
+  serverLock,
+  serverLockFile,
+  ServerLockEntry,
+} from "../src/server"
 import { BunServices } from "@effect/platform-bun"
 import { homedir, hostname, tmpdir } from "node:os"
 import { Gent } from "../src/client"
@@ -236,7 +242,7 @@ const holdAsAnotherServer = (home: string) =>
   Effect.gen(function* () {
     const scope = yield* Scope.make()
     yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
-    expect(yield* serverLock.hold(home).pipe(Scope.provide(scope))).toBe(true)
+    expect(yield* serverLockFile.hold(home).pipe(Scope.provide(scope))).toBe(true)
     return { release: Scope.close(scope, Exit.void) }
   })
 
@@ -255,13 +261,13 @@ describe("Server Lock", () => {
               ConfigProvider.ConfigProvider,
               ConfigProvider.fromEnvRecord({ GENT_DATA_DIR: dataDir }),
             )
-          yield* isolated(serverLock.write(home, entry))
+          yield* isolated(serverLockFile.write(home, entry))
           const fs = yield* FileSystem.FileSystem
           expect(yield* fs.exists(`${dataDir}/server.lock`)).toBe(true)
           expect(yield* fs.exists(`${home}/.gent/server.lock`)).toBe(false)
           // the home-scoped reader does not see the isolated run's server
-          expect(Option.isNone(yield* serverLock.read(home))).toBe(true)
-          expect(Option.isSome(yield* isolated(serverLock.read(home)))).toBe(true)
+          expect(Option.isNone(yield* serverLockFile.read(home))).toBe(true)
+          expect(Option.isSome(yield* isolated(serverLockFile.read(home)))).toBe(true)
         }),
       ),
   )
@@ -271,8 +277,8 @@ describe("Server Lock", () => {
       Effect.gen(function* () {
         const home = yield* makeTmpHomeScoped
         const entry = makeEntry()
-        yield* serverLock.write(home, entry)
-        const read = Option.getOrThrow(yield* serverLock.read(home))
+        yield* serverLockFile.write(home, entry)
+        const read = Option.getOrThrow(yield* serverLockFile.read(home))
         expect(read.serverId).toBe(entry.serverId)
         expect(read.pid).toBe(entry.pid)
         expect(read.rpcUrl).toBe(entry.rpcUrl)
@@ -288,10 +294,10 @@ describe("Server Lock", () => {
         const fs = yield* FileSystem.FileSystem
         const path = yield* Path.Path
         const home = yield* makeTmpHomeScoped
-        expect(Option.isNone(yield* serverLock.read(home))).toBe(true)
+        expect(Option.isNone(yield* serverLockFile.read(home))).toBe(true)
         yield* fs.makeDirectory(path.join(home, ".gent"), { recursive: true })
         yield* fs.writeFileString(path.join(home, ".gent", "server.lock"), "not json")
-        expect(Option.isNone(yield* serverLock.read(home))).toBe(true)
+        expect(Option.isNone(yield* serverLockFile.read(home))).toBe(true)
       }),
     ),
   )
@@ -301,8 +307,8 @@ describe("Server Lock", () => {
       Effect.gen(function* () {
         const home = yield* makeTmpHomeScoped
         const entry = makeEntry({ hostname: "other-host.example.com" })
-        yield* serverLock.write(home, entry)
-        expect(Option.isNone(yield* serverLock.read(home))).toBe(true)
+        yield* serverLockFile.write(home, entry)
+        expect(Option.isNone(yield* serverLockFile.read(home))).toBe(true)
       }),
     ),
   )
@@ -312,11 +318,11 @@ describe("Server Lock", () => {
       Effect.gen(function* () {
         const home = yield* makeTmpHomeScoped
         const entry = makeEntry()
-        yield* serverLock.write(home, entry)
-        expect(yield* serverLock.remove(home, "wrong-id")).toBe(false)
-        expect(Option.isSome(yield* serverLock.read(home))).toBe(true)
-        expect(yield* serverLock.remove(home, entry.serverId)).toBe(true)
-        expect(Option.isNone(yield* serverLock.read(home))).toBe(true)
+        yield* serverLockFile.write(home, entry)
+        expect(yield* serverLockFile.remove(home, "wrong-id")).toBe(false)
+        expect(Option.isSome(yield* serverLockFile.read(home))).toBe(true)
+        expect(yield* serverLockFile.remove(home, entry.serverId)).toBe(true)
+        expect(Option.isNone(yield* serverLockFile.read(home))).toBe(true)
       }),
     ),
   )
@@ -354,7 +360,7 @@ describe("Server Lock", () => {
           ...entry,
           rpcUrl: `${fakeOwnerUrl.origin}/rpc`,
         })
-        yield* serverLock.write(home, entryWithEndpoint)
+        yield* serverLockFile.write(home, entryWithEndpoint)
         yield* holdAsAnotherServer(home)
 
         const server = yield* Gent.server({
@@ -382,7 +388,7 @@ describe("Server Lock", () => {
 
           const owner = yield* Gent.server(options)
           expect(owner._tag).toBe("Owned")
-          const ownerEntry = Option.getOrThrow(yield* serverLock.read(home))
+          const ownerEntry = Option.getOrThrow(yield* serverLockFile.read(home))
 
           const attached = yield* Gent.server(options)
           expect(attached._tag).toBe("Attached")
@@ -417,7 +423,7 @@ describe("Server Lock", () => {
           }
           const owner = yield* Gent.server(options)
           expect(owner._tag).toBe("Owned")
-          const entry = Option.getOrThrow(yield* serverLock.read(home))
+          const entry = Option.getOrThrow(yield* serverLockFile.read(home))
           const response = yield* Effect.promise(() =>
             Bun.fetch(`${owner.url.replace("/rpc", "")}/_gent/identity`),
           )
@@ -464,7 +470,7 @@ describe("Server Lock", () => {
           ),
           (server) => Effect.promise(() => server.stop(true)),
         )
-        yield* serverLock.write(
+        yield* serverLockFile.write(
           home,
           new ServerLockEntry({ ...entry, rpcUrl: `${new URL(foreignOwner.url).origin}/rpc` }),
         )
@@ -475,7 +481,7 @@ describe("Server Lock", () => {
           provider: Gent.provider.mock(),
         }).pipe(withSignalTrap)
         expect(server._tag).toBe("Owned")
-        expect(Option.getOrThrow(yield* serverLock.read(home)).dbPath).toBe(ownDb)
+        expect(Option.getOrThrow(yield* serverLockFile.read(home)).dbPath).toBe(ownDb)
       }),
     ),
   )
@@ -491,7 +497,7 @@ describe("Server Lock", () => {
           provider: Gent.provider.mock(),
         })
         expect(owner._tag).toBe("Owned")
-        expect(Option.getOrThrow(yield* serverLock.read(home)).rpcUrl).toBe(owner.url)
+        expect(Option.getOrThrow(yield* serverLockFile.read(home)).rpcUrl).toBe(owner.url)
         // A client without a port finds that server and attaches to it.
         const client = yield* Gent.server({
           cwd: home,
@@ -560,7 +566,7 @@ describe("Server Lock", () => {
         }
         const owner = yield* Gent.server(options)
         expect(owner._tag).toBe("Owned")
-        const pid = Option.getOrThrow(yield* serverLock.read(home)).pid
+        const pid = Option.getOrThrow(yield* serverLockFile.read(home)).pid
         const second = yield* Gent.server({ ...options, port: 0 }).pipe(Effect.flip)
         expect(second.message).toContain(`PID ${pid}`)
       }),
@@ -597,7 +603,7 @@ const lockWithIdentity = (
       (server) => Effect.promise(() => server.stop(true)),
     )
     const locked = new ServerLockEntry({ ...entry, rpcUrl: `${new URL(endpoint.url).origin}/rpc` })
-    yield* serverLock.write(home, locked)
+    yield* serverLockFile.write(home, locked)
     return locked
   })
 
@@ -608,7 +614,7 @@ describe("Server Lock Ownership", () => {
       const home = yield* makeTmpHomeScoped
       const dbPath = (yield* dataPaths(home)).dbPath
       const buildFingerprint = yield* (yield* BuildFingerprint).current
-      yield* serverLock.write(
+      yield* serverLockFile.write(
         home,
         makeEntry({ pid, dbPath, buildFingerprint, rpcUrl: "http://127.0.0.1:1/rpc" }),
       )
@@ -619,7 +625,7 @@ describe("Server Lock Ownership", () => {
       }).pipe(withSignalTrap)
       expect(result._tag).toBe("Owned")
       expect(signals).toEqual([])
-      expect(Option.getOrThrow(yield* serverLock.read(home)).serverId).not.toBe("test-server-1")
+      expect(Option.getOrThrow(yield* serverLockFile.read(home)).serverId).not.toBe("test-server-1")
     }).pipe(Effect.timeout("20 seconds"))
 
   it.scopedLive("a lock whose pid now belongs to another live process does not block startup", () =>
@@ -657,15 +663,15 @@ describe("Server Lock Ownership", () => {
         const home = yield* makeTmpHomeScoped
         expect((yield* serverLock.status(home))._tag).toBe("None")
         // A live pid under a free kernel lock is a server that is gone.
-        yield* serverLock.write(home, makeEntry())
+        yield* serverLockFile.write(home, makeEntry())
         expect((yield* serverLock.status(home))._tag).toBe("Stale")
         const { release } = yield* holdAsAnotherServer(home)
         expect((yield* serverLock.status(home))._tag).toBe("Alive")
-        yield* serverLock.remove(home, "test-server-1")
+        yield* serverLockFile.remove(home, "test-server-1")
         expect((yield* serverLock.status(home))._tag).toBe("Unnamed")
         yield* release
         expect((yield* serverLock.status(home))._tag).toBe("None")
-        yield* serverLock.write(home, makeEntry({ hostname: "alien-host" }))
+        yield* serverLockFile.write(home, makeEntry({ hostname: "alien-host" }))
         expect((yield* serverLock.status(home))._tag).toBe("None")
       }),
     ),
@@ -693,7 +699,7 @@ describe("Server Lock Ownership", () => {
           expect(result._tag).toBe("@gent/core/GentConnectionError")
           expect(result.message).toContain(String(holder.pid))
           expect(signals).toEqual([])
-          expect(Option.getOrThrow(yield* serverLock.read(home)).serverId).toBe(holder.serverId)
+          expect(Option.getOrThrow(yield* serverLockFile.read(home)).serverId).toBe(holder.serverId)
         }),
       ),
   )
@@ -720,7 +726,7 @@ describe("Server Lock Ownership", () => {
         expect(result.message).toContain("another-build")
         expect(result.message).toContain("gent server stop")
         expect(signals).toEqual([])
-        expect(Option.getOrThrow(yield* serverLock.read(home)).serverId).toBe(holder.serverId)
+        expect(Option.getOrThrow(yield* serverLockFile.read(home)).serverId).toBe(holder.serverId)
       }),
     ),
   )
@@ -748,7 +754,7 @@ describe("Server Lock Ownership", () => {
           expect(result.message).toContain(`PID ${holder.pid}`)
           expect(result.message).toContain("older-build")
           expect(signals).toEqual([])
-          expect(Option.getOrThrow(yield* serverLock.read(home)).serverId).toBe(holder.serverId)
+          expect(Option.getOrThrow(yield* serverLockFile.read(home)).serverId).toBe(holder.serverId)
         }),
       ),
   )
@@ -809,7 +815,7 @@ describe("Server Lock Ownership", () => {
           )
           const firstLine = yield* Effect.promise(() => holder.stdout.getReader().read())
           expect(new TextDecoder().decode(firstLine.value)).toContain("held")
-          yield* serverLock.write(
+          yield* serverLockFile.write(
             home,
             makeEntry({ pid: holder.pid, dbPath: paths.dbPath, buildFingerprint }),
           )
@@ -819,7 +825,7 @@ describe("Server Lock Ownership", () => {
           yield* Effect.promise(() => holder.exited)
           expect((yield* serverLock.status(home))._tag).toBe("Stale")
           // The pid now names this process, which is alive and serves nothing yet.
-          yield* serverLock.write(
+          yield* serverLockFile.write(
             home,
             makeEntry({ pid: process.pid, dbPath: paths.dbPath, buildFingerprint }),
           )
@@ -852,7 +858,7 @@ describe("serverLock.stop", () => {
         ...entry,
         rpcUrl: `${new URL(endpoint.url).origin}/rpc`,
       })
-      yield* serverLock.write(home, locked)
+      yield* serverLockFile.write(home, locked)
       const held = yield* holdAsAnotherServer(home)
       // The server exits: its kernel lock goes, and its endpoint stops answering.
       const release = held.release.pipe(
@@ -878,7 +884,7 @@ describe("serverLock.stop", () => {
       Effect.gen(function* () {
         const home = yield* makeTmpHomeScoped
         expect((yield* serverLock.stop(home))._tag).toBe("None")
-        yield* serverLock.write(home, makeEntry({ hostname: "other-host" }))
+        yield* serverLockFile.write(home, makeEntry({ hostname: "other-host" }))
         const { result, signals } = yield* serverLock.stop(home).pipe(withSignalTrap)
         expect(result._tag).toBe("None")
         expect(signals).toEqual([])
@@ -904,9 +910,9 @@ describe("serverLock.stop", () => {
             if (path !== lockPath || paused) return base.remove(path, options)
             paused = true
             return Effect.gen(function* () {
-              if (yield* serverLock.hold(home).pipe(Scope.provide(newOwnerScope))) {
+              if (yield* serverLockFile.hold(home).pipe(Scope.provide(newOwnerScope))) {
                 newOwnerTookLock = true
-                yield* serverLock.write(home, newOwner)
+                yield* serverLockFile.write(home, newOwner)
               }
             }).pipe(
               Effect.orDie,
@@ -915,14 +921,14 @@ describe("serverLock.stop", () => {
             )
           },
         })
-        yield* serverLock.write(home, makeEntry({ rpcUrl: "http://127.0.0.1:1/rpc" }))
+        yield* serverLockFile.write(home, makeEntry({ rpcUrl: "http://127.0.0.1:1/rpc" }))
         const result = yield* serverLock
           .stop(home, { removeStale: true })
           .pipe(Effect.provideService(FileSystem.FileSystem, racing))
         expect(result._tag).toBe("Removed")
         expect(paused).toBe(true)
         if (newOwnerTookLock) {
-          expect(Option.getOrThrow(yield* serverLock.read(home)).serverId).toBe("new-owner")
+          expect(Option.getOrThrow(yield* serverLockFile.read(home)).serverId).toBe("new-owner")
         }
       }),
     ),
@@ -945,11 +951,11 @@ describe("serverLock.stop", () => {
       Effect.gen(function* () {
         const home = yield* makeTmpHomeScoped
         // The pid is this live process: only the kernel lock proves the server gone.
-        yield* serverLock.write(home, makeEntry())
+        yield* serverLockFile.write(home, makeEntry())
         expect((yield* serverLock.stop(home))._tag).toBe("NotRunning")
-        expect(Option.isSome(yield* serverLock.read(home))).toBe(true)
+        expect(Option.isSome(yield* serverLockFile.read(home))).toBe(true)
         expect((yield* serverLock.stop(home, { removeStale: true }))._tag).toBe("Removed")
-        expect(Option.isNone(yield* serverLock.read(home))).toBe(true)
+        expect(Option.isNone(yield* serverLockFile.read(home))).toBe(true)
       }),
     ),
   )
@@ -962,7 +968,7 @@ describe("serverLock.stop", () => {
         const { result, signals } = yield* serverLock.stop(home).pipe(withSignalTrap)
         expect(result._tag).toBe("NotOwned")
         expect(signals).toEqual([])
-        expect(Option.isSome(yield* serverLock.read(home))).toBe(true)
+        expect(Option.isSome(yield* serverLockFile.read(home))).toBe(true)
       }),
     ),
   )
@@ -971,7 +977,7 @@ describe("serverLock.stop", () => {
     provideFs(
       Effect.gen(function* () {
         const home = yield* makeTmpHomeScoped
-        yield* serverLock.write(home, makeEntry({ rpcUrl: "http://127.0.0.1:1/rpc" }))
+        yield* serverLockFile.write(home, makeEntry({ rpcUrl: "http://127.0.0.1:1/rpc" }))
         yield* holdAsAnotherServer(home)
         const { result, signals } = yield* serverLock.stop(home).pipe(withSignalTrap)
         expect(result._tag).toBe("NotOwned")
@@ -988,7 +994,7 @@ describe("serverLock.stop", () => {
         const { result, signals } = yield* serverLock.stop(home).pipe(withSignalTrap)
         expect(result._tag).toBe("StillRunning")
         expect(signals).toEqual(["SIGTERM"])
-        expect(Option.isSome(yield* serverLock.read(home))).toBe(true)
+        expect(Option.isSome(yield* serverLockFile.read(home))).toBe(true)
       }),
     ),
   )
@@ -1001,7 +1007,7 @@ describe("serverLock.stop", () => {
         const { result, signals } = yield* serverLock.stop(home).pipe(signalTrap(release))
         expect(result._tag).toBe("Stopped")
         expect(signals).toEqual(["SIGTERM"])
-        expect(Option.isNone(yield* serverLock.read(home))).toBe(true)
+        expect(Option.isNone(yield* serverLockFile.read(home))).toBe(true)
       }),
     ),
   )

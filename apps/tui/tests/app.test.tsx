@@ -86,6 +86,7 @@ import {
   widgetContribution,
 } from "../src/extensions/client-facets"
 import { NOTICE_ROWS_BOUND, useSessionController } from "../src/session"
+import { seedDebugSession } from "../src/ops"
 
 // ── app bootstrap ───────────────────────────────────────────────────────────
 
@@ -4440,7 +4441,7 @@ describe("debug playground", () => {
           const cwd = yield* makeTempDirectoryScoped("gent-test-cwd-")
           const server = yield* Gent.server({
             cwd,
-            debug: true,
+            seed: seedDebugSession(cwd),
             state: Gent.state.memory(),
             provider: Gent.provider.mock(),
           })

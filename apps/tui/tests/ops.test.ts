@@ -1,6 +1,12 @@
-import { ExtensionHealth } from "@gent/core/test-utils"
+import {
+  collectTestContributions,
+  ExtensionHealth,
+  makeTempDirectoryScoped,
+} from "@gent/core/test-utils"
 import { describe, expect, it, test } from "effect-bun-test"
-import { BunFileSystem, BunServices } from "@effect/platform-bun"
+import { BunChildProcessSpawner, BunFileSystem, BunServices } from "@effect/platform-bun"
+import { getToolId } from "@gent/core/extensions/api"
+import { BuiltinExtensions } from "@gent/extensions"
 import {
   ConfigProvider,
   Console,
@@ -11,6 +17,7 @@ import {
   Logger,
   Option,
   Path,
+  Predicate,
   Random,
   Schema,
   Sink,
@@ -20,8 +27,8 @@ import { MinimumLogLevel } from "effect/References"
 import {
   classifyLogFile,
   dataPaths,
+  Gent,
   makeJsonFileLogger,
-  serverLock,
   ServerLockEntry,
   ServerLockStatus,
 } from "@gent/sdk"
@@ -38,6 +45,7 @@ import {
   refuseResetWhileServing,
   reportFailureOnStderr,
   resetStorage,
+  seedDebugSession,
 } from "../src/ops"
 import { SqliteClient as BunSqliteClient } from "@effect/sql-sqlite-bun"
 import { SqlClient } from "effect/unstable/sql"
@@ -477,9 +485,16 @@ describe("local health", () => {
           ),
           (server) => Effect.promise(() => server.stop(true)),
         )
-        yield* serverLock.write(
-          home,
-          new ServerLockEntry({ ...identity, rpcUrl: `${new URL(endpoint.url).origin}/rpc` }),
+        // The discovery entry a server writes once it listens, as its JSON file.
+        const paths = yield* dataPaths(home)
+        yield* fs.makeDirectory(paths.dataDir, { recursive: true })
+        const entry = new ServerLockEntry({
+          ...identity,
+          rpcUrl: `${new URL(endpoint.url).origin}/rpc`,
+        })
+        yield* fs.writeFileString(
+          paths.serverLock,
+          yield* Schema.encodeEffect(Schema.fromJsonString(ServerLockEntry))(entry),
         )
         reported.stderr = ""
         const refused = yield* reportFailureOnStderr(refuseResetWhileServing(home)).pipe(
@@ -563,5 +578,74 @@ describe("local health", () => {
         expect(yield* fs.exists(file)).toBe(true)
       }
     }).pipe(Effect.provide(BunServices.layer)),
+  )
+})
+
+// ── debug session ───────────────────────────────────────────────────────────
+
+interface SeededCall {
+  readonly name: string
+  readonly params: unknown
+}
+
+/**
+ * The seeded calls no shipped tool accepts: an unknown tool id, or params the
+ * tool's own schema rejects. Tools come from the builtin extensions' setup.
+ */
+const rejectedCalls = (calls: ReadonlyArray<SeededCall>) =>
+  Effect.gen(function* () {
+    const tools = new Map<string, Schema.Constraint>()
+    for (const extension of BuiltinExtensions) {
+      const contributions = yield* collectTestContributions(extension.setup)
+      for (const tool of contributions.tools ?? []) {
+        tools.set(getToolId(tool), tool.parametersSchema)
+      }
+    }
+    const rejected: string[] = []
+    for (const call of calls) {
+      const schema = tools.get(call.name)
+      if (Predicate.isUndefined(schema)) {
+        rejected.push(`${call.name}: no shipped tool has this id`)
+        continue
+      }
+      // The seeded tools' params are plain structs: their type side is their JSON.
+      if (!Schema.is(schema)(call.params)) rejected.push(`${call.name}: params do not fit`)
+    }
+    return rejected
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        BunServices.layer,
+        BunChildProcessSpawner.layer.pipe(Layer.provide(BunServices.layer)),
+        GentPlatform.Test(),
+      ),
+    ),
+  )
+
+describe("debug session", () => {
+  it.live(
+    "--debug seeds only calls to shipped tools, with params those tools accept",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const cwd = yield* makeTempDirectoryScoped("gent-debug-seed-")
+          const server = yield* Gent.server({
+            cwd,
+            seed: seedDebugSession(cwd),
+            state: Gent.state.memory(),
+            provider: Gent.provider.mock(),
+          })
+          const { client } = yield* Gent.client(server, { cwd })
+          const [session] = yield* client.session.list()
+          const branchId = yield* Effect.fromNullishOr(session?.activeBranchId)
+          const messages = yield* client.message.list({ branchId })
+          const calls = messages.flatMap((message) =>
+            message.parts.filter((part) => part.type === "tool-call"),
+          )
+          expect(calls.length).toBeGreaterThan(0)
+          expect(yield* rejectedCalls(calls)).toEqual([])
+        }).pipe(Effect.timeout("20 seconds")),
+      ),
+    30_000,
   )
 })
