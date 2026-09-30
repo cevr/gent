@@ -758,9 +758,12 @@ describe("BashTool execution", () => {
     () =>
       Effect.gen(function* () {
         const sent = yield* Deferred.make<{ sourceId: string; content: string }>()
+        // ExtensionSessionService.getSession answers undefined for an absent session.
+        // oxlint-disable-next-line effect/noNullish -- the facade's absent-session answer.
+        const absentSession: Session | undefined = undefined
         const ctx = withSession(stubCtx, {
           ...stubCtx.Session,
-          getSession: () => Effect.sync(() => Option.getOrUndefined(Option.none<Session>())),
+          getSession: () => Effect.succeed(absentSession),
           listBranches: Effect.succeed([]),
           send: onQueue((notice) => Deferred.succeed(sent, notice)),
         })

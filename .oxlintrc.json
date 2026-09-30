@@ -44,8 +44,7 @@
     // Custom — a child-session writer admits the depth in its own function
     "gent/child-session-writer-admits": "error",
     // Custom — no `undefined`/`unknown` spelled to pass noNullish or noUnknownParameters.
-    // Off outside packages/core (see overrides) until the p22-tui and p22-ext sites go.
-    "gent/no-lint-evasion": "off",
+    "gent/no-lint-evasion": "error",
 
     // TypeScript - no any
     "typescript/no-explicit-any": "error",
@@ -95,14 +94,6 @@
     "typescript/no-unnecessary-template-expression": "off"
   },
   "overrides": [
-    {
-      // Core carries none of the spellings; the rule keeps it that way until
-      // the TUI and extension sites go and it turns on for every file.
-      "files": ["packages/core/**"],
-      "rules": {
-        "gent/no-lint-evasion": "error"
-      }
-    },
     {
       // GentPlatform implements Bun/OS capabilities at the runtime boundary.
       "files": ["packages/core/src/runtime/gent-platform-bun.ts"],

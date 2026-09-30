@@ -557,17 +557,17 @@ const makeFakeClient = (state: FakeClientState): HttpClient.HttpClient =>
     for (const [key, value] of Object.entries(request.headers)) {
       if (Schema.is(Schema.String)(value)) headersObj[key] = value
     }
-    let bodyText = Option.getOrUndefined(Option.none<string>())
+    let bodyText = Option.none<string>()
     if (request.body._tag === "Uint8Array") {
-      bodyText = new TextDecoder().decode(request.body.body)
+      bodyText = Option.some(new TextDecoder().decode(request.body.body))
     } else if (request.body._tag === "Raw" && Schema.is(Schema.String)(request.body.body)) {
-      bodyText = request.body.body
+      bodyText = Option.some(request.body.body)
     }
     state.captured.push({
       url: request.url,
       method: request.method,
       headers: headersObj,
-      body: bodyText,
+      body: Option.getOrUndefined(bodyText),
     })
     const result = state.responder(state.captured.length - 1)
     if (isTransportFailure(result)) {
@@ -1040,7 +1040,6 @@ const makeIO = (state: IOState): AnthropicCredentialIO => ({
 })
 // TestClock starts at time 0, so all expiresAt values are absolute offsets.
 const FAR_FUTURE = 10 * 60 * 1000 // expiresAt = 10 minutes from t=0
-const COMPLETE = Option.getOrUndefined(Option.none<void>())
 // `TestClock.adjust` requires a `Scope` (it manages internal sleeper
 // fibers). Wrap with `Effect.scoped` so tests don't have to thread
 // scope manually.
@@ -1112,7 +1111,7 @@ describe("Anthropic credential cache — refresh on stale", () => {
         refreshResult: () =>
           Effect.gen(function* () {
             refreshCount += 1
-            yield* Deferred.succeed(refreshStarted, COMPLETE)
+            yield* Deferred.done(refreshStarted, Exit.void)
             yield* Deferred.await(releaseRefresh)
             return fresh
           }),
@@ -1128,7 +1127,7 @@ describe("Anthropic credential cache — refresh on stale", () => {
           yield* Effect.yieldNow
           yield* Effect.yieldNow
           expect(refreshCount).toBe(1)
-          yield* Deferred.succeed(releaseRefresh, COMPLETE)
+          yield* Deferred.done(releaseRefresh, Exit.void)
           const results = yield* Fiber.join(fiber)
           expect(results[0].accessToken).toBe("fresh-access")
           expect(results[1].accessToken).toBe("fresh-access")

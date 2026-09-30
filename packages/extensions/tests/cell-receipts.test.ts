@@ -780,10 +780,7 @@ it.effect(
         sessionId: Schema.optional(Schema.String),
         agentName: Schema.String,
       })
-      const metadata = yield* Schema.encodeEffect(Metadata)({
-        sessionId: Option.getOrUndefined(Option.none<string>()),
-        agentName: "main",
-      })
+      const metadata = yield* Schema.encodeEffect(Metadata)({ agentName: "main" })
       const result = Prompt.toolResultPart({
         id: toolCallId,
         name: "delegate.start",

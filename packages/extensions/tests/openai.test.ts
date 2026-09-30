@@ -152,7 +152,6 @@ const credentialCache = (io: OpenAICredentialIO, authInfo: ProviderAuthInfo) =>
   )
 // TestClock starts at time 0, so `expires` values are absolute offsets.
 const FAR_FUTURE = 10 * 60 * 1000
-const COMPLETE = Option.getOrUndefined(Option.none<void>())
 const EMPTY_PERSISTED_CREDENTIALS = Option.none<StoredOAuthCredentials>()
 const runWithTestClock = <A, E, R>(eff: Effect.Effect<A, E, R>) =>
   Effect.scoped(eff).pipe(Effect.provide(TestClock.layer()))
@@ -277,7 +276,7 @@ describe("OpenAI credential cache — refresh on stale", () => {
         refreshResult: () =>
           Effect.gen(function* () {
             refreshCount += 1
-            yield* Deferred.succeed(refreshStarted, COMPLETE)
+            yield* Deferred.done(refreshStarted, Exit.void)
             yield* Deferred.await(releaseRefresh)
             return fresh
           }),
@@ -305,7 +304,7 @@ describe("OpenAI credential cache — refresh on stale", () => {
           yield* Effect.yieldNow
           yield* Effect.yieldNow
           expect(refreshCount).toBe(1)
-          yield* Deferred.succeed(releaseRefresh, COMPLETE)
+          yield* Deferred.done(releaseRefresh, Exit.void)
           const results = yield* Fiber.join(fiber)
           expect(results[0].access).toBe("fresh-access")
           expect(results[1].access).toBe("fresh-access")
@@ -1073,17 +1072,17 @@ const makeFakeClient = (state: FakeClientState): HttpClient.HttpClient =>
     for (const [key, value] of Object.entries(request.headers)) {
       if (Schema.is(Schema.String)(value)) headersObj[key] = value
     }
-    let bodyText = Option.getOrUndefined(Option.none<string>())
+    let bodyText = Option.none<string>()
     if (request.body._tag === "Uint8Array") {
-      bodyText = new TextDecoder().decode(request.body.body)
+      bodyText = Option.some(new TextDecoder().decode(request.body.body))
     } else if (request.body._tag === "Raw" && Schema.is(Schema.String)(request.body.body)) {
-      bodyText = request.body.body
+      bodyText = Option.some(request.body.body)
     }
     state.captured.push({
       url: request.url,
       method: request.method,
       headers: headersObj,
-      body: bodyText,
+      body: Option.getOrUndefined(bodyText),
     })
     const result = state.responder(state.captured.length - 1)
     if (isTransportFailure(result)) {
