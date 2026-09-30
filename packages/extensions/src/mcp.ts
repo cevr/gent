@@ -1032,6 +1032,12 @@ const startLogin = (
     return started
   })
 
+/** Closes a login's `scope` unless its start succeeded: a failed or interrupted start owns no listener. */
+const closeOnFailure = (scope: Scope.Closeable, exit: Exit.Exit<unknown, unknown>) => {
+  if (Exit.isSuccess(exit)) return Effect.void
+  return Scope.close(scope, exit)
+}
+
 /** The loopback listener for a login's redirect, on a free port; its port. */
 const serveRedirect = (
   server: McpServer,
@@ -1575,6 +1581,8 @@ const mcpClientsLive = ({
         ),
       )
       const runFork = yield* FiberSet.makeRuntime<FileSystem.FileSystem | Path.Path>()
+      /** The layer's scope: each login's listener lives in a child of it. */
+      const layerScope = yield* Scope.Scope
       /** The login each server waits for, so a second `/mcp login` replaces the first. */
       const pendingLogins = new Map<string, Fiber.Fiber<void>>()
       /** The connection each key holds now, so a late close never drops its successor. */
@@ -1787,6 +1795,28 @@ const mcpClientsLive = ({
             }),
           )
         })
+      /** Waits for a started login's redirect, then connects with its token; closes `scope` at the end. */
+      const finishLogin = (server: McpServer, started: LoginStart, scope: Scope.Closeable) =>
+        Effect.gen(function* () {
+          yield* started.finish
+          // A connection opened before the login sends no token; the next one does.
+          const current = Option.fromUndefinedOr(live.get(server.key))
+          if (Option.isSome(current)) yield* evict(server.key, current.value)
+          yield* Effect.scoped(acquire(server))
+          yield* Effect.logInfo("mcp.oauth.login.done").pipe(
+            Effect.annotateLogs({ server: server.name }),
+          )
+        }).pipe(
+          Effect.catchCause((cause) => {
+            const message = failureMessage(Cause.squash(cause))
+            setHealth(server.key, "expired", Option.some(message))
+            return Effect.logWarning("mcp.oauth.login.failed").pipe(
+              Effect.annotateLogs({ server: server.name, error: message }),
+            )
+          }),
+          Effect.ensuring(Scope.close(scope, Exit.void)),
+          Effect.ensuring(Effect.sync(() => pendingLogins.delete(server.name))),
+        )
       /**
        * Starts a login to the server named `name` and returns its URL at
        * once. A process fiber waits for the redirect, stores the tokens, and
@@ -1813,37 +1843,26 @@ const mcpClientsLive = ({
           const config = entry.value.server.config
           const previous = Option.fromUndefinedOr(pendingLogins.get(name))
           if (Option.isSome(previous)) yield* Fiber.interrupt(previous.value)
-          const scope = yield* Scope.make()
-          const started = yield* startLogin(server, config, auth, scope).pipe(
-            Effect.provideService(Crypto.Crypto, crypto),
-            Effect.mapError((error) => {
-              if (error._tag === "McpError") return error
-              return new McpError({ server: name, message: `login: ${error.message}` })
+          // The listener's scope is a child of the layer's from its creation. A
+          // start that fails or is interrupted closes it; a start that
+          // succeeds hands it to the finishing fiber in the same
+          // uninterruptible step, so no gap leaves the listener unowned.
+          return yield* Effect.uninterruptibleMask((restore) =>
+            Effect.gen(function* () {
+              const scope = yield* Scope.fork(layerScope)
+              const started = yield* restore(
+                startLogin(server, config, auth, scope).pipe(
+                  Effect.provideService(Crypto.Crypto, crypto),
+                  Effect.mapError((error) => {
+                    if (error._tag === "McpError") return error
+                    return new McpError({ server: name, message: `login: ${error.message}` })
+                  }),
+                ),
+              ).pipe(Effect.onExit((exit) => closeOnFailure(scope, exit)))
+              pendingLogins.set(name, runFork(finishLogin(server, started, scope)))
+              return started.url
             }),
-            Effect.tapError(() => Scope.close(scope, Exit.void)),
           )
-          const finish = Effect.gen(function* () {
-            yield* started.finish
-            // A connection opened before the login sends no token; the next one does.
-            const current = Option.fromUndefinedOr(live.get(server.key))
-            if (Option.isSome(current)) yield* evict(server.key, current.value)
-            yield* Effect.scoped(acquire(server))
-            yield* Effect.logInfo("mcp.oauth.login.done").pipe(
-              Effect.annotateLogs({ server: server.name }),
-            )
-          }).pipe(
-            Effect.catchCause((cause) => {
-              const message = failureMessage(Cause.squash(cause))
-              setHealth(server.key, "expired", Option.some(message))
-              return Effect.logWarning("mcp.oauth.login.failed").pipe(
-                Effect.annotateLogs({ server: server.name, error: message }),
-              )
-            }),
-            Effect.ensuring(Scope.close(scope, Exit.void)),
-            Effect.ensuring(Effect.sync(() => pendingLogins.delete(name))),
-          )
-          pendingLogins.set(name, runFork(finish))
-          return started.url
         })
       return McpClients.of({
         login,

@@ -3,7 +3,9 @@ import {
   Clock,
   ConfigProvider,
   Context,
+  Deferred,
   Effect,
+  Fiber,
   FileSystem,
   Layer,
   Option,
@@ -1198,6 +1200,53 @@ interface OAuthFixtureState {
   refusedCalls: number
   /** `initialize` requests `/mcp` refused with 401. */
   refusedInitializes: number
+  /** Refresh grants refused because their refresh token was already redeemed. */
+  failedRefreshes: number
+  readonly options: OAuthFixtureOptions
+  /** Refresh grants the fixture is answering now. */
+  refreshing: number
+  /** Done when a second refresh grant arrives while one is held. */
+  readonly secondRefresh: Deferred.Deferred<void>
+  /** The `redirect_uris` each registration named. */
+  readonly redirects: Array<string>
+  /** Open until the test lets registrations answer. */
+  readonly registerGate: Deferred.Deferred<void>
+}
+
+/**
+ * `headerOnly`: the resource metadata is served only at the path the 401's
+ * `WWW-Authenticate` names, and the authorization server lives under `/as`,
+ * so only a client that reads the header finds it. `overlapRefreshes`: a
+ * refresh grant is held until a second one arrives, or a second passes.
+ * `holdRegister`: a registration waits for `registerGate`.
+ */
+interface OAuthFixtureOptions {
+  readonly headerOnly: boolean
+  readonly overlapRefreshes: boolean
+  readonly holdRegister: boolean
+}
+
+const defaultOAuthFixture: OAuthFixtureOptions = {
+  headerOnly: false,
+  overlapRefreshes: false,
+  holdRegister: false,
+}
+
+/** Where the authorization server lives: the origin, or `/as` under `headerOnly`. */
+const authorizationPrefix = (state: OAuthFixtureState) => {
+  if (state.options.headerOnly) return "/as"
+  return ""
+}
+
+/** Where the 401's `WWW-Authenticate` points for the resource metadata. */
+const resourceMetadataUrl = (state: OAuthFixtureState) => {
+  if (state.options.headerOnly) return `${state.origin}/resource-metadata`
+  return `${state.origin}/.well-known/oauth-protected-resource/mcp`
+}
+
+const servesResourceMetadata = (state: OAuthFixtureState, pathname: string) => {
+  if (state.options.headerOnly) return pathname === "/resource-metadata"
+  return pathname.startsWith("/.well-known/oauth-protected-resource")
 }
 
 const FormParams = Schema.Struct({
@@ -1235,25 +1284,42 @@ const issueTokens = (state: OAuthFixtureState) => {
 
 const authorizationServerMetadata = (state: OAuthFixtureState) =>
   fixtureJson({
-    issuer: state.origin,
-    authorization_endpoint: `${state.origin}/authorize`,
-    token_endpoint: `${state.origin}/token`,
-    registration_endpoint: `${state.origin}/register`,
+    issuer: `${state.origin}${authorizationPrefix(state)}`,
+    authorization_endpoint: `${state.origin}${authorizationPrefix(state)}/authorize`,
+    token_endpoint: `${state.origin}${authorizationPrefix(state)}/token`,
+    registration_endpoint: `${state.origin}${authorizationPrefix(state)}/register`,
     response_types_supported: ["code"],
     grant_types_supported: ["authorization_code", "refresh_token"],
     code_challenge_methods_supported: ["S256"],
     token_endpoint_auth_methods_supported: ["none"],
   })
 
-const registerClient = (request: OAuthRequest) =>
-  Effect.flatMap(
-    request.text,
-    Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json))),
-  ).pipe(
-    Effect.map((metadata) =>
-      fixtureJson({ ...metadata, client_id: "client-1", client_id_issued_at: 1 }, 201),
-    ),
-  )
+const ClientMetadata = Schema.fromJsonString(
+  Schema.Struct({ redirect_uris: Schema.Array(Schema.String) }),
+)
+
+const registerClient = (state: OAuthFixtureState, request: OAuthRequest) =>
+  Effect.gen(function* () {
+    const text = yield* request.text
+    const metadata = yield* Schema.decodeEffect(
+      Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json)),
+    )(text)
+    state.redirects.push(...(yield* Schema.decodeEffect(ClientMetadata)(text)).redirect_uris)
+    if (state.options.holdRegister) yield* Deferred.await(state.registerGate)
+    return fixtureJson({ ...metadata, client_id: "client-1", client_id_issued_at: 1 }, 201)
+  })
+
+/** Holds a refresh grant until a second one arrives, or one second passes. */
+const overlapRefresh = (state: OAuthFixtureState) =>
+  Effect.gen(function* () {
+    if (!state.options.overlapRefreshes) return
+    state.refreshing += 1
+    if (state.refreshing >= 2) {
+      yield* Deferred.succeed(state.secondRefresh, void 0)
+      return
+    }
+    yield* Deferred.await(state.secondRefresh).pipe(Effect.timeout("1 second"), Effect.ignore)
+  })
 
 /** The browser's part of a login: the user agrees at once, so it redirects with the code. */
 const authorize = (url: URL) => {
@@ -1272,11 +1338,13 @@ const exchangeToken = (state: OAuthFixtureState, request: OAuthRequest) =>
     if (form.grant_type === "authorization_code" && form.code === "code-1")
       return issueTokens(state)
     const refresh = form.refresh_token ?? ""
+    if (form.grant_type === "refresh_token") yield* overlapRefresh(state)
     if (form.grant_type === "refresh_token" && state.refreshTokens.has(refresh)) {
       state.refreshTokens.delete(refresh)
       state.refreshes += 1
       return issueTokens(state)
     }
+    if (form.grant_type === "refresh_token") state.failedRefreshes += 1
     return fixtureJson({ error: "invalid_grant" }, 400)
   })
 
@@ -1324,7 +1392,7 @@ const answerMcp = (state: OAuthFixtureState, request: OAuthRequest) =>
       return HttpServerResponse.text("unauthorized", {
         status: 401,
         headers: {
-          "www-authenticate": `Bearer resource_metadata="${state.origin}/.well-known/oauth-protected-resource/mcp"`,
+          "www-authenticate": `Bearer resource_metadata="${resourceMetadataUrl(state)}"`,
         },
       })
     }
@@ -1348,22 +1416,27 @@ const oauthFixtureApp = (state: OAuthFixtureState) =>
   Effect.gen(function* () {
     const request = yield* HttpServerRequest.HttpServerRequest
     const url = new URL(request.url, state.origin)
-    if (url.pathname.startsWith("/.well-known/oauth-protected-resource")) {
-      return fixtureJson({ resource: `${state.origin}/mcp`, authorization_servers: [state.origin] })
+    const prefix = authorizationPrefix(state)
+    if (servesResourceMetadata(state, url.pathname)) {
+      return fixtureJson({
+        resource: `${state.origin}/mcp`,
+        authorization_servers: [`${state.origin}${prefix}`],
+      })
     }
-    if (url.pathname === "/.well-known/oauth-authorization-server") {
+    if (url.pathname === `/.well-known/oauth-authorization-server${prefix}`) {
       return authorizationServerMetadata(state)
     }
-    if (url.pathname === "/register") return yield* registerClient(request)
-    if (url.pathname === "/authorize") return authorize(url)
-    if (url.pathname === "/token") return yield* exchangeToken(state, request)
-    if (url.pathname !== "/mcp" || request.method !== "POST") {
-      return HttpServerResponse.empty({ status: 405 })
-    }
+    if (url.pathname === `${prefix}/register`) return yield* registerClient(state, request)
+    if (url.pathname === `${prefix}/authorize`) return authorize(url)
+    if (url.pathname === `${prefix}/token`) return yield* exchangeToken(state, request)
+    if (url.pathname !== "/mcp") return HttpServerResponse.empty({ status: 404 })
+    if (request.method !== "POST") return HttpServerResponse.empty({ status: 405 })
     return yield* answerMcp(state, request)
   }).pipe(Effect.orElseSucceed(() => HttpServerResponse.text("bad request", { status: 400 })))
 
-const serveOAuthFixture = Effect.gen(function* () {
+const serveOAuthFixture = Effect.suspend(() => serveOAuthFixtureWith(defaultOAuthFixture))
+
+const serveOAuthFixtureWith = Effect.fnUntraced(function* (options: OAuthFixtureOptions) {
   const state: OAuthFixtureState = {
     origin: "",
     valid: new Set(),
@@ -1372,6 +1445,12 @@ const serveOAuthFixture = Effect.gen(function* () {
     refreshes: 0,
     refusedCalls: 0,
     refusedInitializes: 0,
+    failedRefreshes: 0,
+    options,
+    refreshing: 0,
+    secondRefresh: yield* Deferred.make<void>(),
+    redirects: [],
+    registerGate: yield* Deferred.make<void>(),
   }
   const context = yield* Layer.build(
     HttpServer.serve(oauthFixtureApp(state)).pipe(
@@ -1415,14 +1494,9 @@ const runOAuthCell = (oauth: OAuthFixtureState, code: string) =>
     return yield* cellResultAfterDone(client, branchId)
   })
 
-/**
- * One session: `/mcp` before the login, `/mcp login secure`, the browser's
- * visit to the presented URL, and `/mcp` once the login listed the tools.
- */
-const loginThroughCommand = (oauth: OAuthFixtureState, catalogFile: string) =>
+/** A session with no model turns: `request` runs `/mcp <input>`, `shown` waits for a message. */
+const commandSession = (oauth: OAuthFixtureState) =>
   Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem
-    const http = yield* HttpClient.HttpClient
     const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
     const harness = yield* createRpcHarness({
       ...shippedPreset,
@@ -1444,12 +1518,47 @@ const loginThroughCommand = (oauth: OAuthFixtureState, catalogFile: string) =>
       waitFor(texts, (all) => all.some((text) => text.includes(needle)), 10_000, needle).pipe(
         Effect.map((all) => all.filter((text) => text.includes(needle)).at(-1) ?? ""),
       )
+    return { request, shown }
+  })
+
+/** Stores a login whose token `token-0` expires in 30 s, inside the 60 s skew. */
+const storeExpiringLogin = (oauth: OAuthFixtureState, directory: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+    oauth.valid.add("token-0")
+    oauth.refreshTokens.add("refresh-0")
+    const now = yield* Clock.currentTimeMillis
+    yield* fs.writeFileString(
+      path.join(directory, "mcp-auth.json"),
+      encodeJson({
+        servers: {
+          [`secure ${oauth.origin}/mcp`]: {
+            tokens: { access_token: "token-0", token_type: "Bearer", refresh_token: "refresh-0" },
+            expiresAt: now + 30_000,
+            client: { client_id: "client-1" },
+            redirectUri: "http://127.0.0.1:9/callback",
+          },
+        },
+      }),
+    )
+  })
+
+/**
+ * One session: `/mcp` before the login, `/mcp login secure`, the browser's
+ * visit to the presented URL, and `/mcp` once the login listed the tools.
+ */
+const loginThroughCommand = (oauth: OAuthFixtureState, catalogFile: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const http = yield* HttpClient.HttpClient
+    const { request, shown } = yield* commandSession(oauth)
     // Setup could not list: the server wants a login.
     yield* request("")
     const before = yield* shown("- secure")
     yield* request("login secure")
     const prompt = yield* shown("/authorize?")
-    const loginUrl = /http:\/\/127\.0\.0\.1:\d+\/authorize\?\S+/.exec(prompt)?.[0] ?? ""
+    const loginUrl = /http:\/\/127\.0\.0\.1:\d+\/\S*authorize\?\S+/.exec(prompt)?.[0] ?? ""
     // The browser's part: the fixture redirects to gent's loopback listener at once.
     const landing = yield* http.get(loginUrl).pipe(Effect.flatMap((response) => response.text))
     yield* waitFor(
@@ -1462,6 +1571,29 @@ const loginThroughCommand = (oauth: OAuthFixtureState, catalogFile: string) =>
     const after = yield* shown("healthy")
     return { before, prompt, landing, after }
   }).pipe(Effect.provide(FetchHttpClient.layer))
+
+/**
+ * One cell: a call, `revoke`, a call the server refuses, and a call on the
+ * next connection, whose refused initialize refreshes the token.
+ */
+const revokeThenCall = (oauth: OAuthFixtureState) =>
+  Effect.gen(function* () {
+    const code = [
+      "const first = await tools.mcp.secure.whoami()",
+      "await tools.mcp.secure.revoke()",
+      "let refused = ''; try { await tools.mcp.secure.whoami() } catch (error) { refused = error.message }",
+      "const second = await tools.mcp.secure.whoami()",
+      "JSON.stringify({ first, refused, second })",
+    ].join("; ")
+    const result = yield* runOAuthCell(oauth, code)
+    expect(result).toMatchObject({ name: "cell", isFailure: false })
+    return yield* cellDisplay(
+      result,
+      Schema.fromJsonString(
+        Schema.Struct({ first: Schema.String, refused: Schema.String, second: Schema.String }),
+      ),
+    )
+  })
 
 describe("mcp oauth", () => {
   it.scopedLive(
@@ -1501,47 +1633,10 @@ describe("mcp oauth", () => {
     "a token near expiry is refreshed before the dial; a refused initialize is refreshed and sent again; a refused call is not",
     () =>
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem
-        const path = yield* Path.Path
         const oauth = yield* serveOAuthFixture
         const data = yield* makeDataDir
-        // A login whose token expires in 30 s, inside the 60 s skew.
-        oauth.valid.add("token-0")
-        oauth.refreshTokens.add("refresh-0")
-        const now = yield* Clock.currentTimeMillis
-        const key = `secure ${oauth.origin}/mcp`
-        yield* fs.writeFileString(
-          path.join(data.directory, "mcp-auth.json"),
-          encodeJson({
-            servers: {
-              [key]: {
-                tokens: {
-                  access_token: "token-0",
-                  token_type: "Bearer",
-                  refresh_token: "refresh-0",
-                },
-                expiresAt: now + 30_000,
-                client: { client_id: "client-1" },
-                redirectUri: "http://127.0.0.1:9/callback",
-              },
-            },
-          }),
-        )
-        const code = [
-          "const first = await tools.mcp.secure.whoami()",
-          "await tools.mcp.secure.revoke()",
-          "let refused = ''; try { await tools.mcp.secure.whoami() } catch (error) { refused = error.message }",
-          "const second = await tools.mcp.secure.whoami()",
-          "JSON.stringify({ first, refused, second })",
-        ].join("; ")
-        const result = yield* runOAuthCell(oauth, code).pipe(Effect.provide(data.layer))
-        expect(result).toMatchObject({ name: "cell", isFailure: false })
-        const shown = yield* cellDisplay(
-          result,
-          Schema.fromJsonString(
-            Schema.Struct({ first: Schema.String, refused: Schema.String, second: Schema.String }),
-          ),
-        )
+        yield* storeExpiringLogin(oauth, data.directory)
+        const shown = yield* revokeThenCall(oauth).pipe(Effect.provide(data.layer))
         // Setup refreshed token-0 to token-1 before it dialed.
         expect(shown.first).toBe("token-1")
         expect(shown.refused).toContain(
@@ -1554,6 +1649,39 @@ describe("mcp oauth", () => {
         // The refused call went out once.
         expect(oauth.refusedCalls).toBe(1)
       }).pipe(Effect.timeout("40 seconds"), Effect.provide(platformLayer)),
+    45_000,
+  )
+
+  it.scopedLive(
+    "an interrupted /mcp login closes its loopback listener",
+    () =>
+      Effect.gen(function* () {
+        const http = yield* HttpClient.HttpClient
+        const oauth = yield* serveOAuthFixtureWith({ ...defaultOAuthFixture, holdRegister: true })
+        // The held registration answers before the fixture stops.
+        yield* Effect.addFinalizer(() => Deferred.succeed(oauth.registerGate, void 0))
+        const data = yield* makeDataDir
+        const { request } = yield* commandSession(oauth).pipe(Effect.provide(data.layer))
+        const login = yield* Effect.forkChild(request("login secure"))
+        // The registration names the listener's redirect; it waits there.
+        const redirect = yield* waitFor(
+          Effect.sync(() => oauth.redirects),
+          (redirects) => redirects.length > 0,
+          10_000,
+          "the login registers its redirect",
+        ).pipe(Effect.map((redirects) => redirects[0] ?? ""))
+        const listening = http.get(redirect).pipe(
+          Effect.as(true),
+          Effect.orElseSucceed(() => false),
+        )
+        expect(yield* listening).toBe(true)
+        yield* Fiber.interrupt(login)
+        yield* waitFor(listening, (up) => !up, 5_000, "the listener closes")
+      }).pipe(
+        Effect.provide(FetchHttpClient.layer),
+        Effect.timeout("40 seconds"),
+        Effect.provide(platformLayer),
+      ),
     45_000,
   )
 })
