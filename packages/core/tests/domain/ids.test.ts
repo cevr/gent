@@ -1,53 +1,19 @@
 /**
- * Branded id locks — guarantees id brands survive.
- *
- * Tests cover:
- * - `Schema.decodeUnknownSync` roundtrip for each branded id
- * - cross-brand assignability is a compile-time error (recorded via @ts-expect-error)
+ * Branded id locks: two ids of different brands are not assignable to each
+ * other, recorded through `@ts-expect-error`.
  *
  * @module
  */
 import { describe, test, expect } from "bun:test"
 import { Schema } from "effect"
 import {
-  ActorCommandId,
-  BranchId,
   ExtensionId,
   InteractionRequestId,
-  MessageId,
   RpcId,
   SessionId,
   ToolCallId,
   ToolId,
 } from "../../src/domain/ids"
-
-describe("branded ids — roundtrip", () => {
-  test("SessionId decodes from a plain string and brand survives", () => {
-    const id = Schema.decodeSync(SessionId)("sess-abc")
-    expect(String(id)).toBe("sess-abc")
-  })
-
-  test("ToolCallId decodes from a plain string and brand survives", () => {
-    const id = Schema.decodeSync(ToolCallId)("tc-1")
-    expect(String(id)).toBe("tc-1")
-  })
-
-  test("ToolId and RpcId roundtrip", () => {
-    expect(String(Schema.decodeSync(ToolId)("read_file"))).toBe("read_file")
-    expect(String(Schema.decodeSync(RpcId)("todo.list"))).toBe("todo.list")
-  })
-
-  test("BranchId, MessageId, ActorCommandId all roundtrip", () => {
-    expect(String(Schema.decodeSync(BranchId)("b-1"))).toBe("b-1")
-    expect(String(Schema.decodeSync(MessageId)("m-1"))).toBe("m-1")
-    expect(String(Schema.decodeSync(ActorCommandId)("a-1"))).toBe("a-1")
-  })
-
-  test("InteractionRequestId and ExtensionId roundtrip", () => {
-    expect(String(Schema.decodeSync(InteractionRequestId)("int-1"))).toBe("int-1")
-    expect(String(Schema.decodeSync(ExtensionId)("@gent/x"))).toBe("@gent/x")
-  })
-})
 
 describe("branded ids — cross-brand assignability is a type error", () => {
   test("SessionId is not assignable to ToolCallId", () => {

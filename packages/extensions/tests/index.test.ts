@@ -3,11 +3,17 @@ import { Effect, FileSystem, Layer, Option, Path, Schema } from "effect"
 import { ExtensionId, getToolId } from "@gent/core/extensions/api"
 import { BuiltinExtensionModules, BuiltinExtensions } from "../src/index.js"
 import { homedir } from "node:os"
-import { BunChildProcessSpawner, BunServices } from "@effect/platform-bun"
+import { BunChildProcessSpawner, BunFileSystem, BunServices } from "@effect/platform-bun"
 import { toCodecAnthropic } from "effect/ai/AnthropicStructuredOutput"
-import { shippedPreset } from "./helpers/test-preset.js"
+import { e2ePreset, shippedPreset } from "./helpers/test-preset.js"
 import { GentPlatform } from "@gent/core/host"
-import { collectTestContributions } from "@gent/core/test-utils"
+import {
+  collectTestContributions,
+  createRpcHarness,
+  LanguageModelLayers,
+  RuntimeEnvironment,
+  textStep,
+} from "@gent/core/test-utils"
 
 // ── starting extensions ─────────────────────────────────────────────────────
 
@@ -109,4 +115,46 @@ describe("builtin tool schemas", () => {
       ),
     )
   })
+})
+
+// ── session deletion ────────────────────────────────────────────────────────
+
+/** The builtin stores that keep one `<branchId>.json` per branch. */
+const BRANCH_STATE_DIRECTORIES = ["goals", "wakes", "delegates"] as const
+
+describe("session deletion", () => {
+  it.scopedLive.layer(BunFileSystem.layer)(
+    "a deleted session's branch files go with it in every branch store; another's stay",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-branch-deleted-" })
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+          cwd: directory,
+          extraLayers: [RuntimeEnvironment.Live({ cwd: directory, home: directory })],
+        })
+        const second = yield* client.branch.create({ sessionId })
+        const branches = [branchId, second.branchId, "another-session-branch"]
+        const files = BRANCH_STATE_DIRECTORIES.map((name) =>
+          branches.map((branch) => `${directory}/.gent/${name}/${branch}.json`),
+        )
+        yield* Effect.forEach(
+          BRANCH_STATE_DIRECTORIES,
+          (name) => fs.makeDirectory(`${directory}/.gent/${name}`, { recursive: true }),
+          { discard: true },
+        )
+        // The removal reads nothing, so a file of any content goes.
+        yield* Effect.forEach(files.flat(), (file) => fs.writeFileString(file, "unread"), {
+          discard: true,
+        })
+
+        yield* client.session.delete({ sessionId })
+
+        const left = yield* Effect.forEach(files, (store) => Effect.forEach(store, fs.exists))
+        expect(left).toEqual(BRANCH_STATE_DIRECTORIES.map(() => [false, false, true]))
+      }).pipe(Effect.timeout("4 seconds")),
+  )
 })

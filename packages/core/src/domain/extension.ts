@@ -25,6 +25,7 @@ import {
 import {
   getToolId,
   getToolMetadata,
+  hasWireParameters,
   isToolCapability,
   isWireToolId,
   type PromptSection,
@@ -67,7 +68,7 @@ import type {
 
 // ── resource ────────────────────────────────────────────────────────────────
 
-/**
+/*
  * Resource — long-lived state with explicit scope.
  *
  * One primitive carries the whole concept: "this extension owns a long-lived
@@ -82,15 +83,13 @@ import type {
  * Add a scope literal only together with its host lifecycle implementation.
  * Advertising `session`/`cwd` without a runtime owner makes impossible
  * lifetimes look supported.
- *
- * @module
  */
 
 /** Stable identity for a declared resource. */
 const ResourceId = Schema.NonEmptyString.pipe(Schema.brand("ResourceId"))
 type ResourceId = typeof ResourceId.Type
 
-// ── Scope discriminator + brand mapping ──
+// ── Scope discriminator + brand mapping ─────────────────────────────────────
 
 /**
  * Pure type-level scope brand used by Resource declarations. Encodes the
@@ -122,7 +121,7 @@ type ScopeOf<S extends ResourceScope> = S extends "process"
     ? BranchScope
     : never
 
-// ── The Resource contribution ──
+// ── The Resource contribution ───────────────────────────────────────────────
 
 /**
  * One Resource carries:
@@ -151,7 +150,7 @@ interface ResourceContribution<A, S extends ResourceScope, R = never, E = never>
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
 export type AnyResourceContribution = ResourceContribution<any, ResourceScope, any, any>
 
-// ── Smart constructor ──
+// ── Smart constructor ───────────────────────────────────────────────────────
 
 /** Spec type accepted by {@link defineResource}. */
 interface ResourceSpec<A, S extends ResourceScope, R = never, E = never> {
@@ -177,7 +176,7 @@ export const defineResource = <A, S extends ResourceScope, R = never, E = never>
 
 // ── contribution ────────────────────────────────────────────────────────────
 
-/**
+/*
  * Contribution buckets — the typed sub-arrays the loader seals from an
  * extension's `host.register(domain, ...values)` and `host.on(kind, handler)`
  * calls. The bucket name is the discrimination: a leaf carries no kind field.
@@ -189,11 +188,9 @@ export const defineResource = <A, S extends ResourceScope, R = never, E = never>
  * Resources are authored through `defineResource({ id, scope, layer })` in
  * this file. Each leaf carries a stable resource identity; the leaf is widened
  * by structural assignability at the bucket boundary.
- *
- * @module
  */
 
-// ── Typed buckets ──
+// ── Typed buckets ───────────────────────────────────────────────────────────
 
 /**
  * The set of buckets an extension may contribute to. Every field is optional;
@@ -425,7 +422,7 @@ export interface TurnUsage {
   readonly complete: boolean
 }
 
-// ── Lifecycle hooks ──
+// ── Lifecycle hooks ─────────────────────────────────────────────────────────
 //
 // Per-extension, per-session handlers run by the runtime at the prompt and
 // turn seams, once when a branch's loop opens in this process (`loopOpen`),
@@ -457,8 +454,9 @@ interface ExtensionHookSignatures {
    * (the session and its descendants), after the rows are gone, under the
    * profile of that session's own cwd, resolved before the delete. A handler
    * removes what the extension keeps for the session outside the database.
-   * `ExtensionContext` names the deleted session; its session verbs find no
-   * session. No user watches it, so it cannot ask. The delete waits for each
+   * Read the deleted session from the input: for a descendant created while
+   * the delete ran, `ExtensionContext` names the root session. Its session
+   * verbs find no session. No user watches it, so it cannot ask. The delete waits for each
    * handler up to `SESSION_DELETED_HOOK_TIMEOUT` (runtime/extension-host.ts),
    * then interrupts it and logs a warning.
    */
@@ -468,6 +466,8 @@ interface ExtensionHookSignatures {
 /** One session a delete removed. */
 export interface SessionDeletedInput {
   readonly sessionId: SessionId
+  /** Every branch the session had; a store keyed by branch removes these. */
+  readonly branchIds: ReadonlyArray<BranchId>
 }
 
 type ExtensionHookKind = keyof ExtensionHookSignatures
@@ -580,7 +580,7 @@ export interface GentExtension<R = ExtensionSetupServices> {
 
 // ── extension-host ──────────────────────────────────────────────────────────
 
-/**
+/*
  * `ExtensionHost` — the one service an extension's `setup` yields.
  *
  * It carries the setup-time facts (cwd, home, host facts)
@@ -594,8 +594,6 @@ export interface GentExtension<R = ExtensionSetupServices> {
  * registrations, validates them, and seals them into
  * `LoadedExtension.contributions`. There is no ctx parameter and no bucket
  * literal: authors yield the host inside `setup`.
- *
- * @module
  */
 
 /** Author-facing domain name → contribution bucket it lands in. */
@@ -698,34 +696,6 @@ export const makeCollectingExtensionHost = (
   // is a stable snapshot; empty buckets never enter `collected`.
   return { service, seal: Effect.sync((): ExtensionContributions => ({ ...collected })) }
 }
-
-/** Re-registers one compiled slot; the switch restores the kind/handler correlation. */
-const replayHook = (host: ExtensionHostService, slot: AnyExtensionHook): Effect.Effect<void> => {
-  switch (slot.kind) {
-    case "systemPrompt":
-      return host.on(slot.kind, slot.hook.handler)
-    case "turnProjection":
-      return host.on(slot.kind, slot.hook.handler)
-    case "turnAfter":
-      return host.on(slot.kind, slot.hook.handler)
-    case "loopOpen":
-      return host.on(slot.kind, slot.hook.handler)
-    case "sessionDeleted":
-      return host.on(slot.kind, slot.hook.handler)
-  }
-}
-
-/** Re-registers an already compiled record; used by test harnesses that wrap loaded extensions. */
-export const registerContributions = (contributions: ExtensionContributions) =>
-  Effect.gen(function* () {
-    const host = yield* ExtensionHost
-    yield* host.register("resource", ...(contributions.resources ?? []))
-    yield* host.register("tool", ...(contributions.tools ?? []))
-    yield* host.register("request", ...(contributions.requests ?? []))
-    yield* host.register("agent", ...(contributions.agents ?? []))
-    yield* host.register("modelDriver", ...(contributions.modelDrivers ?? []))
-    for (const slot of contributions.hooks ?? []) yield* replayHook(host, slot)
-  })
 
 // ── extension-services ──────────────────────────────────────────────────────
 
@@ -1153,6 +1123,11 @@ const checkToolDescriptions = (tools: ReadonlyArray<ToolCapability>): Option.Opt
         `tools[${i}] (${metadata.id}): tool requires a non-empty \`description\` (the model sees it as the tool description)`,
       )
     }
+    if (!hasWireParameters(cap)) {
+      return Option.some(
+        `tools[${i}] (${metadata.id}): tool parameters have no JSON Schema (the model sees them as one; use string keys)`,
+      )
+    }
   }
   return Option.none()
 }
@@ -1257,63 +1232,72 @@ interface FileLockApi {
     path: string,
     effect: Effect.Effect<A, E, R>,
   ) => Effect.Effect<A, E, R>
-  /** Number of paths currently locked or queued for lock. Refcount-bounded —
-   *  drops back to 0 once all callers release. Exposed for diagnostics +
-   *  regression-locking the eviction invariant. */
-  readonly currentSize: Effect.Effect<number>
 }
+
+/**
+ * The lock table, refcount-bounded: an entry exists only while at least one
+ * caller holds (or is waiting on) the lock, and the last release evicts it.
+ * Its size is bounded by concurrent in-flight lock holders, not by the
+ * distinct paths a process ever touched.
+ */
+type FileLockTable = TxRef.TxRef<HashMap.HashMap<string, LockEntry>>
+
+/** An empty lock table. */
+export const makeFileLockTable: Effect.Effect<FileLockTable> = TxRef.make(
+  HashMap.empty<string, LockEntry>(),
+)
 
 export class FileLockService extends Context.Service<FileLockService, FileLockApi>()(
   "@gent/core/src/domain/extension/FileLockService",
 ) {
-  static layer = Layer.effect(
-    FileLockService,
-    Effect.gen(function* () {
-      // Refcount-bounded map: an entry exists only while at least one
-      // caller holds (or is waiting on) the lock. Last release evicts.
-      // Map size is bounded by concurrent in-flight lock holders, not
-      // by total distinct paths ever touched.
-      const locksRef = yield* TxRef.make(HashMap.empty<string, LockEntry>())
-      const pathService = yield* Path.Path
+  /** The service over a lock table its builder made; `layer` makes its own. */
+  static over = (locksRef: FileLockTable) =>
+    Layer.effect(FileLockService, fileLockService(locksRef))
 
-      const acquire = Effect.fn("FileLockService.acquire")(function* (filePath: string) {
-        const resolved = pathService.resolve(filePath)
-        // Speculative TxSemaphore allocation outside the transaction;
-        // only the winner gets installed, the loser is discarded.
-        const fresh = yield* TxSemaphore.make(1)
-        const sem = yield* TxRef.modify(locksRef, (current) => {
-          const found = HashMap.get(current, resolved)
-          if (found._tag === "Some") {
-            const bumped: LockEntry = { sem: found.value.sem, refcount: found.value.refcount + 1 }
-            return [found.value.sem, HashMap.set(current, resolved, bumped)]
-          }
-          const entry: LockEntry = { sem: fresh, refcount: 1 }
-          return [fresh, HashMap.set(current, resolved, entry)]
-        })
-        return { sem, resolved }
-      })
-
-      const release = (resolved: string) =>
-        TxRef.update(locksRef, (current) => {
-          const found = HashMap.get(current, resolved)
-          if (found._tag === "None") return current
-          const next = found.value.refcount - 1
-          if (next <= 0) return HashMap.remove(current, resolved)
-          return HashMap.set(current, resolved, { sem: found.value.sem, refcount: next })
-        })
-
-      return FileLockService.of({
-        withLock: (path, effect) =>
-          Effect.acquireUseRelease(
-            acquire(path),
-            ({ sem }) => TxSemaphore.withPermits(sem, 1, effect),
-            ({ resolved }) => release(resolved),
-          ),
-        currentSize: TxRef.get(locksRef).pipe(Effect.map((m) => HashMap.size(m))),
-      })
-    }),
+  static layer = Layer.unwrap(
+    Effect.map(makeFileLockTable, (locksRef) => FileLockService.over(locksRef)),
   )
 }
+
+const fileLockService = (locksRef: FileLockTable) =>
+  Effect.gen(function* () {
+    const pathService = yield* Path.Path
+
+    const acquire = Effect.fn("FileLockService.acquire")(function* (filePath: string) {
+      const resolved = pathService.resolve(filePath)
+      // Speculative TxSemaphore allocation outside the transaction;
+      // only the winner gets installed, the loser is discarded.
+      const fresh = yield* TxSemaphore.make(1)
+      const sem = yield* TxRef.modify(locksRef, (current) => {
+        const found = HashMap.get(current, resolved)
+        if (found._tag === "Some") {
+          const bumped: LockEntry = { sem: found.value.sem, refcount: found.value.refcount + 1 }
+          return [found.value.sem, HashMap.set(current, resolved, bumped)]
+        }
+        const entry: LockEntry = { sem: fresh, refcount: 1 }
+        return [fresh, HashMap.set(current, resolved, entry)]
+      })
+      return { sem, resolved }
+    })
+
+    const release = (resolved: string) =>
+      TxRef.update(locksRef, (current) => {
+        const found = HashMap.get(current, resolved)
+        if (found._tag === "None") return current
+        const next = found.value.refcount - 1
+        if (next <= 0) return HashMap.remove(current, resolved)
+        return HashMap.set(current, resolved, { sem: found.value.sem, refcount: next })
+      })
+
+    return FileLockService.of({
+      withLock: (path, effect) =>
+        Effect.acquireUseRelease(
+          acquire(path),
+          ({ sem }) => TxSemaphore.withPermits(sem, 1, effect),
+          ({ resolved }) => release(resolved),
+        ),
+    })
+  })
 
 // ── session-mutations ───────────────────────────────────────────────────────
 

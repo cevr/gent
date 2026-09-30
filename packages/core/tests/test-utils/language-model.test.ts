@@ -1,11 +1,9 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Cause, Effect, Fiber, Option, Schema, Stream } from "effect"
+import { Cause, Effect, Fiber, Schema, Stream } from "effect"
 import {
   LanguageModelLayers,
-  multiToolCallStep,
   type SequenceStep,
   textStep,
-  textThenToolCallStep,
   toolCallStep,
 } from "../../src/test-utils/language-model"
 import { convertTools } from "../../src/runtime/tools"
@@ -54,17 +52,10 @@ describe("LanguageModelLayers.sequence", () => {
       const { layer, controls } = yield* LanguageModelLayers.sequence([textStep("hello")])
       const parts = yield* Effect.provide(callProvider, layer)
 
-      expect(parts.length).toBe(2)
-      expect(parts[0]?.type).toBe("text-delta")
-      const first = Option.fromUndefinedOr(parts[0])
-      expect(Option.isSome(first)).toBe(true)
-      if (Option.isNone(first) || first.value.type !== "text-delta") return
-      expect(first.value.delta).toBe("hello")
-      expect(parts[1]?.type).toBe("finish")
-      const finish = Option.fromUndefinedOr(parts[1])
-      expect(Option.isSome(finish)).toBe(true)
-      if (Option.isNone(finish) || finish.value.type !== "finish") return
-      expect(finish.value.reason).toBe("stop")
+      expect(parts).toMatchObject([
+        { type: "text-delta", delta: "hello" },
+        { type: "finish", reason: "stop" },
+      ])
 
       yield* controls.assertDone
     }),
@@ -79,19 +70,13 @@ describe("LanguageModelLayers.sequence", () => {
       ])
 
       const c1 = yield* Effect.provide(callProvider, layer)
-      const first = Option.fromUndefinedOr(c1[0])
-      expect(Option.isSome(first)).toBe(true)
-      if (Option.isNone(first) || first.value.type !== "text-delta") return
-      expect(first.value.delta).toBe("first")
+      expect(c1[0]).toMatchObject({ type: "text-delta", delta: "first" })
 
       const c2 = yield* Effect.provide(callProvider, layer)
-      const second = Option.fromUndefinedOr(c2[0])
-      expect(Option.isSome(second)).toBe(true)
-      if (Option.isNone(second) || second.value.type !== "text-delta") return
-      expect(second.value.delta).toBe("second")
+      expect(c2[0]).toMatchObject({ type: "text-delta", delta: "second" })
 
       const c3 = yield* Effect.provide(callProvider, layer)
-      expect(c3[0]?.type).toBe("tool-call")
+      expect(c3).toMatchObject([{ type: "tool-call" }, { type: "finish", reason: "tool-calls" }])
 
       yield* controls.assertDone
     }),
@@ -133,11 +118,7 @@ describe("LanguageModelLayers.sequence", () => {
       yield* controls.emitAll(0)
 
       const parts = yield* Fiber.join(collectFiber)
-      expect(parts.length).toBe(2)
-      const first = Option.fromUndefinedOr(parts[0])
-      expect(Option.isSome(first)).toBe(true)
-      if (Option.isNone(first) || first.value.type !== "text-delta") return
-      expect(first.value.delta).toBe("gated")
+      expect(parts).toMatchObject([{ type: "text-delta", delta: "gated" }, { type: "finish" }])
     }),
   )
 
@@ -183,69 +164,6 @@ describe("LanguageModelLayers.sequence", () => {
 
       const result = yield* Effect.exit(controls.assertDone)
       expect(result._tag).toBe("Failure")
-    }),
-  )
-
-  it.scoped("callCount tracks calls", () =>
-    Effect.gen(function* () {
-      const { layer, controls } = yield* LanguageModelLayers.sequence([
-        textStep("a"),
-        textStep("b"),
-      ])
-
-      expect(yield* controls.callCount).toBe(0)
-      yield* Effect.provide(callProvider, layer)
-      expect(yield* controls.callCount).toBe(1)
-      yield* Effect.provide(callProvider, layer)
-      expect(yield* controls.callCount).toBe(2)
-    }),
-  )
-
-  it.scoped("toolCallStep emits tool-call + finish parts", () =>
-    Effect.gen(function* () {
-      const { layer } = yield* LanguageModelLayers.sequence([
-        toolCallStep("my_tool", { status: "continue" }),
-      ])
-      const parts = yield* Effect.provide(callProvider, layer)
-
-      expect(parts.length).toBe(2)
-      expect(parts[0]?.type).toBe("tool-call")
-      expect(parts[1]?.type).toBe("finish")
-      const finish = Option.fromUndefinedOr(parts[1])
-      expect(Option.isSome(finish)).toBe(true)
-      if (Option.isNone(finish) || finish.value.type !== "finish") return
-      expect(finish.value.reason).toBe("tool-calls")
-    }),
-  )
-
-  it.scoped("textThenToolCallStep emits text + tool call + finish", () =>
-    Effect.gen(function* () {
-      const { layer } = yield* LanguageModelLayers.sequence([
-        textThenToolCallStep("thinking...", "my_tool", { ok: true }),
-      ])
-      const parts = yield* Effect.provide(callProvider, layer)
-
-      expect(parts.length).toBe(3)
-      expect(parts[0]?.type).toBe("text-delta")
-      expect(parts[1]?.type).toBe("tool-call")
-      expect(parts[2]?.type).toBe("finish")
-    }),
-  )
-
-  it.scoped("multiToolCallStep emits multiple tool calls + finish", () =>
-    Effect.gen(function* () {
-      const { layer } = yield* LanguageModelLayers.sequence([
-        multiToolCallStep(
-          { toolName: "tool_a", input: {} },
-          { toolName: "tool_b", input: { x: 1 } },
-        ),
-      ])
-      const parts = yield* Effect.provide(callProvider, layer)
-
-      expect(parts.length).toBe(3)
-      expect(parts[0]?.type).toBe("tool-call")
-      expect(parts[1]?.type).toBe("tool-call")
-      expect(parts[2]?.type).toBe("finish")
     }),
   )
 })

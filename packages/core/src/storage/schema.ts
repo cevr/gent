@@ -1,10 +1,10 @@
 import { Effect, Layer, Option, Predicate, Schema } from "effect"
-import * as Prompt from "effect/ai/Prompt"
 import {
   Branch,
   decodeDateFromMillis,
   Message,
   MessageMetadata,
+  MessagePart,
   Session,
   SessionAdmission,
 } from "../domain/message.js"
@@ -13,22 +13,13 @@ import { isReasoningEffort, ModelId } from "../domain/agent.js"
 import { BranchId, MessageId, SessionId } from "../domain/ids.js"
 import { Migrator, SqlClient } from "effect/sql"
 import { SqliteMigrator } from "@effect/sql-sqlite-bun"
-import { StorageError } from "../domain/errors.js"
+import { storageError, StorageError } from "../domain/errors.js"
 import { DefaultWorkspaceId } from "../server/workspace-rpc.js"
 
-// ── sqlite/rows ─────────────────────────────────────────────────────────────
+// ── stored rows ─────────────────────────────────────────────────────────────
 
 // Schema decoders - Effect-based (no sync throws)
-const StoredPromptPart = Schema.Union([
-  Prompt.TextPart,
-  Prompt.FilePart,
-  Prompt.ToolCallPart,
-  Prompt.ToolResultPart,
-  Prompt.ReasoningPart,
-  Prompt.ToolApprovalRequestPart,
-  Prompt.ToolApprovalResponsePart,
-])
-const StoredPromptPartJson = Schema.fromJsonString(StoredPromptPart)
+const StoredPromptPartJson = Schema.fromJsonString(MessagePart)
 export const decodeStoredPromptPart = Schema.decodeUnknownEffect(StoredPromptPartJson)
 const encodeStoredPromptPart = Schema.encodeEffect(StoredPromptPartJson)
 const EventJson = Schema.fromJsonString(Schema.Unknown)
@@ -231,8 +222,6 @@ export const groupMessageChunkRows = (rows: ReadonlyArray<MessageChunkRow>) => {
 }
 
 // ── schema ──────────────────────────────────────────────────────────────────
-
-const isStorageError = Schema.is(StorageError)
 
 const configureSqliteConnection = Effect.fn("Storage.configureSqliteConnection")(function* () {
   const sql = yield* SqlClient.SqlClient
@@ -801,26 +790,17 @@ const turnRecordsMigration = Effect.gen(function* () {
     .pipe(ignoreAlreadyAppliedSqliteError("018_turn_records", "CREATE TABLE turn_records"))
 })
 
-// oxlint-disable-next-line effect/noUnknownParameters -- SQLite migrations expose unknown failure causes.
-const wrapMigrationError = (error: unknown): StorageError =>
-  new StorageError({ message: "Storage migration failed", cause: error })
-
-// oxlint-disable-next-line effect/noUnknownParameters -- SQLite pragmas expose unknown failure causes.
-const wrapPragmaError = (error: unknown): StorageError =>
-  new StorageError({ message: "Storage pragma initialization failed", cause: error })
-
 const StoragePragmaLive: Layer.Layer<never, StorageError, SqlClient.SqlClient> =
-  Layer.effectDiscard(configureSqliteConnection().pipe(Effect.mapError(wrapPragmaError)))
+  Layer.effectDiscard(
+    configureSqliteConnection().pipe(
+      Effect.mapError(storageError("Storage pragma initialization failed")),
+    ),
+  )
 
 const StorageCompatibilityLive: Layer.Layer<never, StorageError, SqlClient.SqlClient> =
   Layer.effectDiscard(
     assertMigrationStateCompatible().pipe(
-      Effect.mapError((error) => {
-        if (isStorageError(error)) {
-          return error
-        }
-        return new StorageError({ message: "Storage compatibility check failed", cause: error })
-      }),
+      Effect.mapError(storageError("Storage compatibility check failed")),
     ),
   )
 
@@ -862,7 +842,9 @@ const makeStorageMigratorLive = (
     }),
     table: "gent_storage_migrations",
   }).pipe(
-    Layer.catch((error) => Layer.effectDiscard(Effect.fail(wrapMigrationError(error)))),
+    Layer.catch((error) =>
+      Layer.effectDiscard(Effect.fail(storageError("Storage migration failed")(error))),
+    ),
     Layer.provideMerge(StorageCompatibilityLive),
     Layer.provideMerge(StoragePragmaLive),
   )
@@ -918,12 +900,7 @@ const sessionThreadMigration = Effect.gen(function* () {
 const StorageIntegrityLive: Layer.Layer<never, StorageError, SqlClient.SqlClient> =
   Layer.effectDiscard(
     assertForeignKeyIntegrity().pipe(
-      Effect.mapError((error) => {
-        if (isStorageError(error)) {
-          return error
-        }
-        return new StorageError({ message: "Storage integrity check failed", cause: error })
-      }),
+      Effect.mapError(storageError("Storage integrity check failed")),
     ),
   )
 

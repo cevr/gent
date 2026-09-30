@@ -2788,9 +2788,9 @@ describe("mcp tools in the cell", () => {
           },
         })
         // Two servers listed at setup and dialed again for their calls: four dials.
-        // This harness runs the extension's setup twice, and each setup walks once.
+        // The extension's setup runs once for the session's cwd, and walks once.
         expect(yield* fixture.starts).toBe(4)
-        expect(walks.count).toBe(2)
+        expect(walks.count).toBe(1)
       }).pipe(
         Effect.timeout("25 seconds"),
         Effect.provide(Layer.merge(platformLayer, ConfigProvider.layer(counting))),

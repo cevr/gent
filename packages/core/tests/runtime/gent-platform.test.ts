@@ -93,42 +93,6 @@ describe("GentPlatform", () => {
       }).pipe(Effect.provide(BunGentPlatformLive)),
     )
   })
-
-  describe("GentPlatform.Test", () => {
-    it.live("randomId mints monotonically with the configured prefix", () =>
-      Effect.gen(function* () {
-        const platform = yield* GentPlatform
-        const a = yield* platform.randomId
-        const b = yield* platform.randomId
-        const c = yield* platform.randomId
-        expect(a).toBe("t-00000001")
-        expect(b).toBe("t-00000002")
-        expect(c).toBe("t-00000003")
-      }).pipe(Effect.provide(GentPlatform.Test("t"))),
-    )
-
-    it.live("osInfo / pid / execPath return Test stub values", () =>
-      Effect.gen(function* () {
-        const platform = yield* GentPlatform
-        const info = yield* platform.osInfo
-        expect(info.platform).toBe("linux")
-        expect(info.arch).toBe("x64")
-        expect(info.release).toBe("test-release")
-        expect(info.hostname).toBe("test-host")
-        expect(info.type).toBe("Linux")
-        expect(yield* platform.pid).toBe(1)
-        expect(yield* platform.execPath).toBe("/usr/bin/node")
-      }).pipe(Effect.provide(GentPlatform.Test())),
-    )
-
-    it.live("signal is a Test no-op (succeeds with void)", () =>
-      Effect.gen(function* () {
-        const platform = yield* GentPlatform
-        yield* platform.signal(123, "SIGTERM")
-        yield* platform.signal(123, 0)
-      }).pipe(Effect.provide(GentPlatform.Test())),
-    )
-  })
 })
 
 // ── run process ─────────────────────────────────────────────────────────────

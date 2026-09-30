@@ -113,8 +113,26 @@ export const makeBranchStateStore = <A, E>(input: BranchStateStoreInput<A, E>) =
         return Effect.succeed({ next, result: next })
       })
 
-    return { read, modify, update }
+    /** Removes the branch's file under the lock, without reading it: a corrupt file goes too. */
+    const remove = Effect.fn(`${input.name}.remove`)(function* () {
+      const ctx = yield* ExtensionContext
+      const fs = yield* FileSystem.FileSystem
+      const { file } = yield* location
+      yield* ctx.FileLock.withLock(file, fs.remove(file, { force: true }))
+    })
+
+    return { read, modify, update, remove }
   }
 
-  return { ...bind(Option.none()), at: (branchId: BranchId) => bind(Option.some(branchId)) }
+  /** The files of a deleted session's branches go with it (`sessionDeleted`). */
+  const removeBranches = (branchIds: ReadonlyArray<BranchId>) =>
+    Effect.forEach(branchIds, (branchId) => bind(Option.some(branchId)).remove(), {
+      discard: true,
+    })
+
+  return {
+    ...bind(Option.none()),
+    at: (branchId: BranchId) => bind(Option.some(branchId)),
+    removeBranches,
+  }
 }

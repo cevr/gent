@@ -88,7 +88,7 @@ describe("Interaction Request", () => {
   })
   const workspaceA = "a".repeat(64)
   const workspaceB = "b".repeat(64)
-  it.live("present persists request to storage and throws InteractionPendingError", () =>
+  it.live("an ask parks its call and stores the open request", () =>
     Effect.gen(function* () {
       const is = yield* InteractionStorage
       const storageCallbacks = callbacksFor(is)
@@ -125,7 +125,7 @@ describe("Interaction Request", () => {
       expect(pending[0]!.status).toBe("pending")
     }).pipe(Effect.provide(storageLive)),
   )
-  it.live("respond marks request as resolved in storage", () =>
+  it.live("a request resolved in storage leaves the open list", () =>
     Effect.gen(function* () {
       const is = yield* InteractionStorage
       // Manually insert a pending record
@@ -273,49 +273,51 @@ describe("Interaction Request", () => {
       expect(legacyRow?.owner).toBeUndefined()
     }).pipe(Effect.provide(storageLive)),
   )
-  it.live("service fails closed when durable pending singleton rejects a second request", () =>
-    Effect.gen(function* () {
-      const is = yield* InteractionStorage
-      const sessionId = SessionId.make("s-service-singleton")
-      const branchId = BranchId.make("b-service-singleton")
-      const storageCallbacks = callbacksFor(is)
-      yield* ensureStorageParents({ sessionId, branchId })
-      yield* is.persist({
-        requestId: InteractionRequestId.make("req-existing-pending"),
-        sessionId,
-        branchId,
-        paramsJson: "{}",
-        status: "pending",
-        createdAt: 1,
-      })
+  it.live(
+    "a second open request on one branch is refused and never shown; the stored one stays",
+    () =>
+      Effect.gen(function* () {
+        const is = yield* InteractionStorage
+        const sessionId = SessionId.make("s-service-singleton")
+        const branchId = BranchId.make("b-service-singleton")
+        const storageCallbacks = callbacksFor(is)
+        yield* ensureStorageParents({ sessionId, branchId })
+        yield* is.persist({
+          requestId: InteractionRequestId.make("req-existing-pending"),
+          sessionId,
+          branchId,
+          paramsJson: "{}",
+          status: "pending",
+          createdAt: 1,
+        })
 
-      const presented: InteractionRequestId[] = []
-      const interaction = yield* makeInteractionService({
-        onPresent: (requestId) =>
-          Effect.sync(() => {
-            presented.push(requestId)
-          }),
-        onDismiss: () => Effect.void,
-        storage: storageCallbacks,
-      })
-      const exit = yield* Effect.exit(
-        asCall(interaction, { sessionId, branchId })(
-          interaction.present({ text: "second" }, { sessionId, branchId }),
-        ),
-      )
-      expect(exit._tag).toBe("Failure")
-      if (exit._tag === "Failure") {
-        expect(Cause.pretty(exit.cause)).toContain("Failed to persist interaction request")
-      }
-      expect(presented).toEqual([])
-      expect(yield* shownRequest(interaction, { sessionId, branchId })).toEqual(Option.none())
-      const pending = yield* is.listOpen({ sessionId, branchId })
-      expect(pending.map((record) => record.requestId)).toEqual([
-        InteractionRequestId.make("req-existing-pending"),
-      ])
-    }).pipe(Effect.provide(storageLive)),
+        const presented: InteractionRequestId[] = []
+        const interaction = yield* makeInteractionService({
+          onPresent: (requestId) =>
+            Effect.sync(() => {
+              presented.push(requestId)
+            }),
+          onDismiss: () => Effect.void,
+          storage: storageCallbacks,
+        })
+        const exit = yield* Effect.exit(
+          asCall(interaction, { sessionId, branchId })(
+            interaction.present({ text: "second" }, { sessionId, branchId }),
+          ),
+        )
+        expect(exit._tag).toBe("Failure")
+        if (exit._tag === "Failure") {
+          expect(Cause.pretty(exit.cause)).toContain("Failed to persist interaction request")
+        }
+        expect(presented).toEqual([])
+        expect(yield* shownRequest(interaction, { sessionId, branchId })).toEqual(Option.none())
+        const pending = yield* is.listOpen({ sessionId, branchId })
+        expect(pending.map((record) => record.requestId)).toEqual([
+          InteractionRequestId.make("req-existing-pending"),
+        ])
+      }).pipe(Effect.provide(storageLive)),
   )
-  it.live("storeResolution + subsequent present returns stored value without throwing", () =>
+  it.live("an answer stored after the ask is returned when the call asks again", () =>
     Effect.gen(function* () {
       const storageCallbacks = callbacksFor(yield* InteractionStorage)
       const interaction = yield* makeInteractionService({
@@ -347,7 +349,7 @@ describe("Interaction Request", () => {
       expect(result.approved).toBe(true)
     }).pipe(Effect.provide(storageLive)),
   )
-  it.live("rehydrate + storeResolution + present returns stored value (restart-resume)", () =>
+  it.live("after a restart, an answer to a reloaded request reaches the call that asks again", () =>
     Effect.gen(function* () {
       // Simulate a fresh service after restart — no in-memory state
       const storageCallbacks = callbacksFor(yield* InteractionStorage)
@@ -381,7 +383,7 @@ describe("Interaction Request", () => {
       expect(result.notes).toBe("yes")
     }).pipe(Effect.provide(storageLive)),
   )
-  it.live("cold-resume with InteractionStorage: persist → new service → rehydrate → resolve", () =>
+  it.live("a request stored before a restart is answered by the new service and closes", () =>
     Effect.gen(function* () {
       const is = yield* InteractionStorage
       const storageCallbacks = callbacksFor(is)
@@ -629,6 +631,32 @@ describe("Interaction Request", () => {
       expect(error._tag).toBe("InteractionOwnerMissingError")
       expect(yield* is.listOpen(branch)).toEqual([])
     }).pipe(Effect.provide(storageLive)),
+  )
+
+  it.live("an inner ask whose dispatching call runs on another branch has no owner here", () =>
+    Effect.gen(function* () {
+      const is = yield* InteractionStorage
+      const interaction = yield* makeInteractionService({
+        onPresent: () => Effect.void,
+        onDismiss: () => Effect.void,
+        storage: callbacksFor(is),
+      })
+      const branch = { sessionId: SessionId.make("s-other"), branchId: BranchId.make("b-asked") }
+      const elsewhere = { ...branch, branchId: BranchId.make("b-dispatcher") }
+      yield* ensureStorageParents(branch)
+      const error = yield* Effect.flip(
+        interaction.present({ text: "Approve?" }, branch).pipe(
+          Effect.provideService(CurrentInteractionOwner, {
+            ...elsewhere,
+            persist: (record) => persistInteraction(is, record),
+            resumeRequestId: Effect.succeedNone,
+            take: () => Effect.void,
+          }),
+        ),
+      )
+      expect(error._tag).toBe("InteractionOwnerMissingError")
+      expect(yield* is.listOpen(branch)).toEqual([])
+    }).pipe(Effect.provide(storageLive), Effect.timeout("4 seconds")),
   )
 
   it.live("a call whose kept answer no longer fits asks again in its own queued place", () =>

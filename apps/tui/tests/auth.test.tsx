@@ -276,6 +276,30 @@ describe("Auth route", () => {
       setup.renderer.destroy()
     }),
   )
+  it.live("reads the sign-in methods of the session's own drivers", () =>
+    Effect.gen(function* () {
+      const methodCalls: Array<{ sessionId?: string } | void> = []
+      const client = createMockClient({
+        auth: {
+          listProviders: () => Effect.succeed([]),
+          listMethods: (input: { sessionId?: string } | void) => {
+            methodCalls.push(input)
+            return Effect.succeed({})
+          },
+        },
+      })
+      const runtime = createMockRuntime()
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <Auth sessionId={activeSessionId} />, {
+          client,
+          runtime,
+          initialAgent: AgentName.make("helper:google"),
+        }),
+      )
+      expect(methodCalls).toEqual([{ sessionId: activeSessionId }])
+      setup.renderer.destroy()
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   it.live("ignores stale auth loads after the selected agent changes", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()

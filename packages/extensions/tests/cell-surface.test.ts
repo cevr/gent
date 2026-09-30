@@ -751,7 +751,6 @@ it.scopedLive("rejects cell dispatch without a branch owner", () =>
     Effect.provide(
       createE2ELayer({
         agents: [],
-        extensionInputs: [],
         branchTools: CellBranchTools,
         extensions: [],
         providerLayer: LanguageModelLayers.debug(),
@@ -991,7 +990,6 @@ describe("branch cell lifetime", () => {
             const { client, sessionId, branchId } = yield* createRpcHarness({
               extensions,
               providerLayer,
-              extensionInputs: [],
               branchTools: CellBranchTools,
               agents: [new AgentDefinition({ name: DEFAULT_AGENT_NAME, deniedTools: ["hidden"] })],
             })
@@ -1242,7 +1240,6 @@ it.scopedLive(
             extensions,
             providerLayer,
             agents: [new AgentDefinition({ name: DEFAULT_AGENT_NAME, deniedTools })],
-            extensionInputs: [],
             branchTools: CellBranchTools,
             durableApproval: true,
           }),

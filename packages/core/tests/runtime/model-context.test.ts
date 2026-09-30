@@ -1110,14 +1110,23 @@ describe("provider overflow recovery", () => {
 
 // ── cold prompt cache ───────────────────────────────────────────────────────
 
-/** A 1M window whose provider keeps a prompt cached for `promptCacheTtlMs`, when it says. */
-const coldCacheModel = (promptCacheTtlMs: Option.Option<number>) =>
+/**
+ * A 1M window whose provider keeps a prompt cached for `promptCacheTtlMs`, when
+ * it says, and a child session's prompt for `childPromptCacheTtlMs`.
+ */
+const coldCacheModel = (
+  promptCacheTtlMs: Option.Option<number>,
+  childPromptCacheTtlMs: Option.Option<number>,
+) =>
   Model.make({
     id: ModelId.make("cold-cache/wide-window"),
     name: "Wide window, cached prompts",
     provider: ProviderId.make("cold-cache"),
     contextLength: 1_000_000,
-    ...omitUndefined({ promptCacheTtlMs: Option.getOrUndefined(promptCacheTtlMs) }),
+    ...omitUndefined({
+      promptCacheTtlMs: Option.getOrUndefined(promptCacheTtlMs),
+      childPromptCacheTtlMs: Option.getOrUndefined(childPromptCacheTtlMs),
+    }),
   })
 const FIRST_PROMPT_MARK = "first-prompt-text"
 
@@ -1173,7 +1182,8 @@ const measuredReply = (text: string, inputTokens: number): SequenceStep => ({
  * after its request started. With `firstCallRateLimitedMs`, the first call
  * is refused with that retry delay and the retry streams the first reply.
  * With `switchModel`, the session moves to another model with the same
- * lifetime before the second turn.
+ * lifetime before the second turn. With `spawned`, the turns run in a child
+ * session of the harness session, whose lifetime is `childPromptCacheTtlMs`.
  */
 const runColdCacheTurns = (params: {
   readonly promptCacheTtlMs: Option.Option<number>
@@ -1183,6 +1193,8 @@ const runColdCacheTurns = (params: {
   readonly firstReplyHoldMs?: number
   readonly firstCallRateLimitedMs?: number
   readonly switchModel?: boolean
+  readonly childPromptCacheTtlMs?: number
+  readonly spawned?: boolean
 }) =>
   Effect.gen(function* () {
     const hold = Option.fromUndefinedOr(params.firstReplyHoldMs)
@@ -1236,14 +1248,26 @@ const runColdCacheTurns = (params: {
       onSome: () => Ref.get(played),
     })
     const compactor = [rangeCompactorExtension].filter(() => params.compactor)
-    const model = coldCacheModel(params.promptCacheTtlMs)
+    const model = coldCacheModel(
+      params.promptCacheTtlMs,
+      Option.fromUndefinedOr(params.childPromptCacheTtlMs),
+    )
     const otherModel = Model.make({ ...model, id: ModelId.make("cold-cache/other-window") })
-    const { client, sessionId, branchId } = yield* createRpcHarness({
+    const harness = yield* createRpcHarness({
       providerLayer,
       agents: [AgentDefinition.make({ name: DEFAULT_AGENT_NAME, model: model.id })],
       extensionInputs: [waitToolExtension, ...compactor],
       extraLayers: [ModelRegistry.Test([model, otherModel])],
     })
+    const { client } = harness
+    let target = { sessionId: harness.sessionId, branchId: harness.branchId }
+    if (params.spawned === true) {
+      target = yield* client.session.create({
+        parentSessionId: harness.sessionId,
+        parentBranchId: harness.branchId,
+      })
+    }
+    const { sessionId, branchId } = target
     for (const content of [`${FIRST_PROMPT_MARK} one`, "second prompt"]) {
       if (content === "second prompt" && params.switchModel === true) {
         yield* client.session.updateSettings({
@@ -1299,6 +1323,13 @@ const handoffMarkers = (durable: ReadonlyArray<Message>) =>
     ),
   )
 
+/** What each step that reported usage says of its session: a spawned child or not. */
+const settledStepsChild = (events: ReadonlyArray<AgentEvent>) =>
+  events.flatMap((event) => {
+    if (event._tag !== "StreamEnded" || Predicate.isUndefined(event.usage)) return []
+    return [event.child]
+  })
+
 const secondProjection = (events: ReadonlyArray<AgentEvent>) =>
   events.filter((event) => event._tag === "ModelContextProjected").at(1)
 
@@ -1340,6 +1371,43 @@ describe("cold prompt cache", () => {
       expect(handoffMarkers(result.durable)).toHaveLength(0)
       const projected = secondProjection(result.events)
       expect(projected?._tag === "ModelContextProjected" && projected.compacted).toBe(false)
+    }),
+  )
+
+  it.live("a child session's large window is cold past the child lifetime, not the root's", () =>
+    Effect.gen(function* () {
+      // The catalog keeps a root's prompt an hour and a child's not at all
+      // (a stand-in for a child idle past its 5 minutes).
+      const result = yield* runColdCacheTurns({
+        promptCacheTtlMs: Option.some(60 * 60_000),
+        childPromptCacheTtlMs: 0,
+        spawned: true,
+        firstInputTokens: 100_000,
+        compactor: true,
+        steps: [textStep("the summary of the first turn"), textStep("second reply")],
+      })
+
+      expect(result.calls).toBe(3)
+      expect(result.requests[1]).toContain("summarize")
+      expect(handoffMarkers(result.durable)).toHaveLength(1)
+      // Each step's end says it ran in a child, so a client reads the child lifetime too.
+      expect(settledStepsChild(result.events)).toEqual([true, true])
+    }),
+  )
+
+  it.live("a root session keeps the root lifetime when the child lifetime has lapsed", () =>
+    Effect.gen(function* () {
+      const result = yield* runColdCacheTurns({
+        promptCacheTtlMs: Option.some(60 * 60_000),
+        childPromptCacheTtlMs: 0,
+        firstInputTokens: 100_000,
+        compactor: true,
+        steps: [textStep("second reply")],
+      })
+
+      expect(result.calls).toBe(2)
+      expect(handoffMarkers(result.durable)).toHaveLength(0)
+      expect(settledStepsChild(result.events)).toEqual([false, false])
     }),
   )
 
@@ -1711,23 +1779,6 @@ describe("model context window", () => {
 
 // ── token estimation ────────────────────────────────────────────────────────
 
-describe("Token Estimation", () => {
-  test("estimateTokens calculates token count", () => {
-    const messages = [
-      Message.cases.regular.make({
-        id: MessageId.make("m1"),
-        sessionId: SessionId.make("s"),
-        branchId: BranchId.make("b"),
-        role: "user",
-        parts: [Prompt.textPart({ text: "Hello world" })], // 11 chars
-        createdAt: dateFromMillis(1_767_225_600_000),
-      }),
-    ]
-
-    const tokens = estimateTokens(messages)
-    expect(tokens).toBe(3) // ceil(11/4) = 3
-  })
-})
 describe("estimateTokens", () => {
   test("text parts", () => {
     const messages = [
@@ -2184,6 +2235,73 @@ describe("turn window projection", () => {
       expect(notices[0]?.error).toContain("Context compaction failed (SummaryGenerationFailed)")
       expect(notices[0]?.error).toContain(`continuing with ${omitted} older messages omitted`)
       expect(notices[0]?.notice).toBe(true)
+    }),
+  )
+
+  it.scopedLive("a failing compactor on a turn over budget still names the failure", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("degrade-turn-session")
+      const branchId = BranchId.make("degrade-turn-branch")
+      const message = (id: string, role: "user" | "assistant", text: string, at: number) =>
+        Message.cases.regular.make({
+          id: MessageId.make(id),
+          sessionId,
+          branchId,
+          role,
+          parts: [Prompt.textPart({ text })],
+          createdAt: dateFromMillis(at),
+        })
+      // The newest turn alone is over the window: its first step is huge.
+      const messages = [
+        message("old-user", "user", "earlier question", 1_000),
+        message("old-answer", "assistant", "earlier answer", 1_001),
+        message("turn-user", "user", "continue", 1_002),
+        message("turn-step-1", "assistant", `step ${"x".repeat(400_000)}`, 1_003),
+        message("turn-step-2", "assistant", "next step", 1_004),
+      ]
+      const budget = ModelContextBudget.make({
+        contextLimitTokens: 40_000,
+        reservedSystemTokens: 0,
+        reservedToolTokens: 0,
+        reservedOutputTokens: 4_096,
+      })
+      const failingCompactor = Layer.succeed(
+        ModelContextCompactor,
+        ModelContextCompactor.of({
+          compact: (request) =>
+            Effect.fail(
+              new ModelCompactionError({
+                modelId: request.modelId,
+                reason: "SummaryGenerationFailed",
+              }),
+            ),
+        }),
+      )
+      const publisher = yield* recordingPublisher
+
+      yield* Effect.exit(
+        projectContextWindow({
+          sessionId,
+          branchId,
+          modelId: modelIdTurnWindow,
+          messages,
+          budget,
+          directive: Option.none(),
+          measure: Option.none(),
+          overflowed: false,
+          turnStart: false,
+          promptCache: Option.none(),
+          persist: Effect.succeed,
+          summaryModel,
+        }).pipe(Effect.provide(Layer.mergeAll(failingCompactor, publisher.layer))),
+      )
+
+      const notices = (yield* Ref.get(publisher.published)).filter(
+        (event) => event._tag === "ErrorOccurred",
+      )
+      expect(notices).toHaveLength(1)
+      expect(notices[0]?.error).toContain("Context compaction failed (SummaryGenerationFailed)")
+      expect(notices[0]?.error).toContain("the window is still over budget")
     }),
   )
 })

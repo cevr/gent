@@ -10,6 +10,7 @@ import {
   type EffectiveModelDriver,
   type ModelId,
   type ModelId as ModelIdType,
+  promptCacheTtlMsFor,
   type ReasoningEffort,
   resolveAgentModel,
 } from "../domain/agent.js"
@@ -18,11 +19,13 @@ import {
   compileSharedSystemPrompt,
   compileSystemPrompt,
   dateSection,
+  fromWireToolPart,
   getToolId,
   getToolMetadata,
   type PromptSection,
   systemPromptBlocks,
   type ToolCapability,
+  toWirePrompt,
 } from "../domain/capability.js"
 import {
   assistantMessageIdForTurn,
@@ -31,6 +34,7 @@ import {
   encodeToolOutput,
   Message,
   messagePartsToolCallParts,
+  isSpawnedSession,
   normalizeResponseParts,
   projectResponsePartsToMessageParts,
   responseUsage,
@@ -80,6 +84,7 @@ import {
   credentialFailureMessage,
   isWindowFullStopReason,
   type ProviderAuthError,
+  type ProviderHints,
   ProviderStopReason,
 } from "../domain/driver.js"
 import {
@@ -119,8 +124,6 @@ import {
   attachToolBindingIdentity,
   compileToolPolicy,
   convertTools,
-  fromWireToolPart,
-  toWirePrompt,
   executeToolCalls,
   processLocalReplayBindingKey,
   processLocalReplayResultKey,
@@ -137,6 +140,7 @@ import {
 import { ConfigService, type UserConfig } from "./config.js"
 import { asAgentLoopError, type RunningState } from "../domain/agent-loop.js"
 import {
+  driverCacheWritesByLifetime,
   driverRetryPolicy,
   ModelRegistry,
   ModelResolver,
@@ -167,7 +171,7 @@ import {
 import { GentPlatform } from "./gent-platform.js"
 import type { LoopInbox } from "./agent-loop.js"
 
-// ── agent-loop.utils ────────────────────────────────────────────────────────
+// ── prompt sections ─────────────────────────────────────────────────────────
 
 /**
  * Build the per-turn prompt sections (base + agent addendum + tool list +
@@ -271,7 +275,7 @@ const finalStepMessageIdForTurn = (messageId: MessageId): MessageId =>
 
 const toolCallsFromMessage = (message: Message) => messagePartsToolCallParts(message.parts)
 
-// ── agent-loop.turn-profile ─────────────────────────────────────────────────
+// ── turn profile ────────────────────────────────────────────────────────────
 
 export interface AgentLoopTurnProfile {
   readonly turnBaseSections: ReadonlyArray<PromptSection>
@@ -675,7 +679,7 @@ export const collectFailedModelTurnResponse = (params: {
 
 // ── turn-ledger ─────────────────────────────────────────────────────────────
 
-/**
+/*
  * What the turn now running has spent.
  *
  * A turn's token totals, tool-call count and step count accumulate across its
@@ -691,8 +695,6 @@ export const collectFailedModelTurnResponse = (params: {
  * `beginTurn` is the reset, and a writer says what its step observed rather
  * than how to merge it; the fold (which totals to add, which counts make the
  * total unreportable) lives here.
- *
- * @module
  */
 
 /**
@@ -1196,6 +1198,8 @@ interface ResolvedTurnContext {
   hostToolBindings: ReadonlyMap<string, ResolvedToolCapability>
   /** Sent after the conversation, never in `systemPrompt`: see `toPrompt`. */
   notices: ReadonlyArray<ExtensionTurnNotice>
+  /** The session is a spawned child (`isSpawnedSession`): its requests say so to the driver. */
+  child: boolean
 }
 
 const mergeSystemPromptAddendum = (
@@ -1445,6 +1449,7 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
     temperature: dispatchAgent.temperature,
     modelDriver: route.modelDriver,
     notices: projEval.notices,
+    child: Option.exists(session, isSpawnedSession),
   }
 })
 
@@ -1513,11 +1518,6 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   overflowed: boolean
 }) {
   const extensionRegistry = yield* ExtensionRegistry
-  const publishEventOrDie = (event: ErrorOccurred | ProviderRetrying) =>
-    Effect.gen(function* () {
-      const eventStore = yield* EventStore
-      yield* eventStore.publish(event).pipe(Effect.orDie)
-    })
   const { resolved } = params
   const operations = yield* SessionOperationStorage
   // None: the agent sets no ceiling. Some(false): the turn spent it.
@@ -1599,7 +1599,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   const promptCache = Option.map(
     Option.all([
       Option.filter(params.lastCallAtMillis, () => sameModel),
-      Option.fromUndefinedOr(modelOption.value.promptCacheTtlMs),
+      promptCacheTtlMsFor(modelOption.value, resolved.child),
     ]),
     ([lastCallAtMillis, ttlMs]): PromptCache => ({ lastCallAtMillis, ttlMs }),
   )
@@ -1624,18 +1624,20 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
     reservedToolTokens: estimateToolSchemaTokens(resolved.tools),
     reservedOutputTokens,
   })
+  const turnHints = {
+    temperature: resolved.temperature,
+    reasoning: resolved.reasoning,
+    // The driver reads the catalog's word on reasoning, not the model name.
+    child: resolved.child,
+    supportsReasoning: modelOption.value.reasoning,
+    // The request asks for no more output than the budget keeps free, so
+    // input within the budget plus the reply never passes the window.
+    maxTokens: reservedOutputTokens,
+  } satisfies ProviderHints
   const modelRequest: ResolveModelRequest = {
     modelId: resolved.modelId,
-    hints: {
-      temperature: resolved.temperature,
-      reasoning: resolved.reasoning,
-      cacheKey: params.sessionId,
-      // The driver reads the catalog's word on reasoning, not the model name.
-      supportsReasoning: modelOption.value.reasoning,
-      // The request asks for no more output than the budget keeps free, so
-      // input within the budget plus the reply never passes the window.
-      maxTokens: reservedOutputTokens,
-    },
+    // The session is the cache key: the next step reads this step's prefix.
+    hints: { ...turnHints, cacheKey: params.sessionId },
     driverId: Option.getOrUndefined(driverId),
   }
   const eventStore = yield* EventStore
@@ -1670,11 +1672,12 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
     persist: persistDurableMessage,
     // The summary is plain text under a small output cap. Reasoning tokens
     // count against that cap on some providers, so the summary asks for none
-    // and never inherits the turn's effort.
+    // and never inherits the turn's effort. Its prompt is unique, so it names
+    // no cache key: nothing would read its cache entry back.
     summaryModel: (maxTokens) =>
       resolveAdmittedModel({
         ...modelRequest,
-        hints: { ...modelRequest.hints, maxTokens, reasoning: "none" },
+        hints: { ...turnHints, maxTokens, reasoning: "none" },
       }).pipe(Effect.tap(() => Ref.set(summaryAdmitted, true))),
   })
 
@@ -2554,10 +2557,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         yield* scope.turnLedger.noteCompaction(source.compaction.value.costUsd)
       yield* scope.turnLedger.noteNotices(params.resolved.notices)
 
-      const eventStore = yield* EventStore
-      const publishEventOrDie = (event: StreamStarted | StreamEnded) =>
-        eventStore.publish(event).pipe(Effect.orDie)
-
       yield* publishEventOrDie(
         StreamStarted.make({
           sessionId: scope.sessionId,
@@ -2596,11 +2595,25 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       // A settled step: cost frozen into the boundary event, metrics folded,
       // parts persisted with their bindings.
       const settleStep = Effect.gen(function* () {
+        // The driver splits the cache writes by lifetime when their rates differ.
+        const finishMetadata = collected.responseParts
+          .filter((part): part is Response.FinishPart => part.type === "finish")
+          .reduce<Response.ProviderMetadata>(
+            (merged, part) => ({ ...merged, ...part.metadata }),
+            {},
+          )
+        const cacheWritesByLifetime = yield* driverCacheWritesByLifetime(
+          params.resolved.modelDriver.driverId,
+          finishMetadata,
+        )
         const usage = Option.fromUndefinedOr(collected.messageProjection.usage)
         // Priced by the catalog id, the same one the context window reads: a
         // driver override routes `provider/model` to `driver/model`.
         const pricedModel = params.resolved.modelDriver.contextModelId
-        const streamEndedCost = yield* computeStreamEndedCost({ modelId: pricedModel, usage })
+        const streamEndedCost = yield* computeStreamEndedCost({
+          modelId: pricedModel,
+          usage: Option.map(usage, (counts) => ({ ...counts, cacheWritesByLifetime })),
+        })
         yield* publishEventOrDie(
           StreamEnded.make({
             messageId: params.messageId,
@@ -2612,6 +2625,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             model: params.resolved.modelId,
             costUsd: Option.getOrUndefined(streamEndedCost),
             pricedModel,
+            child: params.resolved.child,
             outcome: outcome._tag,
           }),
         )
@@ -2919,7 +2933,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         )
 
     /** The turn context for a running turn: agent, prompt, model, and bindings. */
-    const resolveForState = (state: RunningState, turnProfile: AgentLoopTurnProfile) =>
+    const resolveForState = (turnProfile: AgentLoopTurnProfile) =>
       resolveTurnContext({
         branchId: scope.branchId,
         sessionId: scope.sessionId,
@@ -2929,7 +2943,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
 
     const resolveReplayHostBindings = Effect.fn("AgentLoop.resolveReplayHostBindings")(
       function* (params: {
-        readonly state: RunningState
         readonly turnProfile: AgentLoopTurnProfile
         readonly nativeToolCalls: ReadonlyArray<Prompt.ToolCallPart>
         readonly toolBindings: Map<string, ResolvedToolCapability>
@@ -2944,7 +2957,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           }),
         )
         if (dispatching.length === 0) return params.toolBindings
-        const resolved = yield* resolveForState(params.state, params.turnProfile)
+        const resolved = yield* resolveForState(params.turnProfile)
         // The turn's agent no longer exists: the resolve already published an
         // error that names it. A removed agent grants nothing, so its
         // dispatching calls lose their bindings and settle as failed; the next
@@ -3236,7 +3249,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         ),
       )
       const hostToolBindings = yield* resolveReplayHostBindings({
-        state: params.state,
         turnProfile: params.turnProfile,
         nativeToolCalls: nativeToolCalls.filter((toolCall) => !cutShortIds.has(toolCall.id)),
         toolBindings,
@@ -3342,7 +3354,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       /** The provider refused the last step as too long; this one hands the window off first. */
       readonly overflowed: boolean
     }) {
-      const resolvedAtBoundary = yield* resolveForState(params.state, params.turnProfile)
+      const resolvedAtBoundary = yield* resolveForState(params.turnProfile)
       // `resolveTurnContext` published `ErrorOccurred` and gave up — an unknown
       // agent, most often. The turn produced no answer, so say so rather than
       // publish a `TurnCompleted` no caller can tell from a reply.
@@ -3396,9 +3408,10 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       const maxSteps = Math.min(resolved.agent.maxSteps ?? MAX_TURN_STEPS, MAX_TURN_STEPS)
       if (params.step > maxSteps) {
         // The final step refuses its tool calls and stops, so only a resume
-        // past the budget lands here. Leaving the flags false publishes a `TurnCompleted` no caller can tell from a
-        // reply, and `apps/tui/src/headless.ts` reads exactly that flag to pick its
-        // exit code, so `gent -H` would exit 0 having printed nothing.
+        // past the budget lands here. Leaving the flags false publishes a
+        // `TurnCompleted` no caller can tell from a reply, and headless mode
+        // reads exactly that flag to pick its exit code, so `gent -H` would
+        // exit 0 having printed nothing.
         yield* Effect.logWarning("turn.max-steps-exceeded").pipe(
           Effect.annotateLogs({ step: params.step, max: maxSteps }),
         )

@@ -8,8 +8,7 @@ import {
   ReasoningEffort,
   SessionDepthLimitError,
 } from "../domain/agent.js"
-import { InvalidStateError, NotFoundError, ProviderError } from "../domain/errors.js"
-import { StorageError } from "../storage/storage.js"
+import { InvalidStateError, NotFoundError, ProviderError, StorageError } from "../domain/errors.js"
 import { EventEnvelope, EventStoreError } from "../domain/event.js"
 import {
   BranchId,
@@ -84,7 +83,7 @@ export const GentRpcError = Schema.Union([
 
 export type GentRpcError = typeof GentRpcError.Type
 
-// ── transport-contract ──────────────────────────────────────────────────────
+// ── rpc payloads ────────────────────────────────────────────────────────────
 
 export { Branch, BranchTreeNode, Session }
 
@@ -236,6 +235,16 @@ export const DeleteAuthKeyInput = Schema.Struct({
 })
 export type DeleteAuthKeyInput = typeof DeleteAuthKeyInput.Type
 
+/**
+ * The session whose profile's drivers answer; the launch profile without one.
+ * A caller may send no payload at all.
+ */
+const ListAuthMethodsInput = Schema.Union([
+  Schema.Struct({ sessionId: Schema.optional(SessionId) }),
+  Schema.Void,
+])
+export type ListAuthMethodsInput = typeof ListAuthMethodsInput.Type
+
 const ListAuthMethodsSuccess = Schema.Record(Schema.String, Schema.Array(AuthMethod))
 
 export const AuthorizeAuthInput = Schema.Struct({
@@ -339,9 +348,7 @@ export const ExtensionHealthSnapshot = Schema.Union([
 ]).pipe(Schema.toTaggedUnion("_tag"))
 export type ExtensionHealthSnapshot = Schema.Schema.Type<typeof ExtensionHealthSnapshot>
 
-// ---------------------------------------------------------------------------
-// Driver routing
-// ---------------------------------------------------------------------------
+// ── driver routing rpcs ─────────────────────────────────────────────────────
 
 /** Per-driver descriptor returned by `driver.list`. */
 export const DriverInfo = Schema.Struct({
@@ -370,9 +377,7 @@ export const ClearDriverOverrideInput = Schema.Struct({
 })
 export type ClearDriverOverrideInput = typeof ClearDriverOverrideInput.Type
 
-// ---------------------------------------------------------------------------
-// Connection lifecycle
-// ---------------------------------------------------------------------------
+// ── connection lifecycle rpcs ───────────────────────────────────────────────
 
 export class GentConnectionError extends Schema.TaggedError<GentConnectionError>()(
   "@gent/core/GentConnectionError",
@@ -397,7 +402,7 @@ export interface GentLifecycle {
   readonly waitForReady: Effect.Effect<void>
 }
 
-// ── rpcs/session ────────────────────────────────────────────────────────────
+// ── session rpcs ────────────────────────────────────────────────────────────
 
 class SessionRpcs extends RpcGroup.make(
   Rpc.make("session.create", {
@@ -502,11 +507,7 @@ class SessionRpcs extends RpcGroup.make(
   }),
 ) {}
 
-// ── rpcs/index ──────────────────────────────────────────────────────────────
-
-// ============================================================================
-// Auth
-// ============================================================================
+// ── auth rpcs ───────────────────────────────────────────────────────────────
 
 class AuthRpcs extends RpcGroup.make(
   Rpc.make("listProviders", {
@@ -523,6 +524,7 @@ class AuthRpcs extends RpcGroup.make(
     error: GentRpcError,
   }),
   Rpc.make("listMethods", {
+    payload: ListAuthMethodsInput,
     success: ListAuthMethodsSuccess,
     error: GentRpcError,
   }),
@@ -537,9 +539,7 @@ class AuthRpcs extends RpcGroup.make(
   }),
 ).prefix("auth.") {}
 
-// ============================================================================
-// Extension + driver + model
-// ============================================================================
+// ── extension, driver and model rpcs ────────────────────────────────────────
 
 class ExtensionRpcs extends RpcGroup.make(
   Rpc.make("extension.request", {
@@ -577,17 +577,13 @@ class ExtensionRpcs extends RpcGroup.make(
   }),
 ) {}
 
-// ============================================================================
-// Merged RPC Group
-// ============================================================================
+// ── rpc group ───────────────────────────────────────────────────────────────
 
 export class GentRpcs extends RpcGroup.make()
   .merge(SessionRpcs, ExtensionRpcs, AuthRpcs)
   .middleware(WorkspaceRpcMiddleware) {}
 
-// ============================================================================
-// RPC Client Types
-// ============================================================================
+// ── rpc client types ────────────────────────────────────────────────────────
 
 // A call fails with its RPC's error or the transport's. `GentConnectionError`
 // belongs to connection setup (the SDK's server and client constructors); no
@@ -601,9 +597,9 @@ export type GentClientRpcError =
   | Rpc.Error<RpcGroupNs.Rpcs<typeof GentRpcs>>
   | RpcClientError.RpcClientError
 
-// ============================================================================
-// Namespaced client — typed nested view over the flat RPC transport
-// ============================================================================
+// ── namespaced client ───────────────────────────────────────────────────────
+
+// A typed nested view over the flat RPC transport.
 
 /**
  * Extract all unique namespace prefixes from a union of dotted string keys.
@@ -640,28 +636,24 @@ const rpcKeys = (): ReadonlyArray<string> => [...GentRpcs.requests.keys()]
 /** A key the flat client answers: every request `GentRpcs` declares. */
 const isClientKey = (key: string): key is keyof GentRpcClient & string => GentRpcs.requests.has(key)
 
+/** Every `GentRpcs` key is `namespace.method`. */
 const splitRpcKey = (key: string) => {
   const separator = key.indexOf(".")
-  if (separator === -1) return { namespace: key, method: Option.none<string>() }
-  return {
-    namespace: key.slice(0, separator),
-    method: Option.some(key.slice(separator + 1)),
-  }
+  return { namespace: key.slice(0, separator), method: key.slice(separator + 1) }
 }
 
 const namespaceMethods = (namespace: string): ReadonlyArray<string> =>
-  rpcKeys().flatMap((key) => {
-    const parsed = splitRpcKey(key)
-    if (parsed.namespace === namespace && Option.isSome(parsed.method)) {
-      return [parsed.method.value]
-    }
-    return []
-  })
+  rpcKeys()
+    .map(splitRpcKey)
+    .filter((parsed) => parsed.namespace === namespace)
+    .map((parsed) => parsed.method)
+
+// oxlint-disable-next-line effect/noNullish -- A Proxy trap answers an absent property with undefined.
+const absent = undefined
 
 const makeNamespace = (flat: GentRpcClient, namespace: string, headers?: Headers.Input) => {
   const methods = namespaceMethods(namespace)
   const headersOption = Option.fromNullishOr(headers)
-  const absent = Option.getOrUndefined(Option.none())
   return new Proxy(Object.create(null), {
     get: (_target, property) => {
       const key = `${namespace}.${String(property)}`
@@ -698,16 +690,7 @@ export const makeNamespacedClient = (
   headers?: Headers.Input,
 ): GentNamespacedClient => {
   const namespaceCache = new Map<string, object>()
-  const namespaces = [
-    ...new Set(
-      rpcKeys().flatMap((key) => {
-        const { namespace } = splitRpcKey(key)
-        if (namespace === "") return []
-        return [namespace]
-      }),
-    ),
-  ]
-  const absent = Option.getOrUndefined(Option.none())
+  const namespaces = [...new Set(rpcKeys().map((key) => splitRpcKey(key).namespace))]
   return new Proxy(Object.create(null), {
     get: (_target, property) => {
       if (!Predicate.isString(property) || !namespaces.includes(property)) return absent

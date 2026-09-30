@@ -1317,7 +1317,7 @@ const measuredUnits = (
 
 // ── model-context-compactor ─────────────────────────────────────────────────
 
-/**
+/*
  * The context compaction seam.
  *
  * The loop decides when a window hands off: on overflow, when the model
@@ -1327,8 +1327,6 @@ const measuredUnits = (
  * notice the handoff marker carries. With none installed, an overflowing
  * transcript is simply truncated. The loop owns the marker, its ids, and the
  * transaction; the extension owns the summary prompt and the notice text.
- *
- * @module
  */
 
 /** Why a summary was not produced. Every failure degrades to a truncated window. */
@@ -1572,17 +1570,18 @@ export interface PromptCache {
    * a long response uses it up as idle time does.
    */
   readonly lastCallAtMillis: number
-  /** `Model.promptCacheTtlMs` of the model the turn calls. */
+  /** The lifetime `promptCacheTtlMsFor` reads for the model the turn calls and its session. */
   readonly ttlMs: number
 }
 
 /**
  * The smallest window a cold start hands off. A cold resend of N tokens is a
- * cache write, 1.25 × N on Anthropic; the summary call reads at most ~33k
- * (the compactor's 32k input cap and its prompt) and the next call resends
- * only the summary and the new prompt. That breaks even near 34k; from 64k
- * the handoff saves at least half the resend, which pays for the detail a
- * summary loses. A window whose input budget is under 128k hands off at half
+ * cache write, the catalog `cacheWrite` multiple of N (2 × N for Anthropic's
+ * one-hour cache); the summary call reads at most ~33k at the base price (the
+ * compactor's 32k input cap and its prompt; it names no cache key, so it
+ * writes no cache), and the next call resends only the summary and the new
+ * prompt. That breaks even near 28k; from 64k the handoff saves at least half
+ * the resend, which pays for the detail a summary loses. A window whose input budget is under 128k hands off at half
  * that budget instead, so a small-window model can hand off at all.
  */
 const COLD_HANDOFF_MAX_THRESHOLD_TOKENS = 64_000
@@ -1767,8 +1766,11 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
         Effect.gen(function* () {
           let outcome = "the history before the kept messages is dropped"
           if (!params.overflowed) {
-            const plain = yield* Effect.fromResult(fit)
-            outcome = `continuing with ${plain.omittedMessageIds.length} older messages omitted`
+            outcome = Result.match(fit, {
+              onSuccess: (plain) =>
+                `continuing with ${plain.omittedMessageIds.length} older messages omitted`,
+              onFailure: () => "the window is still over budget",
+            })
           }
           yield* eventStore.publish(
             ErrorOccurred.make({

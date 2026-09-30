@@ -638,5 +638,6 @@ export const GoalExtension = defineExtension({
     yield* host.register("request", GoalCommand, GoalRpc.Get)
     yield* host.register("tool", GoalTool)
     yield* host.on("turnAfter", continueGoal)
+    yield* host.on("sessionDeleted", ({ branchIds }) => store.removeBranches(branchIds))
   }),
 })

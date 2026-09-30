@@ -200,7 +200,6 @@ const startApprovalCell = (code: string) =>
     const { client, sessionId, branchId } = yield* createRpcHarness({
       extensions: cell.extensions,
       providerLayer,
-      extensionInputs: [],
       branchTools: CellBranchTools,
       durableApproval: true,
       agents: [new AgentDefinition({ name: DEFAULT_AGENT_NAME })],
@@ -382,7 +381,6 @@ describe("cell approvals", () => {
               createE2ELayer({
                 extensions: cell.extensions,
                 providerLayer,
-                extensionInputs: [],
                 branchTools: CellBranchTools,
                 durableApproval: true,
                 agents: [new AgentDefinition({ name: DEFAULT_AGENT_NAME })],
@@ -523,7 +521,6 @@ describe("cell approvals", () => {
         const { client, sessionId, branchId } = yield* createRpcHarness({
           extensions: cell.extensions,
           providerLayer,
-          extensionInputs: [],
           branchTools: CellBranchTools,
           durableApproval: true,
           agents: [new AgentDefinition({ name: DEFAULT_AGENT_NAME })],
@@ -623,7 +620,6 @@ describe("cell receipts", () => {
         const { client, sessionId, branchId } = yield* createRpcHarness({
           extensions,
           providerLayer,
-          extensionInputs: [],
           branchTools: CellBranchTools,
           agents: [new AgentDefinition({ name: DEFAULT_AGENT_NAME })],
         })
@@ -671,7 +667,10 @@ const host = testToolContext({
   branchId: branchIdToolCall,
   toolCallId,
 })
-const base = Layer.mergeAll(BunServices.layer, ToolRunner.Live, EventStore.Memory)
+const base = Layer.provideMerge(
+  Layer.mergeAll(ToolRunner.Live, EventStore.Memory),
+  BunServices.layer,
+)
 
 it.scopedLive("uses the exact selected capability and still enforces the input schema", () =>
   Effect.gen(function* () {
@@ -918,7 +917,6 @@ it.scopedLive(
       const context = yield* Layer.build(
         createE2ELayer({
           agents: [],
-          extensionInputs: [],
           branchTools: CellBranchTools,
           extensions,
           providerLayer: LanguageModelLayers.debug(),
@@ -1058,7 +1056,6 @@ it.scopedLive(
       const context = yield* Layer.build(
         createE2ELayer({
           agents: [],
-          extensionInputs: [],
           branchTools: CellBranchTools,
           extensions,
           providerLayer: LanguageModelLayers.debug(),
@@ -1110,7 +1107,6 @@ it.scopedLive(
       const context = yield* Layer.build(
         createE2ELayer({
           agents: [],
-          extensionInputs: [],
           branchTools: CellBranchTools,
           extensions,
           providerLayer: LanguageModelLayers.debug(),
@@ -1185,7 +1181,6 @@ it.scopedLive(
       const layer = (revision: string) =>
         createE2ELayer({
           agents: [],
-          extensionInputs: [],
           branchTools: CellBranchTools,
           extensions: [extension(revision)],
           providerLayer: LanguageModelLayers.debug(),

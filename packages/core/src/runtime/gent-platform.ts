@@ -28,6 +28,8 @@ import { causeMessage } from "../domain/guards.js"
  * live in exactly one file (`BunGentPlatformLive`).
  *
  * Surface (kept small — only what the codebase actually needs):
+ *   - `bindModules`      — resolve bare specifiers of later-loaded files to
+ *                          the modules this process runs
  *   - `randomId`         — UUIDv7 string for runtime-owned identifiers
  *   - `osInfo`           — `{ platform, arch, release, hostname, type }`
  *   - `pid`              — current process id
@@ -275,11 +277,18 @@ export const runProcess = (
 
 // ── write-file-atomic ───────────────────────────────────────────────────────
 
+/** A string's UTF-8 bytes; bytes as given. */
+const contentBytes = (content: string | Uint8Array): Uint8Array => {
+  if (Predicate.isString(content)) return new TextEncoder().encode(content)
+  return content
+}
+
 /**
  * Replaces the file at `path` with `content` through a staged sibling. A
- * string is written as UTF-8; bytes are written as given. The content lands in a temporary file in the target directory, which is then
- * renamed over the file, so a reader (or a crash) never sees a half-written
- * file. The one atomic write: core's config and every extension use it.
+ * string is written as UTF-8; bytes are written as given. The content lands
+ * in a temporary file in the target directory, which is then renamed over
+ * the file, so a reader (or a crash) never sees a half-written file. The one
+ * atomic write: core's config and every extension use it.
  *
  * A symlink at `path` is followed, as a plain write follows it: the file it
  * names is replaced (staged in that file's directory) and the link stays. A
@@ -292,12 +301,6 @@ export const runProcess = (
  * credential passes 0600), else the mode of the file it replaces, else the
  * default for a new file.
  */
-/** A string's UTF-8 bytes; bytes as given. */
-const contentBytes = (content: string | Uint8Array): Uint8Array => {
-  if (Predicate.isString(content)) return new TextEncoder().encode(content)
-  return content
-}
-
 export const writeFileAtomic = Effect.fn("writeFileAtomic")(function* (
   path: string,
   content: string | Uint8Array,

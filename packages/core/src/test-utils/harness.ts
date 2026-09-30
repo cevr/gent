@@ -3,16 +3,19 @@ import {
   Context,
   DateTime,
   Effect,
+  HashMap,
   Layer,
   Option,
+  Path,
   Predicate,
-  PubSub,
   Random,
   Ref,
   Schema,
   Stream,
+  TxRef,
 } from "effect"
 import {
+  type AnyExtensionHook,
   defineResource,
   ExtensionContext,
   type ExtensionContextService,
@@ -21,21 +24,24 @@ import {
   ExtensionHost,
   type ExtensionHostContext,
   type ExtensionHostPlatform,
+  type ExtensionHostService,
   type ExtensionInteractionService,
   type ExtensionSessionService,
   type ExtensionSetupServices,
   type ExtensionStateFacet,
+  FileLockService,
   type GentExtension,
   type LoadedExtension,
   makeCollectingExtensionHost,
+  makeFileLockTable,
   provideExtensionServices,
-  registerContributions,
 } from "../domain/extension.js"
 import {
   BranchId,
   ExtensionId,
   type InteractionRequestId,
   type MessageId,
+  ProcessGenerationId,
   SessionId,
   ToolCallId,
   ToolId,
@@ -64,6 +70,7 @@ import {
   makeExtensionHostContextProvider,
   provideCurrentHostCtx,
   resolveExtensions,
+  type SessionProfile,
   SessionProfileCache,
 } from "../runtime/extension-host.js"
 import { ConfigService, RuntimeEnvironment } from "../runtime/config.js"
@@ -92,7 +99,13 @@ import {
   StateLocation,
 } from "../server/server.js"
 import { workspaceHeadersForCwd } from "../server/workspace-rpc.js"
-import { Branch, type Message, Session, SessionAdmission } from "../domain/message.js"
+import {
+  Branch,
+  type Message,
+  QueueSnapshot,
+  Session,
+  SessionAdmission,
+} from "../domain/message.js"
 import type { StorageError } from "../domain/errors.js"
 import {
   AgentLoopQueueStorage,
@@ -104,14 +117,7 @@ import {
   SqliteStorage,
   ToolCallBindingStorage,
 } from "../storage/storage.js"
-import {
-  EventEnvelope,
-  EventId,
-  EventStore,
-  type EventStoreService,
-  getEventSessionId,
-  matchesEventFilter,
-} from "../domain/event.js"
+import { EventStore, type EventStoreService } from "../domain/event.js"
 import { type LanguageModel, Model as AiModel } from "effect/ai"
 import { GentPlatform } from "../runtime/gent-platform.js"
 import { BunCrypto } from "@effect/platform-bun"
@@ -169,6 +175,16 @@ const testExtensionHostPlatform = (
   randomId: Random.nextInt.pipe(Effect.map((value) => `test-${value}`)),
 })
 
+/**
+ * The file-lock service over a lock table the test can count: `lockedPaths`
+ * is how many paths a caller holds or waits on. The product never reads the
+ * table's size; a test reads it to prove that the last release evicts.
+ */
+export const fileLockProbe = Effect.map(makeFileLockTable, (locks) => ({
+  layer: FileLockService.over(locks),
+  lockedPaths: Effect.map(TxRef.get(locks), HashMap.size),
+}))
+
 const testExtensionFileLock = (): ExtensionFileLockServiceApi => ({
   withLock: (_path, effect) => effect,
 })
@@ -194,15 +210,13 @@ export const testExtensionHostContext = (
 
 // ── test-root ───────────────────────────────────────────────────────────────
 
-/**
- * What the test composition root shares with its presets: a working
- * directory and a home of its own (see `createE2ELayer`), a deterministic
- * server identity, and an agents extension. `createE2ELayer` is the one root;
- * the in-process layer and the RPC harness are presets over it. The stub
- * contexts above (`testExtensionHostContext`, `testToolContext`,
- * `testHostFacts`) have no scope to make a directory in, so their default cwd
- * is a path no test can create; a test that touches files passes its own.
- */
+// What the test composition root shares with its presets: a working
+// directory and a home of its own (see `createE2ELayer`), a deterministic
+// server identity, and an agents extension. `createE2ELayer` is the one root;
+// the in-process layer and the RPC harness are presets over it. The stub
+// contexts above (`testExtensionHostContext`, `testToolContext`,
+// `testHostFacts`) have no scope to make a directory in, so their default cwd
+// is a path no test can create; a test that touches files passes its own.
 
 const testAgentsExtension = (agents: ReadonlyArray<AgentDefinition>) =>
   defineExtension({
@@ -218,6 +232,10 @@ export const testAgent = AgentDefinition.make({
   name: DEFAULT_AGENT_NAME,
   description: "Test agent",
 })
+
+/** A queue with no steering and no follow-up entries. */
+export const emptyQueueSnapshot = (): QueueSnapshot =>
+  new QueueSnapshot({ steering: [], followUp: [] })
 
 const [defaultProviderId, defaultModelName] = Option.getOrThrow(parseModelId(DEFAULT_MODEL_ID))
 
@@ -314,7 +332,7 @@ export const runToolWithCtx = <Input, Output, Error>(
 export const testLeafContext = (ctx: TestToolContext): ExtensionContextService =>
   Effect.runSync(provideExtensionServices(ctx, Effect.service(ExtensionContext)))
 
-// ── index ───────────────────────────────────────────────────────────────────
+// ── call recording ──────────────────────────────────────────────────────────
 
 // Call Record
 
@@ -356,91 +374,35 @@ export class SequenceRecorder extends Context.Service<SequenceRecorder, Sequence
 
 // Recording EventStore
 
-export const RecordingEventStore: Layer.Layer<EventStore, never, SequenceRecorder> = Layer.unwrap(
+/**
+ * The in-memory event store with each append recorded in the
+ * `SequenceRecorder`, so a test asserts event order against the store
+ * semantics production runs (sliding delivery, the synchronize marker). A
+ * publish appends through the recording `append`.
+ */
+export const RecordingEventStore: Layer.Layer<EventStore, never, SequenceRecorder> = Layer.effect(
+  EventStore,
   Effect.gen(function* () {
     const recorder = yield* SequenceRecorder
-    const events: EventEnvelope[] = []
-    const sessions = new Map<SessionId, PubSub.PubSub<EventEnvelope>>()
-    let nextId = 0
-    const getOrCreateSessionPubSub = (sessionId: SessionId) =>
-      Effect.gen(function* () {
-        const existing = sessions.get(sessionId)
-        if (!Predicate.isUndefined(existing)) return existing
-        const ps = yield* PubSub.unbounded<EventEnvelope>()
-        sessions.set(sessionId, ps)
-        return ps
-      })
-
-    const service: EventStoreService = {
-      append: Effect.fn("RecordingEventStore.append")(function* (event) {
-        nextId += 1
-        const createdAt = yield* Clock.currentTimeMillis
-        const envelope = EventEnvelope.make({
-          id: EventId.make(nextId),
-          event,
-          createdAt,
-        })
-        events.push(envelope)
-        yield* recorder.record({
-          service: "EventStore",
-          method: "append",
-          args: event,
-        })
+    const inner = yield* EventStore
+    const append: EventStoreService["append"] = Effect.fn("RecordingEventStore.append")(
+      function* (event) {
+        const envelope = yield* inner.append(event)
+        yield* recorder.record({ service: "EventStore", method: "append", args: event })
         return envelope
-      }),
-      deliver: (envelope) =>
-        Effect.gen(function* () {
-          const sessionId = getEventSessionId(envelope.event)
-          if (Predicate.isUndefined(sessionId)) return
-          const ps = yield* getOrCreateSessionPubSub(sessionId)
-          yield* PubSub.publish(ps, envelope)
-        }),
+      },
+    )
+    return EventStore.of({
+      ...inner,
+      append,
       publish: Effect.fn("RecordingEventStore.publish")(function* (event) {
-        const envelope = yield* service.append(event)
-        yield* service.deliver(envelope)
-        yield* recorder.record({
-          service: "EventStore",
-          method: "publish",
-          args: event,
-        })
+        yield* inner.deliver(yield* append(event))
       }),
-      subscribe: ({ sessionId, branchId, after }) =>
-        Stream.scoped(
-          Stream.unwrap(
-            Effect.gen(function* () {
-              const ps = yield* getOrCreateSessionPubSub(sessionId)
-              const subscription = yield* PubSub.subscribe(ps)
-              const latestId = nextId
-              let afterId = 0
-              if (after === "latest") afterId = latestId
-              else if (Predicate.isNotUndefined(after)) afterId = after
-              const buffered = events.filter(
-                (env) => matchesEventFilter(env, sessionId, branchId) && env.id > afterId,
-              )
-              const live = Stream.fromSubscription(subscription).pipe(
-                Stream.filter(
-                  (env) => matchesEventFilter(env, sessionId, branchId) && env.id > latestId,
-                ),
-              )
-              return Stream.concat(Stream.fromIterable(buffered), live)
-            }),
-          ),
-        ),
-      removeSession: (sessionId) =>
-        Effect.gen(function* () {
-          const ps = sessions.get(sessionId)
-          if (!Predicate.isUndefined(ps)) {
-            sessions.delete(sessionId)
-            yield* PubSub.shutdown(ps)
-          }
-        }),
-    }
-
-    return Layer.succeed(EventStore, service)
+    })
   }),
-)
+).pipe(Layer.provide(EventStore.Memory))
 
-// ── Test Extension Host ──
+// ── test extension host ─────────────────────────────────────────────────────
 
 /** Facts the test extension host reports to `setup` Effects. */
 interface TestExtensionHostFacts {
@@ -702,9 +664,57 @@ export const storedEvents = Effect.fn("test.storedEvents")(function* (run: Harne
   return yield* (yield* EventStorage).listEvents(run)
 })
 
-// ── e2e-layer ───────────────────────────────────────────────────────────────
+// ── e2e layer ───────────────────────────────────────────────────────────────
 
-export interface E2ELayerConfig {
+/**
+ * A session profile cache over fixed profiles, for per-cwd routing tests. A
+ * cwd with no profile gets one with no extensions; its registry is built once,
+ * in the layer's scope.
+ */
+export const fixedSessionProfiles = (
+  profiles: ReadonlyMap<string, SessionProfile> = new Map(),
+): Layer.Layer<SessionProfileCache> =>
+  Layer.effect(
+    SessionProfileCache,
+    Effect.gen(function* () {
+      const resolved = resolveExtensions([])
+      const layerContext = yield* Layer.build(ExtensionRegistry.fromResolved(resolved))
+      const cache = new Map(profiles)
+      return SessionProfileCache.of({
+        resolve: (cwd) =>
+          Effect.sync(() => {
+            const existing = Option.fromUndefinedOr(cache.get(cwd))
+            if (Option.isSome(existing)) return existing.value
+            const profile: SessionProfile = {
+              cwd,
+              resolved,
+              layerContext,
+              registryService: Context.get(layerContext, ExtensionRegistry),
+              baseSections: [],
+              generationId: ProcessGenerationId.make("test"),
+            }
+            cache.set(cwd, profile)
+            return profile
+          }),
+      })
+    }),
+  )
+
+/**
+ * Where a test root's extensions come from: inputs the root sets up, or
+ * extensions a test already loaded (their setup bypassed). One or the other.
+ */
+type E2EExtensionSource =
+  | {
+      readonly extensionInputs: ReadonlyArray<GentExtension<ExtensionSetupServices>>
+      readonly extensions?: never
+    }
+  | {
+      readonly extensions: ReadonlyArray<LoadedExtension>
+      readonly extensionInputs?: never
+    }
+
+interface E2ELayerOptions {
   /**
    * The branch-tool feature this harness installs. Defaults to
    * `noBranchTools`; a test exercising a real feature names it.
@@ -714,12 +724,8 @@ export interface E2ELayerConfig {
   readonly providerLayer: Layer.Layer<LanguageModel.LanguageModel>
   /** Agents to register in the extension registry */
   readonly agents: ReadonlyArray<AgentDefinition>
-  /** Extension inputs for setup */
-  readonly extensionInputs: ReadonlyArray<GentExtension<ExtensionSetupServices>>
   /** Keep running when an extension fails to load. Only for tests about that failure path. */
   readonly allowFailedExtensions?: boolean
-  /** Pre-loaded extensions to wire directly (bypasses setup). Mutually exclusive with extensionInputs. */
-  readonly extensions?: ReadonlyArray<LoadedExtension>
   /** Approval service override. Default auto-approves for E2E tests. */
   readonly approvalLayer?: Layer.Layer<
     ApprovalService,
@@ -755,6 +761,8 @@ export interface E2ELayerConfig {
   readonly layerOverrides?: Record<string, () => Layer.Layer<never>>
 }
 
+export type E2ELayerConfig = E2ELayerOptions & E2EExtensionSource
+
 const applyLayerOverride = (
   contributions: ExtensionContributions,
   extensionId: ExtensionId,
@@ -785,6 +793,34 @@ const applyLayerOverride = (
   }
 }
 
+/** Re-registers one compiled slot; the switch restores the kind/handler correlation. */
+const replayHook = (host: ExtensionHostService, slot: AnyExtensionHook): Effect.Effect<void> => {
+  switch (slot.kind) {
+    case "systemPrompt":
+      return host.on(slot.kind, slot.hook.handler)
+    case "turnProjection":
+      return host.on(slot.kind, slot.hook.handler)
+    case "turnAfter":
+      return host.on(slot.kind, slot.hook.handler)
+    case "loopOpen":
+      return host.on(slot.kind, slot.hook.handler)
+    case "sessionDeleted":
+      return host.on(slot.kind, slot.hook.handler)
+  }
+}
+
+/** Re-registers an already compiled record, so a test can wrap a loaded extension. */
+export const registerContributions = (contributions: ExtensionContributions) =>
+  Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register("resource", ...(contributions.resources ?? []))
+    yield* host.register("tool", ...(contributions.tools ?? []))
+    yield* host.register("request", ...(contributions.requests ?? []))
+    yield* host.register("agent", ...(contributions.agents ?? []))
+    yield* host.register("modelDriver", ...(contributions.modelDrivers ?? []))
+    for (const slot of contributions.hooks ?? []) yield* replayHook(host, slot)
+  })
+
 const fromLoadedExtension = (
   extension: LoadedExtension,
 ): GentExtension<ExtensionSetupServices> => ({
@@ -795,7 +831,7 @@ const fromLoadedExtension = (
 
 const wrapExtensionInput = (
   extension: GentExtension<ExtensionSetupServices>,
-  layerOverrides: E2ELayerConfig["layerOverrides"],
+  layerOverrides: E2ELayerOptions["layerOverrides"],
 ): GentExtension<ExtensionSetupServices> => ({
   manifest: extension.manifest,
   artifactIdentity: extension.artifactIdentity,
@@ -828,7 +864,7 @@ const extensionInputsForConfig = (
   if (Predicate.isUndefined(config.extensions)) {
     return [
       ...agents,
-      ...config.extensionInputs.map((extension) =>
+      ...(config.extensionInputs ?? []).map((extension) =>
         wrapExtensionInput(extension, config.layerOverrides),
       ),
     ]
@@ -862,7 +898,14 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
   return Layer.unwrap(
     Effect.gen(function* () {
       const home = yield* makeTempDirectoryScoped("gent-test-home-")
-      const cwd = yield* Option.match(Option.fromUndefinedOr(config.cwd), {
+      const path = yield* Path.Path
+      // A file-backed layer is a server a test restarts: by default it runs in
+      // the database's directory, so the restarted layer is in the same place
+      // (and workspace) as the first.
+      const placeOf = Option.orElse(Option.fromUndefinedOr(config.cwd), () =>
+        Option.map(Option.fromUndefinedOr(config.storagePath), (file) => path.dirname(file)),
+      )
+      const cwd = yield* Option.match(placeOf, {
         onNone: () => makeTempDirectoryScoped("gent-test-cwd-"),
         onSome: Effect.succeed,
       })
@@ -903,10 +946,8 @@ const e2eDependencies = (
 
 // ── in-process-layer ────────────────────────────────────────────────────────
 
-/**
- * In-process integration layer: the E2E root with the stub tool runner and
- * the scripted debug model. Use with `createRpcClient()`.
- */
+// In-process integration layer: the E2E root with the stub tool runner and
+// the scripted debug model. Use with `createRpcClient()`.
 
 interface InProcessLayerConfig {
   readonly agents: ReadonlyArray<AgentDefinition>
@@ -922,7 +963,6 @@ export const baseLocalLayerWithProvider = (
     providerLayer,
     agents: config.agents,
     extensions: [],
-    extensionInputs: [],
     extraLayers: config.extraLayers,
     toolRunner: "test",
   })
@@ -933,35 +973,34 @@ export const baseLocalLayer = (config: InProcessLayerConfig) =>
 
 // ── rpc-harness ─────────────────────────────────────────────────────────────
 
-/**
- * RPC acceptance harness — exercises the full per-request scope path that
- * production uses (`createRpcClient → RpcServer → registry dispatch → handler`).
- *
- * Use this for new extension RPC tests instead of hand-composing
- * `createRpcClient(createE2ELayer({...}))` + a session-create call. Direct-runtime
- * tests via `baseLocalLayer` bypass the per-request scope boundary
- * production uses; this harness asserts that boundary.
- *
- * The harness is intentionally thin: it folds the four lines every RPC test
- * already writes (build E2E layer → createRpcClient → session.create → return
- * client + ids) into a single yield. The seeded session runs in the layer's
- * own temp working directory; pass `cwd` to seed it elsewhere.
- *
- * The harness is exposed as `@gent/core/test-utils` so it can be imported from
- * any test file. Because `core` cannot reach into `@gent/extensions`, the
- * caller passes pre-loaded extensions and an agents bucket — the same
- * fragments callers already pass to `createE2ELayer`.
- */
+// RPC acceptance harness — exercises the full per-request scope path that
+// production uses (`createRpcClient → RpcServer → registry dispatch → handler`).
+//
+// Use this for new extension RPC tests instead of hand-composing
+// `createRpcClient(createE2ELayer({...}))` + a session-create call. Direct-runtime
+// tests via `baseLocalLayer` bypass the per-request scope boundary
+// production uses; this harness asserts that boundary.
+//
+// The harness is intentionally thin: it folds the four lines every RPC test
+// already writes (build E2E layer → createRpcClient → session.create → return
+// client + ids) into a single yield. The seeded session runs in the layer's
+// own temp working directory; pass `cwd` to seed it elsewhere.
+//
+// The harness is exposed as `@gent/core/test-utils` so it can be imported from
+// any test file. Because `core` cannot reach into `@gent/extensions`, the
+// caller passes pre-loaded extensions and an agents bucket — the same
+// fragments callers already pass to `createE2ELayer`.
 
-interface RpcHarnessConfig extends Omit<E2ELayerConfig, "toolRunner" | "cwd"> {
-  /**
-   * Working directory passed to the seeded session.create call. Defaults to
-   * the layer's own temp working directory.
-   */
-  readonly cwd?: string
-  /** The seeded session's agent, run spec and interactivity; its turns all run under it. */
-  readonly admission?: SessionAdmission
-}
+type RpcHarnessConfig = Omit<E2ELayerOptions, "toolRunner" | "cwd"> &
+  E2EExtensionSource & {
+    /**
+     * Working directory passed to the seeded session.create call. Defaults to
+     * the layer's own temp working directory.
+     */
+    readonly cwd?: string
+    /** The seeded session's agent, run spec and interactivity; its turns all run under it. */
+    readonly admission?: SessionAdmission
+  }
 
 /**
  * Build an in-process RPC client + seeded session in one yield.
@@ -990,13 +1029,16 @@ export const createRpcHarness = (config: RpcHarnessConfig) =>
 /**
  * An in-process RPC client over `handlersLayer`: the production handlers, the
  * workspace middleware, and a namespaced client, with no socket. The SDK's
- * `Gent.test` is the same path for callers outside core.
+ * `Gent.test` is the same path for callers outside core. The client works in
+ * the workspace of the layer's cwd, as a production client of that cwd does,
+ * so its sessions there share the launch profile.
  */
 export const createRpcClient = <E, R>(
   handlersLayer: Layer.Layer<Layer.Services<typeof RpcHandlersLive>, E, R>,
 ) =>
   Effect.gen(function* () {
-    const context = yield* Layer.build(Layer.provide(RpcHandlersLive, handlersLayer))
-    const client = yield* makeInProcessClient(context, workspaceHeadersForCwd(process.cwd()))
+    const context = yield* Layer.build(Layer.provideMerge(RpcHandlersLive, handlersLayer))
+    const { cwd } = Context.get(context, RuntimeEnvironment)
+    const client = yield* makeInProcessClient(context, workspaceHeadersForCwd(cwd))
     return { client }
   })

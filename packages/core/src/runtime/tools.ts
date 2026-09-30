@@ -35,7 +35,6 @@ import {
 } from "../domain/ids.js"
 import type { ExtensionHostContext, LoadedExtension, TurnProjection } from "../domain/extension.js"
 import * as Prompt from "effect/ai/Prompt"
-import type * as Response from "effect/ai/Response"
 import {
   getToolId,
   getToolMetadata,
@@ -46,7 +45,6 @@ import {
   toolResultSummary,
   ToolSchemaRevision,
   ToolSourceRevision,
-  toolIdFromWire,
   wireToolName,
 } from "../domain/capability.js"
 import {
@@ -73,7 +71,7 @@ import type { CurrentAgentLoopTurnProfile } from "./turn.js"
 
 // ── turn-interruption ───────────────────────────────────────────────────────
 
-/**
+/*
  * Whether the turn now running has been interrupted.
  *
  * The loop, the turn executor and the branch's tools all need this one bit,
@@ -81,8 +79,6 @@ import type { CurrentAgentLoopTurnProfile } from "./turn.js"
  * begins the next one, while a running turn and the tools it dispatches only
  * ask. `interrupt` stops the turn now running, and `beginTurn` declares that a
  * fresh turn starts uninterrupted.
- *
- * @module
  */
 
 /** Asks whether the turn now running has been interrupted. */
@@ -248,7 +244,7 @@ export const resolveStoredToolBinding = Effect.fn("ToolBinding.resolveStored")(f
 }) {
   const toolName = String(params.binding.toolId)
   const fail = (reason: ToolBindingReplayReason, message: string) =>
-    makeBindingReplayError({
+    new ToolBindingReplayError({
       assistantMessageId: params.assistantMessageId,
       toolCallId: params.toolCallId,
       toolId: params.binding.toolId,
@@ -322,7 +318,7 @@ export const resolveReplayToolBinding = Effect.fn("ToolBinding.resolveReplay")(f
   const fail = (reason: ToolBindingReplayReason, message: string) =>
     Effect.andThen(
       localReplay.removeBinding(key),
-      makeBindingReplayError({
+      new ToolBindingReplayError({
         ...address,
         toolId: ToolId.make(toolName),
         reason,
@@ -366,13 +362,6 @@ export const resolveReplayToolBinding = Effect.fn("ToolBinding.resolveReplay")(f
 
 // ── tool-binding-replay ─────────────────────────────────────────────────────
 
-type ToolBindingReplayReason =
-  | "MissingBinding"
-  | "ToolUnavailable"
-  | "MissingSourceIdentity"
-  | "SourceMismatch"
-  | "SchemaMismatch"
-
 export class ToolBindingReplayError extends Schema.TaggedError<ToolBindingReplayError>()(
   "ToolBindingReplayError",
   {
@@ -389,6 +378,8 @@ export class ToolBindingReplayError extends Schema.TaggedError<ToolBindingReplay
     message: Schema.String,
   },
 ) {}
+
+type ToolBindingReplayReason = ToolBindingReplayError["reason"]
 
 const advertisedSchemaJson = (tool: ToolCapability): string =>
   canonicalJsonString(
@@ -475,14 +466,6 @@ const bindingMismatchReason = (
   if (stored.schemaRevision !== current.schemaRevision) return "SchemaMismatch"
   return "SourceMismatch"
 }
-
-const makeBindingReplayError = (params: {
-  readonly assistantMessageId: MessageId
-  readonly toolCallId: ToolCallId
-  readonly toolId: ToolId
-  readonly reason: ToolBindingReplayReason
-  readonly message: string
-}) => new ToolBindingReplayError(params)
 
 // ── process-local-tool-replay ───────────────────────────────────────────────
 
@@ -666,11 +649,7 @@ export const CurrentBranchToolFeature = Context.Reference<BranchToolFeature<neve
   { defaultValue: () => noBranchTools },
 )
 
-// ── tool-runner ─────────────────────────────────────────────────────────────
-
-type ToolCapabilityMap = Record<string, ToolCapability>
-
-// ── wire-tool-names ─────────────────────────────────────────────────────────
+// ── model toolkit ───────────────────────────────────────────────────────────
 
 /**
  * The toolkit a model request declares: each tool under its wire name
@@ -691,46 +670,7 @@ export function convertTools(tools: ReadonlyArray<ToolCapability>) {
   )
 }
 
-/** A prompt as the provider sees it: every tool call and result under its tool's wire name. */
-export const toWirePrompt = (prompt: Prompt.Prompt): Prompt.Prompt =>
-  Prompt.fromMessages(
-    prompt.content.map((message): Prompt.Message => {
-      switch (message.role) {
-        case "assistant":
-          return Prompt.makeMessage("assistant", {
-            content: message.content.map((part) => {
-              if (part.type === "tool-call" || part.type === "tool-result") {
-                return { ...part, name: wireToolName(part.name) }
-              }
-              return part
-            }),
-            options: message.options,
-          })
-        case "tool":
-          return Prompt.makeMessage("tool", {
-            content: message.content.map((part) => {
-              if (part.type === "tool-result") return { ...part, name: wireToolName(part.name) }
-              return part
-            }),
-            options: message.options,
-          })
-        default:
-          return message
-      }
-    }),
-  )
-
-/** A part of the model's reply, with each tool named by its id again. */
-export const fromWireToolPart = (part: Response.AnyPart): Response.AnyPart => {
-  switch (part.type) {
-    case "tool-params-start":
-    case "tool-call":
-    case "tool-result":
-      return { ...part, name: toolIdFromWire(part.name) }
-    default:
-      return part
-  }
-}
+// ── tool-runner ─────────────────────────────────────────────────────────────
 
 type ToolCall = { toolCallId: ToolCallId; toolName: string; input: unknown }
 
@@ -752,6 +692,8 @@ class ToolExecutionFailure extends Schema.TaggedError<ToolExecutionFailure>(
 )("ToolExecutionFailure", {
   message: Schema.String,
 }) {}
+
+type ToolCapabilityMap = Record<string, ToolCapability>
 
 type ToolRunnerToolkit = AiToolkit.WithHandler<ToolCapabilityMap>
 
@@ -921,7 +863,8 @@ const isToolParameterValidationError = (failure: ToolExecutionError): boolean =>
 }
 
 const normalizeToolExecutionError = (
-  failure: Schema.Schema.Type<typeof Schema.Unknown>,
+  // oxlint-disable-next-line effect/noUnknownParameters -- An extension tool fails with an unknown value; this maps it to a typed failure.
+  failure: unknown,
 ): InteractionPendingError | Error => {
   if (Schema.is(InteractionPendingError)(failure)) return failure
   if (failure instanceof Error) return failure
@@ -945,9 +888,16 @@ const captureToolEntry = (params: {
   return Option.fromUndefinedOr(entry)
 }
 
+/** The platform services a tool runs with, captured when the runner is built. */
+interface ToolPlatform {
+  readonly fileSystem: FileSystem.FileSystem
+  readonly path: Path.Path
+}
+
 const runTool = Effect.fn("ToolRunner.execute")(function* (
   toolCall: ToolCall,
   toolEntry: Option.Option<ResolvedToolCapability>,
+  platform: ToolPlatform,
 ) {
   const hostCtx = yield* CurrentExtensionHostContext
   const ctx: ToolCapabilityContext = { ...hostCtx, toolCallId: toolCall.toolCallId }
@@ -989,18 +939,12 @@ const runTool = Effect.fn("ToolRunner.execute")(function* (
       ...ctx,
       extensionId: toolEntry.value.extensionId,
     }
-    const fileSystem = yield* Effect.serviceOption(FileSystem.FileSystem)
-    const path = yield* Effect.serviceOption(Path.Path)
-    if (Option.isNone(fileSystem) || Option.isNone(path)) {
-      return yield* finish(errorResult(toolCall, "Tool execution services unavailable"))
-    }
     const executeKnownTool = Effect.gen(function* () {
       const executionToolkit = yield* makeExecutionToolkit({
         tool: toolEntry.value.capability,
         toolCall,
         ctx: toolCtx,
-        fileSystem: fileSystem.value,
-        path: path.value,
+        ...platform,
       })
       return yield* terminalToolResult(executionToolkit, toolCall)
     })
@@ -1084,15 +1028,21 @@ const runTestTool = (toolCall: ToolCall) =>
 export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()(
   "@gent/core/src/runtime/tools/ToolRunner",
 ) {
-  static Live: Layer.Layer<ToolRunner> = Layer.succeed(
+  static Live: Layer.Layer<ToolRunner, never, FileSystem.FileSystem | Path.Path> = Layer.effect(
     ToolRunner,
-    ToolRunner.of({
-      capture: (params) =>
-        Effect.gen(function* () {
-          const activeRegistry = yield* ExtensionRegistry
-          return captureToolEntry({ ...params, activeRegistry })
-        }),
-      runBound: (toolCall, entry) => runTool(toolCall, entry),
+    Effect.gen(function* () {
+      const platform: ToolPlatform = {
+        fileSystem: yield* FileSystem.FileSystem,
+        path: yield* Path.Path,
+      }
+      return ToolRunner.of({
+        capture: (params) =>
+          Effect.gen(function* () {
+            const activeRegistry = yield* ExtensionRegistry
+            return captureToolEntry({ ...params, activeRegistry })
+          }),
+        runBound: (toolCall, entry) => runTool(toolCall, entry, platform),
+      })
     }),
   )
 
@@ -1219,7 +1169,7 @@ export const executeToolCalls = Effect.fn("TurnHelpers.executeToolCalls")(functi
 
 // ── tool-policy ─────────────────────────────────────────────────────────────
 
-/**
+/*
  * The tool policy one turn runs with.
  *
  * Pure: it takes the resolved capabilities, the agent definition and the
@@ -1227,8 +1177,6 @@ export const executeToolCalls = Effect.fn("TurnHelpers.executeToolCalls")(functi
  * host may run, and what prompt sections the projections contribute. Nothing
  * here reaches a service, a layer or the filesystem — the registry resolves
  * the extensions, this compiles the policy they imply.
- *
- * @module
  */
 
 interface CompiledToolPolicy {

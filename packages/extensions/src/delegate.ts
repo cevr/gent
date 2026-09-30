@@ -1315,6 +1315,7 @@ export const DelegateExtension = defineExtension({
     yield* host.register("agent", delegateAgent)
     yield* host.register("tool", StartChild, CancelChild, ListChildren)
     yield* host.register("resource", ReconciledBranchesResource)
+    yield* host.on("sessionDeleted", ({ branchIds }) => registry.removeBranches(branchIds))
     // Every turn end is read three times: as a child's receipt for its
     // parent, as a parent's interrupt for its children, and as a parent's
     // answer that read its stop notices.

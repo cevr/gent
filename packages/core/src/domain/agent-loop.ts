@@ -52,14 +52,14 @@ const AdmissionError = Schema.Union([AgentLoopError, FollowUpQueueFull])
 export const asAgentLoopError = (message: string) =>
   Effect.mapError((cause: unknown) => new AgentLoopError({ message, cause }))
 
-// ── Shared field groups ──
+// ── Shared field groups ─────────────────────────────────────────────────────
 
 const RunningTurnFields = {
   message: Message,
   startedAtMs: Schema.Finite,
 }
 
-// ── Phase-tagged loop state (flat, actor-owned) ──
+// ── Phase-tagged loop state (flat, actor-owned) ─────────────────────────────
 //
 // The loop is one fiber plus this Ref. While the actor entity is
 // materialized, this enum is the source of truth for "where is the loop?".
@@ -76,14 +76,14 @@ export const LoopState = Schema.TaggedUnion({
   },
 })
 
-// ── Type aliases ──
+// ── Type aliases ────────────────────────────────────────────────────────────
 
 export type LoopState = Schema.Schema.Type<typeof LoopState>
 type IdleState = Extract<LoopState, { _tag: "Idle" }>
 export type RunningState = Extract<LoopState, { _tag: "Running" }>
 export type WaitingForInteractionState = Extract<LoopState, { _tag: "WaitingForInteraction" }>
 
-// ── Runtime projection (transport/UI) ──
+// ── Runtime projection (transport/UI) ───────────────────────────────────────
 // Public runtime state mirrors the machine directly. No parallel `phase/status`
 // matrix — the discriminator is the state. Owned here so the public projection
 // has a single canonical declaration; `protocol.ts` re-exports.
@@ -135,7 +135,7 @@ export const SessionRuntimeMetrics = Schema.Struct({
 })
 export type SessionRuntimeMetrics = typeof SessionRuntimeMetrics.Type
 
-// ── State builders ──
+// ── State builders ──────────────────────────────────────────────────────────
 
 /** The totals of a branch with no events. */
 export const initialSessionMetrics: SessionRuntimeMetrics = {
@@ -236,7 +236,7 @@ export const toWaitingForInteractionState = (params: {
 
 // ── agent-loop.entity-id ────────────────────────────────────────────────────
 
-/**
+/*
  * Reversible entity-id encoding for the AgentLoop actor.
  *
  * Encore's `Entity.toLayer` keys entities by a `string` `entityId`. Per-actor
@@ -253,8 +253,6 @@ export const toWaitingForInteractionState = (params: {
  * `encodeURIComponent` encodes both `:` and `/`, leaving the encoded
  * components free of separators. Use `:` as the separator on encoded
  * components.
- *
- * @module
  */
 
 /** Encode `(workspaceId, sessionId, branchId)` into a unique reversible string. */
@@ -381,9 +379,10 @@ export const interjectionMessageId = (requestId: RequestId | ActorCommandId) =>
 // runtime turns each into an actor operation below.
 
 /**
- * Client-generated request ID for end-to-end correlation + transport-retry
- * dedup. Bounded so a malicious/buggy client cannot bloat per-server
- * dedup caches keyed on it. Callers in this repo use `crypto.randomUUID()`.
+ * The caller's id for a follow-up source. It is the last segment of the
+ * follow-up message id (`followUpMessageIdForSource`), so a second queue of
+ * the same source is a no-op and a dequeue names the item it takes back.
+ * Bounded to 1–256 characters to bound the stored message id.
  */
 const FollowUpSourceIdSchema = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256))
 
@@ -711,10 +710,8 @@ export const submitUserMessage = Effect.fn("AgentLoop.client.submitUserMessage")
  * turn ran. Switching to `ref.execute` (or `send + waitFor`) deadlocks
  * because `applySteer` itself yields `ensureStarted` while the gated
  * in-flight turn holds the actor; the persisted reply can't drain.
- * Empirically validated twice: W35-C7.3 (commit `a8b084bc`),
- * re-derived W37-S4-C10 (2026-05-11) — both produced 4s timeout on
- * `tests/runtime/session.test.ts` ("an interjection joins the
- * running turn ahead of queued follow-ups"). Note: `ref.send` does
+ * The session test "an interjection joins the running turn ahead of
+ * queued follow-ups" times out under `ref.execute`. Note: `ref.send` does
  * NOT silently drop runtime delivery errors — the discardCall Effect
  * propagates; only statically typed `never`. `Steer.persisted: true`
  * is the durability guarantee (Steer survives crash + redeliver) and

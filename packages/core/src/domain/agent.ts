@@ -1,17 +1,17 @@
-import { Option, Schema, SchemaGetter } from "effect"
-import { branded, SessionId } from "./ids.js"
+import { Option, Predicate, Schema, SchemaGetter } from "effect"
+import { SessionId } from "./ids.js"
 import { omitUndefined } from "./guards.js"
 
 // ── model ───────────────────────────────────────────────────────────────────
 
 // Model ID - provider/model format
 
-export const ModelId = Schema.String.pipe(branded("ModelId"))
+export const ModelId = Schema.String.pipe(Schema.brand("ModelId"))
 export type ModelId = typeof ModelId.Type
 
 // Provider - AI provider identifier (open, branded string — extensible via extensions)
 
-export const ProviderId = Schema.String.pipe(branded("ProviderId"))
+export const ProviderId = Schema.String.pipe(Schema.brand("ProviderId"))
 export type ProviderId = typeof ProviderId.Type
 
 // Model pricing per million tokens (USD)
@@ -23,8 +23,23 @@ export const ModelPricing = Schema.Struct({
   cacheRead: Schema.optional(Schema.Finite),
   /** Input written to the prompt cache; priced as `input` when absent. */
   cacheWrite: Schema.optional(Schema.Finite),
+  /**
+   * The price of a cache write by the lifetime of the entry it writes, for a
+   * driver whose writes cost more the longer they live. A write the driver
+   * splits by lifetime (`ModelDriverContribution.cacheWritesByLifetime`)
+   * takes the rate of its lifetime; any other write takes `cacheWrite`.
+   */
+  cacheWriteByLifetime: Schema.optional(
+    Schema.Array(Schema.Struct({ ttlMs: Schema.Finite, price: Schema.Finite })),
+  ),
 })
 export type ModelPricing = typeof ModelPricing.Type
+
+/** The input tokens one response wrote to cache entries of one lifetime. */
+export interface CacheWriteByLifetime {
+  readonly ttlMs: number
+  readonly tokens: number
+}
 
 // Model - individual model from a provider (built-in or custom)
 
@@ -59,7 +74,26 @@ export class Model extends Schema.Class<Model>("Model")({
    * happens.
    */
   promptCacheTtlMs: Schema.optional(Schema.Finite),
+  /**
+   * The lifetime a spawned child session's requests ask for, when the driver
+   * gives children a shorter one (`ProviderHints.child`); absent, a child's
+   * requests keep `promptCacheTtlMs`. Read through `promptCacheTtlMsFor`.
+   */
+  childPromptCacheTtlMs: Schema.optional(Schema.Finite),
 }) {}
+
+/**
+ * How long a request's prompt stays cached: the one reading of the two
+ * catalog lifetimes, for the loop's cold handoff and the TUI's cache notice.
+ */
+export const promptCacheTtlMsFor = (
+  model: Pick<Model, "promptCacheTtlMs" | "childPromptCacheTtlMs">,
+  child: boolean,
+): Option.Option<number> => {
+  const own = Option.fromUndefinedOr(model.promptCacheTtlMs)
+  if (!child) return own
+  return Option.orElse(Option.fromUndefinedOr(model.childPromptCacheTtlMs), () => own)
+}
 
 /**
  * Newest release first; models without a date sort last.
@@ -83,7 +117,9 @@ export const byReleaseDateDesc = (models: readonly Model[]): readonly Model[] =>
 /**
  * The USD cost of one step. `inputTokens` counts every input token, cached or
  * not; the tokens read from or written to the prompt cache take their own
- * price when the catalog has one.
+ * price when the catalog has one. The part of the cache writes the driver
+ * splits by lifetime (`cacheWritesByLifetime`) takes the rate the catalog
+ * names for that lifetime; the rest takes `cacheWrite`.
  */
 export const calculateCost = (
   usage: {
@@ -91,6 +127,7 @@ export const calculateCost = (
     readonly outputTokens: number
     readonly cacheReadTokens?: number
     readonly cacheWriteTokens?: number
+    readonly cacheWritesByLifetime?: ReadonlyArray<CacheWriteByLifetime>
   },
   pricing: Option.Option<ModelPricing>,
 ): number => {
@@ -99,17 +136,20 @@ export const calculateCost = (
   const cacheRead = usage.cacheReadTokens ?? 0
   const cacheWrite = usage.cacheWriteTokens ?? 0
   const uncached = Math.max(0, usage.inputTokens - cacheRead - cacheWrite)
+  const rates = price.cacheWriteByLifetime ?? []
+  const pricedWrites = (usage.cacheWritesByLifetime ?? []).flatMap((write) => {
+    const rate = rates.find((entry) => entry.ttlMs === write.ttlMs)
+    if (Predicate.isUndefined(rate)) return []
+    return [{ tokens: write.tokens, cost: write.tokens * rate.price }]
+  })
+  const pricedTokens = pricedWrites.reduce((sum, write) => sum + write.tokens, 0)
+  const otherWrites = Math.max(0, cacheWrite - pricedTokens)
   const inputCost =
     uncached * price.input +
     cacheRead * (price.cacheRead ?? price.input) +
-    cacheWrite * (price.cacheWrite ?? price.input)
+    pricedWrites.reduce((sum, write) => sum + write.cost, 0) +
+    otherWrites * (price.cacheWrite ?? price.input)
   return (inputCost + usage.outputTokens * price.output) / 1_000_000
-}
-
-export const parseModelProvider = (modelId: string): Option.Option<ProviderId> => {
-  const slash = modelId.indexOf("/")
-  if (slash <= 0 || slash === modelId.length - 1) return Option.none()
-  return Option.some(ProviderId.make(modelId.slice(0, slash)))
 }
 
 export const parseModelId = (modelId: string): Option.Option<readonly [ProviderId, string]> => {
@@ -122,7 +162,7 @@ export const parseModelId = (modelId: string): Option.Option<readonly [ProviderI
 
 // Agent definitions
 
-export const AgentName = Schema.String.pipe(branded("AgentName"))
+export const AgentName = Schema.String.pipe(Schema.brand("AgentName"))
 export type AgentName = typeof AgentName.Type
 
 export const ReasoningEffort = Schema.Literals([
@@ -214,8 +254,6 @@ export const DEFAULT_AGENT_NAME = AgentName.make("main")
  * what it is: name, description, model, prompt, tool allow/deny, sampling
  * defaults, and driver routing. Per-run concerns (persistence/retention,
  * overrides, parent-tool linkage, tags) live on `RunSpec`.
- *
- * Built-in prompts moved to their owning extensions.
  */
 export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinition")({
   name: AgentName,
@@ -249,7 +287,7 @@ export const DEFAULT_MODEL_ID = ModelId.make("anthropic/claude-sonnet-5")
 export const resolveAgentModel = (agent: AgentDefinition): ModelId =>
   agent.model ?? DEFAULT_MODEL_ID
 
-// ── Runtime driver routing ──
+// ── driver routing ──────────────────────────────────────────────────────────
 
 /** The model driver a turn dispatches through, and the catalog id of the model it reaches. */
 export interface EffectiveModelDriver {
@@ -288,7 +326,9 @@ export const effectiveModelDriver = (
   })
 }
 
-// ── RunSpec — per-run dispatch configuration ──
+// ── run spec ────────────────────────────────────────────────────────────────
+
+// Per-run dispatch configuration.
 //
 // Separates per-run concerns from agent identity: `overrides` reshape the
 // agent's model, tools and prompt for every turn of the session.
@@ -340,5 +380,3 @@ export class SessionDepthLimitError extends Schema.TaggedError<SessionDepthLimit
     max: Schema.Int,
   },
 ) {}
-
-// ── steer ───────────────────────────────────────────────────────────────────

@@ -7,6 +7,8 @@ import {
   ToolCallId,
   ToolId,
 } from "./ids.js"
+import * as Prompt from "effect/ai/Prompt"
+import type * as Response from "effect/ai/Response"
 import * as AiTool from "effect/ai/Tool"
 import { clipSummary, summarizeOutput } from "./message.js"
 
@@ -105,12 +107,8 @@ export const dateSection = (now: DateTime.Zoned): PromptSection => ({
 
 // ── capability ──────────────────────────────────────────────────────────────
 
-/** Shared extension callable primitives. Tool and request leaves are
- * independent; this file holds only errors, host contexts, and typed request
- * references used across those leaves.
- *
- * @module
- */
+// Shared extension callable primitives: the errors and host contexts that
+// the tool and request sections below both use.
 
 /** Failure raised by a Capability handler. Carries audience + id for diagnostics. */
 export class CapabilityError extends Schema.TaggedError<CapabilityError>()(
@@ -199,7 +197,6 @@ interface RequestCapabilityApi {
   readonly description?: string
   /** See `RequestInput.answersDuringTurn`. */
   readonly answersDuringTurn?: boolean
-  readonly ref: unknown
 }
 
 /**
@@ -213,9 +210,9 @@ export interface CapabilityRef<Input = unknown, Output = unknown> {
   readonly output: Schema.Decoder<Output, never>
 }
 
-// ── capability/request ──────────────────────────────────────────────────────
+// ── request capability ──────────────────────────────────────────────────────
 
-/**
+/*
  * `request(...)` — typed factory for extension-to-extension Capabilities.
  *
  * Authors call `request({ id, input, output, execute })`.
@@ -226,8 +223,6 @@ export interface CapabilityRef<Input = unknown, Output = unknown> {
  * Host/session authority is imported through `ExtensionContext`; runtime
  * dispatch provides the `ExtensionContext` facade. Request handlers receive
  * decoded params only.
- *
- * @module
  */
 
 /**
@@ -384,7 +379,6 @@ export function request(input: {
     input: input.input,
     output: input.output,
     effect,
-    ref: refValue,
     [RequestCapabilityBrand]: true,
     [REQUEST_REF]: refValue,
     [REQUEST_REF_STATE]: refState,
@@ -417,9 +411,9 @@ export const ref = <Input, Output>(
   capability: RequestCapability<Input, Output>,
 ): CapabilityRef<Input, Output> => capability[REQUEST_REF]
 
-// ── capability/tool ─────────────────────────────────────────────────────────
+// ── tool capability ─────────────────────────────────────────────────────────
 
-/**
+/*
  * `tool(...)` — typed factory for LLM-callable Capabilities.
  *
  * Authors call `tool({ id, description, params, execute, ... })` directly.
@@ -430,8 +424,6 @@ export const ref = <Input, Output>(
  * Lowering: produces a branded native Effect AI tool annotated with Gent
  * metadata. Runtime code reads Gent-only fields from that annotation instead
  * of widening Effect's tool surface.
- *
- * @module
  */
 
 const ToolCapabilityBrand: unique symbol = Symbol("@gent/core/ToolCapability")
@@ -510,10 +502,7 @@ const getToolMetadataOption = (tool: AiTool.Any): GentToolMetadata | undefined =
   Context.get(tool.annotations, GentToolMetadataTag)
 
 export const isToolCapability = (value: unknown): value is ToolCapability => {
-  if (
-    !(AiTool.isUserDefined(value) || AiTool.isDynamic(value) || AiTool.isProviderDefined(value)) ||
-    !(ToolCapabilityBrand in value)
-  ) {
+  if (!AiTool.isDynamic(value) || !(ToolCapabilityBrand in value)) {
     return false
   }
   return !Predicate.isUndefined(getToolMetadataOption(value))
@@ -729,12 +718,60 @@ const TOOL_ID_PATTERN = /^[a-zA-Z0-9-]+(?:_[a-zA-Z0-9-]+)*(?:\.[a-zA-Z0-9-]+(?:_
 
 export const wireToolName = (id: string): string => id.replaceAll(".", WIRE_NAMESPACE_SEPARATOR)
 
-export const toolIdFromWire = (name: string): string =>
-  name.replaceAll(WIRE_NAMESPACE_SEPARATOR, ".")
+const toolIdFromWire = (name: string): string => name.replaceAll(WIRE_NAMESPACE_SEPARATOR, ".")
 
 /** True when `id` has a wire name every provider accepts and that decodes back to it. */
 export const isWireToolId = (id: string): boolean =>
   TOOL_ID_PATTERN.test(id) && wireToolName(id).length <= WIRE_TOOL_NAME_MAX
+
+/**
+ * True when the tool's parameters can be written as the JSON Schema a model
+ * request lists (a symbol-keyed struct cannot). Extension validation rejects
+ * any other tool, so every loaded tool has one.
+ */
+export const hasWireParameters = (tool: ToolCapability): boolean =>
+  Result.isSuccess(Result.try(() => AiTool.getJsonSchema(tool)))
+
+/** A prompt as the provider sees it: every tool call and result under its tool's wire name. */
+export const toWirePrompt = (prompt: Prompt.Prompt): Prompt.Prompt =>
+  Prompt.fromMessages(
+    prompt.content.map((message): Prompt.Message => {
+      switch (message.role) {
+        case "assistant":
+          return Prompt.makeMessage("assistant", {
+            content: message.content.map((part) => {
+              if (part.type === "tool-call" || part.type === "tool-result") {
+                return { ...part, name: wireToolName(part.name) }
+              }
+              return part
+            }),
+            options: message.options,
+          })
+        case "tool":
+          return Prompt.makeMessage("tool", {
+            content: message.content.map((part) => {
+              if (part.type === "tool-result") return { ...part, name: wireToolName(part.name) }
+              return part
+            }),
+            options: message.options,
+          })
+        default:
+          return message
+      }
+    }),
+  )
+
+/** A part of the model's reply, with each tool named by its id again. */
+export const fromWireToolPart = (part: Response.AnyPart): Response.AnyPart => {
+  switch (part.type) {
+    case "tool-params-start":
+    case "tool-call":
+    case "tool-result":
+      return { ...part, name: toolIdFromWire(part.name) }
+    default:
+      return part
+  }
+}
 
 // ── tool-binding ────────────────────────────────────────────────────────────
 
