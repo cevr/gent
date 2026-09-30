@@ -1044,6 +1044,70 @@ describe("continuation", () => {
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
     }).pipe(Effect.timeout("4 seconds")),
   )
+  // The actor runs its handlers concurrently, so a sender's stop can run
+  // before the handler of a steer the sender sent first. The steer's handler
+  // then admits it after the stop found nothing to take back.
+  it.live("a steer admitted after a stop that names it never runs", () =>
+    Effect.gen(function* () {
+      const requestId = RequestId.make("req-interject-after-stop")
+      const parent = { sessionId: SessionId.make("parent"), branchId: BranchId.make("parent") }
+      const promptTexts: Array<string> = []
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        { ...toolCallStep("echo", { text: "step 1" }), gated: true },
+        {
+          ...textStep("Done without the correction."),
+          assertOptions: (options) => {
+            for (const message of Prompt.make(options.prompt).content) {
+              if (message.role !== "user") continue
+              for (const part of message.content) {
+                if (part.type === "text") promptTexts.push(part.text)
+              }
+            }
+          },
+        },
+      ])
+      const eventsRef = yield* Ref.make<AgentEvent[]>([])
+      yield* Effect.gen(function* () {
+        const agentLoop = yield* makeAgentLoopService
+        const messageStorage = yield* MessageStorage
+        const fiber = yield* Effect.forkChild(
+          runAgentLoop(agentLoop, makeContMessage("a turn the steer would join")),
+        )
+        yield* controls.waitForCall(0)
+        // The stop's handler runs first; the steer it names is not admitted yet.
+        expect(
+          yield* stopAgentLoopMessage({
+            sessionId: contSessionId,
+            branchId: contBranchId,
+            messageId: interjectionMessageId(requestId),
+            requestId: "req-stop-before-admission",
+            requester: parent,
+          }),
+        ).toBe(false)
+        yield* steerAgentLoop(
+          {
+            _tag: "Interject",
+            sessionId: contSessionId,
+            branchId: contBranchId,
+            requestId,
+            message: "LATE-CORRECTION",
+            wake: true,
+          },
+          parent,
+        )
+        yield* controls.emitAll(0)
+        yield* Fiber.join(fiber)
+        yield* waitForPhase(agentLoop, { sessionId: contSessionId, branchId: contBranchId }, "Idle")
+        // The running turn reached its next step without the correction, and
+        // the correction opened no turn of its own.
+        expect(yield* controls.callCount).toBe(2)
+        expect(promptTexts).not.toContain("LATE-CORRECTION")
+        expect((yield* Ref.get(eventsRef)).filter(Schema.is(TurnCompleted))).toHaveLength(1)
+        const messages = yield* messageStorage.listMessages(contBranchId)
+        expect(messages.filter((message) => message._tag === "interjection")).toHaveLength(0)
+      }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
+    }).pipe(Effect.timeout("4 seconds")),
+  )
   it.live("a stop that names the running turn's message reports that it stopped the turn", () =>
     Effect.gen(function* () {
       const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
@@ -2786,7 +2850,7 @@ const makeHarness = (
       }),
       startedRef: yield* Ref.make(true),
       turnSettled: () => Effect.succeed(false),
-      messageStored: () => Effect.succeed(false),
+      steerDecided: () => Effect.succeed(false),
     })
     const ranTurns = yield* Ref.make<ReadonlyArray<string>>([])
     const interruptedTurns = yield* Ref.make<ReadonlyArray<boolean>>([])
@@ -6138,7 +6202,7 @@ describe("wake admission", () => {
         startedRef: yield* Ref.make(true),
         turnSettled: (messageId) => Effect.succeed(messageId === MessageId.make("settled")),
         // The running turn opened on "busy", so its message is stored.
-        messageStored: (messageId) => Effect.succeed(messageId === MessageId.make("busy")),
+        steerDecided: (messageId) => Effect.succeed(messageId === MessageId.make("busy")),
       }).pipe(
         Effect.provideService(AgentLoopQueueStorage, {
           getQueueState: () => Ref.get(rows),

@@ -568,8 +568,11 @@ type LoopInboxContext = {
   readonly startedRef: Ref.Ref<boolean>
   /** Whether this message's turn already has its receipt (a stored duration). */
   readonly turnSettled: (messageId: MessageId) => Effect.Effect<boolean, AgentLoopError>
-  /** Whether this message is stored: a steering item joined a turn or ran as one. */
-  readonly messageStored: (messageId: MessageId) => Effect.Effect<boolean, AgentLoopError>
+  /**
+   * Whether a steering item needs no queueing: its message is stored (it
+   * joined a turn or ran as one), or a stop named it and recorded a cancel.
+   */
+  readonly steerDecided: (messageId: MessageId) => Effect.Effect<boolean, AgentLoopError>
 }
 
 export type LoopInbox = {
@@ -614,7 +617,8 @@ export type LoopInbox = {
    * Queue one steering item and answer with the phase the loop was in *before*
    * the append, which is what a caller must test to decide on a wake. Reading
    * the phase separately would race a turn that ended in between. None: the
-   * item was already delivered (a repeat of its request id), and nothing changed.
+   * item was already delivered (a repeat of its request id), or a stop named
+   * it before it was admitted, and nothing changed.
    */
   readonly steer: (item: QueuedTurnItem) => Effect.Effect<Option.Option<LoopState>, AgentLoopError>
   /**
@@ -866,9 +870,14 @@ export const makeLoopInbox = (
     )
 
     // Delivery stores the message before it drops the item, and the drop takes
-    // this permit, so under it an item is either still queued or stored.
+    // this permit, so under it an item is either still queued or stored. A
+    // stop records its cancel before its take-back, and the take-back takes
+    // this permit: a steer that reads no cancel here is queued before the
+    // take-back looks, and one admitted later reads the cancel and is dropped.
+    // The actor runs handlers concurrently, so a steer sent before its
+    // sender's stop can still be admitted after it.
     const steer = Effect.fn("LoopInbox.steer")(function* (item: QueuedTurnItem) {
-      if (yield* scope.messageStored(item.message.id)) return Option.none<LoopState>()
+      if (yield* scope.steerDecided(item.message.id)) return Option.none<LoopState>()
       return yield* commitQueueTransactionHeld("queued steering", (s) => ({
         value: Option.some(s.state),
         next: { ...s, queue: appendSteeringItem(s.queue, item) },
@@ -1683,6 +1692,7 @@ const makeAgentLoopBehavior = (
     const followUp = yield* AgentLoopFollowUp
     const approval = yield* ApprovalService
     const messageStorage = yield* MessageStorage
+    const operations = yield* SessionOperationStorage
     const recoveryEvents = yield* EventStorage
     const host = yield* makeExtensionHostPlatform
     const runtimeContext = yield* captureAgentLoopRuntimeContext
@@ -1899,13 +1909,16 @@ const makeAgentLoopBehavior = (
           Effect.map((message) => Predicate.isNotUndefined(message?.turnDurationMs)),
           asAgentLoopError("Cannot read submitted message"),
         ),
-      messageStored: (messageId) =>
-        messageStorage
-          .getMessage(messageId)
-          .pipe(
-            Effect.map(Predicate.isNotUndefined),
-            asAgentLoopError("Cannot read steered message"),
-          ),
+      steerDecided: (messageId) =>
+        Effect.gen(function* () {
+          const stored = yield* messageStorage
+            .getMessage(messageId)
+            .pipe(asAgentLoopError("Cannot read steered message"))
+          if (Predicate.isNotUndefined(stored)) return true
+          return yield* operations
+            .isTurnCancelled({ sessionId, branchId, messageId })
+            .pipe(asAgentLoopError("Cannot read targeted cancellation"))
+        }),
     })
 
     const recordTurnFailure = (cause: Cause.Cause<unknown>, messageId: MessageId) =>
