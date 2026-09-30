@@ -49,8 +49,8 @@ import { ExtensionHealthIssue, ExtensionHealthSnapshot } from "@gent/core/protoc
 /**
  * The client log file and the doctor's log section.
  *
- * Every case runs against a directory it creates and owns. `/tmp/gent/logs`
- * belongs to a live gent, so a test that removed it would take a running
+ * Every case runs against a directory it creates and owns. The real log
+ * directory belongs to a live gent, so a test that removed it would take a running
  * instance's logs with it, and a test that read it would race whatever else
  * writes there.
  *

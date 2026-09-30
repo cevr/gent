@@ -1,19 +1,21 @@
 import { describe, expect, it } from "effect-bun-test"
 import { BunFileSystem } from "@effect/platform-bun"
-import { ConfigProvider, Effect, FileSystem, Layer, Random, Schema } from "effect"
+import { ConfigProvider, DateTime, Effect, FileSystem, Layer, Schema } from "effect"
 import {
   buildLogPaths,
+  ensureLogDir,
   GentLogLevel,
   GentObservability,
   GentTracerLive,
-  LOG_DIR,
 } from "../src/logger"
-import { resolveLogDir } from "../src/server"
+import { dataPaths } from "../src/server"
 
 // ── log paths ───────────────────────────────────────────────────────────────
 
+const LOG_DIR = "/nonexistent/gent-probe-x/logs"
+
 describe("buildLogPaths", () => {
-  it.effect("returns a deterministic shape under the central log dir", () =>
+  it.effect("returns a deterministic shape under the given log dir", () =>
     Effect.sync(() => {
       const paths = buildLogPaths("/Users/example/repo", LOG_DIR)
       expect(paths.dir).toBe(LOG_DIR)
@@ -32,9 +34,12 @@ describe("buildLogPaths", () => {
 })
 
 const logDirFor = (env: Record<string, string>) =>
-  resolveLogDir.pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))))
+  dataPaths("/nonexistent/gent-probe-home").pipe(
+    Effect.map((paths) => paths.logDir),
+    Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))),
+  )
 
-describe("resolveLogDir", () => {
+describe("the log directory", () => {
   it.effect("a run with its own data directory keeps its logs there", () =>
     Effect.gen(function* () {
       expect(yield* logDirFor({ GENT_DATA_DIR: "/nonexistent/gent-scratch" })).toBe(
@@ -43,10 +48,25 @@ describe("resolveLogDir", () => {
     }),
   )
 
-  it.effect("a run without a data directory uses the shared log directory", () =>
+  it.effect("a run without a data directory logs under its home's data directory", () =>
     Effect.gen(function* () {
-      expect(yield* logDirFor({})).toBe(LOG_DIR)
+      expect(yield* logDirFor({})).toBe("/nonexistent/gent-probe-home/.gent/logs")
     }),
+  )
+
+  it.scopedLive("startup removes gent logs past retention and keeps the rest", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "gent-log-retention-" })
+      const names = ["old-server.log", "old-client.log", "new-server.log", "old-notes.txt"]
+      yield* Effect.forEach(names, (name) => fs.writeFileString(`${dir}/${name}`, "x\n"))
+      const monthAgo = DateTime.toDateUtc(DateTime.subtract(yield* DateTime.now, { days: 30 }))
+      for (const name of ["old-server.log", "old-client.log", "old-notes.txt"]) {
+        yield* fs.utimes(`${dir}/${name}`, monthAgo, monthAgo)
+      }
+      yield* ensureLogDir(dir)
+      expect((yield* fs.readDirectory(dir)).toSorted()).toEqual(["new-server.log", "old-notes.txt"])
+    }).pipe(Effect.provide(BunFileSystem.layer)),
   )
 })
 
@@ -63,12 +83,13 @@ const decodeLogEntry = Schema.decodeUnknownSync(LogEntry)
 describe("GentObservability", () => {
   it.scopedLive("writes one JSON line per log entry to the cwd's server log", () =>
     Effect.gen(function* () {
-      const cwd = `/logger-test/${yield* Random.nextInt}`
-      const logPath = buildLogPaths(cwd, LOG_DIR).log
       const fs = yield* FileSystem.FileSystem
+      const logDir = yield* fs.makeTempDirectoryScoped({ prefix: "gent-logger-" })
+      const cwd = "/logger-test/one-line"
+      const logPath = buildLogPaths(cwd, logDir).log
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const context = yield* Layer.build(GentObservability(cwd, "Debug", LOG_DIR))
+          const context = yield* Layer.build(GentObservability(cwd, "Debug", logDir))
           yield* Effect.logInfo("hello-from-test").pipe(
             Effect.annotateLogs({ sessionId: "s-1" }),
             Effect.provideContext(context),
@@ -76,7 +97,6 @@ describe("GentObservability", () => {
         }),
       )
       const lines = (yield* fs.readFileString(logPath)).trim().split("\n")
-      yield* Effect.ignore(fs.remove(logPath))
       expect(lines.length).toBe(1)
       const entry = decodeLogEntry(lines[0])
       expect(entry.msg).toBe("hello-from-test")

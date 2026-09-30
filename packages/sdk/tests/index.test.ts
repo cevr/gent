@@ -13,7 +13,6 @@ describe("SDK public surface", () => {
       "dataPaths",
       "ensureLogDir",
       "makeJsonFileLogger",
-      "resolveLogDir",
       "serverLock",
     ])
     expect("GentRpcs" in RuntimePublicSdk).toBe(false)

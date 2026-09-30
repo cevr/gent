@@ -24,8 +24,9 @@ import {
   ServerLockEntry,
 } from "../src/server"
 import { BunServices } from "@effect/platform-bun"
-import { hostname, tmpdir } from "node:os"
+import { homedir, hostname, tmpdir } from "node:os"
 import { Gent } from "../src/client"
+import { buildLogPaths } from "../src/logger"
 
 // ── build fingerprint ───────────────────────────────────────────────────────
 
@@ -1113,6 +1114,25 @@ describe("serverLock.stop", () => {
         expect(signals).toEqual(["SIGTERM"])
         expect(Option.isNone(yield* serverLock.read(home))).toBe(true)
       }),
+    ),
+  )
+})
+
+// ── logs ────────────────────────────────────────────────────────────────────
+
+describe("server logs", () => {
+  // Logs follow the data directory. A run without GENT_DATA_DIR logs under
+  // `<home>/.gent/logs`; under the test preload the home is this file's own,
+  // so the logs go away with it instead of piling up in a shared /tmp path.
+  it.scopedLive("a server without a data directory logs under its home's data directory", () =>
+    provideFs(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const cwd = `${process.cwd()}/log-location-probe`
+        yield* Gent.server({ cwd, state: Gent.state.memory(), provider: Gent.provider.mock() })
+        const { log } = buildLogPaths(cwd, `${homedir()}/.gent/logs`)
+        expect(yield* fs.exists(log)).toBe(true)
+      }).pipe(Effect.timeout("15 seconds")),
     ),
   )
 })

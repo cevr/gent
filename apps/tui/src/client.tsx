@@ -15,8 +15,8 @@ import {
 } from "effect"
 import {
   buildLogPaths,
+  dataPaths,
   ensureLogDir,
-  resolveLogDir,
   type GentRuntime,
   makeJsonFileLogger,
 } from "@gent/sdk"
@@ -77,14 +77,15 @@ import { useWorkspace } from "./workspace"
 
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import { appendFileSync, writeFileSync } from "node:fs" // eslint-disable-line effect/noNodeBuiltinImport -- Synchronous shutdown logging runs after the Effect runtime closes.
+import { homedir } from "os"
 
-// Client log path derives from `process.cwd()` and `resolveLogDir` — the same
-// sources the launcher threads into `GentObservability` for the server. Both
-// ends hash the same cwd into the same directory, so a single gent instance
-// writes client + server logs under one filename prefix, beside its own data
-// when `GENT_DATA_DIR` is set. Resolved once at load: `shutdownLog` writes
-// after the Effect runtime closes.
-const CLIENT_LOG_DIR = Effect.runSync(resolveLogDir)
+// Client log path derives from `process.cwd()` and `dataPaths(home).logDir` —
+// the same sources the server threads into `GentObservability`, with the home
+// the platform reads. Both ends hash the same cwd into the same directory, so
+// a single gent instance writes client + server logs under one filename
+// prefix, beside its data. Resolved once at load: `shutdownLog` writes after
+// the Effect runtime closes.
+const CLIENT_LOG_DIR = Effect.runSync(dataPaths(homedir())).logDir
 const CLIENT_LOG_PATH = buildLogPaths(process.cwd(), CLIENT_LOG_DIR).client
 
 // Clock-bypass: `shutdownLog` runs after Effect runtime teardown, so we

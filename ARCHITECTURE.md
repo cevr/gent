@@ -1581,7 +1581,7 @@ Logging conventions:
 
 Log destinations:
 
-- One directory, `/tmp/gent/logs/`, or `<GENT_DATA_DIR>/logs` when `GENT_DATA_DIR` is set (`resolveLogDir` in `packages/sdk/src/server.ts`), so an isolated run keeps its logs beside its database
+- One directory, `<GENT_DATA_DIR or ~/.gent>/logs` (`dataPaths(home).logDir` in `packages/sdk/src/server.ts`): logs follow the data directory, so an isolated run keeps its logs beside its database. Startup (`ensureLogDir`) removes gent logs last written more than 14 days ago
 - `<hash>-<ts>-server.log` — server-side JSON lines (via the SDK's `GentObservability`)
 - `<hash>-<ts>-client.log` — TUI-side JSON lines (`clientLog` and `clientTraceLogger` in `apps/tui/src/client.tsx`); `<hash>` names the cwd, `<ts>` the process start
 - Spans go to an OTLP endpoint when `OTEL_EXPORTER_OTLP_ENDPOINT` is set (`GentTracerLive`); no trace file is written

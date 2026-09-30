@@ -3,9 +3,11 @@ import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http"
 import { BatchSpanProcessor } from "@opentelemetry/sdk-trace-base"
 import {
   Cause,
+  Clock,
   Config,
   type Context,
   DateTime,
+  Duration,
   Effect,
   FileSystem,
   Layer,
@@ -50,19 +52,19 @@ export const GentTracerLive: Layer.Layer<never> = Layer.unwrap(
 // ── log-paths ───────────────────────────────────────────────────────────────
 
 /**
- * Centralized log path resolution — logs go to /tmp/gent/logs/, or to
- * `<GENT_DATA_DIR>/logs` for a run with a data directory of its own
- * (`resolveLogDir` in server.ts, beside the data-path owner), so an isolated
- * run keeps its logs beside its database and its doctor reads them.
+ * Log path resolution — logs follow the data directory, in
+ * `<GENT_DATA_DIR or ~/.gent>/logs` (`dataPaths(home).logDir` in server.ts,
+ * the data-path owner), so an isolated run keeps its logs beside its database
+ * and its doctor reads them.
  *
  * Files are named by a short hash of the cwd + process start timestamp so
  * multiple gent instances don't clobber each other and old logs are easy to
- * identify by time.
+ * identify by time. Nothing outside gent clears the directory, so
+ * {@link ensureLogDir} removes log files older than {@link LOG_RETENTION}.
  *
  * File naming: `<hash>-<ts>-server.log`, `<hash>-<ts>-client.log`
  */
 
-export const LOG_DIR = "/tmp/gent/logs"
 const FALLBACK_CWD_IDENTITY = "unknown-cwd"
 
 /** FNV-1a 32-bit hash → 8-char hex */
@@ -133,11 +135,31 @@ export const buildLogPaths = (cwd: string, dir: string): LogPaths => {
   }
 }
 
-/** Create the log directory if it doesn't exist. Call once at startup. */
+/** How long a log file stays after its last write. */
+const LOG_RETENTION = Duration.days(14)
+
+/** Remove `name` from `dir` when it is a gent log last written before `cutoff`. */
+const pruneLogFile = (dir: string, name: string, cutoff: number) =>
+  Effect.gen(function* () {
+    if (Option.isNone(classifyLogFile(name))) return
+    const fs = yield* FileSystem.FileSystem
+    const path = `${dir}/${name}`
+    const written = (yield* fs.stat(path)).mtime
+    if (Option.exists(written, (date) => date.getTime() < cutoff)) yield* fs.remove(path)
+  }).pipe(Effect.ignore)
+
+/**
+ * Create the log directory if it doesn't exist, and remove the gent logs in it
+ * last written more than {@link LOG_RETENTION} ago. Call once at startup. A
+ * file it cannot read or remove is left as it is.
+ */
 export const ensureLogDir = (dir: string): Effect.Effect<void, never, FileSystem.FileSystem> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     yield* Effect.ignore(fs.makeDirectory(dir, { recursive: true }))
+    const cutoff = (yield* Clock.currentTimeMillis) - Duration.toMillis(LOG_RETENTION)
+    const names = yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => []))
+    yield* Effect.forEach(names, (name) => pruneLogFile(dir, name, cutoff), { discard: true })
   })
 
 // ── logger ──────────────────────────────────────────────────────────────────

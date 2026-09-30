@@ -19,7 +19,6 @@ import {
   classifyLogFile,
   dataPaths,
   Gent,
-  resolveLogDir,
   serverLock,
   type ServerLockEntry,
   type ServerLockStatus,
@@ -157,7 +156,7 @@ export const inspectStorage = (
 
 /**
  * Read a log directory. The doctor passes the one this environment writes to
- * (`resolveLogDir`); tests pass a directory they own, so they never read or
+ * (`dataPaths(home).logDir`); tests pass a directory they own, so they never read or
  * remove real logs.
  */
 export const inspectLogs = (dir: string): Effect.Effect<LogHealth, never, FileSystem.FileSystem> =>
@@ -262,7 +261,7 @@ export const makeDoctorReport = (
       home,
       storage,
       server,
-      logs: yield* inspectLogs(yield* resolveLogDir),
+      logs: yield* inspectLogs((yield* dataPaths(home)).logDir),
       extensions: Option.getOrElse(Option.fromNullishOr(extensions), defaultExtensions),
     }
   })

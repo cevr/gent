@@ -52,7 +52,7 @@ import { FetchHttpClient, Headers, HttpClient, HttpRouter, HttpServer } from "ef
 import { BuiltinExtensionModules, BuiltinExtensions, CellBranchTools } from "@gent/extensions"
 import type { BranchToolFeature } from "@gent/core/extensions/branch-tools"
 import type { LanguageModel } from "effect/unstable/ai"
-import { GentLogLevel, GentObservability, LOG_DIR } from "./logger.js"
+import { GentLogLevel, GentObservability } from "./logger.js"
 
 // ── data-paths ──────────────────────────────────────────────────────────────
 
@@ -66,10 +66,6 @@ import { GentLogLevel, GentObservability, LOG_DIR } from "./logger.js"
  * here, so an operator who redirects the database does not get tools that
  * look somewhere else.
  */
-
-/** A malformed value is no value: the fallback under `home` still applies. */
-const optionalEnv = (name: string): Effect.Effect<Option.Option<string>> =>
-  Config.option(Config.string(name)).pipe(Effect.orElseSucceed(() => Option.none<string>()))
 
 const DB_FILE = "data.db"
 
@@ -85,6 +81,12 @@ interface DataPaths {
   readonly serverLock: string
   /** The SQLite file whose exclusive lock the owning server holds for its life. */
   readonly serverKernelLock: string
+  /**
+   * Where the server and the client write their logs. They follow the data
+   * directory, so an isolated run keeps its logs beside its database and its
+   * `doctor` reads the logs that run wrote.
+   */
+  readonly logDir: string
 }
 
 /** The paths inside an already-resolved data directory. */
@@ -98,6 +100,7 @@ const dataPathsIn = (dataDir: string): DataPaths => {
     archiveDir: pathJoin(resolvedDir, "storage-archive"),
     serverLock: pathJoin(resolvedDir, "server.lock"),
     serverKernelLock: pathJoin(resolvedDir, "server.lock.db"),
+    logDir: pathJoin(resolvedDir, "logs"),
   }
 }
 
@@ -108,19 +111,6 @@ const dataPathsIn = (dataDir: string): DataPaths => {
  */
 export const dataPaths = (home: string): Effect.Effect<DataPaths> =>
   Effect.map(resolveDataDir(home), dataPathsIn)
-
-/**
- * The log directory: `<GENT_DATA_DIR>/logs` for a run with a data directory of
- * its own, else the shared {@link LOG_DIR}. An isolated run keeps its logs
- * beside its database, and its `doctor` reads the logs that run wrote.
- */
-export const resolveLogDir: Effect.Effect<string> = Effect.map(
-  optionalEnv("GENT_DATA_DIR"),
-  Option.match({
-    onNone: () => LOG_DIR,
-    onSome: (dataDir) => pathJoin(pathResolve(dataDir), "logs"),
-  }),
-)
 
 // ── build-fingerprint ───────────────────────────────────────────────────────
 
@@ -1022,7 +1012,8 @@ const buildOwnedServer = (
     )
     // A user extension imports the same effect modules the shipped ones do.
     yield* platform.bindModules(BuiltinExtensionModules)
-    const observability = GentObservability(options.cwd, logLevel, yield* resolveLogDir)
+    const { logDir } = yield* dataPaths(home)
+    const observability = GentObservability(options.cwd, logLevel, logDir)
     const coreServices = yield* Layer.buildWithScope(
       createDependencies({
         cwd: options.cwd,
