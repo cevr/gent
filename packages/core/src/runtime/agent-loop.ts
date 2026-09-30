@@ -971,7 +971,7 @@ export const makeLoopInbox = (
 /**
  * A turn handed to the worker, with a residency hold taken at the hand-over.
  * The worker closes the hold when it is done with the turn, receipt and
- * hooks included. The next turn is handed over before that, so the loop
+ * hooks included; closing the loop closes it too. The next turn is handed over before that, so the loop
  * stays held from one turn to the next.
  */
 export interface TurnWork {
@@ -1062,11 +1062,16 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
         Effect.asVoid,
       )
 
-  /** Hands a turn to the worker. The hold is taken here, before the caller goes on. */
+  /**
+   * Hands a turn to the worker. The hold is taken here, before the caller
+   * goes on. It is a child of the loop scope: the worker releases it when it
+   * is done with the turn, and closing the loop releases a turn the worker
+   * never took.
+   */
   const enqueueTurnWorker = (state: RunningState): Effect.Effect<void> =>
     Effect.uninterruptible(
       Effect.gen(function* () {
-        const resident = yield* Scope.make()
+        const resident = yield* Scope.fork(scope.loopScope)
         yield* scope.residency.held.pipe(Scope.provide(resident))
         yield* TxQueue.offer(scope.turnWorkerQueue, { state, resident })
       }),

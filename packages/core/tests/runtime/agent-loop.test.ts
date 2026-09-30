@@ -2760,6 +2760,8 @@ const makeHarness = (
     readonly completeFailedTurn?: (state: RunningState) => Effect.Effect<void>
     /** Settle the in-flight slot after each turn, as the real `runTurn` does. */
     readonly settles?: boolean
+    /** The entity's keep-alive switch; by default a hold switches nothing, as with no cluster. */
+    readonly keepAlive?: (enabled: boolean) => Effect.Effect<void>
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -2801,8 +2803,7 @@ const makeHarness = (
       sideMutationSemaphore,
       interruptSemaphore: yield* Semaphore.make(1),
       turnWorkerQueue,
-      // No cluster here: a hold switches nothing.
-      residency: yield* makeHoldCount(() => Effect.void),
+      residency: yield* makeHoldCount(options.keepAlive ?? (() => Effect.void)),
       activeStreamRef: yield* Ref.make(Option.none<ActiveStreamHandle>()),
       turnInterruption,
       interruptToolWork: Effect.void,
@@ -3104,6 +3105,24 @@ describe("a start interrupted while it waits for the loop", () => {
       yield* Effect.yieldNow
       expect(yield* Ref.get(harness.ranTurns)).toEqual([])
       yield* Fiber.interrupt(loop)
+    }).pipe(Effect.timeout("2 seconds")),
+  )
+
+  it.live("closing the loop releases the hold of a turn handed over but not yet taken", () =>
+    Effect.gen(function* () {
+      const switched: Array<boolean> = []
+      const harness = yield* makeHarness(
+        { state: buildIdleState(), queue: emptyLoopQueueState() },
+        { settles: true, keepAlive: (enabled) => Effect.sync(() => switched.push(enabled)) },
+      )
+      // No worker runs, so the handed-over turn stays in the worker queue,
+      // as it does when the loop closes between a hand-over and the take.
+      yield* harness.worker.admitAndStart(queuedItem("handed-over"), { queueOnly: false })
+      expect(yield* TxQueue.size(harness.turnWorkerQueue)).toBe(1)
+      expect(switched).toEqual([true])
+      yield* Scope.close(harness.loopScope, Exit.void)
+      // The entity may passivate again: the keep-alive is off.
+      expect(switched).toEqual([true, false])
     }).pipe(Effect.timeout("2 seconds")),
   )
 
