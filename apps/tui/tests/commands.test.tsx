@@ -118,10 +118,11 @@ describe("executeSlashCommand", () => {
 // eslint-disable-next-line effect/noNullish -- a wire field the server leaves unset is present and undefined.
 const absent = undefined
 
+/** The palette as ctrl+p opens it: the session view hands the key to `handleKeybind`. */
 function OpenPaletteOnMount() {
   const command = useCommand()
   createEffect(() => {
-    command.openPalette()
+    command.handleKeybind({ name: "p", ctrl: true }, [], true)
   })
   return <CommandPalette />
 }

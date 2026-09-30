@@ -116,7 +116,7 @@ describe("system theme", () => {
 function OpenPaletteOnMount() {
   const command = useCommand()
   createEffect(() => {
-    command.openPalette()
+    command.handleKeybind({ name: "p", ctrl: true }, [], true)
   })
   return <CommandPalette />
 }

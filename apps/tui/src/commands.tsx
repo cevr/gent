@@ -93,7 +93,6 @@ interface CommandContextValue {
     composerIdle: boolean,
   ) => boolean
   paletteOpen: Accessor<boolean>
-  openPalette: () => void
   closePalette: () => void
 }
 
@@ -144,7 +143,6 @@ export function CommandProvider(props: CommandProviderProps) {
   const value: CommandContextValue = {
     handleKeybind,
     paletteOpen,
-    openPalette: () => setPaletteOpen(true),
     closePalette: () => setPaletteOpen(false),
   }
 
@@ -220,7 +218,6 @@ interface PaletteItem {
   readonly description?: string
   readonly category?: string
   readonly shortcut?: string
-  readonly disabled?: boolean
   readonly onSelect: () => void
 }
 
@@ -237,7 +234,6 @@ interface PaletteLevel {
   readonly id: string
   readonly title: string
   readonly source: Accessor<LevelRows>
-  readonly onEnter?: () => void
 }
 
 /**
@@ -384,7 +380,6 @@ export function CommandPalette() {
   const pushLevel = (level: PaletteLevel) => {
     setState((current) => ({ levelStack: [...current.levelStack, level], category: "" }))
     resetList()
-    level.onEnter?.()
   }
 
   const rootLevel = (): PaletteLevel => ({
@@ -471,7 +466,6 @@ export function CommandPalette() {
   }
 
   const handleSelect = (item: PaletteItem) => {
-    if (item.disabled === true) return
     item.onSelect()
   }
 
@@ -545,14 +539,11 @@ export function CommandPalette() {
   const rows = (): ReadonlyArray<SelectListRow<PaletteItem>> =>
     filteredItems().map((item) =>
       selectable(item, (isSelected, id) => {
-        const disabled = item.disabled === true
         const itemTextColor = () => {
-          if (disabled) return theme.textMuted
           if (isSelected()) return theme.primary
           return theme.text
         }
         const metaColor = () => {
-          if (disabled) return theme.textMuted
           if (isSelected()) return theme.primary
           return theme.textMuted
         }
@@ -570,9 +561,7 @@ export function CommandPalette() {
               truncate
               style={{ fg: itemTextColor() }}
             >
-              <span style={{ bold: isSelected() && !disabled }}>
-                {truncate(item.title, labelWidth() - 2)}
-              </span>
+              <span style={{ bold: isSelected() }}>{truncate(item.title, labelWidth() - 2)}</span>
             </text>
             <Show when={hasDetails()}>
               <text flexGrow={1} wrapMode="none" truncate style={{ fg: metaColor() }}>
