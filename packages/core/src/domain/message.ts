@@ -793,8 +793,8 @@ export const messagePartsReasoning = (parts: ReadonlyArray<MessagePart>): string
   parts.flatMap((part) => messagePartReasoning(part) ?? []).join("")
 
 /**
- * The answer a child run hands back: the last assistant message's text, or its
- * reasoning when the model wrote nothing else.
+ * The answer a child run hands back: the last assistant message's text parts,
+ * one per line, or its reasoning when the model wrote no text.
  */
 export const latestAssistantText = (
   messages: ReadonlyArray<{ readonly role: string; readonly parts: ReadonlyArray<MessagePart> }>,
@@ -802,7 +802,9 @@ export const latestAssistantText = (
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index]
     if (Predicate.isUndefined(message) || message.role !== "assistant") continue
-    const text = messagePartsTextLines(message.parts)[0] ?? ""
+    const text = messagePartsTextLines(message.parts)
+      .filter((line) => line.length > 0)
+      .join("\n")
     if (text.length > 0) return text
     return messagePartsReasoningLines(message.parts).join("\n")
   }

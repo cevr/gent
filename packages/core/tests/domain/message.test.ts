@@ -1554,4 +1554,23 @@ describe("message part projection", () => {
     expect(latestAssistantText(latestWins)).toBe("second")
     expect(latestAssistantText([])).toBe("")
   })
+
+  test("a child's answer keeps every text part of its last assistant message", () => {
+    const twoItems = [
+      makeMessage("a-5", "assistant", [
+        Prompt.textPart({ text: "Here is the plan." }),
+        Prompt.textPart({ text: "Final answer: 42." }),
+      ]),
+    ]
+    expect(latestAssistantText(twoItems)).toBe("Here is the plan.\nFinal answer: 42.")
+    // An empty text part stays when it carries provider metadata (an OpenAI item id).
+    const emptyFirstItem = [
+      makeMessage("a-6", "assistant", [
+        Prompt.reasoningPart({ text: "thinking" }),
+        Prompt.textPart({ text: "" }),
+        Prompt.textPart({ text: "the answer" }),
+      ]),
+    ]
+    expect(latestAssistantText(emptyFirstItem)).toBe("the answer")
+  })
 })
