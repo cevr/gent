@@ -9,6 +9,7 @@ import {
   Layer,
   Option,
   Path,
+  Predicate,
   Ref,
   Schema,
   Scope,
@@ -22,8 +23,6 @@ import {
   BackgroundBashSupervisorLive,
   BashParams,
   BashTool,
-  injectGitTrailers,
-  runBashCommand,
   splitCdCommand,
   stripBackground,
 } from "../src/exec-tools.js"
@@ -107,197 +106,6 @@ describe("splitCdCommand", () => {
   test("a single-quoted directory is literal and still splits", () => {
     expect(splitCdCommand("cd '$x' && ls")).toEqual(Option.some({ cwd: "$x", command: "ls" }))
   })
-})
-
-describe("injectGitTrailers", () => {
-  const trailer = "--trailer=Session-Id:s1"
-  const inject = (command: string) => injectGitTrailers(command, SessionId.make("s1"))
-
-  test("a commit gets the session trailer right after the commit word", () => {
-    expect(inject('git commit -m "fix bug"')).toBe(`git commit ${trailer} -m "fix bug"`)
-  })
-
-  test("a commit after git global options gets the trailer", () => {
-    expect(inject("git -C sub commit -m a")).toBe(`git -C sub commit ${trailer} -m a`)
-    expect(inject("git --no-pager commit -m a")).toBe(`git --no-pager commit ${trailer} -m a`)
-    expect(inject('git -C "my dir" commit -m a')).toBe(`git -C "my dir" commit ${trailer} -m a`)
-  })
-
-  test("a commit that names its own Session-Id trailer keeps it; the other commits get one", () => {
-    expect(inject('git commit --trailer "Session-Id: x" -m a && git commit -m b')).toBe(
-      `git commit --trailer "Session-Id: x" -m a && git commit ${trailer} -m b`,
-    )
-    expect(inject("git commit --trailer=session-id:x -m a")).toBe(
-      "git commit --trailer=session-id:x -m a",
-    )
-  })
-
-  test("another trailer, or a message that reads --trailer, keeps the session trailer", () => {
-    for (const command of [
-      'git commit --trailer "Co-authored-by: X <x@x>" -m a',
-      'git commit -m a -m "--trailer"',
-      'git commit -m "--trailer=Session-Id: x"',
-    ]) {
-      expect(inject(command), command).toBe(command.replace("git commit", `git commit ${trailer}`))
-    }
-  })
-
-  test("a commit found only by name in another command's words gets no trailer", () => {
-    for (const command of ["gh issue create --title x git commit -m y", "ls -la git commit -m y"]) {
-      expect(inject(command), command).toBe(command)
-    }
-  })
-
-  test("a commit a runner runs gets the trailer", () => {
-    for (const command of [
-      "timeout 60 -- git commit -m y",
-      "nix develop -c git commit -m y",
-      "mise exec -- git commit -m y",
-      "pnpm exec git commit -m y",
-    ]) {
-      expect(inject(command), command).toBe(command.replace("git commit", `git commit ${trailer}`))
-    }
-  })
-
-  test("a commit in a coproc or a function body gets the trailer", () => {
-    expect(inject("coproc git commit -m y")).toBe(`coproc git commit ${trailer} -m y`)
-    expect(inject("coproc c { git commit -m y; }")).toBe(`coproc c { git commit ${trailer} -m y; }`)
-    expect(inject("function f { git commit -m y; }")).toBe(
-      `function f { git commit ${trailer} -m y; }`,
-    )
-  })
-
-  test("a heredoc with an escaped delimiter gets no trailer in its body", () => {
-    const command = "cat <<\\EOF > notes.md\n$(git commit -m x)\nEOF"
-    expect(inject(command)).toBe(command)
-  })
-
-  test("every commit in a chained command gets the trailer", () => {
-    expect(inject("git commit -m a && git commit -m b")).toBe(
-      `git commit ${trailer} -m a && git commit ${trailer} -m b`,
-    )
-    expect(inject("git add a.ts; git commit -m a | cat")).toBe(
-      `git add a.ts; git commit ${trailer} -m a | cat`,
-    )
-  })
-
-  test("a message that mentions git commit is left as written", () => {
-    for (const command of [
-      'git commit -m "revert git commit abc"',
-      "git commit -m 'fix git commit hook'",
-      'git commit -m "$(cat <<\'EOF\'\nexplain git commit -m "quoted"\nEOF\n)"',
-    ]) {
-      const result = inject(command)
-      expect(result, command).toBe(command.replace("git commit", `git commit ${trailer}`))
-    }
-  })
-
-  test("a heredoc body that mentions git commit is left as written", () => {
-    const command = "git commit -F - <<EOF\nsee git commit docs\nEOF"
-    expect(inject(command)).toBe(`git commit ${trailer} -F - <<EOF\nsee git commit docs\nEOF`)
-  })
-
-  test("text that only mentions git commit is not a commit", () => {
-    for (const command of [
-      "echo 'run git commit later'",
-      'git log --grep "git commit"',
-      "cat <<EOF\ngit commit -m x\nEOF",
-      "ls # git commit -m x",
-    ]) {
-      expect(inject(command), command).toBe(command)
-    }
-  })
-
-  test("a commit inside a script a shell runs gets the trailer", () => {
-    expect(inject("bash -c 'git commit -m a'")).toBe(`bash -c 'git commit ${trailer} -m a'`)
-    expect(inject('echo "$(git commit -m a)"')).toBe(`echo "$(git commit ${trailer} -m a)"`)
-  })
-
-  test("a commit in an escaped script word gets no trailer that would split the word", () => {
-    for (const command of ["bash -c git\\ commit\\ -m\\ x", 'bash -c "git "commit\\ -m\\ x']) {
-      expect(inject(command), command).toBe(command)
-    }
-    expect(inject("bash -c \"sh -c 'git commit -m x'\"")).toBe(
-      `bash -c "sh -c 'git commit ${trailer} -m x'"`,
-    )
-  })
-
-  test("a commit in a git alias runs with the trailer", () => {
-    expect(inject("git -c alias.c='!git commit -m x' c")).toBe(
-      `git -c alias.c='!git commit ${trailer} -m x' c`,
-    )
-  })
-
-  test("a stored git alias and a printed git commit get no trailer", () => {
-    for (const command of [
-      "git config alias.ci 'commit -v'",
-      'git config --global alias.ci "commit"',
-      "git config alias.c '!git commit -m x'",
-      "echo git commit -m x",
-      "echo 'git commit' | grep commit",
-    ]) {
-      expect(inject(command), command).toBe(command)
-    }
-  })
-
-  test("a commit that env -S runs gets the trailer", () => {
-    expect(inject("env -S git commit -m x")).toBe(`env -S git commit ${trailer} -m x`)
-    expect(inject("env -S 'git commit -m x'")).toBe(`env -S 'git commit ${trailer} -m x'`)
-  })
-
-  test("an escaped quote in ANSI-C quoting does not hide a later commit", () => {
-    expect(inject("git commit -m $'x8\\'s' && git commit -m x9")).toBe(
-      `git commit ${trailer} -m $'x8\\'s' && git commit ${trailer} -m x9`,
-    )
-  })
-
-  test("git push → unchanged", () => {
-    const cmd = "git push origin main"
-    expect(inject(cmd)).toBe(cmd)
-  })
-
-  test("git commit-tree → unchanged", () => {
-    const cmd = "git commit-tree abc -m msg"
-    expect(inject(cmd)).toBe(cmd)
-  })
-
-  test("already has a Session-Id trailer → unchanged", () => {
-    const cmd = 'git commit --trailer "Session-Id: bar" -m "msg"'
-    expect(inject(cmd)).toBe(cmd)
-  })
-
-  it.live("each rewritten commit runs in bash and records the message and trailer", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const dir = yield* fs.makeTempDirectoryScoped()
-      const git = "git -c user.name=t -c user.email=t@t -c commit.gpgsign=false"
-      const script = [
-        `git init -q ${dir}/r && cd ${dir}/r`,
-        `${git} commit -q --allow-empty -m "revert git commit abc"`,
-        `${git} commit -q --allow-empty -m 'fix git commit hook'`,
-        `${git} commit -q --allow-empty -F - <<EOF\nsee git commit docs\nEOF`,
-        `${git} commit -q --allow-empty -m $'it\\'s done' && ${git} commit -q --allow-empty -m after`,
-        `env -S '${git} commit -q --allow-empty -m split'`,
-        `env -S ${git} commit -q --allow-empty -m joined`,
-        `git log --format=%B%x00`,
-      ].join("\n")
-      const result = yield* runBashCommand(inject(script), Option.none()).pipe(Effect.scoped)
-      expect(result.exitCode, result.stderr).toBe(0)
-      const messages = result.stdout
-        .split("\0")
-        .map((message) => message.trim())
-        .filter((message) => message.length > 0)
-      expect(messages).toEqual([
-        "joined\n\nSession-Id: s1",
-        "split\n\nSession-Id: s1",
-        "after\n\nSession-Id: s1",
-        "it's done\n\nSession-Id: s1",
-        "see git commit docs\n\nSession-Id: s1",
-        "fix git commit hook\n\nSession-Id: s1",
-        "revert git commit abc\n\nSession-Id: s1",
-      ])
-    }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("4 seconds")),
-  )
 })
 
 describe("stripBackground", () => {
@@ -730,7 +538,7 @@ describe("BashTool execution", () => {
   )
 
   it.live(
-    "keeps a huge command result whole",
+    "keeps a result past the model bound but within the kept ends whole, with no file",
     () =>
       Effect.gen(function* () {
         // One line per iteration, far past the model-facing bound.
@@ -740,13 +548,13 @@ describe("BashTool execution", () => {
         )
 
         // The tool returns the complete output: no head/tail marker, no
-        // spill path, first and last line both present.
+        // file, first and last line both present.
         expect(result.exitCode).toBe(0)
         expect(result.stdout.length).toBeGreaterThan(maximumModelToolResultChars)
         expect(result.stdout).toContain("line 1\n")
         expect(result.stdout).toContain(`line ${lineCount}`)
-        expect(result.stdout).not.toContain("lines truncated")
-        expect(result.stdout).not.toContain("Full output saved to")
+        expect(result.stdout).not.toContain("characters truncated")
+        expect(result.outputFile).toBeUndefined()
         const storedLines = result.stdout.trimEnd().split("\n")
         expect(storedLines).toHaveLength(lineCount)
       }).pipe(withProcessTimeout),
@@ -1722,6 +1530,153 @@ describe("background job output", () => {
         expect(notice[0]).toContain("MID-RUN-MARK")
       }).pipe(Effect.timeout("40 seconds")),
     45_000,
+  )
+})
+
+describe("foreground command output", () => {
+  /** Live heap bytes after a full collection; Bun counts array buffers in it. */
+  const liveBytes = Effect.sync(() => {
+    Bun.gc(true)
+    return process.memoryUsage().heapUsed
+  })
+
+  it.scopedLive.layer(BunFileSystem.layer)(
+    "a foreground command's output past the kept ends goes to its file, not to server memory or the row",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-fg-stream-" })
+        const produced = `${directory}/produced`
+        const release = `${directory}/release`
+        const bytes = 96 * 1024 * 1024
+        const command = `head -c ${bytes} /dev/zero | tr '\\0' x; printf '\\nMID-RUN-MARK\\n'; printf 'on stderr\\n' >&2; touch ${produced}; while ! test -f ${release}; do sleep 0.02; done; printf 'after release\\n'`
+        const toolCallId = ToolCallId.make("fg-stream-call")
+        const calls = yield* Ref.make(0)
+        const providerLayer = LanguageModelLayers.testStream(() =>
+          Ref.updateAndGet(calls, (n) => n + 1).pipe(
+            Effect.map((call) => {
+              if (call === 1) {
+                return Stream.fromIterable([
+                  toolCallPart("bash", { command }, { toolCallId }),
+                  finishPart({ finishReason: "tool-calls" }),
+                ])
+              }
+              return Stream.fromIterable([
+                textDeltaPart(`reply ${call}`),
+                finishPart({ finishReason: "stop" }),
+              ])
+            }),
+          ),
+        )
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+          cwd: directory,
+          extraLayers: [RuntimeEnvironment.Live({ cwd: directory, home: directory })],
+        })
+        const file = `${directory}/.gent/background-bash/${sessionId}/${branchId}/${toolCallId}.txt`
+        const baseline = yield* liveBytes
+        yield* client.message.send({ sessionId, branchId, content: "run the command" })
+        yield* waitFor(fs.exists(produced), (exists) => exists, 20_000, "the command printed")
+
+        // The command printed 96 MiB and still runs; the server holds only its ends.
+        const held = (yield* liveBytes) - baseline
+        expect(held).toBeLessThan(bytes / 8)
+
+        yield* fs.writeFileString(release, "go")
+        const settled = yield* waitFor(
+          client.session.getSnapshot({ sessionId, branchId }),
+          (snapshot) =>
+            snapshot.runtime._tag === "Idle" &&
+            snapshot.messages.some((message) =>
+              message.parts.some((part) => part.type === "text" && part.text === "reply 2"),
+            ),
+          10_000,
+          "the command's result",
+        )
+        const stored = settled.messages
+          .flatMap((message) => message.parts)
+          .find((part) => part.type === "tool-result" && part.id === toolCallId)
+        if (Predicate.isUndefined(stored) || stored.type !== "tool-result")
+          return yield* Effect.die("Missing bash result")
+        const total =
+          bytes + "\nMID-RUN-MARK\n".length + "on stderr\n".length + "after release\n".length
+        const result = yield* Schema.decodeUnknownEffect(
+          Schema.Struct({
+            stdout: Schema.String,
+            stderr: Schema.String,
+            exitCode: Schema.Finite,
+            outputFile: Schema.String,
+            outputChars: Schema.Finite,
+          }),
+        )(stored.result)
+        // The row keeps each stream's ends and names the file with all of it.
+        expect(result.exitCode).toBe(0)
+        expect(result.stdout.length).toBeLessThanOrEqual(256 * 1024)
+        expect(result.stdout.startsWith("xxxx")).toBe(true)
+        expect(result.stdout).toContain("characters truncated")
+        expect(result.stdout.endsWith("MID-RUN-MARK\nafter release\n")).toBe(true)
+        expect(result.stderr).toBe("on stderr\n")
+        expect(result.outputFile).toBe(file)
+        expect(result.outputChars).toBe(total)
+        expect(Number((yield* fs.stat(file)).size)).toBe(total)
+      }).pipe(Effect.timeout("40 seconds")),
+    45_000,
+  )
+
+  it.scopedLive.layer(BunFileSystem.layer)(
+    "a foreground command that spilled and then timed out leaves no file",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-fg-timeout-" })
+        const command = "head -c 600000 /dev/zero | tr '\\0' x; sleep 30"
+        const toolCallId = ToolCallId.make("fg-timeout-call")
+        const calls = yield* Ref.make(0)
+        const providerLayer = LanguageModelLayers.testStream(() =>
+          Ref.updateAndGet(calls, (n) => n + 1).pipe(
+            Effect.map((call) => {
+              if (call === 1) {
+                return Stream.fromIterable([
+                  toolCallPart("bash", { command, timeout: 3000 }, { toolCallId }),
+                  finishPart({ finishReason: "tool-calls" }),
+                ])
+              }
+              return Stream.fromIterable([
+                textDeltaPart(`reply ${call}`),
+                finishPart({ finishReason: "stop" }),
+              ])
+            }),
+          ),
+        )
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+          cwd: directory,
+          extraLayers: [RuntimeEnvironment.Live({ cwd: directory, home: directory })],
+        })
+        const file = `${directory}/.gent/background-bash/${sessionId}/${branchId}/${toolCallId}.txt`
+        yield* client.message.send({ sessionId, branchId, content: "run the command" })
+        // The output passes what memory keeps whole, so the file holds it while the command runs.
+        yield* waitFor(fs.exists(file), (exists) => exists, 10_000, "the output file")
+        const settled = yield* waitFor(
+          client.session.getSnapshot({ sessionId, branchId }),
+          (snapshot) =>
+            snapshot.runtime._tag === "Idle" &&
+            snapshot.messages.some((message) =>
+              message.parts.some((part) => part.type === "text" && part.text === "reply 2"),
+            ),
+          10_000,
+          "the timed-out result",
+        )
+        const stored = settled.messages
+          .flatMap((message) => message.parts)
+          .find((part) => part.type === "tool-result" && part.id === toolCallId)
+        expect(stored).toMatchObject({ isFailure: true })
+        // A timed-out call returns no pointer, so no file stays behind for it.
+        expect(yield* fs.exists(file)).toBe(false)
+      }).pipe(Effect.timeout("25 seconds")),
+    30_000,
   )
 })
 

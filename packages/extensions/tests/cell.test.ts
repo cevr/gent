@@ -1040,9 +1040,9 @@ describe("recorded cell execution", () => {
     )
   }
 
-  // A built-in the worker cannot put back retires the worker. The snapshot
-  // after a good cell then fails, and the next cell once failed with "reset
-  // before evaluating" instead of restoring the namespace saved before it.
+  // A built-in the worker cannot put back retires the worker. The cell's
+  // result keeps the worker's one note, the host saves nothing after it, and
+  // the next cell restores the namespace saved before it.
   const stuckBuiltins: ReadonlyArray<{
     readonly name: string
     readonly source: string
@@ -1090,6 +1090,14 @@ describe("recorded cell execution", () => {
               "Built-ins the cell changed that cannot be put back: Map.prototype.stuck. The host replaces this worker",
             ),
           )
+          // The worker's note is the one note: it shows once, and no second
+          // note asks for a reset.
+          expect(changed).toHaveProperty(
+            stuck.reply,
+            expect.not.stringMatching(/cannot be put back[\s\S]*cannot be put back/),
+          )
+          expect(changed).toHaveProperty(stuck.reply, expect.not.stringContaining("not saved"))
+          expect(changed).toHaveProperty(stuck.reply, expect.not.stringContaining("reset"))
           expect((yield* run(after)).result).toMatchObject({
             display: "7",
             restored: { restored: ["kept"], omitted: [] },
@@ -3323,6 +3331,103 @@ describe("cell receipts", () => {
         Effect.provide(Layer.merge(BunServices.layer, BunGentPlatformLive)),
       ),
     18000,
+  )
+})
+
+describe("large host replies", () => {
+  it.scopedLive(
+    "a tool result past the frame cap reaches the cell bounded with a read pointer, and the worker keeps its bindings",
+    () =>
+      Effect.gen(function* () {
+        const large = "x".repeat(1_100_000)
+        const extensions: ReadonlyArray<LoadedExtension> = [
+          {
+            manifest: { id: ExtensionId.make("cell-large-reply") },
+            scope: "builtin",
+            sourcePath: "cell-large-reply",
+            artifactIdentity: LoadedArtifactIdentity.make("cell-large-reply-source"),
+            contributions: {
+              tools: [
+                CellTool,
+                tool({
+                  id: "large",
+                  description: "Return a large text",
+                  params: Schema.Struct({}),
+                  output: Schema.String,
+                  execute: () => Effect.succeed(large),
+                }),
+                tool({
+                  id: "largeFailure",
+                  description: "Fail with a large message",
+                  params: Schema.Struct({}),
+                  output: Schema.String,
+                  execute: () =>
+                    Effect.fail(new ToolResultFailure({ message: large, result: large })),
+                }),
+                // Each NUL takes one byte raw and six bytes as JSON: the frame carries JSON.
+                tool({
+                  id: "escapedFailure",
+                  description: "Fail with an error whose JSON escapes grow past the frame cap",
+                  params: Schema.Struct({}),
+                  output: Schema.String,
+                  execute: () =>
+                    Effect.fail(
+                      new ToolResultFailure({
+                        message: "escaped",
+                        result: { error: "\u0000".repeat(200_000) },
+                      }),
+                    ),
+                }),
+              ],
+            },
+          },
+        ]
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          toolCallStep("cell", { code: "var kept = 7; kept" }),
+          toolCallStep("cell", {
+            code: [
+              "const r = await tools.large({})",
+              'const page = await context.read(r.read.match(/"(.+?)"/)[1], { offset: 1_099_991 })',
+              "JSON.stringify([r.truncated, r.totalChars, r.text.length < 1_000_000, page.text, kept])",
+            ].join("\n"),
+          }),
+          toolCallStep("cell", {
+            code: "let failure; try { await tools.largeFailure({}) } catch (e) { failure = e.message }\nJSON.stringify([failure.length < 1_000_000, failure.includes('context.read('), kept])",
+          }),
+          toolCallStep("cell", {
+            code: "let failure; try { await tools.escapedFailure({}) } catch (e) { failure = e.message }\nJSON.stringify([failure.length < 200_000, failure.includes('context.read('), kept])",
+          }),
+          textStep("Read the large results"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          extensions,
+          providerLayer,
+          extensionInputs: [],
+          branchTools: CellBranchTools,
+          agents: [new AgentDefinition({ name: DEFAULT_AGENT_NAME })],
+        })
+        yield* client.message.send({ sessionId, branchId, content: "Read large results" })
+        yield* client.session.events({ sessionId, branchId }).pipe(
+          Stream.filter((envelope) => envelope.event._tag === "TurnCompleted"),
+          Stream.take(1),
+          Stream.runDrain,
+        )
+        const results = (yield* client.message.list({ branchId }))
+          .flatMap((message) => message.parts)
+          .filter((part) => part.type === "tool-result" && part.name === "cell")
+        expect(results).toHaveLength(4)
+        // The JSON text of the string result is its characters plus two quotes;
+        // its last page ends in ten characters and the closing quote.
+        expect(results[1]).toMatchObject({
+          result: { display: '[true,1100002,true,"xxxxxxxxxx\\"",7]' },
+        })
+        expect(results[2]).toMatchObject({ result: { display: "[true,true,7]" } })
+        expect(results[3]).toMatchObject({ result: { display: "[true,true,7]" } })
+      }).pipe(
+        Effect.timeout("25 seconds"),
+        Effect.provide(Layer.merge(BunServices.layer, BunGentPlatformLive)),
+      ),
+    30000,
   )
 })
 
@@ -6472,7 +6577,7 @@ const shippedSignatures: ReadonlyArray<readonly [ToolCapability, string]> = [
   ],
   [
     BashTool,
-    '- tools.bash(input: { command: string; timeout?: number; cwd?: string; run_in_background?: boolean }): Promise<{ stdout: string; stderr: string; exitCode: number; status?: "background" }> // Execute shell commands',
+    '- tools.bash(input: { command: string; timeout?: number; cwd?: string; run_in_background?: boolean }): Promise<{ stdout: string; stderr: string; exitCode: number; status?: "background"; outputFile?: string; outputChars?: number }> // Execute shell commands',
   ],
   [
     ReadTool,
