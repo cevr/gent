@@ -2,15 +2,15 @@
 
 Fetch with `okra repo fetch <slug>`; get the path with `okra repo path <slug>`. `okra repo list` prints hundreds of kilobytes; use `path`. Paths below are written `<repo>/<path inside it>`.
 
-| Slug                            | Branch  | Read it for                                                                                            |
-| ------------------------------- | ------- | ------------------------------------------------------------------------------------------------------ |
-| `sst/opencode`                  | `v2`    | Effect-based. `opencode/packages/core/src/session/runner/step.ts`, `runner/llm.ts`, `session/inbox.ts` |
-| `badlogic/pi-mono`              | `pico`  | Minimalism. `pi-mono/packages/agent/src/agent-loop.ts`                                                 |
-| `openai/codex`                  | default | `input_queue.rs`, turn and tool orchestration                                                          |
-| `primeintellect-ai/prime-agent` | default | `prime-agent/packages/agent/src/agent-loop.ts`                                                         |
-| `exoharness/exo`                | default | `exo/exoharness/typescript/model-runtime/turn-loop.ts`                                                 |
-| `deepseek-ai/deepseek-harness`  | default | `deepseek-harness/packages/core/agent-loop/src/agent.ts`                                               |
-| `vercel-labs/fx`                | default | TUI standard, pty test method (settle, then capture)                                                   |
+| Slug                            | Branch  | Read it for                                                                                             |
+| ------------------------------- | ------- | ------------------------------------------------------------------------------------------------------- |
+| `sst/opencode`                  | `v2`    | Effect-based. `opencode/packages/core/src/session/runner/step.ts`, `runner/llm.ts`, `session/inbox.ts`  |
+| `badlogic/pi-mono`              | `pico`  | Minimalism. `pi-mono/packages/agent/src/agent-loop.ts`                                                  |
+| `openai/codex`                  | default | `input_queue.rs`, turn and tool orchestration                                                           |
+| `primeintellect-ai/prime-agent` | default | `prime-agent/packages/agent/src/agent-loop.ts`                                                          |
+| `exoharness/exo`                | default | `exo/exoharness/typescript/model-runtime/turn-loop.ts`                                                  |
+| `deepseek-ai/deepseek-harness`  | default | `deepseek-harness/packages/core/agent-loop/src/agent.ts`                                                |
+| `vercel-labs/fx`                | default | TUI standard, pty test method (settle, then capture); the ui sweep's first reference ([`ui.md`](ui.md)) |
 
 ## Settled comparisons
 
