@@ -261,22 +261,16 @@ export const extensionHealthFromSnapshot = (
 export const makeDoctorReport = (
   home: string,
   serverStatus: ServerLockStatus,
-  extensions?: ExtensionDoctorHealth,
+  extensions: ExtensionDoctorHealth,
 ): Effect.Effect<DoctorReport, never, FileSystem.FileSystem | GentPlatform> =>
   Effect.gen(function* () {
-    const server = inspectServer(serverStatus)
-    const defaultExtensions = () => {
-      let summary = "No live server for this data directory."
-      if (server.status === "alive") summary = "Extension health was not queried."
-      return extensionHealthUnavailable(summary)
-    }
     const storage = yield* inspectStorage(home)
     return {
       home,
       storage,
-      server,
+      server: inspectServer(serverStatus),
       logs: yield* inspectLogs((yield* dataPaths(home)).logDir),
-      extensions: Option.getOrElse(Option.fromNullishOr(extensions), defaultExtensions),
+      extensions,
     }
   })
 

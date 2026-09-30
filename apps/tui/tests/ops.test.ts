@@ -364,12 +364,14 @@ describe("local health", () => {
       expect(storage.existingStorageTables).toEqual(["sessions"])
       expect(storage.migrationCount).toBe(0)
 
-      const report = formatDoctorReport(yield* makeDoctorReport(home, absentServer))
+      const report = formatDoctorReport(
+        yield* makeDoctorReport(home, absentServer, yield* readDoctorExtensionHealth(absentServer)),
+      )
       expect(report).toContain("Gent doctor")
       expect(report).toContain("incompatible")
       expect(report).toContain("Migration table: missing")
       expect(report).toContain("Extensions:")
-      expect(report).toContain("No live server for this data directory.")
+      expect(report).toContain("Status: No server for this data directory.")
     }).pipe(Effect.provide(Layer.merge(BunServices.layer, GentPlatform.Test()))),
   )
 
@@ -459,7 +461,11 @@ describe("local health", () => {
       const fs = yield* FileSystem.FileSystem
       const home = yield* fs.makeTempDirectoryScoped()
       const dataDir = yield* fs.makeTempDirectoryScoped()
-      const report = yield* makeDoctorReport(home, absentServer).pipe(withDataDir(dataDir))
+      const report = yield* makeDoctorReport(
+        home,
+        absentServer,
+        yield* readDoctorExtensionHealth(absentServer),
+      ).pipe(withDataDir(dataDir))
       // The run writes its logs beside its database, so the doctor names that directory.
       expect(report.logs.dir).toBe(`${dataDir}/logs`)
       expect(formatDoctorReport(report)).toContain(`Directory: ${dataDir}/logs`)
