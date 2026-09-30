@@ -1,12 +1,13 @@
 import { describe, expect, it } from "effect-bun-test"
 import { BunFileSystem } from "@effect/platform-bun"
-import { ConfigProvider, DateTime, Effect, FileSystem, Layer, Schema } from "effect"
+import { ConfigProvider, DateTime, Effect, FileSystem, Layer, Logger, Schema } from "effect"
 import {
   buildLogPaths,
   ensureLogDir,
   GentLogLevel,
   GentObservability,
   GentTracerLive,
+  makeJsonFileLogger,
 } from "../src/logger"
 import { dataPaths } from "../src/server"
 
@@ -54,18 +55,49 @@ describe("the log directory", () => {
     }),
   )
 
-  it.scopedLive("startup removes gent logs past retention and keeps the rest", () =>
+  it.scopedLive("startup removes gent's own logs past retention and keeps the rest", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const dir = yield* fs.makeTempDirectoryScoped({ prefix: "gent-log-retention-" })
-      const names = ["old-server.log", "old-client.log", "new-server.log", "old-notes.txt"]
-      yield* Effect.forEach(names, (name) => fs.writeFileString(`${dir}/${name}`, "x\n"))
+      const oldServer = "0badc0de-20260801120000-server.log"
+      const oldClient = "0badc0de-20260801120000-client.log"
+      const recent = "0badc0de-20260929120000-server.log"
+      // Old files whose names end like a log but that gent did not name.
+      const strangers = ["notes-server.log", "0badc0de-client.log", "old-notes.txt"]
+      const files = [oldServer, oldClient, recent, ...strangers]
+      yield* Effect.forEach(files, (name) => fs.writeFileString(`${dir}/${name}`, "x\n"))
+      // A directory with a generated log name is no log file.
+      const folder = "0badc0de-20260801120001-server.log"
+      yield* fs.makeDirectory(`${dir}/${folder}`)
       const monthAgo = DateTime.toDateUtc(DateTime.subtract(yield* DateTime.now, { days: 30 }))
-      for (const name of ["old-server.log", "old-client.log", "old-notes.txt"]) {
+      for (const name of [oldServer, oldClient, folder, ...strangers]) {
         yield* fs.utimes(`${dir}/${name}`, monthAgo, monthAgo)
       }
       yield* ensureLogDir(dir)
-      expect((yield* fs.readDirectory(dir)).toSorted()).toEqual(["new-server.log", "old-notes.txt"])
+      expect((yield* fs.readDirectory(dir)).toSorted()).toEqual(
+        [recent, folder, ...strangers].toSorted(),
+      )
+    }).pipe(Effect.provide(BunFileSystem.layer)),
+  )
+
+  it.scopedLive("a live logger whose file was pruned writes it again at its next flush", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "gent-log-live-" })
+      const path = `${dir}/0badc0de-20260801120000-server.log`
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const logger = yield* makeJsonFileLogger(path)
+          // Another process's startup prunes the file while this logger is idle.
+          yield* fs.remove(path).pipe(Effect.ignore)
+          yield* Effect.logInfo("after-prune").pipe(
+            Effect.annotateLogs({ sessionId: "s-1" }),
+            Effect.provide(Logger.layer([logger])),
+          )
+        }),
+      )
+      const lines = (yield* fs.readFileString(path)).trim().split("\n")
+      expect(lines.map((line) => decodeLogEntry(line).msg)).toEqual(["after-prune"])
     }).pipe(Effect.provide(BunFileSystem.layer)),
   )
 })
