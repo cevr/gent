@@ -297,6 +297,10 @@ const withoutComments = (text: string): string =>
  * pattern matches both. A blanket directive names no rule; a file-wide
  * directive, written as a block or a line comment, disables its rules to the
  * end of the file or the next enable.
+ *
+ * `effect/requireSuppressionReason` reports a blanket `-next-line` directive,
+ * but not a blanket `-line` or file-wide one: that directive disables every
+ * rule on its own line, the upstream rule with them. So the guards read them.
  */
 const blanketDisableDirective =
   /(?:\/\*\s*(?:es|ox)lint-disable(?:-next-line|-line)?\s*(?:\*\/|--|$))|(?:\/\/\s*(?:es|ox)lint-disable(?:-next-line|-line)?\s*(?:--|$))/

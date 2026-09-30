@@ -14,7 +14,7 @@ const tuiDir = `${repoRoot}/apps/tui`
 const DEFAULT_COLS = 120
 const DEFAULT_ROWS = 40
 
-export interface PtySize {
+interface PtySize {
   readonly cols: number
   readonly rows: number
 }
@@ -25,7 +25,6 @@ export interface TestContext {
   readonly output: string
   readonly size: PtySize
   readonly resize: (size: PtySize) => void
-  readonly tempDir: string
 }
 
 const ignoreSyncDefect = (evaluate: () => void): Effect.Effect<void> =>
@@ -80,7 +79,6 @@ const spawnWithDir = (
           currentSize = next
           pty.resize(next.cols, next.rows)
         },
-        tempDir,
       }
       return context
     }),
@@ -155,12 +153,11 @@ export const screenWaitFor = (
 
 // ── Settle-then-capture ──
 
-export class PtySettleError extends Schema.TaggedError<PtySettleError>()(
-  "@gent/e2e/PtySettleError",
-  { message: Schema.String },
-) {}
+class PtySettleError extends Schema.TaggedError<PtySettleError>()("@gent/e2e/PtySettleError", {
+  message: Schema.String,
+}) {}
 
-export interface SettleOptions {
+interface SettleOptions {
   /** How long the child must write nothing before the output counts as settled. */
   readonly quietMs?: number
   /** How long to wait for that quiet window before failing. */
@@ -218,7 +215,7 @@ export const settlePty = (
  * scrolled off the top and survives only in the terminal's scrollback, and
  * `visible` is the screen itself.
  */
-export interface TerminalGrid {
+interface TerminalGrid {
   readonly history: ReadonlyArray<string>
   readonly visible: ReadonlyArray<string>
   readonly cols: number
@@ -249,10 +246,7 @@ export const countRows = (rows: ReadonlyArray<string>, needle: string): number =
  * line feed at its bottom row pushes the top row into scrollback. `baseY` is
  * where that scrollback ends and the screen begins.
  */
-export const parseTerminal = (
-  bytes: string,
-  size: PtySize,
-): Effect.Effect<TerminalGrid, never, never> =>
+const parseTerminal = (bytes: string, size: PtySize): Effect.Effect<TerminalGrid, never, never> =>
   Effect.callback<TerminalGrid>((resume) => {
     const terminal = new Terminal({
       cols: size.cols,

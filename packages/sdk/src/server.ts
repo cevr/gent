@@ -425,10 +425,7 @@ const lockStatus = (
       if (held) return ServerLockStatus.cases.Unnamed.make({})
       return ServerLockStatus.cases.None.make({})
     }
-    // A server from before the kernel lock holds none, but it still answers for its entry.
-    if (held || (yield* probeServerLockEntryIdentity(entry.value))) {
-      return ServerLockStatus.cases.Alive.make({ entry: entry.value })
-    }
+    if (held) return ServerLockStatus.cases.Alive.make({ entry: entry.value })
     return ServerLockStatus.cases.Stale.make({ entry: entry.value })
   })
 
@@ -460,8 +457,7 @@ const goneWithin = (
 /**
  * Stop the server the entry names. SIGTERM goes out only after the identity
  * endpoint confirms every field of the entry, so a reused pid is never signalled.
- * An entry whose kernel lock is free and whose endpoint does not answer is
- * proved stale, and `removeStale` removes it.
+ * An entry whose kernel lock is free is stale, and `removeStale` removes it.
  */
 const stopLocked = (
   home: string,
@@ -887,16 +883,6 @@ const resolveServerInternal = (
       // The lock is taken in a child scope, so a start that does not own can let it go.
       const lockScope = yield* Scope.fork(scope)
       if (yield* serverLockFile.hold(home).pipe(Scope.provide(lockScope))) {
-        // A server from before the kernel lock holds none; its entry still names it.
-        const existing = yield* serverLockFile.read(home)
-        if (
-          Option.isSome(existing) &&
-          existing.value.dbPath === dbPath &&
-          (yield* probeServerLockEntryIdentity(existing.value))
-        ) {
-          yield* Scope.close(lockScope, Exit.void)
-          return yield* attachOrBlock(existing.value)
-        }
         return yield* startOwnedServer(options, stateSpec, providerSpec, home, dbPath, fingerprint)
       }
       yield* Scope.close(lockScope, Exit.void)
@@ -920,8 +906,7 @@ const resolveServerInternal = (
 
 /**
  * Start the server that owns the database. The caller holds the kernel lock in
- * this scope and has probed the entry on disk, so that entry names a server
- * that is gone, or one on another database.
+ * this scope, so an entry on disk names a server that is gone.
  */
 const startOwnedServer = (
   options: GentServerOptions,

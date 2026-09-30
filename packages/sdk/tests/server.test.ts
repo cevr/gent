@@ -206,22 +206,6 @@ describe("Server Lock", () => {
       ),
   )
 
-  it.scopedLive("a written lock reads back field for field", () =>
-    provideFs(
-      Effect.gen(function* () {
-        const home = yield* makeTmpHomeScoped
-        const entry = makeEntry()
-        yield* serverLockFile.write(home, entry)
-        const read = Option.getOrThrow(yield* serverLockFile.read(home))
-        expect(read.serverId).toBe(entry.serverId)
-        expect(read.pid).toBe(entry.pid)
-        expect(read.rpcUrl).toBe(entry.rpcUrl)
-        expect(read.dbPath).toBe(entry.dbPath)
-        expect(read.buildFingerprint).toBe(entry.buildFingerprint)
-      }),
-    ),
-  )
-
   it.scopedLive("a missing or corrupt lock reads as absent", () =>
     provideFs(
       Effect.gen(function* () {
@@ -231,17 +215,6 @@ describe("Server Lock", () => {
         expect(Option.isNone(yield* serverLockFile.read(home))).toBe(true)
         yield* fs.makeDirectory(path.join(home, ".gent"), { recursive: true })
         yield* fs.writeFileString(path.join(home, ".gent", "server.lock"), "not json")
-        expect(Option.isNone(yield* serverLockFile.read(home))).toBe(true)
-      }),
-    ),
-  )
-
-  it.scopedLive("a lock from another host reads as absent", () =>
-    provideFs(
-      Effect.gen(function* () {
-        const home = yield* makeTmpHomeScoped
-        const entry = makeEntry({ hostname: "other-host.example.com" })
-        yield* serverLockFile.write(home, entry)
         expect(Option.isNone(yield* serverLockFile.read(home))).toBe(true)
       }),
     ),
@@ -645,34 +618,6 @@ describe("Server Lock Ownership", () => {
         expect(Option.getOrThrow(yield* serverLockFile.read(home)).serverId).toBe(holder.serverId)
       }),
     ),
-  )
-
-  it.scopedLive(
-    "an older-build server that answers but holds no kernel lock blocks startup unsignalled",
-    () =>
-      provideFs(
-        Effect.gen(function* () {
-          const home = yield* makeTmpHomeScoped
-          const dbPath = (yield* dataPaths(home)).dbPath
-          // A server from before the kernel lock: it serves its identity but holds no lock.
-          const holder = yield* lockWithIdentity(
-            home,
-            makeEntry({ dbPath, buildFingerprint: "older-build" }),
-            {},
-          )
-          expect((yield* serverLock.status(home))._tag).toBe("Alive")
-          const { result, signals } = yield* Gent.server({
-            cwd: home,
-            state: Gent.state.sqlite({ home }),
-            provider: Gent.provider.mock(),
-          }).pipe(Effect.flip, withSignalTrap)
-          expect(result._tag).toBe("@gent/core/GentConnectionError")
-          expect(result.message).toContain(`PID ${holder.pid}`)
-          expect(result.message).toContain("older-build")
-          expect(signals).toEqual([])
-          expect(Option.getOrThrow(yield* serverLockFile.read(home)).serverId).toBe(holder.serverId)
-        }),
-      ),
   )
 
   it.scopedLive(

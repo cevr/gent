@@ -90,7 +90,7 @@ export const indexFileNames = (root: string, env: typeof Bun.env) =>
   Effect.map(indexEntries(root, env), (entries) => entries.map((entry) => entry.file))
 
 /** One tracked file the scan reads: its path and its text. */
-export interface TrackedText {
+interface TrackedText {
   readonly file: string
   readonly text: string
 }
@@ -162,7 +162,7 @@ export const trackedTexts = (
  * environment `env`: this process's own unless one is given, so a hook's
  * index in a hook.
  */
-export interface FileSet {
+interface FileSet {
   readonly files: Effect.Effect<ReadonlyArray<string>>
   readonly texts: (files: ReadonlyArray<string>) => Effect.Effect<ReadonlyArray<TrackedText>>
 }
