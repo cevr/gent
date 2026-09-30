@@ -446,6 +446,17 @@ export const resolveClientBundle = (options: {
   return Effect.flatMap(Gent.server(configured), Gent.client)
 }
 
+/**
+ * Whether a session this run opens can be resumed later, read from the
+ * storage the bundle above uses. A connected run uses the server's storage:
+ * the local in-memory flags do not reach it, and a shared server keeps its
+ * sessions. A local run keeps them unless its state is in memory.
+ */
+export const resumableSessions = (options: {
+  readonly connect: Option.Option<string>
+  readonly inMemory: boolean
+}): boolean => Option.isSome(options.connect) || !options.inMemory
+
 export const sessions = Command.make(
   "sessions",
   {

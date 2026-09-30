@@ -47,6 +47,7 @@ import {
   doctor,
   readHome,
   resolveClientBundle,
+  resumableSessions,
   server,
   sessions,
   storage,
@@ -358,7 +359,7 @@ const runGent = ({
       shutdown: () => {
         interruptMain()
       },
-      resumable: !inMemory,
+      resumable: resumableSessions({ connect, inMemory }),
       writeTerminal: (text: string) => {
         // eslint-disable-next-line effect/noGlobals -- The line must reach the real terminal after the renderer is destroyed, outside any Effect.
         process.stdout.write(text)

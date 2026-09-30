@@ -38,6 +38,7 @@ import {
   refuseResetWhileServing,
   reportFailureOnStderr,
   resetStorage,
+  resumableSessions,
 } from "../src/ops"
 import { SqliteClient as BunSqliteClient } from "@effect/sql-sqlite-bun"
 import { SqlClient } from "effect/unstable/sql"
@@ -137,6 +138,19 @@ const captureTo = (stream: "stdout" | "stderr") =>
 const reportTest = it.live.layer(
   Stdio.layerTest({ stdout: () => captureTo("stdout"), stderr: () => captureTo("stderr") }),
 )
+
+describe("resumable sessions", () => {
+  test("a local run keeps its sessions unless its state is in memory", () => {
+    expect(resumableSessions({ connect: Option.none(), inMemory: false })).toBe(true)
+    expect(resumableSessions({ connect: Option.none(), inMemory: true })).toBe(false)
+  })
+
+  test("a connected run keeps what the server keeps; the local --isolate does not apply", () => {
+    const server = Option.some("ws://127.0.0.1:4097")
+    expect(resumableSessions({ connect: server, inMemory: true })).toBe(true)
+    expect(resumableSessions({ connect: server, inMemory: false })).toBe(true)
+  })
+})
 
 describe("startup failure report", () => {
   reportTest("a failure is one line on stderr, and stdout stays the session's output", () =>
