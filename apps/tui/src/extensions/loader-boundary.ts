@@ -394,7 +394,8 @@ const withoutRefusedKeybinds = (
       id: source.id,
       reason: `keybind "${Option.getOrElse(keybind, () => "")}" of command "${entry.id}" ${refusal.value}`,
     })
-    return { ...entry, keybind: Option.getOrUndefined(Option.none<string>()) }
+    const { keybind: _refused, ...rest } = entry
+    return rest
   }),
 })
 

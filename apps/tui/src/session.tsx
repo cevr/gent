@@ -1888,7 +1888,6 @@ const ensureAssistantMessage = (
         images: [],
         createdAt,
         segments: [{ _tag: "text", content }],
-        metadata: Option.getOrUndefined(Option.none<Message["metadata"]>()),
       })
     }),
   )
@@ -2072,8 +2071,6 @@ const startToolCall = (
     toolName: event.toolName,
     status: "running",
     input: event.input,
-    summary: Option.getOrUndefined(Option.none<string>()),
-    output: Option.getOrUndefined(Option.none<string>()),
     startedAt,
   } satisfies ToolCall
   const parentToolCallId = Option.fromUndefinedOr(event.parentToolCallId)

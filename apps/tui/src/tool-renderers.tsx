@@ -46,10 +46,10 @@ export interface ToolCall {
   status: "running" | "completed" | "error"
   // eslint-disable-next-line effect/noNullish -- Renderer payloads preserve omitted tool fields from the event stream.
   input: unknown | undefined
-  // eslint-disable-next-line effect/noNullish -- Renderer payloads preserve omitted tool fields from the event stream.
-  summary: string | undefined
-  // eslint-disable-next-line effect/noNullish -- Renderer payloads preserve omitted tool fields from the event stream.
-  output: string | undefined
+  /** Absent until the tool reports one. */
+  summary?: string
+  /** Absent until the tool returns. */
+  output?: string
   /**
    * Inner calls a cell admitted, from the live feed or, after a reload, from
    * the branch's stored tool receipts. Absent on a fork, whose saved result's
@@ -1042,10 +1042,8 @@ export function EditToolRenderer(props: ToolRendererProps) {
 
   const editData = () => getEditUnifiedDiff(props.toolCall.input)
   const path = () => getPath(props.toolCall.input)
-  const subtitleHref = () => {
-    if (isAbsPath(path())) return fileUrl(path())
-    return Option.getOrUndefined(Option.none<string>())
-  }
+  const subtitleHref = () =>
+    Option.getOrUndefined(Option.some(path()).pipe(Option.filter(isAbsPath), Option.map(fileUrl)))
 
   const collapsedDiffLines = createMemo((): DiffLine[] => {
     const data = editData()
@@ -1144,10 +1142,8 @@ function WriteToolRenderer(props: ToolRendererProps) {
   const data = createMemo(() => decodeToolOutput(WriteOutputSchema, props.toolCall.output))
   // The input names the file, so the header shows it while the write runs.
   const path = createMemo(() => getPath(props.toolCall.input))
-  const subtitleHref = () => {
-    if (isAbsPath(path())) return fileUrl(path())
-    return Option.getOrUndefined(Option.none<string>())
-  }
+  const subtitleHref = () =>
+    Option.getOrUndefined(Option.some(path()).pipe(Option.filter(isAbsPath), Option.map(fileUrl)))
 
   // The header names the file, so the body, open or closed, says what the write did.
   const Written = () => (
@@ -1407,11 +1403,8 @@ function ReadSessionToolRenderer(props: ToolRendererProps) {
 
   const output = () => decodeToolOutputOption(ReadSessionOutputSchema, props.toolCall.output)
 
-  const subtitle = () => {
-    const sid = getInputField(props.toolCall.input, "sessionId")
-    if (Option.isNone(sid)) return Option.getOrUndefined(Option.none<string>())
-    return shortId(sid.value)
-  }
+  const subtitle = () =>
+    Option.getOrUndefined(Option.map(getInputField(props.toolCall.input, "sessionId"), shortId))
 
   const summary = (): Option.Option<string> => {
     const o = output()

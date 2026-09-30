@@ -176,7 +176,6 @@ const cutBash = (stdout: string, lines: number, tailLine: number) =>
     toolName: "bash",
     status: "completed",
     input: { command: "seq 1 1000" },
-    summary: Option.getOrUndefined(Option.none<string>()),
     output: Schema.encodeSync(Schema.fromJsonString(Schema.Json))({
       stdout,
       stderr: "",

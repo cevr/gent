@@ -27,7 +27,8 @@ import { delegateSubtitle } from "../../src/extensions/delegate.client"
  * outcome, usage, and calls from the message details.
  */
 
-const absent = Option.getOrUndefined(Option.none<string>())
+// eslint-disable-next-line effect/noNullish -- a wire field the server leaves unset is present and undefined.
+const absent = undefined
 const syntaxStyle = () => SyntaxStyle.create()
 const parentSession: Session = {
   sessionId: SessionId.make("session-parent"),
