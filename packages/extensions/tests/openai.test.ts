@@ -255,7 +255,7 @@ describe("OpenAI credential cache — token endpoint timeout", () => {
           expect(fetchCalls).toBe(1)
           yield* TestClock.adjust("31 seconds")
           return yield* Fiber.join(fiber)
-        }).pipe(Effect.provide(Layer.succeed(FetchHttpClient.Fetch, hangingFetch))),
+        }).pipe(Effect.provideService(FetchHttpClient.Fetch, hangingFetch)),
       ).pipe(Effect.timeout("3 seconds"))
       // The timed-out refresh is a failure that passes: resolveModel returns
       // (the request then fails as retryable), and the stored refresh token

@@ -71,6 +71,6 @@ describe("branch tool feature", () => {
     Effect.gen(function* () {
       const feature = yield* CurrentBranchToolFeature
       expect(feature).toBe(widgetTools)
-    }).pipe(Effect.provide(Layer.succeed(CurrentBranchToolFeature, widgetTools))),
+    }).pipe(Effect.provideService(CurrentBranchToolFeature, widgetTools)),
   )
 })

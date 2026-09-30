@@ -73,7 +73,6 @@ import {
 } from "@gent/core/extensions/api"
 import { encodeExternalJson, externalWireNull } from "./helpers/external-wire.js"
 import { testCatalogSource } from "./helpers/catalog-source.js"
-import { createHash } from "node:crypto"
 import { AiError, LanguageModel, Prompt, Tool, Toolkit } from "effect/ai"
 import { AnthropicClient as AnthropicSdkClient, AnthropicLanguageModel } from "@effect/ai-anthropic"
 
@@ -1438,7 +1437,8 @@ describe("extractFirstUserMessageText", () => {
 describe("computeCch", () => {
   test("returns the first 5 hex chars of sha256(text)", () => {
     const text = "hello"
-    const expected = createHash("sha256").update(text).digest("hex").slice(0, 5)
+    // sha256("hello") = 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824
+    const expected = "2cf24"
     expect(computeCch(text)).toBe(expected)
   })
 
