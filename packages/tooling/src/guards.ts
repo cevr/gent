@@ -168,11 +168,13 @@ const regexEnd = (text: string, start: number): number => {
 }
 
 /**
- * A tag name after `<`, and what follows it. A `,` or `extends` after the
- * name, or a one-letter capital name, makes the `<` a type parameter list:
- * `.tsx` spells a generic arrow `<A,>(a: A) => a`.
+ * A tag name after `<`, and what follows it. A `,`, an `extends` or a `=`
+ * after the name, or a one-letter capital name, makes the `<` a type
+ * parameter list: `.tsx` spells a generic arrow `<A,>(a: A) => a`, with a
+ * constraint `<A extends B,>` or a default `<A = B,>`. No JSX tag name is
+ * followed by `=`.
  */
-const JSX_OPENER = /^<(?:>|([A-Za-z_$][\w$.:-]*)(\s*(?:,|extends\b))?)/
+const JSX_OPENER = /^<(?:>|([A-Za-z_$][\w$.:-]*)(\s*(?:,|=|extends\b))?)/
 
 /** Whether the `<` at `at` opens a JSX element. */
 const opensJsx = (text: string, at: number): boolean => {

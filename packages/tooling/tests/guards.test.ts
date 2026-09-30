@@ -2717,11 +2717,31 @@ describe("the guards' lexer", () => {
       homes(tsx, 'const f = <A,>(a: A) => a; const env = { cwd: "/tmp" }'),
       homes(tsx, 'const f = <A extends object>(a: A) => a; const env = { cwd: "/tmp" }'),
       homes(tsx, 'const f = <A>(a: A) => a; const env = { cwd: "/tmp" }'),
+      homes(tsx, 'const f = <Row = unknown,>(x: Row) => x; const env = { cwd: "/tmp" }'),
+      homes(tsx, 'const f = <Row=unknown,>(x: Row) => x; const env = { cwd: "/tmp" }'),
       homes(
         "apps/tui/tests/probe.test.ts",
         'const f = <Row>(a: Row) => a; const env = { cwd: "/tmp" }',
       ),
-    ]).toEqual([1, 1, 1, 1])
+    ]).toEqual([1, 1, 1, 1, 1, 1])
+  })
+
+  test("a defaulted type parameter in a .tsx file hides no read after it", () => {
+    const findings = findingsFor([
+      {
+        file: "packages/e2e/src/probe.tsx",
+        text: [
+          "export type Helper = number",
+          "const same = <Row = unknown,>(x: Row) => x",
+          "export const used = (): Helper => same(1)",
+        ].join("\n"),
+      },
+      {
+        file: "packages/e2e/tests/probe.test.ts",
+        text: 'import { used } from "../src/probe"\nused()\n',
+      },
+    ])
+    expect(findings).toEqual([])
   })
 })
 
