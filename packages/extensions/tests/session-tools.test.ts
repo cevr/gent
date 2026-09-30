@@ -2,7 +2,7 @@ import { describe, expect, it, test } from "effect-bun-test"
 import { Effect, Fiber, Option, Stream } from "effect"
 import { AgentsExtension } from "../src/agents.js"
 import { builtinAgent } from "./helpers/builtin-agents.js"
-import { type SystemPromptInput, messagePartsDisplayText } from "@gent/core/extensions/api"
+import type { SystemPromptInput } from "@gent/core/extensions/api"
 import {
   collectTestContributions,
   createRpcHarness,
@@ -11,7 +11,6 @@ import {
   textDeltaPart,
   toolCallPart,
   toolCallStep,
-  type MessagePart,
 } from "@gent/core/test-utils"
 import * as Prompt from "effect/ai/Prompt"
 import {
@@ -99,69 +98,6 @@ describe("session.send summary", () => {
       ).toBe("to parent · CI is green")
     }),
   )
-})
-
-describe("messagePartsDisplayText", () => {
-  test("text part → text content", () => {
-    const parts: MessagePart[] = [Prompt.textPart({ text: "hello world" })]
-    expect(messagePartsDisplayText(parts)).toBe("hello world")
-  })
-
-  test("tool-call part → '### tool: name' header + truncated input", () => {
-    const parts: MessagePart[] = [
-      Prompt.toolCallPart({
-        id: ToolCallId.make("tc1"),
-        name: "read",
-        params: { path: "/tmp/test.txt" },
-        providerExecuted: false,
-      }),
-    ]
-    const result = messagePartsDisplayText(parts)
-    expect(result).toContain("### tool: read")
-    expect(result).toContain("/tmp/test.txt")
-  })
-
-  test("tool-call part with undefined input renders without throwing", () => {
-    const parts: MessagePart[] = [
-      Prompt.toolCallPart({
-        id: ToolCallId.make("tc1"),
-        name: "read",
-        params: Option.getOrUndefined(Option.none()),
-        providerExecuted: false,
-      }),
-    ]
-    expect(messagePartsDisplayText(parts)).toBe("### tool: read\nundefined")
-  })
-
-  test("tool-result part → 'result: {truncated output}'", () => {
-    const parts: MessagePart[] = [
-      Prompt.toolResultPart({
-        id: ToolCallId.make("tc1"),
-        name: "read",
-        isFailure: false,
-        providerExecuted: false,
-        result: "file contents here",
-      }),
-    ]
-    const result = messagePartsDisplayText(parts)
-    expect(result).toContain("result: file contents here")
-  })
-
-  test("mixed parts joined with newline", () => {
-    const parts: MessagePart[] = [
-      Prompt.textPart({ text: "start" }),
-      Prompt.toolCallPart({
-        id: ToolCallId.make("tc1"),
-        name: "bash",
-        params: { command: "ls" },
-        providerExecuted: false,
-      }),
-    ]
-    const result = messagePartsDisplayText(parts)
-    expect(result).toContain("start")
-    expect(result).toContain("### tool: bash")
-    expect(result.indexOf("start")).toBeLessThan(result.indexOf("### tool: bash"))
-  })
 })
 
 describe("renderSessionTree", () => {

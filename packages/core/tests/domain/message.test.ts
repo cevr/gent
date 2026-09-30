@@ -12,6 +12,7 @@ import {
   lineCount,
   Message,
   OutputCut,
+  messagePartsDisplayText,
   messagePartsImages,
   messagePartsReasoning,
   messagePartsText,
@@ -245,6 +246,67 @@ describe("headTailChars", () => {
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
 
 // ── message part projection ─────────────────────────────────────────────────
+
+describe("transcript display text", () => {
+  test("a text part shows its text", () => {
+    const parts = [Prompt.textPart({ text: "hello world" })]
+    expect(messagePartsDisplayText(parts)).toBe("hello world")
+  })
+
+  test("a tool call shows its name and input", () => {
+    const parts = [
+      Prompt.toolCallPart({
+        id: ToolCallId.make("tc1"),
+        name: "read",
+        params: { path: "/tmp/test.txt" },
+        providerExecuted: false,
+      }),
+    ]
+    const result = messagePartsDisplayText(parts)
+    expect(result).toContain("### tool: read")
+    expect(result).toContain("/tmp/test.txt")
+  })
+
+  test("a tool call with no input renders instead of throwing", () => {
+    const parts = [
+      Prompt.toolCallPart({
+        id: ToolCallId.make("tc1"),
+        name: "read",
+        // oxlint-disable-next-line effect/noNullish -- A stored call can carry no input; the display must not throw on it.
+        params: undefined,
+        providerExecuted: false,
+      }),
+    ]
+    expect(messagePartsDisplayText(parts)).toBe("### tool: read\nundefined")
+  })
+
+  test("a tool result shows its output", () => {
+    const parts = [
+      Prompt.toolResultPart({
+        id: ToolCallId.make("tc1"),
+        name: "read",
+        isFailure: false,
+        providerExecuted: false,
+        result: "file contents here",
+      }),
+    ]
+    expect(messagePartsDisplayText(parts)).toContain("result: file contents here")
+  })
+
+  test("parts show in order, one per line", () => {
+    const parts = [
+      Prompt.textPart({ text: "start" }),
+      Prompt.toolCallPart({
+        id: ToolCallId.make("tc1"),
+        name: "bash",
+        params: { command: "ls" },
+        providerExecuted: false,
+      }),
+    ]
+    const result = messagePartsDisplayText(parts)
+    expect(result.indexOf("start")).toBeLessThan(result.indexOf("### tool: bash"))
+  })
+})
 
 describe("message part projection", () => {
   // oxlint-disable-next-line effect/noNullish -- The fixture names an absent wire field.
