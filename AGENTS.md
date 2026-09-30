@@ -106,6 +106,8 @@ bun run test:e2e          # PTY + focused server-process lifecycle coverage (slo
 bun run gate              # typecheck + lint + fmt + build + test
 ```
 
+The pre-commit hook runs the guards, and oxlint and oxfmt on the staged files, in under 10 s. Typecheck, build and the tests run only in `bun run gate` and CI: run the gate before a commit that changes behavior and before a handoff.
+
 Test files mirror `packages/core/src/` structure: `tests/domain/`, `tests/runtime/`, `tests/storage/`, etc. One file per feature area, no fix-shaped files or god tests.
 
 ### Test philosophy

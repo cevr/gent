@@ -12,7 +12,7 @@ import {
   findEffectVersionDrift,
   findRepoTempDirectories,
   findSharedTestHomes,
-  findHookWithoutGuards,
+  findPreCommitHookFindings,
   findIdentityEncodes,
   findPackageSurfaceFindings,
   findPlatformDuplicationViolations,
@@ -815,38 +815,50 @@ describe("shared test home checker", () => {
   })
 })
 
-// ── hook runs guards ────────────────────────────────────────────────────────
+// ── the pre-commit hook: the guards, and staged files only ─────────────────
 
 const hook = (...jobs: ReadonlyArray<string>): string =>
-  ["pre-commit:", "  parallel: false", "  jobs:", ...jobs].join("\n")
+  ["pre-commit:", "  parallel: true", "  jobs:", ...jobs].join("\n")
 
 const GUARDS = ["    - name: guards", "      run: bun run guards"]
 const LINT = [
-  "    - name: lint+fmt",
-  "      run: bun run lint:fix && bun run fmt",
+  "    - name: oxlint",
+  '      glob: "*.{ts,tsx}"',
+  "      run: env -u FORCE_COLOR NO_COLOR=1 oxlint --fix {staged_files}",
   "      stage_fixed: true",
 ]
-const TEST = ["    - name: test", "      run: bun run test"]
+const FMT = [
+  "    - name: oxfmt",
+  "      run: env -u FORCE_COLOR NO_COLOR=1 oxfmt {staged_files}",
+  "      stage_fixed: true",
+]
+
+/** The findings' lines and messages, for a hook of `jobs`. */
+const hookFindings = (...jobs: ReadonlyArray<string>) =>
+  findPreCommitHookFindings(HOOK_FILE, hook(...jobs)).map((finding) => [
+    finding.line,
+    finding.message,
+  ])
 
 describe("pre-commit hook runs the guards", () => {
   test("accepts the guards job in any position, under any name", () => {
-    expect(findHookWithoutGuards(HOOK_FILE, hook(...GUARDS, ...LINT, ...TEST))).toEqual([])
-    expect(findHookWithoutGuards(HOOK_FILE, hook(...LINT, ...TEST, ...GUARDS))).toEqual([])
+    expect(hookFindings(...GUARDS, ...LINT, ...FMT)).toEqual([])
+    expect(hookFindings(...LINT, ...FMT, ...GUARDS)).toEqual([])
     const renamed = ["    - name: fast-checks", "      run: bun run guards"]
-    expect(findHookWithoutGuards(HOOK_FILE, hook(...renamed, ...LINT))).toEqual([])
+    expect(hookFindings(...renamed, ...LINT)).toEqual([])
   })
 
   test("flags a hook with no guards job", () => {
-    const findings = findHookWithoutGuards(HOOK_FILE, hook(...LINT, ...TEST))
+    const findings = findPreCommitHookFindings(HOOK_FILE, hook(...LINT, ...FMT))
     expect(findings).toHaveLength(1)
     expect(findings[0]?.message).toContain("runs no `bun run guards` job")
   })
 
   test("a guards job under another hook does not count", () => {
     const text = ["pre-push:", "  jobs:", ...GUARDS, "pre-commit:", "  jobs:", ...LINT].join("\n")
-    expect(findHookWithoutGuards(HOOK_FILE, text)).toHaveLength(1)
+    expect(findPreCommitHookFindings(HOOK_FILE, text)).toHaveLength(1)
     expect(
-      findHookWithoutGuards(
+      findPreCommitHookFindings(
         HOOK_FILE,
         ["pre-commit:", "  jobs:", ...LINT, "pre-push:", ...GUARDS].join("\n"),
       ),
@@ -855,20 +867,60 @@ describe("pre-commit hook runs the guards", () => {
 
   test("a comment that names the guards command does not count", () => {
     const comment = ["    # Run bun run guards before committing."]
-    expect(findHookWithoutGuards(HOOK_FILE, hook(...comment, ...LINT))).toHaveLength(1)
-    const trailing = ["    - name: lint", "      run: bun run lint:fix # then bun run guards"]
-    expect(findHookWithoutGuards(HOOK_FILE, hook(...trailing))).toHaveLength(1)
-    const named = ["    - name: bun run guards", "      run: bun run lint:fix"]
-    expect(findHookWithoutGuards(HOOK_FILE, hook(...named))).toHaveLength(1)
+    expect(hookFindings(...comment, ...LINT)).toHaveLength(1)
+    const trailing = ["    - name: lint", "      run: oxlint --fix {staged_files} # bun run guards"]
+    expect(hookFindings(...trailing)).toHaveLength(1)
+    const named = ["    - name: bun run guards", "      run: oxlint --fix {staged_files}"]
+    expect(hookFindings(...named)).toHaveLength(1)
   })
 
   test("accepts the guards command as one step of a compound run", () => {
-    const chained = ["    - name: checks", "      run: bun run guards && bun run lint:fix"]
-    expect(findHookWithoutGuards(HOOK_FILE, hook(...chained))).toEqual([])
+    const chained = ["    - name: checks", "      run: bun run guards && oxfmt {staged_files}"]
+    expect(hookFindings(...chained)).toEqual([])
   })
 
   test("leaves every other file alone", () => {
-    expect(findHookWithoutGuards("package.json", hook(...LINT, ...TEST))).toEqual([])
+    expect(findPreCommitHookFindings("package.json", hook(...LINT))).toEqual([])
+  })
+})
+
+describe("pre-commit hook runs none of the gate's whole-tree steps", () => {
+  test("flags each gate step at its run line, whatever the job's name", () => {
+    const tests = ["    - name: quick", "      run: bun run test"]
+    expect(hookFindings(...GUARDS, ...tests)).toEqual([
+      [7, expect.stringContaining("runs `bun run test`, a whole-tree gate step")],
+    ])
+    const typecheck = ["    - name: types", "      run: bun run typecheck && bun run build"]
+    expect(hookFindings(...GUARDS, ...typecheck).map(([line]) => line)).toEqual([7, 7])
+  })
+
+  test("flags the whole-tree lint and format scripts, with or without arguments", () => {
+    const wholeTree = [
+      "    - name: lint+fmt",
+      "      run: bun run lint:fix && bun run fmt --check",
+      "      stage_fixed: true",
+    ]
+    expect(hookFindings(...GUARDS, ...wholeTree)).toEqual([
+      [7, expect.stringContaining("`bun run lint:fix`")],
+      [7, expect.stringContaining("`bun run fmt --check`")],
+    ])
+  })
+
+  test("a staged-files command or a script that only shares a prefix is not a gate step", () => {
+    const near = ["    - name: near", "      run: bun run tests-report && bun run gateway"]
+    expect(hookFindings(...GUARDS, ...LINT, ...FMT, ...near)).toEqual([])
+  })
+
+  test("a gate step under another hook does not count", () => {
+    const text = [
+      "pre-commit:",
+      "  jobs:",
+      ...GUARDS,
+      "pre-push:",
+      "  jobs:",
+      "    - run: bun run gate",
+    ].join("\n")
+    expect(findPreCommitHookFindings(HOOK_FILE, text)).toEqual([])
   })
 })
 

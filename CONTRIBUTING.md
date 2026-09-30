@@ -20,5 +20,6 @@ diverges from it.
 
 1. Fork the repo
 2. Create a feature branch
-3. Make changes; run `bun run gate`
+3. Make changes; run `bun run gate` (the pre-commit hook lints and formats
+   the staged files only; the gate and CI run everything)
 4. Submit PR — small, reviewable commits preferred over one mega-PR

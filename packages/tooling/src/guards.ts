@@ -1084,15 +1084,22 @@ export const findSharedTestHomes = (file: string, text: string): ReadonlyArray<F
     .map((line) => ({ file, line, message: SHARED_TEMP_HOME_MESSAGE }))
 }
 
-// ── the pre-commit hook runs the guards ─────────────────────────────────────
+// ── the pre-commit hook: the guards, and staged files only ─────────────────
 
 /**
- * Guard: the pre-commit hook runs the guards.
+ * Guard: the pre-commit hook runs the guards, and none of the gate's
+ * whole-tree steps.
  *
- * The hook's other jobs are oxlint, the formatter, typecheck, build and tests.
- * None of them reads what the guards read, so a hook without a
- * `bun run guards` job commits a guard violation that only the gate would
- * catch later. The job is found by the command it runs, not by its name.
+ * The hook's other jobs lint and format the staged files. None of them reads
+ * what the guards read, so a hook without a `bun run guards` job commits a
+ * guard violation that only the gate would catch later.
+ *
+ * The hook finishes in under 10 s. Typecheck, build, the whole-tree lint and
+ * format, and the tests take minutes; they are `bun run gate`'s, and CI runs
+ * the gate. A hook job that runs one of those root scripts brings the
+ * minutes back into every commit.
+ *
+ * A job is found by the command it runs, not by its name.
  *
  * @module
  */
@@ -1101,21 +1108,45 @@ export const HOOK_FILE = "lefthook.yml"
 
 const GUARD_COMMAND = "bun run guards"
 
+/** The root scripts that read the whole tree: the gate and its parts. */
+const GATE_COMMANDS: ReadonlyArray<string> = [
+  "bun run gate",
+  "bun run typecheck",
+  "bun run build",
+  "bun run test",
+  "bun run test:e2e",
+  "bun run lint",
+  "bun run lint:fix",
+  "bun run fmt",
+  "bun run fmt:check",
+]
+
+const isGateCommand = (command: string): boolean =>
+  GATE_COMMANDS.some((gate) => command === gate || command.startsWith(`${gate} `))
+
 /** The `pre-commit` hook's own key, at the top level of the file. */
 const PRE_COMMIT = /^pre-commit:/
 
 /** Any other top-level key closes the `pre-commit` block. */
 const TOP_LEVEL_KEY = /^\S/
 
+/** One line of the hook file: its 1-based number and its text. */
+interface HookLine {
+  readonly line: number
+  readonly text: string
+}
+
 /** The lines under `pre-commit:`, up to the next top-level key. */
-const preCommitBlock = (text: string): string => {
+const preCommitLines = (text: string): ReadonlyArray<HookLine> => {
   const lines = text.split("\n")
   const start = lines.findIndex((line) => PRE_COMMIT.test(line))
-  if (start === -1) return ""
-  const rest = lines.slice(start + 1)
-  const end = rest.findIndex((line) => TOP_LEVEL_KEY.test(line))
-  if (end === -1) return rest.join("\n")
-  return rest.slice(0, end).join("\n")
+  if (start === -1) return []
+  const rest = lines
+    .slice(start + 1)
+    .map((line, index) => ({ line: start + 2 + index, text: line }))
+  const end = rest.findIndex((line) => TOP_LEVEL_KEY.test(line.text))
+  if (end === -1) return rest
+  return rest.slice(0, end)
 }
 
 /** A job's `run:` entry; a comment line never matches. */
@@ -1129,24 +1160,33 @@ const runCommands = (value: string): ReadonlyArray<string> =>
     .split(/&&|\|\||;/)
     .map((command) => command.trim())
 
-/** Whether a `pre-commit` job runs the guards command as one of its steps. */
-const runsGuards = (block: string): boolean =>
-  block.split("\n").some((line) =>
-    Option.match(Option.fromNullishOr(RUN_ENTRY.exec(line)?.[1]), {
-      onNone: () => false,
-      onSome: (value) => runCommands(value).includes(GUARD_COMMAND),
+/** Each `run:` entry of the `pre-commit` hook: its line and the commands it executes. */
+const preCommitSteps = (text: string) =>
+  preCommitLines(text).flatMap(({ line, text: lineText }) =>
+    Option.match(Option.fromNullishOr(RUN_ENTRY.exec(lineText)?.[1]), {
+      onNone: () => [],
+      onSome: (value) => [{ line, commands: runCommands(value) }],
     }),
   )
 
-export const findHookWithoutGuards = (file: string, text: string): ReadonlyArray<Finding> => {
+export const findPreCommitHookFindings = (file: string, text: string): ReadonlyArray<Finding> => {
   if (file !== HOOK_FILE) return []
-  if (runsGuards(preCommitBlock(text))) return []
+  const steps = preCommitSteps(text)
+  const findings: Array<Finding> = steps.flatMap(({ line, commands }) =>
+    commands.filter(isGateCommand).map((command) => ({
+      file,
+      line,
+      message: `the pre-commit hook runs \`${command}\`, a whole-tree gate step; the hook lints and formats the staged files only and finishes in under 10 s -- leave it to \`bun run gate\` and CI`,
+    })),
+  )
+  if (steps.some(({ commands }) => commands.includes(GUARD_COMMAND))) return findings
   return [
     {
       file,
       line: 1,
       message: `the pre-commit hook runs no \`${GUARD_COMMAND}\` job -- the guards then reach a commit only through the gate`,
     },
+    ...findings,
   ]
 }
 

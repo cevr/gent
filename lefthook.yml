@@ -1,22 +1,24 @@
+# The pre-commit hook finishes in under 10 s: it reads the staged files only.
+# Typecheck, build, the whole-tree lint and the tests are `bun run gate`'s,
+# which CI runs on every push and pull request; run it before a handoff.
 pre-commit:
-  parallel: false
+  parallel: true
   jobs:
-    # First, and alone: the guards read the tree and finish in seconds,
-    # so their verdict heads the output instead of sitting after the
-    # minutes the later jobs take. Every job still runs -- lefthook does not
-    # stop at the first failure -- so this buys the reader the answer early,
-    # not a shorter run. The formatter runs after, so nothing the guards read
-    # has been rewritten under them.
+    # The guards read the index the commit is made from, in about 2 s. They
+    # run beside the fixers: a fix the fixers stage is formatting or an
+    # oxlint autofix, and the gate reads the committed tree again.
     - name: guards
       run: bun run guards
-    # `lint:fix` is oxlint alone; the guards above are the other part of
-    # `bun run lint`, which the gate runs as one command.
+    # oxlint first, then the formatter, on the same staged files, so the
+    # formatter has the last word; each stages what it rewrote.
     - name: lint+fmt
-      run: bun run lint:fix && bun run fmt
-      stage_fixed: true
-    - name: typecheck
-      run: bun run typecheck
-    - name: build
-      run: bun run build
-    - name: test
-      run: bun run test
+      group:
+        piped: true
+        jobs:
+          - name: oxlint
+            glob: "*.{ts,tsx}"
+            run: env -u FORCE_COLOR NO_COLOR=1 bunx oxlint --ignore-path=.oxlintignore --report-unused-disable-directives-severity=error --no-error-on-unmatched-pattern --fix {staged_files}
+            stage_fixed: true
+          - name: oxfmt
+            run: env -u FORCE_COLOR NO_COLOR=1 bunx oxfmt --ignore-path=.oxlintignore --no-error-on-unmatched-pattern {staged_files}
+            stage_fixed: true
