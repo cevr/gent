@@ -481,6 +481,8 @@ function TestComposer(props: {
     </SessionControllerContext.Provider>
   )
 }
+type TestKeys = Effect.Success<ReturnType<typeof renderScoped>>["mockInput"]
+const PASTE = "x".repeat(200)
 describe("Composer renderer", () => {
   // Two extensions may contribute rows under one prefix. The row the reader
   // picks inserts and records through the extension that offered it.
@@ -810,6 +812,105 @@ describe("Composer renderer", () => {
         yield* Effect.promise(() => setup.renderOnce())
         expect(submitted).toEqual(["keep z tail"])
       }
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  /**
+   * Draws `keep <chip> tail`, runs `move` to place the caret, presses `edit`,
+   * and answers what Enter then sends. The kitty keyboard protocol spells the
+   * modified Delete keys.
+   */
+  const editAtChip = (
+    move: (keys: TestKeys) => void,
+    edit: (keys: TestKeys) => Effect.Effect<unknown>,
+  ) =>
+    Effect.gen(function* () {
+      const submitted: Array<string> = []
+      const setup = yield* renderScoped(
+        () => <TestComposer onSubmit={(content) => submitted.push(content)} />,
+        { kittyKeyboard: true },
+      )
+      yield* Effect.promise(() => setup.mockInput.typeText("keep "))
+      yield* Effect.promise(() => setup.mockInput.pasteBracketedText(PASTE))
+      yield* Effect.promise(() => setup.mockInput.typeText(" tail"))
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("[Pasted 200 chars #1] tail"),
+        "the chip",
+      )
+      // From the line start: "keep " is five steps, and the chip starts there.
+      setup.mockInput.pressKey("a", { ctrl: true })
+      move(setup.mockInput)
+      yield* edit(setup.mockInput)
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressKey("RETURN")
+      yield* Effect.promise(() => setup.renderOnce())
+      return submitted
+    })
+  const press = (key: (keys: TestKeys) => void) => (keys: TestKeys) => Effect.sync(() => key(keys))
+  const toChipStart = (keys: TestKeys) => {
+    for (let i = 0; i < 5; i++) keys.pressArrow("right")
+  }
+  const intoChip = (keys: TestKeys) => {
+    for (let i = 0; i < 8; i++) keys.pressArrow("right")
+  }
+  // A forward delete at the chip's start or inside it takes the whole chip.
+  it.scopedLive("delete, shift+delete or ctrl+d at or inside a chip removes the whole chip", () =>
+    Effect.gen(function* () {
+      const deletes: ReadonlyArray<(keys: TestKeys) => Effect.Effect<unknown>> = [
+        press((keys) => keys.pressKey("DELETE")),
+        press((keys) => keys.pressKey("DELETE", { shift: true })),
+        press((keys) => keys.pressKey("d", { ctrl: true })),
+      ]
+      for (const move of [toChipStart, intoChip]) {
+        for (const edit of deletes) {
+          expect(yield* editAtChip(move, edit)).toEqual(["keep  tail"])
+        }
+      }
+    }).pipe(Effect.timeout("20 seconds")),
+  )
+  it.scopedLive("a forward word delete at or inside a chip removes the whole chip", () =>
+    Effect.gen(function* () {
+      const deletes: ReadonlyArray<(keys: TestKeys) => Effect.Effect<unknown>> = [
+        press((keys) => keys.pressKey("d", { meta: true })),
+        press((keys) => keys.pressKey("DELETE", { meta: true })),
+        press((keys) => keys.pressKey("DELETE", { ctrl: true })),
+      ]
+      for (const move of [toChipStart, intoChip]) {
+        for (const edit of deletes) {
+          expect(yield* editAtChip(move, edit)).toEqual(["keep  tail"])
+        }
+      }
+    }).pipe(Effect.timeout("20 seconds")),
+  )
+  // A line delete from inside a chip takes the whole chip with the rest of its span.
+  it.scopedLive("ctrl+k or ctrl+u from inside a chip takes the whole chip", () =>
+    Effect.gen(function* () {
+      expect(
+        yield* editAtChip(
+          intoChip,
+          press((keys) => keys.pressKey("k", { ctrl: true })),
+        ),
+      ).toEqual(["keep"])
+      expect(
+        yield* editAtChip(
+          intoChip,
+          press((keys) => keys.pressKey("u", { ctrl: true })),
+        ),
+      ).toEqual(["tail"])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  // A caret inside a chip never edits its text: typed text lands after the chip.
+  it.scopedLive("a character typed inside a chip goes after it, and the paste still sends", () =>
+    Effect.gen(function* () {
+      expect(
+        yield* editAtChip(
+          intoChip,
+          press((keys) => keys.pressKey("q")),
+        ),
+      ).toEqual([`keep ${PASTE}q tail`])
+      expect(
+        yield* editAtChip(intoChip, (keys) => Effect.promise(() => keys.pasteBracketedText("pq"))),
+      ).toEqual([`keep ${PASTE}pq tail`])
     }).pipe(Effect.timeout("10 seconds")),
   )
   it.live("suspended composer blocks enter submission", () =>

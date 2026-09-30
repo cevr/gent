@@ -536,9 +536,112 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
 
 const PASTE_THRESHOLD_LINES = 3
 const PASTE_THRESHOLD_LENGTH = 150
+/** A paste chip; the group is the id of its stored paste. */
+const PLACEHOLDER = /\[Pasted \d+ (?:lines|chars) #(\d+)\]/g
 
 export function isLargePaste(inserted: string): boolean {
   return lineCount(inserted) >= PASTE_THRESHOLD_LINES || inserted.length >= PASTE_THRESHOLD_LENGTH
+}
+
+/** What a key does to the draft around the caret, as the textarea's bindings resolve it. */
+type DraftEdit =
+  | "backward"
+  | "word-backward"
+  | "forward"
+  | "word-forward"
+  | "to-line-end"
+  | "to-line-start"
+  | "insert"
+
+interface DraftKey {
+  readonly name?: string
+  readonly sequence?: string
+  readonly ctrl?: boolean
+  readonly meta?: boolean
+  readonly shift?: boolean
+  readonly super?: boolean
+}
+
+/**
+ * The keys that edit the draft around the caret: the OpenTUI textarea
+ * defaults plus the composer's own bindings (`meta+backspace`, the newline
+ * keys). Modifiers match exactly, as the textarea's own binding map does. A
+ * key that only moves the caret, submits, or undoes is not here.
+ */
+const DRAFT_EDIT_KEYS: ReadonlyArray<{
+  readonly name: string
+  readonly ctrl?: true
+  readonly meta?: true
+  readonly shift?: true
+  readonly edit: DraftEdit
+}> = [
+  { name: "backspace", edit: "backward" },
+  { name: "backspace", shift: true, edit: "backward" },
+  { name: "backspace", ctrl: true, edit: "word-backward" },
+  { name: "backspace", meta: true, edit: "word-backward" },
+  { name: "w", ctrl: true, edit: "word-backward" },
+  { name: "delete", edit: "forward" },
+  { name: "delete", shift: true, edit: "forward" },
+  { name: "d", ctrl: true, edit: "forward" },
+  { name: "delete", ctrl: true, edit: "word-forward" },
+  { name: "delete", meta: true, edit: "word-forward" },
+  { name: "d", meta: true, edit: "word-forward" },
+  { name: "k", ctrl: true, edit: "to-line-end" },
+  { name: "u", ctrl: true, edit: "to-line-start" },
+  { name: "return", shift: true, edit: "insert" },
+  { name: "return", ctrl: true, edit: "insert" },
+  { name: "linefeed", edit: "insert" },
+  { name: "linefeed", shift: true, edit: "insert" },
+  { name: "j", ctrl: true, edit: "insert" },
+  { name: "space", edit: "insert" },
+]
+
+/** A key with no binding and no modifier types its character, as the textarea does. */
+const typesCharacter = (key: DraftKey): boolean => {
+  if (key.ctrl === true || key.meta === true || key.super === true) return false
+  const code = (key.sequence ?? "").charCodeAt(0)
+  return code >= 32 && code !== 127
+}
+
+const draftEditOf = (key: DraftKey): Option.Option<DraftEdit> =>
+  Option.fromUndefinedOr(
+    DRAFT_EDIT_KEYS.find(
+      (binding) =>
+        binding.name === key.name &&
+        (binding.ctrl === true) === (key.ctrl === true) &&
+        (binding.meta === true) === (key.meta === true) &&
+        (binding.shift === true) === (key.shift === true) &&
+        key.super !== true,
+    ),
+  ).pipe(
+    Option.map((binding) => binding.edit),
+    Option.orElse(() =>
+      Option.liftPredicate(typesCharacter)(key).pipe(Option.as("insert" as const)),
+    ),
+  )
+
+/** A span of the draft, in textarea offsets or in string indices. */
+interface DraftSpan {
+  readonly start: number
+  readonly end: number
+}
+
+/** The textarea offsets an edit covers; an insert is the empty span at the caret. */
+const draftEditSpan = (textarea: TextareaRenderable, edit: DraftEdit): DraftSpan => {
+  const caret = textarea.cursorOffset
+  const spans: Record<DraftEdit, () => DraftSpan> = {
+    backward: () => ({ start: Math.max(0, caret - 1), end: caret }),
+    "word-backward": () => ({
+      start: textarea.editBuffer.getPrevWordBoundary().offset,
+      end: caret,
+    }),
+    forward: () => ({ start: caret, end: caret + 1 }),
+    "word-forward": () => ({ start: caret, end: textarea.editBuffer.getNextWordBoundary().offset }),
+    "to-line-end": () => ({ start: caret, end: textarea.editBuffer.getEOL().offset }),
+    "to-line-start": () => ({ start: caret - textarea.logicalCursor.col, end: caret }),
+    insert: () => ({ start: caret, end: caret }),
+  }
+  return spans[edit]()
 }
 
 /**
@@ -560,23 +663,29 @@ export function createPasteManager() {
       return `[Pasted ${text.length} chars #${id}]`
     },
     expandPlaceholders(text: string): string {
-      return text.replace(/\[Pasted \d+ (?:lines|chars) #(\d+)\]/g, (match, id) =>
+      return text.replace(PLACEHOLDER, (match, id) =>
         Option.getOrElse(Option.fromNullishOr(store.get(id)), () => match),
       )
     },
     /**
-     * The chip that string index `index` stands inside or at the end of, and
-     * that still holds its stored text.
+     * The span an edit of string indices `[start, end)` takes so that every
+     * chip that still holds its stored text stays whole. A delete that cuts
+     * into a chip grows to take the whole chip. An insert (`start === end`)
+     * strictly inside a chip moves to the chip's end.
      */
-    chipAt(text: string, index: number): Option.Option<{ start: number; end: number }> {
-      for (const match of text.matchAll(/\[Pasted \d+ (?:lines|chars) #(\d+)\]/g)) {
-        const start = match.index
-        const end = start + match[0].length
-        if (start < index && index <= end && store.has(match[1] ?? "")) {
-          return Option.some({ start, end })
+    keepChipsWhole(text: string, start: number, end: number): DraftSpan {
+      let span: DraftSpan = { start, end }
+      for (const match of text.matchAll(PLACEHOLDER)) {
+        const chipStart = match.index
+        const chipEnd = chipStart + match[0].length
+        if (!store.has(match[1] ?? "")) continue
+        if (start === end) {
+          if (chipStart < start && start < chipEnd) span = { start: chipEnd, end: chipEnd }
+        } else if (chipStart < end && start < chipEnd) {
+          span = { start: Math.min(span.start, chipStart), end: Math.max(span.end, chipEnd) }
         }
       }
-      return Option.none()
+      return span
     },
     clear() {
       store.clear()
@@ -591,14 +700,9 @@ interface ComposerController {
   readonly inputFocused: Accessor<boolean>
   // eslint-disable-next-line effect/noNullish -- OpenTUI refs pass null before attachment and on cleanup.
   readonly attachTextarea: (renderable: TextareaRenderable | null) => void
-  readonly handleTextareaKeyDown: (event: {
-    name?: string
-    shift?: boolean
-    ctrl?: boolean
-    meta?: boolean
-    super?: boolean
-    preventDefault: () => void
-  }) => void
+  readonly handleTextareaKeyDown: (
+    event: DraftKey & { readonly preventDefault: () => void },
+  ) => void
   readonly handleSubmitFromTextarea: () => void
   readonly resolveInteraction: (result: ApprovalResult) => void
   /** Enter on a row: completes, and dispatches when the row names a command. */
@@ -776,6 +880,8 @@ function useComposerController(): ComposerController {
    */
   const handlePaste = (event: PasteEvent) => {
     if (Option.isNone(inputRef)) return
+    // A paste is an insert: inside a chip it lands after the chip.
+    keepChipsWhole(inputRef.value, "insert")
     const pasted = stripAnsiSequences(decodePasteBytes(event.bytes)).replace(/\r\n?/g, "\n")
     if (!isLargePaste(pasted)) return
     event.preventDefault()
@@ -783,33 +889,36 @@ function useComposerController(): ComposerController {
   }
 
   /**
-   * A paste chip is one unit. Backspace or a word delete at its end or from
-   * inside it removes the whole chip in one undo step; editing it a character
-   * at a time would send the fragment and lose the paste. The stored text
-   * stays, so an undo gives back a chip that still sends its paste.
+   * A paste chip is one unit, and a caret inside it never edits its text.
+   * A delete that would cut into a chip (a character, a word or a line, in
+   * either direction) takes the whole chip in one undo step; editing it a
+   * character at a time would send the fragment and lose the paste. The
+   * stored text stays, so an undo gives back a chip that still sends its
+   * paste. Text typed inside a chip goes after it.
    *
    * The textarea counts its caret in its own units, which a wide or
    * multi-byte character makes differ from string indices. The text before
-   * the caret gives the caret's string index. A chip is all ASCII, one unit
-   * per character in both counts, so the caret moves back by the part of the
-   * chip before it.
+   * an offset gives its string index. A chip is all ASCII, one unit per
+   * character in both counts, so a span that grows over a chip moves its
+   * offsets by the same count as its indices.
    */
-  const removeChipAtCaret = (event: {
-    readonly name?: string
-    readonly ctrl?: boolean
-    readonly preventDefault: () => void
-  }): boolean => {
-    const deletesBack = event.name === "backspace" || (event.name === "w" && event.ctrl === true)
-    if (!deletesBack || Option.isNone(inputRef) || inputRef.value.hasSelection()) return false
-    const value = inputRef.value.plainText
-    const caret = inputRef.value.cursorOffset
-    const caretIndex = inputRef.value.getTextRange(0, caret).length
-    const chip = paste.chipAt(value, caretIndex)
-    if (Option.isNone(chip)) return false
-    event.preventDefault()
-    const next = value.slice(0, chip.value.start) + value.slice(chip.value.end)
-    inputRef.value.replaceText(next)
-    inputRef.value.cursorOffset = caret - (caretIndex - chip.value.start)
+  const keepChipsWhole = (textarea: TextareaRenderable, edit: DraftEdit): boolean => {
+    if (textarea.hasSelection()) return false
+    const value = textarea.plainText
+    const span = draftEditSpan(textarea, edit)
+    const indexOf = (offset: number) => textarea.getTextRange(0, offset).length
+    const start = indexOf(span.start)
+    const end = indexOf(span.end)
+    const whole = paste.keepChipsWhole(value, start, end)
+    if (whole.start === start && whole.end === end) return false
+    if (edit === "insert") {
+      // The textarea inserts at the moved caret.
+      textarea.cursorOffset = span.start + (whole.start - start)
+      return false
+    }
+    const next = value.slice(0, whole.start) + value.slice(whole.end)
+    textarea.replaceText(next)
+    textarea.cursorOffset = span.start - (start - whole.start)
     sc.onComposerInteraction(ComposerInteractionEvent.cases.DraftChanged.make({ text: next }))
     return true
   }
@@ -1224,15 +1333,16 @@ function useComposerController(): ComposerController {
    *   bare return → submit (→ handleSubmitFromTextarea)
    *   shift/ctrl+return → newline
    */
-  const handleTextareaKeyDown = (event: {
-    name?: string
-    shift?: boolean
-    ctrl?: boolean
-    meta?: boolean
-    super?: boolean
-    preventDefault: () => void
-  }) => {
-    if (removeChipAtCaret(event)) return
+  const handleTextareaKeyDown = (event: DraftKey & { readonly preventDefault: () => void }) => {
+    const edit = draftEditOf(event)
+    if (
+      Option.isSome(edit) &&
+      Option.isSome(inputRef) &&
+      keepChipsWhole(inputRef.value, edit.value)
+    ) {
+      event.preventDefault()
+      return
+    }
     const isEnterKey = event.name === "return" || event.name === "linefeed"
     if (!isEnterKey) return
 
