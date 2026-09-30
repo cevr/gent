@@ -88,18 +88,13 @@ const formatStartTs = (timeOrigin: number): string =>
     }),
   ) // YYYYMMDDHHMMSS
 
-let cachedStartTs: Option.Option<string> = Option.none()
 /**
- * Read the process-start timestamp, formatted YYYYMMDDHHMMSS. Lazy and
- * memoized so module import has no platform side effect, and so synchronous
- * callers (TUI logger module init) share the same value as Effect callers.
+ * Read the process-start timestamp, formatted YYYYMMDDHHMMSS. It is read on
+ * call, so module import has no platform side effect. The process's time
+ * origin never changes, so synchronous callers (TUI logger module init) and
+ * Effect callers read the same value.
  */
-const processStartTs = (): string => {
-  if (Option.isSome(cachedStartTs)) return cachedStartTs.value
-  const startTs = formatStartTs(performance.timeOrigin)
-  cachedStartTs = Option.some(startTs)
-  return startTs
-}
+const processStartTs = (): string => formatStartTs(performance.timeOrigin)
 
 interface LogPaths {
   readonly dir: string

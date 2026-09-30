@@ -468,7 +468,6 @@ export const builtinFiles = defineClientExtension("@gent/files-ui", {
 
 const SOURCE = "herdr:gent"
 const AGENT = "gent"
-let herdrReportSequence = 0
 
 const herdrEnvironment = Config.all({
   enabled: Config.String("HERDR_ENV").pipe(Config.withDefault("")),
@@ -558,14 +557,17 @@ export const makeHerdrReporter = Effect.fn("Herdr.makeReporter")(function* (targ
   const reports = yield* Queue.sliding<ClientActivitySnapshot>(1)
   let closed = false
   let previous = ""
+  // A report's sequence rises past every earlier one and tracks the clock in
+  // microseconds, so a reporter that replaces this one still counts upward.
+  let sequence = 0
 
   const send = Effect.fn("Herdr.report")(function* (
     method: string,
     snapshot?: ClientActivitySnapshot,
   ) {
     const now = yield* Clock.currentTimeMillis
-    herdrReportSequence = Math.max(herdrReportSequence + 1, now * 1000)
-    const seq = herdrReportSequence
+    sequence = Math.max(sequence + 1, now * 1000)
+    const seq = sequence
     const params = {
       pane_id: target.paneId,
       source: SOURCE,

@@ -363,18 +363,11 @@ const testStream = (
     generateText: () => Effect.succeed("test response"),
   })
 
-let failingCache = Option.none<Layer.Layer<LanguageModel.LanguageModel>>()
-const failing = () => {
-  if (Option.isNone(failingCache)) {
-    const layer = makeLanguageModelLayer({
-      streamText: () => Stream.fail(aiError("Failing.streamText", "provider exploded")),
-      generateText: () => Effect.fail(aiError("Failing.generateText", "provider exploded")),
-    })
-    failingCache = Option.some(layer)
-    return layer
-  }
-  return failingCache.value
-}
+/** One layer value, so every test that provides it shares its memoized build. */
+const failingLayer = makeLanguageModelLayer({
+  streamText: () => Stream.fail(aiError("Failing.streamText", "provider exploded")),
+  generateText: () => Effect.fail(aiError("Failing.generateText", "provider exploded")),
+})
 
 const signal = (reply: string, options?: { inputTokens?: number; outputTokens?: number }) =>
   Effect.gen(function* () {
@@ -572,7 +565,7 @@ export const LanguageModelLayers = {
     return ScriptedLanguageModel.empty
   },
   get failing() {
-    return failing()
+    return failingLayer
   },
   sequence,
   signal,
