@@ -2759,28 +2759,37 @@ export function createSessionController(props: {
   // composer arms the exit, and so does a ctrl+c that cancels a turn, so a
   // second ctrl+c exits even when a new turn started in between (children
   // that keep waking the session). The arm is per key: a ctrl+c then an Esc
-  // is two gestures. Any other key, a paste, a keybind, or the window running
-  // out disarms it; the window runs on the runtime's clock.
+  // is two gestures. Any other key (an Esc included, when ctrl+c is armed), a
+  // paste, a keybind, or the window running out disarms it; the window runs on
+  // the runtime's clock, and its timer ends with the arm or with the view.
   const ARM_WINDOW = Duration.seconds(1)
   const [armedKey, setArmedKey] = createSignal(Option.none<ArmedKey>())
-  let armVersion = 0
+  let armTimer = Option.none<Fiber.Fiber<void>>()
+  const stopArmTimer = () => {
+    if (Option.isSome(armTimer)) client.runtime.cast(Fiber.interrupt(armTimer.value))
+    armTimer = Option.none()
+  }
   const disarm = () => {
-    armVersion += 1
+    stopArmTimer()
     if (Option.isSome(untrack(armedKey))) setArmedKey(Option.none())
   }
   const arm = (key: ArmedKey) => {
-    const version = ++armVersion
+    stopArmTimer()
     setArmedKey(Option.some(key))
-    client.runtime.cast(
-      Effect.sleep(ARM_WINDOW).pipe(
-        Effect.andThen(
-          Effect.sync(() => {
-            if (version === armVersion) setArmedKey(Option.none())
-          }),
+    armTimer = Option.some(
+      client.runtime.fork(
+        Effect.sleep(ARM_WINDOW).pipe(
+          Effect.andThen(
+            Effect.sync(() => {
+              armTimer = Option.none()
+              setArmedKey(Option.none())
+            }),
+          ),
         ),
       ),
     )
   }
+  onCleanup(stopArmTimer)
   const armedFor = (key: ArmedKey) => Option.contains(untrack(armedKey), key)
   const history = usePromptHistory()
   const frecency = useAutocompleteFrecency()
@@ -3338,11 +3347,12 @@ export function createSessionController(props: {
     const overlay = uiState().overlay
     if (overlayHoldsComposer(overlay)) {
       // The boot branch picker and an enforced sign-in hold the slot: there
-      // is nothing behind them to fall back to, so ctrl+c exits (Esc does
-      // nothing over them). Any other held pane is the nearest thing, and
-      // ctrl+c closes it as Esc does.
+      // is nothing behind them to fall back to, so ctrl+c arms the exit as on
+      // an empty composer (Esc does nothing over them). Any other held pane
+      // is the nearest thing, and ctrl+c closes it as Esc does.
       if (slotHeld(overlay)) {
-        exit()
+        if (second) exit()
+        else arm("interrupt")
         return
       }
       closeOverlay()
@@ -3394,12 +3404,13 @@ export function createSessionController(props: {
   }
 
   // Any other key or a paste disarms (a keybind, a transcript toggle, a typed
-  // character, also one a docked pane takes). Esc and ctrl+c read their own
-  // arm in their branch.
+  // character, also one a docked pane takes, or the other armed key: an Esc
+  // that leaves shell mode disarms a ctrl+c). The armed key reads its own arm
+  // in its branch.
   useInputWatch({
     key: (event) => {
-      if (event.name === "escape") return
-      if (event.ctrl === true && event.name === "c") return
+      if (event.name === "escape" && armedFor("escape")) return
+      if (event.ctrl === true && event.name === "c" && armedFor("interrupt")) return
       disarm()
     },
     paste: disarm,

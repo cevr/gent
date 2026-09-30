@@ -1083,7 +1083,10 @@ function useComposerController(): ComposerController {
 
     if (effectiveMode() !== "shell") return false
 
+    // Esc on a shell draft arms its clear as on any draft (the session's
+    // ladder); Esc on an empty shell draft leaves shell mode at once.
     if (event.name === "escape") {
+      if (sc.interactionState().draft.length > 0) return false
       sc.onComposerInteraction(ComposerInteractionEvent.cases.ExitShell.make({}))
       clearAutocomplete()
       clearInput()

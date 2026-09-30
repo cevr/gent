@@ -9,6 +9,7 @@ import {
   Effect,
   Encoding,
   Exit,
+  Fiber,
   Layer,
   Logger,
   Option,
@@ -626,12 +627,15 @@ const mountIdleSession = (
     yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
     // `useEnv().shutdown` is a no-op in the harness, so count the renderer
     // teardown the controller performs alongside it.
+    const unmount = setup.renderer.destroy.bind(setup.renderer)
     setup.renderer.destroy = () => {
       shutdowns += 1
     }
     return {
       setup,
       shutdowns: () => shutdowns,
+      /** Tears the view down, as the harness does after the test. */
+      unmount,
       /** Time for a key to be parsed and handled before a negative assertion. */
       // gent/no-sleep: allow a lone escape byte stays in the stdin parser until its timeout flushes it as a key
       settle: Effect.sleep("100 millis"),
@@ -1491,6 +1495,81 @@ describe("App auth gate", () => {
       // Disarmed: the next press arms again and does not quit.
       view.setup.mockInput.pressKey("c", { ctrl: true })
       yield* waitForFrame(view.setup, (frame) => frame.includes(CTRL_C_CUE), "the cue again")
+      expect(view.shutdowns()).toBe(0)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  it.scopedLive("the exit cue's window ends with the session view", () =>
+    Effect.gen(function* () {
+      const clock = yield* TestClock.make()
+      const onClock = <R,>() => Context.makeUnsafe<R>(new Map([[Clock.Clock.key, clock]]))
+      // The fibers the ctrl+c press starts; the paused clock keeps a timer open.
+      const started: Array<Fiber.Fiber<unknown, unknown>> = []
+      let recording = false
+      const track = <A, E>(fiber: Fiber.Fiber<A, E>): Fiber.Fiber<A, E> => {
+        if (recording) started.push(fiber)
+        return fiber
+      }
+      const view = yield* mountIdleSession({
+        ...createMockRuntime(),
+        cast: (effect) => {
+          track(Effect.runForkWith(onClock())(effect))
+        },
+        fork: (effect) => track(Effect.runForkWith(onClock())(effect)),
+      })
+      recording = true
+      view.setup.mockInput.pressKey("c", { ctrl: true })
+      yield* waitForFrame(view.setup, (frame) => frame.includes(CTRL_C_CUE), "the exit cue")
+      recording = false
+      expect(started.length).toBeGreaterThan(0)
+      view.unmount()
+      for (const fiber of started) {
+        yield* Fiber.await(fiber).pipe(Effect.timeout("1 second"))
+      }
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  it.scopedLive("an Esc that leaves shell mode disarms a pending exit", () =>
+    Effect.gen(function* () {
+      // A paused clock: the arm lasts until a key disarms it.
+      const clock = yield* TestClock.make()
+      const onClock = <R,>() => Context.makeUnsafe<R>(new Map([[Clock.Clock.key, clock]]))
+      const view = yield* mountIdleSession({
+        ...createMockRuntime(),
+        cast: (effect) => {
+          Effect.runForkWith(onClock())(effect)
+        },
+        fork: (effect) => Effect.runForkWith(onClock())(effect),
+      })
+      yield* Effect.promise(() => view.setup.mockInput.typeText("!"))
+      yield* waitForFrame(view.setup, (frame) => frame.includes("$"), "shell mode")
+      view.setup.mockInput.pressKey("c", { ctrl: true })
+      yield* waitForFrame(view.setup, (frame) => frame.includes(CTRL_C_CUE), "the exit cue")
+      view.setup.mockInput.pressEscape()
+      yield* waitForFrame(
+        view.setup,
+        (frame) => !frame.includes(CTRL_C_CUE) && !frame.includes("┃ $"),
+        "shell mode left and the cue gone",
+      )
+      view.setup.mockInput.pressKey("c", { ctrl: true })
+      yield* waitForFrame(view.setup, (frame) => frame.includes(CTRL_C_CUE), "armed again")
+      expect(view.shutdowns()).toBe(0)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  it.live("Esc on a shell draft arms its clear; Esc on an empty shell draft leaves", () =>
+    Effect.gen(function* () {
+      const view = yield* mountIdleSession()
+      yield* Effect.promise(() => view.setup.mockInput.typeText("!ls -la"))
+      yield* waitForFrame(view.setup, (frame) => frame.includes("ls -la"), "the shell draft")
+      view.setup.mockInput.pressEscape()
+      const armed = yield* waitForFrame(
+        view.setup,
+        (frame) => frame.includes(ESC_CUE),
+        "the clear cue",
+      )
+      expect(armed).toContain("ls -la")
+      view.setup.mockInput.pressEscape()
+      yield* waitForFrame(view.setup, (frame) => !frame.includes("ls -la"), "the draft cleared")
+      view.setup.mockInput.pressEscape()
+      yield* waitForFrame(view.setup, (frame) => !frame.includes("┃ $"), "shell mode left")
       expect(view.shutdowns()).toBe(0)
     }).pipe(Effect.timeout("10 seconds")),
   )
@@ -2986,7 +3065,7 @@ describe("App auth gate", () => {
       setup.renderer.destroy()
     }).pipe(Effect.timeout("10 seconds")),
   )
-  it.live("ctrl+c in the boot branch picker quits, because no branch was chosen", () =>
+  it.live("ctrl+c in the boot branch picker arms the exit, and a second quits", () =>
     Effect.gen(function* () {
       let shutdowns = 0
       const setup = yield* mountBootBranchPicker
@@ -2996,6 +3075,9 @@ describe("App auth gate", () => {
       setup.renderer.destroy = () => {
         shutdowns += 1
       }
+      setup.mockInput.pressKey("c", { ctrl: true })
+      yield* waitForFrame(setup, (frame) => frame.includes(CTRL_C_CUE), "the exit cue")
+      expect(shutdowns).toBe(0)
       setup.mockInput.pressKey("c", { ctrl: true })
       yield* waitForFrame(setup, () => shutdowns > 0, "quit")
       setup.renderer.destroy = destroy
@@ -3160,7 +3242,7 @@ describe("App auth gate", () => {
   )
   // An enforced sign-in holds the slot: with a required key missing there is
   // no session to fall back to, so ctrl+c quits over it.
-  it.live("ctrl+c over an enforced sign-in quits", () =>
+  it.live("ctrl+c over an enforced sign-in arms the exit, and a second quits", () =>
     Effect.gen(function* () {
       let shutdowns = 0
       const client = createMockClient({
@@ -3197,6 +3279,9 @@ describe("App auth gate", () => {
       setup.renderer.destroy = () => {
         shutdowns += 1
       }
+      setup.mockInput.pressKey("c", { ctrl: true })
+      yield* waitForFrame(setup, (frame) => frame.includes(CTRL_C_CUE), "the exit cue")
+      expect(shutdowns).toBe(0)
       setup.mockInput.pressKey("c", { ctrl: true })
       yield* waitForFrame(setup, () => shutdowns > 0, "quit")
       setup.renderer.destroy = destroy

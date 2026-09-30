@@ -273,7 +273,7 @@ export function PromptSearchPalette(props: PromptSearchPaletteProps) {
  * level switches branches after that. While it is open the startup prompt
  * waits, so a reader never sends a `-p` prompt into a branch they did not
  * choose. With no branch chosen there is nothing behind it to fall back to:
- * Esc does nothing here, and ctrl+c exits.
+ * Esc does nothing here, and ctrl+c arms the exit (the second press exits).
  *
  * It draws the `PickerFrame` every docked pane draws — ruled off top and
  * bottom under the composer, not a bordered box — so its height and its
