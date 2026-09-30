@@ -965,7 +965,7 @@ describe("mcp tools in the cell", () => {
         const fixture = yield* makeFixture
         const { systems, recordSystem } = systemRecorder()
         const code = [
-          "const found = tools.search('extra_042').map((entry) => entry.id)",
+          "const found = tools.search('extra_042').items.map((entry) => entry.id)",
           "const signature = tools.describe('mcp.fixture.extra_042')",
           "const called = await tools.mcp.fixture.extra_042({ owner: 'o', repo: 'r', query: 'q' })",
           "JSON.stringify({ found, signature, called })",

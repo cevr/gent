@@ -1153,9 +1153,16 @@ read that returns the tool as a function carrying its catalog entry (`id`,
 `description`, `guidelines`, `parameters`). It reaches an id with a reserved
 segment, which the prompt renders as `tools("read.then")(input)`; it records
 no operation receipt and grants no execution permission. The root also holds
-two discovery functions (`toolDiscoveryKeys`): `tools.search(query)` returns
-`{ id, description }[]` for the ids whose id or description holds a query
-word, and `tools.describe(id)` returns the rendered signature line. They are
+two discovery functions (`toolDiscoveryKeys`). `tools.search(query, { namespace,
+limit, offset }?)` returns one page, `{ items: { id, description }[], total,
+hasMore, nextOffset }`, 20 items by default. It splits camelCase and
+`_ . / : -`, weighs the whole id over its last segment, its namespace and the
+description, adds exact, prefix and phrase bonuses, drops an id that matches
+fewer than all words of a one- or two-word query (60% of a longer one) unless
+the whole query appears in a field, and breaks ties by id in code-unit order
+(`searchCatalog` in `cell-worker-boundary.ts`). `namespace` keeps the ids under
+that prefix, and an empty query lists them by id. `tools.describe(id)`
+returns the rendered signature line. They are
 local like `tools(id)`, and their results arrive as cell output, so discovery
 never changes the prompt. An id whose first segment is `search` or `describe`
 renders and is reached as `tools("search.x")`. A call with no

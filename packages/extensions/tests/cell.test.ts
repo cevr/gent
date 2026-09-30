@@ -7011,7 +7011,7 @@ describe("host tool catalog budget", () => {
           },
         })
         const code = [
-          "const found = tools.search('tool_042').map((entry) => entry.id)",
+          "const found = tools.search('tool_042').items.map((entry) => entry.id)",
           "const signature = tools.describe('mcp.fixture.tool_007')",
           "const called = await tools.mcp.fixture.tool_003({ query: 'x' })",
           "JSON.stringify({ found, signature, called })",

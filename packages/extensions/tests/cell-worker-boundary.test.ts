@@ -660,6 +660,90 @@ describe("Bun cell evaluation", () => {
     }).pipe(Effect.timeout("2 seconds")),
   )
 
+  it.scopedLive(
+    "search ranks a 100-tool catalog by segment and description, filters by namespace, and pages",
+    () =>
+      Effect.gen(function* () {
+        const kernel = yield* makeKernel({ call: () => Effect.succeed(0) })
+        const entry = (name: string, description: string) => ({
+          name,
+          description,
+          guidelines: [],
+          parameters: {},
+          signature: `tools.${name}(input?: {}): Promise<unknown> // ${description}`,
+          summary: description,
+        })
+        const filler = Array.from({ length: 88 }, (_, index) =>
+          entry(`mcp.filler.tool_${String(index).padStart(3, "0")}`, `Filler operation ${index}.`),
+        )
+        const catalog = [
+          entry("mcp.github.listIssues", "List issues in a repository."),
+          entry("mcp.github.createIssue", "Create an issue."),
+          entry("mcp.github.getPullRequest", "Read one pull request."),
+          entry("mcp.github.listPullRequests", "List pull requests."),
+          entry("mcp.github.searchCode", "Search code."),
+          entry("mcp.linear.list_issues", "Linear tickets, listed."),
+          entry("mcp.linear.create_issue", "Open a Linear ticket."),
+          entry("mcp.slack.postMessage", "Post to a channel."),
+          entry("mcp.slack.listChannels", "Every channel."),
+          entry("mcp.docs.lookup", "Find open issues in the tracker."),
+          entry("mcp.filler.a", "Filler operation a."),
+          entry("mcp.filler.B", "Filler operation B."),
+          ...filler,
+        ]
+        expect(catalog).toHaveLength(100)
+        yield* kernel.setCatalog(catalog)
+        const search = (source: string) =>
+          kernel.evaluate(`JSON.stringify(${source})`).pipe(Effect.map((result) => result.display))
+        const ids = (source: string) => search(`${source}.items.map((item) => item.id)`)
+        // camelCase and `_` split: both words must match, so `listPullRequests` is out.
+        expect(yield* ids("tools.search('list issues')")).toBe(
+          '["mcp.github.listIssues","mcp.linear.list_issues"]',
+        )
+        // A word in the name outranks the same word in the description only.
+        expect(yield* ids("tools.search('issue')")).toBe(
+          '["mcp.github.createIssue","mcp.linear.create_issue","mcp.github.listIssues","mcp.linear.list_issues","mcp.docs.lookup"]',
+        )
+        // A one-character word is no prefix: `0` in "Filler operation 0." misses `042`.
+        expect(yield* ids("tools.search('tool_042')")).toBe('["mcp.filler.tool_042"]')
+        // The whole id ranks first.
+        expect(yield* ids("tools.search('mcp.github.createIssue', { limit: 1 })")).toBe(
+          '["mcp.github.createIssue"]',
+        )
+        // Three words need 60%: two of three pass, one of three does not.
+        expect(yield* ids("tools.search('post message channel')")).toBe('["mcp.slack.postMessage"]')
+        // The namespace keeps its own ids; an empty query lists them by id.
+        expect(yield* ids("tools.search('issue', { namespace: 'mcp.linear' })")).toBe(
+          '["mcp.linear.create_issue","mcp.linear.list_issues"]',
+        )
+        expect(yield* ids("tools.search('', { namespace: 'mcp.slack' })")).toBe(
+          '["mcp.slack.listChannels","mcp.slack.postMessage"]',
+        )
+        // Equal scores sort by code unit, so `B` comes before `a`.
+        expect(yield* search("tools.search('filler', { limit: 3 })")).toBe(
+          [
+            '{"items":[{"id":"mcp.filler.B","description":"Filler operation B."},',
+            '{"id":"mcp.filler.a","description":"Filler operation a."},',
+            '{"id":"mcp.filler.tool_000","description":"Filler operation 0."}],',
+            '"total":90,"hasMore":true,"nextOffset":3}',
+          ].join(""),
+        )
+        // Pages follow `nextOffset` to the end, each id once, in the one order.
+        const pages = yield* search(
+          [
+            "(() => {",
+            "  const seen = []; let offset = 0; let last",
+            "  do { last = tools.search('filler', { limit: 40, offset }); seen.push(...last.items.map((item) => item.id)); offset = last.nextOffset } while (last.hasMore)",
+            "  return { count: seen.length, unique: new Set(seen).size, sorted: seen.slice(2).every((id, index, all) => index === 0 || all[index - 1] < id), last: 'nextOffset' in last }",
+            "})()",
+          ].join("\n"),
+        )
+        expect(pages).toBe('{"count":90,"unique":90,"sorted":true,"last":false}')
+        // The default page is 20.
+        expect(yield* search("tools.search('').items.length")).toBe("20")
+      }).pipe(Effect.timeout("5 seconds")),
+  )
+
   it.scopedLive("describes the shipped catalog locally without a host call", () =>
     Effect.gen(function* () {
       const calls = yield* Ref.make(0)
@@ -694,9 +778,10 @@ describe("Bun cell evaluation", () => {
       expect(signature.display).toBe(
         "tools.read(input: { path?: string }): Promise<unknown> // Read a file",
       )
+      // A two-word query needs both words: `write` holds only "file".
       const found = yield* kernel.evaluate("JSON.stringify(tools.search('file read'))")
       expect(found.display).toBe(
-        '[{"id":"read","description":"Read a file"},{"id":"write","description":"Write a file"}]',
+        '{"items":[{"id":"read","description":"Read a file"}],"total":1,"hasMore":false}',
       )
       const unknownDescribe = yield* kernel.evaluate("tools.describe('bash')").pipe(Effect.flip)
       expect(unknownDescribe.message).toContain("tools.bash is not a host tool")
