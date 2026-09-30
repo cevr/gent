@@ -30,7 +30,6 @@ import {
   findUnshippedSkillFiles,
   findUnhashedSteeringFiles,
   BUNDLED_SKILLS_MODULE,
-  findUnneededOffs,
   findUnusedCatalogEntries,
   findUnusedDependencies,
   findUnusedSuppressionApprovals,
@@ -1106,121 +1105,6 @@ describe("a tsconfig plugin override must match a tracked file", () => {
         ),
       ],
     ])
-  })
-})
-
-describe('an override "off" must suppress a diagnostic', () => {
-  const configText = [
-    "{",
-    '  "overrides": [',
-    '    { "files": ["apps/tui/scripts/build.ts"],',
-    '      "rules": { "effect/noGlobals": "off", "gent/no-bun-outside-adapter": "off" } },',
-    '    { "files": ["**/tests/**"],',
-    '      "rules": {',
-    '        "typescript/no-explicit-any": "off"',
-    "      } }",
-    "  ]",
-    "}",
-  ].join("\n")
-  const config = {
-    overrides: [
-      {
-        files: ["apps/tui/scripts/build.ts"],
-        rules: { "effect/noGlobals": "off", "gent/no-bun-outside-adapter": "off" },
-      },
-      { files: ["**/tests/**"], rules: { "typescript/no-explicit-any": "off" } },
-    ],
-  }
-  const allHit = [
-    { file: "apps/tui/scripts/build.ts", code: "effect(noGlobals)" },
-    { file: "apps/tui/scripts/build.ts", code: "gent(no-bun-outside-adapter)" },
-    { file: "packages/core/tests/a.test.ts", code: "typescript(no-explicit-any)" },
-  ]
-
-  test("an off whose rule reports in the override's files is silent", () => {
-    expect(findUnneededOffs(CONFIG, configText, config, allHit)).toEqual([])
-  })
-
-  test("an off with no diagnostic is reported at its rule's line", () => {
-    const findings = findUnneededOffs(CONFIG, configText, config, allHit.slice(1))
-    expect(findings.map((finding) => [finding.line, finding.message])).toEqual([
-      [4, expect.stringContaining("turns off `effect/noGlobals`, which reports nothing")],
-    ])
-  })
-
-  test("a diagnostic in a file outside the override's globs does not count", () => {
-    const findings = findUnneededOffs(CONFIG, configText, config, [
-      ...allHit.slice(0, 2),
-      { file: "packages/core/src/a.ts", code: "typescript(no-explicit-any)" },
-    ])
-    expect(findings.map((finding) => finding.line)).toEqual([7])
-  })
-
-  test("a diagnostic another override also turns off belongs to neither", () => {
-    const shared = {
-      overrides: [
-        ...config.overrides,
-        { files: ["packages/core/tests/**"], rules: { "typescript/no-explicit-any": "off" } },
-      ],
-    }
-    const findings = findUnneededOffs(CONFIG, configText, shared, allHit)
-    expect(findings.map((finding) => finding.message)).toEqual([
-      expect.stringContaining('"**/tests/**" turns off `typescript/no-explicit-any`'),
-      expect.stringContaining('"packages/core/tests/**" turns off `typescript/no-explicit-any`'),
-    ])
-  })
-
-  test("a rule an override sets to a severity is not an off", () => {
-    const enabling = { overrides: [{ files: ["**/tests/**"], rules: { "effect/noAs": "error" } }] }
-    expect(findUnneededOffs(CONFIG, configText, enabling, [])).toEqual([])
-  })
-})
-
-describe('a root "off" must suppress a diagnostic', () => {
-  const configText = [
-    "{",
-    '  "rules": {',
-    '    "no-shadow": "off",',
-    '    "typescript/await-thenable": "off",',
-    '    "complexity": ["error", 20]',
-    "  },",
-    '  "overrides": [',
-    '    { "files": ["**/tests/**"], "rules": { "typescript/await-thenable": "error" } }',
-    "  ]",
-    "}",
-  ].join("\n")
-  const config = {
-    rules: {
-      "no-shadow": "off",
-      "typescript/await-thenable": "off",
-      complexity: ["error", 20],
-    },
-    overrides: [{ files: ["**/tests/**"], rules: { "typescript/await-thenable": "error" } }],
-  }
-
-  test("a root off whose rule reports somewhere is silent", () => {
-    const findings = findUnneededOffs(CONFIG, configText, config, [
-      { file: "packages/core/src/a.ts", code: "eslint(no-shadow)" },
-      { file: "packages/core/src/b.ts", code: "typescript(await-thenable)" },
-    ])
-    expect(findings).toEqual([])
-  })
-
-  test("a root off with no diagnostic is reported at its rule's line", () => {
-    const findings = findUnneededOffs(CONFIG, configText, config, [
-      { file: "packages/core/src/a.ts", code: "eslint(no-shadow)" },
-    ])
-    expect(findings.map((finding) => [finding.line, finding.message])).toEqual([
-      [4, expect.stringContaining("root config turns off `typescript/await-thenable`")],
-    ])
-  })
-
-  test("a diagnostic in a file an override sets the rule for does not count", () => {
-    const findings = findUnneededOffs(CONFIG, configText, config, [
-      { file: "packages/core/src/a.ts", code: "eslint(no-shadow)" },
-      { file: "packages/core/tests/a.test.ts", code: "typescript(await-thenable)" },
-    ])
-    expect(findings.map((finding) => finding.line)).toEqual([4])
   })
 })
 
