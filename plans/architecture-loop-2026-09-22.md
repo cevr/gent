@@ -940,3 +940,30 @@ Reports in `~/.cache/gent-pass22/`: six areas (`pass22-<area>.md`) and seven rev
 ## Pass 23 (sweep of main at `82516da5d`)
 
 Baseline (TypeScript source lines, files): core 32,196 / 33; tui 26,461 / 33; extensions 26,071 / 27; tooling 7,308 / 5; sdk 1,596 / 5; e2e 455 / 2. Pass 22 changed 190 files, +27,758 / −27,473. Coverage: every source directory swept before. Areas: core, extensions, tui, tooling (with the upstream lint-rule sort), efficiency, ui; reviews: core-runtime, core-rest, extensions-cell-mcp, extensions-rest, tui-a, tui-b, small. Waiting on the owner: oxlint-plugin-effect 0.18.0 release (PR #42 CI approval), then gent switches to the upstream rules.
+
+### Pass 23 findings
+
+Reports in `~/.cache/gent-pass23/`: six areas and seven reviews. No P1. Two reviews report polish only (extensions-cell-mcp, extensions-rest); the other eleven have P2s, so Pass 23 is not the last.
+
+- Core: C23-1 a failed session read at turn start runs the turn under the launch profile and directory (`storedSession`, `sessionWorkingDirectory`); C23-2 = EF23-3 = R23-tui-b-2 the TUI prices a child cache miss at the 1 h write rate; C23-3 interaction resolve/take swallow storage failures; R23-core-runtime-1 tool metadata stored twice (`ToolCapabilityApi` copy, `summary` never copied); R23-core-rest-1 harness cwd/home options (≈20 test overrides); R23-core-rest-12 the 60 s dedup success cache is redundant with receipts; P3 comments, duplicated `FileLockApi`, hand-rolled `ExtensionStatusInfo`, ≈30 test-only exports.
+- Extensions: X23-1 = EF23-1 from the second handoff the original task leaves the message list (the marker and goal/child/wake messages count as user messages); X23-2 project stdio entries such as `bun run mcp` share one catalog across projects; X23-3 the host-environment walk grows with the largest number in an env name (`RELEASE_20240101` > 300 s, 2.75 GB); EF22-4 never applied; `fs-tools` guideline says `old_string`; the cell `jsonSchemaOf` guard is redundant.
+- TUI: UI23-1 = R23-tui-a-2 `!l` Backspace leaves shell mode keeping `l`; UI23-2 = T23-1 forward deletes break a paste chip and lose the paste; UI23-3 a draft starting with `/` cannot be sent; UI23-4 `gent "prompt"` without `-H` drops the prompt; UI23-5 a handoff from a resumed session in another directory lands in the launch directory; T23-2 `!cmd` has no output cap, cancel or running row; R23-tui-a-1 a failed `branch.list` in the palette crashes to the fatal screen; R23-tui-a-4 the no-session state is test-only (43 guards); R23-tui-b-1 `fileUrl` does not encode paths.
+- Tooling: R23-small-1 the sdk pre-kernel-lock shim was not deleted (the Pass 22 tooling row said it was; corrected here); R23-small-2 = T23-6 the comment blanker has no regex state and the bracket walk misreads JSX; T23-1 `gent/no-dynamic-imports` is stricter than upstream `noDynamicImports` (not a duplicate); T23-2 the platform-duplication guard (358 lines, regex) misses aliases and should be an AST rule; T23-3 `no-bun-outside-adapter` is generic but for its globs; R23-tui-b-3 `preferSchemaTaggedUnion` / `no-hand-rolled-tagged-union` sees only PascalCase tags (18 unions pass).
+- Efficiency (baseline: first request 7,260 tokens, −114; Host Tools 1,436 for 20 tools, 107 MCP tools add 257; fresh child start −35%; cold handoff 48.3k units, −43%): EF23-1 above; EF23-2 the handoff summary reads 32k tokens.
+
+### Pass 23 decisions
+
+- T23-2 `!cmd`: cap the output, let ctrl+c interrupt it, show it on the activity row; no default time limit (decided by the owner rule "bash runs each command as given").
+- EF23-2 rejected: capping the summary input saves at most 0.4% of spend and adds a knob (decided by subtract-before-you-add).
+- Upstream first: the tagged-union case gap, a strict mode for `noDynamicImports`, and generic forms of `no-bun-outside-adapter` and the platform-duplication guard land in oxlint-plugin-effect; gent keeps its own rules until the release it consumes has them.
+- The paid check that a child 5 min cache reads the parent 1 h entry (< $0.10) stays an owner question.
+
+### Pass 23 triage
+
+| Batch    | Rift               | Items                                                                                                                                                      |
+| -------- | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Core     | `p23-core`         | C23-1, C23-2 (with the TUI cache client), C23-3, C23-4, C23-6, R23-core-runtime-_, R23-core-rest-_, core test rows and gaps                                |
+| Ext      | `p23-ext`          | X23-1, X23-2, X23-3, EF22-4, extension P3s and test rows, `old_string`, `jsonSchemaOf`, `GENT_HOME` comments                                               |
+| TUI      | `p23-tui`          | UI23-1 … UI23-7, T23-1 … T23-8 (TUI), R23-tui-a-_, R23-tui-b-_ (not b-2, b-3), renderScoped migration, `ApprovalDecision` via protocol, TUI `StorageError` |
+| Tooling  | `p23-tooling`      | R23-small-*, T23-4 … T23-8 (tooling), one lexer, preload default timeout                                                                                   |
+| Upstream | effect-oxlint main | R23-tui-b-3 tag case, T23-1 strict dynamic imports, T23-2/T23-3 generic rules                                                                              |
