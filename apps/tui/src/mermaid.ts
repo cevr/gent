@@ -1,6 +1,7 @@
 import { renderMermaidASCII } from "beautiful-mermaid"
 import { Effect, Option, Schema } from "effect"
 import { createContext, useContext } from "solid-js"
+import { textWidth } from "./bun-adapter"
 
 // ── mermaid rendering ───────────────────────────────────────────────────────
 
@@ -64,10 +65,10 @@ const PRESETS: readonly Preset[] = [
 function getMaxLineWidth(text: string): number {
   let max = 0
   for (const line of text.split("\n")) {
-    // Strip ANSI escape codes for accurate width
+    // Strip ANSI escape codes, then count terminal columns: a CJK label takes two a character.
     // eslint-disable-next-line no-control-regex -- ANSI escape stripping needs literal control-byte patterns
     const stripped = line.replace(/\x1b\[[0-9;]*m/g, "")
-    if (stripped.length > max) max = stripped.length
+    max = Math.max(max, textWidth(stripped))
   }
   return max
 }

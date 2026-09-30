@@ -34,6 +34,7 @@ import {
   toolArgSummary,
   type PathPlace,
   type ToolInput,
+  truncate,
   truncatePath,
 } from "./utils"
 
@@ -663,8 +664,8 @@ function CellToolRenderer(props: ToolRendererProps) {
     let first = codeLines()[0] ?? ""
     if (verbs.length > 0) first = verbs.join(" · ")
     if (operations.length > 0) first = formatOperationLabels(operations)
-    if (first.length > 60) return `${first.slice(0, 60)}…`
-    return first
+    // Sixty columns and the ellipsis, counted in terminal columns.
+    return truncate(first, 61)
   })
 
   // Operations are the calls the cell admitted, with their input and output,

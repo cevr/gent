@@ -12,6 +12,7 @@ import {
 } from "./ui"
 import { useTheme } from "./theme"
 import { formatError, shortId, truncate } from "./utils"
+import { textWidth } from "./bun-adapter"
 import { useClient, useRuntime } from "./client"
 import {
   type BranchId,
@@ -480,7 +481,7 @@ export function SettingsPicker(props: SettingsPickerProps) {
       plainRow(row, () => {
         let marker = "  "
         if (Option.exists(props.current, (value) => value === row.id)) marker = "● "
-        const gap = Math.max(1, rowWidth() - 2 - row.name.length - row.detail.length)
+        const gap = Math.max(1, rowWidth() - 2 - textWidth(row.name) - textWidth(row.detail))
         return truncate(`${marker}${row.name}${" ".repeat(gap)}${row.detail}`, rowWidth())
       }),
     )

@@ -605,16 +605,17 @@ export function formatGenericToolText(text: ToolCall["output"]) {
  */
 
 /**
- * Truncate path from start, keeping filename visible
+ * Truncate path from start, keeping filename visible. `maxLen` counts
+ * terminal columns: a wide (CJK) name takes two a character.
  * e.g., "/Users/cvr/Developer/personal/gent/apps/tui/src/app.tsx" -> "…/tui/src/app.tsx"
  */
 export function truncatePath(path: string, maxLen = 40): string {
-  if (path.length <= maxLen) return path
+  if (textWidth(path) <= maxLen) return path
   const parts = path.split("/")
   let result = parts[parts.length - 1] ?? ""
   for (let i = parts.length - 2; i >= 0; i--) {
     const next = parts[i] + "/" + result
-    if (next.length + 1 > maxLen) break
+    if (textWidth(next) + 1 > maxLen) break
     result = next
   }
   return "…/" + result

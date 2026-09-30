@@ -41,6 +41,7 @@ import {
 import { BunServices } from "@effect/platform-bun"
 import { ProviderAuthError } from "@gent/core/extensions/api"
 import os from "node:os"
+import { textWidth } from "../src/bun-adapter"
 
 // ── file refs ───────────────────────────────────────────────────────────────
 
@@ -735,6 +736,15 @@ describe("truncatePath", () => {
 
   test("handles just filename", () => {
     expect(truncatePath("file.ts", 5)).toBe("…/file.ts")
+  })
+
+  // A CJK directory takes two columns a character: the budget counts columns.
+  test("a wide-character path is cut by the columns it takes", () => {
+    const path = "/项目/文档/设计/说明.md"
+    const result = truncatePath(path, 20)
+    expect(result.startsWith("…/")).toBe(true)
+    expect(result.endsWith("说明.md")).toBe(true)
+    expect(textWidth(result)).toBeLessThanOrEqual(22) // +2 for "…/"
   })
 })
 
