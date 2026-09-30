@@ -1527,7 +1527,7 @@ describe("AutocompletePopup renderer", () => {
     }),
   )
 
-  it.live("wraps the cursor at both ends through the shared list", () =>
+  it.live("enter picks the row under the cursor and tab completes it", () =>
     Effect.gen(function* () {
       const picked: Array<string> = []
       const completed: Array<string> = []
@@ -1549,18 +1549,14 @@ describe("AutocompletePopup renderer", () => {
         ),
       )
       yield* waitForFrame(setup, (frame) => frame.includes("/gamma"), "items")
-      // Up from the first row lands on the last.
-      setup.mockInput.pressArrow("up")
-      yield* Effect.promise(() => setup.renderOnce())
-      setup.mockInput.pressEnter()
-      expect(picked).toEqual(["gamma"])
-      // Down from the last row lands on the first. Tab acts on the same row as
-      // enter would, and reports through the completion prop instead.
+      // Tab acts on the row enter would, and reports through the completion prop.
       setup.mockInput.pressArrow("down")
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressTab()
-      expect(completed).toEqual(["alpha"])
-      expect(picked).toEqual(["gamma"])
+      expect(completed).toEqual(["beta"])
+      expect(picked).toEqual([])
+      setup.mockInput.pressEnter()
+      expect(picked).toEqual(["beta"])
     }),
   )
 

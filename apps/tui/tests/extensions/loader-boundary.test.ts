@@ -52,7 +52,7 @@ import { defineRequests, ExtensionId, ref, request } from "@gent/core/extensions
 import { inRuntime } from "../helpers-boundary"
 import { slashAutocompleteItems } from "../../src/session"
 import { builtinClientModules } from "../../src/extensions/builtins"
-import type { Command } from "../../src/commands"
+import { type Command, executeSlashCommand } from "../../src/commands"
 import {
   emptyFrecencyStore,
   frecencyLookup,
@@ -119,6 +119,12 @@ const interactionProps = {
   }),
   resolve: () => {},
 }
+const cmd = (overrides: Partial<Command> & { id: string; slash: string }): Command => ({
+  title: overrides.id,
+  onSelect: () => {},
+  ...overrides,
+})
+
 describe("resolveTuiExtensions", () => {
   test("client contribution constructors enforce slot-specific component contracts", () => {
     const good = widgetContribution({
@@ -457,6 +463,144 @@ describe("resolveTuiExtensions", () => {
       expect(commands.map((command) => command.title)).toEqual(["One"])
       expect(failures.map((failure) => failure.id)).toEqual(["second"])
     }
+  })
+
+  test("a project extension overrides a builtin slash", () => {
+    let winner = ""
+    const { commands, failures } = resolveCommands([
+      {
+        id: "@gent/session",
+        scope: "builtin",
+        source: "builtin:@gent/session",
+        commands: [
+          cmd({ id: "session.model", slash: "model", onSelect: () => (winner = "builtin") }),
+        ],
+      },
+      {
+        id: "@test/model",
+        scope: "project",
+        source: "/project/model.client.ts",
+        commands: [
+          cmd({ id: "project.model", slash: "model", onSelect: () => (winner = "project") }),
+        ],
+      },
+    ])
+    const result = executeSlashCommand("model", "", commands)
+    expect(result.handled).toBe(true)
+    expect(winner).toBe("project")
+    expect(failures).toEqual([])
+    // The builtin keeps its palette row; only the slash moved.
+    expect(commands.find((command) => command.id === "session.model")?.slash).toBeUndefined()
+  })
+
+  test("a server slash that a session command already holds is dropped and reported", () => {
+    const { commands, failures } = resolveCommands([
+      {
+        id: "@gent/session",
+        scope: "builtin",
+        source: "builtin:@gent/session",
+        commands: [cmd({ id: "session.model", slash: "model" })],
+      },
+      {
+        id: "@gent/example-models",
+        scope: "builtin",
+        source: "server:@gent/example-models",
+        commands: [cmd({ id: "server:model", slash: "model" })],
+      },
+    ])
+    expect(commands.map((command) => command.id)).toEqual(["session.model"])
+    expect(failures.map((failure) => failure.id)).toEqual(["@gent/example-models"])
+  })
+
+  test("a keybind that types a character is refused in every scope, and the command stays", () => {
+    const { commands, failures } = resolveCommands([
+      {
+        id: "@gent/session",
+        scope: "builtin",
+        source: "builtin:@gent/session",
+        commands: [
+          cmd({ id: "session.left", slash: "left", keybind: "left" }),
+          cmd({ id: "session.help", slash: "help", keybind: "shift+/" }),
+        ],
+      },
+      {
+        id: "@test/keys",
+        scope: "project",
+        source: "/project/keys.client.ts",
+        commands: [
+          cmd({ id: "project.j", slash: "j", keybind: "j" }),
+          cmd({ id: "project.space", slash: "space", keybind: "space" }),
+          cmd({ id: "project.ctrl-j", slash: "ctrl-j", keybind: "ctrl+j" }),
+          cmd({ id: "project.emoji", slash: "emoji", keybind: "🙂" }),
+          cmd({ id: "project.accent", slash: "accent", keybind: "é" }),
+          cmd({ id: "project.f1", slash: "f1", keybind: "f1" }),
+          cmd({ id: "project.tab", slash: "tab", keybind: "tab" }),
+        ],
+      },
+    ])
+    const keybinds = Object.fromEntries(
+      commands.map((command) => [
+        command.id,
+        Option.getOrElse(Option.fromNullishOr(command.keybind), () => "none"),
+      ]),
+    )
+    expect(keybinds).toEqual({
+      "session.left": "left",
+      "session.help": "none",
+      "project.j": "none",
+      "project.space": "none",
+      "project.ctrl-j": "ctrl+j",
+      "project.emoji": "none",
+      "project.accent": "none",
+      "project.f1": "f1",
+      "project.tab": "tab",
+    })
+    expect(commands.find((command) => command.id === "session.help")?.slash).toBe("help")
+    expect(failures.map((failure) => failure.id)).toEqual([
+      "@gent/session",
+      "@test/keys",
+      "@test/keys",
+      "@test/keys",
+      "@test/keys",
+    ])
+    expect(failures[1]?.reason).toContain('keybind "j"')
+  })
+
+  // A keybind runs before the Esc and ctrl+c ladders: a bare escape or a
+  // ctrl+c would take the turn cancel and the quit away from the key.
+  test("a bare escape or ctrl+c keybind is refused, and one with another modifier stays", () => {
+    const { commands, failures } = resolveCommands([
+      {
+        id: "@test/keys",
+        scope: "project",
+        source: "/project/keys.client.ts",
+        commands: [
+          cmd({ id: "project.escape", slash: "escape", keybind: "escape" }),
+          cmd({ id: "project.shift-escape", slash: "shift-escape", keybind: "shift+escape" }),
+          cmd({ id: "project.ctrl-escape", slash: "ctrl-escape", keybind: "ctrl+escape" }),
+          cmd({ id: "project.ctrl-c", slash: "ctrl-c", keybind: "ctrl+c" }),
+          cmd({ id: "project.ctrl-shift-c", slash: "ctrl-shift-c", keybind: "ctrl+shift+c" }),
+          cmd({ id: "project.ctrl-meta-c", slash: "ctrl-meta-c", keybind: "ctrl+meta+c" }),
+        ],
+      },
+    ])
+    const keybinds = Object.fromEntries(
+      commands.map((command) => [
+        command.id,
+        Option.getOrElse(Option.fromNullishOr(command.keybind), () => "none"),
+      ]),
+    )
+    expect(keybinds).toEqual({
+      "project.escape": "none",
+      "project.shift-escape": "none",
+      "project.ctrl-escape": "ctrl+escape",
+      "project.ctrl-c": "none",
+      "project.ctrl-shift-c": "none",
+      "project.ctrl-meta-c": "ctrl+meta+c",
+    })
+    expect(failures).toHaveLength(4)
+    expect(failures[0]?.reason).toContain('keybind "escape"')
+    expect(failures[2]?.reason).toContain('keybind "ctrl+c"')
   })
 })
 

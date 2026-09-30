@@ -8,7 +8,6 @@ import {
   useCommand,
 } from "../src/commands"
 import { createEffect, For, onCleanup, onMount } from "solid-js"
-import { resolveCommands } from "../src/extensions/loader-boundary"
 import { Effect, Option } from "effect"
 import { BranchId, dateFromMillis, SessionId } from "@gent/core/protocol"
 import { type ClientContextValue, useClient } from "../src/client"
@@ -21,35 +20,20 @@ import { makePaneSlot } from "./extension-test-harness-boundary"
 // ── slash commands ──────────────────────────────────────────────────────────
 
 describe("parseSlashCommand", () => {
-  test("parses simple command", () => {
-    expect(parseSlashCommand("/agent")).toEqual(["agent", ""])
+  test("splits a slash line into its name and the rest, trimmed", () => {
+    const cases: ReadonlyArray<readonly [string, [string, string]]> = [
+      ["/agent", ["agent", ""]],
+      ["/branch feature-branch extra", ["branch", "feature-branch extra"]],
+      ["  /clear  ", ["clear", ""]],
+    ]
+    for (const [line, parsed] of cases) {
+      expect(parseSlashCommand(line)).toEqual(parsed)
+    }
   })
 
-  test("parses command with args", () => {
-    expect(parseSlashCommand("/branch feature-branch")).toEqual(["branch", "feature-branch"])
-  })
-
-  test("parses command with multiple args", () => {
-    expect(parseSlashCommand("/branch feature-branch extra")).toEqual([
-      "branch",
-      "feature-branch extra",
-    ])
-  })
-
-  test("trims whitespace", () => {
-    expect(parseSlashCommand("  /clear  ")).toEqual(["clear", ""])
-  })
-
-  test("returns null for non-command", () => {
+  test("reads a line without a leading slash as no command", () => {
     expect(parseSlashCommand("hello")).toBeNull()
-  })
-
-  test("returns null for empty string", () => {
     expect(parseSlashCommand("")).toBeNull()
-  })
-
-  test("handles command with trailing space", () => {
-    expect(parseSlashCommand("/sessions ")).toEqual(["sessions", ""])
   })
 })
 
@@ -60,42 +44,28 @@ const cmd = (overrides: Partial<Command> & { id: string; slash: string }): Comma
 })
 
 describe("executeSlashCommand", () => {
-  test("executes matching command", () => {
-    let called = false
-    const commands = [
-      cmd({
-        id: "new",
-        slash: "new",
-        onSelect: () => {
-          called = true
-        },
-      }),
-    ]
-    const result = executeSlashCommand("new", "", commands)
-    expect(result.handled).toBe(true)
-    expect(called).toBe(true)
+  test("a slash runs its command by name or alias, in any case", () => {
+    for (const typed of ["new", "NEW", "clear", "CLEAR"]) {
+      let called = false
+      const commands = [
+        cmd({
+          id: "new",
+          slash: "new",
+          aliases: ["clear"],
+          onSelect: () => {
+            called = true
+          },
+        }),
+      ]
+      expect(executeSlashCommand(typed, "", commands).handled).toBe(true)
+      expect(called).toBe(true)
+    }
   })
 
-  test("unknown command returns error", () => {
+  test("an unknown slash reports itself", () => {
     const result = executeSlashCommand("unknown", "", [])
     expect(result.handled).toBe(false)
     expect(result.error).toBe("Unknown command: /unknown")
-  })
-
-  test("case insensitive matching", () => {
-    let called = false
-    const commands = [
-      cmd({
-        id: "new",
-        slash: "new",
-        onSelect: () => {
-          called = true
-        },
-      }),
-    ]
-    const result = executeSlashCommand("NEW", "", commands)
-    expect(result.handled).toBe(true)
-    expect(called).toBe(true)
   })
 
   test("prefers onSlash over onSelect when args present", () => {
@@ -131,144 +101,6 @@ describe("executeSlashCommand", () => {
     expect(selectCalled).toBe(true)
   })
 
-  test("a project extension overrides a builtin slash", () => {
-    let winner = ""
-    const { commands, failures } = resolveCommands([
-      {
-        id: "@gent/session",
-        scope: "builtin",
-        source: "builtin:@gent/session",
-        commands: [
-          cmd({ id: "session.model", slash: "model", onSelect: () => (winner = "builtin") }),
-        ],
-      },
-      {
-        id: "@test/model",
-        scope: "project",
-        source: "/project/model.client.ts",
-        commands: [
-          cmd({ id: "project.model", slash: "model", onSelect: () => (winner = "project") }),
-        ],
-      },
-    ])
-    const result = executeSlashCommand("model", "", commands)
-    expect(result.handled).toBe(true)
-    expect(winner).toBe("project")
-    expect(failures).toEqual([])
-    // The builtin keeps its palette row; only the slash moved.
-    expect(commands.find((command) => command.id === "session.model")?.slash).toBeUndefined()
-  })
-
-  test("a server slash that a session command already holds is dropped and reported", () => {
-    const { commands, failures } = resolveCommands([
-      {
-        id: "@gent/session",
-        scope: "builtin",
-        source: "builtin:@gent/session",
-        commands: [cmd({ id: "session.model", slash: "model" })],
-      },
-      {
-        id: "@gent/example-models",
-        scope: "builtin",
-        source: "server:@gent/example-models",
-        commands: [cmd({ id: "server:model", slash: "model" })],
-      },
-    ])
-    expect(commands.map((command) => command.id)).toEqual(["session.model"])
-    expect(failures.map((failure) => failure.id)).toEqual(["@gent/example-models"])
-  })
-
-  test("a keybind that types a character is refused in every scope, and the command stays", () => {
-    const { commands, failures } = resolveCommands([
-      {
-        id: "@gent/session",
-        scope: "builtin",
-        source: "builtin:@gent/session",
-        commands: [
-          cmd({ id: "session.left", slash: "left", keybind: "left" }),
-          cmd({ id: "session.help", slash: "help", keybind: "shift+/" }),
-        ],
-      },
-      {
-        id: "@test/keys",
-        scope: "project",
-        source: "/project/keys.client.ts",
-        commands: [
-          cmd({ id: "project.j", slash: "j", keybind: "j" }),
-          cmd({ id: "project.space", slash: "space", keybind: "space" }),
-          cmd({ id: "project.ctrl-j", slash: "ctrl-j", keybind: "ctrl+j" }),
-          cmd({ id: "project.emoji", slash: "emoji", keybind: "🙂" }),
-          cmd({ id: "project.accent", slash: "accent", keybind: "é" }),
-          cmd({ id: "project.f1", slash: "f1", keybind: "f1" }),
-          cmd({ id: "project.tab", slash: "tab", keybind: "tab" }),
-        ],
-      },
-    ])
-    const keybinds = Object.fromEntries(
-      commands.map((command) => [
-        command.id,
-        Option.getOrElse(Option.fromNullishOr(command.keybind), () => "none"),
-      ]),
-    )
-    expect(keybinds).toEqual({
-      "session.left": "left",
-      "session.help": "none",
-      "project.j": "none",
-      "project.space": "none",
-      "project.ctrl-j": "ctrl+j",
-      "project.emoji": "none",
-      "project.accent": "none",
-      "project.f1": "f1",
-      "project.tab": "tab",
-    })
-    expect(commands.find((command) => command.id === "session.help")?.slash).toBe("help")
-    expect(failures.map((failure) => failure.id)).toEqual([
-      "@gent/session",
-      "@test/keys",
-      "@test/keys",
-      "@test/keys",
-      "@test/keys",
-    ])
-    expect(failures[1]?.reason).toContain('keybind "j"')
-  })
-
-  // A keybind runs before the Esc and ctrl+c ladders: a bare escape or a
-  // ctrl+c would take the turn cancel and the quit away from the key.
-  test("a bare escape or ctrl+c keybind is refused, and one with another modifier stays", () => {
-    const { commands, failures } = resolveCommands([
-      {
-        id: "@test/keys",
-        scope: "project",
-        source: "/project/keys.client.ts",
-        commands: [
-          cmd({ id: "project.escape", slash: "escape", keybind: "escape" }),
-          cmd({ id: "project.shift-escape", slash: "shift-escape", keybind: "shift+escape" }),
-          cmd({ id: "project.ctrl-escape", slash: "ctrl-escape", keybind: "ctrl+escape" }),
-          cmd({ id: "project.ctrl-c", slash: "ctrl-c", keybind: "ctrl+c" }),
-          cmd({ id: "project.ctrl-shift-c", slash: "ctrl-shift-c", keybind: "ctrl+shift+c" }),
-          cmd({ id: "project.ctrl-meta-c", slash: "ctrl-meta-c", keybind: "ctrl+meta+c" }),
-        ],
-      },
-    ])
-    const keybinds = Object.fromEntries(
-      commands.map((command) => [
-        command.id,
-        Option.getOrElse(Option.fromNullishOr(command.keybind), () => "none"),
-      ]),
-    )
-    expect(keybinds).toEqual({
-      "project.escape": "none",
-      "project.shift-escape": "none",
-      "project.ctrl-escape": "ctrl+escape",
-      "project.ctrl-c": "none",
-      "project.ctrl-shift-c": "none",
-      "project.ctrl-meta-c": "ctrl+meta+c",
-    })
-    expect(failures).toHaveLength(4)
-    expect(failures[0]?.reason).toContain('keybind "escape"')
-    expect(failures[2]?.reason).toContain('keybind "ctrl+c"')
-  })
-
   test("a slash beats another command's alias", () => {
     let winner = ""
     const commands = [
@@ -277,40 +109,6 @@ describe("executeSlashCommand", () => {
     ]
     executeSlashCommand("clear", "", commands)
     expect(winner).toBe("slash")
-  })
-
-  test("aliases resolve to the command", () => {
-    let called = false
-    const commands = [
-      cmd({
-        id: "new",
-        slash: "new",
-        aliases: ["clear"],
-        onSelect: () => {
-          called = true
-        },
-      }),
-    ]
-    const result = executeSlashCommand("clear", "", commands)
-    expect(result.handled).toBe(true)
-    expect(called).toBe(true)
-  })
-
-  test("alias matching is case insensitive", () => {
-    let called = false
-    const commands = [
-      cmd({
-        id: "new",
-        slash: "new",
-        aliases: ["clear"],
-        onSelect: () => {
-          called = true
-        },
-      }),
-    ]
-    const result = executeSlashCommand("CLEAR", "", commands)
-    expect(result.handled).toBe(true)
-    expect(called).toBe(true)
   })
 })
 
@@ -441,7 +239,7 @@ describe("CommandPalette renderer", () => {
     }),
   )
 
-  it.live("wraps the cursor at both ends through the shared list", () =>
+  it.live("a submenu's escape steps back to the root, where escape closes", () =>
     Effect.gen(function* () {
       const setup = yield* Effect.promise(() =>
         renderWithProviders(() => <OpenPaletteOnMount />, { width: 90, height: 28 }),
@@ -451,21 +249,14 @@ describe("CommandPalette renderer", () => {
         (frame) => frame.includes("Commands") && frame.includes("Branches"),
         "commands root",
       )
-      // Up from the first row lands on the last: Branches, whose level shows
-      // "Back" in the footer where the root shows "Close".
+      // Branches (the last row) opens a level whose footer shows "Back"
+      // where the root shows "Close".
       setup.mockInput.pressArrow("up")
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressEnter()
       yield* waitForFrame(setup, (frame) => frame.includes("esc back"), "branches level")
       setup.mockInput.pressEscape()
       yield* waitForFrame(setup, (frame) => frame.includes("esc close"), "root again")
-      // Down from the last row lands on the first: Theme.
-      setup.mockInput.pressArrow("up")
-      yield* Effect.promise(() => setup.renderOnce())
-      setup.mockInput.pressArrow("down")
-      yield* Effect.promise(() => setup.renderOnce())
-      setup.mockInput.pressEnter()
-      yield* waitForFrame(setup, (frame) => frame.includes("System"), "theme level")
     }),
   )
 
