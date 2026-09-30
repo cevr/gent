@@ -2,6 +2,8 @@
 
 Building gent - minimal, opinionated agent harness (built with Effect).
 
+North stars: effect-native, actor-model, a lean core with maximal expressiveness through extensions, and single files over fragmentation.
+
 ## Quick Start
 
 ```bash

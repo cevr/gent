@@ -9,7 +9,7 @@ Read `<warm source>/.claude/skills/architecture-loop/safety.md` in full before a
 
 Repo: <warm source>, branch main, HEAD <hash>. Edit, commit and create nothing in the repo; write only your report.
 
-Goal: fewer concepts, less code, fewer files (one file per concern), with every valuable feature kept. North stars: effect-native, actor-model, a lean core with maximal expressiveness through extensions. Read CLAUDE.md, ARCHITECTURE.md, <ledger path> (the whole ledger: decisions, rejected rows, every pass's results) and .claude/skills/architecture-loop/rejected.md first. A done or rejected item returns only with a new receipt. Prior art: <repo paths from prior-art.md>.
+Goal: fewer concepts, less code, fewer files (one file per concern), with every valuable feature kept. North stars: effect-native, actor-model, a lean core with maximal expressiveness through extensions, and single files over fragmentation (owner: one concern lives in one file under section banners; a split into fragment or helper files is a finding, and merging fragments back is a reduction). Read CLAUDE.md, ARCHITECTURE.md, <ledger path> (the whole ledger: decisions, rejected rows, every pass's results) and .claude/skills/architecture-loop/rejected.md first. A done or rejected item returns only with a new receipt. Prior art: <repo paths from prior-art.md>.
 
 Pass <N-1> changed <stat of `git diff --stat <prev base>..HEAD`>. Weigh every addition by the deletion test: code a smaller shape could carry is a reduction finding. Review these pass-<N-1> changes hardest for regressions:
 <per area: the named mechanisms each batch added>

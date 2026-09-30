@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # Architecture loop
 
-A **pass** is: coverage audit → read-only sweeps → triage into batches → per batch: apply in its own rift, one counsel round, merge → live check. Repeat passes until the close rule holds. Vocabulary and the HTML report come from the `improve-codebase-architecture` skill; invoke it once at the start.
+A **pass** is: coverage audit → read-only sweeps → triage into batches → per batch: apply in its own rift, one counsel round, merge → live check. Repeat passes until the close rule holds. North stars: effect-native, actor-model, a lean core with maximal expressiveness through extensions, and single files over fragmentation (one concern, one file, section banners). Vocabulary and the HTML report come from the `improve-codebase-architecture` skill; invoke it once at the start.
 
 The ledger is `plans/architecture-loop-<date>.md`. It is the single source of truth for what is done and what is rejected. Every sweep and apply brief names it. Pass files (briefs, reports, counsel prompts) live in `~/.cache/gent-pass<N>/`.
 
