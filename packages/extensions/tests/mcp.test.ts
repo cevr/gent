@@ -8,6 +8,7 @@ import {
   Layer,
   Option,
   Path,
+  Predicate,
   Queue,
   Schema,
   Stream,
@@ -577,11 +578,50 @@ const decodeRequest = Schema.decodeUnknownEffect(Schema.fromJsonString(JsonRpcRe
 /**
  * The HTTP fixture's sessions: `initialize` opens one, and every other
  * request names a live one or is answered 404, as the spec asks. The `forget`
- * tool drops them all, as a restarted server does.
+ * tool drops them all, as a restarted server does. A `stateless` fixture
+ * opens no sessions. `gone` answers the next request 404, as a gateway in
+ * front of the server can; `lock401` and `lock403` refuse every later
+ * request with that status, as a server that stopped taking the token does.
+ * `calls` names each `tools/call` the fixture received, refused or not.
  */
 interface HttpSessions {
   readonly live: Set<string>
   opened: number
+  readonly stateless: boolean
+  refuseNext: number
+  refuseAll: number
+  readonly calls: Array<string>
+}
+
+/** The status a fixture tool sets: `gone` for the next request, the locks for every later one. */
+const HTTP_FIXTURE_REFUSALS: ReadonlyMap<
+  string,
+  { readonly status: number; readonly once: boolean }
+> = new Map([
+  ["gone", { status: 404, once: true }],
+  ["lock401", { status: 401, once: false }],
+  ["lock403", { status: 403, once: false }],
+])
+
+/** The refusal the fixture answers `message` with now, if any; a `gone` refusal is used up. */
+const httpRefusal = (sessions: HttpSessions) => {
+  if (sessions.refuseAll !== 0) return Option.some(sessions.refuseAll)
+  if (sessions.refuseNext === 0) return Option.none<number>()
+  const status = sessions.refuseNext
+  sessions.refuseNext = 0
+  return Option.some(status)
+}
+
+/** The fixture's session for `message`: a new one for `initialize`, else the one it names if live. */
+const httpSession = (sessions: HttpSessions, method: string, named: string) => {
+  if (sessions.stateless) return Option.some("")
+  if (method === "initialize") {
+    sessions.opened += 1
+    const session = `session-${sessions.opened}`
+    sessions.live.add(session)
+    return Option.some(session)
+  }
+  return Option.liftPredicate(named, (session) => sessions.live.has(session))
 }
 
 /** An in-process streamable HTTP server that answers only a matching bearer token. */
@@ -594,36 +634,43 @@ const httpFixtureApp = (sessions: HttpSessions) =>
     }
     const message = yield* Effect.flatMap(request.text, decodeRequest)
     const params = Option.fromUndefinedOr(message.params)
-    let session = request.headers["mcp-session-id"] ?? ""
-    if (message.method === "initialize") {
-      sessions.opened += 1
-      session = `session-${sessions.opened}`
-      sessions.live.add(session)
-    } else if (!sessions.live.has(session)) {
-      return HttpServerResponse.text("unknown session", { status: 404 })
-    }
+    const name = Option.flatMap(params, (value) =>
+      Option.filter(Option.fromUndefinedOr(value["name"]), Predicate.isString),
+    )
+    if (message.method === "tools/call") sessions.calls.push(Option.getOrElse(name, () => ""))
+    const refused = httpRefusal(sessions)
+    if (Option.isSome(refused)) return HttpServerResponse.text("refused", { status: refused.value })
+    const session = httpSession(sessions, message.method, request.headers["mcp-session-id"] ?? "")
+    if (Option.isNone(session)) return HttpServerResponse.text("unknown session", { status: 404 })
     const result = answerHttp(message.method, params)
-    if (
-      Option.contains(
-        Option.flatMap(params, (value) => Option.fromUndefinedOr(value["name"])),
-        "forget",
-      )
-    ) {
-      sessions.live.clear()
-    }
+    if (Option.contains(name, "forget")) sessions.live.clear()
+    const refusal = Option.flatMap(name, (tool) =>
+      Option.fromUndefinedOr(HTTP_FIXTURE_REFUSALS.get(tool)),
+    )
+    if (Option.isSome(refusal) && refusal.value.once) sessions.refuseNext = refusal.value.status
+    if (Option.isSome(refusal) && !refusal.value.once) sessions.refuseAll = refusal.value.status
+    const headers = new Headers()
+    if (session.value !== "") headers.set("mcp-session-id", session.value)
     return Option.match(Option.fromUndefinedOr(message.id), {
       onNone: () => HttpServerResponse.empty({ status: 202 }),
-      onSome: (id) =>
-        HttpServerResponse.jsonUnsafe(
-          { jsonrpc: "2.0", id, result },
-          { headers: { "mcp-session-id": session } },
-        ),
+      onSome: (id) => HttpServerResponse.jsonUnsafe({ jsonrpc: "2.0", id, result }, { headers }),
     })
   }).pipe(Effect.orElseSucceed(() => HttpServerResponse.text("bad request", { status: 400 })))
 
 /** The fixture's port and its sessions; the server stops with the test scope. */
-const serveHttpFixture = Effect.gen(function* () {
-  const sessions: HttpSessions = { live: new Set(), opened: 0 }
+const serveHttpFixture = Effect.suspend(() => serveHttpFixtureWith({ stateless: false }))
+
+const serveHttpFixtureWith = Effect.fnUntraced(function* (options: {
+  readonly stateless: boolean
+}) {
+  const sessions: HttpSessions = {
+    live: new Set(),
+    opened: 0,
+    stateless: options.stateless,
+    refuseNext: 0,
+    refuseAll: 0,
+    calls: [],
+  }
   const context = yield* Layer.build(
     HttpServer.serve(httpFixtureApp(sessions)).pipe(
       Layer.provideMerge(BunHttpServer.layerServer({ port: 0, hostname: "127.0.0.1" })),
@@ -666,6 +713,11 @@ const answerHttp = (
           description: "Return an image one byte past 20 MiB.",
           inputSchema: { type: "object", properties: {} },
         },
+        ...[...HTTP_FIXTURE_REFUSALS.keys()].map((refusal) => ({
+          name: refusal,
+          description: `Refuse later requests (${refusal}).`,
+          inputSchema: { type: "object", properties: {} },
+        })),
       ],
     }
   }
@@ -764,7 +816,89 @@ describe("mcp over streamable http", () => {
       ),
     25_000,
   )
+
+  it.scopedLive(
+    "a 404 without a session is not a forgotten session: the call fails and is sent once",
+    () =>
+      Effect.gen(function* () {
+        const { port, sessions } = yield* serveHttpFixtureWith({ stateless: true })
+        const code = [
+          "const first = await tools.mcp.remote.whoami()",
+          "await tools.mcp.remote.gone()",
+          "let second = 'ran'; try { await tools.mcp.remote.whoami() } catch (error) { second = error.message }",
+          "JSON.stringify({ first, second })",
+        ].join("; ")
+        const result = yield* runHttpCell(port, code)
+        const shown = yield* cellDisplay(
+          result,
+          Schema.fromJsonString(Schema.Struct({ first: Schema.String, second: Schema.String })),
+        )
+        expect(shown.first).toBe("http caller")
+        expect(shown.second).toContain("404")
+        expect(sessions.calls).toEqual(["whoami", "gone", "whoami"])
+      }).pipe(
+        Effect.timeout("20 seconds"),
+        Effect.provide(Layer.merge(platformLayer, withFixtureToken)),
+      ),
+    25_000,
+  )
+
+  it.scopedLive(
+    "a server that starts refusing its bearer with 401 or 403 is expired",
+    () =>
+      Effect.gen(function* () {
+        const code = [
+          "for (const server of ['refused401', 'refused403']) {",
+          "  await tools.mcp[server].whoami()",
+          "  await tools.mcp[server][server === 'refused401' ? 'lock401' : 'lock403']()",
+          "  try { await tools.mcp[server].whoami() } catch {}",
+          "}",
+          "JSON.stringify(await tools.mcp.status())",
+        ].join("\n")
+        const first = yield* serveHttpFixture
+        const second = yield* serveHttpFixture
+        const result = yield* runHttpCell(first.port, code, second.port)
+        const status = yield* cellDisplay(result, StatusDisplay)
+        expect(
+          status.servers.map((server) => [server.name, server.health, server.reason ?? ""]),
+        ).toEqual([
+          ["refused401", "expired", expect.stringContaining("401")],
+          ["refused403", "expired", expect.stringContaining("403")],
+        ])
+      }).pipe(
+        Effect.timeout("20 seconds"),
+        Effect.provide(Layer.merge(platformLayer, withFixtureToken)),
+      ),
+    25_000,
+  )
 })
+
+/**
+ * A session whose model runs `code` in one cell over the HTTP fixture at
+ * `port` as `remote`, or, with `other`, over two fixtures as `refused401`
+ * and `refused403`; the cell's result.
+ */
+const runHttpCell = (port: number, code: string, other?: number) =>
+  Effect.gen(function* () {
+    const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+      toolCallStep("cell", { code }),
+      textStep("done"),
+    ])
+    const servers = Option.match(Option.fromUndefinedOr(other), {
+      onNone: () => ({ remote: httpEntry(port) }),
+      onSome: (second) => ({ refused401: httpEntry(port), refused403: httpEntry(second) }),
+    })
+    const { client, sessionId, branchId } = yield* createRpcHarness({
+      ...shippedPreset,
+      extensionInputs: [
+        ...shippedPreset.extensionInputs,
+        McpServers("@test/mcp-http-cell", servers),
+      ],
+      providerLayer,
+    })
+    yield* client.message.send({ sessionId, branchId, content: "run" })
+    return yield* cellResultAfterDone(client, branchId)
+  })
 
 // ── sse ─────────────────────────────────────────────────────────────────────
 

@@ -1323,15 +1323,26 @@ type CallResult = typeof CallResult.Type
 
 /**
  * What a failed call says about its connection. `answered`: the server sent
- * a JSON-RPC error, so the connection is sound. `expired`: HTTP 404, a
- * session the server no longer knows, so it ran nothing. `dead`: the
- * transport failed (the connection closed, the call timed out, HTTP 400, 401
- * or 408, a network error). `kept`: any other HTTP status, which says nothing
- * about the connection. `stale`: the server answered that it has no such
- * tool, so the catalog is out of date. `login`: the server refused the
- * OAuth token and no refresh helped (see `oauthTransport`).
+ * a JSON-RPC error, so the connection is sound. `expired`: HTTP 404 to a
+ * request that carried an `Mcp-Session-Id`, a session the server no longer
+ * knows, so it ran nothing. A 404 without a session says no such thing (a
+ * gateway can answer it after the server ran the call), so it is `kept`.
+ * `dead`: the transport failed (the connection closed, the call timed out,
+ * HTTP 400 or 408, a network error). `refused`: HTTP 401 or 403, the server
+ * no longer takes the entry's credential. `kept`: any other HTTP status,
+ * which says nothing about the connection. `stale`: the server answered that
+ * it has no such tool, so the catalog is out of date. `login`: the server
+ * refused the OAuth token and no refresh helped (see `oauthTransport`).
  */
-const CallFailureKind = Schema.Literals(["answered", "expired", "dead", "kept", "stale", "login"])
+const CallFailureKind = Schema.Literals([
+  "answered",
+  "expired",
+  "dead",
+  "refused",
+  "kept",
+  "stale",
+  "login",
+])
 type CallFailureKind = typeof CallFailureKind.Type
 
 const staleMessage = (name: string) =>
@@ -1351,8 +1362,10 @@ const isUnknownToolMessage = (message: string, name: string) =>
     "i",
   ).test(message)
 
-/** HTTP statuses that end a connection: the request, the credential, or the session is bad. */
-const DEAD_STATUSES: ReadonlySet<number> = new Set([400, 401, 408])
+/** HTTP statuses that end a connection: the request or the session is bad. */
+const DEAD_STATUSES: ReadonlySet<number> = new Set([400, 408])
+/** HTTP statuses that refuse the credential. */
+const REFUSED_STATUSES: ReadonlySet<number> = new Set([401, 403])
 
 /** JSON-RPC codes the SDK raises itself, for a closed connection or a timeout; no server sent them. */
 const CLIENT_RAISED: ReadonlySet<number> = new Set<number>([
@@ -1361,7 +1374,8 @@ const CLIENT_RAISED: ReadonlySet<number> = new Set<number>([
 ])
 const INVALID_PARAMS: number = ErrorCode.InvalidParams
 
-const failureKind = (cause: unknown, name: string): CallFailureKind => {
+/** `hadSession`: the request carried the transport's `Mcp-Session-Id`. */
+const failureKind = (cause: unknown, name: string, hadSession: boolean): CallFailureKind => {
   if (Schema.is(LoginRequired)(cause)) return "login"
   if (cause instanceof ProtocolError) {
     if (CLIENT_RAISED.has(cause.code)) return "dead"
@@ -1369,12 +1383,29 @@ const failureKind = (cause: unknown, name: string): CallFailureKind => {
     return "answered"
   }
   if (cause instanceof StreamableHTTPError) {
-    if (cause.code === 404) return "expired"
-    if (DEAD_STATUSES.has(cause.code ?? 0)) return "dead"
+    const status = cause.code ?? 0
+    if (status === 404 && hadSession) return "expired"
+    if (REFUSED_STATUSES.has(status)) return "refused"
+    if (DEAD_STATUSES.has(status)) return "dead"
     return "kept"
   }
   return "dead"
 }
+
+/** The failures that drop the connection: the next call dials again, with the credential as it is then. */
+const DROPPING_FAILURES: ReadonlySet<CallFailureKind> = new Set([
+  "dead",
+  "expired",
+  "refused",
+  "login",
+])
+
+/** A failed call's message, with the HTTP status the server answered, when it did. */
+const callFailureMessage = (name: string, cause: unknown) =>
+  Option.match(statusOf(cause), {
+    onNone: () => `${name}: ${failureMessage(cause)}`,
+    onSome: (status) => `${name}: ${failureMessage(cause)} (HTTP ${status})`,
+  })
 
 /** A failed call on one connection, and whether that connection had served a call before. */
 class CallFailed extends Schema.TaggedError<CallFailed>()("CallFailed", {
@@ -1672,6 +1703,8 @@ const mcpClientsLive = ({
           }
           const reused = connection.calls > 0
           connection.calls += 1
+          // Read before the call: the transport sends this session id with it.
+          const hadSession = Predicate.isNotUndefined(connection.client.transport?.sessionId)
           const send = Effect.gen(function* () {
             const value = yield* Effect.tryPromise({
               try: (signal) =>
@@ -1681,8 +1714,8 @@ const mcpClientsLive = ({
                   timeout: timeoutOf(server),
                 }),
               catch: (cause) => {
-                const kind = failureKind(cause, name)
-                let message = `${name}: ${failureMessage(cause)}`
+                const kind = failureKind(cause, name, hadSession)
+                let message = callFailureMessage(name, cause)
                 if (kind === "stale") message = staleMessage(name)
                 return new CallFailed({ kind, reused, message })
               },
@@ -1707,12 +1740,10 @@ const mcpClientsLive = ({
               if (failed.kind === "dead") {
                 setHealth(server.key, "degraded", Option.some(failed.message))
               }
-              if (failed.kind === "login") {
+              if (failed.kind === "login" || failed.kind === "refused") {
                 setHealth(server.key, "expired", Option.some(failed.message))
               }
-              if (failed.kind === "dead" || failed.kind === "expired" || failed.kind === "login") {
-                return evict(server.key, connection)
-              }
+              if (DROPPING_FAILURES.has(failed.kind)) return evict(server.key, connection)
               if (failed.kind === "stale") return Effect.sync(() => refresh(server, connection))
               return Effect.void
             }),
