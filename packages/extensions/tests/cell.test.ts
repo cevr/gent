@@ -6780,7 +6780,7 @@ const edgeSignatures: ReadonlyArray<readonly [ToolCapability, string]> = [
     eitherInput,
     "- tools.either(input: { left: string } | { right: string }): Promise<boolean> // Takes one of two shapes.",
   ],
-  [emptyInput, "- tools.ping(input?: {} | unknown[]): Promise<boolean> // Takes nothing."],
+  [emptyInput, "- tools.ping(input?: unknown): Promise<boolean> // Takes nothing."],
   [hugeEnum, "- tools.huge(input: { kind: string }): Promise<boolean> // Picks one of many kinds."],
   [wideInput, "- tools.wide(input: object): Promise<boolean> // Takes many fields."],
   [
@@ -6797,19 +6797,19 @@ const edgeSignatures: ReadonlyArray<readonly [ToolCapability, string]> = [
   ],
   [
     treeResult,
-    "- tools.tree(input?: {} | unknown[]): Promise<{ name: string; children: object[] }> // Returns a tree.",
+    "- tools.tree(input?: unknown): Promise<{ name: string; children: object[] }> // Returns a tree.",
   ],
   [
     longLiteralResult,
-    '- tools["long-literal"](input?: {} | unknown[]): Promise<string> // Returns one of a few long names.',
+    '- tools["long-literal"](input?: unknown): Promise<string> // Returns one of a few long names.',
   ],
   [
     wideOrList,
-    '- tools["wide-or-list"](input?: {} | unknown[]): Promise<object | string[]> // Returns a wide object or a list.',
+    '- tools["wide-or-list"](input?: unknown): Promise<object | string[]> // Returns a wide object or a list.',
   ],
   [
     recordResult,
-    "- tools.record(input?: {} | unknown[]): Promise<Record<string, boolean>> // Returns a map.",
+    "- tools.record(input?: unknown): Promise<Record<string, boolean>> // Returns a map.",
   ],
 ]
 
