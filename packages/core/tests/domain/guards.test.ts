@@ -1,5 +1,4 @@
 import { describe, expect, test } from "effect-bun-test"
-import { Option } from "effect"
 import { causeChainMessage, causeMessage, omitUndefined } from "../../src/domain/guards.js"
 
 describe("guards", () => {
@@ -24,7 +23,8 @@ describe("guards", () => {
   })
 
   test("absent-valued keys are dropped, not kept as present-and-empty", () => {
-    const b = Option.getOrUndefined(Option.none<number>())
+    // oxlint-disable-next-line effect/noNullish -- The test is about an undefined-valued key.
+    const b = undefined
     expect(Object.keys(omitUndefined({ a: 1, b }))).toEqual(["a"])
   })
 })

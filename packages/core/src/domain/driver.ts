@@ -13,8 +13,8 @@
  * @module
  */
 import { Context, Effect, Option, Predicate, Schema, type Layer } from "effect"
-import { AiError, type LanguageModel, type Model as AiModel } from "effect/ai"
-import type { Model } from "./agent.js"
+import { AiError, type LanguageModel, type Model as AiModel, type Response } from "effect/ai"
+import type { CacheWriteByLifetime, Model } from "./agent.js"
 import type { AuthAuthorizationMethod, AuthMethod } from "../runtime/provider.js"
 import type { SessionId } from "./ids.js"
 
@@ -81,8 +81,17 @@ export interface ProviderHints {
   readonly reasoning?: string
   readonly maxTokens?: number
   readonly temperature?: number
-  /** Stable conversation identity for providers that support cache routing. */
+  /**
+   * Stable conversation identity: OpenAI routes the prompt cache by it, and
+   * Anthropic writes a prompt cache only for a request that names one.
+   */
   readonly cacheKey?: string
+  /**
+   * The request is a spawned child session's (`isSpawnedSession`). A child
+   * runs its steps back to back, so a driver may give its prompt cache a
+   * shorter lifetime; the catalog names it as `Model.childPromptCacheTtlMs`.
+   */
+  readonly child?: boolean
   /**
    * The catalog's `Model.reasoning` for the resolved model. A driver sends no
    * reasoning effort to a model the catalog says does not reason; absent when
@@ -328,4 +337,14 @@ export interface ModelDriverContribution {
   readonly envCredential?: string
   /** Retry policy for this driver's transient failures; `DEFAULT_RETRY_POLICY` when absent. */
   readonly retry?: RetryPolicy
+  /**
+   * A response's cache writes split by the lifetime of the entries they wrote,
+   * read from its finish part's provider metadata. A driver whose request
+   * mixes lifetimes names it, so each part is priced at its own rate
+   * (`ModelPricing.cacheWriteByLifetime`). Absent, every write takes the
+   * catalog's `cacheWrite` rate.
+   */
+  readonly cacheWritesByLifetime?: (
+    metadata: Response.ProviderMetadata,
+  ) => ReadonlyArray<CacheWriteByLifetime>
 }

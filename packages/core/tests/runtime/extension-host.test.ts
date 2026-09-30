@@ -29,12 +29,14 @@ import {
   type CallRecord,
   createRpcHarness,
   RecordingEventStore,
+  registerContributions,
   runToolWithCtx,
   SequenceRecorder,
   testExtensionHostContext,
   testHostFacts,
   testToolContext,
   ensureStorageParents,
+  fixedSessionProfiles,
   testSqliteStorage,
 } from "../../src/test-utils/harness"
 import { BunChildProcessSpawner, BunCrypto, BunFileSystem, BunServices } from "@effect/platform-bun"
@@ -60,7 +62,6 @@ import {
   configHealthStatuses,
   CurrentExtensionHostContext,
   type DiscoveredExtension,
-  discoverExtensions,
   ExtensionRegistry,
   listModelCatalog,
   makeExtensionHostContextProvider,
@@ -91,9 +92,9 @@ import {
   SessionStorage,
   type SessionStorageService,
   SqliteStorage,
-  StorageError,
   BranchStorage,
 } from "../../src/storage/storage"
+import { StorageError } from "../../src/domain/errors"
 import { CurrentWorkspaceId, WorkspaceId, workspaceIdForCwd } from "../../src/server/workspace-rpc"
 import {
   ActorCommandId,
@@ -119,7 +120,7 @@ import {
   ProviderAuthInfo,
   type ProviderResolution,
 } from "../../src/domain/driver"
-import { Model as AiModel, LanguageModel } from "effect/ai"
+import { Model as AiModel, type LanguageModel } from "effect/ai"
 import { ModelRegistry } from "../../src/runtime/provider"
 import { LanguageModelLayers, textStep, waitFor } from "../../src/test-utils/language-model"
 import {
@@ -130,7 +131,6 @@ import {
   ModelId,
   ProviderId,
 } from "../../src/domain/agent"
-import { failingLanguageModel } from "../helpers/failing-language-model"
 import * as AiTool from "effect/ai/Tool"
 import {
   bindRequestCapabilityExtension,
@@ -151,13 +151,12 @@ import {
   type ExtensionLoadError,
   hook,
   LoadedArtifactIdentity,
-  registerContributions,
   type SystemPromptInput,
   sortExtensionsByScope,
   type TurnAfterInput,
   type ExtensionHookHandler,
 } from "../../src/domain/extension"
-import { compileToolPolicy, noBranchTools, ToolRunner } from "../../src/runtime/tools"
+import { noBranchTools, ToolRunner } from "../../src/runtime/tools"
 import { SingleRunner } from "effect/cluster"
 import { AgentEvent, EventStore } from "../../src/domain/event"
 import { SessionMutationsLive } from "../../src/server/server"
@@ -1523,9 +1522,7 @@ describe("resolveTurnProfile", () => {
  * regression breaks per-cwd extension resolution.
  */
 const stubResolution = (): Effect.Effect<ProviderResolution> =>
-  Effect.succeed(
-    AiModel.make("test", "model", Layer.succeed(LanguageModel.LanguageModel, failingLanguageModel)),
-  )
+  Effect.succeed(AiModel.make("test", "model", LanguageModelLayers.failing))
 const makeModel = (id: string, name?: string): ModelDriverContribution => ({
   id,
   name: Option.getOrElse(Option.fromUndefinedOr(name), () => id),
@@ -1644,7 +1641,9 @@ describe("driver resolution", () => {
         if (driverId === "auth-a") {
           return Effect.succeed(ProviderAuthInfo.cases.Api.make({ key: "secret-a" }))
         }
-        return Effect.succeed(Option.getOrUndefined(Option.none<ProviderAuthInfo>()))
+        // oxlint-disable-next-line effect/noNullish -- The auth store answers undefined for a provider with no key.
+        const noKey: ProviderAuthInfo | undefined = undefined
+        return Effect.succeed(noKey)
       })
       // Each driver's listModels should have been called with the auth from resolveAuth(its id)
       const authAEntry = Option.fromUndefinedOr(seenAuth.find((s) => s.driverId === "auth-a"))
@@ -1706,6 +1705,36 @@ const fsLayer = Layer.provideMerge(
   Layer.mergeAll(BunFileSystem.layer, Path.layer, BunCrypto.layer, BunGentPlatformLive),
   childProcessSpawnerLive,
 )
+
+/**
+ * The extensions a profile for `home` and `cwd` activates: the scan, load,
+ * setup and validation `SessionProfileCache` runs, with no builtins. User
+ * extension files live in `<home>/.gent/extensions`, project files in
+ * `<cwd>/.gent/extensions`.
+ */
+const discoverProfileExtensions = (dirs: { readonly home: string; readonly cwd: string }) =>
+  Effect.gen(function* () {
+    const scan = yield* scanRuntimeProfileExtensions(dirs)
+    const declarations = yield* loadRuntimeProfileDeclarations(
+      { ...dirs, platform: "test", extensions: [] },
+      scan,
+    )
+    return declarations.extensionDeclarations
+  })
+
+/** A fresh home with an empty user extension directory. */
+const makeExtensionHome = (prefix: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+    const home = yield* fs.realPath(yield* fs.makeTempDirectoryScoped({ prefix }))
+    const userDir = path.join(home, ".gent", "extensions")
+    yield* fs.makeDirectory(userDir, { recursive: true })
+    return { home, userDir }
+  })
+
+/** A cwd with no project extensions. */
+const noProjectCwd = "/nonexistent/gent-loader-project"
 
 const builtin = (extension: ReturnType<typeof makeBuiltin>): DiscoveredExtension => ({
   extension,
@@ -2752,7 +2781,7 @@ describe("runtime slots", () => {
         }),
       ])
       const emit = yield* slots
-        .emitSessionDeleted({ sessionId: SessionId.make("deleted-session") })
+        .emitSessionDeleted({ sessionId: SessionId.make("deleted-session"), branchIds: [] })
         .pipe(Effect.provideService(CurrentExtensionHostContext, stubHostCtx), Effect.forkChild)
       yield* TestClock.adjust(SESSION_DELETED_HOOK_TIMEOUT)
       // The emit returns: the stuck handler no longer holds the delete.
@@ -3195,16 +3224,10 @@ describe("extension entries", () => {
           ].join("\n"),
         )
 
-        const discovered = yield* discoverExtensions({
-          userDir,
-          projectDir: "/nonexistent/gent-entries-project",
-        })
+        const discovered = yield* discoverProfileExtensions({ home, cwd: noProjectCwd })
         expect(discovered.failed).toEqual([])
-        const loaded = yield* Effect.forEach(discovered.loaded, (entry) =>
-          setupExtension(entry, home, home),
-        )
         expect(
-          loaded.map((extension) => ({
+          discovered.active.map((extension) => ({
             id: String(extension.manifest.id),
             tools: extension.contributions.tools?.map((tool) => String(getToolId(tool))),
           })),
@@ -3250,11 +3273,8 @@ describe("extension entries", () => {
         )
       yield* writeImporter("host.ts", "@gent/core/host", "BunPlatformLive")
       yield* writeImporter("protocol.ts", "@gent/core/protocol", "SessionId")
-      const discovered = yield* discoverExtensions({
-        userDir,
-        projectDir: "/nonexistent/gent-entries-project",
-      })
-      expect(discovered.loaded).toEqual([])
+      const discovered = yield* discoverProfileExtensions({ home, cwd: noProjectCwd })
+      expect(discovered.active).toEqual([])
       expect(discovered.failed.map((failure) => failure.error)).toEqual([
         expect.stringContaining("Cannot find package '@gent/core'"),
         expect.stringContaining("Cannot find package '@gent/core'"),
@@ -3288,19 +3308,20 @@ export default { manifest: { id: "trusted-project" }, setup: Effect.void };`,
       )
       const grant = encodeJson({ trustedProjects: [projectRoot] })
       yield* fs.writeFileString(path.join(projectDir, "../config.json"), grant)
-      const denied = yield* discoverExtensions({ userDir, projectDir })
-      expect(denied.loaded).toHaveLength(0)
+      const dirs = { home: path.join(directory, "home"), cwd: path.join(directory, "project") }
+      const denied = yield* discoverProfileExtensions(dirs)
+      expect(denied.active).toHaveLength(0)
       expect(denied.failed[0]?.error).toContain("not trusted")
       expect(yield* fs.exists(marker)).toBe(false)
       yield* fs.writeFileString(path.join(userDir, "../config.json"), grant)
-      const allowed = yield* discoverExtensions({ userDir, projectDir })
-      expect(allowed.loaded.map((entry) => entry.extension.manifest.id)).toEqual([
+      const allowed = yield* discoverProfileExtensions(dirs)
+      expect(allowed.active.map((extension) => extension.manifest.id)).toEqual([
         ExtensionId.make("trusted-project"),
       ])
       expect(yield* fs.readFileString(marker)).toBe("ran")
       yield* fs.writeFileString(path.join(userDir, "../config.json"), "invalid JSON")
-      const revoked = yield* discoverExtensions({ userDir, projectDir })
-      expect(revoked.loaded).toHaveLength(0)
+      const revoked = yield* discoverProfileExtensions(dirs)
+      expect(revoked.active).toHaveLength(0)
     }).pipe(Effect.provide(fsLayer)),
   )
 
@@ -3319,10 +3340,10 @@ export default { manifest: { id: "trusted-project" }, setup: Effect.void };`,
         `import { Effect } from "effect";
 export default { manifest: { id: "home-user" }, setup: Effect.void };`,
       )
-      const loadedAs = (result: Effect.Success<ReturnType<typeof discoverExtensions>>) =>
-        result.loaded.map((entry) => `${entry.scope}:${entry.extension.manifest.id}`)
+      const loadedAs = (result: Effect.Success<ReturnType<typeof discoverProfileExtensions>>) =>
+        result.active.map((extension) => `${extension.scope}:${extension.manifest.id}`)
       // Untrusted (the default): no "not trusted" failure for the user's own files.
-      const untrusted = yield* discoverExtensions({ userDir, projectDir: userDir })
+      const untrusted = yield* discoverProfileExtensions({ home, cwd: home })
       expect(loadedAs(untrusted)).toEqual(["user:home-user"])
       expect(untrusted.failed).toEqual([])
       // Trusted: still one copy, as user.
@@ -3330,7 +3351,7 @@ export default { manifest: { id: "home-user" }, setup: Effect.void };`,
         path.join(userDir, "../config.json"),
         encodeJson({ trustedProjects: [home] }),
       )
-      const trusted = yield* discoverExtensions({ userDir, projectDir: userDir })
+      const trusted = yield* discoverProfileExtensions({ home, cwd: home })
       expect(loadedAs(trusted)).toEqual(["user:home-user"])
       expect(trusted.failed).toEqual([])
     }).pipe(Effect.provide(fsLayer)),
@@ -3418,9 +3439,7 @@ export default { manifest: { id: "home-user" }, setup: Effect.void };`,
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
-      const packageDir = yield* fs.makeTempDirectoryScoped({
-        prefix: "gent-loader-package-",
-      })
+      const { home, userDir: packageDir } = yield* makeExtensionHome("gent-loader-package-")
       yield* fs.writeFileString(
         path.join(packageDir, "package.json"),
         encodeJson({ name: "@gent/test-pinned", version: "1.2.3" }),
@@ -3431,12 +3450,9 @@ export default { manifest: { id: "home-user" }, setup: Effect.void };`,
         'import { Effect } from "effect"\nexport default { manifest: { id: "@gent/test-pinned-v1" }, setup: Effect.void }\n',
       )
 
-      const first = yield* discoverExtensions({
-        userDir: packageDir,
-        projectDir: "/nonexistent-project-dir-loader-test",
-      })
-      expect(first.loaded).toHaveLength(1)
-      expect(first.loaded[0]?.extension.artifactIdentity).toBeUndefined()
+      const first = yield* discoverProfileExtensions({ home, cwd: noProjectCwd })
+      expect(first.active).toHaveLength(1)
+      expect(first.active[0]?.artifactIdentity).toBeUndefined()
 
       // An edited file is imported again under its new version. The loader
       // still attaches no identity to what it imported.
@@ -3444,11 +3460,8 @@ export default { manifest: { id: "home-user" }, setup: Effect.void };`,
         extensionPath,
         'import { Effect } from "effect"\nexport default { manifest: { id: "@gent/test-pinned-v2" }, setup: Effect.void }\n',
       )
-      const second = yield* discoverExtensions({
-        userDir: packageDir,
-        projectDir: "/nonexistent-project-dir-loader-test",
-      })
-      expect(second.loaded[0]?.extension.artifactIdentity).toBeUndefined()
+      const second = yield* discoverProfileExtensions({ home, cwd: noProjectCwd })
+      expect(second.active[0]?.artifactIdentity).toBeUndefined()
 
       // A changed manifest is also not a proof that the already imported
       // module changed. Replay remains explicitly unsupported.
@@ -3456,11 +3469,8 @@ export default { manifest: { id: "home-user" }, setup: Effect.void };`,
         path.join(packageDir, "package.json"),
         encodeJson({ name: "@gent/test-pinned", version: "2.0.0" }),
       )
-      const third = yield* discoverExtensions({
-        userDir: packageDir,
-        projectDir: "/nonexistent-project-dir-loader-test",
-      })
-      expect(third.loaded[0]?.extension.artifactIdentity).toBeUndefined()
+      const third = yield* discoverProfileExtensions({ home, cwd: noProjectCwd })
+      expect(third.active[0]?.artifactIdentity).toBeUndefined()
     }).pipe(Effect.provide(fsLayer)),
   )
 
@@ -3583,7 +3593,7 @@ export default { manifest: { id: "home-user" }, setup: Effect.void };`,
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
-      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "gent-loader-test-" })
+      const { home, userDir: dir } = yield* makeExtensionHome("gent-loader-test-")
 
       const fnSetupPath = path.join(dir, "fn-setup.ts")
       const objectSetupPath = path.join(dir, "object-setup.ts")
@@ -3608,14 +3618,11 @@ export default { manifest: { id: "home-user" }, setup: Effect.void };`,
       // Sanity sibling: a no-extension file is also skipped but for a different reason.
       yield* fs.writeFileString(validPath, `export const notAnExtension = 42`)
 
-      const result = yield* discoverExtensions({
-        userDir: dir,
-        projectDir: "/nonexistent-project-dir-loader-test",
-      })
+      const result = yield* discoverProfileExtensions({ home, cwd: noProjectCwd })
 
-      // None of the malformed files load — they hit `loadExtensionFile`'s
-      // `candidates.length === 0` branch via the `isGentExtension` guard.
-      expect(result.loaded).toHaveLength(0)
+      // None of the malformed files load: the `isGentExtension` guard finds
+      // no extension in them.
+      expect(result.active).toHaveLength(0)
       expect(result.failed.length).toBeGreaterThanOrEqual(4)
       for (const target of [fnSetupPath, objectSetupPath, nullSetupPath, validPath]) {
         const entry = result.failed.find((s) => s.sourcePath === target)
@@ -3625,15 +3632,40 @@ export default { manifest: { id: "home-user" }, setup: Effect.void };`,
     }).pipe(Effect.provide(fsLayer)),
   )
 
+  it.scopedLive("one extension exported under two names loads once; two extensions fail", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const { home, userDir: dir } = yield* makeExtensionHome("gent-loader-test-")
+      const aliasedPath = path.join(dir, "aliased.ts")
+      const twoPath = path.join(dir, "two.ts")
+      yield* fs.writeFileString(
+        aliasedPath,
+        `import { Effect } from "effect"\nexport const ext = { manifest: { id: "@user/aliased" }, setup: Effect.void }\nexport default ext\n`,
+      )
+      yield* fs.writeFileString(
+        twoPath,
+        `import { Effect } from "effect"\nexport const a = { manifest: { id: "@user/two-a" }, setup: Effect.void }\nexport const b = { manifest: { id: "@user/two-b" }, setup: Effect.void }\n`,
+      )
+
+      const result = yield* discoverProfileExtensions({ home, cwd: noProjectCwd })
+
+      expect(result.active.map((ext) => ext.manifest.id)).toEqual([
+        ExtensionId.make("@user/aliased"),
+      ])
+      expect(result.failed.find((s) => s.sourcePath === twoPath)?.error).toContain(
+        "Multiple GentExtension exports",
+      )
+    }).pipe(Effect.timeout("20 seconds"), Effect.provide(fsLayer)),
+  )
+
   // Load order decides which of two same-named services wins, so it must not
   // follow the locale: `Zeta.ts` sorts before `alpha.ts` by code unit.
   it.scopedLive("extension files load in code-unit order of their paths", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
-      const dir = yield* fs.makeTempDirectoryScoped({
-        prefix: "gent-loader-order-",
-      })
+      const { home, userDir: dir } = yield* makeExtensionHome("gent-loader-order-")
       for (const id of ["alpha", "Zeta"]) {
         yield* fs.writeFileString(
           path.join(dir, `${id}.ts`),
@@ -3641,12 +3673,9 @@ export default { manifest: { id: "home-user" }, setup: Effect.void };`,
         )
       }
 
-      const result = yield* discoverExtensions({
-        userDir: dir,
-        projectDir: "/nonexistent-project-dir-loader-test",
-      })
+      const result = yield* discoverProfileExtensions({ home, cwd: noProjectCwd })
 
-      expect(result.loaded.map((entry) => entry.extension.manifest.id)).toEqual([
+      expect(result.active.map((extension) => extension.manifest.id)).toEqual([
         ExtensionId.make("Zeta"),
         ExtensionId.make("alpha"),
       ])
@@ -3657,9 +3686,7 @@ export default { manifest: { id: "home-user" }, setup: Effect.void };`,
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
-      const dir = yield* fs.makeTempDirectoryScoped({
-        prefix: "gent-loader-dangling-",
-      })
+      const { home, userDir: dir } = yield* makeExtensionHome("gent-loader-dangling-")
       yield* fs.writeFileString(
         path.join(dir, "good.ts"),
         'import { Effect } from "effect"\nexport default { manifest: { id: "good" }, setup: Effect.void }\n',
@@ -3667,12 +3694,9 @@ export default { manifest: { id: "home-user" }, setup: Effect.void };`,
       const danglingPath = path.join(dir, "zz-dangling.ts")
       yield* fs.symlink(path.join(dir, "nowhere.ts"), danglingPath)
 
-      const result = yield* discoverExtensions({
-        userDir: dir,
-        projectDir: "/nonexistent-project-dir-loader-test",
-      })
+      const result = yield* discoverProfileExtensions({ home, cwd: noProjectCwd })
 
-      expect(result.loaded.map((entry) => entry.extension.manifest.id)).toEqual([
+      expect(result.active.map((extension) => extension.manifest.id)).toEqual([
         ExtensionId.make("good"),
       ])
       expect(result.failed).toMatchObject([
@@ -3759,17 +3783,6 @@ const makeTool = (name: string): ToolCapability =>
     output: Schema.Void,
     execute: () => Effect.void,
   })
-const compileRegistryPolicy = (
-  registry: ExtensionRegistry["Service"],
-  agent: AgentDefinition,
-  projections: Parameters<typeof compileToolPolicy>[3] = [],
-) =>
-  compileToolPolicy(
-    [...registry.getResolved().modelCapabilities.values()].map((entry) => entry.capability),
-    agent,
-    {},
-    projections,
-  )
 const makeAgent = (
   name: string,
   options?: Partial<ConstructorParameters<typeof AgentDefinition>[0]>,
@@ -3778,13 +3791,7 @@ const makeProvider = (providerId: string, name?: string): ModelDriverContributio
   id: providerId,
   name: name ?? providerId,
   resolveModel: (modelName) =>
-    Effect.succeed(
-      AiModel.make(
-        providerId,
-        modelName,
-        Layer.succeed(LanguageModel.LanguageModel, failingLanguageModel),
-      ),
-    ),
+    Effect.succeed(AiModel.make(providerId, modelName, LanguageModelLayers.failing)),
 })
 const makeExtRegistry = (
   id: string,
@@ -3842,7 +3849,7 @@ const makeRequest = (id: string): RequestCapability =>
     output: Schema.Unknown,
     execute: () => Effect.void,
   })
-describe("resolveExtensions", () => {
+describe("contribution resolution", () => {
   test("empty extensions produce empty maps", () => {
     const resolved = resolveExtensions([])
     expect(resolved.modelCapabilities.size).toBe(0)
@@ -3857,27 +3864,6 @@ describe("resolveExtensions", () => {
     expect(resolved.modelCapabilities.has("read")).toBe(true)
     expect(resolved.modelCapabilities.has("write")).toBe(true)
     expect(resolved.modelCapabilities.has("bash")).toBe(true)
-  })
-  test("later scope wins for same-name tool", () => {
-    const builtinRead = makeTool("read")
-    const projectRead = { ...makeTool("read"), description: "project override" }
-    const resolved = resolveExtensions([
-      makeExtRegistry("a", "builtin", { tools: [builtinRead] }),
-      makeExtRegistry("b", "project", { tools: [projectRead] }),
-    ])
-    expect(resolved.modelCapabilities.get("read")?.capability.description).toBe("project override")
-  })
-  test("later scope wins for same-name agent", () => {
-    const builtinExplore = makeAgent("explore")
-    const projectExplore = AgentDefinition.make({
-      name: AgentName.make("explore"),
-      description: "project explore",
-    })
-    const resolved = resolveExtensions([
-      makeExtRegistry("a", "builtin", { agents: [builtinExplore] }),
-      makeExtRegistry("b", "project", { agents: [projectExplore] }),
-    ])
-    expect(resolved.agents.get("explore")?.description).toBe("project explore")
   })
   test("allows same-name tool/agent from different scopes (override)", () => {
     expect(() =>
@@ -4133,110 +4119,6 @@ describe("ExtensionRegistry", () => {
       expect(agents.map((a) => a.name)).toContain(AgentName.make("secondary"))
     }),
   )
-  it.live("allowedTools narrows the resolved tool set", () =>
-    Effect.gen(function* () {
-      const readTool = makeTool("read")
-      const bashTool = makeTool("bash")
-      const agent = AgentDefinition.make({
-        name: AgentName.make("explore"),
-        allowedTools: ["read"],
-      })
-      const registry = yield* buildRegistry([
-        makeExtRegistry("a", "builtin", { tools: [readTool, bashTool], agents: [agent] }),
-      ])
-      const { tools } = compileRegistryPolicy(registry, agent)
-      expect(tools.length).toBe(1)
-      const firstTool = tools[0]
-      expect(firstTool).toBeDefined()
-      if (Predicate.isUndefined(firstTool)) return
-      expect(String(getToolId(firstTool))).toBe("read")
-    }),
-  )
-  it.live("allowedTools restricts the resolved set to exactly the listed names", () =>
-    Effect.gen(function* () {
-      const readTool = makeTool("read")
-      const bashTool = makeTool("bash")
-      const editTool = makeTool("edit")
-      const agent = AgentDefinition.make({
-        name: AgentName.make("explore"),
-        allowedTools: ["read", "bash"],
-      })
-      const registry = yield* buildRegistry([
-        makeExtRegistry("a", "builtin", { tools: [readTool, bashTool, editTool], agents: [agent] }),
-      ])
-      const { tools } = compileRegistryPolicy(registry, agent)
-      const names = tools.map((t) => String(getToolId(t)))
-      expect(names).toContain("read")
-      expect(names).toContain("bash")
-      expect(names).not.toContain("edit")
-    }),
-  )
-  it.live("deniedTools removes matching entries from the resolved set", () =>
-    Effect.gen(function* () {
-      const readTool = makeTool("read")
-      const writeTool = makeTool("write")
-      const agent = AgentDefinition.make({
-        name: AgentName.make("primary"),
-        deniedTools: ["write"],
-      })
-      const registry = yield* buildRegistry([
-        makeExtRegistry("a", "builtin", { tools: [readTool, writeTool], agents: [agent] }),
-      ])
-      const { tools } = compileRegistryPolicy(registry, agent)
-      const names = tools.map((t) => String(getToolId(t)))
-      expect(names).toContain("read")
-      expect(names).not.toContain("write")
-    }),
-  )
-  it.live("denied tools cannot be injected via projection", () =>
-    Effect.gen(function* () {
-      const readTool = makeTool("read")
-      const secretTool = makeTool("secret")
-      const agent = AgentDefinition.make({
-        name: AgentName.make("primary"),
-        deniedTools: ["secret"],
-      })
-      const registry = yield* buildRegistry([
-        makeExtRegistry("core", "builtin", { tools: [readTool, secretTool] }),
-      ])
-      // Try to force-include via projection
-      const { tools } = compileRegistryPolicy(registry, agent, [
-        { toolPolicy: { include: ["secret"] } },
-      ])
-      expect(tools.map((t) => String(getToolId(t)))).not.toContain("secret")
-    }),
-  )
-  test("registered model driver is findable by ID", () => {
-    const registry = resolveExtensions([
-      makeExtRegistry("a", "builtin", { modelDrivers: [makeProvider("anthropic")] }),
-    ])
-    const provider = registry.modelDrivers.get("anthropic")
-    expect(provider?.id).toBe("anthropic")
-  })
-  test("unregistered model driver ID returns undefined", () => {
-    const registry = resolveExtensions([])
-    const provider = registry.modelDrivers.get("nonexistent")
-    expect(provider).toBeUndefined()
-  })
-  test("lists all registered model drivers", () => {
-    const registry = resolveExtensions([
-      makeExtRegistry("a", "builtin", {
-        modelDrivers: [makeProvider("anthropic"), makeProvider("openai")],
-      }),
-    ])
-    expect(registry.modelDrivers.size).toBe(2)
-  })
-  it.live("test layer starts with empty registry", () =>
-    Effect.gen(function* () {
-      const resolved = yield* Effect.gen(function* () {
-        const ext = yield* ExtensionRegistry
-        return ext.getResolved()
-      }).pipe(Effect.provide(ExtensionRegistry.Test()))
-      expect(resolved.modelCapabilities.size).toBe(0)
-      expect(resolved.agents.size).toBe(0)
-      expect(resolved.modelDrivers.size).toBe(0)
-    }),
-  )
 })
 // Slash-command discovery — identity-first scope shadowing followed by
 // bucket/surface authorization.
@@ -4406,28 +4288,6 @@ const makeStubExtension = (
     sourcePath: "builtin",
     contributions: { resources },
   }) satisfies LoadedExtension
-
-describe("defineResource", () => {
-  test("emits a contribution with the declared scope", () => {
-    const r = defineResource({
-      id: "test/resource-host/declared-scope",
-      scope: "process",
-      layer: layerA,
-    })
-    expect(String(r.id)).toBe("test/resource-host/declared-scope")
-    expect(r.scope).toBe("process")
-  })
-
-  test("rejects an empty resource id", () => {
-    expect(() =>
-      defineResource({
-        id: "",
-        scope: "process",
-        layer: Layer.empty,
-      }),
-    ).toThrow()
-  })
-})
 
 /** One scope's Resources built into the caller's scope, over no other services. */
 const buildProcessResources = (extensions: ReadonlyArray<LoadedExtension>) =>
@@ -4878,7 +4738,7 @@ const makeMutationsLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageMod
     BunServices.layer,
     ModelRegistry.Test(),
     GentPlatform.Test(),
-    SessionProfileCache.Test(),
+    fixedSessionProfiles(),
     AgentLoopSessionGovernance.Live,
   )
   const sessionRuntimeLayer = Layer.provide(

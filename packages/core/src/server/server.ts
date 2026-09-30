@@ -36,11 +36,11 @@ import {
   SessionOperationStorage,
   SessionStorage,
   SqliteStorage,
-  type StorageError,
   type StoredBranchResult,
   type StoredCreateSessionResult,
   type StoredSwitchBranchResult,
 } from "../storage/storage.js"
+import type { StorageError } from "../domain/errors.js"
 import {
   type ExtensionSetupServices,
   type ExtensionStatusInfo,
@@ -51,6 +51,7 @@ import {
 } from "../domain/extension.js"
 import {
   type AuthorizeAuthInput,
+  type ListAuthMethodsInput,
   type CallbackAuthInput,
   type ClearDriverOverrideInput,
   type CreateBranchInput,
@@ -112,12 +113,14 @@ import { CurrentWorkspaceId, workspaceIdForCwd, WorkspaceRpcMiddleware } from ".
 import {
   Auth,
   AuthApi,
+  authorizeProvider,
+  completeProviderAuth,
+  listAuthMethods,
   listAuthProviders,
   ModelCatalogRecord,
   ModelRegistry,
   ModelResolver,
   modelCatalog,
-  ProviderAuth,
 } from "../runtime/provider.js"
 import { ProviderAuthError } from "../domain/driver.js"
 import { ConfigService, RuntimeEnvironment } from "../runtime/config.js"
@@ -182,7 +185,7 @@ interface ServerIdentityApi {
   readonly buildFingerprint: string
 }
 
-// ── session-utils ───────────────────────────────────────────────────────────
+// ── session reads ───────────────────────────────────────────────────────────
 
 type MutableBranchTreeNode = Omit<BranchTreeNode, "children"> & {
   children: MutableBranchTreeNode[]
@@ -313,7 +316,7 @@ export const buildExtensionHealthSnapshot = (
   })
 }
 
-// ── session-mutations-live ──────────────────────────────────────────────────
+// ── session mutations ───────────────────────────────────────────────────────
 
 interface CreateSessionResult {
   readonly sessionId: SessionId
@@ -433,33 +436,6 @@ const makeSessionMutationsService: Effect.Effect<
       return committed.result
     })
 
-  const collectSessionTreeIds = Effect.fn("SessionMutations.collectSessionTreeIds")(function* (
-    rootSessionId: SessionId,
-  ) {
-    const sessionIds: SessionId[] = []
-    const queue: SessionId[] = [rootSessionId]
-    const seen = new Set<SessionId>()
-    let index = 0
-    // Same rule as the durable delete: a handoff that continues the deleted
-    // session's thread survives, so its runtime is not stopped.
-    const rootThread = (yield* sessionStorage.getSession(rootSessionId))?.threadId
-
-    while (index < queue.length) {
-      const sessionId = queue[index]
-      index += 1
-      if (Predicate.isUndefined(sessionId) || seen.has(sessionId)) continue
-      seen.add(sessionId)
-      sessionIds.push(sessionId)
-      const children = yield* relationshipStorage.getChildSessions(sessionId)
-      for (const child of children) {
-        if (Predicate.isNotUndefined(rootThread) && child.threadId === rootThread) continue
-        queue.push(child.id)
-      }
-    }
-
-    return sessionIds
-  })
-
   const cleanupSessionRuntimeStateForMutation = (sessionId: SessionId) =>
     sessionRuntime.terminateSession(sessionId).pipe(Effect.orDie)
   const restoreSessionRuntimeStateForMutation = (sessionId: SessionId) =>
@@ -509,7 +485,7 @@ const makeSessionMutationsService: Effect.Effect<
     // touched, collected inside its own tx) which we then use for the final
     // cleanup pass. Any descendant created between pre-collect and the tx is
     // included in the authoritative set and cleaned up here too.
-    const preTombstoned = yield* collectSessionTreeIds(sessionId)
+    const preTombstoned = yield* sessionStorage.deletionSet(sessionId)
     // Each session's own profile, resolved while its rows still exist: sessions
     // of one tree can live in different cwds with different extensions.
     const profiles = new Map<SessionId, Option.Option<AgentLoopTurnProfile>>()
@@ -523,13 +499,14 @@ const makeSessionMutationsService: Effect.Effect<
     )
     const rootProfile = Option.flatten(Option.fromUndefinedOr(profiles.get(sessionId)))
     yield* Effect.forEach(preTombstoned, cleanupSessionRuntimeStateForMutation, { discard: true })
-    const cascadedIds = yield* sessionStorage.deleteSession(sessionId).pipe(
+    const deleted = yield* sessionStorage.deleteSession(sessionId).pipe(
       // On failure we only restore `preTombstoned`: descendants created after pre-collect
       // were never tombstoned here, so there's no runtime state for them to "restore" to.
       Effect.onError(() =>
         Effect.forEach(preTombstoned, restoreSessionRuntimeStateForMutation, { discard: true }),
       ),
     )
+    const cascadedIds = deleted.map((entry) => entry.sessionId)
     const preSet = new Set(preTombstoned)
     const postDeleteOnly = cascadedIds.filter((id) => !preSet.has(id))
     yield* Effect.forEach(postDeleteOnly, cleanupSessionRuntimeStateForMutation, { discard: true })
@@ -548,11 +525,11 @@ const makeSessionMutationsService: Effect.Effect<
     // created after the pre-collect has no profile of its own; it is heard
     // under the deleted session's. Each handler's failure is logged and isolated.
     yield* Effect.forEach(
-      cascadedIds,
-      (deletedSessionId) =>
+      deleted,
+      (entry) =>
         Option.match(
           Option.orElse(
-            Option.flatten(Option.fromUndefinedOr(profiles.get(deletedSessionId))),
+            Option.flatten(Option.fromUndefinedOr(profiles.get(entry.sessionId))),
             () => rootProfile,
           ),
           {
@@ -560,7 +537,7 @@ const makeSessionMutationsService: Effect.Effect<
             onSome: (resolved) =>
               turnRegistry(resolved)
                 .getResolved()
-                .extensionHooks.emitSessionDeleted({ sessionId: deletedSessionId })
+                .extensionHooks.emitSessionDeleted(entry)
                 .pipe(runAgentLoopTurnProfile(resolved)),
           },
         ),
@@ -611,10 +588,10 @@ const makeSessionMutationsService: Effect.Effect<
     const admission = requestedAdmission(input.admission)
     if (Predicate.isUndefined(input.parentSessionId)) {
       if (!Predicate.isUndefined(input.parentBranchId)) {
-        return yield* new NotFoundError({ message: "parentBranchId requires parentSessionId" })
+        return yield* new InvalidStateError({ message: "parentBranchId requires parentSessionId" })
       }
       if (input.continueThread === true) {
-        return yield* new NotFoundError({ message: "continueThread requires parentSessionId" })
+        return yield* new InvalidStateError({ message: "continueThread requires parentSessionId" })
       }
       return { threadId: Option.none<SessionId>(), admission }
     }
@@ -1023,7 +1000,7 @@ const makeSessionMutationsService: Effect.Effect<
 
 export const SessionMutationsLive = Layer.effect(SessionMutations, makeSessionMutationsService)
 
-// ── rpc-handlers ────────────────────────────────────────────────────────────
+// ── rpc handlers ────────────────────────────────────────────────────────────
 
 /**
  * The registry serving a cwd: its profile's when a profile cache is wired, else
@@ -1182,7 +1159,8 @@ const respondInteraction = Effect.fn("InteractionCommands.respond")(function* (
     branchId: input.branchId,
     requestId: input.requestId,
   })
-  // 3. Publish resolution event
+  // 3. Publish the resolution. The answer is stored and delivered already, so
+  //    a failed publish costs only the event; it is logged, not raised.
   yield* eventStore
     .publish(
       InteractionResolved.make({
@@ -1192,12 +1170,18 @@ const respondInteraction = Effect.fn("InteractionCommands.respond")(function* (
         ...decision,
       }),
     )
-    .pipe(Effect.catchEager(() => Effect.void))
+    .pipe(
+      Effect.catchEager((error) =>
+        Effect.logWarning("InteractionResolved publish failed").pipe(
+          Effect.annotateLogs({ requestId: input.requestId, error: String(error) }),
+        ),
+      ),
+    )
 })
 
-// ============================================================================
-// Handler helpers (yield Tags inside; no service-bag threading)
-// ============================================================================
+// ── rpc handler helpers ─────────────────────────────────────────────────────
+
+// Each helper yields its Tags; no service bag is threaded through.
 
 type BranchPayload = { readonly branchId: BranchId }
 type OptionalSessionPayload = { readonly sessionId?: SessionId }
@@ -1227,21 +1211,34 @@ const authPersistenceError = (
     cause,
   })
 
-/** Run one RPC inside its wide-event boundary and record the fields its result names. */
+type WideEventFields = Parameters<typeof WideEvent.set>[0]
+
+/**
+ * Run one RPC inside its wide-event boundary. The input's fields are recorded
+ * before the call runs, so a failed call still names its session; the fields
+ * the result names are recorded after it succeeds.
+ */
 const rpc = <A, E, R>(
   method: string,
+  fields: WideEventFields,
   effect: Effect.Effect<A, E, R>,
-  fields: (result: A) => Parameters<typeof WideEvent.set>[0],
-  requestId?: RequestId,
+  options: {
+    readonly requestId?: RequestId
+    readonly result?: (result: A) => WideEventFields
+  } = {},
 ) =>
-  effect.pipe(
-    Effect.tap((result) => WideEvent.set(fields(result))),
-    withWideEvent(WideEventBoundary.rpc(method, { requestId })),
+  WideEvent.set(fields).pipe(
+    Effect.andThen(effect),
+    Effect.tap((result) =>
+      Option.match(Option.fromUndefinedOr(options.result), {
+        onNone: () => Effect.void,
+        onSome: (resultFields) => WideEvent.set(resultFields(result)),
+      }),
+    ),
+    withWideEvent(WideEventBoundary.rpc(method, { requestId: options.requestId })),
   )
 
-// ============================================================================
-// RPC Handlers Layer
-// ============================================================================
+// ── rpc handlers layer ──────────────────────────────────────────────────────
 
 const RpcHandlers = GentRpcs.toLayer(
   Effect.gen(function* () {
@@ -1251,7 +1248,7 @@ const RpcHandlers = GentRpcs.toLayer(
     const sessionRuntime = yield* SessionRuntime
     const authStore = yield* Auth
     const catalogRecord = yield* ModelCatalogRecord
-    const providerAuth = yield* ProviderAuth
+    const platform = yield* GentPlatform
     const extensionRegistry = yield* ExtensionRegistry
     const sessionStorage = yield* SessionStorage
     const relationshipStorage = yield* RelationshipStorage
@@ -1292,31 +1289,40 @@ const RpcHandlers = GentRpcs.toLayer(
       keyOf: (input) => Option.fromUndefinedOr(input.requestId),
     })
 
-    const loadSession = (sessionId: string) =>
-      sessionStorage.getSession(SessionId.make(sessionId)).pipe(
-        Effect.map(Option.fromUndefinedOr),
-        Effect.orElseSucceed(() => Option.none()),
-      )
-
-    /** The stored cwd of a session; none without a session or a stored cwd. */
-    const sessionCwd = (sessionId: Option.Option<string>): Effect.Effect<Option.Option<string>> =>
+    // A storage failure fails the call: an answer from the launch profile
+    // would be another profile's models, drivers or commands.
+    const loadSession = (sessionId: Option.Option<SessionId>) =>
       Option.match(sessionId, {
         onNone: () => Effect.succeedNone,
-        onSome: (id) =>
-          loadSession(id).pipe(
-            Effect.map((session) =>
-              Option.flatMap(session, (value) => Option.fromUndefinedOr(value.cwd)),
-            ),
-          ),
+        onSome: (id) => sessionStorage.getSession(id).pipe(Effect.map(Option.fromUndefinedOr)),
       })
 
+    const cwdOf = (session: Option.Option<Session>) =>
+      Option.flatMap(session, (value) => Option.fromUndefinedOr(value.cwd))
+
+    /** The stored cwd of a session; none without a session or a stored cwd. */
+    const sessionCwd = (sessionId: Option.Option<SessionId>) =>
+      loadSession(sessionId).pipe(Effect.map(cwdOf))
+
     // The caller's scope holds the profile's lease while it reads the registry.
+    const registryForCwd = (cwd: Option.Option<string>) =>
+      resolveRegistryForCwd(cwd).pipe(Effect.provideService(ExtensionRegistry, extensionRegistry))
+
     const resolveSessionRegistry = (
-      sessionId: Option.Option<string>,
-    ): Effect.Effect<ExtensionRegistryService, never, Scope.Scope> =>
-      sessionCwd(sessionId).pipe(
-        Effect.flatMap(resolveRegistryForCwd),
-        Effect.provideService(ExtensionRegistry, extensionRegistry),
+      sessionId: Option.Option<SessionId>,
+    ): Effect.Effect<ExtensionRegistryService, StorageError, Scope.Scope> =>
+      sessionCwd(sessionId).pipe(Effect.flatMap(registryForCwd))
+
+    /** Provider login runs against the drivers of the session's own profile. */
+    const inSessionProfile = <A, E>(
+      sessionId: Option.Option<SessionId>,
+      effect: Effect.Effect<A, E, ExtensionRegistry | Auth | GentPlatform>,
+    ) =>
+      resolveSessionRegistry(sessionId).pipe(
+        Effect.flatMap((registry) => Effect.provideService(effect, ExtensionRegistry, registry)),
+        Effect.provideService(Auth, authStore),
+        Effect.provideService(GentPlatform, platform),
+        Effect.scoped,
       )
 
     return {
@@ -1324,12 +1330,10 @@ const RpcHandlers = GentRpcs.toLayer(
       // Session / branch / message / queue / interaction
       // ----------------------------------------------------------------------
       "session.create": (input: CreateSessionInput) =>
-        rpc(
-          "session.create",
-          mutations.createSession(input),
-          (result) => ({ sessionId: result.sessionId }),
-          input.requestId,
-        ),
+        rpc("session.create", {}, mutations.createSession(input), {
+          requestId: input.requestId,
+          result: (result) => ({ sessionId: result.sessionId }),
+        }),
 
       "session.list": () => sessionStorage.listSessions,
 
@@ -1337,21 +1341,25 @@ const RpcHandlers = GentRpcs.toLayer(
         relationshipStorage.getThreadSessions(sessionId),
 
       "session.get": ({ sessionId }: SessionIdPayload) =>
-        rpc("session.get", getSessionView(sessionId).pipe(Effect.map(Option.getOrNull)), () => ({
-          sessionId,
-        })),
+        rpc(
+          "session.get",
+          { sessionId },
+          getSessionView(sessionId).pipe(Effect.map(Option.getOrNull)),
+        ),
 
       "session.delete": ({ sessionId }: SessionIdPayload) =>
-        rpc("session.delete", mutations.deleteSession(sessionId), () => ({ sessionId })),
+        rpc("session.delete", { sessionId }, mutations.deleteSession(sessionId)),
 
       "session.getSnapshot": (input: GetSessionSnapshotInput) =>
-        rpc("session.getSnapshot", getSessionSnapshot(input), () => input),
+        rpc("session.getSnapshot", input, getSessionSnapshot(input)),
 
       "session.updateSettings": (input: UpdateSessionSettingsInput) =>
-        rpc("session.updateSettings", mutations.updateSettings(input), (result) => ({
-          sessionId: input.sessionId,
-          ...result,
-        })),
+        rpc(
+          "session.updateSettings",
+          { sessionId: input.sessionId },
+          mutations.updateSettings(input),
+          { result: (result) => result },
+        ),
 
       "session.events": ({ sessionId, branchId, after }: SubscribeEventsInput) => {
         const subscription = { sessionId, branchId, synchronize: true }
@@ -1365,82 +1373,80 @@ const RpcHandlers = GentRpcs.toLayer(
       "branch.list": ({ sessionId }: SessionIdPayload) => branchStorage.listBranches(sessionId),
 
       "branch.create": (input: CreateBranchInput) =>
-        rpc(
-          "branch.create",
-          mutations.createSessionBranch(input),
-          (result) => ({ sessionId: input.sessionId, branchId: result.branchId }),
-          input.requestId,
-        ),
+        rpc("branch.create", { sessionId: input.sessionId }, mutations.createSessionBranch(input), {
+          requestId: input.requestId,
+          result: (result) => ({ branchId: result.branchId }),
+        }),
 
       "branch.getTree": ({ sessionId }: SessionIdPayload) => getBranchTree(sessionId),
 
       "branch.switch": (input: SwitchBranchInput) =>
         rpc(
           "branch.switch",
-          mutations.switchActiveBranch(input),
-          () => ({
+          {
             sessionId: input.sessionId,
             fromBranchId: input.fromBranchId,
             toBranchId: input.toBranchId,
-          }),
-          input.requestId,
+          },
+          mutations.switchActiveBranch(input),
+          { requestId: input.requestId },
         ),
 
       "branch.fork": (input: ForkBranchInput) =>
         rpc(
           "branch.fork",
+          { sessionId: input.sessionId, fromBranchId: input.fromBranchId },
           mutations.forkSessionBranch(input),
-          (result) => ({
-            sessionId: input.sessionId,
-            fromBranchId: input.fromBranchId,
-            branchId: result.branchId,
-          }),
-          input.requestId,
+          { requestId: input.requestId, result: (result) => ({ branchId: result.branchId }) },
         ),
 
       "message.send": (input: SendMessageInput) =>
         rpc(
           "message.send",
+          { sessionId: input.sessionId, branchId: input.branchId },
           sendMessage(input),
-          () => ({ sessionId: input.sessionId, branchId: input.branchId }),
-          input.requestId,
+          { requestId: input.requestId },
         ),
 
       "message.list": ({ branchId }: BranchPayload) => messageStorage.listMessages(branchId),
 
       "steer.command": ({ command }: { readonly command: TransportSteerCommand }) =>
-        rpc("steer.command", sessionRuntime.steer(clientSteer(command)), () => ({
-          sessionId: command.sessionId,
-          branchId: command.branchId,
-          steerTag: command._tag,
-        })),
+        rpc(
+          "steer.command",
+          { sessionId: command.sessionId, branchId: command.branchId, steerTag: command._tag },
+          sessionRuntime.steer(clientSteer(command)),
+        ),
 
       "queue.drain": ({ sessionId, branchId, requestId }: QueueDrainInput) =>
         rpc(
           "queue.drain",
+          { sessionId, branchId },
           sessionRuntime
             .drainQueuedMessages({ sessionId, branchId, requestId })
             .pipe(Effect.withSpan("SessionRuntime.drainQueuedMessages")),
-          () => ({ sessionId, branchId }),
-          requestId,
+          { requestId },
         ),
 
       "queue.get": (input: QueueTarget) =>
         rpc(
           "queue.get",
+          input,
           sessionRuntime
             .getQueuedMessages(input)
             .pipe(Effect.withSpan("SessionQueries.getQueuedMessages")),
-          () => input,
         ),
 
       "interaction.respondInteraction": (input: RespondInteractionInput) =>
-        rpc("interaction.respondInteraction", respondInteraction(input), () => ({
-          sessionId: input.sessionId,
-          branchId: input.branchId,
-          requestId: input.requestId,
-          approved: input.approved,
-        })),
+        rpc(
+          "interaction.respondInteraction",
+          {
+            sessionId: input.sessionId,
+            branchId: input.branchId,
+            requestId: input.requestId,
+            approved: input.approved,
+          },
+          respondInteraction(input),
+        ),
 
       // ----------------------------------------------------------------------
       // Config / driver / model / auth
@@ -1486,26 +1492,16 @@ const RpcHandlers = GentRpcs.toLayer(
 
       "auth.listProviders": ({ agentName, sessionId }: ListAuthProvidersPayload) =>
         Effect.gen(function* () {
-          const session = yield* Option.match(Option.fromUndefinedOr(sessionId), {
-            onNone: () => Effect.succeedNone,
-            onSome: (id) =>
-              sessionStorage.getSession(SessionId.make(id)).pipe(
-                Effect.flatMap((found) => {
-                  if (Predicate.isUndefined(found)) {
-                    return Effect.fail(new NotFoundError({ message: "Session not found" }))
-                  }
-                  return Effect.succeedSome(found)
-                }),
-              ),
-          })
+          const requested = Option.fromUndefinedOr(sessionId)
+          const session = yield* loadSession(requested)
+          if (Option.isSome(requested) && Option.isNone(session)) {
+            return yield* new NotFoundError({ message: "Session not found" })
+          }
           // The models a turn in this session would run: the session's
           // registry and config, then its model override, as the turn does.
-          const registry = yield* resolveSessionRegistry(Option.fromUndefinedOr(sessionId))
-          const config = yield* configService.get(
-            Option.getOrUndefined(
-              Option.flatMap(session, (found) => Option.fromUndefinedOr(found.cwd)),
-            ),
-          )
+          const cwd = cwdOf(session)
+          const registry = yield* registryForCwd(cwd)
+          const config = yield* configService.get(Option.getOrUndefined(cwd))
           const agents = [...registry.getResolved().agents.values()]
           // The driver a turn routes through: the agent's driver, else the
           // config override, else the model id's provider segment.
@@ -1539,10 +1535,16 @@ const RpcHandlers = GentRpcs.toLayer(
           .remove(provider)
           .pipe(Effect.mapError((error) => authPersistenceError("delete", provider, error))),
 
-      "auth.listMethods": () => providerAuth.listMethods,
+      "auth.listMethods": (input: ListAuthMethodsInput) => {
+        if (!Predicate.isObject(input)) return inSessionProfile(Option.none(), listAuthMethods())
+        return inSessionProfile(Option.fromUndefinedOr(input.sessionId), listAuthMethods())
+      },
 
       "auth.authorize": ({ sessionId, provider, method }: AuthorizeAuthInput) =>
-        providerAuth.authorize(sessionId, provider, method).pipe(Effect.map(Option.getOrNull)),
+        inSessionProfile(
+          Option.some(sessionId),
+          authorizeProvider(sessionId, provider, method),
+        ).pipe(Effect.map(Option.getOrNull)),
 
       "auth.callback": ({
         sessionId,
@@ -1551,7 +1553,10 @@ const RpcHandlers = GentRpcs.toLayer(
         authorizationId,
         code,
       }: CallbackAuthInput) =>
-        providerAuth.callback(sessionId, provider, method, authorizationId, code),
+        inSessionProfile(
+          Option.some(sessionId),
+          completeProviderAuth(sessionId, provider, method, authorizationId, code),
+        ),
 
       // ----------------------------------------------------------------------
       // Extension transport
@@ -1559,9 +1564,7 @@ const RpcHandlers = GentRpcs.toLayer(
       "extension.listStatus": ({ sessionId }: OptionalSessionPayload) =>
         Effect.gen(function* () {
           const cwd = yield* sessionCwd(Option.fromUndefinedOr(sessionId))
-          const registry = yield* resolveRegistryForCwd(cwd).pipe(
-            Effect.provideService(ExtensionRegistry, extensionRegistry),
-          )
+          const registry = yield* registryForCwd(cwd)
           const resolved = registry.getResolved()
           // Config files are read on each call, so a fixed file clears here
           // without a restart.
@@ -1660,7 +1663,7 @@ export const makeInProcessClient = (
     Effect.map((flat) => makeNamespacedClient(flat, headers)),
   )
 
-// ── dependencies ────────────────────────────────────────────────────────────
+// ── server dependencies ─────────────────────────────────────────────────────
 
 interface DependencyOverrides {
   readonly authLayer?: Layer.Layer<Auth>
@@ -1676,22 +1679,11 @@ interface DependencyOverrides {
   readonly extraLayers?: ReadonlyArray<Layer.Layer<never>>
 }
 
-/**
- * Wiring contract failure — fires only when a Layer that depends on the
- * pre-resolved base prompt sections is materialized before the resolver
- * Layer that populates that seed.
- *
- * In a correctly wired composition this is unreachable; surfacing it as
- * a typed error means the failure channel of the bootstrap layer carries
- * an explicit `BootstrapError` instead of an opaque defect.
- */
-class BootstrapError extends Schema.TaggedError<BootstrapError>()("BootstrapError", {
-  seed: Schema.Literals(["baseSections"]),
-}) {
-  override get message(): string {
-    return "Base prompt sections were not initialized"
-  }
-}
+/** The launch profile's base prompt sections, for the loop actor's defaults. */
+class LaunchBaseSections extends Context.Service<
+  LaunchBaseSections,
+  ReadonlyArray<PromptSection>
+>()("@gent/core/src/server/server/LaunchBaseSections") {}
 
 /**
  * Where a composition root keeps its state. `Disk` names the SQLite file it
@@ -1779,7 +1771,6 @@ const makeModelResolverLayer = <A, E, R>(
   })
 
 export const createDependencies = (config: DependenciesConfig) => {
-  let baseSectionsSeed = Option.none<ReadonlyArray<PromptSection>>()
   const runtimeEnvironmentLive = RuntimeEnvironment.Live({
     cwd: config.cwd,
     home: config.home,
@@ -1833,7 +1824,6 @@ export const createDependencies = (config: DependenciesConfig) => {
         const profile = yield* cache
           .resolve(config.cwd)
           .pipe(Effect.provideService(CurrentWorkspaceId, launchWorkspaceId))
-        baseSectionsSeed = Option.some(profile.baseSections)
         // `SessionProfile.layerContext` carries dynamically acquired resource
         // services, so its type intentionally cannot enumerate every service
         // contributed by an extension. Keep the stable registry services
@@ -1841,6 +1831,7 @@ export const createDependencies = (config: DependenciesConfig) => {
         // runtime for extension consumers.
         return Layer.mergeAll(
           Layer.succeed(ExtensionRegistry, profile.registryService),
+          Layer.succeed(LaunchBaseSections, profile.baseSections),
           Layer.succeedContext(profile.layerContext),
         )
       }),
@@ -1855,7 +1846,6 @@ export const createDependencies = (config: DependenciesConfig) => {
       Layer.mergeAll(extensionRegistryLive, authLive, modelCatalogRecordLive),
     )
   const authDeps = Layer.mergeAll(authLive, extensionRegistryLive)
-  const providerAuthLive = Layer.provide(ProviderAuth.Live, authDeps)
   const fileLockServiceLive = FileLockService.layer
 
   const modelResolverLive = makeModelResolverLayer(config, authDeps)
@@ -1870,7 +1860,6 @@ export const createDependencies = (config: DependenciesConfig) => {
       clusterRunnerLive,
       baseEventStoreLive,
       authLive,
-      providerAuthLive,
       configServiceLive,
       modelCatalogRecordLive,
       modelRegistryLive,
@@ -1923,7 +1912,14 @@ export const createDependencies = (config: DependenciesConfig) => {
                   branchId: record.branchId,
                   requestId: record.requestId,
                 })
-                .pipe(Effect.catchEager(() => Effect.void))
+                .pipe(
+                  // One branch that cannot wake does not stop the others.
+                  Effect.catchEager((error) =>
+                    Effect.logWarning("Recovered interaction could not wake its branch").pipe(
+                      Effect.annotateLogs({ requestId: record.requestId, error: String(error) }),
+                    ),
+                  ),
+                )
             }
             recovered++
           }
@@ -1947,11 +1943,7 @@ export const createDependencies = (config: DependenciesConfig) => {
 
   const runtimeWithHandlers = Layer.provideMerge(
     Layer.unwrap(
-      Effect.gen(function* () {
-        if (Option.isNone(baseSectionsSeed))
-          return yield* new BootstrapError({ seed: "baseSections" })
-        return AgentLoopLiveActor({ baseSections: baseSectionsSeed.value })
-      }),
+      Effect.map(LaunchBaseSections, (baseSections) => AgentLoopLiveActor({ baseSections })),
     ),
     allWithRuntime,
   )
@@ -1961,15 +1953,13 @@ export const createDependencies = (config: DependenciesConfig) => {
   )
 }
 
-// ── server-routes ───────────────────────────────────────────────────────────
+// ── http routes ─────────────────────────────────────────────────────────────
 
-/**
- * Reusable HTTP route assembly for gent servers.
- *
- * Used by the SDK's owned-server path: `Gent.server` with its in-process HTTP listener.
- */
+// Reusable HTTP route assembly for gent servers.
+//
+// Used by the SDK's owned-server path: `Gent.server` with its in-process HTTP listener.
 
-// ── WebSocket lifecycle tracing ──
+// ── websocket lifecycle tracing ─────────────────────────────────────────────
 
 /**
  * Layer that registers WebSocket lifecycle tracing on the HttpRouter.
@@ -2018,7 +2008,7 @@ const wsTracingLayer: Layer.Layer<never, never, HttpRouter.HttpRouter> = HttpRou
   ),
 )
 
-// ── Route Assembly ──
+// ── route assembly ──────────────────────────────────────────────────────────
 
 interface ServerRoutesConfig {
   /** The identity `/_gent/identity` serves, verbatim. */

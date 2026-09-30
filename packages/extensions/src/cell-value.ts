@@ -655,6 +655,7 @@ const typedArrayKinds: ReadonlyArray<string> = [
   "Int16Array",
   "Uint32Array",
   "Int32Array",
+  "Float16Array",
   "Float32Array",
   "Float64Array",
   "Uint8ClampedArray",
@@ -1037,7 +1038,7 @@ const formatString = (value: string): string => {
   return `${quoteText(value.slice(0, displayStringLength))}... ${remaining} more ${plural(remaining, "character", "characters")}`
 }
 
-const formatPrimitive = (context: DisplayContext, value: unknown): string => {
+const formatPrimitive = (value: unknown): string => {
   if (Predicate.isString(value)) return formatString(value)
   if (Predicate.isNumber(value)) return formatNumber(value)
   if (Predicate.isBigInt(value)) return `${String(value)}n`
@@ -1355,7 +1356,7 @@ const boxedBase = (
     else base += ` (${prototypeLabel(constructor)})`
   }
   const inner = readSlot(unbox, value)
-  base += `: ${formatPrimitive(context, inner)}]`
+  base += `: ${formatPrimitive(inner)}]`
   if (tag !== "" && tag !== constructor) base += ` [${tag}]`
   return base
 }
@@ -1622,7 +1623,7 @@ const formatRaw = (context: DisplayContext, value: object, depth: number): strin
 }
 
 const formatValue = (context: DisplayContext, value: unknown, depth: number): string => {
-  if (!Predicate.isObjectKeyword(value)) return formatPrimitive(context, value)
+  if (!Predicate.isObjectKeyword(value)) return formatPrimitive(value)
   if (context.budget <= 0) return "..."
   context.budget--
   if (isProxy(value)) return "[Proxy]"
@@ -1630,10 +1631,8 @@ const formatValue = (context: DisplayContext, value: unknown, depth: number): st
   return formatRaw(context, value, depth)
 }
 
-const noPromiseState = (): Option.Option<PromiseState> => Option.none()
-
-const emptyContext = (): DisplayContext => ({
-  options: { promiseState: noPromiseState },
+const emptyContext = (options: DisplayOptions): DisplayContext => ({
+  options,
   indentation: 0,
   currentDepth: 0,
   budget: displayBudget,
@@ -1647,6 +1646,6 @@ const emptyContext = (): DisplayContext => ({
  */
 export const displayValue = (value: unknown, options: DisplayOptions): string =>
   Option.getOrElse(
-    Option.liftThrowable(() => formatValue({ ...emptyContext(), options }, value, 0))(),
+    Option.liftThrowable(() => formatValue(emptyContext(options), value, 0))(),
     () => unreadableDisplay,
   )

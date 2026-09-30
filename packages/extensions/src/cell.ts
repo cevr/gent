@@ -97,6 +97,7 @@ import {
   CellSnapshot,
   decodeCellResponse,
   encodeCellRequest,
+  listingOf,
   makeBoundedOutput,
   makeCellFrameReader,
   makeCellOutputScanner,
@@ -108,6 +109,7 @@ import {
   maximumPendingCellCalls,
   compareIds,
   type SnapshotBinding,
+  toolDetailsOf,
   toolPath,
 } from "./cell-protocol.js"
 import { ChildProcess, ChildProcessSpawner } from "effect/process"
@@ -1053,11 +1055,32 @@ export const openCellProcess = Effect.fn("CellProcess.open")(function* (input: {
 
 // ── kernel ──────────────────────────────────────────────────────────────────
 
+/**
+ * A frame past the byte limit that carried a catalog listing names the tool
+ * count, so the failure points at the agent's tool selection.
+ */
+const namingCatalogSize = (error: CellProcessError, catalog: Option.Option<CellCatalog>) => {
+  const listed = Option.getOrElse(
+    Option.map(catalog, (sent) => sent.tools.length),
+    () => 0,
+  )
+  if (listed === 0 || !error.message.includes("byte limit")) return error
+  return new CellProcessError({
+    phase: error.phase,
+    message: `${error.message}: the listing of ${listed} host tools does not fit one frame; select fewer tools for this agent`,
+    diagnostics: error.diagnostics,
+  })
+}
+
 /** Supplied by the caller for each evaluation. Only the catalog is retained in the worker. */
 export class CellOperationHost extends Context.Service<
   CellOperationHost,
   {
-    /** Selected host tools for the `tools` namespace. Absent leaves the worker's catalog unchanged. */
+    /**
+     * Selected host tools for the `tools` namespace. The worker receives their
+     * listing; `await tools(id)` reads the rest of an entry from here. Absent
+     * leaves the worker's listing, and the catalog the kernel kept, unchanged.
+     */
     readonly catalog?: CellCatalog
     /**
      * Answer one host call. The value and a failure's message each fit
@@ -1166,9 +1189,11 @@ export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
   // The current worker has not completed a cell yet, so its death is a failed launch.
   let unproven = true
   let sequence = 0
-  // Catalog delta: the worker keeps the last catalog, so only a changed hash travels. A
-  // replacement worker starts empty and receives the full catalog on its first cell.
-  let workerCatalogHash = Option.none<string>()
+  // Catalog delta: the worker keeps the listing of the last catalog, so only a changed
+  // hash travels. The kernel keeps that catalog whole and answers the worker's
+  // `Describe` from it. A replacement worker starts empty and receives the listing on
+  // its first cell.
+  let workerCatalog = Option.none<CellCatalog>()
   const isClosed = () => status === "closed"
   const failure = (reason: CellKernelError["reason"], message: string) =>
     Effect.map(
@@ -1226,7 +1251,7 @@ export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
     const host = yield* CellOperationHost
     const cellId = String(++sequence)
     const catalog = Option.fromUndefinedOr(host.catalog).pipe(
-      Option.filter((next) => !Option.contains(workerCatalogHash, next.hash)),
+      Option.filter((next) => !Option.exists(workerCatalog, (held) => held.hash === next.hash)),
     )
     const response = yield* Effect.scoped(
       Effect.gen(function* () {
@@ -1260,6 +1285,31 @@ export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
             frame.cellId !== cellId
           ) {
             return yield* failure("protocol", "Unexpected cell response")
+          }
+          if (frame._tag === "Describe") {
+            if (seen.has(frame.operationId) || seen.size >= maximumCallsPerCell) {
+              return yield* failure("protocol", "Duplicate or excessive cell host call")
+            }
+            seen.add(frame.operationId)
+            // Answered from the catalog the worker holds the listing of; no tool runs.
+            const entry = Option.flatMap(workerCatalog, (held) =>
+              Option.fromUndefinedOr(held.tools.find((tool) => tool.name === frame.id)),
+            )
+            const reply = Option.match(entry, {
+              onNone: () =>
+                CellRequest.cases.HostFailed.make({
+                  cellId,
+                  operationId: frame.operationId,
+                  message: `${toolPath(frame.id)} is not a host tool selected for this turn`,
+                }),
+              onSome: (found) =>
+                CellRequest.cases.HostSucceeded.make({
+                  cellId,
+                  operationId: frame.operationId,
+                  value: toolDetailsOf(found),
+                }),
+            })
+            return yield* child.send(reply).pipe(Effect.mapError(processError))
           }
           if (frame._tag === "HostCall") {
             if (
@@ -1319,17 +1369,18 @@ export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
         ))
           .map((part) => part.toString(16).padStart(8, "0"))
           .join("")
+        // Held before the send: the worker's first `Describe` can arrive at once.
+        if (Option.isSome(catalog)) workerCatalog = catalog
         yield* child
           .send(
             CellRequest.cases.Evaluate.make({
               cellId,
               outputToken,
               source,
-              catalog: Option.getOrUndefined(catalog),
+              catalog: Option.getOrUndefined(Option.map(catalog, listingOf)),
             }),
           )
-          .pipe(Effect.mapError(processError))
-        if (Option.isSome(catalog)) workerCatalogHash = Option.some(catalog.value.hash)
+          .pipe(Effect.mapError((error) => processError(namingCatalogSize(error, catalog))))
         const frame = yield* Deferred.await(result).pipe(Effect.raceFirst(watchdog))
         // The worker answered a cell: it is not part of a crash loop.
         unproven = false
@@ -1398,7 +1449,7 @@ export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
     }
     return yield* Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
-        workerCatalogHash = Option.none()
+        workerCatalog = Option.none()
         child = yield* restore(openWorker()).pipe(
           Effect.tapError(() =>
             Effect.sync(() => {
@@ -1484,7 +1535,9 @@ const decodeEntry = Schema.decodeUnknownEffect(CellCatalogEntry)
 
 /**
  * Read the selected bindings directly. No second schema registry: the entry carries the
- * capability's actual Effect AI input schema. The outer `cell` never lists itself.
+ * capability's actual Effect AI input schema, derived once with the signature, so a
+ * schema that cannot be derived is `{}` there as it is `unknown` in the signature. The
+ * outer `cell` never lists itself.
  */
 const buildCellCatalog = Effect.fn("CellCatalog.build")(function* (
   bindings: ReadonlyMap<string, ResolvedToolCapability>,
@@ -1494,12 +1547,12 @@ const buildCellCatalog = Effect.fn("CellCatalog.build")(function* (
     .sort(([left], [right]) => compareIds(left, right))
   const tools = yield* Effect.forEach(selected, ([name, entry]) =>
     Effect.gen(function* () {
-      const { signature, summary } = yield* toolSignatureParts(entry.capability)
+      const { signature, summary, parameters } = yield* toolSignatureParts(entry.capability)
       return yield* decodeEntry({
         name,
         description: entry.capability.description,
         guidelines: getToolMetadata(entry.capability).promptGuidelines ?? [],
-        parameters: AiTool.getJsonSchema(entry.capability),
+        parameters,
         signature: joinSignature(signature, summary),
         summary,
       })
@@ -2067,108 +2120,98 @@ export const makeCellToolHost = (
     },
 ): Effect.Effect<typeof CellOperationHost.Service, never, CellToolHostServices> =>
   Effect.map(Effect.context<CellToolHostServices>(), (services) =>
-    makeCellToolHostWith(params, services),
-  )
-
-const makeCellToolHostWith = (
-  params: CellToolHostParams &
-    CellContextHostParams & {
-      readonly toolBindings: ReadonlyMap<string, ResolvedToolCapability>
-      readonly catalog?: CellCatalog
-    },
-  services: Context.Context<CellToolHostServices>,
-): typeof CellOperationHost.Service =>
-  CellOperationHost.of({
-    catalog: params.catalog,
-    call: Effect.fn("CellToolHost.call")((request) =>
-      runAgentLoopTurnProfile(params.profile)(
-        Effect.gen(function* () {
-          yield* requireCellHostBranch(params)
-          // The context namespace never touches tool admission: reads are durable
-          // lookups and directives are idempotent until the next projection.
-          if (isContextCall(request.name)) {
-            return yield* handleContextCall({
-              branchId: params.cell.branchId,
-              name: request.name,
-              input: request.input,
-            }).pipe(Effect.provideService(ModelContextLedger, params.ledger))
-          }
-          const storage = (yield* CellStorage).operations
-          const captured = Option.fromUndefinedOr(params.toolBindings.get(request.name))
-          if (Option.isNone(captured))
-            return yield* new CellEvaluationError({
-              phase: "execute",
-              message: `Tool ${request.name} is not selected for this turn`,
-              output: "",
-            })
-          const identity = yield* innerOperationBindingIdentity(
-            captured.value,
-            params.profile.turnGenerationId,
-          )
-          if (Option.isNone(identity))
-            return yield* new CellEvaluationError({
-              phase: "execute",
-              message: `Tool ${request.name} has no bindable source identity`,
-              output: "",
-            })
-          const key = { cell: params.cell, operationId: request.operationId }
-          const admission = yield* storage
-            .admit({
-              ...key,
-              binding: identity.value,
-              input: request.input,
-            })
-            .pipe(
-              // Admission comes before the operation: nothing ran.
-              Effect.mapError(
-                (cause) =>
-                  new CellEvaluationError({
-                    phase: "execute",
-                    message: `Cell operation storage failed. The operation was not run: ${cause.message}`,
-                    output: "",
-                  }),
-              ),
-            )
-          if (!admission.admitted) {
-            if (admission.operation.state._tag === "Completed")
-              return yield* cellToolResultValue(admission.operation.state.result)
-            return yield* new CellEvaluationError({
-              phase: "execute",
-              message:
-                "Cell operation has no recorded result. Its effects may have occurred. It was not executed again.",
-              output: "",
-            })
-          }
-          const result = yield* executeBoundCellTool({
-            request,
-            toolCallId: admission.operation.toolCallId,
-            binding: captured,
-          }).pipe(
-            Effect.provideService(CurrentCellToolOperation, key),
-            Effect.provideService(CurrentInteractionOwner, cellInteractionOwner(key, storage)),
-            Effect.provideService(CurrentDispatchingCall, {
-              assistantMessageId: key.cell.assistantMessageId,
-              toolCallId: key.cell.toolCallId,
-            }),
-          )
-          yield* storage.complete(key, result)
-          return yield* cellToolResultValue(result)
-        }),
-      ).pipe(
-        Effect.catchTags({
-          StorageError: (cause) =>
-            Effect.fail(
-              new CellEvaluationError({
+    CellOperationHost.of({
+      catalog: params.catalog,
+      call: Effect.fn("CellToolHost.call")((request) =>
+        runAgentLoopTurnProfile(params.profile)(
+          Effect.gen(function* () {
+            yield* requireCellHostBranch(params)
+            // The context namespace never touches tool admission: reads are durable
+            // lookups and directives are idempotent until the next projection.
+            if (isContextCall(request.name)) {
+              return yield* handleContextCall({
+                branchId: params.cell.branchId,
+                name: request.name,
+                input: request.input,
+              }).pipe(Effect.provideService(ModelContextLedger, params.ledger))
+            }
+            const storage = (yield* CellStorage).operations
+            const captured = Option.fromUndefinedOr(params.toolBindings.get(request.name))
+            if (Option.isNone(captured))
+              return yield* new CellEvaluationError({
                 phase: "execute",
-                message: `Cell operation storage failed. Its effects may have occurred: ${cause.message}`,
+                message: `Tool ${request.name} is not selected for this turn`,
                 output: "",
+              })
+            const identity = yield* innerOperationBindingIdentity(
+              captured.value,
+              params.profile.turnGenerationId,
+            )
+            if (Option.isNone(identity))
+              return yield* new CellEvaluationError({
+                phase: "execute",
+                message: `Tool ${request.name} has no bindable source identity`,
+                output: "",
+              })
+            const key = { cell: params.cell, operationId: request.operationId }
+            const admission = yield* storage
+              .admit({
+                ...key,
+                binding: identity.value,
+                input: request.input,
+              })
+              .pipe(
+                // Admission comes before the operation: nothing ran.
+                Effect.mapError(
+                  (cause) =>
+                    new CellEvaluationError({
+                      phase: "execute",
+                      message: `Cell operation storage failed. The operation was not run: ${cause.message}`,
+                      output: "",
+                    }),
+                ),
+              )
+            if (!admission.admitted) {
+              if (admission.operation.state._tag === "Completed")
+                return yield* cellToolResultValue(admission.operation.state.result)
+              return yield* new CellEvaluationError({
+                phase: "execute",
+                message:
+                  "Cell operation has no recorded result. Its effects may have occurred. It was not executed again.",
+                output: "",
+              })
+            }
+            const result = yield* executeBoundCellTool({
+              request,
+              toolCallId: admission.operation.toolCallId,
+              binding: captured,
+            }).pipe(
+              Effect.provideService(CurrentCellToolOperation, key),
+              Effect.provideService(CurrentInteractionOwner, cellInteractionOwner(key, storage)),
+              Effect.provideService(CurrentDispatchingCall, {
+                assistantMessageId: key.cell.assistantMessageId,
+                toolCallId: key.cell.toolCallId,
               }),
-            ),
-        }),
-        Effect.provideContext(services),
+            )
+            yield* storage.complete(key, result)
+            return yield* cellToolResultValue(result)
+          }),
+        ).pipe(
+          Effect.catchTags({
+            StorageError: (cause) =>
+              Effect.fail(
+                new CellEvaluationError({
+                  phase: "execute",
+                  message: `Cell operation storage failed. Its effects may have occurred: ${cause.message}`,
+                  output: "",
+                }),
+              ),
+          }),
+          Effect.provideContext(services),
+        ),
       ),
-    ),
-  })
+    }),
+  )
 
 // ── execution ───────────────────────────────────────────────────────────────
 
@@ -2178,10 +2221,10 @@ const CELL_WORKER_BINARY = "gent-cell"
 /** The compiled build defines this symbol; a source run leaves it undeclared. */
 declare const __GENT_COMPILED__: unknown
 
-const isCompiledBuild = Effect.try({
-  try: () => __GENT_COMPILED__ === true,
-  catch: () => false,
-}).pipe(Effect.orElseSucceed(() => false))
+// An undeclared symbol throws a ReferenceError: a source run.
+const isCompiledBuild = Effect.try(() => __GENT_COMPILED__ === true).pipe(
+  Effect.orElseSucceed(() => false),
+)
 
 /**
  * Where the worker lives. A compiled build runs the `gent-cell` binary beside
@@ -2689,7 +2732,6 @@ export const CellTool = tool({
     "The value of the last expression is the cell result; an undefined value shows nothing. Top-level await works; a top-level return does not.",
     "Return a summary, not the data. You see at most 8,000 characters of any tool result (head and tail); a larger result is spilled and its `read` field says how to page the rest with context.read. Slice arrays, count instead of listing, and keep the full value in a binding for the next cell.",
     "Bun.$`cmd`.text() returns stdout only, and Bun.$ pipes stderr away; test runners and many tools report on stderr. Use Bun.spawn with inherited stdio so the output returns with the cell, or .quiet() and read .stderr.",
-    "The Host Tools section lists the host tools selected for this turn with their signatures, up to a size budget; a namespace past it shows as one `tools.a.*: N tools` line, and its tools are still callable. tools.search(query, { namespace, limit, offset }?) returns one ranked page of matching ids with one-line descriptions ({ items, total, hasMore, nextOffset }), tools.describe(id) returns one tool's typed signature, and tools(id) returns the tool as a function carrying its full input schema (parameters) and guidelines. All three are local and synchronous and do not grant permission to execute. Object.keys(tools) lists the top-level names.",
     "The whole session stays reachable from the cell. context.history({ offset, limit }) lists this branch's durable messages in order (id, role, chars, preview, kind), 50 per page with nextOffset. context.read(id, { offset, limit }) returns durable text by message id or tool call id, paged by character offset and limit (nextOffset continues); receipts in a cell result carry the ids of inner calls. context.status() reports what the model sees: tokens, limit, percent, omittedMessages, handoffMessageId. When the window overflows, the history before the current turn is handed off: one durable notice summarizes it and names the session, branch, and message-id range it replaced, so read it back with context.history and context.read instead of guessing. context.compact(instructions?) asks for that handoff before the next turn, focused on the instructions. context.newWindow() drops older history from the model view without a summary. All five are awaited host calls.",
     "Set reset: true to discard retained values and the saved namespace before running new code.",
     "A failed cell may have completed effects. Do not replay source to recover unknown outcomes.",
@@ -2991,8 +3033,9 @@ const CELL_EXTENSION_ID = ExtensionId.make("@gent/cell")
  * The default model execution surface. When this builtin is registered, a native
  * model turn advertises only `cell`; host tools stay callable inside the cell
  * as `tools.<id path>(input)` through the turn's bound identities. The kernel
- * builds that namespace, and the local `tools(id)` lookup, from the catalog the
- * host ships with each changed turn.
+ * builds that namespace, and the local `tools(id)` lookup, from the catalog
+ * listing the host ships with each changed turn; `await tools(id)` asks the
+ * kernel for the rest of the entry.
  * The extension owns the model selection and catalog through ordinary hooks.
  */
 export const CellExtension = defineExtension({
@@ -3058,7 +3101,7 @@ const CELL_WORK_SECTION = {
 
 const HOST_TOOLS_HEADING = `## Host Tools
 
-Inside \`cell\`, each host tool id is a function path under \`tools\`: id \`a.b\` is \`await tools.a.b(input)\`. Every host tool is callable, listed below or not. A line \`tools.a.*: N tools\` stands for a namespace listed by name only, and a \`more\` line counts tools not listed. \`tools.search(query)\` ranks the ids by their segments and description and returns one page, \`{ items: { id, description }[], total, hasMore, nextOffset }\`; a second argument \`{ namespace, limit, offset }\` narrows or pages it. \`tools.describe(id)\` returns one tool's typed signature. \`tools(id)\` returns the tool with its full input schema (\`parameters\`) and \`guidelines\`, and reaches an id with a JavaScript built-in segment such as \`then\` or \`name\`.`
+Inside \`cell\`, each host tool id is a function path under \`tools\`: id \`a.b\` is \`await tools.a.b(input)\`. Every host tool is callable, listed below or not. A line \`tools.a.*: N tools\` stands for a namespace listed by name only, and a \`more\` line counts tools not listed. \`tools.search(query)\` ranks the ids by their segments and one-line description and returns one page, \`{ items: { id, description }[], total, hasMore, nextOffset }\`; a second argument \`{ namespace, limit, offset }\` narrows or pages it. \`tools.describe(id)\` returns one tool's typed signature. \`tools(id)\` returns the tool and reaches an id with a JavaScript built-in segment such as \`then\` or \`name\`; \`await tools(id)\` returns its full input schema (\`parameters\`), \`guidelines\` and description. \`tools.search\`, \`tools.describe\` and \`tools(id)\` are local and synchronous, and these calls grant no permission to execute. \`Object.keys(tools)\` lists the top-level names.`
 
 /**
  * The characters the Host Tools signature lines may take. The shipped tool set
@@ -3183,7 +3226,7 @@ export const renderHostToolCatalog = (entries: ReadonlyArray<HostToolLine>): str
 
 // ── tool signatures ─────────────────────────────────────────────────────────
 
-/** Nested objects longer than this render as `object`; `tools(id).parameters` has the rest. */
+/** Nested objects longer than this render as `object`; `(await tools(id)).parameters` has the rest. */
 const INLINE_OBJECT_LIMIT = 80
 /**
  * An input or result type longer than this renders as its outer shape, so no
@@ -3578,5 +3621,5 @@ const toolSignatureParts = Effect.fn("CellCatalog.toolSignatureParts")(function*
   const resultType = boundedSchemaType(result, SIGNATURE_TYPE_LIMIT)
   const signature = `${toolPath(getToolId(tool))}(${input}): Promise<${resultType}>`
   const summary = firstLine(getToolPrompt(tool).promptSnippet ?? tool.description)
-  return { signature, summary }
+  return { signature, summary, parameters }
 })

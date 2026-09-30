@@ -15,13 +15,7 @@ import {
   Schema,
 } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import {
-  AgentDefinition,
-  AgentName,
-  DriverRef,
-  ModelId,
-  RunSpecSchema,
-} from "../../src/domain/agent"
+import { AgentDefinition, AgentName, DriverRef, ModelId } from "../../src/domain/agent"
 import {
   ConfigService,
   isProjectExtensionDirectoryTrusted,
@@ -30,7 +24,6 @@ import {
   UserConfig,
 } from "../../src/runtime/config"
 import { resolveSessionRoute } from "../../src/runtime/turn"
-import { test } from "bun:test"
 
 // ── user configuration ──────────────────────────────────────────────────────
 
@@ -1072,46 +1065,4 @@ describe("configured driver override routing", () => {
       expect(routedDriver(primary, yield* cfg.get())).toEqual(Option.some("anthropic"))
     }).pipe(Effect.provide(ConfigService.Test())),
   )
-})
-
-// ── execution overrides ─────────────────────────────────────────────────────
-
-/**
- * The run-spec JSON a session's stored admission carries.
- */
-
-describe("stored run spec", () => {
-  const codec = Schema.fromJsonString(RunSpecSchema)
-
-  test("round-trips through JSON encode/decode", () => {
-    const runSpec = {
-      overrides: {
-        modelId: ModelId.make("anthropic/claude-sonnet-4-6"),
-        allowedTools: ["grep", "read"],
-        deniedTools: ["bash"],
-        reasoningEffort: "high",
-        systemPromptAddendum: "Be concise.",
-      },
-    } satisfies Schema.Schema.Type<typeof RunSpecSchema>
-
-    const json = Schema.encodeSync(codec)(runSpec)
-    expect(Predicate.isString(json)).toBe(true)
-
-    const decoded = Schema.decodeSync(codec)(json)
-    expect(decoded).toEqual(runSpec)
-  })
-
-  test("a row that still carries the dropped parentToolCallId decodes", () => {
-    const decoded = Schema.decodeSync(codec)(
-      '{"overrides":{"maxModelAttempts":32},"parentToolCallId":"tc-old"}',
-    )
-    expect(decoded).toEqual({ overrides: { maxModelAttempts: 32 } })
-  })
-
-  test("round-trips empty runSpec", () => {
-    const runSpec = {}
-    const json = Schema.encodeSync(codec)(runSpec)
-    const decoded = Schema.decodeSync(codec)(json)
-    expect(decoded).toEqual({})
-  })
 })

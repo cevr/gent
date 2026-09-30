@@ -45,22 +45,20 @@ import {
 
 // ── fake-fetch ──────────────────────────────────────────────────────────────
 
-/**
- * Shared fake-`FetchHttpClient.Fetch` capture pattern for provider-extension
- * tests: drive one real request through the resolved layer and assert on the
- * captured outbound shape, not on the layer's structure.
- *
- * Use this helper to:
- *   1. Build a `Layer` that overrides `FetchHttpClient.Fetch` with a fake
- *      that captures every outbound request into a shared array.
- *   2. Run one `LanguageModel.generateText({prompt})` through any provider
- *      layer that requires `LanguageModel.LanguageModel`.
- *   3. Inspect captured request URL / method / headers / body to assert
- *      on the production wiring (auth headers, system blocks, betas, etc).
- *
- * The driver tests in `packages/extensions/tests/` (`anthropic.test.ts`,
- * `openai.test.ts`, `providers.test.ts`) are its consumers.
- */
+// Shared fake-`FetchHttpClient.Fetch` capture pattern for provider-extension
+// tests: drive one real request through the resolved layer and assert on the
+// captured outbound shape, not on the layer's structure.
+//
+// Use this helper to:
+//   1. Build a `Layer` that overrides `FetchHttpClient.Fetch` with a fake
+//      that captures every outbound request into a shared array.
+//   2. Run one `LanguageModel.generateText({prompt})` through any provider
+//      layer that requires `LanguageModel.LanguageModel`.
+//   3. Inspect captured request URL / method / headers / body to assert
+//      on the production wiring (auth headers, system blocks, betas, etc).
+//
+// The driver tests in `packages/extensions/tests/` (`anthropic.test.ts`,
+// `openai.test.ts`, `providers.test.ts`) are its consumers.
 
 export interface CapturedRequest {
   url: string
@@ -215,8 +213,6 @@ export const captureProviderStopReason = <A, E, R>(
   })
 
 // ── fixtures ────────────────────────────────────────────────────────────────
-
-/** Shared test fixtures for integration tests across packages. */
 
 /** Create a temp directory that is removed when the test scope closes. */
 export const makeTempDirectoryScoped = (prefix: string) =>
@@ -447,9 +443,9 @@ const sequence = (steps: ReadonlyArray<SequenceStep>) =>
             )
           }
 
-          const step = steps[idx] ?? steps[0]
-          const started = callStarted[idx] ?? callStarted[0]
-          const gate = emitGates[idx] ?? emitGates[0]
+          const step = steps[idx]
+          const started = callStarted[idx]
+          const gate = emitGates[idx]
 
           if (!Predicate.isUndefined(started)) yield* Deferred.succeed(started, void 0)
 
@@ -482,7 +478,7 @@ const sequence = (steps: ReadonlyArray<SequenceStep>) =>
       Option.some((request: ResolveModelRequest) =>
         Effect.gen(function* () {
           const idx = yield* Ref.getAndUpdate(requestIndexRef, (n) => n + 1)
-          const step = steps[idx] ?? steps[0]
+          const step = steps[idx]
           if (Predicate.isUndefined(step?.assertRequest)) return
           yield* Effect.try({
             try: () =>
@@ -573,20 +569,11 @@ export const LanguageModelLayers = {
 
 // ── sequence-steps ──────────────────────────────────────────────────────────
 
-/**
- * Test step builders for scripted language-model sequences.
- *
- * `language-model` owns the low-level Effect AI stream-part helpers and
- * language-model layers. This module composes those parts into single
- * `SequenceStep`s.
- *
- * @module
- */
+// Step builders for scripted language-model sequences. Each composes the
+// stream-part helpers of `runtime/provider.ts` into one `SequenceStep`.
 
 let _stepCallIdCounter = 0
 const makeStepToolCallId = () => ToolCallId.make(`step-tc-${++_stepCallIdCounter}`)
-type DebugValue = Schema.Schema.Type<typeof Schema.Unknown>
-
 export const textStep = (text: string): SequenceStep => ({
   parts: [
     textDeltaPart(text),
@@ -599,7 +586,8 @@ export const textStep = (text: string): SequenceStep => ({
 
 export const toolCallStep = (
   toolName: string,
-  input: DebugValue,
+  // oxlint-disable-next-line effect/noUnknownParameters -- Tool arguments enter the Effect AI codec as unknown JSON data.
+  input: unknown,
   options?: { toolCallId?: ToolCallId },
 ): SequenceStep => ({
   parts: [
@@ -611,24 +599,8 @@ export const toolCallStep = (
   ],
 })
 
-export const textThenToolCallStep = (
-  text: string,
-  toolName: string,
-  input: DebugValue,
-  options?: { toolCallId?: ToolCallId },
-): SequenceStep => ({
-  parts: [
-    textDeltaPart(text),
-    toolCallPart(toolName, input, { toolCallId: options?.toolCallId ?? makeStepToolCallId() }),
-    finishPart({
-      finishReason: "tool-calls",
-      usage: { inputTokens: 10, outputTokens: Math.max(1, Math.ceil(text.length / 4)) + 20 },
-    }),
-  ],
-})
-
 export const multiToolCallStep = (
-  ...calls: ReadonlyArray<{ toolName: string; input: DebugValue; toolCallId?: ToolCallId }>
+  ...calls: ReadonlyArray<{ toolName: string; input: unknown; toolCallId?: ToolCallId }>
 ): SequenceStep => ({
   parts: [
     ...calls.map((call) =>

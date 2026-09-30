@@ -81,7 +81,7 @@ import type { MessageStorage as ClusterMessageStorage } from "effect/cluster"
 import { fromSqlClient as encoreSqlMessageStorage } from "effect-encore"
 
 const encodeSessionAdmission = Schema.encodeEffect(Schema.fromJsonString(SessionAdmission))
-// ── sqlite/owned-tool-call ──────────────────────────────────────────────────
+// ── owned tool call ─────────────────────────────────────────────────────────
 
 export interface OwnedToolCallAddress extends ToolCallBindingKey {
   readonly sessionId: SessionId
@@ -162,12 +162,47 @@ export interface SessionStorageService {
     updatedAt: Date,
   ) => Effect.Effect<void, StorageError>
   /**
-   * Deletes the session and every descendant, returning the full set of
-   * session ids the cascade actually removed. Callers use the returned set
-   * (not a pre-read tree snapshot) to clean in-memory runtime state, so a
-   * child created between pre-collect and the durable tx is still cleaned.
+   * The sessions a delete of `id` removes: the session, everything it
+   * spawned, and a spawn's own handoffs. A handoff that continues the deleted
+   * session's thread is the conversation the user kept working in: it stays.
+   * Empty when the session does not exist. `deleteSession` removes this set.
    */
-  readonly deleteSession: (id: SessionId) => Effect.Effect<ReadonlyArray<SessionId>, StorageError>
+  readonly deletionSet: (id: SessionId) => Effect.Effect<ReadonlyArray<SessionId>, StorageError>
+  /**
+   * Deletes the session and every descendant, returning each session the
+   * cascade actually removed with the branches it had. Callers use the
+   * returned set (not a pre-read tree snapshot) to clean in-memory runtime
+   * state, so a child created between pre-collect and the durable tx is still
+   * cleaned.
+   */
+  readonly deleteSession: (
+    id: SessionId,
+  ) => Effect.Effect<ReadonlyArray<DeletedSession>, StorageError>
+}
+
+/**
+ * Whether `branchId` is a branch of `sessionId` in the current workspace: the
+ * check a write makes before it names a branch.
+ */
+const branchInSession = Effect.fn("Storage.branchInSession")(function* (
+  sql: SqlClient.SqlClient,
+  branchId: BranchId,
+  sessionId: SessionId,
+) {
+  const workspaceId = yield* CurrentWorkspaceId
+  const rows = yield* sql<{ id: BranchId }>`SELECT b.id
+    FROM branches b
+    JOIN sessions s ON s.id = b.session_id
+    WHERE b.id = ${branchId}
+      AND b.session_id = ${sessionId}
+      AND s.workspace_id = ${workspaceId}`
+  return rows.length > 0
+})
+
+/** A session a delete removed, with the branches it had. */
+interface DeletedSession {
+  readonly sessionId: SessionId
+  readonly branchIds: ReadonlyArray<BranchId>
 }
 
 export class SessionStorage extends Context.Service<SessionStorage, SessionStorageService>()(
@@ -177,6 +212,29 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
     SessionStorage,
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient
+
+      /** The one delete-set rule; see `SessionStorageService.deletionSet`. */
+      const deletionSetOf = (id: SessionId) =>
+        Effect.gen(function* () {
+          const workspaceId = yield* CurrentWorkspaceId
+          const rows = yield* sql<{ id: SessionId }>`
+            WITH RECURSIVE
+              target(id, thread_id) AS (
+                SELECT id, thread_id FROM sessions WHERE id = ${id} AND workspace_id = ${workspaceId}
+              ),
+              descendants(id) AS (
+                SELECT id FROM target
+                UNION
+                SELECT sessions.id
+                FROM sessions
+                JOIN descendants ON sessions.parent_session_id = descendants.id
+                WHERE sessions.workspace_id = ${workspaceId}
+                  AND sessions.thread_id IS NOT (SELECT thread_id FROM target)
+              )
+            SELECT id FROM descendants
+          `
+          return rows.map((row) => row.id)
+        })
 
       return {
         createSession: Effect.fn("SessionStorage.createSession")(
@@ -194,15 +252,7 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
               !Predicate.isUndefined(session.parentBranchId) &&
               !Predicate.isUndefined(session.parentSessionId)
             ) {
-              const parentRows = yield* sql<{
-                id: BranchId
-              }>`SELECT b.id
-                FROM branches b
-                JOIN sessions s ON s.id = b.session_id
-                WHERE b.id = ${session.parentBranchId}
-                  AND b.session_id = ${session.parentSessionId}
-                  AND s.workspace_id = ${workspaceId}`
-              if (parentRows.length === 0) {
+              if (!(yield* branchInSession(sql, session.parentBranchId, session.parentSessionId))) {
                 return yield* new StorageError({
                   message: `Parent branch not found in parent session: ${session.parentBranchId}`,
                 })
@@ -288,38 +338,32 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
           Effect.mapError(storageError("Failed to set active branch")),
         ),
 
+        deletionSet: Effect.fn("SessionStorage.deletionSet")(
+          function* (id) {
+            return yield* deletionSetOf(id)
+          },
+          Effect.mapError(storageError("Failed to read the sessions a delete removes")),
+        ),
+
         deleteSession: Effect.fn("SessionStorage.deleteSession")(
           function* (id) {
-            const workspaceId = yield* CurrentWorkspaceId
             return yield* Effect.gen(function* () {
-              // The session goes with everything it spawned, and a spawn goes
-              // with its own handoffs. A handoff that continues the deleted
-              // session's thread is the conversation the user kept working in:
-              // it stays, detached from the parent it no longer has.
-              const descendantRows = yield* sql<{ id: SessionId }>`
-                  WITH RECURSIVE
-                    target(id, thread_id) AS (
-                      SELECT id, thread_id FROM sessions WHERE id = ${id} AND workspace_id = ${workspaceId}
-                    ),
-                    descendants(id) AS (
-                      SELECT id FROM target
-                      UNION
-                      SELECT sessions.id
-                      FROM sessions
-                      JOIN descendants ON sessions.parent_session_id = descendants.id
-                      WHERE sessions.workspace_id = ${workspaceId}
-                        AND sessions.thread_id IS NOT (SELECT thread_id FROM target)
-                    )
-                  SELECT id FROM descendants
-                `
-              const cascadedIds = descendantRows.map((row) => row.id)
-              if (cascadedIds.length === 0) return cascadedIds
+              // A handoff that stays is detached from the parent it no longer has.
+              const cascadedIds = yield* deletionSetOf(id)
+              if (cascadedIds.length === 0) return []
+              const branchRows = yield* sql<{ id: BranchId; session_id: SessionId }>`
+                SELECT id, session_id FROM branches WHERE session_id IN ${sql.in(cascadedIds)}`
               yield* sql`UPDATE sessions SET parent_session_id = NULL, parent_branch_id = NULL
                 WHERE parent_session_id IN ${sql.in(cascadedIds)} AND id NOT IN ${sql.in(cascadedIds)}`
               // Queues, branches, messages and their chunk links cascade by foreign key.
               yield* sql`DELETE FROM sessions WHERE id IN ${sql.in(cascadedIds)}`
               yield* sql`DELETE FROM content_chunks WHERE id NOT IN (SELECT chunk_id FROM message_chunks)`
-              return cascadedIds
+              return cascadedIds.map((sessionId): DeletedSession => ({
+                sessionId,
+                branchIds: branchRows
+                  .filter((row) => row.session_id === sessionId)
+                  .map((row) => row.id),
+              }))
             }).pipe(sql.withTransaction)
           },
           Effect.mapError(storageError("Failed to delete session")),
@@ -371,15 +415,7 @@ export class BranchStorage extends Context.Service<BranchStorage, BranchStorageS
               })
             }
             if (!Predicate.isUndefined(branch.parentBranchId)) {
-              const parentRows = yield* sql<{
-                id: BranchId
-              }>`SELECT b.id
-                FROM branches b
-                JOIN sessions s ON s.id = b.session_id
-                WHERE b.id = ${branch.parentBranchId}
-                  AND b.session_id = ${branch.sessionId}
-                  AND s.workspace_id = ${workspaceId}`
-              if (parentRows.length === 0) {
+              if (!(yield* branchInSession(sql, branch.parentBranchId, branch.sessionId))) {
                 return yield* new StorageError({
                   message: `Parent branch not found in session: ${branch.parentBranchId}`,
                 })
@@ -503,14 +539,7 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
         })
         const ensureMessageWorkspace = Effect.fn("MessageStorage.ensureMessageWorkspace")(
           function* (message: Pick<Message, "sessionId" | "branchId">) {
-            const workspaceId = yield* CurrentWorkspaceId
-            const rows = yield* sql<{ id: BranchId }>`SELECT b.id
-            FROM branches b
-            JOIN sessions s ON s.id = b.session_id
-            WHERE b.id = ${message.branchId}
-              AND b.session_id = ${message.sessionId}
-              AND s.workspace_id = ${workspaceId}`
-            if (rows.length === 0) {
+            if (!(yield* branchInSession(sql, message.branchId, message.sessionId))) {
               return yield* new StorageError({
                 message: `Branch not found in current workspace: ${message.branchId}`,
               })
@@ -618,13 +647,13 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
 const LatestEventIdRow = Schema.Struct({ id: Schema.Finite })
 const decodeLatestEventIdRow = Schema.decodeUnknownEffect(LatestEventIdRow)
 
-type EventDecodeOperation = "listEvents" | "listToolResultWindow"
-
 export class EventDecodeError extends Schema.TaggedError<EventDecodeError>()("EventDecodeError", {
   eventId: EventId,
   operation: Schema.Literals(["listEvents", "listToolResultWindow"]),
   error: Schema.String,
 }) {}
+
+type EventDecodeOperation = typeof EventDecodeError.fields.operation.Type
 
 export type EventStorageError = StorageError | EventDecodeError
 const isEventDecodeError = Schema.is(EventDecodeError)
@@ -736,6 +765,12 @@ export class EventStorage extends Context.Service<EventStorage, EventStorageServ
     EventStorage,
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient
+      /** An event on `branchId` or on no branch; every event when no branch is named. */
+      const onBranch = (branchId: Option.Option<BranchId>) =>
+        Option.match(branchId, {
+          onNone: () => sql.literal(""),
+          onSome: (branchId) => sql`AND (e.branch_id = ${branchId} OR e.branch_id IS NULL)`,
+        })
       const mapEventStorageError = storageErrorExcept(isEventDecodeError)
 
       return {
@@ -784,25 +819,15 @@ export class EventStorage extends Context.Service<EventStorage, EventStorageServ
           function* ({ sessionId, branchId, afterId }) {
             const workspaceId = yield* CurrentWorkspaceId
             const sinceId = afterId ?? 0
-            const rawRows = yield* Option.match(Option.fromUndefinedOr(branchId), {
-              onSome: (
-                branchId,
-              ) => sql`SELECT e.id, e.event_tag, e.event_json, e.created_at, e.trace_id
-                    FROM events e
-                    JOIN sessions s ON s.id = e.session_id
-                    WHERE e.session_id = ${sessionId}
-                      AND s.workspace_id = ${workspaceId}
-                      AND (e.branch_id = ${branchId} OR e.branch_id IS NULL)
-                      AND e.id > ${sinceId}
-                    ORDER BY e.id ASC`,
-              onNone: () => sql`SELECT e.id, e.event_tag, e.event_json, e.created_at, e.trace_id
-                    FROM events e
-                    JOIN sessions s ON s.id = e.session_id
-                    WHERE e.session_id = ${sessionId}
-                      AND s.workspace_id = ${workspaceId}
-                      AND e.id > ${sinceId}
-                    ORDER BY e.id ASC`,
-            })
+            const rawRows =
+              yield* sql`SELECT e.id, e.event_tag, e.event_json, e.created_at, e.trace_id
+              FROM events e
+              JOIN sessions s ON s.id = e.session_id
+              WHERE e.session_id = ${sessionId}
+                AND s.workspace_id = ${workspaceId}
+                ${onBranch(Option.fromUndefinedOr(branchId))}
+                AND e.id > ${sinceId}
+              ORDER BY e.id ASC`
             return yield* rowsToEnvelopes(rawRows, "listEvents")
           },
           Effect.mapError(mapEventStorageError("Failed to list events")),
@@ -811,21 +836,13 @@ export class EventStorage extends Context.Service<EventStorage, EventStorageServ
         getLatestEventId: Effect.fn("EventStorage.getLatestEventId")(
           function* ({ sessionId, branchId }) {
             const workspaceId = yield* CurrentWorkspaceId
-            const rawRows = yield* Option.match(Option.fromUndefinedOr(branchId), {
-              onSome: (branchId) => sql`SELECT e.id
-                    FROM events e
-                    JOIN sessions s ON s.id = e.session_id
-                    WHERE e.session_id = ${sessionId}
-                      AND s.workspace_id = ${workspaceId}
-                      AND (e.branch_id = ${branchId} OR e.branch_id IS NULL)
-                    ORDER BY e.id DESC LIMIT 1`,
-              onNone: () => sql`SELECT e.id
-                    FROM events e
-                    JOIN sessions s ON s.id = e.session_id
-                    WHERE e.session_id = ${sessionId}
-                      AND s.workspace_id = ${workspaceId}
-                    ORDER BY e.id DESC LIMIT 1`,
-            })
+            const rawRows = yield* sql`SELECT e.id
+              FROM events e
+              JOIN sessions s ON s.id = e.session_id
+              WHERE e.session_id = ${sessionId}
+                AND s.workspace_id = ${workspaceId}
+                ${onBranch(Option.fromUndefinedOr(branchId))}
+              ORDER BY e.id DESC LIMIT 1`
             // oxlint-disable-next-line effect/noNullish -- Event history lookup uses undefined when no row exists.
             if (Predicate.isUndefined(rawRows[0])) return undefined
             const row = yield* decodeLatestEventIdRow(rawRows[0])
@@ -860,27 +877,20 @@ export class EventStorage extends Context.Service<EventStorage, EventStorageServ
                 AND e.event_tag = 'MessageReceived'
                 AND json_extract(e.event_json, '$.message.role') = 'assistant'
               ORDER BY e.id ASC LIMIT 1`
-            const rawRows = yield* Option.match(Option.fromUndefinedOr(boundaryRows[0]), {
-              onSome: (
-                boundary,
-              ) => sql`SELECT e.id, e.event_tag, e.event_json, e.created_at, e.trace_id
-                      FROM events e
-                      JOIN sessions s ON s.id = e.session_id
-                      WHERE e.session_id = ${sessionId}
-                        AND s.workspace_id = ${workspaceId}
-                        AND (e.branch_id = ${branchId} OR e.branch_id IS NULL)
-                        AND e.id > ${anchor.id}
-                        AND e.id < ${boundary.id}
-                      ORDER BY e.id ASC`,
-              onNone: () => sql`SELECT e.id, e.event_tag, e.event_json, e.created_at, e.trace_id
-                      FROM events e
-                      JOIN sessions s ON s.id = e.session_id
-                      WHERE e.session_id = ${sessionId}
-                        AND s.workspace_id = ${workspaceId}
-                        AND (e.branch_id = ${branchId} OR e.branch_id IS NULL)
-                        AND e.id > ${anchor.id}
-                      ORDER BY e.id ASC`,
+            const beforeBoundary = Option.match(Option.fromUndefinedOr(boundaryRows[0]), {
+              onNone: () => sql.literal(""),
+              onSome: (boundary) => sql`AND e.id < ${boundary.id}`,
             })
+            const rawRows =
+              yield* sql`SELECT e.id, e.event_tag, e.event_json, e.created_at, e.trace_id
+              FROM events e
+              JOIN sessions s ON s.id = e.session_id
+              WHERE e.session_id = ${sessionId}
+                AND s.workspace_id = ${workspaceId}
+                ${onBranch(Option.some(branchId))}
+                AND e.id > ${anchor.id}
+                ${beforeBoundary}
+              ORDER BY e.id ASC`
             return yield* rowsToEnvelopes(rawRows, "listToolResultWindow")
           },
           Effect.mapError(mapEventStorageError("Failed to list tool result window")),
@@ -899,10 +909,6 @@ export class EventStorage extends Context.Service<EventStorage, EventStorageServ
  */
 
 interface RelationshipStorageService {
-  readonly getChildSessions: (
-    parentSessionId: SessionId,
-  ) => Effect.Effect<ReadonlyArray<Session>, StorageError>
-
   /**
    * The session and its persisted parent chain, nearest first, up to the
    * real root however many handoffs it crosses. The walk stops at a missing
@@ -959,16 +965,6 @@ export class RelationshipStorage extends Context.Service<
       const sql = yield* SqlClient.SqlClient
 
       return {
-        getChildSessions: Effect.fn("RelationshipStorage.getChildSessions")(
-          function* (parentSessionId) {
-            const workspaceId = yield* CurrentWorkspaceId
-            const rows =
-              yield* sql<SessionRow>`SELECT ${sql.literal(SESSION_COLUMNS)} FROM sessions WHERE parent_session_id = ${parentSessionId} AND workspace_id = ${workspaceId} ORDER BY created_at ASC`
-            return yield* Effect.forEach(rows, sessionFromRow)
-          },
-          Effect.mapError(storageError("Failed to get child sessions")),
-        ),
-
         getSessionAncestors: Effect.fn("RelationshipStorage.getSessionAncestors")(
           function* (sessionId) {
             const workspaceId = yield* CurrentWorkspaceId
@@ -1295,25 +1291,19 @@ export class InteractionStorage extends Context.Service<
         listOpen: Effect.fn("InteractionStorage.listOpen")(
           function* (scope?: { sessionId: SessionId; branchId: BranchId }) {
             const workspaceId = yield* CurrentWorkspaceId
-            const rows = yield* Option.match(Option.fromUndefinedOr(scope), {
-              onNone:
-                () => sql<InteractionRequestRow>`SELECT ir.request_id, ir.session_id, ir.branch_id, ir.params_json, ir.decision_json, ir.owner_tool_call_id, ir.owner_occurrence, ir.status, ir.created_at
-                FROM interaction_requests ir
-                JOIN sessions s ON s.id = ir.session_id
-                WHERE ir.status IN ('pending', 'taken')
-                  AND s.workspace_id = ${workspaceId}
-                ORDER BY ir.created_at ASC`,
-              onSome: (
-                scope,
-              ) => sql<InteractionRequestRow>`SELECT ir.request_id, ir.session_id, ir.branch_id, ir.params_json, ir.decision_json, ir.owner_tool_call_id, ir.owner_occurrence, ir.status, ir.created_at
-                FROM interaction_requests ir
-                JOIN sessions s ON s.id = ir.session_id
-                WHERE ir.status IN ('pending', 'taken')
-                  AND ir.session_id = ${scope.sessionId}
-                  AND ir.branch_id = ${scope.branchId}
-                  AND s.workspace_id = ${workspaceId}
-                ORDER BY ir.created_at ASC`,
+            const inScope = Option.match(Option.fromUndefinedOr(scope), {
+              onNone: () => sql.literal(""),
+              onSome: (scope) =>
+                sql`AND ir.session_id = ${scope.sessionId} AND ir.branch_id = ${scope.branchId}`,
             })
+            const rows =
+              yield* sql<InteractionRequestRow>`SELECT ir.request_id, ir.session_id, ir.branch_id, ir.params_json, ir.decision_json, ir.owner_tool_call_id, ir.owner_occurrence, ir.status, ir.created_at
+              FROM interaction_requests ir
+              JOIN sessions s ON s.id = ir.session_id
+              WHERE ir.status IN ('pending', 'taken')
+                ${inScope}
+                AND s.workspace_id = ${workspaceId}
+              ORDER BY ir.created_at ASC`
             return yield* Effect.forEach(rows, (row) => decodeRow(row))
           },
           Effect.mapError(storageError("Failed to list pending interaction requests")),
@@ -1897,9 +1887,11 @@ interface TurnRecordKey {
   readonly messageId: MessageId
 }
 
+const TurnCount = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
+
 const TurnRecordRow = Schema.Struct({
-  step: Schema.Finite,
-  continuations: Schema.Finite,
+  step: TurnCount,
+  continuations: TurnCount,
   pending_tool_calls_json: Schema.String,
 })
 
@@ -1939,8 +1931,8 @@ export class TurnRecordStorage extends Context.Service<
           const decoded = yield* Schema.decodeEffect(TurnRecordRow)(row)
           const pendingToolCalls = yield* decodePending(decoded.pending_tool_calls_json)
           return {
-            step: Math.max(0, Math.trunc(decoded.step)),
-            continuations: Math.max(0, Math.trunc(decoded.continuations)),
+            step: decoded.step,
+            continuations: decoded.continuations,
             pendingToolCalls,
           } satisfies TurnRecord
         }).pipe(Effect.mapError(storageError("Failed to read the turn record")))
@@ -1998,8 +1990,6 @@ export const turnRecordAtStep = (params: {
 
 // ── sqlite-storage ──────────────────────────────────────────────────────────
 
-export { StorageError }
-
 export type StorageTransaction = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
 ) => Effect.Effect<A, E | StorageError, R>
@@ -2007,10 +1997,9 @@ export type StorageTransaction = <A, E, R>(
 // `makeStorageTransaction` yields `SqlClient` once at layer-build time and
 // returns a closure that wraps each mutation in a transaction. Callers do not
 // thread `SqlClient` as a parameter and do not surface it on per-method
-// R-channels; the closure binds it through lexical scope (see project memory
-// "No context params — yield directly"). The factory shape lets the Live
-// layer construction yield sql at the top and produce a `storageTransaction`
-// helper bound to that sql for the lifetime of the layer.
+// R-channels; the closure binds it through lexical scope. The Live layer
+// yields sql once and holds the `storageTransaction` helper bound to it for
+// the lifetime of the layer.
 export const makeStorageTransaction: Effect.Effect<StorageTransaction, never, SqlClient.SqlClient> =
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient

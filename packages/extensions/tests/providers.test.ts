@@ -297,7 +297,7 @@ describe("models.dev catalog", () => {
   )
 
   it.scopedLive(
-    "the Anthropic catalog names the lifetime its markers ask for, 1 hour or 5 minutes with the switch, and prices a cache write by it",
+    "the Anthropic catalog names the lifetimes its markers ask for, 1 hour or 5 minutes with the switch, 5 minutes for a child, and prices each cache write by the lifetime it wrote",
     () =>
       Effect.gen(function* () {
         const home = yield* freshHome("anthropic-cache-lifetime")
@@ -336,15 +336,60 @@ describe("models.dev catalog", () => {
               promptCacheTtl,
             )
             const listModels = Option.getOrThrow(Option.fromUndefinedOr(driver.listModels))
+            // The USD cost of the writes a response's usage reports, each at its lifetime's rate.
+            const lifetimeWriteCostUsd = (model: Model, fiveMinutes: number, oneHour: number) => {
+              const metadata = {
+                anthropic: {
+                  usage: {
+                    cache_creation: {
+                      ephemeral_5m_input_tokens: fiveMinutes,
+                      ephemeral_1h_input_tokens: oneHour,
+                    },
+                  },
+                },
+              }
+              const writes = driver.cacheWritesByLifetime?.(metadata) ?? []
+              const rates = model.pricing?.cacheWriteByLifetime ?? []
+              const cost = writes.reduce(
+                (sum, write) =>
+                  sum +
+                  write.tokens * (rates.find((rate) => rate.ttlMs === write.ttlMs)?.price ?? 0),
+                0,
+              )
+              return cost / 1_000_000
+            }
             return (yield* listModels()).map((model) => ({
               lifetimeMs: model.promptCacheTtlMs,
+              childLifetimeMs: model.childPromptCacheTtlMs,
               // 10,000 tokens written to the cache, in USD.
               writeCostUsd: (10_000 * (model.pricing?.cacheWrite ?? 0)) / 1_000_000,
+              // A child writes 10,000 tokens for 5 minutes.
+              childWriteCostUsd: lifetimeWriteCostUsd(model, 10_000, 0),
+              // A child that also writes the shared part: 6,000 for 5 minutes, 4,000 for 1 hour.
+              mixedWriteCostUsd: lifetimeWriteCostUsd(model, 6_000, 4_000),
             }))
           })
-        // A 1-hour write costs 2x input, a 5-minute one 1.25x.
-        expect(yield* lifetimes("1h")).toEqual([{ lifetimeMs: 60 * 60_000, writeCostUsd: 0.1 }])
-        expect(yield* lifetimes("5m")).toEqual([{ lifetimeMs: 5 * 60_000, writeCostUsd: 0.0625 }])
+        // A 1-hour write costs 2x input, a 5-minute one 1.25x. A child asks for 5 minutes.
+        const lifetimeCosts = {
+          childWriteCostUsd: 0.0625,
+          mixedWriteCostUsd: (6_000 * 6.25 + 4_000 * 10) / 1_000_000,
+        }
+        expect(yield* lifetimes("1h")).toEqual([
+          {
+            lifetimeMs: 60 * 60_000,
+            childLifetimeMs: 5 * 60_000,
+            writeCostUsd: 0.1,
+            ...lifetimeCosts,
+          },
+        ])
+        expect(yield* lifetimes("5m")).toEqual([
+          {
+            lifetimeMs: 5 * 60_000,
+            childLifetimeMs: 5 * 60_000,
+            writeCostUsd: 0.0625,
+            ...lifetimeCosts,
+          },
+        ])
       }).pipe(Effect.timeout("5 seconds"), Effect.provide(BunServices.layer)),
   )
 
@@ -633,19 +678,6 @@ describe("models.dev catalog", () => {
 
       expect(yield* Ref.get(calls)).toBe(1)
       expect(models.map((model) => model.id)).not.toContain(ModelId.make("openai/gpt-4.1"))
-    }).pipe(Effect.provide(platformLayer)),
-  )
-
-  it.scopedLive("a cache an older build wrote still serves when the fetch fails", () =>
-    Effect.gen(function* () {
-      const home = yield* freshHome("unstamped-offline")
-      yield* writeCache(home, olderBuildCache)
-      const calls = yield* Ref.make(0)
-
-      const models = yield* modelsDevCatalog(home).pipe(Effect.provide(failingHttpLayer(calls)))
-
-      expect(yield* Ref.get(calls)).toBe(1)
-      expect(models.map((model) => model.id)).toEqual([ModelId.make("anthropic/claude-opus-5")])
     }).pipe(Effect.provide(platformLayer)),
   )
 

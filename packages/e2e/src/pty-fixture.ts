@@ -1,6 +1,6 @@
 import { makeTempDirectoryScoped, seedAuthKeys, waitFor } from "@gent/core/test-utils"
 import { Terminal } from "@xterm/headless"
-import { Clock, Effect, Predicate, Schema } from "effect"
+import { Clock, Effect, FileSystem, Predicate, Schema, type Scope } from "effect"
 import { spawn, type IPty } from "zigpty"
 import { waitForProcessExit } from "./server-process-fixture"
 
@@ -21,121 +21,137 @@ export interface PtySize {
 
 export interface TestContext {
   readonly pty: IPty
+  /** Everything the child has written so far. It grows whenever the terminal repaints. */
   readonly output: string
-  /** Bytes the child has written so far. Rises whenever the terminal repaints. */
-  readonly bytesWritten: number
   readonly size: PtySize
   readonly resize: (size: PtySize) => void
   readonly tempDir: string
-  readonly cleanup: Effect.Effect<void>
 }
 
 const ignoreSyncDefect = (evaluate: () => void): Effect.Effect<void> =>
   Effect.sync(evaluate).pipe(Effect.ignoreCause)
 
+/**
+ * Start the TUI in a pty that belongs to the caller's scope. Closing the scope
+ * sends ctrl+c, waits for the exit, and kills a child that outlives the wait.
+ */
 const spawnWithDir = (
   tempDir: string,
   extraArgs: string[] = [],
   extraEnv: Record<string, string> = {},
   size: PtySize = { cols: DEFAULT_COLS, rows: DEFAULT_ROWS },
-): TestContext => {
-  const mainPath = `${tuiDir}/src/main.tsx`
-  const preloadPath = `${tuiDir}/node_modules/@opentui/solid/scripts/preload.js`
+): Effect.Effect<TestContext, never, Scope.Scope> =>
+  Effect.acquireRelease(
+    Effect.sync(() => {
+      const mainPath = `${tuiDir}/src/main.tsx`
+      const preloadPath = `${tuiDir}/node_modules/@opentui/solid/scripts/preload.js`
 
-  let output = ""
-  let currentSize = size
+      let output = ""
+      let currentSize = size
 
-  const pty = spawn("bun", ["--preload", preloadPath, mainPath, "--isolate", ...extraArgs], {
-    name: "xterm-256color",
-    cols: size.cols,
-    rows: size.rows,
-    cwd: tuiDir,
-    env: {
-      ...Bun.env,
-      GENT_DATA_DIR: tempDir,
-      GENT_AUTH_DIRECTORY: `${tempDir}/auth`,
-      COLUMNS: String(size.cols),
-      LINES: String(size.rows),
-      ...extraEnv,
-    },
-  })
+      const pty = spawn("bun", ["--preload", preloadPath, mainPath, "--isolate", ...extraArgs], {
+        name: "xterm-256color",
+        cols: size.cols,
+        rows: size.rows,
+        cwd: tuiDir,
+        env: {
+          ...Bun.env,
+          GENT_DATA_DIR: tempDir,
+          GENT_AUTH_DIRECTORY: `${tempDir}/auth`,
+          COLUMNS: String(size.cols),
+          LINES: String(size.rows),
+          ...extraEnv,
+        },
+      })
 
-  pty.onData((data) => {
-    output += data
-  })
+      pty.onData((data) => {
+        output += data
+      })
 
-  const cleanup = Effect.gen(function* () {
-    const pid = pty.pid
-    yield* ignoreSyncDefect(() => pty.write(CTRL_C))
-    const exited = yield* waitForProcessExit(pid, 1_000)
-    if (!exited) {
-      yield* ignoreSyncDefect(() => process.kill(pid, "SIGKILL"))
-      yield* waitForProcessExit(pid, 2_000)
-    }
-    yield* ignoreSyncDefect(() => pty.close())
-  })
-
-  return {
-    pty,
-    get output() {
-      return output
-    },
-    get bytesWritten() {
-      return output.length
-    },
-    get size() {
-      return currentSize
-    },
-    resize: (next: PtySize) => {
-      currentSize = next
-      pty.resize(next.cols, next.rows)
-    },
-    tempDir,
-    cleanup,
-  }
-}
+      const context: TestContext = {
+        pty,
+        get output() {
+          return output
+        },
+        get size() {
+          return currentSize
+        },
+        resize: (next: PtySize) => {
+          currentSize = next
+          pty.resize(next.cols, next.rows)
+        },
+        tempDir,
+      }
+      return context
+    }),
+    ({ pty }) =>
+      Effect.gen(function* () {
+        const pid = pty.pid
+        yield* ignoreSyncDefect(() => pty.write(CTRL_C))
+        const exited = yield* waitForProcessExit(pid, 1_000)
+        if (!exited) {
+          yield* ignoreSyncDefect(() => process.kill(pid, "SIGKILL"))
+          yield* waitForProcessExit(pid, 2_000)
+        }
+        yield* ignoreSyncDefect(() => pty.close())
+      }),
+  )
 
 export const seedAndSpawn = (extraArgs: string[] = [], size?: PtySize) =>
   Effect.gen(function* () {
     const tempDir = yield* makeTempDirectoryScoped("gent-e2e-")
     yield* seedAuthKeys(`${tempDir}/auth`).pipe(Effect.orDie)
-    return spawnWithDir(tempDir, extraArgs, {}, size)
+    return yield* spawnWithDir(tempDir, extraArgs, {}, size)
   })
 
 export const spawnNoAuth = Effect.gen(function* () {
   const tempDir = yield* makeTempDirectoryScoped("gent-e2e-")
-  return spawnWithDir(tempDir)
+  return yield* spawnWithDir(tempDir)
 })
 
 export const seedSkillAndSpawn = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem
   const tempDir = yield* makeTempDirectoryScoped("gent-e2e-")
 
   const fakeHome = `${tempDir}/home`
   const skillDir = `${fakeHome}/.claude/skills/test-skill`
-  yield* Effect.promise(() => Bun.$`mkdir -p ${skillDir}`.quiet())
-  yield* Effect.promise(() =>
-    Bun.write(
+  yield* fs.makeDirectory(skillDir, { recursive: true }).pipe(Effect.orDie)
+  yield* fs
+    .writeFileString(
       `${skillDir}/SKILL.md`,
       "---\nname: test-skill\ndescription: A test skill for e2e\n---\n\nTest skill content.",
-    ),
-  )
+    )
+    .pipe(Effect.orDie)
 
   yield* seedAuthKeys(`${tempDir}/auth`).pipe(Effect.orDie)
-  return spawnWithDir(tempDir, [], { HOME: fakeHome })
+  return yield* spawnWithDir(tempDir, [], { HOME: fakeHome })
 })
 
+/** Wait until the output, colors stripped, has contained `text` at some point. */
 export const ptyWaitFor = (ctx: TestContext, text: string, opts: { timeout: number }) =>
   waitFor(
-    Effect.sync(() => stripAnsi(ctx.output)),
+    Effect.sync(() => Bun.stripANSI(ctx.output)),
     (output) => output.includes(text),
     opts.timeout,
     `PTY output "${text}"`,
   ).pipe(Effect.asVoid)
 
-// gent/no-sleep: allow PTY fixture primitive — deliberate OS-level pause for terminal redraw cycles
-export const shortPause = (ms: number): Effect.Effect<void> => Effect.sleep(`${ms} millis`)
-
-export const stripAnsi = (str: string): string => Bun.stripANSI(str)
+/**
+ * Wait until the screen as drawn now satisfies `predicate`. The output keeps
+ * every frame ever drawn, so text that left the screen is still in it; the
+ * parsed grid shows only what a reader sees.
+ */
+export const screenWaitFor = (
+  ctx: TestContext,
+  predicate: (visible: ReadonlyArray<string>) => boolean,
+  opts: { timeout: number; label: string },
+) =>
+  waitFor(
+    Effect.suspend(() => parseTerminal(ctx.output, ctx.size)),
+    (grid) => predicate(grid.visible),
+    opts.timeout,
+    `screen: ${opts.label}`,
+  ).pipe(Effect.asVoid)
 
 // ── Settle-then-capture ──
 
@@ -154,18 +170,18 @@ export interface SettleOptions {
 const SETTLE_POLL_MS = 50
 
 /**
- * Wait until the child has written no new bytes for `quietMs`.
+ * Wait until the child has written nothing new for `quietMs`.
  *
  * A terminal repaints in bursts: one frame is many writes, and the rows a
  * commit hands to scrollback land in the same burst as the footer repaint that
  * follows it. Reading the grid mid-burst reads a half-drawn screen, so every
- * capture waits for the bytes to stop first. This is the one real asynchronous
+ * capture waits for the output to stop first. This is the one real asynchronous
  * boundary in these tests — no state signal says "the terminal is done", only
  * the absence of further output — so the wait is bounded and it fails loudly
  * when the quiet window never opens.
  */
 export const settlePty = (
-  ctx: TestContext,
+  ctx: Pick<TestContext, "output">,
   options: SettleOptions = {},
 ): Effect.Effect<void, PtySettleError> =>
   Effect.gen(function* () {
@@ -176,7 +192,7 @@ export const settlePty = (
 
     const loop = (lastSeen: number, stablePolls: number): Effect.Effect<void, PtySettleError> =>
       Effect.gen(function* () {
-        const seen = ctx.bytesWritten
+        const seen = ctx.output.length
         let stable = 0
         if (seen === lastSeen) stable = stablePolls + 1
         if (stable >= quietPolls) return
@@ -184,10 +200,11 @@ export const settlePty = (
           return yield* new PtySettleError({
             message:
               `pty never went quiet for ${quietMs}ms within ${timeoutMs}ms ` +
-              `(${seen} bytes captured)`,
+              `(${seen} characters captured)`,
           })
         }
-        yield* shortPause(SETTLE_POLL_MS)
+        // gent/no-sleep: allow the poll interval of the quiet-window wait; only the absence of output marks the end of a repaint
+        yield* Effect.sleep(`${SETTLE_POLL_MS} millis`)
         return yield* loop(seen, stable)
       })
 
@@ -259,9 +276,14 @@ export const parseTerminal = (
     })
   })
 
-/** Settle, then replay everything captured so far into a grid. */
+/**
+ * Settle, then replay everything captured by then into a grid. The output is
+ * read after the quiet window, not when the capture is built.
+ */
 export const settleAndCapture = (
-  ctx: TestContext,
+  ctx: Pick<TestContext, "output" | "size">,
   options: SettleOptions = {},
 ): Effect.Effect<TerminalGrid, PtySettleError> =>
-  settlePty(ctx, options).pipe(Effect.andThen(parseTerminal(ctx.output, ctx.size)))
+  settlePty(ctx, options).pipe(
+    Effect.andThen(Effect.suspend(() => parseTerminal(ctx.output, ctx.size))),
+  )

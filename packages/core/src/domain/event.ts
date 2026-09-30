@@ -18,7 +18,6 @@ import {
 import { Message } from "./message.js"
 import {
   BranchId,
-  branded,
   ExtensionId,
   InteractionRequestId,
   MessageId,
@@ -29,9 +28,7 @@ import { ModelId, ReasoningEffort } from "./agent.js"
 
 // ── event ───────────────────────────────────────────────────────────────────
 
-// ============================================================================
-// Shared sub-schemas
-// ============================================================================
+// ── shared sub-schemas ──────────────────────────────────────────────────────
 
 export const UsageSchema = Schema.Struct({
   inputTokens: Schema.Finite,
@@ -56,8 +53,9 @@ export const QuestionSchema = Schema.Struct({
 })
 export type Question = typeof QuestionSchema.Type
 
-// ============================================================================
-// AgentEvent — the discriminated union of every event the runtime emits.
+// ── agent event ─────────────────────────────────────────────────────────────
+
+// The discriminated union of every event the runtime emits.
 //
 // Authored via upstream `Schema.TaggedUnion({...})` shorthand. Variant names
 // are also the wire `_tag` values, so the shorthand covers the full surface
@@ -66,9 +64,8 @@ export type Question = typeof QuestionSchema.Type
 // or — via the per-variant re-exports below — `SessionStarted.make`. Pattern
 // matching uses `AgentEvent.match({...})`; `_tag === "X"` narrowing works
 // unchanged. Wire shape: `{ _tag: "VariantName", ...fields }`.
-// ============================================================================
 
-export const EventId = Schema.Finite.pipe(branded("EventId"))
+export const EventId = Schema.Finite.pipe(Schema.brand("EventId"))
 export type EventId = typeof EventId.Type
 
 /**
@@ -129,6 +126,14 @@ export const AgentEvent = Schema.TaggedUnion({
      * client that prices part of the step reads this one.
      */
     pricedModel: Schema.optional(ModelId),
+    /**
+     * The step ran in a spawned child session (`isSpawnedSession`), whose
+     * requests ask for the child cache lifetime: a client reads the step's
+     * lifetime with `promptCacheTtlMsFor(model, child)`. Absent on a step
+     * that reported no usage, and on rows written before it; such a step
+     * reads as a root session's.
+     */
+    child: Schema.optional(Schema.Boolean),
     interrupted: Schema.optional(Schema.Boolean),
     /** How the step ended; the step boundary the loop's policy matched on. */
     outcome: Schema.optional(StepOutcomeTag),
@@ -311,13 +316,13 @@ export const AgentEvent = Schema.TaggedUnion({
 })
 export type AgentEvent = Schema.Schema.Type<typeof AgentEvent>
 
-// ============================================================================
-// Per-variant re-exports — same TaggedStruct identity as `AgentEvent.cases.X`,
+// ── per-variant re-exports ──────────────────────────────────────────────────
+
+// The same TaggedStruct identity as `AgentEvent.cases.X`,
 // exposed at module scope so consumers may import variants directly without
 // going through the union object. `SessionStarted.make(...)` and
 // `AgentEvent.cases.SessionStarted.make(...)` produce structurally identical
 // values; these are aliases, not parallel implementations.
-// ============================================================================
 
 export const SessionStarted = AgentEvent.cases.SessionStarted
 export type SessionStarted = typeof AgentEvent.cases.SessionStarted.Type
@@ -359,23 +364,14 @@ export const ExtensionStateChanged = AgentEvent.cases.ExtensionStateChanged
 export type ExtensionStateChanged = typeof AgentEvent.cases.ExtensionStateChanged.Type
 const StreamSynchronized = AgentEvent.cases.StreamSynchronized
 
-// ============================================================================
-// Interaction types — shared between server and client
-// ============================================================================
+// ── interaction types ───────────────────────────────────────────────────────
+
+// Shared between server and client.
 
 /** Active interaction — the generic InteractionPresented event */
 export type ActiveInteraction = InteractionPresented
 
-/** Approval decision — the generic resolution */
-export type ApprovalResult = {
-  readonly approved: boolean
-  readonly notes?: string
-  readonly editedContent?: string
-}
-
-// ============================================================================
-// EventEnvelope + EventStore
-// ============================================================================
+// ── event envelope and store ────────────────────────────────────────────────
 
 export class EventEnvelope extends Schema.Class<EventEnvelope>("EventEnvelope")({
   id: EventId,
@@ -468,7 +464,7 @@ export const getEventBranchId = (event: AgentEvent): BranchId | undefined => {
   return undefined
 }
 
-export const matchesEventFilter = (
+const matchesEventFilter = (
   env: EventEnvelope,
   sessionId: SessionId,
   branchId?: BranchId,

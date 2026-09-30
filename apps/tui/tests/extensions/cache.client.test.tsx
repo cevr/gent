@@ -133,6 +133,8 @@ const makeHistory = () => {
     readonly model?: ModelId
     readonly pricedModel?: ModelId
     readonly costUsd?: number
+    /** The step ran in a spawned child session. */
+    readonly child?: boolean
     /** Refused attempts inside the step: when each was refused, and the delay before its retry. */
     readonly retries?: ReadonlyArray<{ readonly at: number; readonly delayMs: number }>
   }) => {
@@ -157,6 +159,7 @@ const makeHistory = () => {
         model: opts.model ?? SONNET,
         pricedModel: opts.pricedModel ?? opts.model ?? SONNET,
         costUsd: opts.costUsd ?? 0.05,
+        child: opts.child,
       }),
     )
   }
@@ -830,6 +833,49 @@ describe("cache client extension", () => {
         "cache expired after 14m idle · 30k tokens re-billed ~$0.07",
       ])
       expect(extension.label()).toEqual([{ text: "cache waste $0.07", color: "textMuted" }])
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
+  it.scopedLive("a child's step is judged by the child lifetime, a root's by the root's", () =>
+    Effect.gen(function* () {
+      // A root keeps its prompt an hour, a child 5 minutes.
+      const lifetimes = models.map(
+        (model) =>
+          new Model({ ...model, promptCacheTtlMs: 60 * MINUTE, childPromptCacheTtlMs: 5 * MINUTE }),
+      )
+      // Two steps of one turn with a 6-minute approval wait between them.
+      const waitedHistory = (child: boolean) => {
+        const history = makeHistory()
+        history.input(0, "t1")
+        history.step({
+          start: SECOND,
+          end: 10 * SECOND,
+          turn: "t1",
+          usage: { inputTokens: 30_000, cacheWriteTokens: 30_000 },
+          child,
+        })
+        history.approval(11 * SECOND, 6 * MINUTE + 11 * SECOND)
+        history.step({
+          start: 6 * MINUTE + 12 * SECOND,
+          end: 6 * MINUTE + 20 * SECOND,
+          turn: "t1",
+          usage: missedStep,
+          child,
+        })
+        return history
+      }
+      const rowsFor = (child: boolean) =>
+        Effect.gen(function* () {
+          const extension = yield* setupWithCatalog(Option.some(lifetimes))
+          extension.deliver(waitedHistory(child).envelopes)
+          return rowsOf(extension.rows()).map((row) => row.text)
+        })
+      expect(yield* rowsFor(true)).toEqual([
+        "cache expired waiting 6m for approval · 30k tokens re-billed ~$0.07",
+      ])
+      expect(yield* rowsFor(false)).toEqual([
+        "cache miss: prefix changed · 30k tokens re-billed ~$0.07",
+      ])
     }).pipe(Effect.timeout("4 seconds")),
   )
 

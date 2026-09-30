@@ -13,7 +13,6 @@ import {
   CurrentWorkspaceId,
   WORKSPACE_ID_HEADER,
   WorkspaceId,
-  validateWorkspaceId,
   provideWorkspaceIdHeader,
   workspaceHeadersForCwd,
   workspaceIdForCwd,
@@ -24,20 +23,15 @@ const validWorkspaceId = WorkspaceId.make("a".repeat(64))
 const otherWorkspaceId = WorkspaceId.make("b".repeat(64))
 
 describe("workspace RPC middleware", () => {
-  it.live("validates workspace ids", () =>
+  it.live("publishes a valid workspace id to request scope and rejects a malformed one", () =>
     Effect.gen(function* () {
-      expect(yield* validateWorkspaceId(validWorkspaceId)).toBe(validWorkspaceId)
-      const invalid = yield* Effect.exit(validateWorkspaceId("not-a-workspace"))
+      const observe = (workspaceId: string) =>
+        Effect.service(CurrentWorkspaceId).pipe(
+          provideWorkspaceIdHeader(Headers.fromInput({ [WORKSPACE_ID_HEADER]: workspaceId })),
+        )
+      expect(yield* observe(validWorkspaceId)).toBe(validWorkspaceId)
+      const invalid = yield* Effect.exit(observe("not-a-workspace"))
       expect(invalid._tag).toBe("Failure")
-    }),
-  )
-
-  it.live("publishes the validated workspace id to request scope", () =>
-    Effect.gen(function* () {
-      const observed = yield* Effect.service(CurrentWorkspaceId).pipe(
-        provideWorkspaceIdHeader(Headers.fromInput({ [WORKSPACE_ID_HEADER]: validWorkspaceId })),
-      )
-      expect(observed).toBe(validWorkspaceId)
     }),
   )
 
@@ -97,8 +91,11 @@ describe("workspace RPC middleware", () => {
     Effect.gen(function* () {
       const id = workspaceIdForCwd("/tmp/gent")
 
-      // The branded pattern the RPC middleware validates against.
-      expect(yield* validateWorkspaceId(id)).toBe(id)
+      // The header the client sends passes the RPC middleware as that id.
+      const published = yield* Effect.service(CurrentWorkspaceId).pipe(
+        provideWorkspaceIdHeader(Headers.fromInput(workspaceHeadersForCwd("/tmp/gent"))),
+      )
+      expect(published).toBe(id)
 
       // Canonical: the path is resolved before hashing.
       expect(workspaceIdForCwd("/tmp/gent/../gent")).toBe(id)
@@ -118,8 +115,8 @@ describe("workspace RPC middleware", () => {
       const platform = yield* GentPlatform
       const cwd = "/nonexistent/gent/nested/.."
 
-      // The shape `dependencies.ts` used to compute on its own. It must keep
-      // matching the shared derivation, or the server and its clients split.
+      // The server's launch workspace is a sha256 of the resolved cwd. It must
+      // match the shared derivation, or the server and its clients split.
       const viaPlatform = WorkspaceId.make(platform.hash("sha256", path.resolve(cwd)))
 
       expect(workspaceIdForCwd(cwd)).toBe(viaPlatform)

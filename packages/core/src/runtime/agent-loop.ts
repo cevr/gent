@@ -149,9 +149,9 @@ import { GentPlatform } from "./gent-platform.js"
 import { Actor } from "effect-encore"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 
-// ── agent-loop.session-governance ───────────────────────────────────────────
+// ── session governance ──────────────────────────────────────────────────────
 
-/**
+/*
  * Cross-(workspaceId, sessionId, branchId) session lifecycle governance for AgentLoop.
  *
  * `terminateSession(sessionId)` marks all branches of a session as
@@ -162,8 +162,6 @@ import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
  * is `(sessionId, branchId)`. This governance lives ABOVE the per-
  * entity scope so every entity instance for the session reads the same
  * terminated set.
- *
- * @module
  */
 
 interface AgentLoopSessionGovernanceService {
@@ -215,7 +213,7 @@ export class AgentLoopSessionGovernance extends Context.Service<
 
 // ── loop-inbox ──────────────────────────────────────────────────────────────
 
-/**
+/*
  * The loop's inbox: everything a branch does with input it has accepted but
  * not yet answered.
  *
@@ -262,8 +260,6 @@ export class AgentLoopSessionGovernance extends Context.Service<
  * `wantsWakeOnRecovery` is the one exported function over a
  * loaded-but-not-yet-installed queue: startup has to decide whether to wake
  * before a loop exists to ask.
- *
- * @module
  */
 
 /**
@@ -288,7 +284,7 @@ export const wantsWakeOnRecovery = (
   return Option.some({ unconditional })
 }
 
-// ── Pure algebra (module-private) ──
+// ── loop inbox algebra ──────────────────────────────────────────────────────
 //
 // No caller outside this file sees these. They are the only code that knows
 // the queue has three compartments.
@@ -466,7 +462,7 @@ const loopHoldsMessage = (s: AgentLoopState, messageId: MessageId): boolean => {
 const queueSnapshotFromQueueState = (queue: LoopQueueState): QueueSnapshot =>
   toQueueSnapshot(queue.steering, queue.followUp)
 
-// ── Aggregate (single-Ref shape) ──
+// ── loop inbox aggregate ────────────────────────────────────────────────────
 //
 // The per-branch memory the loop reads and writes through one
 // SubscriptionRef. It lives here because every field but `state` is the
@@ -547,7 +543,7 @@ const turnFailureEpoch = (state: AgentLoopState): number =>
     () => 0,
   )
 
-// ── The module ──
+// ── loop inbox service ──────────────────────────────────────────────────────
 
 /**
  * The queue writes that failed so far, as a monotonic counter with the latest
@@ -1428,7 +1424,7 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
   }
 }
 
-// ── agent-loop.behavior ─────────────────────────────────────────────────────
+// ── behavior ────────────────────────────────────────────────────────────────
 
 type AgentLoopRuntimeServices =
   | SessionStorage
@@ -2149,7 +2145,7 @@ const makeAgentLoopBehavior = (
 
 // ── actor ───────────────────────────────────────────────────────────────────
 
-/**
+/*
  * `AgentLoop` as `Actor.fromEntity`.
  *
  * **Op surface:** request/reply only. `Subscribe` and `Snapshot` are NOT
@@ -2178,8 +2174,6 @@ const makeAgentLoopBehavior = (
  *
  * Schemas reuse gent's existing domain (`Message`, `RunSpec`,
  * `SteerCommand`) rather than introducing a parallel envelope shape.
- *
- * @module
  */
 
 /** The running turn's stop latch: its message, whether a stop latched, and who asked first. */
@@ -3154,7 +3148,7 @@ const buildAgentLoopActorHandlers = (config: {
             )
             const rpcRegistry = turnRegistry(environment).getResolved().rpcRegistry
             const capabilityId = RpcId.make(operation.capabilityId)
-            let input: unknown = Option.getOrUndefined(Option.none())
+            let input: unknown
             if (operation.input._tag === "Present") input = operation.input.value
             const run = runExtensionRequest(
               environment,

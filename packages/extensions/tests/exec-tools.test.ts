@@ -1,5 +1,6 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import {
+  Clock,
   ConfigProvider,
   Deferred,
   Effect,
@@ -487,6 +488,25 @@ describe("BashTool summary", () => {
 })
 
 describe("BashTool execution", () => {
+  // `trap '' TERM` leaves SIGTERM ignored for the whole group, so only the
+  // SIGKILL three seconds later ends it. The call must not wait for that.
+  it.live(
+    "a command that ignores SIGTERM returns at its timeout, not after the kill",
+    () =>
+      Effect.gen(function* () {
+        const started = yield* Clock.currentTimeMillis
+        const exit = yield* Effect.exit(
+          provideBun(
+            runToolWithCtx(BashTool, { command: "trap '' TERM; sleep 30", timeout: 500 }, stubCtx),
+          ),
+        )
+        const elapsed = (yield* Clock.currentTimeMillis) - started
+        expect(Exit.isFailure(exit)).toBe(true)
+        expect(elapsed).toBeLessThan(1_500)
+      }).pipe(withProcessTimeout),
+    processTestTimeout,
+  )
+
   it.live(
     "a multibyte character split across output chunks decodes whole",
     () =>

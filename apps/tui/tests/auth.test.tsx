@@ -347,6 +347,26 @@ describe("Auth route", () => {
       expect(deleted).toEqual(["openai"])
     }).pipe(Effect.timeout("10 seconds")),
   )
+  it.scopedLive("reads the sign-in methods of the session's own drivers", () =>
+    Effect.gen(function* () {
+      const methodCalls: Array<{ sessionId?: string } | void> = []
+      const client = createMockClient({
+        auth: {
+          listProviders: () => Effect.succeed([]),
+          listMethods: (input: { sessionId?: string } | void) => {
+            methodCalls.push(input)
+            return Effect.succeed({})
+          },
+        },
+      })
+      yield* renderScoped(() => <Auth sessionId={activeSessionId} />, {
+        client,
+        runtime: createMockRuntime(),
+        initialAgent: AgentName.make("helper:google"),
+      })
+      expect(methodCalls).toEqual([{ sessionId: activeSessionId }])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   it.scopedLive("ignores stale auth loads after the selected agent changes", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()

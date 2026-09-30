@@ -24,7 +24,6 @@ import {
   ModelId,
   type ModelPricing,
   parseModelId,
-  parseModelProvider,
   ProviderId,
 } from "../domain/agent.js"
 import { SessionId, ToolCallId } from "../domain/ids.js"
@@ -62,16 +61,16 @@ import type * as AiToolkit from "effect/ai/Toolkit"
  * and the guard.
  * Each provider's auth blob is one URL-encoded JSON file under the configured
  * directory (default `~/.gent/auth/`), mode 0600, replaced atomically. The
- * schema is `Auth.Info`, a tagged enum with `Api | Oauth` variants.
+ * schema is `AuthInfo`, a tagged enum with `Api | Oauth` variants.
  */
 
-// ── Driver-facing wire types ────────────────────────────────────────────
+// ── auth method wire types ──────────────────────────────────────────────────
 
-const AuthMethodType = Schema.Literals(["oauth", "api"])
-type AuthMethodType = typeof AuthMethodType.Type
+/** How a provider signs in: an API key or an OAuth login. */
+const AuthType = Schema.Literals(["api", "oauth"])
 
 export class AuthMethod extends Schema.Class<AuthMethod>("AuthMethod")({
-  type: AuthMethodType,
+  type: AuthType,
   label: Schema.String,
 }) {}
 
@@ -85,10 +84,10 @@ export class AuthAuthorization extends Schema.Class<AuthAuthorization>("AuthAuth
   instructions: Schema.optional(Schema.String),
 }) {}
 
-// ── Stored auth payload ─────────────────────────────────────────────────
+// ── stored auth ─────────────────────────────────────────────────────────────
 
 /**
- * `Auth.Info` — variants persisted in the store.
+ * `AuthInfo`: the variants persisted in the store.
  *
  * - `Api`   — bearer/API key; presented to the model driver as `key`.
  * - `Oauth` — refreshable bearer token + expiry; driver may rotate.
@@ -118,10 +117,7 @@ export type AuthApi = typeof AuthInfo.cases.Api.Type
 const AuthOauth = AuthInfo.cases.Oauth
 type AuthOauth = typeof AuthInfo.cases.Oauth.Type
 
-const AuthType = Schema.Literals(["api", "oauth"])
-type AuthType = typeof AuthType.Type
-
-// ── Auth-guard wire types ───────────────────────────────────────────────
+// ── auth guard wire types ───────────────────────────────────────────────────
 
 /** Where a provider's credential comes from: the auth store, or the driver's env variable. */
 const AuthSource = Schema.Literals(["none", "stored", "env"])
@@ -146,7 +142,7 @@ export const ListAuthProvidersPayload = Schema.Struct({
 })
 export type ListAuthProvidersPayload = typeof ListAuthProvidersPayload.Type
 
-// ── Auth service ────────────────────────────────────────────────────────
+// ── auth service ────────────────────────────────────────────────────────────
 
 export class AuthError extends Schema.TaggedError<AuthError>()("AuthError", {
   message: Schema.String,
@@ -423,7 +419,7 @@ export class Auth extends Context.Service<Auth, AuthService>()(
     })
 }
 
-// ── Auth guard ──────────────────────────────────────────────────────────
+// ── auth guard ──────────────────────────────────────────────────────────────
 
 /** True when the named env variable holds a non-empty value. */
 const envCredentialSet = (name: Option.Option<string>): Effect.Effect<boolean> =>
@@ -547,134 +543,104 @@ const storedOAuthFields = (stored: AuthInfo): Option.Option<StoredOAuthCredentia
   return Option.some({ ...fields, accountId: stored.accountId })
 }
 
-interface ProviderAuthService {
-  readonly listMethods: Effect.Effect<Record<string, ReadonlyArray<AuthMethod>>>
-  readonly authorize: (
-    sessionId: SessionId,
-    provider: string,
-    method: number,
-  ) => Effect.Effect<Option.Option<AuthAuthorization>, ProviderAuthError>
-  readonly callback: (
-    sessionId: SessionId,
-    provider: string,
-    method: number,
-    authorizationId: string,
-    code?: string,
-  ) => Effect.Effect<void, ProviderAuthError>
-}
+// ── provider login ──────────────────────────────────────────────────────────
+//
+// Login reads the drivers of the `ExtensionRegistry` in context: the caller
+// provides the registry of the session's own profile.
 
-const makeProviderAuth: Effect.Effect<
-  ProviderAuthService,
-  never,
-  Auth | ExtensionRegistry | GentPlatform
-> = Effect.gen(function* () {
+/** The login methods of each driver that has one. */
+export const listAuthMethods = Effect.fn("ProviderLogin.listMethods")(function* () {
+  const { modelDrivers } = (yield* ExtensionRegistry).getResolved()
+  const result: Record<string, ReadonlyArray<AuthMethod>> = {}
+  for (const provider of modelDrivers.values()) {
+    if (!Predicate.isUndefined(provider.auth) && provider.auth.methods.length > 0) {
+      result[provider.id] = provider.auth.methods
+    }
+  }
+  return result
+})
+
+/** Start a driver's login; none when the method completed without a link. */
+export const authorizeProvider = Effect.fn("ProviderLogin.authorize")(function* (
+  sessionId: SessionId,
+  provider: string,
+  method: number,
+) {
   const { modelDrivers } = (yield* ExtensionRegistry).getResolved()
   const authStore = yield* Auth
   const platform = yield* GentPlatform
-
-  const makePersist = (providerId: string) => persistAuthTo(authStore, providerId)
-
-  const listMethods = Effect.sync(() => {
-    const result: Record<string, ReadonlyArray<AuthMethod>> = {}
-    for (const provider of modelDrivers.values()) {
-      if (!Predicate.isUndefined(provider.auth) && provider.auth.methods.length > 0) {
-        result[provider.id] = provider.auth.methods
-      }
-    }
-    return result
-  })
-
-  const authorize = Effect.fn("ProviderAuth.authorize")(function* (
-    sessionId: SessionId,
-    provider: string,
-    method: number,
-  ) {
-    const extProvider = modelDrivers.get(provider)
-    if (Predicate.isUndefined(extProvider?.auth?.authorize)) {
-      return yield* new ProviderAuthError({
-        message: `Provider "${provider}" does not support authorize`,
-      })
-    }
-    const authorizationId = yield* platform.randomId
-    const extResult = yield* extProvider.auth
-      .authorize({
-        sessionId,
-        methodIndex: method,
-        authorizationId,
-        persist: makePersist(provider),
-      })
-      .pipe(
-        Effect.catchDefect((e) =>
-          Effect.fail(
-            new ProviderAuthError({
-              message: `Provider auth failed: ${causeMessage(e)}`,
-              cause: e,
-            }),
-          ),
+  const extProvider = modelDrivers.get(provider)
+  if (Predicate.isUndefined(extProvider?.auth?.authorize)) {
+    return yield* new ProviderAuthError({
+      message: `Provider "${provider}" does not support authorize`,
+    })
+  }
+  const authorizationId = yield* platform.randomId
+  const extResult = yield* extProvider.auth
+    .authorize({
+      sessionId,
+      methodIndex: method,
+      authorizationId,
+      persist: persistAuthTo(authStore, provider),
+    })
+    .pipe(
+      Effect.catchDefect((e) =>
+        Effect.fail(
+          new ProviderAuthError({
+            message: `Provider auth failed: ${causeMessage(e)}`,
+            cause: e,
+          }),
         ),
-      )
-    if (Option.isNone(extResult)) return Option.none()
-    return Option.some(
-      new AuthAuthorization({
-        authorizationId,
-        url: extResult.value.url,
-        method: extResult.value.method,
-        instructions: extResult.value.instructions,
-      }),
+      ),
     )
-  })
-
-  const callback = Effect.fn("ProviderAuth.callback")(function* (
-    sessionId: SessionId,
-    provider: string,
-    method: number,
-    authorizationId: string,
-    code?: string,
-  ) {
-    const extProvider = modelDrivers.get(provider)
-    if (Predicate.isUndefined(extProvider?.auth?.callback)) {
-      // No callback handler — auth completed during authorize (e.g. "done" method)
-      return
-    }
-    yield* extProvider.auth
-      .callback({
-        sessionId,
-        methodIndex: method,
-        authorizationId,
-        persist: makePersist(provider),
-        code,
-      })
-      .pipe(
-        Effect.catchDefect((e) =>
-          Effect.fail(
-            new ProviderAuthError({
-              message: `Provider auth callback failed: ${causeMessage(e)}`,
-              cause: e,
-            }),
-          ),
-        ),
-      )
-  })
-
-  return ProviderAuth.of({
-    listMethods,
-    authorize,
-    callback,
-  })
+  if (Option.isNone(extResult)) return Option.none()
+  return Option.some(
+    new AuthAuthorization({
+      authorizationId,
+      url: extResult.value.url,
+      method: extResult.value.method,
+      instructions: extResult.value.instructions,
+    }),
+  )
 })
 
-export class ProviderAuth extends Context.Service<ProviderAuth, ProviderAuthService>()(
-  "@gent/core/src/runtime/provider/ProviderAuth",
+/** Finish a driver's login with the code the user brings back. */
+export const completeProviderAuth = Effect.fn("ProviderLogin.callback")(function* (
+  sessionId: SessionId,
+  provider: string,
+  method: number,
+  authorizationId: string,
+  code?: string,
 ) {
-  static Live: Layer.Layer<ProviderAuth, never, Auth | ExtensionRegistry | GentPlatform> =
-    Layer.effect(ProviderAuth, makeProviderAuth)
-}
+  const { modelDrivers } = (yield* ExtensionRegistry).getResolved()
+  const authStore = yield* Auth
+  const extProvider = modelDrivers.get(provider)
+  // A driver without a callback finished its login in authorize (a "done" method).
+  if (Predicate.isUndefined(extProvider?.auth?.callback)) return
+  yield* extProvider.auth
+    .callback({
+      sessionId,
+      methodIndex: method,
+      authorizationId,
+      persist: persistAuthTo(authStore, provider),
+      code,
+    })
+    .pipe(
+      Effect.catchDefect((e) =>
+        Effect.fail(
+          new ProviderAuthError({
+            message: `Provider auth callback failed: ${causeMessage(e)}`,
+            cause: e,
+          }),
+        ),
+      ),
+    )
+})
 
 // ── model-resolver ──────────────────────────────────────────────────────────
 
 export interface ResolveModelRequest {
   readonly modelId: ModelId | string
-  readonly agentName?: AgentName
   readonly hints?: ProviderHints
   /** Per-agent model driver override from `agent.driver`. */
   readonly driverId?: string
@@ -905,8 +871,9 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
           const existing = Option.fromUndefinedOr(models.find((model) => model.id === modelId))
           if (Option.isSome(existing)) return Effect.succeedSome(existing.value)
           if (models.length > 0) return Effect.succeedNone
-          const provider = Option.getOrElse(parseModelProvider(modelId), () =>
-            ProviderId.make("test"),
+          const provider = Option.getOrElse(
+            Option.map(parseModelId(modelId), ([providerId]) => providerId),
+            () => ProviderId.make("test"),
           )
           return Effect.succeedSome(
             Model.make({
@@ -939,6 +906,22 @@ export const driverRetryPolicy = Effect.fn("Retry.driverRetryPolicy")(function* 
   }
   return driver.retry
 })
+
+/**
+ * A response's cache writes split by lifetime, as the driver a turn called
+ * reads them from its finish part's metadata; empty for a driver that does
+ * not split them, or no driver at all.
+ */
+export const driverCacheWritesByLifetime = Effect.fn("Provider.driverCacheWritesByLifetime")(
+  function* (driverId: Option.Option<string>, metadata: Response.ProviderMetadata) {
+    if (Option.isNone(driverId)) return []
+    const driver = (yield* ExtensionRegistry).getResolved().modelDrivers.get(driverId.value)
+    if (Predicate.isUndefined(driver) || Predicate.isUndefined(driver.cacheWritesByLifetime)) {
+      return []
+    }
+    return driver.cacheWritesByLifetime(metadata)
+  },
+)
 
 type ProviderOrAuthError = ProviderError | ProviderAuthError
 
@@ -1094,6 +1077,8 @@ export const reasoningDeltaPart = (
 
 export const finishPart = (params: {
   finishReason: Response.FinishReason
+  /** The provider metadata the finish part carries, as a driver's own usage detail. */
+  metadata?: Response.ProviderMetadata
   usage?: {
     inputTokens: number
     outputTokens: number
@@ -1121,6 +1106,7 @@ export const finishPart = (params: {
     }),
     // oxlint-disable-next-line effect/noNullish -- Effect AI requires the absent response in this wire fixture.
     response: undefined,
+    metadata: params.metadata ?? {},
   })
 
 const makeEncodingToolkit = <Tools extends Record<string, AiTool.Any>>(
@@ -1200,22 +1186,12 @@ const retryBudgetFor = (text: string): number => {
   return 0
 }
 
-const buildReply = (latestUserText: string): string => {
-  const lineCount = latestUserText.split("\n").filter((line) => line.trim().length > 0).length
-  if (lineCount > 1) {
-    return [
-      "gent processed a merged queued turn.",
-      `Received ${lineCount} lines in one message block.`,
-      `Tail: ${latestUserText.split("\n").at(-1) ?? latestUserText}`,
-    ].join(" ")
-  }
-
-  return [
+const buildReply = (latestUserText: string): string =>
+  [
     "gent debug response.",
     `Latest user message: ${latestUserText || "(empty)"}.`,
     "This turn is flowing through the real agent loop with a scripted language model.",
   ].join(" ")
-}
 
 const makeReplyStream = (latestUserText: string, reply: string, delayMs = 0) => {
   const parts = reply.split(/(?<=[.!?])\s+/).filter((chunk) => chunk.length > 0)

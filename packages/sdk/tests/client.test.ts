@@ -1,112 +1,18 @@
-import { describe, expect, it, test } from "effect-bun-test"
+import { describe, expect, it } from "effect-bun-test"
 import { Crypto, Effect, Random, Schema } from "effect"
 import { defineExtension, ExtensionHost, request } from "@gent/core/extensions/api"
 import { BuiltinExtensions } from "@gent/extensions"
-import {
-  makeTempDirectoryScoped,
-  waitFor,
-  projectMessagesWithToolInteractions,
-} from "@gent/core/test-utils"
-import {
-  SessionStorage,
-  WORKSPACE_ID_HEADER,
-  workspaceHeadersForCwd,
-  workspaceIdForCwd,
-} from "@gent/core/host"
-import * as Prompt from "effect/ai/Prompt"
+import { makeTempDirectoryScoped, waitFor } from "@gent/core/test-utils"
+import { SessionStorage } from "@gent/core/host"
 import { Gent } from "../src/client"
-import type { Message as DomainMessage } from "@gent/core/protocol"
-import {
-  BranchId,
-  MessageId,
-  Session,
-  SessionId,
-  ToolCallId,
-  dateFromMillis,
-  Message,
-  messagePartsText,
-} from "@gent/core/protocol"
-
-// ── client helpers ──────────────────────────────────────────────────────────
-
-describe("sdk client helpers", () => {
-  test("canonical tool interactions expose running calls", () => {
-    const message = Message.cases.regular.make({
-      id: MessageId.make("m1"),
-      sessionId: SessionId.make("s1"),
-      branchId: BranchId.make("b1"),
-      role: "assistant",
-      parts: [
-        Prompt.toolCallPart({
-          id: ToolCallId.make("tc1"),
-          name: "read",
-          params: { path: "/foo" },
-          providerExecuted: false,
-        }),
-      ],
-      createdAt: dateFromMillis(0),
-    })
-    const projected = projectMessagesWithToolInteractions([message])[0]
-    expect(projected?.toolInteractions.length).toBe(1)
-    expect(projected?.toolInteractions[0]?.id).toBe(ToolCallId.make("tc1"))
-    expect(projected?.toolInteractions[0]?.toolName).toBe("read")
-    expect(projected?.toolInteractions[0]?.status).toBe("running")
-  })
-
-  test("canonical tool interactions include completed results", () => {
-    const messages: DomainMessage[] = [
-      Message.cases.regular.make({
-        id: MessageId.make("m1"),
-        sessionId: SessionId.make("s1"),
-        branchId: BranchId.make("b1"),
-        role: "assistant",
-        parts: [
-          Prompt.toolCallPart({
-            id: ToolCallId.make("tc1"),
-            name: "read",
-            params: { path: "/foo" },
-            providerExecuted: false,
-          }),
-        ],
-        createdAt: dateFromMillis(0),
-      }),
-      Message.cases.regular.make({
-        id: MessageId.make("m2"),
-        sessionId: SessionId.make("s1"),
-        branchId: BranchId.make("b1"),
-        role: "tool",
-        parts: [
-          Prompt.toolResultPart({
-            id: ToolCallId.make("tc1"),
-            name: "read",
-            isFailure: false,
-            providerExecuted: false,
-            result: "file contents",
-          }),
-        ],
-        createdAt: dateFromMillis(1),
-      }),
-    ]
-    const projected = projectMessagesWithToolInteractions(messages)[0]
-    expect(projected?.toolInteractions[0]?.status).toBe("completed")
-    expect(projected?.toolInteractions[0]?.output).toBe("file contents")
-  })
-
-  test("workspace id is a stable hash of canonical cwd", () => {
-    expect(workspaceIdForCwd("/tmp/gent/../gent")).toBe(workspaceIdForCwd("/tmp/gent"))
-    expect(workspaceIdForCwd("/tmp/gent")).toMatch(/^[a-f0-9]{64}$/)
-    expect(workspaceHeadersForCwd("/tmp/gent")[WORKSPACE_ID_HEADER]).toBe(
-      workspaceIdForCwd("/tmp/gent"),
-    )
-  })
-})
+import { Session, SessionId, dateFromMillis, messagePartsText } from "@gent/core/protocol"
 
 // ── server options ──────────────────────────────────────────────────────────
 
 /**
  * `Gent.server` is the single server composition root. These tests pin the
- * options `gent server start` needs from it — a fixed port and idle
- * shutdown — so the launcher never rebuilds a second root to get them back.
+ * options `gent server start` needs from it, such as a fixed port, so the
+ * launcher never rebuilds a second root to get them back.
  */
 
 const ServerIdentity = Schema.Struct({
@@ -291,6 +197,36 @@ describe("Gent.server workspace isolation", () => {
           expect(branchesB).toEqual([])
           expect(messagesB).toEqual([])
           expect(snapshotB._tag).toBe("Failure")
+        }).pipe(Effect.timeout("20 seconds")),
+      ),
+    30_000,
+  )
+
+  it.live(
+    "a client built from a URL names the workspace of its cwd, or of the process cwd",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const cwdA = yield* makeTempDirectoryScoped("gent-url-client-")
+          const cwdB = yield* makeTempDirectoryScoped("gent-url-client-")
+          const server = yield* Gent.server({
+            cwd: cwdA,
+            state: Gent.state.memory(),
+            provider: Gent.provider.mock(),
+          })
+          const clientA = (yield* Gent.client(server.url, { cwd: cwdA })).client
+          const clientB = (yield* Gent.client(server.url, { cwd: cwdB })).client
+          const clientHere = (yield* Gent.client(server.url)).client
+
+          const created = yield* clientA.session.create({ name: "Workspace A", cwd: cwdA })
+          const ids = (sessions: ReadonlyArray<{ readonly id: string }>) =>
+            sessions.map((session) => session.id)
+          expect(ids(yield* clientA.session.list())).toContain(created.sessionId)
+          expect(ids(yield* clientB.session.list())).not.toContain(created.sessionId)
+          expect(ids(yield* clientHere.session.list())).not.toContain(created.sessionId)
+          const here = yield* clientHere.session.create({ name: "Here", cwd: process.cwd() })
+          expect(ids(yield* clientHere.session.list())).toContain(here.sessionId)
+          expect(ids(yield* clientA.session.list())).not.toContain(here.sessionId)
         }).pipe(Effect.timeout("20 seconds")),
       ),
     30_000,

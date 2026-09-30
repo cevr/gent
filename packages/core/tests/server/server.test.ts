@@ -9,6 +9,7 @@ import {
   Logger,
   Option,
   Path,
+  type PlatformError,
   Predicate,
   Ref,
   Schema,
@@ -21,12 +22,9 @@ import {
   SessionMutationsLive,
   buildBranchTree,
   getBranchTree,
+  RpcHandlersLive,
 } from "../../src/server/server"
-import {
-  ExtensionHealth,
-  ExtensionHealthIssue,
-  ExtensionHealthSnapshot,
-} from "../../src/server/rpc"
+import { ExtensionHealthSnapshot, GentRpcs } from "../../src/server/rpc"
 import {
   BranchId,
   ExtensionId,
@@ -42,7 +40,12 @@ import {
   textStep,
   waitFor,
 } from "../../src/test-utils/language-model"
-import { createE2ELayer, createRpcClient, testSqliteStorage } from "../../src/test-utils/harness"
+import {
+  createE2ELayer,
+  createRpcClient,
+  testSqliteStorage,
+  emptyQueueSnapshot,
+} from "../../src/test-utils/harness"
 import {
   messagePartsText,
   Branch,
@@ -57,9 +60,11 @@ import {
   MessageStorage,
   SessionStorage,
   SqliteStorage,
+  type BranchStorageService,
+  type SessionStorageService,
 } from "../../src/storage/storage"
 import { GentPlatform } from "../../src/runtime/gent-platform"
-import { ConfigService, UserConfig } from "../../src/runtime/config"
+import { ConfigService, UserConfig, RuntimeEnvironment } from "../../src/runtime/config"
 import {
   ExtensionRegistry,
   resolveExtensions,
@@ -67,22 +72,11 @@ import {
   type SessionProfile,
 } from "../../src/runtime/extension-host"
 import type { LoadedExtension } from "../../src/domain/extension.js"
-import { makeRequestDeduper, SessionRuntimeError } from "../../src/runtime/session"
 import {
-  collectSessionEvents,
-  createActiveSessionFixture,
-  failingDeleteSessionMutationsLayerWithMachineProbe,
-  failingSessionMutationsLayer,
-  FIXED_NOW,
-  interleavedSessionMutationsLayer,
-  makeClient,
-  makeRpcHandlersClient,
-  racySessionMutationsLayer,
-  sessionMutationsLayer,
-  sessionMutationsLayerWithMachineProbe,
-  sessionRuntimeLayer,
-  testRuntimeEnvironment,
-} from "./session-mutations"
+  SessionRuntimeError,
+  SessionRuntime,
+  type SessionRuntimeService,
+} from "../../src/runtime/session"
 import * as Prompt from "effect/ai/Prompt"
 import { SessionMutations } from "../../src/domain/extension"
 import {
@@ -91,12 +85,289 @@ import {
   DEFAULT_MAX_AGENT_RUN_DEPTH,
   ModelId,
 } from "../../src/domain/agent"
-import { type EventEnvelope, EventStore, SessionStarted } from "../../src/domain/event"
+import {
+  type EventEnvelope,
+  EventStore,
+  SessionStarted,
+  EventStoreError,
+} from "../../src/domain/event"
 import { BunServices } from "@effect/platform-bun"
 import { TestClock } from "effect/testing"
-import { SqlClient } from "effect/sql"
+import { SqlClient, type SqlError } from "effect/sql"
 import { ModelResolver } from "../../src/runtime/provider"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
+import { RpcClient, RpcTest } from "effect/rpc"
+import { WORKSPACE_ID_HEADER, WorkspaceId } from "../../src/server/workspace-rpc"
+
+// ── fixtures ────────────────────────────────────────────────────────────────
+
+const FIXED_NOW = dateFromMillis(1_767_225_600_000)
+
+/** The host environment `SessionMutations` builds its deleted-session host context from. */
+const testRuntimeEnvironment = RuntimeEnvironment.Live({
+  cwd: "/nonexistent/gent-test-cwd",
+  home: "/nonexistent/gent-test-home",
+})
+
+const makeClient = (reply = "ok") =>
+  Effect.gen(function* () {
+    const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep(reply)])
+    return yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
+  })
+
+const rpcTestWorkspaceId = WorkspaceId.make("c".repeat(64))
+
+/**
+ * RPC client over `RpcHandlersLive` with the production e2e root underneath
+ * and a stub `SessionRuntime` on top. The stub shadows the root's runtime so
+ * a test can count or fail dispatches while the `message.send` handler runs
+ * its real request-id dedup.
+ */
+const makeRpcHandlersClient = (
+  runtimeOverrides: Partial<SessionRuntimeService> = {},
+  extraLayer: Layer.Layer<never> = Layer.empty,
+) =>
+  Effect.gen(function* () {
+    const context = yield* Layer.build(
+      Layer.provide(
+        RpcHandlersLive,
+        Layer.mergeAll(
+          createE2ELayer({ ...e2ePreset, providerLayer: LanguageModelLayers.debug() }),
+          sessionRuntimeLayer(runtimeOverrides),
+          extraLayer,
+        ),
+      ),
+    )
+    const client = yield* RpcTest.makeClient(GentRpcs).pipe(Effect.provide(context))
+    const inWorkspace = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+      RpcClient.withHeaders(effect, { [WORKSPACE_ID_HEADER]: rpcTestWorkspaceId })
+    return { client, inWorkspace }
+  })
+
+const collectSessionEvents = <A, E>(stream: Stream.Stream<A, E>) =>
+  Effect.gen(function* () {
+    const ready = yield* Deferred.make<void>()
+    const closed = yield* Deferred.make<void>()
+
+    yield* stream.pipe(
+      Stream.runForEach(() => Deferred.succeed(ready, void 0).pipe(Effect.ignore)),
+      Effect.ensuring(Deferred.succeed(closed, void 0).pipe(Effect.ignore)),
+      Effect.forkScoped,
+    )
+
+    yield* Deferred.await(ready).pipe(Effect.timeout("5 seconds"))
+    return closed
+  })
+
+const failingPublisherLayer = Layer.succeed(
+  EventStore,
+  EventStore.of({
+    subscribe: () => Stream.empty,
+    removeSession: () => Effect.void,
+    append: () => Effect.fail(new EventStoreError({ message: "publish failed" })),
+    deliver: () => Effect.void,
+    publish: () => Effect.fail(new EventStoreError({ message: "publish failed" })),
+  }),
+)
+
+const sessionRuntimeLayer = (
+  overrides: Partial<SessionRuntimeService> = {},
+): Layer.Layer<SessionRuntime> =>
+  Layer.succeed(
+    SessionRuntime,
+    SessionRuntime.of({
+      sendUserMessage: () => Effect.void,
+      steer: () => Effect.void,
+      respondInteraction: () => Effect.void,
+      requestExtension: () => Effect.void,
+      drainQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
+      getQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
+      getState: () =>
+        Effect.succeed({
+          _tag: "Idle",
+          agent: AgentName.make("primary"),
+          queue: emptyQueueSnapshot(),
+        }),
+      watchState: () => Effect.succeed(Stream.empty),
+      terminateSession: () => Effect.void,
+      ...overrides,
+    }),
+  )
+
+type TestStorage = Layer.Layer<
+  Layer.Success<ReturnType<typeof testSqliteStorage<never>>>,
+  StorageError | PlatformError.PlatformError
+>
+
+/**
+ * `SessionMutationsLive` over a fresh in-memory database and stub
+ * collaborators. Each option replaces one collaborator; `sessionStorage`
+ * wraps the real session storage to inject a failure or a racing write.
+ */
+const sessionMutationsTestLayer = (
+  options: {
+    readonly storage?: TestStorage
+    readonly sessionStorage?: (
+      sessions: SessionStorageService,
+    ) => Effect.Effect<SessionStorageService, never, BranchStorage | SqlClient.SqlClient>
+    readonly runtime?: Layer.Layer<SessionRuntime>
+    readonly governance?: Layer.Layer<AgentLoopSessionGovernance>
+    readonly eventStore?: Layer.Layer<EventStore>
+  } = {},
+) => {
+  const storageLayer = options.storage ?? testSqliteStorage(() => Layer.empty, {})
+  const sessionStorageLayer = Layer.effect(
+    SessionStorage,
+    Effect.flatMap(SessionStorage, options.sessionStorage ?? Effect.succeed),
+  ).pipe(Layer.provide(storageLayer))
+  const deps = Layer.mergeAll(
+    storageLayer,
+    sessionStorageLayer,
+    options.runtime ?? sessionRuntimeLayer(),
+    options.governance ?? sessionGovernanceProbeLayer(),
+    options.eventStore ?? EventStore.Memory,
+    LanguageModelLayers.debug(),
+    LanguageModelLayers.resolver(LanguageModelLayers.debug()),
+    GentPlatform.Test(),
+    testRuntimeEnvironment,
+    ExtensionRegistry.Test(),
+  )
+  return Layer.provideMerge(SessionMutationsLive, deps)
+}
+
+/** A fresh database for every test that provides it. */
+const freshSessionMutationsLayer = (options?: Parameters<typeof sessionMutationsTestLayer>[0]) =>
+  Layer.fresh(Layer.unwrap(Effect.sync(() => sessionMutationsTestLayer(options))))
+
+const failingSessionMutationsLayer = freshSessionMutationsLayer({
+  eventStore: failingPublisherLayer,
+})
+
+const sessionMutationsLayer = freshSessionMutationsLayer()
+
+const createActiveSessionFixture = Effect.fn("createActiveSessionFixture")(function* (input: {
+  readonly sessions: SessionStorageService
+  readonly branches: BranchStorageService
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly now: Date
+  readonly name?: string
+  readonly cwd?: string
+  readonly parentSessionId?: SessionId
+  readonly parentBranchId?: BranchId
+  readonly threadId?: SessionId
+}) {
+  const session = new Session({
+    id: input.sessionId,
+    name: input.name,
+    cwd: input.cwd,
+    parentSessionId: input.parentSessionId,
+    parentBranchId: input.parentBranchId,
+    threadId: input.threadId,
+    createdAt: input.now,
+    updatedAt: input.now,
+  })
+  yield* input.sessions.createSession(session)
+  yield* input.branches.createBranch(
+    new Branch({ id: input.branchId, sessionId: input.sessionId, createdAt: input.now }),
+  )
+  yield* input.sessions.setActiveBranch(input.sessionId, input.branchId, input.now)
+})
+
+const sessionRuntimeProbeLayer = (terminated: Array<SessionId>) =>
+  sessionRuntimeLayer({
+    terminateSession: (sessionId) =>
+      Effect.sync(() => {
+        terminated.push(sessionId)
+      }),
+  })
+
+const sessionGovernanceProbeLayer = (restored?: Array<SessionId>) =>
+  Layer.succeed(
+    AgentLoopSessionGovernance,
+    AgentLoopSessionGovernance.of({
+      markTerminated: () => Effect.void,
+      clearTerminated: (_workspaceId, sessionId) =>
+        Effect.sync(() => {
+          restored?.push(sessionId)
+        }),
+      isTerminated: () => Effect.succeed(false),
+    }),
+  )
+
+/**
+ * Session mutations whose first `deleteSession` inserts a child of the
+ * deleted root first: a new descendant that commits after the delete set is
+ * read but before the cascade tx opens.
+ */
+const racySessionMutationsLayer = (params: {
+  readonly runtimeTerminated: Array<SessionId>
+  readonly lateChild: { sessionId: SessionId; branchId: BranchId }
+}) =>
+  sessionMutationsTestLayer({
+    runtime: sessionRuntimeProbeLayer(params.runtimeTerminated),
+    sessionStorage: (sessions) =>
+      Effect.gen(function* () {
+        const branches = yield* BranchStorage
+        let fired = false
+        return SessionStorage.of({
+          ...sessions,
+          deleteSession: (rootId: SessionId) =>
+            Effect.gen(function* () {
+              if (!fired) {
+                fired = true
+                const now = FIXED_NOW
+                yield* sessions.createSession(
+                  new Session({
+                    id: params.lateChild.sessionId,
+                    cwd: "/nonexistent/racing-late-child",
+                    parentSessionId: rootId,
+                    createdAt: now,
+                    updatedAt: now,
+                  }),
+                )
+                yield* branches.createBranch(
+                  new Branch({
+                    id: params.lateChild.branchId,
+                    sessionId: params.lateChild.sessionId,
+                    createdAt: now,
+                  }),
+                )
+              }
+              return yield* sessions.deleteSession(rootId)
+            }),
+        })
+      }),
+  })
+
+/**
+ * Session mutations whose first read of `sessionId` is followed at once by a
+ * racing writer's committed change (`racingWrite`, raw SQL). It stands for a
+ * `/model` switch or a rename tool call that lands between a mutation's read
+ * and its write.
+ */
+const interleavedSessionMutationsLayer = (params: {
+  readonly sessionId: SessionId
+  readonly racingWrite: (sql: SqlClient.SqlClient) => Effect.Effect<unknown, SqlError.SqlError>
+}) =>
+  sessionMutationsTestLayer({
+    sessionStorage: (sessions) =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient
+        let fired = false
+        return SessionStorage.of({
+          ...sessions,
+          getSession: (id: SessionId) =>
+            Effect.gen(function* () {
+              const found = yield* sessions.getSession(id)
+              if (fired || id !== params.sessionId) return found
+              fired = true
+              yield* params.racingWrite(sql).pipe(Effect.orDie)
+              return found
+            }),
+        })
+      }),
+  })
 
 // ── extension health ────────────────────────────────────────────────────────
 
@@ -173,47 +444,6 @@ describe("buildExtensionHealthSnapshot", () => {
           manifest: { id: ExtensionId.make("@gent/memory") },
           scope: "builtin",
           sourcePath: "builtin",
-        },
-      ],
-    })
-  })
-
-  test("health issue constructors preserve typed failure categories", () => {
-    expect(
-      ExtensionHealthIssue.cases.ActivationFailed.make({
-        phase: "startup",
-        error: "startup boom",
-      }),
-    ).toEqual({
-      _tag: "ActivationFailed",
-      phase: "startup",
-      error: "startup boom",
-    })
-  })
-
-  test("degraded constructor requires non-empty issues", () => {
-    expect(
-      ExtensionHealth.cases.Degraded.make({
-        manifest: { id: "@gent/plan" },
-        scope: "builtin",
-        sourcePath: "builtin",
-        issues: [
-          ExtensionHealthIssue.cases.ActivationFailed.make({
-            phase: "startup",
-            error: "launchd boom",
-          }),
-        ],
-      }),
-    ).toEqual({
-      _tag: "Degraded",
-      manifest: { id: "@gent/plan" },
-      scope: "builtin",
-      sourcePath: "builtin",
-      issues: [
-        {
-          _tag: "ActivationFailed",
-          phase: "startup",
-          error: "launchd boom",
         },
       ],
     })
@@ -315,16 +545,8 @@ describe("buildExtensionHealthSnapshot", () => {
 
 // ── branch tree ─────────────────────────────────────────────────────────────
 
-/**
- * Regression suite for the `getBranchTree` pure helper.
- *
- * The helper replaces the old `SessionQueries.getBranchTree` plumbed
- * method (W35-C4). Pin its public contract — composition over
- * `BranchStorage.listBranches` + `BranchStorage.countMessagesByBranches`
- * + pure `buildBranchTree`, and propagation of a delegated failure as
- * `StorageError` — so future refactors cannot silently re-introduce a
- * service method or skip the typed-error surface.
- */
+// `getBranchTree` composes `BranchStorage.listBranches`,
+// `BranchStorage.countMessagesByBranches` and the pure `buildBranchTree`.
 
 const SESSION_ID = SessionId.make("test-session")
 const ROOT_ID = BranchId.make("branch-root")
@@ -358,8 +580,8 @@ const branchStorageLayer = (
     }),
   )
 
-describe("getBranchTree helper", () => {
-  it.live("composes listBranches + countMessagesByBranches via buildBranchTree", () =>
+describe("branch tree", () => {
+  it.live("nests each branch under its parent with its message count", () =>
     Effect.gen(function* () {
       const branches = [
         makeBranch(ROOT_ID, 0),
@@ -385,50 +607,6 @@ describe("getBranchTree helper", () => {
       expect(root?.children).toHaveLength(1)
       expect(root?.children[0]?.branch.id).toBe(CHILD_ID)
       expect(root?.children[0]?.messageCount).toBe(7)
-    }),
-  )
-
-  it.live("propagates listBranches failures as StorageError", () =>
-    Effect.gen(function* () {
-      const failure = new StorageError({ message: "boom" })
-      const layer = Layer.succeed(
-        BranchStorage,
-        BranchStorage.of({
-          createBranch: die("createBranch"),
-          getBranch: die("getBranch"),
-          listBranches: () => Effect.fail(failure),
-          countMessagesByBranches: () => Effect.succeed(new Map<BranchId, number>()),
-        }),
-      )
-      const exit = yield* Effect.exit(getBranchTree(SESSION_ID).pipe(Effect.provide(layer)))
-      expect(exit._tag).toBe("Failure")
-      if (exit._tag !== "Failure") return
-      const error = Cause.findErrorOption(exit.cause)
-      expect(Option.isSome(error)).toBe(true)
-      if (!Option.isSome(error)) return
-      expect(Schema.is(StorageError)(error.value)).toBe(true)
-    }),
-  )
-
-  it.live("propagates countMessagesByBranches failures as StorageError", () =>
-    Effect.gen(function* () {
-      const failure = new StorageError({ message: "count boom" })
-      const layer = Layer.succeed(
-        BranchStorage,
-        BranchStorage.of({
-          createBranch: die("createBranch"),
-          getBranch: die("getBranch"),
-          listBranches: () => Effect.succeed([makeBranch(ROOT_ID, 0)]),
-          countMessagesByBranches: () => Effect.fail(failure),
-        }),
-      )
-      const exit = yield* Effect.exit(getBranchTree(SESSION_ID).pipe(Effect.provide(layer)))
-      expect(exit._tag).toBe("Failure")
-      if (exit._tag !== "Failure") return
-      const error = Cause.findErrorOption(exit.cause)
-      expect(Option.isSome(error)).toBe(true)
-      if (!Option.isSome(error)) return
-      expect(Schema.is(StorageError)(error.value)).toBe(true)
     }),
   )
 })
@@ -575,27 +753,35 @@ describe("session queries", () => {
     ),
   )
 
-  it.live("createSession rejects parent branch without parent session through the public API", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { client } = yield* makeClient()
-        const result = yield* Effect.result(
-          client.session.create({
-            name: "Dangling branch parent",
-            cwd: process.cwd(),
-            parentBranchId: BranchId.make("dangling-parent-branch"),
-          }),
-        )
+  it.live(
+    "a create that names a parent branch or thread but no parent session is invalid, and stores nothing",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { client } = yield* makeClient()
+          const danglingBranch = yield* client.session
+            .create({
+              name: "Dangling branch parent",
+              cwd: process.cwd(),
+              parentBranchId: BranchId.make("dangling-parent-branch"),
+            })
+            .pipe(Effect.flip)
+          const danglingThread = yield* client.session
+            .create({ name: "Dangling thread", cwd: process.cwd(), continueThread: true })
+            .pipe(Effect.flip)
 
-        expect(result._tag).toBe("Failure")
-      }).pipe(Effect.timeout("4 seconds")),
-    ),
+          expect(danglingBranch._tag).toBe("InvalidStateError")
+          expect(danglingThread._tag).toBe("InvalidStateError")
+          expect(yield* client.session.list()).toHaveLength(0)
+        }).pipe(Effect.timeout("4 seconds")),
+      ),
   )
 })
 
 // ── session command persistence ─────────────────────────────────────────────
 
-const absentModel = Option.getOrUndefined(Option.none<ModelId>())
+// oxlint-disable-next-line effect/noNullish -- The command leaves the model unset, as a client sends it.
+const absentModel = undefined
 
 describe("session command persistence", () => {
   it.live("message.send surfaces runtime failure and does not log message sent", () =>
@@ -903,22 +1089,6 @@ describe("session command persistence", () => {
       expect((yield* sessions.getSession(sessionId))?.reasoningLevel).toBeUndefined()
     }).pipe(Effect.provide(failingSessionMutationsLayer), Effect.timeout("4 seconds")),
   )
-
-  it.live("rejects session creation with parent branch but no parent session", () =>
-    Effect.gen(function* () {
-      const mutations = yield* SessionMutations
-      const sessions = yield* SessionStorage
-
-      const exit = yield* Effect.exit(
-        mutations.createSession({
-          parentBranchId: BranchId.make("dangling-parent-branch"),
-        }),
-      )
-
-      expect(exit._tag).toBe("Failure")
-      expect(yield* sessions.listSessions).toHaveLength(0)
-    }).pipe(Effect.provide(sessionMutationsLayer), Effect.timeout("4 seconds")),
-  )
 })
 
 // ── session nesting depth ───────────────────────────────────────────────────
@@ -1201,7 +1371,9 @@ describe("session.delete", () => {
         yield* Deferred.await(grandchildClosed).pipe(Effect.timeout("5 seconds"))
         expect(runtimeTerminated).toEqual([parent.sessionId, child.sessionId, grandchild.sessionId])
       }).pipe(
-        Effect.provide(sessionMutationsLayerWithMachineProbe(runtimeTerminated)),
+        Effect.provide(
+          sessionMutationsTestLayer({ runtime: sessionRuntimeProbeLayer(runtimeTerminated) }),
+        ),
         Effect.timeout("4 seconds"),
       ),
     )
@@ -1270,7 +1442,61 @@ describe("session.delete", () => {
 
         expect(runtimeTerminated).toEqual([parent.sessionId, child.sessionId])
       }).pipe(
-        Effect.provide(sessionMutationsLayerWithMachineProbe(runtimeTerminated)),
+        Effect.provide(
+          sessionMutationsTestLayer({ runtime: sessionRuntimeProbeLayer(runtimeTerminated) }),
+        ),
+        Effect.timeout("4 seconds"),
+      ),
+    )
+  })
+
+  // The runtimes stopped before the delete are the sessions the delete
+  // removes: a spawn's handoff goes with the spawn, the root's handoff stays.
+  it.live("a delete stops the runtimes of exactly the sessions it removes", () => {
+    const runtimeTerminated: Array<SessionId> = []
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const mutations = yield* SessionMutations
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
+        const base = { sessions, branches, now: FIXED_NOW }
+        const ids = (name: string) => ({
+          sessionId: SessionId.make(`tree-${name}`),
+          branchId: BranchId.make(`tree-${name}-branch`),
+        })
+        const under = (parent: string) => ({
+          parentSessionId: SessionId.make(`tree-${parent}`),
+          parentBranchId: BranchId.make(`tree-${parent}-branch`),
+        })
+        yield* createActiveSessionFixture({ ...base, ...ids("root") })
+        yield* createActiveSessionFixture({
+          ...base,
+          ...ids("root-handoff"),
+          ...under("root"),
+          threadId: SessionId.make("tree-root"),
+        })
+        yield* createActiveSessionFixture({ ...base, ...ids("spawn"), ...under("root") })
+        yield* createActiveSessionFixture({
+          ...base,
+          ...ids("spawn-handoff"),
+          ...under("spawn"),
+          threadId: SessionId.make("tree-spawn"),
+        })
+
+        yield* mutations.deleteSession(SessionId.make("tree-root"))
+
+        expect(runtimeTerminated.map(String).toSorted()).toEqual([
+          "tree-root",
+          "tree-spawn",
+          "tree-spawn-handoff",
+        ])
+        const kept = yield* sessions.getSession(SessionId.make("tree-root-handoff"))
+        expect(kept?.parentSessionId).toBeUndefined()
+        expect(yield* sessions.getSession(SessionId.make("tree-spawn-handoff"))).toBeUndefined()
+      }).pipe(
+        Effect.provide(
+          sessionMutationsTestLayer({ runtime: sessionRuntimeProbeLayer(runtimeTerminated) }),
+        ),
         Effect.timeout("4 seconds"),
       ),
     )
@@ -1303,7 +1529,17 @@ describe("session.delete", () => {
         expect(yield* sessions.getSession(sessionId)).not.toBeUndefined()
       }).pipe(
         Effect.provide(
-          failingDeleteSessionMutationsLayerWithMachineProbe(runtimeTerminated, runtimeRestored),
+          sessionMutationsTestLayer({
+            runtime: sessionRuntimeProbeLayer(runtimeTerminated),
+            governance: sessionGovernanceProbeLayer(runtimeRestored),
+            sessionStorage: (sessions) =>
+              Effect.succeed(
+                SessionStorage.of({
+                  ...sessions,
+                  deleteSession: () => Effect.fail(new StorageError({ message: "delete failed" })),
+                }),
+              ),
+          }),
         ),
         Effect.timeout("4 seconds"),
       ),
@@ -2027,25 +2263,14 @@ describe("session transport contract", () => {
 // ── request idempotency ─────────────────────────────────────────────────────
 
 describe("requestId idempotency", () => {
-  const makePersistentSessionMutationsLayer = (dbPath: string) => {
-    const storageLayer = SqliteStorage.LiveWithSql(dbPath, () => Layer.empty, {}).pipe(
-      Layer.provide(BunServices.layer),
-      Layer.provide(GentPlatform.Test()),
-    )
-    const deps = Layer.mergeAll(
-      storageLayer,
-      sessionRuntimeLayer(),
-      EventStore.Memory,
-      EventStore.Memory,
-      AgentLoopSessionGovernance.Live,
-      LanguageModelLayers.debug(),
-      ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
-      GentPlatform.Test(),
-      testRuntimeEnvironment,
-      ExtensionRegistry.Test(),
-    )
-    return Layer.provideMerge(SessionMutationsLive, deps)
-  }
+  const makePersistentSessionMutationsLayer = (dbPath: string) =>
+    sessionMutationsTestLayer({
+      storage: SqliteStorage.LiveWithSql(dbPath, () => Layer.empty, {}).pipe(
+        Layer.provide(BunServices.layer),
+        Layer.provide(GentPlatform.Test()),
+      ),
+      governance: AgentLoopSessionGovernance.Live,
+    })
 
   it.live("duplicate createSession requestId converges on a single session id", () =>
     Effect.gen(function* () {
@@ -2262,38 +2487,6 @@ describe("requestId idempotency", () => {
     ),
   )
 
-  it.live("duplicate createBranch requestId converges on a single branch id", () =>
-    Effect.gen(function* () {
-      const mutations = yield* SessionMutations
-      const branches = yield* BranchStorage
-      const sessions = yield* SessionStorage
-      const sessionId = SessionId.make("session-branch-dedup")
-      const branchId = BranchId.make("branch-branch-dedup")
-      yield* createActiveSessionFixture({
-        sessions,
-        branches,
-        sessionId,
-        branchId,
-        now: FIXED_NOW,
-      })
-
-      const first = yield* mutations.createSessionBranch({
-        sessionId,
-        name: "feat",
-        requestId: "req-branch-1",
-      })
-      const second = yield* mutations.createSessionBranch({
-        sessionId,
-        name: "feat",
-        requestId: "req-branch-1",
-      })
-
-      expect(second.branchId).toBe(first.branchId)
-      // 1 from fixture + 1 from the deduped create
-      expect(yield* branches.listBranches(sessionId)).toHaveLength(2)
-    }).pipe(Effect.provide(sessionMutationsLayer), Effect.timeout("4 seconds")),
-  )
-
   it.live("concurrent duplicate createBranch requestIds converge on one branch", () =>
     Effect.gen(function* () {
       const mutations = yield* SessionMutations
@@ -2319,90 +2512,6 @@ describe("requestId idempotency", () => {
       )
       expect(results[0].branchId).toBe(results[1].branchId)
       expect(results[0].branchId).toBe(results[2].branchId)
-      expect(yield* branches.listBranches(sessionId)).toHaveLength(2)
-    }).pipe(Effect.provide(sessionMutationsLayer), Effect.timeout("4 seconds")),
-  )
-
-  it.live("duplicate switchBranch requestId activates the target only once", () =>
-    Effect.gen(function* () {
-      const mutations = yield* SessionMutations
-      const sessions = yield* SessionStorage
-      const branches = yield* BranchStorage
-      const sessionId = SessionId.make("session-switch-dedup")
-      const fromBranchId = BranchId.make("branch-switch-dedup-from")
-      const toBranchId = BranchId.make("branch-switch-dedup-to")
-      const now = FIXED_NOW
-      yield* createActiveSessionFixture({
-        sessions,
-        branches,
-        sessionId,
-        branchId: fromBranchId,
-        now,
-      })
-      yield* branches.createBranch(new Branch({ id: toBranchId, sessionId, createdAt: now }))
-
-      yield* mutations.switchActiveBranch({
-        sessionId,
-        fromBranchId,
-        toBranchId,
-        requestId: "req-switch-1",
-      })
-      yield* mutations.switchActiveBranch({
-        sessionId,
-        fromBranchId,
-        toBranchId,
-        requestId: "req-switch-1",
-      })
-
-      expect((yield* sessions.getSession(sessionId))?.activeBranchId).toBe(toBranchId)
-    }).pipe(Effect.provide(sessionMutationsLayer), Effect.timeout("4 seconds")),
-  )
-
-  it.live("duplicate forkBranch requestId converges on a single new branch", () =>
-    Effect.gen(function* () {
-      const mutations = yield* SessionMutations
-      const sessions = yield* SessionStorage
-      const branches = yield* BranchStorage
-      const messages = yield* MessageStorage
-      const sessionId = SessionId.make("session-fork-dedup")
-      const branchId = BranchId.make("branch-fork-dedup")
-      const messageId = MessageId.make("message-fork-dedup")
-      const now = FIXED_NOW
-      yield* createActiveSessionFixture({
-        sessions,
-        branches,
-        sessionId,
-        branchId,
-        now,
-      })
-      yield* messages.createMessage(
-        Message.cases.regular.make({
-          id: messageId,
-          sessionId,
-          branchId,
-          role: "user",
-          parts: [Prompt.textPart({ text: "seed" })],
-          createdAt: now,
-        }),
-      )
-
-      const first = yield* mutations.forkSessionBranch({
-        sessionId,
-        fromBranchId: branchId,
-        atMessageId: messageId,
-        name: "fork",
-        requestId: "req-fork-1",
-      })
-      const second = yield* mutations.forkSessionBranch({
-        sessionId,
-        fromBranchId: branchId,
-        atMessageId: messageId,
-        name: "fork",
-        requestId: "req-fork-1",
-      })
-
-      expect(second.branchId).toBe(first.branchId)
-      // origin + 1 forked branch
       expect(yield* branches.listBranches(sessionId)).toHaveLength(2)
     }).pipe(Effect.provide(sessionMutationsLayer), Effect.timeout("4 seconds")),
   )
@@ -2644,72 +2753,6 @@ describe("requestId idempotency", () => {
     }).pipe(Effect.provide(sessionMutationsLayer)),
   )
 
-  it.effect("dedup cache hard cap evicts the oldest requestId", () =>
-    Effect.gen(function* () {
-      let value = 0
-      const run = yield* makeRequestDeduper<{ requestId: string }, number, never>({
-        body: () =>
-          Effect.sync(() => {
-            value += 1
-            return value
-          }),
-        keyOf: (input) => Option.some(input.requestId),
-      })
-
-      // The cap is 1024 entries: fill it, then add one more.
-      const first = yield* run({ requestId: "req-cap-0" })
-      for (let index = 1; index <= 1024; index += 1) {
-        yield* run({ requestId: `req-cap-${index}` })
-      }
-      expect(value).toBe(1025)
-
-      // Past the cap, "req-cap-0" was evicted to make room for
-      // "req-cap-1024", so this call is a fresh lookup, not a cache hit.
-      const retry = yield* run({ requestId: "req-cap-0" })
-      expect(retry).not.toBe(first)
-      expect(retry).toBe(1026)
-    }),
-  )
-
-  // Regression: a same-key retry inside the TTL window must collapse onto
-  // the cached outcome AND must not let a stale body leak into pending such
-  // that a post-eviction retry runs the wrong body.
-  it.effect("dedup cache post-eviction retry runs the fresh body, not a stale one", () =>
-    Effect.gen(function* () {
-      // The body's identity is captured in `lastSeen` so we can prove which
-      // input arg triggered the lookup. If the post-eviction call ran a
-      // stale closure, `lastSeen` would show input1's marker, not input3's.
-      let lastSeen = ""
-      const run = yield* makeRequestDeduper<{ requestId: string; marker: string }, string, never>({
-        body: (input) =>
-          Effect.sync(() => {
-            lastSeen = input.marker
-            return input.marker
-          }),
-        keyOf: (input) => Option.some(input.requestId),
-      })
-
-      // F1 populates the cache with key="K", body uses marker="m1".
-      const first = yield* run({ requestId: "K", marker: "m1" })
-      expect(first).toBe("m1")
-      expect(lastSeen).toBe("m1")
-
-      // F2 retries the same key inside the TTL window — must hit the cache
-      // and observe F1's outcome. F2's body (marker="m2") must NOT run.
-      const second = yield* run({ requestId: "K", marker: "m2" })
-      expect(second).toBe("m1")
-      expect(lastSeen).toBe("m1")
-
-      // Advance past the TTL so F1's cache entry is gone. F3 must run a
-      // fresh lookup with ITS OWN body (marker="m3"). If F2's body leaked
-      // into pending, this would observe "m2" instead of "m3".
-      yield* TestClock.adjust("61 seconds")
-      const third = yield* run({ requestId: "K", marker: "m3" })
-      expect(third).toBe("m3")
-      expect(lastSeen).toBe("m3")
-    }),
-  )
-
   it.scoped("createSession requestId replays durable result after mutations layer restart", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
@@ -2737,19 +2780,11 @@ describe("requestId idempotency", () => {
             })
           },
         })
-        const deps = Layer.mergeAll(
-          storageLayer,
-          runtimeLayer,
-          EventStore.Memory,
-          EventStore.Memory,
-          AgentLoopSessionGovernance.Live,
-          LanguageModelLayers.debug(),
-          ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
-          GentPlatform.Test(),
-          testRuntimeEnvironment,
-          ExtensionRegistry.Test(),
-        )
-        return Layer.provideMerge(SessionMutationsLive, deps)
+        return sessionMutationsTestLayer({
+          storage: storageLayer,
+          runtime: runtimeLayer,
+          governance: AgentLoopSessionGovernance.Live,
+        })
       }
 
       const firstExit = yield* Effect.exit(

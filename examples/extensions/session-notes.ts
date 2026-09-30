@@ -8,6 +8,7 @@
  *   - one model-callable tool
  *   - one slash-presented request
  *   - one turn projection hook
+ *   - one sessionDeleted hook: a deleted session's notes leave the Ref
  */
 import { Context, Effect, HashMap, Layer, Option, Ref, Schema } from "effect"
 import {
@@ -108,6 +109,12 @@ export default defineExtension({
             },
           ],
         }
+      }),
+    )
+    // The Ref outlives every session; a deleted session's notes go with it.
+    yield* host.on("sessionDeleted", ({ sessionId }) =>
+      Effect.gen(function* () {
+        yield* Ref.update(yield* SessionNotesState, HashMap.remove(sessionId))
       }),
     )
   }),

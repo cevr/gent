@@ -1,5 +1,4 @@
 import { Clock, type Duration, Effect, Schema, type Scope } from "effect"
-import * as Option from "effect/Option"
 
 // ── wait-for-process-exit ───────────────────────────────────────────────────
 
@@ -8,9 +7,8 @@ import * as Option from "effect/Option"
  *
  * Both subprocess fixtures need the same answer — did this pid go away
  * before the deadline — so they ask it once here. The result is that
- * question and nothing more: `true` for exited, `false` for timed out. An
- * exit *code* is not on offer, because `process.kill(pid, 0)` never carried
- * one; the old `0`/`-1` sentinels only looked like exit codes.
+ * question and nothing more: `true` for exited, `false` for timed out. It
+ * carries no exit code, because `process.kill(pid, 0)` never reports one.
  */
 
 /** A pid that was never valid cannot be alive, and must not be probed. */
@@ -52,6 +50,9 @@ class ServerProcessFixtureError extends Schema.TaggedError<ServerProcessFixtureE
   { message: Schema.String },
 ) {}
 
+const READY_PREFIX = "Gent server ready on "
+const READY_LINE = new RegExp(`${READY_PREFIX}.+`)
+
 const readReadyUrl = (
   proc: Bun.Subprocess,
   readyWithin: Duration.Input,
@@ -67,35 +68,34 @@ const readReadyUrl = (
     }
     const reader = stdout.getReader()
     const pump = (): void => {
-      reader.read().then(({ value, done }) => {
-        if (done) {
-          resume(
-            Effect.fail(new ServerProcessFixtureError({ message: "stdout closed before ready" })),
-          )
-          return
-        }
-        chunks.push(decoder.decode(value))
-        const match = chunks.join("").match(/Gent server ready on (.+)/)
-        if (match) {
-          reader.releaseLock()
-          const readyUrl = Option.fromNullishOr(match[1])
-          if (Option.isNone(readyUrl)) {
+      reader.read().then(
+        ({ value, done }) => {
+          if (done) {
             resume(
-              Effect.fail(
-                new ServerProcessFixtureError({
-                  message: "server ready line did not include a url",
-                }),
-              ),
+              Effect.fail(new ServerProcessFixtureError({ message: "stdout closed before ready" })),
             )
             return
           }
-          resume(Effect.succeed(readyUrl.value.trim()))
-        } else {
-          pump()
-        }
-      })
+          chunks.push(decoder.decode(value))
+          const match = chunks.join("").match(READY_LINE)
+          if (match) {
+            reader.releaseLock()
+            resume(Effect.succeed(match[0].slice(READY_PREFIX.length).trim()))
+          } else {
+            pump()
+          }
+        },
+        (error: unknown) =>
+          resume(
+            Effect.fail(
+              new ServerProcessFixtureError({ message: `reading stdout failed: ${String(error)}` }),
+            ),
+          ),
+      )
     }
     pump()
+    // A missed ready bound interrupts the wait: the pending read is cancelled with it.
+    return Effect.tryPromise(() => reader.cancel()).pipe(Effect.ignore)
   })
   return ready.pipe(
     Effect.timeoutOrElse({
@@ -142,24 +142,6 @@ export const spawnServer = ({
     )
     const url = yield* readReadyUrl(proc, readyWithin)
     return { url: `${url}/rpc`, proc }
-  })
-
-export const waitUntil = (
-  predicate: () => boolean,
-  timeoutMs: number,
-  intervalMs = 100,
-): Effect.Effect<boolean> =>
-  Effect.gen(function* () {
-    const deadline = (yield* Clock.currentTimeMillis) + timeoutMs
-    const loop: Effect.Effect<boolean> = Effect.gen(function* () {
-      if (predicate()) return true
-      const now = yield* Clock.currentTimeMillis
-      if (now >= deadline) return false
-      // gent/no-sleep: allow real-clock polling primitive — predicate observes external subprocess state
-      yield* Effect.sleep(`${intervalMs} millis`)
-      return yield* loop
-    })
-    return yield* loop
   })
 
 export const killProcess = (proc: Bun.Subprocess, signal?: NodeJS.Signals): Effect.Effect<void> =>

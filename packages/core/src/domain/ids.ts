@@ -2,34 +2,28 @@ import { Schema } from "effect"
 
 // ── ids ─────────────────────────────────────────────────────────────────────
 
-/** Schema.brand helper kept only to standardize branded-id declarations. */
-export const branded =
-  <B extends string>(brand: B) =>
-  <S extends Schema.Top>(schema: S) =>
-    schema.pipe(Schema.brand(brand))
-
-export const SessionId = Schema.String.pipe(branded("SessionId"))
+export const SessionId = Schema.String.pipe(Schema.brand("SessionId"))
 export type SessionId = typeof SessionId.Type
 
-export const BranchId = Schema.String.pipe(branded("BranchId"))
+export const BranchId = Schema.String.pipe(Schema.brand("BranchId"))
 export type BranchId = typeof BranchId.Type
 
-export const MessageId = Schema.String.pipe(branded("MessageId"))
+export const MessageId = Schema.String.pipe(Schema.brand("MessageId"))
 export type MessageId = typeof MessageId.Type
 
-export const ToolCallId = Schema.String.pipe(branded("ToolCallId"))
+export const ToolCallId = Schema.String.pipe(Schema.brand("ToolCallId"))
 export type ToolCallId = typeof ToolCallId.Type
 
-export const ToolId = Schema.String.pipe(branded("ToolId"))
+export const ToolId = Schema.String.pipe(Schema.brand("ToolId"))
 export type ToolId = typeof ToolId.Type
 
-export const RpcId = Schema.String.pipe(branded("RpcId"))
+export const RpcId = Schema.String.pipe(Schema.brand("RpcId"))
 export type RpcId = typeof RpcId.Type
 
-export const ActorCommandId = Schema.String.pipe(branded("ActorCommandId"))
+export const ActorCommandId = Schema.String.pipe(Schema.brand("ActorCommandId"))
 export type ActorCommandId = typeof ActorCommandId.Type
 
-export const InteractionRequestId = Schema.String.pipe(branded("InteractionRequestId"))
+export const InteractionRequestId = Schema.String.pipe(Schema.brand("InteractionRequestId"))
 export type InteractionRequestId = typeof InteractionRequestId.Type
 
 /**
@@ -47,10 +41,10 @@ export type RequestId = typeof RequestId.Type
  * loop stamps the client origin only if the grant is still live when it
  * admits the message.
  */
-export const ClientRequestGrant = Schema.String.pipe(branded("ClientRequestGrant"))
+export const ClientRequestGrant = Schema.String.pipe(Schema.brand("ClientRequestGrant"))
 export type ClientRequestGrant = typeof ClientRequestGrant.Type
 
-export const ExtensionId = Schema.String.pipe(branded("ExtensionId"))
+export const ExtensionId = Schema.String.pipe(Schema.brand("ExtensionId"))
 export type ExtensionId = typeof ExtensionId.Type
 
 // ── process-generation ──────────────────────────────────────────────────────

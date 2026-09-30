@@ -59,6 +59,7 @@ const withWidgets = testSqliteStorage(() => Layer.empty, widgetMigrations)
 describe("feature migrations", () => {
   it.live("core builds only the kernel's tables when no feature contributes any", () =>
     Effect.gen(function* () {
+      expect(yield* tableExists("messages")).toBe(true)
       expect(yield* tableExists("widgets")).toBe(false)
       expect(yield* appliedMigrations).not.toContain("widgets")
     }).pipe(Effect.provide(kernelOnly)),

@@ -32,6 +32,7 @@ import {
   type ProviderHints,
   reportProviderStopReason,
   runProcess,
+  writeFileAtomic,
 } from "@gent/core/extensions/api"
 import {
   type CatalogSource,
@@ -59,7 +60,7 @@ import {
 import { ChildProcessSpawner } from "effect/process"
 import { FetchHttpClient, Headers, HttpClient, HttpClientRequest } from "effect/http"
 import { AnthropicClient, AnthropicLanguageModel, Generated } from "@effect/ai-anthropic"
-import { type AiError, Model as AiModel } from "effect/ai"
+import { type AiError, Model as AiModel, type Response } from "effect/ai"
 
 // Test seam: only tests read these exports. The model table and its lookups
 // (MODEL_CONFIG, getModelOverride, getModelBetas), the billing header (SYSTEM_IDENTITY_PREFIX,
@@ -215,10 +216,9 @@ export class AnthropicPlatform extends Context.Service<AnthropicPlatform, Anthro
   /**
    * Build from the `ExtensionHost` seen during setup. `home` is sourced from
    * `host.homeDirectory` (the OS user home), not `ctx.home` (the Gent
-   * configured home) — the Claude Code credential file lives at the OS
-   * user's home regardless of a `GENT_HOME` override, and earlier
-   * refactors regressed this exactly once. Centralizing the lookup here
-   * means future callers can't pick the wrong field.
+   * configured home): the Claude Code credential file lives at the OS
+   * user's home regardless of a `GENT_HOME` override. This is the one place
+   * that picks the field.
    */
   static readonly fromSetup = (
     ctx: Pick<ExtensionHostService, "host">,
@@ -406,9 +406,7 @@ const decodeCredentials = (raw: string): Effect.Effect<ClaudeCredentials, Provid
  * Splice fresh credentials into an existing keychain blob, preserving
  * any other fields (e.g. `subscriptionType`, `mcpOAuth`) so a write-back
  * doesn't blow away CLI state. Returns `None` if the blob isn't
- * valid JSON. Exported for testing.
- *
- * @internal
+ * valid JSON.
  */
 export const updateCredentialBlob = (
   existingJson: string,
@@ -435,9 +433,7 @@ export const updateCredentialBlob = (
  * Parse a raw OAuth refresh response body into `ClaudeCredentials`.
  * Returns `None` if the body is not valid JSON, not an object,
  * or missing `access_token`. Defaults `expires_in` to 36 000s (10h) per
- * Anthropic's observed token lifetime. Exported for testing.
- *
- * @internal
+ * Anthropic's observed token lifetime.
  */
 export const parseOAuthResponse = (
   raw: string,
@@ -624,13 +620,10 @@ const writeCredentialsFile = (
     if (exists) {
       raw = yield* fs.readFileString(credentialsFile).pipe(Effect.mapError(mapFsError))
     }
+    // Staged and renamed over the file, owner-only from the first byte: the
+    // claude CLI reading it at the same time sees the old or the new blob.
     return yield* compareAndWrite(raw, creds, base, (blob) =>
-      fs.writeFileString(credentialsFile, blob).pipe(
-        // chmod 0600 after write so the credentials file is not
-        // world-readable on first creation.
-        Effect.andThen(fs.chmod(credentialsFile, 0o600)),
-        Effect.mapError(mapFsError),
-      ),
+      writeFileAtomic(credentialsFile, blob, { mode: 0o600 }).pipe(Effect.mapError(mapFsError)),
     )
   })
 
@@ -1422,7 +1415,7 @@ const relocateThirdPartyIntoFirstUser = (
  */
 export const transformPayload = (
   payload: JsonRecord,
-  promptCacheTtl: PromptCacheTtl,
+  cacheLifetimes: Option.Option<CacheLifetimes>,
 ): Effect.Effect<JsonRecord, never, KeychainTransformRequirements> =>
   Effect.gen(function* () {
     let result = { ...payload }
@@ -1447,7 +1440,7 @@ export const transformPayload = (
     result["messages"] = messagesAfterRelocate
     result["system"] = yield* buildSystemArray(messagesAfterRelocate)
 
-    return markCacheBreakpoints(result, "first-user", promptCacheTtl)
+    return markRequestCache(result, "first-user", cacheLifetimes)
   })
 
 // ── Prompt caching ──
@@ -1513,40 +1506,126 @@ const SHARED_PREFIX_MIN_CHARS = 4_096
  * minutes, so a session with no pause pays about 43% more input on 1 hour;
  * such a session sets the switch.
  *
+ * A spawned child session (`ProviderHints.child`) runs its steps back to
+ * back, so its markers ask for `CHILD_PROMPT_CACHE_TTL`, decided by the owner
+ * (2026-09-30). The end of the shared system part keeps the session lifetime:
+ * the parent and every sibling read that entry. The catalog names the child
+ * lifetime as each model's `childPromptCacheTtlMs`.
+ *
  * The Messages API takes `ttl` on `cache_control` with no beta header
  * (`CacheControlEphemeral` in `@effect/ai-anthropic`'s Generated schema). A
- * request must list longer-lived entries before shorter ones, so every
- * marker of a request carries the one lifetime, a marker the SDK rendered
- * from a message's own `cacheControl` option too.
+ * request must list longer-lived entries before shorter ones. The shared
+ * end comes before every other marker, so a request carries the shared
+ * lifetime up to it and the request lifetime after it (`CacheLifetimes`), a
+ * marker the SDK rendered from a message's own `cacheControl` option too.
  *
- * The usage the API reports counts every write in one number, and the
- * catalog prices it at one `cacheWrite` rate. One lifetime per request makes
- * that rate exact: the catalog prices each Anthropic model's write at the
- * multiple of input its lifetime costs.
+ * A write's price follows the lifetime of the entry it wrote, not the
+ * session's: the catalog names a rate for each lifetime
+ * (`ModelPricing.cacheWriteByLifetime`), and the driver splits each
+ * response's writes by lifetime from the usage the API reports
+ * (`cache_creation`), so a child's 5-minute writes and a mixed request's
+ * 1-hour shared part each cost their own rate. `cacheWrite` stays the session
+ * lifetime's rate, for a response that reports no split.
  */
 type PromptCacheTtl = NonNullable<Generated.CacheControlEphemeral["ttl"]>
 
 const PROMPT_CACHE_TTL = Schema.Literals(["5m", "1h"])
 const DEFAULT_PROMPT_CACHE_TTL: PromptCacheTtl = "1h"
+const CHILD_PROMPT_CACHE_TTL: PromptCacheTtl = "5m"
+
+/**
+ * The lifetimes of one request's markers: `shared` for the tools and the
+ * system prompt through its shared part, `request` for every marker after.
+ */
+interface CacheLifetimes {
+  readonly request: PromptCacheTtl
+  readonly shared: PromptCacheTtl
+}
+
+/** A root session's markers all ask for `ttl`; a child's ask for the child lifetime past the shared part. */
+const cacheLifetimes = (ttl: PromptCacheTtl, child: boolean): CacheLifetimes => {
+  if (!child) return { request: ttl, shared: ttl }
+  return { request: shorterPromptCacheTtl(ttl, CHILD_PROMPT_CACHE_TTL), shared: ttl }
+}
 const PROMPT_CACHE_LIFETIME = {
   "5m": Duration.minutes(5),
   "1h": Duration.hours(1),
 } satisfies Record<PromptCacheTtl, Duration.Duration>
+
+const shorterPromptCacheTtl = (a: PromptCacheTtl, b: PromptCacheTtl): PromptCacheTtl => {
+  if (Duration.isLessThanOrEqualTo(PROMPT_CACHE_LIFETIME[a], PROMPT_CACHE_LIFETIME[b])) return a
+  return b
+}
+
+/** The models with the lifetime a child's requests ask for when the session asks for `ttl`. */
+const withChildPromptCacheLifetime =
+  (ttl: PromptCacheTtl) =>
+  (models: ReadonlyArray<Model>): ReadonlyArray<Model> => {
+    const lifetime = PROMPT_CACHE_LIFETIME[cacheLifetimes(ttl, true).request]
+    return models.map((model) =>
+      Model.make({ ...model, childPromptCacheTtlMs: Duration.toMillis(lifetime) }),
+    )
+  }
 /** A cache write's price as a multiple of base input, by lifetime (platform.claude.com prompt-caching pricing). */
 const PROMPT_CACHE_WRITE_INPUT_MULTIPLE = {
   "5m": 1.25,
   "1h": 2,
 } satisfies Record<PromptCacheTtl, number>
 
-/** The models with each cache write priced at the rate of the lifetime `ttl` names. */
+const PROMPT_CACHE_TTLS: ReadonlyArray<PromptCacheTtl> = ["5m", "1h"]
+
+/**
+ * The models with a cache write priced at the rate of each lifetime, and at
+ * the rate of the lifetime `ttl` names when a response reports no split.
+ */
 const withPromptCacheWritePrice =
   (ttl: PromptCacheTtl) =>
   (models: ReadonlyArray<Model>): ReadonlyArray<Model> =>
     models.map((model) => {
       if (Predicate.isUndefined(model.pricing)) return model
-      const cacheWrite = model.pricing.input * PROMPT_CACHE_WRITE_INPUT_MULTIPLE[ttl]
-      return Model.make({ ...model, pricing: { ...model.pricing, cacheWrite } })
+      const input = model.pricing.input
+      const cacheWrite = input * PROMPT_CACHE_WRITE_INPUT_MULTIPLE[ttl]
+      const cacheWriteByLifetime = PROMPT_CACHE_TTLS.map((lifetime) => ({
+        ttlMs: Duration.toMillis(PROMPT_CACHE_LIFETIME[lifetime]),
+        price: input * PROMPT_CACHE_WRITE_INPUT_MULTIPLE[lifetime],
+      }))
+      return Model.make({
+        ...model,
+        pricing: { ...model.pricing, cacheWrite, cacheWriteByLifetime },
+      })
     })
+
+/** The split of a response's cache writes the Messages API reports in its usage. */
+const AnthropicCacheCreation = Schema.Struct({
+  anthropic: Schema.Struct({
+    usage: Schema.Struct({
+      cache_creation: Schema.Struct({
+        ephemeral_5m_input_tokens: Schema.Finite,
+        ephemeral_1h_input_tokens: Schema.Finite,
+      }),
+    }),
+  }),
+})
+const decodeAnthropicCacheCreation = Schema.decodeUnknownOption(AnthropicCacheCreation)
+
+/** A response's cache writes by lifetime; empty when its usage reports no split. */
+const anthropicCacheWritesByLifetime = (metadata: Response.ProviderMetadata) =>
+  Option.match(decodeAnthropicCacheCreation(metadata), {
+    onNone: () => [],
+    onSome: ({ anthropic }) => {
+      const creation = anthropic.usage.cache_creation
+      return [
+        {
+          ttlMs: Duration.toMillis(PROMPT_CACHE_LIFETIME["5m"]),
+          tokens: creation.ephemeral_5m_input_tokens,
+        },
+        {
+          ttlMs: Duration.toMillis(PROMPT_CACHE_LIFETIME["1h"]),
+          tokens: creation.ephemeral_1h_input_tokens,
+        },
+      ]
+    },
+  })
 
 /** The `ANTHROPIC_PROMPT_CACHE_TTL` switch; a value other than `5m` or `1h` is reported and ignored. */
 export const readPromptCacheTtl: Effect.Effect<PromptCacheTtl> = Effect.gen(function* () {
@@ -1626,13 +1705,10 @@ const systemPromptBlockIndex = (content: ReadonlyArray<JsonRecord>): number =>
   content.findIndex((block) => block["type"] !== "tool_result" && isCacheableBlock(block))
 
 /**
- * The system blocks with the end of the shared part marked: the cacheable
+ * The index of the system block that ends the shared part: the cacheable
  * block before the last one, when the text through it is long enough to cache.
  */
-const markSharedSystemEnd = (
-  system: ReadonlyArray<JsonRecord>,
-  marker: JsonRecord,
-): Option.Option<ReadonlyArray<JsonRecord>> => {
+const sharedSystemEnd = (system: ReadonlyArray<JsonRecord>): Option.Option<number> => {
   const last = system.findLastIndex(isCacheableBlock)
   const shared = system.slice(0, Math.max(last, 0)).findLastIndex(isCacheableBlock)
   if (shared < 0) return Option.none()
@@ -1642,29 +1718,36 @@ const markSharedSystemEnd = (
     if (Predicate.isString(text)) chars += text.length
   }
   if (chars < SHARED_PREFIX_MIN_CHARS) return Option.none()
-  return markBlockAt(system, shared, marker)
+  return Option.some(shared)
 }
 
-/** The blocks with each marker they carry replaced by `marker`. */
-const withMarkerLifetime = (blocks: JsonValue, marker: JsonRecord): JsonValue => {
+/** The blocks with each marker they carry, up to index `through`, replaced by `marker`. */
+const withMarkerLifetime = (
+  blocks: JsonValue,
+  marker: JsonRecord,
+  through = Number.POSITIVE_INFINITY,
+): JsonValue => {
   if (!isRecordArray(blocks)) return blocks
-  return blocks.map((block) => {
-    if (!hasCacheMarker(block)) return block
+  return blocks.map((block, index) => {
+    if (index > through || !hasCacheMarker(block)) return block
     return { ...block, cache_control: marker }
   })
 }
 
 /**
- * The payload with every marker it already carries asking for `marker`'s
- * lifetime. The SDK renders a message's `cacheControl` option as a marker
- * of its own, with the 5-minute default; one lifetime per request keeps the
- * longer-before-shorter ordering rule whatever the order of the markers.
+ * The payload with every marker it already carries asking for the request
+ * lifetime, and the tool list's for the shared one. The SDK renders a
+ * message's `cacheControl` option as a marker of its own, with the 5-minute
+ * default; the lifetimes keep the longer-before-shorter ordering rule
+ * whatever the order of the markers.
  */
-const withUniformLifetime = (payload: JsonRecord, marker: JsonRecord): JsonRecord => {
+const withRequestLifetimes = (payload: JsonRecord, lifetimes: CacheLifetimes): JsonRecord => {
   const result = { ...payload }
-  for (const key of ["tools", "system"]) {
-    if (key in payload) result[key] = withMarkerLifetime(payload[key], marker)
+  if ("tools" in payload) {
+    result["tools"] = withMarkerLifetime(payload["tools"], cacheMarker(lifetimes.shared))
   }
+  const marker = cacheMarker(lifetimes.request)
+  if ("system" in payload) result["system"] = withMarkerLifetime(payload["system"], marker)
   const messages = payload["messages"]
   if (isRecordArray(messages)) {
     result["messages"] = messages.map((message) => {
@@ -1677,16 +1760,18 @@ const withUniformLifetime = (payload: JsonRecord, marker: JsonRecord): JsonRecor
 
 /**
  * The payload with `cache_control` at the end of the system prompt, on the
- * conversation tail, and at the end of the system prompt's shared part, each
- * asking for `ttl`, as does every marker the payload already carries.
+ * conversation tail, and at the end of the system prompt's shared part. The
+ * shared end asks for the shared lifetime, as does every marker before it;
+ * the rest ask for the request lifetime.
  */
 const markCacheBreakpoints = (
   rendered: JsonRecord,
   prefixEnd: CachePrefixEnd,
-  ttl: PromptCacheTtl,
+  lifetimes: CacheLifetimes,
 ): JsonRecord => {
-  const marker = cacheMarker(ttl)
-  const payload = withUniformLifetime(rendered, marker)
+  const marker = cacheMarker(lifetimes.request)
+  const sharedMarker = cacheMarker(lifetimes.shared)
+  const payload = withRequestLifetimes(rendered, lifetimes)
   const result = { ...payload }
   let budget = CACHE_BREAKPOINT_LIMIT - countCacheMarkers(payload)
   const messages: Array<JsonRecord> = []
@@ -1732,13 +1817,34 @@ const markCacheBreakpoints = (
   )
   const system = result["system"]
   if (prefixEnd === "system" && isRecordArray(system)) {
-    spend(markSharedSystemEnd(system, marker), (marked) => {
-      result["system"] = marked
-    })
+    const shared = sharedSystemEnd(system)
+    if (Option.isSome(shared)) {
+      const relabeled = withMarkerLifetime(system, sharedMarker, shared.value)
+      result["system"] = relabeled
+      if (isRecordArray(relabeled)) {
+        spend(markBlockAt(relabeled, shared.value, sharedMarker), (marked) => {
+          result["system"] = marked
+        })
+      }
+    }
   }
   if (isRecordArray(payload["messages"])) result["messages"] = messages
   return result
 }
+
+/**
+ * The payload marked for the request's cache lifetime. A request with none
+ * (its hints carry no `cacheKey`) writes no cache: no later request reads it.
+ */
+const markRequestCache = (
+  rendered: JsonRecord,
+  prefixEnd: CachePrefixEnd,
+  lifetimes: Option.Option<CacheLifetimes>,
+): JsonRecord =>
+  Option.match(lifetimes, {
+    onNone: () => rendered,
+    onSome: (value) => markCacheBreakpoints(rendered, prefixEnd, value),
+  })
 
 // ── Response Transforms (incoming) ──
 
@@ -1879,8 +1985,8 @@ const anthropicClientLayer = <R>(
  * The API-key path marks prompt-cache breakpoints and changes nothing else.
  * The Claude Code path marks its payload in `transformPayload`.
  */
-const apiKeyClientPath = (promptCacheTtl: PromptCacheTtl): ClientPath<never> => ({
-  payload: (payload) => Effect.succeed(markCacheBreakpoints(payload, "system", promptCacheTtl)),
+const apiKeyClientPath = (cacheLifetimes: Option.Option<CacheLifetimes>): ClientPath<never> => ({
+  payload: (payload) => Effect.succeed(markRequestCache(payload, "system", cacheLifetimes)),
   message: (call) => call,
   stream: (call) => call,
 })
@@ -1892,11 +1998,11 @@ const apiKeyClientPath = (promptCacheTtl: PromptCacheTtl): ClientPath<never> => 
  */
 const claudeCodeClientPath = (
   creds: CredentialCache<ClaudeCredentials>,
-  promptCacheTtl: PromptCacheTtl,
+  cacheLifetimes: Option.Option<CacheLifetimes>,
 ): ClientPath<KeychainTransformRequirements> => {
   const explain = explainCredentialFailure(creds)
   return {
-    payload: (payload) => transformPayload(payload, promptCacheTtl),
+    payload: (payload) => transformPayload(payload, cacheLifetimes),
     message: (call, toolIds) =>
       explain(call).pipe(
         Effect.map(([body, response]) => {
@@ -2225,12 +2331,13 @@ const anthropicRequestPlan = (
 
 type AnthropicConfig = Required<Parameters<typeof AnthropicLanguageModel.layer>[0]>["config"]
 
-/** One model's requests: the SDK config, the plan the client layer applies, and the prompt-cache lifetime its markers ask for. */
+/** One model's requests: the SDK config, the plan the client layer applies, and the prompt-cache lifetimes its markers ask for. */
 interface AnthropicRequest {
   /** The output cap, and `temperature` where the model takes one. */
   readonly config: AnthropicConfig
   readonly plan: AnthropicRequestPlan
-  readonly promptCacheTtl: PromptCacheTtl
+  /** None when the hints carry no `cacheKey`: the request writes no cache. */
+  readonly cacheLifetimes: Option.Option<CacheLifetimes>
 }
 
 const anthropicRequest = (
@@ -2253,7 +2360,10 @@ const anthropicRequest = (
       config = { ...config, temperature: temperature.value }
     }
   }
-  return { config, plan, promptCacheTtl }
+  const cacheKey = Option.flatMap(hints, (value) => Option.fromUndefinedOr(value.cacheKey))
+  const child = Option.exists(hints, (value) => value.child === true)
+  const lifetimes = cacheLifetimes(promptCacheTtl, child)
+  return { config, plan, cacheLifetimes: Option.map(cacheKey, () => lifetimes) }
 }
 
 /**
@@ -2338,7 +2448,7 @@ const applyRequestPlan = (payload: JsonRecord, plan: AnthropicRequestPlan): Json
 const makeApiKeyAnthropicLayer = (modelName: string, request: AnthropicRequest, apiKey: string) => {
   const clientLayer = anthropicClientLayer(
     request.plan,
-    apiKeyClientPath(request.promptCacheTtl),
+    apiKeyClientPath(request.cacheLifetimes),
     (rewriteBody) =>
       AnthropicClient.layer({ apiKey: Redacted.make(apiKey), transformClient: rewriteBody }),
   ).pipe(Layer.provide(FetchHttpClient.layer))
@@ -2369,7 +2479,7 @@ const makeOauthAnthropicLayer = (
   const keychain = buildKeychainTransformClient(creds, Context.get(services, AnthropicPlatform).env)
   const wrappedClient = anthropicClientLayer(
     request.plan,
-    claudeCodeClientPath(creds, request.promptCacheTtl),
+    claudeCodeClientPath(creds, request.cacheLifetimes),
     (rewriteBody) =>
       AnthropicClient.layer({ transformClient: (client) => keychain(rewriteBody(client)) }),
   ).pipe(Layer.provide(FetchHttpClient.layer), Layer.provide(Layer.succeedContext(services)))
@@ -2379,11 +2489,9 @@ const makeOauthAnthropicLayer = (
 }
 
 /**
- * Build the model-driver contribution given the pre-allocated credential
- * cell. Extracted from the inline `modelDrivers` factory so tests can
- * inject their own cell and assert that two `resolveModel` calls share
- * the closure-owned cell (a fresh cell per `resolveModel` would kill
- * credential reuse).
+ * Build the model-driver contribution over a credential cell the caller
+ * allocated once: every `resolveModel` call shares it, so a credential is
+ * reused (a fresh cell per `resolveModel` would lose it).
  */
 export const buildAnthropicModelDriver = (
   credentialCellRef: CredentialCacheCellRef<ClaudeCredentials>,
@@ -2395,12 +2503,14 @@ export const buildAnthropicModelDriver = (
   id: "anthropic",
   name: "Anthropic",
   envCredential: "ANTHROPIC_API_KEY",
-  // The lifetime every marker asks for, and the write price it costs; see `PromptCacheTtl`.
+  // The lifetimes the markers ask for, a root's and a child's, and the write price; see `PromptCacheTtl`.
   listModels: () =>
     driverListModels(catalog, "anthropic", PROMPT_CACHE_LIFETIME[promptCacheTtl])().pipe(
       Effect.map(withDocumentedWindows),
+      Effect.map(withChildPromptCacheLifetime(promptCacheTtl)),
       Effect.map(withPromptCacheWritePrice(promptCacheTtl)),
     ),
+  cacheWritesByLifetime: anthropicCacheWritesByLifetime,
   retry: {
     ...DEFAULT_RETRY_POLICY,
     // An accepted request can still end with an error event inside the stream; Anthropic names its type.
@@ -2521,11 +2631,9 @@ export const AnthropicExtension = defineExtension({
       Context.add(AnthropicPlatform, AnthropicPlatform.fromSetup(ctx, env)),
     )
 
-    // Cache cells are hoisted to extension-closure scope so they
-    // survive across `resolveModel` calls. Lifetime: one extension
-    // instance → one cell that lives until the runtime tears the
-    // extension down. Setup is Effectful, so cache cells are allocated
-    // through SynchronizedRef.make instead of an unsafe closure escape hatch.
+    // One credential cell per extension instance, allocated at setup, so it
+    // survives across `resolveModel` calls until the runtime tears the
+    // extension down.
     const credentialCellRef =
       yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
 

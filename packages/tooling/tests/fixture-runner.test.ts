@@ -20,14 +20,9 @@
 
 import { describe, expect, test } from "bun:test"
 import { BunServices } from "@effect/platform-bun"
-import { Effect, FileSystem, Option, Path, Schema } from "effect"
+import { Effect, FileSystem, Option, Path, Schema, Stream } from "effect"
+import { ChildProcess } from "effect/process"
 import { describe as effectDescribe, it } from "effect-bun-test"
-import {
-  runOxlint,
-  type Diagnostic,
-  type OxlintReport,
-  type OxlintRun,
-} from "../src/fixture-runner"
 import gentRules, {
   isTest,
   isTestCode,
@@ -36,6 +31,104 @@ import gentRules, {
   isTestSupport,
   ruleSubject,
 } from "../src/gent-rules"
+
+// ── one oxlint run over a fixture set ───────────────────────────────────────
+
+const DiagnosticSchema = Schema.Struct({
+  code: Schema.optional(Schema.String),
+  rule_id: Schema.optional(Schema.String),
+  message: Schema.String,
+  filename: Schema.optional(Schema.String),
+})
+type Diagnostic = typeof DiagnosticSchema.Type
+
+const OxlintReportSchema = Schema.Struct({
+  diagnostics: Schema.Array(DiagnosticSchema),
+  number_of_files: Schema.Int,
+})
+type OxlintReport = typeof OxlintReportSchema.Type
+
+interface OxlintRun {
+  readonly report: OxlintReport
+  readonly exitCode: number
+  readonly stderr: string
+}
+
+/** One oxlint run did not produce a report. */
+class OxlintRunError extends Schema.TaggedError<OxlintRunError>()("OxlintRunError", {
+  message: Schema.String,
+}) {}
+
+/** The fixture directory and its lint config, beside the tests directory that holds `testFile`. */
+const fixturesBeside = Effect.fn("fixturesBeside")(function* (testFile: URL) {
+  const path = yield* Path.Path
+  return {
+    dir: yield* path.fromFileUrl(new URL("../fixtures", testFile)),
+    config: yield* path.fromFileUrl(new URL("../fixtures/.oxlintrc.json", testFile)),
+  }
+})
+
+/** The bound on one oxlint run over a fixture set; about a second on an idle machine. */
+const OXLINT_RUN_BOUND = "20 seconds"
+
+/** How long an oxlint process may ignore SIGTERM from the closing scope before it gets SIGKILL. */
+const OXLINT_KILL_GRACE = "2 seconds"
+
+/** The bound on both fixture runs together, past one run's bound plus its kill grace. */
+const FIXTURE_LINT_BOUND = "25 seconds"
+
+/** Bun's timeout for the fixture lint test, past `FIXTURE_LINT_BOUND`. */
+const FIXTURE_LINT_BACKSTOP_MS = 30_000
+
+const decodeOxlintReport = Schema.decodeUnknownEffect(Schema.fromJsonString(OxlintReportSchema))
+
+/**
+ * Lint a fixture set in one oxlint process with a JSON report. Its own bound
+ * is the only bound: an overrun is one `OxlintRunError` that names the bound,
+ * and the run's scope kills the process, not a test timeout mid-report. The
+ * kill escalates to SIGKILL after `OXLINT_KILL_GRACE`, so a process that
+ * ignores SIGTERM cannot hold the scope open.
+ */
+const runOxlint = (fixtureFiles: ReadonlyArray<string>) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fixtures = yield* fixturesBeside(new URL(import.meta.url))
+      const handle = yield* ChildProcess.make(
+        "bunx",
+        ["oxlint", "--format=json", "-c", fixtures.config, ...fixtureFiles],
+        { cwd: fixtures.dir, forceKillAfter: OXLINT_KILL_GRACE },
+      )
+      const [exitCode, stdout, stderr] = yield* Effect.all(
+        [
+          handle.exitCode,
+          Stream.mkString(Stream.decodeText(handle.stdout)),
+          Stream.mkString(Stream.decodeText(handle.stderr)),
+        ],
+        { concurrency: "unbounded" },
+      )
+      const report = yield* decodeOxlintReport(stdout).pipe(
+        Effect.mapError(
+          (error) =>
+            new OxlintRunError({
+              message: `oxlint exited ${exitCode} without a JSON report: ${error.message}\nstderr:\n${stderr}`,
+            }),
+        ),
+      )
+      return { report, exitCode: Number(exitCode), stderr } satisfies OxlintRun
+    }),
+  ).pipe(
+    Effect.timeoutOrElse({
+      duration: OXLINT_RUN_BOUND,
+      orElse: () =>
+        Effect.fail(
+          new OxlintRunError({
+            message: `oxlint did not lint ${fixtureFiles.length} fixture files within ${OXLINT_RUN_BOUND}`,
+          }),
+        ),
+    }),
+  )
+
+// ── each rule against its fixtures ──────────────────────────────────────────
 
 const filterByFile = (report: OxlintReport, fixtureFile: string): ReadonlyArray<Diagnostic> =>
   report.diagnostics.filter((d) => d.filename === fixtureFile)
@@ -331,6 +424,15 @@ const CASES: ReadonlyArray<RuleCase> = [
     // and an admission after the write
     expectedCount: 5,
   },
+  {
+    rule: "gent/no-lint-evasion",
+    invalid: "no-lint-evasion.invalid.ts",
+    valid: ["no-lint-evasion.valid.ts"],
+    // `Option.getOrUndefined(Option.none())` bare, with a type argument and in
+    // a record; `Schema.Schema.Type<typeof Schema.Unknown>` as an alias and as
+    // a parameter type
+    expectedCount: 5,
+  },
 ]
 
 /** Each fixture file once: a run lints a path it is given once, however many cases name it. */
@@ -367,25 +469,42 @@ const expectedRows = CASES.map((c) => ({
 }))
 
 effectDescribe("custom lint rules", () => {
-  it.live("each rule fires on its invalid fixture and stays silent on its valid ones", () =>
+  // The two runs go together: each is bounded by OXLINT_RUN_BOUND plus
+  // OXLINT_KILL_GRACE, the test by FIXTURE_LINT_BOUND, and bun by
+  // FIXTURE_LINT_BACKSTOP_MS, each longer than the one before, so a stuck run
+  // fails inside Effect with its finalizers run, never at the bun backstop.
+  it.live(
+    "each rule fires on its invalid fixture and stays silent on its valid ones",
+    () =>
+      Effect.gen(function* () {
+        const [invalidRun, validRun] = yield* Effect.all(
+          [runOxlint(INVALID_FIXTURES), runOxlint(VALID_FIXTURES)],
+          { concurrency: 2 },
+        )
+        // oxlint exits non-zero when any fixture has violations, and the
+        // invalid set always does.
+        expect(invalidRun.exitCode).not.toBe(0)
+        expect(ruleRows(invalidRun, validRun)).toEqual(expectedRows)
+        // A valid fixture reports nothing either way; only the file count shows
+        // that oxlint read it instead of ignoring or missing the path.
+        expect(
+          [invalidRun.report.number_of_files, validRun.report.number_of_files],
+          `stderr:\n${invalidRun.stderr}\n${validRun.stderr}`,
+        ).toEqual([INVALID_FIXTURES.length, VALID_FIXTURES.length])
+        expect(validRun.exitCode).toBe(0)
+        expect(validRun.report.diagnostics.length).toBe(0)
+      }).pipe(Effect.timeout(FIXTURE_LINT_BOUND), Effect.provide(BunServices.layer)),
+    FIXTURE_LINT_BACKSTOP_MS,
+  )
+
+  it.live("the fixtures are found from a checkout whose path has a space", () =>
     Effect.gen(function* () {
-      const [invalidRun, validRun] = yield* Effect.all([
-        runOxlint(INVALID_FIXTURES),
-        runOxlint(VALID_FIXTURES),
-      ])
-      // oxlint exits non-zero when any fixture has violations, and the
-      // invalid set always does.
-      expect(invalidRun.exitCode).not.toBe(0)
-      expect(ruleRows(invalidRun, validRun)).toEqual(expectedRows)
-      // A valid fixture reports nothing either way; only the file count shows
-      // that oxlint read it instead of ignoring or missing the path.
-      expect(
-        [invalidRun.report.number_of_files, validRun.report.number_of_files],
-        `stderr:\n${invalidRun.stderr}\n${validRun.stderr}`,
-      ).toEqual([INVALID_FIXTURES.length, VALID_FIXTURES.length])
-      expect(validRun.exitCode).toBe(0)
-      expect(validRun.report.diagnostics.length).toBe(0)
-    }),
+      const testFile = new URL("file:///work/gent%20checkout/packages/tooling/tests/a.test.ts")
+      expect(yield* fixturesBeside(testFile)).toEqual({
+        dir: "/work/gent checkout/packages/tooling/fixtures",
+        config: "/work/gent checkout/packages/tooling/fixtures/.oxlintrc.json",
+      })
+    }).pipe(Effect.provide(BunServices.layer)),
   )
 
   it.live("every rule the plugin defines has a positive and a negative fixture", () =>
@@ -399,13 +518,9 @@ effectDescribe("custom lint rules", () => {
     }),
   )
 
-  it.live("retired all-errors-are-tagged surface is covered by extendsNativeError", () =>
+  it.live("native Error subclasses fail typecheck", () =>
     Effect.gen(function* () {
-      const [tsconfigJson, oxlintConfig] = yield* Effect.all(
-        [readTypeScriptConfig("tsconfig.json"), readTextFile(".oxlintrc.json")],
-        { concurrency: "unbounded" },
-      )
-
+      const tsconfigJson = yield* readTypeScriptConfig("tsconfig.json")
       const effectPlugin = Option.fromNullishOr(
         tsconfigJson.compilerOptions.plugins.find(
           (plugin) => plugin.name === "@effect/language-service",
@@ -417,8 +532,6 @@ effectDescribe("custom lint rules", () => {
         ),
       )
       expect(Option.getOrElse(extendsNativeError, () => "missing")).toBe("error")
-
-      expect(oxlintConfig).not.toContain("gent/all-errors-are-tagged")
     }).pipe(Effect.provide(BunServices.layer)),
   )
 })

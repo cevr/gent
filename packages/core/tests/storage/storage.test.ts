@@ -1,4 +1,4 @@
-import { describe, expect, it, test } from "effect-bun-test"
+import { describe, expect, it } from "effect-bun-test"
 import * as Prompt from "effect/ai/Prompt"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { SqliteClient as BunSqliteClient } from "@effect/sql-sqlite-bun"
@@ -775,7 +775,8 @@ describe("Sessions", () => {
           error: "cascade projection",
         }),
       )
-      const cascadedIds = yield* sessions.deleteSession(sessionId)
+      const deleted = yield* sessions.deleteSession(sessionId)
+      const cascadedIds = deleted.map((entry) => entry.sessionId)
       const sessionsResult = yield* sql<{
         count: number
       }>`SELECT COUNT(*) as count FROM sessions`
@@ -801,6 +802,12 @@ describe("Sessions", () => {
       expect(refs[0]?.count).toBe(0)
       expect(chunks[0]?.count).toBe(0)
       expect([...cascadedIds].sort()).toEqual([sessionId, childSessionId].sort())
+      expect(new Map(deleted.map((entry) => [entry.sessionId, entry.branchIds]))).toEqual(
+        new Map([
+          [sessionId, [branchId]],
+          [childSessionId, [childBranchId]],
+        ]),
+      )
     }).pipe(Effect.provide(testSqliteStorage(() => Layer.empty, {}))),
   )
   it.live("returns the cascade set for a no-op delete of an already-removed session", () =>
@@ -878,13 +885,14 @@ describe("Sessions", () => {
             }),
           ),
         )
-      const [cascadedIds, childExits] = yield* Effect.all(
+      const [deleted, childExits] = yield* Effect.all(
         [
           sessions.deleteSession(parentId),
           Effect.forEach(childIds, createChild, { concurrency: 16 }),
         ],
         { concurrency: 2 },
       )
+      const cascadedIds = deleted.map((entry) => entry.sessionId)
       // Invariant 1+2: parent is gone, and parent is in the returned set.
       const parentRows = yield* sql<{
         count: number
@@ -992,7 +1000,7 @@ describe("persisted loop queue format", () => {
     }
   }`
 
-  it.live("a row holding every optional field still decodes after the inbox move", () =>
+  it.live("a row holding every optional field still decodes", () =>
     Effect.gen(function* () {
       const sessions = yield* SessionStorage
       const branches = yield* BranchStorage
@@ -1582,20 +1590,6 @@ describe("Message Metadata", () => {
       expect(detailExit._tag).toBe("Failure")
     }).pipe(Effect.provide(testSqliteStorage(() => Layer.empty, {}))),
   )
-  test("domain message preserves metadata for transport", () => {
-    const message = Message.cases.regular.make({
-      id: MessageId.make("info-msg"),
-      sessionId: SessionId.make("info-s"),
-      branchId: BranchId.make("info-b"),
-      role: "assistant",
-      parts: [Prompt.textPart({ text: "response" })],
-      createdAt: FIXED_NOW,
-      metadata: { customType: "review-status", hidden: true },
-    })
-    expect(message.metadata).toBeDefined()
-    expect(message.metadata!.customType).toBe("review-status")
-    expect(message.metadata!.hidden).toBe(true)
-  })
   it.live("interjection messages round-trip as explicit variants", () =>
     Effect.gen(function* () {
       const sessions = yield* SessionStorage
@@ -1632,17 +1626,6 @@ describe("Message Metadata", () => {
       expect(stored.role).toBe("user")
     }).pipe(Effect.provide(testSqliteStorage(() => Layer.empty, {}))),
   )
-  test("domain message omits metadata when absent", () => {
-    const message = Message.cases.regular.make({
-      id: MessageId.make("plain-msg"),
-      sessionId: SessionId.make("plain-s"),
-      branchId: BranchId.make("plain-b"),
-      role: "user",
-      parts: [Prompt.textPart({ text: "hi" })],
-      createdAt: FIXED_NOW,
-    })
-    expect(message.metadata).toBeUndefined()
-  })
 })
 
 // ── event storage ───────────────────────────────────────────────────────────
@@ -1907,6 +1890,55 @@ describe("Branches", () => {
       expect(exit._tag).toBe("Failure")
     }).pipe(Effect.provide(testSqliteStorage(() => Layer.empty, {}))),
   )
+  it.live("a child session or a message cannot name a branch in another workspace", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionStorage
+      const branches = yield* BranchStorage
+      const messages = yield* MessageStorage
+      const sessionId = SessionId.make("workspace-a-session")
+      const branchId = BranchId.make("workspace-a-branch")
+      yield* Effect.gen(function* () {
+        yield* sessions.createSession(
+          new Session({ id: sessionId, createdAt: FIXED_NOW, updatedAt: FIXED_NOW }),
+        )
+        yield* branches.createBranch(new Branch({ id: branchId, sessionId, createdAt: FIXED_NOW }))
+      }).pipe(Effect.provideService(CurrentWorkspaceId, WORKSPACE_A))
+
+      const childId = SessionId.make("workspace-b-child")
+      const child = yield* sessions
+        .createSession(
+          new Session({
+            id: childId,
+            parentSessionId: sessionId,
+            parentBranchId: branchId,
+            createdAt: FIXED_NOW,
+            updatedAt: FIXED_NOW,
+          }),
+        )
+        .pipe(Effect.provideService(CurrentWorkspaceId, WORKSPACE_B), Effect.exit)
+      expect(Exit.isFailure(child)).toBe(true)
+
+      const messageId = MessageId.make("workspace-b-message")
+      const message = yield* messages
+        .createMessage(
+          Message.cases.regular.make({
+            id: messageId,
+            sessionId,
+            branchId,
+            role: "user",
+            parts: [Prompt.textPart({ text: "from workspace b" })],
+            createdAt: FIXED_NOW,
+          }),
+        )
+        .pipe(Effect.provideService(CurrentWorkspaceId, WORKSPACE_B), Effect.exit)
+      expect(Exit.isFailure(message)).toBe(true)
+
+      yield* Effect.gen(function* () {
+        expect(yield* sessions.getSession(childId)).toBeUndefined()
+        expect(yield* messages.getMessage(messageId)).toBeUndefined()
+      }).pipe(Effect.provideService(CurrentWorkspaceId, WORKSPACE_A))
+    }).pipe(Effect.provide(testSqliteStorage(() => Layer.empty, {})), Effect.timeout("4 seconds")),
+  )
 })
 
 // ── concurrent writes ───────────────────────────────────────────────────────
@@ -2157,15 +2189,18 @@ describe("thread sessions", () => {
       const sessions = yield* SessionStorage
       const relationships = yield* RelationshipStorage
 
+      const planned = yield* sessions.deletionSet(SessionId.make("root"))
       const deleted = yield* sessions.deleteSession(SessionId.make("root"))
 
-      expect(deleted.map(String).toSorted()).toEqual(["delegate", "delegate-handoff", "root"])
+      const removed = ["delegate", "delegate-handoff", "root"]
+      expect(planned.map(String).toSorted()).toEqual(removed)
+      expect(deleted.map((entry) => String(entry.sessionId)).toSorted()).toEqual(removed)
       const handoff = yield* sessions.getSession(SessionId.make("handoff"))
       expect(handoff?.parentSessionId).toBeUndefined()
       const thread = yield* relationships.getThreadSessions(SessionId.make("handoff"))
       expect(ids(thread)).toEqual(["handoff"])
-      const children = yield* relationships.getChildSessions(SessionId.make("handoff"))
-      expect(ids(children)).toEqual(["handoff-spawn"])
+      const handoffSpawn = yield* sessions.getSession(SessionId.make("handoff-spawn"))
+      expect(handoffSpawn?.parentSessionId).toBe(SessionId.make("handoff"))
     }).pipe(Effect.provide(testSqliteStorage(() => Layer.empty, {}))),
   )
 
@@ -2698,16 +2733,6 @@ describe("turn_records migration", () => {
         .sort((left, right) => left.pk - right.pk)
         .map((column) => column.name)
       expect(key).toEqual(["session_id", "branch_id", "message_id"])
-    }).pipe(Effect.provide(storageLayer)),
-  )
-
-  it.live("records the turn_records migration in the applied chain", () =>
-    Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient
-      const rows = yield* sql<{ readonly name: string }>`
-        SELECT name FROM gent_storage_migrations WHERE name = 'turn_records'
-      `
-      expect(rows.length).toBe(1)
     }).pipe(Effect.provide(storageLayer)),
   )
 })

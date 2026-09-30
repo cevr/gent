@@ -18,8 +18,9 @@ export class NotFoundError extends Schema.TaggedError<NotFoundError>()("NotFound
   message: Schema.String,
 }) {}
 
-// Business-rule violation surfaced from the server-side mutation layer
-// (e.g. "cannot delete the active branch", "branch has child sessions").
+// A request the server cannot carry out as stated: a session snapshot read
+// whose events or runtime state cannot be read, or a session create that
+// names a parent branch or thread without its parent session.
 export class InvalidStateError extends Schema.TaggedError<InvalidStateError>()(
   "InvalidStateError",
   { message: Schema.String },

@@ -725,38 +725,30 @@ interface MessagePartsDisplayTextOptions {
   readonly maxToolChars?: number
 }
 
-type JsonEncoderInput = Parameters<typeof encodeToolOutput>[0]
-
-const stringifyDisplayValue = (value: JsonEncoderInput): string => {
-  const encoded = Result.try(() => encodeToolOutput(value))
-  if (Result.isFailure(encoded)) return String(value)
-  return encoded.success
-}
-
-// oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
+// oxlint-disable-next-line effect/noNullish -- A part projection answers undefined for a part of another kind.
 const messagePartText = (part: MessagePart): string | undefined => {
   if (part.type === "text") return part.text
-  // oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
+  // oxlint-disable-next-line effect/noNullish -- A part projection answers undefined for a part of another kind.
   return undefined
 }
 
-// oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
+// oxlint-disable-next-line effect/noNullish -- A part projection answers undefined for a part of another kind.
 const messagePartReasoning = (part: MessagePart): string | undefined => {
   if (part.type === "reasoning") return part.text
-  // oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
+  // oxlint-disable-next-line effect/noNullish -- A part projection answers undefined for a part of another kind.
   return undefined
 }
 
-// oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
+// oxlint-disable-next-line effect/noNullish -- A part projection answers undefined for a part of another kind.
 const messagePartImage = (part: MessagePart): ImagePartProjection | undefined => {
-  // oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
+  // oxlint-disable-next-line effect/noNullish -- A part projection answers undefined for a part of another kind.
   if (part.type !== "file" || !part.mediaType.startsWith("image/")) return undefined
   return { mediaType: part.mediaType }
 }
 
-// oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
+// oxlint-disable-next-line effect/noNullish -- A part projection answers undefined for a part of another kind.
 const messagePartToolCall = (part: MessagePart): ToolCallPartProjection | undefined => {
-  // oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
+  // oxlint-disable-next-line effect/noNullish -- A part projection answers undefined for a part of another kind.
   if (part.type !== "tool-call") return undefined
   return {
     id: part.id,
@@ -765,9 +757,9 @@ const messagePartToolCall = (part: MessagePart): ToolCallPartProjection | undefi
   }
 }
 
-// oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
+// oxlint-disable-next-line effect/noNullish -- A part projection answers undefined for a part of another kind.
 const messagePartToolResult = (part: MessagePart): ToolResultPartProjection | undefined => {
-  // oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
+  // oxlint-disable-next-line effect/noNullish -- A part projection answers undefined for a part of another kind.
   if (part.type !== "tool-result") return undefined
   return {
     id: part.id,
@@ -793,8 +785,8 @@ export const messagePartsReasoning = (parts: ReadonlyArray<MessagePart>): string
   parts.flatMap((part) => messagePartReasoning(part) ?? []).join("")
 
 /**
- * The answer a child run hands back: the last assistant message's text, or its
- * reasoning when the model wrote nothing else.
+ * The answer a child run hands back: the last assistant message's text parts,
+ * one per line, or its reasoning when the model wrote no text.
  */
 export const latestAssistantText = (
   messages: ReadonlyArray<{ readonly role: string; readonly parts: ReadonlyArray<MessagePart> }>,
@@ -802,7 +794,9 @@ export const latestAssistantText = (
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index]
     if (Predicate.isUndefined(message) || message.role !== "assistant") continue
-    const text = messagePartsTextLines(message.parts)[0] ?? ""
+    const text = messagePartsTextLines(message.parts)
+      .filter((line) => line.length > 0)
+      .join("\n")
     if (text.length > 0) return text
     return messagePartsReasoningLines(message.parts).join("\n")
   }
@@ -1110,6 +1104,9 @@ const fieldCost = (
 ): number =>
   costUpTo(encodeJson(name), cost, Infinity) + 1 + costUpTo(encodeJson(value), cost, Infinity) + 1
 
+// oxlint-disable-next-line effect/noNullish -- ToolInteraction's input, summary, output and duration are UndefinedOr wire fields.
+const absentField = undefined
+
 /**
  * An operation's input as its collapsed row reads it: top-level scalar fields.
  * Every field is kept whole or not at all, cheapest first, within `budget`,
@@ -1124,10 +1121,9 @@ type BoundedInput = string | Readonly<Record<string, Scalar>> | undefined
 const boundedInput = (input: unknown, budget: number): BoundedInput => {
   if (Predicate.isString(input)) {
     if (costUpTo(input, encodedOnce, budget) + 2 <= budget) return input
-    return Option.getOrUndefined(Option.none<string>())
+    return absentField
   }
-  if (!Predicate.isObject(input) || Array.isArray(input))
-    return Option.getOrUndefined(Option.none<string>())
+  if (!Predicate.isObject(input) || Array.isArray(input)) return absentField
   const fields = Object.entries(input)
     .filter((entry): entry is [string, Scalar] => isScalar(entry[1]))
     .map(([key, value]) => ({ key, value, cost: fieldCost(key, value, encodedOnce) }))
@@ -1225,7 +1221,7 @@ interface BoundedOutput {
   readonly cuts: ReadonlyArray<OutputCut>
 }
 
-const noOutput: BoundedOutput = { output: Option.getOrUndefined(Option.none()), cuts: [] }
+const noOutput: BoundedOutput = { output: absentField, cuts: [] }
 
 /** A cuttable field's value within its share, and the record of its cut. */
 interface FittedField {
@@ -1438,9 +1434,9 @@ const fitOperation = (raw: OperationRaw): ToolOperation => {
     id: ToolCallId.make(""),
     toolName: headWithin(raw.toolName, TOOL_NAME_BUDGET, encodedOnce),
     status: raw.status,
-    input: Option.getOrUndefined(Option.none()),
+    input: absentField,
     summary: raw.summary,
-    output: Option.getOrUndefined(Option.none()),
+    output: absentField,
     durationMs: raw.durationMs,
   }
   // `"input":` and `"output":` with their commas.
@@ -1500,9 +1496,9 @@ const admitOperation = (
       toolName: event.toolName,
       status: "running",
       input: event.input,
-      summary: Option.getOrUndefined(Option.none<string>()),
-      output: Option.getOrUndefined(Option.none<string>()),
-      durationMs: Option.getOrUndefined(Option.none<number>()),
+      summary: absentField,
+      output: absentField,
+      durationMs: absentField,
     }),
   )
   operations.set(parent, siblings)
@@ -1652,7 +1648,7 @@ export const messagePartsDisplayText = (
     if (!Predicate.isUndefined(toolCall)) {
       chunks.push(
         `### tool: ${toolCall.toolName}\n${clipChars(
-          stringifyDisplayValue(toolCall.input),
+          Option.getOrElse(tryStringifyJson(toolCall.input), () => String(toolCall.input)),
           maxToolChars,
         )}`,
       )
@@ -1717,15 +1713,13 @@ export class QueueSnapshot extends Schema.Class<QueueSnapshot>("QueueSnapshot")(
   followUp: Schema.Array(QueueEntryInfo),
 }) {}
 
-export const emptyQueueSnapshot = (): QueueSnapshot =>
-  new QueueSnapshot({ steering: [], followUp: [] })
-
-// ── Persisted queue ──
+// ── persisted queue ─────────────────────────────────────────────────────────
 //
 // The on-disk format of `agent_loop_queues.queue_json`. A row written by any
 // shipped build must still decode, so no field here is renamed, re-shaped, or
-// promoted from optional to required. `runtime/agent/loop-inbox.ts` is the
-// only module that interprets these values; this file declares their shape.
+// promoted from optional to required. The loop inbox in
+// `runtime/agent-loop.ts` is the only code that interprets these values; this
+// file declares their shape.
 
 /**
  * A branch that asks another branch for something: it steers that branch, or
@@ -1805,6 +1799,10 @@ const mergeProviderMetadata = (
 const hasProviderMetadata = (metadata: Response.ProviderMetadata): boolean =>
   Object.keys(metadata).length > 0
 
+/** The part kinds a provider streams in chunks; an unfinished text part flushes first. */
+const streamedKinds = ["text", "reasoning"] as const
+type StreamedKind = (typeof streamedKinds)[number]
+
 /**
  * Text and reasoning a provider streams, as whole parts. A part that carries
  * provider metadata stays whole and keeps it: the metadata (an OpenAI item id
@@ -1813,34 +1811,26 @@ const hasProviderMetadata = (metadata: Response.ProviderMetadata): boolean =>
  * text, as an OpenAI reasoning item without a summary is. Chunks without
  * metadata join the previous part of their kind.
  */
-const appendNormalizedTextPart = (
+const appendNormalizedPart = (
   parts: Array<Response.AnyPart>,
+  kind: StreamedKind,
   text: string,
   metadata: Response.ProviderMetadata = {},
 ): void => {
   const keep = hasProviderMetadata(metadata)
   if (text === "" && !keep) return
   const last = parts.at(-1)
-  if (!keep && last?.type === "text" && !hasProviderMetadata(last.metadata)) {
-    parts[parts.length - 1] = Response.makePart("text", { text: `${last.text}${text}` })
+  if (
+    !keep &&
+    !Predicate.isUndefined(last) &&
+    (last.type === "text" || last.type === "reasoning") &&
+    last.type === kind &&
+    !hasProviderMetadata(last.metadata)
+  ) {
+    parts[parts.length - 1] = Response.makePart(kind, { text: `${last.text}${text}` })
     return
   }
-  parts.push(Response.makePart("text", { text, metadata }))
-}
-
-const appendNormalizedReasoningPart = (
-  parts: Array<Response.AnyPart>,
-  text: string,
-  metadata: Response.ProviderMetadata = {},
-): void => {
-  const keep = hasProviderMetadata(metadata)
-  if (text === "" && !keep) return
-  const last = parts.at(-1)
-  if (!keep && last?.type === "reasoning" && !hasProviderMetadata(last.metadata)) {
-    parts[parts.length - 1] = Response.makePart("reasoning", { text: `${last.text}${text}` })
-    return
-  }
-  parts.push(Response.makePart("reasoning", { text, metadata }))
+  parts.push(Response.makePart(kind, { text, metadata }))
 }
 
 /** A streamed part between its start and its end. */
@@ -1851,21 +1841,39 @@ interface ActiveDelta {
 
 interface NormalizedResponseState {
   readonly normalized: Array<Response.AnyPart>
-  readonly activeTextDeltas: Map<string, ActiveDelta>
-  readonly activeReasoningDeltas: Map<string, ActiveDelta>
+  readonly activeDeltas: Record<StreamedKind, Map<string, ActiveDelta>>
   readonly toolCallIds: Set<string>
   readonly toolResultIds: Set<string>
 }
 
-type TextResponsePart = Extract<
+type StreamedResponsePart = Extract<
   Response.AnyPart,
-  { readonly type: "text" | "text-start" | "text-delta" | "text-end" }
+  {
+    readonly type:
+      | "text"
+      | "text-start"
+      | "text-delta"
+      | "text-end"
+      | "reasoning"
+      | "reasoning-start"
+      | "reasoning-delta"
+      | "reasoning-end"
+  }
 >
 
-type ReasoningResponsePart = Extract<
-  Response.AnyPart,
-  { readonly type: "reasoning" | "reasoning-start" | "reasoning-delta" | "reasoning-end" }
->
+const streamedKindOf: Record<StreamedResponsePart["type"], StreamedKind> = {
+  text: "text",
+  "text-start": "text",
+  "text-delta": "text",
+  "text-end": "text",
+  reasoning: "reasoning",
+  "reasoning-start": "reasoning",
+  "reasoning-delta": "reasoning",
+  "reasoning-end": "reasoning",
+}
+
+const isStreamedResponsePart = (part: Response.AnyPart): part is StreamedResponsePart =>
+  Object.hasOwn(streamedKindOf, part.type)
 
 /** Fold one streamed chunk into its active part; `false` when no part with that id started. */
 const foldActiveDelta = (
@@ -1898,52 +1906,32 @@ const takeActiveDelta = (
   })
 }
 
-const normalizeTextResponsePart = (
+const normalizeStreamedResponsePart = (
   state: NormalizedResponseState,
-  part: TextResponsePart,
+  part: StreamedResponsePart,
 ): void => {
+  const kind = streamedKindOf[part.type]
+  const active = state.activeDeltas[kind]
   switch (part.type) {
     case "text":
-      appendNormalizedTextPart(state.normalized, part.text, part.metadata)
+    case "reasoning":
+      appendNormalizedPart(state.normalized, kind, part.text, part.metadata)
       return
     case "text-start":
-      state.activeTextDeltas.set(part.id, { text: "", metadata: part.metadata })
+    case "reasoning-start":
+      active.set(part.id, { text: "", metadata: part.metadata })
       return
     case "text-delta":
-      if (!foldActiveDelta(state.activeTextDeltas, part.id, part.delta, part.metadata)) {
-        appendNormalizedTextPart(state.normalized, part.delta, part.metadata)
-      }
-      return
-    case "text-end": {
-      const done = takeActiveDelta(state.activeTextDeltas, part.id, part.metadata)
-      if (Option.isSome(done)) {
-        appendNormalizedTextPart(state.normalized, done.value.text, done.value.metadata)
-      }
-      return
-    }
-  }
-}
-
-const normalizeReasoningResponsePart = (
-  state: NormalizedResponseState,
-  part: ReasoningResponsePart,
-): void => {
-  switch (part.type) {
-    case "reasoning":
-      appendNormalizedReasoningPart(state.normalized, part.text, part.metadata)
-      return
-    case "reasoning-start":
-      state.activeReasoningDeltas.set(part.id, { text: "", metadata: part.metadata })
-      return
     case "reasoning-delta":
-      if (!foldActiveDelta(state.activeReasoningDeltas, part.id, part.delta, part.metadata)) {
-        appendNormalizedReasoningPart(state.normalized, part.delta, part.metadata)
+      if (!foldActiveDelta(active, part.id, part.delta, part.metadata)) {
+        appendNormalizedPart(state.normalized, kind, part.delta, part.metadata)
       }
       return
+    case "text-end":
     case "reasoning-end": {
-      const done = takeActiveDelta(state.activeReasoningDeltas, part.id, part.metadata)
+      const done = takeActiveDelta(active, part.id, part.metadata)
       if (Option.isSome(done)) {
-        appendNormalizedReasoningPart(state.normalized, done.value.text, done.value.metadata)
+        appendNormalizedPart(state.normalized, kind, done.value.text, done.value.metadata)
       }
       return
     }
@@ -1983,41 +1971,23 @@ export const normalizeResponseParts = (
 ): ReadonlyArray<Response.AnyPart> => {
   const state: NormalizedResponseState = {
     normalized: [],
-    activeTextDeltas: new Map<string, ActiveDelta>(),
-    activeReasoningDeltas: new Map<string, ActiveDelta>(),
+    activeDeltas: { text: new Map(), reasoning: new Map() },
     toolCallIds: new Set<string>(),
     toolResultIds: new Set<string>(),
   }
 
   for (const part of parts) {
-    if (
-      part.type === "text" ||
-      part.type === "text-start" ||
-      part.type === "text-delta" ||
-      part.type === "text-end"
-    ) {
-      normalizeTextResponsePart(state, part)
+    if (isStreamedResponsePart(part)) {
+      normalizeStreamedResponsePart(state, part)
       continue
     }
-
-    if (
-      part.type === "reasoning" ||
-      part.type === "reasoning-start" ||
-      part.type === "reasoning-delta" ||
-      part.type === "reasoning-end"
-    ) {
-      normalizeReasoningResponsePart(state, part)
-      continue
-    }
-
     normalizePassthroughResponsePart(state, part)
   }
 
-  for (const active of state.activeTextDeltas.values()) {
-    appendNormalizedTextPart(state.normalized, active.text, active.metadata)
-  }
-  for (const active of state.activeReasoningDeltas.values()) {
-    appendNormalizedReasoningPart(state.normalized, active.text, active.metadata)
+  for (const kind of streamedKinds) {
+    for (const active of state.activeDeltas[kind].values()) {
+      appendNormalizedPart(state.normalized, kind, active.text, active.metadata)
+    }
   }
 
   return state.normalized

@@ -92,7 +92,7 @@ type JsonRecord = Schema.Schema.Type<typeof JsonRecordSchema>
 
 /** The payload transform with the host's crypto and platform provided. */
 const transformPayload = (payload: JsonRecord) =>
-  transformPayloadEffect(payload, "1h").pipe(
+  transformPayloadEffect(payload, Option.some({ request: "1h", shared: "1h" })).pipe(
     Effect.provide(Layer.merge(BunCrypto.layer, testPlatformLayer)),
   )
 
@@ -2048,9 +2048,16 @@ describe("Anthropic chronological context", () => {
       }),
   )
 })
-/** Every `cache_control` marker in a request body, in wire order. */
-const cacheMarkers = (body: string): ReadonlyArray<string> =>
-  Array.from(body.matchAll(/"cache_control":\{[^}]*\}/g), (match) => match[0])
+/** Every `cache_control` marker in a request body, in prefix order (tools, system, messages) whatever the order of its keys. */
+const cacheMarkers = (body: string): ReadonlyArray<string> => {
+  const payload = Schema.decodeSync(Schema.fromJsonString(JsonRecordSchema))(body)
+  const toJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
+  return ["tools", "system", "messages"]
+    .filter((key) => key in payload)
+    .flatMap((key) =>
+      Array.from(toJson(payload[key]).matchAll(/"cache_control":\{[^}]*\}/g), (match) => match[0]),
+    )
+}
 
 describe("Anthropic prompt-cache lifetime", () => {
   const conversation = Prompt.make([
@@ -2058,7 +2065,11 @@ describe("Anthropic prompt-cache lifetime", () => {
     { role: "user", content: [{ type: "text", text: "Run a cell." }] },
   ])
   /** The markers of one rendered request on each sign-in path: an API key, then Claude Code. */
-  const renderedMarkers = (promptCacheTtl: "5m" | "1h", prompt: Prompt.Prompt = conversation) =>
+  const renderedMarkers = (
+    promptCacheTtl: "5m" | "1h",
+    prompt: Prompt.Prompt = conversation,
+    hints: ProviderHints = { cacheKey: "session-cache-key" },
+  ) =>
     Effect.gen(function* () {
       const perPath: Array<ReadonlyArray<string>> = []
       for (const authInfo of [makeApiAuthInfo("test-key"), makeOAuthInfo()]) {
@@ -2075,7 +2086,7 @@ describe("Anthropic prompt-cache lifetime", () => {
           Option.none(),
           promptCacheTtl,
         )
-        const model = yield* driver.resolveModel("claude-opus-4-6", authInfo)
+        const model = yield* driver.resolveModel("claude-opus-4-6", authInfo, hints)
         const state = makeFakeFetchState()
         yield* runContextRequest(model, state, prompt, "text")
         perPath.push(
@@ -2124,6 +2135,53 @@ describe("Anthropic prompt-cache lifetime", () => {
           }
         }
       }).pipe(Effect.timeout("5 seconds")),
+  )
+
+  it.live(
+    "a child's markers ask for 5 minutes, its shared part 1 hour; a root's ask for 1 hour",
+    () =>
+      Effect.gen(function* () {
+        const sharedPart = `# Shared\n\n${"Instructions every agent reads. ".repeat(160)}`
+        const sharedPrompt = Prompt.fromMessages([
+          Prompt.makeMessage("system", { content: sharedPart }),
+          Prompt.makeMessage("system", { content: "# Children\n\n- Delegate independent work." }),
+          Prompt.makeMessage("user", {
+            content: [Prompt.makePart("text", { text: "Run a cell." })],
+          }),
+        ])
+        const hour = '"cache_control":{"type":"ephemeral","ttl":"1h"}'
+        const minutes = '"cache_control":{"type":"ephemeral","ttl":"5m"}'
+        const [childApiKey, childClaudeCode] = yield* renderedMarkers("1h", sharedPrompt, {
+          cacheKey: "child-session",
+          child: true,
+        })
+        // A fresh child still reads the shared part its parent wrote; the longer
+        // lifetime renders first, as the ordering rule asks.
+        expect(childApiKey).toEqual([hour, minutes, minutes])
+        expect(childClaudeCode?.length).toBeGreaterThanOrEqual(2)
+        for (const marker of childClaudeCode ?? []) expect(marker).toBe(minutes)
+        for (const markers of yield* renderedMarkers("1h", sharedPrompt)) {
+          expect(markers.length).toBeGreaterThanOrEqual(2)
+          for (const marker of markers) expect(marker).toBe(hour)
+        }
+        // The 5-minute switch still sets every marker, a child's shared part too.
+        for (const markers of yield* renderedMarkers("5m", sharedPrompt, {
+          cacheKey: "child-session",
+          child: true,
+        })) {
+          for (const marker of markers) expect(marker).toBe(minutes)
+        }
+      }).pipe(Effect.timeout("5 seconds")),
+  )
+
+  it.live("a request with no cache key writes no cache, on both sign-in paths", () =>
+    Effect.gen(function* () {
+      // A one-off request, such as a compaction summary, has no later request
+      // to read its entry back.
+      for (const markers of yield* renderedMarkers("1h", conversation, {})) {
+        expect(markers).toEqual([])
+      }
+    }).pipe(Effect.timeout("5 seconds")),
   )
 
   it.live("the 5-minute switch renders every marker with the 5-minute lifetime", () =>
@@ -2410,6 +2468,62 @@ describe("buildAnthropicModelDriver — refresh writes only the keychain", () =>
       const keychain = yield* fs.readFileString(path.join(home, ".claude", ".credentials.json"))
       expect(keychain).toContain("refreshed-refresh")
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+  )
+  it.live(
+    "a refresh replaces the credentials file whole, owner-only, with no staging file left",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const home = yield* fs.makeTempDirectoryScoped()
+        const claudeDir = path.join(home, ".claude")
+        yield* fs.makeDirectory(claudeDir)
+        const credentialsFile = path.join(claudeDir, ".credentials.json")
+        yield* fs.writeFileString(
+          credentialsFile,
+          encodeExternalJson({
+            claudeAiOauth: { accessToken: "old-access", refreshToken: "old-refresh", expiresAt: 0 },
+          }),
+          { mode: 0o644 },
+        )
+        const before = yield* fs.stat(credentialsFile)
+        const credentialCellRef =
+          yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
+        const driver = buildAnthropicModelDriverLive(
+          credentialCellRef,
+          Option.none(),
+          yield* driverServices(AnthropicPlatform.of({ platform: "linux", home, env: {} })),
+          testCatalogSource(),
+          "1h",
+        )
+        const fetchState = makeFakeFetchState()
+        const fetchLayer = fakeFetchLayer(fetchState, (request) => {
+          if (!request.url.endsWith("/v1/oauth/token")) return anthropicHappyResponse()
+          return {
+            status: 200,
+            body: encodeExternalJson({
+              access_token: "refreshed-access",
+              refresh_token: "refreshed-refresh",
+              expires_in: 3600,
+            }),
+          }
+        })
+        const authInfo = ProviderAuthInfo.cases.Oauth.make({
+          update: () => Effect.die(new Error("the Claude Code path never writes the gent store")),
+        })
+        const model = yield* driver
+          .resolveModel("claude-opus-4-6", authInfo)
+          .pipe(Effect.provide(fetchLayer))
+        yield* runOne(model, fetchState)
+
+        const after = yield* fs.stat(credentialsFile)
+        // A new inode: the refresh renamed a staged file over the old one, so a
+        // concurrent reader (the claude CLI) never sees a half-written file.
+        expect(after.ino).not.toEqual(before.ino)
+        expect(after.mode & 0o777).toBe(0o600)
+        expect(yield* fs.readDirectory(claudeDir)).toEqual([".credentials.json"])
+        expect(yield* fs.readFileString(credentialsFile)).toContain("refreshed-refresh")
+      }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
   )
   it.live("a sign-in written during the refresh survives, and the request uses it", () =>
     Effect.gen(function* () {
@@ -2944,7 +3058,10 @@ describe("buildAnthropicModelDriver — prompt caching", () => {
         },
       )
       const driver = yield* buildAnthropicModelDriver(credentialCellRef, Option.none())
-      const model = yield* driver.resolveModel("claude-sonnet-4-6", authInfo)
+      // A conversation turn names its session as the cache key; the driver marks only such a request.
+      const model = yield* driver.resolveModel("claude-sonnet-4-6", authInfo, {
+        cacheKey: "session-cache-key",
+      })
       const state = makeFakeFetchState()
       yield* runCachingRequest(model, state, options, after, system)
       return yield* Schema.decodeEffect(CachedRequest)(

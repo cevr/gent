@@ -12,6 +12,7 @@ import {
   lineCount,
   Message,
   OutputCut,
+  messagePartsDisplayText,
   messagePartsImages,
   messagePartsReasoning,
   messagePartsText,
@@ -24,7 +25,7 @@ import {
   toolCallReceipts,
 } from "../../src/domain/message"
 import { AgentEvent, EventEnvelope, EventId } from "../../src/domain/event"
-import { Option, Predicate, Schema } from "effect"
+import { Predicate, Schema } from "effect"
 import * as Response from "effect/ai/Response"
 
 describe("steer command", () => {
@@ -246,8 +247,70 @@ const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[
 
 // ── message part projection ─────────────────────────────────────────────────
 
+describe("transcript display text", () => {
+  test("a text part shows its text", () => {
+    const parts = [Prompt.textPart({ text: "hello world" })]
+    expect(messagePartsDisplayText(parts)).toBe("hello world")
+  })
+
+  test("a tool call shows its name and input", () => {
+    const parts = [
+      Prompt.toolCallPart({
+        id: ToolCallId.make("tc1"),
+        name: "read",
+        params: { path: "/tmp/test.txt" },
+        providerExecuted: false,
+      }),
+    ]
+    const result = messagePartsDisplayText(parts)
+    expect(result).toContain("### tool: read")
+    expect(result).toContain("/tmp/test.txt")
+  })
+
+  test("a tool call with no input renders instead of throwing", () => {
+    const parts = [
+      Prompt.toolCallPart({
+        id: ToolCallId.make("tc1"),
+        name: "read",
+        // oxlint-disable-next-line effect/noNullish -- A stored call can carry no input; the display must not throw on it.
+        params: undefined,
+        providerExecuted: false,
+      }),
+    ]
+    expect(messagePartsDisplayText(parts)).toBe("### tool: read\nundefined")
+  })
+
+  test("a tool result shows its output", () => {
+    const parts = [
+      Prompt.toolResultPart({
+        id: ToolCallId.make("tc1"),
+        name: "read",
+        isFailure: false,
+        providerExecuted: false,
+        result: "file contents here",
+      }),
+    ]
+    expect(messagePartsDisplayText(parts)).toContain("result: file contents here")
+  })
+
+  test("parts show in order, one per line", () => {
+    const parts = [
+      Prompt.textPart({ text: "start" }),
+      Prompt.toolCallPart({
+        id: ToolCallId.make("tc1"),
+        name: "bash",
+        params: { command: "ls" },
+        providerExecuted: false,
+      }),
+    ]
+    const result = messagePartsDisplayText(parts)
+    expect(result.indexOf("start")).toBeLessThan(result.indexOf("### tool: bash"))
+  })
+})
+
 describe("message part projection", () => {
-  const absent = Option.getOrUndefined(Option.none<number>())
+  // oxlint-disable-next-line effect/noNullish -- The fixture names an absent wire field.
+  const absent = undefined
   const makeMessage = (
     id: string,
     role: "assistant" | "tool",
@@ -396,7 +459,8 @@ describe("message part projection", () => {
     const read = ToolCallId.make("tc-read")
     const lost = ToolCallId.make("tc-lost")
     const forked = ToolCallId.make("tc-forked")
-    const noText = Option.getOrUndefined(Option.none<string>())
+    // oxlint-disable-next-line effect/noNullish -- The fixture names an absent wire field.
+    const noText = undefined
     const envelope = (id: number, createdAt: number, event: AgentEvent) =>
       EventEnvelope.make({ id: EventId.make(id), createdAt, event })
     const events = [
@@ -1553,5 +1617,24 @@ describe("message part projection", () => {
     ]
     expect(latestAssistantText(latestWins)).toBe("second")
     expect(latestAssistantText([])).toBe("")
+  })
+
+  test("a child's answer keeps every text part of its last assistant message", () => {
+    const twoItems = [
+      makeMessage("a-5", "assistant", [
+        Prompt.textPart({ text: "Here is the plan." }),
+        Prompt.textPart({ text: "Final answer: 42." }),
+      ]),
+    ]
+    expect(latestAssistantText(twoItems)).toBe("Here is the plan.\nFinal answer: 42.")
+    // An empty text part stays when it carries provider metadata (an OpenAI item id).
+    const emptyFirstItem = [
+      makeMessage("a-6", "assistant", [
+        Prompt.reasoningPart({ text: "thinking" }),
+        Prompt.textPart({ text: "" }),
+        Prompt.textPart({ text: "the answer" }),
+      ]),
+    ]
+    expect(latestAssistantText(emptyFirstItem)).toBe("the answer")
   })
 })
