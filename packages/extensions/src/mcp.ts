@@ -28,7 +28,11 @@ import {
 import { Base64, Base64Url, Hex } from "effect/encoding"
 import { FetchHttpClient, HttpServer, HttpServerRequest, HttpServerResponse } from "effect/http"
 import { BunHttpServer } from "@effect/platform-bun"
-import { auth, type OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js"
+import {
+  auth,
+  extractResourceMetadataUrl,
+  type OAuthClientProvider,
+} from "@modelcontextprotocol/sdk/client/auth.js"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { SSEClientTransport, SseError } from "@modelcontextprotocol/sdk/client/sse.js"
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
@@ -619,6 +623,13 @@ const StoredLogin = Schema.Struct({
   client: StoredClient,
   /** The redirect URI the client registered with; a refresh names it again. */
   redirectUri: Schema.String,
+  /**
+   * The protected resource metadata URL the server's 401 named in
+   * `WWW-Authenticate`, when it named one. A refresh finds the token
+   * endpoint through it; a server that serves its metadata off the
+   * well-known path is not found otherwise.
+   */
+  resourceMetadataUrl: Schema.optional(Schema.String),
 })
 type StoredLogin = typeof StoredLogin.Type
 
@@ -748,6 +759,7 @@ const loginFrom = (
   tokens: StoredTokens,
   client: StoredClient,
   redirectUri: string,
+  metadata: Option.Option<URL>,
   now: number,
 ): StoredLogin => ({
   tokens,
@@ -757,8 +769,53 @@ const loginFrom = (
     expiresAt: Option.getOrUndefined(
       Option.map(Option.fromUndefinedOr(tokens.expires_in), (seconds) => now + seconds * 1000),
     ),
+    resourceMetadataUrl: Option.getOrUndefined(Option.map(metadata, (url) => url.href)),
   }),
 })
+
+/** The options an SDK `auth()` run takes for `config`, with the resource metadata URL when known. */
+const authOptions = (config: HttpServerConfig, metadata: Option.Option<URL>) => ({
+  serverUrl: config.url,
+  ...Option.match(metadata, {
+    onNone: () => ({}),
+    onSome: (resourceMetadataUrl) => ({ resourceMetadataUrl }),
+  }),
+})
+
+/** The stored resource metadata URL of `login`, when it has a valid one. */
+const storedMetadata = (login: StoredLogin) =>
+  Option.flatMap(Option.fromUndefinedOr(login.resourceMetadataUrl), (href) =>
+    Option.liftThrowable(() => new URL(href))(),
+  )
+
+/** The server's `initialize` as a probe sends it, with no token. */
+const INITIALIZE_PROBE =
+  '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"gent","version":"1.0.0"}}}'
+
+/**
+ * The resource metadata URL the server names in its 401's
+ * `WWW-Authenticate`, read from one request with no token: an `initialize`
+ * POST, or the stream's GET for an `sse` entry. None when the server does not
+ * refuse it or names none; discovery then tries the well-known paths.
+ */
+const namedMetadata = (config: HttpServerConfig) =>
+  Effect.gen(function* () {
+    const fetchWeb = yield* FetchHttpClient.Fetch
+    const headers = new Headers(config.headers)
+    headers.set("Accept", "application/json, text/event-stream")
+    const init: RequestInit = { headers }
+    if (configuredTransport(config) !== "sse") {
+      headers.set("Content-Type", "application/json")
+      init.method = "POST"
+      init.body = INITIALIZE_PROBE
+    }
+    const response = yield* Effect.tryPromise(() => fetchWeb(config.url, init))
+    // Only the status and headers count; an `sse` stream's body never ends.
+    const body = Option.fromNullishOr(response.body)
+    if (Option.isSome(body)) yield* Effect.ignore(Effect.tryPromise(() => body.value.cancel()))
+    if (response.status !== 401) return Option.none<URL>()
+    return Option.fromUndefinedOr(extractResourceMetadataUrl(response))
+  }).pipe(Effect.orElseSucceed(() => Option.none<URL>()))
 
 /** gent's client as it registers with an authorization server: a public client on a loopback redirect. */
 const clientMetadataFor = (redirectUri: string) => ({
@@ -832,13 +889,15 @@ const flowProvider = (
 
 /**
  * A new token for `login` from its refresh token, stored; none when it has
- * no refresh token or the authorization server refused it.
+ * no refresh token or the authorization server refused it. Discovery starts
+ * from `named`, the metadata URL a 401 just named, else the stored one.
  */
 const refreshLogin = (
   server: McpServer,
   config: HttpServerConfig,
   store: AuthStore,
   login: StoredLogin,
+  named: Option.Option<URL>,
 ) =>
   Effect.gen(function* () {
     if (Predicate.isUndefined(login.tokens.refresh_token)) return Option.none<StoredLogin>()
@@ -851,12 +910,14 @@ const refreshLogin = (
       Option.some(login),
       Option.none(),
     )
-    const result = yield* Effect.tryPromise(() => auth(provider, { serverUrl: config.url }))
+    const metadata = Option.orElse(named, () => storedMetadata(login))
+    const result = yield* Effect.tryPromise(() => auth(provider, authOptions(config, metadata)))
     if (result !== "AUTHORIZED" || Option.isNone(flow.tokens)) return Option.none<StoredLogin>()
     const refreshed = loginFrom(
       flow.tokens.value,
       Option.getOrElse(flow.client, () => login.client),
       login.redirectUri,
+      metadata,
       now,
     )
     yield* writeLogin(store, authKey(server, config), refreshed)
@@ -878,7 +939,7 @@ const loginBeforeDial = (server: McpServer, config: HttpServerConfig, store: Aut
     const now = yield* Clock.currentTimeMillis
     const expiresAt = Option.fromUndefinedOr(login.value.expiresAt)
     if (Option.isSome(expiresAt) && expiresAt.value - Duration.toMillis(REFRESH_SKEW) <= now) {
-      return yield* refreshLogin(server, config, store, login.value)
+      return yield* refreshLogin(server, config, store, login.value, Option.none())
     }
     return login
   })
@@ -937,7 +998,14 @@ const oauthTransport = (server: McpServer, config: HttpServerConfig, store: Auth
         if (response.status === 401 && REPLAYABLE.has(requestMethod(init))) {
           const refreshed = yield* Option.match(current, {
             onNone: () => Effect.succeed(Option.none<StoredLogin>()),
-            onSome: (login) => refreshLogin(server, config, store, login),
+            onSome: (login) =>
+              refreshLogin(
+                server,
+                config,
+                store,
+                login,
+                Option.fromUndefinedOr(extractResourceMetadataUrl(response)),
+              ),
           })
           if (Option.isSome(refreshed)) {
             current = refreshed
@@ -969,7 +1037,8 @@ interface LoginStart {
 
 /**
  * Starts a login to `server`: a loopback listener on 127.0.0.1 for the
- * redirect, the SDK's client registration and PKCE authorization URL. The
+ * redirect, the resource metadata URL the server names in a 401 (see
+ * `namedMetadata`), the SDK's client registration and PKCE authorization URL. The
  * listener lives in `scope`. `finish` waits up to `LOGIN_TIMEOUT` for the
  * redirect, exchanges its code, and stores the login.
  */
@@ -986,10 +1055,11 @@ const startLogin = (
     const port = yield* serveRedirect(server, state, code).pipe(Scope.provide(scope))
     const redirectUri = `http://127.0.0.1:${port}/callback`
     const flow = emptyFlow(Option.none())
+    const metadata = yield* namedMetadata(config)
     const provider = flowProvider(server.name, redirectUri, flow, Option.none(), Option.some(state))
     const fail = (message: string) => new McpError({ server: server.name, message })
     yield* Effect.tryPromise({
-      try: () => auth(provider, { serverUrl: config.url }),
+      try: () => auth(provider, authOptions(config, metadata)),
       catch: (cause) => fail(`login: ${failureMessage(cause)}`),
     })
     if (Option.isNone(flow.authorizationUrl)) {
@@ -1003,7 +1073,8 @@ const startLogin = (
         }),
       )
       yield* Effect.tryPromise({
-        try: () => auth(provider, { serverUrl: config.url, authorizationCode: received }),
+        try: () =>
+          auth(provider, { ...authOptions(config, metadata), authorizationCode: received }),
         catch: (cause) => fail(`login: ${failureMessage(cause)}`),
       })
       if (Option.isNone(flow.tokens) || Option.isNone(flow.client)) {
@@ -1013,6 +1084,7 @@ const startLogin = (
         flow.tokens.value,
         flow.client.value,
         redirectUri,
+        metadata,
         yield* Clock.currentTimeMillis,
       )
       yield* writeLogin(store, authKey(server, config), login)

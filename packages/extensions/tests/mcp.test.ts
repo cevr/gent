@@ -1653,6 +1653,28 @@ describe("mcp oauth", () => {
   )
 
   it.scopedLive(
+    "a server whose resource metadata only its WWW-Authenticate header names logs in and refreshes",
+    () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path
+        const oauth = yield* serveOAuthFixtureWith({ ...defaultOAuthFixture, headerOnly: true })
+        const data = yield* makeDataDir
+        const catalogFile = path.join(data.directory, "mcp-catalog.json")
+        const first = yield* loginThroughCommand(oauth, catalogFile).pipe(
+          Effect.provide(data.layer),
+        )
+        expect(first.landing).toBe("gent is logged in to secure. You can close this tab.")
+        expect(first.after).toContain("- secure (streamable-http): healthy, 2 tools, connected")
+        // The refused initialize finds the token endpoint through the header too.
+        const shown = yield* revokeThenCall(oauth).pipe(Effect.provide(data.layer))
+        expect(shown.first).toBe("token-1")
+        expect(shown.second).toBe("token-2")
+        expect(oauth.refreshes).toBe(1)
+      }).pipe(Effect.timeout("40 seconds"), Effect.provide(platformLayer)),
+    45_000,
+  )
+
+  it.scopedLive(
     "an interrupted /mcp login closes its loopback listener",
     () =>
       Effect.gen(function* () {
