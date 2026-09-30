@@ -600,7 +600,7 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
   }
   installHostNamespace("tools", toolsNamespace)
   installHostNamespace("context", context)
-  if (!Predicate.isFunction(Reflect.get(globalThis, "require"))) {
+  if (!(Predicate.hasProperty(globalThis, "require") && Predicate.isFunction(globalThis.require))) {
     Object.defineProperty(globalThis, "require", {
       value: createRequire(`${environment.workingDirectory}/`),
       writable: true,

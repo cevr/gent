@@ -604,10 +604,12 @@ export const resolveTuiExtensions = (
 // eslint-disable-next-line effect/noUnknownParameters -- dynamic imports are parsed at this module boundary.
 const clientModuleProblem = (value: unknown): Option.Option<string> => {
   if (!Predicate.isObject(value)) return Option.some("module must export an object")
-  const id = Reflect.get(value, "id")
-  if (!Predicate.isString(id)) return Option.some("missing id")
-  const setup = Reflect.get(value, "setup")
-  if (!Effect.isEffect(setup)) return Option.some("setup must be an Effect value")
+  if (!Predicate.hasProperty(value, "id") || !Predicate.isString(value.id)) {
+    return Option.some("missing id")
+  }
+  if (!Predicate.hasProperty(value, "setup") || !Effect.isEffect(value.setup)) {
+    return Option.some("setup must be an Effect value")
+  }
   return Option.none()
 }
 

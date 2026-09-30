@@ -344,22 +344,14 @@ describe("writeFileAtomic", () => {
         ...fs,
         open: (file, options) =>
           fs.open(file, options).pipe(
-            // The handle is a class instance: forward to it, bound, and
-            // record its sync.
-            Effect.map(
-              (handle) =>
-                new Proxy(handle, {
-                  get: (target, key) => {
-                    if (key === "sync")
-                      return Effect.sync(() => syncOrder.push("sync")).pipe(
-                        Effect.andThen(target.sync),
-                      )
-                    const value: unknown = Reflect.get(target, key, target)
-                    if (Predicate.isFunction(value)) return value.bind(target)
-                    return value
-                  },
-                }),
-            ),
+            // The handle is a class instance: its own `sync` records the
+            // sync, then runs the one the class gives it.
+            Effect.map((handle) => {
+              const sync = handle.sync
+              return Object.defineProperty(handle, "sync", {
+                value: Effect.sync(() => syncOrder.push("sync")).pipe(Effect.andThen(sync)),
+              })
+            }),
           ),
         rename: (from, to) =>
           Effect.sync(() => syncOrder.push("rename")).pipe(Effect.andThen(fs.rename(from, to))),
