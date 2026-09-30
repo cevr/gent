@@ -12,8 +12,8 @@ import { CellRequest } from "../../src/cell-protocol.js"
 BunRuntime.runMain(
   Effect.scoped(
     Effect.gen(function* () {
-      const scriptPath = yield* Config.string("CELL_WORKER_SCRIPT")
-      const source = yield* Config.string("CELL_SOURCE")
+      const scriptPath = yield* Config.String("CELL_WORKER_SCRIPT")
+      const source = yield* Config.String("CELL_SOURCE")
       const worker = yield* openCellProcess({
         worker: CellWorker.cases.Script.make({ runtimePath: process.execPath, scriptPath }),
         cwd: process.cwd(),

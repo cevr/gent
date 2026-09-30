@@ -470,9 +470,9 @@ const AGENT = "gent"
 let herdrReportSequence = 0
 
 const herdrEnvironment = Config.all({
-  enabled: Config.string("HERDR_ENV").pipe(Config.withDefault("")),
-  socketPath: Config.string("HERDR_SOCKET_PATH").pipe(Config.withDefault("")),
-  paneId: Config.string("HERDR_PANE_ID").pipe(Config.withDefault("")),
+  enabled: Config.String("HERDR_ENV").pipe(Config.withDefault("")),
+  socketPath: Config.String("HERDR_SOCKET_PATH").pipe(Config.withDefault("")),
+  paneId: Config.String("HERDR_PANE_ID").pipe(Config.withDefault("")),
 }).pipe(
   Config.map((env) => {
     if (env.enabled !== "1" || env.socketPath.length === 0 || env.paneId.length === 0)

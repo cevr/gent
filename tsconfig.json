@@ -93,7 +93,8 @@
           "unnecessaryEffectGen": "error",
           "unnecessaryFailYieldableError": "error",
           "unnecessaryPipe": "off",
-          "unnecessaryPipeChain": "off"
+          "unnecessaryPipeChain": "off",
+          "unstableApiUsage": "off"
         },
         "keyPatterns": [
           {

@@ -50,7 +50,7 @@ import {
 import { indexFileNames, scanTrackedTexts, trackedTexts } from "../src/check-guardrails"
 import { BunServices } from "@effect/platform-bun"
 import { Config, Effect, FileSystem, Option, Path } from "effect"
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
+import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import { it } from "effect-bun-test"
 
 // ── blanket eslint disable ──────────────────────────────────────────────────
@@ -1054,7 +1054,7 @@ describe("every guard reads one file set, the git index", () => {
    * would aim the scratch git at the real repository's index.
    */
   const scratchEnv = (root: string, extra: Readonly<Record<string, string>> = {}) =>
-    Effect.map(Config.string("PATH"), (PATH) => ({ PATH, HOME: root, ...extra }))
+    Effect.map(Config.String("PATH"), (PATH) => ({ PATH, HOME: root, ...extra }))
 
   const git = (
     root: string,
@@ -1251,7 +1251,7 @@ describe("a read variable must have a writer", () => {
   test("a variable something in the tree sets is silent", () => {
     const findings = findReadersWithoutWriters(
       new Map([
-        ["packages/sdk/src/reader.ts", `Config.option(Config.string("GENT_CHILD_ID"))\n`],
+        ["packages/sdk/src/reader.ts", `Config.option(Config.String("GENT_CHILD_ID"))\n`],
         ["packages/sdk/src/spawn.ts", `const env = { GENT_CHILD_ID: id }\n`],
       ]),
       none,
@@ -1262,7 +1262,7 @@ describe("a read variable must have a writer", () => {
   test("a variable nothing sets is reported", () => {
     // GENT_TRACE_ID outlived its writer and kept an unreachable branch alive.
     const findings = findReadersWithoutWriters(
-      new Map([["packages/sdk/src/reader.ts", `Config.option(Config.string("GENT_ORPHAN"))\n`]]),
+      new Map([["packages/sdk/src/reader.ts", `Config.option(Config.String("GENT_ORPHAN"))\n`]]),
       none,
     )
     expect(messages(findings)).toEqual([
@@ -1276,8 +1276,8 @@ describe("a read variable must have a writer", () => {
         [
           "packages/sdk/src/reader.ts",
           [
-            `const mode = Config.literals(["a", "b"], "GENT_PROBE_B")`,
-            `const level = Config.literals(NAMES,`,
+            `const mode = Config.Literals(["a", "b"], "GENT_PROBE_B")`,
+            `const level = Config.Literals(NAMES,`,
             `  "GENT_PROBE_C",`,
             `)`,
             `const dir = optionalEnv("GENT_PROBE_D")`,
@@ -1316,7 +1316,7 @@ describe("a read variable must have a writer", () => {
   test("a string that shows the assignment in another production file sets nothing", () => {
     const findings = findReadersWithoutWriters(
       new Map([
-        ["packages/sdk/src/reader.ts", `Config.option(Config.string("GENT_ORPHAN"))\n`],
+        ["packages/sdk/src/reader.ts", `Config.option(Config.String("GENT_ORPHAN"))\n`],
         [
           "packages/sdk/src/help.ts",
           `console.log("run with GENT_ORPHAN=1")\nconst hint = "GENT_ORPHAN: on"\n`,
@@ -1331,10 +1331,10 @@ describe("a read variable must have a writer", () => {
 
   test("each real writer shape sets the variable", () => {
     const reader = [
-      `Config.string("GENT_W_SPAWN")`,
-      `Config.string("GENT_W_ASSIGN")`,
-      `Config.string("GENT_W_INDEX")`,
-      `Config.string("GENT_W_SCRIPT")`,
+      `Config.String("GENT_W_SPAWN")`,
+      `Config.String("GENT_W_ASSIGN")`,
+      `Config.String("GENT_W_INDEX")`,
+      `Config.String("GENT_W_SCRIPT")`,
     ].join("\n")
     const findings = findReadersWithoutWriters(
       new Map([
@@ -1357,7 +1357,7 @@ describe("a read variable must have a writer", () => {
   test("a shell prefix outside a package script sets nothing", () => {
     const findings = findReadersWithoutWriters(
       new Map([
-        ["packages/sdk/src/reader.ts", `Config.string("GENT_W_TEXT")\n`],
+        ["packages/sdk/src/reader.ts", `Config.String("GENT_W_TEXT")\n`],
         ["packages/sdk/src/help.ts", `const usage = "GENT_W_TEXT=1 gent"\n`],
       ]),
       none,
@@ -1372,7 +1372,7 @@ describe("a read variable must have a writer", () => {
           "packages/sdk/src/reader.ts",
           [
             `// run with GENT_PROBE_F=1 to enable`,
-            `Config.string("GENT_PROBE_F")`,
+            `Config.String("GENT_PROBE_F")`,
             "fail(`invalid GENT_PROBE_F: ${reason}`)",
           ].join("\n"),
         ],
@@ -1384,7 +1384,7 @@ describe("a read variable must have a writer", () => {
 
   test("a variable the operator sets is allowed, with its reason", () => {
     const findings = findReadersWithoutWriters(
-      new Map([["packages/sdk/src/logger.ts", `Config.option(Config.string("GENT_LOG_LEVEL"))\n`]]),
+      new Map([["packages/sdk/src/logger.ts", `Config.option(Config.String("GENT_LOG_LEVEL"))\n`]]),
       new Map([["GENT_LOG_LEVEL", "a developer sets this by hand"]]),
     )
     expect(findings).toEqual([])
@@ -1395,7 +1395,7 @@ describe("a read variable must have a writer", () => {
     // the reader works, not that anything in production supplies it.
     const findings = findReadersWithoutWriters(
       new Map([
-        ["packages/sdk/src/reader.ts", `Config.option(Config.string("GENT_TEST_ONLY"))\n`],
+        ["packages/sdk/src/reader.ts", `Config.option(Config.String("GENT_TEST_ONLY"))\n`],
         ["packages/sdk/tests/reader.test.ts", `const env = { GENT_TEST_ONLY: "1" }\n`],
         ["packages/e2e/src/pty-fixture.ts", `const env = { GENT_TEST_ONLY: "1" }\n`],
         ["packages/core/src/test-utils/harness.ts", `env["GENT_TEST_ONLY"] = "1"\n`],
@@ -1416,8 +1416,8 @@ describe("a read variable must have a writer", () => {
   test("every reader of one dead variable is reported, not just the first", () => {
     const findings = findReadersWithoutWriters(
       new Map([
-        ["packages/sdk/src/a.ts", `Config.option(Config.string("GENT_ORPHAN"))\n`],
-        ["packages/sdk/src/b.ts", `Config.option(Config.string("GENT_ORPHAN"))\n`],
+        ["packages/sdk/src/a.ts", `Config.option(Config.String("GENT_ORPHAN"))\n`],
+        ["packages/sdk/src/b.ts", `Config.option(Config.String("GENT_ORPHAN"))\n`],
       ]),
       none,
     )
@@ -1472,7 +1472,7 @@ describe("a read variable must have a writer", () => {
   test("an env record bound to a name ending in Env sets its keys", () => {
     const findings = findReadersWithoutWriters(
       new Map([
-        ["packages/sdk/src/reader.ts", `Config.string("GENT_CHILD_MODE")\n`],
+        ["packages/sdk/src/reader.ts", `Config.String("GENT_CHILD_MODE")\n`],
         [
           "packages/sdk/src/spawn.ts",
           `const childEnv = { GENT_CHILD_MODE: "1" }\nBun.spawn(["gent"], { env: childEnv })\n`,
@@ -1486,7 +1486,7 @@ describe("a read variable must have a writer", () => {
   test("an operator entry nothing reads, or that production sets, is reported", () => {
     const findings = findReadersWithoutWriters(
       new Map([
-        ["packages/sdk/src/reader.ts", `Config.string("GENT_SET_HERE")\n`],
+        ["packages/sdk/src/reader.ts", `Config.String("GENT_SET_HERE")\n`],
         ["packages/sdk/src/spawn.ts", `const env = { GENT_SET_HERE: "1" }\n`],
       ]),
       new Map([
@@ -1512,7 +1512,7 @@ describe("the guard entry routes each tracked file to its finders", () => {
     // scan, so a script writer counted only when a test fed it to the finder.
     expect(
       gentNames([
-        { file: "packages/sdk/src/reader.ts", text: `Config.string("GENT_PROBE_SCRIPT")\n` },
+        { file: "packages/sdk/src/reader.ts", text: `Config.String("GENT_PROBE_SCRIPT")\n` },
         {
           file: "apps/tui/package.json",
           text: `{ "scripts": { "dev": "GENT_PROBE_SCRIPT=1 bun run x" } }\n`,
@@ -1524,7 +1524,7 @@ describe("the guard entry routes each tracked file to its finders", () => {
   test("a manifest field other than scripts sets nothing, even when it shows the prefix", () => {
     expect(
       gentNames([
-        { file: "packages/sdk/src/reader.ts", text: `Config.string("GENT_PROBE_SCRIPT")\n` },
+        { file: "packages/sdk/src/reader.ts", text: `Config.String("GENT_PROBE_SCRIPT")\n` },
         {
           file: "apps/tui/package.json",
           text: `{ "description": "run with GENT_PROBE_SCRIPT=1 to probe", "scripts": { "dev": "bun run x" } }\n`,
@@ -1536,7 +1536,7 @@ describe("the guard entry routes each tracked file to its finders", () => {
   test("with no script to set it, the entry still reports the reader", () => {
     expect(
       gentNames([
-        { file: "packages/sdk/src/reader.ts", text: `Config.string("GENT_PROBE_SCRIPT")\n` },
+        { file: "packages/sdk/src/reader.ts", text: `Config.String("GENT_PROBE_SCRIPT")\n` },
         { file: "apps/tui/package.json", text: `{ "scripts": { "dev": "bun run x" } }\n` },
       ]),
     ).toEqual([expect.stringContaining("is read but nothing in the tree sets it")])

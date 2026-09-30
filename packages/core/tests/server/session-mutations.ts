@@ -1,6 +1,6 @@
 import { Predicate, Deferred, Effect, Layer, Stream } from "effect"
-import { RpcClient, RpcTest } from "effect/unstable/rpc"
-import { SqlClient, type SqlError } from "effect/unstable/sql"
+import { RpcClient, RpcTest } from "effect/rpc"
+import { SqlClient, type SqlError } from "effect/sql"
 import { LanguageModelLayers, textStep } from "../../src/test-utils/language-model"
 import { ExtensionRegistry } from "../../src/runtime/extension-host.js"
 import type { BranchId, SessionId } from "../../src/domain/ids"

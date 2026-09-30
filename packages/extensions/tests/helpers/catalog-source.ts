@@ -19,7 +19,7 @@ const platformLayer = Layer.merge(BunFileSystem.layer, Path.layer)
 const source = Effect.runSync(
   Effect.gen(function* () {
     const path = yield* Path.Path
-    const home = path.join(yield* Config.string("HOME"), "no-catalog")
+    const home = path.join(yield* Config.String("HOME"), "no-catalog")
     const platform = yield* Effect.context<FileSystem.FileSystem | Path.Path>()
     return { home, platform } satisfies CatalogSource
   }).pipe(Effect.provide(platformLayer), Effect.orDie),

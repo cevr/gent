@@ -10,7 +10,7 @@ import {
   writeFileAtomic,
 } from "../../src/runtime/gent-platform"
 import { BunChildProcessSpawner, BunFileSystem, BunServices } from "@effect/platform-bun"
-import type * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner"
+import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner"
 import { homedir, tmpdir } from "node:os"
 import { makeTempDirectoryScoped } from "../../src/test-utils/language-model"
 

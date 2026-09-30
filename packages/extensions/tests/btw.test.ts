@@ -12,9 +12,9 @@ import {
   Stream,
 } from "effect"
 import { TestClock } from "effect/testing"
-import * as AiError from "effect/unstable/ai/AiError"
-import * as Prompt from "effect/unstable/ai/Prompt"
-import type { ProviderOptions } from "effect/unstable/ai/LanguageModel"
+import * as AiError from "effect/ai/AiError"
+import * as Prompt from "effect/ai/Prompt"
+import type { ProviderOptions } from "effect/ai/LanguageModel"
 import {
   createRpcHarness,
   finishPart,

@@ -19,7 +19,7 @@ import {
 } from "./ids.js"
 import { CurrentWorkspaceId, WorkspaceId } from "../server/workspace-rpc.js"
 import { GentPlatform } from "../runtime/gent-platform.js"
-import * as Prompt from "effect/unstable/ai/Prompt"
+import * as Prompt from "effect/ai/Prompt"
 import { Actor } from "effect-encore"
 
 // ── agent-loop.state ────────────────────────────────────────────────────────

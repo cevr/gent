@@ -41,9 +41,9 @@ import {
   HttpClient,
   type HttpClientRequest,
   HttpClientResponse,
-} from "effect/unstable/http"
-import { EncodeError, HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
-import { AiError, LanguageModel, Prompt, Tool, Toolkit } from "effect/unstable/ai"
+} from "effect/http"
+import { EncodeError, HttpClientError, TransportError } from "effect/http/HttpClientError"
+import { AiError, LanguageModel, Prompt, Tool, Toolkit } from "effect/ai"
 import { encodeExternalJson } from "./helpers/external-wire.js"
 import { testCatalogSource } from "./helpers/catalog-source.js"
 import { e2ePreset } from "./helpers/test-preset.js"

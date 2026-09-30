@@ -31,7 +31,7 @@ import {
   type ToolCapability,
 } from "./capability.js"
 import type { ModelDriverContribution } from "./driver.js"
-import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
+import type { ChildProcessSpawner } from "effect/process/ChildProcessSpawner"
 import type { GentPlatform, GentPlatformOsInfo } from "../runtime/gent-platform.js"
 import {
   ActorCommandId,

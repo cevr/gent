@@ -15,16 +15,16 @@ import {
   Stream,
 } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import { LanguageModel } from "effect/unstable/ai"
-import { FetchHttpClient } from "effect/unstable/http"
+import { LanguageModel } from "effect/ai"
+import { FetchHttpClient } from "effect/http"
 // oxlint-disable-next-line effect/noNodeBuiltinImport -- This synchronous fixture adapter creates worker files before the child runtime starts.
 import * as fs from "node:fs"
 import * as os from "node:os"
 // oxlint-disable-next-line effect/noNodeBuiltinImport -- This synchronous fixture adapter builds worker paths before the child runtime starts.
 import * as path from "node:path"
-import type { ProviderOptions } from "effect/unstable/ai/LanguageModel"
-import type * as AiError from "effect/unstable/ai/AiError"
-import type * as Prompt from "effect/unstable/ai/Prompt"
+import type { ProviderOptions } from "effect/ai/LanguageModel"
+import type * as AiError from "effect/ai/AiError"
+import type * as Prompt from "effect/ai/Prompt"
 import { ProviderStopReason, reportProviderStopReason } from "../domain/driver.js"
 import { omitUndefined } from "../domain/guards.js"
 import { ToolCallId } from "../domain/ids.js"

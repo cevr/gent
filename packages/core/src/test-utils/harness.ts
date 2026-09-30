@@ -112,7 +112,7 @@ import {
   getEventSessionId,
   matchesEventFilter,
 } from "../domain/event.js"
-import { type LanguageModel, Model as AiModel } from "effect/unstable/ai"
+import { type LanguageModel, Model as AiModel } from "effect/ai"
 import { GentPlatform } from "../runtime/gent-platform.js"
 import { BunCrypto } from "@effect/platform-bun"
 import type { FeatureMigrations } from "../storage/schema.js"

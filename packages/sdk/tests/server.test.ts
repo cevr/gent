@@ -1,5 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
 import {
+  ByteSize,
   ConfigProvider,
   Effect,
   FileSystem,
@@ -12,7 +13,7 @@ import {
   Schema,
   Scope,
 } from "effect"
-import * as ChildProcessSpawnerNs from "effect/unstable/process/ChildProcessSpawner"
+import * as ChildProcessSpawnerNs from "effect/process/ChildProcessSpawner"
 import { dateFromMillis } from "@gent/core/protocol"
 import { BunGentPlatformLive } from "@gent/core/test-utils"
 import { GentPlatform } from "@gent/core/host"
@@ -88,7 +89,7 @@ const makeCountingFs = (counter: Ref.Ref<number>): Layer.Layer<FileSystem.FileSy
           uid: Option.none(),
           gid: Option.none(),
           rdev: Option.none(),
-          size: FileSystem.Size(0),
+          size: ByteSize.zero,
           blksize: Option.none(),
           blocks: Option.none(),
         })),

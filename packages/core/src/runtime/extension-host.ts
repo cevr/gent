@@ -93,7 +93,7 @@ import {
   type ProviderAuthError,
   type ProviderAuthInfo,
 } from "../domain/driver.js"
-import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
+import { ChildProcessSpawner } from "effect/process/ChildProcessSpawner"
 import { GentPlatform, type RuntimeModuleSource } from "./gent-platform.js"
 import {
   type ConfigLoadError,
@@ -130,8 +130,8 @@ import {
   RelationshipStorage,
   SessionStorage,
 } from "../storage/storage.js"
-import { SqlClient } from "effect/unstable/sql"
-import * as Prompt from "effect/unstable/ai/Prompt"
+import { SqlClient } from "effect/sql"
+import * as Prompt from "effect/ai/Prompt"
 import * as EffectEntry from "effect"
 import { ActorStateRegistry, listStateEntityIds, stateOf } from "effect-encore"
 import {

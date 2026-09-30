@@ -60,8 +60,8 @@ import {
 } from "@gent/core/protocol"
 import { e2ePreset, shippedPreset } from "./helpers/test-preset"
 import { isToolResultFor } from "./helpers/tool-event.js"
-import * as AiError from "effect/unstable/ai/AiError"
-import type * as Prompt from "effect/unstable/ai/Prompt"
+import * as AiError from "effect/ai/AiError"
+import type * as Prompt from "effect/ai/Prompt"
 
 // ── delegate harness ────────────────────────────────────────────────────────
 

@@ -1,7 +1,7 @@
 import { BunServices } from "@effect/platform-bun"
 import { Config, Effect, FileSystem, Path, Stream } from "effect"
 import { describe, expect, it } from "effect-bun-test"
-import { ChildProcess } from "effect/unstable/process"
+import { ChildProcess } from "effect/process"
 
 /**
  * Each render in the TUI harness gets its own home. The homes of one test
@@ -76,7 +76,7 @@ const runTestFile = (sandbox: string, source: string) =>
     const path = yield* Path.Path
     const file = path.join(sandbox, "render.test.ts")
     yield* fs.writeFileString(file, source)
-    const PATH = yield* Config.string("PATH")
+    const PATH = yield* Config.String("PATH")
     const handle = yield* ChildProcess.make("bun", ["test", "--preload", PRELOAD, file], {
       cwd: APP_DIR,
       env: { PATH, TMPDIR: sandbox, HOME: sandbox, NO_COLOR: "1" },

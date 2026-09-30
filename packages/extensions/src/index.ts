@@ -4,21 +4,21 @@ import {
   type GentExtension,
   LoadedArtifactIdentity,
 } from "@gent/core/extensions/api"
-import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
+import type { ChildProcessSpawner } from "effect/process/ChildProcessSpawner"
 import * as EffectAiAnthropic from "@effect/ai-anthropic"
 import * as EffectAiOpenAi from "@effect/ai-openai"
 import * as EffectPlatformBun from "@effect/platform-bun"
 import * as EffectRoot from "effect"
-import * as EffectAi from "effect/unstable/ai"
-import * as EffectAiError from "effect/unstable/ai/AiError"
-import * as EffectPrompt from "effect/unstable/ai/Prompt"
-import * as EffectResponse from "effect/unstable/ai/Response"
-import * as EffectTool from "effect/unstable/ai/Tool"
-import * as EffectHttp from "effect/unstable/http"
-import * as EffectHttpClientError from "effect/unstable/http/HttpClientError"
-import * as EffectProcess from "effect/unstable/process"
-import * as EffectChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner"
-import * as EffectSql from "effect/unstable/sql"
+import * as EffectAi from "effect/ai"
+import * as EffectAiError from "effect/ai/AiError"
+import * as EffectPrompt from "effect/ai/Prompt"
+import * as EffectResponse from "effect/ai/Response"
+import * as EffectTool from "effect/ai/Tool"
+import * as EffectHttp from "effect/http"
+import * as EffectHttpClientError from "effect/http/HttpClientError"
+import * as EffectProcess from "effect/process"
+import * as EffectChildProcessSpawner from "effect/process/ChildProcessSpawner"
+import * as EffectSql from "effect/sql"
 import { CellBranchTools, CellExtension } from "./cell.js"
 import { CompactionExtension } from "./compaction.js"
 import { ExecToolsExtension } from "./exec-tools.js"
@@ -114,14 +114,14 @@ export const BuiltinExtensionModules: ReadonlyMap<string, () => object> = new Ma
   ["@effect/ai-openai", () => EffectAiOpenAi],
   ["@effect/platform-bun", () => EffectPlatformBun],
   ["effect", () => EffectRoot],
-  ["effect/unstable/ai", () => EffectAi],
-  ["effect/unstable/ai/AiError", () => EffectAiError],
-  ["effect/unstable/ai/Prompt", () => EffectPrompt],
-  ["effect/unstable/ai/Response", () => EffectResponse],
-  ["effect/unstable/ai/Tool", () => EffectTool],
-  ["effect/unstable/http", () => EffectHttp],
-  ["effect/unstable/http/HttpClientError", () => EffectHttpClientError],
-  ["effect/unstable/process", () => EffectProcess],
-  ["effect/unstable/process/ChildProcessSpawner", () => EffectChildProcessSpawner],
-  ["effect/unstable/sql", () => EffectSql],
+  ["effect/ai", () => EffectAi],
+  ["effect/ai/AiError", () => EffectAiError],
+  ["effect/ai/Prompt", () => EffectPrompt],
+  ["effect/ai/Response", () => EffectResponse],
+  ["effect/ai/Tool", () => EffectTool],
+  ["effect/http", () => EffectHttp],
+  ["effect/http/HttpClientError", () => EffectHttpClientError],
+  ["effect/process", () => EffectProcess],
+  ["effect/process/ChildProcessSpawner", () => EffectChildProcessSpawner],
+  ["effect/sql", () => EffectSql],
 ])

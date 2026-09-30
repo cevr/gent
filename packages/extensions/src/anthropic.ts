@@ -56,10 +56,10 @@ import {
   readOptionalEnv,
   withHeaders,
 } from "./providers.js"
-import { ChildProcessSpawner } from "effect/unstable/process"
-import { FetchHttpClient, Headers, HttpClient, HttpClientRequest } from "effect/unstable/http"
+import { ChildProcessSpawner } from "effect/process"
+import { FetchHttpClient, Headers, HttpClient, HttpClientRequest } from "effect/http"
 import { AnthropicClient, AnthropicLanguageModel, Generated } from "@effect/ai-anthropic"
-import { type AiError, Model as AiModel } from "effect/unstable/ai"
+import { type AiError, Model as AiModel } from "effect/ai"
 
 // Test seam: only tests read these exports. The model table and its lookups
 // (MODEL_CONFIG, getModelOverride, getModelBetas), the billing header (SYSTEM_IDENTITY_PREFIX,

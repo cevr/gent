@@ -17,7 +17,7 @@ import {
   Schema,
   Stream,
 } from "effect"
-import { ChildProcess } from "effect/unstable/process"
+import { ChildProcess } from "effect/process"
 import { GentPlatform, BranchStorage, MessageStorage, SessionStorage } from "@gent/core/host"
 import {
   type LoadedExtension,
@@ -56,7 +56,7 @@ import {
   testSqliteStorage,
 } from "@gent/core/test-utils"
 import { BunServices } from "@effect/platform-bun"
-import * as Prompt from "effect/unstable/ai/Prompt"
+import * as Prompt from "effect/ai/Prompt"
 import {
   BranchId,
   MessageId,
@@ -150,7 +150,7 @@ import {
   ListChildren,
   StartChild,
 } from "../src/delegate.js"
-import { SqlClient } from "effect/unstable/sql"
+import { SqlClient } from "effect/sql"
 import { CompactionExtension } from "../src/compaction.js"
 
 // ── cell worker build ───────────────────────────────────────────────────────

@@ -49,8 +49,8 @@ import {
 } from "../src/extensions/client-facets"
 import { builtinClientModules } from "../src/extensions/builtins"
 import { rankAutocompleteItems } from "../src/autocomplete"
-import { RpcClientError } from "effect/unstable/rpc/RpcClientError"
-import { SocketCloseError } from "effect/unstable/socket/Socket"
+import { RpcClientError } from "effect/rpc/RpcClientError"
+import { SocketCloseError } from "effect/socket/Socket"
 
 // ── shell ───────────────────────────────────────────────────────────────────
 

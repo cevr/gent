@@ -1,6 +1,6 @@
 import { Context, Effect, Layer, Option, Schema } from "effect"
-import { Headers } from "effect/unstable/http"
-import { RpcMiddleware } from "effect/unstable/rpc"
+import { Headers } from "effect/http"
+import { RpcMiddleware } from "effect/rpc"
 // @effect-diagnostics nodeBuiltinImport:off — the workspace id is a wire constant, see workspaceIdForCwd
 // oxlint-disable-next-line gent/no-bun-outside-adapter -- a client and its server derive the wire id in separate processes; it is pinned to node:crypto sha256, not an adapter's hash
 import { createHash } from "node:crypto"

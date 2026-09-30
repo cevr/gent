@@ -1,0 +1,22 @@
+diff --git a/dist/AnthropicLanguageModel.js b/dist/AnthropicLanguageModel.js
+index 7b5734b062b963e876399649f0e0d94cc3ba92b9..02d0124ebef1f598fef9a4dbf6e9cf8bb59b709d 100644
+--- a/dist/AnthropicLanguageModel.js
++++ b/dist/AnthropicLanguageModel.js
+@@ -273,6 +273,17 @@ const prepareMessages = /*#__PURE__*/Effect.fnUntraced(function* ({
+     switch (group.type) {
+       case "system":
+         {
++          if (i > 0) {
++            messages.push({
++              role: "user",
++              content: group.messages.map(message => ({
++                type: "text",
++                text: `<host-context-update>\n${message.content.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")}\n</host-context-update>`,
++                cache_control: getCacheControl(message)
++              }))
++            });
++            break;
++          }
+           system = group.messages.map(message => ({
+             type: "text",
+             text: message.content,

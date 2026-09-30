@@ -30,8 +30,8 @@ import { CurrentLogAnnotations, CurrentLogSpans, MinimumLogLevel } from "effect/
  * Otherwise the Effect default Tracer (a no-op) is left in place.
  */
 
-const otlpEndpoint = Config.option(Config.string("OTEL_EXPORTER_OTLP_ENDPOINT"))
-const otlpServiceName = Config.option(Config.string("OTEL_SERVICE_NAME"))
+const otlpEndpoint = Config.option(Config.String("OTEL_EXPORTER_OTLP_ENDPOINT"))
+const otlpServiceName = Config.option(Config.String("OTEL_SERVICE_NAME"))
 
 export const GentTracerLive: Layer.Layer<never> = Layer.unwrap(
   Effect.gen(function* () {
@@ -349,7 +349,7 @@ const LOG_LEVEL_NAMES: ReadonlyArray<LogLevelName> = [
  * Minimum log level from `GENT_LOG_LEVEL`. Unset keeps the Debug floor; a
  * name outside {@link LOG_LEVEL_NAMES} fails with a config error.
  */
-export const GentLogLevel: Config.Config<LogLevel> = Config.literals(
+export const GentLogLevel: Config.Config<LogLevel> = Config.Literals(
   LOG_LEVEL_NAMES,
   "GENT_LOG_LEVEL",
 ).pipe(Config.withDefault<LogLevelName>("debug"), Config.map(levelOf))

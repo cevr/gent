@@ -42,7 +42,7 @@ import {
   remainingTokens,
 } from "../src/goal.js"
 import { BunServices } from "@effect/platform-bun"
-import * as AiError from "effect/unstable/ai/AiError"
+import * as AiError from "effect/ai/AiError"
 
 /**
  * `/goal` keeps a durable per-branch objective and re-prompts the loop after

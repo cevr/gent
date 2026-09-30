@@ -1,6 +1,6 @@
 import { RGBA, SyntaxStyle, type TerminalColors } from "@opentui/core"
 import { Config, Effect, Fiber, Option, Predicate, Record } from "effect"
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
+import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import { GentPlatform } from "@gent/core/host"
 import { createContext, createMemo, type JSX, onCleanup, onMount, untrack } from "solid-js"
 import { useRequiredContext } from "./utils"
@@ -411,7 +411,7 @@ export function buildSyntaxStyle(theme: Theme): SyntaxStyle {
 
 // ── terminal color scheme detection ─────────────────────────────────────────
 
-const readColorFgBg = Config.option(Config.string("COLORFGBG")).pipe(
+const readColorFgBg = Config.option(Config.String("COLORFGBG")).pipe(
   Effect.orElseSucceed(() => Option.none<string>()),
 )
 

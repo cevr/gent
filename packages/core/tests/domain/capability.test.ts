@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Context, DateTime, Effect, Schema } from "effect"
-import * as AiTool from "effect/unstable/ai/Tool"
+import * as AiTool from "effect/ai/Tool"
 import {
   defineRequests,
   getToolId,

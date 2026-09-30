@@ -7,7 +7,7 @@ import {
   responseUsage,
   toolResultMessageIdForTurn,
 } from "../../src/domain/message"
-import * as Response from "effect/unstable/ai/Response"
+import * as Response from "effect/ai/Response"
 import {
   type ActiveStreamHandle,
   classifyStep,
@@ -34,7 +34,7 @@ import {
   ToolCallSucceeded,
   UsageSchema,
 } from "../../src/domain/event"
-import * as Prompt from "effect/unstable/ai/Prompt"
+import * as Prompt from "effect/ai/Prompt"
 import { EventStorage, MessageStorage } from "../../src/storage/storage"
 import { EventStoreLive } from "../../src/runtime/session"
 import { noBranchTools } from "../../src/runtime/tools"

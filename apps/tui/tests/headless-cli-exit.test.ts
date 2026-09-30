@@ -198,7 +198,7 @@ import { defineExtension, ExtensionHost, tool } from "@gent/core/extensions/api"
 import * as OpenAi from "@effect/ai-openai"
 import * as PlatformBun from "@effect/platform-bun"
 import { Effect, Schema } from "effect"
-import * as Sql from "effect/unstable/sql"
+import * as Sql from "effect/sql"
 
 export default defineExtension({
   id: "@user/peers-probe",

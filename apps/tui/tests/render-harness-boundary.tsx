@@ -56,7 +56,7 @@ let currentSetup: Option.Option<TestRenderSetup> = Option.none()
 const makeRenderHome = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
-  const root = path.join(yield* Config.string("HOME"), "render-homes")
+  const root = path.join(yield* Config.String("HOME"), "render-homes")
   yield* fs.makeDirectory(root, { recursive: true })
   return yield* fs.makeTempDirectory({ directory: root, prefix: "home-" })
 }).pipe(Effect.provide(BunServices.layer), Effect.orDie)

@@ -17,7 +17,7 @@ import {
   Predicate,
   Schema,
 } from "effect"
-import type { ChildProcessSpawner } from "effect/unstable/process"
+import type { ChildProcessSpawner } from "effect/process"
 import {
   defineExtension,
   defineRequests,

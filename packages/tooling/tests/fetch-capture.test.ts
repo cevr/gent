@@ -1,7 +1,7 @@
 import { BunServices } from "@effect/platform-bun"
 import { Config, Effect, FileSystem, Path, Stream } from "effect"
 import { describe, expect, it } from "effect-bun-test"
-import { ChildProcess } from "effect/unstable/process"
+import { ChildProcess } from "effect/process"
 import { userInfo } from "node:os"
 
 /**
@@ -24,7 +24,7 @@ const startCapture = (root: string, env: Readonly<Record<string, string>>) =>
     const path = yield* Path.Path
     const started = path.join(root, "started.ts")
     yield* fs.writeFileString(started, 'console.log("STARTED")\n')
-    const PATH = yield* Config.string("PATH")
+    const PATH = yield* Config.String("PATH")
     const handle = yield* ChildProcess.make("bun", ["--preload", PRELOAD, started], {
       cwd: root,
       env: { PATH, ...env },

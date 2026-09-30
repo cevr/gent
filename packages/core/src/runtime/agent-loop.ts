@@ -36,7 +36,7 @@ import {
   type SessionId,
 } from "../domain/ids.js"
 import type { AgentName } from "../domain/agent.js"
-import * as Prompt from "effect/unstable/ai/Prompt"
+import * as Prompt from "effect/ai/Prompt"
 import {
   emptyLoopQueueState,
   FollowUpQueueEntryInfo,
@@ -119,9 +119,9 @@ import {
   type TurnInterruption,
 } from "./tools.js"
 import { withWideEvent } from "effect-wide-event"
-import { Entity, Sharding, ShardingConfig } from "effect/unstable/cluster"
-import type { SqlClient } from "effect/unstable/sql"
-import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
+import { Entity, Sharding, ShardingConfig } from "effect/cluster"
+import type { SqlClient } from "effect/sql"
+import type { ChildProcessSpawner } from "effect/process/ChildProcessSpawner"
 import {
   ApprovalService,
   buildScopeResources,

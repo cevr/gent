@@ -1,9 +1,9 @@
 import { Option, Predicate, Result, Schema } from "effect"
-import * as Prompt from "effect/unstable/ai/Prompt"
+import * as Prompt from "effect/ai/Prompt"
 import { BranchId, MessageId, RequestId, SessionId, ToolCallId } from "./ids.js"
 import { AgentName, ModelId, ReasoningEffort, RunSpecSchema } from "./agent.js"
 import type { EventEnvelope, ToolCallStarted, Usage } from "./event.js"
-import * as Response from "effect/unstable/ai/Response"
+import * as Response from "effect/ai/Response"
 
 // ── head-tail ───────────────────────────────────────────────────────────────
 

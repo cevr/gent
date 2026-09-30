@@ -15,7 +15,7 @@ import {
 } from "effect"
 import { join as pathJoin, resolve as pathResolve } from "node:path"
 import { Database } from "bun:sqlite"
-import type { ChildProcessSpawner } from "effect/unstable/process"
+import type { ChildProcessSpawner } from "effect/process"
 import { dateFromMillis, GentConnectionError } from "@gent/core/protocol"
 import {
   GentPlatform,
@@ -36,10 +36,10 @@ import {
 } from "@gent/core/host"
 import { runProcess, type GentExtension } from "@gent/core/extensions/api"
 import { BunHttpServer } from "@effect/platform-bun"
-import { FetchHttpClient, Headers, HttpClient, HttpRouter, HttpServer } from "effect/unstable/http"
+import { FetchHttpClient, Headers, HttpClient, HttpRouter, HttpServer } from "effect/http"
 import { BuiltinExtensionModules, BuiltinExtensions, CellBranchTools } from "@gent/extensions"
 import type { BranchToolFeature } from "@gent/core/extensions/branch-tools"
-import type { LanguageModel } from "effect/unstable/ai"
+import type { LanguageModel } from "effect/ai"
 import { GentLogLevel, GentObservability } from "./logger.js"
 
 // ── data-paths ──────────────────────────────────────────────────────────────

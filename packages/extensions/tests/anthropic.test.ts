@@ -46,7 +46,7 @@ import {
 import type * as AnthropicClient from "@effect/ai-anthropic/AnthropicClient"
 import { BunCrypto, BunServices } from "@effect/platform-bun"
 import { TestClock } from "effect/testing"
-import type { ChildProcessSpawner } from "effect/unstable/process"
+import type { ChildProcessSpawner } from "effect/process"
 import {
   captureProviderStopReason,
   testHostFacts,
@@ -56,8 +56,8 @@ import {
   oneGenerate,
   turnNoticesText,
 } from "@gent/core/test-utils"
-import { FetchHttpClient, HttpBody, HttpClient, HttpClientResponse } from "effect/unstable/http"
-import { HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
+import { FetchHttpClient, HttpBody, HttpClient, HttpClientResponse } from "effect/http"
+import { HttpClientError, TransportError } from "effect/http/HttpClientError"
 import {
   type CredentialCacheCell,
   type CredentialFailure,
@@ -74,7 +74,7 @@ import {
 import { encodeExternalJson, externalWireNull } from "./helpers/external-wire.js"
 import { testCatalogSource } from "./helpers/catalog-source.js"
 import { createHash } from "node:crypto"
-import { AiError, LanguageModel, Prompt, Tool, Toolkit } from "effect/unstable/ai"
+import { AiError, LanguageModel, Prompt, Tool, Toolkit } from "effect/ai"
 import { AnthropicClient as AnthropicSdkClient, AnthropicLanguageModel } from "@effect/ai-anthropic"
 
 // ── payload transforms ──────────────────────────────────────────────────────

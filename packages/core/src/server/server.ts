@@ -84,7 +84,7 @@ import {
   type GentNamespacedClient,
   makeNamespacedClient,
 } from "./rpc.js"
-import type { SqlClient } from "effect/unstable/sql"
+import type { SqlClient } from "effect/sql"
 import {
   type AgentEvent,
   BranchCreated,
@@ -135,19 +135,14 @@ import { resolveSessionRoute } from "../runtime/turn.js"
 import { WideEvent, WideEventBoundary, withWideEvent } from "effect-wide-event"
 
 import { omitUndefined } from "../domain/guards.js"
-import { SingleRunner } from "effect/unstable/cluster"
-import {
-  FetchHttpClient,
-  HttpRouter,
-  HttpServerRequest,
-  HttpServerResponse,
-} from "effect/unstable/http"
-import { ChildProcessSpawner as ProcessSpawner } from "effect/unstable/process"
+import { SingleRunner } from "effect/cluster"
+import { FetchHttpClient, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http"
+import { ChildProcessSpawner as ProcessSpawner } from "effect/process"
 import type { PromptSection } from "../domain/capability.js"
 import { type BranchToolFeature, CurrentBranchToolFeature, ToolRunner } from "../runtime/tools.js"
 import { messagesInCurrentWindow, settledMessages } from "../runtime/model-context.js"
-import { RpcSerialization, RpcServer, RpcTest } from "effect/unstable/rpc"
-import type { Headers } from "effect/unstable/http"
+import { RpcSerialization, RpcServer, RpcTest } from "effect/rpc"
+import type { Headers } from "effect/http"
 
 // ── client origin ───────────────────────────────────────────────────────────
 

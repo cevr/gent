@@ -19,7 +19,7 @@ import {
   type ToolCall,
   transcriptFingerprint,
 } from "../src/message-list"
-import * as Prompt from "effect/unstable/ai/Prompt"
+import * as Prompt from "effect/ai/Prompt"
 import {
   BranchId,
   dateFromMillis,

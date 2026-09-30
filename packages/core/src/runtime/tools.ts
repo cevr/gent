@@ -34,7 +34,7 @@ import {
   ToolId,
 } from "../domain/ids.js"
 import type { ExtensionHostContext, LoadedExtension, TurnProjection } from "../domain/extension.js"
-import * as Prompt from "effect/unstable/ai/Prompt"
+import * as Prompt from "effect/ai/Prompt"
 import {
   getToolId,
   getToolMetadata,
@@ -57,14 +57,14 @@ import {
   provideExtensionLeaf,
 } from "./extension-host.js"
 import { canonicalJsonString } from "effect-encore"
-import * as AiTool from "effect/unstable/ai/Tool"
+import * as AiTool from "effect/ai/Tool"
 import { GentPlatform } from "./gent-platform.js"
 import type { FeatureMigrations } from "../storage/schema.js"
 import { InteractionPendingError } from "../domain/interaction.js"
 import { EventStore, ToolCallFailed, ToolCallStarted, ToolCallSucceeded } from "../domain/event.js"
 import { WideEvent, WideEventBoundary, withWideEvent } from "effect-wide-event"
-import * as AiToolkit from "effect/unstable/ai/Toolkit"
-import * as AiError from "effect/unstable/ai/AiError"
+import * as AiToolkit from "effect/ai/Toolkit"
+import * as AiError from "effect/ai/AiError"
 import type { AgentDefinition, AgentName as AgentNameType } from "../domain/agent.js"
 import type { CurrentAgentLoopTurnProfile } from "./turn.js"
 

@@ -18,7 +18,7 @@ import {
   splitLines,
   type GentClientRpcError,
 } from "@gent/core/protocol"
-import { RpcClientError } from "effect/unstable/rpc/RpcClientError"
+import { RpcClientError } from "effect/rpc/RpcClientError"
 import type { ToolCall } from "./tool-renderers"
 
 // ── solid context access ────────────────────────────────────────────────────

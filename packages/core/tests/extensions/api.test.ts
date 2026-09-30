@@ -31,11 +31,11 @@ import {
   resolveExtensions,
 } from "../../src/runtime/extension-host"
 import { collectTestContributions, testExtensionHostContext } from "../../src/test-utils/harness"
-import * as AiTool from "effect/unstable/ai/Tool"
+import * as AiTool from "effect/ai/Tool"
 import { testAgent } from "../helpers/test-preset"
 import { DEFAULT_AGENT_NAME } from "../../src/domain/agent"
 
-import type { ChildProcessSpawner } from "effect/unstable/process"
+import type { ChildProcessSpawner } from "effect/process"
 import type * as PublicExtensionApi from "@gent/core/extensions/api"
 
 // ── define extension ────────────────────────────────────────────────────────

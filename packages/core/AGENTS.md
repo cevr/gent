@@ -28,5 +28,5 @@
 
 ## Provider Boundary
 
-- Provider/model-driver code uses `effect/unstable/ai` types directly (`LanguageModel`, `Prompt`, `Response`, `Tool`)
+- Provider/model-driver code uses `effect/ai` types directly (`LanguageModel`, `Prompt`, `Response`, `Tool`)
 - Stream normalized `Response.StreamPart` values and derive Gent durable events once at the runtime edge

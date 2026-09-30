@@ -1,7 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Fiber, FileSystem, Path, Stream } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import * as Prompt from "effect/unstable/ai/Prompt"
+import * as Prompt from "effect/ai/Prompt"
 import {
   createRpcHarness,
   LanguageModelLayers,

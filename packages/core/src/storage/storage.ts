@@ -14,8 +14,8 @@ import {
   Predicate,
   Schema,
 } from "effect"
-import { SqlClient, SqlError } from "effect/unstable/sql"
-import type * as Prompt from "effect/unstable/ai/Prompt"
+import { SqlClient, SqlError } from "effect/sql"
+import type * as Prompt from "effect/ai/Prompt"
 import {
   BranchId,
   type InteractionRequestId,
@@ -77,7 +77,7 @@ import {
   type StoredInteractionDecision,
 } from "../domain/interaction.js"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
-import type { MessageStorage as ClusterMessageStorage } from "effect/unstable/cluster"
+import type { MessageStorage as ClusterMessageStorage } from "effect/cluster"
 import { fromSqlClient as encoreSqlMessageStorage } from "effect-encore"
 
 const encodeSessionAdmission = Schema.encodeEffect(Schema.fromJsonString(SessionAdmission))

@@ -21,10 +21,10 @@ import {
 } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { TestClock } from "effect/testing"
-import { RpcClientError } from "effect/unstable/rpc/RpcClientError"
-import { SocketCloseError } from "effect/unstable/socket/Socket"
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
-import * as Prompt from "effect/unstable/ai/Prompt"
+import { RpcClientError } from "effect/rpc/RpcClientError"
+import { SocketCloseError } from "effect/socket/Socket"
+import { ChildProcess, ChildProcessSpawner } from "effect/process"
+import * as Prompt from "effect/ai/Prompt"
 import {
   AgentName,
   BranchId,

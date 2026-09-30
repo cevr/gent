@@ -80,8 +80,8 @@ import {
   toolResultSummary,
   type TurnInterruptionStatus,
 } from "@gent/core/extensions/branch-tools"
-import { SqlClient } from "effect/unstable/sql"
-import * as Prompt from "effect/unstable/ai/Prompt"
+import { SqlClient } from "effect/sql"
+import * as Prompt from "effect/ai/Prompt"
 import { canonicalJsonString } from "effect-encore"
 import {
   CellCatalog,
@@ -109,8 +109,8 @@ import {
   type SnapshotBinding,
   toolPath,
 } from "./cell-protocol.js"
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
-import * as AiTool from "effect/unstable/ai/Tool"
+import { ChildProcess, ChildProcessSpawner } from "effect/process"
+import * as AiTool from "effect/ai/Tool"
 import { RetainedBindings } from "./compaction.js"
 
 // ── input ───────────────────────────────────────────────────────────────────

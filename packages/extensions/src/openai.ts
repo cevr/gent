@@ -32,7 +32,7 @@ import {
   HttpRouter,
   HttpServerRequest,
   HttpServerResponse,
-} from "effect/unstable/http"
+} from "effect/http"
 import { BunHttpServer } from "@effect/platform-bun"
 import {
   AuthMethod,
@@ -76,7 +76,7 @@ import {
   OpenAiClient as OpenAiResponsesClient,
   OpenAiLanguageModel as OpenAiResponsesLanguageModel,
 } from "@effect/ai-openai"
-import { Model as AiModel } from "effect/unstable/ai"
+import { Model as AiModel } from "effect/ai"
 
 // Test seam: only tests read these exports. OAuthError, authorizeOpenAIDevice,
 // OpenAICredentials, OpenAICredentialIO and makeOpenAICredentialCache let a test

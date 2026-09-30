@@ -1,5 +1,5 @@
 import { type Effect, Option, Predicate, Schema, Stream } from "effect"
-import { Headers } from "effect/unstable/http"
+import { Headers } from "effect/http"
 import {
   AgentDefinition,
   AgentName,
@@ -49,7 +49,7 @@ import {
   type RpcClientError,
   RpcGroup,
   type RpcGroup as RpcGroupNs,
-} from "effect/unstable/rpc"
+} from "effect/rpc"
 import { WorkspaceRpcMiddleware } from "./workspace-rpc.js"
 
 // ── errors ──────────────────────────────────────────────────────────────────

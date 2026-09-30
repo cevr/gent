@@ -75,7 +75,7 @@ import {
   provideCurrentHostCtx,
   RunOpener,
 } from "./extension-host.js"
-import type * as Response from "effect/unstable/ai/Response"
+import type * as Response from "effect/ai/Response"
 import {
   credentialFailureMessage,
   isWindowFullStopReason,
@@ -100,7 +100,7 @@ import {
 } from "../domain/event.js"
 import { causeMessage, omitUndefined } from "../domain/guards.js"
 import { ProviderError } from "../domain/errors.js"
-import * as Prompt from "effect/unstable/ai/Prompt"
+import * as Prompt from "effect/ai/Prompt"
 import {
   emptyTurnRecord,
   EventStorage,

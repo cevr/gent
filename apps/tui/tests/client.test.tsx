@@ -54,13 +54,13 @@ import {
   renderWithProviders,
 } from "./render-harness-boundary"
 import { inRuntime, waitForFrame, waitUntil, waitUntilAdvancing } from "./helpers-boundary"
-import * as Prompt from "effect/unstable/ai/Prompt"
+import * as Prompt from "effect/ai/Prompt"
 import { InteractionRequestId } from "@gent/core/extensions/branch-tools"
 import { useSessionFeed } from "../src/session"
 import { useExtensionUI } from "../src/extensions/host"
 import { ClientContext, type ClientRuntime } from "../src/extensions/client-facets"
-import { RpcClientDefect, RpcClientError } from "effect/unstable/rpc/RpcClientError"
-import { SocketCloseError } from "effect/unstable/socket/Socket"
+import { RpcClientDefect, RpcClientError } from "effect/rpc/RpcClientError"
+import { SocketCloseError } from "effect/socket/Socket"
 
 // ── agent lifecycle ─────────────────────────────────────────────────────────
 

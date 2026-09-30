@@ -36,8 +36,8 @@ import {
   WorkspaceId,
 } from "../../src/server/workspace-rpc"
 import { describe, expect, it } from "effect-bun-test"
-import { RpcClient } from "effect/unstable/rpc"
-import { SqlClient } from "effect/unstable/sql"
+import { RpcClient } from "effect/rpc"
+import { SqlClient } from "effect/sql"
 import {
   finishPart,
   textDeltaPart,
@@ -77,7 +77,7 @@ import {
   RequestId,
   SessionId,
 } from "../../src/domain/ids"
-import { Model as AiModel, LanguageModel } from "effect/unstable/ai"
+import { Model as AiModel, LanguageModel } from "effect/ai"
 import { BunServices } from "@effect/platform-bun"
 import type { ModelDriverContribution } from "../../src/domain/driver.js"
 import { type ExtensionHealthSnapshot, SetDriverOverrideInput } from "../../src/server/rpc.js"

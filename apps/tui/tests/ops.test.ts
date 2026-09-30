@@ -49,7 +49,7 @@ import {
   seedDebugSession,
 } from "../src/ops"
 import { SqliteClient as BunSqliteClient } from "@effect/sql-sqlite-bun"
-import { SqlClient } from "effect/unstable/sql"
+import { SqlClient } from "effect/sql"
 import { GentPlatform } from "@gent/core/host"
 import { ExtensionHealthIssue, ExtensionHealthSnapshot } from "@gent/core/protocol"
 

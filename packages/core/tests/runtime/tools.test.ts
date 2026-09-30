@@ -34,7 +34,7 @@ import {
   type ToolCallStarted,
   type ToolCallSucceeded,
 } from "../../src/domain/event"
-import * as Prompt from "effect/unstable/ai/Prompt"
+import * as Prompt from "effect/ai/Prompt"
 import { createRpcHarness, testToolContext } from "../../src/test-utils/harness"
 import {
   BranchId,

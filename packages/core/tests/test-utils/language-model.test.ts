@@ -9,8 +9,8 @@ import {
   toolCallStep,
 } from "../../src/test-utils/language-model"
 import { convertTools } from "../../src/runtime/tools"
-import { LanguageModel } from "effect/unstable/ai"
-import type * as Response from "effect/unstable/ai/Response"
+import { LanguageModel } from "effect/ai"
+import type * as Response from "effect/ai/Response"
 import { tool } from "@gent/core/extensions/api"
 
 // ── sequence language model ─────────────────────────────────────────────────

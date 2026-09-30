@@ -45,14 +45,14 @@ import {
   type StoredOAuthCredentials,
 } from "../domain/driver.js"
 import { GentPlatform, writeFileAtomic } from "./gent-platform.js"
-import { LanguageModel } from "effect/unstable/ai"
+import { LanguageModel } from "effect/ai"
 import { ProviderError } from "../domain/errors.js"
-import * as AiError from "effect/unstable/ai/AiError"
-import type { ProviderOptions } from "effect/unstable/ai/LanguageModel"
-import * as Prompt from "effect/unstable/ai/Prompt"
-import * as Response from "effect/unstable/ai/Response"
-import type * as AiTool from "effect/unstable/ai/Tool"
-import type * as AiToolkit from "effect/unstable/ai/Toolkit"
+import * as AiError from "effect/ai/AiError"
+import type { ProviderOptions } from "effect/ai/LanguageModel"
+import * as Prompt from "effect/ai/Prompt"
+import * as Response from "effect/ai/Response"
+import type * as AiTool from "effect/ai/Tool"
+import type * as AiToolkit from "effect/ai/Toolkit"
 
 // ── auth ────────────────────────────────────────────────────────────────────
 
@@ -429,7 +429,7 @@ const envCredentialSet = (name: Option.Option<string>): Effect.Effect<boolean> =
   Option.match(name, {
     onNone: () => Effect.succeed(false),
     onSome: (envName) =>
-      Config.option(Config.nonEmptyString(envName)).pipe(
+      Config.option(Config.NonEmptyString(envName)).pipe(
         Effect.map(Option.isSome),
         Effect.orElseSucceed(() => false),
       ),
@@ -683,7 +683,7 @@ interface ModelResolverService {
   readonly resolve: (
     request: ResolveModelRequest,
   ) => Effect.Effect<
-    LanguageModel.Service,
+    LanguageModel.LanguageModel,
     ProviderError | ProviderAuthError,
     Scope.Scope | ExtensionRegistry
   >

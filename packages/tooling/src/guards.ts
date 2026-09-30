@@ -1441,8 +1441,8 @@ const EXTERNALLY_SET: ReadonlyMap<string, string> = new Map([
 ])
 
 /**
- * A quoted name is a read wherever it sits -- `Config.string("GENT_X")`, the
- * last argument of `Config.literals([...], "GENT_X")` on its own line,
+ * A quoted name is a read wherever it sits -- `Config.String("GENT_X")`, the
+ * last argument of `Config.Literals([...], "GENT_X")` on its own line,
  * `optionalEnv("GENT_X")`, `process.env["GENT_X"]` or either branch of a
  * ternary -- unless it is a record key or the target of an assignment.
  */

@@ -1,7 +1,7 @@
 import { type ProcessError, runProcess } from "@gent/core/extensions/api"
 import { dataPaths } from "@gent/sdk"
 import { DateTime, Effect, FileSystem, Option, Path, Schema } from "effect"
-import type { ChildProcessSpawner } from "effect/unstable/process"
+import type { ChildProcessSpawner } from "effect/process"
 import { homedir } from "os"
 import {
   type Accessor,

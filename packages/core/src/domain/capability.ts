@@ -7,7 +7,7 @@ import {
   ToolCallId,
   ToolId,
 } from "./ids.js"
-import * as AiTool from "effect/unstable/ai/Tool"
+import * as AiTool from "effect/ai/Tool"
 import { clipSummary, summarizeOutput } from "./message.js"
 
 // ── prompt ──────────────────────────────────────────────────────────────────

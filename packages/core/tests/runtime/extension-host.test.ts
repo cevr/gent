@@ -117,7 +117,7 @@ import {
   ProviderAuthInfo,
   type ProviderResolution,
 } from "../../src/domain/driver"
-import { Model as AiModel, LanguageModel } from "effect/unstable/ai"
+import { Model as AiModel, LanguageModel } from "effect/ai"
 import { ModelRegistry } from "../../src/runtime/provider"
 import { LanguageModelLayers, textStep, waitFor } from "../../src/test-utils/language-model"
 import {
@@ -129,7 +129,7 @@ import {
   ProviderId,
 } from "../../src/domain/agent"
 import { failingLanguageModel } from "../helpers/failing-language-model"
-import * as AiTool from "effect/unstable/ai/Tool"
+import * as AiTool from "effect/ai/Tool"
 import {
   bindRequestCapabilityExtension,
   CapabilityError,
@@ -156,7 +156,7 @@ import {
   type ExtensionHookHandler,
 } from "../../src/domain/extension"
 import { compileToolPolicy, noBranchTools, ToolRunner } from "../../src/runtime/tools"
-import { SingleRunner } from "effect/unstable/cluster"
+import { SingleRunner } from "effect/cluster"
 import { AgentEvent, EventStore } from "../../src/domain/event"
 import { SessionMutationsLive } from "../../src/server/server"
 import { AgentLoopLiveActor, AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"

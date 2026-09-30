@@ -12,7 +12,7 @@ import {
   testToolContext,
 } from "@gent/core/test-utils"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
-import * as Prompt from "effect/unstable/ai/Prompt"
+import * as Prompt from "effect/ai/Prompt"
 import { ExtensionContext } from "@gent/core/extensions/api"
 import {
   basePromptSections,
