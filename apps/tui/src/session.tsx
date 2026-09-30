@@ -1441,7 +1441,7 @@ const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] =>
     category: "Session",
     slash: "branch",
     onSelect: () => {
-      props.cast(props.client.surfaceError(props.client.createBranch()))
+      props.cast(props.client.surfaceError(props.client.createBranch))
     },
   },
   {

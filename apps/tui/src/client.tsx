@@ -529,8 +529,8 @@ interface ClientSessionValue {
 
   // Sync data fetching helpers (return Effects for caller to run)
   listBranches: Effect.Effect<readonly Branch[], GentClientRpcError>
-  createBranch: (name?: string) => Effect.Effect<BranchId, GentClientRpcError>
-  forkBranch: (messageId: MessageId, name?: string) => Effect.Effect<BranchId, GentClientRpcError>
+  createBranch: Effect.Effect<void, GentClientRpcError>
+  forkBranch: (messageId: MessageId) => Effect.Effect<BranchId, GentClientRpcError>
   drainQueuedMessages: Effect.Effect<QueueSnapshot, GentClientRpcError>
 
   // Branch navigation (fire-and-forget)
@@ -1293,20 +1293,13 @@ export function ClientProvider(props: ClientProviderProps) {
       )
     },
 
-    createBranch: (name) => {
-      const s = session()
-      return Effect.gen(function* () {
-        const requestId = yield* randomId
-        const result = yield* client.branch.create({
-          sessionId: s.sessionId,
-          requestId,
-          name,
-        })
-        return result.branchId
-      })
-    },
+    createBranch: Effect.gen(function* () {
+      const { sessionId } = session()
+      const requestId = yield* randomId
+      yield* client.branch.create({ sessionId, requestId })
+    }),
 
-    forkBranch: (messageId, name) => {
+    forkBranch: (messageId) => {
       const s = session()
       return Effect.gen(function* () {
         const requestId = yield* randomId
@@ -1315,7 +1308,6 @@ export function ClientProvider(props: ClientProviderProps) {
           fromBranchId: s.branchId,
           atMessageId: messageId,
           requestId,
-          name,
         })
         return BranchId.make(result.branchId)
       })

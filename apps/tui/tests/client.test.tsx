@@ -1261,7 +1261,7 @@ describe("ClientProvider session lifecycle", () => {
       )
       const client = yield* requireClientSessionState(ctx)
       expect(client.error()).toEqual(Option.none())
-      yield* client.surfaceError(client.createBranch())
+      yield* client.surfaceError(client.createBranch)
       expect(client.error()).toEqual(Option.some("Not found: branch gone"))
       expect(client.isError()).toBe(true)
     }),
