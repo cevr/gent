@@ -35,10 +35,10 @@ import {
   toPrompt,
   type Usage,
 } from "@gent/core/extensions/branch-tools"
-import type { LanguageModel } from "effect/unstable/ai"
-import * as AiError from "effect/unstable/ai/AiError"
-import * as Prompt from "effect/unstable/ai/Prompt"
-import type * as Response from "effect/unstable/ai/Response"
+import type { LanguageModel } from "effect/ai"
+import * as AiError from "effect/ai/AiError"
+import * as Prompt from "effect/ai/Prompt"
+import type * as Response from "effect/ai/Response"
 
 // Test seam: only tests read these exports. MODEL_COMPACTION_OUTPUT_TOKENS,
 // referencedBindings and selectSummarySource are pure with unit tests;
@@ -210,7 +210,7 @@ const failureMessage = (value: AiError.AiError | ProviderAuthError | ProviderErr
 
 const summarize = Effect.fn("ModelCompaction.summarize")(function* (params: {
   readonly modelId: ModelId
-  readonly model: LanguageModel.Service
+  readonly model: LanguageModel.LanguageModel
   readonly source: ReadonlyArray<Message>
   readonly instructions: Option.Option<string>
   readonly retainedBindings: ReadonlyArray<string>
@@ -292,7 +292,7 @@ export const compactModelContext = Effect.fn("ModelCompaction.compactModelContex
   params: Omit<CompactionRequest, "summaryModel" | "kept"> & {
     readonly retainedBindings: ReadonlyArray<string>
     readonly summaryModel: Effect.Effect<
-      LanguageModel.Service,
+      LanguageModel.LanguageModel,
       ProviderError | ProviderAuthError,
       Scope.Scope
     >

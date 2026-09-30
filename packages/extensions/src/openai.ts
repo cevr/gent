@@ -7,7 +7,6 @@ import {
   Deferred,
   Duration,
   Effect,
-  Encoding,
   Exit,
   Fiber,
   HashSet,
@@ -22,6 +21,7 @@ import {
   Semaphore,
   SynchronizedRef,
 } from "effect"
+import { Base64Url } from "effect/encoding"
 import {
   FetchHttpClient,
   Headers,
@@ -32,7 +32,7 @@ import {
   HttpRouter,
   HttpServerRequest,
   HttpServerResponse,
-} from "effect/unstable/http"
+} from "effect/http"
 import { BunHttpServer } from "@effect/platform-bun"
 import {
   AuthMethod,
@@ -76,7 +76,7 @@ import {
   OpenAiClient as OpenAiResponsesClient,
   OpenAiLanguageModel as OpenAiResponsesLanguageModel,
 } from "@effect/ai-openai"
-import { Model as AiModel } from "effect/unstable/ai"
+import { Model as AiModel } from "effect/ai"
 
 // Test seam: only tests read these exports. OAuthError, authorizeOpenAIDevice,
 // OpenAICredentials, OpenAICredentialIO and makeOpenAICredentialCache let a test
@@ -232,7 +232,7 @@ const generatePKCE: Effect.Effect<PkceCodes, OAuthError, Crypto.Crypto> = Effect
   const bytes = yield* crypto.randomBytes(43)
   const verifier = Array.from(bytes, (byte) => chars[byte % chars.length]).join("")
   const hash = yield* crypto.digest("SHA-256", new TextEncoder().encode(verifier))
-  return { verifier, challenge: Encoding.encodeBase64Url(hash) }
+  return { verifier, challenge: Base64Url.encode(hash) }
 }).pipe(
   Effect.mapError(
     (error) =>
@@ -246,7 +246,7 @@ const generatePKCE: Effect.Effect<PkceCodes, OAuthError, Crypto.Crypto> = Effect
 const parseJwtClaims = (token: string): Option.Option<typeof JwtClaimsSchema.Type> => {
   const parts = token.split(".")
   if (parts.length !== 3) return Option.none()
-  return Encoding.decodeBase64UrlString(parts[1] ?? "").pipe(
+  return Base64Url.decodeString(parts[1] ?? "").pipe(
     Result.getSuccess,
     Option.flatMap(decodeJwtClaims),
   )
@@ -383,7 +383,7 @@ const exchangeCodeWithFetch = (
   codeVerifier: string,
 ): Effect.Effect<TokenResponse, OAuthError> =>
   exchangeCodeForTokens(code, redirectUri, codeVerifier).pipe(
-    // @effect-diagnostics-next-line strictEffectProvide:off OAuth token endpoint at extension boundary
+    // @effect-diagnostics-next-line strictEffectProvide:off -- OAuth token endpoint at extension boundary
     Effect.provide(FetchHttpClient.layer),
   )
 
@@ -393,7 +393,7 @@ const refreshAccessToken = (refreshToken: string): Effect.Effect<TokenResponse, 
     refresh_token: refreshToken,
     client_id: CLIENT_ID,
   }).pipe(
-    // @effect-diagnostics-next-line strictEffectProvide:off OAuth token endpoint at extension boundary
+    // @effect-diagnostics-next-line strictEffectProvide:off -- OAuth token endpoint at extension boundary
     Effect.provide(FetchHttpClient.layer),
   )
 
@@ -563,7 +563,7 @@ const authorizeOpenAI: Effect.Effect<
         }),
     ),
   )
-  const state = Encoding.encodeBase64Url(stateBytes)
+  const state = Base64Url.encode(stateBytes)
   const port = yield* OAuthRedirectPort
   const redirectUri = `http://localhost:${port}/auth/callback`
   const authUrl = buildAuthorizeUrl(redirectUri, pkce, state)
@@ -836,7 +836,7 @@ const allocateOpenAIDeviceAuthorization: Effect.Effect<
   OAuthError
 > = authorizeOpenAIDevice.pipe(
   Effect.map((flow) => ({ flow, close: Effect.void })),
-  // @effect-diagnostics-next-line strictEffectProvide:off device endpoints at extension boundary
+  // @effect-diagnostics-next-line strictEffectProvide:off -- device endpoints at extension boundary
   Effect.provide(FetchHttpClient.layer),
 )
 
@@ -1085,7 +1085,6 @@ const ensureBetaToken = (existing: Option.Option<string>, requiredToken: string)
  *   - `store: false` to prevent server-side conversation persistence
  */
 const isInstructionItem = (
-  // oxlint-disable-next-line effect/noUnknownParameters -- preserve vendor JSON fields that this transport adapter does not interpret
   item: unknown,
 ): item is { role: "system" | "developer"; content?: unknown } => {
   if (!isRecord(item)) return false

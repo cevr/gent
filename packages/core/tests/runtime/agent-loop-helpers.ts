@@ -1,8 +1,8 @@
-import type { LanguageModel } from "effect/unstable/ai"
+import type { LanguageModel } from "effect/ai"
 import { BunServices } from "@effect/platform-bun"
 import { Clock, Duration, Effect, Layer, Option, Ref, Schema, Stream } from "effect"
-import * as Prompt from "effect/unstable/ai/Prompt"
-import * as AiError from "effect/unstable/ai/AiError"
+import * as Prompt from "effect/ai/Prompt"
+import * as AiError from "effect/ai/AiError"
 import {
   AgentLoop as AgentLoopActor,
   AgentLoopError,

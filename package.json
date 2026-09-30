@@ -22,50 +22,52 @@
     "clean": "rm -rf .turbo */.turbo */*/.turbo",
     "smoke": "d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && GENT_DATA_DIR=\"$d\" bun run --cwd apps/tui dev --debug -H 'Say hi in 3 words'",
     "gamut": "bun testbeds/gamut/gamut.ts",
-    "prepare": "lefthook install && effect-tsgo patch"
+    "prepare": "lefthook install && effect-tsgo patch --force"
   },
   "devDependencies": {
     "@effect/platform-bun": "catalog:",
     "@effect/sql-sqlite-bun": "catalog:",
-    "@effect/tsgo": "0.41.0",
-    "@oxlint/plugins": "^1.82.0",
+    "@effect/tsgo": "0.47.0",
+    "@oxlint/plugins": "^1.86.0",
     "@types/bun": "^1.4.2",
     "@types/picomatch": "catalog:",
     "concurrently": "^10.0.5",
     "effect": "catalog:",
     "effect-bun-test": "catalog:",
     "lefthook": "^2.1.12",
-    "oxfmt": "^0.67.0",
-    "oxlint": "^1.82.0",
-    "oxlint-plugin-effect": "^0.12.1",
-    "oxlint-tsgolint": "^7.0.2001",
+    "oxfmt": "^0.71.0",
+    "oxlint": "^1.86.0",
+    "oxlint-plugin-effect": "^0.17.0",
+    "oxlint-tsgolint": "^7.0.2003",
     "turbo": "^2.10.12",
     "typescript": "^7.0.2"
   },
   "overrides": {
-    "@effect/ai-anthropic": "4.0.0-rc.112",
-    "@effect/ai-openai": "4.0.0-rc.112",
-    "@effect/platform-node-shared": "4.0.0-rc.112",
-    "effect": "4.0.0-rc.112"
+    "@effect/ai-anthropic": "4.0.0-rc.118",
+    "@effect/ai-openai": "4.0.0-rc.118",
+    "@effect/platform-node-shared": "4.0.0-rc.118",
+    "effect": "4.0.0-rc.118"
   },
   "packageManager": "bun@1.4.1",
   "catalog": {
-    "effect": "4.0.0-rc.112",
-    "@effect/platform-bun": "4.0.0-rc.112",
-    "@effect/sql-sqlite-bun": "4.0.0-rc.112",
-    "@effect/opentelemetry": "4.0.0-rc.112",
+    "effect": "4.0.0-rc.118",
+    "@effect/platform-bun": "4.0.0-rc.118",
+    "@effect/sql-sqlite-bun": "4.0.0-rc.118",
+    "@effect/opentelemetry": "4.0.0-rc.118",
     "effect-encore": "^0.31.0",
-    "effect-wide-event": "0.3.0",
+    "effect-wide-event": "0.5.0",
     "picomatch": "^4.0.7",
     "@types/picomatch": "^4.0.3",
     "effect-bun-test": "0.3.0",
     "solid-js": "^1.9.15",
-    "@effect/ai-anthropic": "4.0.0-rc.112",
-    "@effect/ai-openai": "4.0.0-rc.112",
+    "@effect/ai-anthropic": "4.0.0-rc.118",
+    "@effect/ai-openai": "4.0.0-rc.118",
     "@ff-labs/fff-bun": "0.10.6"
   },
   "patchedDependencies": {
     "@opentui/core@0.5.11": "patches/@opentui%2Fcore@0.5.11.patch",
-    "@effect/ai-anthropic@4.0.0-rc.112": "patches/@effect%2Fai-anthropic@4.0.0-rc.112.patch"
+    "@effect/ai-anthropic@4.0.0-rc.118": "patches/@effect%2Fai-anthropic@4.0.0-rc.118.patch",
+    "effect-encore@0.31.0": "patches/effect-encore@0.31.0.patch",
+    "oxlint-plugin-effect@0.17.0": "patches/oxlint-plugin-effect@0.17.0.patch"
   }
 }

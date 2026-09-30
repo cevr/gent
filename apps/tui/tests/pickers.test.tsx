@@ -2,7 +2,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Option } from "effect"
 import { createSignal } from "solid-js"
-import * as Prompt from "effect/unstable/ai/Prompt"
+import * as Prompt from "effect/ai/Prompt"
 import {
   BranchId,
   dateFromMillis,

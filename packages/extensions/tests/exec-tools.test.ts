@@ -54,16 +54,15 @@ import {
   RuntimeEnvironment,
   SqliteStorage,
 } from "@gent/core/test-utils"
-import { shippedPreset } from "./helpers/test-preset.js"
+import { e2ePreset, shippedPreset } from "./helpers/test-preset.js"
 import { toolResultSummary } from "@gent/core/extensions/branch-tools"
 import { BunChildProcessSpawner, BunFileSystem, BunServices } from "@effect/platform-bun"
 import { BunPlatformLive } from "@gent/core/host"
 import { ExtensionServiceError, maximumModelToolResultChars } from "@gent/core/extensions/api"
-import { e2ePreset } from "./helpers/test-preset"
-import { SqlClient } from "effect/unstable/sql"
+import { SqlClient } from "effect/sql"
 import { isToolResultFor } from "./helpers/tool-event.js"
-import type * as Prompt from "effect/unstable/ai/Prompt"
-import * as AiError from "effect/unstable/ai/AiError"
+import type * as Prompt from "effect/ai/Prompt"
+import * as AiError from "effect/ai/AiError"
 
 // ── bash command parsing ────────────────────────────────────────────────────
 

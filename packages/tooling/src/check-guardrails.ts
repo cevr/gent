@@ -210,7 +210,7 @@ const decodeJsonc = Effect.fn("Tooling.decodeJsonc")(function* <
   S extends Schema.Top & { readonly DecodingServices: never },
 >(path: string, text: string, schema: S) {
   const parsed = yield* Effect.try({
-    try: (): unknown => Bun.JSONC.parse(text),
+    try: () => Bun.JSONC.parse(text),
     catch: (error) => `${path}: ${String(error)}`,
   })
   const value = yield* Schema.decodeUnknownEffect(schema)(parsed).pipe(
@@ -363,7 +363,10 @@ const dependencyScopes = Effect.fn("Tooling.dependencyScopes")(function* (
     files: useTexts,
     commands: [
       ...[root, ...manifests.values()].flatMap((read) => scriptsOf(read.value)),
-      ...[...useTexts].filter(([file]) => /\.ya?ml$/.test(file)).map(([, text]) => text),
+      ...useTexts
+        .entries()
+        .filter(([file]) => /\.ya?ml$/.test(file))
+        .map(([, text]) => text),
     ],
     installed: yield* installedOf([""], root.value),
   }

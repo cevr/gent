@@ -1,5 +1,5 @@
 import { type Effect, Option, Predicate, Schema, Stream } from "effect"
-import { Headers } from "effect/unstable/http"
+import { Headers } from "effect/http"
 import {
   AgentDefinition,
   AgentName,
@@ -49,7 +49,7 @@ import {
   type RpcClientError,
   RpcGroup,
   type RpcGroup as RpcGroupNs,
-} from "effect/unstable/rpc"
+} from "effect/rpc"
 import { WorkspaceRpcMiddleware } from "./workspace-rpc.js"
 
 // ── errors ──────────────────────────────────────────────────────────────────
@@ -637,6 +637,9 @@ type RpcMethod = (
 
 const rpcKeys = (): ReadonlyArray<string> => [...GentRpcs.requests.keys()]
 
+/** A key the flat client answers: every request `GentRpcs` declares. */
+const isClientKey = (key: string): key is keyof GentRpcClient & string => GentRpcs.requests.has(key)
+
 const splitRpcKey = (key: string) => {
   const separator = key.indexOf(".")
   if (separator === -1) return { namespace: key, method: Option.none<string>() }
@@ -661,8 +664,9 @@ const makeNamespace = (flat: GentRpcClient, namespace: string, headers?: Headers
   const absent = Option.getOrUndefined(Option.none())
   return new Proxy(Object.create(null), {
     get: (_target, property) => {
-      if (!Predicate.isString(property)) return absent
-      const method = Reflect.get(flat, `${namespace}.${property}`)
+      const key = `${namespace}.${String(property)}`
+      if (!Predicate.isString(property) || !isClientKey(key)) return absent
+      const method: unknown = flat[key]
       if (Option.isNone(headersOption) || !Predicate.isFunction(method)) return method
       // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion, effect/noAs -- Runtime key comes from GentRpcs.requests; wrapping preserves the underlying RPC method shape.
       const call = method as RpcMethod

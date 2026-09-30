@@ -89,6 +89,31 @@ export const makeClientTestTransport = (
   }
 }
 
+/** Fail the test where it stands: a pure load test never reaches the transport. */
+const throwOnAccess = (label: string): never =>
+  Effect.runSync(Effect.die(`unexpected transport call in pure load test: ${label}`))
+
+/** A transport whose every client and runtime call fails the test, for a load that must not reach it. */
+export const makeUnreachableTransport = (): ClientShellTransport => ({
+  client: new Proxy(createMockClient(), {
+    get: (_target, prop) =>
+      new Proxy(
+        {},
+        {
+          get: (_target2, method) => () =>
+            throwOnAccess(`client.${String(prop)}.${String(method)}`),
+        },
+      ),
+  }),
+  runtime: new Proxy(createMockRuntime(), {
+    get: (_target, method) => () => throwOnAccess(`runtime.${String(method)}`),
+  }),
+  currentSession: () => Option.none(),
+  onExtensionStateChanged: () => () => {},
+  onSessionEvent: () => () => {},
+  modelCatalog: () => Option.none(),
+})
+
 export const makeClientExtensionRuntime = (
   opts: ClientExtensionHarnessOptions = {},
 ): ClientRuntime =>

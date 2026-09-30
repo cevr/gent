@@ -507,8 +507,10 @@ const readRegExp = (
   const source = readSlot(regExpSource, value)
   if (!Predicate.isString(source)) return Option.none()
   const flags = regExpFlags
+    .values()
     .filter(({ get }) => readSlot(get, value) === true)
     .map(({ flag }) => flag)
+    .toArray()
     .join("")
   return Option.some({ source, flags })
 }

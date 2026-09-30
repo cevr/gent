@@ -10,7 +10,7 @@ import {
   type SessionRuntimeState,
 } from "@gent/core/test-utils"
 import { describe, expect, it, test } from "effect-bun-test"
-import { Clock, Context, Deferred, Effect, Option, Predicate, Schema, Stream } from "effect"
+import { Clock, Deferred, Effect, Option, Predicate, Schema, Stream } from "effect"
 import { TestClock } from "effect/testing"
 import type { GentRuntime } from "@gent/sdk"
 import {
@@ -54,14 +54,14 @@ import {
   renderWithProviders,
 } from "./render-harness-boundary"
 import { inRuntime, waitForFrame, waitUntil, waitUntilAdvancing } from "./helpers-boundary"
-import * as Prompt from "effect/unstable/ai/Prompt"
+import * as Prompt from "effect/ai/Prompt"
 import { InteractionRequestId } from "@gent/core/extensions/branch-tools"
 import { useSessionFeed } from "../src/session"
 import { getSessionEventLabel } from "../src/message-list"
 import { useExtensionUI } from "../src/extensions/host"
 import { ClientContext, type ClientRuntime } from "../src/extensions/client-facets"
-import { RpcClientDefect, RpcClientError } from "effect/unstable/rpc/RpcClientError"
-import { SocketCloseError } from "effect/unstable/socket/Socket"
+import { RpcClientDefect, RpcClientError } from "effect/rpc/RpcClientError"
+import { SocketCloseError } from "effect/socket/Socket"
 
 // ── agent lifecycle ─────────────────────────────────────────────────────────
 
@@ -2066,14 +2066,11 @@ describe("useSessionFeed", () => {
       let watchDelivered = yield* Deferred.make<void>()
       // The feed runs on a test clock, so the backoff runs in test time.
       const clock = yield* TestClock.make()
-      const withClock = <R,>() =>
-        Context.makeUnsafe<R>(new Map<string, unknown>([[Clock.Clock.key, clock]]))
+      const withClock = createMockRuntime(new Map([[Clock.Clock.key, clock]]))
       const runtime: GentRuntime = {
         ...createMockRuntime(),
-        cast: (effect) => {
-          Effect.runForkWith(withClock())(effect)
-        },
-        fork: (effect) => Effect.runForkWith(withClock())(effect),
+        cast: withClock.cast,
+        fork: withClock.fork,
       }
       const dispose = createRoot((disposeRoot) => {
         const [active] = createSignal(makeSession(sessionId, branchId))

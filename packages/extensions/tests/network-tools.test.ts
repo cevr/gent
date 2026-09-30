@@ -1,8 +1,8 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Fiber, Layer, Option, Schema } from "effect"
 import { TestClock } from "effect/testing"
-import { HttpClient, HttpClientResponse } from "effect/unstable/http"
-import { HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
+import { HttpClient, HttpClientResponse } from "effect/http"
+import { HttpClientError, TransportError } from "effect/http/HttpClientError"
 import { WebSearchTool } from "../src/network-tools.js"
 import { runToolWithCtx, testToolContext } from "@gent/core/test-utils"
 

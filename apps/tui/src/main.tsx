@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { Command, Flag, Argument } from "effect/unstable/cli"
+import { Command, Flag, Argument } from "effect/cli"
 import { BunPlatformLive } from "@gent/core/host"
 import {
   Config,
@@ -134,49 +134,49 @@ const runHeadlessTurn = (
 
 // The inputs the TUI/headless entry takes. `resume` reuses them.
 const gentFlags = {
-  connect: Flag.string("connect").pipe(
+  connect: Flag.String("connect").pipe(
     Flag.withDescription("Connect to an existing gent server"),
     Flag.optional,
   ),
-  session: Flag.string("session").pipe(
+  session: Flag.String("session").pipe(
     Flag.withAlias("s"),
     Flag.withDescription("Session ID to continue"),
     Flag.optional,
   ),
-  headless: Flag.boolean("headless").pipe(
+  headless: Flag.Boolean("headless").pipe(
     Flag.withAlias("H"),
     Flag.withDescription("Run in headless mode (no TUI, streams to stdout)"),
     Flag.withDefault(false),
   ),
-  isolate: Flag.boolean("isolate").pipe(
+  isolate: Flag.Boolean("isolate").pipe(
     Flag.withDescription("Keep state in memory: no data-directory database or lock"),
     Flag.withDefault(false),
   ),
-  debug: Flag.boolean("debug").pipe(
+  debug: Flag.Boolean("debug").pipe(
     Flag.withDescription("Launch TUI renderer playground for widgets and tool renderers"),
     Flag.withDefault(false),
   ),
-  mockEmpty: Flag.boolean("mock-empty").pipe(
+  mockEmpty: Flag.Boolean("mock-empty").pipe(
     Flag.withDescription(
       "Run against a model that answers nothing, to exercise the unanswered turn",
     ),
     Flag.withDefault(false),
   ),
-  prompt: Flag.string("prompt").pipe(
+  prompt: Flag.String("prompt").pipe(
     Flag.withAlias("p"),
     Flag.withDescription("Initial prompt (TUI mode)"),
     Flag.optional,
   ),
-  promptArg: Argument.string("prompt").pipe(
+  promptArg: Argument.String("prompt").pipe(
     Argument.withDescription("Prompt for headless mode"),
     Argument.optional,
   ),
-  agent: Flag.string("agent").pipe(
+  agent: Flag.String("agent").pipe(
     Flag.withAlias("a"),
     Flag.withDescription("Agent for the new headless session (-H only; default: main)"),
     Flag.optional,
   ),
-  approveAll: Flag.boolean("approve-all").pipe(
+  approveAll: Flag.Boolean("approve-all").pipe(
     Flag.withDescription(
       "Approve every ask of the headless turn (-H only; default: decline, as no user is present)",
     ),
@@ -245,9 +245,9 @@ const runGent = ({
     const scope = yield* Effect.scope
     const builtUiServices = yield* Layer.buildWithScope(makeUiLayer(), scope)
     const uiServices = Context.makeUnsafe<unknown>(builtUiServices.mapUnsafe)
-    const visualOpt = yield* Config.option(Config.string("VISUAL"))
-    const editorOpt = yield* Config.option(Config.string("EDITOR"))
-    const authDirectoryOpt = yield* Config.option(Config.string("GENT_AUTH_DIRECTORY"))
+    const visualOpt = yield* Config.option(Config.String("VISUAL"))
+    const editorOpt = yield* Config.option(Config.String("EDITOR"))
+    const authDirectoryOpt = yield* Config.option(Config.String("GENT_AUTH_DIRECTORY"))
     const env = {
       visual: visualOpt,
       editor: editorOpt,
@@ -438,7 +438,7 @@ const main = Command.make("gent", gentFlags, (input) => runGent({ ...input, cont
 const resume = Command.make(
   "resume",
   {
-    sessionId: Argument.string("session-id").pipe(
+    sessionId: Argument.String("session-id").pipe(
       Argument.withDescription("Session to resume (default: the last one in this directory)"),
       Argument.optional,
     ),

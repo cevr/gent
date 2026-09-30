@@ -20,7 +20,7 @@ import {
   type ToolCall,
   transcriptFingerprint,
 } from "../src/message-list"
-import * as Prompt from "effect/unstable/ai/Prompt"
+import * as Prompt from "effect/ai/Prompt"
 import {
   BranchId,
   dateFromMillis,
@@ -3853,8 +3853,10 @@ describe("tool group rows", () => {
     )
   const callLabels = (lines: ReadonlyArray<string>) =>
     lines
+      .values()
       .filter((line) => line.includes("├") || line.includes("└"))
       .map((line) => line.trim().split(/\s{2,}/)[0])
+      .toArray()
 
   it.live("the group row and the read frame name the file from the cwd", () =>
     Effect.gen(function* () {

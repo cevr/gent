@@ -44,12 +44,8 @@ export const makeSettleHold: Effect.Effect<SettleHold> = Effect.gen(function* ()
             Effect.andThen(Deferred.await(releaseGate)),
           ),
         )
-      return new Proxy(surface, {
-        get(target: ScrollbackSurface, key: string | symbol, receiver: ScrollbackSurface) {
-          if (key === "settle") return heldSettle
-          return Reflect.get(target, key, receiver)
-        },
-      })
+      // The surface's own `settle` holds; its other members stay the class's.
+      return Object.defineProperty(surface, "settle", { value: heldSettle })
     }
   }
 

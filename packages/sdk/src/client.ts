@@ -1,8 +1,8 @@
 import { Effect, Layer, Match, Option, Predicate } from "effect"
 import type { Context, Scope } from "effect"
-import { RpcClient, RpcSerialization } from "effect/unstable/rpc"
-import type { Headers } from "effect/unstable/http"
-import { Socket } from "effect/unstable/socket"
+import { RpcClient, RpcSerialization } from "effect/rpc"
+import type { Headers } from "effect/http"
+import { Socket } from "effect/socket"
 import {
   ConnectionState,
   GentConnectionError,

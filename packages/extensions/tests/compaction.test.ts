@@ -1,8 +1,8 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Cause, Effect, Exit, Fiber, Layer, Option, Predicate, Schema, Stream } from "effect"
-import { LanguageModel } from "effect/unstable/ai"
-import * as Prompt from "effect/unstable/ai/Prompt"
-import * as AiError from "effect/unstable/ai/AiError"
+import { LanguageModel } from "effect/ai"
+import * as Prompt from "effect/ai/Prompt"
+import * as AiError from "effect/ai/AiError"
 import {
   BranchId,
   MessageId,

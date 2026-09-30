@@ -20,7 +20,7 @@
 
 import { BunRuntime, BunServices } from "@effect/platform-bun"
 import { Console, Effect, FileSystem, Layer, Path, Schema, Stream } from "effect"
-import { ChildProcess } from "effect/unstable/process"
+import { ChildProcess } from "effect/process"
 import {
   type GuideCodeContext,
   guideBlockFile,

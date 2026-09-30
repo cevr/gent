@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Context, DateTime, Effect, Schema } from "effect"
-import * as AiTool from "effect/unstable/ai/Tool"
+import * as AiTool from "effect/ai/Tool"
 import {
   defineRequests,
   getToolId,
@@ -141,7 +141,7 @@ describe("ref(capability)", () => {
       execute: () => Effect.succeed("ok"),
     })
 
-    // @ts-expect-error Tool capabilities are not request refs.
+    // @ts-expect-error -- Tool capabilities are not request refs.
     ref(capability)
   })
 })

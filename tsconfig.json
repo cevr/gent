@@ -93,7 +93,8 @@
           "unnecessaryEffectGen": "error",
           "unnecessaryFailYieldableError": "error",
           "unnecessaryPipe": "off",
-          "unnecessaryPipeChain": "off"
+          "unnecessaryPipeChain": "off",
+          "unstableApiUsage": "off"
         },
         "keyPatterns": [
           {
@@ -124,7 +125,10 @@
             }
           },
           {
-            "include": ["packages/tooling/src/gent-rules.ts"],
+            "include": [
+              "packages/tooling/src/gent-rules.ts",
+              "apps/tui/tests/render-harness-boundary.tsx"
+            ],
             "options": {
               "diagnosticSeverity": {
                 "nodeBuiltinImport": "off"

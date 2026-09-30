@@ -7,7 +7,6 @@ import {
   Deferred,
   Duration,
   Effect,
-  Encoding,
   Exit,
   Fiber,
   Layer,
@@ -19,12 +18,13 @@ import {
   Scope,
   Stream,
 } from "effect"
+import { Base64 } from "effect/encoding"
 import { BunServices } from "@effect/platform-bun"
 import { TestClock } from "effect/testing"
-import { RpcClientError } from "effect/unstable/rpc/RpcClientError"
-import { SocketCloseError } from "effect/unstable/socket/Socket"
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
-import * as Prompt from "effect/unstable/ai/Prompt"
+import { RpcClientError } from "effect/rpc/RpcClientError"
+import { SocketCloseError } from "effect/socket/Socket"
+import { ChildProcess, ChildProcessSpawner } from "effect/process"
+import * as Prompt from "effect/ai/Prompt"
 import {
   AgentName,
   BranchId,
@@ -817,20 +817,17 @@ const mountNoticeSources = (ids: ReadonlyArray<string>) =>
     })
     // Only the session view's casts read this clock: the bound sleeps on it.
     // The test preload turns logs off; these casts log again, into `capture`.
-    const withClock = <R,>() =>
-      Context.makeUnsafe<R>(
-        new Map<string, unknown>([
-          [Clock.Clock.key, clock],
-          [Logger.CurrentLoggers.key, new Set([capture])],
-          [References.MinimumLogLevel.key, "All"],
-        ]),
-      )
+    const withClock = createMockRuntime(
+      new Map<string, unknown>([
+        [Clock.Clock.key, clock],
+        [Logger.CurrentLoggers.key, new Set([capture])],
+        [References.MinimumLogLevel.key, "All"],
+      ]),
+    )
     const runtime: GentRuntime = {
       ...createMockRuntime(),
-      cast: (effect) => {
-        Effect.runForkWith(withClock())(effect)
-      },
-      fork: (effect) => Effect.runForkWith(withClock())(effect),
+      cast: withClock.cast,
+      fork: withClock.fork,
     }
     const answers = new Map<string, Signal<Option.Option<ReadonlyArray<NoticeRow>>>>(
       ids.map((id) => [id, createSignal(Option.none<ReadonlyArray<NoticeRow>>())]),
@@ -1481,13 +1478,11 @@ describe("App auth gate", () => {
   it.scopedLive("the exit cue disarms after its window", () =>
     Effect.gen(function* () {
       const clock = yield* TestClock.make()
-      const onClock = <R,>() => Context.makeUnsafe<R>(new Map([[Clock.Clock.key, clock]]))
+      const onClock = createMockRuntime(new Map([[Clock.Clock.key, clock]]))
       const view = yield* mountIdleSession({
         ...createMockRuntime(),
-        cast: (effect) => {
-          Effect.runForkWith(onClock())(effect)
-        },
-        fork: (effect) => Effect.runForkWith(onClock())(effect),
+        cast: onClock.cast,
+        fork: onClock.fork,
       })
       view.setup.mockInput.pressKey("c", { ctrl: true })
       yield* waitForFrame(view.setup, (frame) => frame.includes(CTRL_C_CUE), "the exit cue")
@@ -1502,7 +1497,7 @@ describe("App auth gate", () => {
   it.scopedLive("the exit cue's window ends with the session view", () =>
     Effect.gen(function* () {
       const clock = yield* TestClock.make()
-      const onClock = <R,>() => Context.makeUnsafe<R>(new Map([[Clock.Clock.key, clock]]))
+      const onClock = createMockRuntime(new Map([[Clock.Clock.key, clock]]))
       // The fibers the ctrl+c press starts; the paused clock keeps a timer open.
       const started: Array<Fiber.Fiber<unknown, unknown>> = []
       let recording = false
@@ -1513,9 +1508,9 @@ describe("App auth gate", () => {
       const view = yield* mountIdleSession({
         ...createMockRuntime(),
         cast: (effect) => {
-          track(Effect.runForkWith(onClock())(effect))
+          track(onClock.fork(effect))
         },
-        fork: (effect) => track(Effect.runForkWith(onClock())(effect)),
+        fork: (effect) => track(onClock.fork(effect)),
       })
       recording = true
       view.setup.mockInput.pressKey("c", { ctrl: true })
@@ -1532,13 +1527,11 @@ describe("App auth gate", () => {
     Effect.gen(function* () {
       // A paused clock: the arm lasts until a key disarms it.
       const clock = yield* TestClock.make()
-      const onClock = <R,>() => Context.makeUnsafe<R>(new Map([[Clock.Clock.key, clock]]))
+      const onClock = createMockRuntime(new Map([[Clock.Clock.key, clock]]))
       const view = yield* mountIdleSession({
         ...createMockRuntime(),
-        cast: (effect) => {
-          Effect.runForkWith(onClock())(effect)
-        },
-        fork: (effect) => Effect.runForkWith(onClock())(effect),
+        cast: onClock.cast,
+        fork: onClock.fork,
       })
       yield* Effect.promise(() => view.setup.mockInput.typeText("!"))
       yield* waitForFrame(view.setup, (frame) => frame.includes("$"), "shell mode")
@@ -4163,7 +4156,7 @@ describe("App copy on select", () => {
   })
 
   /** The bytes an OSC 52 copy of `text` to the clipboard sends the terminal. */
-  const osc52 = (text: string) => `\u001b]52;c;${Encoding.encodeBase64(text)}\u001b\\`
+  const osc52 = (text: string) => `\u001b]52;c;${Base64.encode(text)}\u001b\\`
 
   /**
    * The enforced sign-in on its OAuth screen, the device URL `url` on screen,

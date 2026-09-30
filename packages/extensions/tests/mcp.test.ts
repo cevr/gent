@@ -19,8 +19,8 @@ import {
   HttpServer,
   HttpServerRequest,
   HttpServerResponse,
-} from "effect/unstable/http"
-import type * as Prompt from "effect/unstable/ai/Prompt"
+} from "effect/http"
+import type * as Prompt from "effect/ai/Prompt"
 import {
   BunGentPlatformLive,
   collectTestContributions,
@@ -302,6 +302,15 @@ const cellResultAfterDone = (
         .flatMap((message) => message.parts)
         .find((part): part is Prompt.ToolResultPart => part.type === "tool-result"),
     ),
+  )
+
+/** The `display` of a cell result, decoded by `schema`. */
+const cellDisplay = <A>(
+  result: Effect.Success<ReturnType<typeof cellResultAfterDone>>,
+  schema: Schema.Codec<A, string>,
+) =>
+  Schema.decodeUnknownEffect(Schema.Struct({ display: schema }))(result?.result).pipe(
+    Effect.map(({ display }) => display),
   )
 
 // ── config ──────────────────────────────────────────────────────────────────
@@ -619,7 +628,7 @@ const serveHttpFixture = Effect.gen(function* () {
     ),
   )
   const address = Context.get(context, HttpServer.HttpServer).address
-  if (address._tag !== "TcpAddress") return yield* Effect.die("expected a TCP address")
+  if (address._tag === "UnixPathAddress") return yield* Effect.die("expected a TCP address")
   return { port: address.port, sessions }
 })
 
@@ -810,7 +819,7 @@ const serveSseFixture = Effect.gen(function* () {
     ),
   )
   const address = Context.get(context, HttpServer.HttpServer).address
-  if (address._tag !== "TcpAddress") return yield* Effect.die("expected a TCP address")
+  if (address._tag === "UnixPathAddress") return yield* Effect.die("expected a TCP address")
   return { port: address.port, counts }
 })
 
@@ -932,9 +941,7 @@ describe("mcp status", () => {
         yield* client.message.send({ sessionId, branchId, content: "status" })
         const result = yield* cellResultAfterDone(client, branchId)
         expect(result).toMatchObject({ name: "cell", isFailure: false })
-        const status = yield* Schema.decodeUnknownEffect(StatusDisplay)(
-          Reflect.get(result?.result ?? {}, "display"),
-        )
+        const status = yield* cellDisplay(result, StatusDisplay)
         expect(status.servers.map((server) => [server.name, server.health])).toEqual([
           ["dead", "degraded"],
           ["fixture", "healthy"],
@@ -1173,7 +1180,7 @@ const serveOAuthFixture = Effect.gen(function* () {
     ),
   )
   const address = Context.get(context, HttpServer.HttpServer).address
-  if (address._tag !== "TcpAddress") return yield* Effect.die("expected a TCP address")
+  if (address._tag === "UnixPathAddress") return yield* Effect.die("expected a TCP address")
   state.origin = `http://127.0.0.1:${address.port}`
   return state
 })
@@ -1330,11 +1337,12 @@ describe("mcp oauth", () => {
         ].join("; ")
         const result = yield* runOAuthCell(oauth, code).pipe(Effect.provide(data.layer))
         expect(result).toMatchObject({ name: "cell", isFailure: false })
-        const shown = yield* Schema.decodeUnknownEffect(
+        const shown = yield* cellDisplay(
+          result,
           Schema.fromJsonString(
             Schema.Struct({ first: Schema.String, refused: Schema.String, second: Schema.String }),
           ),
-        )(Reflect.get(result?.result ?? {}, "display"))
+        )
         // Setup refreshed token-0 to token-1 before it dialed.
         expect(shown.first).toBe("token-1")
         expect(shown.refused).toContain(
@@ -1443,9 +1451,7 @@ describe("mcp binary content", () => {
           ),
         )
         expect(result).toMatchObject({ name: "cell", isFailure: false })
-        const shown = yield* Schema.decodeUnknownEffect(BinaryDisplay)(
-          Reflect.get(result?.result ?? {}, "display"),
-        )
+        const shown = yield* cellDisplay(result, BinaryDisplay)
         expect(shown.text).toBe("a picture")
         expect(shown.omitted.map((entry) => [entry.type, entry.mimeType, entry.bytes])).toEqual([
           ["image", "image/png", 9],
@@ -1610,15 +1616,11 @@ describe("mcp tools in the cell", () => {
           Stream.take(5),
           Stream.runCollect,
         )
-        expect(
-          inner.map((envelope) => ({
-            tool: Reflect.get(envelope.event, "toolName"),
-            parent: Reflect.get(envelope.event, "parentToolCallId"),
-          })),
-        ).toEqual(
+        expect(inner.map((envelope) => envelope.event)).toMatchObject(
           ["echo", "structured", "fail", "echo", "count"].map((name) => ({
-            tool: `mcp.fixture.${name}`,
-            parent: cellToolCallId,
+            _tag: "ToolCallStarted",
+            toolName: `mcp.fixture.${name}`,
+            parentToolCallId: cellToolCallId,
           })),
         )
         expect(result?.result).toMatchObject({
@@ -1707,11 +1709,12 @@ describe("mcp tools in the cell", () => {
           "tools.mcp.fixture.stats(input?: {}): Promise<{ open: number; labels: string[] }>"
         expect(systems[0] ?? "").toContain(`- ${typed} // Count open issues.`)
         expect(result).toMatchObject({ name: "cell", isFailure: false })
-        const display = yield* Schema.decodeUnknownEffect(
+        const display = yield* cellDisplay(
+          result,
           Schema.fromJsonString(
             Schema.Struct({ signature: Schema.String, stats: Schema.Json, broken: Schema.String }),
           ),
-        )(Reflect.get(result?.result ?? {}, "display"))
+        )
         expect(display).toMatchObject({
           signature: `${typed} // Count open issues.`,
           stats: { open: 3, labels: ["bug"] },
@@ -1757,7 +1760,9 @@ describe("mcp tools in the cell", () => {
         yield* client.message.send({ sessionId, branchId, content: "count" })
         const result = yield* cellResultAfterDone(client, branchId)
         expect(result).toMatchObject({ name: "cell", isFailure: false })
-        const display = String(Reflect.get(Object(result?.result), "display"))
+        const { display } = yield* Schema.decodeUnknownEffect(
+          Schema.Struct({ display: Schema.String }),
+        )(result?.result)
         expect(display).toContain("no longer lists count")
         expect(display).toContain('"echoed":"still here"')
         // The connection relisted and wrote the cache, so the next setup has no `count`.
@@ -1903,9 +1908,7 @@ describe("mcp tools in the cell", () => {
           })
           yield* client.message.send({ sessionId, branchId, content: "count" })
           const result = yield* cellResultAfterDone(client, branchId)
-          expect(String(Reflect.get(Object(result?.result), "display"))).toContain(
-            "no longer lists count",
-          )
+          expect(yield* cellDisplay(result, Schema.String)).toContain("no longer lists count")
           yield* waitFor(
             collectTestContributions(McpServers("@test/mcp-unknown", servers).setup, {
               home: path.join(fixture.directory, "home"),

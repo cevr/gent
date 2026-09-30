@@ -56,7 +56,7 @@ let currentSetup: Option.Option<TestRenderSetup> = Option.none()
 const makeRenderHome = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
-  const root = path.join(yield* Config.string("HOME"), "render-homes")
+  const root = path.join(yield* Config.String("HOME"), "render-homes")
   yield* fs.makeDirectory(root, { recursive: true })
   return yield* fs.makeTempDirectory({ directory: root, prefix: "home-" })
 }).pipe(Effect.provide(BunServices.layer), Effect.orDie)
@@ -209,14 +209,20 @@ export const createMockClient = (overrides?: NamespaceOverrides): GentNamespaced
   })
 }
 
-export const createMockRuntime = (): GentRuntime => ({
+/**
+ * A runtime that runs each effect on `services`, keyed as `Context` keys them:
+ * a test hands in its own clock or loggers here. None by default.
+ */
+export const createMockRuntime = (
+  services: ReadonlyMap<string, unknown> = new Map(),
+): GentRuntime => ({
   cast: <A, E, R>(effect: Effect.Effect<A, E, R>) => {
-    Effect.runForkWith(Context.makeUnsafe<R>(new Map<string, never>()))(effect)
+    Effect.runForkWith(Context.makeUnsafe<R>(new Map(services)))(effect)
   },
   fork: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    Effect.runForkWith(Context.makeUnsafe<R>(new Map<string, never>()))(effect),
+    Effect.runForkWith(Context.makeUnsafe<R>(new Map(services)))(effect),
   run: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    Effect.runPromiseWith(Context.makeUnsafe<R>(new Map<string, never>()))(effect),
+    Effect.runPromiseWith(Context.makeUnsafe<R>(new Map(services)))(effect),
   lifecycle: {
     getState: () => ConnectionState.cases.Connected.make({ generation: 0 }),
     subscribe: (listener) => {

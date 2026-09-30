@@ -1,7 +1,7 @@
 /**
  * Model driver primitives. A `ModelDriverContribution` wraps an LLM provider:
  * auth, `listModels`, and `resolveModel` returning a model that provides an
- * `effect/unstable/ai` `LanguageModel`. The gent providers
+ * `effect/ai` `LanguageModel`. The gent providers
  * (anthropic, openai) register one each.
  *
  * An agent may name a driver with `driver: DriverRef`; otherwise the loop
@@ -13,7 +13,7 @@
  * @module
  */
 import { Context, Effect, Option, Predicate, Schema, type Layer } from "effect"
-import { AiError, type LanguageModel, type Model as AiModel } from "effect/unstable/ai"
+import { AiError, type LanguageModel, type Model as AiModel } from "effect/ai"
 import type { Model } from "./agent.js"
 import type { AuthAuthorizationMethod, AuthMethod } from "../runtime/provider.js"
 import type { SessionId } from "./ids.js"
@@ -297,7 +297,7 @@ export const DEFAULT_RETRY_POLICY: RetryPolicy = {
 
 /**
  * Registers a model provider as a driver. `id` doubles as the driver id, the
- * model returned by `resolveModel` provides an `effect/unstable/ai` LanguageModel,
+ * model returned by `resolveModel` provides an `effect/ai` LanguageModel,
  * `listModels` supplies the driver's own catalog, and `auth` wires the OAuth/API
  * key flow. The driver registry routes a `DriverRef({ _tag: "Model", id })`
  * to the matching contribution.

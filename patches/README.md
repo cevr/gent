@@ -24,7 +24,7 @@ Remove this patch when an OpenTUI release handles non-bottom-pinned
 split-footer resize cleanup. Recheck these paths before removing it.
 Rechecked on 2026-09-08: 0.5.11 still ships the unbounded clear, so the patch was regenerated for that release.
 
-## `@effect/ai-anthropic@4.0.0-rc.112`
+## `@effect/ai-anthropic@4.0.0-rc.118`
 
 `prepareMessages` sets the request's `system` field from each system group
 it meets, so a system message after the first message replaces the system
@@ -41,3 +41,36 @@ Anthropic extension (`packages/extensions/src/anthropic.ts`) reads it through
 `isHostContextUpdateText` to keep the cache marker off these blocks.
 
 Remove this patch when the SDK keeps a later system message in place.
+Rechecked on 2026-09-30: rc.118 still replaces `system`, so the patch was
+regenerated for that release. It patches `dist` only; the shipped `src` copy
+keeps the upstream text.
+
+## `effect-encore@0.31.0`
+
+Effect 4.0.0-rc.118 moved the `effect/unstable/*` modules to `effect/*` and
+split the root `Encoding` module into `effect/encoding` (`Base64`,
+`Base64Url`, `Hex`). effect-encore 0.31.0, the latest release, still imports
+the old paths, so it fails to load under rc.118 although its peer range
+(`>=4.0.0-rc.112 <5`) admits it.
+
+The patch rewrites every `effect/unstable/<module>` specifier in `dist` to
+`effect/<module>`, and `Encoding.encodeHex` in `canonical-json.js` to
+`Hex.encode` from `effect/encoding`. It changes no behavior.
+
+Remove this patch when an effect-encore release imports the rc.118 paths.
+
+## `oxlint-plugin-effect@0.17.0`
+
+`.oxlintrc.json` extends `presets/recommended.json`. The preset declares
+`jsPlugins` and `rules` but no `plugins` key. oxlint reads a config without
+`plugins` as one that wants the default plugins, so extending the preset adds
+`unicorn` and `oxc` to the plugins gent names, and their correctness rules
+start to report (for example 328 `unicorn/consistent-function-scoping` and
+75 `unicorn/no-array-sort` findings). A shim config that extends the preset
+does not help: the preset itself carries the missing key.
+
+The patch adds `"plugins": []` to the preset, so the preset brings only its
+own plugin and the root config keeps the plugin list it declares.
+
+Remove this patch when an oxlint-plugin-effect release declares `plugins` in
+its presets, or when oxlint stops adding default plugins through `extends`.

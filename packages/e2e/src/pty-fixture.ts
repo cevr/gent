@@ -210,7 +210,11 @@ export interface TerminalGrid {
 
 /** Every row, history first, with blank rows dropped. */
 export const gridText = (grid: TerminalGrid): ReadonlyArray<string> =>
-  [...grid.history, ...grid.visible].map((row) => row.trimEnd()).filter((row) => row.length > 0)
+  [...grid.history, ...grid.visible]
+    .values()
+    .map((row) => row.trimEnd())
+    .filter((row) => row.length > 0)
+    .toArray()
 
 /** History rows only, blank rows dropped. */
 export const historyText = (grid: TerminalGrid): ReadonlyArray<string> =>

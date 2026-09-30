@@ -4,7 +4,6 @@ import {
   Context,
   Crypto,
   Effect,
-  Encoding,
   FileSystem,
   Layer,
   Option,
@@ -13,6 +12,7 @@ import {
   Result,
   Schema,
 } from "effect"
+import { Hex } from "effect/encoding"
 import {
   defineExtension,
   defineRequests,
@@ -113,7 +113,7 @@ export const installBundledSkills = Effect.fn("Skills.installBundled")(function*
   )(bundledSkillFiles).pipe(Effect.orDie)
   const digest = yield* crypto.digest("SHA-256", new TextEncoder().encode(manifest))
   const parent = path.join(home, ".cache", "gent", "skills")
-  const root = path.join(parent, Encoding.encodeHex(digest))
+  const root = path.join(parent, Hex.encode(digest))
   if (yield* fs.exists(root)) return root
   yield* fs.makeDirectory(parent, { recursive: true })
   yield* Effect.acquireUseRelease(

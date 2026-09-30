@@ -384,9 +384,10 @@ const windowRows = (
   max: number,
 ): ReadonlyArray<WindowedLine> => {
   const lineIndexes = rows
-    .map((row, index) => ({ row, index }))
-    .filter((entry) => entry.row._tag === "line")
-    .map((entry) => entry.index)
+    .entries()
+    .filter(([, row]) => row._tag === "line")
+    .map(([index]) => index)
+    .toArray()
   if (lineIndexes.length <= max) return rows
   const half = Math.floor(max / 2)
   const headEnd = (lineIndexes[half - 1] ?? -1) + 1

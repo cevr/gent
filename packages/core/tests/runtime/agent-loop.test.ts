@@ -47,7 +47,7 @@ import {
   wantsWakeOnRecovery,
 } from "../../src/runtime/agent-loop"
 import { TestClock } from "effect/testing"
-import { SqlClient } from "effect/unstable/sql"
+import { SqlClient } from "effect/sql"
 import {
   AgentDefinition,
   AgentName,
@@ -151,7 +151,7 @@ import {
   waitFor as waitForOption,
   waitForPhase,
 } from "./agent-loop-helpers"
-import * as Prompt from "effect/unstable/ai/Prompt"
+import * as Prompt from "effect/ai/Prompt"
 import {
   AgentEvent,
   EventEnvelope,
@@ -173,7 +173,7 @@ import {
 } from "../../src/runtime/turn"
 import { windowDetails, windowMarkerMessage } from "../../src/runtime/model-context"
 import { e2ePreset, rangeCompactorLayer, testAgents } from "../helpers/test-preset"
-import * as AiModel from "effect/unstable/ai/Model"
+import * as AiModel from "effect/ai/Model"
 import { BunCrypto, BunServices } from "@effect/platform-bun"
 import {
   type ModelDriverContribution,
@@ -213,15 +213,15 @@ import {
   type RunningState,
   toWaitingForInteractionState,
 } from "../../src/domain/agent-loop"
-import * as AiError from "effect/unstable/ai/AiError"
+import * as AiError from "effect/ai/AiError"
 import { StorageError } from "../../src/domain/errors"
 import { Database } from "bun:sqlite"
-import type { LanguageModel } from "effect/unstable/ai"
-import { SingleRunner } from "effect/unstable/cluster"
+import type { LanguageModel } from "effect/ai"
+import { SingleRunner } from "effect/cluster"
 import { admitChildSessionDepth, getSessionDepth, SessionRuntime } from "../../src/runtime/session"
 import { test } from "bun:test"
 import { InteractionPendingError } from "../../src/domain/interaction"
-import * as Response from "effect/unstable/ai/Response"
+import * as Response from "effect/ai/Response"
 import {
   LoadedArtifactIdentity,
   type LoadedExtension,

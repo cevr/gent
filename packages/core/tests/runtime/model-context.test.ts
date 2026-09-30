@@ -11,8 +11,8 @@ import {
   Schema,
   Stream,
 } from "effect"
-import * as AiError from "effect/unstable/ai/AiError"
-import * as Prompt from "effect/unstable/ai/Prompt"
+import * as AiError from "effect/ai/AiError"
+import * as Prompt from "effect/ai/Prompt"
 import {
   ActorCommandId,
   BranchId,
@@ -88,7 +88,7 @@ import {
 } from "../../src/storage/storage"
 import { baseLocalLayerWithProvider, createRpcHarness } from "../../src/test-utils/harness"
 import { type AgentEvent, EventEnvelope, EventId, EventStore } from "../../src/domain/event"
-import * as Response from "effect/unstable/ai/Response"
+import * as Response from "effect/ai/Response"
 
 interface TestMessageOptional {
   metadata?: {

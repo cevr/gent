@@ -1,5 +1,5 @@
 import { Effect, Layer, Option, Predicate, Schema } from "effect"
-import * as Prompt from "effect/unstable/ai/Prompt"
+import * as Prompt from "effect/ai/Prompt"
 import {
   Branch,
   decodeDateFromMillis,
@@ -11,7 +11,7 @@ import {
 import { AgentEvent, EventId } from "../domain/event.js"
 import { isReasoningEffort, ModelId } from "../domain/agent.js"
 import { BranchId, MessageId, SessionId } from "../domain/ids.js"
-import { Migrator, SqlClient } from "effect/unstable/sql"
+import { Migrator, SqlClient } from "effect/sql"
 import { SqliteMigrator } from "@effect/sql-sqlite-bun"
 import { StorageError } from "../domain/errors.js"
 import { DefaultWorkspaceId } from "../server/workspace-rpc.js"

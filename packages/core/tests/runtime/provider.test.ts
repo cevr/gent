@@ -15,7 +15,7 @@ import {
   Stream,
 } from "effect"
 import { TestClock } from "effect/testing"
-import * as AiError from "effect/unstable/ai/AiError"
+import * as AiError from "effect/ai/AiError"
 import {
   DEFAULT_RETRY_POLICY,
   isContextOverflow,
@@ -44,7 +44,7 @@ import {
   toolCallPart,
 } from "../../src/runtime/provider"
 import { BunServices } from "@effect/platform-bun"
-import { Model as AiModel, LanguageModel } from "effect/unstable/ai"
+import { Model as AiModel, LanguageModel } from "effect/ai"
 import { test as bunTest } from "bun:test"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extension-host"
 import type { LoadedExtension } from "../../src/domain/extension.js"
@@ -57,11 +57,11 @@ import { LanguageModelLayers } from "../../src/test-utils/language-model"
 import { convertTools } from "../../src/runtime/tools"
 import { toPrompt } from "../../src/runtime/model-context"
 import { dateFromMillis, Message } from "../../src/domain/message"
-import { toCodecAnthropic } from "effect/unstable/ai/AnthropicStructuredOutput"
-import * as AiTool from "effect/unstable/ai/Tool"
-import type * as AiToolkit from "effect/unstable/ai/Toolkit"
-import type { ToolkitInput } from "effect/unstable/ai/LanguageModel"
-import * as Prompt from "effect/unstable/ai/Prompt"
+import { toCodecAnthropic } from "effect/ai/AnthropicStructuredOutput"
+import * as AiTool from "effect/ai/Tool"
+import type * as AiToolkit from "effect/ai/Toolkit"
+import type { ToolkitInput } from "effect/ai/LanguageModel"
+import * as Prompt from "effect/ai/Prompt"
 
 // ── provider retry ──────────────────────────────────────────────────────────
 
@@ -1222,11 +1222,14 @@ const testAuthStorage: AuthService = serializeAuthStore({
 /** Create a fake upstream model with a stub LanguageModel layer */
 const fakeResolution = (): ProviderResolution =>
   AiModel.make("test", "model", Layer.succeed(LanguageModel.LanguageModel, failingLanguageModel))
-const modelFromService = (provider: string, service: LanguageModel.Service): ProviderResolution =>
+const modelFromService = (
+  provider: string,
+  service: LanguageModel.LanguageModel,
+): ProviderResolution =>
   AiModel.make(provider, "model", Layer.succeed(LanguageModel.LanguageModel, service))
 const assertProviderResolutionRejectsBareLayer = () => {
   const bareLayer = Layer.succeed(LanguageModel.LanguageModel, failingLanguageModel)
-  // @ts-expect-error ProviderResolution must come from Effect AI Model.make metadata.
+  // @ts-expect-error -- ProviderResolution must come from Effect AI Model.make metadata.
   const resolution: ProviderResolution = bareLayer
   return resolution
 }
@@ -1282,11 +1285,24 @@ const resolveModel = (request: ModelRequest) =>
       driverId: request.driverId,
     })
   })
-const streamResolvedModel = <Tools extends Record<string, AiTool.Any> = Record<string, AiTool.Any>>(
+/** A tool whose parameters encode without services, as `streamText` requires with `disableToolCallResolution`. */
+type ServiceFreeTool = AiTool.Tool<
+  string,
+  {
+    readonly parameters: Schema.Codec<unknown, unknown, never, never>
+    readonly success: Schema.Top
+    readonly failure: Schema.Top
+    readonly failureMode: AiTool.FailureMode
+  },
+  never
+>
+const streamResolvedModel = <
+  Tools extends Record<string, ServiceFreeTool> = Record<string, ServiceFreeTool>,
+>(
   request: ModelRequest & {
     readonly prompt: Prompt.RawInput
     readonly tools?: ReadonlyArray<ToolCapability>
-    readonly toolkit?: ToolkitInput<Tools>
+    readonly toolkit?: ToolkitInput<Tools, never, never>
   },
 ) =>
   Effect.gen(function* () {

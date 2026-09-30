@@ -13,7 +13,7 @@ import {
   toolCallStep,
   type MessagePart,
 } from "@gent/core/test-utils"
-import * as Prompt from "effect/unstable/ai/Prompt"
+import * as Prompt from "effect/ai/Prompt"
 import {
   renderMessageParts,
   renderSessionTree,

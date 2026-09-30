@@ -1,0 +1,10 @@
+diff --git a/presets/recommended.json b/presets/recommended.json
+index 5a98fce76f4b35bbd1385d6cb5a78cfe0c5d09cb..001355b454cc525783fff0a5df1cacafb6bcdad3 100644
+--- a/presets/recommended.json
++++ b/presets/recommended.json
+@@ -1,4 +1,5 @@
+ {
++  "plugins": [],
+   "jsPlugins": ["oxlint-plugin-effect/plugin"],
+   "rules": {
+     "complexity": ["error", { "max": 21 }],

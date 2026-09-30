@@ -762,7 +762,7 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
   }
   installHostNamespace("tools", toolsNamespace)
   installHostNamespace("context", context)
-  if (!Predicate.isFunction(Reflect.get(globalThis, "require"))) {
+  if (!(Predicate.hasProperty(globalThis, "require") && Predicate.isFunction(globalThis.require))) {
     Object.defineProperty(globalThis, "require", {
       value: createRequire(`${environment.workingDirectory}/`),
       writable: true,
@@ -841,9 +841,11 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
   let reported = new Map<string, unknown>()
   const reportBindings = () => {
     const current = namespace()
-    const named = [...current.entries()]
+    const named = current
+      .entries()
       .filter(([name, value]) => !reported.has(name) || !Object.is(reported.get(name), value))
       .map(([name]) => name)
+      .toArray()
       .sort()
       .slice(0, maximumCellBindings)
     reported = current

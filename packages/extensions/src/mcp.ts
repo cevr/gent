@@ -11,7 +11,6 @@ import {
   Fiber,
   FileSystem,
   Crypto,
-  Encoding,
   Equal,
   FiberSet,
   JsonSchema,
@@ -26,12 +25,8 @@ import {
   Scope,
   Semaphore,
 } from "effect"
-import {
-  FetchHttpClient,
-  HttpServer,
-  HttpServerRequest,
-  HttpServerResponse,
-} from "effect/unstable/http"
+import { Base64, Base64Url, Hex } from "effect/encoding"
+import { FetchHttpClient, HttpServer, HttpServerRequest, HttpServerResponse } from "effect/http"
 import { BunHttpServer } from "@effect/platform-bun"
 import { auth, type OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
@@ -166,7 +161,7 @@ const serverKey = Effect.fn("Mcp.serverKey")(function* (
     "SHA-256",
     new TextEncoder().encode(serverIdentity(written, config, cwd)),
   )
-  return Encoding.encodeHex(digest)
+  return Hex.encode(digest)
 })
 
 /** Default bound on connecting to a server and on each call. */
@@ -226,7 +221,7 @@ const VARIABLE = /\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}/g
 const expandVariables = Effect.fn("Mcp.expandVariables")(function* (text: string) {
   const values = new Map<string, string>()
   for (const [match, name = "", fallback] of text.matchAll(VARIABLE)) {
-    const value = yield* Config.option(Config.string(name)).pipe(
+    const value = yield* Config.option(Config.String(name)).pipe(
       Effect.orElseSucceed(() => Option.none<string>()),
     )
     const resolved = Option.orElse(value, () => Option.fromUndefinedOr(fallback))
@@ -535,12 +530,12 @@ const makeBlobStore = (directory: string) =>
     const saveOne = (data: string, mimeType: Option.Option<string>) =>
       Effect.gen(function* () {
         if (base64Bytes(data) > BLOB_FILE_LIMIT) return Option.none<string>()
-        const bytes = Encoding.decodeBase64(data)
+        const bytes = Base64.decode(data)
         if (Result.isFailure(bytes) || bytes.success.length > BLOB_FILE_LIMIT) {
           return Option.none<string>()
         }
         yield* prune
-        const digest = Encoding.encodeHex(yield* crypto.digest("SHA-256", bytes.success))
+        const digest = Hex.encode(yield* crypto.digest("SHA-256", bytes.success))
         const file = path.join(directory, `${digest}.${blobExtension(mimeType)}`)
         if (!(yield* fs.exists(file))) {
           yield* fs.makeDirectory(directory, { recursive: true })
@@ -963,7 +958,7 @@ const startLogin = (
 ) =>
   Effect.gen(function* () {
     const crypto = yield* Crypto.Crypto
-    const state = Encoding.encodeBase64Url(yield* crypto.randomBytes(24))
+    const state = Base64Url.encode(yield* crypto.randomBytes(24))
     const code = yield* Deferred.make<string, McpError>()
     const port = yield* serveRedirect(server, state, code).pipe(Scope.provide(scope))
     const redirectUri = `http://127.0.0.1:${port}/callback`
@@ -1052,7 +1047,7 @@ const serveRedirect = (
       ),
     )
     const address = Context.get(context, HttpServer.HttpServer).address
-    if (address._tag !== "TcpAddress") {
+    if (address._tag === "UnixPathAddress") {
       return yield* new McpError({ server: server.name, message: "login: no loopback port" })
     }
     return address.port

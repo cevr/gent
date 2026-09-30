@@ -1,6 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Layer } from "effect"
-import { SqlClient } from "effect/unstable/sql"
+import { SqlClient } from "effect/sql"
 import {
   BranchStorage,
   MessageStorage,
@@ -13,7 +13,7 @@ import { Database } from "bun:sqlite"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { Branch, dateFromMillis, Message, Session } from "../../src/domain/message"
 import { AgentName } from "../../src/domain/agent"
-import * as Prompt from "effect/unstable/ai/Prompt"
+import * as Prompt from "effect/ai/Prompt"
 import { BranchId, MessageId, SessionId } from "../../src/domain/ids"
 import { CurrentWorkspaceId } from "../../src/server/workspace-rpc"
 import { makeTempDirectoryScoped } from "../../src/test-utils/language-model"

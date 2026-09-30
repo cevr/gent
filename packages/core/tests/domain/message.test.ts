@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import * as Prompt from "effect/unstable/ai/Prompt"
+import * as Prompt from "effect/ai/Prompt"
 import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "../../src/domain/ids"
 import {
   clipSummary,
@@ -25,7 +25,7 @@ import {
 } from "../../src/domain/message"
 import { AgentEvent, EventEnvelope, EventId } from "../../src/domain/event"
 import { Option, Predicate, Schema } from "effect"
-import * as Response from "effect/unstable/ai/Response"
+import * as Response from "effect/ai/Response"
 
 describe("steer command", () => {
   test("a stored Interrupt row still decodes", () => {

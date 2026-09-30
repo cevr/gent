@@ -9,7 +9,10 @@
     "perf": "error"
   },
   "plugins": ["typescript", "import", "node"],
-  "jsPlugins": ["./packages/tooling/src/gent-rules.ts", "oxlint-plugin-effect/plugin"],
+  // The Effect preset loads its own plugin and enables every recommended rule;
+  // a rule below overrides it only where gent deliberately differs.
+  "extends": ["./node_modules/oxlint-plugin-effect/presets/recommended.json"],
+  "jsPlugins": ["./packages/tooling/src/gent-rules.ts"],
   "rules": {
     // Custom — no positional error args in Effect.log*
     "gent/no-positional-log-error": "error",
@@ -41,48 +44,6 @@
     // Custom — a child-session writer admits the depth in its own function
     "gent/child-session-writer-admits": "error",
 
-    // Effect — complete recommended preset
-    "effect/maxCognitiveComplexity": ["error", { "max": 21 }],
-    "effect/maxHalsteadDifficulty": ["error", { "max": 79 }],
-    "effect/noAs": "error",
-    "effect/noAsyncFunction": "error",
-    "effect/noChainedTypeAssertions": "error",
-    "effect/noConditionalEmptyObjectSpread": "error",
-    "effect/noEffectBind": "error",
-    "effect/noEffectDo": "error",
-    "effect/noGlobals": "error",
-    "effect/noInlineProvide": "error",
-    "effect/noKnownValueWidening": "error",
-    "effect/noManagedRuntimeInEffect": "error",
-    "effect/noModuleMocks": "error",
-    "effect/noNestedEffectGen": "error",
-    "effect/noNewError": "error",
-    "effect/noNewPromise": "error",
-    "effect/noNodeBuiltinImport": "error",
-    "effect/noNullish": "error",
-    "effect/noObjectParameters": "error",
-    "effect/noPerCallCacheConstruction": "error",
-    "effect/noRunCollectOnUnboundedStream": "error",
-    "effect/noRuntimeTypeof": "error",
-    "effect/noSequentialEffectAll": "error",
-    "effect/noShapeInSymbolNames": "error",
-    "effect/noSilentCatchAll": "error",
-    "effect/noTernary": "error",
-    "effect/noTestLifecycleHooks": "error",
-    "effect/noThrowStatement": "error",
-    "effect/noTryCatch": "error",
-    "effect/noUnboundedConcurrency": "error",
-    "effect/noUnboundedRetry": "error",
-    "effect/noUnknownParameters": "error",
-    "effect/noUnknownTypeAliases": "error",
-    "effect/noUnsafeDictionaryType": "error",
-    "effect/noWidenThenAssert": "error",
-    "effect/preferCatchTag": "error",
-    "effect/preferEffectFn": "error",
-    "effect/preferMatchTagsExhaustive": "error",
-    "effect/preferPredicateIsTagged": "error",
-    "effect/preferServiceOf": "error",
-    "effect/requireNamedEffectFn": "error",
     // TypeScript - no any
     "typescript/no-explicit-any": "error",
     // TypeScript - flag unsafe type assertions (as X)
@@ -111,6 +72,7 @@
 
     // Readability
     "no-nested-ternary": "error",
+    // Stricter than the Effect preset (21): gent held this limit before adopting it.
     "complexity": ["error", 20],
 
     // Disabled — false positives with TS enums, type imports, etc.
@@ -138,16 +100,19 @@
       }
     },
     {
-      // The lint plugin runs inside oxlint's Node host, not in an Effect runtime.
+      // The lint plugin runs inside oxlint's Node host, not in an Effect
+      // runtime, and reads fields of oxlint's untyped AST nodes by name.
       "files": ["packages/tooling/src/gent-rules.ts"],
       "rules": {
         "effect/noNodeBuiltinImport": "off",
         "effect/noGlobals": "off",
         "effect/noKnownValueWidening": "off",
         "effect/noNullish": "off",
+        "effect/noReflectGet": "off",
         "effect/noRuntimeTypeof": "off",
         "effect/noTernary": "off",
         "effect/noUnknownParameters": "off",
+        "effect/noUnknownReturns": "off",
         "effect/noUnsafeDictionaryType": "off"
       }
     },
@@ -237,16 +202,53 @@
         "effect/noGlobals": "off",
         "effect/noNullish": "off",
         "effect/noObjectParameters": "off",
-        "effect/noUnknownParameters": "off"
+        "effect/noReflectApply": "off",
+        "effect/noReflectGet": "off",
+        "effect/noUnknownParameters": "off",
+        "effect/noUnknownReturns": "off"
+      }
+    },
+    {
+      // The cell worker evaluates model code in its realm. Its tool namespace
+      // is a Proxy whose `get` trap forwards other keys to the target with the
+      // receiver, and an evaluated cell yields a value the cell value reader
+      // parses afterwards.
+      "files": ["packages/extensions/src/cell-worker-boundary.ts"],
+      "rules": {
+        "effect/noReflectGet": "off",
+        "effect/noUnknownReturns": "off"
+      }
+    },
+    {
+      // The scripted model numbers the ids of the stream parts and tool calls
+      // it builds, so each id is unique in the process; only uniqueness counts.
+      "files": [
+        "packages/core/src/runtime/provider.ts",
+        "packages/core/src/test-utils/language-model.ts"
+      ],
+      "rules": {
+        "effect/noModuleLevelMutableState": "off"
+      }
+    },
+    {
+      // The render harness holds the renderer that the bun:test `afterEach`
+      // tears down, and the platform services every render in the test
+      // process shares. A mocked client method returns whatever its test gives.
+      "files": ["apps/tui/tests/render-harness-boundary.tsx"],
+      "rules": {
+        "effect/noModuleLevelMutableState": "off",
+        "effect/noUnknownReturns": "off"
       }
     },
     {
       // The shared test preload runs in bun's test host before any Effect
-      // runtime: it sets the process's data directory synchronously, and
-      // removes it after the process's last test.
+      // runtime: it sets the process's data directory synchronously, points
+      // the `os` module's home at it for every test file, and removes it
+      // after the process's last test.
       "files": ["packages/tooling/src/test-preload.ts"],
       "rules": {
         "effect/noGlobals": "off",
+        "effect/noModuleMocks": "off",
         "effect/noNodeBuiltinImport": "off",
         "effect/noTestLifecycleHooks": "off"
       }

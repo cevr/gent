@@ -36,7 +36,7 @@ import {
   type SessionId,
 } from "../domain/ids.js"
 import type { AgentName } from "../domain/agent.js"
-import * as Prompt from "effect/unstable/ai/Prompt"
+import * as Prompt from "effect/ai/Prompt"
 import {
   emptyLoopQueueState,
   FollowUpQueueEntryInfo,
@@ -120,9 +120,9 @@ import {
   type TurnInterruption,
 } from "./tools.js"
 import { withWideEvent } from "effect-wide-event"
-import { Entity, Sharding, ShardingConfig } from "effect/unstable/cluster"
-import type { SqlClient } from "effect/unstable/sql"
-import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
+import { Entity, Sharding, ShardingConfig } from "effect/cluster"
+import type { SqlClient } from "effect/sql"
+import type { ChildProcessSpawner } from "effect/process/ChildProcessSpawner"
 import {
   ApprovalService,
   buildScopeResources,
@@ -1648,6 +1648,7 @@ const makeAgentLoopResidency = Effect.gen(function* () {
 const makeAgentLoopBehavior = (
   sessionId: SessionId,
   branchId: BranchId,
+  loopScope: Scope.Closeable,
   sideMutationSemaphore: Semaphore.Semaphore,
   baseSections: ReadonlyArray<PromptSection>,
   initialQueue: LoopQueueState = emptyLoopQueueState(),
@@ -1766,7 +1767,6 @@ const makeAgentLoopBehavior = (
         }).pipe(Effect.provideService(ExtensionRegistry, extensionRegistry)),
       )
 
-    const loopScope = yield* Effect.scope
     const turnInterruption = yield* makeTurnInterruption
     // Branch-owned turn services: the cell kernel, the model context ledger, and
     // every extension Resource declared with `scope: "branch"`. All three share
@@ -2721,6 +2721,7 @@ const buildAgentLoopActorHandlers = (config: {
           makeAgentLoopBehavior(
             sessionId,
             branchId,
+            loopScope,
             sideMutationSemaphore,
             config.baseSections,
             initialQueue,

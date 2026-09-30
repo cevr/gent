@@ -191,7 +191,7 @@ describe("cell value display", () => {
 
   test("a getter and a trap never run", () => {
     for (const [value, expected] of hazards) expect(shown(value)).toBe(expected)
-    expect(Reflect.get(globalThis, "displayRan")).toBeUndefined()
+    expect(globalThis).not.toHaveProperty("displayRan")
   })
 })
 

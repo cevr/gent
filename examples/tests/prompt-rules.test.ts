@@ -1,6 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Fiber, Stream } from "effect"
-import * as Prompt from "effect/unstable/ai/Prompt"
+import * as Prompt from "effect/ai/Prompt"
 import {
   createRpcHarness,
   LanguageModelLayers,
@@ -17,9 +17,11 @@ import PromptRulesExtension from "../extensions/prompt-rules.js"
 
 /** The system text a model call received. */
 const systemText = (prompt: Prompt.RawInput): string =>
-  [...Prompt.make(prompt).content]
+  Prompt.make(prompt)
+    .content.values()
     .filter((message): message is Prompt.SystemMessage => message.role === "system")
     .map((message) => message.content)
+    .toArray()
     .join("\n")
 
 describe("prompt rules example extension", () => {

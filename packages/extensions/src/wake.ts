@@ -17,7 +17,7 @@ import {
   Predicate,
   Schema,
 } from "effect"
-import type { ChildProcessSpawner } from "effect/unstable/process"
+import type { ChildProcessSpawner } from "effect/process"
 import {
   defineExtension,
   defineRequests,
@@ -589,7 +589,14 @@ const cancelWakes = Effect.fn("WakeTool.cancel")(function* (keep: (entry: WakeEn
     Effect.succeed({
       next: current.filter(keep),
       // A repeating notify alarm and its unread notices share one id.
-      result: [...new Set(current.filter((entry) => !keep(entry)).map((entry) => entry.wakeId))],
+      result: [
+        ...new Set(
+          current
+            .values()
+            .filter((entry) => !keep(entry))
+            .map((entry) => entry.wakeId),
+        ),
+      ],
     }),
   )
   // A stored entry may have no timer yet (before the loop's open re-arms it); an

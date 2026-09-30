@@ -119,7 +119,7 @@ import {
   ProviderAuthInfo,
   type ProviderResolution,
 } from "../../src/domain/driver"
-import { Model as AiModel, LanguageModel } from "effect/unstable/ai"
+import { Model as AiModel, LanguageModel } from "effect/ai"
 import { ModelRegistry } from "../../src/runtime/provider"
 import { LanguageModelLayers, textStep, waitFor } from "../../src/test-utils/language-model"
 import {
@@ -131,7 +131,7 @@ import {
   ProviderId,
 } from "../../src/domain/agent"
 import { failingLanguageModel } from "../helpers/failing-language-model"
-import * as AiTool from "effect/unstable/ai/Tool"
+import * as AiTool from "effect/ai/Tool"
 import {
   bindRequestCapabilityExtension,
   CapabilityError,
@@ -158,7 +158,7 @@ import {
   type ExtensionHookHandler,
 } from "../../src/domain/extension"
 import { compileToolPolicy, noBranchTools, ToolRunner } from "../../src/runtime/tools"
-import { SingleRunner } from "effect/unstable/cluster"
+import { SingleRunner } from "effect/cluster"
 import { AgentEvent, EventStore } from "../../src/domain/event"
 import { SessionMutationsLive } from "../../src/server/server"
 import { AgentLoopLiveActor, AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
@@ -3210,12 +3210,18 @@ describe("extension entries", () => {
           })),
         ).toEqual([{ id: "@user/entries", tools: ["entries_probe"] }])
 
-        const bound: object = (yield* importFile(extensionFile)).bound
+        const { bound } = yield* Schema.decodeUnknownEffect(
+          Schema.Struct({
+            bound: Schema.Record(Schema.String, Schema.Record(Schema.String, Schema.Unknown)),
+          }),
+        )(yield* importFile(extensionFile))
         for (const [specifier, entryModule] of Object.entries(boundEntries)) {
-          const imported: object = Reflect.get(bound, specifier)
-          expect(Object.keys(imported).sort()).toEqual(Object.keys(entryModule).sort())
+          const imported = Option.fromNullishOr(bound[specifier])
+          expect(Option.map(imported, (names) => Object.keys(names).sort())).toEqual(
+            Option.some(Object.keys(entryModule).sort()),
+          )
           for (const [name, value] of Object.entries(entryModule)) {
-            const same = Reflect.get(imported, name) === value
+            const same = Option.exists(imported, (names) => names[name] === value)
             expect({ specifier, name, same }).toEqual({
               specifier,
               name,
@@ -4887,8 +4893,10 @@ const makeMutationsLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageMod
 }
 const eventTags = (calls: ReadonlyArray<CallRecord>) =>
   calls
+    .values()
     .filter((call) => call.service === "EventStore" && call.method === "append")
     .map((call) => Schema.decodeUnknownSync(AgentEvent)(call.args)._tag)
+    .toArray()
 describe("session agent", () => {
   it.scopedLive("every turn of a session runs as the agent it was created with", () =>
     Effect.gen(function* () {

@@ -42,6 +42,7 @@ import {
   UserRow,
 } from "@gent/tui/extensions"
 import { BunSocket } from "@effect/platform-bun"
+import { Socket } from "effect/socket"
 import { createEffect, createRoot, Show } from "solid-js"
 import { AgentName } from "@gent/core/protocol"
 import { ref } from "@gent/core/extensions/api"
@@ -467,12 +468,11 @@ export const builtinFiles = defineClientExtension("@gent/files-ui", {
 
 const SOURCE = "herdr:gent"
 const AGENT = "gent"
-let herdrReportSequence = 0
 
 const herdrEnvironment = Config.all({
-  enabled: Config.string("HERDR_ENV").pipe(Config.withDefault("")),
-  socketPath: Config.string("HERDR_SOCKET_PATH").pipe(Config.withDefault("")),
-  paneId: Config.string("HERDR_PANE_ID").pipe(Config.withDefault("")),
+  enabled: Config.String("HERDR_ENV").pipe(Config.withDefault("")),
+  socketPath: Config.String("HERDR_SOCKET_PATH").pipe(Config.withDefault("")),
+  paneId: Config.String("HERDR_PANE_ID").pipe(Config.withDefault("")),
 }).pipe(
   Config.map((env) => {
     if (env.enabled !== "1" || env.socketPath.length === 0 || env.paneId.length === 0)
@@ -510,52 +510,44 @@ const Reply = Schema.Struct({
   error: Schema.optional(Schema.Unknown),
 })
 
+/** Pulls until the reply's first line; a close before it or an oversized reply fails. */
+const readReplyLine: (
+  pull: Effect.Effect<ReadonlyArray<string>, Socket.SocketError>,
+  buffer: string,
+) => Effect.Effect<string, HerdrReportError> = Effect.fn("Herdr.readReplyLine")(
+  function* (pull, buffer) {
+    const chunks = yield* pull.pipe(
+      Effect.mapError(() => new HerdrReportError({ message: "Herdr closed before replying" })),
+    )
+    const next = buffer + chunks.join("")
+    if (next.length > 65_536)
+      return yield* new HerdrReportError({ message: "Herdr reply exceeded the limit" })
+    const end = next.indexOf("\n")
+    if (end < 0) return yield* readReplyLine(pull, next)
+    return next.slice(0, end)
+  },
+)
+
 const sendRequest = Effect.fn("Herdr.sendRequest")(
   function* (target: HerdrTarget, request: typeof Request.Type) {
     const socket = yield* BunSocket.makeNet({ path: target.socketPath })
-    const write = yield* socket.writer
-    const reply = yield* Deferred.make<void, HerdrReportError>()
-    let buffer = ""
-    const read = socket
-      .runString(
-        (chunk) => {
-          buffer += chunk
-          if (buffer.length > 65_536)
-            return Deferred.fail(
-              reply,
-              new HerdrReportError({ message: "Herdr reply exceeded the limit" }),
-            )
-          const end = buffer.indexOf("\n")
-          if (end < 0) return Effect.void
-          const decoded = Schema.decodeOption(Schema.fromJsonString(Reply))(buffer.slice(0, end))
-          if (
-            Option.isNone(decoded) ||
-            decoded.value.id !== request.id ||
-            Option.isSome(Option.fromUndefinedOr(decoded.value.error)) ||
-            Option.isNone(Option.fromUndefinedOr(decoded.value.result))
-          ) {
-            return Deferred.fail(
-              reply,
-              new HerdrReportError({ message: "Herdr rejected the report" }),
-            )
-          }
-          return Deferred.done(reply, Exit.void)
-        },
-        {
-          onOpen: write(`${encodeRequest(request)}\n`).pipe(
-            Effect.catchEager(() =>
-              Deferred.fail(reply, new HerdrReportError({ message: "Herdr write failed" })),
-            ),
-            Effect.asVoid,
-          ),
-        },
-      )
-      .pipe(
-        Effect.andThen(
-          Effect.fail(new HerdrReportError({ message: "Herdr closed before replying" })),
-        ),
-      )
-    yield* Effect.raceFirst(read, Deferred.await(reply))
+    const writer = yield* socket.writer
+    const pull = yield* Socket.readerString(socket).pipe(
+      Effect.mapError(() => new HerdrReportError({ message: "Herdr closed before replying" })),
+    )
+    yield* writer
+      .write(`${encodeRequest(request)}\n`)
+      .pipe(Effect.mapError(() => new HerdrReportError({ message: "Herdr write failed" })))
+    const line = yield* readReplyLine(pull, "")
+    const decoded = Schema.decodeOption(Schema.fromJsonString(Reply))(line)
+    if (
+      Option.isNone(decoded) ||
+      decoded.value.id !== request.id ||
+      Option.isSome(Option.fromUndefinedOr(decoded.value.error)) ||
+      Option.isNone(Option.fromUndefinedOr(decoded.value.result))
+    ) {
+      return yield* new HerdrReportError({ message: "Herdr rejected the report" })
+    }
   },
   Effect.scoped,
   Effect.timeout("500 millis"),
@@ -565,14 +557,17 @@ export const makeHerdrReporter = Effect.fn("Herdr.makeReporter")(function* (targ
   const reports = yield* Queue.sliding<ClientActivitySnapshot>(1)
   let closed = false
   let previous = ""
+  // A report's sequence rises past every earlier one and tracks the clock in
+  // microseconds, so a reporter that replaces this one still counts upward.
+  let sequence = 0
 
   const send = Effect.fn("Herdr.report")(function* (
     method: string,
     snapshot?: ClientActivitySnapshot,
   ) {
     const now = yield* Clock.currentTimeMillis
-    herdrReportSequence = Math.max(herdrReportSequence + 1, now * 1000)
-    const seq = herdrReportSequence
+    sequence = Math.max(sequence + 1, now * 1000)
+    const seq = sequence
     const params = {
       pane_id: target.paneId,
       source: SOURCE,

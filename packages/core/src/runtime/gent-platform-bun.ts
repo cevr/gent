@@ -14,7 +14,6 @@
  */
 
 import * as os from "node:os"
-import { createHash } from "node:crypto"
 import { Effect, Layer, Option, Schema } from "effect"
 import { causeMessage } from "../domain/guards.js"
 import { BunServices } from "@effect/platform-bun"
@@ -95,7 +94,7 @@ export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.succeed(
         },
       }),
 
-    hash: (algorithm, input) => createHash(algorithm).update(input).digest("hex"),
+    hash: (algorithm, input) => new Bun.CryptoHasher(algorithm).update(input).digest("hex"),
   }),
 )
 

@@ -1419,12 +1419,14 @@ export const findUnenabledPluginRules = (
   rootRules: ReadonlySet<string>,
 ): ReadonlyArray<Finding> =>
   ruleNames
+    .values()
     .filter((rule) => !rootRules.has(`gent/${rule}`))
     .map((rule) => ({
       file: pluginFile,
       line: lineOfRule(pluginText, rule),
       message: `lint rule \`gent/${rule}\` is defined but the root config never enables it; enable it, or delete the rule and its fixtures`,
     }))
+    .toArray()
 
 // ---------------------------------------------------------------------------
 // (c) A GENT_* variable with a reader but nothing to set it
@@ -1441,8 +1443,8 @@ const EXTERNALLY_SET: ReadonlyMap<string, string> = new Map([
 ])
 
 /**
- * A quoted name is a read wherever it sits -- `Config.string("GENT_X")`, the
- * last argument of `Config.literals([...], "GENT_X")` on its own line,
+ * A quoted name is a read wherever it sits -- `Config.String("GENT_X")`, the
+ * last argument of `Config.Literals([...], "GENT_X")` on its own line,
  * `optionalEnv("GENT_X")`, `process.env["GENT_X"]` or either branch of a
  * ternary -- unless it is a record key or the target of an assignment.
  */
@@ -1764,7 +1766,11 @@ interface PlatformBunBindings {
 
 /** `A|B` of the escaped names, or nothing when there are none. */
 const alternation = (names: ReadonlyArray<string>): ReadonlyArray<string> =>
-  [names].filter((list) => list.length > 0).map((list) => list.map(escapeRegExp).join("|"))
+  [names]
+    .values()
+    .filter((list) => list.length > 0)
+    .map((list) => list.map(escapeRegExp).join("|"))
+    .toArray()
 
 /** A member access, plain or optional: `BunCrypto.layer` and `BunCrypto?.layer` read the same member. */
 const MEMBER = String.raw`\s*\??\.\s*`
@@ -1922,7 +1928,10 @@ export const findPlatformDuplicationViolations = (
 ): ReadonlyArray<Finding> => {
   if (!isShippedSource(file) || platformProviderRoots.has(file)) return []
   const allowed = new Set(
-    platformLayerAllowances.filter((entry) => entry.file === file).map((entry) => entry.layer),
+    platformLayerAllowances
+      .values()
+      .filter((entry) => entry.file === file)
+      .map((entry) => entry.layer),
   )
   const code = withoutComments(text)
   const bindings = platformBunBindings(code)
@@ -1931,16 +1940,18 @@ export const findPlatformDuplicationViolations = (
     spans.some((span) => index >= span.start && index < span.end)
   const provisions = [
     ...code.matchAll(GENT_PLATFORM_LAYER),
-    ...Array.from(code.matchAll(platformBunLayerPattern(bindings))).filter(
-      (match) => !inBindingSpan(match.index),
-    ),
+    ...code
+      .matchAll(platformBunLayerPattern(bindings))
+      .filter((match) => !inBindingSpan(match.index)),
   ]
+    .values()
     .map((match) => ({ index: match.index, name: collapsedText(match[0]) }))
     .filter((provision) => !allowed.has(provision.name))
     .map((provision) => ({
       index: provision.index,
       message: `\`${provision.name}\` provides a Bun platform layer outside the platform roots; yield the service the root provides, or record why no root can provide it in platformLayerAllowances`,
     }))
+    .toArray()
   const reExports = platformBunReExports(code, bindings).map((match) => ({
     index: match.index,
     message: `\`${collapsedText(match[0].replace(/\s+/g, " "))}\` re-exports @effect/platform-bun outside the platform roots, which hands its layers to any importer; import from the package where it is used, or yield the service the root provides`,
@@ -2465,7 +2476,9 @@ const danglingLinkTargets = (
   tracked: ReadonlySet<string>,
   prefixes: ReadonlySet<string>,
 ): ReadonlyArray<string> =>
-  [...line.replace(BACKTICKED, "").matchAll(MARKDOWN_LINK)]
+  line
+    .replace(BACKTICKED, "")
+    .matchAll(MARKDOWN_LINK)
     .map((match) => Option.getOrElse(Option.fromNullishOr(match[1]), () => ""))
     .filter((target) => !NOT_REPO_TARGET.test(target))
     .filter((target) =>
@@ -2474,6 +2487,7 @@ const danglingLinkTargets = (
         onSome: (resolved) => !existsInTree(resolved, tracked, prefixes),
       }),
     )
+    .toArray()
 
 export const findSteeringFilePaths = (
   file: string,
@@ -2557,6 +2571,7 @@ export const findUnshippedSkillFiles = (
   for (const match of code.matchAll(BUNDLED_ROW)) rows.set(match[2] ?? "", match[1] ?? "")
   const importedPaths = new Set([...imported.values()].map((entry) => entry.path))
   const findings: Array<Finding> = trackedFiles
+    .values()
     .filter((file) => file.startsWith(BUNDLED_SKILLS_DIRECTORY) && file.endsWith(".md"))
     .filter((file) => !importedPaths.has(file.slice(BUNDLED_SKILLS_DIRECTORY.length)))
     .map((file) => ({
@@ -2564,6 +2579,7 @@ export const findUnshippedSkillFiles = (
       line: 1,
       message: `a bundled skill file that \`${BUNDLED_SKILLS_MODULE}\` does not import never ships; import it as text and list it in \`bundledSkillFiles\`, or delete it`,
     }))
+    .toArray()
   for (const [name, entry] of imported) {
     const listed = Option.fromNullishOr(rows.get(name))
     if (Option.isSome(listed) && listed.value === entry.path) continue
@@ -2610,10 +2626,16 @@ export const findUnhashedSteeringFiles = (
     if (input.startsWith("../")) return globMatcher(input.slice(3))
     return globMatcher(packageDirectory + input)
   }
-  const included = inputs.filter((input) => !input.startsWith("!")).map(repoGlob)
+  const included = inputs
+    .values()
+    .filter((input) => !input.startsWith("!"))
+    .map((input) => repoGlob(input))
+    .toArray()
   const excluded = inputs
+    .values()
     .filter((input) => input.startsWith("!"))
     .map((input) => repoGlob(input.slice(1)))
+    .toArray()
   const hashed = (path: string): boolean =>
     included.some((glob) => glob.test(path)) && !excluded.some((glob) => glob.test(path))
   const message = (path: string): string => {
@@ -2623,8 +2645,10 @@ export const findUnhashedSteeringFiles = (
     return `the typecheck inputs read \`${path}\`, which is not steering prose, so a change to it reruns the guide check for nothing; make the inputs match \`isSteeringFile\``
   }
   return trackedFiles
+    .values()
     .filter((path) => path.endsWith(".md") && hashed(path) !== isSteeringFile(path))
     .map((path) => ({ file, line: 1, message: message(path) }))
+    .toArray()
 }
 
 // ── the steering prose's code compiles ──────────────────────────────────────
@@ -2876,105 +2900,104 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
   {
     file: "apps/tui/src/client.tsx",
     scope: "next-line",
-    text: "nodeBuiltinImport:off",
+    text: "nodeBuiltinImport:off -- synchronous shutdown logging runs after the Effect runtime closes.",
   },
   {
     file: "apps/tui/tests/extensions/loader-boundary.test.ts",
     scope: "next-line",
-    text: "nodeBuiltinImport:off",
-    count: 2,
+    text: "nodeBuiltinImport:off -- synchronous filesystem fixture setup is a test boundary.",
+  },
+  {
+    file: "apps/tui/tests/extensions/loader-boundary.test.ts",
+    scope: "next-line",
+    text: "nodeBuiltinImport:off -- synchronous path fixture setup is a test boundary.",
   },
   {
     file: "packages/core/src/server/workspace-rpc.ts",
     scope: "file",
-    text: "nodeBuiltinImport:off — the workspace id is a wire constant, see workspaceIdForCwd",
+    text: "nodeBuiltinImport:off -- the workspace id is a wire constant, see workspaceIdForCwd",
   },
   {
     file: "packages/core/src/server/workspace-rpc.ts",
     scope: "file",
-    text: "nodeBuiltinImport:off — the workspace id canonicalizes its cwd before hashing",
+    text: "nodeBuiltinImport:off -- the workspace id canonicalizes its cwd before hashing",
   },
   {
     file: "packages/sdk/src/server.ts",
     scope: "file",
-    text: "nodeBuiltinImport:off — server primitive owns filesystem path resolution for gent's data directory",
+    text: "nodeBuiltinImport:off -- server primitive owns filesystem path resolution for gent's data directory",
   },
   {
     file: "packages/sdk/src/server.ts",
     scope: "next-line",
-    text: "strictEffectProvide:off",
+    text: "strictEffectProvide:off -- the public entry point provides the local platform it resolves on.",
   },
   {
     file: "packages/sdk/src/server.ts",
     scope: "next-line",
-    text: "strictEffectProvide:off self-contained probe, no scope lifetime",
-  },
-  {
-    file: "packages/sdk/tests/server.test.ts",
-    scope: "file",
-    text: "nodeBuiltinImport:off",
+    text: "strictEffectProvide:off -- self-contained probe, no scope lifetime",
   },
   {
     file: "packages/core/src/domain/extension.ts",
     scope: "next-line",
-    text: "anyUnknownInErrorContext:off",
+    text: "anyUnknownInErrorContext:off -- extension setup is untyped until this membrane maps its failures to ExtensionLoadError.",
   },
   {
     file: "packages/core/src/test-utils/language-model.ts",
     scope: "file",
-    text: "nodeBuiltinImport:off — test fixture lifecycle comes from bun:test",
+    text: "nodeBuiltinImport:off -- test fixture lifecycle comes from bun:test",
   },
   {
     file: "packages/tooling/src/test-preload.ts",
     scope: "file",
-    text: "nodeBuiltinImport:off — the test preload runs in bun's test host before any Effect runtime",
+    text: "nodeBuiltinImport:off -- the test preload runs in bun's test host before any Effect runtime",
   },
   {
     file: "packages/core/src/test-utils/language-model.ts",
     scope: "next-line",
-    text: "strictEffectProvide:off test entry point",
+    text: "strictEffectProvide:off -- test entry point: the probe owns its fake fetch layer.",
   },
   {
     file: "packages/core/src/runtime/tools.ts",
     scope: "next-line",
-    text: "anyUnknownInErrorContext:off",
+    text: "anyUnknownInErrorContext:off -- an extension tool fails with unknown until normalizeToolExecutionError maps it.",
   },
   {
     file: "packages/core/src/domain/capability.ts",
     scope: "next-line",
-    text: "anyUnknownInErrorContext:off — the erased handler crosses the runtime membrane; the public overloads keep authors typed.",
+    text: "anyUnknownInErrorContext:off -- the erased handler crosses the runtime membrane; the public overloads keep authors typed.",
   },
   {
     file: "packages/core/src/runtime/extension-host.ts",
     scope: "next-line",
-    text: "anyUnknownInErrorContext:off",
+    text: "anyUnknownInErrorContext:off -- the extension membrane erases the author effect channels and seals them here.",
     count: 8,
   },
   {
     file: "packages/core/src/runtime/extension-host.ts",
     scope: "next-line",
-    text: "anyUnknownInErrorContext:off — heterogeneous Resource layer enters the explicit eraseResourceLayer membrane.",
+    text: "anyUnknownInErrorContext:off -- heterogeneous Resource layer enters the explicit eraseResourceLayer membrane.",
   },
   {
     file: "packages/extensions/src/openai.ts",
     scope: "next-line",
-    text: "strictEffectProvide:off OAuth token endpoint at extension boundary",
+    text: "strictEffectProvide:off -- OAuth token endpoint at extension boundary",
     count: 2,
   },
   {
     file: "packages/extensions/src/openai.ts",
     scope: "next-line",
-    text: "strictEffectProvide:off device endpoints at extension boundary",
+    text: "strictEffectProvide:off -- device endpoints at extension boundary",
   },
   {
     file: "packages/extensions/src/anthropic.ts",
     scope: "next-line",
-    text: "strictEffectProvide:off",
+    text: "strictEffectProvide:off -- the credential read owns its HTTP client at the extension boundary; it outlives no scope.",
   },
   {
     file: "packages/extensions/src/providers.ts",
     scope: "next-line",
-    text: "strictEffectProvide:off The catalog owns its own HTTP client at the driver boundary; it outlives no scope.",
+    text: "strictEffectProvide:off -- The catalog owns its own HTTP client at the driver boundary; it outlives no scope.",
   },
 ]
 
@@ -3052,7 +3075,8 @@ export const findUnusedSuppressionApprovals = (
     const nth = (listed.get(key) ?? 0) + 1
     listed.set(key, nth)
     const at = (): number => {
-      const lines = [...entryLines.entries()]
+      const lines = entryLines
+        .entries()
         .filter(
           ([index, text]) =>
             text.includes(`file: "${entry.file}"`) &&
@@ -3061,6 +3085,7 @@ export const findUnusedSuppressionApprovals = (
               .some((next) => next.includes(`text: "${entry.text}"`)),
         )
         .map(([index]) => index + 1)
+        .toArray()
       return Option.getOrElse(Option.fromNullishOr(lines.at(nth - 1)), () => 1)
     }
     if (nth > 1) {
@@ -4238,13 +4263,15 @@ export const findPackageSurfaceFindings = (
   tsconfigs: ReadonlyMap<string, TsConfigJson>,
 ): ReadonlyArray<Finding> => {
   const rows = new Set(PACKAGE_SURFACES.map((surface) => surface.packageJson))
-  const unlisted = [...packageJsons.keys()]
+  const unlisted = packageJsons
+    .keys()
     .filter((file) => !rows.has(file))
     .map((file) => ({
       file,
       line: 1,
       message: `a workspace package with no package-surface row in guards.ts; add one naming its entry points (none for a leaf)`,
     }))
+    .toArray()
   const checked = PACKAGE_SURFACES.flatMap((surface) =>
     Option.match(Option.fromNullishOr(packageJsons.get(surface.packageJson)), {
       onNone: (): ReadonlyArray<Finding> => [
@@ -4310,8 +4337,13 @@ export interface DependencyScope {
   readonly installed: ReadonlyMap<string, InstalledDependency>
 }
 
-/** The package a module specifier resolves into; a relative path names none. */
+/**
+ * The package a module specifier resolves into. A relative path names none,
+ * unless it reaches into `node_modules/<package>/…` (a config `extends` path).
+ */
 const packageOfSpecifier = (specifier: string): Option.Option<string> => {
+  const installed = /(?:^|\/)node_modules\/(.+)$/.exec(specifier)?.[1]
+  if (Predicate.isNotUndefined(installed)) return packageOfSpecifier(installed)
   if (specifier === "bun" || specifier.startsWith("bun:")) return Option.some("bun")
   if (specifier.startsWith("node:")) return Option.some("node")
   if (!/^(?:@[\w.-]+\/)?[\w.-]+(?:\/|$)/.test(specifier)) return Option.none()
@@ -4422,6 +4454,7 @@ const scopeUse = (scope: DependencyScope, providedPeers: ReadonlySet<string>): S
   const installed = (name: string) => Option.fromNullishOr(scope.installed.get(name))
   const used = new Set(
     declared
+      .values()
       .map(({ name }) => name)
       .filter(
         (name) =>
@@ -4495,10 +4528,11 @@ export const findUnusedCatalogEntries = (
 ): ReadonlyArray<Finding> => {
   const taken = new Set(
     [root.packageJson, ...manifests].flatMap((manifest) =>
-      DEPENDENCY_FIELDS.map((field) => manifest[field])
-        .flatMap((versions) => Object.entries(versions ?? {}))
+      DEPENDENCY_FIELDS.values()
+        .flatMap((field) => Object.entries(manifest[field] ?? {}))
         .filter(([, version]) => version.startsWith("catalog:"))
-        .map(([name]) => name),
+        .map(([name]) => name)
+        .toArray(),
     ),
   )
   const lines = root.text.split("\n")
@@ -4617,12 +4651,14 @@ export const findEffectVersionDrift = (
     }),
   ]
   const drift = pins
+    .values()
     .filter((pin) => isEffectPackage(pin.name) && pin.pinned !== version)
     .map((pin) => ({
       file: root.manifest,
       line: lineInBlock(root.text, pin.block, pin.needle),
       message: `${pin.block}["${pin.name}"] pins ${pin.pinned}, but catalog["effect"] is ${version}; the Effect packages release together, so pin every one at ${version}`,
     }))
+    .toArray()
   const literals = [root, ...manifests].flatMap((read) =>
     DEPENDENCY_FIELDS.flatMap((field) =>
       Object.entries(read.packageJson[field] ?? {})

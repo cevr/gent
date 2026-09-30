@@ -9,8 +9,8 @@ import {
   toolCallStep,
 } from "../../src/test-utils/language-model"
 import { convertTools } from "../../src/runtime/tools"
-import { LanguageModel } from "effect/unstable/ai"
-import type * as Response from "effect/unstable/ai/Response"
+import { LanguageModel } from "effect/ai"
+import type * as Response from "effect/ai/Response"
 import { tool } from "@gent/core/extensions/api"
 
 // ── sequence language model ─────────────────────────────────────────────────
@@ -160,13 +160,10 @@ describe("LanguageModelLayers.sequence", () => {
 
   it.scoped("assertOptions fires and can fail the stream", () =>
     Effect.gen(function* () {
-      const context = yield* Effect.context()
       const step: SequenceStep = {
         ...textStep("guarded"),
         assertOptions: (options) => {
-          if (options.tools.length === 3) {
-            return Effect.runSyncWith(context)(Effect.die(new Error("wrong options")))
-          }
+          expect(options.tools).not.toHaveLength(3)
         },
       }
       const { layer } = yield* LanguageModelLayers.sequence([step])
@@ -175,7 +172,7 @@ describe("LanguageModelLayers.sequence", () => {
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
         const pretty = Cause.pretty(exit.cause)
-        expect(pretty).toContain("wrong options")
+        expect(pretty).toContain("assertOptions failed at step 0")
       }
     }),
   )

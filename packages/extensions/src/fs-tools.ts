@@ -23,7 +23,7 @@ import {
   tool,
   writeFileAtomic,
 } from "@gent/core/extensions/api"
-import { ChildProcess, type ChildProcessSpawner } from "effect/unstable/process"
+import { ChildProcess, type ChildProcessSpawner } from "effect/process"
 
 // ── file listing ─────────────────────────────────────────────────────────────
 
