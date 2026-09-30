@@ -1234,56 +1234,70 @@ interface FileLockApi {
   ) => Effect.Effect<A, E, R>
 }
 
+/**
+ * The lock table, refcount-bounded: an entry exists only while at least one
+ * caller holds (or is waiting on) the lock, and the last release evicts it.
+ * Its size is bounded by concurrent in-flight lock holders, not by the
+ * distinct paths a process ever touched.
+ */
+type FileLockTable = TxRef.TxRef<HashMap.HashMap<string, LockEntry>>
+
+/** An empty lock table. */
+export const makeFileLockTable: Effect.Effect<FileLockTable> = TxRef.make(
+  HashMap.empty<string, LockEntry>(),
+)
+
 export class FileLockService extends Context.Service<FileLockService, FileLockApi>()(
   "@gent/core/src/domain/extension/FileLockService",
 ) {
-  static layer = Layer.effect(
-    FileLockService,
-    Effect.gen(function* () {
-      // Refcount-bounded map: an entry exists only while at least one
-      // caller holds (or is waiting on) the lock. Last release evicts.
-      // Map size is bounded by concurrent in-flight lock holders, not
-      // by total distinct paths ever touched.
-      const locksRef = yield* TxRef.make(HashMap.empty<string, LockEntry>())
-      const pathService = yield* Path.Path
+  /** The service over a lock table its builder made; `layer` makes its own. */
+  static over = (locksRef: FileLockTable) =>
+    Layer.effect(FileLockService, fileLockService(locksRef))
 
-      const acquire = Effect.fn("FileLockService.acquire")(function* (filePath: string) {
-        const resolved = pathService.resolve(filePath)
-        // Speculative TxSemaphore allocation outside the transaction;
-        // only the winner gets installed, the loser is discarded.
-        const fresh = yield* TxSemaphore.make(1)
-        const sem = yield* TxRef.modify(locksRef, (current) => {
-          const found = HashMap.get(current, resolved)
-          if (found._tag === "Some") {
-            const bumped: LockEntry = { sem: found.value.sem, refcount: found.value.refcount + 1 }
-            return [found.value.sem, HashMap.set(current, resolved, bumped)]
-          }
-          const entry: LockEntry = { sem: fresh, refcount: 1 }
-          return [fresh, HashMap.set(current, resolved, entry)]
-        })
-        return { sem, resolved }
-      })
-
-      const release = (resolved: string) =>
-        TxRef.update(locksRef, (current) => {
-          const found = HashMap.get(current, resolved)
-          if (found._tag === "None") return current
-          const next = found.value.refcount - 1
-          if (next <= 0) return HashMap.remove(current, resolved)
-          return HashMap.set(current, resolved, { sem: found.value.sem, refcount: next })
-        })
-
-      return FileLockService.of({
-        withLock: (path, effect) =>
-          Effect.acquireUseRelease(
-            acquire(path),
-            ({ sem }) => TxSemaphore.withPermits(sem, 1, effect),
-            ({ resolved }) => release(resolved),
-          ),
-      })
-    }),
+  static layer = Layer.unwrap(
+    Effect.map(makeFileLockTable, (locksRef) => FileLockService.over(locksRef)),
   )
 }
+
+const fileLockService = (locksRef: FileLockTable) =>
+  Effect.gen(function* () {
+    const pathService = yield* Path.Path
+
+    const acquire = Effect.fn("FileLockService.acquire")(function* (filePath: string) {
+      const resolved = pathService.resolve(filePath)
+      // Speculative TxSemaphore allocation outside the transaction;
+      // only the winner gets installed, the loser is discarded.
+      const fresh = yield* TxSemaphore.make(1)
+      const sem = yield* TxRef.modify(locksRef, (current) => {
+        const found = HashMap.get(current, resolved)
+        if (found._tag === "Some") {
+          const bumped: LockEntry = { sem: found.value.sem, refcount: found.value.refcount + 1 }
+          return [found.value.sem, HashMap.set(current, resolved, bumped)]
+        }
+        const entry: LockEntry = { sem: fresh, refcount: 1 }
+        return [fresh, HashMap.set(current, resolved, entry)]
+      })
+      return { sem, resolved }
+    })
+
+    const release = (resolved: string) =>
+      TxRef.update(locksRef, (current) => {
+        const found = HashMap.get(current, resolved)
+        if (found._tag === "None") return current
+        const next = found.value.refcount - 1
+        if (next <= 0) return HashMap.remove(current, resolved)
+        return HashMap.set(current, resolved, { sem: found.value.sem, refcount: next })
+      })
+
+    return FileLockService.of({
+      withLock: (path, effect) =>
+        Effect.acquireUseRelease(
+          acquire(path),
+          ({ sem }) => TxSemaphore.withPermits(sem, 1, effect),
+          ({ resolved }) => release(resolved),
+        ),
+    })
+  })
 
 // ── session-mutations ───────────────────────────────────────────────────────
 

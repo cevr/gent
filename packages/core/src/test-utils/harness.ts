@@ -3,6 +3,7 @@ import {
   Context,
   DateTime,
   Effect,
+  HashMap,
   Layer,
   Option,
   Path,
@@ -11,6 +12,7 @@ import {
   Ref,
   Schema,
   Stream,
+  TxRef,
 } from "effect"
 import {
   type AnyExtensionHook,
@@ -27,9 +29,11 @@ import {
   type ExtensionSessionService,
   type ExtensionSetupServices,
   type ExtensionStateFacet,
+  FileLockService,
   type GentExtension,
   type LoadedExtension,
   makeCollectingExtensionHost,
+  makeFileLockTable,
   provideExtensionServices,
 } from "../domain/extension.js"
 import {
@@ -170,6 +174,16 @@ const testExtensionHostPlatform = (
   homeDirectory: home,
   randomId: Random.nextInt.pipe(Effect.map((value) => `test-${value}`)),
 })
+
+/**
+ * The file-lock service over a lock table the test can count: `lockedPaths`
+ * is how many paths a caller holds or waits on. The product never reads the
+ * table's size; a test reads it to prove that the last release evicts.
+ */
+export const fileLockProbe = Effect.map(makeFileLockTable, (locks) => ({
+  layer: FileLockService.over(locks),
+  lockedPaths: Effect.map(TxRef.get(locks), HashMap.size),
+}))
 
 const testExtensionFileLock = (): ExtensionFileLockServiceApi => ({
   withLock: (_path, effect) => effect,

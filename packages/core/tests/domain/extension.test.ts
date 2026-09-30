@@ -1,7 +1,8 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Layer, type Path, Ref } from "effect"
+import { Deferred, Effect, Fiber, Layer, type Path, Ref } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { FileLockService } from "../../src/domain/extension"
+import { fileLockProbe } from "../../src/test-utils/harness"
 
 // ── file lock ───────────────────────────────────────────────────────────────
 
@@ -105,5 +106,38 @@ describe("FileLockService", () => {
         expect(result).toEqual(["fail-start", "success"])
       }),
     ),
+  )
+
+  it.live("the last holder's release evicts the path, so the table holds only locked paths", () =>
+    Effect.gen(function* () {
+      const probe = yield* fileLockProbe
+      yield* Effect.gen(function* () {
+        const lock = yield* FileLockService
+        // 100 distinct paths, one after another: each entry leaves with its holder.
+        for (let i = 0; i < 100; i++) {
+          yield* lock.withLock(`/nonexistent/gent-lock/${i}`, Effect.void)
+        }
+        expect(yield* probe.lockedPaths).toBe(0)
+
+        // While a holder runs, its path is in the table.
+        const release = yield* Deferred.make<void>()
+        const entered = yield* Deferred.make<void>()
+        const held = yield* Effect.forkChild(
+          lock.withLock(
+            "/nonexistent/gent-lock/held",
+            Deferred.succeed(entered, void 0).pipe(Effect.andThen(Deferred.await(release))),
+          ),
+        )
+        yield* Deferred.await(entered)
+        expect(yield* probe.lockedPaths).toBe(1)
+        yield* Deferred.succeed(release, void 0)
+        yield* Fiber.join(held)
+        expect(yield* probe.lockedPaths).toBe(0)
+
+        // A holder that fails leaves too.
+        yield* lock.withLock("/nonexistent/gent-lock/boom", Effect.fail("boom")).pipe(Effect.ignore)
+        expect(yield* probe.lockedPaths).toBe(0)
+      }).pipe(Effect.provide(Layer.provide(probe.layer, BunServices.layer)))
+    }).pipe(Effect.timeout("4 seconds")),
   )
 })
