@@ -821,7 +821,6 @@ function useComposerController(): ComposerController {
   const extensionUI = useExtensionUI()
 
   let inputRef = Option.none<TextareaRenderable>()
-  let submitMode: "queue" | "interject" = "queue"
 
   // Token highlighting — colors autocomplete-resolved tokens with theme.primary
   const tokenStyle = SyntaxStyle.create()
@@ -1243,7 +1242,7 @@ function useComposerController(): ComposerController {
     )
   }
 
-  const handleSubmit = () => {
+  const handleSubmit = (mode: "queue" | "interject") => {
     const draft = Option.getOrElse(
       Option.map(inputRef, (renderable) => renderable.plainText),
       () => "",
@@ -1256,17 +1255,13 @@ function useComposerController(): ComposerController {
 
     if (effectiveMode() === "shell") {
       submitShellCommand(text)
-      submitMode = "queue"
       return
     }
 
     if (submitSlashCommand(draft, text)) {
-      submitMode = "queue"
       return
     }
 
-    const mode = submitMode
-    submitMode = "queue"
     submitMessage(text, mode)
   }
 
@@ -1447,8 +1442,7 @@ function useComposerController(): ComposerController {
    */
   const handleSubmitFromTextarea = () => {
     if (holdsComposer() || effectiveMode() === "interaction") return
-    submitMode = "queue"
-    handleSubmit()
+    handleSubmit("queue")
   }
 
   /**
@@ -1478,8 +1472,7 @@ function useComposerController(): ComposerController {
     // Meta/Super+Enter = interject (bypasses keybindings)
     if (event.meta === true || event.super === true) {
       event.preventDefault()
-      submitMode = "interject"
-      handleSubmit()
+      handleSubmit("interject")
       return
     }
 
