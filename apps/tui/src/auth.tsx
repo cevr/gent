@@ -282,7 +282,7 @@ const missingRequired = (catalog: AuthCatalog): ReadonlyArray<AuthProviderInfo> 
  */
 
 interface AuthProps {
-  sessionId?: SessionId
+  sessionId: SessionId
   enforceAuth?: boolean
   onResolved?: () => void
   onClose?: () => void
@@ -301,7 +301,7 @@ export function Auth(props: AuthProps) {
 
   const [autoPrompted, setAutoPrompted] = createSignal(false)
   const [successMessage, setSuccessMessage] = createSignal(Option.none<string>())
-  const sessionId = Option.fromNullishOr(props.sessionId)
+  const sessionId = props.sessionId
 
   // ── Staleness ─────────────────────────────────────────────────────
 
@@ -360,14 +360,12 @@ export function Auth(props: AuthProps) {
     clientCtx.log.info("auth:load-start")
     const request = omitUndefined({
       agentName: Option.getOrUndefined(clientCtx.agent()),
-      sessionId: Option.getOrUndefined(sessionId),
+      sessionId,
     })
     cast(
       Effect.all([
         clientCtx.client.auth.listProviders(request),
-        clientCtx.client.auth.listMethods(
-          omitUndefined({ sessionId: Option.getOrUndefined(sessionId) }),
-        ),
+        clientCtx.client.auth.listMethods({ sessionId }),
       ]).pipe(
         Effect.tap(([providers, methods]) =>
           whileCurrent(token, () => {
@@ -493,14 +491,10 @@ export function Auth(props: AuthProps) {
     methodIndex: number,
     authorizationId: string,
   ) => {
-    if (Option.isNone(sessionId)) {
-      send(AuthEvent.cases.OAuthAutoFailed.make({ error: "No active session for authorization" }))
-      return
-    }
     cast(
       clientCtx.client.auth
         .callback({
-          sessionId: sessionId.value,
+          sessionId,
           provider,
           method: methodIndex,
           authorizationId,
@@ -529,57 +523,51 @@ export function Auth(props: AuthProps) {
       send(AuthEvent.cases.OpenKey.make({ provider }))
       return
     }
-    if (Option.isNone(sessionId)) {
-      send(AuthEvent.cases.Failed.make({ error: "No active session for authorization" }))
-      return
-    }
 
     cast(
-      clientCtx.client.auth
-        .authorize({ sessionId: sessionId.value, provider, method: methodIndex })
-        .pipe(
-          Effect.tap((authorization) =>
-            whileCurrent(token, () => {
-              const result = Option.fromNullishOr(authorization)
-              if (Option.isNone(result)) {
-                send(
-                  AuthEvent.cases.Failed.make({
-                    error: "No authorization available for this method",
-                  }),
-                )
-                return
-              }
-              // "done" means the server finished it during `authorize`.
-              if (result.value.method === "done") {
-                flashSuccess(`Authenticated ${provider}`)
-                loadAuth(token)
-                return
-              }
+      clientCtx.client.auth.authorize({ sessionId, provider, method: methodIndex }).pipe(
+        Effect.tap((authorization) =>
+          whileCurrent(token, () => {
+            const result = Option.fromNullishOr(authorization)
+            if (Option.isNone(result)) {
               send(
-                AuthEvent.cases.OpenOAuth.make({
-                  provider,
-                  methodIndex,
-                  method,
-                  authorization: result.value,
+                AuthEvent.cases.Failed.make({
+                  error: "No authorization available for this method",
                 }),
               )
-            }),
-          ),
-          Effect.tap((authorization) => {
-            if (!isCurrent(token)) return Effect.void
-            const result = Option.fromNullishOr(authorization)
-            if (Option.isNone(result) || result.value.method === "done") return Effect.void
-            return openAuthorization(token, result.value.url).pipe(
-              Effect.andThen(
-                Effect.sync(() => {
-                  if (!isCurrent(token) || result.value.method !== "auto") return
-                  awaitBrowserCallback(token, provider, methodIndex, result.value.authorizationId)
-                }),
-              ),
+              return
+            }
+            // "done" means the server finished it during `authorize`.
+            if (result.value.method === "done") {
+              flashSuccess(`Authenticated ${provider}`)
+              loadAuth(token)
+              return
+            }
+            send(
+              AuthEvent.cases.OpenOAuth.make({
+                provider,
+                methodIndex,
+                method,
+                authorization: result.value,
+              }),
             )
           }),
-          Effect.catchEager(failed(token)),
         ),
+        Effect.tap((authorization) => {
+          if (!isCurrent(token)) return Effect.void
+          const result = Option.fromNullishOr(authorization)
+          if (Option.isNone(result) || result.value.method === "done") return Effect.void
+          return openAuthorization(token, result.value.url).pipe(
+            Effect.andThen(
+              Effect.sync(() => {
+                if (!isCurrent(token) || result.value.method !== "auto") return
+                awaitBrowserCallback(token, provider, methodIndex, result.value.authorizationId)
+              }),
+            ),
+          )
+        }),
+        Effect.catchEager(failed(token)),
+      ),
     )
   }
 
@@ -588,17 +576,13 @@ export function Auth(props: AuthProps) {
     const trimmed = screen.code.trim()
     // A "code" flow has nothing to send without one; "auto" may be retried bare.
     if (screen.authorization.method === "code" && trimmed.length === 0) return
-    if (Option.isNone(sessionId)) {
-      send(AuthEvent.cases.Failed.make({ error: "No active session for authorization" }))
-      return
-    }
     const token = begin()
     clientCtx.log.info("auth:submit-oauth", {
       provider: screen.provider,
       method: screen.authorization.method,
     })
     const base = {
-      sessionId: sessionId.value,
+      sessionId,
       provider: screen.provider,
       method: screen.methodIndex,
       authorizationId: screen.authorization.authorizationId,
