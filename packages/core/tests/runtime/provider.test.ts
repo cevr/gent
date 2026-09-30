@@ -1285,11 +1285,24 @@ const resolveModel = (request: ModelRequest) =>
       driverId: request.driverId,
     })
   })
-const streamResolvedModel = <Tools extends Record<string, AiTool.Any> = Record<string, AiTool.Any>>(
+/** A tool whose parameters encode without services, as `streamText` requires with `disableToolCallResolution`. */
+type ServiceFreeTool = AiTool.Tool<
+  string,
+  {
+    readonly parameters: Schema.Codec<unknown, unknown, never, never>
+    readonly success: Schema.Top
+    readonly failure: Schema.Top
+    readonly failureMode: AiTool.FailureMode
+  },
+  never
+>
+const streamResolvedModel = <
+  Tools extends Record<string, ServiceFreeTool> = Record<string, ServiceFreeTool>,
+>(
   request: ModelRequest & {
     readonly prompt: Prompt.RawInput
     readonly tools?: ReadonlyArray<ToolCapability>
-    readonly toolkit?: ToolkitInput<Tools>
+    readonly toolkit?: ToolkitInput<Tools, never, never>
   },
 ) =>
   Effect.gen(function* () {

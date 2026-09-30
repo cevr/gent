@@ -483,7 +483,7 @@ export const GentToolMetadataTag = Context.Reference<GentToolMetadata | undefine
  * tools annotated with Gent execution metadata. Runtime code reads Gent-only
  * fields from the annotation instead of widening Effect's tool surface.
  */
-type GentParametersSchema = Schema.Decoder<unknown, never>
+type GentParametersSchema = Schema.Codec<unknown, unknown, never, never>
 type GentResultSchema = Schema.Encoder<unknown, never>
 type GentFailureSchema = Schema.Codec<Error, unknown, never, never>
 
@@ -588,12 +588,12 @@ export const getToolPrompt = (
 /** Author-facing input to `tool(...)`. Mirrors the LLM-tool fields as a
  *  standalone leaf with no shared capability parent.
  *
- *  `Params` is a `Schema.Decoder<I, never>` — the tool adapter needs to
- *  decode JSON synchronously without resolving services, so the decoder
- *  may not have a context requirement. */
+ *  `Params` is a `Schema.Codec<I, E, never, never>` — the tool adapter
+ *  decodes JSON synchronously, and Effect AI encodes the streamed tool-call
+ *  parameters, so neither direction may have a context requirement. */
 export interface ToolInput<
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
-  Params extends Schema.Decoder<any, never> = Schema.Decoder<any, never>,
+  Params extends Schema.Codec<any, any, never, never> = Schema.Codec<any, any, never, never>,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
   Output extends Schema.Encoder<any, never> = Schema.Encoder<any, never>,
   Error = never,
@@ -610,9 +610,9 @@ export interface ToolInput<
   /** Marks a write tool as destructive for Effect AI provider metadata. */
   readonly destructive?: boolean
   /**
-   * Schema for `execute` input. Must have no context requirement so the
-   * tool adapter can decode JSON synchronously without resolving services.
-   * `Schema.Decoder<I, never>` ⊆ `Schema.Schema<I, _, never>`.
+   * Schema for `execute` input. Must have no context requirement in either
+   * direction: the tool adapter decodes JSON synchronously, and Effect AI
+   * encodes the streamed tool-call parameters.
    */
   readonly params: Params
   /** Schema for successful `execute` output. Effect AI owns result encoding
@@ -641,7 +641,7 @@ export interface ToolInput<
  */
 export const tool = <
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
-  Params extends Schema.Decoder<any, never>,
+  Params extends Schema.Codec<any, any, never, never>,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
   Output extends Schema.Encoder<any, never>,
   Error,
