@@ -650,6 +650,21 @@ describe("repo temp directory guard", () => {
     expect(findRepoTempDirectories(testFile, source)).toEqual([])
   })
 
+  test("an array joined with a separator is no path literal", () => {
+    const sources = [
+      [
+        'const suffix = ["a", "b"].join("")',
+        "const dir = yield* fs.makeTempDirectoryScoped({ prefix: `gent-${suffix}-` })",
+      ].join("\n"),
+      'const text = ["tmp", "x"].join("\\n")',
+      [
+        'const label = parts.join(", ")',
+        "const d = mkdtempSync(`/nonexistent/gent-probe-x/${label}`)",
+      ].join("\n"),
+    ]
+    expect(sources.map((source) => findRepoTempDirectories(testFile, source))).toEqual([[], [], []])
+  })
+
   test("product source is out of scope", () => {
     const source = 'const dir = { directory: path.resolve(import.meta.dir, "..") }'
     expect(findRepoTempDirectories("packages/core/src/runtime/x.ts", source)).toEqual([])

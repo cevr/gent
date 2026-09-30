@@ -904,10 +904,13 @@ export const findE2eFixtureImportFindings = (
  * whose arguments name a repo path, a node `mkdtemp` whose prefix is a relative
  * literal (`mkdtempSync("case-")` creates the directory in the working directory),
  * and a repo path joined to a `tmp` or `temp` segment (`.tmp`, `tmp-x`,
- * `temp`). A literal is relative when it starts with none of `/`, `$` or `~`.
+ * `temp`). A `directory:` literal is relative when it starts with none of `/`,
+ * `$` or `~`. A `join(`/`resolve(` literal must also start a path segment (a
+ * word character or `.`), so `.join("")`, `.join("\n")` and `.join(", ")` on
+ * an array are no path.
  */
 const REPO_PATH =
-  /\bimport\.meta\.dir(?:name)?\b|\b__dirname\b|\bprocess\.cwd\(\)|\b(?:join|resolve)\(\s*["'`](?![/$~])|\bdirectory:\s*["'`](?![/$~])/
+  /\bimport\.meta\.dir(?:name)?\b|\b__dirname\b|\bprocess\.cwd\(\)|\b(?:join|resolve)\(\s*["'`](?=[\w.])|\bdirectory:\s*["'`](?![/$~])/
 /** A node `mkdtemp` whose prefix is a relative literal: the directory lands in the working directory. */
 const RELATIVE_MKDTEMP = /^mkdtemp(?:Sync)?\s*\(\s*["'`](?![/$~])/
 const BINDING = /\b(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=(.*)$/
