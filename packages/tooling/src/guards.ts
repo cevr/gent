@@ -37,13 +37,77 @@ const quotedEnd = (text: string, start: number): number => {
 
 const OPENERS = "([{"
 const CLOSERS = ")]}"
-const QUOTES = `'"\``
+
+/** The end of a template that opens at `start`: past its closing backtick, interpolations included. */
+const templateEnd = (text: string, start: number): number => {
+  let at = start + 1
+  while (at < text.length) {
+    const char = text[at]
+    if (char === "\\") at += 2
+    else if (char === "`") return at + 1
+    else if (text.startsWith("${", at)) at = topLevelStop(text, at + 2) + 1
+    else at += 1
+  }
+  return text.length
+}
+
+/** Characters after which a `/` opens a regex literal rather than dividing. */
+const REGEX_PRECEDERS = "(,=:[!&|?{};+-*%<>~^"
+const REGEX_KEYWORD_BEFORE =
+  /(?:^|[^\w$])(?:return|typeof|case|void|delete|in|of|new|throw|yield|await)$/
+
+/** Whether the `/` at `at` opens a regex literal: what precedes it cannot end a value. */
+const opensRegex = (text: string, at: number): boolean => {
+  let end = at
+  while (end > 0 && /\s/.test(text[end - 1] ?? "")) end -= 1
+  const before = text.slice(Math.max(0, end - 8), end)
+  if (before.length === 0) return true
+  if (REGEX_PRECEDERS.includes(before.at(-1) ?? "")) return true
+  return REGEX_KEYWORD_BEFORE.test(before)
+}
+
+/** The end of a regex literal that opens at `start`: past its flags, or at the line end. */
+const regexEnd = (text: string, start: number): number => {
+  let at = start + 1
+  let inClass = false
+  while (at < text.length && text[at] !== "\n") {
+    const char = text[at]
+    if (char === "\\") at += 2
+    else if (char === "/" && !inClass) {
+      at += 1
+      while (/[a-z]/i.test(text[at] ?? "")) at += 1
+      return at
+    } else {
+      if (char === "[") inClass = true
+      if (char === "]") inClass = false
+      at += 1
+    }
+  }
+  return at
+}
+
+/**
+ * Where the token that opens at `at` ends when it is one whose text is not
+ * code -- a string, a template, a comment or a regex literal -- or `at` when
+ * none opens there. A bracket inside one is text, not structure.
+ */
+const lexicalEnd = (text: string, at: number): number => {
+  const char = text[at]
+  if (char === "'" || char === '"') return quotedEnd(text, at)
+  if (char === "`") return templateEnd(text, at)
+  if (char !== "/") return at
+  const next = text[at + 1]
+  if (next === "/" || next === "*") return commentEnd(text, at, `/${next}`)
+  if (opensRegex(text, at)) return regexEnd(text, at)
+  return at
+}
 
 /**
  * The first index at or after `start` where `stopsAt` holds at bracket depth
  * zero, or where a closer takes the depth below zero: it closes a bracket
- * opened before `start`. A quoted string is skipped whole. `text.length` when
- * neither comes. Every bracket walk in this file is this one.
+ * opened before `start`. A string, a template, a comment or a regex literal is
+ * skipped whole. `text.length` when neither comes. Every bracket walk in this
+ * file is this one.
  */
 const topLevelStop = (
   text: string,
@@ -55,8 +119,9 @@ const topLevelStop = (
   while (at < text.length) {
     const char = text[at] ?? ""
     if (depth === 0 && stopsAt(at)) return at
-    if (QUOTES.includes(char)) {
-      at = quotedEnd(text, at)
+    const skipped = lexicalEnd(text, at)
+    if (skipped > at) {
+      at = skipped
       continue
     }
     if (OPENERS.includes(char)) depth += 1

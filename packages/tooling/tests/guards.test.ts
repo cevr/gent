@@ -469,6 +469,22 @@ describe("unadapted seam guard", () => {
     expect(adaptedSeamsIn("packages/extensions/tests/notes.test.ts", "ctx.Telepathy").size).toBe(0)
   })
 
+  test("a bracket in a comment, a string or a regex does not end the declaration", () => {
+    const hooks = [
+      "export interface ExtensionHookSignatures {",
+      "  // 1) Register hooks",
+      "  readonly beforeTurn: Hook",
+      '  readonly note: "(" /* ) */',
+      "  readonly afterTurn: Hook",
+      "}",
+    ].join("\n")
+    const findings = findUnadaptedSeams(new Map([[SEAMS_FILE, hooks]]), new Set(["note"]))
+    expect(findings.map((finding) => finding.message.split('"')[1])).toEqual([
+      "beforeTurn",
+      "afterTurn",
+    ])
+  })
+
   test("the seam file never credits a facet, not even one its own helpers reach", () => {
     // `extensionServicesFromHostContext` mirrors the host-context param into a
     // new struct with `Facet: ctx.Facet` lines, and a helper in the same file
@@ -1462,6 +1478,30 @@ describe("a read variable must have a writer", () => {
             `const e2 = {`,
             `  "GENT_K3": v,`,
             `}`,
+          ].join("\n"),
+        ],
+      ]),
+      none,
+    )
+    expect(findings).toEqual([])
+  })
+
+  test("a bracket in a regex, a template or a comment inside an env record hides no key", () => {
+    const findings = findReadersWithoutWriters(
+      new Map([
+        [
+          "packages/sdk/src/reader.ts",
+          [`Config.String("GENT_R1")`, `Config.String("GENT_R2")`, `Config.String("GENT_R3")`].join(
+            "\n",
+          ),
+        ],
+        [
+          "packages/sdk/src/spawn.ts",
+          [
+            `const env = { NOTE: /[)]/.source, GENT_R1: "1" }`,
+            'const twoEnv = { NOTE: `a\n)`, GENT_R2: "1" }',
+            `const threeEnv = { // }`,
+            `  GENT_R3: "1" }`,
           ].join("\n"),
         ],
       ]),
