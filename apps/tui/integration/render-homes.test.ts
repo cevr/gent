@@ -15,9 +15,9 @@ import { ChildProcess } from "effect/process"
 const homesTest = it.scopedLive.layer(BunServices.layer)
 
 /**
- * Each case bounds itself at 60 s inside the Effect. A plain multi-file run
- * (the e2e lane) keeps bun's 5 s default, not the preload's backstop, so the
- * bun timeout sits past the inner bound and the bound is the one that fires.
+ * Each case bounds itself at 60 s inside the Effect, past the lanes' 30 s bun
+ * timeout, so the case sets a longer bun timeout and the inner bound is the
+ * one that fires.
  */
 const HOMES_BUN_TIMEOUT_MS = 90_000
 

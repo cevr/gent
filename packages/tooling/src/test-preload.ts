@@ -10,7 +10,10 @@
  *   the bound fires; bun's own timeout abandons the fiber and skips them. With
  *   bun's 5 s default, a test that bounds itself at 8 or 20 s is cut off at
  *   5 s and its inner bound never runs. A test whose inner bound is 30 s or
- *   more passes its own, longer bun timeout.
+ *   more passes its own, longer bun timeout. `setDefaultTimeout` below holds
+ *   for each file of a `--parallel` run and for a one-file run; a plain
+ *   multi-file run applies it to its first file only, so a plain lane also
+ *   passes `--timeout=30000`, and the guards check that it does.
  * - Each test file has its own default data directory. `HOME` names a temp
  *   directory made here and removed in the `afterAll` below, and
  *   `GENT_DATA_DIR` is cleared, whatever the shell set. A `--parallel` run

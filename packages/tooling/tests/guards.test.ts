@@ -20,6 +20,7 @@ import {
   findRetiredSurfaces,
   findSteeringFilePaths,
   findSuppressionInventoryFindings,
+  findTestLaneDefaults,
   findTuiSessionIdentityReads,
   findUnadaptedSeams,
   findUnconsumedExports,
@@ -907,6 +908,57 @@ describe("pre-commit hook runs only its fast commands", () => {
       "    - run: bun run gate",
     ].join("\n")
     expect(findPreCommitHookFindings(HOOK_FILE, text)).toEqual([])
+  })
+})
+
+// ── test lane defaults ──────────────────────────────────────────────────────
+
+/** A manifest whose `test` script (line 3) is `script`, which holds no quote. */
+const laneManifest = (script: string) =>
+  ["{", '  "scripts": {', `    "test": "${script}",`, '    "build": "tsc"', "  }", "}"].join("\n")
+
+/** Each finding's line, and whether it is the missing preload (true) or the missing timeout (false). */
+const laneFindings = (file: string, script: string) =>
+  findTestLaneDefaults(file, laneManifest(script)).map((finding) => [
+    finding.line,
+    finding.message.includes("without the test preload"),
+  ])
+
+describe("test lane defaults guard", () => {
+  test("a parallel lane, and a plain lane with the preload's timeout, pass", () => {
+    expect(
+      laneFindings(
+        "packages/sdk/package.json",
+        "bun test --preload ../../packages/tooling/src/test-preload.ts --parallel tests",
+      ),
+    ).toEqual([])
+    expect(
+      laneFindings(
+        "packages/tooling/package.json",
+        "bun test --preload ./src/test-preload.ts --timeout=30000 ./tests/",
+      ),
+    ).toEqual([])
+  })
+
+  test("a plain lane without the timeout, or with another one, is reported", () => {
+    const preload = "bun test --preload ../tooling/src/test-preload.ts"
+    expect(laneFindings("packages/e2e/package.json", `${preload} tests`)).toEqual([[3, false]])
+    expect(laneFindings("packages/e2e/package.json", `${preload} --timeout=5000 tests`)).toEqual([
+      [3, false],
+    ])
+  })
+
+  test("a lane without the preload is reported", () => {
+    expect(laneFindings("examples/package.json", "bun test --parallel tests")).toEqual([[3, true]])
+    expect(
+      laneFindings("examples/package.json", "bun test --preload ./other-preload.ts --parallel"),
+    ).toEqual([[3, true]])
+  })
+
+  test("a script that runs no bun test, and the gamut fixture's own project, pass", () => {
+    expect(laneFindings("packages/core/package.json", "tsc --noEmit")).toEqual([])
+    expect(laneFindings("testbeds/gamut/fixture/package.json", "bun test")).toEqual([])
+    expect(laneFindings("packages/core/tsconfig.json", "bun test")).toEqual([])
   })
 })
 

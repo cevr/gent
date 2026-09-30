@@ -1214,6 +1214,57 @@ export const findPreCommitHookFindings = (file: string, text: string): ReadonlyA
   ]
 }
 
+// ── every test lane sets the shared test defaults ───────────────────────────
+
+/**
+ * The bun timeout a plain lane passes. The preload's `setDefaultTimeout`
+ * holds for each file of a `--parallel` run, which evaluates the preload once
+ * per file, and for a one-file run. A plain multi-file run evaluates it once
+ * and applies it to its first file only; the files after it keep bun's 5 s
+ * default. The command line applies to every file, so a plain lane passes the
+ * preload's value there.
+ */
+const TEST_TIMEOUT_FLAG = "--timeout=30000"
+
+/** The preload every lane loads: logs off, a temp home, the 30 s bun timeout. */
+const TEST_PRELOAD = /--preload\s+\S*\/src\/test-preload\.ts(?:\s|$)/
+
+/** The gamut fixture is a user's project that gamut opens; its `bun test` is not a gent lane. */
+const GAMUT_FIXTURE = /^testbeds\/gamut\/fixture\//
+
+/**
+ * Guard: every package script that runs `bun test` loads the test preload,
+ * and one that runs without `--parallel` also passes the preload's timeout.
+ */
+export const findTestLaneDefaults = (file: string, text: string): ReadonlyArray<Finding> => {
+  if (!isManifest(file) || GAMUT_FIXTURE.test(file)) return []
+  const scripts = Option.match(decodeManifestScripts(text), {
+    onNone: () => [],
+    onSome: (manifest) => Object.entries(manifest.scripts ?? {}),
+  })
+  return scripts.flatMap(([name, script]) => {
+    if (!/\bbun test\b/.test(script)) return []
+    const line = lineAt(text, text.indexOf(`"${name}":`))
+    const words = script.split(/\s+/)
+    const findings: Array<Finding> = []
+    if (!TEST_PRELOAD.test(script)) {
+      findings.push({
+        file,
+        line,
+        message: `script \`${name}\` runs \`bun test\` without the test preload -- its tests then log, and write into the real home`,
+      })
+    }
+    if (!words.includes("--parallel") && !words.includes(TEST_TIMEOUT_FLAG)) {
+      findings.push({
+        file,
+        line,
+        message: `script \`${name}\` runs \`bun test\` without \`--parallel\` or \`${TEST_TIMEOUT_FLAG}\` -- a plain multi-file run keeps bun's 5 s default past its first file`,
+      })
+    }
+    return findings
+  })
+}
+
 // ── lint config names nothing that is gone ──────────────────────────────────
 
 /**

@@ -23,6 +23,7 @@ import {
   findRetiredSurfaces,
   findSteeringFilePaths,
   findSuppressionInventoryFindings,
+  findTestLaneDefaults,
   findTuiSessionIdentityReads,
   findUnadaptedSeams,
   findUnconsumedExports,
@@ -269,6 +270,7 @@ const ANY_FILE_FINDERS: ReadonlyArray<FileFinder> = [
   findSuppressionInventoryFindings,
   findPreCommitHookFindings,
   findRetiredSurfaces,
+  findTestLaneDefaults,
 ]
 
 /** Findings a source file answers on its own, without the rest of the tree. */
