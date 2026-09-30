@@ -123,19 +123,43 @@ const encodeKeyFields = Schema.encodeSync(Schema.fromJsonString(Schema.Json))
 const sortedEntries = (record: Readonly<Record<string, string>> = {}) =>
   Object.entries(record).toSorted(([left], [right]) => compareIds(left, right))
 
+/** `.`, `..`, `./x` or `../x`; `dir/x` (not `@scope/name`); or a name with an extension, such as `server.py`. */
+const RELATIVE_PATH = /^\.{1,2}(\/|$)|^[^/@:][^:]*\/|\.[A-Za-z0-9]+$/
+/** A flag with a value: `--config=./x.json` names `./x.json`. */
+const FLAG_VALUE = /^-{1,2}[^=]*=(.*)$/
+
+/**
+ * Whether a command or an argument can name a file relative to the working
+ * directory, alone or as a flag's value. It errs toward yes: a wrong yes costs
+ * one listing per project, a wrong no hands one project another's tools.
+ */
+const namesRelativePath = (value: string): boolean => {
+  const flag = Option.fromNullishOr(FLAG_VALUE.exec(value))
+  if (Option.isNone(flag) && value.startsWith("-")) return false
+  const target = Option.match(flag, { onNone: () => value, onSome: (match) => match[1] ?? "" })
+  if (target.startsWith("/") || target.includes("://")) return false
+  return RELATIVE_PATH.test(target)
+}
+
 /**
  * What decides the tools a server lists: the entry as it runs, after
- * expansion, with its transport type, and for a stdio server that names a
- * `cwd` the directory it resolves to, in a fixed order so key order never
- * matters. A stdio entry that names no `cwd` runs in the session's directory
- * but keys without it: one listing serves every project, and a server whose
- * tools depend on its directory is corrected by the relist on its first
- * connection. It holds secrets, so only its SHA-256 digest is kept.
+ * expansion, with its transport type, and for a stdio server the directory it
+ * runs in when that can change what it runs: the entry names a `cwd`, or its
+ * command or an argument names a relative path. The rest run in the session's
+ * directory but key without it, so one listing serves every project. The key
+ * fields go in a fixed order so key order never matters. It holds secrets, so
+ * only its SHA-256 digest is kept.
  */
 const serverIdentity = (written: string, config: McpServerConfig, cwd: string) => {
   if ("command" in config) {
     let namedCwd = ""
-    if (Predicate.isNotUndefined(config.cwd)) namedCwd = cwd
+    if (
+      Predicate.isNotUndefined(config.cwd) ||
+      namesRelativePath(config.command) ||
+      (config.args ?? []).some(namesRelativePath)
+    ) {
+      namedCwd = cwd
+    }
     return encodeKeyFields([
       written,
       "stdio",

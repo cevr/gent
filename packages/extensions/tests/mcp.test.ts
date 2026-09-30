@@ -523,6 +523,22 @@ describe("mcp config", () => {
         yield* collectTestContributions(pinned.setup, { home, cwd: fixture.directory })
         yield* collectTestContributions(pinned.setup, { home, cwd: other })
         expect(yield* fixture.starts).toBe(4)
+        // So is an entry whose command or arguments name a path relative to the
+        // session: two projects' `./server.cjs` are two servers.
+        yield* fs.copyFile(fixture.server, path.join(other, "server.cjs"))
+        const relative = McpServers("@test/mcp-identity", {
+          fixture: { ...entry, args: ["./server.cjs"] },
+        })
+        yield* collectTestContributions(relative.setup, { home, cwd: fixture.directory })
+        yield* collectTestContributions(relative.setup, { home, cwd: other })
+        expect(yield* fixture.starts).toBe(6)
+        // A path in a flag's value counts too.
+        const flagged = McpServers("@test/mcp-identity", {
+          fixture: { ...entry, args: [entry.args[0] ?? "", "--config=./settings.json"] },
+        })
+        yield* collectTestContributions(flagged.setup, { home, cwd: fixture.directory })
+        yield* collectTestContributions(flagged.setup, { home, cwd: other })
+        expect(yield* fixture.starts).toBe(8)
       }).pipe(Effect.timeout("20 seconds"), Effect.provide(platformLayer)),
     30_000,
   )

@@ -1346,10 +1346,14 @@ Setup reads each server's tool list from `<data dir>/mcp-catalog.json`, keyed
 by the SHA-256 digest of the entry as it runs (its expanded values, for a
 `url` entry its configured `type`, with `http` and `streamable-http` one
 value, and for stdio the resolved directory its `cwd` names), so an edited
-entry or a changed variable lists again. A stdio entry that names no `cwd`
-runs in the session directory but keys without it, so a new project does not
-spawn every server at setup; a server whose tools depend on the directory is
-corrected by the relist on its first connection. The file holds only the
+entry or a changed variable lists again. A stdio entry whose command or
+arguments name a relative path (`./server.ts`, `src/x.js`, `server.py`, or a
+flag value such as `--config=./x.json`) also keys with the session directory,
+so two projects' `./server.ts` are two servers. Any other stdio entry that
+names no `cwd` runs in the session directory but keys without it, so a new
+project does not spawn every server at setup. A relist on the first
+connection corrects the cache for the next session; the capabilities a
+session registered stay as its setup listed them. The file holds only the
 digest, the server's `initialize` instructions and a `listedAt` stamp, never a
 token. On a miss setup connects once and lists; every server setup listed, and
 every cached entry it read whose stamp is over a day old, goes to the cache in
