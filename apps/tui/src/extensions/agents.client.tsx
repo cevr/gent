@@ -730,7 +730,7 @@ export function AgentsPane(props: {
         keys={[
           KeyHints.move,
           KeyHints.select,
-          keyHint("ctrl+x", "delete"),
+          KeyHints.delete,
           keyHint("ctrl+t", "hide"),
           KeyHints.close,
         ]}

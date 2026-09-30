@@ -276,6 +276,55 @@ describe("Auth route", () => {
       setup.renderer.destroy()
     }),
   )
+  // Signing out is destructive, so it takes the agents pane's key and ladder:
+  // ctrl+x arms the row, a second ctrl+x removes the stored key.
+  it.live("a stored sign-in is removed only on a second ctrl+x", () =>
+    Effect.gen(function* () {
+      const deleted: Array<string> = []
+      const client = createMockClient({
+        auth: {
+          listProviders: () =>
+            Effect.succeed([
+              {
+                provider: ProviderId.make("openai"),
+                hasKey: true,
+                required: false,
+                source: "stored",
+                authType: "api",
+              },
+            ]),
+          listMethods: () => Effect.succeed({ openai: [apiMethodRoute] }),
+          deleteKey: ({ provider }: { provider: string }) =>
+            Effect.sync(() => {
+              deleted.push(provider)
+            }),
+        },
+      })
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <Auth sessionId={activeSessionId} />, {
+          client,
+          runtime: createMockRuntime(),
+        }),
+      )
+      const list = yield* waitForFrame(setup, (frame) => frame.includes("openai"))
+      expect(list).toContain("ctrl+x delete")
+      setup.mockInput.pressKey("d")
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(deleted).toEqual([])
+      setup.mockInput.pressKey("x", { ctrl: true })
+      yield* waitForFrame(setup, (frame) => frame.includes("ctrl+x again to delete openai login"))
+      expect(deleted).toEqual([])
+      // Any other key steps back from the armed row.
+      setup.mockInput.pressKey("ESCAPE")
+      yield* waitForFrame(setup, (frame) => !frame.includes("ctrl+x again"))
+      setup.mockInput.pressKey("x", { ctrl: true })
+      yield* waitForFrame(setup, (frame) => frame.includes("ctrl+x again to delete openai login"))
+      setup.mockInput.pressKey("x", { ctrl: true })
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(deleted).toEqual(["openai"])
+      setup.renderer.destroy()
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   it.live("ignores stale auth loads after the selected agent changes", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()

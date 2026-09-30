@@ -411,6 +411,20 @@ export function Auth(props: AuthProps) {
 
   // ── Actions ───────────────────────────────────────────────────────
 
+  // Signing out is destructive: the first ctrl+x arms the row, the second
+  // removes the stored key, as the agents pane deletes a session.
+  const [armed, setArmed] = createSignal(Option.none<string>())
+  const armOrDelete = (selected: Option.Option<AuthProviderInfo>): boolean => {
+    if (Option.isNone(selected) || selected.value.source !== "stored") return true
+    if (Option.contains(armed(), selected.value.provider)) {
+      setArmed(Option.none())
+      deleteProvider(selected.value)
+      return true
+    }
+    setArmed(Option.some(selected.value.provider))
+    return true
+  }
+
   const deleteProvider = (provider: AuthProviderInfo) => {
     if (provider.source !== "stored") return
     const token = begin()
@@ -663,12 +677,21 @@ export function Auth(props: AuthProps) {
           paddingLeft={1}
           flexDirection="row"
         >
-          <text style={{ fg: rowForeground(isSelected(), theme.text) }}>{provider.provider}</text>
-          <text style={{ fg: rowForeground(isSelected(), statusColor(provider)) }}>
-            {" "}
-            {authLabel(provider)}
-            {requiredLabel(provider)}
-          </text>
+          <Show
+            when={!Option.contains(armed(), provider.provider)}
+            fallback={
+              <text style={{ fg: theme.error }}>
+                ctrl+x again to delete {provider.provider} login
+              </text>
+            }
+          >
+            <text style={{ fg: rowForeground(isSelected(), theme.text) }}>{provider.provider}</text>
+            <text style={{ fg: rowForeground(isSelected(), statusColor(provider)) }}>
+              {" "}
+              {authLabel(provider)}
+              {requiredLabel(provider)}
+            </text>
+          </Show>
         </box>
       )),
     )
@@ -717,7 +740,7 @@ export function Auth(props: AuthProps) {
   }
   const listKeys = () => {
     if (Option.isSome(state().error)) return [keyHint("r", "retry"), listLeave()]
-    return [KeyHints.move, KeyHints.select, keyHint("d", "delete"), listLeave()]
+    return [KeyHints.move, KeyHints.select, KeyHints.delete, listLeave()]
   }
   const dismissList = () => {
     if (enforced()) return
@@ -835,12 +858,13 @@ export function Auth(props: AuthProps) {
             onDismiss={dismissList}
             empty={emptyList}
             extraKeys={(event, selected) => {
+              if (event.ctrl === true && event.name === "x") return armOrDelete(selected)
+              // Any other key steps back from an armed row; Esc does only that.
+              const wasArmed = Option.isSome(armed())
+              setArmed(Option.none())
+              if (event.name === "escape" && wasArmed) return true
               if (event.name === "r" && Option.isSome(state().error)) {
                 loadAuth(begin())
-                return true
-              }
-              if (event.name === "d") {
-                Option.map(selected, deleteProvider)
                 return true
               }
               return false
