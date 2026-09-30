@@ -32,7 +32,7 @@ import type { AutocompleteItem } from "./extensions/client-facets.js"
  * command used a few times a week keeps accumulating rather than decaying to
  * nothing between uses.
  */
-export const HALF_LIFE_MS = 14 * 24 * 60 * 60 * 1000
+const HALF_LIFE_MS = 14 * 24 * 60 * 60 * 1000
 
 /**
  * Entries kept in the store, oldest-and-faintest pruned past this.
@@ -89,7 +89,7 @@ const frecencyKey = (prefix: string, id: string): string => `${prefix}${id}`
  * A future `lastAt` — a clock that moved backwards, an edited file — is
  * clamped to no decay rather than amplified into a huge score.
  */
-export const decayedWeight = (entry: typeof FrecencyEntry.Type, now: number): number => {
+const decayedWeight = (entry: typeof FrecencyEntry.Type, now: number): number => {
   const age = Math.max(0, now - entry.lastAt)
   return entry.count * Math.pow(0.5, age / HALF_LIFE_MS)
 }
@@ -205,7 +205,7 @@ const decodeStore = Schema.decodeUnknownOption(Schema.fromJsonString(FrecencySto
 const encodeStore = Schema.encodeSync(Schema.fromJsonString(FrecencyStore))
 
 /** Where the store lives, derived from the home the shell mounted with. */
-export const frecencyPaths = (home: string) =>
+const frecencyPaths = (home: string) =>
   Effect.gen(function* () {
     const path = yield* Path.Path
     const directory = path.join(home, ".cache", "gent")
@@ -237,7 +237,7 @@ export const readFrecencyStore = (
  * A pick is a side effect of a keystroke. Losing one to a full disk is
  * invisible and harmless; surfacing it would interrupt the reader mid-word.
  */
-export const writeFrecencyStore = (
+const writeFrecencyStore = (
   home: string,
   store: FrecencyStoreValue,
 ): Effect.Effect<void, never, FileSystem.FileSystem | Path.Path> =>
@@ -435,7 +435,7 @@ const FRECENCY_MIN_FILTER = 3
  * Zero weight yields exactly zero, so a reader with no history — or a store
  * that failed to load — ranks on match quality alone.
  */
-export const frecencyBonus = (weight: number): number => {
+const frecencyBonus = (weight: number): number => {
   if (weight <= 0) return 0
   return FRECENCY_MAX * (1 - Math.pow(2, -weight / FRECENCY_GROWTH))
 }
@@ -449,7 +449,7 @@ export const frecencyBonus = (weight: number): number => {
  * alignment further right — but on names of a few words it agrees with the
  * optimal alignment, and it costs one pass instead of a matrix.
  */
-export const scoreSubsequence = (needle: string, haystack: string): number => {
+const scoreSubsequence = (needle: string, haystack: string): number => {
   const lowerNeedle = needle.toLowerCase()
   const lowerHaystack = haystack.toLowerCase()
   if (lowerNeedle.length === 0) return 0
