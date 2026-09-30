@@ -749,7 +749,6 @@ describe("docked panes", () => {
               sessionName="Test Session"
               branches={[branch("b1", "main"), branch("b2", "side-quest")]}
               onSelect={() => {}}
-              onClose={() => {}}
             />
           ),
           { width: 80, height: 40 },
@@ -773,7 +772,6 @@ describe("docked panes", () => {
               sessionName="Test Session"
               branches={[branch("b1", "main"), branch("b2", "side-quest"), branch("b3", "third")]}
               onSelect={() => {}}
-              onClose={() => {}}
             />
           ),
           { width: 80, height: 40 },
@@ -941,7 +939,6 @@ describe("docked pane column budget", () => {
                 sessionName="Test Session"
                 branches={[wideBranch]}
                 onSelect={() => {}}
-                onClose={() => {}}
               />
             </>
           ),

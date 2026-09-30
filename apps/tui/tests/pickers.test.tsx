@@ -127,7 +127,6 @@ describe("Branch picker", () => {
               onSelect={() => {
                 switched.push("select")
               }}
-              onClose={() => {}}
             />
           ),
           {
@@ -172,7 +171,6 @@ describe("Branch picker", () => {
               sessionName="Test Session"
               branches={[first, fork]}
               onSelect={() => {}}
-              onClose={() => {}}
             />
           ),
           {
@@ -194,33 +192,6 @@ describe("Branch picker", () => {
     }),
   )
 
-  it.live("hands escape to the pane owner rather than dismissing the list itself", () =>
-    Effect.gen(function* () {
-      // The select list treats escape as its own dismissal. The pane's handler
-      // has to win, or escape does nothing at all and the picker cannot be left.
-      let closes = 0
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <BranchPicker
-            open={true}
-            sessionId={SessionId.make("session-test")}
-            sessionName="Test Session"
-            branches={[branch("branch-main", "main")]}
-            onSelect={() => {}}
-            onClose={() => {
-              closes += 1
-            }}
-          />
-        )),
-      )
-      yield* waitForFrame(setup, () => renderFrame(setup).includes("main"), "open")
-      setup.mockInput.pressEscape()
-      // The mock terminal holds an escape until the next frame.
-      yield* waitForFrame(setup, () => closes > 0, "closed")
-      expect(closes).toBe(1)
-    }),
-  )
-
   it.live("resumes the branch the reader selects", () =>
     Effect.gen(function* () {
       const main = branch("branch-main", "main")
@@ -236,7 +207,6 @@ describe("Branch picker", () => {
             onSelect={(branchId) => {
               selected.push(branchId)
             }}
-            onClose={() => {}}
           />
         )),
       )

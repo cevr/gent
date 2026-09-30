@@ -706,9 +706,20 @@ export function Auth(props: AuthProps) {
   // The list screens size themselves from their `SelectList`; the key and
   // OAuth screens ask for the rows they draw.
 
+  // An enforced sign-in holds the slot: Esc on its list does nothing (closing
+  // it would only open it again), and the way out is ctrl+c.
+  const enforced = () => props.enforceAuth === true
+  const listLeave = () => {
+    if (enforced()) return "ctrl+c quit"
+    return "esc close"
+  }
   const listFooter = () => {
-    if (Option.isSome(state().error)) return "r retry · esc close"
-    return "↑↓ move · ↵ choose · d delete · esc close"
+    if (Option.isSome(state().error)) return `r retry · ${listLeave()}`
+    return `↑↓ move · ↵ choose · d delete · ${listLeave()}`
+  }
+  const dismissList = () => {
+    if (enforced()) return
+    Option.map(Option.fromNullishOr(props.onClose), (onClose) => onClose())
   }
   const emptyList = () => (
     <text style={{ fg: theme.textMuted }}>
@@ -819,7 +830,7 @@ export function Auth(props: AuthProps) {
             onSelect={(provider) =>
               send(AuthEvent.cases.OpenMethod.make({ provider: provider.provider }))
             }
-            onDismiss={() => Option.map(Option.fromNullishOr(props.onClose), (close) => close())}
+            onDismiss={dismissList}
             empty={emptyList}
             extraKeys={(event, selected) => {
               if (event.name === "r" && Option.isSome(state().error)) {

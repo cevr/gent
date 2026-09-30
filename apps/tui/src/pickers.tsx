@@ -261,10 +261,12 @@ export function PromptSearchPalette(props: PromptSearchPaletteProps) {
  * resume.
  *
  * The session underneath is already mounted on its active branch, so the pane
- * only has to say which branch to switch to. It opens at boot when the resumed
- * session has more than one branch, and on `/branches` after that. While it is
- * open the startup prompt waits, so a reader never sends a `-p` prompt into a
- * branch they did not choose.
+ * only has to say which branch to switch to. It opens only at boot, when the
+ * resumed session has more than one branch; the command palette's Branches
+ * level switches branches after that. While it is open the startup prompt
+ * waits, so a reader never sends a `-p` prompt into a branch they did not
+ * choose. With no branch chosen there is nothing behind it to fall back to:
+ * Esc does nothing here, and ctrl+c exits.
  *
  * It draws the `PickerFrame` every docked pane draws — ruled off top and
  * bottom under the composer, not a bordered box — so its height and its
@@ -279,7 +281,6 @@ interface BranchPickerProps {
   readonly sessionName: string
   readonly branches: readonly Branch[]
   readonly onSelect: (branchId: BranchId) => void
-  readonly onClose: () => void
 }
 
 const formatBranchLabel = (
@@ -364,7 +365,7 @@ export function BranchPicker(props: BranchPickerProps) {
           follows the list. */}
       <PickerFrame
         title={`Resume: ${props.sessionName}`}
-        footer={"↑↓ move   ↵ resume branch   esc close"}
+        footer={"↑↓ move   ↵ resume branch   ctrl+c quit"}
         error={error()}
       >
         <SelectList
@@ -373,7 +374,7 @@ export function BranchPicker(props: BranchPickerProps) {
           rows={rows}
           rowKey={(branch) => branch.id}
           onSelect={(branch) => props.onSelect(branch.id)}
-          onDismiss={props.onClose}
+          onDismiss={() => {}}
         />
       </PickerFrame>
     </Show>

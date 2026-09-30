@@ -665,13 +665,17 @@ export function Session(props: SessionProps) {
     if (controller.uiState().transcriptExpanded) {
       items.push({ text: "transcript · Esc to return", color: theme.textMuted })
     }
-    // One footer line, one owner. A local error (a slash command that could
-    // not apply, a failed RPC) replaces the phase word until the next turn
-    // clears it; an extension notice shows when no error stands, and a
-    // notice never replaces an error.
+    // One footer line, one owner. An armed key's cue (`ctrl+c again to exit`)
+    // comes first: it answers the key just pressed and lasts a second. A
+    // local error (a slash command that could not apply, a failed RPC)
+    // replaces the phase word until the next turn clears it; an extension
+    // notice shows when no error stands, and a notice never replaces an error.
+    const armedCue = controller.armedCue()
     const localError = Option.fromNullishOr(client.error())
     const notice = client.notice()
-    if (Option.isSome(localError)) {
+    if (Option.isSome(armedCue)) {
+      items.push({ text: armedCue.value, color: theme.warning })
+    } else if (Option.isSome(localError)) {
       items.push({ text: localError.value, color: theme.error })
     } else if (Option.isSome(notice)) {
       items.push({ text: notice.value, color: theme.warning })
@@ -817,7 +821,6 @@ export function Session(props: SessionProps) {
                 sessionName={controller.currentSessionName()}
                 branches={overlay.branches}
                 onSelect={controller.onBranchPickerSelect}
-                onClose={controller.onBranchPickerDismiss}
               />
             )
           })()}

@@ -589,6 +589,45 @@ const mountRunningTurn = (height = 24, extensions: ReadonlyArray<AnyExtensionCli
 
 type TestSetup = Awaited<ReturnType<typeof renderWithProviders>>
 
+const ESC_CUE = "esc again to clear"
+const CTRL_C_CUE = "ctrl+c again to exit"
+
+/** An idle session view with no draft; `shutdowns` counts the exits it performs. */
+const mountIdleSession = (runtime: GentRuntime = createMockRuntime()) =>
+  Effect.gen(function* () {
+    let shutdowns = 0
+    const client = createMockClient({
+      auth: { listProviders: () => Effect.succeed([]) },
+      branch: { getTree: () => Effect.succeed([]) },
+    })
+    const setup = yield* Effect.promise(() =>
+      renderWithProviders(() => <App />, {
+        client,
+        runtime,
+        initialSession: {
+          id: SessionId.make("session-a"),
+          activeBranchId: BranchId.make("branch-a"),
+          name: "Session A",
+          createdAt: dateFromMillis(0),
+          updatedAt: dateFromMillis(0),
+        },
+      }),
+    )
+    yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
+    // `useEnv().shutdown` is a no-op in the harness, so count the renderer
+    // teardown the controller performs alongside it.
+    setup.renderer.destroy = () => {
+      shutdowns += 1
+    }
+    return {
+      setup,
+      shutdowns: () => shutdowns,
+      /** Time for a key to be parsed and handled before a negative assertion. */
+      // gent/no-sleep: allow a lone escape byte stays in the stdin parser until its timeout flushes it as a key
+      settle: Effect.sleep("100 millis"),
+    }
+  })
+
 /** Type a slash command and press Enter. */
 const typeCommand = (command: string) => (setup: TestSetup) =>
   Effect.gen(function* () {
@@ -1353,51 +1392,111 @@ describe("App auth gate", () => {
       setup.renderer.destroy()
     }),
   )
-  it.live("opening the palette between two escapes does not quit", () =>
+  // Esc never quits: on a draft the first press arms and says so, and the
+  // second clears the draft.
+  it.live("Esc Esc on a draft clears it and never quits", () =>
     Effect.gen(function* () {
-      let shutdowns = 0
-      const client = createMockClient({
-        auth: { listProviders: () => Effect.succeed([]) },
-        branch: { getTree: () => Effect.succeed([]) },
-      })
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <App />, {
-          client,
-          runtime: createMockRuntime(),
-          initialSession: {
-            id: SessionId.make("session-a"),
-            activeBranchId: BranchId.make("branch-a"),
-            name: "Session A",
-            createdAt: dateFromMillis(0),
-            updatedAt: dateFromMillis(0),
-          },
-        }),
+      const view = yield* mountIdleSession()
+      yield* Effect.promise(() => view.setup.mockInput.typeText("keep me"))
+      yield* waitForFrame(view.setup, (frame) => frame.includes("keep me"), "the draft")
+      view.setup.mockInput.pressEscape()
+      const armed = yield* waitForFrame(
+        view.setup,
+        (frame) => frame.includes(ESC_CUE),
+        "the clear cue",
       )
-      yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
-      const destroy = setup.renderer.destroy.bind(setup.renderer)
-      setup.renderer.destroy = () => {
-        shutdowns += 1
-      }
-      // One escape arms the quit; the palette keybind disarms it, and an escape closes the palette.
-      setup.mockInput.pressEscape()
-      // gent/no-sleep: allow a lone escape byte stays in the stdin parser until its timeout flushes it as a key
-      yield* Effect.sleep("100 millis")
-      setup.mockInput.pressKey("p", { ctrl: true })
-      yield* waitForFrame(setup, (frame) => frame.includes("Commands"), "palette")
-      setup.mockInput.pressEscape()
-      yield* waitForFrame(setup, (frame) => !frame.includes("Commands"), "palette closed")
-      // The quit is disarmed, so this escape only arms it again.
-      setup.mockInput.pressEscape()
-      // gent/no-sleep: allow the escape must be parsed and handled before the negative assertion
-      yield* Effect.sleep("100 millis")
-      expect(shutdowns).toBe(0)
-      // A second escape in the window quits.
-      setup.mockInput.pressEscape()
-      yield* waitForFrame(setup, () => shutdowns > 0, "quit")
-      setup.renderer.destroy = destroy
-      expect(shutdowns).toBe(1)
-      setup.renderer.destroy()
-    }),
+      expect(armed).toContain("keep me")
+      view.setup.mockInput.pressEscape()
+      yield* waitForFrame(
+        view.setup,
+        (frame) => !frame.includes("keep me") && !frame.includes(ESC_CUE),
+        "the draft cleared",
+      )
+      // Esc on the empty composer does nothing.
+      view.setup.mockInput.pressEscape()
+      yield* view.settle
+      expect(view.shutdowns()).toBe(0)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  it.live("a keybind between two escapes disarms the clear", () =>
+    Effect.gen(function* () {
+      const view = yield* mountIdleSession()
+      yield* Effect.promise(() => view.setup.mockInput.typeText("keep me"))
+      view.setup.mockInput.pressEscape()
+      yield* waitForFrame(view.setup, (frame) => frame.includes(ESC_CUE), "the clear cue")
+      view.setup.mockInput.pressKey("p", { ctrl: true })
+      yield* waitForFrame(view.setup, (frame) => frame.includes("Commands"), "palette")
+      view.setup.mockInput.pressEscape()
+      yield* waitForFrame(view.setup, (frame) => !frame.includes("Commands"), "palette closed")
+      // The clear is disarmed, so this escape only arms it again.
+      view.setup.mockInput.pressEscape()
+      const frame = yield* waitForFrame(
+        view.setup,
+        (next) => next.includes(ESC_CUE),
+        "the clear cue again",
+      )
+      expect(frame).toContain("keep me")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  it.live("one ctrl+c on an idle empty composer draws the cue and does not quit", () =>
+    Effect.gen(function* () {
+      const view = yield* mountIdleSession()
+      view.setup.mockInput.pressKey("c", { ctrl: true })
+      yield* waitForFrame(view.setup, (frame) => frame.includes(CTRL_C_CUE), "the exit cue")
+      expect(view.shutdowns()).toBe(0)
+      view.setup.mockInput.pressKey("c", { ctrl: true })
+      yield* waitForFrame(view.setup, () => view.shutdowns() > 0, "quit")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  it.live("ctrl+c on a draft clears it and never quits over it", () =>
+    Effect.gen(function* () {
+      const view = yield* mountIdleSession()
+      yield* Effect.promise(() => view.setup.mockInput.typeText("keep me"))
+      yield* waitForFrame(view.setup, (frame) => frame.includes("keep me"), "the draft")
+      view.setup.mockInput.pressKey("c", { ctrl: true })
+      const frame = yield* waitForFrame(
+        view.setup,
+        (next) => !next.includes("keep me"),
+        "the draft cleared",
+      )
+      expect(frame).not.toContain(CTRL_C_CUE)
+      expect(view.shutdowns()).toBe(0)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  it.scopedLive("the exit cue disarms after its window", () =>
+    Effect.gen(function* () {
+      const clock = yield* TestClock.make()
+      const onClock = <R,>() => Context.makeUnsafe<R>(new Map([[Clock.Clock.key, clock]]))
+      const view = yield* mountIdleSession({
+        ...createMockRuntime(),
+        cast: (effect) => {
+          Effect.runForkWith(onClock())(effect)
+        },
+        fork: (effect) => Effect.runForkWith(onClock())(effect),
+      })
+      view.setup.mockInput.pressKey("c", { ctrl: true })
+      yield* waitForFrame(view.setup, (frame) => frame.includes(CTRL_C_CUE), "the exit cue")
+      yield* clock.adjust(Duration.seconds(5))
+      yield* waitForFrame(view.setup, (frame) => !frame.includes(CTRL_C_CUE), "the cue gone")
+      // Disarmed: the next press arms again and does not quit.
+      view.setup.mockInput.pressKey("c", { ctrl: true })
+      yield* waitForFrame(view.setup, (frame) => frame.includes(CTRL_C_CUE), "the cue again")
+      expect(view.shutdowns()).toBe(0)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  it.live("ctrl+d on an empty composer exits; on a draft it does not", () =>
+    Effect.gen(function* () {
+      const view = yield* mountIdleSession()
+      yield* Effect.promise(() => view.setup.mockInput.typeText("x"))
+      yield* waitForFrame(view.setup, (frame) => frame.includes("┃ x"), "the draft")
+      view.setup.mockInput.pressKey("d", { ctrl: true })
+      yield* view.settle
+      expect(view.shutdowns()).toBe(0)
+      view.setup.mockInput.pressKey("c", { ctrl: true })
+      yield* waitForFrame(view.setup, (frame) => !frame.includes("┃ x"), "the draft cleared")
+      view.setup.mockInput.pressKey("d", { ctrl: true })
+      yield* waitForFrame(view.setup, () => view.shutdowns() > 0, "quit")
+    }).pipe(Effect.timeout("10 seconds")),
   )
   it.live("an error shown during a running turn leaves the turn running", () =>
     Effect.gen(function* () {
@@ -1720,7 +1819,7 @@ describe("App auth gate", () => {
       setup.renderer.destroy()
     }).pipe(Effect.timeout("10 seconds")),
   )
-  it.live("ctrl+c quits an idle session while the btw pane is open", () =>
+  it.live("ctrl+c twice quits an idle session while the btw pane is open", () =>
     Effect.gen(function* () {
       let shutdowns = 0
       const client = createMockClient({
@@ -1749,6 +1848,9 @@ describe("App auth gate", () => {
       setup.renderer.destroy = () => {
         shutdowns += 1
       }
+      setup.mockInput.pressKey("c", { ctrl: true })
+      yield* waitForFrame(setup, (frame) => frame.includes(CTRL_C_CUE), "the exit cue")
+      expect(shutdowns).toBe(0)
       setup.mockInput.pressKey("c", { ctrl: true })
       yield* waitForFrame(setup, () => shutdowns > 0, "quit")
       setup.renderer.destroy = destroy
@@ -2684,11 +2786,6 @@ describe("App auth gate", () => {
       expect(view.sent).toEqual([])
     }).pipe(Effect.timeout("10 seconds")),
   )
-  const quitKeys: ReadonlyArray<{ readonly name: string; readonly press: (s: TestSetup) => void }> =
-    [
-      { name: "escape", press: (setup) => setup.mockInput.pressEscape() },
-      { name: "ctrl+c", press: (setup) => setup.mockInput.pressKey("c", { ctrl: true }) },
-    ]
   /** A resumed session with two branches: the boot branch picker is open over it. */
   const mountBootBranchPicker = Effect.gen(function* () {
     const client = createMockClient({
@@ -2749,27 +2846,45 @@ describe("App auth gate", () => {
       expect(frame).toContain("┃")
     }).pipe(Effect.timeout("10 seconds")),
   )
-  for (const key of quitKeys)
-    it.live(`${key.name} in the boot branch picker quits, because no branch was chosen`, () =>
-      Effect.gen(function* () {
-        // The picker is where a resumed multi-branch session starts. With no
-        // branch chosen there is nothing behind it to fall back to, so escape
-        // has to leave the program, not just close the pane.
-        let shutdowns = 0
-        const setup = yield* mountBootBranchPicker
-        // `useEnv().shutdown` is a no-op in the harness, so observe the renderer
-        // teardown the controller performs alongside it.
-        const destroy = setup.renderer.destroy.bind(setup.renderer)
-        setup.renderer.destroy = () => {
-          shutdowns += 1
-        }
-        key.press(setup)
-        yield* waitForFrame(setup, () => shutdowns > 0, "quit")
-        setup.renderer.destroy = destroy
-        expect(shutdowns).toBe(1)
-        setup.renderer.destroy()
-      }),
-    )
+  // The picker is where a resumed multi-branch session starts. With no branch
+  // chosen there is nothing behind it to fall back to: Esc never quits, so it
+  // does nothing here, and the hint names the way out.
+  it.live("Esc in the boot branch picker does nothing; its hint says ctrl+c quits", () =>
+    Effect.gen(function* () {
+      let shutdowns = 0
+      const setup = yield* mountBootBranchPicker
+      const destroy = setup.renderer.destroy.bind(setup.renderer)
+      setup.renderer.destroy = () => {
+        shutdowns += 1
+      }
+      expect(renderFrame(setup)).toContain("ctrl+c quit")
+      setup.mockInput.pressEscape()
+      // gent/no-sleep: allow a lone escape byte stays in the stdin parser until its timeout flushes it as a key
+      yield* Effect.sleep("100 millis")
+      const frame = yield* waitForFrame(setup, () => true, "the key handled")
+      expect(frame).toContain("Resume: Session A")
+      expect(shutdowns).toBe(0)
+      setup.renderer.destroy = destroy
+      setup.renderer.destroy()
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  it.live("ctrl+c in the boot branch picker quits, because no branch was chosen", () =>
+    Effect.gen(function* () {
+      let shutdowns = 0
+      const setup = yield* mountBootBranchPicker
+      // `useEnv().shutdown` is a no-op in the harness, so observe the renderer
+      // teardown the controller performs alongside it.
+      const destroy = setup.renderer.destroy.bind(setup.renderer)
+      setup.renderer.destroy = () => {
+        shutdowns += 1
+      }
+      setup.mockInput.pressKey("c", { ctrl: true })
+      yield* waitForFrame(setup, () => shutdowns > 0, "quit")
+      setup.renderer.destroy = destroy
+      expect(shutdowns).toBe(1)
+      setup.renderer.destroy()
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   it.live("branch picker does not trigger auth gating before a branch is selected", () =>
     Effect.gen(function* () {
       const calls: Array<{
@@ -2967,6 +3082,65 @@ describe("App auth gate", () => {
       setup.mockInput.pressKey("c", { ctrl: true })
       yield* waitForFrame(setup, () => shutdowns > 0, "quit")
       setup.renderer.destroy = destroy
+      setup.renderer.destroy()
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  // Esc never quits, and an enforced sign-in holds the slot: Esc on its
+  // provider list does nothing. It neither closes the pane (the gate would
+  // open a fresh one that loads the providers again and jumps back to the
+  // method screen) nor claims to.
+  it.live("Esc on an enforced sign-in's provider list keeps it and loads nothing again", () =>
+    Effect.gen(function* () {
+      let loads = 0
+      const client = createMockClient({
+        auth: {
+          listProviders: () =>
+            Effect.sync(() => {
+              loads += 1
+              return [
+                {
+                  provider: "openai",
+                  hasKey: false,
+                  required: true,
+                  source: noAuthSource,
+                  authType: absent,
+                },
+              ]
+            }),
+          listMethods: () => Effect.succeed({ openai: [apiMethod] }),
+        },
+      })
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <App />, {
+          client,
+          runtime: createMockRuntime(),
+          initialAgent: AgentName.make("cowork"),
+          initialSession: {
+            id: SessionId.make("session-a"),
+            activeBranchId: BranchId.make("branch-a"),
+            name: "A",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        }),
+      )
+      yield* waitForFrame(setup, (frame) => frame.includes("· method"), "the method screen")
+      setup.mockInput.pressEscape()
+      const list = yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("Sign in · 1 provider"),
+        "the provider list",
+      )
+      expect(list).toContain("ctrl+c quit")
+      expect(list).not.toContain("esc close")
+      const atList = loads
+      setup.mockInput.pressEscape()
+      // gent/no-sleep: allow a lone escape byte stays in the stdin parser until its timeout flushes it as a key
+      yield* Effect.sleep("100 millis")
+      const frame = yield* waitForFrame(setup, () => true, "the key handled")
+      expect(frame).toContain("Sign in · 1 provider")
+      expect(frame).not.toContain("· method")
+      expect(loads).toBe(atList)
       setup.renderer.destroy()
     }).pipe(Effect.timeout("10 seconds")),
   )

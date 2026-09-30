@@ -509,8 +509,9 @@ function TestComposer(props: {
       open: () => {},
       onEvent: () => {},
     },
-    activity: () => ({ phase: "idle", turn: 0 }),
+    activity: () => ({ phase: "idle" }),
     phaseLabel: () => "idle",
+    armedCue: () => Option.none(),
     elapsed: () => 0,
     // Production threads the live contributions here (session-controller.ts).
     // Dropping them makes every popup assertion vacuous, so the harness
@@ -537,7 +538,6 @@ function TestComposer(props: {
     onModelSelect: () => {},
     onReasoningSelect: () => {},
     currentSessionName: () => "Test Session",
-    onBranchPickerDismiss: () => {},
     onBranchPickerSelect: () => {},
   } satisfies SessionController
   return (
@@ -1589,8 +1589,9 @@ function TestComposerGhost(props: {
       open: () => {},
       onEvent: () => {},
     },
-    activity: () => ({ phase: "idle", turn: 0 }),
+    activity: () => ({ phase: "idle" }),
     phaseLabel: () => "idle",
+    armedCue: () => Option.none(),
     elapsed: () => 0,
     onComposerInteraction: (event: Parameters<typeof transitionComposerInteraction>[1]) =>
       setInteractionState((current) =>
@@ -1606,7 +1607,6 @@ function TestComposerGhost(props: {
     onModelSelect: () => {},
     onReasoningSelect: () => {},
     currentSessionName: () => "Test Session",
-    onBranchPickerDismiss: () => {},
     onBranchPickerSelect: () => {},
   } satisfies SessionController
   return (
@@ -1833,8 +1833,9 @@ function TestComposerSlashEnter(props: {
       open: () => {},
       onEvent: () => {},
     },
-    activity: () => ({ phase: "idle", turn: 0 }),
+    activity: () => ({ phase: "idle" }),
     phaseLabel: () => "idle",
+    armedCue: () => Option.none(),
     elapsed: () => 0,
     onComposerInteraction: (event: Parameters<typeof transitionComposerInteraction>[1]) =>
       setInteractionState((current) =>
@@ -1853,7 +1854,6 @@ function TestComposerSlashEnter(props: {
     onModelSelect: () => {},
     onReasoningSelect: () => {},
     currentSessionName: () => "Test Session",
-    onBranchPickerDismiss: () => {},
     onBranchPickerSelect: () => {},
   } satisfies SessionController
   return (
