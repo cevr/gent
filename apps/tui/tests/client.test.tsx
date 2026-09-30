@@ -712,6 +712,59 @@ describe("ClientProvider session lifecycle", () => {
       )
     }),
   )
+  // A handoff continues its parent's thread, so it works in the parent's
+  // directory, not the one gent was launched in.
+  it.scopedLive("a handoff creates its session in the current session's cwd", () =>
+    Effect.gen(function* () {
+      let ctx = Option.none<ClientContextValue>()
+      const createInputs: Array<{ cwd?: string }> = []
+      const client = createMockClient({
+        session: {
+          get: () =>
+            Effect.succeed({
+              id: SessionId.make("session-parent"),
+              name: "Parent",
+              cwd: "/work/parent",
+              createdAt: dateFromMillis(0),
+              updatedAt: dateFromMillis(0),
+            }),
+          create: (input: { cwd?: string }) =>
+            Effect.sync(() => {
+              createInputs.push(input)
+              return {
+                sessionId: SessionId.make("session-handoff"),
+                branchId: BranchId.make("branch-handoff"),
+                name: "Handoff",
+              }
+            }),
+        },
+      })
+      const setup = yield* renderScoped(
+        () => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />,
+        {
+          client,
+          cwd: "/work/launch",
+          initialSession: {
+            id: SessionId.make("session-parent"),
+            activeBranchId: BranchId.make("branch-parent"),
+            name: "Parent",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        },
+      )
+      const active = yield* requireClientSessionState(ctx)
+      active.openHandoffSession("the summary")
+      yield* waitForFrame(
+        setup,
+        () =>
+          Option.exists(active.session(), (s) => s.sessionId === SessionId.make("session-handoff")),
+        "handoff session active",
+      )
+      expect(createInputs.map((input) => input.cwd)).toEqual(["/work/parent"])
+      expect(Option.map(active.session(), (s) => s.cwd)).toEqual(Option.some("/work/parent"))
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   it.live("a new session takes its agent from its snapshot, never from the session before it", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()

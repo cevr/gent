@@ -1230,11 +1230,17 @@ export function ClientProvider(props: ClientProviderProps) {
   // latest: a later /new or switch has overtaken it otherwise.
   let navigation = 0
 
+  /**
+   * Creates a session in `cwd` and shows it. A `/new` starts in the launch
+   * directory; a handoff continues its parent's thread, so it takes the
+   * parent's directory.
+   */
   const createSessionWith = (
     input: Pick<
       CreateSessionInput,
       "parentSessionId" | "parentBranchId" | "continueThread" | "initialPrompt"
     >,
+    cwd: Effect.Effect<string, GentClientRpcError>,
   ) => {
     const ownNavigation = ++navigation
     // The current session stays in view until the server answers: a create
@@ -1244,7 +1250,9 @@ export function ClientProvider(props: ClientProviderProps) {
       yield* Effect.sync(() => {
         log.info("createSession", { requestId })
       })
-      return yield* client.session.create({ ...input, requestId, cwd: workspace.cwd })
+      const directory = yield* cwd
+      const created = yield* client.session.create({ ...input, requestId, cwd: directory })
+      return { ...created, cwd: directory }
     })
     cast(
       createSessionEffect().pipe(
@@ -1265,7 +1273,7 @@ export function ClientProvider(props: ClientProviderProps) {
                   sessionId: result.sessionId,
                   branchId: result.branchId,
                   name: result.name,
-                  cwd: workspace.cwd,
+                  cwd: result.cwd,
                 },
               }),
             )
@@ -1290,17 +1298,20 @@ export function ClientProvider(props: ClientProviderProps) {
     cwdOf,
     pathPlace,
 
-    createSession: () => createSessionWith({}),
+    createSession: () => createSessionWith({}, Effect.succeed(workspace.cwd)),
 
     openHandoffSession: (summary) => {
       const current = sessionOption()
       if (Option.isNone(current)) return
-      createSessionWith({
-        parentSessionId: current.value.sessionId,
-        parentBranchId: current.value.branchId,
-        continueThread: true,
-        initialPrompt: summary,
-      })
+      createSessionWith(
+        {
+          parentSessionId: current.value.sessionId,
+          parentBranchId: current.value.branchId,
+          continueThread: true,
+          initialPrompt: summary,
+        },
+        cwdOf(current.value.sessionId),
+      )
     },
 
     switchSession: (sessionId, branchId, name) => {
