@@ -448,46 +448,6 @@ describe("recorded cell execution", () => {
   // A bound function prints as native code, so only identity marks a host
   // getter. A cell's getter that never returns must not hang its worker. The
   // error is thrown, not bound, so only the error reader sees it.
-  it.scopedLive(
-    "a cell's own bound getter on a thrown error never runs",
-    () =>
-      Effect.gen(function* () {
-        const worker = yield* buildCellWorker
-        const [define, looping, after] = yield* setupCalls([
-          "let kept = 7",
-          "throw Object.defineProperty(new Error('x'), 'message', { get: function () { for (;;) {} }.bind(null) })",
-          "kept",
-        ])
-        if (!define || !looping || !after) return yield* Effect.die("Missing test cells")
-        const host = CellOperationHost.of({
-          catalog: hostCatalog("start"),
-          call: () => Effect.succeed({}),
-        })
-        const cells = Context.get(
-          yield* Layer.build(
-            CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }),
-          ),
-          CellExecution,
-        )
-        const ReplyText = Schema.Union([
-          Schema.Struct({ message: Schema.String }),
-          Schema.Struct({ display: Schema.String }),
-        ])
-        const reply = (call: typeof looping) =>
-          cells.run(call).pipe(
-            Effect.provideService(CellOperationHost, host),
-            Effect.map((result) => {
-              const text = Schema.decodeUnknownSync(ReplyText)(result.result)
-              if ("message" in text) return text.message
-              return text.display
-            }),
-          )
-        expect(yield* reply(define)).toBe("7")
-        expect(yield* reply(looping)).toBe("Error")
-        expect(yield* reply(after)).toBe("7")
-      }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
-    10000,
-  )
 
   /** A cell a hazard holds fails with the hazard's name instead of the test's timeout. */
   const heldBy =
@@ -653,34 +613,6 @@ describe("recorded cell execution", () => {
 
   // The error reader walks a thrown value's prototype chain. A Proxy in that
   // chain once ran its trap there, and a looping trap held the worker.
-  it.scopedLive(
-    "a thrown value over a looping Proxy prototype fails its cell; the worker lives",
-    () =>
-      Effect.gen(function* () {
-        const worker = yield* buildCellWorker
-        const [define, thrown, after] = yield* setupCalls([
-          "let kept = 7",
-          "throw Object.create(new Proxy({}, { getPrototypeOf() { for (;;) {} }, get() { for (;;) {} } }))",
-          "kept",
-        ])
-        if (!define || !thrown || !after) return yield* Effect.die("Missing test cells")
-        const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
-        const cells = Context.get(
-          yield* Layer.build(
-            CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }),
-          ),
-          CellExecution,
-        )
-        const run = (call: typeof define) =>
-          cells.run(call).pipe(Effect.provideService(CellOperationHost, host))
-        expect((yield* run(define)).result).toMatchObject({ display: "7" })
-        expect((yield* run(thrown)).result).toMatchObject({
-          message: "A thrown value that cannot be read",
-        })
-        expect((yield* run(after)).result).toMatchObject({ display: "7" })
-      }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
-    10000,
-  )
 
   // A cell can replace a shared built-in. The worker puts every built-in back
   // after the cell, before the display and the snapshot, and names it. The
@@ -1079,6 +1011,18 @@ describe("recorded cell execution", () => {
       source:
         "throw new Error('outer', { cause: { data: 1, get [Symbol.toStringTag]() { for (;;) {} } } })",
       shown: "Error: outer\ncaused by { data: 1, Symbol(Symbol.toStringTag): [Getter] }",
+    },
+    {
+      name: "a thrown error's own bound message getter",
+      source:
+        "throw Object.defineProperty(new Error('x'), 'message', { get: function () { for (;;) {} }.bind(null) })",
+      shown: "Error",
+    },
+    {
+      name: "a thrown value over a looping Proxy prototype",
+      source:
+        "throw Object.create(new Proxy({}, { getPrototypeOf() { for (;;) {} }, get() { for (;;) {} } }))",
+      shown: "A thrown value that cannot be read",
     },
   ]
   it.scopedLive(
