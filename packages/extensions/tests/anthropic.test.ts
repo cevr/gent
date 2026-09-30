@@ -448,7 +448,7 @@ describe("transformPayload — system content relocation", () => {
     () =>
       Effect.gen(function* () {
         // Anthropic requires tool_result blocks to be the FIRST blocks of
-        // a user message that carries any. Counsel  follow-up: relocator
+        // a user message that carries any. The relocator
         // must splice the prefix in AFTER the leading tool_result run,
         // not at index 0, otherwise the API returns 400.
         const payload = {
@@ -1260,10 +1260,8 @@ void Ref
  * keychain write-back. The HTTP path itself is exercised through the
  * Live integration (and gated by a real keychain entry); these tests
  * cover the deterministic transformations that decide whether a
- * refresh succeeds and what the keychain blob ends up containing.
- *
- * Counsel keychain alignment K1 + K2 — pulled in from
- * `griffinmartin/opencode-claude-auth`'s reference implementation.
+ * refresh succeeds and what the keychain blob ends up containing, as
+ * `griffinmartin/opencode-claude-auth`'s reference implementation does.
  */
 
 const WrappedCredentialBlob = Schema.Struct({
@@ -1668,14 +1666,10 @@ describe("getModelBetas", () => {
  * AnthropicPlatform.fromSetup invariant lock.
  *
  * `platform.home` must source from `host.homeDirectory` (the OS user home),
- * NOT `ctx.home` (the Gent-configured home). The Claude Code credential
+ * NOT `ctx.home` (the home gent runs with). The Claude Code credential
  * file is read from `~/.config/claude/.credentials.json` at the real OS
- * home regardless of any `GENT_HOME` override.
- *
- * This is a regression lock: an earlier refactor in W33-C4 briefly used
- * `ctx.home`, which would have redirected credential lookup to the
- * configured Gent home and broken Anthropic OAuth for any setup with a
- * non-default `GENT_HOME`.
+ * home whatever `ctx.home` is: reading it under `ctx.home` would break
+ * Anthropic OAuth for a host whose `ctx.home` is not the OS home.
  */
 
 type SetupFacts = Pick<ExtensionHostService, "host">
@@ -1736,8 +1730,8 @@ describe("AnthropicPlatform.fromSetup", () => {
  *      Allocating `Ref<CredentialCacheCell>` inside
  *      `makeOauthAnthropicLayer` gave each request a fresh empty
  *      cache — credential reuse was silently dead.
- *   2. **API-key path wrapped in keychainClient**: only OAuth should
- *      flow through `keychainClient` (which injects Claude Code OAuth
+ *   2. **API-key path wrapped in buildKeychainTransformClient**: only OAuth should
+ *      flow through `buildKeychainTransformClient` (which injects Claude Code OAuth
  *      billing-header system blocks + identity prefix). Extending the
  *      wrapper to the API-key branch is incorrect.
  *
@@ -2240,7 +2234,7 @@ describe("buildAnthropicModelDriver — OAuth path uses the external credential 
     }),
   )
   it.live(
-    "OAuth resolveModel layer applies keychainClient transforms (system identity prefix)",
+    "OAuth resolveModel layer applies buildKeychainTransformClient transforms (system identity prefix)",
     () =>
       Effect.gen(function* () {
         const credentialCellRef =
@@ -2258,7 +2252,7 @@ describe("buildAnthropicModelDriver — OAuth path uses the external credential 
         const payload = parsePayload(
           Option.getOrThrow(Option.fromUndefinedOr(fetchState.captured.at(-1)!.body)),
         )
-        // keychainClient injects the SYSTEM_IDENTITY_PREFIX block. If the
+        // buildKeychainTransformClient injects the SYSTEM_IDENTITY_PREFIX block. If the
         // OAuth path stops being wrapped, the system block disappears.
         const systemBlocks = payload["system"]
         expect(Array.isArray(systemBlocks)).toBe(true)
@@ -3371,7 +3365,7 @@ describe("buildAnthropicModelDriver — API-key path is plain SDK", () => {
     }),
   )
   it.live(
-    "API-key resolveModel does NOT inject keychainClient transforms (no SYSTEM_IDENTITY_PREFIX)",
+    "API-key resolveModel does NOT inject buildKeychainTransformClient transforms (no SYSTEM_IDENTITY_PREFIX)",
     () =>
       Effect.gen(function* () {
         const credentialCellRef =
@@ -3383,7 +3377,7 @@ describe("buildAnthropicModelDriver — API-key path is plain SDK", () => {
         const payload = parsePayload(
           Option.getOrThrow(Option.fromUndefinedOr(fetchState.captured.at(-1)!.body)),
         )
-        // No keychainClient wrapper → no system block, no identity prefix
+        // No buildKeychainTransformClient wrapper → no system block, no identity prefix
         // injection. The API-key branch must not wrap.
         expect(Bun.inspect(payload["system"] ?? "")).not.toContain(SYSTEM_IDENTITY_PREFIX)
       }),

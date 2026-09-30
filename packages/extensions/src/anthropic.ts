@@ -215,10 +215,10 @@ export class AnthropicPlatform extends Context.Service<AnthropicPlatform, Anthro
 ) {
   /**
    * Build from the `ExtensionHost` seen during setup. `home` is sourced from
-   * `host.homeDirectory` (the OS user home), not `ctx.home` (the Gent
-   * configured home): the Claude Code credential file lives at the OS
-   * user's home regardless of a `GENT_HOME` override. This is the one place
-   * that picks the field.
+   * `host.homeDirectory` (the OS user home), not `ctx.home` (the home gent
+   * runs with, which a host may set elsewhere): the Claude Code credential
+   * file lives at the OS user's home whatever `ctx.home` is. This is the one
+   * place that picks the field.
    */
   static readonly fromSetup = (
     ctx: Pick<ExtensionHostService, "host">,
@@ -2416,7 +2416,7 @@ const applyRequestPlan = (payload: JsonRecord, plan: AnthropicRequestPlan): Json
 
 /**
  * API-key path: plain `AnthropicClient.layer` over `FetchHttpClient`.
- * No keychain wrapper — `keychainClient` injects Claude Code OAuth
+ * No keychain wrapper — `buildKeychainTransformClient` injects Claude Code OAuth
  * billing-header system blocks + identity prefix, which API-key users
  * are not on the hook for.
  */
