@@ -65,6 +65,7 @@ import {
   type BranchId,
   ClientRequestGrant,
   ExtensionId,
+  type InteractionRequestId,
   MessageId,
   ProcessGenerationId,
   RequestId,
@@ -2473,6 +2474,12 @@ export class SessionProfileCache extends Context.Service<
  * Tools access this indirectly via `ctx.interaction.approve()` on ToolCapabilityContext.
  */
 
+const logStoreFailure =
+  (write: "resolve" | "take", requestId: InteractionRequestId) => (error: StorageError) =>
+    Effect.logWarning(`interaction.${write}-failed`).pipe(
+      Effect.annotateLogs({ requestId, error: String(error) }),
+    )
+
 const makeApprovalInteractionService: Effect.Effect<
   InteractionService,
   never,
@@ -2488,8 +2495,12 @@ const makeApprovalInteractionService: Effect.Effect<
             new EventStoreError({ message: "Failed to persist interaction request", cause }),
         ),
       ),
-    resolve: (requestId) => store.resolve(requestId).pipe(Effect.catchEager(() => Effect.void)),
-    take: (requestId) => store.take(requestId).pipe(Effect.catchEager(() => Effect.void)),
+    // A failed resolve or take leaves the row open, so the startup recovery
+    // asks it again; the call goes on, and the log names the request.
+    resolve: (requestId) =>
+      store.resolve(requestId).pipe(Effect.catchEager(logStoreFailure("resolve", requestId))),
+    take: (requestId) =>
+      store.take(requestId).pipe(Effect.catchEager(logStoreFailure("take", requestId))),
     decide: (branch, requestId, decisionJson) =>
       store
         .decide(branch, requestId, decisionJson)

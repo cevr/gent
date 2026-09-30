@@ -1,8 +1,23 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Cause, Clock, Deferred, Effect, Exit, Fiber, Layer, Option, Queue, Schema } from "effect"
+import {
+  Cause,
+  Clock,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Logger,
+  Option,
+  Queue,
+  References,
+  Schema,
+} from "effect"
 import { InteractionStorage, type InteractionStorageService } from "../../src/storage/storage"
 import { ensureStorageParents, testSqliteStorage } from "../../src/test-utils/harness"
-import { EventStoreError } from "../../src/domain/event"
+import { EventStore, EventStoreError } from "../../src/domain/event"
+import { StorageError } from "../../src/domain/errors"
+import { ApprovalService } from "../../src/runtime/extension-host"
 import {
   CurrentInteractionOwner,
   InteractionPendingError,
@@ -841,6 +856,51 @@ describe("Interaction Request", () => {
       expect(yield* shownRequest(interaction, branch)).toEqual(Option.none())
       expect(yield* is.listOpen(branch)).toEqual([])
     }).pipe(Effect.provide(storageLive)),
+  )
+
+  // A failed resolve leaves the row open, so a restart asks it again; the
+  // log is the only trace of why.
+  it.live("a settle that storage fails logs its request and leaves the row open", () =>
+    Effect.gen(function* () {
+      const warnings: Array<{ readonly message: string; readonly requestId: unknown }> = []
+      const capture = Logger.make(({ message, fiber }) => {
+        const annotations = fiber.getRef(References.CurrentLogAnnotations)
+        warnings.push({ message: String(message), requestId: annotations["requestId"] })
+      })
+      const failingResolve = Layer.effect(
+        InteractionStorage,
+        Effect.map(InteractionStorage, (is) =>
+          InteractionStorage.of({
+            ...is,
+            resolve: () => Effect.fail(new StorageError({ message: "disk full" })),
+          }),
+        ),
+      ).pipe(Layer.provideMerge(storageLive))
+      const approvalLayer = ApprovalService.Live.pipe(
+        Layer.provideMerge(Layer.mergeAll(failingResolve, EventStore.Memory)),
+      )
+      yield* Effect.gen(function* () {
+        const approval = yield* ApprovalService
+        const branch = { sessionId: SessionId.make("s-fail"), branchId: BranchId.make("b-fail") }
+        yield* ensureStorageParents(branch)
+        const open = yield* pendingId(
+          yield* asCall(
+            approval,
+            branch,
+          )(approval.present({ text: "Go?" }, branch)).pipe(Effect.exit),
+        )
+        yield* approval.endTurn(branch)
+        expect(warnings).toContainEqual({
+          message: "interaction.resolve-failed",
+          requestId: open,
+        })
+        expect((yield* (yield* InteractionStorage).listOpen(branch)).length).toBe(1)
+      }).pipe(
+        Effect.provide(Layer.mergeAll(approvalLayer, Logger.layer([capture]))),
+        // The test preload turns logs off; this test reads one.
+        Effect.provideService(References.MinimumLogLevel, "Warn"),
+      )
+    }),
   )
 
   /**
