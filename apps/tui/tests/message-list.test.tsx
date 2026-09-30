@@ -4,6 +4,7 @@ import { type CliRenderer, type CliRendererExternalOutputEvent, SyntaxStyle } fr
 import { describe, expect, it, test } from "effect-bun-test"
 import {
   addStep,
+  currentMillis,
   emptyTurnSteps,
   getSessionEventLabel,
   type Message as ListMessage,
@@ -216,6 +217,38 @@ describe("session event labels", () => {
     )
     expect(getSessionEventLabel({ ...event, reason: "" }, createdAt)).toBe("Retrying in 2s... 1/3")
   })
+
+  // A pending retry's row is the one row that follows the clock.
+  it.live("a pending retry row counts down to now", () =>
+    Effect.gen(function* () {
+      const event: SessionEvent = {
+        _tag: "retrying",
+        attempt: 1,
+        maxAttempts: 3,
+        delayMs: 1000,
+        outcome: "pending",
+        reason: "",
+        createdAt: currentMillis(),
+        seq: 1,
+      }
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <MessageList
+              items={[event]}
+              disclosure="collapsed"
+              syntaxStyle={syntaxStyle}
+              streaming={true}
+            />
+          ),
+          { width: 80, height: 10 },
+        ),
+      )
+      yield* waitForFrame(setup, (frame) => frame.includes("Retrying in 1s... 1/3"), "countdown")
+      yield* waitForFrame(setup, (frame) => frame.includes("Retrying now... 1/3"), "now", 3000)
+      destroyRenderSetup(setup)
+    }).pipe(Effect.timeout("8 seconds")),
+  )
 
   test("a retry the turn's cancel cut short is not called finished", () => {
     const event: SessionEvent = {

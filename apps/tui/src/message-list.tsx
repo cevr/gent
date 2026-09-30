@@ -222,9 +222,12 @@ function SessionEventIndicator(props: SessionEventIndicatorProps) {
   const { theme } = useTheme()
   const tick = useSpinnerClock()
 
+  // Only a pending retry counts down; every other row's label is fixed, so
+  // only that row reads the clock.
   const content = () => {
-    tick()
-    return getSessionEventLabel(props.event, currentMillis())
+    const event = props.event
+    if (event._tag === "retrying" && event.outcome === "pending") tick()
+    return getSessionEventLabel(event, currentMillis())
   }
 
   const color = () => {
