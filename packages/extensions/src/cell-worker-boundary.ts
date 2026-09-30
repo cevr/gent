@@ -16,7 +16,7 @@ import { AsyncLocalStorage } from "node:async_hooks"
 import { createRequire } from "node:module"
 import { types } from "node:util"
 import {
-  type CellCatalogEntry,
+  type CellCatalogListing,
   reservedToolSegments,
   toolDiscoveryKeys,
   toolPath,
@@ -105,9 +105,11 @@ const nodeTarget = (path: string) =>
 type ToolNode = ReturnType<typeof nodeTarget>
 
 interface ToolCatalogView {
-  readonly entries: () => ReadonlyArray<CellCatalogEntry>
+  readonly entries: () => ReadonlyArray<CellCatalogListing>
   readonly ids: () => ReadonlyArray<string>
-  readonly describe: (id: string) => Option.Option<CellCatalogEntry>
+  readonly describe: (id: string) => Option.Option<CellCatalogListing>
+  /** The tool's full description, which the host holds: `await tools(id)`. */
+  readonly details: (id: string) => Promise<Schema.Json>
   // oxlint-disable-next-line effect/noUnknownParameters -- model code passes any JavaScript value to the tool namespace
   readonly call: (id: string, input: unknown) => Promise<Schema.Json>
 }
@@ -125,14 +127,14 @@ const searchTokens = (text: string) =>
     .split(" ")
     .filter((word) => word !== "")
 
-/** Each field a query is matched in, by weight: the id, its last segment, its namespace, the description. */
-const searchFields = (entry: CellCatalogEntry) => {
+/** Each field a query is matched in, by weight: the id, its last segment, its namespace, the summary. */
+const searchFields = (entry: CellCatalogListing) => {
   const segments = entry.name.split(".")
   return [
     { text: entry.name, weight: 12 },
     { text: segments.at(-1) ?? "", weight: 10 },
     { text: segments.slice(0, -1).join("."), weight: 8 },
-    { text: entry.description, weight: 5 },
+    { text: entry.summary, weight: 5 },
   ].map((field) => ({ raw: searchText(field.text), tokens: searchTokens(field.text), ...field }))
 }
 
@@ -145,7 +147,7 @@ const searchFields = (entry: CellCatalogEntry) => {
  * shorter than 3 characters is never a prefix of the query word, so `0` does
  * not match `042`), or 1 for a substring. Matching every word adds 25.
  */
-const scoreEntry = (entry: CellCatalogEntry, phrase: string, words: ReadonlyArray<string>) => {
+const scoreEntry = (entry: CellCatalogListing, phrase: string, words: ReadonlyArray<string>) => {
   const matched = new Set<string>()
   let score = 0
   let phraseFound = false
@@ -212,7 +214,7 @@ const defaultSearchLimit = 20
  * only when `hasMore` is true.
  */
 const searchCatalog = (
-  entries: ReadonlyArray<CellCatalogEntry>,
+  entries: ReadonlyArray<CellCatalogListing>,
   query: string,
   // oxlint-disable-next-line effect/noUnknownParameters -- model code passes any JavaScript value to the tool namespace
   options: unknown,
@@ -269,8 +271,10 @@ const isToolKey = (key: string | symbol): key is string =>
  * A reserved key (`then`, `toJSON`, `constructor`, `call`, `name`, ...) is
  * never a tool, so `await`, `JSON.stringify`, and inspection never call one.
  * `tools(id)` is the one lookup by string: it returns the tool as a function
- * that carries its catalog entry (`id`, `description`, `guidelines`,
- * `parameters`), and reaches an id whose segment is reserved.
+ * that carries its `id` and `signature`, and reaches an id whose segment is
+ * reserved. That function is also thenable: `await tools(id)` asks the host
+ * for the tool's `{ id, description, guidelines, parameters, signature }`,
+ * which the worker does not hold.
  *
  * The root also holds the discovery functions: `tools.search(query, options?)`
  * returns one ranked page of `{ id, description }` (see `searchCatalog`), and
@@ -302,9 +306,12 @@ const makeToolNamespace = (catalog: ToolCatalogView): ToolNode => {
     // oxlint-disable-next-line effect/noUnknownParameters -- model code passes any JavaScript value to the tool namespace
     return Object.assign((input?: unknown) => catalog.call(entry.name, input), {
       id: entry.name,
-      description: entry.description,
-      guidelines: [...entry.guidelines],
-      parameters: entry.parameters,
+      signature: entry.signature,
+      then: (
+        onFulfilled?: (details: Schema.Json) => unknown,
+        // oxlint-disable-next-line effect/noUnknownParameters -- `await` hands the thenable its own callbacks
+        onRejected?: (reason: unknown) => unknown,
+      ) => catalog.details(entry.name).then(onFulfilled, onRejected),
     })
   }
   // Model code may pass any value; `String` reads it as the query or id it names.
@@ -418,6 +425,8 @@ export class CellHost extends Context.Service<
       name: string,
       input: Schema.Json,
     ) => Effect.Effect<Schema.Json, CellEvaluationError>
+    /** The full description of a listed tool, which only the host holds. */
+    readonly describe: (id: string) => Effect.Effect<Schema.Json, CellEvaluationError>
   }
 >()("@gent/extensions/src/cell-worker-boundary/CellHost") {}
 
@@ -725,15 +734,12 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
     })
   // The catalog is data the host already validated. The namespace reads it on every access,
   // so a changed catalog changes the callable paths without rebuilding anything.
-  let catalog: ReadonlyArray<CellCatalogEntry> = []
+  let catalog: ReadonlyArray<CellCatalogListing> = []
   const toolsNamespace = makeToolNamespace({
     entries: () => catalog,
     ids: () => catalog.map((entry) => entry.name),
-    describe: (id) =>
-      Option.map(
-        Option.fromUndefinedOr(catalog.find((candidate) => candidate.name === id)),
-        (entry) => ({ ...entry, guidelines: [...entry.guidelines] }),
-      ),
+    describe: (id) => Option.fromUndefinedOr(catalog.find((candidate) => candidate.name === id)),
+    details: (id) => runPromise(host.describe(id)),
     call: (id, input) =>
       runPromise(
         Schema.decodeUnknownEffect(Schema.Json)(inputOrEmpty(input)).pipe(
@@ -1018,7 +1024,7 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
   })
 
   /** Replace the catalog the tools namespace reads. It is not part of the bindings. */
-  const setCatalog = (tools: ReadonlyArray<CellCatalogEntry>) =>
+  const setCatalog = (tools: ReadonlyArray<CellCatalogListing>) =>
     Effect.sync(() => {
       catalog = tools
     })
@@ -1064,7 +1070,7 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
     evaluate: (source: string) => Semaphore.withPermit(permit, evaluate(source)),
     /** Never waits for the permit: the error may come from the running cell. */
     reportUncaught,
-    setCatalog: (tools: ReadonlyArray<CellCatalogEntry>) =>
+    setCatalog: (tools: ReadonlyArray<CellCatalogListing>) =>
       Semaphore.withPermit(permit, setCatalog(tools)),
     snapshot: Semaphore.withPermit(permit, snapshot),
     /** Built-ins this worker could not put back; the host replaces a worker that names any. */
@@ -1119,26 +1125,36 @@ export const runCellWorker = Effect.scoped(
       Effect.forEach(pending.values(), Deferred.interrupt, { discard: true }),
     )
 
+    /** Sends one request the host answers by operation id, and waits for that answer. */
+    const askHost = Effect.fn("CellWorker.askHost")(function* (
+      request: (cellId: string, operationId: string) => CellResponse,
+    ) {
+      if (Option.isNone(activeCell)) return yield* callError("No active cell")
+      if (pending.size >= maximumPendingCellCalls || cellCalls >= maximumCallsPerCell) {
+        return yield* callError("Cell host-call limit exceeded")
+      }
+      const cellId = activeCell.value
+      const operationId = String(++operationSequence)
+      cellCalls++
+      const reply = yield* Deferred.make<Schema.Json, CellEvaluationError>()
+      pending.set(operationId, reply)
+      return yield* transport.send(request(cellId, operationId)).pipe(
+        Effect.mapError((error) => callError(error.message)),
+        Effect.andThen(Deferred.await(reply)),
+        Effect.ensuring(Effect.sync(() => pending.delete(operationId))),
+      )
+    })
+
     const kernel = yield* makeBunCellEvaluator.pipe(
       Effect.provideService(CellHost, {
-        call: Effect.fn("CellWorker.call")(function* (name, input) {
-          if (Option.isNone(activeCell)) return yield* callError("No active cell")
-          if (pending.size >= maximumPendingCellCalls || cellCalls >= maximumCallsPerCell) {
-            return yield* callError("Cell host-call limit exceeded")
-          }
-          const cellId = activeCell.value
-          const operationId = String(++operationSequence)
-          cellCalls++
-          const reply = yield* Deferred.make<Schema.Json, CellEvaluationError>()
-          pending.set(operationId, reply)
-          return yield* transport
-            .send(CellResponse.cases.HostCall.make({ cellId, operationId, name, input }))
-            .pipe(
-              Effect.mapError((error) => callError(error.message)),
-              Effect.andThen(Deferred.await(reply)),
-              Effect.ensuring(Effect.sync(() => pending.delete(operationId))),
-            )
-        }),
+        call: (name, input) =>
+          askHost((cellId, operationId) =>
+            CellResponse.cases.HostCall.make({ cellId, operationId, name, input }),
+          ),
+        describe: (id) =>
+          askHost((cellId, operationId) =>
+            CellResponse.cases.Describe.make({ cellId, operationId, id }),
+          ),
       }),
     )
 

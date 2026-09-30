@@ -2316,7 +2316,7 @@ describe("cell worker process", () => {
   )
 
   it.scopedLive(
-    "ships the catalog once per hash and again to a replacement worker",
+    "ships the catalog listing once per hash and again to a replacement worker, and serves its details",
     () =>
       Effect.gen(function* () {
         const kernel = yield* openCellKernel({
@@ -2339,7 +2339,8 @@ describe("cell worker process", () => {
           ],
         }
         const host = CellOperationHost.of({ catalog, call: () => Effect.succeed(true) })
-        const describe = "tools('read').description"
+        // The worker holds the listing; the kernel answers the details from the catalog it kept.
+        const describe = "(await tools('read')).description"
         const first = yield* kernel
           .evaluate(describe)
           .pipe(Effect.provideService(CellOperationHost, host))
@@ -4333,7 +4334,7 @@ const cellOnly = (step: SequenceStep): SequenceStep => ({
       .join("\n")
     expect(system).toContain("## Host Tools")
     expect(system).toContain("- tools.read(input: { path: string")
-    expect(system).toContain("`tools(id)` returns the tool with its full input schema")
+    expect(system).toContain("`await tools(id)` returns its full input schema")
     expect(system).not.toContain("tools.cell(")
   },
 })
@@ -5070,8 +5071,8 @@ describe("branch cell lifetime", () => {
         yield* Effect.scoped(
           Effect.gen(function* () {
             const sources = [
-              "const names = Object.keys(tools); if (names.includes('hidden') || names.includes('cell') || !names.includes('worker')) throw new Error('Wrong catalog'); const spec = tools('worker'); if (spec.parameters.type !== 'number' || !spec.guidelines.includes('Supply the current worker PID')) throw new Error('Wrong tool description'); let kept = 21; await tools.worker(process.pid); kept",
-              "if (tools('worker').parameters.type !== 'number') throw new Error('Catalog was not retained'); kept += 1",
+              "const names = Object.keys(tools); if (names.includes('hidden') || names.includes('cell') || !names.includes('worker')) throw new Error('Wrong catalog'); const spec = await tools('worker'); if (spec.parameters.type !== 'number' || !spec.guidelines.includes('Supply the current worker PID')) throw new Error('Wrong tool description'); let kept = 21; await tools.worker(process.pid); kept",
+              "if ((await tools('worker')).parameters.type !== 'number') throw new Error('Catalog was not retained'); kept += 1",
               "await tools.worker(process.pid); typeof kept",
               "let rejected = false; try { await tools.cell({code: 'kept = 0'}) } catch (error) { rejected = error.message.includes('tools.cell is not a host tool selected for this turn') }; let hiddenRejected = false; try { await tools.hidden({}) } catch { hiddenRejected = true }; rejected && hiddenRejected && kept === 23",
               "typeof kept",

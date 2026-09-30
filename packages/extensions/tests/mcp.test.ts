@@ -60,6 +60,7 @@ import { shippedPreset } from "./helpers/test-preset.js"
  * `MCP_FIXTURE_ENV_TOOL` adds `env`, which reads the server's environment;
  * `MCP_FIXTURE_MALFORMED` adds four entries the spec's tool schema refuses, one named `a.b`, and `a_b`;
  * `MCP_FIXTURE_BINARY` adds `image`, which returns an image and a blob;
+ * `MCP_FIXTURE_MANY=n` adds `n` tools `bulk_<i>`, each with a 2 KB input schema;
  * `MCP_FIXTURE_TYPED` adds `stats` and `badstats`, which declare an output
  * schema, and only `stats` keeps it;
  * `tools/list` answers no tools while `MCP_FIXTURE_EMPTY_LIST` names a file that exists.
@@ -134,6 +135,12 @@ if (process.env.MCP_FIXTURE_MALFORMED) {
 }
 if (process.env.MCP_FIXTURE_BINARY) {
   tools.push({ name: "image", description: "Return an image and a blob.", inputSchema: { type: "object" } })
+}
+if (process.env.MCP_FIXTURE_MANY) {
+  const padding = "p".repeat(2000)
+  for (let index = 0; index < Number(process.env.MCP_FIXTURE_MANY); index++) {
+    tools.push({ name: "bulk_" + index, description: "Bulk tool " + index + ".", inputSchema: { type: "object", description: padding, properties: {} } })
+  }
 }
 if (process.env.MCP_FIXTURE_TYPED) {
   const outputSchema = {
@@ -2098,6 +2105,44 @@ describe("mcp results", () => {
 // ── cell ────────────────────────────────────────────────────────────────────
 
 describe("mcp tools in the cell", () => {
+  it.scopedLive(
+    "a server listing 600 tools with 2 KB schemas leaves the cell working, and await tools(id) reads one schema",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* makeFixture
+        const code = [
+          "const spec = await tools('mcp.fixture.bulk_599')",
+          "const echoed = await tools.mcp.fixture.echo({ text: 'hi' })",
+          "JSON.stringify({ echoed, id: spec.id, schema: spec.parameters.description.length })",
+        ].join("; ")
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          toolCallStep("cell", { code }),
+          textStep("done"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...shippedPreset,
+          extensionInputs: [
+            ...shippedPreset.extensionInputs,
+            McpServers("@test/mcp-many", { fixture: fixture.stdio({ MCP_FIXTURE_MANY: "600" }) }),
+          ],
+          providerLayer,
+        })
+        yield* client.message.send({ sessionId, branchId, content: "use one of many tools" })
+        const result = yield* cellResultAfterDone(client, branchId)
+        expect(result).toMatchObject({
+          name: "cell",
+          isFailure: false,
+          result: {
+            display: encodeJson({ echoed: "hi", id: "mcp.fixture.bulk_599", schema: 2000 }),
+          },
+        })
+      }).pipe(
+        Effect.timeout("25 seconds"),
+        Effect.provide(Layer.provideMerge(withDataDir, platformLayer)),
+      ),
+    30_000,
+  )
+
   it.scopedLive(
     "the cell calls MCP tools as typed functions through the host tool path, on one lazy connection",
     () =>

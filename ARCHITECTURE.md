@@ -1136,13 +1136,16 @@ never exceeds it. Ids order by UTF-16 code unit (`compareIds` in
 the cached prompt prefix stays byte-stable while the set does. The section is rebuilt each turn, so live composition changes reach
 the model as ordinary instruction changes. `cell.ts` builds the data half from
 the same selected map: name, description, guidelines, the actual Effect AI
-input schema, the rendered signature line, and its one-line summary, hashed
-over its encoding. `dispatchCell` hands it to the cell host; the kernel sends it inside
-`Evaluate` only when the hash differs from what the current worker holds, and
-clears that memory when a replacement worker starts, so the first cell on a new
-worker carries the full catalog. The worker keeps the catalog beside the
-namespace: `reset` clears bindings, not the catalog, and a snapshot never
-contains it.
+input schema (derived once with the signature; a schema that cannot be
+derived is `{}`), the rendered signature line, and its one-line summary,
+hashed over its encoding. `dispatchCell` hands it to the cell host. The kernel
+sends only its listing (id, signature line, summary) inside `Evaluate`, and
+only when the hash differs from what the current worker holds, so the frame
+stays small with hundreds of tools; it keeps the whole catalog and clears that
+memory when a replacement worker starts, so the first cell on a new worker
+carries the listing. A listing past the 1 MiB frame fails the cell with the
+tool count named. The worker keeps the listing beside the namespace: `reset`
+clears bindings, not the listing, and a snapshot never contains it.
 
 Inside the cell `tools` is a namespace over that catalog: every selected id is
 a callable path, split on `.` (`delegate.start` is `tools.delegate.start(input)`,
@@ -1155,15 +1158,17 @@ its own or defines on a function (`then`, `toJSON`, `constructor`, `call`,
 `name`, ...; `reservedToolSegments` in `cell-protocol.ts`) keeps its JavaScript
 meaning and never names a tool, so `await`, `JSON.stringify`, and inspection
 never call one. `tools(id)` is the one lookup by string: a local synchronous
-read that returns the tool as a function carrying its catalog entry (`id`,
-`description`, `guidelines`, `parameters`). It reaches an id with a reserved
-segment, which the prompt renders as `tools("read.then")(input)`; it records
-no operation receipt and grants no execution permission. The root also holds
+read that returns the tool as a function carrying its `id` and `signature`.
+It reaches an id with a reserved segment, which the prompt renders as
+`tools("read.then")(input)`. The function is thenable: `await tools(id)` sends
+a `Describe` frame and the kernel answers from the catalog it kept with the
+tool's `{ id, description, guidelines, parameters, signature }`. Neither
+records an operation receipt or grants execution permission. The root also holds
 two discovery functions (`toolDiscoveryKeys`). `tools.search(query, { namespace,
 limit, offset }?)` returns one page, `{ items: { id, description }[], total,
 hasMore, nextOffset }`, 20 items by default. It splits camelCase and
 `_ . / : -`, weighs the whole id over its last segment, its namespace and the
-description, adds exact, prefix and phrase bonuses, drops an id that matches
+one-line summary, adds exact, prefix and phrase bonuses, drops an id that matches
 fewer than all distinct words of a one- or two-word query (60% of a longer one;
 a repeated word counts once) unless
 the whole query appears in a field, and breaks ties by id in code-unit order
