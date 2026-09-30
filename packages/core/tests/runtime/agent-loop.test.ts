@@ -8099,50 +8099,56 @@ describe("streaming", () => {
     6000,
   )
 
-  it.live("concurrent sessions run independently", () =>
-    Effect.gen(function* () {
-      const gate = yield* Deferred.make<void>()
-      const firstStarted = yield* Deferred.make<void>()
-      let calls = 0
-      const providerLayer = LanguageModelLayers.testStream(() => {
-        calls += 1
-        if (calls === 1) {
-          return Effect.succeed(
-            Stream.fromEffect(
-              Effect.gen(function* () {
-                yield* Deferred.succeed(firstStarted, void 0)
-                yield* Deferred.await(gate)
-                return finishPart({ finishReason: "stop" })
-              }),
-            ).pipe(
-              Stream.flatMap(() =>
-                Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
+  it.live(
+    "concurrent sessions run independently",
+    () =>
+      Effect.gen(function* () {
+        const gate = yield* Deferred.make<void>()
+        const firstStarted = yield* Deferred.make<void>()
+        let calls = 0
+        const providerLayer = LanguageModelLayers.testStream(() => {
+          calls += 1
+          if (calls === 1) {
+            return Effect.succeed(
+              Stream.fromEffect(
+                Effect.gen(function* () {
+                  yield* Deferred.succeed(firstStarted, void 0)
+                  yield* Deferred.await(gate)
+                  return finishPart({ finishReason: "stop" })
+                }),
+              ).pipe(
+                Stream.flatMap(() =>
+                  Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
+                ),
               ),
-            ),
+            )
+          }
+          return Effect.succeed(
+            Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
           )
-        }
-        return Effect.succeed(
-          Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
+        })
+        const layer = makeLayer(providerLayer)
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const agentLoop = yield* makeAgentLoopService
+            const messageA = makeMessage(SessionId.make("s1"), BranchId.make("b1"), "hello")
+            const messageB = makeMessage(SessionId.make("s2"), BranchId.make("b2"), "world")
+            const fiberA = yield* Effect.forkChild(runAgentLoop(agentLoop, messageA))
+            yield* Deferred.await(firstStarted)
+            const fiberB = yield* Effect.forkChild(runAgentLoop(agentLoop, messageB))
+            // A's model stays open until the gate opens below, so B finishing
+            // here is B running without A. B waiting on A never finishes, and
+            // the test's deadlock bound fails it.
+            const finishedB = yield* Fiber.await(fiberB)
+            expect(Exit.isSuccess(finishedB)).toBe(true)
+            const statusA = fiberA.pollUnsafe()
+            expect(statusA).toBeUndefined()
+            yield* Deferred.succeed(gate, void 0)
+            yield* Fiber.join(fiberA)
+          }).pipe(Effect.provide(layer)),
         )
-      })
-      const layer = makeLayer(providerLayer)
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const agentLoop = yield* makeAgentLoopService
-          const messageA = makeMessage(SessionId.make("s1"), BranchId.make("b1"), "hello")
-          const messageB = makeMessage(SessionId.make("s2"), BranchId.make("b2"), "world")
-          const fiberA = yield* Effect.forkChild(runAgentLoop(agentLoop, messageA))
-          yield* Deferred.await(firstStarted)
-          const fiberB = yield* Effect.forkChild(runAgentLoop(agentLoop, messageB))
-          const finishedB = yield* Fiber.join(fiberB).pipe(Effect.timeoutOption("200 millis"))
-          expect(finishedB._tag).toBe("Some")
-          const statusA = fiberA.pollUnsafe()
-          expect(statusA).toBeUndefined()
-          yield* Deferred.succeed(gate, void 0)
-          yield* Fiber.join(fiberA)
-        }).pipe(Effect.provide(layer)),
-      )
-    }),
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
   )
   it.live("same session/branch serializes loop creation", () =>
     Effect.gen(function* () {
