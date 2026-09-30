@@ -3591,7 +3591,11 @@ const firstLine = (text: string) => {
   return `${line.slice(0, DESCRIPTION_LIMIT - 3)}...`
 }
 
-/** A schema the renderer cannot derive renders as `unknown` instead of failing the prompt. */
+/**
+ * Load validation (core `hasWireParameters`) checks a tool's input schema, not
+ * its output: an output schema with no JSON Schema (a symbol-keyed struct)
+ * renders as `unknown` instead of failing the prompt.
+ */
 const jsonSchemaOf = (derive: () => JsonSchema.JsonSchema) =>
   Effect.try({ try: derive, catch: () => "underivable" }).pipe(
     Effect.orElseSucceed((): JsonSchema.JsonSchema => ({})),
@@ -3620,7 +3624,8 @@ export const renderToolSignature = Effect.fn("CellCatalog.renderToolSignature")(
 const toolSignatureParts = Effect.fn("CellCatalog.toolSignatureParts")(function* (
   tool: ToolCapability,
 ) {
-  const parameters = yield* jsonSchemaOf(() => AiTool.getJsonSchema(tool))
+  // Extension validation loads only tools whose input has a JSON Schema (core `hasWireParameters`).
+  const parameters = AiTool.getJsonSchema(tool)
   const output = tool.output
   let result: JsonSchema.JsonSchema = {}
   if (Schema.isSchema(output)) {
