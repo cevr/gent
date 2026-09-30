@@ -12,7 +12,6 @@ import {
   Predicate,
   Record,
   Runtime,
-  Scope,
 } from "effect"
 import {
   clearClientLog,
@@ -85,16 +84,14 @@ const waitForRendererDestroy = (renderer: CliRenderer) =>
     })
   })
 
-// Platform layer — `BunPlatformLive` bundles `BunServices.layer`
-// (FileSystem, Path, ChildProcessSpawner, …) with `BunGentPlatformLive`
-// so callers can yield `GentPlatform` alongside the standard primitives.
-const PlatformLayer = BunPlatformLive
-
+// `BunPlatformLive` bundles `BunServices.layer` (FileSystem, Path,
+// ChildProcessSpawner, …) with `BunGentPlatformLive`, so callers can yield
+// `GentPlatform` alongside the standard primitives.
 // `LinkOpener.Live` depends on `GentPlatform`, which
-// `PlatformLayer` provides. `Layer.mergeAll` builds in parallel, so use
+// `BunPlatformLive` provides. `Layer.mergeAll` builds in parallel, so use
 // `provideMerge` to thread `GentPlatform` into the dependents while
 // keeping it in the output context for downstream consumers.
-const makeUiLayer = () => Layer.provideMerge(LinkOpener.Live, PlatformLayer)
+const makeUiLayer = () => Layer.provideMerge(LinkOpener.Live, BunPlatformLive)
 
 const runHeadlessTurn = (
   bundle: GentClientBundle,
@@ -235,15 +232,14 @@ const runGent = ({
     }
 
     // Create Effect-backed logger from captured services
-    const logServices = yield* Effect.context<never>()
-    const log = createClientLog(Context.makeUnsafe<unknown>(logServices.mapUnsafe))
+    const mainServices = yield* Effect.context<never>()
+    const log = createClientLog(Context.makeUnsafe<unknown>(mainServices.mapUnsafe))
     let mainFiber: Option.Option<Fiber.Fiber<unknown, unknown>> = Option.none()
     yield* Effect.withFiber((fiber) =>
       Effect.sync(() => {
         mainFiber = Option.some(fiber)
       }),
     )
-    const mainServices = yield* Effect.context<never>()
     const interruptMain = () => {
       shutdownLog("shutdown.interrupt-fiber")
       if (Option.isSome(mainFiber)) {
@@ -347,7 +343,6 @@ const runGent = ({
       },
     }
 
-    const uiScope = yield* Scope.Scope
     const renderer = yield* Effect.promise(() =>
       createCliRenderer({
         exitOnCtrlC: false,
@@ -369,7 +364,7 @@ const runGent = ({
                 initialSession={bootstrap.initialSession}
                 initialAgent={initialAgent}
               >
-                <ExtensionUIProvider scope={uiScope}>
+                <ExtensionUIProvider scope={scope}>
                   <TerminalDimensionsProvider>
                     <ComposerMemoryProvider
                       initialPrompt={bootstrap.initialPrompt}
@@ -463,7 +458,7 @@ const TraceLoggerLayer = Layer.unwrap(
  */
 const mainEffect = Effect.scoped(
   Effect.gen(function* () {
-    const platformContext = yield* Layer.build(PlatformLayer)
+    const platformContext = yield* Layer.build(BunPlatformLive)
     const platform = Context.makeUnsafe<unknown>(platformContext.mapUnsafe)
     const runCli = Effect.gen(function* () {
       const loggerContext = yield* Layer.build(TraceLoggerLayer)
