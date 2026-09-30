@@ -35,8 +35,9 @@ import {
   SessionStateEvent,
   transitionSessionState,
   useClient,
+  useRuntime,
 } from "../src/client"
-import { onMount } from "solid-js"
+import { createSignal, onMount, Show } from "solid-js"
 import {
   createMockClient,
   createMutableRuntime,
@@ -1684,6 +1685,49 @@ describe("ClientProvider send", () => {
       )
     }
   }
+})
+
+// ── runtime calls ───────────────────────────────────────────────────────────
+
+describe("useRuntime call", () => {
+  // A call its component's unmount interrupts did not fail: the log keeps
+  // only real failures, which `gent doctor` reports.
+  it.scopedLive("an unmount's interrupt is not logged as a failed call; a failure is", () =>
+    Effect.gen(function* () {
+      const logged: Array<string> = []
+      const interrupted = yield* Deferred.make<void>()
+      const [mounted, setMounted] = createSignal(true)
+      const [failing, setFailing] = createSignal(false)
+      const Waits = () => {
+        useRuntime().call(
+          Effect.never.pipe(Effect.onInterrupt(() => Deferred.done(interrupted, Exit.void))),
+        )
+        return <box />
+      }
+      const Fails = () => {
+        useRuntime().call(Effect.fail("refused"))
+        return <box />
+      }
+      yield* renderScoped(
+        () => (
+          <>
+            <Show when={mounted()}>
+              <Waits />
+            </Show>
+            <Show when={failing()}>
+              <Fails />
+            </Show>
+          </>
+        ),
+        { log: { debug: () => {}, info: () => {}, warn: () => {}, error: (m) => logged.push(m) } },
+      )
+      setMounted(false)
+      yield* Deferred.await(interrupted)
+      setFailing(true)
+      yield* waitUntil(() => logged.length > 0, "the failure logged")
+      expect(logged).toEqual(["call.failed"])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
 })
 
 // ── errors ──────────────────────────────────────────────────────────────────

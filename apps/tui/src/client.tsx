@@ -1575,8 +1575,9 @@ export function useRuntime(): UseRuntimeReturn {
   const call = <A, E, R>(effect: Effect.Effect<A, E, R>): void => {
     const fiber = fork(effect)
 
+    // The unmount's own interrupt is not a failure; the log keeps real ones.
     fiber.addObserver((exit) => {
-      if (Exit.isFailure(exit)) {
+      if (Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)) {
         log.error("call.failed", { error: Cause.pretty(exit.cause) })
       }
     })
