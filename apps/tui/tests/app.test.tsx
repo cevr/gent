@@ -4762,7 +4762,6 @@ describe("TUI renderer surfaces", () => {
         )),
       )
       const frame = renderFrame(setup)
-      expect(frame).toContain("queue")
       expect(frame).toContain("[steer 1] switch to secondary")
       expect(frame).toContain("[queued 1] line one +2 lines")
       expect(frame).toContain("cmd+up restore")

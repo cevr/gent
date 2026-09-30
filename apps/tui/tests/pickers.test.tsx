@@ -110,11 +110,10 @@ describe("Message picker", () => {
 })
 
 describe("Branch picker", () => {
-  it.live("lists branches with their message counts and resumes the chosen one", () =>
+  it.live("lists branches with their message counts", () =>
     Effect.gen(function* () {
       const main = branch("branch-main", "main")
       const side = branch("branch-side", "side-quest")
-      const switched: Array<string> = []
 
       const setup = yield* Effect.promise(() =>
         renderWithProviders(
@@ -124,9 +123,7 @@ describe("Branch picker", () => {
               sessionId={SessionId.make("session-test")}
               sessionName="Test Session"
               branches={[main, side]}
-              onSelect={() => {
-                switched.push("select")
-              }}
+              onSelect={() => {}}
             />
           ),
           {
@@ -137,10 +134,6 @@ describe("Branch picker", () => {
                     { branch: main, messageCount: 4, children: [] },
                     { branch: side, messageCount: 2, children: [] },
                   ]),
-                switch: () => {
-                  switched.push("switch")
-                  return Effect.succeed(Option.getOrUndefined(Option.none()))
-                },
               },
             }),
           },

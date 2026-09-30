@@ -121,46 +121,52 @@ function OpenPaletteOnMount() {
   return <CommandPalette />
 }
 
-/** Every key the app reads off a theme; a hole here renders as a missing color. */
-const THEME_KEYS: ReadonlyArray<keyof Theme> = [
-  "primary",
-  "error",
-  "warning",
-  "success",
-  "info",
-  "text",
-  "textMuted",
-  "selectedListItemText",
-  "background",
-  "backgroundElement",
-  "backgroundMenu",
-  "border",
-  "borderSubtle",
-  "diffAdded",
-  "diffRemoved",
-  "diffAddedBg",
-  "diffRemovedBg",
-  "diffContextBg",
-  "diffAddedLineNumberBg",
-  "diffRemovedLineNumberBg",
-  "markdownHeading",
-  "markdownLink",
-  "markdownLinkText",
-  "markdownCode",
-  "markdownBlockQuote",
-  "markdownEmph",
-  "markdownStrong",
-  "markdownListItem",
-  "syntaxComment",
-  "syntaxKeyword",
-  "syntaxFunction",
-  "syntaxVariable",
-  "syntaxString",
-  "syntaxNumber",
-  "syntaxType",
-  "syntaxOperator",
-  "syntaxPunctuation",
-]
+/**
+ * Every key the app reads off a theme; a hole here renders as a missing color.
+ * The `satisfies` makes a new `Theme` key a type error until it is listed.
+ */
+const THEME_KEY_SET = {
+  primary: true,
+  error: true,
+  warning: true,
+  success: true,
+  info: true,
+  text: true,
+  textMuted: true,
+  selectedListItemText: true,
+  background: true,
+  backgroundElement: true,
+  backgroundMenu: true,
+  border: true,
+  borderSubtle: true,
+  diffAdded: true,
+  diffRemoved: true,
+  diffAddedBg: true,
+  diffRemovedBg: true,
+  diffContextBg: true,
+  diffAddedLineNumberBg: true,
+  diffRemovedLineNumberBg: true,
+  markdownHeading: true,
+  markdownLink: true,
+  markdownLinkText: true,
+  markdownCode: true,
+  markdownBlockQuote: true,
+  markdownEmph: true,
+  markdownStrong: true,
+  markdownListItem: true,
+  syntaxComment: true,
+  syntaxKeyword: true,
+  syntaxFunction: true,
+  syntaxVariable: true,
+  syntaxString: true,
+  syntaxNumber: true,
+  syntaxType: true,
+  syntaxOperator: true,
+  syntaxPunctuation: true,
+} satisfies Record<keyof Theme, true>
+const THEME_KEYS = Object.keys(THEME_KEY_SET).filter(
+  (key): key is keyof Theme => key in THEME_KEY_SET,
+)
 
 describe("bundled theme catalog", () => {
   it.live("every bundled theme resolves both variants with no missing color", () =>

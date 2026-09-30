@@ -48,79 +48,41 @@ import { createSignal } from "solid-js"
 // ── file tag ────────────────────────────────────────────────────────────────
 
 describe("getFileTag", () => {
-  test("returns [ts] for TypeScript files", () => {
-    expect(getFileTag("file.ts")).toBe("[ts]")
-    expect(getFileTag("component.tsx")).toBe("[ts]")
-    expect(getFileTag("src/utils/helper.ts")).toBe("[ts]")
-  })
-
-  test("returns [js] for JavaScript files", () => {
-    expect(getFileTag("file.js")).toBe("[js]")
-    expect(getFileTag("component.jsx")).toBe("[js]")
-  })
-
-  test("returns [md] for Markdown files", () => {
-    expect(getFileTag("README.md")).toBe("[md]")
-    expect(getFileTag("docs/guide.mdx")).toBe("[md]")
-  })
-
-  test("returns [json] for JSON files", () => {
-    expect(getFileTag("package.json")).toBe("[json]")
-    expect(getFileTag("tsconfig.json")).toBe("[json]")
-  })
-
-  test("returns [css] for CSS-like files", () => {
-    expect(getFileTag("styles.css")).toBe("[css]")
-    expect(getFileTag("theme.scss")).toBe("[css]")
-    expect(getFileTag("vars.less")).toBe("[css]")
-  })
-
-  test("returns [html] for HTML files", () => {
-    expect(getFileTag("index.html")).toBe("[html]")
-  })
-
-  test("returns [py] for Python files", () => {
-    expect(getFileTag("script.py")).toBe("[py]")
-  })
-
-  test("returns [rs] for Rust files", () => {
-    expect(getFileTag("main.rs")).toBe("[rs]")
-  })
-
-  test("returns [go] for Go files", () => {
-    expect(getFileTag("main.go")).toBe("[go]")
-  })
-
-  test("returns [yaml] for YAML files", () => {
-    expect(getFileTag("config.yaml")).toBe("[yaml]")
-    expect(getFileTag("ci.yml")).toBe("[yaml]")
-  })
-
-  test("returns [toml] for TOML files", () => {
-    expect(getFileTag("Cargo.toml")).toBe("[toml]")
-  })
-
-  test("returns [sh] for shell files", () => {
-    expect(getFileTag("script.sh")).toBe("[sh]")
-    expect(getFileTag("setup.bash")).toBe("[sh]")
-    expect(getFileTag("init.zsh")).toBe("[sh]")
-  })
-
-  test("returns empty string for unknown extensions", () => {
-    expect(getFileTag("file.txt")).toBe("")
-    expect(getFileTag("image.png")).toBe("")
-    expect(getFileTag("archive.zip")).toBe("")
-  })
-
-  test("returns empty string for files without extension", () => {
-    expect(getFileTag("Makefile")).toBe("")
-    expect(getFileTag("Dockerfile")).toBe("")
-  })
-
-  test("is case insensitive", () => {
-    expect(getFileTag("FILE.TS")).toBe("[ts]")
-    expect(getFileTag("README.MD")).toBe("[md]")
-    expect(getFileTag("Config.JSON")).toBe("[json]")
+  test("tags a path by its extension, in any case, and leaves the rest untagged", () => {
+    const cases: ReadonlyArray<readonly [string, string]> = [
+      ["file.ts", "[ts]"],
+      ["component.tsx", "[ts]"],
+      ["src/utils/helper.ts", "[ts]"],
+      ["file.js", "[js]"],
+      ["component.jsx", "[js]"],
+      ["README.md", "[md]"],
+      ["docs/guide.mdx", "[md]"],
+      ["package.json", "[json]"],
+      ["styles.css", "[css]"],
+      ["theme.scss", "[css]"],
+      ["vars.less", "[css]"],
+      ["index.html", "[html]"],
+      ["script.py", "[py]"],
+      ["main.rs", "[rs]"],
+      ["main.go", "[go]"],
+      ["config.yaml", "[yaml]"],
+      ["ci.yml", "[yaml]"],
+      ["Cargo.toml", "[toml]"],
+      ["script.sh", "[sh]"],
+      ["setup.bash", "[sh]"],
+      ["init.zsh", "[sh]"],
+      ["FILE.TS", "[ts]"],
+      ["README.MD", "[md]"],
+      ["Config.JSON", "[json]"],
+      ["file.txt", ""],
+      ["image.png", ""],
+      ["archive.zip", ""],
+      ["Makefile", ""],
+      ["Dockerfile", ""],
+    ]
+    for (const [path, tag] of cases) {
+      expect([path, getFileTag(path)]).toEqual([path, tag])
+    }
   })
 })
 

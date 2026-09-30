@@ -176,7 +176,7 @@ const run = (client: ReturnType<typeof createMockClient>, options: HeadlessOptio
   runHeadless(client, sessionId, branchId, PROMPT, options).pipe(Effect.timeout("2 seconds"))
 
 describe("runHeadless", () => {
-  headlessTest("an error notice does not end the turn; the answer after it prints", () =>
+  headlessTest("an error before the answer does not end the turn; the answer after it prints", () =>
     Effect.gen(function* () {
       const client = branchClient({
         ownTurn: [
@@ -192,16 +192,19 @@ describe("runHeadless", () => {
     }),
   )
 
-  headlessTest("an error notice alone leaves the run waiting for its turn", () =>
+  headlessTest("an error alone, plain or a notice, leaves the run waiting for its turn", () =>
     Effect.gen(function* () {
-      const client = branchClient({
-        ownTurn: [errorOccurred("Context compaction failed; continuing")],
-      })
-      // Absence of an end: the run is still open when the bound expires.
-      const outcome = yield* runHeadless(client, sessionId, branchId, PROMPT, noUser).pipe(
-        Effect.timeoutOption("150 millis"),
-      )
-      expect(Option.isNone(outcome)).toBe(true)
+      for (const event of [
+        errorOccurred("Context compaction failed; continuing"),
+        errorNotice("compaction fell back"),
+      ]) {
+        const client = branchClient({ ownTurn: [event] })
+        // Absence of an end: the run is still open when the bound expires.
+        const outcome = yield* runHeadless(client, sessionId, branchId, PROMPT, noUser).pipe(
+          Effect.timeoutOption("150 millis"),
+        )
+        expect(Option.isNone(outcome)).toBe(true)
+      }
     }),
   )
 
@@ -214,18 +217,6 @@ describe("runHeadless", () => {
       const exit = yield* Effect.exit(run(client))
       expect(exit._tag).toBe("Success")
       expect(capturedErrors.join("")).toBe("Warning: compaction fell back to truncation\n")
-    }),
-  )
-
-  headlessTest("a notice alone leaves the run waiting for its turn", () =>
-    Effect.gen(function* () {
-      const client = branchClient({
-        ownTurn: [errorNotice("compaction fell back")],
-      })
-      const outcome = yield* runHeadless(client, sessionId, branchId, PROMPT, noUser).pipe(
-        Effect.timeoutOption("150 millis"),
-      )
-      expect(Option.isNone(outcome)).toBe(true)
     }),
   )
 
