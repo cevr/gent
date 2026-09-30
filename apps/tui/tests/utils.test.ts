@@ -26,11 +26,10 @@ import {
   formatPreviewFooter,
   formatRowCounts,
   formatTokens,
-  formatToolInput,
   formatUsageStats,
+  displayPath,
   isAbsPath,
   previewOutput,
-  shortenPath,
   toolArgSummary,
   truncate,
   truncatePath,
@@ -542,18 +541,28 @@ describe("formatUsageStats", () => {
   })
 })
 
-describe("shortenPath", () => {
-  test("replaces home directory with ~", () => {
-    expect(shortenPath(`${HOME}/foo/bar.ts`, HOME)).toBe("~/foo/bar.ts")
+const CWD = `${HOME}/code/proj`
+const PLACE = { cwd: CWD, home: HOME }
+
+describe("displayPath", () => {
+  test("a path under the cwd reads from the cwd", () => {
+    expect(displayPath(`${CWD}/apps/tui/src/app.tsx`, PLACE)).toBe("apps/tui/src/app.tsx")
+    expect(displayPath(CWD, PLACE)).toBe(".")
   })
 
-  test("leaves non-home paths unchanged", () => {
-    expect(shortenPath("/tmp/foo.ts")).toBe("/tmp/foo.ts")
-    expect(shortenPath("relative/path.ts")).toBe("relative/path.ts")
+  test("a path under home but outside the cwd starts with ~", () => {
+    expect(displayPath(`${HOME}/foo/bar.ts`, PLACE)).toBe("~/foo/bar.ts")
+    expect(displayPath(HOME, PLACE)).toBe("~")
   })
 
-  test("handles home directory exactly", () => {
-    expect(shortenPath(HOME, HOME)).toBe("~")
+  test("a sibling that only shares a prefix keeps its full spelling", () => {
+    expect(displayPath(`${CWD}-other/a.ts`, PLACE)).toBe("~/code/proj-other/a.ts")
+    expect(displayPath(`${HOME}x/a.ts`, PLACE)).toBe(`${HOME}x/a.ts`)
+  })
+
+  test("other paths stay as given", () => {
+    expect(displayPath("/tmp/foo.ts", PLACE)).toBe("/tmp/foo.ts")
+    expect(displayPath("relative/path.ts", PLACE)).toBe("relative/path.ts")
   })
 })
 
@@ -577,9 +586,7 @@ describe("toolArgSummary", () => {
   })
 
   test("read: shortens home paths", () => {
-    expect(toolArgSummary("read", { file_path: `${HOME}/src/app.ts` }, { home: HOME })).toBe(
-      "~/src/app.ts",
-    )
+    expect(toolArgSummary("read", { file_path: `${HOME}/src/app.ts` }, PLACE)).toBe("~/src/app.ts")
   })
 
   test("write: path with line count", () => {
@@ -603,9 +610,7 @@ describe("toolArgSummary", () => {
   })
 
   test("edit: shortened path", () => {
-    expect(toolArgSummary("edit", { file_path: `${HOME}/src/app.ts` }, { home: HOME })).toBe(
-      "~/src/app.ts",
-    )
+    expect(toolArgSummary("edit", { file_path: `${HOME}/src/app.ts` }, PLACE)).toBe("~/src/app.ts")
     expect(toolArgSummary("edit", {})).toBe("")
   })
 
@@ -648,8 +653,25 @@ describe("toolArgSummary", () => {
     expect(toolArgSummary("read", { file_path: nullValue })).toBe("")
   })
 
-  test("unknown tool returns empty", () => {
+  test("a tool with no formatter shows its leading argument", () => {
     expect(toolArgSummary("unknown_tool", { anything: "value" })).toBe("")
+    expect(toolArgSummary("webfetch", { url: "https://a.test/x\nmore" })).toBe("https://a.test/x")
+    expect(toolArgSummary("custom", { path: `${CWD}/src/a.ts` }, PLACE)).toBe("src/a.ts")
+  })
+
+  test("input that is not an object has no label", () => {
+    expect(toolArgSummary("bash", nullValue)).toBe("")
+    expect(toolArgSummary("bash", absent)).toBe("")
+    expect(toolArgSummary("bash", "string")).toBe("")
+    expect(toolArgSummary("Bash", { command: "git status" })).toBe("git status")
+  })
+
+  test("paths read from the place", () => {
+    expect(toolArgSummary("read", { path: `${CWD}/src/app.ts`, offset: 3 }, PLACE)).toBe(
+      "src/app.ts:3",
+    )
+    expect(toolArgSummary("grep", { pattern: "err", path: CWD }, PLACE)).toBe("/err/ in .")
+    expect(toolArgSummary("write", { path: `${HOME}/notes.md` }, PLACE)).toBe("~/notes.md")
   })
 })
 
@@ -730,83 +752,6 @@ describe("truncatePath", () => {
 
   test("handles just filename", () => {
     expect(truncatePath("file.ts", 5)).toBe("…/file.ts")
-  })
-})
-
-describe("formatToolInput", () => {
-  test("returns empty for null/undefined input", () => {
-    expect(formatToolInput("bash", nullValue)).toBe("")
-    expect(formatToolInput("bash", absent)).toBe("")
-  })
-
-  test("returns empty for non-object input", () => {
-    expect(formatToolInput("bash", "string")).toBe("")
-    expect(formatToolInput("bash", 123)).toBe("")
-  })
-
-  test("formats bash command", () => {
-    expect(formatToolInput("bash", { command: "ls -la" })).toBe("ls -la")
-    expect(formatToolInput("Bash", { command: "git status" })).toBe("git status")
-  })
-
-  test("formats read path", () => {
-    expect(formatToolInput("read", { path: "/foo/bar.ts" })).toBe("/foo/bar.ts")
-  })
-
-  test("formats write path", () => {
-    expect(formatToolInput("write", { path: "/foo/bar.ts" })).toBe("/foo/bar.ts")
-  })
-
-  test("formats edit path", () => {
-    expect(formatToolInput("edit", { path: "/foo/bar.ts" })).toBe("/foo/bar.ts")
-  })
-
-  test("truncates long paths", () => {
-    const longPath = "/Users/cvr/Developer/personal/gent/apps/tui/src/app.tsx"
-    const result = formatToolInput("read", { path: longPath })
-    expect(result.length).toBeLessThanOrEqual(42) // 40 + "…/"
-    expect(result.endsWith("app.tsx")).toBe(true)
-  })
-
-  test("formats grep pattern and path", () => {
-    const result = formatToolInput("grep", { pattern: "TODO", path: "/src" })
-    expect(result).toBe("/TODO/ in /src")
-  })
-
-  test("grep uses cwd fallback when no path", () => {
-    expect(formatToolInput("grep", { pattern: "error" }, "/my/project")).toBe(
-      "/error/ in /my/project",
-    )
-  })
-
-  test("returns empty for grep without pattern", () => {
-    expect(formatToolInput("grep", { path: "/foo" })).toBe("")
-  })
-
-  test("returns empty for unknown tools", () => {
-    expect(formatToolInput("custom", { anything: "value" })).toBe("")
-    expect(formatToolInput("unknown", { path: "/foo" })).toBe("")
-  })
-
-  test("handles missing expected properties", () => {
-    expect(formatToolInput("bash", {})).toBe("")
-    expect(formatToolInput("bash", { notCommand: "foo" })).toBe("")
-    expect(formatToolInput("read", {})).toBe("")
-    expect(formatToolInput("read", { notPath: "foo" })).toBe("")
-  })
-
-  test("handles wrong property types", () => {
-    expect(formatToolInput("bash", { command: 123 })).toBe("")
-    expect(formatToolInput("read", { path: nullValue })).toBe("")
-    expect(formatToolInput("grep", { pattern: {}, path: "/foo" })).toBe("")
-  })
-
-  test("formats delegate.start with its todo", () => {
-    expect(formatToolInput("delegate.start", { todo: "find the bug" })).toBe("find the bug")
-  })
-
-  test("read supports file_path field", () => {
-    expect(formatToolInput("read", { file_path: "/foo/bar.ts" })).toBe("/foo/bar.ts")
   })
 })
 

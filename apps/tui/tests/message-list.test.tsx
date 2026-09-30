@@ -3772,3 +3772,102 @@ describe("promptOnScreen", () => {
     expect(reads).toBeLessThanOrEqual(8)
   })
 })
+
+describe("tool group rows", () => {
+  const cwd = "/work/proj"
+  const readCall = (id: string, path: string): ToolCall => ({
+    id,
+    toolName: "read",
+    status: "completed",
+    input: { path },
+    summary: absent,
+    output: "one\ntwo",
+  })
+  const groupRows = (items: SessionItem[], width: number) =>
+    Effect.promise(() =>
+      renderWithProviders(
+        () => (
+          <MessageList
+            items={items}
+            disclosure="preview"
+            syntaxStyle={syntaxStyle}
+            streaming={false}
+          />
+        ),
+        { width, height: 20, cwd },
+      ),
+    ).pipe(
+      Effect.map((setup) =>
+        renderFrame(setup)
+          .split("\n")
+          .filter((line) => line.trim().length > 0),
+      ),
+    )
+  const callLabels = (lines: ReadonlyArray<string>) =>
+    lines
+      .filter((line) => line.includes("├") || line.includes("└"))
+      .map((line) => line.trim().split(/\s{2,}/)[0])
+
+  it.live("the group row and the read frame name the file from the cwd", () =>
+    Effect.gen(function* () {
+      const call = readCall("call-read-path", `${cwd}/apps/tui/src/app.tsx`)
+      const rows = yield* groupRows([assistantToolMessage("assistant-read-path", call)], 80)
+      expect(callLabels(rows)).toEqual(["└ read apps/tui/src/app.tsx"])
+      const ReadToolRenderer = builtinRenderer("read")
+      const frame = yield* Effect.promise(() =>
+        renderWithProviders(() => <ReadToolRenderer expanded={false} toolCall={call} />, {
+          width: 80,
+          height: 10,
+          cwd,
+        }),
+      )
+      const header = renderFrame(frame).split("\n")[0] ?? ""
+      expect(header).toContain("read apps/tui/src/app.tsx")
+      expect(header).not.toContain(cwd)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.live("a path outside the cwd keeps its full spelling", () =>
+    Effect.gen(function* () {
+      const call = readCall("call-read-outside", "/etc/hosts")
+      const rows = yield* groupRows([assistantToolMessage("assistant-read-outside", call)], 80)
+      expect(callLabels(rows)).toEqual(["└ read /etc/hosts"])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.live("a frame header with a long path keeps one line", () =>
+    Effect.gen(function* () {
+      const path = "/var/lib/very/long/path/that/does/not/fit/in/forty/columns/app.tsx"
+      const ReadToolRenderer = builtinRenderer("read")
+      const frame = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => <ReadToolRenderer expanded={false} toolCall={readCall("call-long", path)} />,
+          { width: 40, height: 10, cwd },
+        ),
+      )
+      const lines = renderFrame(frame).split("\n")
+      expect(lines[0]).toContain("read")
+      expect(lines[1]).not.toContain("columns")
+      expect(lines[1]).not.toContain("app.tsx")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.live("a long row keeps one line and its whole call id near 60 columns", () =>
+    Effect.gen(function* () {
+      const call: ToolCall = {
+        id: "dbg-review",
+        toolName: "bash",
+        status: "completed",
+        input: { command: "echo sanity-check the debug session bootstrap and the queue semantics" },
+        summary: absent,
+        output: absent,
+      }
+      for (const width of [59, 60, 61]) {
+        const lines = yield* groupRows([assistantToolMessage("assistant-long-row", call)], width)
+        const row = lines.findIndex((line) => line.includes("└ bash"))
+        expect(lines[row]?.trimEnd().endsWith("#dbg-review")).toBe(true)
+        expect(lines.slice(row + 1).join("\n")).not.toContain("semantics")
+      }
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+})

@@ -63,7 +63,8 @@ import {
   formatConnectionIssue,
   formatError,
   formatTokens,
-  formatToolInput,
+  type PathPlace,
+  toolArgSummary,
   lostRequest,
   randomId,
   SEND_RETRY,
@@ -1668,7 +1669,10 @@ type SessionFeedClient = Pick<
   | "applySessionEvent"
   | "applyBufferedSessionEvent"
   | "resetSessionEvents"
->
+> & {
+  /** Where tool paths in the running-call label read from. */
+  readonly place: PathPlace
+}
 
 type SessionFeedStore = {
   messages: Message[]
@@ -2037,8 +2041,8 @@ const isToolResultEvent = Predicate.or(
 type ToolStartedEvent = Extract<AgentEvent, { _tag: "ToolCallStarted" }>
 
 /** The status-line label for a running tool: its name plus a short input. */
-const activeToolLabel = (event: ToolStartedEvent): string => {
-  const inputSummary = formatToolInput(event.toolName, event.input)
+const activeToolLabel = (event: ToolStartedEvent, place: PathPlace): string => {
+  const inputSummary = toolArgSummary(event.toolName, event.input, place)
   if (inputSummary.length === 0) return event.toolName
   return `${event.toolName}(${inputSummary})`
 }
@@ -2054,6 +2058,7 @@ interface RunningCall {
 const startCall = (
   calls: ReadonlyArray<RunningCall>,
   event: ToolStartedEvent,
+  place: PathPlace,
 ): ReadonlyArray<RunningCall> => {
   if (calls.some((call) => call.id === event.toolCallId)) return calls
   return [
@@ -2061,7 +2066,7 @@ const startCall = (
     {
       id: event.toolCallId,
       parent: Option.fromUndefinedOr(event.parentToolCallId),
-      label: activeToolLabel(event),
+      label: activeToolLabel(event, place),
     },
   ]
 }
@@ -2188,7 +2193,7 @@ export function useSessionFeed(
         return
 
       case "ToolCallStarted":
-        setRunningCalls((calls) => startCall(calls, event))
+        setRunningCalls((calls) => startCall(calls, event, client.place))
         startToolCall(setStore, event, receivedAt)
         return
 
@@ -2731,6 +2736,7 @@ export function createSessionController(props: {
   const { cast } = useRuntime()
   const renderer = useRenderer()
   const env = useEnv()
+  const workspace = useWorkspace()
   const exit = () => {
     // The session id is the only way back into this conversation, and it is
     // about to leave the screen. Printed after the renderer is destroyed so it
@@ -2975,7 +2981,7 @@ export function createSessionController(props: {
   const feed = useSessionFeed(
     () => props.sessionId,
     () => props.branchId,
-    client,
+    { ...client, place: workspace },
     cast,
     {
       onInteraction,

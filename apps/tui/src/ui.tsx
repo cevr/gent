@@ -1406,7 +1406,7 @@ export function ToolFrame(props: ToolFrameProps) {
     <box flexDirection="column">
       <Show when={!bodyOnly}>
         <box flexDirection="row" onMouseDown={() => setLocalExpanded((prev) => !prev)}>
-          <text flexGrow={1} flexShrink={1}>
+          <text flexGrow={1} flexShrink={1} wrapMode="none" truncate>
             <span style={{ fg: statusColor() }}>{statusIcon()} </span>
             <Show when={props.status === "error"}>
               <span style={{ fg: theme.error }}>failed </span>

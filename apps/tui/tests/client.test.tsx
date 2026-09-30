@@ -1394,6 +1394,10 @@ const feedClientStub = (
   resetSessionEvents: () => {},
   applyBufferedSessionEvent: () => {},
   ...parts,
+  place: Option.getOrElse(Option.fromNullishOr(parts.place), () => ({
+    cwd: "/work/proj",
+    home: "/home/test",
+  })),
 })
 
 const snapshotFor = (
@@ -2472,6 +2476,34 @@ describe("useSessionFeed", () => {
         Effect.ensuring(Effect.sync(dispose)),
       )
     }),
+  )
+
+  it.live("a running read names its file from the cwd, as its row does", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-feed-running-read")
+      const branchId = BranchId.make("branch-feed-running-read")
+      const { activeTool, dispose } = openFeed(snapshotFor(sessionId, branchId), [
+        makeEnvelope(1, AgentEvent.cases.StreamStarted.make({ sessionId, branchId })),
+        makeEnvelope(
+          2,
+          AgentEvent.cases.ToolCallStarted.make({
+            sessionId,
+            branchId,
+            toolCallId: ToolCallId.make("tool-call-running-read"),
+            toolName: "read",
+            input: { path: "/work/proj/src/app.tsx" },
+          }),
+        ),
+      ])
+      yield* waitUntil(() => Option.isSome(activeTool())).pipe(
+        Effect.andThen(
+          Effect.sync(() =>
+            expect(Option.getOrElse(activeTool(), () => "")).toBe("read(src/app.tsx)"),
+          ),
+        ),
+        Effect.ensuring(Effect.sync(dispose)),
+      )
+    }).pipe(Effect.timeout("10 seconds")),
   )
 
   it.live("an op still running when its cell fails reads as failed, as a reload draws it", () =>

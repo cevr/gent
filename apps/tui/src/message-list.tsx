@@ -8,6 +8,8 @@ import {
   formatPreviewFooter,
   formatRowCounts,
   getString,
+  type PathPlace,
+  toolArgSummary,
   parseBashOutput,
   plural,
   previewOutput,
@@ -16,6 +18,7 @@ import {
 } from "./utils"
 import { DateTime, Effect, Fiber, Match, Option, Predicate, Schema } from "effect"
 import { resolveThemeColor, useTheme } from "./theme"
+import { useWorkspace } from "./workspace"
 import {
   CollapsedRow,
   formatToolCallIdentity,
@@ -256,10 +259,10 @@ const decodeHandoffDetails = Schema.decodeUnknownOption(HandoffDetails)
 
 const PREVIEW_LINES = 20
 
-const toActivityCall = (call: ToolCall): ActivityCall => ({
+const toActivityCall = (call: ToolCall, place: PathPlace): ActivityCall => ({
   toolName: call.toolName,
   status: call.status,
-  operations: cellOperations(call),
+  operations: cellOperations(call, place),
   code: getString(call.input, "code"),
   durationMs: call.durationMs,
 })
@@ -524,6 +527,7 @@ function ToolCallGroup(props: {
   fullDetail: boolean
 }) {
   const { theme } = useTheme()
+  const workspace = useWorkspace()
   const failed = () => props.calls.some((call) => call.status === "error")
   const running = () => props.calls.some((call) => call.status === "running")
   const tick = useSpinnerClock()
@@ -536,7 +540,9 @@ function ToolCallGroup(props: {
     if (failed()) return theme.error
     return theme.textMuted
   }
-  const header = createMemo(() => formatActivityHeader(props.calls.map(toActivityCall)))
+  const header = createMemo(() =>
+    formatActivityHeader(props.calls.map((call) => toActivityCall(call, workspace))),
+  )
   // The transcript view and the full level both open every row; collapsed keeps only failures.
   const rowsOpen = () => props.fullDetail || props.disclosure === "full"
   const visibleCalls = () => {
@@ -568,7 +574,7 @@ function ToolCallGroup(props: {
                 return theme.textMuted
               }
               const connector = () => {
-                if (index() === props.calls.length - 1) return "└"
+                if (index() === visibleCalls().length - 1) return "└"
                 return "├"
               }
               const status = () => {
@@ -582,27 +588,14 @@ function ToolCallGroup(props: {
               const label = () => {
                 if (call.toolName === "cell") {
                   const result = cellResultText(call)
-                  return formatCellRowLabel(toActivityCall(call), {
+                  return formatCellRowLabel(toActivityCall(call, workspace), {
                     code: getString(call.input, "code"),
                     display: result.display,
                     error: result.error,
                   })
                 }
-                for (const key of [
-                  "path",
-                  "url",
-                  "command",
-                  "pattern",
-                  "query",
-                  "goal",
-                  "description",
-                  "task",
-                  "todo",
-                  "agent",
-                ]) {
-                  const value = getString(call.input, key)
-                  if (value.length > 0) return value.split("\n")[0]
-                }
+                const args = toolArgSummary(call.toolName, call.input, workspace)
+                if (args.length > 0) return args
                 const summary = (call.summary ?? "").trim()
                 if (summary.startsWith("{") || summary.startsWith("[")) return ""
                 return summary.split("\n")[0]
@@ -618,7 +611,13 @@ function ToolCallGroup(props: {
                   fallback={
                     <box flexDirection="column">
                       <box flexDirection="row">
-                        <text flexGrow={1} flexShrink={1} style={{ fg: color() }}>
+                        <text
+                          flexGrow={1}
+                          flexShrink={1}
+                          wrapMode="none"
+                          truncate
+                          style={{ fg: color() }}
+                        >
                           {connector()} {call.toolName} {label()}
                           {counts()}
                           {status()}
