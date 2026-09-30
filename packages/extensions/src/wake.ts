@@ -991,6 +991,7 @@ export const WakeExtension = defineExtension({
     const host = yield* ExtensionHost
     yield* host.register("tool", WakeTool, MonitorTool, CancelTool, ListTool)
     yield* host.register("request", WakeRpc.Pending)
+    yield* host.on("sessionDeleted", ({ branchIds }) => store.removeBranches(branchIds))
     // The branch resource starts without a session facade, so the loop's open
     // is where stored entries get their timers back: after a restart or a
     // branch close, as soon as anything reaches the branch. A past-due alarm

@@ -775,7 +775,8 @@ describe("Sessions", () => {
           error: "cascade projection",
         }),
       )
-      const cascadedIds = yield* sessions.deleteSession(sessionId)
+      const deleted = yield* sessions.deleteSession(sessionId)
+      const cascadedIds = deleted.map((entry) => entry.sessionId)
       const sessionsResult = yield* sql<{
         count: number
       }>`SELECT COUNT(*) as count FROM sessions`
@@ -801,6 +802,12 @@ describe("Sessions", () => {
       expect(refs[0]?.count).toBe(0)
       expect(chunks[0]?.count).toBe(0)
       expect([...cascadedIds].sort()).toEqual([sessionId, childSessionId].sort())
+      expect(new Map(deleted.map((entry) => [entry.sessionId, entry.branchIds]))).toEqual(
+        new Map([
+          [sessionId, [branchId]],
+          [childSessionId, [childBranchId]],
+        ]),
+      )
     }).pipe(Effect.provide(testSqliteStorage(() => Layer.empty, {}))),
   )
   it.live("returns the cascade set for a no-op delete of an already-removed session", () =>
@@ -878,13 +885,14 @@ describe("Sessions", () => {
             }),
           ),
         )
-      const [cascadedIds, childExits] = yield* Effect.all(
+      const [deleted, childExits] = yield* Effect.all(
         [
           sessions.deleteSession(parentId),
           Effect.forEach(childIds, createChild, { concurrency: 16 }),
         ],
         { concurrency: 2 },
       )
+      const cascadedIds = deleted.map((entry) => entry.sessionId)
       // Invariant 1+2: parent is gone, and parent is in the returned set.
       const parentRows = yield* sql<{
         count: number
@@ -2134,7 +2142,11 @@ describe("thread sessions", () => {
 
       const deleted = yield* sessions.deleteSession(SessionId.make("root"))
 
-      expect(deleted.map(String).toSorted()).toEqual(["delegate", "delegate-handoff", "root"])
+      expect(deleted.map((entry) => String(entry.sessionId)).toSorted()).toEqual([
+        "delegate",
+        "delegate-handoff",
+        "root",
+      ])
       const handoff = yield* sessions.getSession(SessionId.make("handoff"))
       expect(handoff?.parentSessionId).toBeUndefined()
       const thread = yield* relationships.getThreadSessions(SessionId.make("handoff"))

@@ -2781,7 +2781,7 @@ describe("runtime slots", () => {
         }),
       ])
       const emit = yield* slots
-        .emitSessionDeleted({ sessionId: SessionId.make("deleted-session") })
+        .emitSessionDeleted({ sessionId: SessionId.make("deleted-session"), branchIds: [] })
         .pipe(Effect.provideService(CurrentExtensionHostContext, stubHostCtx), Effect.forkChild)
       yield* TestClock.adjust(SESSION_DELETED_HOOK_TIMEOUT)
       // The emit returns: the stuck handler no longer holds the delete.

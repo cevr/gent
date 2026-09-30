@@ -525,13 +525,14 @@ const makeSessionMutationsService: Effect.Effect<
     )
     const rootProfile = Option.flatten(Option.fromUndefinedOr(profiles.get(sessionId)))
     yield* Effect.forEach(preTombstoned, cleanupSessionRuntimeStateForMutation, { discard: true })
-    const cascadedIds = yield* sessionStorage.deleteSession(sessionId).pipe(
+    const deleted = yield* sessionStorage.deleteSession(sessionId).pipe(
       // On failure we only restore `preTombstoned`: descendants created after pre-collect
       // were never tombstoned here, so there's no runtime state for them to "restore" to.
       Effect.onError(() =>
         Effect.forEach(preTombstoned, restoreSessionRuntimeStateForMutation, { discard: true }),
       ),
     )
+    const cascadedIds = deleted.map((entry) => entry.sessionId)
     const preSet = new Set(preTombstoned)
     const postDeleteOnly = cascadedIds.filter((id) => !preSet.has(id))
     yield* Effect.forEach(postDeleteOnly, cleanupSessionRuntimeStateForMutation, { discard: true })
@@ -550,11 +551,11 @@ const makeSessionMutationsService: Effect.Effect<
     // created after the pre-collect has no profile of its own; it is heard
     // under the deleted session's. Each handler's failure is logged and isolated.
     yield* Effect.forEach(
-      cascadedIds,
-      (deletedSessionId) =>
+      deleted,
+      (entry) =>
         Option.match(
           Option.orElse(
-            Option.flatten(Option.fromUndefinedOr(profiles.get(deletedSessionId))),
+            Option.flatten(Option.fromUndefinedOr(profiles.get(entry.sessionId))),
             () => rootProfile,
           ),
           {
@@ -562,7 +563,7 @@ const makeSessionMutationsService: Effect.Effect<
             onSome: (resolved) =>
               turnRegistry(resolved)
                 .getResolved()
-                .extensionHooks.emitSessionDeleted({ sessionId: deletedSessionId })
+                .extensionHooks.emitSessionDeleted(entry)
                 .pipe(runAgentLoopTurnProfile(resolved)),
           },
         ),

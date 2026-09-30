@@ -465,6 +465,8 @@ interface ExtensionHookSignatures {
 /** One session a delete removed. */
 export interface SessionDeletedInput {
   readonly sessionId: SessionId
+  /** Every branch the session had; a store keyed by branch removes these. */
+  readonly branchIds: ReadonlyArray<BranchId>
 }
 
 type ExtensionHookKind = keyof ExtensionHookSignatures

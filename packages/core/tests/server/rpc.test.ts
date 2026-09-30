@@ -89,6 +89,7 @@ import {
   hook,
   LoadedArtifactIdentity,
   type LoadedExtension,
+  type SessionDeletedInput,
 } from "../../src/domain/extension.js"
 import { failingLanguageModel } from "../helpers/failing-language-model"
 import {
@@ -5163,6 +5164,34 @@ describe("sessionDeleted hook", () => {
         yield* client.session.delete({ sessionId })
 
         expect(heard).toEqual([{ sessionId: child.sessionId, cwd: childCwd }])
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+
+  it.live("the hook names every branch of the deleted session", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const heard: Array<SessionDeletedInput> = []
+        const listener: GentExtension = {
+          manifest: { id: ExtensionId.make("@test/session-deleted-branches") },
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.on("sessionDeleted", (input) => Effect.sync(() => heard.push(input)))
+          }),
+        }
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+          extensionInputs: [...e2ePreset.extensionInputs, listener],
+        })
+        const second = yield* client.branch.create({ sessionId })
+
+        yield* client.session.delete({ sessionId })
+
+        expect(heard).toHaveLength(1)
+        expect(heard[0]?.sessionId).toBe(sessionId)
+        expect([...(heard[0]?.branchIds ?? [])].sort()).toEqual([branchId, second.branchId].sort())
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )

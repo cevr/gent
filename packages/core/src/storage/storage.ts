@@ -162,12 +162,21 @@ export interface SessionStorageService {
     updatedAt: Date,
   ) => Effect.Effect<void, StorageError>
   /**
-   * Deletes the session and every descendant, returning the full set of
-   * session ids the cascade actually removed. Callers use the returned set
-   * (not a pre-read tree snapshot) to clean in-memory runtime state, so a
-   * child created between pre-collect and the durable tx is still cleaned.
+   * Deletes the session and every descendant, returning each session the
+   * cascade actually removed with the branches it had. Callers use the
+   * returned set (not a pre-read tree snapshot) to clean in-memory runtime
+   * state, so a child created between pre-collect and the durable tx is still
+   * cleaned.
    */
-  readonly deleteSession: (id: SessionId) => Effect.Effect<ReadonlyArray<SessionId>, StorageError>
+  readonly deleteSession: (
+    id: SessionId,
+  ) => Effect.Effect<ReadonlyArray<DeletedSession>, StorageError>
+}
+
+/** A session a delete removed, with the branches it had. */
+interface DeletedSession {
+  readonly sessionId: SessionId
+  readonly branchIds: ReadonlyArray<BranchId>
 }
 
 export class SessionStorage extends Context.Service<SessionStorage, SessionStorageService>()(
@@ -313,13 +322,20 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
                   SELECT id FROM descendants
                 `
               const cascadedIds = descendantRows.map((row) => row.id)
-              if (cascadedIds.length === 0) return cascadedIds
+              if (cascadedIds.length === 0) return []
+              const branchRows = yield* sql<{ id: BranchId; session_id: SessionId }>`
+                SELECT id, session_id FROM branches WHERE session_id IN ${sql.in(cascadedIds)}`
               yield* sql`UPDATE sessions SET parent_session_id = NULL, parent_branch_id = NULL
                 WHERE parent_session_id IN ${sql.in(cascadedIds)} AND id NOT IN ${sql.in(cascadedIds)}`
               // Queues, branches, messages and their chunk links cascade by foreign key.
               yield* sql`DELETE FROM sessions WHERE id IN ${sql.in(cascadedIds)}`
               yield* sql`DELETE FROM content_chunks WHERE id NOT IN (SELECT chunk_id FROM message_chunks)`
-              return cascadedIds
+              return cascadedIds.map((sessionId): DeletedSession => ({
+                sessionId,
+                branchIds: branchRows
+                  .filter((row) => row.session_id === sessionId)
+                  .map((row) => row.id),
+              }))
             }).pipe(sql.withTransaction)
           },
           Effect.mapError(storageError("Failed to delete session")),
