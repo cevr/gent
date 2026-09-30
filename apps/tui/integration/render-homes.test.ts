@@ -15,7 +15,7 @@ import { ChildProcess } from "effect/process"
 const homesTest = it.scopedLive.layer(BunServices.layer)
 
 const APP_DIR = new URL("..", import.meta.url).pathname
-const HARNESS = new URL("./render-harness-boundary.tsx", import.meta.url).pathname
+const HARNESS = new URL("../tests/render-harness-boundary.tsx", import.meta.url).pathname
 const PRELOAD = new URL("../../../packages/tooling/src/test-preload.ts", import.meta.url).pathname
 
 /** A test file that renders once through the harness; it lives in the sandbox, so its imports resolve from here. */
