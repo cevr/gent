@@ -173,6 +173,18 @@ const toolIds = (contributions: { readonly tools?: ReadonlyArray<ToolCapability>
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Json))
 
+/**
+ * An environment whose data directory is a fixed scratch path, so a test that
+ * cannot name the harness's home still shares its catalog cache.
+ */
+const withDataDir = Layer.unwrap(
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-mcp-data-" })
+    return ConfigProvider.layer(ConfigProvider.fromUnknown({ GENT_DATA_DIR: directory }))
+  }),
+)
+
 /** An environment with `GENT_MCP_VALUE` set to `value`. */
 const withVariable = (value: string) =>
   ConfigProvider.layer(ConfigProvider.fromUnknown({ GENT_MCP_VALUE: value }))
@@ -289,6 +301,32 @@ describe("mcp config", () => {
         const edited = McpServers("@test/mcp-cache", { fixture: fixture.stdio({ EDITED: "1" }) })
         yield* collectTestContributions(edited.setup, { home, cwd: fixture.directory })
         expect(yield* fixture.starts).toBe(2)
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(platformLayer)),
+    30_000,
+  )
+
+  it.scopedLive(
+    "servers listed together at setup all reach the cache",
+    () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path
+        const fixture = yield* makeFixture
+        const home = path.join(fixture.directory, "home")
+        const servers = Object.fromEntries(
+          Array.from({ length: 8 }, (_, index) => [
+            `server${index}`,
+            fixture.stdio({ INSTANCE: String(index) }),
+          ]),
+        )
+        const extension = McpServers("@test/mcp-many-cold", servers)
+        yield* collectTestContributions(extension.setup, { home, cwd: fixture.directory })
+        expect(yield* fixture.starts).toBe(8)
+        const warm = yield* collectTestContributions(extension.setup, {
+          home,
+          cwd: fixture.directory,
+        })
+        expect(toolIds(warm)).toHaveLength(40)
+        expect(yield* fixture.starts).toBe(8)
       }).pipe(Effect.timeout("20 seconds"), Effect.provide(platformLayer)),
     30_000,
   )
@@ -641,6 +679,96 @@ describe("mcp tools in the cell", () => {
             }),
           },
         })
+      }).pipe(Effect.timeout("25 seconds"), Effect.provide(platformLayer)),
+    30_000,
+  )
+
+  it.scopedLive(
+    "a call to a tool the server stopped listing names the stale catalog, and the cache drops it",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const fixture = yield* makeFixture
+        const hide = path.join(fixture.directory, "hide-count")
+        // A fixed directory, so the key does not follow the harness's session cwd.
+        const servers = {
+          fixture: { ...fixture.stdio({ MCP_FIXTURE_HIDE_COUNT: hide }), cwd: fixture.directory },
+        }
+        const code = [
+          "let stale = ''; try { await tools.mcp.fixture.count() } catch (error) { stale = error.message }",
+          "const echoed = await tools.mcp.fixture.echo({ text: 'still here' })",
+          "JSON.stringify({ stale, echoed })",
+        ].join("; ")
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          toolCallStep("cell", { code }),
+          textStep("done"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...shippedPreset,
+          extensionInputs: [
+            ...shippedPreset.extensionInputs,
+            McpServers("@test/mcp-stale", servers),
+          ],
+          providerLayer,
+        })
+        expect(yield* fixture.starts).toBe(1)
+        // The server drops `count` after setup cached it.
+        yield* fs.writeFileString(hide, "")
+        yield* client.message.send({ sessionId, branchId, content: "count" })
+        const result = yield* cellResultAfterDone(client, branchId)
+        expect(result).toMatchObject({ name: "cell", isFailure: false })
+        const display = String(Reflect.get(Object(result?.result), "display"))
+        expect(display).toContain("no longer lists count")
+        expect(display).toContain('"echoed":"still here"')
+        // The connection relisted and wrote the cache, so the next setup has no `count`.
+        const next = yield* collectTestContributions(McpServers("@test/mcp-stale", servers).setup, {
+          home: path.join(fixture.directory, "home"),
+          cwd: fixture.directory,
+        })
+        expect(toolIds(next)).not.toContain("mcp.fixture.count")
+        expect(toolIds(next)).toContain("mcp.fixture.echo")
+        expect(yield* fixture.starts).toBe(2)
+      }).pipe(
+        Effect.timeout("25 seconds"),
+        Effect.provide(Layer.provideMerge(withDataDir, platformLayer)),
+      ),
+    30_000,
+  )
+
+  it.scopedLive(
+    "a failed connect is not kept: the next call connects again",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* makeFixture
+        const code = [
+          "let first = ''; try { await tools.mcp.fixture.echo({ text: 'a' }) } catch (error) { first = 'failed' }",
+          "const second = await tools.mcp.fixture.echo({ text: 'b' })",
+          "JSON.stringify({ first, second })",
+        ].join("; ")
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          toolCallStep("cell", { code }),
+          textStep("done"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...shippedPreset,
+          extensionInputs: [
+            ...shippedPreset.extensionInputs,
+            // Setup is start 1; the first call's connect is start 2, which exits.
+            McpServers("@test/mcp-retry", {
+              fixture: { ...fixture.stdio({ MCP_FIXTURE_FAIL_ON_START: "2" }), timeoutMs: 5000 },
+            }),
+          ],
+          providerLayer,
+        })
+        yield* client.message.send({ sessionId, branchId, content: "echo twice" })
+        const result = yield* cellResultAfterDone(client, branchId)
+        expect(result).toMatchObject({
+          name: "cell",
+          isFailure: false,
+          result: { display: encodeJson({ first: "failed", second: "b" }) },
+        })
+        expect(yield* fixture.starts).toBe(3)
       }).pipe(Effect.timeout("25 seconds"), Effect.provide(platformLayer)),
     30_000,
   )

@@ -1279,10 +1279,16 @@ core does not have. Setup reads each server's tool list from
 `<data dir>/mcp-catalog.json`, keyed by the SHA-256 digest of the entry as it
 runs (its expanded values and, for stdio, its resolved directory), so an edited
 entry, a changed variable, or another project lists again; the file holds only
-the digest, never a token. On a miss setup connects once, lists, and writes the
-cache. A server that cannot list is logged and contributes nothing. Calls
-share one process Resource (`McpClients`): an `RcMap` opens a server's
-connection on its first call and closes it after five idle minutes. Each
+the digest, never a token. On a miss setup connects once and lists; every
+server setup listed goes to the cache in one write. A server that cannot list
+is logged and contributes nothing. Calls share one process Resource
+(`McpClients`): an `RcMap` opens a server's connection on its first call and
+closes it after five idle minutes, and a failed connect is dropped from the
+map, so the next call connects again. Opening a connection lists the tools
+again: a list that differs is written to the cache (under one permit), so the
+next session registers it, and a call to a tool the server no longer lists
+fails with a message naming the stale catalog. The current session keeps the
+tools it registered; replacing them live needs a host seam. Each
 tool's input schema is imported from its JSON Schema (patterns ignored), so
 the host checks input and the catalog shows its types; a result is its
 `structuredContent`, else its joined text, else its blocks without binary

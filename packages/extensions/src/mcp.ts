@@ -15,6 +15,7 @@ import {
   Result,
   Schema,
   SchemaRepresentation,
+  Semaphore,
 } from "effect"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
@@ -332,19 +333,27 @@ const readCatalog = Effect.fn("Mcp.readCatalog")(function* (file: string) {
   )
 })
 
-/** Merge one server's tools into the cache file; a failed write only costs a relist. */
-const writeCatalogEntry = Effect.fn("Mcp.writeCatalogEntry")(function* (
+/**
+ * Merge servers' tools into the cache file in one read and one write. Setup
+ * writes every server it listed at once, and the connections write under one
+ * permit, so no entry is lost to another's write in this process. A write
+ * another gent process races can still lose an entry; that costs one relist.
+ */
+const writeCatalogEntries = Effect.fn("Mcp.writeCatalogEntries")(function* (
   file: string,
-  key: string,
-  tools: ReadonlyArray<CatalogTool>,
+  entries: ReadonlyArray<readonly [key: string, tools: ReadonlyArray<CatalogTool>]>,
 ) {
+  if (entries.length === 0) return
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
   const current = yield* readCatalog(file)
-  const next = { servers: { ...current.servers, [key]: { tools } } }
+  const servers = { ...current.servers }
+  for (const [key, tools] of entries) servers[key] = { tools }
   yield* fs.makeDirectory(path.dirname(file), { recursive: true })
-  yield* writeFileAtomic(file, yield* Schema.encodeEffect(CatalogFile)(next))
+  yield* writeFileAtomic(file, yield* Schema.encodeEffect(CatalogFile)({ servers }))
 })
+
+const encodeTools = Schema.encodeEffect(Schema.fromJsonString(Schema.Array(CatalogTool)))
 
 // ── connections ─────────────────────────────────────────────────────────────
 
@@ -456,25 +465,73 @@ class McpClients extends Context.Service<McpClients, McpClientsService>()(
   "@gent/extensions/src/mcp/McpClients",
 ) {}
 
-/** The connections of `servers`, each under its cache key, which names one entry. */
-const mcpClientsLive = (servers: ReadonlyArray<McpServer>) =>
+/** A server this process registered, with the tools its registration read. */
+interface RegisteredServer {
+  readonly server: McpServer
+  readonly tools: ReadonlyArray<CatalogTool>
+}
+
+/** An open connection and the tool names the server listed when it opened. */
+interface Connection {
+  readonly client: Client
+  readonly listed: ReadonlySet<string>
+}
+
+/**
+ * The connections of `registered`, each under its cache key, which names one
+ * entry. Opening a connection lists the server's tools again: a tool it no
+ * longer lists fails its call by name, and a list that differs from the one
+ * registered is written to the cache, so the next session registers it. The
+ * current session keeps the tools it registered; changing them live needs a
+ * host seam to re-register an extension's tools.
+ */
+const mcpClientsLive = (registered: ReadonlyArray<RegisteredServer>, file: string) =>
   Layer.effect(
     McpClients,
     Effect.gen(function* () {
-      const byKey = new Map(servers.map((server) => [server.key, server]))
-      const clients = yield* RcMap.make({
-        lookup: (key: string) => {
-          const server = byKey.get(key)
-          if (Predicate.isUndefined(server)) {
-            return Effect.fail(new McpError({ server: key, message: "not configured" }))
+      const byKey = new Map(registered.map((entry) => [entry.server.key, entry]))
+      const writePermit = yield* Semaphore.make(1)
+      const relist = (entry: RegisteredServer, client: Client) =>
+        Effect.gen(function* () {
+          const tools = yield* listTools(entry.server, client)
+          if ((yield* encodeTools(tools)) !== (yield* encodeTools(entry.tools))) {
+            yield* Semaphore.withPermit(
+              writePermit,
+              writeCatalogEntries(file, [[entry.server.key, tools]]),
+            )
           }
-          return connect(server)
-        },
+          return new Set(tools.map((listed) => listed.name))
+        })
+      const clients = yield* RcMap.make({
+        lookup: (key: string) =>
+          Effect.gen(function* () {
+            const entry = byKey.get(key)
+            if (Predicate.isUndefined(entry)) {
+              return yield* new McpError({ server: key, message: "not configured" })
+            }
+            const client = yield* connect(entry.server)
+            // A server that cannot list again keeps the registered list.
+            const listed = yield* relist(entry, client).pipe(
+              Effect.orElseSucceed(() => new Set(entry.tools.map((listed) => listed.name))),
+            )
+            return { client, listed } satisfies Connection
+          }),
         idleTimeToLive: IDLE_TIME_TO_LIVE,
       })
       return McpClients.of({
         call: (server, name, input) =>
           RcMap.get(clients, server.key).pipe(
+            // RcMap keeps a failed lookup until it idles out; drop it so the next call connects.
+            Effect.tapError(() => RcMap.invalidate(clients, server.key)),
+            Effect.filterOrFail(
+              (connection) => connection.listed.has(name),
+              () =>
+                new McpError({
+                  server: server.name,
+                  message: `the server no longer lists ${name}; the tool catalog was stale, and the next session registers the current list`,
+                }),
+            ),
+            Effect.map((connection) => connection.client),
             Effect.flatMap((client) =>
               Effect.tryPromise({
                 try: (signal) =>
@@ -600,22 +657,30 @@ const toolsFor = (server: McpServer, listed: ReadonlyArray<CatalogTool>) => {
   })
 }
 
+/** A server's tools, and whether setup listed them now (so they go to the cache). */
+interface SetupCatalog {
+  readonly tools: ReadonlyArray<CatalogTool>
+  readonly listedNow: boolean
+}
+
 /**
  * The server's tools from the cache, or, on a miss, from one connection at
- * setup that lists them and writes the cache. A server that cannot list is
- * reported and contributes nothing; the other servers are unaffected.
+ * setup that lists them. A server that cannot list is reported and
+ * contributes nothing; the other servers are unaffected.
  */
-const catalogFor = (server: McpServer, cache: CatalogFile, file: string) => {
+const catalogFor = (server: McpServer, cache: CatalogFile): Effect.Effect<SetupCatalog> => {
   const cached = cache.servers[server.key]
-  if (Predicate.isNotUndefined(cached)) return Effect.succeed(cached.tools)
+  if (Predicate.isNotUndefined(cached)) {
+    return Effect.succeed({ tools: cached.tools, listedNow: false })
+  }
   return Effect.scoped(
     connect(server).pipe(Effect.flatMap((client) => listTools(server, client))),
   ).pipe(
-    Effect.tap((tools) => writeCatalogEntry(file, server.key, tools).pipe(Effect.ignore)),
+    Effect.map((tools): SetupCatalog => ({ tools, listedNow: true })),
     Effect.catchCause((cause) =>
       Effect.logWarning("mcp.server.unlisted").pipe(
         Effect.annotateLogs({ server: server.name, error: String(cause) }),
-        Effect.as<ReadonlyArray<CatalogTool>>([]),
+        Effect.as<SetupCatalog>({ tools: [], listedNow: false }),
       ),
     ),
   )
@@ -637,20 +702,32 @@ const registerServers = Effect.fn("Mcp.registerServers")(function* (
   if (servers.length === 0) return
   const file = yield* catalogPath(host.home)
   const cache = yield* readCatalog(file)
-  const catalogs = yield* Effect.forEach(servers, (server) => catalogFor(server, cache, file), {
-    concurrency: 8,
-  })
+  const registered = yield* Effect.forEach(
+    servers,
+    (server) => Effect.map(catalogFor(server, cache), (catalog) => ({ server, ...catalog })),
+    { concurrency: 8 },
+  )
+  // One write for every server listed now; a failed write only costs a relist.
+  yield* writeCatalogEntries(
+    file,
+    registered
+      .filter((entry) => entry.listedNow)
+      .map((entry): readonly [string, ReadonlyArray<CatalogTool>] => [
+        entry.server.key,
+        entry.tools,
+      ]),
+  ).pipe(Effect.ignore)
   yield* host.register(
     "resource",
     defineResource({
       id: `${extensionId}/clients`,
       scope: "process",
-      layer: mcpClientsLive(servers),
+      layer: mcpClientsLive(registered, file),
     }),
   )
   yield* host.register(
     "tool",
-    ...servers.flatMap((server, index) => toolsFor(server, catalogs[index] ?? [])),
+    ...registered.flatMap((entry) => toolsFor(entry.server, entry.tools)),
   )
 })
 
