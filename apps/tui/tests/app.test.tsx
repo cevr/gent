@@ -672,6 +672,8 @@ const mountShortTerminalWithTrays = (
   options: {
     readonly width?: number
     readonly onClient?: (client: ClientContextValue) => void
+    /** What `session.delete` answers; the default deletes. */
+    readonly deleteSession?: Effect.Effect<void, GentClientRpcError>
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -713,6 +715,7 @@ const mountShortTerminalWithTrays = (
             metrics: { turns: 1, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
           }),
         watchRuntime: () => Stream.concat(Stream.make(running), Stream.never),
+        delete: () => options.deleteSession ?? Effect.void,
         thread: () =>
           Effect.succeed([
             new Session({
@@ -2362,6 +2365,45 @@ describe("App auth gate", () => {
       setup.renderer.destroy()
     }).pipe(Effect.timeout("10 seconds")),
   )
+  // A server command the server refuses says so on the status row.
+  it.live("a server slash command that fails shows why", () =>
+    Effect.gen(function* () {
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <App />, {
+          client: createMockClient({
+            auth: { listProviders: () => Effect.succeed([]) },
+            branch: { getTree: () => Effect.succeed([]) },
+            extension: {
+              listSlashCommands: () =>
+                Effect.succeed([
+                  {
+                    name: "audit",
+                    displayName: "Audit",
+                    description: "Detect, audit, and report code issues",
+                    extensionId: "@test/server-audit",
+                    capabilityId: "audit",
+                  },
+                ]),
+              request: () => Effect.fail(new ProviderAuthError({ message: "audit refused" })),
+            },
+          }),
+          runtime: createMockRuntime(),
+          builtins: builtinClientModules,
+          initialSession: {
+            id: SessionId.make("session-a"),
+            activeBranchId: BranchId.make("branch-a"),
+            name: "Session A",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        }),
+      )
+      yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
+      yield* typeCommand("/audit now")(setup)
+      yield* waitForFrame(setup, (frame) => frame.includes("audit refused"), "the failure")
+      setup.renderer.destroy()
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   it.live("the slash popup shows a server command's description", () =>
     Effect.gen(function* () {
       const setup = yield* Effect.promise(() =>
@@ -2597,6 +2639,25 @@ describe("App auth gate", () => {
   // rows give way, and the agents pane's rules and title take three more: the
   // filter row, the section heading and the cursor row fit. The trays, the
   // blank rows and the detail line give way for them.
+  // A delete the server refuses says so: the row stays, and the status row
+  // names the failure.
+  it.live("an agents-pane delete the server refuses shows why", () =>
+    Effect.gen(function* () {
+      const setup = yield* mountShortTerminalWithTrays(24, [], {
+        deleteSession: Effect.fail(new ProviderAuthError({ message: "delete refused" })),
+      })
+      setup.mockInput.pressKey("t", { ctrl: true })
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("Agents ·") && frame.includes("delegate: task 3"),
+        "the agents pane",
+      )
+      setup.mockInput.pressKey("x", { ctrl: true })
+      yield* waitForFrame(setup, (frame) => frame.includes("ctrl+x again"), "the armed delete")
+      setup.mockInput.pressKey("x", { ctrl: true })
+      yield* waitForFrame(setup, (frame) => frame.includes("delete refused"), "the failure")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   it.live("the agents pane keeps its cursor row in view at the smallest height that holds it", () =>
     Effect.gen(function* () {
       const setup = yield* mountShortTerminalWithTrays(14)

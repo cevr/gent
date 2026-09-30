@@ -851,9 +851,12 @@ export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
             onDelete={(row) =>
               shell.cast(
                 transport.deleteSession(row.sessionId).pipe(
-                  Effect.catchCause((cause) =>
-                    Effect.logWarning("agents.delete failed").pipe(
-                      Effect.annotateLogs({ sessionId: row.sessionId, error: String(cause) }),
+                  // The reader asked for the delete, so a refusal shows on the
+                  // status row; the row stays in the listing.
+                  Effect.catch((error) =>
+                    Effect.sync(() => shell.notify(error.message)).pipe(
+                      Effect.andThen(Effect.logWarning("agents.delete failed")),
+                      Effect.annotateLogs({ sessionId: row.sessionId, error: error.message }),
                     ),
                   ),
                   // The pane is open and may be filtered, so the listing is

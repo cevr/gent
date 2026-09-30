@@ -30,7 +30,7 @@ import {
   on,
   onMount,
 } from "solid-js"
-import { isConnectionLoss, useRequiredContext } from "../utils"
+import { formatError, isConnectionLoss, useRequiredContext } from "../utils"
 import { builtinClientModules } from "./builtins"
 import { ToolRenderersProvider } from "../tool-renderers"
 import type { Command } from "../commands"
@@ -312,8 +312,16 @@ export function ExtensionUIProvider(props: {
                         branchId: bid,
                       })
                       .pipe(
+                        // The reader ran the command, so a failure shows on the
+                        // status row of the session it ran in.
                         Effect.catchEager((error) =>
-                          Effect.logWarning("slash.command.failed").pipe(
+                          Effect.sync(() =>
+                            client.setErrorIn(
+                              { sessionId: sid, branchId: bid },
+                              `/${c.name} failed: ${formatError(error)}`,
+                            ),
+                          ).pipe(
+                            Effect.andThen(Effect.logWarning("slash.command.failed")),
                             Effect.annotateLogs({
                               extensionId: c.extensionId,
                               capabilityId: c.capabilityId,
