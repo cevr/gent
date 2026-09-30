@@ -611,6 +611,7 @@ function ToolCallGroup(props: {
                   when={call.status === "error"}
                   fallback={
                     <box flexDirection="column">
+                      {/* The raw call id is detail: the open frame (ctrl+o) names it, the row does not. */}
                       <box flexDirection="row">
                         <text
                           flexGrow={1}
@@ -623,10 +624,12 @@ function ToolCallGroup(props: {
                           {counts()}
                           {status()}
                         </text>
-                        <text flexShrink={0} wrapMode="none" style={{ fg: theme.textMuted }}>
-                          {" "}
-                          #{formatToolCallIdentity(call.id)}
-                        </text>
+                        <Show when={rowsOpen()}>
+                          <text flexShrink={0} wrapMode="none" style={{ fg: theme.textMuted }}>
+                            {" "}
+                            #{formatToolCallIdentity(call.id)}
+                          </text>
+                        </Show>
                       </box>
                       <Show when={rowsOpen()}>
                         <ToolFrameBody>

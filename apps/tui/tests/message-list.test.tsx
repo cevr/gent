@@ -2019,13 +2019,17 @@ describe("FX transcript treatment", () => {
         Option.fromUndefinedOr(preview.split("\n").find((line) => line.includes("└ cell"))),
       ).trim()
       expect(row).toContain("↑ 2 ↓ 25 lines")
+      // The preview row names no call id; the open rows add it at the end of the same words.
+      expect(row).not.toContain("#call-stable")
+      const isOpenRow = (line: string) =>
+        line.trim().startsWith(row) && line.trim().endsWith("#call-stable")
       yield* Effect.sync(() => setDisclosure("full"))
       const full = yield* waitForFrame(
         setup,
         (frame) => frame.includes("CELL-OUTPUT-025") && frame.includes("note.content"),
         "full cell output",
       )
-      expect(full.split("\n").some((line) => line.trim() === row)).toBe(true)
+      expect(full.split("\n").some(isOpenRow)).toBe(true)
       expect(full.match(/#call-stable/g)).toHaveLength(1)
       expect(full).not.toContain("… +5 lines")
       yield* Effect.sync(() => {
@@ -2037,7 +2041,7 @@ describe("FX transcript treatment", () => {
         (frame) => frame.includes("CELL-OUTPUT-025") && !frame.includes("1 cell ·"),
         "full transcript from preview",
       )
-      expect(transcript.split("\n").some((line) => line.trim() === row)).toBe(true)
+      expect(transcript.split("\n").some(isOpenRow)).toBe(true)
       expect(transcript).not.toContain("… +5 lines")
       for (let line = 1; line <= 25; line++) {
         const text = `CELL-OUTPUT-${String(line).padStart(3, "0")}`
@@ -3895,7 +3899,7 @@ describe("tool group rows", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
 
-  it.live("a long row keeps one line and its whole call id near 60 columns", () =>
+  it.live("a long row keeps one line and names no call id near 60 columns", () =>
     Effect.gen(function* () {
       const call: ToolCall = {
         id: "dbg-review",
@@ -3908,7 +3912,8 @@ describe("tool group rows", () => {
       for (const width of [59, 60, 61]) {
         const lines = yield* groupRows([assistantToolMessage("assistant-long-row", call)], width)
         const row = lines.findIndex((line) => line.includes("└ bash"))
-        expect(lines[row]?.trimEnd().endsWith("#dbg-review")).toBe(true)
+        expect(lines[row]).toContain("└ bash echo sanity-")
+        expect(lines.join("\n")).not.toContain("dbg-review")
         expect(lines.slice(row + 1).join("\n")).not.toContain("semantics")
       }
     }).pipe(Effect.timeout("10 seconds")),
