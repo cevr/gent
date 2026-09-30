@@ -57,7 +57,11 @@ import { inRuntime, waitForFrame, waitUntil, waitUntilAdvancing } from "./helper
 import * as Prompt from "effect/ai/Prompt"
 import { InteractionRequestId } from "@gent/core/extensions/branch-tools"
 import { useSessionFeed } from "../src/session"
-import { getSessionEventLabel } from "../src/message-list"
+import {
+  getSessionEventLabel,
+  type Message as FeedMessage,
+  messageToolCalls,
+} from "../src/message-list"
 import { useExtensionUI } from "../src/extensions/host"
 import { ClientContext, type ClientRuntime } from "../src/extensions/client-facets"
 import { RpcClientDefect, RpcClientError } from "effect/rpc/RpcClientError"
@@ -74,6 +78,10 @@ const makeMessage = (role: "user" | "assistant") =>
     parts: [],
     createdAt: dateFromMillis(0),
   })
+
+/** A message's tool calls; none for a message that is not there. */
+const toolCallsOf = (message: Option.Option<FeedMessage>): ReturnType<typeof messageToolCalls> =>
+  Option.match(message, { onNone: () => [], onSome: messageToolCalls })
 
 describe("reduceAgentLifecycle", () => {
   test("a stream start says a turn runs", () => {
@@ -2283,10 +2291,10 @@ describe("useSessionFeed", () => {
         expect(appliedEvents).toBe(uniqueEnvelopes.length)
         expect(userMessages).toHaveLength(1)
         expect(assistantMessage?.content).toBe("assistant text")
-        expect(assistantMessage?.toolCalls).toHaveLength(1)
-        expect(assistantMessage?.toolCalls?.[0]?.status).toBe("completed")
+        expect(toolCallsOf(Option.fromUndefinedOr(assistantMessage))).toHaveLength(1)
+        expect(toolCallsOf(Option.fromUndefinedOr(assistantMessage))[0]?.status).toBe("completed")
         // The duration is the gap between the started and terminal envelope times.
-        expect(assistantMessage?.toolCalls?.[0]?.durationMs).toBe(1_200)
+        expect(toolCallsOf(Option.fromUndefinedOr(assistantMessage))[0]?.durationMs).toBe(1_200)
         const toolSegments = assistantMessage?.segments?.filter(
           (segment) => segment._tag === "tool-call",
         )
@@ -2552,9 +2560,11 @@ describe("useSessionFeed", () => {
   ) => {
     const assistant = feed.messages().find((message) => message.role === "assistant")
     // The inner read is not a transcript sibling of the cell.
-    expect(assistant?.toolCalls?.map((call) => call.toolName)).toEqual(["cell"])
-    const operation = assistant?.toolCalls?.[0]?.operations?.[0]
-    expect(assistant?.toolCalls?.[0]?.operations).toHaveLength(1)
+    expect(toolCallsOf(Option.fromUndefinedOr(assistant)).map((call) => call.toolName)).toEqual([
+      "cell",
+    ])
+    const operation = toolCallsOf(Option.fromUndefinedOr(assistant))[0]?.operations?.[0]
+    expect(toolCallsOf(Option.fromUndefinedOr(assistant))[0]?.operations).toHaveLength(1)
     expect(operation?.id).toBe(innerId)
     expect(operation?.toolName).toBe("read")
     expect(operation?.status).toBe("error")
@@ -2658,7 +2668,11 @@ describe("useSessionFeed", () => {
       yield* waitUntil(
         () =>
           Option.isSome(feed) &&
-          feed.value.messages().some((message) => message.toolCalls?.[0]?.status === "completed"),
+          feed.value
+            .messages()
+            .some(
+              (message) => toolCallsOf(Option.fromUndefinedOr(message))[0]?.status === "completed",
+            ),
       )
       yield* Effect.sync(() => {
         if (Option.isNone(feed)) return
@@ -2703,7 +2717,11 @@ describe("useSessionFeed", () => {
     const cellOf = () =>
       Option.flatMap(feed, (value) =>
         Option.fromNullishOr(
-          value.messages().find((message) => message.role === "assistant")?.toolCalls?.[0],
+          toolCallsOf(
+            Option.fromUndefinedOr(
+              value.messages().find((message) => message.role === "assistant"),
+            ),
+          )[0],
         ),
       )
     const activeTool = () =>
@@ -2864,7 +2882,16 @@ describe("useSessionFeed", () => {
               sessionId,
               branchId,
               role: "assistant",
-              parts: [Prompt.textPart({ text: "" })],
+              // A stored interaction projects from the call part the assistant wrote.
+              parts: [
+                Prompt.textPart({ text: "" }),
+                Prompt.toolCallPart({
+                  id: cellId,
+                  name: "cell",
+                  params: {},
+                  providerExecuted: false,
+                }),
+              ],
               createdAt: dateFromMillis(0),
             }),
             [
@@ -3089,13 +3116,24 @@ describe("useSessionFeed", () => {
                   operations: [savedOperation],
                 }),
               )
+            // A stored interaction projects from the call part the assistant wrote.
+            const parts: Array<Prompt.Part> = [Prompt.textPart({ text })]
+            if (calls.length > 0)
+              parts.push(
+                Prompt.toolCallPart({
+                  id: toolCallId,
+                  name: "cell",
+                  params: {},
+                  providerExecuted: false,
+                }),
+              )
             return projectMessage(
               Message.cases.regular.make({
                 id,
                 sessionId,
                 branchId,
                 role: "assistant",
-                parts: [Prompt.textPart({ text })],
+                parts,
                 createdAt: dateFromMillis(index),
               }),
               calls,
@@ -3167,15 +3205,17 @@ describe("useSessionFeed", () => {
                 assistantMessageIdForTurn(inputId, 2),
                 assistantMessageIdForTurn(nextInputId, 1),
               ])
-              expect(messages[0]?.toolCalls?.[0]?.status).toBe("completed")
+              expect(toolCallsOf(Option.fromUndefinedOr(messages[0]))[0]?.status).toBe("completed")
               // A saved interaction keeps the duration the snapshot projected from receipts.
-              expect(messages[0]?.toolCalls?.[0]?.durationMs).toBe(1_200)
+              expect(toolCallsOf(Option.fromUndefinedOr(messages[0]))[0]?.durationMs).toBe(1_200)
               if (saved) {
                 // After a reload the cell draws its operations, not only its receipts.
-                expect(messages[0]?.toolCalls?.[0]?.operations).toEqual([savedOperation])
+                expect(toolCallsOf(Option.fromUndefinedOr(messages[0]))[0]?.operations).toEqual([
+                  savedOperation,
+                ])
               }
-              expect(messages[1]?.toolCalls).toBeUndefined()
-              expect(messages[2]?.toolCalls).toBeUndefined()
+              expect(toolCallsOf(Option.fromUndefinedOr(messages[1]))).toEqual([])
+              expect(toolCallsOf(Option.fromUndefinedOr(messages[2]))).toEqual([])
             }),
           ),
           Effect.ensuring(Effect.sync(dispose)),
@@ -3257,7 +3297,9 @@ describe("useSessionFeed", () => {
           applied === events.length &&
           Option.isSome(feed) &&
           feed.value.messages().length === 2 &&
-          feed.value.messages().some((message) => Predicate.isNotUndefined(message.toolCalls)),
+          feed.value
+            .messages()
+            .some((message) => toolCallsOf(Option.fromUndefinedOr(message)).length > 0),
       ).pipe(
         Effect.andThen(
           Effect.sync(() => {
@@ -3265,8 +3307,10 @@ describe("useSessionFeed", () => {
             const messages = feed.value.messages()
             const first = messages.find((message) => message.id === firstAnswerId)
             const second = messages.find((message) => message.id === secondAnswerId)
-            expect(first?.toolCalls?.map((call) => call.id)).toEqual([lateToolCallId])
-            expect(second?.toolCalls).toBe(absent)
+            expect(toolCallsOf(Option.fromUndefinedOr(first)).map((call) => call.id)).toEqual([
+              lateToolCallId,
+            ])
+            expect(toolCallsOf(Option.fromUndefinedOr(second))).toEqual([])
           }),
         ),
         Effect.ensuring(Effect.sync(dispose)),

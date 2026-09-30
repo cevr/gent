@@ -373,9 +373,7 @@ interface MessageBase {
   reasoning: string
   images: ReadonlyArray<ImagePartProjection>
   createdAt: number
-  // eslint-disable-next-line effect/noNullish -- snapshot messages preserve absent tool-call data.
-  toolCalls: ToolCall[] | undefined
-  /** Ordered parts for interleaved rendering */
+  /** Ordered parts for interleaved rendering; the one owner of the message's tool calls. */
   segments?: AssistantSegment[]
   metadata?: MessageMetadataInfo
 }
@@ -390,6 +388,15 @@ interface InterjectionMessage extends MessageBase {
 }
 
 export type Message = RegularMessage | InterjectionMessage
+
+/** The tool calls a message shows inline, in segment order. */
+export const messageToolCalls = (message: Pick<MessageBase, "segments">): ReadonlyArray<ToolCall> =>
+  Option.getOrElse(Option.fromNullishOr(message.segments), (): AssistantSegment[] => []).flatMap(
+    (segment) => {
+      if (segment._tag === "tool-call") return [segment.toolCall]
+      return []
+    },
+  )
 export type SessionItem = Message | SessionEvent
 
 type TerminalDimensions = { readonly width: number; readonly height: number }
@@ -450,8 +457,6 @@ function AssistantMessage(props: {
   content: string
   reasoning: string
   images: ReadonlyArray<ImagePartProjection>
-  // eslint-disable-next-line effect/noNullish -- snapshot messages preserve absent tool-call data.
-  toolCalls: ToolCall[] | undefined
   segments?: AssistantSegment[]
   disclosure: DisclosureLevel
   fullDetail: boolean
@@ -465,7 +470,7 @@ function AssistantMessage(props: {
     if (props.content.length > 0) return true
     if (props.reasoning.length > 0) return true
     if (props.images.length > 0) return true
-    return (props.toolCalls ?? []).length > 0
+    return messageToolCalls(props).length > 0
   }
 
   const contentMargin = () => {
@@ -744,7 +749,6 @@ export function MessageList(props: MessageListProps) {
                     content={item.content}
                     reasoning={item.reasoning}
                     images={item.images}
-                    toolCalls={item.toolCalls}
                     segments={item.segments}
                     disclosure={props.disclosure}
                     fullDetail={props.fullDetail === true}
@@ -831,7 +835,6 @@ export const transcriptFingerprint = (item: SessionItem): string => {
       item.images.length,
       item.createdAt,
       item.pendingMode,
-      (item.toolCalls ?? []).map(toolFingerprint),
       (item.segments ?? []).map(segmentFingerprint),
       item.metadata?.customType,
       item.metadata?.hidden,
@@ -905,7 +908,7 @@ function captureTranscriptDisplay(items: SessionItem[]): TranscriptDisplayBounda
       reasoning: item.reasoning,
       imageCount: item.images.length,
       segments: (item.segments ?? []).map(segmentContent),
-      tools: new Map((item.toolCalls ?? []).map((tool) => [tool.id, toolIdentity(tool)])),
+      tools: new Map(messageToolCalls(item).map((tool) => [tool.id, toolIdentity(tool)])),
     })
   }
   return { items: new Set(items.map(itemKey)), messages }
@@ -927,9 +930,6 @@ function projectMessage(message: Message, boundary: MessageBoundary): Message {
       segments.push(segment)
     }
   }
-  const toolCalls = Option.map(Option.fromNullishOr(message.toolCalls), (tools) =>
-    tools.filter((tool) => boundary.tools.get(tool.id) !== toolIdentity(tool)),
-  )
   return {
     ...message,
     content: afterPrefix(message.content, boundary.content),
@@ -938,7 +938,6 @@ function projectMessage(message: Message, boundary: MessageBoundary): Message {
     segments: Option.getOrUndefined(
       Option.map(Option.fromNullishOr(message.segments), () => segments),
     ),
-    toolCalls: Option.getOrUndefined(toolCalls),
   }
 }
 

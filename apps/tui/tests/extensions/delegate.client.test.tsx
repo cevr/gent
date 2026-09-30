@@ -68,7 +68,6 @@ const assistant = (id: string, calls: ToolCall[], text = ""): SessionItem => {
     reasoning: "",
     images: [],
     createdAt: 0,
-    toolCalls: Option.getOrUndefined(Option.liftPredicate(calls, (list) => list.length > 0)),
     segments,
   }
 }
@@ -94,7 +93,6 @@ const completion = (
   reasoning: "",
   images: [],
   createdAt: 1,
-  toolCalls: Option.getOrUndefined(Option.none()),
   metadata: { customType: CHILD_COMPLETION_TYPE, details },
 })
 

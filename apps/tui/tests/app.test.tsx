@@ -4703,7 +4703,6 @@ describe("TUI renderer surfaces", () => {
           reasoning: "",
           images: [],
           createdAt: 0,
-          toolCalls: absent,
         } satisfies Message,
         {
           _tag: "regular-message",
@@ -4713,7 +4712,6 @@ describe("TUI renderer surfaces", () => {
           reasoning: "Considering current todo state",
           images: [],
           createdAt: 0,
-          toolCalls: absent,
           // The feed spells an assistant answer as segments in part order,
           // with the flat fields alongside for readers that want the whole
           // text at once.

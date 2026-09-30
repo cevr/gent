@@ -551,7 +551,6 @@ const userMessage = (
       reasoning: "",
       images: [...images],
       createdAt: 0,
-      toolCalls: absent,
     }
   }
   return {
@@ -563,16 +562,13 @@ const userMessage = (
     reasoning: "",
     images: [...images],
     createdAt: 0,
-    toolCalls: absent,
   }
 }
 
 /**
  * One assistant message carrying one tool call.
  *
- * The feed writes `segments` for every assistant message, so a fixture that
- * carries only `toolCalls` draws nothing. Both fields name the same call here,
- * the way the feed spells it.
+ * The segments own a message's tool calls, as the feed writes them.
  */
 const assistantToolMessage = (id: string, toolCall: ToolCall): ListMessage => ({
   _tag: "regular-message",
@@ -582,7 +578,6 @@ const assistantToolMessage = (id: string, toolCall: ToolCall): ListMessage => ({
   reasoning: "",
   images: [],
   createdAt: 0,
-  toolCalls: [toolCall],
   segments: [{ _tag: "tool-call", toolCall }],
 })
 
@@ -682,7 +677,6 @@ const compactionMessage = (): ListMessage => ({
   reasoning: "",
   images: [],
   createdAt: 0,
-  toolCalls: absent,
   metadata: {
     customType: "context-window",
     details: {
@@ -930,7 +924,6 @@ describe("FX transcript treatment", () => {
           reasoning: "",
           images: [],
           createdAt: 0,
-          toolCalls: absent,
           segments: [{ _tag: "text", content: "ANSWER-END" }],
         }
         const items: SessionItem[] = [
@@ -2457,7 +2450,6 @@ describe("transcript block spacing", () => {
       reasoning: "",
       images: [],
       createdAt: index,
-      toolCalls: [toolCall],
       segments: [{ _tag: "tool-call", toolCall }],
     }
   }
@@ -2469,7 +2461,6 @@ describe("transcript block spacing", () => {
     reasoning: "",
     images: [],
     createdAt: 9,
-    toolCalls: absent,
     segments: [{ _tag: "text", content: "done" }],
   }
   const items: SessionItem[] = [
@@ -2991,7 +2982,6 @@ const assistant = (id: string, content: string): ListMessage => ({
   reasoning: "",
   images: [],
   createdAt: 0,
-  toolCalls: absent,
   segments: [{ _tag: "text", content }],
 })
 
@@ -3226,8 +3216,6 @@ describe("native transcript mouse tracking", () => {
  * fingerprint therefore names the drawn fields in a fixed order.
  */
 
-const noToolCalls = Option.getOrUndefined(Option.none<ToolCall[]>())
-
 /** The streaming path writes `_tag` first and carries no metadata. */
 const streamedMessage = (id: string, content: string): ListMessage => ({
   _tag: "regular-message",
@@ -3237,7 +3225,6 @@ const streamedMessage = (id: string, content: string): ListMessage => ({
   reasoning: "",
   images: [],
   createdAt: 0,
-  toolCalls: noToolCalls,
   segments: [{ _tag: "text", content }],
 })
 
@@ -3250,7 +3237,6 @@ const rebuiltMessage = (id: string, content: string): ListMessage => {
     reasoning: "",
     images: [],
     createdAt: 0,
-    toolCalls: noToolCalls,
     segments: [{ _tag: "text", content }],
     metadata: absent,
   }
@@ -3283,10 +3269,10 @@ describe("transcript fingerprint", () => {
       output: absent,
     }
     const base = rebuiltMessage("m1", "hello")
-    const running: ListMessage = { ...base, toolCalls: [call] }
+    const running: ListMessage = { ...base, segments: [{ _tag: "tool-call", toolCall: call }] }
     const done: ListMessage = {
       ...base,
-      toolCalls: [{ ...call, status: "completed", output: "ok" }],
+      segments: [{ _tag: "tool-call", toolCall: { ...call, status: "completed", output: "ok" } }],
     }
     expect(transcriptFingerprint(running)).not.toBe(transcriptFingerprint(done))
   })
@@ -3626,7 +3612,6 @@ describe("sticky last prompt", () => {
       reasoning: "",
       images: [],
       createdAt: 0,
-      toolCalls: absent,
       segments: [{ _tag: "text", content: text }],
     }
   }

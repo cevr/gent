@@ -105,6 +105,7 @@ import {
   currentMillis,
   emptyTurnSteps,
   type Message,
+  messageToolCalls,
   type RetryOutcome,
   type SessionEvent,
   type SessionItem,
@@ -1741,11 +1742,10 @@ const buildMessages = (msgs: readonly ProjectedMessage[]): Message[] => {
   const filteredMsgs = msgs.filter((m) => m.role !== "tool")
 
   return filteredMsgs.map((m) => {
-    const toolCalls = m.toolInteractions.map(toToolCall)
-    let toolCallsOption = Option.none<typeof toolCalls>()
-    if (toolCalls.length > 0) toolCallsOption = Option.some(toolCalls)
+    // Only an assistant message calls tools, and its segments name every call it made.
     let segments = Option.none<AssistantSegment[]>()
-    if (m.role === "assistant") segments = Option.some(buildSegments(m.segments, toolCalls))
+    if (m.role === "assistant")
+      segments = Option.some(buildSegments(m.segments, m.toolInteractions.map(toToolCall)))
     if (m._tag === "interjection")
       return {
         _tag: "interjection-message",
@@ -1755,7 +1755,6 @@ const buildMessages = (msgs: readonly ProjectedMessage[]): Message[] => {
         reasoning: messagePartsReasoning(m.parts),
         images: messagePartsImages(m.parts),
         createdAt: m.createdAt.getTime(),
-        toolCalls: Option.getOrUndefined(toolCallsOption),
         segments: Option.getOrUndefined(segments),
         metadata: m.metadata,
       }
@@ -1767,7 +1766,6 @@ const buildMessages = (msgs: readonly ProjectedMessage[]): Message[] => {
       reasoning: messagePartsReasoning(m.parts),
       images: messagePartsImages(m.parts),
       createdAt: m.createdAt.getTime(),
-      toolCalls: Option.getOrUndefined(toolCallsOption),
       segments: Option.getOrUndefined(segments),
       metadata: m.metadata,
     }
@@ -1823,8 +1821,7 @@ const dateAnswerFromRetry = (
     produce((draft) => {
       const answer = Option.fromNullishOr(draft.messages.find((message) => message.id === id))
       if (Option.isNone(answer) || answer.value.content !== "") return
-      const calls = Option.fromNullishOr(answer.value.toolCalls)
-      if (Option.isSome(calls) && calls.value.length > 0) return
+      if (messageToolCalls(answer.value).length > 0) return
       answer.value.createdAt = requestAt
     }),
   )
@@ -1886,7 +1883,6 @@ const ensureAssistantMessage = (
         reasoning: "",
         images: [],
         createdAt,
-        toolCalls: Option.getOrUndefined(Option.none<ToolCall[]>()),
         segments: [{ _tag: "text", content }],
         metadata: Option.getOrUndefined(Option.none<Message["metadata"]>()),
       })
@@ -1912,30 +1908,23 @@ const updateToolMessage = (
 
 /** Find a tool call by id among direct calls and cell-admitted operations. */
 const locateToolCall = (
-  calls: Option.Option<ReadonlyArray<ToolCall>>,
+  calls: ReadonlyArray<ToolCall>,
   toolCallId: string,
 ): Option.Option<ToolCall> => {
-  if (Option.isNone(calls)) return Option.none()
-  for (const call of calls.value) {
+  for (const call of calls) {
     if (call.id === toolCallId) return Option.some(call)
-    const nested = locateToolCall(Option.fromNullishOr(call.operations), toolCallId)
+    const nested = locateToolCall(
+      Option.getOrElse(Option.fromNullishOr(call.operations), (): ToolCall[] => []),
+      toolCallId,
+    )
     if (Option.isSome(nested)) return nested
   }
   return Option.none()
 }
 
-/** The tool calls a message shows inline, in segment order. */
-const segmentToolCalls = (message: Message): Option.Option<ReadonlyArray<ToolCall>> =>
-  Option.map(Option.fromNullishOr(message.segments), (segments) =>
-    segments.flatMap((segment) => {
-      if (segment._tag === "tool-call") return [segment.toolCall]
-      return []
-    }),
-  )
-
 /** Attach a cell-admitted call under its parent instead of the transcript top level. */
 const attachOperation = (
-  calls: Option.Option<ReadonlyArray<ToolCall>>,
+  calls: ReadonlyArray<ToolCall>,
   parentToolCallId: string,
   operation: ToolCall,
 ) => {
@@ -1985,23 +1974,14 @@ const handleToolCallResult = (
   setRunningCalls((calls) => endCall(calls, toolEvent.toolCallId))
   updateToolMessage(
     setStore,
-    (message) => {
-      applyToolCallResult(
-        locateToolCall(Option.fromNullishOr(message.toolCalls), toolEvent.toolCallId),
-        status,
-        toolEvent,
-        completedAt,
-      )
-      // The same call also renders inline as a segment.
-      applyToolCallResult(
-        locateToolCall(segmentToolCalls(message), toolEvent.toolCallId),
-        status,
-        toolEvent,
-        completedAt,
-      )
-    },
     (message) =>
-      Option.isSome(locateToolCall(Option.fromNullishOr(message.toolCalls), toolEvent.toolCallId)),
+      applyToolCallResult(
+        locateToolCall(messageToolCalls(message), toolEvent.toolCallId),
+        status,
+        toolEvent,
+        completedAt,
+      ),
+    (message) => Option.isSome(locateToolCall(messageToolCalls(message), toolEvent.toolCallId)),
   )
 }
 
@@ -2097,25 +2077,17 @@ const startToolCall = (
     setStore,
     (message) => {
       if (Option.isSome(parentToolCallId)) {
-        attachOperation(Option.fromNullishOr(message.toolCalls), parentToolCallId.value, toolCall)
-        attachOperation(segmentToolCalls(message), parentToolCallId.value, { ...toolCall })
+        attachOperation(messageToolCalls(message), parentToolCallId.value, toolCall)
         return
       }
-      const existing = Option.fromNullishOr(message.toolCalls)
       // Cold interaction resume starts the same call again, not a new call.
-      if (Option.isSome(existing) && existing.value.some((call) => call.id === event.toolCallId))
-        return
-      if (Option.isNone(existing)) message.toolCalls = []
-      message.toolCalls?.push(toolCall)
-      // Also push to segments for interleaved rendering.
+      if (messageToolCalls(message).some((call) => call.id === event.toolCallId)) return
       if (Option.isNone(Option.fromNullishOr(message.segments))) message.segments = []
       message.segments?.push({ _tag: "tool-call", toolCall })
     },
     (message) => {
       if (Option.isSome(parentToolCallId)) {
-        return Option.isSome(
-          locateToolCall(Option.fromNullishOr(message.toolCalls), parentToolCallId.value),
-        )
+        return Option.isSome(locateToolCall(messageToolCalls(message), parentToolCallId.value))
       }
       // A late receipt names the message it belongs to; it must not land on a newer one.
       if (Predicate.isNotUndefined(event.assistantMessageId))
