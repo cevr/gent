@@ -9,6 +9,7 @@ import {
   Logger,
   Option,
   Path,
+  type PlatformError,
   Predicate,
   Ref,
   Schema,
@@ -193,14 +194,38 @@ const sessionRuntimeLayer = (
     }),
   )
 
-const buildFailingSessionMutationsLayer = () => {
-  const storageLayer = testSqliteStorage(() => Layer.empty, {})
+type TestStorage = Layer.Layer<
+  Layer.Success<ReturnType<typeof testSqliteStorage<never>>>,
+  StorageError | PlatformError.PlatformError
+>
+
+/**
+ * `SessionMutationsLive` over a fresh in-memory database and stub
+ * collaborators. Each option replaces one collaborator; `sessionStorage`
+ * wraps the real session storage to inject a failure or a racing write.
+ */
+const sessionMutationsTestLayer = (
+  options: {
+    readonly storage?: TestStorage
+    readonly sessionStorage?: (
+      sessions: SessionStorageService,
+    ) => Effect.Effect<SessionStorageService, never, BranchStorage | SqlClient.SqlClient>
+    readonly runtime?: Layer.Layer<SessionRuntime>
+    readonly governance?: Layer.Layer<AgentLoopSessionGovernance>
+    readonly eventStore?: Layer.Layer<EventStore>
+  } = {},
+) => {
+  const storageLayer = options.storage ?? testSqliteStorage(() => Layer.empty, {})
+  const sessionStorageLayer = Layer.effect(
+    SessionStorage,
+    Effect.flatMap(SessionStorage, options.sessionStorage ?? Effect.succeed),
+  ).pipe(Layer.provide(storageLayer))
   const deps = Layer.mergeAll(
     storageLayer,
-    sessionRuntimeLayer(),
-    sessionGovernanceProbeLayer(),
-    EventStore.Memory,
-    failingPublisherLayer,
+    sessionStorageLayer,
+    options.runtime ?? sessionRuntimeLayer(),
+    options.governance ?? sessionGovernanceProbeLayer(),
+    options.eventStore ?? EventStore.Memory,
     LanguageModelLayers.debug(),
     LanguageModelLayers.resolver(LanguageModelLayers.debug()),
     GentPlatform.Test(),
@@ -210,9 +235,15 @@ const buildFailingSessionMutationsLayer = () => {
   return Layer.provideMerge(SessionMutationsLive, deps)
 }
 
-const failingSessionMutationsLayer = Layer.fresh(
-  Layer.unwrap(Effect.sync(buildFailingSessionMutationsLayer)),
-)
+/** A fresh database for every test that provides it. */
+const freshSessionMutationsLayer = (options?: Parameters<typeof sessionMutationsTestLayer>[0]) =>
+  Layer.fresh(Layer.unwrap(Effect.sync(() => sessionMutationsTestLayer(options))))
+
+const failingSessionMutationsLayer = freshSessionMutationsLayer({
+  eventStore: failingPublisherLayer,
+})
+
+const sessionMutationsLayer = freshSessionMutationsLayer()
 
 const createActiveSessionFixture = Effect.fn("createActiveSessionFixture")(function* (input: {
   readonly sessions: SessionStorageService
@@ -243,25 +274,6 @@ const createActiveSessionFixture = Effect.fn("createActiveSessionFixture")(funct
   yield* input.sessions.setActiveBranch(input.sessionId, input.branchId, input.now)
 })
 
-const buildSessionMutationsLayer = () => {
-  const storageLayer = testSqliteStorage(() => Layer.empty, {})
-  const deps = Layer.mergeAll(
-    storageLayer,
-    sessionRuntimeLayer(),
-    sessionGovernanceProbeLayer(),
-    EventStore.Memory,
-    EventStore.Memory,
-    LanguageModelLayers.debug(),
-    LanguageModelLayers.resolver(LanguageModelLayers.debug()),
-    GentPlatform.Test(),
-    testRuntimeEnvironment,
-    ExtensionRegistry.Test(),
-  )
-  return Layer.provideMerge(SessionMutationsLive, deps)
-}
-
-const sessionMutationsLayer = Layer.fresh(Layer.unwrap(Effect.sync(buildSessionMutationsLayer)))
-
 const sessionRuntimeProbeLayer = (terminated: Array<SessionId>) =>
   sessionRuntimeLayer({
     terminateSession: (sessionId) =>
@@ -283,123 +295,50 @@ const sessionGovernanceProbeLayer = (restored?: Array<SessionId>) =>
     }),
   )
 
-const sessionMutationsLayerWithMachineProbe = (
-  runtimeTerminated?: Array<SessionId>,
-  runtimeRestored?: Array<SessionId>,
-) => {
-  const storageLayer = testSqliteStorage(() => Layer.empty, {})
-  let runtimeLayer = sessionRuntimeLayer()
-  if (!Predicate.isUndefined(runtimeTerminated)) {
-    runtimeLayer = sessionRuntimeProbeLayer(runtimeTerminated)
-  }
-  const deps = Layer.mergeAll(
-    storageLayer,
-    runtimeLayer,
-    sessionGovernanceProbeLayer(runtimeRestored),
-    EventStore.Memory,
-    EventStore.Memory,
-    LanguageModelLayers.debug(),
-    LanguageModelLayers.resolver(LanguageModelLayers.debug()),
-    GentPlatform.Test(),
-    testRuntimeEnvironment,
-    ExtensionRegistry.Test(),
-  )
-  return Layer.provideMerge(SessionMutationsLive, deps)
-}
-
-const failingDeleteSessionMutationsLayerWithMachineProbe = (
-  runtimeTerminated: Array<SessionId>,
-  runtimeRestored: Array<SessionId>,
-) => {
-  const storageLayer = testSqliteStorage(() => Layer.empty, {})
-  const failingSessionStorageLayer = Layer.effect(
-    SessionStorage,
-    Effect.gen(function* () {
-      const sessions = yield* SessionStorage
-      return SessionStorage.of({
-        ...sessions,
-        deleteSession: () => Effect.fail(new StorageError({ message: "delete failed" })),
-      })
-    }),
-  ).pipe(Layer.provide(storageLayer))
-  const deps = Layer.mergeAll(
-    storageLayer,
-    failingSessionStorageLayer,
-    sessionRuntimeProbeLayer(runtimeTerminated),
-    sessionGovernanceProbeLayer(runtimeRestored),
-    EventStore.Memory,
-    EventStore.Memory,
-    LanguageModelLayers.debug(),
-    LanguageModelLayers.resolver(LanguageModelLayers.debug()),
-    GentPlatform.Test(),
-    testRuntimeEnvironment,
-    ExtensionRegistry.Test(),
-  )
-  return Layer.provideMerge(SessionMutationsLive, deps)
-}
-
 /**
- * SessionMutations layer that injects a child-session create into the DB
- * between the pre-collect and the durable `deleteSession` tx. Simulates the
- * race of a new descendant committing after
- * `collectSessionTreeIds` runs but before the cascade tx opens. Fires once
- * for any deleteSession call, inserting a child pointed at the deleted root.
+ * Session mutations whose first `deleteSession` inserts a child of the
+ * deleted root first: a new descendant that commits after the delete set is
+ * read but before the cascade tx opens.
  */
 const racySessionMutationsLayer = (params: {
   readonly runtimeTerminated: Array<SessionId>
   readonly lateChild: { sessionId: SessionId; branchId: BranchId }
-}) => {
-  const storageLayer = testSqliteStorage(() => Layer.empty, {})
-  const racingSessionStorageLayer = Layer.effect(
-    SessionStorage,
-    Effect.gen(function* () {
-      const sessions = yield* SessionStorage
-      const branches = yield* BranchStorage
-      let fired = false
-      return SessionStorage.of({
-        ...sessions,
-        deleteSession: (rootId: SessionId) =>
-          Effect.gen(function* () {
-            if (!fired) {
-              fired = true
-              const now = FIXED_NOW
-              yield* sessions.createSession(
-                new Session({
-                  id: params.lateChild.sessionId,
-                  cwd: "/nonexistent/racing-late-child",
-                  parentSessionId: rootId,
-                  createdAt: now,
-                  updatedAt: now,
-                }),
-              )
-              yield* branches.createBranch(
-                new Branch({
-                  id: params.lateChild.branchId,
-                  sessionId: params.lateChild.sessionId,
-                  createdAt: now,
-                }),
-              )
-            }
-            return yield* sessions.deleteSession(rootId)
-          }),
-      })
-    }),
-  ).pipe(Layer.provide(storageLayer))
-  const deps = Layer.mergeAll(
-    storageLayer,
-    racingSessionStorageLayer,
-    sessionRuntimeProbeLayer(params.runtimeTerminated),
-    sessionGovernanceProbeLayer(),
-    EventStore.Memory,
-    EventStore.Memory,
-    LanguageModelLayers.debug(),
-    LanguageModelLayers.resolver(LanguageModelLayers.debug()),
-    GentPlatform.Test(),
-    testRuntimeEnvironment,
-    ExtensionRegistry.Test(),
-  )
-  return Layer.provideMerge(SessionMutationsLive, deps)
-}
+}) =>
+  sessionMutationsTestLayer({
+    runtime: sessionRuntimeProbeLayer(params.runtimeTerminated),
+    sessionStorage: (sessions) =>
+      Effect.gen(function* () {
+        const branches = yield* BranchStorage
+        let fired = false
+        return SessionStorage.of({
+          ...sessions,
+          deleteSession: (rootId: SessionId) =>
+            Effect.gen(function* () {
+              if (!fired) {
+                fired = true
+                const now = FIXED_NOW
+                yield* sessions.createSession(
+                  new Session({
+                    id: params.lateChild.sessionId,
+                    cwd: "/nonexistent/racing-late-child",
+                    parentSessionId: rootId,
+                    createdAt: now,
+                    updatedAt: now,
+                  }),
+                )
+                yield* branches.createBranch(
+                  new Branch({
+                    id: params.lateChild.branchId,
+                    sessionId: params.lateChild.sessionId,
+                    createdAt: now,
+                  }),
+                )
+              }
+              return yield* sessions.deleteSession(rootId)
+            }),
+        })
+      }),
+  })
 
 /**
  * Session mutations whose first read of `sessionId` is followed at once by a
@@ -410,42 +349,25 @@ const racySessionMutationsLayer = (params: {
 const interleavedSessionMutationsLayer = (params: {
   readonly sessionId: SessionId
   readonly racingWrite: (sql: SqlClient.SqlClient) => Effect.Effect<unknown, SqlError.SqlError>
-}) => {
-  const storageLayer = testSqliteStorage(() => Layer.empty, {})
-  const interleavedSessionStorageLayer = Layer.effect(
-    SessionStorage,
-    Effect.gen(function* () {
-      const sessions = yield* SessionStorage
-      const sql = yield* SqlClient.SqlClient
-      let fired = false
-      return SessionStorage.of({
-        ...sessions,
-        getSession: (id: SessionId) =>
-          Effect.gen(function* () {
-            const found = yield* sessions.getSession(id)
-            if (fired || id !== params.sessionId) return found
-            fired = true
-            yield* params.racingWrite(sql).pipe(Effect.orDie)
-            return found
-          }),
-      })
-    }),
-  ).pipe(Layer.provide(storageLayer))
-  const deps = Layer.mergeAll(
-    storageLayer,
-    interleavedSessionStorageLayer,
-    sessionRuntimeLayer(),
-    sessionGovernanceProbeLayer(),
-    EventStore.Memory,
-    EventStore.Memory,
-    LanguageModelLayers.debug(),
-    LanguageModelLayers.resolver(LanguageModelLayers.debug()),
-    GentPlatform.Test(),
-    testRuntimeEnvironment,
-    ExtensionRegistry.Test(),
-  )
-  return Layer.provideMerge(SessionMutationsLive, deps)
-}
+}) =>
+  sessionMutationsTestLayer({
+    sessionStorage: (sessions) =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient
+        let fired = false
+        return SessionStorage.of({
+          ...sessions,
+          getSession: (id: SessionId) =>
+            Effect.gen(function* () {
+              const found = yield* sessions.getSession(id)
+              if (fired || id !== params.sessionId) return found
+              fired = true
+              yield* params.racingWrite(sql).pipe(Effect.orDie)
+              return found
+            }),
+        })
+      }),
+  })
 
 // ── extension health ────────────────────────────────────────────────────────
 
@@ -1449,7 +1371,9 @@ describe("session.delete", () => {
         yield* Deferred.await(grandchildClosed).pipe(Effect.timeout("5 seconds"))
         expect(runtimeTerminated).toEqual([parent.sessionId, child.sessionId, grandchild.sessionId])
       }).pipe(
-        Effect.provide(sessionMutationsLayerWithMachineProbe(runtimeTerminated)),
+        Effect.provide(
+          sessionMutationsTestLayer({ runtime: sessionRuntimeProbeLayer(runtimeTerminated) }),
+        ),
         Effect.timeout("4 seconds"),
       ),
     )
@@ -1518,7 +1442,9 @@ describe("session.delete", () => {
 
         expect(runtimeTerminated).toEqual([parent.sessionId, child.sessionId])
       }).pipe(
-        Effect.provide(sessionMutationsLayerWithMachineProbe(runtimeTerminated)),
+        Effect.provide(
+          sessionMutationsTestLayer({ runtime: sessionRuntimeProbeLayer(runtimeTerminated) }),
+        ),
         Effect.timeout("4 seconds"),
       ),
     )
@@ -1568,7 +1494,9 @@ describe("session.delete", () => {
         expect(kept?.parentSessionId).toBeUndefined()
         expect(yield* sessions.getSession(SessionId.make("tree-spawn-handoff"))).toBeUndefined()
       }).pipe(
-        Effect.provide(sessionMutationsLayerWithMachineProbe(runtimeTerminated)),
+        Effect.provide(
+          sessionMutationsTestLayer({ runtime: sessionRuntimeProbeLayer(runtimeTerminated) }),
+        ),
         Effect.timeout("4 seconds"),
       ),
     )
@@ -1601,7 +1529,17 @@ describe("session.delete", () => {
         expect(yield* sessions.getSession(sessionId)).not.toBeUndefined()
       }).pipe(
         Effect.provide(
-          failingDeleteSessionMutationsLayerWithMachineProbe(runtimeTerminated, runtimeRestored),
+          sessionMutationsTestLayer({
+            runtime: sessionRuntimeProbeLayer(runtimeTerminated),
+            governance: sessionGovernanceProbeLayer(runtimeRestored),
+            sessionStorage: (sessions) =>
+              Effect.succeed(
+                SessionStorage.of({
+                  ...sessions,
+                  deleteSession: () => Effect.fail(new StorageError({ message: "delete failed" })),
+                }),
+              ),
+          }),
         ),
         Effect.timeout("4 seconds"),
       ),
@@ -2325,25 +2263,14 @@ describe("session transport contract", () => {
 // ── request idempotency ─────────────────────────────────────────────────────
 
 describe("requestId idempotency", () => {
-  const makePersistentSessionMutationsLayer = (dbPath: string) => {
-    const storageLayer = SqliteStorage.LiveWithSql(dbPath, () => Layer.empty, {}).pipe(
-      Layer.provide(BunServices.layer),
-      Layer.provide(GentPlatform.Test()),
-    )
-    const deps = Layer.mergeAll(
-      storageLayer,
-      sessionRuntimeLayer(),
-      EventStore.Memory,
-      EventStore.Memory,
-      AgentLoopSessionGovernance.Live,
-      LanguageModelLayers.debug(),
-      ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
-      GentPlatform.Test(),
-      testRuntimeEnvironment,
-      ExtensionRegistry.Test(),
-    )
-    return Layer.provideMerge(SessionMutationsLive, deps)
-  }
+  const makePersistentSessionMutationsLayer = (dbPath: string) =>
+    sessionMutationsTestLayer({
+      storage: SqliteStorage.LiveWithSql(dbPath, () => Layer.empty, {}).pipe(
+        Layer.provide(BunServices.layer),
+        Layer.provide(GentPlatform.Test()),
+      ),
+      governance: AgentLoopSessionGovernance.Live,
+    })
 
   it.live("duplicate createSession requestId converges on a single session id", () =>
     Effect.gen(function* () {
@@ -2853,19 +2780,11 @@ describe("requestId idempotency", () => {
             })
           },
         })
-        const deps = Layer.mergeAll(
-          storageLayer,
-          runtimeLayer,
-          EventStore.Memory,
-          EventStore.Memory,
-          AgentLoopSessionGovernance.Live,
-          LanguageModelLayers.debug(),
-          ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
-          GentPlatform.Test(),
-          testRuntimeEnvironment,
-          ExtensionRegistry.Test(),
-        )
-        return Layer.provideMerge(SessionMutationsLive, deps)
+        return sessionMutationsTestLayer({
+          storage: storageLayer,
+          runtime: runtimeLayer,
+          governance: AgentLoopSessionGovernance.Live,
+        })
       }
 
       const firstExit = yield* Effect.exit(
