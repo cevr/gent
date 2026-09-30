@@ -20,12 +20,8 @@ import type { AutocompleteItem } from "./extensions/client-facets.js"
  * evidence has to fade, or a burst of picks in one afternoon outranks a habit
  * formed over months — so a pick's weight halves every {@link HALF_LIFE_MS}.
  *
- * This module is pure. It computes scores from a store value handed to it and
- * never reads a clock or a disk of its own; the caller supplies `now`, and
- * the frecency store section below owns the file. That is what keeps the
- * ranker unit-testable at a fixed instant.
- *
- * @module
+ * The model's functions are pure: they compute scores from a store value and
+ * a `now` the caller supplies. The frecency store section below owns the file.
  */
 
 /**
@@ -202,9 +198,7 @@ export const frecencyLookup =
  * an empty file is an interrupted write, and unparseable content is a file
  * someone edited or a format that changed. None of those are worth failing a
  * popup over: all three answer `Option.none()` and ranking proceeds on the
- * subsequence score alone, exactly as it did before frecency existed.
- *
- * @module
+ * subsequence score alone.
  */
 
 const decodeStore = Schema.decodeUnknownOption(Schema.fromJsonString(FrecencyStore))
@@ -260,24 +254,15 @@ export const writeFrecencyStore = (
 /**
  * Serializes the read-modify-write below.
  *
- * Two surfaces record picks — the `/` commands registry and the `$` skills
- * extension — and before this gate they wrote by different strategies. `$`
- * re-read the file every time; `/` serialized a snapshot the module had
- * loaded once and never refreshed. So a `$` pick that landed after that load
- * was invisible to the `/` writer, and the next `/` pick wrote the stale
- * snapshot back over the file. Every `$` pick was erased by the next `/`
- * pick, and the reverse order lost the `/` pick the same way.
- *
- * One permit means the file is read, folded and written as one step with no
- * other pick interleaved. It is a module singleton because the thing it
- * protects is a single path on disk, not a value any one caller owns.
+ * Every surface that records picks (`/` commands, `$` skills, `@` files)
+ * writes through this one gate. One permit means the file is read, folded
+ * and written as one step, so a pick from one surface never writes a stale
+ * store over a pick from another. It is a module singleton because the thing
+ * it protects is a single path on disk, not a value any one caller owns.
  *
  * Its reach is this process. Two `gent` processes sharing a home each hold
  * their own gate, so a pick from one can still be lost to a pick from the
- * other — the write is not atomic against an outside writer. That is the
- * pre-existing exposure, unchanged and untested here; what this closes is the
- * cross-surface loss inside one TUI, which is the one a reader hits, because
- * a reader uses `/` and `$` in the same session.
+ * other: the write is atomic, but the read-modify-write is not.
  */
 const writeGate = Semaphore.makeUnsafe(1)
 
@@ -354,12 +339,10 @@ export const recordFrecencyPick = (
  * Relevance ranking for the composer's autocomplete rows, and the completion
  * the ghost line offers.
  *
- * Three prefixes feed the popup and they did not agree on what "best match"
- * meant. `/` commands and `$` skills were merely filtered by
- * `String.includes` and left in registration order. That is why
- * `/ag` listed `/fork` first: "Fork from Mess**ag**e" contains the filter, and
- * it registers before `/agents`. A reader who typed the first two letters of
- * the command they wanted got a different command under the cursor.
+ * A plain substring filter in registration order answers `/ag` with `/fork`
+ * ("Fork from Mess**ag**e" contains the filter, and it registers before
+ * `/agents`), so the reader who types the first two letters of a command gets
+ * another one under the cursor. The rows are ranked instead.
  *
  * The matcher here is a subsequence scorer in the fzy tradition, written out
  * rather than taken from a package: it costs no dependency, and a general
@@ -383,8 +366,6 @@ export const recordFrecencyPick = (
  *
  * All three prefixes route through this: `/` commands, `$` skills and `@`
  * files, each with its own frecency prefix.
- *
- * @module
  */
 
 /** Characters that begin a new word, so a match just after one reads as deliberate. */
@@ -444,7 +425,7 @@ const FRECENCY_GROWTH = 1.6
  *
  * Three characters is where the subsequence score starts carrying real
  * signal, and it is the length at which ranking was verified live. Below it
- * rows rank purely on match quality, exactly as they did before frecency.
+ * rows rank purely on match quality.
  */
 const FRECENCY_MIN_FILTER = 3
 
@@ -452,7 +433,7 @@ const FRECENCY_MIN_FILTER = 3
  * The score bonus for a row with decayed pick weight `weight`.
  *
  * Zero weight yields exactly zero, so a reader with no history — or a store
- * that failed to load — ranks precisely as they did before frecency existed.
+ * that failed to load — ranks on match quality alone.
  */
 export const frecencyBonus = (weight: number): number => {
   if (weight <= 0) return 0

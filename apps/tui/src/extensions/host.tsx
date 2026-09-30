@@ -31,6 +31,7 @@ import {
   onMount,
 } from "solid-js"
 import { formatError, isConnectionLoss, useRequiredContext } from "../utils"
+// A static import: Bun's bundler reaches the builtins only through it in the compiled binary.
 import { builtinClientModules } from "./builtins"
 import { ToolRenderersProvider } from "../tool-renderers"
 import type { Command } from "../commands"
@@ -74,8 +75,6 @@ export const makeClientRuntime = (
  * `transport.onExtensionStateChanged`; see the goal label in
  * `builtins.tsx` and the wake tray in `wake.client.tsx`.
  */
-
-// Static builtin imports — Bun's bundler needs these reachable for compiled binary
 
 interface ExtensionUIContextValue {
   /**

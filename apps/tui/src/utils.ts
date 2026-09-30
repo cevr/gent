@@ -504,7 +504,7 @@ const leadingArg = (args: Schema.JsonObject, place: PathPlace): string => {
 
 /**
  * The one label of a call's arguments: the tool's own formatter, else its
- * leading argument. Paths read from `place` when one is given.
+ * leading argument. Paths read from `place`: the cwd and home they are shown against.
  */
 export function toolArgSummary(toolName: string, input: ToolInput, place: PathPlace): string {
   const args = decodeToolArgs(input)

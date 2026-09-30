@@ -179,11 +179,9 @@ interface StatusRowProps {
    * How many of `labels`, counted from the end, are laid out from the right
    * edge inward instead of after the left group.
    *
-   * The row had one left-to-right budget, so a label added anywhere earlier
-   * pushed the last ones off the end and they vanished with no indication —
-   * adding the cwd silently dropped the effort, context and cost. The reader
-   * glances at the right-hand labels without reading the row, so their
-   * position has to be fixed and the left group is what gives way.
+   * The reader glances at the right-hand labels (effort, context, cost)
+   * without reading the row, so their position is fixed and the left group
+   * is what gives way when the row runs out of columns.
    */
   rightLabels?: number
 }
@@ -1085,11 +1083,10 @@ function useComposerController(): ComposerController {
     const keyName = Option.getOrElse(Option.fromNullishOr(event.name), () => "")
     // Enter is deliberately absent from this list. A popup holding rows binds
     // its keys after this handler and consumes enter before the composer sees
-    // it, so an enter arriving here is one the popup already declined for want
-    // of a row to select. Claiming it anyway is what swallowed `/xyz`: the
-    // popup opened on zero rows, so nothing selected the key and nothing
-    // submitted the draft. The navigation keys stay claimed — while a popup is
-    // open the cursor is its business, rows or no rows.
+    // it, so an enter arriving here is one the popup declined for want of a
+    // row to select, and it submits the draft (`/xyz` on zero rows). The
+    // navigation keys stay claimed: while a popup is open the cursor is its
+    // business, rows or no rows.
     if (["up", "down", "tab"].includes(keyName)) {
       return Option.some(false)
     }

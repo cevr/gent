@@ -647,9 +647,7 @@ export type ClientContextValue = ClientTransportValue &
  * The four interfaces above name the facets of the client — transport,
  * session, agent, actions — but they are not four seams. They share one
  * provider, one lifetime, and one set of signals, and every consumer wants
- * them together. Splitting them into four Solid contexts only forced each
- * call site to spread them back into a single object, which allocated a new
- * value per read and let a stale copy outlive the seam it came from.
+ * them together, so they are one context value.
  */
 const ClientContext = createContext<ClientContextValue>()
 

@@ -38,8 +38,6 @@ import {
  * The docked agents pane keeps the live progress of a running child.
  */
 
-/** The server delegate's id; the client module shares it by convention. */
-
 // ── start row ───────────────────────────────────────────────────────────────
 
 const decodeDelegateInput = Schema.decodeUnknownOption(

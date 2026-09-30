@@ -128,7 +128,9 @@ const gentFlags = {
   ),
   isolate: isolateFlag,
   debug: Flag.Boolean("debug").pipe(
-    Flag.withDescription("Launch TUI renderer playground for widgets and tool renderers"),
+    Flag.withDescription(
+      "Start an in-memory server with a seeded session on the scripted model, to exercise the TUI",
+    ),
     Flag.withDefault(false),
   ),
   mockEmpty: Flag.Boolean("mock-empty").pipe(

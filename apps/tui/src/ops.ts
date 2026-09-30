@@ -666,8 +666,8 @@ export const seedDebugSession = (cwd: string) =>
 // ── admin subcommands ───────────────────────────────────────────────────────
 
 /**
- * The admin subcommands: `sessions`, `server status`, `server stop`, `doctor`
- * and `storage reset`.
+ * The admin subcommands: `sessions`, `server start`, `server status`,
+ * `server stop`, `doctor` and `storage reset`.
  *
  * They share no state with the interactive TUI — each one opens what it needs,
  * prints, and returns — so they live beside the health readers they call rather

@@ -1076,8 +1076,9 @@ describe("autocomplete Effect items() through the client transport", () => {
  */
 
 /**
- * The registration order that produced the bug: `/fork` and `/auth` carry "ag"
- * in their titles and register before `/agents` carries it in its name.
+ * A registration order that a substring filter gets wrong: `/fork` and
+ * `/auth` carry "ag" in their titles and register before `/agents` carries it
+ * in its name.
  */
 const commands: ReadonlyArray<Command> = [
   { id: "message.fork", title: "Fork from Message", slash: "fork", onSelect: () => {} },
@@ -1092,9 +1093,8 @@ const ids = (items: ReadonlyArray<{ readonly id: string }>): ReadonlyArray<strin
 
 describe("slash autocomplete contribution", () => {
   test("puts the command named by the filter first", () => {
-    // Before ranking this answered `fork, auth, agents` in registration order,
-    // so the preselected row — the one Tab completes and Enter runs — was the
-    // wrong command.
+    // Registration order would answer `fork, auth, agents`, and the
+    // preselected row is the one Tab completes and Enter runs.
     expect(ids(slashAutocompleteItems(commands, "ag"))[0]).toBe("agents")
   })
 

@@ -722,8 +722,8 @@ type SessionOverlayState =
   | { readonly _tag: "reasoning" }
   /**
    * The branch picker. The boot flow is the only thing that opens it, so
-   * escape quits: a reader who never chose a branch has nowhere to fall back
-   * to.
+   * escape does nothing: a reader who never chose a branch has nowhere to
+   * fall back to, and ctrl+c still quits.
    */
   | { readonly _tag: "branches"; readonly branches: readonly Branch[] }
   | PromptSearchOverlayState
