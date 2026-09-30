@@ -1291,8 +1291,9 @@ the loose result schema); core has no MCP concept. The one Promise edge, the
 is the `mcpServers` object Claude Code, Cursor, and opencode share, in
 `~/.gent/mcp.json` and, for a project root `trustedProjects` names, in
 `<project>/.gent/mcp.json` (a project entry wins by name). A `command` entry
-runs over stdio with the host's whole environment, its own `env` winning (its
-stderr is ignored, so it never draws on the TUI). A `url` entry sends its
+runs over stdio with the host's whole environment, empty values included and
+read once per setup, its own `env` winning (its stderr is ignored, so it never
+draws on the TUI). A `url` entry sends its
 `headers`; its `type` picks the transport: `http` (or `streamable-http`) and
 `sse` pin one, and `auto`, the default, tries streamable HTTP and then SSE
 when the server answers 400, 404, 405, 406, 415, 422 or 501 (never on 401 or

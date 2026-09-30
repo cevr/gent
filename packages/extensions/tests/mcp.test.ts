@@ -2646,14 +2646,33 @@ describe("mcp tools in the cell", () => {
   )
 
   it.scopedLive(
-    "a stdio server runs with the host environment, its entry's env winning",
-    () =>
-      Effect.gen(function* () {
+    "stdio servers run with the host environment, empty and numbered names included, their entry's env winning, and it is read once",
+    () => {
+      // The gent process's environment, as a proxy or CA variable is in a user's
+      // shell. `NO_PROXY=` is set empty on purpose; Docker links name a port.
+      const hostEnv = ConfigProvider.fromEnv({
+        env: {
+          GENT_MCP_HOST_ONLY: "from the host",
+          GENT_MCP_DECLARED: "from the host",
+          GENT_MCP_EMPTY: "",
+          GENT_MCP_PORT_5432_TCP: "tcp://db:5432",
+        },
+      })
+      // Each walk of the environment loads this name once.
+      const walks = { count: 0 }
+      const counting = ConfigProvider.make((path) => {
+        if (path.join("_") === "GENT_MCP_HOST_ONLY") walks.count += 1
+        return hostEnv.load(path)
+      })
+      return Effect.gen(function* () {
         const fixture = yield* makeFixture
         const code = [
           "const host = await tools.mcp.fixture.env({ name: 'GENT_MCP_HOST_ONLY' })",
           "const declared = await tools.mcp.fixture.env({ name: 'GENT_MCP_DECLARED' })",
-          "JSON.stringify({ host, declared })",
+          "const empty = await tools.mcp.fixture.env({ name: 'GENT_MCP_EMPTY' })",
+          "const port = await tools.mcp.fixture.env({ name: 'GENT_MCP_PORT_5432_TCP' })",
+          "const other = await tools.mcp.other.env({ name: 'GENT_MCP_HOST_ONLY' })",
+          "JSON.stringify({ host, declared, empty, port, other })",
         ].join("; ")
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
           toolCallStep("cell", { code }),
@@ -2668,6 +2687,7 @@ describe("mcp tools in the cell", () => {
                 MCP_FIXTURE_ENV_TOOL: "1",
                 GENT_MCP_DECLARED: "from the entry",
               }),
+              other: fixture.stdio({ MCP_FIXTURE_ENV_TOOL: "1" }),
             }),
           ],
           providerLayer,
@@ -2678,23 +2698,24 @@ describe("mcp tools in the cell", () => {
           name: "cell",
           isFailure: false,
           result: {
-            display: encodeJson({ host: "from the host", declared: "from the entry" }),
+            display: encodeJson({
+              host: "from the host",
+              declared: "from the entry",
+              empty: "",
+              port: "tcp://db:5432",
+              other: "from the host",
+            }),
           },
         })
+        // Two servers listed at setup and dialed again for their calls: four dials.
+        // This harness runs the extension's setup twice, and each setup walks once.
+        expect(yield* fixture.starts).toBe(4)
+        expect(walks.count).toBe(2)
       }).pipe(
         Effect.timeout("25 seconds"),
-        Effect.provide(
-          Layer.merge(
-            platformLayer,
-            // The gent process's environment, as a proxy or CA variable is in a user's shell.
-            ConfigProvider.layer(
-              ConfigProvider.fromEnv({
-                env: { GENT_MCP_HOST_ONLY: "from the host", GENT_MCP_DECLARED: "from the host" },
-              }),
-            ),
-          ),
-        ),
-      ),
+        Effect.provide(Layer.merge(platformLayer, ConfigProvider.layer(counting))),
+      )
+    },
     30_000,
   )
 })
