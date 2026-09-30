@@ -1890,6 +1890,55 @@ describe("Branches", () => {
       expect(exit._tag).toBe("Failure")
     }).pipe(Effect.provide(testSqliteStorage(() => Layer.empty, {}))),
   )
+  it.live("a child session or a message cannot name a branch in another workspace", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionStorage
+      const branches = yield* BranchStorage
+      const messages = yield* MessageStorage
+      const sessionId = SessionId.make("workspace-a-session")
+      const branchId = BranchId.make("workspace-a-branch")
+      yield* Effect.gen(function* () {
+        yield* sessions.createSession(
+          new Session({ id: sessionId, createdAt: FIXED_NOW, updatedAt: FIXED_NOW }),
+        )
+        yield* branches.createBranch(new Branch({ id: branchId, sessionId, createdAt: FIXED_NOW }))
+      }).pipe(Effect.provideService(CurrentWorkspaceId, WORKSPACE_A))
+
+      const childId = SessionId.make("workspace-b-child")
+      const child = yield* sessions
+        .createSession(
+          new Session({
+            id: childId,
+            parentSessionId: sessionId,
+            parentBranchId: branchId,
+            createdAt: FIXED_NOW,
+            updatedAt: FIXED_NOW,
+          }),
+        )
+        .pipe(Effect.provideService(CurrentWorkspaceId, WORKSPACE_B), Effect.exit)
+      expect(Exit.isFailure(child)).toBe(true)
+
+      const messageId = MessageId.make("workspace-b-message")
+      const message = yield* messages
+        .createMessage(
+          Message.cases.regular.make({
+            id: messageId,
+            sessionId,
+            branchId,
+            role: "user",
+            parts: [Prompt.textPart({ text: "from workspace b" })],
+            createdAt: FIXED_NOW,
+          }),
+        )
+        .pipe(Effect.provideService(CurrentWorkspaceId, WORKSPACE_B), Effect.exit)
+      expect(Exit.isFailure(message)).toBe(true)
+
+      yield* Effect.gen(function* () {
+        expect(yield* sessions.getSession(childId)).toBeUndefined()
+        expect(yield* messages.getMessage(messageId)).toBeUndefined()
+      }).pipe(Effect.provideService(CurrentWorkspaceId, WORKSPACE_A))
+    }).pipe(Effect.provide(testSqliteStorage(() => Layer.empty, {})), Effect.timeout("4 seconds")),
+  )
 })
 
 // ── concurrent writes ───────────────────────────────────────────────────────
