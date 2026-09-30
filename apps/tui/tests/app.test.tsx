@@ -1321,7 +1321,7 @@ describe("App auth gate", () => {
       const inB = renderFrame(setup)
       expect(inB).not.toContain("send refused in A")
       expect(inB).not.toContain("keep me in A")
-      expect(clientCtx.error()).toBeNull()
+      expect(clientCtx.error()).toEqual(Option.none())
       clientCtx.switchSession(sessionA, branchA, "Session A")
       yield* waitForFrame(setup, (frame) => frame.includes("keep me in A"), "draft back in A")
       yield* waitForFrame(setup, (frame) => frame.includes("send refused in A"), "reason in A")
@@ -1389,7 +1389,12 @@ describe("App auth gate", () => {
       ctx.value.createSession()
       yield* waitForFrame(
         setup,
-        () => ctx.pipe(Option.exists((value) => value.session()?.sessionId === nextSessionId)),
+        () =>
+          ctx.pipe(
+            Option.exists((value) =>
+              Option.exists(value.session(), (s) => s.sessionId === nextSessionId),
+            ),
+          ),
         "next session mounted",
       )
       // Several frames for the new session's feed to settle.
@@ -1517,7 +1522,9 @@ describe("App auth gate", () => {
       yield* typeCommand("/new")(setup)
       // While the create is in flight, the session stays mounted.
       yield* waitForFrame(setup, (frame) => !frame.includes("/new"), "command sent")
-      expect(clientContext.session()?.sessionId).toBe(SessionId.make("session-kept"))
+      expect(Option.map(clientContext.session(), (s) => s.sessionId)).toEqual(
+        Option.some(SessionId.make("session-kept")),
+      )
       expect(renderFrame(setup)).toContain("ready ·")
       yield* Deferred.succeed(release, void 0)
       const frame = yield* waitForFrame(
@@ -1526,7 +1533,9 @@ describe("App auth gate", () => {
         "the refusal on the status row",
       )
       expect(frame).toContain("┃")
-      expect(clientContext.session()?.sessionId).toBe(SessionId.make("session-kept"))
+      expect(Option.map(clientContext.session(), (s) => s.sessionId)).toEqual(
+        Option.some(SessionId.make("session-kept")),
+      )
       setup.renderer.destroy()
     }).pipe(Effect.timeout("10 seconds")),
   )
@@ -1810,7 +1819,7 @@ describe("App auth gate", () => {
     Effect.gen(function* () {
       const view = yield* mountRunningTurnWithError
       expect(view.client.isStreaming()).toBe(true)
-      expect(view.client.error()).toBe('No model matches "typo"')
+      expect(view.client.error()).toEqual(Option.some('No model matches "typo"'))
       expect(view.activity()).toBe("working")
     }).pipe(Effect.timeout("10 seconds")),
   )
@@ -4160,9 +4169,7 @@ describe("App auth gate", () => {
         setup,
         (frame) =>
           frame.includes(`┃ ${initialPrompt}`) &&
-          Option.exists(Option.fromNullishOr(clientContext.error()), (error) =>
-            error.includes("send refused"),
-          ),
+          Option.exists(clientContext.error(), (error) => error.includes("send refused")),
         "prompt back in the draft",
       )
       expect(attempts).toHaveLength(1)
@@ -4571,7 +4578,9 @@ describe("agents view on the left arrow", () => {
       setup.mockInput.pressArrow("right")
       yield* waitForFrame(setup, (frame) => !paneOpen(frame), "the pane closed")
       const client = yield* requireClient(ctx)
-      expect(client.session()?.sessionId).toBe(SessionId.make("child-4"))
+      expect(Option.map(client.session(), (s) => s.sessionId)).toEqual(
+        Option.some(SessionId.make("child-4")),
+      )
     }).pipe(Effect.timeout("10 seconds")),
   )
 })

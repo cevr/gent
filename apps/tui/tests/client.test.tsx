@@ -254,7 +254,7 @@ describe("ClientProvider contract", () => {
       // another, so a consumer that stored it could observe a session the
       // rest of the tree had already left.
       const captured = yield* requireValue(held, "consumer never mounted")
-      expect(Option.fromNullishOr(captured.session())).toEqual(Option.none())
+      expect(captured.session()).toEqual(Option.none())
 
       const sessionId = SessionId.make("contract-session")
       const branchId = BranchId.make("contract-branch")
@@ -262,7 +262,7 @@ describe("ClientProvider contract", () => {
       yield* settle(setup)
 
       const observed = yield* requireValue(
-        Option.fromNullishOr(captured.session()),
+        captured.session(),
         "held value never observed the switch",
       )
       expect(observed.sessionId).toBe(sessionId)
@@ -296,7 +296,7 @@ describe("ClientProvider contract", () => {
       // An action writes; the agent facet on the same value reports it.
       client.setError("contract failure")
       expect(client.isError()).toBe(true)
-      expect(client.error()).toBe("contract failure")
+      expect(client.error()).toEqual(Option.some("contract failure"))
 
       // A session write; the session facet on the same value reports it.
       client.switchSession(SessionId.make("facet-session"), BranchId.make("facet-branch"), "Facets")
@@ -743,7 +743,7 @@ describe("ClientProvider session lifecycle", () => {
       active.createSession()
       yield* waitForFrame(
         setup,
-        () => active.session()?.sessionId === createdSessionId,
+        () => Option.exists(active.session(), (s) => s.sessionId === createdSessionId),
         "created session active",
       )
       expect(createInputs).toHaveLength(1)
@@ -753,14 +753,16 @@ describe("ClientProvider session lifecycle", () => {
       expect(Predicate.isString(firstInput.value.requestId)).toBe(true)
       // The created session becomes the active one; the shell mounts what the
       // client says, so there is no second place a navigation could go wrong.
-      expect(active.session()).toEqual({
-        sessionId: createdSessionId,
-        branchId: createdBranchId,
-        name: "Created",
-        modelId: absent,
-        reasoningLevel: absent,
-        cwd: workspaceCwd,
-      })
+      expect(active.session()).toEqual(
+        Option.some({
+          sessionId: createdSessionId,
+          branchId: createdBranchId,
+          name: "Created",
+          modelId: absent,
+          reasoningLevel: absent,
+          cwd: workspaceCwd,
+        }),
+      )
     }),
   )
   it.live("a new session takes its agent from its snapshot, never from the session before it", () =>
@@ -791,16 +793,16 @@ describe("ClientProvider session lifecycle", () => {
       )
       if (Option.isNone(ctx)) return yield* Effect.die("client context not ready")
       const active = ctx.value
-      expect(active.agent()).toBe(AgentName.make("secondary"))
+      expect(active.agent()).toEqual(Option.some(AgentName.make("secondary")))
       active.createSession()
       yield* waitForFrame(
         setup,
-        () => active.session()?.sessionId === SessionId.make("session-new"),
+        () => Option.exists(active.session(), (s) => s.sessionId === SessionId.make("session-new")),
         "new session active",
       )
       // No guess before the snapshot: a handoff inherits its parent's agent,
       // so assuming the default would flicker.
-      expect(active.agent()).toBeUndefined()
+      expect(active.agent()).toEqual(Option.none())
       active.applySessionSnapshot({
         sessionId: SessionId.make("session-new"),
         branchId: BranchId.make("branch-new"),
@@ -812,7 +814,7 @@ describe("ClientProvider session lifecycle", () => {
         runtime: { _tag: "Idle", queue: emptyQueueSnapshot() },
         metrics: { turns: 0, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
       })
-      expect(active.agent()).toBe(AgentName.make("secondary"))
+      expect(active.agent()).toEqual(Option.some(AgentName.make("secondary")))
     }),
   )
   it.live("choosing the session already in view keeps its settings, status and metrics", () =>
@@ -838,11 +840,11 @@ describe("ClientProvider session lifecycle", () => {
         runtime: { _tag: "Running", queue: emptyQueueSnapshot(), startedAtMs: 0 },
       })
       client.switchSession(FIRST.sessionId, FIRST.branchId, "First")
-      const session = yield* Effect.fromOption(Option.fromNullishOr(client.session()))
+      const session = yield* Effect.fromOption(client.session())
       expect(session).toMatchObject({ modelId: model, reasoningLevel: "high" })
       expect(client.isStreaming()).toBe(true)
       expect(client.cost()).toBe(1.5)
-      expect(client.agent()).toBe(AgentName.make("primary"))
+      expect(client.agent()).toEqual(Option.some(AgentName.make("primary")))
       expect(client.sessionMetrics().latestInputTokens).toBe(9_000)
       expect(Option.isSome(client.sessionMetrics().context)).toBe(true)
     }),
@@ -884,7 +886,7 @@ describe("ClientProvider session lifecycle", () => {
           ),
         )
         client.switchSession(FIRST.sessionId, nextBranch, "First")
-        expect(client.session()?.branchId).toBe(nextBranch)
+        expect(Option.map(client.session(), (s) => s.branchId)).toEqual(Option.some(nextBranch))
         expect(client.isStreaming()).toBe(false)
         expect(client.cost()).toBe(0)
         expect(Option.isNone(client.sessionMetrics().context)).toBe(true)
@@ -921,7 +923,9 @@ describe("ClientProvider session lifecycle", () => {
       active.switchSession(SECOND.sessionId, SECOND.branchId, "Second")
       yield* active.updateSessionSettings({ reasoningLevel: Option.some("low") })
       expect(sent).toEqual([{ sessionId: SECOND.sessionId, reasoningLevel: Option.some("low") }])
-      expect(active.session()?.modelId).toBe(ModelId.make("openai/gpt-5.6-luna"))
+      expect(Option.map(active.session(), (s) => s.modelId)).toEqual(
+        Option.some(ModelId.make("openai/gpt-5.6-luna")),
+      )
     }),
   )
   it.live("runtime idle clears finishing activity only for the current branch", () =>
@@ -1024,7 +1028,7 @@ describe("ClientProvider session lifecycle", () => {
       })
       client.setError("provider refused the request")
       yield* notify('Unknown driver "nope".')
-      expect(client.error()).toBe("provider refused the request")
+      expect(client.error()).toEqual(Option.some("provider refused the request"))
       expect(client.notice()).toEqual(Option.some('Unknown driver "nope".'))
     }).pipe(Effect.timeout("10 seconds")),
   )
@@ -1047,9 +1051,8 @@ describe("ClientProvider session lifecycle", () => {
         }),
       )
       const client = yield* requireClientSessionState(ctx)
-      yield* waitForFrame(setup, () => Predicate.isNotNullish(client.error()), "agent error")
-      const error = client.error()
-      expect(error).toBe("Driver openai: catalog filter failed")
+      yield* waitForFrame(setup, () => Option.isSome(client.error()), "agent error")
+      expect(client.error()).toEqual(Option.some("Driver openai: catalog filter failed"))
     }),
   )
   it.live("a model catalog that failed to load is read again after a reconnect", () =>
@@ -1078,7 +1081,7 @@ describe("ClientProvider session lifecycle", () => {
         }),
       )
       const client = yield* requireClientSessionState(ctx)
-      yield* waitUntil(() => Predicate.isNotNullish(client.error()), "the failed load")
+      yield* waitUntil(() => Option.isSome(client.error()), "the failed load")
       lifecycle.emit(ConnectionState.cases.Reconnecting.make({ attempt: 1, generation: 1 }))
       lifecycle.emit(ConnectionState.cases.Connected.make({ generation: 1 }))
       yield* waitUntil(() => listings === 2, "the reconnect reads the catalog again")
@@ -1133,9 +1136,11 @@ describe("ClientProvider session lifecycle", () => {
           1,
           AgentEvent.cases.SessionNameUpdated.make({ sessionId: FIRST.sessionId, name: "Renamed" }),
         )
-        expect(client.session()?.name).toBe("Renamed")
+        expect(Option.map(client.session(), (s) => s.name)).toEqual(Option.some("Renamed"))
         yield* client.updateSessionSettings({ modelId: Option.none() })
-        expect(client.session()?.modelId).toBe(ModelId.make("openai/gpt-5.6-luna"))
+        expect(Option.map(client.session(), (s) => s.modelId)).toEqual(
+          Option.some(ModelId.make("openai/gpt-5.6-luna")),
+        )
         // A settings change can change what an extension reports; so can its own pulse.
         yield* waitUntil(() => healthReads.length === 2, "the settings change reads health")
         pulse(
@@ -1181,9 +1186,9 @@ describe("ClientProvider session lifecycle", () => {
         }),
       )
       const client = yield* requireClientSessionState(ctx)
-      expect(client.error()).toBe(nullValue)
+      expect(client.error()).toEqual(Option.none())
       yield* client.surfaceError(client.createBranch())
-      expect(client.error()).toBe("Not found: branch gone")
+      expect(client.error()).toEqual(Option.some("Not found: branch gone"))
       expect(client.isError()).toBe(true)
     }),
   )
@@ -1209,15 +1214,17 @@ describe("ClientProvider session lifecycle", () => {
         const client = yield* requireClientSessionState(ctx)
         client.switchSession(SessionId.make("session-b"), BranchId.make("branch-b"), "B")
         yield* waitForFrame(setup, () => client.isActive(), "session state")
-        expect(client.session()).toEqual({
-          sessionId: SessionId.make("session-b"),
-          branchId: BranchId.make("branch-b"),
-          name: "B",
-          modelId: absent,
-          reasoningLevel: absent,
-          cwd: absent,
-        })
-        expect(client.agent()).toBeUndefined()
+        expect(client.session()).toEqual(
+          Option.some({
+            sessionId: SessionId.make("session-b"),
+            branchId: BranchId.make("branch-b"),
+            name: "B",
+            modelId: absent,
+            reasoningLevel: absent,
+            cwd: absent,
+          }),
+        )
+        expect(client.agent()).toEqual(Option.none())
       }),
   )
   it.live("model() and agent() read the snapshot's server-resolved model and session agent", () =>
@@ -1261,7 +1268,7 @@ describe("ClientProvider session lifecycle", () => {
       )
       expect(client.model()).toBe("anthropic/claude-haiku-4-5-20251001")
       // The footer names the session's agent, which the snapshot carries.
-      expect(client.agent()).toBe(AgentName.make("primary"))
+      expect(client.agent()).toEqual(Option.some(AgentName.make("primary")))
     }),
   )
   it.live("applySessionSnapshot refreshes the active session metadata", () =>
@@ -1303,19 +1310,21 @@ describe("ClientProvider session lifecycle", () => {
         setup,
         () =>
           Option.exists(
-            Option.fromNullishOr(client.session()),
+            client.session(),
             (current) => current.name === "Fresh" && current.reasoningLevel === "high",
           ),
         "session state",
       )
-      expect(client.session()).toEqual({
-        sessionId: SessionId.make("session-refresh"),
-        branchId: BranchId.make("branch-refresh"),
-        name: "Fresh",
-        modelId: absent,
-        reasoningLevel: "high",
-        cwd: absent,
-      })
+      expect(client.session()).toEqual(
+        Option.some({
+          sessionId: SessionId.make("session-refresh"),
+          branchId: BranchId.make("branch-refresh"),
+          name: "Fresh",
+          modelId: absent,
+          reasoningLevel: "high",
+          cwd: absent,
+        }),
+      )
     }),
   )
   it.live("applySessionSnapshot ignores stale foreign identity snapshots", () =>
@@ -1360,15 +1369,17 @@ describe("ClientProvider session lifecycle", () => {
         },
       })
       yield* waitForFrame(setup, () => client.isActive(), "session state")
-      expect(client.session()).toEqual({
-        sessionId: SessionId.make("session-target"),
-        branchId: BranchId.make("branch-target"),
-        name: "Target",
-        modelId: absent,
-        reasoningLevel: absent,
-        cwd: absent,
-      })
-      expect(client.agent()).toBeUndefined()
+      expect(client.session()).toEqual(
+        Option.some({
+          sessionId: SessionId.make("session-target"),
+          branchId: BranchId.make("branch-target"),
+          name: "Target",
+          modelId: absent,
+          reasoningLevel: absent,
+          cwd: absent,
+        }),
+      )
+      expect(client.agent()).toEqual(Option.none())
       expect(client.model()).not.toBe("anthropic/claude-haiku-4-5-20251001")
       expect(client.cost()).toBe(0)
       expect(client.sessionMetrics().latestInputTokens).toBe(0)
@@ -1419,20 +1430,22 @@ describe("ClientProvider session lifecycle", () => {
         setup,
         () =>
           Option.exists(
-            Option.fromNullishOr(client.session()),
+            client.session(),
             (current) => current.branchId === BranchId.make("branch-new"),
           ),
         "session state",
       )
-      expect(client.session()).toEqual({
-        sessionId: SessionId.make("session-branch-race"),
-        branchId: BranchId.make("branch-new"),
-        name: "New",
-        modelId: absent,
-        reasoningLevel: absent,
-        cwd: absent,
-      })
-      expect(client.agent()).toBeUndefined()
+      expect(client.session()).toEqual(
+        Option.some({
+          sessionId: SessionId.make("session-branch-race"),
+          branchId: BranchId.make("branch-new"),
+          name: "New",
+          modelId: absent,
+          reasoningLevel: absent,
+          cwd: absent,
+        }),
+      )
+      expect(client.agent()).toEqual(Option.none())
       expect(client.cost()).toBe(0)
       expect(client.sessionMetrics().latestInputTokens).toBe(0)
     }),
@@ -1694,7 +1707,7 @@ describe("ClientProvider errors", () => {
       client.switchSession(SECOND.sessionId, SECOND.branchId, "Second")
       client.setErrorIn(SECOND, "send refused")
       client.applySessionSnapshot(snapshotOf(SECOND, { costUsd: 0, lastInputTokens: 0 }))
-      expect(client.error()).toBe("send refused")
+      expect(client.error()).toEqual(Option.some("send refused"))
     }),
   )
 
@@ -1716,7 +1729,7 @@ describe("ClientProvider errors", () => {
       client.applySessionSnapshot(snapshotOf(FIRST, { costUsd: 0, lastInputTokens: 0 }))
       client.switchSession(FIRST.sessionId, FIRST.branchId, "First")
       client.setErrorIn(FIRST, "send refused")
-      expect(client.error()).toBe("send refused")
+      expect(client.error()).toEqual(Option.some("send refused"))
       // A later turn replaces the error on screen.
       client.applySessionEvent(
         makeEnvelope(
@@ -1728,7 +1741,7 @@ describe("ClientProvider errors", () => {
       client.switchSession(SECOND.sessionId, SECOND.branchId, "Second")
       client.switchSession(FIRST.sessionId, FIRST.branchId, "First")
       client.applySessionSnapshot(snapshotOf(FIRST, { costUsd: 0, lastInputTokens: 0 }))
-      expect(client.error()).toBeNull()
+      expect(client.error()).toEqual(Option.none())
     }),
   )
 
@@ -1751,7 +1764,7 @@ describe("ClientProvider errors", () => {
       client.setErrorIn(FIRST, "send refused")
       // The feed came back after a reconnect and hydrates again.
       client.applySessionSnapshot(snapshotOf(FIRST, { costUsd: 0, lastInputTokens: 0 }))
-      expect(client.error()).toBe("send refused")
+      expect(client.error()).toEqual(Option.some("send refused"))
     }),
   )
 
@@ -1773,7 +1786,7 @@ describe("ClientProvider errors", () => {
       client.switchSession(SECOND.sessionId, SECOND.branchId, "Second")
       client.setErrorIn(SECOND, "send refused")
       client.applySessionSnapshot(snapshotOf(SECOND, { costUsd: 0, lastInputTokens: 0 }))
-      expect(client.error()).toBe("send refused")
+      expect(client.error()).toEqual(Option.some("send refused"))
       client.applySessionEvent(
         makeEnvelope(
           1,
@@ -1781,7 +1794,7 @@ describe("ClientProvider errors", () => {
         ),
       )
       client.applySessionSnapshot(snapshotOf(SECOND, { costUsd: 0, lastInputTokens: 0 }))
-      expect(client.error()).toBeNull()
+      expect(client.error()).toEqual(Option.none())
     }),
   )
 
@@ -1802,7 +1815,7 @@ describe("ClientProvider errors", () => {
       const client = yield* requireClient(ctx)
       client.applySessionSnapshot(snapshotOf(FIRST, { costUsd: 0, lastInputTokens: 0 }))
       client.setErrorIn(FIRST, "send refused")
-      expect(client.error()).toBe("send refused")
+      expect(client.error()).toEqual(Option.some("send refused"))
     }),
   )
 
@@ -1835,7 +1848,7 @@ describe("ClientProvider errors", () => {
       }
       client.applySessionSnapshot({ ...idle, runtime: running })
       expect(client.isStreaming()).toBe(true)
-      expect(client.error()).toBeNull()
+      expect(client.error()).toEqual(Option.none())
     }),
   )
 
@@ -1864,14 +1877,14 @@ describe("ClientProvider errors", () => {
       client.setErrorIn(FIRST, "interject refused")
       // The same turn still runs when the feed hydrates again.
       client.applySessionSnapshot(midTurn)
-      expect(client.error()).toBe("interject refused")
+      expect(client.error()).toEqual(Option.some("interject refused"))
       // It ends while the connection is down; no new turn starts.
       client.applySessionSnapshot({
         ...midTurn,
         runtime: { _tag: "Idle", queue: emptyQueueSnapshot() },
         metrics: { ...midTurn.metrics, turns: midTurn.metrics.turns + 1 },
       })
-      expect(client.error()).toBe("interject refused")
+      expect(client.error()).toEqual(Option.some("interject refused"))
     }),
   )
 
@@ -1900,7 +1913,7 @@ describe("ClientProvider errors", () => {
       expect(client.isStreaming()).toBe(true)
       // A queue change re-emits Running; the turn did not start again.
       client.applySessionRuntime({ ...FIRST, runtime: running })
-      expect(client.error()).toBe('No model matches "typo"')
+      expect(client.error()).toEqual(Option.some('No model matches "typo"'))
       // The turn ends; the error stays until a turn starts.
       client.applySessionEvent(
         makeEnvelope(
@@ -1913,10 +1926,10 @@ describe("ClientProvider errors", () => {
         ),
       )
       expect(client.isStreaming()).toBe(false)
-      expect(client.error()).toBe('No model matches "typo"')
+      expect(client.error()).toEqual(Option.some('No model matches "typo"'))
       client.applySessionRuntime({ ...FIRST, runtime: running })
       expect(client.isStreaming()).toBe(true)
-      expect(client.error()).toBeNull()
+      expect(client.error()).toEqual(Option.none())
     }),
   )
 })

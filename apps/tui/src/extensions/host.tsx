@@ -298,7 +298,7 @@ export function ExtensionUIProvider(props: {
               const byExtension = new Map<string, Array<Command>>()
               for (const c of cmds) {
                 const run = (args: string) => {
-                  const activeSession = Option.fromNullishOr(client.session())
+                  const activeSession = client.session()
                   if (Option.isNone(activeSession)) return
                   const sid = activeSession.value.sessionId
                   const bid = activeSession.value.branchId

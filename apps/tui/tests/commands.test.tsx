@@ -506,14 +506,16 @@ describe("CommandPalette renderer", () => {
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressEnter()
       yield* waitForFrame(setup, (frame) => !frame.includes("Agents ·"), "agents pane closed")
-      expect(ctx.value.session()).toEqual({
-        sessionId: delegateId,
-        branchId: delegateBranchId,
-        name: "Delegate",
-        modelId: absent,
-        reasoningLevel: absent,
-        cwd: absent,
-      })
+      expect(ctx.value.session()).toEqual(
+        Option.some({
+          sessionId: delegateId,
+          branchId: delegateBranchId,
+          name: "Delegate",
+          modelId: absent,
+          reasoningLevel: absent,
+          cwd: absent,
+        }),
+      )
     }),
   )
 

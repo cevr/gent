@@ -361,7 +361,7 @@ export function ConnectionWidget() {
   const client = useClient()
   const ext = useExtensionUI()
   const { theme } = useTheme()
-  const connectionIssue = () => Option.fromNullishOr(client.connectionIssue())
+  const connectionIssue = () => client.connectionIssue()
   const degradedExtensions = () => {
     const health = client.extensionHealth()
     if (health._tag === "Degraded") return health.degradedExtensions
@@ -560,11 +560,11 @@ export function Session(props: SessionProps) {
     const items: StatusRowLabel[] = []
 
     // Core chrome: connection/restart status
-    const conn = client.connectionState()
+    const restart = Option.filter(client.connectedGeneration(), (generation) => generation > 0)
     if (client.isReconnecting()) {
       items.push({ text: "reconnecting", color: theme.warning })
-    } else if (conn?._tag === "Connected" && conn.generation > 0) {
-      items.push({ text: `restart ${conn.generation}`, color: theme.textMuted })
+    } else if (Option.isSome(restart)) {
+      items.push({ text: `restart ${restart.value}`, color: theme.textMuted })
     }
 
     return items
@@ -584,12 +584,12 @@ export function Session(props: SessionProps) {
   }
 
   const modelLabels = (): StatusRowLabel[] => {
-    const model = Option.fromNullishOr(client.modelInfo())
+    const model = client.modelInfo()
     const items: StatusRowLabel[] = []
     if (Option.isSome(model)) items.push({ text: model.value.name, color: theme.textMuted })
     return items.concat(
       buildModelLabels({
-        reasoningLevel: Option.fromNullishOr(client.reasoningLevel()),
+        reasoningLevel: client.reasoningLevel(),
         theme,
         debugMode: props.debugMode === true,
       }),
@@ -604,7 +604,7 @@ export function Session(props: SessionProps) {
   const rightAnchoredLabels = (): StatusRowLabel[] =>
     buildContextLabels({
       metrics: client.sessionMetrics(),
-      model: Option.fromNullishOr(client.modelInfo()),
+      model: client.modelInfo(),
       theme,
     }).concat(costLabels())
 
@@ -623,7 +623,7 @@ export function Session(props: SessionProps) {
     // replaces the phase word until the next turn clears it; an extension
     // notice shows when no error stands, and a notice never replaces an error.
     const armedCue = controller.armedCue()
-    const localError = Option.fromNullishOr(client.error())
+    const localError = client.error()
     const notice = client.notice()
     if (Option.isSome(armedCue)) {
       items.push({ text: armedCue.value, color: theme.warning })
@@ -760,7 +760,9 @@ export function Session(props: SessionProps) {
             rows={reasoningRows(client.resolvedReasoningLevel())}
             current={Option.some(
               Option.getOrElse(
-                Option.fromUndefinedOr(client.session()?.reasoningLevel),
+                Option.flatMap(client.session(), (session) =>
+                  Option.fromUndefinedOr(session.reasoningLevel),
+                ),
                 () => DEFAULT_ROW_ID,
               ),
             )}

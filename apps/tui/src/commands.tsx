@@ -365,10 +365,11 @@ export function CommandPalette() {
               id: `branch.${branch.id}`,
               title: selectedTitle(
                 branch.name ?? `Branch ${shortId(branch.id)}`,
-                client.session()?.branchId === branch.id,
+                Option.exists(client.session(), (session) => session.branchId === branch.id),
               ),
               onSelect: () => {
-                if (client.session()?.branchId !== branch.id) client.switchBranch(branch.id)
+                if (!Option.exists(client.session(), (session) => session.branchId === branch.id))
+                  client.switchBranch(branch.id)
                 closePalette()
               },
             })),

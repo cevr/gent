@@ -1021,10 +1021,7 @@ describe("Composer submit", () => {
       setup.mockInput.pressEnter()
       yield* waitForFrame(
         setup,
-        () =>
-          Option.exists(client, (c) =>
-            Option.exists(Option.fromNullishOr(c.error()), (m) => m.startsWith("Shell:")),
-          ),
+        () => Option.exists(client, (c) => Option.exists(c.error(), (m) => m.startsWith("Shell:"))),
         "error shown",
       )
       yield* waitForFrame(setup, (frame) => frame.includes("echo hi"), "draft restored")
@@ -1069,10 +1066,7 @@ describe("Composer submit", () => {
       setup.mockInput.pressEnter()
       yield* waitForFrame(
         setup,
-        () =>
-          Option.exists(client, (c) =>
-            Option.exists(Option.fromNullishOr(c.error()), (m) => m.startsWith("Shell:")),
-          ),
+        () => Option.exists(client, (c) => Option.exists(c.error(), (m) => m.startsWith("Shell:"))),
         "error shown",
       )
       const frame = yield* waitForFrame(
@@ -1154,13 +1148,11 @@ describe("Composer submit", () => {
       yield* waitForFrame(
         setup,
         () =>
-          Option.exists(client, (c) =>
-            Option.exists(Option.fromNullishOr(c.error()), (m) => m.includes("send refused")),
-          ),
+          Option.exists(client, (c) => Option.exists(c.error(), (m) => m.includes("send refused"))),
         "error shown",
       )
       // The reason says the command ran, so the reader does not run it again.
-      const reason = Option.flatMap(client, (c) => Option.fromNullishOr(c.error()))
+      const reason = Option.flatMap(client, (c) => c.error())
       expect(Option.exists(reason, (m) => m.includes("ran"))).toBe(true)
       // The output is as large as a paste, so it comes back as a placeholder.
       yield* waitForFrame(setup, (frame) => frame.includes("[Pasted 3 lines"), "output restored")
@@ -1202,9 +1194,7 @@ describe("Composer submit", () => {
       yield* waitForFrame(
         setup,
         () =>
-          Option.exists(client, (c) =>
-            Option.exists(Option.fromNullishOr(c.error()), (m) => m.includes("send refused")),
-          ),
+          Option.exists(client, (c) => Option.exists(c.error(), (m) => m.includes("send refused"))),
         "error shown",
       )
       yield* waitForFrame(setup, (frame) => frame.includes("keep me"), "draft restored")

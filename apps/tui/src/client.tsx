@@ -3,6 +3,7 @@ import {
   Context,
   DateTime,
   Effect,
+  Equal,
   Exit,
   Fiber,
   type FileSystem,
@@ -456,18 +457,15 @@ interface ClientTransportValue {
   /** Structured logger — flows through Effect's logger layer */
   log: ClientLog
 
-  // eslint-disable-next-line effect/noNullish -- RPC transport exposes an absent state before startup.
-  connectionState: () => ConnectionState | undefined
   waitForTransportReady: Effect.Effect<void>
   /** The generation of the open connection; None while it is not connected. */
   connectedGeneration: () => Option.Option<number>
   isReconnecting: () => boolean
-  // eslint-disable-next-line effect/noNullish -- UI transport exposes null when no issue is present.
-  connectionIssue: () => string | null
+  connectionIssue: () => Option.Option<string>
   extensionHealth: () => ExtensionHealthSnapshot
 
-  // eslint-disable-next-line effect/noNullish -- UI transport accepts null to clear its issue.
-  setConnectionIssue: (error: string | null) => void
+  /** None clears the issue. */
+  setConnectionIssue: (issue: Option.Option<string>) => void
 
   // Extension state-change pulse subscription. Fires once per
   // `ExtensionStateChanged` event seen on the active session for each
@@ -512,8 +510,8 @@ export const sameIdentity = (left: SessionIdentity, right: SessionIdentity): boo
   left.sessionId === right.sessionId && left.branchId === right.branchId
 
 interface ClientSessionValue {
-  // eslint-disable-next-line effect/noNullish -- UI session accessors expose null while no session is active.
-  session: () => Session | null
+  /** None while no session is active. */
+  session: () => Option.Option<Session>
   /** The active session's ids; a new record with the same ids is the same value. */
   sessionIdentity: () => Option.Option<SessionIdentity>
   /** The active session's id alone, for consumers that never read the branch. */
@@ -572,13 +570,13 @@ export interface SessionMetrics {
 
 interface ClientAgentValue {
   // Agent state (derived from events)
-  // eslint-disable-next-line effect/noNullish -- UI agent accessors expose absence before hydration.
-  agent: () => AgentName | undefined
+  /** None until a snapshot names the session's agent. */
+  agent: () => Option.Option<AgentName>
   cost: () => number
   /** The model the next turn would use: session setting, else the server-resolved default. */
   model: () => string
-  // eslint-disable-next-line effect/noNullish -- UI agent accessors expose absence before hydration.
-  reasoningLevel: () => ReasoningEffort | undefined
+  /** The session's level, else the resolved one; None before either is known. */
+  reasoningLevel: () => Option.Option<ReasoningEffort>
   /** The reasoning level config/agent would apply without a session override. */
   resolvedReasoningLevel: () => Option.Option<ReasoningEffort>
   // Derived accessors
@@ -587,12 +585,12 @@ interface ClientAgentValue {
   /** How many turns the branch in view has started; None until its first snapshot lands. */
   turnsStarted: () => Option.Option<number>
   isError: () => boolean
-  // eslint-disable-next-line effect/noNullish -- UI agent accessors expose null outside the error state.
-  error: () => string | null
+  /** The error on screen; None outside the error state. */
+  error: () => Option.Option<string>
   /** What the last turn spent: the provider's token count and the model-context projection. */
   sessionMetrics: () => SessionMetrics
-  // eslint-disable-next-line effect/noNullish -- model metadata is absent until the model registry loads.
-  modelInfo: () => Model | undefined
+  /** None until the model registry loads the model in use. */
+  modelInfo: () => Option.Option<Model>
   /** The models a registered driver can run, in registry order; empty until both load. */
   models: () => readonly Model[]
   /** `models`, or `None` until the catalog's first load settles; a failed load settles empty. */
@@ -724,8 +722,6 @@ export function ClientProvider(props: ClientProviderProps) {
     if (current.status === "active") return Option.some(current.session)
     return Option.none()
   }
-  // eslint-disable-next-line effect/noNullish -- UI session accessors use null for inactive state.
-  const session = (): Session | null => Option.getOrNull(sessionOption())
   // The one place the session's identity is derived. Held as a memo with an
   // equivalence on the ids so a rename or a settings change — both of which
   // rebuild the record — leaves this value untouched, and the effects keyed on
@@ -818,14 +814,11 @@ export function ClientProvider(props: ClientProviderProps) {
   const [connectionState, setConnectionState] = createSignal<Option.Option<ConnectionState>>(
     Option.fromNullishOr(runtime.lifecycle.getState()),
   )
-  const connectionStateValue = () => Option.getOrUndefined(connectionState())
   const [connectionIssue, setConnectionIssueState] = createSignal<Option.Option<string>>(
     Option.none(),
   )
-  const connectionIssueValue = () => Option.getOrNull(connectionIssue())
-  // eslint-disable-next-line effect/noNullish -- UI transport uses null to clear an issue.
-  const setConnectionIssue = (error: string | null): void => {
-    setConnectionIssueState(Option.fromNullishOr(error))
+  const setConnectionIssue = (issue: Option.Option<string>): void => {
+    setConnectionIssueState(issue)
   }
   const clearConnectionIssue = (): void => {
     setConnectionIssueState(Option.none())
@@ -1219,12 +1212,11 @@ export function ClientProvider(props: ClientProviderProps) {
     services,
     log,
 
-    connectionState: connectionStateValue,
     waitForTransportReady: runtime.lifecycle.waitForReady,
     connectedGeneration,
     isReconnecting,
     extensionHealth,
-    connectionIssue: connectionIssueValue,
+    connectionIssue,
     setConnectionIssue,
     onExtensionStateChanged: eventHub.onExtensionStateChanged,
     onSessionEvent: eventHub.onSessionEvent,
@@ -1285,7 +1277,7 @@ export function ClientProvider(props: ClientProviderProps) {
   }
 
   const sessionValue: ClientSessionValue = {
-    session,
+    session: sessionOption,
     sessionIdentity,
     activeSessionId,
     isActive,
@@ -1436,7 +1428,7 @@ export function ClientProvider(props: ClientProviderProps) {
   // `Option` for the agent (a reconnect refetches one), and a write of the
   // same name is not a new agent: the effects keyed on it (the auth gate, the
   // auth pane's catalog) must not run again and reset an open sign-in.
-  const agentName = createMemo(() => Option.getOrUndefined(agentStore.agent))
+  const agentName = createMemo(() => agentStore.agent, Option.none(), { equals: Equal.equals })
   const agentValue: ClientAgentValue = {
     agent: agentName,
     cost: () => runtimeMetrics().costUsd,
@@ -1456,20 +1448,18 @@ export function ClientProvider(props: ClientProviderProps) {
       return DEFAULT_MODEL_ID
     },
     reasoningLevel: () =>
-      Option.getOrUndefined(
-        Option.orElse(
-          Option.flatMap(sessionOption(), (s) => Option.fromUndefinedOr(s.reasoningLevel)),
-          () => agentStore.resolvedReasoningLevel,
-        ),
+      Option.orElse(
+        Option.flatMap(sessionOption(), (s) => Option.fromUndefinedOr(s.reasoningLevel)),
+        () => agentStore.resolvedReasoningLevel,
       ),
     resolvedReasoningLevel: () => agentStore.resolvedReasoningLevel,
     // Derived accessors
     isStreaming: () => agentStore.running,
     turnsStarted: () => agentStore.turnsStarted,
     isError: () => Option.isSome(agentStore.error),
-    error: () => Option.getOrNull(agentStore.error),
+    error: () => agentStore.error,
     sessionMetrics,
-    modelInfo: () => modelStore.modelsById[agentValue.model()],
+    modelInfo: () => Option.fromNullishOr(modelStore.modelsById[agentValue.model()]),
     models: runnableModels,
     modelCatalog: () => {
       if (!modelStore.settled) return Option.none()

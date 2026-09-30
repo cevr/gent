@@ -630,7 +630,7 @@ describe("session controller state", () => {
 
   test("manual auth close invalidates pending checks and stores the current agent", () => {
     const checking = beginAuthCheck(initialSessionControllerState())
-    const closed = closeAuthGateState(checking, "deep")
+    const closed = closeAuthGateState(checking, Option.some("deep"))
     const staleResult = completeAuthCheck(closed, {
       version: checking.authCheckVersion,
       agent: "fast",
@@ -638,7 +638,7 @@ describe("session controller state", () => {
     })
 
     expect(closed.authGate).toBe("closed")
-    expect(closed.validatedAgent).toBe("deep")
+    expect(closed.validatedAgent).toEqual(Option.some("deep"))
     expect(closed.authCheckVersion).toBe(checking.authCheckVersion + 1)
     expect(staleResult).toBe(closed)
   })

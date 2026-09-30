@@ -64,7 +64,7 @@ describe("session lifecycle", () => {
           if (Option.isNone(ctx)) return
           // The shell mounts whatever the client says is active; the bootstrap
           // handed it a session, so that is what shows.
-          expect(Option.isSome(Option.fromNullishOr(ctx.value.client.session()))).toBe(true)
+          expect(Option.isSome(ctx.value.client.session())).toBe(true)
           // waitForFrame polls until the composer renders — no pre-sleep
           // needed; the visible "ready/idle/❯" marker is the readiness signal.
           const frame = yield* waitForFrame(
@@ -126,7 +126,7 @@ describe("session lifecycle", () => {
           // the response itself confirms the feed fiber was subscribed.
           expect(Option.isSome(ctx)).toBe(true)
           if (Option.isNone(ctx)) return
-          const session = Option.fromNullishOr(ctx.value.client.session())
+          const session = ctx.value.client.session()
           expect(Option.isSome(session)).toBe(true)
           if (Option.isNone(session)) return
           yield* client.message

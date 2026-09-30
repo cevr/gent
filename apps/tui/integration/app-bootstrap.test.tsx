@@ -114,7 +114,7 @@ describe("app bootstrap", () => {
           // Route should already be session — no loading transition needed
           // The shell mounts whatever the client says is active; the bootstrap
           // handed it a session, so that is what shows.
-          expect(Option.isSome(Option.fromNullishOr(ctx.value.client.session()))).toBe(true)
+          expect(Option.isSome(ctx.value.client.session())).toBe(true)
           // waitForFrame polls until the loading marker clears — no
           // pre-sleep needed.
           const frame = yield* waitForFrame(

@@ -499,7 +499,7 @@ afterEach(() => {
 export const applySnapshotAgent = (client: ClientContextValue, agent: AgentName): void => {
   const session: Pick<Session, "sessionId" | "branchId" | "name"> &
     Partial<Pick<Session, "modelId" | "reasoningLevel">> = Option.getOrElse(
-    Option.fromNullishOr(client.session()),
+    client.session(),
     () => ({
       sessionId: SessionId.make("session-test"),
       branchId: BranchId.make("branch-test"),

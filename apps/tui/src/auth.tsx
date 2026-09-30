@@ -359,7 +359,7 @@ export function Auth(props: AuthProps) {
   const loadAuth = (token: number) => {
     clientCtx.log.info("auth:load-start")
     const request = omitUndefined({
-      agentName: Option.getOrUndefined(Option.fromNullishOr(clientCtx.agent())),
+      agentName: Option.getOrUndefined(clientCtx.agent()),
       sessionId: Option.getOrUndefined(sessionId),
     })
     cast(

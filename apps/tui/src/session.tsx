@@ -942,7 +942,8 @@ type AuthGateState = "checking" | "open" | "closed" | "error"
 
 interface SessionControllerState {
   readonly authGate: AuthGateState
-  readonly validatedAgent?: string
+  /** The agent the last auth check answered for; None before one answers. */
+  readonly validatedAgent: Option.Option<string>
   readonly authCheckVersion: number
   readonly queue: QueueState
   readonly elapsed: number
@@ -956,6 +957,7 @@ const emptyQueueState = (): QueueState => ({ steering: [], followUp: [] })
  */
 export const initialSessionControllerState = (): SessionControllerState => ({
   authGate: "closed",
+  validatedAgent: Option.none(),
   authCheckVersion: 0,
   queue: emptyQueueState(),
   elapsed: 0,
@@ -978,7 +980,7 @@ export const completeAuthCheck = (
   if (input.version !== state.authCheckVersion) return state
   let authGate: AuthGateState = "closed"
   if (input.missing) authGate = "open"
-  return { ...state, validatedAgent: input.agent, authGate }
+  return { ...state, validatedAgent: Option.some(input.agent), authGate }
 }
 
 export const failAuthCheck = (
@@ -988,19 +990,18 @@ export const failAuthCheck = (
   if (version !== state.authCheckVersion) return state
   return {
     ...state,
-    validatedAgent: Option.getOrUndefined(Option.none()),
+    validatedAgent: Option.none(),
     authGate: "error",
   }
 }
 
 export const closeAuthGateState = (
   state: SessionControllerState,
-  // eslint-disable-next-line effect/noNullish -- auth gate closure may omit an agent override.
-  agent: string | undefined,
+  agent: Option.Option<string>,
 ): SessionControllerState => ({
   ...state,
   authCheckVersion: state.authCheckVersion + 1,
-  validatedAgent: Option.getOrUndefined(Option.fromNullishOr(agent)),
+  validatedAgent: agent,
   authGate: "closed",
 })
 
@@ -2457,7 +2458,7 @@ export function useSessionFeed(
                       yield* Deferred.succeed(eventsServed, void 0)
                     }
                     if (Option.isNone(currentKey) || currentKey.value !== key) return
-                    client.setConnectionIssue(Option.getOrNull(Option.none()))
+                    client.setConnectionIssue(Option.none())
                     yield* processEnvelope(
                       envelope,
                       branch,
@@ -2479,7 +2480,7 @@ export function useSessionFeed(
                       Effect.andThen(
                         Effect.sync(() => {
                           if (Option.isNone(currentKey) || currentKey.value !== key) return
-                          client.setConnectionIssue(Option.getOrNull(Option.none()))
+                          client.setConnectionIssue(Option.none())
                           // The turn's own end, when it arrives, says how a stopped retry ended.
                           if (next._tag === "Idle") settleRetryingEvents(setStore, "stopped")
                           client.applySessionRuntime({
@@ -2516,7 +2517,7 @@ export function useSessionFeed(
                 key,
                 error: formatConnectionIssue(err),
               })
-              client.setConnectionIssue(formatConnectionIssue(err))
+              client.setConnectionIssue(Option.some(formatConnectionIssue(err)))
             },
             waitForRetry: () => client.waitForTransportReady,
           },
@@ -2745,7 +2746,7 @@ export function createSessionController(props: {
     // about to leave the screen. Printed after the renderer is destroyed so it
     // lands in the terminal the reader keeps, not in the alternate screen.
     // An in-memory store ends with the process, so it has nothing to resume.
-    const leaving = Option.fromNullishOr(client.session()).pipe(Option.filter(() => env.resumable))
+    const leaving = client.session().pipe(Option.filter(() => env.resumable))
     shutdownLog("exit.renderer-destroy")
     renderer.destroy()
     Option.match(leaving, {
@@ -2799,9 +2800,7 @@ export function createSessionController(props: {
 
   const currentSessionName = (): string =>
     Option.getOrElse(
-      Option.flatMap(Option.fromNullishOr(client.session()), (value) =>
-        Option.fromNullishOr(value.name),
-      ),
+      Option.flatMap(client.session(), (value) => Option.fromNullishOr(value.name)),
       () => "Unnamed",
     )
 
@@ -2840,7 +2839,7 @@ export function createSessionController(props: {
       ([agentName, pickerOpen]) => {
         if (props.debugMode) return
         if (pickerOpen) return
-        Option.match(Option.fromNullishOr(agentName), {
+        Option.match(agentName, {
           onNone: () => {},
           onSome: (resolvedAgent) => {
             const version = controllerState().authCheckVersion + 1
@@ -2877,7 +2876,8 @@ export function createSessionController(props: {
   )
 
   const authGatePending = () =>
-    !props.debugMode && (authGateState() !== "closed" || validatedAgent() !== client.agent())
+    !props.debugMode &&
+    (authGateState() !== "closed" || !Equal.equals(validatedAgent(), client.agent()))
 
   const [composerState, setComposerState] = createSignal<ComposerState>(ComposerState.idle())
   const drafts = useComposerDrafts()
@@ -2932,7 +2932,7 @@ export function createSessionController(props: {
   onCleanup(() => ext.setPaneOwner(Option.none()))
 
   ext.setActivityProvider(() => {
-    const session = Option.fromNullishOr(client.session())
+    const session = client.session()
     const sessionId = Option.getOrUndefined(Option.map(session, (value) => value.sessionId))
     if (client.isReconnecting()) return { sessionId, state: "unknown" }
     if (isBlockingAuthGate(authGateState()) || composerState()._tag === "interaction") {
