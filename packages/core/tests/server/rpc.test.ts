@@ -968,6 +968,102 @@ describe("provider login", () => {
       }).pipe(Effect.timeout("8 seconds")),
     ).pipe(Effect.provide(BunServices.layer)),
   )
+
+  // Two callbacks for one login: the one that succeeds first must not
+  // retire the superseded profile under the one still running.
+  it.live("a finished callback keeps the login's profile until a slower callback ends", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const project = yield* makeTempDirectoryScoped("gent-login-race-")
+        const home = yield* makeTempDirectoryScoped("gent-login-race-home-")
+        const slowStarted = yield* Deferred.make<void>()
+        const slowGate = yield* Deferred.make<void>()
+        const loginDriver = defineExtension({
+          id: "@test/racing-login",
+          setup: Effect.gen(function* () {
+            // Set when this instance's profile retires.
+            const retired = MutableRef.make(false)
+            const host = yield* ExtensionHost
+            yield* host.register(
+              "resource",
+              // oxlint-disable-next-line effect/noAs -- The fixture erases a resource with no service output at the contribution boundary.
+              defineResource({
+                id: "test/racing-login/instance",
+                scope: "process",
+                layer: Layer.effectDiscard(
+                  Effect.addFinalizer(() => Effect.sync(() => MutableRef.set(retired, true))),
+                ),
+              }) as never,
+            )
+            yield* host.register("modelDriver", {
+              id: "racing-oauth",
+              name: "Racing OAuth",
+              resolveModel: () => Effect.succeed(stubModel),
+              auth: {
+                methods: [AuthMethod.make({ type: "oauth", label: "OAuth" })],
+                authorize: () =>
+                  Effect.succeedSome({ url: "http://example.com/auth", method: "code" as const }),
+                callback: (ctx) =>
+                  Effect.gen(function* () {
+                    if (ctx.code === "sk-slow") {
+                      yield* Deferred.succeed(slowStarted, void 0)
+                      yield* Deferred.await(slowGate)
+                    }
+                    if (MutableRef.get(retired)) {
+                      return yield* new ProviderAuthError({ message: "login instance retired" })
+                    }
+                    yield* ctx.persist({ type: "api", key: ctx.code ?? "" })
+                  }),
+              },
+            })
+          }),
+        })
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const { client } = yield* createRpcClient(
+          createE2ELayer({
+            agents: e2ePreset.agents,
+            providerLayer,
+            extensionInputs: [loginDriver],
+            configServiceLayer: ConfigService.Live.pipe(
+              Layer.provide(RuntimeEnvironment.Live({ cwd: project, home })),
+              Layer.provide(BunPlatformLive),
+            ),
+          }),
+        )
+        const { sessionId } = yield* client.session.create({ cwd: project })
+        const authorization = yield* client.auth.authorize({
+          sessionId,
+          provider: "racing-oauth",
+          method: 0,
+        })
+        if (Predicate.isNull(authorization)) return yield* Effect.die("authorize gave no link")
+        const projectConfig = path.join(project, ".gent", "config.json")
+        yield* fs.makeDirectory(path.dirname(projectConfig), { recursive: true })
+        yield* fs.writeFileString(
+          projectConfig,
+          encodeJson({ disabledExtensions: ["@test/racing-login"] }),
+        )
+        // Reading the providers builds the new profile, which supersedes the login's.
+        yield* client.auth.listProviders({ sessionId })
+        const callback = (code: string) =>
+          client.auth.callback({
+            sessionId,
+            provider: "racing-oauth",
+            method: 0,
+            authorizationId: authorization.authorizationId,
+            code,
+          })
+        const slow = yield* callback("sk-slow").pipe(Effect.exit, Effect.forkChild)
+        yield* Deferred.await(slowStarted)
+        yield* callback("sk-fast")
+        yield* Deferred.succeed(slowGate, void 0)
+        const slowExit = yield* Fiber.join(slow)
+        expect(Exit.isSuccess(slowExit)).toBe(true)
+      }).pipe(Effect.timeout("8 seconds")),
+    ).pipe(Effect.provide(BunServices.layer)),
+  )
 })
 
 // ── interaction commands ────────────────────────────────────────────────────

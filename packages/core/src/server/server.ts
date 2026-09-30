@@ -1256,8 +1256,11 @@ interface LoginLease {
   readonly scope: Scope.Closeable
   /** Callbacks running on the lease. */
   inFlight: number
-  /** `LOGIN_LEASE` passed while a callback ran: the last one out lets it go. */
-  expired: boolean
+  /**
+   * A callback succeeded or `LOGIN_LEASE` passed. The lease goes when it is
+   * done and no callback runs on it: the last one out lets it go.
+   */
+  done: boolean
 }
 
 const RpcHandlers = GentRpcs.toLayer(
@@ -1361,7 +1364,8 @@ const RpcHandlers = GentRpcs.toLayer(
     // succeeds or `LOGIN_LEASE` passes, so a config edit between the two
     // calls, which supersedes the session's profile, cannot retire the
     // instance under the login. A callback in flight keeps the lease past
-    // its expiry; the last one out lets it go.
+    // its expiry or past another callback's success; the last one out lets
+    // it go.
     const handlersScope = yield* Effect.scope
     const loginLeases = new Map<string, LoginLease>()
     const dropLoginLease = (authorizationId: string, lease: LoginLease) =>
@@ -1393,14 +1397,14 @@ const RpcHandlers = GentRpcs.toLayer(
           registry: authorized.registry,
           scope,
           inFlight: 0,
-          expired: false,
+          done: false,
         }
         loginLeases.set(authorizationId, lease)
         // The timer lives in the lease's scope: a lease let go stops it.
         yield* Effect.sleep(LOGIN_LEASE).pipe(
           Effect.andThen(
             Effect.suspend(() => {
-              lease.expired = true
+              lease.done = true
               if (lease.inFlight > 0) return Effect.void
               return dropLoginLease(authorizationId, lease)
             }),
@@ -1427,12 +1431,16 @@ const RpcHandlers = GentRpcs.toLayer(
         }),
         () =>
           underRegistry(lease.registry, run).pipe(
-            Effect.tap(() => dropLoginLease(input.authorizationId, lease)),
+            Effect.tap(() =>
+              Effect.sync(() => {
+                lease.done = true
+              }),
+            ),
           ),
         () =>
           Effect.suspend(() => {
             lease.inFlight--
-            if (!lease.expired || lease.inFlight > 0) return Effect.void
+            if (!lease.done || lease.inFlight > 0) return Effect.void
             return dropLoginLease(input.authorizationId, lease)
           }),
       )
