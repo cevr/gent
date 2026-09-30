@@ -349,14 +349,14 @@ describe("transformPayload — system content relocation", () => {
       const systemTexts = system.map((b) => b.text ?? "")
       expect(systemTexts.some((t) => t.startsWith("x-anthropic-billing-header"))).toBe(true)
       expect(systemTexts.some((t) => t.startsWith(SYSTEM_IDENTITY_PREFIX))).toBe(true)
-      // Relocated content is prepended to the first user message.
+      // Each relocated block leads the first user message, in its order.
       const messages = decodeMessagesWithBlocks(result["messages"])
-      const firstUserContent = messages[0]!.content
-      expect(firstUserContent[0]!["type"]).toBe("text")
-      expect(firstUserContent[0]!["text"]).toContain("third-party system instructions")
-      expect(firstUserContent[0]!["text"]).toContain("additional rules")
-      // Original user text survives at the tail.
-      expect(firstUserContent[1]!["text"]).toBe("hello")
+      expect(messages[0]!.content.map((block) => block["text"])).toEqual([
+        "third-party system instructions",
+        "additional rules",
+        // Original user text survives at the tail.
+        "hello",
+      ])
     }),
   )
 
@@ -2154,11 +2154,10 @@ describe("Anthropic prompt-cache lifetime", () => {
           cacheKey: "child-session",
           child: true,
         })
-        // A fresh child still reads the shared part its parent wrote; the longer
-        // lifetime renders first, as the ordering rule asks.
+        // A fresh child still reads the shared part its parent wrote, on both
+        // sign-in paths; the longer lifetime renders first, as the ordering rule asks.
         expect(childApiKey).toEqual([hour, minutes, minutes])
-        expect(childClaudeCode?.length).toBeGreaterThanOrEqual(2)
-        for (const marker of childClaudeCode ?? []) expect(marker).toBe(minutes)
+        expect(childClaudeCode).toEqual([hour, minutes, minutes])
         for (const markers of yield* renderedMarkers("1h", sharedPrompt)) {
           expect(markers.length).toBeGreaterThanOrEqual(2)
           for (const marker of markers) expect(marker).toBe(hour)
@@ -3041,11 +3040,13 @@ describe("buildAnthropicModelDriver — prompt caching", () => {
   const callerMarker: Prompt.ProviderOptions = {
     anthropic: { cacheControl: { type: "ephemeral" } },
   }
-  const sentFor = (
+  /** The request body as sent; `child` marks a spawned child session's request. */
+  const bodyFor = (
     authInfo: ProviderAuthInfo,
     options: Prompt.ProviderOptions = {},
     after: ReadonlyArray<Prompt.Message> = [],
     system?: ReadonlyArray<string>,
+    child = false,
   ) =>
     Effect.gen(function* () {
       const credentialCellRef = yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(
@@ -3060,13 +3061,21 @@ describe("buildAnthropicModelDriver — prompt caching", () => {
       // A conversation turn names its session as the cache key; the driver marks only such a request.
       const model = yield* driver.resolveModel("claude-sonnet-4-6", authInfo, {
         cacheKey: "session-cache-key",
+        child,
       })
       const state = makeFakeFetchState()
       yield* runCachingRequest(model, state, options, after, system)
-      return yield* Schema.decodeEffect(CachedRequest)(
-        Option.getOrThrow(Option.fromUndefinedOr(state.captured.at(-1)?.body)),
-      )
+      return Option.getOrThrow(Option.fromUndefinedOr(state.captured.at(-1)?.body))
     })
+  const sentFor = (
+    authInfo: ProviderAuthInfo,
+    options: Prompt.ProviderOptions = {},
+    after: ReadonlyArray<Prompt.Message> = [],
+    system?: ReadonlyArray<string>,
+  ) =>
+    bodyFor(authInfo, options, after, system).pipe(
+      Effect.flatMap(Schema.decodeEffect(CachedRequest)),
+    )
 
   // The tool list alone is below Anthropic's minimum cacheable length, so
   // the system prompt's marker caches it: tools render before the system.
@@ -3174,15 +3183,84 @@ describe("buildAnthropicModelDriver — prompt caching", () => {
     }),
   )
 
-  // The Claude Code path joins the blocks into the one relocated block.
-  it.live("a Claude Code request keeps one relocated system block and its two markers", () =>
+  // The Claude Code path moves each system block into the first user message
+  // as a block of its own, so the shared part ends there too.
+  it.live("a Claude Code request also marks the end of the relocated shared part", () =>
     Effect.gen(function* () {
       const request = yield* sentFor(makeOAuthInfo(), {}, [], [sharedPart, agentPart])
       const first = request.messages[0]?.content ?? []
-      expect(first.filter(isMarked).map((block) => block.text)).toEqual([
-        `${sharedPart}\n\n${agentPart}`,
-      ])
-      expect(markerCount(request)).toBe(2)
+      expect(first.map((block) => block.text)).toEqual([sharedPart, agentPart, "Read a.txt."])
+      expect(first.map(isMarked)).toEqual([true, true, false])
+      expect(markerCount(request)).toBe(3)
+    }),
+  )
+
+  // A fresh child reads the shared part back from its parent's entry only
+  // when every cached byte through that part's end is the parent's.
+  // Anthropic caches the prefix in the order tools → system → messages, and
+  // a marker is not part of the cached bytes. On the Claude Code path the
+  // billing header in `system` hashes the first user text block.
+  const PrefixRequest = Schema.fromJsonString(
+    Schema.Struct({
+      tools: Schema.optional(Schema.Array(Schema.Unknown)),
+      system: Schema.optional(Schema.Array(Schema.Unknown)),
+      messages: Schema.Array(
+        Schema.Struct({
+          role: Schema.String,
+          content: Schema.Array(
+            Schema.Struct({
+              type: Schema.String,
+              text: Schema.optional(Schema.String),
+              cache_control: Schema.optional(
+                Schema.NullOr(Schema.Struct({ ttl: Schema.optional(Schema.String) })),
+              ),
+            }),
+          ),
+        }),
+      ),
+    }),
+  )
+  const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
+  /**
+   * The request in cache order, without its markers. The Claude Code path
+   * sends none on the tools or the system blocks.
+   */
+  const cachedBytes = (request: typeof PrefixRequest.Type) =>
+    encodeJson([
+      request.tools,
+      request.system,
+      request.messages.map((message) => ({
+        role: message.role,
+        content: message.content.map(({ cache_control: _marker, ...block }) => block),
+      })),
+    ])
+  const sharedBlock = (request: typeof PrefixRequest.Type) =>
+    request.messages
+      .flatMap((message) => message.content)
+      .find((block) => block.text === sharedPart)
+
+  it.live("a child's first request repeats its parent's cached bytes through the shared part", () =>
+    Effect.gen(function* () {
+      const childPart = "# Task\n\n- Report to the parent."
+      const decode = Schema.decodeEffect(PrefixRequest)
+      // The Claude Code path: the API-key path keeps the shared part in `system`.
+      const parent = yield* decode(yield* bodyFor(makeOAuthInfo(), {}, [], [sharedPart, agentPart]))
+      const child = yield* decode(
+        yield* bodyFor(makeOAuthInfo(), {}, [], [sharedPart, childPart], true),
+      )
+      const parentBytes = cachedBytes(parent)
+      const childBytes = cachedBytes(child)
+      let firstDifference = 0
+      while (parentBytes[firstDifference] === childBytes[firstDifference]) firstDifference += 1
+      // The shared text as it renders, without the closing quote: the parent
+      // may send it as a block of its own or at the start of a longer one.
+      const sharedText = encodeJson(sharedPart).slice(0, -1)
+      const sharedEnd = parentBytes.indexOf(sharedText) + sharedText.length
+      expect(firstDifference).toBeGreaterThan(sharedEnd)
+      expect(sharedEnd).toBeGreaterThan(sharedText.length)
+      // Both mark the shared end for the parent's lifetime, so the child reads the parent's entry.
+      expect(sharedBlock(parent)?.cache_control?.ttl).toBe("1h")
+      expect(sharedBlock(child)?.cache_control?.ttl).toBe("1h")
     }),
   )
 })

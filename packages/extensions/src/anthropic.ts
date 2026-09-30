@@ -1332,8 +1332,12 @@ const buildSystemArray = (
  * validates `system[]` against the Claude Code identity prefix.
  * Third-party system content alongside the prefix trips a 400 "out of
  * extra usage" rejection. The relocator takes the third-party blocks
- * (already partitioned by `partitionSystemBlocks`) and folds them into
- * the first user message as a single text block.
+ * (already partitioned by `partitionSystemBlocks`) and moves them into
+ * the first user message, one text block each, before the user's own
+ * text. The runtime sends the prompt as the part a session shares with
+ * its children, then the agent's own part: the shared part leads the
+ * message, so the billing hash of the first text block and every byte
+ * through the shared part are the same for a parent and its children.
  *
  * Ordering rules:
  *   - tool_result ordering: Anthropic requires tool_result blocks to be
@@ -1344,32 +1348,35 @@ const buildSystemArray = (
  *     billing hash is computed from the FINAL first-user text, and the
  *     wire hash matches the wire text.
  *
- * Returns the new messages array; mutates nothing.
+ * Returns the new messages and the number of blocks the system prompt
+ * takes in the first user message; mutates nothing.
  */
 const relocateThirdPartyIntoFirstUser = (
   thirdPartyBlocks: ReadonlyArray<JsonRecord>,
   messages: ReadonlyArray<JsonRecord>,
-): ReadonlyArray<JsonRecord> => {
+): RelocatedPrompt => {
+  const unmoved = { messages, blocks: 0 }
   const movedTexts: string[] = []
   for (const block of thirdPartyBlocks) {
     const text = block["text"]
     if (Predicate.isString(text) && text.length > 0) movedTexts.push(text)
   }
-  if (movedTexts.length === 0) return messages
+  if (movedTexts.length === 0) return unmoved
 
   const firstUserIdx = messages.findIndex((m) => m["role"] === "user")
-  if (firstUserIdx === -1) return messages
+  if (firstUserIdx === -1) return unmoved
 
   const firstUser = Option.fromUndefinedOr(messages[firstUserIdx])
-  if (Option.isNone(firstUser)) return messages
+  if (Option.isNone(firstUser)) return unmoved
   const firstUserValue = firstUser.value
   const content = firstUserValue["content"]
-  const prefix = movedTexts.join("\n\n")
   const nextMessages = messages.slice()
 
+  // A string content takes no marker, so the prompt joins into it.
   if (Predicate.isString(content)) {
+    const prefix = movedTexts.join("\n\n")
     nextMessages[firstUserIdx] = { ...firstUserValue, content: `${prefix}\n\n${content}` }
-    return nextMessages
+    return { messages: nextMessages, blocks: 0 }
   }
   if (isRecordArray(content)) {
     // Find the index where leading tool_result blocks end. Inserting
@@ -1386,14 +1393,20 @@ const relocateThirdPartyIntoFirstUser = (
       ...firstUserValue,
       content: [
         ...content.slice(0, firstNonToolResult),
-        { type: "text", text: prefix },
+        ...movedTexts.map((text) => ({ type: "text", text })),
         ...content.slice(firstNonToolResult),
       ],
     }
-    return nextMessages
+    return { messages: nextMessages, blocks: movedTexts.length }
   }
   // Unknown content shape — bail out rather than mangling it.
-  return messages
+  return unmoved
+}
+
+/** The messages after relocation, and how many blocks the system prompt takes in the first user message. */
+interface RelocatedPrompt {
+  readonly messages: ReadonlyArray<JsonRecord>
+  readonly blocks: number
 }
 
 /**
@@ -1433,14 +1446,18 @@ export const transformPayload = (
     }
 
     const { thirdPartyBlocks } = partitionSystemBlocks(result["system"])
-    let messagesAfterRelocate: ReadonlyArray<JsonRecord> = []
+    let relocated: RelocatedPrompt = { messages: [], blocks: 0 }
     if (isRecordArray(result["messages"])) {
-      messagesAfterRelocate = relocateThirdPartyIntoFirstUser(thirdPartyBlocks, result["messages"])
+      relocated = relocateThirdPartyIntoFirstUser(thirdPartyBlocks, result["messages"])
     }
-    result["messages"] = messagesAfterRelocate
-    result["system"] = yield* buildSystemArray(messagesAfterRelocate)
+    result["messages"] = relocated.messages
+    result["system"] = yield* buildSystemArray(relocated.messages)
 
-    return markRequestCache(result, "first-user", cacheLifetimes)
+    return markRequestCache(
+      result,
+      CachePrefixEnd.cases.FirstUser.make({ blocks: relocated.blocks }),
+      cacheLifetimes,
+    )
   })
 
 // ── Prompt caching ──
@@ -1453,10 +1470,10 @@ export const transformPayload = (
  *
  * Markers, in priority order, while the limit allows:
  *   1. the end of the system prompt: the last system block, or on the
- *      Claude Code path the system prompt's block in the first user
- *      message (it moves there, before the user's own text, and the
- *      billing and identity blocks take no marker). A new session and
- *      every sibling child read the prompt back from this entry;
+ *      Claude Code path the last of the system prompt's blocks in the first
+ *      user message (they move there, before the user's own text, and the
+ *      billing and identity blocks take no marker). A new session of the
+ *      same agent reads the prompt back from this entry;
  *   2. the last cacheable block of the last conversation message, so each
  *      step reads the previous step's conversation back from the cache. A
  *      host context update after it (a later system message, which the SDK
@@ -1464,15 +1481,16 @@ export const transformPayload = (
  *      notices) takes no marker. It changes from turn to turn, so a marker
  *      on it would write an entry no later request reads, and the next step
  *      would find no entry at the conversation's end;
- *   3. on the API-key path, the end of the shared part of the system prompt:
- *      the runtime sends the prompt as two system blocks, the part a session
- *      shares with its children and then the agent's own part (the children
- *      guidance, the host tool list). A fresh child's first request reads the
- *      shared part back from its parent's entry. The marker goes only where
- *      the shared text reaches `SHARED_PREFIX_MIN_CHARS`: a shorter prefix is
- *      below the minimum cacheable length, and the marker would spend a slot
- *      for nothing. The Claude Code path joins the blocks into one relocated
- *      block, so it has no such point.
+ *   3. the end of the shared part of the system prompt: the runtime sends
+ *      the prompt as two system blocks, the part a session shares with its
+ *      children and then the agent's own part (the children guidance, the
+ *      host tool list). A fresh child's first request reads the shared part
+ *      back from its parent's entry. The marker goes only where the shared
+ *      text reaches `SHARED_PREFIX_MIN_CHARS`: a shorter prefix is below the
+ *      minimum cacheable length, and the marker would spend a slot for
+ *      nothing. On the Claude Code path the blocks keep their order in the
+ *      first user message, and the billing header hashes the first of them,
+ *      the shared part, so the child's bytes match through it.
  *
  * The tool list takes no marker of its own: it renders first, so the
  * system prompt's marker caches it, and alone it is below the minimum
@@ -1481,8 +1499,16 @@ export const transformPayload = (
  * Markers already on the payload count toward the limit. A marker does
  * not change the cached bytes, so the tail marker moves forward each
  * step, which is the documented multi-turn pattern.
+ *
+ * `CachePrefixEnd` is where the system prompt sits in the rendered payload: the `system` blocks,
+ * or (the Claude Code path) the first `blocks` text blocks of the first user
+ * message after any leading tool results.
  */
-type CachePrefixEnd = "system" | "first-user"
+const CachePrefixEnd = Schema.TaggedUnion({
+  System: {},
+  FirstUser: { blocks: Schema.Int },
+})
+type CachePrefixEnd = typeof CachePrefixEnd.Type
 
 const CACHE_BREAKPOINT_LIMIT = 4
 /**
@@ -1697,14 +1723,6 @@ const markLastCacheable = (blocks: ReadonlyArray<JsonRecord>, marker: JsonRecord
   markBlockAt(blocks, blocks.findLastIndex(isCacheableBlock), marker)
 
 /**
- * The block that ends the system prompt in a Claude Code request: the first
- * text after any leading tool results in the first user message, where
- * `relocateThirdPartyIntoFirstUser` puts it.
- */
-const systemPromptBlockIndex = (content: ReadonlyArray<JsonRecord>): number =>
-  content.findIndex((block) => block["type"] !== "tool_result" && isCacheableBlock(block))
-
-/**
  * The index of the system block that ends the shared part: the cacheable
  * block before the last one, when the text through it is long enough to cache.
  */
@@ -1799,37 +1817,80 @@ const markCacheBreakpoints = (
     })
   }
 
-  if (prefixEnd === "system") {
-    if (isRecordArray(payload["system"])) {
-      spend(markLastCacheable(payload["system"], marker), (system) => {
-        result["system"] = system
-      })
-    }
-  } else {
-    markMessage(
-      messages.findIndex((message) => message["role"] === "user"),
-      (content) => markBlockAt(content, systemPromptBlockIndex(content), marker),
-    )
-  }
+  const prompt = CachePrefixEnd.match(prefixEnd, {
+    System: (): PromptRegion => ({
+      read: () => {
+        const system = result["system"]
+        if (isRecordArray(system)) return system
+        return []
+      },
+      write: (blocks) => {
+        result["system"] = blocks
+      },
+    }),
+    FirstUser: ({ blocks }) => firstUserPrompt(messages, blocks),
+  })
+  spend(markLastCacheable(prompt.read(), marker), prompt.write)
   markMessage(
     messages.findLastIndex((message) => !isHostContextUpdate(message)),
     (content) => markLastCacheable(content, marker),
   )
-  const system = result["system"]
-  if (prefixEnd === "system" && isRecordArray(system)) {
-    const shared = sharedSystemEnd(system)
-    if (Option.isSome(shared)) {
-      const relabeled = withMarkerLifetime(system, sharedMarker, shared.value)
-      result["system"] = relabeled
-      if (isRecordArray(relabeled)) {
-        spend(markBlockAt(relabeled, shared.value, sharedMarker), (marked) => {
-          result["system"] = marked
-        })
-      }
+  const promptBlocks = prompt.read()
+  const shared = sharedSystemEnd(promptBlocks)
+  if (Option.isSome(shared)) {
+    const relabeled = withMarkerLifetime(promptBlocks, sharedMarker, shared.value)
+    if (isRecordArray(relabeled)) {
+      prompt.write(relabeled)
+      spend(markBlockAt(relabeled, shared.value, sharedMarker), prompt.write)
     }
   }
   if (isRecordArray(payload["messages"])) result["messages"] = messages
   return result
+}
+
+/** The system prompt's blocks in a payload being marked, read and written in place. */
+interface PromptRegion {
+  readonly read: () => ReadonlyArray<JsonRecord>
+  readonly write: (blocks: ReadonlyArray<JsonRecord>) => void
+}
+
+/**
+ * The system prompt's blocks on the Claude Code path: the first `blocks`
+ * blocks after any leading tool results in the first user message, where
+ * `relocateThirdPartyIntoFirstUser` puts them. A write replaces them in
+ * `messages`.
+ */
+const firstUserPrompt = (messages: Array<JsonRecord>, blocks: number): PromptRegion => {
+  const index = messages.findIndex((message) => message["role"] === "user")
+  // The SDK always sends block arrays; a string content takes no marker.
+  const content = (): ReadonlyArray<JsonRecord> => {
+    const message = Option.fromUndefinedOr(messages[index])
+    if (Option.isNone(message)) return []
+    const value = message.value["content"]
+    if (isRecordArray(value)) return value
+    return []
+  }
+  // After the leading tool results, as `relocateThirdPartyIntoFirstUser` counts them.
+  const start = (blocksNow: ReadonlyArray<JsonRecord>) => {
+    const first = blocksNow.findIndex((block) => block["type"] !== "tool_result")
+    if (first < 0) return blocksNow.length
+    return first
+  }
+  return {
+    read: () => {
+      const now = content()
+      return now.slice(start(now), start(now) + blocks)
+    },
+    write: (marked) => {
+      const message = Option.fromUndefinedOr(messages[index])
+      if (Option.isNone(message)) return
+      const now = content()
+      messages[index] = {
+        ...message.value,
+        content: [...now.slice(0, start(now)), ...marked, ...now.slice(start(now) + blocks)],
+      }
+    },
+  }
 }
 
 /**
@@ -1986,7 +2047,8 @@ const anthropicClientLayer = <R>(
  * The Claude Code path marks its payload in `transformPayload`.
  */
 const apiKeyClientPath = (cacheLifetimes: Option.Option<CacheLifetimes>): ClientPath<never> => ({
-  payload: (payload) => Effect.succeed(markRequestCache(payload, "system", cacheLifetimes)),
+  payload: (payload) =>
+    Effect.succeed(markRequestCache(payload, CachePrefixEnd.cases.System.make({}), cacheLifetimes)),
   message: (call) => call,
   stream: (call) => call,
 })
