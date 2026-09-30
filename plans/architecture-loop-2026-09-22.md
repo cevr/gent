@@ -936,3 +936,7 @@ Reports in `~/.cache/gent-pass22/`: six areas (`pass22-<area>.md`) and seven rev
 
 - Decision (owner, 2026-09-30): tooling sweeps sort each gent lint rule and AST-shaped guard into gent-specific or generic; generic rules move to oxlint-plugin-effect and are released there, gent consumes them (`prompts/sweep.md`).
 - EF22-2 (owner, 2026-09-30, "subagents 5min"): child sessions use the 5-minute cache.
+
+## Pass 23 (sweep of main at `82516da5d`)
+
+Baseline (TypeScript source lines, files): core 32,196 / 33; tui 26,461 / 33; extensions 26,071 / 27; tooling 7,308 / 5; sdk 1,596 / 5; e2e 455 / 2. Pass 22 changed 190 files, +27,758 / −27,473. Coverage: every source directory swept before. Areas: core, extensions, tui, tooling (with the upstream lint-rule sort), efficiency, ui; reviews: core-runtime, core-rest, extensions-cell-mcp, extensions-rest, tui-a, tui-b, small. Waiting on the owner: oxlint-plugin-effect 0.18.0 release (PR #42 CI approval), then gent switches to the upstream rules.
