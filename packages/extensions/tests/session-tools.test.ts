@@ -1,7 +1,6 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import { Effect, Fiber, Option, Stream } from "effect"
-import { AgentsExtension } from "../src/agents.js"
-import { builtinAgent } from "./helpers/builtin-agents.js"
+import { AgentsExtension, main as builtinAgent } from "../src/agents.js"
 import type { SystemPromptInput } from "@gent/core/extensions/api"
 import {
   collectTestContributions,

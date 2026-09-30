@@ -22,13 +22,18 @@ import {
   sessionId,
   branchId,
   testLayer,
-  unusedWorker,
   hostCatalog,
   setupCalls,
 } from "./helpers/cell-kernel.js"
 
 // Recorded cell execution: reset, cancel, errors and the built-in hazards
 // a cell can leave, over one worker and in-memory storage.
+
+/** A worker the test never launches: the cell settles before it needs one. */
+const unusedWorker = CellWorker.cases.Script.make({
+  runtimePath: "/nonexistent/bun",
+  scriptPath: "/nonexistent/worker.js",
+})
 
 describe("recorded cell execution", () => {
   it.scopedLive(

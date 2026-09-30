@@ -1,7 +1,8 @@
 import { Schema } from "effect"
 
-const decodeWireNull = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Null))
-const encodeWireJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
+/** A provider's wire JSON as it is sent: fixtures of the Anthropic and OpenAI APIs. */
 
-export const externalWireNull = decodeWireNull("null")
-export const encodeExternalJson = encodeWireJson
+// oxlint-disable-next-line effect/noNullish -- the provider's wire JSON holds null, and the fixtures carry it as sent
+export const externalWireNull = null
+
+export const encodeExternalJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))

@@ -19,7 +19,7 @@ import {
   createRpcHarness,
 } from "@gent/core/test-utils"
 import { e2ePreset } from "./helpers/test-preset"
-import { builtinAgent } from "./helpers/builtin-agents"
+import { main as builtinAgent } from "../src/agents.js"
 
 const makeSkill = (
   name: string,
