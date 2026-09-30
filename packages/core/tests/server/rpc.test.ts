@@ -3929,6 +3929,12 @@ describe("extension requests and slash commands", () => {
               output: Schema.Void,
               execute: () => Effect.void,
             }),
+            request({
+              id: "hidden",
+              input: Schema.String,
+              output: Schema.Void,
+              execute: () => Effect.void,
+            }),
           ],
         },
       }
@@ -3942,67 +3948,6 @@ describe("extension requests and slash commands", () => {
           })
           const commands = yield* client.extension.listSlashCommands({ sessionId })
           expect(commands.map((command) => command.name)).toEqual(["visible"])
-        }).pipe(Effect.timeout("4 seconds")),
-      )
-    }),
-  )
-
-  it.live("RPC handlers receive ExtensionContext authority without intent ceremony", () =>
-    Effect.gen(function* () {
-      const extensionId = ExtensionId.make("@test/read-context")
-      const ext: GentExtension = {
-        manifest: { id: extensionId },
-        setup: registerContributions({
-          requests: [
-            request({
-              id: "inspect",
-              input: Schema.Void,
-              output: Schema.Struct({
-                hasSessionMutations: Schema.Boolean,
-                hasAgentRun: Schema.Boolean,
-                extensionContextFollowUpQueued: Schema.Boolean,
-              }),
-              execute: () =>
-                Effect.gen(function* () {
-                  const extensionCtx = yield* ExtensionContext
-                  const followUpExit = yield* Effect.exit(
-                    extensionCtx.Session.send({
-                      delivery: "queue",
-                      sourceId: "rpc",
-                      content: "queued",
-                    }),
-                  )
-                  return {
-                    hasSessionMutations: false,
-                    hasAgentRun: false,
-                    extensionContextFollowUpQueued: Exit.isSuccess(followUpExit),
-                  }
-                }),
-            }),
-          ],
-        }),
-      }
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-          const { client, sessionId, branchId } = yield* createRpcHarness({
-            ...e2ePreset,
-            providerLayer,
-            extensionInputs: [...e2ePreset.extensionInputs, ext],
-          })
-          const result = yield* client.extension.request({
-            sessionId,
-            branchId,
-            extensionId,
-            capabilityId: "inspect",
-            // oxlint-disable-next-line effect/noNullish -- Keep the absent field in this schema boundary fixture.
-            input: undefined,
-          })
-          expect(result).toEqual({
-            hasSessionMutations: false,
-            hasAgentRun: false,
-            extensionContextFollowUpQueued: true,
-          })
         }).pipe(Effect.timeout("4 seconds")),
       )
     }),

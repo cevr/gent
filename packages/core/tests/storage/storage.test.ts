@@ -106,7 +106,7 @@ describe("Sessions", () => {
       expect(sessionsResult.length).toBe(2)
     }).pipe(Effect.provide(testSqliteStorage(() => Layer.empty, {}))),
   )
-  it.live("lists first branch per session", () =>
+  it.live("lists sessions newest first", () =>
     Effect.gen(function* () {
       const sessions = yield* SessionStorage
       const now = FIXED_NOW_MILLIS
@@ -160,8 +160,8 @@ describe("Sessions", () => {
       const sessions = yield* SessionStorage
       const sql = yield* SqlClient.SqlClient
       yield* sql`INSERT INTO sessions (id, created_at, updated_at) VALUES (${"invalid-session-row"}, ${"not-a-number"}, ${FIXED_NOW_MILLIS})`
-      const exit = yield* Effect.exit(sessions.getSession(SessionId.make("invalid-session-row")))
-      expect(exit._tag).toBe("Failure")
+      const error = yield* Effect.flip(sessions.getSession(SessionId.make("invalid-session-row")))
+      expect(error).toBeInstanceOf(StorageError)
     }).pipe(Effect.provide(testSqliteStorage(() => Layer.empty, {}))),
   )
   it.live("deletes a session", () =>
@@ -1887,8 +1887,8 @@ describe("Branches", () => {
         }),
       )
       yield* sql`INSERT INTO branches (id, session_id, created_at) VALUES (${"invalid-branch-row"}, ${"invalid-branch-session"}, ${"not-a-number"})`
-      const exit = yield* Effect.exit(branches.getBranch(BranchId.make("invalid-branch-row")))
-      expect(exit._tag).toBe("Failure")
+      const error = yield* Effect.flip(branches.getBranch(BranchId.make("invalid-branch-row")))
+      expect(error).toBeInstanceOf(StorageError)
     }).pipe(Effect.provide(testSqliteStorage(() => Layer.empty, {}))),
   )
   it.live("a child session or a message cannot name a branch in another workspace", () =>
