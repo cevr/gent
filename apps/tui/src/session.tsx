@@ -12,7 +12,6 @@ import {
   untrack,
 } from "solid-js"
 import {
-  type Array as Arr,
   Clock,
   Deferred,
   Duration,
@@ -24,7 +23,6 @@ import {
   Option,
   Path,
   Predicate,
-  Random,
   Schedule,
   Schema,
   Semaphore,
@@ -1045,31 +1043,6 @@ const formatAuthGateError = (error: unknown): string => {
 }
 
 // ── controller activity ─────────────────────────────────────────────────────
-
-const THINKING_WORDS = [
-  "thinking",
-  "pondering",
-  "reasoning",
-  "analyzing",
-  "processing",
-  "evaluating",
-  "reflecting",
-  "deliberating",
-  "considering",
-  "contemplating",
-  "mulling",
-  "deducing",
-  "inferring",
-  "examining",
-  "synthesizing",
-  "assessing",
-  "ruminating",
-] satisfies Arr.NonEmptyReadonlyArray<string>
-
-const pickThinkingWord = (random: number): string => {
-  const word = THINKING_WORDS[Math.floor(random * THINKING_WORDS.length)]
-  return Option.getOrElse(Option.fromNullishOr(word), () => THINKING_WORDS[0])
-}
 
 // ── prompt history ──────────────────────────────────────────────────────────
 
@@ -3145,25 +3118,7 @@ export function createSessionController(props: {
     })
   })
 
-  let thinkingWord = "thinking"
-  createEffect(
-    on(
-      () => activity().phase,
-      (phase) => {
-        if (phase !== "idle") {
-          client.runtime.cast(
-            Effect.gen(function* () {
-              const wordRandom = yield* Random.next
-              yield* Effect.sync(() => {
-                thinkingWord = pickThinkingWord(wordRandom)
-              })
-            }),
-          )
-        }
-      },
-    ),
-  )
-
+  // The status row reads the label while idle, the activity row while a tool runs.
   const phaseLabel = createMemo(() => {
     const nextActivity = activity()
     switch (nextActivity.phase) {
@@ -3171,7 +3126,7 @@ export function createSessionController(props: {
         if (Option.exists(client.turnsStarted(), (turns) => turns > 0)) return "idle"
         return "ready"
       case "thinking":
-        return thinkingWord
+        return "thinking"
       case "tool":
         return nextActivity.toolInfo
     }
