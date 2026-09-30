@@ -1404,6 +1404,23 @@ describe("App auth gate", () => {
       setup.renderer.destroy()
     }),
   )
+  // Mermaid draws inline in the transcript. No key opens a full-screen
+  // viewer over the session: panes dock, and the composer keeps the keys.
+  it.live("ctrl+shift+m keeps the session view and its composer", () =>
+    Effect.gen(function* () {
+      const view = yield* mountIdleSession(createMockRuntime(), { kittyKeyboard: true })
+      view.setup.mockInput.pressKey("m", { ctrl: true, shift: true })
+      yield* view.settle
+      yield* Effect.promise(() => view.setup.mockInput.typeText("hi"))
+      const frame = yield* waitForFrame(
+        view.setup,
+        (current) => current.includes("┃ hi") || current.includes("Fatal error"),
+        "the draft",
+      )
+      expect(frame).not.toContain("Fatal error")
+      expect(frame).toContain("ready ·")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   // Esc never quits: on a draft the first press arms and says so, and the
   // second clears the draft.
   it.live("Esc Esc on a draft clears it and never quits", () =>

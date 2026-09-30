@@ -716,7 +716,6 @@ interface PromptSearchOverlayState {
 type SessionOverlayState =
   | { readonly _tag: "none" }
   | { readonly _tag: "fork"; readonly messages: readonly DurableMessage[] }
-  | { readonly _tag: "mermaid" }
   | { readonly _tag: "auth"; readonly enforceAuth: boolean }
   | { readonly _tag: "model" }
   | { readonly _tag: "reasoning" }
@@ -776,7 +775,6 @@ const SessionUiEvent = Schema.TaggedUnion({
   ToggleTranscript: {},
   ClearDisplay: {},
   OpenFork: { messages: Schema.Array(DurableMessage) },
-  OpenMermaid: {},
   OpenAuth: { enforceAuth: Schema.Boolean },
   OpenSettingsPicker: { picker: Schema.Literals(["model", "reasoning"]) },
   OpenBranches: { branches: Schema.Array(Branch) },
@@ -803,7 +801,6 @@ interface SessionUiTransitionResult {
  */
 const SLOT_OPENERS: ReadonlySet<SessionUiEvent["_tag"]> = new Set([
   "OpenFork",
-  "OpenMermaid",
   "OpenAuth",
   "OpenSettingsPicker",
   "OpenBranches",
@@ -869,13 +866,6 @@ function transitionSlot(state: SessionUiState, event: SessionUiEvent): SessionUi
         state: {
           ...state,
           overlay: { _tag: "fork", messages: event.messages },
-        },
-        effects: [],
-      }),
-      OpenMermaid: (): SessionUiTransitionResult => ({
-        state: {
-          ...state,
-          overlay: { _tag: "mermaid" },
         },
         effects: [],
       }),
@@ -3517,11 +3507,6 @@ export function createSessionController(props: {
     }
 
     if (handleTranscriptKey(event)) return true
-
-    if (event.ctrl === true && event.shift === true && event.name === "m") {
-      dispatchSessionUi(SessionUiEvent.cases.OpenMermaid.make({}))
-      return true
-    }
 
     return false
   })

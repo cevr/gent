@@ -51,7 +51,7 @@ import {
 } from "../extension-test-harness-boundary"
 import { defineRequests, ExtensionId, ref, request } from "@gent/core/extensions/api"
 import { inRuntime } from "../helpers-boundary"
-import { SessionUiState, slashAutocompleteItems, transitionSessionUi } from "../../src/session"
+import { slashAutocompleteItems } from "../../src/session"
 import { builtinClientModules } from "../../src/extensions/builtins"
 import type { Command } from "../../src/commands"
 import {
@@ -1725,18 +1725,6 @@ export default defineClientExtension("@test/dup", {
         ),
       )
     })
-  })
-})
-describe("session UI state", () => {
-  test("a picker replaces the current overlay and closes cleanly", () => {
-    const withMermaid = transitionSessionUi(SessionUiState.initial(), { _tag: "OpenMermaid" })
-    const withPicker = transitionSessionUi(withMermaid.state, {
-      _tag: "OpenSettingsPicker",
-      picker: "model",
-    })
-    const closed = transitionSessionUi(withPicker.state, { _tag: "CloseOverlay" })
-    expect(withPicker.state.overlay).toEqual({ _tag: "model" })
-    expect(closed.state.overlay).toEqual({ _tag: "none" })
   })
 })
 

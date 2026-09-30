@@ -1005,7 +1005,6 @@ describe("one pane slot", () => {
     const opens: ReadonlyArray<Parameters<typeof transitionSessionUi>[1]> = [
       { _tag: "OpenPane", id: "agents.pane" },
       { _tag: "OpenFork", messages: [] },
-      { _tag: "OpenMermaid" },
       { _tag: "OpenAuth", enforceAuth: false },
       { _tag: "OpenSettingsPicker", picker: "model" },
       { _tag: "OpenBranches", branches: [] },
@@ -1100,7 +1099,6 @@ describe("prompt search overlay", () => {
     const replacers: ReadonlyArray<Parameters<typeof transitionSessionUi>[1]> = [
       { _tag: "OpenPane", id: "agents.pane" },
       { _tag: "OpenFork", messages: [] },
-      { _tag: "OpenMermaid" },
       { _tag: "OpenAuth", enforceAuth: false },
       { _tag: "OpenSettingsPicker", picker: "model" },
       { _tag: "OpenBranches", branches: [] },

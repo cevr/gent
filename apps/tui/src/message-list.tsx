@@ -364,7 +364,7 @@ interface MessageBase {
   id: string
   role: "user" | "assistant" | "system" | "tool"
   pendingMode?: "queued" | "steer"
-  /** Concatenated text content (derived — used by picker, mermaid, search) */
+  /** Concatenated text content (derived — used by picker, search) */
   content: string
   /** Concatenated reasoning (derived) */
   reasoning: string

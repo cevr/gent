@@ -38,7 +38,6 @@ import {
   reasoningRows,
   SettingsPicker,
 } from "./pickers"
-import { collectDiagrams, MermaidViewer } from "./mermaid"
 import { useEnv, useWorkspace } from "./workspace"
 import {
   type StatusRowLabel,
@@ -589,12 +588,6 @@ export function Session(props: SessionProps) {
     if (overlay._tag === "auth") return Option.some(overlay)
     return Option.none()
   }
-  const mermaidDiagrams = createMemo(() => {
-    if (controller.uiState().overlay._tag === "mermaid") {
-      return collectDiagrams(controller.messages(), dimensions().width)
-    }
-    return []
-  })
 
   // Map semantic color names from extensions to resolved theme colors
   const resolveColor = (color: StatusLabelColor): RGBA => resolveThemeColor(theme, color)
@@ -848,12 +841,6 @@ export function Session(props: SessionProps) {
           </Show>
           <ExtensionWidgets slot="below-input" />
         </DockFooter>
-
-        <MermaidViewer
-          open={controller.uiState().overlay._tag === "mermaid"}
-          diagrams={mermaidDiagrams()}
-          onClose={controller.closeOverlay}
-        />
       </box>
     </SessionControllerContext.Provider>
   )
