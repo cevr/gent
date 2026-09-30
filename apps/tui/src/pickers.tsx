@@ -2,7 +2,14 @@
 import { Effect, Match, Option, Schema } from "effect"
 import { matchSorter } from "match-sorter"
 import { createEffect, createMemo, createSignal, Show } from "solid-js"
-import { PickerFrame, selectable, SelectList, type SelectListRow, usePickerGeometry } from "./ui"
+import {
+  KeyHints,
+  PickerFrame,
+  selectable,
+  SelectList,
+  type SelectListRow,
+  usePickerGeometry,
+} from "./ui"
 import { useTheme } from "./theme"
 import { formatError, shortId, truncate } from "./utils"
 import { useClient, useRuntime } from "./client"
@@ -217,7 +224,7 @@ export function PromptSearchPalette(props: PromptSearchPaletteProps) {
         return (
           <PickerFrame
             title={`Prompt search · ${items().length}`}
-            footer={"type to filter · ↑↓ move · ↵ accept · esc cancel"}
+            keys={[KeyHints.filter, KeyHints.move, KeyHints.select, KeyHints.close]}
           >
             <SelectList
               id="prompt-search"
@@ -261,10 +268,12 @@ export function PromptSearchPalette(props: PromptSearchPaletteProps) {
  * resume.
  *
  * The session underneath is already mounted on its active branch, so the pane
- * only has to say which branch to switch to. It opens at boot when the resumed
- * session has more than one branch, and on `/branches` after that. While it is
- * open the startup prompt waits, so a reader never sends a `-p` prompt into a
- * branch they did not choose.
+ * only has to say which branch to switch to. It opens only at boot, when the
+ * resumed session has more than one branch; the command palette's Branches
+ * level switches branches after that. While it is open the startup prompt
+ * waits, so a reader never sends a `-p` prompt into a branch they did not
+ * choose. With no branch chosen there is nothing behind it to fall back to:
+ * Esc does nothing here, and ctrl+c arms the exit (the second press exits).
  *
  * It draws the `PickerFrame` every docked pane draws — ruled off top and
  * bottom under the composer, not a bordered box — so its height and its
@@ -279,7 +288,6 @@ interface BranchPickerProps {
   readonly sessionName: string
   readonly branches: readonly Branch[]
   readonly onSelect: (branchId: BranchId) => void
-  readonly onClose: () => void
 }
 
 const formatBranchLabel = (
@@ -364,7 +372,7 @@ export function BranchPicker(props: BranchPickerProps) {
           follows the list. */}
       <PickerFrame
         title={`Resume: ${props.sessionName}`}
-        footer={"↑↓ move   ↵ resume branch   esc close"}
+        keys={[KeyHints.move, KeyHints.select, KeyHints.quit]}
         error={error()}
       >
         <SelectList
@@ -373,7 +381,7 @@ export function BranchPicker(props: BranchPickerProps) {
           rows={rows}
           rowKey={(branch) => branch.id}
           onSelect={(branch) => props.onSelect(branch.id)}
-          onDismiss={props.onClose}
+          onDismiss={() => {}}
         />
       </PickerFrame>
     </Show>
@@ -445,7 +453,7 @@ export function MessagePicker(props: MessagePickerProps) {
     <Show when={props.open}>
       <PickerFrame
         title={`Fork from message · ${items().length}`}
-        footer={"↑↓ move · ↵ fork here · esc close"}
+        keys={[KeyHints.move, KeyHints.select, KeyHints.close]}
       >
         <SelectList
           id="message-picker"
@@ -560,7 +568,7 @@ export function SettingsPicker(props: SettingsPickerProps) {
     <Show when={props.open}>
       <PickerFrame
         title={`${props.title} · ${visible().length}`}
-        footer={"type to filter · ↑↓ move · ↵ select · esc close"}
+        keys={[KeyHints.filter, KeyHints.move, KeyHints.select, KeyHints.close]}
       >
         <SelectList
           id="settings-picker"

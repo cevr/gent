@@ -47,6 +47,7 @@ import {
   doctor,
   readHome,
   resolveClientBundle,
+  resumableSessions,
   server,
   sessions,
   storage,
@@ -269,13 +270,14 @@ const runGent = ({
       }
     }
 
+    const inMemory = debug || isolate || mockEmpty
     let mock = Option.none<{ readonly empty: boolean }>()
     if (debug) mock = Option.some({ empty: false })
     if (mockEmpty) mock = Option.some({ empty: true })
     const bundle = yield* resolveClientBundle({
       cwd,
       connect,
-      inMemory: debug || isolate || mockEmpty,
+      inMemory,
       debug,
       mock,
       authDirectory: authDirectoryOpt,
@@ -324,7 +326,12 @@ const runGent = ({
         })
       }
 
-      yield* runHeadlessTurn(bundle, state, { approveAll })
+      // Tool paths read from the session's own cwd, as the TUI spells them.
+      const place = {
+        cwd: Option.getOrElse(Option.fromNullishOr(state.session.cwd), () => cwd),
+        home,
+      }
+      yield* runHeadlessTurn(bundle, state, { approveAll, place })
       return
     }
 
@@ -351,6 +358,11 @@ const runGent = ({
       ...env,
       shutdown: () => {
         interruptMain()
+      },
+      resumable: resumableSessions({ connect, inMemory }),
+      writeTerminal: (text: string) => {
+        // eslint-disable-next-line effect/noGlobals -- The line must reach the real terminal after the renderer is destroyed, outside any Effect.
+        process.stdout.write(text)
       },
     }
 

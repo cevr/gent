@@ -27,6 +27,7 @@ import {
   parseBashOutput,
   toolArgSummary,
   isConnectionLoss,
+  type PathPlace,
   randomId,
   type ToolInput,
 } from "./utils.js"
@@ -43,12 +44,17 @@ interface HeadlessToolCall {
   readonly operationsPrinted?: boolean
 }
 
-type HeadlessToolRenderer = (toolCall: HeadlessToolCall) => Option.Option<string>
+/** Draws one call; paths in its arguments read from `place`, as the TUI spells them. */
+type HeadlessToolRenderer = (toolCall: HeadlessToolCall, place: PathPlace) => Option.Option<string>
 
-const inputSummary = (toolName: string, input: Option.Option<ToolInput>): string =>
+const inputSummary = (
+  toolName: string,
+  input: Option.Option<ToolInput>,
+  place: PathPlace,
+): string =>
   Option.match(input, {
     onNone: () => "",
-    onSome: (value) => toolArgSummary(toolName, value),
+    onSome: (value) => toolArgSummary(toolName, value, place),
   })
 
 const outputText = (toolCall: HeadlessToolCall): Option.Option<string> =>
@@ -67,8 +73,8 @@ const decodeString = Schema.decodeUnknownOption(Schema.String)
 const getString = (record: Schema.JsonObject, key: string): string =>
   Option.getOrElse(decodeString(record[key]), () => "")
 
-const renderGeneric: HeadlessToolRenderer = (toolCall) => {
-  const summary = inputSummary(toolCall.toolName, toolCall.input)
+const renderGeneric: HeadlessToolRenderer = (toolCall, place) => {
+  const summary = inputSummary(toolCall.toolName, toolCall.input, place)
   if (toolCall.status === "running") {
     if (summary.length > 0) return Option.some(`[tool: ${toolCall.toolName}] ${summary}`)
     return Option.some(`[tool: ${toolCall.toolName}]`)
@@ -85,15 +91,15 @@ const renderGeneric: HeadlessToolRenderer = (toolCall) => {
   )
 }
 
-const BashHeadlessToolRenderer: HeadlessToolRenderer = (toolCall) => {
-  const command = inputSummary("bash", toolCall.input)
+const BashHeadlessToolRenderer: HeadlessToolRenderer = (toolCall, place) => {
+  const command = inputSummary("bash", toolCall.input, place)
   if (toolCall.status === "running") {
     if (command.length > 0) return Option.some(`[tool: bash] ${command}`)
     return Option.some("[tool: bash]")
   }
 
   const parsed = parseBashOutput(Option.getOrUndefined(toolCall.output))
-  if (Option.isNone(parsed)) return renderGeneric(toolCall)
+  if (Option.isNone(parsed)) return renderGeneric(toolCall, place)
 
   const { stdout, stderr, exitCode } = parsed.value
   // A background command has not ended: it has no exit code yet.
@@ -118,15 +124,15 @@ const receiptGlyph = (outcome: "succeeded" | "failed" | "incomplete") => {
   return "?"
 }
 
-const CellHeadlessToolRenderer: HeadlessToolRenderer = (toolCall) => {
-  const firstLine = inputSummary("cell", toolCall.input)
+const CellHeadlessToolRenderer: HeadlessToolRenderer = (toolCall, place) => {
+  const firstLine = inputSummary("cell", toolCall.input, place)
   if (toolCall.status === "running") {
     if (firstLine.length > 0) return Option.some(`[tool: cell] ${firstLine}`)
     return Option.some("[tool: cell]")
   }
 
   const parsed = parseJsonObject(toolCall.output)
-  if (Option.isNone(parsed)) return renderGeneric(toolCall)
+  if (Option.isNone(parsed)) return renderGeneric(toolCall, place)
 
   let status = "done"
   if (toolCall.status === "error") status = "error"
@@ -156,13 +162,13 @@ const HEADLESS_TOOL_RENDERERS: ReadonlyMap<string, HeadlessToolRenderer> = new M
   ["cell", CellHeadlessToolRenderer],
 ])
 
-export const renderHeadlessToolCall = (toolCall: HeadlessToolCall): string => {
+export const renderHeadlessToolCall = (toolCall: HeadlessToolCall, place: PathPlace): string => {
   const renderer = Option.getOrElse(
     Option.fromNullishOr(HEADLESS_TOOL_RENDERERS.get(toolCall.toolName.toLowerCase())),
     () => renderGeneric,
   )
-  return renderer(toolCall).pipe(
-    Option.orElse(() => renderGeneric(toolCall)),
+  return renderer(toolCall, place).pipe(
+    Option.orElse(() => renderGeneric(toolCall, place)),
     Option.getOrElse(() => `[tool: ${toolCall.toolName}]`),
   )
 }
@@ -186,6 +192,8 @@ export interface HeadlessOptions {
    * run has no user, so it declines each ask, as a session with no user does.
    */
   readonly approveAll: boolean
+  /** Where the session runs: tool paths read from here, as the TUI spells them. */
+  readonly place: PathPlace
 }
 
 /** What the model reads when the run declines its ask. */
@@ -285,7 +293,7 @@ export const runHeadless = (
       // Cells whose admitted calls printed their own lines.
       const cellsWithPrintedOperations = new Set<string>()
       const renderTool = (toolCall: HeadlessToolCall, parentToolCallId?: string) => {
-        const rendered = renderHeadlessToolCall(toolCall)
+        const rendered = renderHeadlessToolCall(toolCall, options.place)
         if (Predicate.isUndefined(parentToolCallId)) return writeStdout(`${rendered}\n`)
         // Cell-admitted calls stay visibly nested under their cell.
         const nested = rendered

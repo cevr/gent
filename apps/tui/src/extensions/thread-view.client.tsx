@@ -16,6 +16,7 @@ import {
   defineClientExtension,
   fitWidth,
   formatAge,
+  KeyHints,
   PickerFrame,
   plural,
   selectable,
@@ -439,7 +440,7 @@ export function ThreadPane(props: {
           has windows; the frame adds the detail line under them. */}
       <PickerFrame
         title={title()}
-        footer={"↑↓ move   ↵ open session   esc close"}
+        keys={[KeyHints.move, KeyHints.select, KeyHints.close]}
         detail={Option.liftPredicate(detailFor(cursor()), () => windows().length > 0)}
         error={props.controller.error()}
       >
