@@ -318,6 +318,27 @@ describe("startup agent and headless auth", () => {
       expect(calls).toEqual([])
     }),
   )
+
+  // A session record with no branch is a typed failure, so `gent -s <id>`
+  // prints one line for it, as it does for a missing session.
+  it.live("a resumed session with no branch fails with a typed bootstrap error", () =>
+    Effect.gen(function* () {
+      const branchless = { ...sessionA, activeBranchId: absent }
+      const error = yield* expectAppBootstrapFailure(
+        resolveInteractiveBootstrap({
+          client: createMockClient({
+            branch: { list: () => Effect.succeed([]) },
+            session: { get: () => Effect.succeed(branchless) },
+          }),
+          cwd: "/nonexistent/gent-test-cwd",
+          sessionId: "session-a",
+          continue_: false,
+          debugMode: false,
+        }),
+      )
+      expect(error.reason).toBe("missing-branch")
+    }),
+  )
 })
 
 describe("resolveInitialState", () => {

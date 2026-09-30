@@ -57,11 +57,9 @@ import type { StatusLabelColor, WidgetSlot } from "./extensions/client-facets.js
 // ── boot flow ───────────────────────────────────────────────────────────────
 
 /**
- * Surfaces a corrupt session record (session row exists but has no
- * `activeBranchId`). Caught at the bootstrap boundary in `main.tsx`
- * so the user sees a structured error message instead of a stack
- * trace. Thrown synchronously because `resolveAppBootstrap` is a
- * synchronous projection at the render boundary.
+ * Why the interactive or headless start could not resolve its session: a
+ * corrupt record (no `activeBranchId`), a missing session or prompt. A typed
+ * failure, so the CLI prints its one line instead of a stack trace.
  */
 export class AppBootstrapError extends Schema.TaggedError<AppBootstrapError>()(
   "AppBootstrapError",
@@ -163,22 +161,23 @@ const resolveAppBootstrap = (
   options: {
     debugMode: boolean
   },
-): AppBootstrap => {
+): Effect.Effect<AppBootstrap, AppBootstrapError> => {
   // A created session always has its branch. A corrupt record from `-s <id>`
   // may not, and the view (and a picker docked over it) needs one to mount.
   const initialSession = toSession(state.session)
   if (Option.isNone(initialSession)) {
-    // eslint-disable-next-line effect/noThrowStatement -- synchronous render-boundary validation must throw.
-    throw new AppBootstrapError({ sessionId: state.session.id, reason: "missing-branch" })
+    return Effect.fail(
+      new AppBootstrapError({ sessionId: state.session.id, reason: "missing-branch" }),
+    )
   }
   let initialBranches = Option.none<readonly Branch[]>()
   if (state._tag === "branchPicker") initialBranches = Option.some(state.branches)
-  return {
+  return Effect.succeed({
     initialSession: initialSession.value,
     initialPrompt: Option.fromNullishOr(state.prompt),
     initialBranches,
     debugMode: options.debugMode,
-  }
+  })
 }
 
 export const resolveInteractiveBootstrap = (input: {
@@ -207,7 +206,7 @@ export const resolveInteractiveBootstrap = (input: {
     const initialAgent = yield* resolveStartupAgent({ client: input.client, state })
 
     return {
-      bootstrap: resolveAppBootstrap(state, { debugMode: input.debugMode }),
+      bootstrap: yield* resolveAppBootstrap(state, { debugMode: input.debugMode }),
       initialAgent: Option.getOrUndefined(initialAgent),
     }
   })
