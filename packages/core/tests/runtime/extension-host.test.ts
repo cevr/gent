@@ -2877,7 +2877,7 @@ describe("runtime slots", () => {
               durationMs: 10,
               joinedMessageIds: new Set(),
               startedAtMs: 0,
-              agentName: AgentName.make("cowork"),
+              agentName: AgentName.make("primary"),
               interrupted: false,
               streamFailed: false,
               unanswered: false,
@@ -2927,7 +2927,7 @@ describe("runtime slots", () => {
             durationMs: 10,
             joinedMessageIds: new Set(),
             startedAtMs: 0,
-            agentName: AgentName.make("cowork"),
+            agentName: AgentName.make("primary"),
             interrupted: false,
             streamFailed: false,
             unanswered: false,
@@ -2980,7 +2980,7 @@ describe("runtime slots", () => {
             durationMs: 10,
             joinedMessageIds: new Set(),
             startedAtMs: 0,
-            agentName: AgentName.make("cowork"),
+            agentName: AgentName.make("primary"),
             interrupted: false,
             streamFailed: false,
             unanswered: false,
@@ -3966,7 +3966,7 @@ describe("resolveExtensions — disabled filtering", () => {
     const disabledSet = new Set(["@gent/agents"])
     const extensions = [
       makeExtRegistry("@gent/agents", "builtin", {
-        agents: [makeAgent("cowork", { model: ModelId.make("anthropic/claude-opus-4-6") })],
+        agents: [makeAgent("primary", { model: ModelId.make("anthropic/claude-opus-4-6") })],
       }),
       makeExtRegistry("@gent/fs-tools", "builtin", { tools: [makeTool("read")] }),
     ]
@@ -3991,7 +3991,7 @@ describe("resolveExtensions — disabled filtering", () => {
     const extensions = [
       makeExtRegistry("@gent/todo", "builtin", { tools: [makeTool("add_todo")] }),
       makeExtRegistry("@gent/agents", "builtin", {
-        agents: [makeAgent("cowork", { model: ModelId.make("anthropic/claude-opus-4-6") })],
+        agents: [makeAgent("primary", { model: ModelId.make("anthropic/claude-opus-4-6") })],
       }),
       makeExtRegistry("@gent/openai", "builtin", { modelDrivers: [makeProvider("openai")] }),
       makeExtRegistry("@gent/fs-tools", "builtin", { tools: [makeTool("read")] }),
@@ -4108,23 +4108,23 @@ describe("ExtensionRegistry", () => {
   )
   it.live("lists all agents including override winners", () =>
     Effect.gen(function* () {
-      const cowork = AgentDefinition.make({
-        name: AgentName.make("cowork"),
+      const primary = AgentDefinition.make({
+        name: AgentName.make("primary"),
         model: ModelId.make("anthropic/claude-opus-4-6"),
       })
       const explore = makeAgent("explore")
-      const deepwork = AgentDefinition.make({
-        name: AgentName.make("deepwork"),
+      const secondary = AgentDefinition.make({
+        name: AgentName.make("secondary"),
         model: ModelId.make("openai/gpt-5.4"),
       })
       const registry = yield* buildRegistry([
-        makeExtRegistry("a", "builtin", { agents: [cowork, explore, deepwork] }),
+        makeExtRegistry("a", "builtin", { agents: [primary, explore, secondary] }),
       ])
       const agents = [...registry.getResolved().agents.values()]
       expect(agents.length).toBe(3)
-      expect(agents.map((a) => a.name)).toContain(AgentName.make("cowork"))
+      expect(agents.map((a) => a.name)).toContain(AgentName.make("primary"))
       expect(agents.map((a) => a.name)).toContain(AgentName.make("explore"))
-      expect(agents.map((a) => a.name)).toContain(AgentName.make("deepwork"))
+      expect(agents.map((a) => a.name)).toContain(AgentName.make("secondary"))
     }),
   )
   it.live("allowedTools narrows the resolved tool set", () =>
@@ -4170,7 +4170,7 @@ describe("ExtensionRegistry", () => {
       const readTool = makeTool("read")
       const writeTool = makeTool("write")
       const agent = AgentDefinition.make({
-        name: AgentName.make("cowork"),
+        name: AgentName.make("primary"),
         deniedTools: ["write"],
       })
       const registry = yield* buildRegistry([
@@ -4187,7 +4187,7 @@ describe("ExtensionRegistry", () => {
       const readTool = makeTool("read")
       const secretTool = makeTool("secret")
       const agent = AgentDefinition.make({
-        name: AgentName.make("cowork"),
+        name: AgentName.make("primary"),
         deniedTools: ["secret"],
       })
       const registry = yield* buildRegistry([
@@ -4540,7 +4540,7 @@ const stubEvent: Omit<TurnAfterInput, "readNotices"> = {
   durationMs: 100,
   joinedMessageIds: new Set(),
   startedAtMs: 0,
-  agentName: AgentName.make("cowork"),
+  agentName: AgentName.make("primary"),
   interrupted: false,
   streamFailed: false,
   unanswered: false,
@@ -4665,7 +4665,7 @@ describe("runtime hooks", () => {
         }),
       ])
       const projection = yield* compiled
-        .resolveTurnProjection({ agent: AgentDefinition.make({ name: AgentName.make("cowork") }) })
+        .resolveTurnProjection({ agent: AgentDefinition.make({ name: AgentName.make("primary") }) })
         .pipe(Effect.provideService(CurrentExtensionHostContext, stubCtx))
       expect(projection.notices.map(({ notice }) => notice.keys)).toEqual([["seen"]])
     }))
@@ -4689,7 +4689,7 @@ describe("runtime hooks", () => {
         }),
       ])
       const projection = yield* compiled
-        .resolveTurnProjection({ agent: AgentDefinition.make({ name: AgentName.make("cowork") }) })
+        .resolveTurnProjection({ agent: AgentDefinition.make({ name: AgentName.make("primary") }) })
         .pipe(Effect.provideService(CurrentExtensionHostContext, stubCtx))
       expect(projection.notices).toEqual([
         {
@@ -5691,7 +5691,7 @@ describe("live Profile", () => {
                 sessionId: SessionId.make("s"),
                 branchId: BranchId.make("b"),
                 agent: testAgent,
-                agentName: AgentName.make("cowork"),
+                agentName: AgentName.make("primary"),
                 allTools: [],
               },
               host: testExtensionHostContext({
@@ -5805,7 +5805,7 @@ describe("live Profile", () => {
             sessionId: SessionId.make("s"),
             branchId: BranchId.make("b"),
             agent: testAgent,
-            agentName: AgentName.make("cowork"),
+            agentName: AgentName.make("primary"),
             allTools: [],
           },
           host: testExtensionHostContext({

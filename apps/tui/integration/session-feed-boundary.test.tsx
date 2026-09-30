@@ -28,7 +28,7 @@ describe("session feed boundary", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const { layer: signalLayer, controls } = yield* LanguageModelLayers.signal(
-            "cowork debug response. Latest user message: queued. This turn is flowing through the real agent loop with a scripted provider.",
+            "gent debug response. Latest user message: queued. This turn is flowing through the real agent loop with a scripted provider.",
           )
           const { client, runtime } = yield* Gent.test(baseLocalLayerWithProvider(signalLayer))
           const created = yield* client.session.create({ cwd: repoRoot })
@@ -82,7 +82,7 @@ describe("session feed boundary", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const { layer: signalLayer, controls } = yield* LanguageModelLayers.signal(
-            "cowork debug response. First turn complete.",
+            "gent debug response. First turn complete.",
           )
           const { client, runtime } = yield* Gent.test(baseLocalLayerWithProvider(signalLayer))
           const created = yield* client.session.create({ cwd: repoRoot })

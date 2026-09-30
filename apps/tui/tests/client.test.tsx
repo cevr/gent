@@ -421,7 +421,7 @@ const snapshotOf = (
   lastEventId: nullValue,
   reasoningLevel: absent,
   resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
-  agent: AgentName.make("cowork"),
+  agent: AgentName.make("primary"),
   runtime: {
     _tag: "Idle",
     queue: emptyQueueSnapshot(),
@@ -805,12 +805,12 @@ describe("ClientProvider session lifecycle", () => {
             createdAt: dateFromMillis(0),
             updatedAt: dateFromMillis(0),
           },
-          initialAgent: AgentName.make("deepwork"),
+          initialAgent: AgentName.make("secondary"),
         }),
       )
       if (Option.isNone(ctx)) return yield* Effect.die("client context not ready")
       const active = ctx.value
-      expect(active.agent()).toBe(AgentName.make("deepwork"))
+      expect(active.agent()).toBe(AgentName.make("secondary"))
       active.createSession()
       yield* waitForFrame(
         setup,
@@ -827,11 +827,11 @@ describe("ClientProvider session lifecycle", () => {
         lastEventId: 1,
         reasoningLevel: absent,
         resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
-        agent: AgentName.make("deepwork"),
+        agent: AgentName.make("secondary"),
         runtime: { _tag: "Idle", queue: emptyQueueSnapshot() },
         metrics: { turns: 0, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
       })
-      expect(active.agent()).toBe(AgentName.make("deepwork"))
+      expect(active.agent()).toBe(AgentName.make("secondary"))
     }),
   )
   it.live("choosing the session already in view keeps its settings, status and metrics", () =>
@@ -862,7 +862,7 @@ describe("ClientProvider session lifecycle", () => {
       expect(state.session).toMatchObject({ modelId: model, reasoningLevel: "high" })
       expect(client.isStreaming()).toBe(true)
       expect(client.cost()).toBe(1.5)
-      expect(client.agent()).toBe(AgentName.make("cowork"))
+      expect(client.agent()).toBe(AgentName.make("primary"))
       expect(client.sessionMetrics().latestInputTokens).toBe(9_000)
       expect(Option.isSome(client.sessionMetrics().context)).toBe(true)
     }),
@@ -1273,7 +1273,7 @@ describe("ClientProvider session lifecycle", () => {
         lastEventId: nullValue,
         reasoningLevel: absent,
         resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
-        agent: AgentName.make("cowork"),
+        agent: AgentName.make("primary"),
         runtime: {
           _tag: "Idle",
           queue: emptyQueueSnapshot(),
@@ -1297,7 +1297,7 @@ describe("ClientProvider session lifecycle", () => {
       )
       expect(client.model()).toBe("anthropic/claude-haiku-4-5-20251001")
       // The footer names the session's agent, which the snapshot carries.
-      expect(client.agent()).toBe(AgentName.make("cowork"))
+      expect(client.agent()).toBe(AgentName.make("primary"))
     }),
   )
   it.live("applySessionSnapshot refreshes the active session metadata", () =>
@@ -1323,7 +1323,7 @@ describe("ClientProvider session lifecycle", () => {
         lastEventId: nullValue,
         reasoningLevel: "high",
         resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
-        agent: AgentName.make("cowork"),
+        agent: AgentName.make("primary"),
         runtime: {
           _tag: "Idle",
           queue: emptyQueueSnapshot(),
@@ -1389,7 +1389,7 @@ describe("ClientProvider session lifecycle", () => {
         lastEventId: nullValue,
         reasoningLevel: "high",
         resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
-        agent: AgentName.make("cowork"),
+        agent: AgentName.make("primary"),
         runtime: {
           _tag: "Running",
           queue: emptyQueueSnapshot(),
@@ -1456,7 +1456,7 @@ describe("ClientProvider session lifecycle", () => {
         lastEventId: nullValue,
         reasoningLevel: "medium",
         resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
-        agent: AgentName.make("cowork"),
+        agent: AgentName.make("primary"),
         runtime: {
           _tag: "Running",
           queue: emptyQueueSnapshot(),
@@ -1518,7 +1518,7 @@ describe("ClientProvider session lifecycle", () => {
         lastEventId: nullValue,
         reasoningLevel: absent,
         resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
-        agent: AgentName.make("cowork"),
+        agent: AgentName.make("primary"),
         runtime: {
           _tag: "Idle",
           queue: emptyQueueSnapshot(),
@@ -1578,7 +1578,7 @@ const snapshotFor = (
   modelId: Option.getOrUndefined(Option.none()),
   reasoningLevel: Option.getOrUndefined(Option.none()),
   resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
-  agent: AgentName.make("cowork"),
+  agent: AgentName.make("primary"),
   runtime: {
     _tag: "Idle",
     queue: emptyQueueSnapshot(),

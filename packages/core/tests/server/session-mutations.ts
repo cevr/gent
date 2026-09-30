@@ -108,7 +108,7 @@ export const sessionRuntimeLayer = (
       getState: () =>
         Effect.succeed({
           _tag: "Idle",
-          agent: AgentName.make("cowork"),
+          agent: AgentName.make("primary"),
           queue: emptyQueueSnapshot(),
         }),
       watchState: () => Effect.succeed(Stream.empty),
