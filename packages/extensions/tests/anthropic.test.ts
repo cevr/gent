@@ -10,7 +10,6 @@ import {
   type ClaudeCredentials,
   extractFirstUserMessageText,
   getModelBetas,
-  MODEL_CONFIG,
   parseOAuthResponse,
   readPromptCacheTtl,
   SYSTEM_IDENTITY_PREFIX,
@@ -693,7 +692,7 @@ describe("keychainTransformClient — auth headers", () => {
       const betas = beta!.split(",").map((s) => s.trim())
       // Incoming preserved
       expect(betas).toContain("incoming-beta-1")
-      // Model default present (oauth-2025-04-20 is in MODEL_CONFIG.baseBetas)
+      // Model default present (oauth-2025-04-20 is a base beta)
       expect(betas).toContain("oauth-2025-04-20")
       // Per-model-override present (effort-2025-11-24 is added for "4-6")
       expect(betas).toContain("effort-2025-11-24")
@@ -1503,11 +1502,16 @@ describe("buildBillingHeaderValue", () => {
 // ── model config ────────────────────────────────────────────────────────────
 
 describe("getModelBetas", () => {
-  test("includes every base beta for a generic sonnet model", () => {
-    const betas = getModelBetas("claude-sonnet-4-5", Option.none())
-    for (const beta of MODEL_CONFIG.baseBetas) {
-      expect(betas).toContain(beta)
-    }
+  test("a generic sonnet model sends the five betas Claude Code sends", () => {
+    // Written out, not read from MODEL_CONFIG: a beta dropped from the table
+    // must fail here.
+    expect(getModelBetas("claude-sonnet-4-5", Option.none())).toEqual([
+      "claude-code-20250219",
+      "oauth-2025-04-20",
+      "interleaved-thinking-2025-05-14",
+      "prompt-caching-scope-2026-01-05",
+      "context-management-2025-06-27",
+    ])
   })
 
   test("no model gets the context-1m beta: a 1M window is the default", () => {

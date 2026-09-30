@@ -62,8 +62,8 @@ import { FetchHttpClient, Headers, HttpClient, HttpClientRequest } from "effect/
 import { AnthropicClient, AnthropicLanguageModel, Generated } from "@effect/ai-anthropic"
 import { type AiError, Model as AiModel, type Response } from "effect/ai"
 
-// Test seam: only tests read these exports. The model table and its lookups
-// (MODEL_CONFIG, getModelBetas), the billing header (SYSTEM_IDENTITY_PREFIX,
+// Test seam: only tests read these exports. The model beta lookup
+// (getModelBetas), the billing header (SYSTEM_IDENTITY_PREFIX,
 // extractFirstUserMessageText, buildBillingHeaderValue), the wire transforms (transformPayload, transformResponseContent, transformStreamEvent)
 // and the credential parsers (ClaudeCredentials,
 // updateCredentialBlob, parseOAuthResponse) are pure functions with unit tests.
@@ -105,7 +105,7 @@ interface ModelConfig {
  * set; reference at
  * `~/.cache/repo/griffinmartin/opencode-claude-auth/src/model-config.ts`.
  */
-export const MODEL_CONFIG: ModelConfig = {
+const MODEL_CONFIG: ModelConfig = {
   ccVersion: "2.1.280",
   baseBetas: [
     "claude-code-20250219",
