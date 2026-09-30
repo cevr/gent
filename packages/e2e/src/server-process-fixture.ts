@@ -43,7 +43,9 @@ const repoRoot = decodeURIComponent(new URL("../../..", import.meta.url).pathnam
   /\/$/,
   "",
 )
-const serverEntry = `${repoRoot}/apps/server/src/main.ts`
+// The TUI binary owns `gent server start`; it runs from its package, whose
+// bunfig preloads the JSX transform.
+const tuiDirectory = `${repoRoot}/apps/tui`
 
 class ServerProcessFixtureError extends Schema.TaggedError<ServerProcessFixtureError>()(
   "@gent/e2e/src/server-process-fixture/ServerProcessFixtureError",
@@ -122,19 +124,19 @@ export const spawnServer = ({
   Effect.gen(function* () {
     const proc = yield* Effect.acquireRelease(
       Effect.sync(() =>
-        Bun.spawn(["bun", serverEntry], {
-          cwd: repoRoot,
-          env: {
-            ...Bun.env,
-            GENT_PORT: String(port),
-            GENT_PERSISTENCE_MODE: "memory",
-            GENT_PROVIDER_MODE: "debug-scripted",
-            GENT_DATA_DIR: dataDir,
+        Bun.spawn(
+          ["bun", "src/main.tsx", "server", "start", "--port", String(port), "--isolate", "--mock"],
+          {
+            cwd: tuiDirectory,
+            env: {
+              ...Bun.env,
+              GENT_DATA_DIR: dataDir,
+            },
+            stdout: "pipe",
+            // Nothing reads stderr; a pipe nobody drains can stall the server.
+            stderr: "ignore",
           },
-          stdout: "pipe",
-          // Nothing reads stderr; a pipe nobody drains can stall the server.
-          stderr: "ignore",
-        }),
+        ),
       ),
       (proc) => stopProcess(proc, 5_000),
     )

@@ -327,10 +327,9 @@ export function ExtensionUIProvider(props: {
 
                 const base = {
                   id: `server:${c.name}`,
-                  title: Option.getOrElse(Option.fromNullishOr(c.displayName), () =>
-                    Option.getOrElse(Option.fromNullishOr(c.description), () => c.name),
-                  ),
+                  title: Option.getOrElse(Option.fromNullishOr(c.displayName), () => c.name),
                   slash: c.name,
+                  description: c.description,
                   category: Option.getOrElse(Option.fromNullishOr(c.category), () => "Extension"),
                   onSelect: () => run(""),
                   onSlash: run,

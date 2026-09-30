@@ -200,6 +200,8 @@ describe("PromptRenderer", () => {
                 visual: Option.some(`bun ${editorPath}`),
                 editor: Option.none(),
                 shutdown: () => {},
+                resumable: true,
+                writeTerminal: () => {},
               }}
             >
               <PromptRenderer

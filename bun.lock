@@ -23,17 +23,6 @@
         "typescript": "^7.0.2",
       },
     },
-    "apps/server": {
-      "name": "@gent/server-http",
-      "version": "0.0.0",
-      "dependencies": {
-        "@effect/platform-bun": "catalog:",
-        "@gent/sdk": "workspace:*",
-      },
-      "peerDependencies": {
-        "effect": "catalog:",
-      },
-    },
     "apps/tui": {
       "name": "@gent/tui",
       "version": "0.0.0",
@@ -282,8 +271,6 @@
     "@gent/extensions": ["@gent/extensions@workspace:packages/extensions"],
 
     "@gent/sdk": ["@gent/sdk@workspace:packages/sdk"],
-
-    "@gent/server-http": ["@gent/server-http@workspace:apps/server"],
 
     "@gent/tooling": ["@gent/tooling@workspace:packages/tooling"],
 

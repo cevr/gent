@@ -15,8 +15,8 @@ import { makeBranchStateStore } from "./branch-state-store.js"
 
 // Test seam: only tests read these exports. GoalState, goalContinuationSource,
 // continuationPrompt, formatGoalUsage and the GOAL_PAUSED_* texts are pure
-// values with unit tests; readGoal reads the stored goal in assertions; GoalTool
-// is the capability the cell signature tests render.
+// values with unit tests; GoalTool is the capability the cell signature tests
+// render.
 
 // ── protocol ────────────────────────────────────────────────────────────────
 
@@ -164,7 +164,7 @@ const store = makeBranchStateStore({
 
 const goalOf = (snapshot: GoalSnapshot) => Option.fromUndefinedOr(snapshot.goal)
 
-export const readGoal = Effect.fn("GoalStore.readGoal")(function* () {
+const readGoal = Effect.fn("GoalStore.readGoal")(function* () {
   return goalOf(yield* store.read())
 })
 

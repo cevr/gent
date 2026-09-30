@@ -1298,7 +1298,8 @@ describe("recorded cell execution", () => {
         const worker = yield* buildCellWorker
         const [define, change, after] = yield* setupCalls([
           "var kept = 7",
-          "setTimeout(() => Object.defineProperty(Map.prototype, 'late', { value: 1 }), 0); var lost = 1; 2",
+          // The microtask runs after the cell's check and before the host's snapshot request.
+          "Promise.resolve().then(() => Object.defineProperty(Map.prototype, 'late', { value: 1 })); var lost = 1; 2",
           "[kept, typeof lost, typeof Map.prototype.late].join(',')",
         ])
         if (!define || !change || !after) return yield* Effect.die("Missing test cells")
@@ -1318,8 +1319,9 @@ describe("recorded cell execution", () => {
           display: "7,undefined,undefined",
           restored: { restored: ["kept"], omitted: [] },
         })
-      }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
-    10000,
+        // A deadlock bound only: the worker it retires is replaced before `after` runs.
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(testLayer)),
+    30_000,
   )
 
   // Display once went through `inspect`, which reads `Symbol.toStringTag` with

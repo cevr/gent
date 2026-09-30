@@ -17,6 +17,10 @@ interface EnvContextValue {
   editor: Option.Option<string>
   /** Graceful shutdown — triggers Effect scope cleanup instead of process.exit */
   shutdown: () => void
+  /** Sessions outlive the process. False for an in-memory store (`--debug`, `--isolate`): nothing to resume. */
+  resumable: boolean
+  /** Writes to the terminal the reader keeps, once the renderer is gone. */
+  writeTerminal: (text: string) => void
 }
 
 const EnvContext = createContext<EnvContextValue>()
@@ -91,10 +95,19 @@ const getGitInfo = (
     )
     if (root.length === 0) return Option.none()
 
-    const branch = yield* gitCommand(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]).pipe(
+    // `symbolic-ref` names an unborn branch too, and prints nothing when HEAD
+    // is detached; a detached HEAD then reads by its commit.
+    const branchName = yield* gitCommand(cwd, ["symbolic-ref", "--short", "-q", "HEAD"]).pipe(
       Effect.catchEager(() => Effect.succeed("")),
     )
-    if (branch.length === 0) return Option.none()
+    let branch = branchName
+    if (branch.length === 0) {
+      const sha = yield* gitCommand(cwd, ["rev-parse", "--short", "HEAD"]).pipe(
+        Effect.catchEager(() => Effect.succeed("")),
+      )
+      if (sha.length === 0) return Option.none()
+      branch = `detached @${sha}`
+    }
 
     const diffText = yield* gitCommand(cwd, ["diff", "--stat", "HEAD"]).pipe(
       Effect.catchEager(() => Effect.succeed("")),

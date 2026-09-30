@@ -15,8 +15,8 @@ import {
 } from "effect"
 import {
   buildLogPaths,
+  dataPaths,
   ensureLogDir,
-  resolveLogDir,
   type GentRuntime,
   makeJsonFileLogger,
 } from "@gent/sdk"
@@ -59,7 +59,14 @@ import {
 } from "solid-js"
 import { createStore } from "solid-js/store"
 import { omitUndefined } from "@gent/core/extensions/api"
-import { formatError, randomId, SEND_RETRY, type UiError, useRequiredContext } from "./utils"
+import {
+  formatError,
+  type PathPlace,
+  randomId,
+  SEND_RETRY,
+  type UiError,
+  useRequiredContext,
+} from "./utils"
 import { useWorkspace } from "./workspace"
 
 // ── client logging ──────────────────────────────────────────────────────────
@@ -77,14 +84,15 @@ import { useWorkspace } from "./workspace"
 
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import { appendFileSync, writeFileSync } from "node:fs" // eslint-disable-line effect/noNodeBuiltinImport -- Synchronous shutdown logging runs after the Effect runtime closes.
+import { homedir } from "os"
 
-// Client log path derives from `process.cwd()` and `resolveLogDir` — the same
-// sources the launcher threads into `GentObservability` for the server. Both
-// ends hash the same cwd into the same directory, so a single gent instance
-// writes client + server logs under one filename prefix, beside its own data
-// when `GENT_DATA_DIR` is set. Resolved once at load: `shutdownLog` writes
-// after the Effect runtime closes.
-const CLIENT_LOG_DIR = Effect.runSync(resolveLogDir)
+// Client log path derives from `process.cwd()` and `dataPaths(home).logDir` —
+// the same sources the server threads into `GentObservability`, with the home
+// the platform reads. Both ends hash the same cwd into the same directory, so
+// a single gent instance writes client + server logs under one filename
+// prefix, beside its data. Resolved once at load: `shutdownLog` writes after
+// the Effect runtime closes.
+const CLIENT_LOG_DIR = Effect.runSync(dataPaths(homedir())).logDir
 const CLIENT_LOG_PATH = buildLogPaths(process.cwd(), CLIENT_LOG_DIR).client
 
 // Clock-bypass: `shutdownLog` runs after Effect runtime teardown, so we
@@ -427,7 +435,7 @@ const isReconnectingState = ConnectionState.isAnyOf(["Connecting", "Reconnecting
  * What this UI can ask a running loop to do.
  *
  * Narrower than the wire `SteerCommand` on purpose. The domain also carries
- * `Interrupt`, which the loop folds into `Cancel` (`agent-loop.actor.ts:763`),
+ * `Interrupt`, which the loop handles as `Cancel` (`runtime/agent-loop.ts`),
  * and `wake` on an interjection, which this UI never needs: it interjects only
  * into a streaming turn, and an idle branch takes an ordinary `sendMessage`
  * that starts a turn by itself.
@@ -476,8 +484,8 @@ interface ClientTransportValue {
   // `ExtensionStateChanged` event seen on the active session for each
   // registered subscriber. The pulse carries no payload — consumers
   // refetch via the extension's typed `client.extension.request(...)`.
-  // Returns an unsubscribe function. Replaces a single-slot callback so
-  // multiple widgets can listen for their own extension's pulses.
+  // Returns an unsubscribe function; any number of widgets subscribe, each
+  // for its own extension's pulses.
   onExtensionStateChanged: (
     cb: (pulse: { sessionId: SessionId; branchId: BranchId; extensionId: string }) => void,
   ) => () => void
@@ -532,6 +540,11 @@ interface ClientSessionValue {
   sessionCwd: Effect.Effect<string, GentClientRpcError>
   /** The directory a given session resolves against, whether or not it is active. */
   cwdOf: (sessionId: SessionId) => Effect.Effect<string, GentClientRpcError>
+  /**
+   * Where the session in view runs, for spelling tool paths: its cwd when the
+   * record carries one, else the launch directory.
+   */
+  pathPlace: () => PathPlace
 
   // Session actions (fire-and-forget, update state internally)
   /** Create a session and make it the active one. */
@@ -587,6 +600,8 @@ interface ClientAgentValue {
   // Derived accessors
   /** Whether a turn runs; an error on screen does not change it. */
   isStreaming: () => boolean
+  /** How many turns the branch in view has started; None until its first snapshot lands. */
+  turnsStarted: () => Option.Option<number>
   isError: () => boolean
   // eslint-disable-next-line effect/noNullish -- UI agent accessors expose null outside the error state.
   error: () => string | null
@@ -785,6 +800,13 @@ export function ClientProvider(props: ClientProviderProps) {
       onSome: (current) => cwdOf(current.sessionId),
     }),
   )
+  const pathPlace = (): PathPlace => ({
+    cwd: Option.getOrElse(
+      Option.flatMap(sessionOption(), (current) => Option.fromUndefinedOr(current.cwd)),
+      () => workspace.cwd,
+    ),
+    home: workspace.home,
+  })
 
   // A session reached by id alone reads its cwd once, so the status row names
   // where it is rooted before anything is submitted.
@@ -793,44 +815,6 @@ export function ClientProvider(props: ClientProviderProps) {
       const current = sessionOption()
       if (Option.isNone(current) || Predicate.isNotUndefined(current.value.cwd)) return
       cast(sessionCwd.pipe(Effect.catchEager(() => Effect.void)))
-    }),
-  )
-
-  // The catalog is the active session's profile: a project model driver
-  // appears once that session is active, a disabled one disappears.
-  let modelCatalogLoadVersion = 0
-  createEffect(
-    on(activeSessionId, (sessionId) => {
-      const version = ++modelCatalogLoadVersion
-      const request = omitUndefined({ sessionId: Option.getOrUndefined(sessionId) })
-      cast(
-        Effect.all({
-          models: client.model.list(request),
-          drivers: client.driver.list(request),
-        }).pipe(
-          Effect.tap(({ models, drivers }) =>
-            Effect.sync(() => {
-              if (version !== modelCatalogLoadVersion) return
-              const modelsById: Record<string, Model> = {}
-              for (const model of models) modelsById[model.id] = model
-              const agentsByName: Record<string, AgentDefinition> = {}
-              for (const agent of drivers.agents) agentsByName[agent.name] = agent
-              const driverIds = drivers.drivers.map((driver) => driver.id)
-              setModelStore({ modelsById, agentsByName, driverIds, settled: true })
-            }),
-          ),
-          Effect.catchEager((err) =>
-            Effect.sync(() => {
-              if (version !== modelCatalogLoadVersion) return
-              const error = formatError(err)
-              log.error("model.list.failed", { error })
-              setAgentStore({ error: Option.some(error) })
-              // A reader waiting for the catalog goes on with what it holds.
-              setModelStore({ settled: true })
-            }),
-          ),
-        ),
-      )
     }),
   )
 
@@ -980,16 +964,36 @@ export function ClientProvider(props: ClientProviderProps) {
     return isReconnectingState(state.value)
   }
 
-  let extensionHealthLoadVersion = 0
+  // The server reads below follow the open connection and the session's
+  // identity. Both keys are memos: a rename or a settings change on the session
+  // record reads nothing again, and a reconnect reads again. Health adds its
+  // own invalidations below.
+  const connectionAndSession = (): readonly [Option.Option<number>, Option.Option<SessionId>] => [
+    connectedGeneration(),
+    activeSessionId(),
+  ]
 
-  const extensionHealthDependencies = (): readonly [
+  let extensionHealthLoadVersion = 0
+  // Health can change while the session stays: a settings change (a model its
+  // extension needs) or an extension's own pulse. Both invalidate it
+  // explicitly; a rename, which also rebuilds the record, does not.
+  const sessionSettings = createMemo(() =>
+    Option.match(sessionOption(), {
+      onNone: () => "",
+      onSome: (active) => `${active.modelId ?? ""}|${active.reasoningLevel ?? ""}`,
+    }),
+  )
+  const [extensionPulses, setExtensionPulses] = createSignal(0)
+  const healthKey = (): readonly [
     Option.Option<number>,
     Option.Option<SessionId>,
-  ] => [connectedGeneration(), Option.map(sessionOption(), (value) => value.sessionId)]
+    string,
+    number,
+  ] => [...connectionAndSession(), sessionSettings(), extensionPulses()]
 
   createEffect(
     on(
-      extensionHealthDependencies,
+      healthKey,
       ([epoch, sessionId]) => {
         const version = ++extensionHealthLoadVersion
         if (Option.isNone(epoch)) {
@@ -1018,6 +1022,46 @@ export function ClientProvider(props: ClientProviderProps) {
       },
       { defer: false },
     ),
+  )
+
+  // The catalog is the active session's profile: a project model driver
+  // appears once that session is active, a disabled one disappears. A load
+  // that failed in a dropped connection is read again on the reconnect.
+  let modelCatalogLoadVersion = 0
+  createEffect(
+    on(connectionAndSession, ([epoch, sessionId]) => {
+      const version = ++modelCatalogLoadVersion
+      if (Option.isNone(epoch)) return
+      const request = omitUndefined({ sessionId: Option.getOrUndefined(sessionId) })
+      cast(
+        Effect.all({
+          models: client.model.list(request),
+          drivers: client.driver.list(request),
+        }).pipe(
+          Effect.tap(({ models, drivers }) =>
+            Effect.sync(() => {
+              if (version !== modelCatalogLoadVersion) return
+              const modelsById: Record<string, Model> = {}
+              for (const model of models) modelsById[model.id] = model
+              const agentsByName: Record<string, AgentDefinition> = {}
+              for (const agent of drivers.agents) agentsByName[agent.name] = agent
+              const driverIds = drivers.drivers.map((driver) => driver.id)
+              setModelStore({ modelsById, agentsByName, driverIds, settled: true })
+            }),
+          ),
+          Effect.catchEager((err) =>
+            Effect.sync(() => {
+              if (version !== modelCatalogLoadVersion) return
+              const error = formatError(err)
+              log.error("model.list.failed", { error })
+              setAgentStore({ error: Option.some(error) })
+              // A reader waiting for the catalog goes on with what it holds.
+              setModelStore({ settled: true })
+            }),
+          ),
+        ),
+      )
+    }),
   )
 
   const applySessionRuntime: ClientTransportValue["applySessionRuntime"] = (input) => {
@@ -1146,10 +1190,18 @@ export function ClientProvider(props: ClientProviderProps) {
     }
   }
 
+  // An extension that has news may report another health: read it again.
+  const invalidateHealthOn = (event: EventEnvelope["event"]): void => {
+    if (event._tag !== "ExtensionStateChanged") return
+    if (!Option.contains(activeSessionId(), event.sessionId)) return
+    setExtensionPulses((count) => count + 1)
+  }
+
   const applySessionEvent = (envelope: EventEnvelope): void => {
     const event = envelope.event
     eventHub.notifySessionEvent(envelope)
     eventHub.notifyExtensionStateChanged(event)
+    invalidateHealthOn(event)
     if (event._tag === "StreamEnded" && Option.isSome(Option.fromNullishOr(event.usage))) {
       refreshSessionMetrics()
     }
@@ -1166,6 +1218,7 @@ export function ClientProvider(props: ClientProviderProps) {
     // Snapshot replay owns lifecycle, metadata, and metrics; buffered events
     // may still invalidate extension subscribers, which must stay idempotent.
     eventHub.notifyExtensionStateChanged(event)
+    invalidateHealthOn(event)
   }
 
   const transportValue: ClientTransportValue = {
@@ -1248,6 +1301,7 @@ export function ClientProvider(props: ClientProviderProps) {
     isLoading,
     sessionCwd,
     cwdOf,
+    pathPlace,
 
     createSession: () => createSessionWith({}),
 
@@ -1451,6 +1505,7 @@ export function ClientProvider(props: ClientProviderProps) {
     resolvedReasoningLevel: () => agentStore.resolvedReasoningLevel,
     // Derived accessors
     isStreaming: () => agentStore.running,
+    turnsStarted: () => agentStore.turnsStarted,
     isError: () => Option.isSome(agentStore.error),
     error: () => Option.getOrNull(agentStore.error),
     sessionMetrics,

@@ -27,7 +27,7 @@ The SAFETY rules live once, in `.claude/skills/architecture-loop/safety.md` ([`s
 
 3. **Prior art, first pass only.** Read [`prior-art.md`](prior-art.md). Survey only what it does not already answer. Done when each new idea is a ledger row: adopt, or rejected with a reason.
 
-4. **Sweep.** Fill the brief template in [`prompts/sweep.md`](prompts/sweep.md) into `~/.cache/gent-pass<N>/pass<N>-sweep-brief.md`, then launch one read-only agent per area in one message. One area every pass is **efficiency**: what the harness sends to the model, measured as cost per task; its agent also reads [`efficiency.md`](efficiency.md). Another area every pass is **ui**: gent's rendered TUI against the prior-art TUIs (vercel-labs/fx first), driven side by side in herdr panes; its agent also reads [`ui.md`](ui.md). Done when every area has a report, including the areas that report no findings, and the ledger has an efficiency baseline row and a UI matrix row.
+4. **Sweep.** Fill the brief template in [`prompts/sweep.md`](prompts/sweep.md) into `~/.cache/gent-pass<N>/pass<N>-sweep-brief.md`, then launch one read-only agent per area in one message. One area every pass is **efficiency**: what the harness sends to the model, measured as cost per task; its agent also reads [`efficiency.md`](efficiency.md). Another area every pass is **ui**: gent's rendered TUI against the prior-art TUIs (vercel-labs/fx first), driven side by side in herdr panes; its agent also reads [`ui.md`](ui.md). And every pass runs a **review** agent per workspace package: slop removal and test value, by the code-review contract and the writing-tests guidance; it reads [`review.md`](review.md). Done when every area and every package has a report, including those that report no findings, and the ledger has an efficiency baseline row, a UI matrix row and a review row per package.
 
 5. **Triage.** Group the findings into batches, one per set of files (core, extensions, TUI, tooling, efficiency, live fixes). Write the pass section of the ledger: the verdict, the decisions, and a triage table (batch, rift, items). Done when every finding is in a batch or rejected with a receipt.
 
@@ -48,7 +48,7 @@ The SAFETY rules live once, in `.claude/skills/architecture-loop/safety.md` ([`s
 
 ## Close rule
 
-Close when one pass holds all four: the coverage table has no unswept directory, the sweeps report polish only (under about 5 lines of value each), the efficiency sweep has no measured saving left that it can change directly, and the loop reader names no structural change. Then write the HTML report and the final message. A pass that finds a guard blind spot is never the last: close the blind spot, run the guard, and sweep what it reveals.
+Close when one pass holds all four: the coverage table has no unswept directory, the sweeps and the package reviews report polish only (under about 5 lines of value each), the efficiency sweep has no measured saving left that it can change directly, and the loop reader names no structural change. Then write the HTML report and the final message. A pass that finds a guard blind spot is never the last: close the blind spot, run the guard, and sweep what it reveals.
 
 ## What pays late
 

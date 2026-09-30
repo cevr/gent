@@ -18,6 +18,7 @@ import {
   fileUrl,
   formatActivityHeader,
   formatAge,
+  formatCost,
   formatCellRowLabel,
   formatDuration,
   formatError,
@@ -26,11 +27,10 @@ import {
   formatPreviewFooter,
   formatRowCounts,
   formatTokens,
-  formatToolInput,
   formatUsageStats,
+  displayPath,
   isAbsPath,
   previewOutput,
-  shortenPath,
   toolArgSummary,
   truncate,
   truncatePath,
@@ -525,7 +525,7 @@ describe("formatUsageStats", () => {
 
   test("formats all populated fields", () => {
     const result = formatUsageStats({ input: 1500, output: 500, cost: 0.0023, turns: 3 }, "gpt-5.4")
-    expect(result).toBe("3 turns ↑1.5k ↓500 $0.0023 gpt-5.4")
+    expect(result).toBe("3 turns ↑1.5k ↓500 $0.002 gpt-5.4")
   })
 
   test("singular turn", () => {
@@ -538,118 +538,167 @@ describe("formatUsageStats", () => {
 
   test("partial fields", () => {
     expect(formatUsageStats({ input: 500 })).toBe("↑500")
-    expect(formatUsageStats({ cost: 0.01 })).toBe("$0.0100")
+    expect(formatUsageStats({ cost: 0.01 })).toBe("$0.01")
   })
 })
 
-describe("shortenPath", () => {
-  test("replaces home directory with ~", () => {
-    expect(shortenPath(`${HOME}/foo/bar.ts`, HOME)).toBe("~/foo/bar.ts")
+describe("formatCost", () => {
+  test("a cent or more reads in cents", () => {
+    expect(formatCost(0.01)).toBe("$0.01")
+    expect(formatCost(0.125)).toBe("$0.13")
+    expect(formatCost(12.3)).toBe("$12.30")
   })
 
-  test("leaves non-home paths unchanged", () => {
-    expect(shortenPath("/tmp/foo.ts")).toBe("/tmp/foo.ts")
-    expect(shortenPath("relative/path.ts")).toBe("relative/path.ts")
+  test("under a cent keeps a tenth of a cent, so it never reads as free", () => {
+    expect(formatCost(0.002)).toBe("$0.002")
+    expect(formatCost(0.0004)).toBe("<$0.001")
+    expect(formatCost(0)).toBe("$0.00")
+  })
+})
+
+const CWD = `${HOME}/code/proj`
+const PLACE = { cwd: CWD, home: HOME }
+
+describe("displayPath", () => {
+  test("a path under the cwd reads from the cwd", () => {
+    expect(displayPath(`${CWD}/apps/tui/src/app.tsx`, PLACE)).toBe("apps/tui/src/app.tsx")
+    expect(displayPath(CWD, PLACE)).toBe(".")
   })
 
-  test("handles home directory exactly", () => {
-    expect(shortenPath(HOME, HOME)).toBe("~")
+  test("a path under home but outside the cwd starts with ~", () => {
+    expect(displayPath(`${HOME}/foo/bar.ts`, PLACE)).toBe("~/foo/bar.ts")
+    expect(displayPath(HOME, PLACE)).toBe("~")
+  })
+
+  test("a sibling that only shares a prefix keeps its full spelling", () => {
+    expect(displayPath(`${CWD}-other/a.ts`, PLACE)).toBe("~/code/proj-other/a.ts")
+    expect(displayPath(`${HOME}x/a.ts`, PLACE)).toBe(`${HOME}x/a.ts`)
+  })
+
+  test("other paths stay as given", () => {
+    expect(displayPath("/tmp/foo.ts", PLACE)).toBe("/tmp/foo.ts")
+    expect(displayPath("relative/path.ts", PLACE)).toBe("relative/path.ts")
+  })
+
+  test("a cwd of / reads every absolute path from the root", () => {
+    const root = { cwd: "/", home: HOME }
+    expect(displayPath("/tmp/a", root)).toBe("tmp/a")
+    expect(displayPath("/", root)).toBe(".")
   })
 })
 
 describe("toolArgSummary", () => {
   test("bash: first line of command", () => {
-    expect(toolArgSummary("bash", { command: "ls -la" })).toBe("ls -la")
-    expect(toolArgSummary("bash", { command: "echo hello\necho world" })).toBe("echo hello")
-    expect(toolArgSummary("bash", { cmd: "git status" })).toBe("git status")
-    expect(toolArgSummary("bash", {})).toBe("")
+    expect(toolArgSummary("bash", { command: "ls -la" }, PLACE)).toBe("ls -la")
+    expect(toolArgSummary("bash", { command: "echo hello\necho world" }, PLACE)).toBe("echo hello")
+    expect(toolArgSummary("bash", { cmd: "git status" }, PLACE)).toBe("git status")
+    expect(toolArgSummary("bash", {}, PLACE)).toBe("")
   })
 
   test("read: path with optional range", () => {
-    expect(toolArgSummary("read", { file_path: "/tmp/foo.ts" })).toBe("/tmp/foo.ts")
-    expect(toolArgSummary("read", { file_path: "/tmp/foo.ts", offset: 10 })).toBe("/tmp/foo.ts:10")
-    expect(toolArgSummary("read", { file_path: "/tmp/foo.ts", offset: 10, limit: 20 })).toBe(
+    expect(toolArgSummary("read", { file_path: "/tmp/foo.ts" }, PLACE)).toBe("/tmp/foo.ts")
+    expect(toolArgSummary("read", { file_path: "/tmp/foo.ts", offset: 10 }, PLACE)).toBe(
+      "/tmp/foo.ts:10",
+    )
+    expect(toolArgSummary("read", { file_path: "/tmp/foo.ts", offset: 10, limit: 20 }, PLACE)).toBe(
       "/tmp/foo.ts:10-29",
     )
-    expect(toolArgSummary("read", { file_path: "/tmp/foo.ts", limit: 50 })).toBe("/tmp/foo.ts:1-50")
-    expect(toolArgSummary("read", { path: "/tmp/bar.ts" })).toBe("/tmp/bar.ts")
-    expect(toolArgSummary("read", {})).toBe("")
+    expect(toolArgSummary("read", { file_path: "/tmp/foo.ts", limit: 50 }, PLACE)).toBe(
+      "/tmp/foo.ts:1-50",
+    )
+    expect(toolArgSummary("read", { path: "/tmp/bar.ts" }, PLACE)).toBe("/tmp/bar.ts")
+    expect(toolArgSummary("read", {}, PLACE)).toBe("")
   })
 
   test("read: shortens home paths", () => {
-    expect(toolArgSummary("read", { file_path: `${HOME}/src/app.ts` }, { home: HOME })).toBe(
-      "~/src/app.ts",
-    )
+    expect(toolArgSummary("read", { file_path: `${HOME}/src/app.ts` }, PLACE)).toBe("~/src/app.ts")
   })
 
   test("write: path with line count", () => {
-    expect(toolArgSummary("write", { file_path: "/tmp/foo.ts", content: "a\nb\nc" })).toBe(
+    expect(toolArgSummary("write", { file_path: "/tmp/foo.ts", content: "a\nb\nc" }, PLACE)).toBe(
       "/tmp/foo.ts (3 lines)",
     )
-    expect(toolArgSummary("write", { file_path: "/tmp/foo.ts", content: "single" })).toBe(
+    expect(toolArgSummary("write", { file_path: "/tmp/foo.ts", content: "single" }, PLACE)).toBe(
       "/tmp/foo.ts",
     )
-    expect(toolArgSummary("write", { file_path: "/tmp/foo.ts" })).toBe("/tmp/foo.ts")
-    expect(toolArgSummary("write", {})).toBe("")
+    expect(toolArgSummary("write", { file_path: "/tmp/foo.ts" }, PLACE)).toBe("/tmp/foo.ts")
+    expect(toolArgSummary("write", {}, PLACE)).toBe("")
   })
 
   test("write: a final newline ends the last line, it does not start one", () => {
-    expect(toolArgSummary("write", { file_path: "/tmp/foo.ts", content: "a\nb\n" })).toBe(
+    expect(toolArgSummary("write", { file_path: "/tmp/foo.ts", content: "a\nb\n" }, PLACE)).toBe(
       "/tmp/foo.ts (2 lines)",
     )
-    expect(toolArgSummary("write", { file_path: "/tmp/foo.ts", content: "single\n" })).toBe(
+    expect(toolArgSummary("write", { file_path: "/tmp/foo.ts", content: "single\n" }, PLACE)).toBe(
       "/tmp/foo.ts",
     )
   })
 
   test("edit: shortened path", () => {
-    expect(toolArgSummary("edit", { file_path: `${HOME}/src/app.ts` }, { home: HOME })).toBe(
-      "~/src/app.ts",
-    )
-    expect(toolArgSummary("edit", {})).toBe("")
+    expect(toolArgSummary("edit", { file_path: `${HOME}/src/app.ts` }, PLACE)).toBe("~/src/app.ts")
+    expect(toolArgSummary("edit", {}, PLACE)).toBe("")
   })
 
   test("grep: pattern and path", () => {
-    expect(toolArgSummary("grep", { pattern: "TODO", path: "/src" })).toBe("/TODO/ in /src")
-    expect(toolArgSummary("grep", { pattern: "err" })).toBe("/err/ in .")
-    expect(toolArgSummary("grep", {})).toBe("")
+    expect(toolArgSummary("grep", { pattern: "TODO", path: "/src" }, PLACE)).toBe("/TODO/ in /src")
+    expect(toolArgSummary("grep", { pattern: "err" }, PLACE)).toBe("/err/ in .")
+    expect(toolArgSummary("grep", {}, PLACE)).toBe("")
   })
 
   test("delegate.start: todo", () => {
-    expect(toolArgSummary("delegate.start", { todo: "find the bug" })).toBe("find the bug")
-    expect(toolArgSummary("delegate.start", {})).toBe("")
+    expect(toolArgSummary("delegate.start", { todo: "find the bug" }, PLACE)).toBe("find the bug")
+    expect(toolArgSummary("delegate.start", {}, PLACE)).toBe("")
   })
 
   test("delegate.start: truncates long todo text within its 40-column budget", () => {
     const longTodo = "a".repeat(60)
-    const result = toolArgSummary("delegate.start", { todo: longTodo })
+    const result = toolArgSummary("delegate.start", { todo: longTodo }, PLACE)
     expect(result).toBe(`${"a".repeat(39)}…`)
     expect(Bun.stringWidth(result)).toBe(40)
   })
 
   test("read_session: session id", () => {
-    expect(toolArgSummary("read_session", { sessionId: "019debug1-session" })).toBe(
+    expect(toolArgSummary("read_session", { sessionId: "019debug1-session" }, PLACE)).toBe(
       "019debug1-session",
     )
   })
 
   test("handoff: reason", () => {
-    expect(toolArgSummary("handoff", { reason: "need deeper analysis" })).toBe(
+    expect(toolArgSummary("handoff", { reason: "need deeper analysis" }, PLACE)).toBe(
       "need deeper analysis",
     )
   })
 
   test("degrades gracefully on bad input types", () => {
-    expect(toolArgSummary("grep", { pattern: "ok", path: {} })).toBe("/ok/ in .")
+    expect(toolArgSummary("grep", { pattern: "ok", path: {} }, PLACE)).toBe("/ok/ in .")
     expect(
-      toolArgSummary("read", { file_path: "/tmp/f.ts", offset: "bad", limit: nullValue }),
+      toolArgSummary("read", { file_path: "/tmp/f.ts", offset: "bad", limit: nullValue }, PLACE),
     ).toBe("/tmp/f.ts")
-    expect(toolArgSummary("bash", { command: 123 })).toBe("")
-    expect(toolArgSummary("read", { file_path: nullValue })).toBe("")
+    expect(toolArgSummary("bash", { command: 123 }, PLACE)).toBe("")
+    expect(toolArgSummary("read", { file_path: nullValue }, PLACE)).toBe("")
   })
 
-  test("unknown tool returns empty", () => {
-    expect(toolArgSummary("unknown_tool", { anything: "value" })).toBe("")
+  test("a tool with no formatter shows its leading argument", () => {
+    expect(toolArgSummary("unknown_tool", { anything: "value" }, PLACE)).toBe("")
+    expect(toolArgSummary("webfetch", { url: "https://a.test/x\nmore" }, PLACE)).toBe(
+      "https://a.test/x",
+    )
+    expect(toolArgSummary("custom", { path: `${CWD}/src/a.ts` }, PLACE)).toBe("src/a.ts")
+  })
+
+  test("input that is not an object has no label", () => {
+    expect(toolArgSummary("bash", nullValue, PLACE)).toBe("")
+    expect(toolArgSummary("bash", absent, PLACE)).toBe("")
+    expect(toolArgSummary("bash", "string", PLACE)).toBe("")
+    expect(toolArgSummary("Bash", { command: "git status" }, PLACE)).toBe("git status")
+  })
+
+  test("paths read from the place", () => {
+    expect(toolArgSummary("read", { path: `${CWD}/src/app.ts`, offset: 3 }, PLACE)).toBe(
+      "src/app.ts:3",
+    )
+    expect(toolArgSummary("grep", { pattern: "err", path: CWD }, PLACE)).toBe("/err/ in .")
+    expect(toolArgSummary("write", { path: `${HOME}/notes.md` }, PLACE)).toBe("~/notes.md")
   })
 })
 
@@ -730,83 +779,6 @@ describe("truncatePath", () => {
 
   test("handles just filename", () => {
     expect(truncatePath("file.ts", 5)).toBe("…/file.ts")
-  })
-})
-
-describe("formatToolInput", () => {
-  test("returns empty for null/undefined input", () => {
-    expect(formatToolInput("bash", nullValue)).toBe("")
-    expect(formatToolInput("bash", absent)).toBe("")
-  })
-
-  test("returns empty for non-object input", () => {
-    expect(formatToolInput("bash", "string")).toBe("")
-    expect(formatToolInput("bash", 123)).toBe("")
-  })
-
-  test("formats bash command", () => {
-    expect(formatToolInput("bash", { command: "ls -la" })).toBe("ls -la")
-    expect(formatToolInput("Bash", { command: "git status" })).toBe("git status")
-  })
-
-  test("formats read path", () => {
-    expect(formatToolInput("read", { path: "/foo/bar.ts" })).toBe("/foo/bar.ts")
-  })
-
-  test("formats write path", () => {
-    expect(formatToolInput("write", { path: "/foo/bar.ts" })).toBe("/foo/bar.ts")
-  })
-
-  test("formats edit path", () => {
-    expect(formatToolInput("edit", { path: "/foo/bar.ts" })).toBe("/foo/bar.ts")
-  })
-
-  test("truncates long paths", () => {
-    const longPath = "/Users/cvr/Developer/personal/gent/apps/tui/src/app.tsx"
-    const result = formatToolInput("read", { path: longPath })
-    expect(result.length).toBeLessThanOrEqual(42) // 40 + "…/"
-    expect(result.endsWith("app.tsx")).toBe(true)
-  })
-
-  test("formats grep pattern and path", () => {
-    const result = formatToolInput("grep", { pattern: "TODO", path: "/src" })
-    expect(result).toBe("/TODO/ in /src")
-  })
-
-  test("grep uses cwd fallback when no path", () => {
-    expect(formatToolInput("grep", { pattern: "error" }, "/my/project")).toBe(
-      "/error/ in /my/project",
-    )
-  })
-
-  test("returns empty for grep without pattern", () => {
-    expect(formatToolInput("grep", { path: "/foo" })).toBe("")
-  })
-
-  test("returns empty for unknown tools", () => {
-    expect(formatToolInput("custom", { anything: "value" })).toBe("")
-    expect(formatToolInput("unknown", { path: "/foo" })).toBe("")
-  })
-
-  test("handles missing expected properties", () => {
-    expect(formatToolInput("bash", {})).toBe("")
-    expect(formatToolInput("bash", { notCommand: "foo" })).toBe("")
-    expect(formatToolInput("read", {})).toBe("")
-    expect(formatToolInput("read", { notPath: "foo" })).toBe("")
-  })
-
-  test("handles wrong property types", () => {
-    expect(formatToolInput("bash", { command: 123 })).toBe("")
-    expect(formatToolInput("read", { path: nullValue })).toBe("")
-    expect(formatToolInput("grep", { pattern: {}, path: "/foo" })).toBe("")
-  })
-
-  test("formats delegate.start with its todo", () => {
-    expect(formatToolInput("delegate.start", { todo: "find the bug" })).toBe("find the bug")
-  })
-
-  test("read supports file_path field", () => {
-    expect(formatToolInput("read", { file_path: "/foo/bar.ts" })).toBe("/foo/bar.ts")
   })
 })
 

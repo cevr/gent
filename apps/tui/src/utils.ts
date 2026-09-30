@@ -345,6 +345,16 @@ export function formatTokens(count: number): string {
   return `${(count / 1000000).toFixed(1)}M`
 }
 
+/**
+ * The one spelling of a dollar cost: cents at a cent or more, a tenth of a
+ * cent below it, so a cheap turn never reads as free.
+ */
+export function formatCost(usd: number): string {
+  if (usd > 0 && usd < 0.001) return "<$0.001"
+  if (usd > 0 && usd < 0.01) return `$${usd.toFixed(3)}`
+  return `$${usd.toFixed(2)}`
+}
+
 export function formatUsageStats(
   usage: {
     input?: number
@@ -366,17 +376,31 @@ export function formatUsageStats(
   const output = Option.fromNullishOr(usage.output)
   if (Option.isSome(output) && output.value > 0) parts.push(`↓${formatTokens(output.value)}`)
   const cost = Option.fromNullishOr(usage.cost)
-  if (Option.isSome(cost) && cost.value > 0) parts.push(`$${cost.value.toFixed(4)}`)
+  if (Option.isSome(cost) && cost.value > 0) parts.push(formatCost(cost.value))
   const modelName = Option.fromNullishOr(model)
   if (Option.isSome(modelName)) parts.push(modelName.value)
   return parts.join(" ")
 }
 
-export function shortenPath(p: string, home?: string): string {
-  const homePath = Option.fromNullishOr(home)
-  if (Option.isSome(homePath) && homePath.value.length > 0 && p.startsWith(homePath.value)) {
-    return `~${p.slice(homePath.value.length)}`
-  }
+/** Where a session runs: tool paths read from here. */
+export interface PathPlace {
+  readonly cwd: string
+  readonly home: string
+}
+
+const isUnder = (p: string, root: string) =>
+  root.length > 1 && (p === root || p.startsWith(`${root}/`))
+
+/**
+ * The one spelling of a tool path: relative to the cwd when under it,
+ * else `~`-abbreviated when under home, else as given. A cwd of `/` holds
+ * every absolute path; a home of `/` abbreviates nothing.
+ */
+export function displayPath(p: string, place: PathPlace): string {
+  if (p === place.cwd) return "."
+  if (place.cwd === "/" && p.startsWith("/")) return p.slice(1)
+  if (isUnder(p, place.cwd)) return p.slice(place.cwd.length + 1)
+  if (isUnder(p, place.home)) return `~${p.slice(place.home.length)}`
   return p
 }
 
@@ -395,22 +419,15 @@ function getNumberArg(args: Schema.JsonObject, key: string) {
   return decodeNumber(args[key])
 }
 
-const optionsHome = (options?: ToolArgSummaryOptions) =>
-  Option.fromNullishOr(options).pipe(Option.flatMap((value) => Option.fromNullishOr(value.home)))
-
 function getPathArg(args: Schema.JsonObject): string {
   return getStringArg(args, "file_path", "path")
 }
 
-interface ToolArgSummaryOptions {
-  readonly home?: string
-}
-
-function summarizeRead(args: Schema.JsonObject, options?: ToolArgSummaryOptions): string {
+function summarizeRead(args: Schema.JsonObject, place: PathPlace): string {
   const rawPath = getPathArg(args)
   if (rawPath.length === 0) return ""
 
-  let text = shortenPath(rawPath, Option.getOrUndefined(optionsHome(options)))
+  let text = displayPath(rawPath, place)
   const offset = getNumberArg(args, "offset")
   const limit = getNumberArg(args, "limit")
   if (Option.isNone(offset) && Option.isNone(limit)) return text
@@ -423,28 +440,28 @@ function summarizeRead(args: Schema.JsonObject, options?: ToolArgSummaryOptions)
   return text
 }
 
-function summarizeWrite(args: Schema.JsonObject, options?: ToolArgSummaryOptions): string {
+function summarizeWrite(args: Schema.JsonObject, place: PathPlace): string {
   const rawPath = getPathArg(args)
   if (rawPath.length === 0) return ""
 
   const lines = lineCount(getStringArg(args, "content"))
-  let text = shortenPath(rawPath, Option.getOrUndefined(optionsHome(options)))
+  let text = displayPath(rawPath, place)
   if (lines > 1) text += ` (${lines} lines)`
   return text
 }
 
-function summarizeGrep(args: Schema.JsonObject, options?: ToolArgSummaryOptions): string {
+function summarizeGrep(args: Schema.JsonObject, place: PathPlace): string {
   const pattern = getStringArg(args, "pattern")
   if (pattern.length === 0) return ""
   const rawPath = getStringArg(args, "path") || "."
-  return `/${pattern}/ in ${shortenPath(rawPath, Option.getOrUndefined(optionsHome(options)))}`
+  return `/${pattern}/ in ${displayPath(rawPath, place)}`
 }
 
 function summarizeDelegate(args: Schema.JsonObject): string {
   return truncate(getStringArg(args, "todo"), 40)
 }
 
-type ToolArgFormatter = (args: Schema.JsonObject, options?: ToolArgSummaryOptions) => string
+type ToolArgFormatter = (args: Schema.JsonObject, place: PathPlace) => string
 
 const toolArgFormatters = {
   bash: (args) => {
@@ -458,10 +475,10 @@ const toolArgFormatters = {
   },
   read: summarizeRead,
   write: summarizeWrite,
-  edit: (args, options) => {
+  edit: (args, place) => {
     const rawPath = getPathArg(args)
     if (rawPath.length > 0) {
-      return shortenPath(rawPath, Option.getOrUndefined(optionsHome(options)))
+      return displayPath(rawPath, place)
     }
     return ""
   },
@@ -472,17 +489,43 @@ const toolArgFormatters = {
 } satisfies Record<string, ToolArgFormatter>
 const toolArgFormattersByName = new Map<string, ToolArgFormatter>(Object.entries(toolArgFormatters))
 
-export function toolArgSummary(
-  toolName: string,
-  input: ToolInput,
-  options?: ToolArgSummaryOptions,
-): string {
+/** A tool with no formatter shows the first of these arguments it has. */
+const LEADING_ARG_KEYS = [
+  "path",
+  "url",
+  "command",
+  "pattern",
+  "query",
+  "goal",
+  "description",
+  "task",
+  "todo",
+  "agent",
+]
+
+const leadingArg = (args: Schema.JsonObject, place: PathPlace): string => {
+  for (const key of LEADING_ARG_KEYS) {
+    const value = getStringArg(args, key)
+    if (value.length === 0) continue
+    const line = value.split("\n")[0] ?? ""
+    if (key === "path") return displayPath(line, place)
+    return line
+  }
+  return ""
+}
+
+/**
+ * The one label of a call's arguments: the tool's own formatter, else its
+ * leading argument. Paths read from `place` when one is given.
+ */
+export function toolArgSummary(toolName: string, input: ToolInput, place: PathPlace): string {
   const args = decodeToolArgs(input)
   if (Option.isNone(args)) return ""
   const formatter = toolArgFormattersByName.get(toolName.toLowerCase())
-  const selected = Option.fromNullishOr(formatter)
-  if (Option.isNone(selected)) return ""
-  return selected.value(args.value, options)
+  return Option.match(Option.fromNullishOr(formatter), {
+    onNone: () => leadingArg(args.value, place),
+    onSome: (selected) => selected(args.value, place),
+  })
 }
 
 // ── generic tool formatting ─────────────────────────────────────────────────
@@ -574,41 +617,6 @@ export function truncatePath(path: string, maxLen = 40): string {
     result = next
   }
   return "…/" + result
-}
-
-/**
- * Format tool input for display in tool header.
- * Delegates to toolArgSummary for smart formatting, then applies
- * truncatePath for width safety on path-heavy tools. A grep with no
- * path searches `cwd`.
- */
-export function formatToolInput(
-  toolName: string,
-  input: ToolInput,
-  cwd = ".",
-  home?: string,
-): string {
-  const name = toolName.toLowerCase()
-
-  // grep: the cwd fallback happens before toolArgSummary
-  if (name === "grep") {
-    const pattern = getString(input, "pattern")
-    if (pattern.length === 0) return ""
-    const path = getString(input, "path")
-    let searchPath = truncatePath(cwd, 30)
-    if (path.length > 0) searchPath = truncatePath(path, 30)
-    return `/${pattern}/ in ${searchPath}`
-  }
-
-  const summary = toolArgSummary(name, input, { home })
-  if (summary.length === 0) return ""
-
-  // Apply truncatePath for path-heavy tools
-  if (name === "read" || name === "write" || name === "edit") {
-    return truncatePath(summary)
-  }
-
-  return summary
 }
 
 // ── RLM activity summary ──

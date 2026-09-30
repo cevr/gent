@@ -5,7 +5,6 @@ describe("SDK public surface", () => {
   test("exports only stable runtime values", () => {
     expect(Object.keys(RuntimePublicSdk).sort()).toEqual([
       "Gent",
-      "LaunchConfig",
       "ServerLockEntry",
       "ServerLockStatus",
       "buildLogPaths",
@@ -13,12 +12,16 @@ describe("SDK public surface", () => {
       "dataPaths",
       "ensureLogDir",
       "makeJsonFileLogger",
-      "resolveLogDir",
       "serverLock",
     ])
     expect("GentRpcs" in RuntimePublicSdk).toBe(false)
     expect("RpcHandlersLive" in RuntimePublicSdk).toBe(false)
     expect("makeRpcClient" in RuntimePublicSdk).toBe(false)
+  })
+
+  test("the server lock offers a client status, probe and stop only", () => {
+    // Reading, writing, removing and holding the lock is `Gent.server`'s own work.
+    expect(Object.keys(RuntimePublicSdk.serverLock).sort()).toEqual(["probe", "status", "stop"])
   })
 
   test("does not expose unstable or redundant type aliases", () => {
@@ -30,6 +33,8 @@ describe("SDK public surface", () => {
     type _BadStateSpec = RuntimePublicSdk.StateSpec
     // @ts-expect-error — provider specs are constructed through Gent.provider factories
     type _BadProviderSpec = RuntimePublicSdk.ProviderSpec
+    // @ts-expect-error — the TUI's `--debug` seeds its own session through `seed`
+    type _BadDebugOption = Parameters<typeof RuntimePublicSdk.Gent.server>[0]["debug"]
     // @ts-expect-error — prompt part aliases come from Effect AI, not the SDK
     type _BadTextPart = RuntimePublicSdk.TextPart
     // @ts-expect-error — prompt part aliases come from Effect AI, not the SDK

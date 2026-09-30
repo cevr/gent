@@ -59,8 +59,8 @@ import {
 } from "@gent/core/extensions/api"
 import { makeBranchStateStore } from "./branch-state-store.js"
 
-// Test seam: only tests read these exports. DELEGATE_AGENT_NAME, DelegateError
-// and DelegateEntry name the registry's shapes in assertions. StartChild,
+// Test seam: only tests read these exports. DELEGATE_AGENT_NAME and
+// DelegateEntry name the registry's shapes in assertions. StartChild,
 // CancelChild, ListChildren and ChildAgentHandle are the capabilities and the
 // handle the cell tests drive.
 
@@ -96,7 +96,7 @@ const delegateAgent = AgentDefinition.make({
 
 // ── registry ────────────────────────────────────────────────────────────────
 
-export class DelegateError extends Schema.TaggedError<DelegateError>()("DelegateError", {
+class DelegateError extends Schema.TaggedError<DelegateError>()("DelegateError", {
   message: Schema.String,
   cause: Schema.optional(Schema.Unknown),
 }) {}
