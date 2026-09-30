@@ -1,4 +1,4 @@
-import { describe, expect, it } from "effect-bun-test"
+import { describe, expect, it, test } from "effect-bun-test"
 import {
   ConfigProvider,
   Context,
@@ -69,8 +69,6 @@ if (process.env.MCP_FIXTURE_COLLIDE) {
   for (const name of ["a/b", "a.b", "a_b_2", "x".repeat(70) + "1", "x".repeat(70) + "2"]) {
     tools.push({ name, description: "Collides as " + name + ".", inputSchema: { type: "object" } })
   }
-  tools.push({ name: "mixed", description: "Structured content with other content.", inputSchema: { type: "object" } })
-  tools.push({ name: "picture", description: "An image only.", inputSchema: { type: "object" } })
 }
 for (let index = 0; index < Number(process.env.MCP_FIXTURE_EXTRA ?? 0); index++) {
   tools.push({
@@ -97,19 +95,6 @@ const answer = (request) => {
       return { result: { content: [{ type: "text", text: String(input.text).repeat(input.times ?? 1) }] } }
     case "structured":
       return { result: { content: [{ type: "text", text: JSON.stringify({ ok: true, items: [1, 2] }) }], structuredContent: { ok: true, items: [1, 2] } } }
-    case "mixed":
-      return {
-        result: {
-          content: [
-            { type: "text", text: "a caption" },
-            { type: "image", data: "AAAA", mimeType: "image/png" },
-            { type: "resource", resource: { uri: "file:///r", mimeType: "x/y", blob: "AAAAAAAA" } },
-          ],
-          structuredContent: { ok: true },
-        },
-      }
-    case "picture":
-      return { result: { content: [{ type: "image", data: "AAAA", mimeType: "image/png" }] } }
     case "fail":
       return { result: { content: [{ type: "text", text: "fixture failure" }], isError: true } }
     case "count":
@@ -522,34 +507,67 @@ describe("mcp over streamable http", () => {
 // ── results ─────────────────────────────────────────────────────────────────
 
 describe("mcp results", () => {
-  it.effect("structured content wins, text joins, and binary blocks keep only their type", () =>
-    Effect.sync(() => {
-      expect(
-        projectCallResult({ content: [{ type: "text", text: "x" }], structuredContent: { a: 1 } }),
-      ).toEqual({ a: 1 })
-      expect(
-        projectCallResult({
-          content: [
-            { type: "text", text: "a" },
-            { type: "text", text: "b" },
-          ],
-        }),
-      ).toBe("a\nb")
-      expect(
-        projectCallResult({
-          content: [
-            { type: "text", text: "see" },
-            { type: "image", data: "AAAA", mimeType: "image/png" },
-            { type: "resource", resource: { uri: "file:///x", blob: "AAAA", mimeType: "x/y" } },
-          ],
-        }),
-      ).toEqual([
-        "see",
-        { type: "image", mimeType: "image/png" },
-        { type: "resource", uri: "file:///x", mimeType: "x/y" },
-      ])
-    }),
-  )
+  test("structured content alone when its text only repeats it; text joins", () => {
+    expect(
+      projectCallResult({
+        content: [{ type: "text", text: '{"a":1}' }],
+        structuredContent: { a: 1 },
+      }),
+    ).toEqual({ a: 1 })
+    expect(
+      projectCallResult({
+        content: [
+          { type: "text", text: "a" },
+          { type: "text", text: "b" },
+        ],
+      }),
+    ).toBe("a\nb")
+  })
+
+  test("structured content keeps the text and blocks beside it", () => {
+    expect(
+      projectCallResult({
+        content: [
+          { type: "text", text: "a caption" },
+          { type: "resource", resource: { uri: "file:///notes", text: "notes" } },
+        ],
+        structuredContent: { a: 1 },
+      }),
+    ).toEqual({
+      structuredContent: { a: 1 },
+      text: "a caption",
+      content: [{ type: "resource", uri: "file:///notes", text: "notes" }],
+    })
+  })
+
+  test("binary blocks are named as omitted, with their type, MIME type and size", () => {
+    expect(
+      projectCallResult({
+        content: [
+          { type: "text", text: "see" },
+          { type: "image", data: "AAAA", mimeType: "image/png" },
+          { type: "resource", resource: { uri: "file:///x", blob: "AAAAAA==", mimeType: "x/y" } },
+        ],
+      }),
+    ).toEqual({
+      text: "see",
+      omitted: [
+        { type: "image", mimeType: "image/png", bytes: 3 },
+        { type: "resource", uri: "file:///x", mimeType: "x/y", bytes: 4 },
+      ],
+      note: "2 binary blocks omitted: the cell receives no image, audio or blob data",
+    })
+    expect(
+      projectCallResult({
+        content: [{ type: "audio", data: "AAAA", mimeType: "audio/wav" }],
+        structuredContent: { ok: true },
+      }),
+    ).toEqual({
+      structuredContent: { ok: true },
+      omitted: [{ type: "audio", mimeType: "audio/wav", bytes: 3 }],
+      note: "1 binary block omitted: the cell receives no image, audio or blob data",
+    })
+  })
 })
 
 // ── cell ────────────────────────────────────────────────────────────────────

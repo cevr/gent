@@ -1290,9 +1290,12 @@ next session registers it, and a call to a tool the server no longer lists
 fails with a message naming the stale catalog. The current session keeps the
 tools it registered; replacing them live needs a host seam. Each
 tool's input schema is imported from its JSON Schema (patterns ignored), so
-the host checks input and the catalog shows its types; a result is its
-`structuredContent`, else its joined text, else its blocks without binary
-data, and `isError` fails the call as `{ error }`. Server and tool names are
+the host checks input and the catalog shows its types. A result of text alone
+is its joined text, and one of `structuredContent` alone (its text only
+repeating it) is that value; any other result is an object of
+`structuredContent`, `text`, the other blocks as `content`, and `omitted`,
+which names each image, audio, or blob block the cell does not receive with its
+MIME type and size, beside a `note`. `isError` fails the call as `{ error }`. Server and tool names are
 cut to `[A-Za-z0-9_-]` with no `__`, 32 and 64 characters, so the provider
 wire name stays within 128. Many MCP tools collapse in the prompt catalog by
 the host tool catalog budget; the model reaches them with `tools.search` and

@@ -6,6 +6,7 @@ import {
   FileSystem,
   Crypto,
   Encoding,
+  Equal,
   JsonSchema,
   Layer,
   Option,
@@ -26,6 +27,7 @@ import {
   ExtensionHost,
   hasProjectScope,
   isRecord,
+  omitUndefined,
   resolveDataDir,
   tool,
   ToolResultFailure,
@@ -353,8 +355,6 @@ const writeCatalogEntries = Effect.fn("Mcp.writeCatalogEntries")(function* (
   yield* writeFileAtomic(file, yield* Schema.encodeEffect(CatalogFile)({ servers }))
 })
 
-const encodeTools = Schema.encodeEffect(Schema.fromJsonString(Schema.Array(CatalogTool)))
-
 // ── connections ─────────────────────────────────────────────────────────────
 
 class McpError extends Schema.TaggedError<McpError>()("McpError", {
@@ -494,7 +494,7 @@ const mcpClientsLive = (registered: ReadonlyArray<RegisteredServer>, file: strin
       const relist = (entry: RegisteredServer, client: Client) =>
         Effect.gen(function* () {
           const tools = yield* listTools(entry.server, client)
-          if ((yield* encodeTools(tools)) !== (yield* encodeTools(entry.tools))) {
+          if (!Equal.equals(tools, entry.tools)) {
             yield* Semaphore.withPermit(
               writePermit,
               writeCatalogEntries(file, [[entry.server.key, tools]]),
@@ -585,32 +585,109 @@ const inputSchemaOf = (inputSchema: Schema.Json) =>
     return Schema.make<Schema.Codec<Readonly<Record<string, Schema.Json>>>>(imported.ast)
   }).pipe(Result.getOrElse(() => AnyInput))
 
-/** A content block as JSON: text as its text; a binary block as its type and MIME type only. */
-const projectBlock = (block: Schema.Json): Schema.Json => {
-  if (!isRecord(block)) return block
-  if (block["type"] === "text" && Predicate.isString(block["text"])) return block["text"]
-  if (block["type"] === "image" || block["type"] === "audio") {
-    return {
-      type: block["type"],
-      mimeType: Option.getOrNull(Option.liftPredicate(block["mimeType"], Predicate.isString)),
+/** The bytes a base64 string decodes to. */
+const base64Bytes = (data: string) => {
+  const padding = data.length - data.replace(/=+$/, "").length
+  return Math.floor((data.length * 3) / 4) - padding
+}
+
+const isTextBlock = Schema.is(Schema.Struct({ type: Schema.Literal("text"), text: Schema.String }))
+const isMediaBlock = Schema.is(
+  Schema.Struct({
+    type: Schema.Literals(["image", "audio"]),
+    data: Schema.optional(Schema.String),
+    mimeType: Schema.optional(Schema.String),
+  }),
+)
+const isBlobResource = Schema.is(
+  Schema.Struct({
+    type: Schema.Literal("resource"),
+    resource: Schema.Struct({
+      uri: Schema.optional(Schema.String),
+      mimeType: Schema.optional(Schema.String),
+      blob: Schema.String,
+    }),
+  }),
+)
+const isResource = Schema.is(
+  Schema.Struct({
+    type: Schema.Literal("resource"),
+    resource: Schema.Record(Schema.String, Schema.Json),
+  }),
+)
+
+/** A call's content blocks sorted into text, other blocks, and binary data left out. */
+interface ProjectedContent {
+  readonly texts: Array<string>
+  readonly blocks: Array<Schema.Json>
+  readonly omitted: Array<Schema.Json>
+}
+
+const projectContent = (content: ReadonlyArray<Schema.Json>): ProjectedContent => {
+  const projected: ProjectedContent = { texts: [], blocks: [], omitted: [] }
+  for (const block of content) {
+    if (isTextBlock(block)) {
+      projected.texts.push(block.text)
+    } else if (isMediaBlock(block)) {
+      projected.omitted.push({
+        type: block.type,
+        ...omitUndefined({ mimeType: block.mimeType }),
+        bytes: base64Bytes(block.data ?? ""),
+      })
+    } else if (isBlobResource(block)) {
+      projected.omitted.push({
+        type: "resource",
+        ...omitUndefined({ uri: block.resource.uri, mimeType: block.resource.mimeType }),
+        bytes: base64Bytes(block.resource.blob),
+      })
+    } else if (isResource(block)) {
+      projected.blocks.push({ type: "resource", ...block.resource })
+    } else {
+      projected.blocks.push(block)
     }
   }
-  if (block["type"] === "resource" && isRecord(block["resource"])) {
-    const { blob: _blob, ...resource } = block["resource"]
-    return { type: "resource", ...resource }
-  }
-  return block
+  return projected
+}
+
+const decodeJsonText = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json))
+
+/** Whether `text` is only `value` serialized, as the spec asks a server to send beside it. */
+const repeats = (text: string, value: Schema.Json) =>
+  Option.match(decodeJsonText(text), {
+    onNone: () => false,
+    onSome: (parsed) => Equal.equals(parsed, value),
+  })
+
+const omittedNote = (count: number) => {
+  let noun = "blocks"
+  if (count === 1) noun = "block"
+  return `${count} binary ${noun} omitted: the cell receives no image, audio or blob data`
 }
 
 /**
- * The value a call returns: its structured content when it has one, else its
- * text when every block is text, else each block projected.
+ * The value a call returns. Text alone is its joined text; structured content
+ * alone (its text only repeating it) is that value. Anything else is an
+ * object: `structuredContent`, `text`, the other blocks as `content`, and
+ * `omitted` naming each image, audio, or blob block the cell does not
+ * receive, with its MIME type and size, and a `note` saying so.
  */
 export const projectCallResult = (result: CallResult): Schema.Json => {
-  if (Predicate.isNotUndefined(result.structuredContent)) return result.structuredContent
-  const blocks = (result.content ?? []).map(projectBlock)
-  if (blocks.every(Predicate.isString)) return blocks.join("\n")
-  return blocks
+  const { texts, blocks, omitted } = projectContent(result.content ?? [])
+  const text = texts.join("\n")
+  const structured = Option.fromUndefinedOr(result.structuredContent)
+  if (blocks.length === 0 && omitted.length === 0) {
+    if (Option.isNone(structured)) return text
+    if (texts.length === 0 || repeats(text, structured.value)) return structured.value
+  }
+  const value: Record<string, Schema.Json> = {}
+  if (Option.isSome(structured)) value["structuredContent"] = structured.value
+  if (texts.length > 0) value["text"] = text
+  if (blocks.length > 0) value["content"] = blocks
+  if (omitted.length > 0) {
+    value["omitted"] = omitted
+    value["note"] = omittedNote(omitted.length)
+  }
+  return value
 }
 
 const toolDescription = (server: McpServer, listed: CatalogTool) => {
