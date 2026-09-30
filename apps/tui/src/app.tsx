@@ -27,7 +27,7 @@ import {
 import type { RGBA } from "@opentui/core"
 import { MessageList, NativeTranscript, splitFooterHeight } from "./message-list"
 import { Composer, ComposerFrame, StatusRow } from "./composer"
-import { DockFooter, DockProvider, useDockSpacer } from "./ui"
+import { DockFooter, DockProvider, KeyHints, keyHintsLine, useDockSpacer } from "./ui"
 import { CommandPalette, CommandProvider, useCommand } from "./commands"
 import {
   BranchPicker,
@@ -912,23 +912,54 @@ function AppContent(props: AppProps) {
   )
 }
 
-export function App(props: AppProps) {
-  const decodeError = Schema.decodeUnknownOption(Schema.instanceOf(Error))
-  const errorMessage = (error: Parameters<typeof decodeError>[0]): string =>
-    Option.match(decodeError(error), {
-      onNone: () => String(error),
-      onSome: (cause) => cause.message,
-    })
+const decodeError = Schema.decodeUnknownOption(Schema.instanceOf(Error))
 
+/**
+ * What a render throw leaves on screen. The session view is gone with its
+ * keys, so this screen keeps one way out: ctrl+c or ctrl+d exits. The error
+ * goes to the client log with its stack, since the screen shows only the
+ * message.
+ */
+function FatalScreen(props: { readonly error: unknown }) {
+  const renderer = useRenderer()
+  const env = useEnv()
+  const client = useClient()
+  const cause = decodeError(props.error)
+  const message = Option.match(cause, {
+    onNone: () => String(props.error),
+    onSome: (error) => error.message,
+  })
+  client.log.error("app.fatal", {
+    error: message,
+    stack: Option.getOrElse(
+      Option.flatMap(cause, (error) => Option.fromNullishOr(error.stack)),
+      () => "",
+    ),
+  })
+  useScopedKeyboard((event) => {
+    if (event.ctrl !== true || (event.name !== "c" && event.name !== "d")) return false
+    renderer.destroy()
+    env.shutdown()
+    return true
+  })
+  return (
+    <box flexDirection="column" paddingLeft={1} paddingTop={1}>
+      <text>
+        <span style={{ fg: "red", bold: true }}>Fatal error</span>
+      </text>
+      <text>{message}</text>
+      <text>{keyHintsLine([KeyHints.quit], 80)}</text>
+    </box>
+  )
+}
+
+export function App(props: AppProps) {
   return (
     <ErrorBoundary
-      fallback={(err) => (
-        <box flexDirection="column" paddingLeft={1} paddingTop={1}>
-          <text>
-            <span style={{ fg: "red", bold: true }}>Fatal error</span>
-          </text>
-          <text>{errorMessage(err)}</text>
-        </box>
+      fallback={(error) => (
+        <KeyboardScopeProvider>
+          <FatalScreen error={error} />
+        </KeyboardScopeProvider>
       )}
     >
       <ThemeProvider mode={props.initialThemeMode}>

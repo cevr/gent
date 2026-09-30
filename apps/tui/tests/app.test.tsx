@@ -64,7 +64,7 @@ import {
   TerminalOutput,
 } from "./render-harness-boundary"
 import { LinkOpener, LinkOpenerError } from "../src/os"
-import { createSignal, onMount, type Signal } from "solid-js"
+import { createSignal, type JSX, onMount, Show, type Signal } from "solid-js"
 import { ProviderAuthError } from "@gent/core/extensions/api"
 import { type ClientContextValue, useClient } from "../src/client"
 import {
@@ -1419,6 +1419,65 @@ describe("App auth gate", () => {
       )
       expect(frame).not.toContain("Fatal error")
       expect(frame).toContain("ready ·")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  // A render throw replaces the whole view. The screen it leaves names a way
+  // out, ctrl+c takes it, and the client log keeps the error.
+  it.live("the fatal screen logs the error and exits on ctrl+c", () =>
+    Effect.gen(function* () {
+      const [broken, setBroken] = createSignal(false)
+      // A widget whose render throws once `broken` turns true: its decode fails.
+      const Explodes = (): JSX.Element =>
+        Schema.decodeUnknownSync(Schema.Literal("fine"))("widget broke")
+      const Breaks = () => (
+        <Show when={broken()}>
+          <Explodes />
+        </Show>
+      )
+      const extension = defineClientExtension("@test/breaks", {
+        setup: Effect.succeed(
+          clientContributions(
+            widgetContribution({ id: "breaks", slot: "below-input", component: Breaks }),
+          ),
+        ),
+      })
+      const logged: Array<string> = []
+      const record = (msg: string) => logged.push(msg)
+      let shutdowns = 0
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <App />, {
+          client: createMockClient({
+            auth: { listProviders: () => Effect.succeed([]) },
+            branch: { getTree: () => Effect.succeed([]) },
+          }),
+          builtins: [...builtinClientModules, extension],
+          log: { debug: () => {}, info: () => {}, warn: () => {}, error: record },
+          initialSession: {
+            id: SessionId.make("session-fatal"),
+            activeBranchId: BranchId.make("branch-fatal"),
+            name: "Fatal",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        }),
+      )
+      yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
+      const unmount = setup.renderer.destroy.bind(setup.renderer)
+      setup.renderer.destroy = () => {
+        shutdowns += 1
+      }
+      setBroken(true)
+      const frame = yield* waitForFrame(
+        setup,
+        (current) => current.includes("Fatal error"),
+        "fatal",
+      )
+      expect(frame).toContain(`Expected "fine"`)
+      expect(frame).toContain("ctrl+c")
+      expect(logged).toContain("app.fatal")
+      setup.mockInput.pressKey("c", { ctrl: true })
+      yield* waitForFrame(setup, () => shutdowns === 1, "exit")
+      unmount()
     }).pipe(Effect.timeout("10 seconds")),
   )
   // Esc never quits: on a draft the first press arms and says so, and the

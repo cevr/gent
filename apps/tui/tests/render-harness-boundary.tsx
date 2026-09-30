@@ -366,6 +366,8 @@ export const renderWithProviders = (
     resumable?: boolean
     /** Takes what the session writes to the terminal once the renderer is gone. */
     writeTerminal?: (text: string) => void
+    /** Takes what the client logs; the default drops it. */
+    log?: ClientLog
   },
 ): Promise<TestRenderSetup> =>
   Effect.runPromise(
@@ -437,7 +439,7 @@ export const renderWithProviders = (
                             client={client}
                             runtime={runtime}
                             services={services}
-                            log={noopLog}
+                            log={options?.log ?? noopLog}
                             initialSession={Option.getOrUndefined(
                               toInitialSession(Option.fromNullishOr(options?.initialSession)),
                             )}
