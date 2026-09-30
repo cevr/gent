@@ -61,7 +61,7 @@ import {
   lineCount,
   MODEL_CHANGE_MESSAGE_TYPE,
 } from "@gent/core/protocol"
-import { replaceMermaidBlocks } from "./mermaid"
+import { useMermaidBlocks } from "./mermaid"
 import type { DisclosureLevel } from "./session"
 import { insert, RendererContext, useRenderer } from "@opentui/solid"
 
@@ -466,6 +466,7 @@ function AssistantMessage(props: {
   dimensions: Accessor<TerminalDimensions>
 }) {
   const { theme } = useTheme()
+  const replaceMermaidBlocks = useMermaidBlocks()
 
   const hasContent = () => {
     if (props.content.length > 0) return true

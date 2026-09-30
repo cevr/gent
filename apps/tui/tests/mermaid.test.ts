@@ -1,5 +1,6 @@
 import { describe, expect, test } from "effect-bun-test"
-import { extractMermaidBlocks } from "../src/mermaid"
+import { Option } from "effect"
+import { createMermaidCache, extractMermaidBlocks, replaceMermaidBlocks } from "../src/mermaid"
 
 // ── mermaid blocks ──────────────────────────────────────────────────────────
 
@@ -63,5 +64,44 @@ describe("extractMermaidBlocks", () => {
     expect(blocks[0]!.endIndex).toBe(prefix.length + mermaid.length)
     // Verify slicing roundtrip
     expect(text.slice(blocks[0]!.startIndex, blocks[0]!.endIndex)).toBe(mermaid)
+  })
+})
+
+describe("inline mermaid replace", () => {
+  const diagram = "before\n```mermaid\ngraph LR\n  Alpha-->Beta\n```\nafter"
+  const uncached = replaceMermaidBlocks(Option.none())
+
+  const widest = (text: string): number => Math.max(...text.split("\n").map((line) => line.length))
+
+  test("a diagram is drawn in place of its code block, inside the width", () => {
+    const drawn = uncached(diagram, 80)
+    expect(drawn.startsWith("before\n")).toBe(true)
+    expect(drawn.endsWith("\nafter")).toBe(true)
+    expect(drawn).not.toContain("```mermaid")
+    expect(drawn).toContain("Alpha")
+    expect(widest(drawn)).toBeLessThanOrEqual(80)
+  })
+
+  test("a width no preset fits keeps the tightest drawing", () => {
+    const narrow = uncached(diagram, 4)
+    expect(narrow).not.toContain("```mermaid")
+    expect(widest(narrow)).toBeLessThan(widest(uncached(diagram, 200)))
+  })
+
+  test("a source that does not parse stays as its code block", () => {
+    const broken = "```mermaid\nnot a diagram {{{\n```"
+    expect(uncached(broken, 80)).toBe(broken)
+  })
+
+  test("the session view's cache serves a second draw of the same diagram", () => {
+    const cache = createMermaidCache()
+    const cached = replaceMermaidBlocks(Option.some(cache))
+    const first = cached(diagram, 80)
+    expect(first).toBe(uncached(diagram, 80))
+    expect(cache.renders.size).toBe(1)
+    expect(cached(diagram, 80)).toBe(first)
+    expect(cache.renders.size).toBe(1)
+    cached(diagram, 60)
+    expect(cache.renders.size).toBe(2)
   })
 })

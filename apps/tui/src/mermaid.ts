@@ -1,13 +1,14 @@
-import { type AsciiRenderOptions, renderMermaidASCII } from "beautiful-mermaid"
+import { renderMermaidASCII } from "beautiful-mermaid"
 import { Effect, Option, Schema } from "effect"
+import { createContext, useContext } from "solid-js"
 
 // ── mermaid rendering ───────────────────────────────────────────────────────
 
 /**
  * Mermaid diagram extraction and ASCII rendering.
  *
- * Detects ```mermaid fenced blocks in markdown, renders them
- * to ASCII art via beautiful-mermaid, and caches results.
+ * Detects ```mermaid fenced blocks in markdown and renders them to ASCII art
+ * via beautiful-mermaid. A session view holds one cache for its renders.
  */
 
 interface MermaidBlock {
@@ -47,20 +48,18 @@ export function extractMermaidBlocks(text: string): MermaidBlock[] {
 // Adaptive density presets — from roomy to tightest
 
 interface Preset {
-  name: string
   paddingX: number
   paddingY: number
   boxBorderPadding: number
 }
 
 const PRESETS: readonly Preset[] = [
-  { name: "roomy", paddingX: 8, paddingY: 5, boxBorderPadding: 2 },
-  { name: "normal", paddingX: 5, paddingY: 3, boxBorderPadding: 1 },
-  { name: "compact", paddingX: 3, paddingY: 2, boxBorderPadding: 1 },
-  { name: "tight", paddingX: 2, paddingY: 1, boxBorderPadding: 1 },
-  { name: "tightest", paddingX: 1, paddingY: 1, boxBorderPadding: 0 },
+  { paddingX: 8, paddingY: 5, boxBorderPadding: 2 },
+  { paddingX: 5, paddingY: 3, boxBorderPadding: 1 },
+  { paddingX: 3, paddingY: 2, boxBorderPadding: 1 },
+  { paddingX: 2, paddingY: 1, boxBorderPadding: 1 },
+  { paddingX: 1, paddingY: 1, boxBorderPadding: 0 },
 ]
-const TIGHTEST_PRESET: Preset = { name: "tightest", paddingX: 1, paddingY: 1, boxBorderPadding: 0 }
 
 function getMaxLineWidth(text: string): number {
   let max = 0
@@ -73,119 +72,105 @@ function getMaxLineWidth(text: string): number {
   return max
 }
 
-/**
- * Try each preset from roomy → tightest. Pick the first whose
- * rendered output fits within maxWidth. Falls back to tightest.
- */
-function pickBestPreset(source: string, maxWidth: number): AsciiRenderOptions {
-  for (const preset of PRESETS) {
-    const rendered = Effect.runSync(
-      Effect.option(
-        Effect.try(() =>
-          renderMermaidASCII(source, {
-            paddingX: preset.paddingX,
-            paddingY: preset.paddingY,
-            boxBorderPadding: preset.boxBorderPadding,
-          }),
-        ),
-      ),
-    )
-    if (Option.isSome(rendered)) {
-      const ascii = Option.fromNullishOr(rendered.value)
-      if (Option.isSome(ascii) && ascii.value.length > 0) {
-        const width = getMaxLineWidth(ascii.value)
-        if (width <= maxWidth) {
-          return {
-            paddingX: preset.paddingX,
-            paddingY: preset.paddingY,
-            boxBorderPadding: preset.boxBorderPadding,
-          }
-        }
-      }
-    }
-  }
-  // Return tightest as fallback
-  return {
-    paddingX: TIGHTEST_PRESET.paddingX,
-    paddingY: TIGHTEST_PRESET.paddingY,
-    boxBorderPadding: TIGHTEST_PRESET.boxBorderPadding,
-  }
-}
-
-// LRU cache for rendered diagrams — keyed by source + width. The cache is
-// bounded by `CACHE_MAX` so memory stays bounded; the key is structured
-// JSON so a source string that happens to contain a `:<width>` suffix
-// cannot collide with a separate `(source, width)` call.
-const CACHE_MAX = 20
-const renderCache = new Map<string, string>()
-
-const encodeCacheKey = Schema.encodeSync(
-  Schema.fromJsonString(
-    Schema.Struct({ source: Schema.String, maxWidth: Schema.optional(Schema.Finite) }),
-  ),
-)
-
-const cacheKey = (source: string, maxWidth: number): string => encodeCacheKey({ source, maxWidth })
+const renderWith = (source: string, preset: Preset): Option.Option<string> =>
+  Effect.runSync(Effect.option(Effect.try(() => renderMermaidASCII(source, preset)))).pipe(
+    Option.flatMap(Option.fromNullishOr),
+    Option.filter((ascii) => ascii.length > 0),
+  )
 
 /**
- * Render a mermaid diagram to ASCII art.
- * When maxWidth is provided, uses adaptive preset selection.
- * Results are cached (LRU).
+ * Render with each preset from roomy to tightest, once each, and keep the
+ * first render that fits `maxWidth`. When none fits, keep the tightest render
+ * that succeeded.
  */
 function renderMermaidToAscii(source: string, maxWidth: number): Option.Option<string> {
-  const key = cacheKey(source, maxWidth)
-  const cached = Option.fromNullishOr(renderCache.get(key))
+  let tightest = Option.none<string>()
+  for (const preset of PRESETS) {
+    const rendered = renderWith(source, preset)
+    if (Option.isNone(rendered)) continue
+    if (getMaxLineWidth(rendered.value) <= maxWidth) return rendered
+    tightest = rendered
+  }
+  return tightest
+}
+
+// ── render cache ────────────────────────────────────────────────────────────
+
+/**
+ * The renders of one session view, keyed by source and width. A diagram is
+ * drawn in the live transcript and again when it commits to scrollback; the
+ * cache makes the second draw free. It is bounded by `CACHE_MAX`, least
+ * recently used first out, and the key is structured JSON so a source that
+ * ends in a width cannot collide with another (source, width) pair.
+ */
+interface MermaidCache {
+  readonly renders: Map<string, string>
+}
+
+const CACHE_MAX = 20
+
+export const createMermaidCache = (): MermaidCache => ({ renders: new Map() })
+
+/** The session view's cache; outside one, each render runs uncached. */
+export const MermaidCacheContext = createContext<Option.Option<MermaidCache>>(Option.none())
+
+const cacheKey = Schema.encodeSync(
+  Schema.fromJsonString(Schema.Struct({ source: Schema.String, maxWidth: Schema.Finite })),
+)
+
+const cachedRender = (
+  cache: MermaidCache,
+  source: string,
+  maxWidth: number,
+): Option.Option<string> => {
+  const key = cacheKey({ source, maxWidth })
+  const cached = Option.fromNullishOr(cache.renders.get(key))
   if (Option.isSome(cached)) {
     // Move to end for LRU
-    renderCache.delete(key)
-    renderCache.set(key, cached.value)
+    cache.renders.delete(key)
+    cache.renders.set(key, cached.value)
     return cached
   }
-
-  const options = pickBestPreset(source, maxWidth)
-  const rendered = Effect.runSync(
-    Effect.option(Effect.try(() => renderMermaidASCII(source, options))),
-  )
-  if (Option.isNone(rendered)) return Option.none()
-  const ascii = Option.fromNullishOr(rendered.value)
-  if (Option.isNone(ascii) || ascii.value.length === 0) return Option.none()
-
-  // Evict oldest if at capacity
-  if (renderCache.size >= CACHE_MAX) {
-    const oldest = renderCache.keys().next()
-    if (!oldest.done) {
-      renderCache.delete(oldest.value)
-    }
+  const ascii = renderMermaidToAscii(source, maxWidth)
+  if (Option.isNone(ascii)) return ascii
+  if (cache.renders.size >= CACHE_MAX) {
+    const oldest = cache.renders.keys().next()
+    if (!oldest.done) cache.renders.delete(oldest.value)
   }
-  renderCache.set(key, ascii.value)
+  cache.renders.set(key, ascii.value)
   return ascii
 }
 
 /**
- * Replace mermaid blocks in text with rendered ASCII art.
- * Falls back to the original code block if rendering fails.
+ * Replace mermaid blocks in text with rendered ASCII art, through the session
+ * view's cache when there is one. A block that fails to render stays as its
+ * code block.
  */
-export function replaceMermaidBlocks(text: string, maxWidth: number): string {
-  const blocks = extractMermaidBlocks(text)
-  if (blocks.length === 0) return text
+export const replaceMermaidBlocks = (
+  cache: Option.Option<MermaidCache>,
+): ((text: string, maxWidth: number) => string) => {
+  const render = (source: string, maxWidth: number): Option.Option<string> =>
+    Option.match(cache, {
+      onNone: () => renderMermaidToAscii(source, maxWidth),
+      onSome: (owned) => cachedRender(owned, source, maxWidth),
+    })
+  return (text, maxWidth) => {
+    const blocks = extractMermaidBlocks(text)
+    if (blocks.length === 0) return text
 
-  let result = ""
-  let lastEnd = 0
-
-  for (const block of blocks) {
-    result += text.slice(lastEnd, block.startIndex)
-
-    const ascii = renderMermaidToAscii(block.source, maxWidth)
-    if (Option.isSome(ascii)) {
-      result += ascii.value
-    } else {
-      // Fallback: show original code block
-      result += text.slice(block.startIndex, block.endIndex)
+    let result = ""
+    let lastEnd = 0
+    for (const block of blocks) {
+      result += text.slice(lastEnd, block.startIndex)
+      result += Option.getOrElse(render(block.source, maxWidth), () =>
+        text.slice(block.startIndex, block.endIndex),
+      )
+      lastEnd = block.endIndex
     }
-
-    lastEnd = block.endIndex
+    return result + text.slice(lastEnd)
   }
-
-  result += text.slice(lastEnd)
-  return result
 }
+
+/** {@link replaceMermaidBlocks} through the session view's cache. */
+export const useMermaidBlocks = (): ((text: string, maxWidth: number) => string) =>
+  replaceMermaidBlocks(useContext(MermaidCacheContext))
