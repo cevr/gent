@@ -686,6 +686,33 @@ describe("Composer renderer", () => {
       expect(renderFrame(setup)).toContain("┃ pasted line 2 from")
     }).pipe(Effect.timeout("10 seconds")),
   )
+  // A chip is one unit: a delete at its end takes the whole chip and its
+  // stored text, so no fragment of it reaches the model.
+  it.live("backspace or ctrl+w at a paste chip's end removes the whole chip", () =>
+    Effect.gen(function* () {
+      const submitted: Array<string> = []
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <TestComposer onSubmit={(content) => submitted.push(content)} />),
+      )
+      const chip = "x".repeat(200)
+      yield* Effect.promise(() => setup.mockInput.typeText("keep "))
+      yield* Effect.promise(() => setup.mockInput.pasteBracketedText(chip))
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(renderFrame(setup)).toContain("┃ keep [Pasted 200 chars #1]")
+      setup.mockInput.pressBackspace()
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(renderFrame(setup)).not.toContain("Pasted")
+      yield* Effect.promise(() => setup.mockInput.pasteBracketedText(chip))
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(renderFrame(setup)).toContain("┃ keep [Pasted 200 chars #2]")
+      setup.mockInput.pressKey("w", { ctrl: true })
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(renderFrame(setup)).not.toContain("Pasted")
+      setup.mockInput.pressKey("RETURN")
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(submitted).toEqual(["keep"])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   it.live("suspended composer blocks enter submission", () =>
     Effect.gen(function* () {
       const submitted: string[] = []

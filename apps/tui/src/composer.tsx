@@ -573,6 +573,18 @@ export function createPasteManager() {
         return match
       })
     },
+    /** The chip that ends at `offset` and still holds its stored text. */
+    chipEndingAt(text: string, offset: number): Option.Option<{ start: number; id: string }> {
+      return Option.fromNullishOr(
+        /\[Pasted \d+ (?:lines|chars) #(\d+)\]$/.exec(text.slice(0, offset)),
+      ).pipe(
+        Option.map((match) => ({ start: offset - match[0].length, id: match[1] ?? "" })),
+        Option.filter((chip) => store.has(chip.id)),
+      )
+    },
+    drop(id: string) {
+      store.delete(id)
+    },
     clear() {
       store.clear()
     },
@@ -779,6 +791,31 @@ function useComposerController(): ComposerController {
     if (!isLargePaste(pasted)) return
     event.preventDefault()
     inputRef.value.insertText(paste.createPlaceholder(pasted))
+  }
+
+  /**
+   * A paste chip is one unit. Backspace or a word delete at its end removes
+   * the whole chip and its stored text; editing it a character at a time
+   * would send the fragment and lose the paste.
+   */
+  const removeChipBeforeCaret = (event: {
+    readonly name?: string
+    readonly ctrl?: boolean
+    readonly preventDefault: () => void
+  }): boolean => {
+    const deletesBack = event.name === "backspace" || (event.name === "w" && event.ctrl === true)
+    if (!deletesBack || Option.isNone(inputRef) || inputRef.value.hasSelection()) return false
+    const value = inputRef.value.plainText
+    const caret = inputRef.value.cursorOffset
+    const chip = paste.chipEndingAt(value, caret)
+    if (Option.isNone(chip)) return false
+    event.preventDefault()
+    paste.drop(chip.value.id)
+    const next = value.slice(0, chip.value.start) + value.slice(caret)
+    inputRef.value.replaceText(next)
+    inputRef.value.cursorOffset = chip.value.start
+    sc.onComposerInteraction(ComposerInteractionEvent.cases.DraftChanged.make({ text: next }))
+    return true
   }
 
   const handleContentChange = () => {
@@ -1200,6 +1237,7 @@ function useComposerController(): ComposerController {
     super?: boolean
     preventDefault: () => void
   }) => {
+    if (removeChipBeforeCaret(event)) return
     const isEnterKey = event.name === "return" || event.name === "linefeed"
     if (!isEnterKey) return
 
