@@ -1,5 +1,5 @@
 import type { JSX } from "@opentui/solid"
-import { createPatch } from "diff"
+import { createPatch, structuredPatch } from "diff"
 import { Match, Option, Schema } from "effect"
 import { createContext, createMemo, For, type JSX as SolidJSX, Show, useContext } from "solid-js"
 import { buildSyntaxStyle, useTheme } from "./theme"
@@ -131,29 +131,26 @@ export function getFiletype(path: string): string | undefined {
 }
 
 /**
- * Count lines added/removed from old and new strings
+ * The lines a patch adds and removes, read from its hunks: a rewrite removes
+ * every old line and adds every new one, and a shifted edit counts only the
+ * lines that moved. A final newline ends the last line (the core line rule),
+ * so a missing one is no change of its own.
  */
-interface DiffLineCount {
-  readonly added: number
-  readonly removed: number
+const withFinalNewline = (text: string) => {
+  if (text.length === 0 || text.endsWith("\n")) return text
+  return `${text}\n`
 }
-
-export function countDiffLines(oldStr: string, newStr: string): DiffLineCount {
-  const oldLines = lineCount(oldStr)
-  const newLines = lineCount(newStr)
-  if (newLines > oldLines) {
-    return { added: newLines - oldLines, removed: 0 }
-  } else if (oldLines > newLines) {
-    return { added: 0, removed: oldLines - newLines }
+const patchLineCounts = (oldStr: string, newStr: string) => {
+  let added = 0
+  let removed = 0
+  const patch = structuredPatch("", "", withFinalNewline(oldStr), withFinalNewline(newStr))
+  for (const hunk of patch.hunks) {
+    for (const line of hunk.lines) {
+      if (line.startsWith("+")) added++
+      else if (line.startsWith("-")) removed++
+    }
   }
-  // Same line count - count actual changed lines
-  const oldArr = oldStr.split("\n")
-  const newArr = newStr.split("\n")
-  let changed = 0
-  for (let i = 0; i < oldArr.length; i++) {
-    if (oldArr[i] !== newArr[i]) changed++
-  }
-  return { added: changed, removed: changed }
+  return { added, removed }
 }
 
 interface EditDiffResult {
@@ -183,7 +180,7 @@ export function getEditUnifiedDiff(input: EditInput) {
     )
     const diff = createPatch(path, oldStr, newStr)
     const filetype = getFiletype(path)
-    const { added, removed } = countDiffLines(oldStr, newStr)
+    const { added, removed } = patchLineCounts(oldStr, newStr)
     return { diff, filetype, added, removed } satisfies EditDiffResult
   })
   return Option.getOrNull(result)

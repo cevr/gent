@@ -1605,8 +1605,8 @@ describe("FX transcript treatment", () => {
       expect(frame).toBe(liveFrame)
       // A failed command reads as failed after a reload, not as a bare success header.
       expect(frame).toContain("exit 1")
-      // The diff is built from the whole strings: the new text adds a line.
-      expect(frame).toContain("+1 -0")
+      // The diff is built from the whole strings: the new text changes the line and adds one.
+      expect(frame).toContain("+2 -1")
       expect(frame).toContain("+export const other = 1")
     }),
   )

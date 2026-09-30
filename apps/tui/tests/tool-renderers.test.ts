@@ -1,12 +1,7 @@
 import { describe, expect, test } from "effect-bun-test"
 import { Option, Schema } from "effect"
 import { OutputCut } from "@gent/core/protocol"
-import {
-  bashOutputRows,
-  countDiffLines,
-  getEditUnifiedDiff,
-  getFiletype,
-} from "../src/tool-renderers"
+import { bashOutputRows, getEditUnifiedDiff, getFiletype } from "../src/tool-renderers"
 
 // ── edit utils ──────────────────────────────────────────────────────────────
 
@@ -47,48 +42,49 @@ describe("getFiletype", () => {
   })
 })
 
-describe("countDiffLines", () => {
-  test("counts lines added", () => {
-    const oldStr = "line1\nline2"
-    const newStr = "line1\nline2\nline3\nline4"
-    const result = countDiffLines(oldStr, newStr)
-    expect(result).toEqual({ added: 2, removed: 0 })
-  })
-
-  test("counts lines removed", () => {
-    const oldStr = "line1\nline2\nline3"
-    const newStr = "line1"
-    const result = countDiffLines(oldStr, newStr)
-    expect(result).toEqual({ added: 0, removed: 2 })
-  })
-
-  test("counts changed lines when same count", () => {
-    const oldStr = "aaa\nbbb\nccc"
-    const newStr = "aaa\nXXX\nccc"
-    const result = countDiffLines(oldStr, newStr)
-    expect(result).toEqual({ added: 1, removed: 1 })
-  })
-
-  test("handles empty strings", () => {
-    expect(countDiffLines("", "line1")).toEqual({ added: 1, removed: 0 })
-    expect(countDiffLines("line1", "")).toEqual({ added: 0, removed: 1 })
-    expect(countDiffLines("", "")).toEqual({ added: 0, removed: 0 })
-  })
-
-  test("a final newline ends the last line, it does not start one", () => {
-    expect(countDiffLines("a\nb\n", "")).toEqual({ added: 0, removed: 2 })
-    expect(countDiffLines("", "a\nb\nc\n")).toEqual({ added: 3, removed: 0 })
-  })
-
-  test("handles identical strings", () => {
-    const str = "line1\nline2"
-    const result = countDiffLines(str, str)
-    expect(result).toEqual({ added: 0, removed: 0 })
-  })
-
-  test("handles single line changes", () => {
-    expect(countDiffLines("old", "new")).toEqual({ added: 1, removed: 1 })
-  })
+// The edit row's +/- counts are the diff's own lines: a rewrite removes every
+// old line and adds every new one, and a shifted edit moves only what changed.
+describe("edit diff counts", () => {
+  const cases: ReadonlyArray<{
+    readonly name: string
+    readonly oldString: string
+    readonly newString: string
+    readonly added: number
+    readonly removed: number
+  }> = [
+    { name: "lines appended", oldString: "a\nb", newString: "a\nb\nc\nd", added: 2, removed: 0 },
+    { name: "lines removed", oldString: "a\nb\nc", newString: "a", added: 0, removed: 2 },
+    { name: "one line changed", oldString: "a\nb\nc", newString: "a\nX\nc", added: 1, removed: 1 },
+    {
+      name: "a 3-line rewrite to 5 lines",
+      oldString: "a\nb\nc",
+      newString: "v\nw\nx\ny\nz",
+      added: 5,
+      removed: 3,
+    },
+    {
+      name: "a shifted edit of the same length",
+      oldString: "a\nb\nc",
+      newString: "b\nc\nd",
+      added: 1,
+      removed: 1,
+    },
+    {
+      name: "a final newline ends the last line",
+      oldString: "a\nb\n",
+      newString: "",
+      added: 0,
+      removed: 2,
+    },
+    { name: "identical text", oldString: "a\nb", newString: "a\nb", added: 0, removed: 0 },
+  ]
+  for (const { name, oldString, newString, added, removed } of cases) {
+    test(name, () => {
+      const result = getEditUnifiedDiff({ path: "/foo/bar.ts", oldString, newString })
+      expect(result?.added).toBe(added)
+      expect(result?.removed).toBe(removed)
+    })
+  }
 })
 
 describe("getEditUnifiedDiff", () => {
@@ -149,30 +145,6 @@ describe("getEditUnifiedDiff", () => {
     expect(getEditUnifiedDiff({ path: 123, oldString: "a", newString: "b" })).toBeNull()
     expect(getEditUnifiedDiff({ path: "/foo", oldString: 123, newString: "b" })).toBeNull()
     expect(getEditUnifiedDiff({ path: "/foo", oldString: "a", newString: 123 })).toBeNull()
-  })
-
-  test("counts multi-line additions correctly", () => {
-    const input = {
-      path: "/foo.ts",
-      oldString: "line1",
-      newString: "line1\nline2\nline3",
-    }
-    const result = getEditUnifiedDiff(input)
-
-    expect(result!.added).toBe(2)
-    expect(result!.removed).toBe(0)
-  })
-
-  test("counts multi-line removals correctly", () => {
-    const input = {
-      path: "/foo.ts",
-      oldString: "line1\nline2\nline3",
-      newString: "line1",
-    }
-    const result = getEditUnifiedDiff(input)
-
-    expect(result!.added).toBe(0)
-    expect(result!.removed).toBe(2)
   })
 
   test("generates valid unified diff format", () => {
