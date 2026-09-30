@@ -1631,6 +1631,12 @@ const platformLayerAllowances: ReadonlyArray<PlatformLayerAllowance> = [
     reason:
       "the OAuth redirect listener binds the fixed port OpenAI registers, for one sign-in; no root provides an HTTP server, and a user extension may start its own listener",
   },
+  {
+    file: "packages/extensions/src/mcp.ts",
+    layer: "BunHttpServer.layerServer",
+    reason:
+      "the OAuth redirect listener of `/mcp login` binds a free loopback port for one sign-in; no root provides an HTTP server, and a user extension may start its own listener",
+  },
 ]
 
 /** The gent-owned names of the Bun platform layer. */

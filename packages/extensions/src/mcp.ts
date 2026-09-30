@@ -4,8 +4,11 @@ import {
   Config,
   ConfigProvider,
   Context,
+  Deferred,
   Duration,
   Effect,
+  Exit,
+  Fiber,
   FileSystem,
   Crypto,
   Encoding,
@@ -20,8 +23,17 @@ import {
   Result,
   Schema,
   SchemaRepresentation,
+  Scope,
   Semaphore,
 } from "effect"
+import {
+  FetchHttpClient,
+  HttpServer,
+  HttpServerRequest,
+  HttpServerResponse,
+} from "effect/unstable/http"
+import { BunHttpServer } from "@effect/platform-bun"
+import { auth, type OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { SSEClientTransport, SseError } from "@modelcontextprotocol/sdk/client/sse.js"
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
@@ -30,6 +42,7 @@ import {
   StreamableHTTPError,
 } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
 import { ErrorCode, McpError as ProtocolError } from "@modelcontextprotocol/sdk/types.js"
+import { type SdkFetch, sdkFetch } from "./mcp-boundary.js"
 import {
   defineExtension,
   defineResource,
@@ -531,6 +544,495 @@ const makeBlobStore = (directory: string) =>
     }
   })
 
+// ── oauth ───────────────────────────────────────────────────────────────────
+
+/** Tokens as the SDK hands them to `saveTokens`, kept as they came. */
+const StoredTokens = Schema.Struct({
+  access_token: Schema.String,
+  id_token: Schema.optional(Schema.String),
+  token_type: Schema.String,
+  expires_in: Schema.optional(Schema.Finite),
+  scope: Schema.optional(Schema.String),
+  refresh_token: Schema.optional(Schema.String),
+  issuer: Schema.optional(Schema.String),
+})
+type StoredTokens = typeof StoredTokens.Type
+
+/** The client the authorization server registered, as `saveClientInformation` hands it. */
+const StoredClient = Schema.Struct({
+  client_id: Schema.String,
+  client_secret: Schema.optional(Schema.String),
+  client_id_issued_at: Schema.optional(Schema.Finite),
+  client_secret_expires_at: Schema.optional(Schema.Finite),
+  token_endpoint_auth_method: Schema.optional(Schema.String),
+  issuer: Schema.optional(Schema.String),
+})
+type StoredClient = typeof StoredClient.Type
+
+const StoredLogin = Schema.Struct({
+  tokens: StoredTokens,
+  /** When the access token expires, in epoch milliseconds, when the server said. */
+  expiresAt: Schema.optional(Schema.Finite),
+  client: StoredClient,
+  /** The redirect URI the client registered with; a refresh names it again. */
+  redirectUri: Schema.String,
+})
+type StoredLogin = typeof StoredLogin.Type
+
+/** `<data dir>/mcp-auth.json`, mode 0600: each login under `authKey`. */
+const AuthFile = Schema.fromJsonString(
+  Schema.Struct({ servers: Schema.Record(Schema.String, StoredLogin) }),
+)
+type AuthFile = typeof AuthFile.Type
+
+/** A token that expires within this long is refreshed before a dial. */
+const REFRESH_SKEW = Duration.seconds(60)
+/** A login waits this long for the browser's redirect. */
+const LOGIN_TIMEOUT = Duration.minutes(5)
+/**
+ * The requests a 401 may send again once a refresh gave a new token. They
+ * change nothing on the server; a `tools/call` is never sent twice.
+ */
+const REPLAYABLE: ReadonlySet<string> = new Set([
+  "initialize",
+  "notifications/initialized",
+  "ping",
+  "tools/list",
+  "GET",
+])
+
+/** The server refused the OAuth token, and no refresh gave one it takes. */
+class LoginRequired extends Schema.TaggedError<LoginRequired>()("LoginRequired", {
+  server: Schema.String,
+  message: Schema.String,
+}) {}
+
+const loginMessage = (name: string) =>
+  `the ${name} MCP server needs a login: run /mcp login ${name}`
+
+const loginRequired = (name: string) =>
+  new LoginRequired({ server: name, message: loginMessage(name) })
+
+type HttpServerConfig = typeof HttpServerConfig.Type
+
+/** A `url` entry signs in with OAuth unless it sends its own `Authorization` header. */
+const usesOAuth = (config: McpServerConfig): config is HttpServerConfig =>
+  "url" in config &&
+  !Object.keys(config.headers ?? {}).some((name) => name.toLowerCase() === "authorization")
+
+/**
+ * A login's key: the server's name and URL, not the entry's digest, so a
+ * login outlives an edit to the entry's other fields.
+ */
+const authKey = (server: McpServer, config: HttpServerConfig) => `${server.name} ${config.url}`
+
+/** The login file, the permit its writes take, and the services a fetch runs its refresh with. */
+interface AuthStore {
+  readonly file: string
+  readonly permit: Semaphore.Semaphore
+  readonly services: Context.Context<FileSystem.FileSystem | Path.Path | Crypto.Crypto>
+}
+
+const makeAuthStore = Effect.fn("Mcp.makeAuthStore")(function* (home: string) {
+  const path = yield* Path.Path
+  return {
+    file: path.join(yield* resolveDataDir(home), "mcp-auth.json"),
+    permit: yield* Semaphore.make(1),
+    services: yield* Effect.context<FileSystem.FileSystem | Path.Path | Crypto.Crypto>(),
+  }
+})
+
+const readLogins = (store: AuthStore) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    return yield* fs.readFileString(store.file).pipe(
+      Effect.flatMap(Schema.decodeUnknownEffect(AuthFile)),
+      Effect.orElseSucceed((): AuthFile => ({ servers: {} })),
+    )
+  })
+
+const readLogin = (store: AuthStore, key: string) =>
+  Effect.map(readLogins(store), (file) => Option.fromUndefinedOr(file.servers[key]))
+
+/** Stores one login; the file is written whole, atomically, readable by its owner only. */
+const writeLogin = (store: AuthStore, key: string, login: StoredLogin) =>
+  Semaphore.withPermit(
+    store.permit,
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const current = yield* readLogins(store)
+      const servers = { ...current.servers, [key]: login }
+      yield* fs.makeDirectory(path.dirname(store.file), { recursive: true })
+      yield* writeFileAtomic(store.file, yield* Schema.encodeEffect(AuthFile)({ servers }), {
+        mode: 0o600,
+      })
+    }),
+  )
+
+/** The SDK's tokens as stored; a refresh answer without a refresh token keeps the old one. */
+const storedTokens = (
+  tokens: StoredTokens,
+  previous: Option.Option<StoredTokens>,
+): StoredTokens => ({
+  access_token: tokens.access_token,
+  token_type: tokens.token_type,
+  ...omitUndefined({
+    id_token: tokens.id_token,
+    expires_in: tokens.expires_in,
+    scope: tokens.scope,
+    issuer: tokens.issuer,
+    refresh_token:
+      tokens.refresh_token ??
+      Option.getOrUndefined(
+        Option.flatMap(previous, (old) => Option.fromUndefinedOr(old.refresh_token)),
+      ),
+  }),
+})
+
+const storedClient = (client: StoredClient): StoredClient => ({
+  client_id: client.client_id,
+  ...omitUndefined({
+    client_secret: client.client_secret,
+    client_id_issued_at: client.client_id_issued_at,
+    client_secret_expires_at: client.client_secret_expires_at,
+    token_endpoint_auth_method: client.token_endpoint_auth_method,
+    issuer: client.issuer,
+  }),
+})
+
+const loginFrom = (
+  tokens: StoredTokens,
+  client: StoredClient,
+  redirectUri: string,
+  now: number,
+): StoredLogin => ({
+  tokens,
+  client,
+  redirectUri,
+  ...omitUndefined({
+    expiresAt: Option.getOrUndefined(
+      Option.map(Option.fromUndefinedOr(tokens.expires_in), (seconds) => now + seconds * 1000),
+    ),
+  }),
+})
+
+/** gent's client as it registers with an authorization server: a public client on a loopback redirect. */
+const clientMetadataFor = (redirectUri: string) => ({
+  client_name: "gent",
+  redirect_uris: [redirectUri],
+  grant_types: ["authorization_code", "refresh_token"],
+  response_types: ["code"],
+  token_endpoint_auth_method: "none",
+})
+
+/** What an SDK `auth()` run saved: the client it registered, the tokens, the login URL and verifier. */
+interface AuthFlow {
+  client: Option.Option<StoredClient>
+  tokens: Option.Option<StoredTokens>
+  authorizationUrl: Option.Option<URL>
+  verifier: string
+}
+
+const emptyFlow = (client: Option.Option<StoredClient>): AuthFlow => ({
+  client,
+  tokens: Option.none(),
+  authorizationUrl: Option.none(),
+  verifier: "",
+})
+
+/**
+ * The SDK's `OAuthClientProvider` over one `AuthFlow`. It never opens a
+ * browser: where the SDK would send the user to log in, it keeps the
+ * authorization URL in the flow and the SDK's `auth` answers `REDIRECT`.
+ * `interactive` is a login's state; a login presents that URL, and a refresh
+ * that ends there has no token.
+ */
+const flowProvider = (
+  server: string,
+  redirectUri: string,
+  flow: AuthFlow,
+  previous: Option.Option<StoredLogin>,
+  interactive: Option.Option<string>,
+): OAuthClientProvider => ({
+  get redirectUrl() {
+    return redirectUri
+  },
+  get clientMetadata() {
+    return clientMetadataFor(redirectUri)
+  },
+  ...Option.match(interactive, {
+    onNone: () => ({}),
+    onSome: (state) => ({ state: () => state }),
+  }),
+  clientInformation: () => Option.getOrUndefined(flow.client),
+  saveClientInformation: (client) => {
+    flow.client = Option.some(storedClient(client))
+  },
+  tokens: () => Option.getOrUndefined(Option.map(previous, (login) => login.tokens)),
+  saveTokens: (tokens) => {
+    flow.tokens = Option.some(
+      storedTokens(
+        tokens,
+        Option.map(previous, (login) => login.tokens),
+      ),
+    )
+  },
+  redirectToAuthorization: (url) => {
+    flow.authorizationUrl = Option.some(url)
+  },
+  saveCodeVerifier: (verifier) => {
+    flow.verifier = verifier
+  },
+  codeVerifier: () => flow.verifier,
+})
+
+/**
+ * A new token for `login` from its refresh token, stored; none when it has
+ * no refresh token or the authorization server refused it.
+ */
+const refreshLogin = (
+  server: McpServer,
+  config: HttpServerConfig,
+  store: AuthStore,
+  login: StoredLogin,
+) =>
+  Effect.gen(function* () {
+    if (Predicate.isUndefined(login.tokens.refresh_token)) return Option.none<StoredLogin>()
+    const now = yield* Clock.currentTimeMillis
+    const flow = emptyFlow(Option.some(login.client))
+    const provider = flowProvider(
+      server.name,
+      login.redirectUri,
+      flow,
+      Option.some(login),
+      Option.none(),
+    )
+    const result = yield* Effect.tryPromise(() => auth(provider, { serverUrl: config.url }))
+    if (result !== "AUTHORIZED" || Option.isNone(flow.tokens)) return Option.none<StoredLogin>()
+    const refreshed = loginFrom(
+      flow.tokens.value,
+      Option.getOrElse(flow.client, () => login.client),
+      login.redirectUri,
+      now,
+    )
+    yield* writeLogin(store, authKey(server, config), refreshed)
+    return Option.some(refreshed)
+  }).pipe(
+    Effect.catchCause((cause) =>
+      Effect.logWarning("mcp.oauth.refresh.failed").pipe(
+        Effect.annotateLogs({ server: server.name, error: failureMessage(Cause.squash(cause)) }),
+        Effect.as(Option.none<StoredLogin>()),
+      ),
+    ),
+  )
+
+/** The stored login, refreshed first when its token expires within `REFRESH_SKEW`. */
+const loginBeforeDial = (server: McpServer, config: HttpServerConfig, store: AuthStore) =>
+  Effect.gen(function* () {
+    const login = yield* readLogin(store, authKey(server, config))
+    if (Option.isNone(login)) return login
+    const now = yield* Clock.currentTimeMillis
+    const expiresAt = Option.fromUndefinedOr(login.value.expiresAt)
+    if (Option.isSome(expiresAt) && expiresAt.value - Duration.toMillis(REFRESH_SKEW) <= now) {
+      return yield* refreshLogin(server, config, store, login.value)
+    }
+    return login
+  })
+
+const JsonRpcMethod = Schema.fromJsonString(Schema.Struct({ method: Schema.String }))
+
+/** The JSON-RPC method a request sends, or `GET` for a stream a transport opens. */
+const requestMethod = (init: Option.Option<RequestInit>) => {
+  const method = Option.getOrElse(
+    Option.flatMap(init, (value) => Option.fromUndefinedOr(value.method)),
+    () => "GET",
+  )
+  if (method === "GET") return "GET"
+  return Option.match(
+    Option.flatMap(
+      Option.flatMap(init, (value) => Option.fromNullishOr(value.body)),
+      Schema.decodeUnknownOption(JsonRpcMethod),
+    ),
+    { onNone: () => "", onSome: (message) => message.method },
+  )
+}
+
+/** What a transport takes to send a server's OAuth token. */
+interface OAuthTransport {
+  readonly authProvider: OAuthClientProvider
+  readonly fetch: SdkFetch
+}
+
+/**
+ * The OAuth parts of a `url` entry's transport, when it signs in with OAuth.
+ * The provider only hands the SDK the stored bearer token; it never starts a
+ * login. The fetch answers each 401 or 403 before the SDK sees it: a 401 on
+ * a request in `REPLAYABLE` refreshes the token and sends that request once
+ * more, and any other refusal fails with `LoginRequired`, whose message names
+ * `/mcp login <server>`. So a `tools/call` is never sent twice.
+ */
+const oauthTransport = (server: McpServer, config: HttpServerConfig, store: AuthStore) =>
+  Effect.gen(function* () {
+    if (!usesOAuth(config)) return Option.none<OAuthTransport>()
+    let current = yield* loginBeforeDial(server, config, store)
+    const tokens = () => Option.getOrUndefined(Option.map(current, (login) => login.tokens))
+    const authProvider: OAuthClientProvider = {
+      ...flowProvider(server.name, "", emptyFlow(Option.none()), current, Option.none()),
+      get redirectUrl() {
+        return Option.getOrUndefined(Option.map(current, (login) => login.redirectUri))
+      },
+      tokens,
+    }
+    const fetchWeb = yield* FetchHttpClient.Fetch
+    const send = (url: string | URL, init: Option.Option<RequestInit>) =>
+      Effect.promise(() => fetchWeb(url, Option.getOrUndefined(init)))
+    const answer = (url: string | URL, init: Option.Option<RequestInit>) =>
+      Effect.gen(function* () {
+        const response = yield* send(url, init)
+        if (response.status !== 401 && response.status !== 403) return response
+        if (response.status === 401 && REPLAYABLE.has(requestMethod(init))) {
+          const refreshed = yield* Option.match(current, {
+            onNone: () => Effect.succeed(Option.none<StoredLogin>()),
+            onSome: (login) => refreshLogin(server, config, store, login),
+          })
+          if (Option.isSome(refreshed)) {
+            current = refreshed
+            const headers = new Headers(
+              Option.getOrUndefined(Option.map(init, (value) => value.headers)),
+            )
+            headers.set("Authorization", `Bearer ${refreshed.value.tokens.access_token}`)
+            const retried = yield* send(
+              url,
+              Option.some({ ...Option.getOrElse(init, () => ({})), headers }),
+            )
+            if (retried.status !== 401 && retried.status !== 403) return retried
+          }
+        }
+        return yield* loginRequired(server.name)
+      })
+    const transport: OAuthTransport = {
+      authProvider,
+      fetch: sdkFetch(store.services, answer),
+    }
+    return Option.some(transport)
+  })
+
+/** The login a `/mcp login` started: its URL, and the effect that waits for the redirect and finishes it. */
+interface LoginStart {
+  readonly url: string
+  readonly finish: Effect.Effect<StoredLogin, McpError>
+}
+
+/**
+ * Starts a login to `server`: a loopback listener on 127.0.0.1 for the
+ * redirect, the SDK's client registration and PKCE authorization URL. The
+ * listener lives in `scope`. `finish` waits up to `LOGIN_TIMEOUT` for the
+ * redirect, exchanges its code, and stores the login.
+ */
+const startLogin = (
+  server: McpServer,
+  config: HttpServerConfig,
+  store: AuthStore,
+  scope: Scope.Scope,
+) =>
+  Effect.gen(function* () {
+    const crypto = yield* Crypto.Crypto
+    const state = Encoding.encodeBase64Url(yield* crypto.randomBytes(24))
+    const code = yield* Deferred.make<string, McpError>()
+    const port = yield* serveRedirect(server, state, code).pipe(Scope.provide(scope))
+    const redirectUri = `http://127.0.0.1:${port}/callback`
+    const flow = emptyFlow(Option.none())
+    const provider = flowProvider(server.name, redirectUri, flow, Option.none(), Option.some(state))
+    const fail = (message: string) => new McpError({ server: server.name, message })
+    yield* Effect.tryPromise({
+      try: () => auth(provider, { serverUrl: config.url }),
+      catch: (cause) => fail(`login: ${failureMessage(cause)}`),
+    })
+    if (Option.isNone(flow.authorizationUrl)) {
+      return yield* fail("login: the authorization server gave no login URL")
+    }
+    const finish = Effect.gen(function* () {
+      const received = yield* Deferred.await(code).pipe(
+        Effect.timeoutOrElse({
+          duration: LOGIN_TIMEOUT,
+          orElse: () => Effect.fail(fail("login: no redirect came within 5 minutes")),
+        }),
+      )
+      yield* Effect.tryPromise({
+        try: () => auth(provider, { serverUrl: config.url, authorizationCode: received }),
+        catch: (cause) => fail(`login: ${failureMessage(cause)}`),
+      })
+      if (Option.isNone(flow.tokens) || Option.isNone(flow.client)) {
+        return yield* fail("login: the authorization server gave no token")
+      }
+      const login = loginFrom(
+        flow.tokens.value,
+        flow.client.value,
+        redirectUri,
+        yield* Clock.currentTimeMillis,
+      )
+      yield* writeLogin(store, authKey(server, config), login)
+      return login
+    }).pipe(
+      Effect.provideService(
+        FileSystem.FileSystem,
+        Context.get(store.services, FileSystem.FileSystem),
+      ),
+      Effect.provideService(Path.Path, Context.get(store.services, Path.Path)),
+      Effect.mapError((error) => {
+        if (error._tag === "McpError") return error
+        return fail(`login: ${error.message}`)
+      }),
+    )
+    const started: LoginStart = { url: flow.authorizationUrl.value.href, finish }
+    return started
+  })
+
+/** The loopback listener for a login's redirect, on a free port; its port. */
+const serveRedirect = (
+  server: McpServer,
+  state: string,
+  code: Deferred.Deferred<string, McpError>,
+) =>
+  Effect.gen(function* () {
+    const app = Effect.gen(function* () {
+      const request = yield* HttpServerRequest.HttpServerRequest
+      const url = new URL(request.url, "http://127.0.0.1")
+      const param = (name: string) => Option.fromNullishOr(url.searchParams.get(name))
+      if (url.pathname !== "/callback") return HttpServerResponse.text("not found", { status: 404 })
+      // A request without this login's state is not its redirect; the wait goes on.
+      if (!Option.contains(param("state"), state)) {
+        return HttpServerResponse.text("this is not the login gent started", { status: 400 })
+      }
+      const refused = param("error")
+      if (Option.isSome(refused)) {
+        const message = Option.getOrElse(param("error_description"), () => refused.value)
+        yield* Deferred.fail(
+          code,
+          new McpError({ server: server.name, message: `login: ${message}` }),
+        )
+        return HttpServerResponse.text(`gent: the login failed: ${message}`, { status: 400 })
+      }
+      const received = param("code").pipe(Option.filter((value) => value !== ""))
+      if (Option.isNone(received)) {
+        return HttpServerResponse.text("the redirect carries no code", { status: 400 })
+      }
+      yield* Deferred.succeed(code, received.value)
+      return HttpServerResponse.text(`gent is logged in to ${server.name}. You can close this tab.`)
+    })
+    const context = yield* Layer.build(
+      HttpServer.serve(app).pipe(
+        Layer.provideMerge(BunHttpServer.layerServer({ port: 0, hostname: "127.0.0.1" })),
+      ),
+    )
+    const address = Context.get(context, HttpServer.HttpServer).address
+    if (address._tag !== "TcpAddress") {
+      return yield* new McpError({ server: server.name, message: "login: no loopback port" })
+    }
+    return address.port
+  })
+
 // ── connections ─────────────────────────────────────────────────────────────
 
 class McpError extends Schema.TaggedError<McpError>()("McpError", {
@@ -588,6 +1090,7 @@ const transportFor = (
   server: McpServer,
   kind: TransportKind,
   environment: Readonly<Record<string, string>>,
+  oauth: Option.Option<OAuthTransport>,
 ) => {
   const config = server.config
   if ("command" in config) {
@@ -600,7 +1103,10 @@ const transportFor = (
       stderr: "ignore",
     })
   }
-  const options = { requestInit: { headers: { ...config.headers } } }
+  const options = {
+    requestInit: { headers: { ...config.headers } },
+    ...Option.getOrElse(oauth, () => ({})),
+  }
   if (kind === "sse") return new SSEClientTransport(new URL(config.url), options)
   return new StreamableHTTPClientTransport(new URL(config.url), options)
 }
@@ -610,6 +1116,7 @@ const statusOf = (cause: unknown): Option.Option<number> => {
   if (cause instanceof StreamableHTTPError || cause instanceof SseError) {
     return Option.fromUndefinedOr(cause.code)
   }
+  if (Schema.is(LoginRequired)(cause)) return Option.some(401)
   return Option.none()
 }
 
@@ -628,6 +1135,7 @@ const dial = (
   server: McpServer,
   kind: TransportKind,
   environment: Readonly<Record<string, string>>,
+  oauth: Option.Option<OAuthTransport>,
   onToolsChanged: Option.Option<() => void>,
 ) =>
   Effect.gen(function* () {
@@ -643,7 +1151,7 @@ const dial = (
         Effect.tryPromise(() => opened.close()).pipe(Effect.timeout(CLOSE_TIMEOUT), Effect.ignore),
     )
     yield* Effect.tryPromise({
-      try: () => client.connect(transportFor(server, kind, environment)),
+      try: () => client.connect(transportFor(server, kind, environment, oauth)),
       catch: (cause) =>
         new McpError({
           server: server.name,
@@ -663,24 +1171,30 @@ const dial = (
  * closes the transport, and a stdio server with it. A `url` entry's `type`
  * picks the transport: `http` (or `streamable-http`) and `sse` pin one, and
  * `auto`, the default, tries streamable HTTP and then SSE when the server
- * answers with a status in `SSE_FALLBACK_STATUSES`. `onToolsChanged` runs on
- * each `notifications/tools/list_changed` of a server that declares it sends
- * them.
+ * answers with a status in `SSE_FALLBACK_STATUSES`. A `url` entry without
+ * its own `Authorization` header signs in with its stored OAuth login (see
+ * `oauthTransport`). `onToolsChanged` runs on each
+ * `notifications/tools/list_changed` of a server that declares it sends them.
  */
-const connect = (server: McpServer, onToolsChanged: Option.Option<() => void> = Option.none()) =>
+const connect = (
+  server: McpServer,
+  auth: AuthStore,
+  onToolsChanged: Option.Option<() => void> = Option.none(),
+) =>
   Effect.gen(function* () {
     const config = server.config
     if ("command" in config) {
-      return yield* dial(server, "stdio", yield* hostEnvironment, onToolsChanged)
+      return yield* dial(server, "stdio", yield* hostEnvironment, Option.none(), onToolsChanged)
     }
+    const oauth = yield* oauthTransport(server, config, auth)
     const type = config.type ?? "auto"
-    if (type === "sse") return yield* dial(server, "sse", {}, onToolsChanged)
-    const streamable = dial(server, "streamable-http", {}, onToolsChanged)
+    if (type === "sse") return yield* dial(server, "sse", {}, oauth, onToolsChanged)
+    const streamable = dial(server, "streamable-http", {}, oauth, onToolsChanged)
     if (type !== "auto") return yield* streamable
     return yield* streamable.pipe(
       Effect.catchTag("McpError", (error) => {
         if (!SSE_FALLBACK_STATUSES.has(error.status ?? 0)) return Effect.fail(error)
-        return dial(server, "sse", {}, onToolsChanged).pipe(
+        return dial(server, "sse", {}, oauth, onToolsChanged).pipe(
           Effect.mapError(
             (sse) =>
               new McpError({
@@ -746,9 +1260,10 @@ type CallResult = typeof CallResult.Type
  * transport failed (the connection closed, the call timed out, HTTP 400, 401
  * or 408, a network error). `kept`: any other HTTP status, which says nothing
  * about the connection. `stale`: the server answered that it has no such
- * tool, so the catalog is out of date.
+ * tool, so the catalog is out of date. `login`: the server refused the
+ * OAuth token and no refresh helped (see `oauthTransport`).
  */
-const CallFailureKind = Schema.Literals(["answered", "expired", "dead", "kept", "stale"])
+const CallFailureKind = Schema.Literals(["answered", "expired", "dead", "kept", "stale", "login"])
 type CallFailureKind = typeof CallFailureKind.Type
 
 const staleMessage = (name: string) =>
@@ -779,6 +1294,7 @@ const CLIENT_RAISED: ReadonlySet<number> = new Set<number>([
 const INVALID_PARAMS: number = ErrorCode.InvalidParams
 
 const failureKind = (cause: unknown, name: string): CallFailureKind => {
+  if (Schema.is(LoginRequired)(cause)) return "login"
   if (cause instanceof ProtocolError) {
     if (CLIENT_RAISED.has(cause.code)) return "dead"
     if (cause.code === INVALID_PARAMS && isUnknownToolMessage(cause.message, name)) return "stale"
@@ -843,6 +1359,8 @@ interface McpClientsService {
   ) => Effect.Effect<CallResult, McpError>
   /** Every configured server as this process sees it now, by name. */
   readonly status: Effect.Effect<McpStatus>
+  /** Starts an OAuth login to the named server; the URL to open (see `login` in `mcpClientsLive`). */
+  readonly login: (name: string) => Effect.Effect<string, McpError>
   /** Writes a result's binary blocks to files (see `makeBlobStore`); each block's file by index. */
   readonly saveBlobs: (
     content: ReadonlyArray<Schema.Json>,
@@ -917,19 +1435,31 @@ interface Connection {
  * Each server's health (see `McpHealth`) starts from its setup listing and
  * follows its connects, lists and failed calls; `status` reads it.
  */
-const mcpClientsLive = (
-  registered: ReadonlyArray<RegisteredServer>,
-  misconfigured: ReadonlyArray<MisconfiguredServer>,
-  file: string,
-  blobs: string,
-) =>
+const mcpClientsLive = ({
+  registered,
+  misconfigured,
+  file,
+  blobs,
+  auth,
+}: {
+  readonly registered: ReadonlyArray<RegisteredServer>
+  readonly misconfigured: ReadonlyArray<MisconfiguredServer>
+  /** The catalog cache. */
+  readonly file: string
+  /** The directory binary blocks are written to. */
+  readonly blobs: string
+  readonly auth: AuthStore
+}) =>
   Layer.effect(
     McpClients,
     Effect.gen(function* () {
+      const crypto = yield* Crypto.Crypto
       const blobStore = yield* makeBlobStore(blobs)
       const byKey = new Map(registered.map((entry) => [entry.server.key, entry]))
       const writePermit = yield* Semaphore.make(1)
       const runFork = yield* FiberSet.makeRuntime<FileSystem.FileSystem | Path.Path>()
+      /** The login each server waits for, so a second `/mcp login` replaces the first. */
+      const pendingLogins = new Map<string, Fiber.Fiber<void>>()
       /** The connection each key holds now, so a late close never drops its successor. */
       const live = new Map<string, Connection>()
       /** Each server's last accepted entry, which a new list is compared with. */
@@ -1008,6 +1538,7 @@ const mcpClientsLive = (
             let onToolsChanged = () => {}
             const { client, transport, instructions } = yield* connect(
               entry.server,
+              auth,
               Option.some(() => onToolsChanged()),
             )
             const connection: Connection = {
@@ -1110,7 +1641,10 @@ const mcpClientsLive = (
               if (failed.kind === "dead") {
                 setHealth(server.key, "degraded", Option.some(failed.message))
               }
-              if (failed.kind === "dead" || failed.kind === "expired") {
+              if (failed.kind === "login") {
+                setHealth(server.key, "expired", Option.some(failed.message))
+              }
+              if (failed.kind === "dead" || failed.kind === "expired" || failed.kind === "login") {
                 return evict(server.key, connection)
               }
               if (failed.kind === "stale") return Effect.sync(() => refresh(server, connection))
@@ -1118,7 +1652,66 @@ const mcpClientsLive = (
             }),
           )
         })
+      /**
+       * Starts a login to the server named `name` and returns its URL at
+       * once. A process fiber waits for the redirect, stores the tokens, and
+       * connects with them, which lists the tools into the cache; `/mcp`
+       * shows how it went. No turn and no request waits for the browser.
+       */
+      const login = (name: string) =>
+        Effect.gen(function* () {
+          const entry = Option.fromUndefinedOr(
+            registered.find(
+              (candidate) => candidate.server.name === name && usesOAuth(candidate.server.config),
+            ),
+          )
+          if (Option.isNone(entry) || !usesOAuth(entry.value.server.config)) {
+            const names = registered
+              .filter((candidate) => usesOAuth(candidate.server.config))
+              .map((candidate) => candidate.server.name)
+            return yield* new McpError({
+              server: name,
+              message: `no MCP server named ${name} signs in with OAuth; these do: ${names.join(", ") || "none"}`,
+            })
+          }
+          const { server } = entry.value
+          const config = entry.value.server.config
+          const previous = Option.fromUndefinedOr(pendingLogins.get(name))
+          if (Option.isSome(previous)) yield* Fiber.interrupt(previous.value)
+          const scope = yield* Scope.make()
+          const started = yield* startLogin(server, config, auth, scope).pipe(
+            Effect.provideService(Crypto.Crypto, crypto),
+            Effect.mapError((error) => {
+              if (error._tag === "McpError") return error
+              return new McpError({ server: name, message: `login: ${error.message}` })
+            }),
+            Effect.tapError(() => Scope.close(scope, Exit.void)),
+          )
+          const finish = Effect.gen(function* () {
+            yield* started.finish
+            // A connection opened before the login sends no token; the next one does.
+            const current = Option.fromUndefinedOr(live.get(server.key))
+            if (Option.isSome(current)) yield* evict(server.key, current.value)
+            yield* Effect.scoped(acquire(server))
+            yield* Effect.logInfo("mcp.oauth.login.done").pipe(
+              Effect.annotateLogs({ server: server.name }),
+            )
+          }).pipe(
+            Effect.catchCause((cause) => {
+              const message = failureMessage(Cause.squash(cause))
+              setHealth(server.key, "expired", Option.some(message))
+              return Effect.logWarning("mcp.oauth.login.failed").pipe(
+                Effect.annotateLogs({ server: server.name, error: message }),
+              )
+            }),
+            Effect.ensuring(Scope.close(scope, Exit.void)),
+            Effect.ensuring(Effect.sync(() => pendingLogins.delete(name))),
+          )
+          pendingLogins.set(name, runFork(finish))
+          return started.url
+        })
       return McpClients.of({
+        login,
         call: (server, name, input) =>
           callOnce(server, name, input).pipe(
             Effect.catchTag("CallFailed", (failed) => {
@@ -1435,10 +2028,14 @@ interface SetupCatalog {
  * setup that lists them. A server that cannot list is reported and
  * contributes nothing; the other servers are unaffected.
  */
-const catalogFor = (server: McpServer, cache: CatalogFile): Effect.Effect<SetupCatalog> => {
+const catalogFor = (server: McpServer, cache: CatalogFile, auth: AuthStore) => {
   const cached = cache.servers[server.key]
   if (Predicate.isNotUndefined(cached)) {
-    return Effect.succeed({ catalog: cached, listedNow: false, failure: Option.none() })
+    return Effect.succeed<SetupCatalog>({
+      catalog: cached,
+      listedNow: false,
+      failure: Option.none(),
+    })
   }
   const unlisted = (error: McpError) =>
     Effect.logWarning("mcp.server.unlisted").pipe(
@@ -1451,7 +2048,7 @@ const catalogFor = (server: McpServer, cache: CatalogFile): Effect.Effect<SetupC
     )
   return Effect.scoped(
     Effect.gen(function* () {
-      const { client, instructions } = yield* connect(server)
+      const { client, instructions } = yield* connect(server, auth)
       const tools = yield* listTools(server, client)
       const catalog: CatalogServer = {
         tools,
@@ -1507,22 +2104,39 @@ const statusLine = (server: McpServerStatus) => {
 
 const firstLine = (text: string) => text.trim().split("\n")[0] ?? ""
 
-/** `/mcp`: shows `mcp.status` to the user. */
+/**
+ * `/mcp` shows `mcp.status` to the user. `/mcp login <server>` starts that
+ * server's OAuth login and shows the URL to open; the login finishes in the
+ * background, and `/mcp` shows the result. The URL is shown, not opened: the
+ * gent server may run on another machine than the browser.
+ */
 const McpCommand = request({
   id: "mcp-command",
-  description: "Show the MCP servers: transport, health, and tool count",
+  description: "Show the MCP servers, or log in to one",
   slash: {
     trigger: "mcp",
     name: "MCP",
-    description: "/mcp · status of each MCP server",
+    description: "/mcp · status of each MCP server · login <server>",
     category: "Tools",
   },
   input: Schema.String,
   output: Schema.Void,
-  execute: () =>
+  execute: (input: string) =>
     Effect.gen(function* () {
       const ctx = yield* ExtensionContext
       const clients = yield* McpClients
+      const words = input.trim().split(/\s+/)
+      if (words[0] === "login") {
+        const name = words[1] ?? ""
+        const content = yield* clients.login(name).pipe(
+          Effect.map(
+            (url) =>
+              `Open this URL to log in to the ${name} MCP server. gent waits 5 minutes for the redirect, then lists the server's tools; run /mcp to see the result.\n\n${url}`,
+          ),
+          Effect.catchTag("McpError", (error) => Effect.succeed(error.message)),
+        )
+        return yield* ctx.Interaction.present({ title: "MCP login", content })
+      }
       const { servers } = yield* clients.status
       yield* ctx.Interaction.present({
         title: "MCP servers",
@@ -1547,9 +2161,10 @@ const registerServers = Effect.fn("Mcp.registerServers")(function* (
   if (servers.length === 0 && misconfigured.length === 0) return
   const file = yield* catalogPath(host.home)
   const cache = yield* readCatalog(file)
+  const auth = yield* makeAuthStore(host.home)
   const registered = yield* Effect.forEach(
     servers,
-    (server) => Effect.map(catalogFor(server, cache), (catalog) => ({ server, ...catalog })),
+    (server) => Effect.map(catalogFor(server, cache, auth), (catalog) => ({ server, ...catalog })),
     { concurrency: 8 },
   )
   // One write for every server listed now; a failed write only costs a relist.
@@ -1564,7 +2179,13 @@ const registerServers = Effect.fn("Mcp.registerServers")(function* (
     defineResource({
       id: `${extensionId}/clients`,
       scope: "process",
-      layer: mcpClientsLive(registered, misconfigured, file, yield* blobDirectory(host.home)),
+      layer: mcpClientsLive({
+        registered,
+        misconfigured,
+        file,
+        blobs: yield* blobDirectory(host.home),
+        auth,
+      }),
     }),
   )
   yield* host.register(

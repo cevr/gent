@@ -13,7 +13,13 @@ import {
   Stream,
 } from "effect"
 import { BunHttpServer, BunServices } from "@effect/platform-bun"
-import { HttpServer, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
+import {
+  FetchHttpClient,
+  HttpClient,
+  HttpServer,
+  HttpServerRequest,
+  HttpServerResponse,
+} from "effect/unstable/http"
 import type * as Prompt from "effect/unstable/ai/Prompt"
 import {
   BunGentPlatformLive,
@@ -937,6 +943,379 @@ describe("mcp status", () => {
         )
       }).pipe(Effect.timeout("25 seconds"), Effect.provide(platformLayer)),
     30_000,
+  )
+})
+
+// ── oauth ───────────────────────────────────────────────────────────────────
+
+/** What the OAuth fixture saw and holds. */
+interface OAuthFixtureState {
+  origin: string
+  /** Access tokens `/mcp` accepts; `revoke` clears them, not the refresh tokens. */
+  readonly valid: Set<string>
+  readonly refreshTokens: Set<string>
+  issued: number
+  refreshes: number
+  /** `tools/call` requests `/mcp` refused with 401. */
+  refusedCalls: number
+  /** `initialize` requests `/mcp` refused with 401. */
+  refusedInitializes: number
+}
+
+const FormParams = Schema.Struct({
+  grant_type: Schema.String,
+  code: Schema.optional(Schema.String),
+  refresh_token: Schema.optional(Schema.String),
+})
+
+const RpcMessage = Schema.fromJsonString(
+  Schema.Struct({
+    id: Schema.optional(Schema.Union([Schema.String, Schema.Finite])),
+    method: Schema.String,
+    params: Schema.optional(Schema.Record(Schema.String, Schema.Json)),
+  }),
+)
+
+type OAuthRequest = HttpServerRequest.HttpServerRequest
+
+const fixtureJson = (body: Schema.Json, status = 200) =>
+  HttpServerResponse.jsonUnsafe(body, { status })
+
+/** The next numbered token pair, which the fixture then accepts. */
+const issueTokens = (state: OAuthFixtureState) => {
+  state.issued += 1
+  const tokens = {
+    access_token: `token-${state.issued}`,
+    token_type: "Bearer",
+    expires_in: 3600,
+    refresh_token: `refresh-${state.issued}`,
+  }
+  state.valid.add(tokens.access_token)
+  state.refreshTokens.add(tokens.refresh_token)
+  return fixtureJson(tokens)
+}
+
+const authorizationServerMetadata = (state: OAuthFixtureState) =>
+  fixtureJson({
+    issuer: state.origin,
+    authorization_endpoint: `${state.origin}/authorize`,
+    token_endpoint: `${state.origin}/token`,
+    registration_endpoint: `${state.origin}/register`,
+    response_types_supported: ["code"],
+    grant_types_supported: ["authorization_code", "refresh_token"],
+    code_challenge_methods_supported: ["S256"],
+    token_endpoint_auth_methods_supported: ["none"],
+  })
+
+const registerClient = (request: OAuthRequest) =>
+  Effect.flatMap(
+    request.text,
+    Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json))),
+  ).pipe(
+    Effect.map((metadata) =>
+      fixtureJson({ ...metadata, client_id: "client-1", client_id_issued_at: 1 }, 201),
+    ),
+  )
+
+/** The browser's part of a login: the user agrees at once, so it redirects with the code. */
+const authorize = (url: URL) => {
+  const redirect = new URL(url.searchParams.get("redirect_uri") ?? "")
+  redirect.searchParams.set("code", "code-1")
+  redirect.searchParams.set("state", url.searchParams.get("state") ?? "")
+  return HttpServerResponse.redirect(redirect.href, { status: 302 })
+}
+
+/** The code grant for `code-1`, and the refresh grant for a refresh token not yet used. */
+const exchangeToken = (state: OAuthFixtureState, request: OAuthRequest) =>
+  Effect.gen(function* () {
+    const form = yield* Effect.flatMap(request.text, (text) =>
+      Schema.decodeUnknownEffect(FormParams)(Object.fromEntries(new URLSearchParams(text))),
+    )
+    if (form.grant_type === "authorization_code" && form.code === "code-1")
+      return issueTokens(state)
+    const refresh = form.refresh_token ?? ""
+    if (form.grant_type === "refresh_token" && state.refreshTokens.has(refresh)) {
+      state.refreshTokens.delete(refresh)
+      state.refreshes += 1
+      return issueTokens(state)
+    }
+    return fixtureJson({ error: "invalid_grant" }, 400)
+  })
+
+/** The JSON-RPC result of `/mcp` for an accepted token. */
+const mcpResult = (
+  state: OAuthFixtureState,
+  method: string,
+  name: Option.Option<Schema.Json>,
+  token: string,
+): Schema.Json => {
+  if (method === "initialize") {
+    return {
+      protocolVersion: "2025-06-18",
+      capabilities: { tools: {} },
+      serverInfo: { name: "oauth-fixture", version: "1" },
+    }
+  }
+  if (method === "tools/list") {
+    return {
+      tools: [
+        { name: "whoami", description: "Name the token.", inputSchema: { type: "object" } },
+        {
+          name: "revoke",
+          description: "Revoke every access token.",
+          inputSchema: { type: "object" },
+        },
+      ],
+    }
+  }
+  if (Option.contains(name, "revoke")) {
+    state.valid.clear()
+    return { content: [{ type: "text", text: "revoked" }] }
+  }
+  return { content: [{ type: "text", text: token }] }
+}
+
+/** `/mcp`: 401 with the resource metadata for a token it does not accept, else the result. */
+const answerMcp = (state: OAuthFixtureState, request: OAuthRequest) =>
+  Effect.gen(function* () {
+    const message = yield* Effect.flatMap(request.text, Schema.decodeUnknownEffect(RpcMessage))
+    const token = (request.headers["authorization"] ?? "").replace(/^Bearer /, "")
+    if (!state.valid.has(token)) {
+      if (message.method === "tools/call") state.refusedCalls += 1
+      if (message.method === "initialize") state.refusedInitializes += 1
+      return HttpServerResponse.text("unauthorized", {
+        status: 401,
+        headers: {
+          "www-authenticate": `Bearer resource_metadata="${state.origin}/.well-known/oauth-protected-resource/mcp"`,
+        },
+      })
+    }
+    const name = Option.flatMap(Option.fromUndefinedOr(message.params), (params) =>
+      Option.fromUndefinedOr(params["name"]),
+    )
+    const result = mcpResult(state, message.method, name, token)
+    return Option.match(Option.fromUndefinedOr(message.id), {
+      onNone: () => HttpServerResponse.empty({ status: 202 }),
+      onSome: (id) => fixtureJson({ jsonrpc: "2.0", id, result }),
+    })
+  })
+
+/**
+ * One local server that is both an MCP resource at `/mcp` and its OAuth
+ * authorization server: metadata, dynamic registration, an `/authorize` that
+ * redirects at once with a code, and `/token` for the code and refresh
+ * grants. Tokens are numbered in issue order.
+ */
+const oauthFixtureApp = (state: OAuthFixtureState) =>
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest
+    const url = new URL(request.url, state.origin)
+    if (url.pathname.startsWith("/.well-known/oauth-protected-resource")) {
+      return fixtureJson({ resource: `${state.origin}/mcp`, authorization_servers: [state.origin] })
+    }
+    if (url.pathname === "/.well-known/oauth-authorization-server") {
+      return authorizationServerMetadata(state)
+    }
+    if (url.pathname === "/register") return yield* registerClient(request)
+    if (url.pathname === "/authorize") return authorize(url)
+    if (url.pathname === "/token") return yield* exchangeToken(state, request)
+    if (url.pathname !== "/mcp" || request.method !== "POST") {
+      return HttpServerResponse.empty({ status: 405 })
+    }
+    return yield* answerMcp(state, request)
+  }).pipe(Effect.orElseSucceed(() => HttpServerResponse.text("bad request", { status: 400 })))
+
+const serveOAuthFixture = Effect.gen(function* () {
+  const state: OAuthFixtureState = {
+    origin: "",
+    valid: new Set(),
+    refreshTokens: new Set(),
+    issued: 0,
+    refreshes: 0,
+    refusedCalls: 0,
+    refusedInitializes: 0,
+  }
+  const context = yield* Layer.build(
+    HttpServer.serve(oauthFixtureApp(state)).pipe(
+      Layer.provideMerge(BunHttpServer.layerServer({ port: 0, hostname: "127.0.0.1" })),
+    ),
+  )
+  const address = Context.get(context, HttpServer.HttpServer).address
+  if (address._tag !== "TcpAddress") return yield* Effect.die("expected a TCP address")
+  state.origin = `http://127.0.0.1:${address.port}`
+  return state
+})
+
+/** A scratch data directory, and the harness environment that uses it. */
+const makeDataDir = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem
+  const directory = yield* fs.realPath(
+    yield* fs.makeTempDirectoryScoped({ prefix: "gent-mcp-oauth-" }),
+  )
+  return {
+    directory,
+    layer: ConfigProvider.layer(ConfigProvider.fromUnknown({ GENT_DATA_DIR: directory })),
+  }
+})
+
+const oauthServers = (oauth: OAuthFixtureState) =>
+  McpServers("@test/mcp-oauth", { secure: { url: `${oauth.origin}/mcp` } })
+
+/** A session whose model runs `code` in one cell; the cell's result. */
+const runOAuthCell = (oauth: OAuthFixtureState, code: string) =>
+  Effect.gen(function* () {
+    const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+      toolCallStep("cell", { code }),
+      textStep("done"),
+    ])
+    const { client, sessionId, branchId } = yield* createRpcHarness({
+      ...shippedPreset,
+      extensionInputs: [...shippedPreset.extensionInputs, oauthServers(oauth)],
+      providerLayer,
+    })
+    yield* client.message.send({ sessionId, branchId, content: "who am I" })
+    return yield* cellResultAfterDone(client, branchId)
+  })
+
+/**
+ * One session: `/mcp` before the login, `/mcp login secure`, the browser's
+ * visit to the presented URL, and `/mcp` once the login listed the tools.
+ */
+const loginThroughCommand = (oauth: OAuthFixtureState, catalogFile: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const http = yield* HttpClient.HttpClient
+    const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+    const harness = yield* createRpcHarness({
+      ...shippedPreset,
+      extensionInputs: [...shippedPreset.extensionInputs, oauthServers(oauth)],
+      providerLayer,
+    })
+    const request = (input: string) =>
+      harness.client.extension.request({
+        sessionId: harness.sessionId,
+        branchId: harness.branchId,
+        extensionId: ExtensionId.make("@test/mcp-oauth"),
+        capabilityId: "mcp-command",
+        input,
+      })
+    const texts = harness.client.message
+      .list({ branchId: harness.branchId })
+      .pipe(Effect.map((all) => all.map((message) => messagePartsText(message.parts))))
+    const shown = (needle: string) =>
+      waitFor(texts, (all) => all.some((text) => text.includes(needle)), 10_000, needle).pipe(
+        Effect.map((all) => all.filter((text) => text.includes(needle)).at(-1) ?? ""),
+      )
+    // Setup could not list: the server wants a login.
+    yield* request("")
+    const before = yield* shown("- secure")
+    yield* request("login secure")
+    const prompt = yield* shown("/authorize?")
+    const loginUrl = /http:\/\/127\.0\.0\.1:\d+\/authorize\?\S+/.exec(prompt)?.[0] ?? ""
+    // The browser's part: the fixture redirects to gent's loopback listener at once.
+    const landing = yield* http.get(loginUrl).pipe(Effect.flatMap((response) => response.text))
+    yield* waitFor(
+      fs.readFileString(catalogFile).pipe(Effect.orElseSucceed(() => "")),
+      (text) => text.includes("whoami"),
+      10_000,
+      "the login lists the tools into the cache",
+    )
+    yield* request("")
+    const after = yield* shown("healthy")
+    return { before, prompt, landing, after }
+  }).pipe(Effect.provide(FetchHttpClient.layer))
+
+describe("mcp oauth", () => {
+  it.scopedLive(
+    "/mcp login signs in through the loopback redirect, stores the token 0600, and the next session calls with it",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const oauth = yield* serveOAuthFixture
+        const data = yield* makeDataDir
+        const authFile = path.join(data.directory, "mcp-auth.json")
+        const catalogFile = path.join(data.directory, "mcp-catalog.json")
+        const first = yield* loginThroughCommand(oauth, catalogFile).pipe(
+          Effect.provide(data.layer),
+        )
+        expect(first.before).toContain(
+          "- secure (auto): expired, 0 tools, not connected\n  connect: the secure MCP server needs a login: run /mcp login secure",
+        )
+        expect(first.prompt).toContain("Open this URL to log in to the secure MCP server.")
+        expect(first.landing).toBe("gent is logged in to secure. You can close this tab.")
+        expect(first.after).toContain("- secure (streamable-http): healthy, 2 tools, connected")
+        const stored = yield* fs.readFileString(authFile)
+        expect(stored).toContain('"access_token":"token-1"')
+        expect(stored).toContain('"client_id":"client-1"')
+        const info = yield* fs.stat(authFile)
+        expect(Number(info.mode) & 0o777).toBe(0o600)
+        // A new session registers the listed tools and calls with the stored token.
+        const called = yield* runOAuthCell(oauth, "await tools.mcp.secure.whoami()").pipe(
+          Effect.provide(data.layer),
+        )
+        expect(called).toMatchObject({ isFailure: false, result: { display: "token-1" } })
+      }).pipe(Effect.timeout("40 seconds"), Effect.provide(platformLayer)),
+    45_000,
+  )
+
+  it.scopedLive(
+    "a token near expiry is refreshed before the dial; a refused initialize is refreshed and sent again; a refused call is not",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const oauth = yield* serveOAuthFixture
+        const data = yield* makeDataDir
+        // A login whose token expires in 30 s, inside the 60 s skew.
+        oauth.valid.add("token-0")
+        oauth.refreshTokens.add("refresh-0")
+        const now = yield* Clock.currentTimeMillis
+        const key = `secure ${oauth.origin}/mcp`
+        yield* fs.writeFileString(
+          path.join(data.directory, "mcp-auth.json"),
+          encodeJson({
+            servers: {
+              [key]: {
+                tokens: {
+                  access_token: "token-0",
+                  token_type: "Bearer",
+                  refresh_token: "refresh-0",
+                },
+                expiresAt: now + 30_000,
+                client: { client_id: "client-1" },
+                redirectUri: "http://127.0.0.1:9/callback",
+              },
+            },
+          }),
+        )
+        const code = [
+          "const first = await tools.mcp.secure.whoami()",
+          "await tools.mcp.secure.revoke()",
+          "let refused = ''; try { await tools.mcp.secure.whoami() } catch (error) { refused = error.message }",
+          "const second = await tools.mcp.secure.whoami()",
+          "JSON.stringify({ first, refused, second })",
+        ].join("; ")
+        const result = yield* runOAuthCell(oauth, code).pipe(Effect.provide(data.layer))
+        expect(result).toMatchObject({ name: "cell", isFailure: false })
+        const shown = yield* Schema.decodeUnknownEffect(
+          Schema.fromJsonString(
+            Schema.Struct({ first: Schema.String, refused: Schema.String, second: Schema.String }),
+          ),
+        )(Reflect.get(result?.result ?? {}, "display"))
+        // Setup refreshed token-0 to token-1 before it dialed.
+        expect(shown.first).toBe("token-1")
+        expect(shown.refused).toContain(
+          "the secure MCP server needs a login: run /mcp login secure",
+        )
+        // The refused initialize was refreshed to token-2 and sent again.
+        expect(shown.second).toBe("token-2")
+        expect(oauth.refreshes).toBe(2)
+        expect(oauth.refusedInitializes).toBe(1)
+        // The refused call went out once.
+        expect(oauth.refusedCalls).toBe(1)
+      }).pipe(Effect.timeout("40 seconds"), Effect.provide(platformLayer)),
+    45_000,
   )
 })
 
