@@ -58,10 +58,10 @@ import {
   createSignal,
   on,
   onCleanup,
+  untrack,
   type ParentProps,
 } from "solid-js"
 import { createStore } from "solid-js/store"
-import { omitUndefined } from "@gent/core/extensions/api"
 import {
   formatError,
   type PathPlace,
@@ -242,10 +242,6 @@ const SessionSchema: Schema.Schema<Session> = Schema.Struct({
   cwd: Schema.optional(Schema.String),
 })
 
-export type SessionState =
-  | { readonly status: "none" }
-  | { readonly status: "active"; readonly session: Session }
-
 export const SessionStateEvent = Schema.TaggedUnion({
   Activated: { session: SessionSchema },
   UpdateName: { name: Schema.String },
@@ -258,35 +254,24 @@ export const SessionStateEvent = Schema.TaggedUnion({
 })
 export type SessionStateEvent = Schema.Schema.Type<typeof SessionStateEvent>
 
-export const SessionState = {
-  none: (): SessionState => ({ status: "none" }),
-  active: (session: Session): SessionState => ({ status: "active", session }),
-}
-
-const mapActive = (state: SessionState, update: (session: Session) => Session): SessionState => {
-  if (state.status === "active") return SessionState.active(update(state.session))
-  return state
-}
-
-export function transitionSessionState(
-  state: SessionState,
-  event: SessionStateEvent,
-): SessionState {
+/**
+ * The session in view. The client always holds one: the process starts on a
+ * session, and every navigation replaces it with another.
+ */
+export function transitionSessionState(session: Session, event: SessionStateEvent): Session {
   return Match.value(event).pipe(
     Match.tagsExhaustive({
-      Activated: (activated) => SessionState.active(activated.session),
-      UpdateName: (update) => mapActive(state, (session) => ({ ...session, name: update.name })),
-      UpdateCwd: (update) =>
-        mapActive(state, (session) => {
-          if (session.sessionId !== update.sessionId) return session
-          return { ...session, cwd: update.cwd }
-        }),
-      UpdateSettings: (update) =>
-        mapActive(state, (session) => ({
-          ...session,
-          modelId: update.modelId,
-          reasoningLevel: update.reasoningLevel,
-        })),
+      Activated: (activated) => activated.session,
+      UpdateName: (update) => ({ ...session, name: update.name }),
+      UpdateCwd: (update) => {
+        if (session.sessionId !== update.sessionId) return session
+        return { ...session, cwd: update.cwd }
+      },
+      UpdateSettings: (update) => ({
+        ...session,
+        modelId: update.modelId,
+        reasoningLevel: update.reasoningLevel,
+      }),
     }),
   )
 }
@@ -510,18 +495,16 @@ export const sameIdentity = (left: SessionIdentity, right: SessionIdentity): boo
   left.sessionId === right.sessionId && left.branchId === right.branchId
 
 interface ClientSessionValue {
-  /** None while no session is active. */
-  session: () => Option.Option<Session>
-  /** The active session's ids; a new record with the same ids is the same value. */
-  sessionIdentity: () => Option.Option<SessionIdentity>
-  /** The active session's id alone, for consumers that never read the branch. */
-  activeSessionId: () => Option.Option<SessionId>
-  isActive: () => boolean
+  /** The session in view. */
+  session: () => Session
+  /** Its ids; a new record with the same ids is the same value. */
+  sessionIdentity: () => SessionIdentity
+  /** Its id alone, for consumers that never read the branch. */
+  activeSessionId: () => SessionId
   /**
-   * The directory `@file` and `!cmd` resolve against: the active session's
-   * cwd, read from the server when the record does not carry it yet. The
-   * launch directory stands in only with no session, or for a stored session
-   * that names no cwd.
+   * The directory `@file` and `!cmd` resolve against: the session's cwd, read
+   * from the server when the record does not carry it yet. The launch
+   * directory stands in only for a stored session that names no cwd.
    */
   sessionCwd: Effect.Effect<string, GentClientRpcError>
   /** The directory a given session resolves against, whether or not it is active. */
@@ -670,8 +653,8 @@ interface ClientProviderProps extends ParentProps {
   client: GentNamespacedClient
   runtime: GentRuntime
   log: ClientLog
-  // eslint-disable-next-line effect/noNullish -- bootstrap passes no session when starting fresh.
-  initialSession: Session | undefined
+  /** The session the process starts on: bootstrap always resolves one. */
+  initialSession: Session
   initialAgent?: AgentName
   /**
    * Host-provided platform services (e.g. `FileSystem`, `ChildProcessSpawner`).
@@ -697,54 +680,27 @@ export function ClientProvider(props: ClientProviderProps) {
 
   const eventHub = createClientEventHub(log)
 
-  const initialSession = Option.fromNullishOr(props.initialSession)
-  const initialSessionState = Option.match(initialSession, {
-    onNone: SessionState.none,
-    onSome: SessionState.active,
-  })
   // The agent startup resolved for the startup session holds until its
-  // snapshot lands. Past startup a session's snapshot names its agent; with
-  // no session, the default agent is the one a new session gets.
-  const initialAgent = Option.orElse(Option.fromNullishOr(props.initialAgent), () =>
-    Option.match(initialSession, {
-      onNone: () => Option.some(DEFAULT_AGENT_NAME),
-      onSome: () => Option.none(),
-    }),
-  )
-  const [sessionState, setSessionState] = createSignal<SessionState>(initialSessionState)
+  // snapshot lands. Past startup a session's snapshot names its agent.
+  const initialAgent = Option.fromNullishOr(props.initialAgent)
+  const [session, setSession] = createSignal<Session>(props.initialSession)
   const dispatchSession = (event: Parameters<typeof transitionSessionState>[1]) => {
-    setSessionState((current) => transitionSessionState(current, event))
-  }
-  const sessionOption = (): Option.Option<Session> => {
-    const current = sessionState()
-    if (current.status === "active") return Option.some(current.session)
-    return Option.none()
+    setSession((current) => transitionSessionState(current, event))
   }
   // The one place the session's identity is derived. Held as a memo with an
   // equivalence on the ids so a rename or a settings change — both of which
   // rebuild the record — leaves this value untouched, and the effects keyed on
   // it keep running.
   const sessionIdentity = createMemo(
-    () =>
-      Option.map(sessionOption(), (active) => ({
-        sessionId: active.sessionId,
-        branchId: active.branchId,
-      })),
-    Option.none<SessionIdentity>(),
-    {
-      equals: Option.makeEquivalence<SessionIdentity>(sameIdentity),
-    },
+    (): SessionIdentity => ({ sessionId: session().sessionId, branchId: session().branchId }),
+    { sessionId: props.initialSession.sessionId, branchId: props.initialSession.branchId },
+    { equals: sameIdentity },
   )
-  const activeSessionId = createMemo(
-    () => Option.map(sessionIdentity(), (identity) => identity.sessionId),
-    Option.none<SessionId>(),
-    { equals: Option.makeEquivalence<SessionId>((left, right) => left === right) },
-  )
-  const isActive = () => sessionState().status === "active"
+  const activeSessionId = createMemo(() => sessionIdentity().sessionId)
 
   const cwdOf = (sessionId: SessionId): Effect.Effect<string, GentClientRpcError> =>
     Effect.suspend(() => {
-      const known = sessionOption().pipe(
+      const known = Option.some(session()).pipe(
         Option.filter((current) => current.sessionId === sessionId),
         Option.flatMap((current) => Option.fromUndefinedOr(current.cwd)),
       )
@@ -767,16 +723,10 @@ export function ClientProvider(props: ClientProviderProps) {
       Effect.map(Option.getOrElse(() => workspace.cwd)),
     )
   const sessionCwd: Effect.Effect<string, GentClientRpcError> = Effect.suspend(() =>
-    Option.match(sessionOption(), {
-      onNone: () => Effect.succeed(workspace.cwd),
-      onSome: (current) => cwdOf(current.sessionId),
-    }),
+    cwdOf(session().sessionId),
   )
   const pathPlace = (): PathPlace => ({
-    cwd: Option.getOrElse(
-      Option.flatMap(sessionOption(), (current) => Option.fromUndefinedOr(current.cwd)),
-      () => workspace.cwd,
-    ),
+    cwd: Option.getOrElse(Option.fromUndefinedOr(session().cwd), () => workspace.cwd),
     home: workspace.home,
   })
 
@@ -784,8 +734,7 @@ export function ClientProvider(props: ClientProviderProps) {
   // where it is rooted before anything is submitted.
   createEffect(
     on(activeSessionId, () => {
-      const current = sessionOption()
-      if (Option.isNone(current) || Predicate.isNotUndefined(current.value.cwd)) return
+      if (Predicate.isNotUndefined(untrack(session).cwd)) return
       cast(sessionCwd.pipe(Effect.catchEager(() => Effect.void)))
     }),
   )
@@ -843,7 +792,7 @@ export function ClientProvider(props: ClientProviderProps) {
     `${identity.sessionId}\u0000${identity.branchId}`
   /** Write the error on screen for the session in view; it replaces that session's held error. */
   const showError = (error: Option.Option<string>): void => {
-    Option.map(sessionOption(), (current) => heldErrors.delete(identityKey(current)))
+    heldErrors.delete(identityKey(session()))
     setAgentStore({ error })
   }
   /** Write whether a turn runs. A turn start clears the error on screen. */
@@ -942,7 +891,7 @@ export function ClientProvider(props: ClientProviderProps) {
   // identity. Both keys are memos: a rename or a settings change on the session
   // record reads nothing again, and a reconnect reads again. Health adds its
   // own invalidations below.
-  const connectionAndSession = (): readonly [Option.Option<number>, Option.Option<SessionId>] => [
+  const connectionAndSession = (): readonly [Option.Option<number>, SessionId] => [
     connectedGeneration(),
     activeSessionId(),
   ]
@@ -951,19 +900,15 @@ export function ClientProvider(props: ClientProviderProps) {
   // Health can change while the session stays: a settings change (a model its
   // extension needs) or an extension's own pulse. Both invalidate it
   // explicitly; a rename, which also rebuilds the record, does not.
-  const sessionSettings = createMemo(() =>
-    Option.match(sessionOption(), {
-      onNone: () => "",
-      onSome: (active) => `${active.modelId ?? ""}|${active.reasoningLevel ?? ""}`,
-    }),
+  const sessionSettings = createMemo(
+    () => `${session().modelId ?? ""}|${session().reasoningLevel ?? ""}`,
   )
   const [extensionPulses, setExtensionPulses] = createSignal(0)
-  const healthKey = (): readonly [
-    Option.Option<number>,
-    Option.Option<SessionId>,
-    string,
-    number,
-  ] => [...connectionAndSession(), sessionSettings(), extensionPulses()]
+  const healthKey = (): readonly [Option.Option<number>, SessionId, string, number] => [
+    ...connectionAndSession(),
+    sessionSettings(),
+    extensionPulses(),
+  ]
 
   createEffect(
     on(
@@ -975,7 +920,7 @@ export function ClientProvider(props: ClientProviderProps) {
           return
         }
 
-        const request = omitUndefined({ sessionId: Option.getOrUndefined(sessionId) })
+        const request = { sessionId }
         cast(
           client.extension.listStatus(request).pipe(
             Effect.tap((nextHealth) =>
@@ -1006,7 +951,7 @@ export function ClientProvider(props: ClientProviderProps) {
     on(connectionAndSession, ([epoch, sessionId]) => {
       const version = ++modelCatalogLoadVersion
       if (Option.isNone(epoch)) return
-      const request = omitUndefined({ sessionId: Option.getOrUndefined(sessionId) })
+      const request = { sessionId }
       cast(
         Effect.all({
           models: client.model.list(request),
@@ -1039,37 +984,27 @@ export function ClientProvider(props: ClientProviderProps) {
   )
 
   const applySessionRuntime: ClientTransportValue["applySessionRuntime"] = (input) => {
-    if (!Option.exists(sessionOption(), (current) => sameIdentity(current, input))) return
+    if (!sameIdentity(session(), input)) return
     setRunning(input.runtime._tag !== "Idle")
   }
 
   const applySessionSnapshot = (snapshot: SessionSnapshot): void => {
-    const currentSession = sessionOption()
-    if (Option.isSome(currentSession) && !sameIdentity(currentSession.value, snapshot)) return
+    const current = session()
+    if (!sameIdentity(current, snapshot)) return
     clearConnectionIssue()
     const nextSession = {
       sessionId: snapshot.sessionId,
       branchId: snapshot.branchId,
-      name: Option.getOrElse(Option.fromNullishOr(snapshot.name), () =>
-        Option.getOrElse(
-          Option.flatMap(currentSession, (value) => Option.fromNullishOr(value.name)),
-          () => "Unnamed",
-        ),
-      ),
+      name: Option.getOrElse(Option.fromNullishOr(snapshot.name), () => current.name),
       modelId: snapshot.modelId,
       reasoningLevel: snapshot.reasoningLevel,
       // The snapshot names no cwd; the record keeps the one it has.
-      cwd: Option.getOrUndefined(
-        Option.flatMap(currentSession, (value) => Option.fromUndefinedOr(value.cwd)),
-      ),
+      cwd: current.cwd,
     }
-    const sessionChanged = Option.match(currentSession, {
-      onNone: () => true,
-      onSome: (current) =>
-        current.name !== nextSession.name ||
-        current.modelId !== nextSession.modelId ||
-        current.reasoningLevel !== nextSession.reasoningLevel,
-    })
+    const sessionChanged =
+      current.name !== nextSession.name ||
+      current.modelId !== nextSession.modelId ||
+      current.reasoningLevel !== nextSession.reasoningLevel
     if (sessionChanged) {
       dispatchSession(SessionStateEvent.cases.Activated.make({ session: nextSession }))
     }
@@ -1096,9 +1031,7 @@ export function ClientProvider(props: ClientProviderProps) {
    * conversation, so the read does not grow with the session's history.
    */
   const refreshResolvedSettings = (): void => {
-    const currentSession = sessionOption()
-    if (Option.isNone(currentSession)) return
-    const s = currentSession.value
+    const s = session()
     cast(
       client.session.get({ sessionId: s.sessionId }).pipe(
         Effect.tap((reply) =>
@@ -1108,9 +1041,8 @@ export function ClientProvider(props: ClientProviderProps) {
             // session's reset values, so a reply for a session the reader
             // left, or for a session that is gone, is dropped.
             const view = Option.fromNullishOr(reply)
-            const active = sessionOption()
-            if (Option.isNone(view) || Option.isNone(active)) return
-            if (active.value.sessionId !== s.sessionId) return
+            if (Option.isNone(view)) return
+            if (session().sessionId !== s.sessionId) return
             setAgentStore({
               resolvedModelId: Option.fromUndefinedOr(view.value.resolvedModelId),
               resolvedReasoningLevel: Option.fromUndefinedOr(view.value.resolvedReasoningLevel),
@@ -1135,16 +1067,14 @@ export function ClientProvider(props: ClientProviderProps) {
   const applySessionMetadataEvent = (event: EventEnvelope["event"]): void => {
     switch (event._tag) {
       case "SessionNameUpdated": {
-        const s = sessionOption()
-        if (Option.isSome(s) && event.sessionId === s.value.sessionId) {
+        if (event.sessionId === session().sessionId) {
           dispatchSession(SessionStateEvent.cases.UpdateName.make({ name: event.name }))
         }
         break
       }
 
       case "SessionSettingsUpdated": {
-        const s = sessionOption()
-        if (Option.isSome(s) && event.sessionId === s.value.sessionId) {
+        if (event.sessionId === session().sessionId) {
           dispatchSession(
             SessionStateEvent.cases.UpdateSettings.make({
               modelId: event.modelId,
@@ -1160,7 +1090,7 @@ export function ClientProvider(props: ClientProviderProps) {
       // The turn read the project config again, which no event reports: read
       // what the next turn resolves to, once per turn, not once per step.
       case "TurnCompleted": {
-        if (Option.contains(activeSessionId(), event.sessionId)) refreshResolvedSettings()
+        if (activeSessionId() === event.sessionId) refreshResolvedSettings()
         break
       }
     }
@@ -1168,7 +1098,7 @@ export function ClientProvider(props: ClientProviderProps) {
 
   // An extension that has news may report another health: read it again.
   const isActivePulse = (event: EventEnvelope["event"]): boolean =>
-    event._tag === "ExtensionStateChanged" && Option.contains(activeSessionId(), event.sessionId)
+    event._tag === "ExtensionStateChanged" && activeSessionId() === event.sessionId
   const invalidateHealthOn = (event: EventEnvelope["event"]): void => {
     if (isActivePulse(event)) setExtensionPulses((count) => count + 1)
   }
@@ -1293,10 +1223,9 @@ export function ClientProvider(props: ClientProviderProps) {
   }
 
   const sessionValue: ClientSessionValue = {
-    session: sessionOption,
+    session,
     sessionIdentity,
     activeSessionId,
-    isActive,
     sessionCwd,
     cwdOf,
     pathPlace,
@@ -1304,43 +1233,38 @@ export function ClientProvider(props: ClientProviderProps) {
     createSession: () => createSessionWith({}, Effect.succeed(workspace.cwd)),
 
     openHandoffSession: (summary) => {
-      const current = sessionOption()
-      if (Option.isNone(current)) return
+      const current = session()
       createSessionWith(
         {
-          parentSessionId: current.value.sessionId,
-          parentBranchId: current.value.branchId,
+          parentSessionId: current.sessionId,
+          parentBranchId: current.branchId,
           continueThread: true,
           initialPrompt: summary,
         },
-        cwdOf(current.value.sessionId),
+        cwdOf(current.sessionId),
       )
     },
 
     switchSession: (sessionId, branchId, name) => {
-      const current = sessionOption()
+      const current = session()
       // A switch overtakes any create still waiting, even a switch to the
       // session already in view: the reader chose where to be.
       navigation++
       // Choosing the session already in view changes nothing else. A reset here
       // would clear its status, metrics and settings, and no snapshot comes to
       // restore them: the identity did not change, so the feed does not re-run.
-      if (Option.exists(current, (value) => sameIdentity(value, { sessionId, branchId }))) return
-      const currentSessionId = Option.map(current, (value) => value.sessionId)
+      if (sameIdentity(current, { sessionId, branchId })) return
+      const sameSession = current.sessionId === sessionId
       // A branch switch stays in the session's directory; another session's
       // directory is read when something asks for it.
       const cwd = Option.getOrUndefined(
-        Option.flatMap(
-          Option.filter(current, (value) => value.sessionId === sessionId),
-          (value) => Option.fromUndefinedOr(value.cwd),
-        ),
+        Option.filter(Option.fromUndefinedOr(current.cwd), () => sameSession),
       )
       resetForSession({
         // The session's snapshot names its agent.
         agent: Option.none(),
         // A branch switch within one session keeps that session's health.
-        clearExtensionHealth:
-          Option.isNone(currentSessionId) || currentSessionId.value !== sessionId,
+        clearExtensionHealth: !sameSession,
       })
       dispatchSession(
         SessionStateEvent.cases.Activated.make({
@@ -1354,16 +1278,10 @@ export function ClientProvider(props: ClientProviderProps) {
       )
     },
 
-    listBranches: Effect.gen(function* () {
-      const currentSession = sessionOption()
-      if (Option.isNone(currentSession)) return [] satisfies readonly Branch[]
-      return yield* client.branch.list({ sessionId: currentSession.value.sessionId })
-    }),
+    listBranches: Effect.suspend(() => client.branch.list({ sessionId: session().sessionId })),
 
     updateSessionSettings: (change) => {
-      const currentSession = sessionOption()
-      if (Option.isNone(currentSession)) return Effect.void
-      const s = currentSession.value
+      const s = session()
       return client.session.updateSettings({ ...change, sessionId: s.sessionId }).pipe(
         Effect.tap((result) =>
           Effect.sync(() => {
@@ -1376,9 +1294,7 @@ export function ClientProvider(props: ClientProviderProps) {
     },
 
     createBranch: (name) => {
-      const currentSession = sessionOption()
-      if (Option.isNone(currentSession)) return Effect.succeed(BranchId.make(""))
-      const s = currentSession.value
+      const s = session()
       return Effect.gen(function* () {
         const requestId = yield* randomId
         const result = yield* client.branch.create({
@@ -1391,9 +1307,7 @@ export function ClientProvider(props: ClientProviderProps) {
     },
 
     forkBranch: (messageId, name) => {
-      const currentSession = sessionOption()
-      if (Option.isNone(currentSession)) return Effect.succeed(BranchId.make(""))
-      const s = currentSession.value
+      const s = session()
       return Effect.gen(function* () {
         const requestId = yield* randomId
         const result = yield* client.branch.fork({
@@ -1408,22 +1322,13 @@ export function ClientProvider(props: ClientProviderProps) {
     },
 
     drainQueuedMessages: Effect.gen(function* () {
-      const currentSession = sessionOption()
-      if (Option.isNone(currentSession)) {
-        return { steering: [], followUp: [] } satisfies QueueSnapshot
-      }
+      const { sessionId, branchId } = session()
       const requestId = yield* randomId
-      return yield* client.queue.drain({
-        sessionId: currentSession.value.sessionId,
-        branchId: currentSession.value.branchId,
-        requestId,
-      })
+      return yield* client.queue.drain({ sessionId, branchId, requestId })
     }),
 
     switchBranch: (branchId) => {
-      const currentSession = sessionOption()
-      if (Option.isNone(currentSession)) return
-      const s = currentSession.value
+      const s = session()
 
       cast(
         Effect.gen(function* () {
@@ -1456,7 +1361,7 @@ export function ClientProvider(props: ClientProviderProps) {
       // The session setting applies before the snapshot refresh lands; the
       // server-resolved id covers config and agent defaults. The agent
       // definition only fills the gap before the first snapshot hydrates.
-      const pinned = Option.flatMap(sessionOption(), (s) => Option.fromUndefinedOr(s.modelId))
+      const pinned = Option.fromUndefinedOr(session().modelId)
       if (Option.isSome(pinned)) return pinned.value
       if (Option.isSome(agentStore.resolvedModelId)) return agentStore.resolvedModelId.value
       const agentDef = Option.flatMap(agentStore.agent, (agent) =>
@@ -1469,7 +1374,7 @@ export function ClientProvider(props: ClientProviderProps) {
     },
     reasoningLevel: () =>
       Option.orElse(
-        Option.flatMap(sessionOption(), (s) => Option.fromUndefinedOr(s.reasoningLevel)),
+        Option.fromUndefinedOr(session().reasoningLevel),
         () => agentStore.resolvedReasoningLevel,
       ),
     resolvedReasoningLevel: () => agentStore.resolvedReasoningLevel,
@@ -1488,7 +1393,7 @@ export function ClientProvider(props: ClientProviderProps) {
     setErrorIn: (target, error) => {
       // The session in view shows it now. Either way it is held, so the
       // session's next snapshot shows it again over the status it writes.
-      const inView = Option.exists(sessionOption(), (current) => sameIdentity(current, target))
+      const inView = sameIdentity(session(), target)
       if (inView) agentValue.setError(error)
       // Shown against the turns the branch in view has started; a branch not
       // in view gets its count from its first snapshot.

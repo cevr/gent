@@ -159,16 +159,12 @@ export function ExtensionUIProvider(props: {
   >(Option.none())
   const commandsSettled = () =>
     loaded() &&
-    Option.match(client.activeSessionId(), {
-      onNone: () => true,
-      onSome: (id) =>
-        Option.exists(
-          serverListed(),
-          (listed) =>
-            listed.sessionId === id &&
-            Option.contains(client.connectedGeneration(), listed.generation),
-        ),
-    })
+    Option.exists(
+      serverListed(),
+      (listed) =>
+        listed.sessionId === client.activeSessionId() &&
+        Option.contains(client.connectedGeneration(), listed.generation),
+    )
   const [dynamicAutocomplete, setDynamicAutocomplete] = createSignal<
     ReadonlyArray<AutocompleteContribution>
   >([])
@@ -193,10 +189,9 @@ export function ExtensionUIProvider(props: {
     transport: {
       client: client.client,
       runtime: client.runtime,
-      // The client's identity memo, read straight through: the reference is
-      // stable across a rename, so an effect tracking this accessor stays put
-      // while the session and the branch do.
-      currentSession: client.sessionIdentity,
+      // The client's identity memo: it holds across a rename, so an effect
+      // tracking this accessor stays put while the session and the branch do.
+      currentSession: () => Option.some(client.sessionIdentity()),
       onExtensionStateChanged: (cb) => client.onExtensionStateChanged(cb),
       onSessionEvent: (cb) => client.onSessionEvent(cb),
       modelCatalog: client.modelCatalog,
@@ -278,29 +273,26 @@ export function ExtensionUIProvider(props: {
   // connection.
   createEffect(
     on([client.activeSessionId, client.connectedGeneration], ([current, generation]) => {
-      if (Option.isNone(current) || Option.isNone(generation)) return
+      if (Option.isNone(generation)) return
 
       let active = true
       const listed = () => {
         if (active)
-          setServerListed(Option.some({ sessionId: current.value, generation: generation.value }))
+          setServerListed(Option.some({ sessionId: current, generation: generation.value }))
       }
       onCleanup(() => {
         active = false
       })
 
       client.runtime.cast(
-        client.client.extension.listSlashCommands({ sessionId: current.value }).pipe(
+        client.client.extension.listSlashCommands({ sessionId: current }).pipe(
           Effect.tap((cmds) =>
             Effect.sync(() => {
               if (!active) return
               const byExtension = new Map<string, Array<Command>>()
               for (const c of cmds) {
                 const run = (args: string) => {
-                  const activeSession = client.session()
-                  if (Option.isNone(activeSession)) return
-                  const sid = activeSession.value.sessionId
-                  const bid = activeSession.value.branchId
+                  const { sessionId: sid, branchId: bid } = client.sessionIdentity()
                   client.runtime.cast(
                     client.client.extension
                       .request({

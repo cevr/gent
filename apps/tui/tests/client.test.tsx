@@ -30,7 +30,6 @@ import { ExtensionId } from "@gent/core/extensions/api"
 import {
   type ClientContextValue,
   reduceAgentLifecycle,
-  SessionState,
   SteerCommandInput,
   SessionStateEvent,
   transitionSessionState,
@@ -41,6 +40,7 @@ import { createSignal, onMount, Show } from "solid-js"
 import {
   createMockClient,
   createMutableRuntime,
+  defaultTestSession,
   renderScoped,
   renderWithProviders,
 } from "./render-harness-boundary"
@@ -129,14 +129,14 @@ describe("reduceAgentLifecycle", () => {
 // eslint-disable-next-line effect/noNullish -- a wire field the server leaves unset is present and undefined.
 const absent = undefined
 
-const active = SessionState.active({
+const active = {
   sessionId: SessionId.make("s"),
   branchId: BranchId.make("b"),
   name: "S",
   modelId: absent,
-  reasoningLevel: "high",
+  reasoningLevel: "high" as const,
   cwd: absent,
-})
+}
 
 describe("session settings", () => {
   test("an update replaces both settings at once", () => {
@@ -147,22 +147,11 @@ describe("session settings", () => {
         reasoningLevel: absent,
       }),
     )
-    expect(next.status).toBe("active")
-    if (next.status === "active") {
-      expect(next.session).toMatchObject({
-        modelId: ModelId.make("openai/gpt-5.6-luna"),
-        reasoningLevel: absent,
-      })
-      expect(next.session.name).toBe("S")
-    }
-  })
-
-  test("an update while no session is active is ignored", () => {
-    const next = transitionSessionState(
-      SessionState.none(),
-      SessionStateEvent.cases.UpdateSettings.make({ modelId: absent, reasoningLevel: "low" }),
-    )
-    expect(next).toEqual(SessionState.none())
+    expect(next).toMatchObject({
+      modelId: ModelId.make("openai/gpt-5.6-luna"),
+      reasoningLevel: absent,
+    })
+    expect(next.name).toBe("S")
   })
 })
 
@@ -212,20 +201,16 @@ describe("ClientProvider contract", () => {
       // another, so a consumer that stored it could observe a session the
       // rest of the tree had already left.
       const captured = yield* requireValue(held, "consumer never mounted")
-      expect(captured.session()).toEqual(Option.none())
+      expect(captured.session().sessionId).toBe(defaultTestSession.sessionId)
 
       const sessionId = SessionId.make("contract-session")
       const branchId = BranchId.make("contract-branch")
       captured.switchSession(sessionId, branchId, "Contract")
       yield* settle(setup)
 
-      const observed = yield* requireValue(
-        captured.session(),
-        "held value never observed the switch",
-      )
+      const observed = captured.session()
       expect(observed.sessionId).toBe(sessionId)
       expect(observed.branchId).toBe(branchId)
-      expect(captured.isActive()).toBe(true)
     }).pipe(Effect.timeout("10 seconds")),
   )
 
@@ -244,7 +229,6 @@ describe("ClientProvider contract", () => {
         seen = seen + 1
       })
       expect(client.isReconnecting()).toBe(false)
-      expect(client.isActive()).toBe(false)
       expect(client.isError()).toBe(false)
       expect(client.isStreaming()).toBe(false)
 
@@ -254,7 +238,6 @@ describe("ClientProvider contract", () => {
 
       client.switchSession(SessionId.make("facet-session"), BranchId.make("facet-branch"), "Facets")
       yield* settle(setup)
-      expect(client.isActive()).toBe(true)
       expect(client.isError()).toBe(false)
       expect(client.isStreaming()).toBe(false)
       expect(client.cost()).toBe(0)
@@ -691,7 +674,7 @@ describe("ClientProvider session lifecycle", () => {
       active.createSession()
       yield* waitForFrame(
         setup,
-        () => Option.exists(active.session(), (s) => s.sessionId === createdSessionId),
+        () => active.session().sessionId === createdSessionId,
         "created session active",
       )
       expect(createInputs).toHaveLength(1)
@@ -701,16 +684,14 @@ describe("ClientProvider session lifecycle", () => {
       expect(Predicate.isString(firstInput.value.requestId)).toBe(true)
       // The created session becomes the active one; the shell mounts what the
       // client says, so there is no second place a navigation could go wrong.
-      expect(active.session()).toEqual(
-        Option.some({
-          sessionId: createdSessionId,
-          branchId: createdBranchId,
-          name: "Created",
-          modelId: absent,
-          reasoningLevel: absent,
-          cwd: workspaceCwd,
-        }),
-      )
+      expect(active.session()).toEqual({
+        sessionId: createdSessionId,
+        branchId: createdBranchId,
+        name: "Created",
+        modelId: absent,
+        reasoningLevel: absent,
+        cwd: workspaceCwd,
+      })
     }),
   )
   // A handoff continues its parent's thread, so it works in the parent's
@@ -758,12 +739,11 @@ describe("ClientProvider session lifecycle", () => {
       active.openHandoffSession("the summary")
       yield* waitForFrame(
         setup,
-        () =>
-          Option.exists(active.session(), (s) => s.sessionId === SessionId.make("session-handoff")),
+        () => active.session().sessionId === SessionId.make("session-handoff"),
         "handoff session active",
       )
       expect(createInputs.map((input) => input.cwd)).toEqual(["/work/parent"])
-      expect(Option.map(active.session(), (s) => s.cwd)).toEqual(Option.some("/work/parent"))
+      expect(active.session().cwd).toEqual("/work/parent")
     }).pipe(Effect.timeout("10 seconds")),
   )
   it.live("a new session takes its agent from its snapshot, never from the session before it", () =>
@@ -798,7 +778,7 @@ describe("ClientProvider session lifecycle", () => {
       active.createSession()
       yield* waitForFrame(
         setup,
-        () => Option.exists(active.session(), (s) => s.sessionId === SessionId.make("session-new")),
+        () => active.session().sessionId === SessionId.make("session-new"),
         "new session active",
       )
       // No guess before the snapshot: a handoff inherits its parent's agent,
@@ -859,21 +839,17 @@ describe("ClientProvider session lifecycle", () => {
         { client },
       )
       const active = yield* requireClientSessionState(ctx)
-      const inView = () => active.session().pipe(Option.map((s) => s.sessionId))
+      const inView = () => active.session().sessionId
       // Two /new: the second answers first and takes the view; the first
       // answers after it and must not take the view back.
       active.createSession()
       active.createSession()
       yield* waitUntil(() => calls === 2, "both creates sent")
       yield* release(1)
-      yield* waitForFrame(
-        setup,
-        () => Option.contains(inView(), created(1).sessionId),
-        "the second create",
-      )
+      yield* waitForFrame(setup, () => inView() === created(1).sessionId, "the second create")
       yield* release(0)
       yield* Effect.promise(() => setup.renderOnce())
-      expect(inView()).toEqual(Option.some(created(1).sessionId))
+      expect(inView()).toEqual(created(1).sessionId)
       // A switch while a create is pending wins over the create's answer.
       active.createSession()
       yield* waitUntil(() => calls === 3, "the third create sent")
@@ -881,7 +857,7 @@ describe("ClientProvider session lifecycle", () => {
       active.switchSession(chosen, BranchId.make("branch-chosen"), "Chosen")
       yield* release(2)
       yield* Effect.promise(() => setup.renderOnce())
-      expect(inView()).toEqual(Option.some(chosen))
+      expect(inView()).toEqual(chosen)
     }).pipe(Effect.timeout("10 seconds")),
   )
   // An overtaken create's failure belongs to the session the reader left:
@@ -915,7 +891,7 @@ describe("ClientProvider session lifecycle", () => {
       yield* Deferred.done(gate, Exit.void)
       yield* Deferred.await(answered)
       yield* Effect.promise(() => setup.renderOnce())
-      expect(active.session().pipe(Option.map((s) => s.sessionId))).toEqual(Option.some(chosen))
+      expect(active.session().sessionId).toEqual(chosen)
       expect(active.error()).toEqual(Option.none())
     }).pipe(Effect.timeout("10 seconds")),
   )
@@ -942,7 +918,7 @@ describe("ClientProvider session lifecycle", () => {
         runtime: { _tag: "Running", queue: emptyQueueSnapshot(), startedAtMs: 0 },
       })
       client.switchSession(FIRST.sessionId, FIRST.branchId, "First")
-      const session = yield* Effect.fromOption(client.session())
+      const session = client.session()
       expect(session).toMatchObject({ modelId: model, reasoningLevel: "high" })
       expect(client.isStreaming()).toBe(true)
       expect(client.cost()).toBe(1.5)
@@ -988,7 +964,7 @@ describe("ClientProvider session lifecycle", () => {
           ),
         )
         client.switchSession(FIRST.sessionId, nextBranch, "First")
-        expect(Option.map(client.session(), (s) => s.branchId)).toEqual(Option.some(nextBranch))
+        expect(client.session().branchId).toEqual(nextBranch)
         expect(client.isStreaming()).toBe(false)
         expect(client.cost()).toBe(0)
         expect(Option.isNone(client.sessionMetrics().context)).toBe(true)
@@ -1025,9 +1001,7 @@ describe("ClientProvider session lifecycle", () => {
       active.switchSession(SECOND.sessionId, SECOND.branchId, "Second")
       yield* active.updateSessionSettings({ reasoningLevel: Option.some("low") })
       expect(sent).toEqual([{ sessionId: SECOND.sessionId, reasoningLevel: Option.some("low") }])
-      expect(Option.map(active.session(), (s) => s.modelId)).toEqual(
-        Option.some(ModelId.make("openai/gpt-5.6-luna")),
-      )
+      expect(active.session().modelId).toEqual(ModelId.make("openai/gpt-5.6-luna"))
     }),
   )
   it.live("runtime idle clears finishing activity only for the current branch", () =>
@@ -1238,11 +1212,9 @@ describe("ClientProvider session lifecycle", () => {
           1,
           AgentEvent.cases.SessionNameUpdated.make({ sessionId: FIRST.sessionId, name: "Renamed" }),
         )
-        expect(Option.map(client.session(), (s) => s.name)).toEqual(Option.some("Renamed"))
+        expect(client.session().name).toEqual("Renamed")
         yield* client.updateSessionSettings({ modelId: Option.none() })
-        expect(Option.map(client.session(), (s) => s.modelId)).toEqual(
-          Option.some(ModelId.make("openai/gpt-5.6-luna")),
-        )
+        expect(client.session().modelId).toEqual(ModelId.make("openai/gpt-5.6-luna"))
         // A settings change can change what an extension reports; so can its own pulse.
         yield* waitUntil(() => healthReads.length === 2, "the settings change reads health")
         pulse(
@@ -1299,7 +1271,7 @@ describe("ClientProvider session lifecycle", () => {
     () =>
       Effect.gen(function* () {
         let ctx = Option.none<ClientContextValue>()
-        const setup = yield* Effect.promise(() =>
+        yield* Effect.promise(() =>
           renderWithProviders(
             () => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />,
             {
@@ -1315,17 +1287,14 @@ describe("ClientProvider session lifecycle", () => {
         )
         const client = yield* requireClientSessionState(ctx)
         client.switchSession(SessionId.make("session-b"), BranchId.make("branch-b"), "B")
-        yield* waitForFrame(setup, () => client.isActive(), "session state")
-        expect(client.session()).toEqual(
-          Option.some({
-            sessionId: SessionId.make("session-b"),
-            branchId: BranchId.make("branch-b"),
-            name: "B",
-            modelId: absent,
-            reasoningLevel: absent,
-            cwd: absent,
-          }),
-        )
+        expect(client.session()).toEqual({
+          sessionId: SessionId.make("session-b"),
+          branchId: BranchId.make("branch-b"),
+          name: "B",
+          modelId: absent,
+          reasoningLevel: absent,
+          cwd: absent,
+        })
         expect(client.agent()).toEqual(Option.none())
       }),
   )
@@ -1365,7 +1334,7 @@ describe("ClientProvider session lifecycle", () => {
       })
       yield* waitForFrame(
         setup,
-        () => client.isActive() && client.model() === "anthropic/claude-haiku-4-5-20251001",
+        () => client.model() === "anthropic/claude-haiku-4-5-20251001",
         "session state",
       )
       expect(client.model()).toBe("anthropic/claude-haiku-4-5-20251001")
@@ -1410,29 +1379,23 @@ describe("ClientProvider session lifecycle", () => {
       })
       yield* waitForFrame(
         setup,
-        () =>
-          Option.exists(
-            client.session(),
-            (current) => current.name === "Fresh" && current.reasoningLevel === "high",
-          ),
+        () => client.session().name === "Fresh" && client.session().reasoningLevel === "high",
         "session state",
       )
-      expect(client.session()).toEqual(
-        Option.some({
-          sessionId: SessionId.make("session-refresh"),
-          branchId: BranchId.make("branch-refresh"),
-          name: "Fresh",
-          modelId: absent,
-          reasoningLevel: "high",
-          cwd: absent,
-        }),
-      )
+      expect(client.session()).toEqual({
+        sessionId: SessionId.make("session-refresh"),
+        branchId: BranchId.make("branch-refresh"),
+        name: "Fresh",
+        modelId: absent,
+        reasoningLevel: "high",
+        cwd: absent,
+      })
     }),
   )
   it.live("a snapshot for a session the reader left changes nothing", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()
-      const setup = yield* Effect.promise(() =>
+      yield* Effect.promise(() =>
         renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
           initialSession: {
             id: SessionId.make("session-source"),
@@ -1470,17 +1433,14 @@ describe("ClientProvider session lifecycle", () => {
           lastInputTokens: 456,
         },
       })
-      yield* waitForFrame(setup, () => client.isActive(), "session state")
-      expect(client.session()).toEqual(
-        Option.some({
-          sessionId: SessionId.make("session-target"),
-          branchId: BranchId.make("branch-target"),
-          name: "Target",
-          modelId: absent,
-          reasoningLevel: absent,
-          cwd: absent,
-        }),
-      )
+      expect(client.session()).toEqual({
+        sessionId: SessionId.make("session-target"),
+        branchId: BranchId.make("branch-target"),
+        name: "Target",
+        modelId: absent,
+        reasoningLevel: absent,
+        cwd: absent,
+      })
       expect(client.agent()).toEqual(Option.none())
       expect(client.model()).not.toBe("anthropic/claude-haiku-4-5-20251001")
       expect(client.cost()).toBe(0)
@@ -1530,23 +1490,17 @@ describe("ClientProvider session lifecycle", () => {
       })
       yield* waitForFrame(
         setup,
-        () =>
-          Option.exists(
-            client.session(),
-            (current) => current.branchId === BranchId.make("branch-new"),
-          ),
+        () => client.session().branchId === BranchId.make("branch-new"),
         "session state",
       )
-      expect(client.session()).toEqual(
-        Option.some({
-          sessionId: SessionId.make("session-branch-race"),
-          branchId: BranchId.make("branch-new"),
-          name: "New",
-          modelId: absent,
-          reasoningLevel: absent,
-          cwd: absent,
-        }),
-      )
+      expect(client.session()).toEqual({
+        sessionId: SessionId.make("session-branch-race"),
+        branchId: BranchId.make("branch-new"),
+        name: "New",
+        modelId: absent,
+        reasoningLevel: absent,
+        cwd: absent,
+      })
       expect(client.agent()).toEqual(Option.none())
       expect(client.cost()).toBe(0)
       expect(client.sessionMetrics().latestInputTokens).toBe(0)
@@ -1588,7 +1542,7 @@ describe("ClientProvider session lifecycle", () => {
       })
       yield* waitForFrame(
         setup,
-        () => client.isActive() && client.model() === "anthropic/claude-haiku-4-5-20251001",
+        () => client.model() === "anthropic/claude-haiku-4-5-20251001",
         "session state",
       )
       client.switchSession(SessionId.make("session-next"), BranchId.make("branch-next"), "N")

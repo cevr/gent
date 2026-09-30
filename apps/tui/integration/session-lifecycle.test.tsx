@@ -121,7 +121,7 @@ describe("session lifecycle", () => {
           if (Option.isNone(ctx)) return
           // The shell mounts whatever the client says is active; the bootstrap
           // handed it a session, so that is what shows.
-          expect(Option.isSome(ctx.value.client.session())).toBe(true)
+          expect(ctx.value.client.session().sessionId).toBe(bootstrap.initialSession.sessionId)
           // waitForFrame polls until the composer renders — no pre-sleep
           // needed; the visible "ready/idle/❯" marker is the readiness signal.
           const frame = yield* waitForFrame(
@@ -184,12 +184,10 @@ describe("session lifecycle", () => {
           expect(Option.isSome(ctx)).toBe(true)
           if (Option.isNone(ctx)) return
           const session = ctx.value.client.session()
-          expect(Option.isSome(session)).toBe(true)
-          if (Option.isNone(session)) return
           yield* client.message
             .send({
-              sessionId: session.value.sessionId,
-              branchId: session.value.branchId,
+              sessionId: session.sessionId,
+              branchId: session.branchId,
               content: "hello world",
             })
             .pipe(

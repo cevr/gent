@@ -1326,7 +1326,7 @@ describe("App auth gate", () => {
         clientCtx.switchSession(sessionB, branchB, "Session B")
         yield* waitForFrame(
           setup,
-          () => Option.exists(clientCtx.sessionIdentity(), (s) => s.sessionId === sessionB),
+          () => clientCtx.sessionIdentity().sessionId === sessionB,
           "session B",
         )
         yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session B view")
@@ -1405,12 +1405,7 @@ describe("App auth gate", () => {
       ctx.value.createSession()
       yield* waitForFrame(
         setup,
-        () =>
-          ctx.pipe(
-            Option.exists((value) =>
-              Option.exists(value.session(), (s) => s.sessionId === nextSessionId),
-            ),
-          ),
+        () => ctx.pipe(Option.exists((value) => value.session().sessionId === nextSessionId)),
         "next session mounted",
       )
       // Several frames for the new session's feed to settle.
@@ -1539,9 +1534,7 @@ describe("App auth gate", () => {
       yield* typeCommand("/new")(setup)
       // While the create is in flight, the session stays mounted.
       yield* waitForFrame(setup, (frame) => !frame.includes("/new"), "command sent")
-      expect(Option.map(clientContext.session(), (s) => s.sessionId)).toEqual(
-        Option.some(SessionId.make("session-kept")),
-      )
+      expect(clientContext.session().sessionId).toEqual(SessionId.make("session-kept"))
       expect(renderFrame(setup)).toContain("ready ·")
       yield* Deferred.succeed(release, void 0)
       const frame = yield* waitForFrame(
@@ -1550,9 +1543,7 @@ describe("App auth gate", () => {
         "the refusal on the status row",
       )
       expect(frame).toContain("┃")
-      expect(Option.map(clientContext.session(), (s) => s.sessionId)).toEqual(
-        Option.some(SessionId.make("session-kept")),
-      )
+      expect(clientContext.session().sessionId).toEqual(SessionId.make("session-kept"))
     }).pipe(Effect.timeout("10 seconds")),
   )
   // Esc never quits: on a draft the first press arms and says so, and the
@@ -4534,9 +4525,7 @@ describe("agents view on the left arrow", () => {
       setup.mockInput.pressArrow("right")
       yield* waitForFrame(setup, (frame) => !paneOpen(frame), "the pane closed")
       const client = yield* requireClient(ctx)
-      expect(Option.map(client.session(), (s) => s.sessionId)).toEqual(
-        Option.some(SessionId.make("child-4")),
-      )
+      expect(client.session().sessionId).toEqual(SessionId.make("child-4"))
     }).pipe(Effect.timeout("10 seconds")),
   )
 })

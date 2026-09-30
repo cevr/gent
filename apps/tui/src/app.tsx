@@ -757,9 +757,7 @@ export function Session(props: SessionProps) {
               rows={reasoningRows(client.resolvedReasoningLevel())}
               current={Option.some(
                 Option.getOrElse(
-                  Option.flatMap(client.session(), (session) =>
-                    Option.fromUndefinedOr(session.reasoningLevel),
-                  ),
+                  Option.fromUndefinedOr(client.session().reasoningLevel),
                   () => DEFAULT_ROW_ID,
                 ),
               )}
@@ -832,7 +830,7 @@ function AppContent(props: AppProps) {
   // makes a new record, and a mount keyed on the record would tear the whole
   // session view down for it. `sessionIdentity` is the client's one answer to
   // "which session"; every consumer that does not read the name shares it.
-  const active = () => Option.getOrUndefined(sessionClient.sessionIdentity())
+  const active = sessionClient.sessionIdentity
 
   // The boot picker belongs to the first session this process mounts. A later
   // switch is a session the reader already chose, so it docks nothing.

@@ -1062,9 +1062,8 @@ function useComposerController(): ComposerController {
   // submit, never when a refusal lands.
   createEffect(() => {
     const identity = client.sessionIdentity()
-    if (Option.isNone(identity)) return
     onCleanup(
-      refusals.link(identity.value.branchId, {
+      refusals.link(identity.branchId, {
         current: () => ({
           draft: Option.getOrElse(
             Option.map(inputRef, (renderable) => renderable.plainText),
@@ -1099,12 +1098,10 @@ function useComposerController(): ComposerController {
    * The session a draft was written in. A submission carries it to the end:
    * a switch while `@file` expands or `!cmd` runs does not move the message.
    */
-  const draftedIn = (): Option.Option<SessionIdentity> => client.sessionIdentity()
+  const draftedIn = (): SessionIdentity => client.sessionIdentity()
 
   const submitShellCommand = (text: string) => {
-    const drafted = draftedIn()
-    if (Option.isNone(drafted)) return
-    const target = drafted.value
+    const target = draftedIn()
     const order = refusals.nextOrder()
     refusals.submitted(target.branchId, text)
     // The command leaves the composer before it runs, so a second Enter
@@ -1184,25 +1181,17 @@ function useComposerController(): ComposerController {
 
     client.log.info("slash-command", { cmd })
     const order = refusals.nextOrder()
-    const drafted = draftedIn()
-    const reused = Option.flatMap(drafted, (target) => refusals.submitted(target.branchId, text))
+    const target = draftedIn()
+    const reused = refusals.submitted(target.branchId, text)
     clearInput()
 
     // A command still held when the view goes comes back to the draft it was written in.
     const refuseCommand = (reason: string) =>
-      Option.match(drafted, {
-        onNone: () => client.setError(reason),
-        onSome: (target) =>
-          refuse(target, { order, text, shell: false, requestId: Option.none() }, reason),
-      })
-    const sendAsMessage = () =>
-      Option.match(drafted, {
-        onNone: () => {},
-        onSome: (target) => {
-          history.add(text)
-          sendMessage(target, text, "queue", order, reused)
-        },
-      })
+      refuse(target, { order, text, shell: false, requestId: Option.none() }, reason)
+    const sendAsMessage = () => {
+      history.add(text)
+      sendMessage(target, text, "queue", order, reused)
+    }
     cast(
       client.surfaceError(
         sc.onSlashCommand({ cmd, args, send: sendAsMessage, refuse: refuseCommand }),
@@ -1212,9 +1201,7 @@ function useComposerController(): ComposerController {
   }
 
   const submitMessage = (text: string, mode: "queue" | "interject") => {
-    const drafted = draftedIn()
-    if (Option.isNone(drafted)) return
-    const target = drafted.value
+    const target = draftedIn()
     history.add(text)
     const order = refusals.nextOrder()
     // A refused text sent again unchanged after a lost reply keeps its id.

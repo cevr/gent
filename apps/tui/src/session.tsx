@@ -2303,15 +2303,9 @@ export function useSessionFeed(
   // Keyed subscription — re-runs only when sessionId:branchId identity changes
   const feedKey = createMemo(() => `${sessionId()}:${branchId()}`)
 
-  // Wait for session to become active before subscribing
+  // Wait for the client to hold this session before subscribing
   const activeSessionKey = createMemo(
-    (): Option.Option<string> =>
-      Option.map(
-        client.sessionIdentity(),
-        (identity) => `${identity.sessionId}:${identity.branchId}`,
-      ),
-    Option.none(),
-    { equals: Equal.equals },
+    () => `${client.sessionIdentity().sessionId}:${client.sessionIdentity().branchId}`,
   )
 
   const canSendPromptNow = () =>
@@ -2324,7 +2318,7 @@ export function useSessionFeed(
     on(
       [activeSessionKey, feedKey, streamReadyKey, canSendPromptNow],
       ([active, key, readyKey, canSend]) => {
-        if (Option.isNone(active) || active.value !== key) return
+        if (active !== key) return
         if (Option.isNone(readyKey) || readyKey.value !== key || !canSend) return
         const startup = Option.flatMap(takeInitialPromptValue, (take) => take())
         if (Option.isNone(startup)) return
@@ -2364,7 +2358,7 @@ export function useSessionFeed(
 
   createEffect(
     on([activeSessionKey, feedKey], ([active, key]) => {
-      if (Option.isNone(active) || active.value !== key) return
+      if (active !== key) return
 
       // The first activation clears what the client held for another session.
       if (!activated) {
@@ -2700,13 +2694,10 @@ export const useExit = () => {
   const renderer = useRenderer()
   const env = useEnv()
   return () => {
-    const leaving = client.sessionIdentity().pipe(Option.filter(() => env.resumable))
+    const leaving = client.activeSessionId()
     shutdownLog("exit.renderer-destroy")
     renderer.destroy()
-    Option.match(leaving, {
-      onNone: () => {},
-      onSome: (session) => env.writeTerminal(`\nto resume: gent resume ${session.sessionId}\n`),
-    })
+    if (env.resumable) env.writeTerminal(`\nto resume: gent resume ${leaving}\n`)
     shutdownLog("exit.shutdown-signal")
     env.shutdown()
   }
@@ -2772,11 +2763,7 @@ export function createSessionController(props: {
   const history = usePromptHistory()
   const frecency = useAutocompleteFrecency()
 
-  const currentSessionName = (): string =>
-    Option.getOrElse(
-      Option.flatMap(client.session(), (value) => Option.fromNullishOr(value.name)),
-      () => "Unnamed",
-    )
+  const currentSessionName = (): string => client.session().name
 
   // ── Branch picker ──
   //
@@ -2908,8 +2895,7 @@ export function createSessionController(props: {
   onCleanup(() => ext.setPaneOwner(Option.none()))
 
   ext.setActivityProvider(() => {
-    const session = client.session()
-    const sessionId = Option.getOrUndefined(Option.map(session, (value) => value.sessionId))
+    const sessionId = client.activeSessionId()
     if (client.isReconnecting()) return { sessionId, state: "unknown" }
     if (isBlockingAuthGate(authGateState()) || composerState()._tag === "interaction") {
       return { sessionId, state: "blocked" }
@@ -3269,9 +3255,7 @@ export function createSessionController(props: {
   ): Effect.Effect<void, GentClientRpcError> => {
     // Interjecting steers the stream in view, so it holds only while the
     // drafted-in session is still the one streaming; otherwise the message queues there.
-    const stillHere = Option.exists(client.sessionIdentity(), (current) =>
-      sameIdentity(current, target),
-    )
+    const stillHere = sameIdentity(client.sessionIdentity(), target)
     if (mode === "interject" && stillHere && client.isStreaming()) {
       return client.steer(
         target,
@@ -3283,14 +3267,13 @@ export function createSessionController(props: {
   }
   /** Cancel the turn streaming in the session in view. */
   const cancelTurn = () => {
-    Option.map(client.sessionIdentity(), (target) =>
-      cast(
-        randomId.pipe(
-          Effect.flatMap((requestId) =>
-            client.steer(target, SteerCommandInput.cases.Cancel.make({}), requestId),
-          ),
-          client.surfaceError,
+    const target = client.sessionIdentity()
+    cast(
+      randomId.pipe(
+        Effect.flatMap((requestId) =>
+          client.steer(target, SteerCommandInput.cases.Cancel.make({}), requestId),
         ),
+        client.surfaceError,
       ),
     )
   }

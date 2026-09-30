@@ -1203,8 +1203,10 @@ const makeSession = (sessionId: SessionId, branchId: BranchId): Session => ({
 })
 
 /** The feed reads only which session is active, so the probe supplies only that. */
-const identityOf = (active: () => Session) => () =>
-  Option.some({ sessionId: active().sessionId, branchId: active().branchId })
+const identityOf = (active: () => Session) => () => ({
+  sessionId: active().sessionId,
+  branchId: active().branchId,
+})
 
 const isSessionEvent = Predicate.or(
   Predicate.isTagged("turn-ended"),
