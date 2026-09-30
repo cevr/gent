@@ -354,7 +354,9 @@ export function Auth(props: AuthProps) {
     cast(
       Effect.all([
         clientCtx.client.auth.listProviders(request),
-        clientCtx.client.auth.listMethods(),
+        clientCtx.client.auth.listMethods(
+          omitUndefined({ sessionId: Option.getOrUndefined(sessionId) }),
+        ),
       ]).pipe(
         Effect.tap(([providers, methods]) =>
           whileCurrent(token, () => {
