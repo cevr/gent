@@ -644,21 +644,16 @@ const sessionOutputDirectory = (path: Path.Path, dataDir: string, sessionId: Ses
  * are the extension's own, outside the database, so nothing else removes them.
  */
 const removeSessionOutputs = Effect.fn("ExecTools.removeSessionOutputs")(function* (
-  sessionIds: ReadonlyArray<SessionId>,
+  sessionId: SessionId,
 ) {
   const ctx = yield* ExtensionContext
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
   const dataDir = yield* resolveDataDir(ctx.home)
-  yield* Effect.forEach(
-    sessionIds,
-    (sessionId) =>
-      fs.remove(sessionOutputDirectory(path, dataDir, sessionId), {
-        recursive: true,
-        force: true,
-      }),
-    { discard: true },
-  )
+  yield* fs.remove(sessionOutputDirectory(path, dataDir, sessionId), {
+    recursive: true,
+    force: true,
+  })
 })
 
 /**
@@ -1523,6 +1518,6 @@ export const ExecToolsExtension = defineExtension({
         ),
       ),
     )
-    yield* host.on("sessionDeleted", ({ sessionIds }) => removeSessionOutputs(sessionIds))
+    yield* host.on("sessionDeleted", ({ sessionId }) => removeSessionOutputs(sessionId))
   }),
 })

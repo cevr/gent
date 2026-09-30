@@ -135,7 +135,12 @@ import {
 } from "../runtime/extension-host.js"
 import type { AgentName } from "../domain/agent.js"
 import { foldSessionMetrics, type SendUserMessagePayload } from "../domain/agent-loop.js"
-import { resolveSessionRoute, runAgentLoopTurnProfile, turnRegistry } from "../runtime/turn.js"
+import {
+  type AgentLoopTurnProfile,
+  resolveSessionRoute,
+  runAgentLoopTurnProfile,
+  turnRegistry,
+} from "../runtime/turn.js"
 import { WideEvent, WideEventBoundary, withWideEvent } from "effect-wide-event"
 
 import { omitUndefined } from "../domain/guards.js"
@@ -326,6 +331,9 @@ type SwitchBranchParams = Parameters<SessionMutationsService["switchActiveBranch
 type SessionMutationError = Effect.Error<ReturnType<SessionMutationsService["switchActiveBranch"]>>
 type RenameSessionResult = Effect.Success<ReturnType<SessionMutationsService["renameSession"]>>
 
+/** How many deleted sessions' `sessionDeleted` hooks run at once. */
+const SESSION_DELETED_CONCURRENCY = 8
+
 const createSessionResult = (operation: StoredCreateSessionResult): CreateSessionResult => ({
   sessionId: operation.sessionId,
   branchId: operation.branchId,
@@ -499,7 +507,6 @@ const makeSessionMutationsService: Effect.Effect<
   const deleteSessionCascade = Effect.fn("SessionMutations.deleteSessionCascade")(function* (
     sessionId: SessionId,
   ) {
-    const profile = yield* deletedSessionProfile(sessionId)
     // Pre-collect is the best effort set we can tombstone BEFORE the durable
     // delete — so their runtimes stop accepting work while the tx runs. The
     // durable delete returns the authoritative set (the same rows the cascade
@@ -507,6 +514,18 @@ const makeSessionMutationsService: Effect.Effect<
     // cleanup pass. Any descendant created between pre-collect and the tx is
     // included in the authoritative set and cleaned up here too.
     const preTombstoned = yield* collectSessionTreeIds(sessionId)
+    // Each session's own profile, resolved while its rows still exist: sessions
+    // of one tree can live in different cwds with different extensions.
+    const profiles = new Map<SessionId, Option.Option<AgentLoopTurnProfile>>()
+    yield* Effect.forEach(
+      preTombstoned,
+      (id) =>
+        deletedSessionProfile(id).pipe(
+          Effect.tap((profile) => Effect.sync(() => profiles.set(id, profile))),
+        ),
+      { discard: true },
+    )
+    const rootProfile = Option.flatten(Option.fromUndefinedOr(profiles.get(sessionId)))
     yield* Effect.forEach(preTombstoned, cleanupSessionRuntimeStateForMutation, { discard: true })
     const cascadedIds = yield* sessionStorage.deleteSession(sessionId).pipe(
       // On failure we only restore `preTombstoned`: descendants created after pre-collect
@@ -529,17 +548,28 @@ const makeSessionMutationsService: Effect.Effect<
         ),
       { discard: true },
     )
-    // The extensions hear the authoritative set once, under the deleted
-    // session's profile; each handler's failure is logged and isolated.
-    if (cascadedIds.length === 0) return
-    yield* Option.match(profile, {
-      onNone: () => Effect.void,
-      onSome: (resolved) =>
-        turnRegistry(resolved)
-          .getResolved()
-          .extensionHooks.emitSessionDeleted({ sessionIds: cascadedIds })
-          .pipe(runAgentLoopTurnProfile(resolved)),
-    })
+    // Each removed session is heard once, under its own profile. A descendant
+    // created after the pre-collect has no profile of its own; it is heard
+    // under the deleted session's. Each handler's failure is logged and isolated.
+    yield* Effect.forEach(
+      cascadedIds,
+      (deletedSessionId) =>
+        Option.match(
+          Option.orElse(
+            Option.flatten(Option.fromUndefinedOr(profiles.get(deletedSessionId))),
+            () => rootProfile,
+          ),
+          {
+            onNone: () => Effect.void,
+            onSome: (resolved) =>
+              turnRegistry(resolved)
+                .getResolved()
+                .extensionHooks.emitSessionDeleted({ sessionId: deletedSessionId })
+                .pipe(runAgentLoopTurnProfile(resolved)),
+          },
+        ),
+      { concurrency: SESSION_DELETED_CONCURRENCY, discard: true },
+    )
   }, Effect.scoped)
 
   const sendInitialPrompt = Effect.fn("SessionMutations.sendInitialPrompt")(function* (

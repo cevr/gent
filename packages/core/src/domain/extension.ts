@@ -453,19 +453,20 @@ interface ExtensionHookSignatures {
    */
   readonly loopOpen: { readonly input: void; readonly output: void }
   /**
-   * A session was deleted, with the descendants its delete removed. It runs
-   * once, after the rows are gone, with every deleted id in `sessionIds`.
-   * A handler removes what the extension keeps for those sessions outside the
-   * database. `ExtensionContext` names the deleted session, under the profile
-   * of its cwd; its session verbs find no session. No user watches it, so it
-   * cannot ask. The delete waits for every handler.
+   * A session was deleted. It runs once for each session a delete removed
+   * (the session and its descendants), after the rows are gone, under the
+   * profile of that session's own cwd, resolved before the delete. A handler
+   * removes what the extension keeps for the session outside the database.
+   * `ExtensionContext` names the deleted session; its session verbs find no
+   * session. No user watches it, so it cannot ask. The delete waits for every
+   * handler.
    */
   readonly sessionDeleted: { readonly input: SessionDeletedInput; readonly output: void }
 }
 
-/** The sessions one delete removed: the deleted session and its descendants. */
+/** One session a delete removed. */
 export interface SessionDeletedInput {
-  readonly sessionIds: ReadonlyArray<SessionId>
+  readonly sessionId: SessionId
 }
 
 type ExtensionHookKind = keyof ExtensionHookSignatures

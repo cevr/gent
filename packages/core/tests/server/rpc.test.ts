@@ -85,6 +85,7 @@ import {
   defineResource,
   ExtensionLoadError,
   type GentExtension,
+  hook,
   LoadedArtifactIdentity,
   type LoadedExtension,
   registerContributions,
@@ -3246,6 +3247,29 @@ const expectExtensionProtocolFailure = (cause: Cause.Cause<unknown>, message?: s
   expect(error._tag).toBe("ExtensionProtocolError")
   if (!Predicate.isUndefined(message)) expect(error.message).toBe(message)
 }
+/** A cwd's profile built from the given extensions, for a test profile cache. */
+const makeProfile = (cwd: string, extensions: ReadonlyArray<LoadedExtension>) =>
+  Effect.gen(function* () {
+    const resolved = resolveExtensions(extensions)
+    const registryContext = yield* Layer.build(ExtensionRegistry.fromResolved(resolved))
+    const started = yield* buildScopeResources({
+      extensions: resolved.extensions,
+      scope: "process",
+      context: Context.merge(Context.makeUnsafe<unknown>(new Map()), registryContext),
+      parent: yield* Effect.scope,
+      restore: (effect) => effect,
+    })
+    const layerContext = started.context
+    return {
+      cwd,
+      resolved,
+      layerContext,
+      registryService: Context.get(layerContext, ExtensionRegistry),
+      baseSections: [],
+      generationId: ProcessGenerationId.make("test"),
+    } satisfies SessionProfile
+  })
+
 describe("extension command RPCs", () => {
   const invoked: Array<{
     args: string
@@ -3292,27 +3316,6 @@ describe("extension command RPCs", () => {
       expect("provideCapabilityAccessNeeds" in ExtensionApi).toBe(false)
     }),
   )
-  const makeProfile = (cwd: string, extensions: ReadonlyArray<LoadedExtension>) =>
-    Effect.gen(function* () {
-      const resolved = resolveExtensions(extensions)
-      const registryContext = yield* Layer.build(ExtensionRegistry.fromResolved(resolved))
-      const started = yield* buildScopeResources({
-        extensions: resolved.extensions,
-        scope: "process",
-        context: Context.merge(Context.makeUnsafe<unknown>(new Map()), registryContext),
-        parent: yield* Effect.scope,
-        restore: (effect) => effect,
-      })
-      const layerContext = started.context
-      return {
-        cwd,
-        resolved,
-        layerContext,
-        registryService: Context.get(layerContext, ExtensionRegistry),
-        baseSections: [],
-        generationId: ProcessGenerationId.make("test"),
-      } satisfies SessionProfile
-    })
   const makeCommandExtension = (extensionId: string, commandId: string): LoadedExtension => ({
     manifest: { id: ExtensionId.make(extensionId) },
     scope: "builtin",
@@ -4998,22 +5001,22 @@ export default defineExtension({
 
 describe("sessionDeleted hook", () => {
   it.live(
-    "an extension hears every session a delete removed, once, beside another's failing hook",
+    "an extension hears every session a delete removed, once each, beside another's failing hook",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
           const heard: Array<{
-            readonly sessionIds: ReadonlyArray<SessionId>
+            readonly sessionId: SessionId
             readonly contextSessionId: SessionId
           }> = []
           const listener: GentExtension = {
             manifest: { id: ExtensionId.make("@test/session-deleted-listener") },
             setup: Effect.gen(function* () {
               const host = yield* ExtensionHost
-              yield* host.on("sessionDeleted", ({ sessionIds }) =>
+              yield* host.on("sessionDeleted", ({ sessionId }) =>
                 Effect.gen(function* () {
                   const ctx = yield* ExtensionContext
-                  heard.push({ sessionIds, contextSessionId: ctx.sessionId })
+                  heard.push({ sessionId, contextSessionId: ctx.sessionId })
                 }),
               )
             }),
@@ -5039,15 +5042,67 @@ describe("sessionDeleted hook", () => {
 
           yield* client.session.delete({ sessionId })
 
-          // The delete returns after the hooks ran, with the rows gone.
-          expect(heard).toHaveLength(1)
-          expect(new Set(heard[0]?.sessionIds)).toEqual(new Set([sessionId, child.sessionId]))
-          expect(heard[0]?.contextSessionId).toBe(sessionId)
+          // The delete returns after the hooks ran, with the rows gone. Each
+          // session is heard under its own context.
+          expect(heard).toHaveLength(2)
+          expect(new Set(heard.map((entry) => entry.sessionId))).toEqual(
+            new Set([sessionId, child.sessionId]),
+          )
+          for (const entry of heard) expect(entry.contextSessionId).toBe(entry.sessionId)
           expect(yield* client.session.get({ sessionId })).toBeNull()
           expect(yield* client.session.get({ sessionId: child.sessionId })).toBeNull()
           expect(yield* client.session.get({ sessionId: bystander.sessionId })).not.toBeNull()
         }).pipe(Effect.timeout("4 seconds")),
       ),
+  )
+
+  it.live("a descendant in another cwd is heard under its own cwd's extensions", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const parentCwd = "/nonexistent/gent-probe-deleted-parent"
+        const childCwd = "/nonexistent/gent-probe-deleted-child"
+        const heard: Array<{ readonly sessionId: SessionId; readonly cwd: string }> = []
+        // Only the child's cwd enables the cleanup extension.
+        const cleanup: LoadedExtension = {
+          manifest: { id: ExtensionId.make("@test/session-deleted-cleanup") },
+          scope: "builtin",
+          sourcePath: "test",
+          contributions: {
+            hooks: [
+              hook("sessionDeleted", ({ sessionId }) =>
+                Effect.gen(function* () {
+                  const ctx = yield* ExtensionContext
+                  heard.push({ sessionId, cwd: ctx.cwd })
+                }),
+              ),
+            ],
+          },
+        }
+        const sessionProfileCacheLayer = SessionProfileCache.Test(
+          new Map([
+            [parentCwd, yield* makeProfile(parentCwd, [])],
+            [childCwd, yield* makeProfile(childCwd, [cleanup])],
+          ]),
+        )
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+          extensions: [],
+          sessionProfileCacheLayer,
+          cwd: parentCwd,
+        })
+        const child = yield* client.session.create({
+          parentSessionId: sessionId,
+          parentBranchId: branchId,
+          cwd: childCwd,
+        })
+
+        yield* client.session.delete({ sessionId })
+
+        expect(heard).toEqual([{ sessionId: child.sessionId, cwd: childCwd }])
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
   )
 })
 
