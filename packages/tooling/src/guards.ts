@@ -601,10 +601,8 @@ export const findIdentityEncodes = (file: string, text: string): ReadonlyArray<F
  * Core is the loop plus the extension API. A seam with no implementation
  * behind it is not extensibility -- it is speculative surface that every
  * reader must account for and every refactor must carry. One adapter makes a
- * seam hypothetical; none makes it dead. `scheduledJobs` (removed in
- * 271c523a) and the `toolCall`/`toolResult` hooks were both found this way:
- * live, fully wired core machinery whose only registrants were the tests
- * exercising the mechanism itself.
+ * seam hypothetical; none makes it dead: live, fully wired core machinery
+ * whose only registrants are the tests exercising the mechanism itself.
  *
  * Four seam families are checked, all declared in core and filled from
  * outside it:
@@ -618,8 +616,7 @@ export const findIdentityEncodes = (file: string, text: string): ReadonlyArray<F
  *     `scope: "<scope>"` on a resource definition
  *
  * Each family is named differently in adapter code, so each contributes its
- * own pattern to `adaptedSeamsIn` rather than sharing one. The `Dynamic`
- * facet (removed in 875b9149) is what the facet check exists to catch.
+ * own pattern to `adaptedSeamsIn` rather than sharing one.
  *
  * Only shipped code counts as an adapter. A test registrant proves the
  * mechanism runs, not that anything needs it -- that is exactly the state
@@ -628,7 +625,7 @@ export const findIdentityEncodes = (file: string, text: string): ReadonlyArray<F
  * @module
  */
 
-/** Every seam family core declares now lives in one file; each scan is anchored on its own interface name. */
+/** The file that declares every seam family core has; each scan is anchored on its own interface name. */
 const SEAM_DECLARATION_FILE = "packages/core/src/domain/extension.ts"
 
 /** Files that may fill a seam: shipped extensions and the apps, never test support. */
@@ -668,14 +665,12 @@ const lineOf = (text: string, name: string): number => {
 }
 
 /**
- * Seam names a shipped file registers. Matches across newlines because
- * `host.register(` and its domain argument are routinely formatted apart --
- * a single-line pattern silently reports a filled seam as empty.
- */
-/**
  * How each seam family is spelled where it is filled. Registrations name the
  * seam in a string argument; a facet is reached as a property on the yielded
- * context; a resource scope is a literal field on the definition.
+ * context; a resource scope is a literal field on the definition. The
+ * registration pattern matches across newlines because `host.register(` and
+ * its domain argument are often formatted apart, and a single-line pattern
+ * would report a filled seam as empty.
  */
 const ADAPTER_PATTERNS: ReadonlyArray<RegExp> = [
   /(?:register|\.on|hook)\(\s*"([A-Za-z][A-Za-z0-9]*)"/g,
@@ -1204,17 +1199,14 @@ export const findPreCommitHookFindings = (file: string, text: string): ReadonlyA
  * Four findings, all of the same shape -- a declaration whose subject left the
  * tree, which stays green because nothing ever reads it again:
  *
- * - An `.oxlintrc.json` override whose `files` glob matches no tracked file.
- *   The override for `packages/sdk/src/supervisor.ts` outlived that file and
- *   kept turning a rule off for nothing. The same holds for an `.oxlintignore`
- *   row (a dead `.tmp-*` row sat there) and for an `include` glob of an Effect
- *   language-service override in the root tsconfig.
- * - A rule defined in `gent-rules.ts` that the root config never enables. Five such
- *   rules accumulated; one of them (`no-make-unsafe`) could not be enabled at
- *   all, because shipped code would have failed it.
- * - A `GENT_*` environment variable read in the source with nothing to set it.
- *   The subprocess trace variables kept two readers alive after their writer
- *   was deleted, so a branch nothing could take looked like working code.
+ * - An `.oxlintrc.json` override whose `files` glob matches no tracked file:
+ *   it turns a rule off for nothing. The same holds for an `.oxlintignore` row
+ *   and for an `include` glob of an Effect language-service override in the
+ *   root tsconfig.
+ * - A rule defined in `gent-rules.ts` that the root config never names: a rule
+ *   nobody decided on, which may not even pass on shipped code.
+ * - A `GENT_*` environment variable read in the source with nothing to set it:
+ *   a branch nothing can take that looks like working code.
  * - A `GENT_*` environment variable set, in production or a test, that
  *   nothing reads: a setter that configures nothing.
  *
@@ -2625,6 +2617,13 @@ export const findUnshippedSkillFiles = (
   return findings
 }
 
+/** The part of a package's `turbo.json` the guide input check reads. */
+export const TurboTypecheckInputsSchema = Schema.Struct({
+  tasks: Schema.Struct({
+    typecheck: Schema.Struct({ inputs: Schema.Array(Schema.String) }),
+  }),
+})
+
 /**
  * Guard: the guide check's cache key reads exactly the steering prose.
  *
@@ -2637,13 +2636,6 @@ export const findUnshippedSkillFiles = (
  * files `isSteeringFile` accepts. Turbo globs are relative to the package, so
  * `../x` names the repo path `x`, and a `!` input subtracts.
  */
-/** The part of a package's `turbo.json` the guide input check reads. */
-export const TurboTypecheckInputsSchema = Schema.Struct({
-  tasks: Schema.Struct({
-    typecheck: Schema.Struct({ inputs: Schema.Array(Schema.String) }),
-  }),
-})
-
 export const findUnhashedSteeringFiles = (
   file: string,
   inputs: ReadonlyArray<string>,
@@ -3404,11 +3396,9 @@ const DECLARATION =
  *
  * Three shapes reach the same place. `export const Foo` names the value on the
  * spot. A bare `export { Foo, Bar }` with no `from` clause exposes names this
- * file owns, so it is a surface too -- 26 dead names hid in one such block in
- * `packages/sdk/src/client.ts` because only the first shape was read. And
- * `export { Foo } from "./x.js"` puts a second consumable name at this module
- * path, so a dead one is dead here even though `./x.js` keeps its own alive --
- * `providers/provider-auth.ts` carried such a line past three review passes.
+ * file owns, so it is a surface too. And `export { Foo } from "./x.js"` puts a
+ * second consumable name at this module path, so a dead one is dead here even
+ * though `./x.js` keeps its own alive.
  *
  * Two kinds of name in a *bare* block are not this file's own, and counting
  * either would hide a real consumer: one it imported, and one it declares
@@ -4479,8 +4469,7 @@ const unusedFindings = (scope: DependencyScope, use: ScopeUse): ReadonlyArray<Fi
 
 /**
  * A declared dependency nothing uses is dead weight that installs, resolves
- * and audits forever, and nothing else notices it (pass 3 dropped a set once,
- * pass 14 four more, pass 15 a dead peer). A dependency is used when a file
+ * and audits forever, and nothing else notices it. A dependency is used when a file
  * in its scope loads or names it, a command runs one of its binaries, it
  * types a used package (`@types/x`), or it is a peer of a used dependency (a
  * workspace dependency's peers included). Peers are checked the same way: a
