@@ -28,3 +28,20 @@ const cacheKey = Schema.encodeSync(
   Schema.fromJsonString(Schema.Struct({ source: Schema.String, maxWidth: Schema.Finite })),
 )
 export const cached = new Map<string, string>().get(cacheKey({ source: "a", maxWidth: 1 }))
+
+// Nested in-place structs, arrays, tuples, literals and optional fields of
+// primitives write every key in the schema's order.
+const nestedKey = Schema.encodeSync(
+  Schema.fromJsonString(
+    Schema.Struct({
+      kind: Schema.Literals(["a", "b"]),
+      size: Schema.optional(Schema.Int),
+      tags: Schema.Array(Schema.String),
+      pair: Schema.Tuple([Schema.Boolean, Schema.NullOr(Schema.Number)]),
+      inner: Schema.Struct({ name: Schema.optionalKey(Schema.String) }),
+    }),
+  ),
+)
+export const nested = new Set<string>().has(
+  nestedKey({ kind: "a", tags: [], pair: [true, null], inner: {} }),
+)

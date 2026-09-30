@@ -757,10 +757,67 @@ const IDENTITY_WORDS: ReadonlySet<string> = new Set([
 const namesIdentity = (name: string): boolean =>
   name.split(/(?=[A-Z])|_/).some((segment) => IDENTITY_WORDS.has(segment.toLowerCase()))
 
+/** Schemas whose encoded JSON has no keys of its own to order. */
+const STABLE_LEAF_SCHEMAS = new Set([
+  "Schema.String",
+  "Schema.NonEmptyString",
+  "Schema.Number",
+  "Schema.Finite",
+  "Schema.Int",
+  "Schema.Boolean",
+  "Schema.BigInt",
+  "Schema.Null",
+  "Schema.Undefined",
+])
+
+/** Schemas that write their one argument's encoding, or an array of it. */
+const STABLE_WRAPPER_SCHEMAS = new Set([
+  "Schema.optional",
+  "Schema.optionalKey",
+  "Schema.NullOr",
+  "Schema.UndefinedOr",
+  "Schema.NullishOr",
+  "Schema.Array",
+  "Schema.NonEmptyArray",
+])
+
+/** Schemas that take an array of member schemas. */
+const STABLE_LIST_SCHEMAS = new Set(["Schema.Tuple", "Schema.Union"])
+
+/**
+ * Whether the schema written at `node` encodes every key in its own order:
+ * a primitive, a literal, or an in-place struct, tuple, union, array or
+ * optional of such schemas. A named schema, `Schema.Unknown`, a record or
+ * a struct with a spread or a computed key is open: its keys come in the
+ * value's order.
+ */
+const encodesStably = (node: AstNode | undefined): boolean => {
+  if (node === undefined) return false
+  if (node.type !== "CallExpression") return STABLE_LEAF_SCHEMAS.has(dottedName(node) ?? "")
+  const callee = dottedName(getNodeField(node, "callee")) ?? ""
+  const args = callExpressionArgs(node)
+  if (callee === "Schema.Literal" || callee === "Schema.Literals") return true
+  if (STABLE_WRAPPER_SCHEMAS.has(callee)) return args.length === 1 && encodesStably(args[0])
+  const [members] = args
+  if (STABLE_LIST_SCHEMAS.has(callee)) {
+    return (
+      members?.type === "ArrayExpression" &&
+      (getNodeArrayField(members, "elements") ?? []).every(encodesStably)
+    )
+  }
+  if (callee !== "Schema.Struct" || members?.type !== "ObjectExpression") return false
+  return (getNodeArrayField(members, "properties") ?? []).every(
+    (property) =>
+      property.type === "Property" &&
+      fieldOf(property, "computed") !== true &&
+      encodesStably(getNodeField(property, "value")),
+  )
+}
+
 /**
  * `Schema.encodeSync(Schema.fromJsonString(schema))`: an encoder of a whole
- * value to JSON. A `Schema.Struct({...})` written in place writes its fields
- * in its own order, whatever the value's key order, so it is not one.
+ * value to JSON. A schema written in place whose every key encodes in the
+ * schema's own order, whatever the value's key order, is not one.
  */
 const isJsonEncoder = (node: AstNode | undefined): boolean => {
   if (node?.type !== "CallExpression") return false
@@ -769,10 +826,7 @@ const isJsonEncoder = (node: AstNode | undefined): boolean => {
   if (json?.type !== "CallExpression") return false
   if (dottedName(getNodeField(json, "callee")) !== "Schema.fromJsonString") return false
   const [schema] = callExpressionArgs(json)
-  return (
-    schema?.type !== "CallExpression" ||
-    dottedName(getNodeField(schema, "callee")) !== "Schema.Struct"
-  )
+  return !encodesStably(schema)
 }
 
 /** A `…Fingerprint(...)` call, which returns its fields in a fixed order. */

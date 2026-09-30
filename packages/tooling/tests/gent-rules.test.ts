@@ -419,8 +419,9 @@ const CASES: ReadonlyArray<RuleCase> = [
     ],
     // four identity names, a comparison, `.has` and `.add`, three arrays that
     // carry an object, the unsafe side of a mixed comparison, a binding
-    // broken across lines, and an encoder called where it is built
-    expectedCount: 13,
+    // broken across lines, an encoder called where it is built, and three
+    // in-place structs with a field of open or unknown encoding
+    expectedCount: 16,
   },
 ]
 

@@ -37,3 +37,20 @@ export const split = encodeItem(a) !== encodeItem([item.id])
 
 // An encoder called where it is built.
 export const inline = seen.has(Schema.encodeSync(Schema.fromJsonString(Item))(a))
+
+// A struct written in place fixes only its own fields' order: a field that
+// holds an open value writes that value's keys in the value's order.
+const encodePayload = Schema.encodeSync(
+  Schema.fromJsonString(Schema.Struct({ id: Schema.String, payload: Schema.Unknown })),
+)
+export const payloadIdentity = encodePayload(a)
+const encodeTags = Schema.encodeSync(
+  Schema.fromJsonString(
+    Schema.Struct({
+      inner: Schema.Struct({ tags: Schema.Record(Schema.String, Schema.String) }),
+    }),
+  ),
+)
+export const tagsKey = encodeTags(a)
+const encodeNamed = Schema.encodeSync(Schema.fromJsonString(Schema.Struct({ item: Item })))
+export const namedKey = encodeNamed(a)
