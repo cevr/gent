@@ -564,12 +564,12 @@ export function createPasteManager() {
         Option.getOrElse(Option.fromNullishOr(store.get(id)), () => match),
       )
     },
-    /** The chip that ends at `offset` and still holds its stored text. */
-    chipEndingAt(text: string, offset: number): Option.Option<{ start: number; id: string }> {
+    /** The chip that ends at string index `index` and still holds its stored text. */
+    chipEndingAt(text: string, index: number): Option.Option<{ start: number; id: string }> {
       return Option.fromNullishOr(
-        /\[Pasted \d+ (?:lines|chars) #(\d+)\]$/.exec(text.slice(0, offset)),
+        /\[Pasted \d+ (?:lines|chars) #(\d+)\]$/.exec(text.slice(0, index)),
       ).pipe(
-        Option.map((match) => ({ start: offset - match[0].length, id: match[1] ?? "" })),
+        Option.map((match) => ({ start: index - match[0].length, id: match[1] ?? "" })),
         Option.filter((chip) => store.has(chip.id)),
       )
     },
@@ -782,6 +782,11 @@ function useComposerController(): ComposerController {
    * the whole chip in one undo step; editing it a character at a time would
    * send the fragment and lose the paste. The stored text stays, so an undo
    * gives back a chip that still sends its paste.
+   *
+   * The textarea counts its caret in its own units, which a wide or
+   * multi-byte character makes differ from string indices. The text before
+   * the caret gives the caret's string index. A chip is all ASCII, one unit
+   * per character in both counts, so the caret moves back by its length.
    */
   const removeChipBeforeCaret = (event: {
     readonly name?: string
@@ -792,12 +797,13 @@ function useComposerController(): ComposerController {
     if (!deletesBack || Option.isNone(inputRef) || inputRef.value.hasSelection()) return false
     const value = inputRef.value.plainText
     const caret = inputRef.value.cursorOffset
-    const chip = paste.chipEndingAt(value, caret)
+    const caretIndex = inputRef.value.getTextRange(0, caret).length
+    const chip = paste.chipEndingAt(value, caretIndex)
     if (Option.isNone(chip)) return false
     event.preventDefault()
-    const next = value.slice(0, chip.value.start) + value.slice(caret)
+    const next = value.slice(0, chip.value.start) + value.slice(caretIndex)
     inputRef.value.replaceText(next)
-    inputRef.value.cursorOffset = chip.value.start
+    inputRef.value.cursorOffset = caret - (caretIndex - chip.value.start)
     sc.onComposerInteraction(ComposerInteractionEvent.cases.DraftChanged.make({ text: next }))
     return true
   }

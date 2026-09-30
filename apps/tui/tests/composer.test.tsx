@@ -759,6 +759,29 @@ describe("Composer renderer", () => {
       expect(submitted).toEqual([`keep ${chip}`])
     }).pipe(Effect.timeout("10 seconds")),
   )
+  // The textarea counts its caret in its own units, not in string indices. A
+  // wide or multi-byte character before the chip must not shift the delete.
+  it.scopedLive("a chip after a wide or accented character deletes whole", () =>
+    Effect.gen(function* () {
+      for (const prefix of ["界 ", "é "]) {
+        const submitted: Array<string> = []
+        const setup = yield* renderScoped(() => (
+          <TestComposer onSubmit={(content) => submitted.push(content)} />
+        ))
+        yield* Effect.promise(() => setup.mockInput.pasteBracketedText(prefix))
+        yield* Effect.promise(() => setup.mockInput.pasteBracketedText("x".repeat(200)))
+        yield* waitForFrame(setup, (frame) => frame.includes("[Pasted 200 chars #1]"), "the chip")
+        setup.mockInput.pressBackspace()
+        yield* waitForFrame(setup, (frame) => !frame.includes("[Pasted"), "the chip deleted")
+        expect(renderFrame(setup)).not.toContain("[")
+        // The caret stands where the chip began.
+        yield* Effect.promise(() => setup.mockInput.typeText("z"))
+        setup.mockInput.pressKey("RETURN")
+        yield* Effect.promise(() => setup.renderOnce())
+        expect(submitted).toEqual([`${prefix}z`])
+      }
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   it.live("suspended composer blocks enter submission", () =>
     Effect.gen(function* () {
       const submitted: string[] = []
