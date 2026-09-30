@@ -856,7 +856,7 @@ const drawnCell = (
     return frame
   })
 
-describe("FX transcript treatment", () => {
+describe("transcript message rows", () => {
   it.live("shows information excluded from model context in the transcript", () =>
     Effect.gen(function* () {
       const message: ListMessage = {
@@ -1016,195 +1016,6 @@ describe("FX transcript treatment", () => {
       }),
     )
   }
-
-  it.live(
-    "native history holds rows until client extensions load, then commits them rendered",
-    () =>
-      Effect.gen(function* () {
-        const release = yield* Deferred.make<void>()
-        const held = defineClientExtension("@test/held-load", {
-          setup: Deferred.await(release).pipe(Effect.as(clientContributions())),
-        })
-        const savedText: string[] = []
-        const goalMessage: ListMessage = {
-          ...userMessage("regular-message", "goal-held", "RAW-GOAL-TEXT keep going.", "queued"),
-          pendingMode: absent,
-          metadata: { customType: "goal-context" },
-        }
-        const items: SessionItem[] = [
-          goalMessage,
-          ...Array.from({ length: 6 }, (_, index) =>
-            userMessage(
-              "regular-message",
-              `filler-${index}`,
-              `filler ${index}\nsecond line\nthird line`,
-              "queued",
-            ),
-          ),
-        ]
-        const setup = yield* Effect.promise(() =>
-          renderWithProviders(
-            () => {
-              const renderer = useRenderer()
-              const capture = (event: CliRendererExternalOutputEvent) => {
-                savedText.push(new TextDecoder().decode(event.snapshot.getRealCharBytes(false)))
-              }
-              renderer.on("external_output", capture)
-              onCleanup(() => renderer.off("external_output", capture))
-              return (
-                <NativeTranscript
-                  items={items}
-                  settled
-                  streaming={false}
-                  footerHeight={3}
-                  expanded={false}
-                  disclosure="collapsed"
-                  displayRevision={0}
-                  overlayOpen={false}
-                  renderItems={(visible) => (
-                    <MessageList
-                      items={visible}
-                      disclosure="collapsed"
-                      syntaxStyle={syntaxStyle}
-                      streaming={false}
-                    />
-                  )}
-                >
-                  <box />
-                </NativeTranscript>
-              )
-            },
-            { width: 60, height: 14, builtins: [...builtinClientModules, held] },
-          ),
-        )
-        // Held: the live view overflows, but nothing may reach scrollback yet.
-        for (let pass = 0; pass < 20; pass++) {
-          yield* Effect.promise(() => setup.flush())
-          yield* Effect.yieldNow
-        }
-        expect(savedText.join("")).toBe("")
-        yield* Deferred.complete(release, Effect.void)
-        yield* waitForFrame(
-          setup,
-          () => savedText.join("").includes("goal continuation"),
-          "goal row in scrollback",
-        )
-        expect(savedText.join("")).not.toContain("RAW-GOAL-TEXT")
-      }),
-  )
-
-  it.live("native history holds rows while a notice-row source is still deriving", () =>
-    Effect.gen(function* () {
-      const [settled, setSettled] = createSignal(false)
-      let extensionsLoaded = () => false
-      const savedText: string[] = []
-      const items: SessionItem[] = Array.from({ length: 8 }, (_, index) =>
-        userMessage(
-          "regular-message",
-          `unsettled-${index}`,
-          `unsettled ${index}\nsecond line\nthird line`,
-          "queued",
-        ),
-      )
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => {
-            const renderer = useRenderer()
-            extensionsLoaded = useExtensionUI().loaded
-            const capture = (event: CliRendererExternalOutputEvent) => {
-              savedText.push(new TextDecoder().decode(event.snapshot.getRealCharBytes(false)))
-            }
-            renderer.on("external_output", capture)
-            onCleanup(() => renderer.off("external_output", capture))
-            return (
-              <NativeTranscript
-                items={items}
-                settled={settled()}
-                streaming={false}
-                footerHeight={3}
-                expanded={false}
-                disclosure="collapsed"
-                displayRevision={0}
-                overlayOpen={false}
-                renderItems={(visible) => (
-                  <MessageList
-                    items={visible}
-                    disclosure="collapsed"
-                    syntaxStyle={syntaxStyle}
-                    streaming={false}
-                  />
-                )}
-              >
-                <box />
-              </NativeTranscript>
-            )
-          },
-          { width: 60, height: 14 },
-        ),
-      )
-      yield* Effect.promise(() => setup.flush()).pipe(
-        Effect.repeat({ until: () => extensionsLoaded() }),
-        Effect.timeout("5 seconds"),
-      )
-      // The live view overflows, but a source that has not answered holds every commit.
-      for (let pass = 0; pass < 20; pass++) {
-        yield* Effect.promise(() => setup.flush())
-        yield* Effect.yieldNow
-      }
-      expect(savedText.join("")).toBe("")
-      setSettled(true)
-      yield* waitForFrame(
-        setup,
-        () => savedText.join("").includes("unsettled 0"),
-        "first row in scrollback",
-      )
-    }),
-  )
-
-  it.live("goal continuations collapse to one line until full detail is on", () =>
-    Effect.gen(function* () {
-      const goalMessage: ListMessage = {
-        ...userMessage(
-          "regular-message",
-          "goal-1",
-          "Continue working toward the active goal.",
-          "queued",
-        ),
-        pendingMode: absent,
-        metadata: { customType: "goal-context" },
-      }
-      const collapsedFrame = yield* renderLoaded([goalMessage])
-      expect(collapsedFrame).toContain("goal continuation")
-      expect(collapsedFrame).not.toContain("Continue working")
-      const expandedFrame = yield* renderLoaded([goalMessage], true)
-      expect(expandedFrame).toContain("Continue working")
-      expect(expandedFrame).not.toContain("goal continuation")
-    }),
-  )
-
-  it.live("a fired alarm collapses to its note until full detail is on", () =>
-    Effect.gen(function* () {
-      const wakeMessage: ListMessage = {
-        ...userMessage(
-          "regular-message",
-          "wake-1",
-          "Alarm w1 fired at 2026-09-15T05:51:35.262Z. Run bun test and report.",
-          "queued",
-        ),
-        pendingMode: absent,
-        metadata: {
-          customType: "wake",
-          details: { outcome: "fired", note: "Run bun test and report." },
-        },
-      }
-      const collapsedFrame = yield* renderLoaded([wakeMessage])
-      expect(collapsedFrame).toContain("alarm fired · Run bun test and report.")
-      expect(collapsedFrame).not.toContain("fired at 2026")
-      const expandedFrame = yield* renderLoaded([wakeMessage], true)
-      expect(expandedFrame).toContain("fired at 2026")
-      expect(expandedFrame).not.toContain("alarm fired ·")
-    }),
-  )
 
   it.live("a message from another session names its sender above the text", () =>
     Effect.gen(function* () {
@@ -1370,7 +1181,266 @@ describe("FX transcript treatment", () => {
       expect(setup.renderer.listenerCount("resize")).toBe(1)
     }),
   )
+})
 
+describe("native history before the client extensions load", () => {
+  it.live(
+    "native history holds rows until client extensions load, then commits them rendered",
+    () =>
+      Effect.gen(function* () {
+        const release = yield* Deferred.make<void>()
+        const held = defineClientExtension("@test/held-load", {
+          setup: Deferred.await(release).pipe(Effect.as(clientContributions())),
+        })
+        const savedText: string[] = []
+        const goalMessage: ListMessage = {
+          ...userMessage("regular-message", "goal-held", "RAW-GOAL-TEXT keep going.", "queued"),
+          pendingMode: absent,
+          metadata: { customType: "goal-context" },
+        }
+        const items: SessionItem[] = [
+          goalMessage,
+          ...Array.from({ length: 6 }, (_, index) =>
+            userMessage(
+              "regular-message",
+              `filler-${index}`,
+              `filler ${index}\nsecond line\nthird line`,
+              "queued",
+            ),
+          ),
+        ]
+        const setup = yield* Effect.promise(() =>
+          renderWithProviders(
+            () => {
+              const renderer = useRenderer()
+              const capture = (event: CliRendererExternalOutputEvent) => {
+                savedText.push(new TextDecoder().decode(event.snapshot.getRealCharBytes(false)))
+              }
+              renderer.on("external_output", capture)
+              onCleanup(() => renderer.off("external_output", capture))
+              return (
+                <NativeTranscript
+                  items={items}
+                  settled
+                  streaming={false}
+                  footerHeight={3}
+                  expanded={false}
+                  disclosure="collapsed"
+                  displayRevision={0}
+                  overlayOpen={false}
+                  renderItems={(visible) => (
+                    <MessageList
+                      items={visible}
+                      disclosure="collapsed"
+                      syntaxStyle={syntaxStyle}
+                      streaming={false}
+                    />
+                  )}
+                >
+                  <box />
+                </NativeTranscript>
+              )
+            },
+            { width: 60, height: 14, builtins: [...builtinClientModules, held] },
+          ),
+        )
+        // Held: the live view overflows, but nothing may reach scrollback yet.
+        for (let pass = 0; pass < 20; pass++) {
+          yield* Effect.promise(() => setup.flush())
+          yield* Effect.yieldNow
+        }
+        expect(savedText.join("")).toBe("")
+        yield* Deferred.complete(release, Effect.void)
+        yield* waitForFrame(
+          setup,
+          () => savedText.join("").includes("goal continuation"),
+          "goal row in scrollback",
+        )
+        expect(savedText.join("")).not.toContain("RAW-GOAL-TEXT")
+      }),
+  )
+
+  it.live("native history holds rows while a notice-row source is still deriving", () =>
+    Effect.gen(function* () {
+      const [settled, setSettled] = createSignal(false)
+      let extensionsLoaded = () => false
+      const savedText: string[] = []
+      const items: SessionItem[] = Array.from({ length: 8 }, (_, index) =>
+        userMessage(
+          "regular-message",
+          `unsettled-${index}`,
+          `unsettled ${index}\nsecond line\nthird line`,
+          "queued",
+        ),
+      )
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => {
+            const renderer = useRenderer()
+            extensionsLoaded = useExtensionUI().loaded
+            const capture = (event: CliRendererExternalOutputEvent) => {
+              savedText.push(new TextDecoder().decode(event.snapshot.getRealCharBytes(false)))
+            }
+            renderer.on("external_output", capture)
+            onCleanup(() => renderer.off("external_output", capture))
+            return (
+              <NativeTranscript
+                items={items}
+                settled={settled()}
+                streaming={false}
+                footerHeight={3}
+                expanded={false}
+                disclosure="collapsed"
+                displayRevision={0}
+                overlayOpen={false}
+                renderItems={(visible) => (
+                  <MessageList
+                    items={visible}
+                    disclosure="collapsed"
+                    syntaxStyle={syntaxStyle}
+                    streaming={false}
+                  />
+                )}
+              >
+                <box />
+              </NativeTranscript>
+            )
+          },
+          { width: 60, height: 14 },
+        ),
+      )
+      yield* Effect.promise(() => setup.flush()).pipe(
+        Effect.repeat({ until: () => extensionsLoaded() }),
+        Effect.timeout("5 seconds"),
+      )
+      // The live view overflows, but a source that has not answered holds every commit.
+      for (let pass = 0; pass < 20; pass++) {
+        yield* Effect.promise(() => setup.flush())
+        yield* Effect.yieldNow
+      }
+      expect(savedText.join("")).toBe("")
+      setSettled(true)
+      yield* waitForFrame(
+        setup,
+        () => savedText.join("").includes("unsettled 0"),
+        "first row in scrollback",
+      )
+    }),
+  )
+})
+
+describe("rows that fold until full detail is on", () => {
+  it.live("goal continuations collapse to one line until full detail is on", () =>
+    Effect.gen(function* () {
+      const goalMessage: ListMessage = {
+        ...userMessage(
+          "regular-message",
+          "goal-1",
+          "Continue working toward the active goal.",
+          "queued",
+        ),
+        pendingMode: absent,
+        metadata: { customType: "goal-context" },
+      }
+      const collapsedFrame = yield* renderLoaded([goalMessage])
+      expect(collapsedFrame).toContain("goal continuation")
+      expect(collapsedFrame).not.toContain("Continue working")
+      const expandedFrame = yield* renderLoaded([goalMessage], true)
+      expect(expandedFrame).toContain("Continue working")
+      expect(expandedFrame).not.toContain("goal continuation")
+    }),
+  )
+
+  it.live("a fired alarm collapses to its note until full detail is on", () =>
+    Effect.gen(function* () {
+      const wakeMessage: ListMessage = {
+        ...userMessage(
+          "regular-message",
+          "wake-1",
+          "Alarm w1 fired at 2026-09-15T05:51:35.262Z. Run bun test and report.",
+          "queued",
+        ),
+        pendingMode: absent,
+        metadata: {
+          customType: "wake",
+          details: { outcome: "fired", note: "Run bun test and report." },
+        },
+      }
+      const collapsedFrame = yield* renderLoaded([wakeMessage])
+      expect(collapsedFrame).toContain("alarm fired · Run bun test and report.")
+      expect(collapsedFrame).not.toContain("fired at 2026")
+      const expandedFrame = yield* renderLoaded([wakeMessage], true)
+      expect(expandedFrame).toContain("fired at 2026")
+      expect(expandedFrame).not.toContain("alarm fired ·")
+    }),
+  )
+
+  it.live("a context handoff folds to one line until full detail is on", () =>
+    Effect.gen(function* () {
+      const items: SessionItem[] = [compactionMessage()]
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <>
+              <MessageList
+                items={items}
+                disclosure="collapsed"
+                syntaxStyle={syntaxStyle}
+                streaming={false}
+              />
+              <MessageList
+                items={items}
+                disclosure="full"
+                syntaxStyle={syntaxStyle}
+                streaming={false}
+              />
+              <MessageList
+                items={items}
+                disclosure="collapsed"
+                fullDetail={true}
+                syntaxStyle={syntaxStyle}
+                streaming={false}
+              />
+            </>
+          ),
+          { width: 100, height: 20 },
+        ),
+      )
+      const frame = renderFrame(setup)
+      expect(frame.match(/⇣ context handoff · 3 messages summarized/g)?.length).toBe(2)
+      expect(frame.match(/renamed the loader/g)?.length).toBe(1)
+    }),
+  )
+
+  it.live("the runtime's model-change notice folds to one line", () =>
+    Effect.gen(function* () {
+      const notice: ListMessage = {
+        ...compactionMessage(),
+        id: "model-change:b1:m5",
+        content: "MODEL-NOTICE-BODY",
+        metadata: { customType: MODEL_CHANGE_MESSAGE_TYPE },
+      }
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <MessageList
+              items={[notice]}
+              disclosure="collapsed"
+              syntaxStyle={syntaxStyle}
+              streaming={false}
+            />
+          ),
+          { width: 100, height: 10 },
+        ),
+      )
+      const frame = renderFrame(setup)
+      expect(frame).toContain("⇄ model changed")
+      expect(frame).not.toContain("MODEL-NOTICE-BODY")
+    }),
+  )
+})
+
+describe("tool frame identity", () => {
   it.live("keeps tool identity and failure status on direct compact and expanded frames", () =>
     Effect.gen(function* () {
       const setup = yield* Effect.promise(() =>
@@ -1524,7 +1594,9 @@ describe("FX transcript treatment", () => {
       expect(frame.match(/Its source was not replayed/g)?.length).toBe(3)
     }),
   )
+})
 
+describe("reloaded cell ops", () => {
   it.live("a reloaded cell draws its ops as the live feed drew them", () =>
     Effect.gen(function* () {
       const sessionId = SessionId.make("session-reloaded-ops")
@@ -1986,7 +2058,9 @@ describe("FX transcript treatment", () => {
         expect(frame).not.toContain("exit 0")
       }),
   )
+})
 
+describe("cell rows", () => {
   it.live("shows cell operation receipts in tree and detail frames", () =>
     Effect.gen(function* () {
       const setup = yield* Effect.promise(() =>
@@ -2134,6 +2208,31 @@ describe("FX transcript treatment", () => {
     }),
   )
 
+  it.live("collapsed keeps the group header and hides finished rows and output", () =>
+    Effect.gen(function* () {
+      const items: SessionItem[] = [bashMessage("call-bash-8", 25)]
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <MessageList
+              items={items}
+              disclosure="collapsed"
+              syntaxStyle={syntaxStyle}
+              streaming={false}
+            />
+          ),
+          { width: 80, height: 20 },
+        ),
+      )
+      const frame = renderFrame(setup)
+      expect(frame).toContain("1 tool call · 1 bash")
+      expect(frame).not.toContain("└ bash")
+      expect(frame).not.toContain("row 1")
+    }),
+  )
+})
+
+describe("bash row line counts", () => {
   it.live("a bash row counts lines as its body does: a final newline ends a line", () =>
     Effect.gen(function* () {
       const items: SessionItem[] = [
@@ -2203,93 +2302,6 @@ describe("FX transcript treatment", () => {
         }),
       )
       expect(renderFrame(body)).toContain("1000 lines")
-    }),
-  )
-
-  it.live("collapsed keeps the group header and hides finished rows and output", () =>
-    Effect.gen(function* () {
-      const items: SessionItem[] = [bashMessage("call-bash-8", 25)]
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <MessageList
-              items={items}
-              disclosure="collapsed"
-              syntaxStyle={syntaxStyle}
-              streaming={false}
-            />
-          ),
-          { width: 80, height: 20 },
-        ),
-      )
-      const frame = renderFrame(setup)
-      expect(frame).toContain("1 tool call · 1 bash")
-      expect(frame).not.toContain("└ bash")
-      expect(frame).not.toContain("row 1")
-    }),
-  )
-
-  it.live("a context handoff folds to one line until full detail is on", () =>
-    Effect.gen(function* () {
-      const items: SessionItem[] = [compactionMessage()]
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <>
-              <MessageList
-                items={items}
-                disclosure="collapsed"
-                syntaxStyle={syntaxStyle}
-                streaming={false}
-              />
-              <MessageList
-                items={items}
-                disclosure="full"
-                syntaxStyle={syntaxStyle}
-                streaming={false}
-              />
-              <MessageList
-                items={items}
-                disclosure="collapsed"
-                fullDetail={true}
-                syntaxStyle={syntaxStyle}
-                streaming={false}
-              />
-            </>
-          ),
-          { width: 100, height: 20 },
-        ),
-      )
-      const frame = renderFrame(setup)
-      expect(frame.match(/⇣ context handoff · 3 messages summarized/g)?.length).toBe(2)
-      expect(frame.match(/renamed the loader/g)?.length).toBe(1)
-    }),
-  )
-
-  it.live("the runtime's model-change notice folds to one line", () =>
-    Effect.gen(function* () {
-      const notice: ListMessage = {
-        ...compactionMessage(),
-        id: "model-change:b1:m5",
-        content: "MODEL-NOTICE-BODY",
-        metadata: { customType: MODEL_CHANGE_MESSAGE_TYPE },
-      }
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <MessageList
-              items={[notice]}
-              disclosure="collapsed"
-              syntaxStyle={syntaxStyle}
-              streaming={false}
-            />
-          ),
-          { width: 100, height: 10 },
-        ),
-      )
-      const frame = renderFrame(setup)
-      expect(frame).toContain("⇄ model changed")
-      expect(frame).not.toContain("MODEL-NOTICE-BODY")
     }),
   )
 })
