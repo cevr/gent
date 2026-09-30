@@ -15,6 +15,7 @@ import {
   Cause,
   Context,
   Deferred,
+  Exit,
   Effect,
   Fiber,
   Layer,
@@ -97,7 +98,6 @@ import {
   admitChildSessionDepth,
   makeRequestDeduper,
 } from "../../src/runtime/session"
-import { TestClock } from "effect/testing"
 import { ModelCompactionError, ModelContextCompactor } from "../../src/runtime/model-context"
 import type { ExtensionContributions } from "../../src/domain/extension.js"
 import { e2ePreset } from "../helpers/test-preset"
@@ -1400,69 +1400,69 @@ describe("session depth guard", () => {
 // ── request dedup ───────────────────────────────────────────────────────────
 
 describe("request dedup", () => {
-  it.effect("dedup cache hard cap evicts the oldest requestId", () =>
+  /** A deduper whose body records its marker and waits on `gate`. */
+  const gatedDeduper = (gate: Deferred.Deferred<void>, runs: Ref.Ref<ReadonlyArray<string>>) =>
+    makeRequestDeduper<{ requestId: string; marker: string }, string, never>({
+      body: (input) =>
+        Ref.update(runs, (seen) => [...seen, input.marker]).pipe(
+          Effect.andThen(Deferred.await(gate)),
+          Effect.as(input.marker),
+        ),
+      keyOf: (input) => Option.some(input.requestId),
+    })
+
+  it.live("calls in flight together with one request id run the body once", () =>
     Effect.gen(function* () {
-      let value = 0
-      const run = yield* makeRequestDeduper<{ requestId: string }, number, never>({
-        body: () =>
-          Effect.sync(() => {
-            value += 1
-            return value
-          }),
-        keyOf: (input) => Option.some(input.requestId),
-      })
-
-      // The cap is 1024 entries: fill it, then add one more.
-      const first = yield* run({ requestId: "req-cap-0" })
-      for (let index = 1; index <= 1024; index += 1) {
-        yield* run({ requestId: `req-cap-${index}` })
-      }
-      expect(value).toBe(1025)
-
-      // Past the cap, "req-cap-0" was evicted to make room for
-      // "req-cap-1024", so this call is a fresh lookup, not a cache hit.
-      const retry = yield* run({ requestId: "req-cap-0" })
-      expect(retry).not.toBe(first)
-      expect(retry).toBe(1026)
-    }),
+      const gate = yield* Deferred.make<void>()
+      const runs = yield* Ref.make<ReadonlyArray<string>>([])
+      const entered = yield* Ref.make(0)
+      const run = yield* gatedDeduper(gate, runs)
+      const call = (marker: string) =>
+        Ref.update(entered, (count) => count + 1).pipe(
+          Effect.andThen(run({ requestId: "K", marker })),
+        )
+      const calls = yield* Effect.forkChild(
+        Effect.all([call("m1"), call("m2"), call("m3")], { concurrency: "unbounded" }),
+      )
+      yield* waitFor(Ref.get(entered), (count) => count === 3, 2_000, "three calls in flight")
+      yield* Deferred.done(gate, Exit.void)
+      expect(yield* Fiber.join(calls)).toEqual(["m1", "m1", "m1"])
+      expect(yield* Ref.get(runs)).toEqual(["m1"])
+    }).pipe(Effect.timeout("4 seconds")),
   )
 
-  // Regression: a same-key retry inside the TTL window must collapse onto
-  // the cached outcome AND must not let a stale body leak into pending such
-  // that a post-eviction retry runs the wrong body.
-  it.effect("dedup cache post-eviction retry runs the fresh body, not a stale one", () =>
+  // Nothing is kept once a run ends: a later call runs its own body, and a
+  // finished call's body never runs for it.
+  it.live("a call after the first one ends runs its own body", () =>
     Effect.gen(function* () {
-      // The body's identity is captured in `lastSeen` so we can prove which
-      // input arg triggered the lookup. If the post-eviction call ran a
-      // stale closure, `lastSeen` would show input1's marker, not input3's.
-      let lastSeen = ""
-      const run = yield* makeRequestDeduper<{ requestId: string; marker: string }, string, never>({
-        body: (input) =>
-          Effect.sync(() => {
-            lastSeen = input.marker
-            return input.marker
-          }),
-        keyOf: (input) => Option.some(input.requestId),
-      })
+      const gate = yield* Deferred.make<void>()
+      yield* Deferred.done(gate, Exit.void)
+      const runs = yield* Ref.make<ReadonlyArray<string>>([])
+      const run = yield* gatedDeduper(gate, runs)
+      expect(yield* run({ requestId: "K", marker: "m1" })).toBe("m1")
+      expect(yield* run({ requestId: "K", marker: "m2" })).toBe("m2")
+      expect(yield* Ref.get(runs)).toEqual(["m1", "m2"])
+    }).pipe(Effect.timeout("4 seconds")),
+  )
 
-      // F1 populates the cache with key="K", body uses marker="m1".
-      const first = yield* run({ requestId: "K", marker: "m1" })
-      expect(first).toBe("m1")
-      expect(lastSeen).toBe("m1")
-
-      // F2 retries the same key inside the TTL window — must hit the cache
-      // and observe F1's outcome. F2's body (marker="m2") must NOT run.
-      const second = yield* run({ requestId: "K", marker: "m2" })
-      expect(second).toBe("m1")
-      expect(lastSeen).toBe("m1")
-
-      // Advance past the TTL so F1's cache entry is gone. F3 must run a
-      // fresh lookup with ITS OWN body (marker="m3"). If F2's body leaked
-      // into pending, this would observe "m2" instead of "m3".
-      yield* TestClock.adjust("61 seconds")
-      const third = yield* run({ requestId: "K", marker: "m3" })
-      expect(third).toBe("m3")
-      expect(lastSeen).toBe("m3")
-    }),
+  it.live("an interrupted run ends the calls waiting on it, and the next call runs again", () =>
+    Effect.gen(function* () {
+      const gate = yield* Deferred.make<void>()
+      const runs = yield* Ref.make<ReadonlyArray<string>>([])
+      const run = yield* gatedDeduper(gate, runs)
+      const first = yield* Effect.forkChild(run({ requestId: "K", marker: "m1" }))
+      yield* waitFor(Ref.get(runs), (seen) => seen.length === 1, 2_000, "the first run")
+      const entered = yield* Ref.make(false)
+      const waiting = yield* Effect.forkChild(
+        Ref.set(entered, true).pipe(Effect.andThen(run({ requestId: "K", marker: "m2" }))),
+      )
+      yield* waitFor(Ref.get(entered), (value) => value, 2_000, "the waiting call")
+      yield* Fiber.interrupt(first)
+      const waited = yield* Fiber.await(waiting)
+      expect(Exit.hasInterrupts(waited)).toBe(true)
+      yield* Deferred.done(gate, Exit.void)
+      expect(yield* run({ requestId: "K", marker: "m3" })).toBe("m3")
+      expect(yield* Ref.get(runs)).toEqual(["m1", "m3"])
+    }).pipe(Effect.timeout("4 seconds")),
   )
 })

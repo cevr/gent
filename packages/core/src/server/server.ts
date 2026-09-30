@@ -901,15 +901,14 @@ const makeSessionMutationsService: Effect.Effect<
   // ── requestId dedup ──
   //
   // Clients generate a `requestId` per mutation so a WS-level retry after an
-  // ambiguous failure converges on one durable outcome. Each body also checks
-  // the durable operation row, which owns restart/retry correctness; the
-  // in-memory cache only collapses concurrent same-process fibers.
+  // ambiguous failure converges on one durable outcome. Each body checks the
+  // durable operation row, which answers every sequential retry, a restart
+  // included.
   //
-  // Dedup is *concurrency-safe*: `RpcServer.layerHttp` runs with
-  // `concurrency: "unbounded"` and the client has `retryTransientErrors: true`,
-  // so the same requestId can land on two fibers in parallel. `Cache`
-  // collapses concurrent same-key lookups via an internal Deferred so the
-  // second fiber awaits the first's outcome.
+  // `RpcServer.layerHttp` runs with `concurrency: "unbounded"` and the client
+  // has `retryTransientErrors: true`, so the same requestId can land on two
+  // fibers in parallel. `makeRequestDeduper` runs the body once for the calls
+  // in flight together; the others await its outcome.
   const keyOf = (input: { readonly requestId?: string }) => Option.fromUndefinedOr(input.requestId)
   const dedupCreateSession = yield* makeRequestDeduper<
     CreateSessionInput,
@@ -1276,10 +1275,12 @@ const RpcHandlers = GentRpcs.toLayer(
     const runtimeEnvironment = yield* RuntimeEnvironment
     const pathService = yield* Path.Path
 
-    // `message.send` has no durable operation row; the runtime keys its actor
-    // command on `requestId`. This cache collapses concurrent same-requestId
-    // fibers (unbounded RPC concurrency + client transport retries) so the
-    // runtime sees one dispatch per request id.
+    // `message.send` has no durable operation row: its `requestId` names the
+    // user message, and the loop admits a message whose turn is admitted,
+    // running or settled as a replay (`LoopInbox.admit`), so a sequential
+    // retry runs no second turn. The deduper runs the body once for the
+    // calls in flight together (unbounded RPC concurrency + client transport
+    // retries).
     const sendMessage = yield* makeRequestDeduper<SendMessageInput, void, SessionRuntimeError>({
       body: (input) =>
         sessionRuntime

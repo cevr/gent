@@ -92,7 +92,6 @@ import {
   EventStoreError,
 } from "../../src/domain/event"
 import { BunServices } from "@effect/platform-bun"
-import { TestClock } from "effect/testing"
 import { SqlClient, type SqlError } from "effect/sql"
 import { ModelResolver } from "../../src/runtime/provider"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
@@ -2432,57 +2431,38 @@ describe("requestId idempotency", () => {
     }).pipe(Effect.provide(sessionMutationsLayer), Effect.timeout("4 seconds")),
   )
 
-  it.live("duplicate public message.send requestId dispatches to the runtime only once", () =>
+  // A send with a request id returns when its turn ends. Its repeats, in
+  // flight together or sent after that, run no second turn.
+  it.live("a repeated message.send requestId runs one turn, in flight or after it ends", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        let dispatchCount = 0
-        const { client, inWorkspace } = yield* makeRpcHandlersClient({
-          sendUserMessage: () =>
-            Effect.sync(() => {
-              dispatchCount++
-            }),
-        })
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          textStep("one"),
+          textStep("two"),
+        ])
+        const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
+        const { sessionId, branchId } = yield* client.session.create({ cwd: process.cwd() })
         const send = (content: string, requestId: string) =>
-          inWorkspace(
-            client["message.send"]({
-              sessionId: SessionId.make("s1"),
-              branchId: BranchId.make("b1"),
-              content,
-              requestId,
-            }),
-          )
+          client.message.send({ sessionId, branchId, content, requestId })
 
-        yield* send("hi", "req-send-1")
+        yield* Effect.all([send("hi", "req-send-1"), send("hi", "req-send-1")], {
+          concurrency: "unbounded",
+        })
         yield* send("hi", "req-send-1")
         yield* send("hi (distinct)", "req-send-2")
 
-        expect(dispatchCount).toBe(2)
-      }).pipe(Effect.timeout("4 seconds")),
-    ),
-  )
-
-  it.live("concurrent duplicate public message.send requestIds dispatch only once", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        let dispatchCount = 0
-        const { client, inWorkspace } = yield* makeRpcHandlersClient({
-          sendUserMessage: () =>
-            Effect.sync(() => {
-              dispatchCount++
-            }),
-        })
-        const send = inWorkspace(
-          client["message.send"]({
-            sessionId: SessionId.make("s1"),
-            branchId: BranchId.make("b1"),
-            content: "hi",
-            requestId: "req-conc-send",
-          }),
+        const snapshot = yield* waitFor(
+          client.session.getSnapshot({ sessionId, branchId }),
+          (current) => current.runtime._tag === "Idle",
+          3_000,
+          "runtime idle after the sends",
         )
-
-        yield* Effect.all([send, send, send], { concurrency: "unbounded" })
-
-        expect(dispatchCount).toBe(1)
+        expect(
+          snapshot.messages
+            .filter((message) => message.role === "user")
+            .map((message) => messagePartsText(message.parts)),
+        ).toEqual(["hi", "hi (distinct)"])
+        expect(yield* controls.callCount).toBe(2)
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )
@@ -2701,12 +2681,11 @@ describe("requestId idempotency", () => {
     ),
   )
 
-  // Fresh process cache. createSession has a durable operation result
-  // underneath the in-memory process cache, so a retry of the same
-  // `requestId` still returns the original session/branch ids after the
-  // cache is gone. Each `Effect.provide` of the layer builds a new
-  // `SessionMutations` (new dedup cache) over the same SQLite file.
-  it.scoped("durable createSession result survives a fresh process cache", () =>
+  // createSession stores its result as a durable operation row, so a retry
+  // of the same `requestId` in a new process returns the original
+  // session/branch ids. Each `Effect.provide` of the layer builds a new
+  // `SessionMutations` over the same SQLite file.
+  it.scoped("a createSession retry in a new process returns the stored result", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
@@ -2729,28 +2708,6 @@ describe("requestId idempotency", () => {
       expect(second.branchId).toBe(first.branchId)
       expect(sessions).toHaveLength(1)
     }).pipe(Effect.provide(BunServices.layer), Effect.timeout("4 seconds")),
-  )
-
-  // Companion to the TTL eviction test: prove the bound is the bound.
-  // Within the 60s window, a retry MUST collapse onto the cached outcome
-  // — otherwise "evict past TTL" would be vacuous.
-  it.effect("dedup cache retains success entry within TTL — retried requestId collapses", () =>
-    Effect.gen(function* () {
-      const mutations = yield* SessionMutations
-      const sessions = yield* SessionStorage
-      const first = yield* mutations.createSession({
-        cwd: "/nonexistent/ttl-mid",
-        requestId: "req-ttl-mid",
-      })
-      // Advance well inside the 60s window — should still hit the cache.
-      yield* TestClock.adjust("30 seconds")
-      const second = yield* mutations.createSession({
-        cwd: "/nonexistent/ttl-mid",
-        requestId: "req-ttl-mid",
-      })
-      expect(second.sessionId).toBe(first.sessionId)
-      expect((yield* sessions.listSessions).length).toBe(1)
-    }).pipe(Effect.provide(sessionMutationsLayer)),
   )
 
   it.scoped("createSession requestId replays durable result after mutations layer restart", () =>
