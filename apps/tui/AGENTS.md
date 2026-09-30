@@ -63,7 +63,7 @@ Ported from opencode. Key patterns:
 One ladder, owned by `createSessionController` (`handleEscape`, `handleInterrupt` in `session.tsx`). Esc never quits.
 
 - **Esc** steps back one layer: the expanded transcript, the palette, the disclosure, then a running turn (one press cancels it). On a draft the first press arms and the status row says `esc again to clear`; the second clears the draft. On an empty idle composer it does nothing. In shell mode a draft arms and clears the same way; on an empty shell draft the composer takes Esc and leaves shell mode.
-- **ctrl+c** closes a pane that holds the composer, collapses the expanded transcript, clears a draft, then cancels a running turn. A press that cancels a turn, or one on an idle empty composer, arms the exit and the status row says `ctrl+c again to exit`; the second press exits, even over a turn that started since (children that keep waking the session).
+- **ctrl+c** closes a pane that holds the composer, collapses the expanded transcript, clears a draft, stops a running `!cmd` (and arms nothing), then cancels a running turn. A press that cancels a turn, or one on an idle empty composer, arms the exit and the status row says `ctrl+c again to exit`; the second press exits, even over a turn that started since (children that keep waking the session).
 - **ctrl+d** on an empty composer exits (no pane, palette or ask open, the transcript collapsed); on a draft it deletes forward.
 - An armed key disarms on any other key (the other ladder key included: an Esc that leaves shell mode disarms a ctrl+c), a paste, a keybind, or after one second (a fiber on the client runtime, so a test clock moves it; the view interrupts it when it unmounts). The arm is per key: a ctrl+c then an Esc is two gestures.
 - Over the boot branch picker and an enforced sign-in, Esc does nothing and the hint says `ctrl+c quit`; ctrl+c arms the exit as on an empty composer, and the second press exits.
@@ -245,6 +245,8 @@ Special prefixes at input start trigger different modes:
 - Submit executes command, output shown in chat
 - ESC at an empty shell draft, or Backspace at the draft's start (it stands for deleting the `!`), exits shell mode; Backspace elsewhere edits the command; ESC on a shell draft arms its clear (see Keys)
 - Runs in the session's cwd; a spawn failure (the cwd is gone) is a refused submission (below)
+- Has no time limit: while it runs the activity row shows `$ cmd`, and ctrl+c stops it (or the view going). A stopped command sends nothing, and the status row says so
+- Output is read as it arrives, up to 8 MiB (`SHELL_READ_CAP_BYTES` in `composer.tsx`); past that the command is ended. The message keeps the lines that fit the `@file` cap; a cut writes the output read to `<data dir>/shell-output/` and the message names the file
 
 ### Refused submissions
 

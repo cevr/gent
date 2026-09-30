@@ -664,7 +664,7 @@ export function Session(props: SessionProps) {
           <NativeTranscript
             items={controller.items()}
             settled={controller.itemsSettled()}
-            streaming={controller.activity().phase !== "idle"}
+            streaming={client.isStreaming()}
             footerHeight={footerHeight()}
             expanded={controller.uiState().transcriptExpanded}
             disclosure={controller.uiState().disclosure}

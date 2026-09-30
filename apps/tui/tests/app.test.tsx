@@ -590,7 +590,18 @@ type TestSetup = Awaited<ReturnType<typeof renderWithProviders>>
 const ESC_CUE = "esc again to clear"
 const CTRL_C_CUE = "ctrl+c again to exit"
 
-/** An idle session view with no draft; `shutdowns` counts the exits it performs. */
+/** A `message` namespace that records each sent content. */
+const recordSends = (sent: Array<string>) => ({
+  send: (input: { readonly content: string }) =>
+    Effect.sync(() => {
+      sent.push(input.content)
+    }),
+})
+
+/**
+ * An idle session view with no draft; `shutdowns` counts the exits it
+ * performs, and `sent` holds each message it sent.
+ */
 const mountIdleSession = (
   runtime: GentRuntime = createMockRuntime(),
   terminal: {
@@ -602,9 +613,11 @@ const mountIdleSession = (
 ) =>
   Effect.gen(function* () {
     let shutdowns = 0
+    const sent: Array<string> = []
     const client = createMockClient({
       auth: { listProviders: () => Effect.succeed([]) },
       branch: { getTree: () => Effect.succeed([]) },
+      message: recordSends(sent),
     })
     const setup = yield* Effect.promise(() =>
       renderWithProviders(() => <App />, {
@@ -630,6 +643,7 @@ const mountIdleSession = (
     return {
       setup,
       shutdowns: () => shutdowns,
+      sent: (): ReadonlyArray<string> => sent,
       /** Tears the view down, as the harness does after the test. */
       unmount,
       /** Time for a key to be parsed and handled before a negative assertion. */
@@ -780,14 +794,6 @@ const mountShortTerminalWithTrays = (
     )
     return setup
   })
-
-/** A `message` namespace that records each sent content: a slash line no command ran lands here. */
-const recordSends = (sent: Array<string>) => ({
-  send: (input: { readonly content: string }) =>
-    Effect.sync(() => {
-      sent.push(input.content)
-    }),
-})
 
 function ExtensionUIProbe(props: {
   readonly onReady: (ext: ReturnType<typeof useExtensionUI>) => void
@@ -1706,6 +1712,31 @@ describe("App auth gate", () => {
       view.setup.mockInput.pressBackspace()
       yield* waitForFrame(view.setup, (frame) => !frame.includes("┃ $"), "shell mode left")
       expect(renderFrame(view.setup)).toContain("┃ s")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  // A `!cmd` has no time limit, so ctrl+c is how the reader ends one. While
+  // it runs the activity row names it; the press stops it, sends nothing, and
+  // arms no exit.
+  it.live("ctrl+c stops a running !cmd, and its output is not sent", () =>
+    Effect.gen(function* () {
+      const view = yield* mountIdleSession()
+      yield* Effect.promise(() => view.setup.mockInput.typeText("!sleep 30"))
+      yield* waitForFrame(view.setup, (frame) => frame.includes("┃ $ sleep 30"), "the command")
+      view.setup.mockInput.pressEnter()
+      yield* waitForFrame(
+        view.setup,
+        (frame) => frame.includes("$ sleep 30") && !frame.includes("┃ $ sleep 30"),
+        "the activity row names the command",
+      )
+      view.setup.mockInput.pressKey("c", { ctrl: true })
+      const stopped = yield* waitForFrame(
+        view.setup,
+        (frame) => frame.includes("Stopped: $ sleep 30"),
+        "the stop notice",
+      )
+      expect(stopped).not.toContain(CTRL_C_CUE)
+      expect(view.sent()).toEqual([])
+      expect(view.shutdowns()).toBe(0)
     }).pipe(Effect.timeout("10 seconds")),
   )
   it.live("ctrl+d on an empty composer exits; on a draft it does not", () =>

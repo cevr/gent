@@ -1,7 +1,7 @@
-import { type ProcessError, runProcess } from "@gent/core/extensions/api"
+import { ProcessError } from "@gent/core/extensions/api"
 import { dataPaths } from "@gent/sdk"
-import { DateTime, Effect, FileSystem, Option, Path, Schema } from "effect"
-import type { ChildProcessSpawner } from "effect/process"
+import { DateTime, Duration, Effect, FileSystem, Option, Path, Schema, Stream } from "effect"
+import { ChildProcess, type ChildProcessSpawner } from "effect/process"
 import { homedir } from "os"
 import {
   type Accessor,
@@ -88,9 +88,9 @@ import {
  * Shell execution utility with an inline output cap and a spill file.
  *
  * The composer's `!cmd` shell puts its output straight into a chat message, so
- * the inline copy has to stay small. A command that overruns the cap writes its
- * whole output under the gent data directory and the notice names that file, so
- * nothing the reader ran is lost to the cap.
+ * the inline copy has to stay small. A command that overruns the cap writes the
+ * output read under the gent data directory and the notice names that file, so
+ * the inline cap loses nothing that was read.
  */
 
 /**
@@ -101,39 +101,81 @@ const shellOutputDirectory = (): Effect.Effect<string> =>
   Effect.map(dataPaths(homedir()), ({ dataDir }) => `${dataDir}/shell-output`)
 
 /**
+ * Past this many bytes of output a `!cmd` stops being read and ends: memory
+ * holds at most this much, and the spill file keeps it. The command has no
+ * time limit; ctrl+c stops it.
+ */
+export const SHELL_READ_CAP_BYTES = 8 * 1024 * 1024
+
+/**
  * Execute a shell command. The inline copy keeps the whole lines that fit the
  * `@file` cap (`inlineHead`). The caller sees `truncated` when the cap drops
- * output, and `savedPath` names the file holding the whole of it.
+ * output, and `savedPath` names the file holding all that was read. `ended`
+ * says the output passed `SHELL_READ_CAP_BYTES`, so the command was ended
+ * there and the file holds its first part.
  */
 export const executeShell = (command: string, cwd: string) =>
   Effect.gen(function* () {
-    const { stdout, stderr } = yield* runCommand(command, cwd)
+    const { stdout, stderr, ended } = yield* runCommand(command, cwd)
     let fullOutput = stdout
     if (stderr.length > 0) fullOutput = `${stdout}\n${stderr}`
 
     const lines = splitLines(fullOutput)
     const kept = inlineHead(lines)
 
-    if (kept.length === lines.length) {
-      return { output: fullOutput.trim(), truncated: false, savedPath: Option.none<string>() }
+    if (kept.length === lines.length && !ended) {
+      return {
+        output: fullOutput.trim(),
+        truncated: false,
+        ended,
+        savedPath: Option.none<string>(),
+      }
     }
 
-    const savedPath = yield* saveFullOutput(command, fullOutput)
+    const savedPath = yield* saveFullOutput(command, fullOutput, ended)
     return {
       output: kept.join("\n").trim(),
       truncated: true,
+      ended,
       savedPath,
     }
   })
 
 /**
- * Writes the whole output beside the rest of the gent data. A write that fails
- * costs the reader the spill file, not the command they just ran, so the
- * failure reports as an absent path rather than a failed shell.
+ * The message a `!cmd` sends: the command, then its inline output. A cut
+ * names the spill file, so the rest stays reachable.
+ */
+const shellMessage =
+  (command: string) =>
+  (result: Effect.Success<ReturnType<typeof executeShell>>): string => {
+    const message = `$ ${command}\n\n${result.output}`
+    if (!result.truncated) return message
+    let cut = "output truncated"
+    let saved = "full output saved to"
+    if (result.ended) {
+      cut = `output past ${SHELL_READ_CAP_BYTES} bytes not read; the command was ended`
+      saved = "the output read is saved to"
+    }
+    return (
+      message +
+      Option.match(result.savedPath, {
+        onNone: () => `\n\n[${cut}]`,
+        onSome: (path) => `\n\n[${cut}; ${saved} ${path}]`,
+      })
+    )
+  }
+
+/**
+ * Writes the output read beside the rest of the gent data: all of it, or its
+ * first `SHELL_READ_CAP_BYTES` when the command was ended there, which the
+ * header says. A write that fails costs the reader the spill file, not the
+ * command they just ran, so the failure reports as an absent path rather
+ * than a failed shell.
  */
 const saveFullOutput = (
   command: string,
   output: string,
+  ended: boolean,
 ): Effect.Effect<Option.Option<string>, never, FileSystem.FileSystem | Path.Path> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
@@ -143,7 +185,10 @@ const saveFullOutput = (
     const now = yield* DateTime.nowAsDate
     const stamp = now.toISOString().replaceAll(":", "-").replaceAll(".", "-")
     const filePath = path.join(directory, `shell_${stamp}.txt`)
-    const header = `# Command: ${command}\n# Timestamp: ${now.toISOString()}\n\n`
+    let header = `# Command: ${command}\n# Timestamp: ${now.toISOString()}\n`
+    if (ended)
+      header += `# Output past ${SHELL_READ_CAP_BYTES} bytes was not read; the command was ended\n`
+    header += "\n"
     yield* fs.writeFileString(filePath, header + output)
     return Option.some(filePath)
   }).pipe(
@@ -155,20 +200,70 @@ const saveFullOutput = (
     ),
   )
 
+/** One streaming decoder across the chunks: a character split between two chunks decodes whole. */
+const decodeUtf8 = (chunks: ReadonlyArray<Uint8Array>): string => {
+  const decoder = new TextDecoder()
+  let out = ""
+  for (const chunk of chunks) out += decoder.decode(chunk, { stream: true })
+  return out + decoder.decode()
+}
+
+/** What a `!cmd` wrote, read up to `SHELL_READ_CAP_BYTES`. */
+interface ShellOutput {
+  readonly stdout: string
+  readonly stderr: string
+  /** The output passed the cap: reading stopped there and the command was ended. */
+  readonly ended: boolean
+}
+
 /**
- * A spawn that fails (the session's directory is gone, bash is missing) is a
- * typed failure: the submit restores the command and says why.
+ * Runs `bash -c <command>` and reads stdout and stderr as they arrive, up to
+ * `SHELL_READ_CAP_BYTES` in all. Past the cap the reading stops, and closing
+ * the scope ends the process (SIGTERM, then SIGKILL). An interrupt ends it the
+ * same way. A spawn that fails (the session's directory is gone, bash is
+ * missing) is a typed failure: the submit restores the command and says why.
  */
 const runCommand = (
   command: string,
   cwd: string,
-): Effect.Effect<
-  { stdout: string; stderr: string },
-  ProcessError,
-  ChildProcessSpawner.ChildProcessSpawner
-> =>
-  runProcess("bash", ["-c", command], { cwd, stdout: "pipe", stderr: "pipe" }).pipe(
-    Effect.map((r) => ({ stdout: r.stdout, stderr: r.stderr })),
+): Effect.Effect<ShellOutput, ProcessError, ChildProcessSpawner.ChildProcessSpawner> =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const handle = yield* ChildProcess.make("bash", ["-c", command], {
+        cwd,
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "pipe",
+        forceKillAfter: Duration.seconds(2),
+      })
+      const stdout: Array<Uint8Array> = []
+      const stderr: Array<Uint8Array> = []
+      let bytes = 0
+      const chunks = Stream.merge(
+        handle.stdout.pipe(Stream.map((chunk) => ({ into: stdout, chunk }))),
+        handle.stderr.pipe(Stream.map((chunk) => ({ into: stderr, chunk }))),
+      )
+      yield* Stream.runForEachWhile(chunks, ({ into, chunk }) =>
+        Effect.sync(() => {
+          into.push(chunk)
+          bytes += chunk.byteLength
+          return bytes < SHELL_READ_CAP_BYTES
+        }),
+      )
+      const ended = bytes >= SHELL_READ_CAP_BYTES
+      // Both streams closed: the command is done, or about to be.
+      if (!ended) yield* handle.exitCode
+      return { stdout: decodeUtf8(stdout), stderr: decodeUtf8(stderr), ended }
+    }),
+  ).pipe(
+    Effect.mapError(
+      (error) =>
+        new ProcessError({
+          command: "bash",
+          message: `bash failed: ${error.message}`,
+          cause: error,
+        }),
+    ),
   )
 
 // ── composer frame ──────────────────────────────────────────────────────────
@@ -1016,53 +1111,52 @@ function useComposerController(): ComposerController {
     sc.onComposerInteraction(ComposerInteractionEvent.cases.ExitShell.make({}))
     clearInput()
     cast(
-      client.cwdOf(target.sessionId).pipe(
-        Effect.flatMap((cwd) => executeShell(text, cwd)),
-        Effect.map(({ output, truncated, savedPath }) => {
-          let userMessage = `$ ${text}\n\n${output}`
-          if (!truncated) return userMessage
-          // The notice names the spill file, so the rest stays reachable.
-          userMessage += Option.match(savedPath, {
-            onNone: () => `\n\n[output truncated]`,
-            onSome: (path) => `\n\n[output truncated; full output saved to ${path}]`,
-          })
-          return userMessage
-        }),
-        Effect.flatMap((userMessage) =>
-          // The command has run, and its side effects are done. A refused send
-          // gives back the output as a message, never the command to run again.
-          randomId.pipe(
-            Effect.flatMap((requestId) =>
-              sc.onSubmit(userMessage, "queue", target, requestId).pipe(
-                Effect.catchEager((error) =>
-                  Effect.sync(() =>
-                    refuse(
-                      target,
-                      {
-                        order,
-                        text: userMessage,
-                        shell: false,
-                        requestId: lostRequest(error, requestId),
-                      },
-                      `The command ran; its output was not sent. ${formatError(error)}`,
+      sc
+        .runShell(
+          text,
+          client.cwdOf(target.sessionId).pipe(Effect.flatMap((cwd) => executeShell(text, cwd))),
+        )
+        .pipe(
+          Effect.map(shellMessage(text)),
+          Effect.flatMap((userMessage) =>
+            // The command has run, and its side effects are done. A refused send
+            // gives back the output as a message, never the command to run again.
+            randomId.pipe(
+              Effect.flatMap((requestId) =>
+                sc.onSubmit(userMessage, "queue", target, requestId).pipe(
+                  Effect.catchEager((error) =>
+                    Effect.sync(() =>
+                      refuse(
+                        target,
+                        {
+                          order,
+                          text: userMessage,
+                          shell: false,
+                          requestId: lostRequest(error, requestId),
+                        },
+                        `The command ran; its output was not sent. ${formatError(error)}`,
+                      ),
                     ),
                   ),
                 ),
               ),
             ),
           ),
+          // The reader stopped it, or left the view: the output is not sent.
+          Effect.catchTag("ShellStopped", ({ command }) =>
+            Effect.sync(() => client.setNotice(`Stopped: $ ${command}; its output was not sent`)),
+          ),
+          // Nothing ran: the command comes back to run.
+          Effect.catchEager((error) =>
+            Effect.sync(() => {
+              refuse(
+                target,
+                { order, text, shell: true, requestId: Option.none() },
+                shellRefusal(error),
+              )
+            }),
+          ),
         ),
-        // Nothing ran: the command comes back to run.
-        Effect.catchEager((error) =>
-          Effect.sync(() => {
-            refuse(
-              target,
-              { order, text, shell: true, requestId: Option.none() },
-              shellRefusal(error),
-            )
-          }),
-        ),
-      ),
     )
   }
 

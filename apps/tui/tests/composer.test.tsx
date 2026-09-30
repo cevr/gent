@@ -7,8 +7,20 @@ import {
   createPasteManager,
   executeShell,
   isLargePaste,
+  SHELL_READ_CAP_BYTES,
 } from "../src/composer"
-import { ConfigProvider, Deferred, Effect, FileSystem, Layer, Option, Schema } from "effect"
+import {
+  ConfigProvider,
+  Deferred,
+  Effect,
+  Fiber,
+  FileSystem,
+  Layer,
+  Option,
+  Schedule,
+  Schema,
+} from "effect"
+import { runProcess } from "@gent/core/extensions/api"
 import {
   type ActiveInteraction,
   BranchId,
@@ -208,6 +220,43 @@ describe("executeShell", () => {
       expect(result.output.split("\n").every((line) => line === "é".repeat(50))).toBe(true)
       expect(Option.isSome(result.savedPath)).toBe(true)
     }),
+  )
+
+  // `yes` never ends on its own: reading stops at the cap, the command is
+  // ended there, and memory holds no more than the cap and one chunk.
+  shellTest("output past the read cap ends the command and keeps what was read", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const testDir = yield* fs.makeTempDirectoryScoped()
+      const result = yield* executeShell("yes", testDir)
+      expect(result.ended).toBe(true)
+      expect(result.truncated).toBe(true)
+      const savedPath = yield* Effect.fromOption(result.savedPath)
+      const saved = yield* fs.readFileString(savedPath)
+      expect(saved).toContain("the command was ended")
+      expect(saved.length).toBeGreaterThanOrEqual(SHELL_READ_CAP_BYTES)
+      expect(saved.length).toBeLessThan(SHELL_READ_CAP_BYTES + 1024 * 1024)
+      yield* fs.remove(savedPath)
+    }).pipe(Effect.timeout("20 seconds")),
+  )
+
+  // An interrupt closes the command's scope, and the process goes with it.
+  shellTest("an interrupted command ends its process", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const testDir = yield* fs.makeTempDirectoryScoped()
+      const fiber = yield* Effect.forkChild(executeShell("echo $$ > pid; exec sleep 30", testDir))
+      const pidFile = `${testDir}/pid`
+      const poll = Schedule.spaced("10 millis")
+      yield* fs.exists(pidFile).pipe(Effect.repeat({ until: (started) => started, schedule: poll }))
+      const pid = (yield* fs.readFileString(pidFile)).trim()
+      expect(pid.length).toBeGreaterThan(0)
+      yield* Fiber.interrupt(fiber)
+      // `ps -p` fails once no process has the id.
+      yield* runProcess("ps", ["-p", pid]).pipe(
+        Effect.repeat({ until: (ps) => ps.exitCode !== 0, schedule: poll }),
+      )
+    }).pipe(Effect.timeout("10 seconds")),
   )
 
   shellTest("a command inside the cap spills nothing", () =>
@@ -474,6 +523,8 @@ function TestComposer(props: {
         Effect.andThen(props.sendResult ?? Effect.void),
       ),
     onSlashCommand: () => Effect.void,
+    // The command runs as given: this harness has no ctrl+c ladder to stop it.
+    runShell: <A, E, R>(_command: string, run: Effect.Effect<A, E, R>) => run,
     onRestoreQueue: () => {},
     dispatchComposer: props.dispatchComposer ?? (() => {}),
     resolveAuthGate: () => {},
@@ -1851,6 +1902,8 @@ function TestComposerGhost(props: {
       ),
     onSubmit: (text: string) => Effect.sync(() => props.onSubmit(text)),
     onSlashCommand: () => Effect.void,
+    // The command runs as given: this harness has no ctrl+c ladder to stop it.
+    runShell: <A, E, R>(_command: string, run: Effect.Effect<A, E, R>) => run,
     onRestoreQueue: () => {},
     dispatchComposer: () => {},
     resolveAuthGate: () => {},
@@ -2099,6 +2152,8 @@ function TestComposerSlashEnter(props: {
       props.onSlashCommand(cmd, args)
       return Effect.void
     },
+    // The command runs as given: this harness has no ctrl+c ladder to stop it.
+    runShell: <A, E, R>(_command: string, run: Effect.Effect<A, E, R>) => run,
     onRestoreQueue: () => {},
     dispatchComposer: () => {},
     resolveAuthGate: () => {},

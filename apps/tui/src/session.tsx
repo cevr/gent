@@ -17,6 +17,7 @@ import {
   Duration,
   Effect,
   Equal,
+  Exit,
   Fiber,
   FileSystem,
   Match,
@@ -2615,6 +2616,11 @@ export interface SlashSubmission {
   readonly refuse: (reason: string) => void
 }
 
+/** A running `!cmd` was stopped: ctrl+c, or the session view went. Nothing is sent. */
+class ShellStopped extends Schema.TaggedError<ShellStopped>()("ShellStopped", {
+  command: Schema.String,
+}) {}
+
 export interface SessionController {
   items: () => SessionItem[]
   /**
@@ -2652,6 +2658,14 @@ export interface SessionController {
    * answered, is not a command: its text goes out as a message (`send`).
    */
   onSlashCommand: (command: SlashSubmission) => Effect.Effect<void>
+  /**
+   * Runs a `!cmd` as this view's: the activity row shows `$ command` while it
+   * runs, and ctrl+c, or the view going, stops it with `ShellStopped`.
+   */
+  runShell: <A, E, R>(
+    command: string,
+    run: Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E | ShellStopped, R>
   onRestoreQueue: () => void
   dispatchComposer: (event: ComposerEvent) => void
   resolveAuthGate: () => void
@@ -3043,7 +3057,42 @@ export function createSessionController(props: {
     dispatch: (event) => dispatchSessionUi(SessionUiEvent.cases.PromptSearch.make({ event })),
   })
 
+  // ── the running `!cmd` ──
+  //
+  // A `!cmd` has no time limit; it runs until it ends, ctrl+c stops it, or the
+  // view goes. Each one runs against its own stop signal, and the activity
+  // row names the latest while any runs.
+  interface RunningShell {
+    readonly command: string
+    readonly stop: Deferred.Deferred<void>
+  }
+  const [runningShells, setRunningShells] = createSignal<ReadonlyArray<RunningShell>>([])
+  const runShell = <A, E, R>(
+    command: string,
+    run: Effect.Effect<A, E, R>,
+  ): Effect.Effect<A, E | ShellStopped, R> =>
+    Effect.gen(function* () {
+      const running: RunningShell = { command, stop: yield* Deferred.make<void>() }
+      const stopped = Deferred.await(running.stop).pipe(
+        Effect.andThen(Effect.fail(new ShellStopped({ command }))),
+      )
+      return yield* Effect.acquireUseRelease(
+        Effect.sync(() => setRunningShells((shells) => [...shells, running])),
+        () => Effect.raceFirst(run, stopped),
+        () => Effect.sync(() => setRunningShells((shells) => shells.filter((s) => s !== running))),
+      )
+    })
+  /** Stops every running `!cmd`; true when one was running. */
+  const stopShells = () => {
+    const shells = untrack(runningShells)
+    for (const shell of shells) client.runtime.cast(Deferred.done(shell.stop, Exit.void))
+    return shells.length > 0
+  }
+  onCleanup(stopShells)
+
   const activity = (): ReturnType<SessionController["activity"]> => {
+    const shell = Option.fromUndefinedOr(runningShells().at(-1))
+    if (Option.isSome(shell)) return { phase: "tool", toolInfo: `$ ${shell.value.command}` }
     if (!client.isStreaming()) return { phase: "idle" }
     const tool = Option.fromNullishOr(feed.activeTool())
     if (Option.isSome(tool)) {
@@ -3264,8 +3313,9 @@ export function createSessionController(props: {
    * whatever started since: a session that children keep waking has a new
    * turn running at every press, and cancelling each one would never let the
    * reader leave. Something nearer that appeared since (a draft, an expanded
-   * transcript) still comes first: the press clears it and never exits over
-   * it. On an idle empty composer the first press only arms the exit.
+   * transcript, a running `!cmd`) still comes first: the press clears or stops
+   * it and never exits over it. On an idle empty composer the first press only
+   * arms the exit.
    */
   const handleInterrupt = () => {
     const second = armedFor("interrupt")
@@ -3292,6 +3342,8 @@ export function createSessionController(props: {
       onComposerInteraction(ComposerInteractionEvent.cases.ClearDraft.make({}))
       return
     }
+    // A running `!cmd` is nearer than the turn: the press stops it and arms nothing.
+    if (stopShells()) return
     if (second) {
       exit()
       return
@@ -3432,6 +3484,7 @@ export function createSessionController(props: {
     onComposerInteraction,
     onSubmit,
     onSlashCommand,
+    runShell,
     onRestoreQueue,
     dispatchComposer,
     resolveAuthGate,
