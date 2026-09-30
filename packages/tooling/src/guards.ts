@@ -1506,13 +1506,17 @@ const DIRECT_READ = /\b(?:process|Bun)\.env\.(GENT_[A-Z0-9_]+)\b(?!\s*=(?!=))/g
  * such as a message saying `GENT_X=1`, sets nothing:
  *
  * - a key of an env record: `env: { GENT_X: v }`, `const env = { "GENT_X": v }`,
- *   `const childEnv = { GENT_X: v }`, the shape a spawned process receives. A
- *   record bound to any other name is not read as a writer, so its reader is
- *   reported: the guard fails loud there, never open;
+ *   `const childEnv = { GENT_X: v }`, the shape a spawned process receives;
+ *   a record merged into the environment, `Object.assign(process.env, { GENT_X: v })`;
+ *   and a record a config provider serves, `ConfigProvider.fromEnvRecord({ GENT_X: v })`
+ *   or `ConfigProvider.fromUnknown({ GENT_X: v })`. A record bound to any other
+ *   name is not read as a writer, so its reader is reported: the guard fails
+ *   loud there, never open;
  * - an assignment: `process.env.GENT_X = v`, `Bun.env["GENT_X"] = v`;
  * - a shell prefix in a package script: `"dev": "GENT_X=1 bun run ..."`.
  */
-const ENV_RECORD_OPEN = /\b(?:(?:env|[a-z]\w*Env)\s*[:=]|fromEnvRecord\()\s*\{/g
+const ENV_RECORD_OPEN =
+  /\b(?:(?:env|[a-z]\w*Env)\s*[:=]|from(?:EnvRecord|Unknown)\(|Object\.assign\(\s*(?:process|Bun)\.env\s*,)\s*\{/g
 const ENV_RECORD_KEY = /(?:^|[{,\s])["']?(GENT_[A-Z0-9_]+)["']?\s*:/g
 const ENV_ASSIGNMENT =
   /\b(?:process|Bun)\.env(?:\.(GENT_[A-Z0-9_]+)|\[["'](GENT_[A-Z0-9_]+)["']\])\s*=(?!=)/g

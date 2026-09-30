@@ -1606,6 +1606,25 @@ describe("a set variable must have a reader", () => {
     expect(findings).toEqual([])
   })
 
+  test("a record merged into the environment or handed to a config provider sets its keys", () => {
+    const findings = findWritersWithoutReaders(
+      new Map([
+        [
+          "packages/sdk/src/boot.ts",
+          `Object.assign(process.env, { GENT_S5: "1" })\nObject.assign(Bun.env, {\n  GENT_S6: "1",\n})\n`,
+        ],
+        ["packages/sdk/tests/a.test.ts", `ConfigProvider.fromUnknown({ GENT_S7: "1" })\n`],
+      ]),
+    )
+    expect(
+      findings.map((finding) => [finding.file, finding.line, finding.message.split("`")[1]]),
+    ).toEqual([
+      ["packages/sdk/src/boot.ts", 1, "GENT_S5"],
+      ["packages/sdk/src/boot.ts", 3, "GENT_S6"],
+      ["packages/sdk/tests/a.test.ts", 1, "GENT_S7"],
+    ])
+  })
+
   test("a set variable read in production or in a fixture is silent", () => {
     const findings = findWritersWithoutReaders(
       new Map([
