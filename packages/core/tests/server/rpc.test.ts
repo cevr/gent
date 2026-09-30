@@ -414,7 +414,7 @@ describe("branch.fork", () => {
           textStep("fork done"),
         ])
         const { client, sessionId, branchId } = yield* createRpcHarness({
-          ...e2ePreset,
+          agents: e2ePreset.agents,
           providerLayer,
           extensions: [EchoProbeExtension],
         })
@@ -556,7 +556,11 @@ describe("auth.listProviders", () => {
       Effect.gen(function* () {
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
         const { client } = yield* createRpcClient(
-          createE2ELayer({ ...e2ePreset, providerLayer, extensions: [authDriversExtension] }),
+          createE2ELayer({
+            agents: e2ePreset.agents,
+            providerLayer,
+            extensions: [authDriversExtension],
+          }),
         )
         const session = yield* client.session.create({ cwd: process.cwd() })
         const required = (providers: ReadonlyArray<{ provider: string; required: boolean }>) =>
@@ -586,7 +590,11 @@ describe("auth.listProviders", () => {
       Effect.gen(function* () {
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
         const { client } = yield* createRpcClient(
-          createE2ELayer({ ...e2ePreset, providerLayer, extensions: [authDriversExtension] }),
+          createE2ELayer({
+            agents: e2ePreset.agents,
+            providerLayer,
+            extensions: [authDriversExtension],
+          }),
         )
         const required = (providers: ReadonlyArray<{ provider: string; required: boolean }>) =>
           providers
@@ -608,7 +616,7 @@ describe("auth.listProviders", () => {
         const configContext = yield* Layer.build(ConfigService.Test())
         const { client } = yield* createRpcClient(
           createE2ELayer({
-            ...e2ePreset,
+            agents: e2ePreset.agents,
             providerLayer,
             extensions: [authDriversExtension],
             configServiceLayer: Layer.succeedContext(configContext),
@@ -657,9 +665,11 @@ describe("auth.listProviders", () => {
         }
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
         const { client } = yield* createRpcClient(
-          createE2ELayer({ ...e2ePreset, providerLayer, extensions: [envDrivers] }).pipe(
-            Layer.provide(envLayer),
-          ),
+          createE2ELayer({
+            agents: e2ePreset.agents,
+            providerLayer,
+            extensions: [envDrivers],
+          }).pipe(Layer.provide(envLayer)),
         )
         const providers = yield* client.auth.listProviders({})
         const anthropic = providers.find((entry) => entry.provider === "anthropic")
@@ -766,7 +776,7 @@ describe("auth persistence RPC failures", () => {
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
         const { client } = yield* createRpcClient(
           createE2ELayer({
-            ...e2ePreset,
+            agents: e2ePreset.agents,
             providerLayer,
             extensions: makePersistingExtensions(),
             authLayer: failingAuthStoreLayer,
@@ -792,7 +802,7 @@ describe("auth persistence RPC failures", () => {
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
         const { client } = yield* createRpcClient(
           createE2ELayer({
-            ...e2ePreset,
+            agents: e2ePreset.agents,
             providerLayer,
             extensions: makePersistingExtensions(),
             authLayer: failingAuthStoreLayer,
@@ -850,7 +860,7 @@ describe("provider login", () => {
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
         const { client } = yield* createRpcClient(
           createE2ELayer({
-            ...e2ePreset,
+            agents: e2ePreset.agents,
             providerLayer,
             extensions: [],
             sessionProfileCacheLayer: fixedSessionProfiles(new Map([[profileCwd, profile]])),
@@ -1250,7 +1260,7 @@ describe("interaction.respondInteraction", () => {
           Effect.gen(function* () {
             const { client } = yield* createRpcClient(
               createE2ELayer({
-                ...e2ePreset,
+                agents: e2ePreset.agents,
                 providerLayer: firstProvider.layer,
                 extensions: [InteractionProbeExtension],
                 durableApproval: true,
@@ -1299,7 +1309,7 @@ describe("interaction.respondInteraction", () => {
           Effect.gen(function* () {
             const { client } = yield* createRpcClient(
               createE2ELayer({
-                ...e2ePreset,
+                agents: e2ePreset.agents,
                 providerLayer: secondProvider.layer,
                 extensions: [InteractionProbeExtension],
                 durableApproval: true,
@@ -1381,7 +1391,7 @@ describe("interaction.respondInteraction", () => {
           Effect.gen(function* () {
             const { client } = yield* createRpcClient(
               createE2ELayer({
-                ...e2ePreset,
+                agents: e2ePreset.agents,
                 providerLayer: firstProvider.layer,
                 extensions: [InteractionProbeExtension],
                 durableApproval: true,
@@ -1439,7 +1449,7 @@ describe("interaction.respondInteraction", () => {
           Effect.gen(function* () {
             const { client } = yield* createRpcClient(
               createE2ELayer({
-                ...e2ePreset,
+                agents: e2ePreset.agents,
                 providerLayer: secondProvider.layer,
                 extensions: [InteractionProbeExtension],
                 durableApproval: true,
@@ -1491,7 +1501,7 @@ describe("interaction.respondInteraction", () => {
           ])
           const { client } = yield* createRpcClient(
             createE2ELayer({
-              ...e2ePreset,
+              agents: e2ePreset.agents,
               providerLayer,
               extensions: [InteractionProbeExtension],
               approvalLayer: ApprovalService.Live,
@@ -1597,7 +1607,7 @@ describe("interaction.respondInteraction", () => {
           ])
           const { client } = yield* createRpcClient(
             createE2ELayer({
-              ...e2ePreset,
+              agents: e2ePreset.agents,
               providerLayer,
               extensions: [makeOriginProbe()],
               approvalLayer: ApprovalService.Live,
@@ -1714,7 +1724,7 @@ describe("interaction.respondInteraction", () => {
           ])
           const { client } = yield* createRpcClient(
             createE2ELayer({
-              ...e2ePreset,
+              agents: e2ePreset.agents,
               providerLayer,
               extensions: [makeOriginProbe()],
               approvalLayer: ApprovalService.Live,
@@ -1799,7 +1809,7 @@ describe("interaction.respondInteraction", () => {
           ])
           const { client } = yield* createRpcClient(
             createE2ELayer({
-              ...e2ePreset,
+              agents: e2ePreset.agents,
               providerLayer,
               extensions: [makeOriginProbe()],
               approvalLayer: ApprovalService.Live,
@@ -1855,7 +1865,11 @@ describe("interaction.respondInteraction", () => {
             textStep("custom nudge answered"),
           ])
           const { client } = yield* createRpcClient(
-            createE2ELayer({ ...e2ePreset, providerLayer, extensions: [makeOriginProbe()] }),
+            createE2ELayer({
+              agents: e2ePreset.agents,
+              providerLayer,
+              extensions: [makeOriginProbe()],
+            }),
           )
           const origin = originClient(client)
           const top = yield* client.session.create({})
@@ -1918,7 +1932,7 @@ describe("interaction.respondInteraction", () => {
           ])
           const context = yield* Layer.build(
             createE2ELayer({
-              ...e2ePreset,
+              agents: e2ePreset.agents,
               providerLayer,
               extensions: [InteractionProbeExtension],
               approvalLayer: ApprovalService.Live,
@@ -1990,7 +2004,7 @@ describe("interaction.respondInteraction", () => {
           ])
           const { client } = yield* createRpcClient(
             createE2ELayer({
-              ...e2ePreset,
+              agents: e2ePreset.agents,
               providerLayer,
               extensions: [InteractionProbeExtension],
               approvalLayer: ApprovalService.Live,
@@ -2070,7 +2084,7 @@ describe("interaction.respondInteraction", () => {
           ).pipe(Layer.provide(ApprovalService.Live))
           const { client } = yield* createRpcClient(
             createE2ELayer({
-              ...e2ePreset,
+              agents: e2ePreset.agents,
               providerLayer,
               extensions: [InteractionProbeExtension],
               approvalLayer: failAfterFirstStore,
@@ -2156,7 +2170,7 @@ describe("interaction.respondInteraction", () => {
           ])
           const { client } = yield* createRpcClient(
             createE2ELayer({
-              ...e2ePreset,
+              agents: e2ePreset.agents,
               providerLayer,
               extensions: [EchoApprovalExtension],
               approvalLayer: ApprovalService.Live,
@@ -2246,7 +2260,7 @@ describe("interaction.respondInteraction", () => {
           ])
           const { client } = yield* createRpcClient(
             createE2ELayer({
-              ...e2ePreset,
+              agents: e2ePreset.agents,
               providerLayer,
               extensions: [extension],
               approvalLayer: ApprovalService.Live,
@@ -2306,7 +2320,7 @@ describe("interaction.respondInteraction", () => {
           ])
           const { client } = yield* createRpcClient(
             createE2ELayer({
-              ...e2ePreset,
+              agents: e2ePreset.agents,
               providerLayer,
               extensions: [extension],
               approvalLayer: ApprovalService.Live,
@@ -2358,7 +2372,7 @@ describe("interaction.respondInteraction", () => {
           ])
           const { client } = yield* createRpcClient(
             createE2ELayer({
-              ...e2ePreset,
+              agents: e2ePreset.agents,
               providerLayer,
               extensions: [extension],
               approvalLayer: ApprovalService.Live,
@@ -2418,7 +2432,7 @@ describe("interaction.respondInteraction", () => {
           Effect.gen(function* () {
             const { client } = yield* createRpcClient(
               createE2ELayer({
-                ...e2ePreset,
+                agents: e2ePreset.agents,
                 providerLayer: firstProvider.layer,
                 extensions: [extension],
                 durableApproval: true,
@@ -2463,7 +2477,7 @@ describe("interaction.respondInteraction", () => {
           Effect.gen(function* () {
             const { client } = yield* createRpcClient(
               createE2ELayer({
-                ...e2ePreset,
+                agents: e2ePreset.agents,
                 providerLayer: secondProvider.layer,
                 extensions: [extension],
                 durableApproval: true,
@@ -2544,7 +2558,7 @@ describe("interaction.respondInteraction", () => {
           ])
           const { client } = yield* createRpcClient(
             createE2ELayer({
-              ...e2ePreset,
+              agents: e2ePreset.agents,
               providerLayer,
               extensions: [extension],
               approvalLayer: ApprovalService.Live,
@@ -2598,7 +2612,7 @@ describe("interaction.respondInteraction", () => {
           Effect.gen(function* () {
             const { client } = yield* createRpcClient(
               createE2ELayer({
-                ...e2ePreset,
+                agents: e2ePreset.agents,
                 providerLayer,
                 extensions: [extension],
                 durableApproval: true,
@@ -2662,7 +2676,7 @@ describe("interaction.respondInteraction", () => {
           Effect.gen(function* () {
             const { client } = yield* createRpcClient(
               createE2ELayer({
-                ...e2ePreset,
+                agents: e2ePreset.agents,
                 providerLayer: firstProvider.layer,
                 extensions: [extension],
                 durableApproval: true,
@@ -2695,7 +2709,7 @@ describe("interaction.respondInteraction", () => {
           Effect.gen(function* () {
             const { client } = yield* createRpcClient(
               createE2ELayer({
-                ...e2ePreset,
+                agents: e2ePreset.agents,
                 providerLayer: secondProvider.layer,
                 extensions: [extension],
                 durableApproval: true,
@@ -2752,7 +2766,7 @@ describe("interaction.respondInteraction", () => {
           ])
           const { client } = yield* createRpcClient(
             createE2ELayer({
-              ...e2ePreset,
+              agents: e2ePreset.agents,
               providerLayer,
               extensions: [extension],
               approvalLayer: ApprovalService.Live,
@@ -2817,7 +2831,7 @@ describe("interaction.respondInteraction", () => {
           ])
           const { client } = yield* createRpcClient(
             createE2ELayer({
-              ...e2ePreset,
+              agents: e2ePreset.agents,
               providerLayer,
               extensions: [extension],
               approvalLayer: ApprovalService.Live,
@@ -2902,7 +2916,7 @@ describe("interaction.respondInteraction", () => {
           ])
           const { client } = yield* createRpcClient(
             createE2ELayer({
-              ...e2ePreset,
+              agents: e2ePreset.agents,
               providerLayer,
               extensions: [extension],
               approvalLayer: ApprovalService.Live,
@@ -2969,7 +2983,7 @@ describe("interaction.respondInteraction", () => {
           ])
           const { client } = yield* createRpcClient(
             createE2ELayer({
-              ...e2ePreset,
+              agents: e2ePreset.agents,
               providerLayer,
               extensions: [extension],
               approvalLayer: ApprovalService.Live,
@@ -3011,7 +3025,7 @@ describe("interaction.respondInteraction", () => {
           ])
           const { client } = yield* createRpcClient(
             createE2ELayer({
-              ...e2ePreset,
+              agents: e2ePreset.agents,
               providerLayer,
               extensions: [InteractionProbeExtension],
               approvalLayer: ApprovalService.Live,
@@ -3152,7 +3166,7 @@ describe("interaction.respondInteraction", () => {
         Effect.gen(function* () {
           const { client } = yield* createRpcClient(
             createE2ELayer({
-              ...e2ePreset,
+              agents: e2ePreset.agents,
               providerLayer: firstProvider.layer,
               extensions: [extension],
               durableApproval: true,
@@ -3204,7 +3218,7 @@ describe("interaction.respondInteraction", () => {
         Effect.gen(function* () {
           const { client } = yield* createRpcClient(
             createE2ELayer({
-              ...e2ePreset,
+              agents: e2ePreset.agents,
               providerLayer: secondProvider.layer,
               extensions: [extension],
               durableApproval: true,
@@ -3529,7 +3543,7 @@ describe("extension requests and slash commands", () => {
         Effect.gen(function* () {
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
           const { client, sessionId, branchId } = yield* createRpcHarness({
-            ...e2ePreset,
+            agents: e2ePreset.agents,
             providerLayer,
             extensions: [ext],
             cwd: "/nonexistent/gent-extension-queue-follow-up",
@@ -3596,7 +3610,7 @@ describe("extension requests and slash commands", () => {
             textStep("follow-up reply"),
           ])
           const { client, sessionId, branchId } = yield* createRpcHarness({
-            ...e2ePreset,
+            agents: e2ePreset.agents,
             providerLayer,
             extensions: [ext],
             cwd: "/nonexistent/gent-extension-queue-follow-up-warm",
@@ -3690,7 +3704,7 @@ describe("extension requests and slash commands", () => {
         Effect.gen(function* () {
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
           const { client, sessionId, branchId } = yield* createRpcHarness({
-            ...e2ePreset,
+            agents: e2ePreset.agents,
             providerLayer,
             extensions: [ext],
             cwd: "/nonexistent/gent-extension-queue-follow-up-slash",
@@ -3844,7 +3858,7 @@ describe("extension requests and slash commands", () => {
         Effect.gen(function* () {
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
           const { client, sessionId } = yield* createRpcHarness({
-            ...e2ePreset,
+            agents: e2ePreset.agents,
             providerLayer,
             extensions: [ext],
           })
@@ -3940,7 +3954,7 @@ describe("extension requests and slash commands", () => {
         Effect.gen(function* () {
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
           const { client, sessionId, branchId } = yield* createRpcHarness({
-            ...e2ePreset,
+            agents: e2ePreset.agents,
             providerLayer,
             extensions: [projectExt],
           })
@@ -4003,7 +4017,7 @@ describe("extension requests and slash commands", () => {
           expect(profile.resolved.failedExtensions).toEqual([])
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
           const { client, sessionId, branchId } = yield* createRpcHarness({
-            ...e2ePreset,
+            agents: e2ePreset.agents,
             providerLayer,
             extensions: [],
             sessionProfileCacheLayer: fixedSessionProfiles(
@@ -4072,7 +4086,7 @@ describe("extension requests and slash commands", () => {
           expect(profile.resolved.failedExtensions).toEqual([])
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
           const { client, sessionId } = yield* createRpcHarness({
-            ...e2ePreset,
+            agents: e2ePreset.agents,
             providerLayer,
             extensions: [],
             sessionProfileCacheLayer: fixedSessionProfiles(
@@ -4105,7 +4119,7 @@ describe("extension requests and slash commands", () => {
           )
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
           const { client, sessionId, branchId } = yield* createRpcHarness({
-            ...e2ePreset,
+            agents: e2ePreset.agents,
             providerLayer,
             extensions: [],
             sessionProfileCacheLayer,
@@ -4272,7 +4286,11 @@ describe("extension health", () => {
         Effect.gen(function* () {
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
           const { client } = yield* createRpcClient(
-            createE2ELayer({ ...e2ePreset, providerLayer, extensions: [catalogDrivers] }),
+            createE2ELayer({
+              agents: e2ePreset.agents,
+              providerLayer,
+              extensions: [catalogDrivers],
+            }),
           )
           const models = yield* client.model.list({})
           expect(models.map((model) => model.id)).toContain(ModelId.make("working/one"))
@@ -4322,7 +4340,11 @@ describe("extension health", () => {
         Effect.gen(function* () {
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
           const { client } = yield* createRpcClient(
-            createE2ELayer({ ...e2ePreset, providerLayer, extensions: [catalogDrivers] }),
+            createE2ELayer({
+              agents: e2ePreset.agents,
+              providerLayer,
+              extensions: [catalogDrivers],
+            }),
           )
           // No run yet: health runs the catalog once, then reads that record.
           const first = yield* client.extension.listStatus({})
@@ -4357,7 +4379,7 @@ describe("event subscriptions", () => {
           textStep("synced reply"),
         ])
         const { client, sessionId, branchId } = yield* createRpcHarness({
-          ...e2ePreset,
+          agents: e2ePreset.agents,
           providerLayer,
           extensions: [],
           cwd: "/nonexistent/gent-extension-stream-synchronized",
@@ -4439,7 +4461,7 @@ describe("session threads", () => {
         Effect.gen(function* () {
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
           const { client, sessionId, branchId } = yield* createRpcHarness({
-            ...e2ePreset,
+            agents: e2ePreset.agents,
             providerLayer,
             extensions: [ext],
             cwd: "/nonexistent/gent-child-thread",
@@ -4520,7 +4542,7 @@ describe("session threads", () => {
         const profiles = yield* reviewerProfiles(projectCwd)
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
         const { client } = yield* createRpcHarness({
-          ...e2ePreset,
+          agents: e2ePreset.agents,
           providerLayer,
           extensions: [],
           sessionProfileCacheLayer: profiles.layer,
@@ -4592,7 +4614,7 @@ describe("extension resources", () => {
           const sessionProfileCacheLayer = fixedSessionProfiles(new Map([[profileCwd, profile]]))
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
           const { client, sessionId, branchId } = yield* createRpcHarness({
-            ...e2ePreset,
+            agents: e2ePreset.agents,
             providerLayer,
             extensions: [],
             sessionProfileCacheLayer,
@@ -4674,7 +4696,7 @@ describe("extension resources", () => {
           )
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
           const { client, sessionId, branchId } = yield* createRpcHarness({
-            ...e2ePreset,
+            agents: e2ePreset.agents,
             providerLayer,
             extensions: [],
             sessionProfileCacheLayer,
@@ -4756,7 +4778,7 @@ describe("extension resources", () => {
           // The launch registry does not load the extension: only the
           // profile for the session's cwd knows its branch resource.
           const { client, sessionId, branchId } = yield* createRpcHarness({
-            ...e2ePreset,
+            agents: e2ePreset.agents,
             providerLayer,
             extensions: [],
             sessionProfileCacheLayer,
@@ -4944,7 +4966,7 @@ export default defineExtension({
               textStep("the turn ran"),
             ])
             const { client, sessionId, branchId } = yield* createRpcHarness({
-              ...e2ePreset,
+              agents: e2ePreset.agents,
               providerLayer,
               extensions: [],
               sessionProfileCacheLayer,
@@ -5112,7 +5134,7 @@ describe("sessionDeleted hook", () => {
         )
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
         const { client, sessionId, branchId } = yield* createRpcHarness({
-          ...e2ePreset,
+          agents: e2ePreset.agents,
           providerLayer,
           extensions: [],
           sessionProfileCacheLayer,
@@ -5444,7 +5466,7 @@ describe("a resumed call that had taken its answer", () => {
         }
         const layerFor = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) =>
           createE2ELayer({
-            ...e2ePreset,
+            agents: e2ePreset.agents,
             providerLayer,
             extensions: [extension],
             durableApproval: true,
@@ -5565,7 +5587,7 @@ describe("a call answered while a sibling call still ran", () => {
         }
         const layerFor = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) =>
           createE2ELayer({
-            ...e2ePreset,
+            agents: e2ePreset.agents,
             providerLayer,
             extensions: [extension],
             durableApproval: true,

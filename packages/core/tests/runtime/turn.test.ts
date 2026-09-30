@@ -2515,7 +2515,7 @@ describe("model-change notice", () => {
           },
         ])
         const { client, sessionId, branchId } = yield* createRpcHarness({
-          ...e2ePreset,
+          agents: e2ePreset.agents,
           providerLayer,
           extensions: [holdToolExtension(gate)],
         })
@@ -2575,7 +2575,7 @@ describe("model-change notice", () => {
           },
         ])
         const { client, sessionId, branchId } = yield* createRpcHarness({
-          ...e2ePreset,
+          agents: e2ePreset.agents,
           providerLayer,
           extensions: [holdToolExtension(gate)],
         })
@@ -2629,7 +2629,7 @@ describe("model-change notice", () => {
           Effect.gen(function* () {
             const { client } = yield* createRpcClient(
               createE2ELayer({
-                ...e2ePreset,
+                agents: e2ePreset.agents,
                 providerLayer: firstProvider.layer,
                 extensions: [ResumeProbeExtension],
                 storagePath: dbPath,
@@ -2666,7 +2666,7 @@ describe("model-change notice", () => {
           Effect.gen(function* () {
             const { client } = yield* createRpcClient(
               createE2ELayer({
-                ...e2ePreset,
+                agents: e2ePreset.agents,
                 providerLayer: secondProvider.layer,
                 extensions: [ResumeProbeExtension],
                 storagePath: dbPath,
@@ -2852,7 +2852,6 @@ describe("turn record", () => {
         })
         const layerFor = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) =>
           createE2ELayer({
-            ...e2ePreset,
             agents: [...testAgents, helperAgent],
             providerLayer,
             extensions: [ResumeProbeExtension],
@@ -2957,7 +2956,6 @@ describe("turn record", () => {
           agents: ReadonlyArray<AgentDefinition>,
         ) =>
           createE2ELayer({
-            ...e2ePreset,
             agents,
             providerLayer,
             extensions: [ResumeProbeExtension],
@@ -3044,7 +3042,6 @@ describe("turn record", () => {
           agents: ReadonlyArray<AgentDefinition>,
         ) =>
           createE2ELayer({
-            ...e2ePreset,
             agents,
             providerLayer,
             extensions: [DispatchProbeExtension],
@@ -3124,7 +3121,7 @@ describe("turn record", () => {
         ])
         const { client } = yield* createRpcClient(
           createE2ELayer({
-            ...e2ePreset,
+            agents: e2ePreset.agents,
             providerLayer: provider.layer,
             extensions: [ResumeProbeExtension],
             storagePath: dbPath,
@@ -3186,7 +3183,7 @@ describe("turn record", () => {
           Effect.gen(function* () {
             const { client } = yield* createRpcClient(
               createE2ELayer({
-                ...e2ePreset,
+                agents: e2ePreset.agents,
                 providerLayer: firstProvider.layer,
                 extensions: [ResumeProbeExtension],
                 storagePath: dbPath,
@@ -3220,7 +3217,7 @@ describe("turn record", () => {
           Effect.gen(function* () {
             const { client } = yield* createRpcClient(
               createE2ELayer({
-                ...e2ePreset,
+                agents: e2ePreset.agents,
                 providerLayer: secondProvider.layer,
                 extensions: [ResumeProbeExtension],
                 storagePath: dbPath,
@@ -3273,7 +3270,7 @@ describe("turn record", () => {
           Effect.gen(function* () {
             const { client } = yield* createRpcClient(
               createE2ELayer({
-                ...e2ePreset,
+                agents: e2ePreset.agents,
                 providerLayer: firstProvider.layer,
                 extensions: [ResumeProbeExtension],
                 storagePath: dbPath,
@@ -3296,7 +3293,7 @@ describe("turn record", () => {
           Effect.gen(function* () {
             const { client } = yield* createRpcClient(
               createE2ELayer({
-                ...e2ePreset,
+                agents: e2ePreset.agents,
                 providerLayer: secondProvider.layer,
                 extensions: [ResumeProbeExtension],
                 storagePath: dbPath,
@@ -3351,7 +3348,7 @@ describe("turn record", () => {
           Effect.gen(function* () {
             const { client } = yield* createRpcClient(
               createE2ELayer({
-                ...e2ePreset,
+                agents: e2ePreset.agents,
                 providerLayer: firstProvider.layer,
                 extensions: [ResumeProbeExtension],
                 storagePath: dbPath,
@@ -3382,7 +3379,7 @@ describe("turn record", () => {
           Effect.gen(function* () {
             const { client } = yield* createRpcClient(
               createE2ELayer({
-                ...e2ePreset,
+                agents: e2ePreset.agents,
                 providerLayer: secondProvider.layer,
                 extensions: [ResumeProbeExtension],
                 storagePath: dbPath,
@@ -3433,7 +3430,7 @@ describe("turn record", () => {
           Effect.gen(function* () {
             const { client } = yield* createRpcClient(
               createE2ELayer({
-                ...e2ePreset,
+                agents: e2ePreset.agents,
                 providerLayer: firstProvider.layer,
                 extensions: [ResumeProbeExtension],
                 storagePath: dbPath,
@@ -3475,7 +3472,7 @@ describe("turn record", () => {
           Effect.gen(function* () {
             const { client } = yield* createRpcClient(
               createE2ELayer({
-                ...e2ePreset,
+                agents: e2ePreset.agents,
                 providerLayer: secondProvider.layer,
                 extensions: [ResumeProbeExtension],
                 storagePath: dbPath,
@@ -4212,7 +4209,7 @@ describe("a tool call a restart cut short", () => {
         }
         const layerFor = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) =>
           createE2ELayer({
-            ...e2ePreset,
+            agents: e2ePreset.agents,
             providerLayer,
             extensions: [extension],
             storagePath: dbPath,
@@ -4306,7 +4303,7 @@ describe("a tool call a restart cut short", () => {
         ])
         const { client } = yield* createRpcClient(
           createE2ELayer({
-            ...e2ePreset,
+            agents: e2ePreset.agents,
             providerLayer,
             extensions: [extension],
             durableApproval: true,

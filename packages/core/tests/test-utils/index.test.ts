@@ -9,7 +9,9 @@ import { ExtensionRegistry } from "../../src/runtime/extension-host"
 import { defineExtension, defineResource, ExtensionHost } from "@gent/core/extensions/api"
 
 /** The server root with the stub tool runner, the scripted model, and no agents. */
-const toolLayer = (config: Pick<E2ELayerConfig, "extensionInputs">) =>
+const toolLayer = (config: {
+  readonly extensionInputs: NonNullable<E2ELayerConfig["extensionInputs"]>
+}) =>
   createE2ELayer({
     ...config,
     providerLayer: LanguageModelLayers.debug(),

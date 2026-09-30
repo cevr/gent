@@ -686,7 +686,21 @@ export const fixedSessionProfiles = (
     }),
   )
 
-export interface E2ELayerConfig {
+/**
+ * Where a test root's extensions come from: inputs the root sets up, or
+ * extensions a test already loaded (their setup bypassed). One or the other.
+ */
+type E2EExtensionSource =
+  | {
+      readonly extensionInputs: ReadonlyArray<GentExtension<ExtensionSetupServices>>
+      readonly extensions?: never
+    }
+  | {
+      readonly extensions: ReadonlyArray<LoadedExtension>
+      readonly extensionInputs?: never
+    }
+
+interface E2ELayerOptions {
   /**
    * The branch-tool feature this harness installs. Defaults to
    * `noBranchTools`; a test exercising a real feature names it.
@@ -696,12 +710,8 @@ export interface E2ELayerConfig {
   readonly providerLayer: Layer.Layer<LanguageModel.LanguageModel>
   /** Agents to register in the extension registry */
   readonly agents: ReadonlyArray<AgentDefinition>
-  /** Extension inputs for setup */
-  readonly extensionInputs: ReadonlyArray<GentExtension<ExtensionSetupServices>>
   /** Keep running when an extension fails to load. Only for tests about that failure path. */
   readonly allowFailedExtensions?: boolean
-  /** Pre-loaded extensions to wire directly (bypasses setup). Mutually exclusive with extensionInputs. */
-  readonly extensions?: ReadonlyArray<LoadedExtension>
   /** Approval service override. Default auto-approves for E2E tests. */
   readonly approvalLayer?: Layer.Layer<
     ApprovalService,
@@ -736,6 +746,8 @@ export interface E2ELayerConfig {
   /** Per-extension layer overrides (e.g., memory vault test layer) */
   readonly layerOverrides?: Record<string, () => Layer.Layer<never>>
 }
+
+export type E2ELayerConfig = E2ELayerOptions & E2EExtensionSource
 
 const applyLayerOverride = (
   contributions: ExtensionContributions,
@@ -805,7 +817,7 @@ const fromLoadedExtension = (
 
 const wrapExtensionInput = (
   extension: GentExtension<ExtensionSetupServices>,
-  layerOverrides: E2ELayerConfig["layerOverrides"],
+  layerOverrides: E2ELayerOptions["layerOverrides"],
 ): GentExtension<ExtensionSetupServices> => ({
   manifest: extension.manifest,
   artifactIdentity: extension.artifactIdentity,
@@ -838,7 +850,7 @@ const extensionInputsForConfig = (
   if (Predicate.isUndefined(config.extensions)) {
     return [
       ...agents,
-      ...config.extensionInputs.map((extension) =>
+      ...(config.extensionInputs ?? []).map((extension) =>
         wrapExtensionInput(extension, config.layerOverrides),
       ),
     ]
@@ -937,7 +949,6 @@ export const baseLocalLayerWithProvider = (
     providerLayer,
     agents: config.agents,
     extensions: [],
-    extensionInputs: [],
     extraLayers: config.extraLayers,
     toolRunner: "test",
   })
@@ -966,15 +977,16 @@ export const baseLocalLayer = (config: InProcessLayerConfig) =>
 // caller passes pre-loaded extensions and an agents bucket — the same
 // fragments callers already pass to `createE2ELayer`.
 
-interface RpcHarnessConfig extends Omit<E2ELayerConfig, "toolRunner" | "cwd"> {
-  /**
-   * Working directory passed to the seeded session.create call. Defaults to
-   * the layer's own temp working directory.
-   */
-  readonly cwd?: string
-  /** The seeded session's agent, run spec and interactivity; its turns all run under it. */
-  readonly admission?: SessionAdmission
-}
+type RpcHarnessConfig = Omit<E2ELayerOptions, "toolRunner" | "cwd"> &
+  E2EExtensionSource & {
+    /**
+     * Working directory passed to the seeded session.create call. Defaults to
+     * the layer's own temp working directory.
+     */
+    readonly cwd?: string
+    /** The seeded session's agent, run spec and interactivity; its turns all run under it. */
+    readonly admission?: SessionAdmission
+  }
 
 /**
  * Build an in-process RPC client + seeded session in one yield.

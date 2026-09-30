@@ -777,7 +777,6 @@ describe("large host replies", () => {
         const { client, sessionId, branchId } = yield* createRpcHarness({
           extensions,
           providerLayer,
-          extensionInputs: [],
           branchTools: CellBranchTools,
           agents: [new AgentDefinition({ name: DEFAULT_AGENT_NAME })],
         })

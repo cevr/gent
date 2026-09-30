@@ -540,7 +540,6 @@ describe("turn lifetime", () => {
         const { client, sessionId, branchId } = yield* createRpcHarness({
           providerLayer,
           extensions: [],
-          extensionInputs: [],
           agents: [new AgentDefinition({ name: DEFAULT_AGENT_NAME })],
         })
         const completed = yield* client.session.events({ sessionId, branchId }).pipe(
@@ -639,7 +638,6 @@ describe("turn lifetime", () => {
         const { client, sessionId, branchId } = yield* createRpcHarness({
           providerLayer,
           extensions: [],
-          extensionInputs: [],
           agents: [new AgentDefinition({ name: DEFAULT_AGENT_NAME })],
         })
         const seen: Array<string> = []
