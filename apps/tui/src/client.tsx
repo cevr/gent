@@ -38,12 +38,10 @@ import {
   DEFAULT_MODEL_ID,
   resolveAgentModel,
   type Branch,
-  type BranchTreeNode,
   ConnectionState,
   type ExtensionHealthSnapshot,
   type GentClientRpcError,
   type GentNamespacedClient,
-  type Message,
   initialSessionMetrics,
   type QueueSnapshot,
   type UpdateSessionSettingsInput,
@@ -249,7 +247,6 @@ export type SessionState =
 
 export const SessionStateEvent = Schema.TaggedUnion({
   Activated: { session: SessionSchema },
-  Clear: {},
   UpdateName: { name: Schema.String },
   /** The session's cwd, read after a switch; ignored once the shell left that session. */
   UpdateCwd: { sessionId: SessionId, cwd: Schema.String },
@@ -277,7 +274,6 @@ export function transitionSessionState(
   return Match.value(event).pipe(
     Match.tagsExhaustive({
       Activated: (activated) => SessionState.active(activated.session),
-      Clear: () => SessionState.none(),
       UpdateName: (update) => mapActive(state, (session) => ({ ...session, name: update.name })),
       UpdateCwd: (update) =>
         mapActive(state, (session) => {
@@ -516,8 +512,6 @@ export const sameIdentity = (left: SessionIdentity, right: SessionIdentity): boo
   left.sessionId === right.sessionId && left.branchId === right.branchId
 
 interface ClientSessionValue {
-  // Session state (union)
-  sessionState: () => SessionState
   // eslint-disable-next-line effect/noNullish -- UI session accessors expose null while no session is active.
   session: () => Session | null
   /** The active session's ids; a new record with the same ids is the same value. */
@@ -546,7 +540,6 @@ interface ClientSessionValue {
   /** Open the session a confirmed handoff produces: linked to the current one, seeded with the summary. */
   openHandoffSession: (summary: string) => void
   switchSession: (sessionId: SessionId, branchId: BranchId, name: string) => void
-  clearSession: () => void
   /**
    * Change the session's settings. Only the fields the change names are sent;
    * the server merges them into what it stores, and its reply is folded back.
@@ -554,13 +547,10 @@ interface ClientSessionValue {
   updateSessionSettings: (change: SessionSettingsChange) => Effect.Effect<void, GentClientRpcError>
 
   // Sync data fetching helpers (return Effects for caller to run)
-  listMessages: Effect.Effect<readonly Message[], GentClientRpcError>
   listBranches: Effect.Effect<readonly Branch[], GentClientRpcError>
   createBranch: (name?: string) => Effect.Effect<BranchId, GentClientRpcError>
-  getBranchTree: Effect.Effect<readonly BranchTreeNode[], GentClientRpcError>
   forkBranch: (messageId: MessageId, name?: string) => Effect.Effect<BranchId, GentClientRpcError>
   drainQueuedMessages: Effect.Effect<QueueSnapshot, GentClientRpcError>
-  getQueuedMessages: Effect.Effect<QueueSnapshot, GentClientRpcError>
 
   // Branch navigation (fire-and-forget)
   switchBranch: (branchId: BranchId) => void
@@ -1305,8 +1295,6 @@ export function ClientProvider(props: ClientProviderProps) {
   }
 
   const sessionValue: ClientSessionValue = {
-    // Session state
-    sessionState,
     session,
     sessionIdentity,
     activeSessionId,
@@ -1364,17 +1352,6 @@ export function ClientProvider(props: ClientProviderProps) {
       )
     },
 
-    clearSession: () => {
-      dispatchSession(SessionStateEvent.cases.Clear.make({}))
-      resetForSession({ agent: Option.some(DEFAULT_AGENT_NAME), clearExtensionHealth: true })
-    },
-
-    listMessages: Effect.gen(function* () {
-      const currentSession = sessionOption()
-      if (Option.isNone(currentSession)) return [] satisfies readonly Message[]
-      return yield* client.message.list({ branchId: currentSession.value.branchId })
-    }),
-
     listBranches: Effect.gen(function* () {
       const currentSession = sessionOption()
       if (Option.isNone(currentSession)) return [] satisfies readonly Branch[]
@@ -1411,14 +1388,6 @@ export function ClientProvider(props: ClientProviderProps) {
       })
     },
 
-    getBranchTree: Effect.gen(function* () {
-      const currentSession = sessionOption()
-      if (Option.isNone(currentSession)) {
-        return [] satisfies readonly BranchTreeNode[]
-      }
-      return yield* client.branch.getTree({ sessionId: currentSession.value.sessionId })
-    }),
-
     forkBranch: (messageId, name) => {
       const currentSession = sessionOption()
       if (Option.isNone(currentSession)) return Effect.succeed(BranchId.make(""))
@@ -1446,17 +1415,6 @@ export function ClientProvider(props: ClientProviderProps) {
         sessionId: currentSession.value.sessionId,
         branchId: currentSession.value.branchId,
         requestId,
-      })
-    }),
-
-    getQueuedMessages: Effect.gen(function* () {
-      const currentSession = sessionOption()
-      if (Option.isNone(currentSession)) {
-        return { steering: [], followUp: [] } satisfies QueueSnapshot
-      }
-      return yield* client.queue.get({
-        sessionId: currentSession.value.sessionId,
-        branchId: currentSession.value.branchId,
       })
     }),
 

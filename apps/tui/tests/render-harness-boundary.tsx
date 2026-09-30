@@ -497,14 +497,15 @@ afterEach(() => {
  * none is active, as opening one would.
  */
 export const applySnapshotAgent = (client: ClientContextValue, agent: AgentName): void => {
-  const state = client.sessionState()
-  let session: Pick<Session, "sessionId" | "branchId" | "name"> &
-    Partial<Pick<Session, "modelId" | "reasoningLevel">> = {
-    sessionId: SessionId.make("session-test"),
-    branchId: BranchId.make("branch-test"),
-    name: "Test Session",
-  }
-  if (state.status === "active") session = state.session
+  const session: Pick<Session, "sessionId" | "branchId" | "name"> &
+    Partial<Pick<Session, "modelId" | "reasoningLevel">> = Option.getOrElse(
+    Option.fromNullishOr(client.session()),
+    () => ({
+      sessionId: SessionId.make("session-test"),
+      branchId: BranchId.make("branch-test"),
+      name: "Test Session",
+    }),
+  )
   client.applySessionSnapshot({
     sessionId: session.sessionId,
     branchId: session.branchId,

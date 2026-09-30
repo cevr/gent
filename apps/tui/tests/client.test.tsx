@@ -268,7 +268,6 @@ describe("ClientProvider contract", () => {
       expect(observed.sessionId).toBe(sessionId)
       expect(observed.branchId).toBe(branchId)
       expect(captured.isActive()).toBe(true)
-      expect(captured.sessionState().status).toBe("active")
     }).pipe(Effect.timeout("10 seconds")),
   )
 
@@ -477,38 +476,6 @@ describe("ClientProvider session metrics", () => {
       expect(clientContext.cost()).toBe(0)
       expect(clientContext.sessionMetrics().latestInputTokens).toBe(0)
       expect(Option.isNone(clientContext.sessionMetrics().context)).toBe(true)
-
-      setup.renderer.destroy()
-    }),
-  )
-
-  it.live("clearing the session drops the context projection", () =>
-    Effect.gen(function* () {
-      let ctx = Option.none<ClientContextValue>()
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <ClientProbe onReady={(c) => (ctx = Option.some(c))} />, {
-          initialSession: {
-            id: FIRST.sessionId,
-            activeBranchId: FIRST.branchId,
-            name: "First",
-            createdAt: dateFromMillis(0),
-            updatedAt: dateFromMillis(0),
-          },
-        }),
-      )
-      const clientContext = yield* requireClient(ctx)
-
-      clientContext.applySessionSnapshot(
-        snapshotOf(FIRST, { costUsd: 1.5, lastInputTokens: 5_000, context: busyContext }),
-      )
-      yield* Effect.promise(() => setup.renderOnce())
-      expect(Option.isSome(clientContext.sessionMetrics().context)).toBe(true)
-
-      clientContext.clearSession()
-      yield* Effect.promise(() => setup.renderOnce())
-
-      expect(Option.isNone(clientContext.sessionMetrics().context)).toBe(true)
-      expect(clientContext.sessionMetrics().latestInputTokens).toBe(0)
 
       setup.renderer.destroy()
     }),
@@ -871,9 +838,8 @@ describe("ClientProvider session lifecycle", () => {
         runtime: { _tag: "Running", queue: emptyQueueSnapshot(), startedAtMs: 0 },
       })
       client.switchSession(FIRST.sessionId, FIRST.branchId, "First")
-      const state = client.sessionState()
-      if (state.status !== "active") return yield* Effect.die("no active session")
-      expect(state.session).toMatchObject({ modelId: model, reasoningLevel: "high" })
+      const session = yield* Effect.fromOption(Option.fromNullishOr(client.session()))
+      expect(session).toMatchObject({ modelId: model, reasoningLevel: "high" })
       expect(client.isStreaming()).toBe(true)
       expect(client.cost()).toBe(1.5)
       expect(client.agent()).toBe(AgentName.make("primary"))
@@ -1242,25 +1208,14 @@ describe("ClientProvider session lifecycle", () => {
         )
         const client = yield* requireClientSessionState(ctx)
         client.switchSession(SessionId.make("session-b"), BranchId.make("branch-b"), "B")
-        yield* waitForFrame(
-          setup,
-          () => {
-            const current = client.sessionState()
-            return current.status === "active"
-          },
-          "session state",
-        )
-        const state = client.sessionState()
-        expect(state).toEqual({
-          status: "active",
-          session: {
-            sessionId: SessionId.make("session-b"),
-            branchId: BranchId.make("branch-b"),
-            name: "B",
-            modelId: absent,
-            reasoningLevel: absent,
-            cwd: absent,
-          },
+        yield* waitForFrame(setup, () => client.isActive(), "session state")
+        expect(client.session()).toEqual({
+          sessionId: SessionId.make("session-b"),
+          branchId: BranchId.make("branch-b"),
+          name: "B",
+          modelId: absent,
+          reasoningLevel: absent,
+          cwd: absent,
         })
         expect(client.agent()).toBeUndefined()
       }),
@@ -1301,12 +1256,7 @@ describe("ClientProvider session lifecycle", () => {
       })
       yield* waitForFrame(
         setup,
-        () => {
-          const state = client.sessionState()
-          return (
-            state.status === "active" && client.model() === "anthropic/claude-haiku-4-5-20251001"
-          )
-        },
+        () => client.isActive() && client.model() === "anthropic/claude-haiku-4-5-20251001",
         "session state",
       )
       expect(client.model()).toBe("anthropic/claude-haiku-4-5-20251001")
@@ -1351,27 +1301,20 @@ describe("ClientProvider session lifecycle", () => {
       })
       yield* waitForFrame(
         setup,
-        () => {
-          const current = client.sessionState()
-          return (
-            current.status === "active" &&
-            current.session.name === "Fresh" &&
-            current.session.reasoningLevel === "high"
-          )
-        },
+        () =>
+          Option.exists(
+            Option.fromNullishOr(client.session()),
+            (current) => current.name === "Fresh" && current.reasoningLevel === "high",
+          ),
         "session state",
       )
-      const state = client.sessionState()
-      expect(state).toEqual({
-        status: "active",
-        session: {
-          sessionId: SessionId.make("session-refresh"),
-          branchId: BranchId.make("branch-refresh"),
-          name: "Fresh",
-          modelId: absent,
-          reasoningLevel: "high",
-          cwd: absent,
-        },
+      expect(client.session()).toEqual({
+        sessionId: SessionId.make("session-refresh"),
+        branchId: BranchId.make("branch-refresh"),
+        name: "Fresh",
+        modelId: absent,
+        reasoningLevel: "high",
+        cwd: absent,
       })
     }),
   )
@@ -1416,25 +1359,14 @@ describe("ClientProvider session lifecycle", () => {
           lastInputTokens: 456,
         },
       })
-      yield* waitForFrame(
-        setup,
-        () => {
-          const current = client.sessionState()
-          return current.status === "active"
-        },
-        "session state",
-      )
-      const state = client.sessionState()
-      expect(state).toEqual({
-        status: "active",
-        session: {
-          sessionId: SessionId.make("session-target"),
-          branchId: BranchId.make("branch-target"),
-          name: "Target",
-          modelId: absent,
-          reasoningLevel: absent,
-          cwd: absent,
-        },
+      yield* waitForFrame(setup, () => client.isActive(), "session state")
+      expect(client.session()).toEqual({
+        sessionId: SessionId.make("session-target"),
+        branchId: BranchId.make("branch-target"),
+        name: "Target",
+        modelId: absent,
+        reasoningLevel: absent,
+        cwd: absent,
       })
       expect(client.agent()).toBeUndefined()
       expect(client.model()).not.toBe("anthropic/claude-haiku-4-5-20251001")
@@ -1485,25 +1417,20 @@ describe("ClientProvider session lifecycle", () => {
       })
       yield* waitForFrame(
         setup,
-        () => {
-          const current = client.sessionState()
-          return (
-            current.status === "active" && current.session.branchId === BranchId.make("branch-new")
-          )
-        },
+        () =>
+          Option.exists(
+            Option.fromNullishOr(client.session()),
+            (current) => current.branchId === BranchId.make("branch-new"),
+          ),
         "session state",
       )
-      const state = client.sessionState()
-      expect(state).toEqual({
-        status: "active",
-        session: {
-          sessionId: SessionId.make("session-branch-race"),
-          branchId: BranchId.make("branch-new"),
-          name: "New",
-          modelId: absent,
-          reasoningLevel: absent,
-          cwd: absent,
-        },
+      expect(client.session()).toEqual({
+        sessionId: SessionId.make("session-branch-race"),
+        branchId: BranchId.make("branch-new"),
+        name: "New",
+        modelId: absent,
+        reasoningLevel: absent,
+        cwd: absent,
       })
       expect(client.agent()).toBeUndefined()
       expect(client.cost()).toBe(0)
@@ -1546,12 +1473,7 @@ describe("ClientProvider session lifecycle", () => {
       })
       yield* waitForFrame(
         setup,
-        () => {
-          const state = client.sessionState()
-          return (
-            state.status === "active" && client.model() === "anthropic/claude-haiku-4-5-20251001"
-          )
-        },
+        () => client.isActive() && client.model() === "anthropic/claude-haiku-4-5-20251001",
         "session state",
       )
       client.switchSession(SessionId.make("session-next"), BranchId.make("branch-next"), "N")

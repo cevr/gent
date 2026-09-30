@@ -4331,11 +4331,7 @@ const scheduledFailureHealth = (id: string, error: string): ExtensionHealthSnaps
 const healthyHealth: ExtensionHealthSnapshot = { _tag: "Healthy", extensions: [] }
 
 const HealthControlsProbe = (props: {
-  expose: (controls: {
-    switchSession: () => void
-    switchBranchSameSession: () => void
-    clearSession: () => void
-  }) => void
+  expose: (controls: { switchSession: () => void; switchBranchSameSession: () => void }) => void
 }) => {
   const client = useClient()
   const nextBranchId = Option.getOrElse(Option.fromNullishOr(nextSession.activeBranchId), () =>
@@ -4347,7 +4343,6 @@ const HealthControlsProbe = (props: {
     switchSession: () => client.switchSession(nextSession.id, nextBranchId, nextName),
     switchBranchSameSession: () =>
       client.switchSession(testSession.id, BranchId.make("branch-alt"), testName),
-    clearSession: () => client.clearSession(),
   })
   const failedActivation = () => {
     const health = client.extensionHealth()
@@ -4984,7 +4979,6 @@ describe("TUI renderer surfaces", () => {
     Effect.gen(function* () {
       let controls = Option.none<{
         switchSession: () => void
-        clearSession: () => void
       }>()
       const setup = yield* Effect.promise(() =>
         renderWithProviders(
@@ -5026,7 +5020,6 @@ describe("TUI renderer surfaces", () => {
       let controls = Option.none<{
         switchSession: () => void
         switchBranchSameSession: () => void
-        clearSession: () => void
       }>()
       const setup = yield* Effect.promise(() =>
         renderWithProviders(
