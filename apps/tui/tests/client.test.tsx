@@ -10,7 +10,7 @@ import {
   type SessionRuntimeState,
 } from "@gent/core/test-utils"
 import { describe, expect, it, test } from "effect-bun-test"
-import { Clock, Deferred, Effect, Option, Predicate, Schema, Stream } from "effect"
+import { Clock, Deferred, Effect, Exit, Fiber, Option, Predicate, Schema, Stream } from "effect"
 import { TestClock } from "effect/testing"
 import type { GentRuntime } from "@gent/sdk"
 import {
@@ -1943,6 +1943,47 @@ describe("ClientProvider errors", () => {
 })
 
 describe("useSessionFeed", () => {
+  it.live("an unmount interrupts the feed fiber", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("feed-unmount-session")
+      const branchId = BranchId.make("feed-unmount-branch")
+      const base = createMockRuntime()
+      const forked: Array<Fiber.Fiber<unknown, unknown>> = []
+      const runtime: GentRuntime = {
+        ...base,
+        fork: (effect) => {
+          const fiber = base.fork(effect)
+          forked.push(fiber)
+          return fiber
+        },
+      }
+      const dispose = createRoot((disposeRoot) => {
+        const [active] = createSignal(makeSession(sessionId, branchId))
+        useSessionFeed(
+          () => sessionId,
+          () => branchId,
+          feedClientStub({
+            sessionIdentity: identityOf(active),
+            // The feed waits on its snapshot forever: only an interrupt ends it.
+            client: createMockClient({ session: { getSnapshot: () => Effect.never } }),
+            runtime,
+          }),
+          {
+            onInteraction: () => {},
+            onInteractionDismissed: () => {},
+            onQueueSnapshot: () => {},
+            onBranchSwitch: () => {},
+          },
+        )
+        return disposeRoot
+      })
+      expect(forked.length).toBe(1)
+      dispose()
+      const exits = yield* Effect.forEach(forked, (fiber) => Fiber.await(fiber))
+      expect(exits.map(Exit.hasInterrupts)).toEqual([true])
+    }).pipe(Effect.timeout("5 seconds")),
+  )
+
   it.live("changes route when a branch event changes the active client identity", () =>
     Effect.gen(function* () {
       const sessionId = SessionId.make("branch-navigation-session")
