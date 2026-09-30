@@ -50,6 +50,15 @@ export class Model extends Schema.Class<Model>("Model")({
   releaseDate: Schema.optional(Schema.String),
   /** Whether the model reasons, as the catalog says; absent when it does not say. */
   reasoning: Schema.optional(Schema.Boolean),
+  /**
+   * How long the provider keeps a request's prompt cached after the request,
+   * in milliseconds, as the model's driver says. A turn that starts on a large
+   * window after it lapsed hands the window off first (`projectContextWindow`),
+   * and the TUI's cache extension tells an expired cache from a changed
+   * prefix by it. Absent when the driver names no lifetime: then neither
+   * happens.
+   */
+  promptCacheTtlMs: Schema.optional(Schema.Finite),
 }) {}
 
 /**
