@@ -1128,7 +1128,7 @@ const validAuthInfo = (
 const noopRefreshIO = (): OpenAICredentialIO => ({
   refresh: () => Effect.fail(new ProviderAuthError({ message: "should not be called" })),
 })
-// `HttpBody.jsonUnsafe` mirrors how the OpenAI-compat SDK serializes
+// `HttpBody.jsonUnsafe` mirrors how `@effect/ai-openai` serializes
 // outgoing JSON bodies (via `bodyJsonUnsafe`/`bodyText` → Uint8Array).
 const jsonBody = (payload: JsonRecord) => HttpBody.jsonUnsafe(payload)
 const runOk = <A, E, R>(eff: Effect.Effect<A, E, R>) => Effect.scoped(eff.pipe(Effect.orDie))
@@ -1248,7 +1248,7 @@ describe("codexTransformClient — auth headers", () => {
   )
   it.scopedLive("preserves request method, url, and body for non-Codex paths", () =>
     Effect.gen(function* () {
-      // The OpenAI-compat SDK ALSO talks to `/embeddings` and other
+      // `@effect/ai-openai` also talks to `/embeddings` and other
       // non-Codex endpoints. Those must pass through untouched (auth
       // headers still applied — see other tests). Use the embeddings
       // path here as a non-Codex example.
