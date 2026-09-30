@@ -3,7 +3,7 @@ import { describe, expect, it } from "effect-bun-test"
 import { Clock, Deferred, Effect, Option } from "effect"
 import { TestClock } from "effect/testing"
 import { createSignal, Show } from "solid-js"
-import { BranchId, dateFromMillis, Session, SessionId } from "@gent/core/protocol"
+import { BranchId, SessionId } from "@gent/core/protocol"
 import {
   type AgentRowEntry,
   DELEGATE_EXTENSION_ID,
@@ -25,7 +25,6 @@ import {
   makePaneSlot,
   provideClientServices,
 } from "../extension-test-harness-boundary"
-import { makeThreadController } from "../../src/extensions/thread-view.client"
 
 // ── agents controller ───────────────────────────────────────────────────────
 
@@ -1682,12 +1681,11 @@ describe("Subagent tray", () => {
 // ── pane stale reply ────────────────────────────────────────────────────────
 
 /**
- * Docked panes must not write a previous session's rows, and must not write an
+ * The agents pane must not write a previous session's rows, and must not write an
  * older query's rows either.
  *
- * Both panes refetch across a session switch — the agents tray on `current()`
- * changing plus a 2 s poll, the thread pane on a compaction event — so a reply
- * can land after the shell has already moved. The key the fetch was made for
+ * The pane refetches across a session switch — on `current()` changing plus a
+ * 2 s poll — so a reply can land after the shell has already moved. The key the fetch was made for
  * is re-read when it lands; a reply for any other key is dropped.
  *
  * The filter fires one fetch per keystroke, so replies also race each other
@@ -1796,41 +1794,6 @@ describe("Agents controller across a session switch", () => {
       // The rows are dropped, but the pane must not draw "loading" forever.
       expect(controller.rows()).toEqual([])
       expect(controller.loading()).toBe(false)
-    }).pipe(Effect.timeout("20 seconds")),
-  )
-})
-
-describe("Thread controller across a session switch", () => {
-  it.scopedLive("drops windows fetched for the session the shell just left", () =>
-    Effect.gen(function* () {
-      const gate = yield* Deferred.make<ReadonlyArray<Session>>()
-
-      let active = Option.some(key("first"))
-
-      const controller = yield* provideClientServices(
-        makeThreadController(
-          () => Deferred.await(gate),
-          () => Effect.succeed([]),
-          () => Effect.succeed(0),
-        ),
-        { currentSession: () => active },
-      )
-
-      controller.refresh()
-      active = Option.some(key("second"))
-
-      yield* Deferred.succeed(gate, [
-        new Session({
-          id: SessionId.make("first"),
-          name: "First",
-          activeBranchId: BranchId.make("first-branch"),
-          createdAt: dateFromMillis(0),
-          updatedAt: dateFromMillis(1),
-        }),
-      ])
-      yield* Effect.yieldNow
-
-      expect(controller.sessions()).toBe(0)
     }).pipe(Effect.timeout("20 seconds")),
   )
 })

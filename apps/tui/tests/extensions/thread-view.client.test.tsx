@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it, test } from "effect-bun-test"
-import { Effect, Option } from "effect"
+import { Deferred, Effect, Option } from "effect"
 import { createSignal } from "solid-js"
 import * as Prompt from "effect/ai/Prompt"
 import {
@@ -13,6 +13,7 @@ import {
 } from "@gent/core/protocol"
 import {
   detailFor,
+  makeThreadController,
   summaryBody,
   threadChain,
   threadItems,
@@ -24,6 +25,7 @@ import {
 import { childTaskText } from "@gent/extensions/client"
 import { renderFrame, renderWithProviders } from "../render-harness-boundary"
 import { waitForFrame } from "../helpers-boundary"
+import { provideClientServices } from "../extension-test-harness-boundary"
 
 // ── thread view ─────────────────────────────────────────────────────────────
 
@@ -268,5 +270,53 @@ describe("thread pane", () => {
       yield* waitForFrame(setup, () => !open(), "thread pane closed")
       expect(renderFrame(setup)).not.toContain("Thread")
     }),
+  )
+})
+
+// ── controller stale reply ──────────────────────────────────────────────────
+
+/**
+ * The thread pane refetches on a compaction event, so a reply can land after
+ * the shell has already moved. The key the fetch was made for is re-read when
+ * it lands; a reply for any other key is dropped.
+ */
+
+const key = (id: string) => ({
+  sessionId: SessionId.make(id),
+  branchId: BranchId.make(`${id}-branch`),
+})
+
+describe("Thread controller across a session switch", () => {
+  it.scopedLive("drops windows fetched for the session the shell just left", () =>
+    Effect.gen(function* () {
+      const gate = yield* Deferred.make<ReadonlyArray<Session>>()
+
+      let active = Option.some(key("first"))
+
+      const controller = yield* provideClientServices(
+        makeThreadController(
+          () => Deferred.await(gate),
+          () => Effect.succeed([]),
+          () => Effect.succeed(0),
+        ),
+        { currentSession: () => active },
+      )
+
+      controller.refresh()
+      active = Option.some(key("second"))
+
+      yield* Deferred.succeed(gate, [
+        new Session({
+          id: SessionId.make("first"),
+          name: "First",
+          activeBranchId: BranchId.make("first-branch"),
+          createdAt: dateFromMillis(0),
+          updatedAt: dateFromMillis(1),
+        }),
+      ])
+      yield* Effect.yieldNow
+
+      expect(controller.sessions()).toBe(0)
+    }).pipe(Effect.timeout("20 seconds")),
   )
 })
