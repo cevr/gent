@@ -13,6 +13,7 @@ import {
   Option,
   Path,
   Predicate,
+  Ref,
   Result,
   Schema,
   Scope,
@@ -95,6 +96,7 @@ import {
 import { failingLanguageModel } from "../helpers/failing-language-model"
 import {
   CapabilityError,
+  defineExtension,
   ExtensionContext,
   type ExtensionContextService,
   ExtensionHost,
@@ -917,9 +919,10 @@ const InteractionProbeExtension: LoadedExtension = {
   },
 }
 
-// The same derivation the server and its clients use; a third copy here
-// would be a third thing to keep in step.
-const currentTestWorkspaceId = () => workspaceIdForCwd(process.cwd())
+// A file-backed test layer runs in its database's directory, so its sessions
+// live in that workspace: the same derivation the server and its clients use.
+const workspaceOfDatabase = (dbPath: string) =>
+  workspaceIdForCwd(dbPath.slice(0, dbPath.lastIndexOf("/")))
 
 // ── owner-keyed interaction fixtures ────────────────────────────────────────
 
@@ -1433,7 +1436,7 @@ describe("interaction.respondInteraction", () => {
           yield* storage.decide(first, first.requestId, decisionJson)
         }).pipe(
           Effect.provide(storageLayer),
-          Effect.provideService(CurrentWorkspaceId, currentTestWorkspaceId()),
+          Effect.provideService(CurrentWorkspaceId, workspaceOfDatabase(dbPath)),
         )
 
         const secondProvider = yield* LanguageModelLayers.sequence([textStep(finalReply)])
@@ -2632,7 +2635,7 @@ describe("interaction.respondInteraction", () => {
               Layer.provide(BunPlatformLive),
             ),
           ),
-          Effect.provideService(CurrentWorkspaceId, currentTestWorkspaceId()),
+          Effect.provideService(CurrentWorkspaceId, workspaceOfDatabase(dbPath)),
         )
         expect(pending).toEqual([])
       }),
@@ -3295,7 +3298,7 @@ describe("interaction.respondInteraction", () => {
                   Layer.provide(BunPlatformLive),
                 ),
               ),
-              Effect.provideService(CurrentWorkspaceId, currentTestWorkspaceId()),
+              Effect.provideService(CurrentWorkspaceId, workspaceOfDatabase(first.dbPath)),
             ),
           answersAfter: [],
         })
@@ -5300,6 +5303,28 @@ describe("session profile lookup", () => {
           expect(tags).toEqual(["StorageError", "StorageError", "StorageError", "StorageError"])
         }).pipe(Effect.timeout("4 seconds")),
       ),
+  )
+
+  // A client of the launch cwd works in the launch workspace, so its
+  // session shares the launch profile instead of setting it up again.
+  it.live("a session in the launch cwd runs each extension's setup once", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const setups = yield* Ref.make(0)
+        const counted = defineExtension({
+          id: "@test/counted-setup",
+          setup: Ref.update(setups, (n) => n + 1),
+        })
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+        const { client, sessionId } = yield* createRpcHarness({
+          ...e2ePreset,
+          extensionInputs: [...e2ePreset.extensionInputs, counted],
+          providerLayer,
+        })
+        yield* client.extension.listStatus({ sessionId })
+        expect(yield* Ref.get(setups)).toBe(1)
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
   )
 })
 

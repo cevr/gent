@@ -5,6 +5,7 @@ import {
   Effect,
   Layer,
   Option,
+  Path,
   Predicate,
   Random,
   Ref,
@@ -871,7 +872,14 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
   return Layer.unwrap(
     Effect.gen(function* () {
       const home = yield* makeTempDirectoryScoped("gent-test-home-")
-      const cwd = yield* Option.match(Option.fromUndefinedOr(config.cwd), {
+      const path = yield* Path.Path
+      // A file-backed layer is a server a test restarts: by default it runs in
+      // the database's directory, so the restarted layer is in the same place
+      // (and workspace) as the first.
+      const placeOf = Option.orElse(Option.fromUndefinedOr(config.cwd), () =>
+        Option.map(Option.fromUndefinedOr(config.storagePath), (file) => path.dirname(file)),
+      )
+      const cwd = yield* Option.match(placeOf, {
         onNone: () => makeTempDirectoryScoped("gent-test-cwd-"),
         onSome: Effect.succeed,
       })
@@ -995,13 +1003,16 @@ export const createRpcHarness = (config: RpcHarnessConfig) =>
 /**
  * An in-process RPC client over `handlersLayer`: the production handlers, the
  * workspace middleware, and a namespaced client, with no socket. The SDK's
- * `Gent.test` is the same path for callers outside core.
+ * `Gent.test` is the same path for callers outside core. The client works in
+ * the workspace of the layer's cwd, as a production client of that cwd does,
+ * so its sessions there share the launch profile.
  */
 export const createRpcClient = <E, R>(
   handlersLayer: Layer.Layer<Layer.Services<typeof RpcHandlersLive>, E, R>,
 ) =>
   Effect.gen(function* () {
-    const context = yield* Layer.build(Layer.provide(RpcHandlersLive, handlersLayer))
-    const client = yield* makeInProcessClient(context, workspaceHeadersForCwd(process.cwd()))
+    const context = yield* Layer.build(Layer.provideMerge(RpcHandlersLive, handlersLayer))
+    const { cwd } = Context.get(context, RuntimeEnvironment)
+    const client = yield* makeInProcessClient(context, workspaceHeadersForCwd(cwd))
     return { client }
   })
