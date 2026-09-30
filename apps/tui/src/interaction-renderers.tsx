@@ -329,6 +329,32 @@ function OptionList(props: OptionListProps): JSX.Element {
   )
 }
 
+// ── yes/no answer ───────────────────────────────────────────────────────────
+
+type InteractionAnswer = Parameters<InteractionRendererProps["resolve"]>[0]
+
+/** The first choice, lower-cased; none when nothing was chosen. */
+const firstChoice = (selections: readonly string[]): Option.Option<string> =>
+  Option.map(Option.fromNullishOr(selections[0]), (value) => value.toLowerCase())
+
+/**
+ * A yes/no pick: approved only on "yes". The first selection that is none of
+ * the list's own labels is free text the reader typed, and it goes as notes.
+ */
+const yesNoAnswer = (
+  selections: readonly string[],
+  labels: readonly string[],
+): InteractionAnswer => {
+  const approved = Option.contains(firstChoice(selections), "yes")
+  const notes = Option.fromNullishOr(
+    selections.find((value) => !labels.includes(value.toLowerCase())),
+  )
+  return Option.match(notes, {
+    onNone: () => ({ approved }),
+    onSome: (value) => ({ approved, notes: value }),
+  })
+}
+
 // ── ask user renderer ───────────────────────────────────────────────────────
 
 const decodeAskUserMetadata = Schema.decodeUnknownOption(
@@ -338,11 +364,8 @@ const encodeAnswers = Schema.encodeSync(
   Schema.fromJsonString(Schema.Array(Schema.Array(Schema.String))),
 )
 
-type AskUserMetadata = InteractionRendererProps["event"]["metadata"]
-const parseAskUserMetadata = (metadata: AskUserMetadata) => decodeAskUserMetadata(metadata)
-
 export function AskUserRenderer(props: InteractionRendererProps) {
-  const meta = () => parseAskUserMetadata(props.event.metadata)
+  const meta = () => decodeAskUserMetadata(props.event.metadata)
   const questions = () =>
     Option.getOrElse(
       Option.map(meta(), (metadata) => metadata.questions),
@@ -379,20 +402,7 @@ export function AskUserRenderer(props: InteractionRendererProps) {
           header="Question"
           question={props.event.text}
           options={[{ label: "Yes" }, { label: "No" }]}
-          onSubmit={(selections) => {
-            const selection = Option.map(Option.fromNullishOr(selections[0]), (value) =>
-              value.toLowerCase(),
-            )
-            const selected = Option.getOrElse(selection, () => "no")
-            const freeform = Option.fromNullishOr(
-              selections.find((value) => !["yes", "no"].includes(value.toLowerCase())),
-            )
-            if (Option.isSome(freeform)) {
-              props.resolve({ approved: selected === "yes", notes: freeform.value })
-              return
-            }
-            props.resolve({ approved: selected === "yes" })
-          }}
+          onSubmit={(selections) => props.resolve(yesNoAnswer(selections, ["yes", "no"]))}
           onCancel={() => props.resolve({ approved: false })}
         />
       }
@@ -426,10 +436,6 @@ const decodePromptMetadata = Schema.decodeUnknownOption(
   }),
 )
 
-type PromptMetadata = InteractionRendererProps["event"]["metadata"]
-const parsePromptMetadata = (metadata: PromptMetadata) =>
-  Option.getOrUndefined(decodePromptMetadata(metadata))
-
 export function PromptRenderer(props: InteractionRendererProps) {
   const renderer = useRenderer()
   const env = useEnv()
@@ -437,9 +443,17 @@ export function PromptRenderer(props: InteractionRendererProps) {
   const { theme } = useTheme()
   const [editing, setEditing] = createSignal(false)
   const [editorError, setEditorError] = createSignal("")
-  const meta = () => parsePromptMetadata(props.event.metadata)
-  const mode = () => meta()?.mode ?? "confirm"
-  const title = () => meta()?.title
+  const meta = () => decodePromptMetadata(props.event.metadata)
+  const mode = () =>
+    Option.getOrElse(
+      Option.flatMap(meta(), (value) => Option.fromNullishOr(value.mode)),
+      () => "confirm",
+    )
+  const title = () =>
+    Option.getOrElse(
+      Option.flatMap(meta(), (value) => Option.fromNullishOr(value.title)),
+      () => "Prompt",
+    )
 
   createEffect(() => {
     if (!editing()) return
@@ -481,27 +495,16 @@ export function PromptRenderer(props: InteractionRendererProps) {
         fallback={<text style={{ fg: theme.textMuted }}>Opening editor…</text>}
       >
         <OptionList
-          header={title() ?? "Prompt"}
+          header={title()}
           question={props.event.text}
           options={options()}
           onSubmit={(selections) => {
-            const sel = Option.fromNullishOr(selections[0]).pipe(
-              Option.map((value) => value.toLowerCase()),
-              Option.getOrElse(() => "no"),
-            )
-            if (sel === "edit" && mode() === "review") {
+            if (Option.contains(firstChoice(selections), "edit") && mode() === "review") {
               setEditorError("")
               setEditing(true)
               return
             }
-            const freeform = Option.fromNullishOr(
-              selections.find((value) => !["yes", "no", "edit"].includes(value.toLowerCase())),
-            )
-            if (Option.isSome(freeform)) {
-              props.resolve({ approved: sel === "yes", notes: freeform.value })
-              return
-            }
-            props.resolve({ approved: sel === "yes" })
+            props.resolve(yesNoAnswer(selections, ["yes", "no", "edit"]))
           }}
           onCancel={() => props.resolve({ approved: false })}
         />
@@ -515,7 +518,7 @@ export function PromptRenderer(props: InteractionRendererProps) {
 /** Confirms a handoff. A confirmed one opens the new session seeded with the summary. */
 export function HandoffRenderer(props: InteractionRendererProps) {
   const client = useClient()
-  const resolve = (result: Parameters<InteractionRendererProps["resolve"]>[0]) => {
+  const resolve = (result: InteractionAnswer) => {
     props.resolve(result)
     if (!result.approved) return
     // `openHandoffSession` activates the new session on the client, and the
@@ -527,20 +530,7 @@ export function HandoffRenderer(props: InteractionRendererProps) {
       header="Handoff"
       question={props.event.text}
       options={[{ label: "Yes" }, { label: "No" }]}
-      onSubmit={(selections) => {
-        const sel = Option.fromNullishOr(selections[0]).pipe(
-          Option.map((value) => value.toLowerCase()),
-          Option.getOrElse(() => "no"),
-        )
-        const freeform = Option.fromNullishOr(
-          selections.find((value) => !["yes", "no"].includes(value.toLowerCase())),
-        )
-        if (Option.isSome(freeform)) {
-          resolve({ approved: sel === "yes", notes: freeform.value })
-          return
-        }
-        resolve({ approved: sel === "yes" })
-      }}
+      onSubmit={(selections) => resolve(yesNoAnswer(selections, ["yes", "no"]))}
       onCancel={() => resolve({ approved: false })}
     />
   )
