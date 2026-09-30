@@ -846,13 +846,24 @@ const loginFrom = (
   }),
 })
 
-/** The options an SDK `auth()` run takes for `config`, with the resource metadata URL when known. */
-const authOptions = (config: HttpServerConfig, metadata: Option.Option<URL>) => ({
-  serverUrl: config.url,
-  ...Option.match(metadata, {
-    onNone: () => ({}),
-    onSome: (resourceMetadataUrl) => ({ resourceMetadataUrl }),
-  }),
+/**
+ * The options an SDK `auth()` run takes for `config`, with the resource
+ * metadata URL when known. Every run sends its requests through the Effect
+ * `Fetch` service, each one ended by the run's `signal`.
+ */
+const authOptions = Effect.fn("Mcp.authOptions")(function* (
+  config: HttpServerConfig,
+  metadata: Option.Option<URL>,
+) {
+  const fetchWeb = yield* FetchHttpClient.Fetch
+  return (signal: AbortSignal) => ({
+    serverUrl: config.url,
+    ...Option.match(metadata, {
+      onNone: () => ({}),
+      onSome: (resourceMetadataUrl) => ({ resourceMetadataUrl }),
+    }),
+    fetchFn: (url: string | URL, init?: RequestInit) => fetchWeb(url, { ...init, signal }),
+  })
 })
 
 /** The stored resource metadata URL of `login`, when it has a valid one. */
@@ -987,13 +998,8 @@ const refreshLogin = (
     // The step this runs in is not interrupted (`refreshUnlessFresh`), so this
     // signal is what ends every request of the refresh by `REFRESH_BOUND`.
     const signal = AbortSignal.timeout(Duration.toMillis(REFRESH_BOUND))
-    const fetchWeb = yield* FetchHttpClient.Fetch
-    const result = yield* Effect.tryPromise(() =>
-      auth(provider, {
-        ...authOptions(config, metadata),
-        fetchFn: (url, init) => fetchWeb(url, { ...init, signal }),
-      }),
-    )
+    const options = yield* authOptions(config, metadata)
+    const result = yield* Effect.tryPromise(() => auth(provider, options(signal)))
     if (result !== "AUTHORIZED" || Option.isNone(flow.tokens)) return Option.none<StoredLogin>()
     const refreshed = loginFrom(
       flow.tokens.value,
@@ -1255,8 +1261,9 @@ const startLogin = (
     const metadata = yield* namedMetadata(config)
     const provider = flowProvider(server.name, redirectUri, flow, Option.none(), Option.some(state))
     const fail = (message: string) => new McpError({ server: server.name, message })
+    const options = yield* authOptions(config, metadata)
     yield* Effect.tryPromise({
-      try: () => auth(provider, authOptions(config, metadata)),
+      try: (signal) => auth(provider, options(signal)),
       catch: (cause) => fail(`login: ${failureMessage(cause)}`),
     })
     if (Option.isNone(flow.authorizationUrl)) {
@@ -1270,8 +1277,7 @@ const startLogin = (
         }),
       )
       yield* Effect.tryPromise({
-        try: () =>
-          auth(provider, { ...authOptions(config, metadata), authorizationCode: received }),
+        try: (signal) => auth(provider, { ...options(signal), authorizationCode: received }),
         catch: (cause) => fail(`login: ${failureMessage(cause)}`),
       })
       if (Option.isNone(flow.tokens) || Option.isNone(flow.client)) {
