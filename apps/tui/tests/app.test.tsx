@@ -781,6 +781,14 @@ const mountShortTerminalWithTrays = (
     return setup
   })
 
+/** A `message` namespace that records each sent content: a slash line no command ran lands here. */
+const recordSends = (sent: Array<string>) => ({
+  send: (input: { readonly content: string }) =>
+    Effect.sync(() => {
+      sent.push(input.content)
+    }),
+})
+
 function ExtensionUIProbe(props: {
   readonly onReady: (ext: ReturnType<typeof useExtensionUI>) => void
 }) {
@@ -2170,6 +2178,7 @@ describe("App auth gate", () => {
         setup: Deferred.await(release).pipe(Effect.as(clientContributions())),
       })
       let ext = Option.none<ReturnType<typeof useExtensionUI>>()
+      const sent: Array<string> = []
       const setup = yield* renderScoped(
         () => (
           <>
@@ -2181,6 +2190,7 @@ describe("App auth gate", () => {
           client: createMockClient({
             auth: { listProviders: () => Effect.succeed([]) },
             branch: { getTree: () => Effect.succeed([]) },
+            message: recordSends(sent),
           }),
           runtime: createMockRuntime(),
           builtins: [...builtinClientModules, held],
@@ -2198,29 +2208,21 @@ describe("App auth gate", () => {
       yield* Effect.promise(() => setup.mockInput.typeText("/btw"))
       yield* waitForFrame(setup, (frame) => frame.includes("/btw"), "the typed command")
       setup.mockInput.pressEnter()
-      yield* waitForFrame(
-        setup,
-        (frame) => frame.includes("Unknown command") || !frame.includes("/btw"),
-        "the command sent",
-      )
-      expect(renderFrame(setup)).not.toContain("Unknown command")
-      // A command no extension names waits too, and reports once the load settles.
+      yield* waitForFrame(setup, (frame) => !frame.includes("/btw"), "the command sent")
+      // A name no extension carries yet waits too; once the load settles it
+      // is no command, and its text goes out as a message.
       yield* Effect.promise(() => setup.mockInput.typeText("/nonesuch"))
       yield* waitForFrame(setup, (frame) => frame.includes("/nonesuch"), "the unknown command")
       setup.mockInput.pressEnter()
-      yield* waitForFrame(
-        setup,
-        (frame) => frame.includes("Unknown command") || !frame.includes("/nonesuch"),
-        "the unknown command sent",
-      )
-      expect(renderFrame(setup)).not.toContain("Unknown command")
+      yield* waitForFrame(setup, (frame) => !frame.includes("/nonesuch"), "the draft left")
+      expect(sent).toEqual([])
       yield* Deferred.complete(release, Effect.void)
       yield* waitForFrame(
         setup,
-        (frame) => frame.includes("btw · fork") && frame.includes("Unknown command: /nonesuch"),
-        "btw pane and the settled unknown command",
+        (frame) => frame.includes("btw · fork") && sent.includes("/nonesuch"),
+        "btw pane and the settled name sent",
       )
-      expect(renderFrame(setup)).not.toContain("Unknown command: /btw")
+      expect(sent).toEqual(["/nonesuch"])
     }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive("a pane that opens over a previewing prompt search gives the draft back", () =>
@@ -2257,45 +2259,13 @@ describe("App auth gate", () => {
       yield* waitForFrame(setup, (frame) => frame.includes("┃ mine"), "the draft back")
     }).pipe(Effect.timeout("10 seconds")),
   )
-  it.scopedLive("an unknown slash command comes back to the draft with its reason", () =>
-    Effect.gen(function* () {
-      const setup = yield* renderScoped(() => <App />, {
-        client: createMockClient({
-          auth: { listProviders: () => Effect.succeed([]) },
-          branch: { getTree: () => Effect.succeed([]) },
-        }),
-        runtime: createMockRuntime(),
-        builtins: builtinClientModules,
-        initialSession: {
-          id: SessionId.make("session-a"),
-          activeBranchId: BranchId.make("branch-a"),
-          name: "Session A",
-          createdAt: dateFromMillis(0),
-          updatedAt: dateFromMillis(0),
-        },
-      })
-      yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
-      yield* Effect.promise(() => setup.mockInput.typeText("/modle sonnet"))
-      yield* waitForFrame(setup, (frame) => frame.includes("/modle sonnet"), "the typed command")
-      setup.mockInput.pressEnter()
-      yield* waitForFrame(
-        setup,
-        (frame) => frame.includes("Unknown command: /modle"),
-        "the command refused",
-      )
-      yield* waitForFrame(
-        setup,
-        (frame) => frame.includes("┃ /modle sonnet"),
-        "the command back in the draft",
-      )
-    }).pipe(Effect.timeout("10 seconds")),
-  )
   it.scopedLive(
     "a slash command typed before the session's server commands list waits for them",
     () =>
       Effect.gen(function* () {
         const listed = yield* Deferred.make<void>()
         const requests: Array<unknown> = []
+        const sent: Array<string> = []
         let ext = Option.none<ReturnType<typeof useExtensionUI>>()
         const setup = yield* renderScoped(
           () => (
@@ -2308,6 +2278,7 @@ describe("App auth gate", () => {
             client: createMockClient({
               auth: { listProviders: () => Effect.succeed([]) },
               branch: { getTree: () => Effect.succeed([]) },
+              message: recordSends(sent),
               extension: {
                 listSlashCommands: () =>
                   Deferred.await(listed).pipe(
@@ -2345,17 +2316,13 @@ describe("App auth gate", () => {
         yield* Effect.promise(() => setup.mockInput.typeText("/probe now"))
         yield* waitForFrame(setup, (frame) => frame.includes("/probe now"), "the typed command")
         setup.mockInput.pressEnter()
-        yield* waitForFrame(
-          setup,
-          (frame) => frame.includes("Unknown command") || !frame.includes("/probe now"),
-          "the command sent",
-        )
-        expect(renderFrame(setup)).not.toContain("Unknown command")
+        yield* waitForFrame(setup, (frame) => !frame.includes("/probe now"), "the command sent")
+        expect(sent).toEqual([])
         expect(requests).toHaveLength(0)
         yield* Deferred.complete(listed, Effect.void)
         yield* waitForFrame(setup, () => requests.length === 1, "the server command ran")
         expect(requests).toEqual(["now"])
-        expect(renderFrame(setup)).not.toContain("Unknown command")
+        expect(sent).toEqual([])
       }).pipe(Effect.timeout("10 seconds")),
   )
   // A server command the server refuses says so on the status row.
@@ -2442,6 +2409,7 @@ describe("App auth gate", () => {
           const drop = yield* Deferred.make<void>()
           const failed = yield* Deferred.make<void>()
           const requests: Array<unknown> = []
+          const sent: Array<string> = []
           let listings = 0
           const lifecycle = createMutableRuntime(
             ConnectionState.cases.Connected.make({ generation: 0 }),
@@ -2458,6 +2426,7 @@ describe("App auth gate", () => {
               client: createMockClient({
                 auth: { listProviders: () => Effect.succeed([]) },
                 branch: { getTree: () => Effect.succeed([]) },
+                message: recordSends(sent),
                 extension: {
                   listSlashCommands: () =>
                     Effect.suspend(() => {
@@ -2518,13 +2487,13 @@ describe("App auth gate", () => {
           // Two render passes let the host take the failed reply.
           yield* waitForFrame(setup, () => true, "the failed reply taken")
           yield* waitForFrame(setup, () => true, "the failed reply taken")
-          expect(renderFrame(setup)).not.toContain("Unknown command")
+          expect(sent).toEqual([])
           if (failureFirst) reconnecting()
           lifecycle.emit(ConnectionState.cases.Connected.make({ generation: 1 }))
           yield* waitForFrame(setup, () => requests.length === 1, "the server command ran")
           expect(requests).toEqual(["now"])
           expect(listings).toBe(2)
-          expect(renderFrame(setup)).not.toContain("Unknown command")
+          expect(sent).toEqual([])
         }).pipe(Effect.timeout("10 seconds")),
     )
   }
@@ -2537,6 +2506,7 @@ describe("App auth gate", () => {
       Effect.gen(function* () {
         const relisted = yield* Deferred.make<void>()
         const requests: Array<unknown> = []
+        const sent: Array<string> = []
         let listings = 0
         const lifecycle = createMutableRuntime(
           ConnectionState.cases.Connected.make({ generation: 0 }),
@@ -2553,6 +2523,7 @@ describe("App auth gate", () => {
             client: createMockClient({
               auth: { listProviders: () => Effect.succeed([]) },
               branch: { getTree: () => Effect.succeed([]) },
+              message: recordSends(sent),
               extension: {
                 listSlashCommands: () =>
                   Effect.suspend(() => {
@@ -2598,16 +2569,12 @@ describe("App auth gate", () => {
         yield* Effect.promise(() => setup.mockInput.typeText("/probe now"))
         yield* waitForFrame(setup, (frame) => frame.includes("/probe now"), "the typed command")
         setup.mockInput.pressEnter()
-        yield* waitForFrame(
-          setup,
-          (frame) => frame.includes("Unknown command") || !frame.includes("/probe now"),
-          "the command sent",
-        )
-        expect(renderFrame(setup)).not.toContain("Unknown command")
+        yield* waitForFrame(setup, (frame) => !frame.includes("/probe now"), "the command sent")
+        expect(sent).toEqual([])
         yield* Deferred.succeed(relisted, void 0)
         yield* waitForFrame(setup, () => requests.length === 1, "the server command ran")
         expect(requests).toEqual(["now"])
-        expect(renderFrame(setup)).not.toContain("Unknown command")
+        expect(sent).toEqual([])
       }).pipe(Effect.timeout("10 seconds")),
   )
   /**

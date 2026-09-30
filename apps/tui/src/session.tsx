@@ -2603,10 +2603,15 @@ export function useSessionFeed(
 
 // ── session controller ──────────────────────────────────────────────────────
 
-/** A submitted slash command, and the way back to its draft if nothing runs it. */
-interface HeldSlashCommand {
+/**
+ * A submitted slash command. `send` sends its text as a message when no
+ * command source names it; `refuse` gives it back to its draft when the view
+ * goes before it could run.
+ */
+export interface SlashSubmission {
   readonly cmd: string
   readonly args: string
+  readonly send: () => void
   readonly refuse: (reason: string) => void
 }
 
@@ -2643,14 +2648,10 @@ export interface SessionController {
     requestId: string,
   ) => Effect.Effect<void, GentClientRpcError>
   /**
-   * Run a slash command. One no command source names is handed to `refuse`
-   * with its reason; the composer gives it back to the draft it came from.
+   * Run a slash command. One no command source names, once every source has
+   * answered, is not a command: its text goes out as a message (`send`).
    */
-  onSlashCommand: (
-    cmd: string,
-    args: string,
-    refuse: (reason: string) => void,
-  ) => Effect.Effect<void>
+  onSlashCommand: (command: SlashSubmission) => Effect.Effect<void>
   onRestoreQueue: () => void
   dispatchComposer: (event: ComposerEvent) => void
   resolveAuthGate: () => void
@@ -3143,21 +3144,17 @@ export function createSessionController(props: {
     closeOverlay()
   }
 
-  // A command no source names is refused: it goes back to its draft with the reason.
-  const runSlashCommand = (held: HeldSlashCommand) => {
-    const result = executeSlashCommand(held.cmd, held.args, ext.commands())
-    Option.match(Option.fromNullishOr(result.error), {
-      onNone: () => {},
-      onSome: held.refuse,
-    })
+  // A command no source names is not a command: its text goes out as a message.
+  const runSlashCommand = (held: SlashSubmission) => {
+    if (!executeSlashCommand(held.cmd, held.args, ext.commands())) held.send()
   }
 
   // A command sent before every command source has answered (the client
   // extensions' load, the session's server slash list) may belong to one of
   // them: it waits for them to settle, then resolves. Only settled sources
-  // report `Unknown command`. A command still held when the session view
-  // goes comes back to its draft.
-  let heldSlashCommands: ReadonlyArray<HeldSlashCommand> = []
+  // decide that a name is no command. A command still held when the session
+  // view goes comes back to its draft.
+  let heldSlashCommands: ReadonlyArray<SlashSubmission> = []
   createEffect(
     on(ext.commandsSettled, (settled) => {
       if (!settled || heldSlashCommands.length === 0) return
@@ -3174,14 +3171,9 @@ export function createSessionController(props: {
     }
   })
 
-  const onSlashCommand = (
-    cmd: string,
-    args: string,
-    refuse: (reason: string) => void,
-  ): Effect.Effect<void> =>
+  const onSlashCommand = (command: SlashSubmission): Effect.Effect<void> =>
     Effect.sync(() => {
-      const command: HeldSlashCommand = { cmd, args, refuse }
-      if (!ext.commandsSettled() && !isSlashCommandName(cmd, ext.commands())) {
+      if (!ext.commandsSettled() && !isSlashCommandName(command.cmd, ext.commands())) {
         heldSlashCommands = [...heldSlashCommands, command]
         return
       }

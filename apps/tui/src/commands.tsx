@@ -154,15 +154,6 @@ export function CommandProvider(props: CommandProviderProps) {
 // ── slash commands ──────────────────────────────────────────────────────────
 
 /**
- * Slash command resolution — looks up commands by slash name or alias.
- */
-
-interface SlashCommandResult {
-  handled: boolean
-  error?: string
-}
-
-/**
  * The command `/name` names, case-insensitively: the one whose `slash` it is,
  * else the one that lists it among its `aliases`. Resolution leaves one owner
  * per slash, so a slash beats an alias another command still carries.
@@ -179,39 +170,32 @@ const findSlashCommand = (
   )
 }
 
-/** Find and execute a slash command from the resolved commands. */
+/**
+ * Runs the command `/cmd` names with `args`. Answers whether one ran: a name
+ * no command carries runs nothing.
+ */
 export const executeSlashCommand = (
   cmd: string,
   args: string,
   commands: ReadonlyArray<Command>,
-): SlashCommandResult => {
-  const match = findSlashCommand(cmd, commands)
-  if (Option.isNone(match)) {
-    return { handled: false, error: `Unknown command: /${cmd}` }
-  }
+): boolean =>
+  Option.match(findSlashCommand(cmd, commands), {
+    onNone: () => false,
+    onSome: (command) => {
+      const onSlash = Option.fromNullishOr(command.onSlash)
+      if (Option.isSome(onSlash)) onSlash.value(args)
+      else command.onSelect()
+      return true
+    },
+  })
 
-  const onSlash = Option.fromNullishOr(match.value.onSlash)
-  if (Option.isSome(onSlash)) onSlash.value(args)
-  else match.value.onSelect()
-  return { handled: true }
-}
-
-/**
- * Parse slash command from input
- * @returns [command, args] or null if not a slash command
- */
-// eslint-disable-next-line effect/noNullish -- parser API uses null as its no-match sentinel.
-export function parseSlashCommand(input: string): [string, string] | null {
+/** A line's command name and the rest, trimmed; `None` for a line that does not start with `/`. */
+export const parseSlashCommand = (input: string): Option.Option<readonly [string, string]> => {
   const trimmed = input.trim()
-  // eslint-disable-next-line effect/noNullish -- parser API uses null as its no-match sentinel.
-  if (!trimmed.startsWith("/")) return null
-
+  if (!trimmed.startsWith("/")) return Option.none()
   const spaceIdx = trimmed.indexOf(" ")
-  if (spaceIdx === -1) {
-    return [trimmed.slice(1), ""]
-  }
-
-  return [trimmed.slice(1, spaceIdx), trimmed.slice(spaceIdx + 1).trim()]
+  if (spaceIdx === -1) return Option.some([trimmed.slice(1), ""])
+  return Option.some([trimmed.slice(1, spaceIdx), trimmed.slice(spaceIdx + 1).trim()])
 }
 
 /**

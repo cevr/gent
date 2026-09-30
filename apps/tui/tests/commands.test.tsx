@@ -32,13 +32,13 @@ describe("parseSlashCommand", () => {
       ["  /clear  ", ["clear", ""]],
     ]
     for (const [line, parsed] of cases) {
-      expect(parseSlashCommand(line)).toEqual(parsed)
+      expect(parseSlashCommand(line)).toEqual(Option.some(parsed))
     }
   })
 
   test("reads a line without a leading slash as no command", () => {
-    expect(parseSlashCommand("hello")).toBeNull()
-    expect(parseSlashCommand("")).toBeNull()
+    expect(parseSlashCommand("hello")).toEqual(Option.none())
+    expect(parseSlashCommand("")).toEqual(Option.none())
   })
 })
 
@@ -62,15 +62,13 @@ describe("executeSlashCommand", () => {
           },
         }),
       ]
-      expect(executeSlashCommand(typed, "", commands).handled).toBe(true)
+      expect(executeSlashCommand(typed, "", commands)).toBe(true)
       expect(called).toBe(true)
     }
   })
 
-  test("an unknown slash reports itself", () => {
-    const result = executeSlashCommand("unknown", "", [])
-    expect(result.handled).toBe(false)
-    expect(result.error).toBe("Unknown command: /unknown")
+  test("a name no command carries runs nothing", () => {
+    expect(executeSlashCommand("unknown", "", [])).toBe(false)
   })
 
   test("prefers onSlash over onSelect when args present", () => {
@@ -85,8 +83,7 @@ describe("executeSlashCommand", () => {
         },
       }),
     ]
-    const result = executeSlashCommand("think", "high", commands)
-    expect(result.handled).toBe(true)
+    expect(executeSlashCommand("think", "high", commands)).toBe(true)
     expect(receivedArgs).toBe("high")
   })
 
@@ -101,8 +98,7 @@ describe("executeSlashCommand", () => {
         },
       }),
     ]
-    const result = executeSlashCommand("ext", "ignored", commands)
-    expect(result.handled).toBe(true)
+    expect(executeSlashCommand("ext", "ignored", commands)).toBe(true)
     expect(selectCalled).toBe(true)
   })
 
@@ -380,7 +376,7 @@ describe("CommandPalette renderer", () => {
         () => commands().some((command) => command.slash === "sessions"),
         "extension commands loaded",
       )
-      expect(executeSlashCommand("sessions", "", commands())).toEqual({ handled: true })
+      expect(executeSlashCommand("sessions", "", commands())).toBe(true)
       yield* waitForFrame(
         setup,
         (frame) => frame.includes("Agents ·") && frame.includes("Delegate"),

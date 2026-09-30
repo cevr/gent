@@ -476,8 +476,7 @@ describe("resolveTuiExtensions", () => {
         ],
       },
     ])
-    const result = executeSlashCommand("model", "", commands)
-    expect(result.handled).toBe(true)
+    expect(executeSlashCommand("model", "", commands)).toBe(true)
     expect(winner).toBe("project")
     expect(failures).toEqual([])
     // The builtin keeps its palette row; only the slash moved.

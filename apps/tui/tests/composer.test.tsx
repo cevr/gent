@@ -26,6 +26,7 @@ import {
   ComposerInteractionState,
   ComposerState,
   type SessionController,
+  type SlashSubmission,
   SessionControllerContext,
   SessionUiState,
   transitionComposerInteraction,
@@ -396,6 +397,15 @@ function Contribute() {
   ])
   return <box />
 }
+/** Draws a marker once every command source has answered. */
+function CommandsSettled() {
+  const ui = useExtensionUI()
+  return (
+    <Show when={ui.commandsSettled()}>
+      <text>commands settled</text>
+    </Show>
+  )
+}
 /** Draws a marker once the client extensions contribute `count` sources on `prefix`. */
 function SourcesLoaded(props: { readonly prefix: string; readonly count: number }) {
   const ui = useExtensionUI()
@@ -463,7 +473,7 @@ function TestComposer(props: {
       Effect.sync(() => props.onSubmit(content, mode, target, requestId)).pipe(
         Effect.andThen(props.sendResult ?? Effect.void),
       ),
-    onSlashCommand: (_cmd: string, _args: string) => Effect.void,
+    onSlashCommand: () => Effect.void,
     onRestoreQueue: () => {},
     dispatchComposer: props.dispatchComposer ?? (() => {}),
     resolveAuthGate: () => {},
@@ -1941,10 +1951,9 @@ describe("Composer ghost line", () => {
  *
  * An unregistered name is the same one Enter. `/xyz` opens the popup — the
  * trigger only needs a `/` at position 0, not a matching row — and the popup
- * then holds no rows to select. The composer used to claim that Enter anyway
- * and drop it, so the first press did nothing and only a second one reported
- * `Unknown command: /xyz`. The popup declines a key it cannot act on, so the
- * draft submits and the error surfaces on the first press.
+ * then holds no rows to select. The popup declines a key it cannot act on,
+ * so the draft submits on the first press, and a name no command carries
+ * goes out as a message.
  *
  * Tab does not run anything. It is the key that builds `/model sonnet`:
  * complete the name, keep the caret, type the argument. Enter and tab reach
@@ -2052,6 +2061,8 @@ function ContributeSlashEnter() {
 
 function TestComposerSlashEnter(props: {
   readonly onSlashCommand: (cmd: string, args: string) => void
+  /** A draft sent as a message. */
+  readonly onSubmit?: (content: string) => void
   readonly children?: JSX.Element
 }) {
   const [interactionState, setInteractionState] = createSignal(ComposerInteractionState.initial())
@@ -2083,8 +2094,8 @@ function TestComposerSlashEnter(props: {
       setInteractionState((current) =>
         transitionComposerInteraction(current, event, ext.autocompleteItems()),
       ),
-    onSubmit: () => Effect.void,
-    onSlashCommand: (cmd: string, args: string) => {
+    onSubmit: (content: string) => Effect.sync(() => props.onSubmit?.(content)),
+    onSlashCommand: ({ cmd, args }: SlashSubmission) => {
       props.onSlashCommand(cmd, args)
       return Effect.void
     },
@@ -2253,17 +2264,59 @@ describe("Composer slash Enter", () => {
     }),
   )
 
-  it.live("reports an unregistered command on the first Enter", () =>
+  // Only a known command name is a command. A path, a typo or a pasted log
+  // line that starts with `/` is text for the model.
+  it.scopedLive("a draft whose first word names no command is sent as a message", () =>
+    Effect.gen(function* () {
+      for (const draft of ["/xyz", "/tmp/x.log what is this?"]) {
+        const dispatched: Array<Dispatched> = []
+        const submitted: Array<string> = []
+        const setup = yield* renderScoped(
+          () => (
+            <TestComposerSlashEnter
+              onSlashCommand={(cmd, args) => dispatched.push({ cmd, args })}
+              onSubmit={(content) => submitted.push(content)}
+            >
+              <Composer.Autocomplete />
+              <CommandsSettled />
+            </TestComposerSlashEnter>
+          ),
+          { width: 80, height: 24 },
+        )
+        yield* waitForFrame(setup, (frame) => frame.includes("commands settled"), "commands")
+        yield* Effect.promise(() => setup.mockInput.typeText(draft))
+        yield* waitForFrame(setup, (frame) => frame.includes(draft), "the draft")
+        setup.mockInput.pressEnter()
+        yield* waitForFrame(setup, (frame) => !frame.includes(draft), "the draft sent")
+        expect(dispatched).toEqual([])
+        expect(submitted).toEqual([draft])
+      }
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  // A paste is never a command, even one that starts with a command's name.
+  it.scopedLive("a draft that starts with a paste chip is sent as a message", () =>
     Effect.gen(function* () {
       const dispatched: Array<Dispatched> = []
-      // `/xyz` matches no registered command, so the popup opens with no rows.
-      // The Enter has to reach the submit path regardless: dispatching is what
-      // produces `Unknown command: /xyz` from `executeSlashCommand`.
-      const setup = yield* typeThenEnter(dispatched, "/xyz", "No matches")
-      expect(dispatched).toEqual([{ cmd: "xyz", args: "" }])
-      // The draft is gone — the key was consumed by the submit, not dropped.
-      expect(renderFrame(setup)).not.toContain("/xyz")
-    }),
+      const submitted: Array<string> = []
+      const setup = yield* renderScoped(
+        () => (
+          <TestComposerSlashEnter
+            onSlashCommand={(cmd, args) => dispatched.push({ cmd, args })}
+            onSubmit={(content) => submitted.push(content)}
+          />
+        ),
+        { width: 80, height: 24 },
+      )
+      const log = "/model app.log:12 error\n".repeat(5)
+      yield* Effect.promise(() => setup.mockInput.pasteBracketedText(log))
+      yield* Effect.promise(() => setup.mockInput.typeText(" why?"))
+      yield* waitForFrame(setup, (frame) => frame.includes("lines #1] why?"), "the chip")
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, (frame) => !frame.includes("why?"), "the draft sent")
+      expect(dispatched).toEqual([])
+      expect(submitted).toEqual([`${log} why?`.trim()])
+    }).pipe(Effect.timeout("10 seconds")),
   )
 
   it.live("selects a row instead of submitting while the popup has one", () =>

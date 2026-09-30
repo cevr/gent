@@ -826,7 +826,7 @@ function useComposerController(): ComposerController {
       isSlashCommandName(value, extensionUI.commands())
     ) {
       clearAutocomplete()
-      submitSlashCommand(`/${value}`)
+      submitSlashCommand(`/${value}`, `/${value}`)
       return
     }
 
@@ -1066,25 +1066,51 @@ function useComposerController(): ComposerController {
     )
   }
 
-  const submitSlashCommand = (text: string) => {
-    const parsed = Option.fromNullishOr(parseSlashCommand(text))
-    if (Option.isNone(parsed)) return false
+  /**
+   * Only a known command name is a command: a path, a typo or a pasted line
+   * that starts with `/` is a message. The name is read from the draft as
+   * typed, so text from a paste chip never names one. While a command source
+   * is still answering, the session holds the command until it can tell.
+   */
+  const submitSlashCommand = (draft: string, text: string) => {
+    const named = parseSlashCommand(draft)
+    if (Option.isNone(named)) return false
+    const [cmd] = named.value
+    if (extensionUI.commandsSettled() && !isSlashCommandName(cmd, extensionUI.commands())) {
+      return false
+    }
+    // The arguments take the paste they name.
+    const args = Option.match(parseSlashCommand(text), {
+      onNone: () => "",
+      onSome: ([, value]) => value,
+    })
 
-    const [cmd, args] = parsed.value
     client.log.info("slash-command", { cmd })
     const order = refusals.nextOrder()
     const drafted = draftedIn()
-    Option.map(drafted, (target) => refusals.submitted(target.branchId, text))
+    const reused = Option.flatMap(drafted, (target) => refusals.submitted(target.branchId, text))
     clearInput()
 
-    // A command nothing runs comes back to the draft it was written in.
+    // A command still held when the view goes comes back to the draft it was written in.
     const refuseCommand = (reason: string) =>
       Option.match(drafted, {
         onNone: () => client.setError(reason),
         onSome: (target) =>
           refuse(target, { order, text, shell: false, requestId: Option.none() }, reason),
       })
-    cast(client.surfaceError(sc.onSlashCommand(cmd, args, refuseCommand)))
+    const sendAsMessage = () =>
+      Option.match(drafted, {
+        onNone: () => {},
+        onSome: (target) => {
+          history.add(text)
+          sendMessage(target, text, "queue", order, reused)
+        },
+      })
+    cast(
+      client.surfaceError(
+        sc.onSlashCommand({ cmd, args, send: sendAsMessage, refuse: refuseCommand }),
+      ),
+    )
     return true
   }
 
@@ -1092,7 +1118,6 @@ function useComposerController(): ComposerController {
     const drafted = draftedIn()
     if (Option.isNone(drafted)) return
     const target = drafted.value
-    client.log.info("composer.submit.requested", { contentLength: text.length, mode })
     history.add(text)
     const order = refusals.nextOrder()
     // A refused text sent again unchanged after a lost reply keeps its id.
@@ -1100,6 +1125,18 @@ function useComposerController(): ComposerController {
     // The message leaves the composer before its `@file` refs expand, so a
     // second Enter finds an empty draft instead of sending it again.
     clearInput()
+    sendMessage(target, text, mode, order, reused)
+  }
+
+  /** Sends `text` to `target`; a refusal comes back to its draft in `order`. */
+  const sendMessage = (
+    target: SessionIdentity,
+    text: string,
+    mode: "queue" | "interject",
+    order: number,
+    reused: Option.Option<string>,
+  ) => {
+    client.log.info("composer.submit.requested", { contentLength: text.length, mode })
     cast(
       Option.match(reused, { onNone: () => randomId, onSome: Effect.succeed }).pipe(
         Effect.flatMap((requestId) =>
@@ -1123,13 +1160,11 @@ function useComposerController(): ComposerController {
   }
 
   const handleSubmit = () => {
-    const expandedValue = paste.expandPlaceholders(
-      Option.getOrElse(
-        Option.map(inputRef, (renderable) => renderable.plainText),
-        () => "",
-      ),
+    const draft = Option.getOrElse(
+      Option.map(inputRef, (renderable) => renderable.plainText),
+      () => "",
     )
-    const text = expandedValue.trim()
+    const text = paste.expandPlaceholders(draft).trim()
     if (text.length === 0) return
 
     clearAutocomplete()
@@ -1141,7 +1176,7 @@ function useComposerController(): ComposerController {
       return
     }
 
-    if (submitSlashCommand(text)) {
+    if (submitSlashCommand(draft, text)) {
       submitMode = "queue"
       return
     }
