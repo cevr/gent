@@ -51,7 +51,6 @@ import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensio
 import type { LoadedExtension } from "../../src/domain/extension.js"
 import { ModelId, ProviderId, Model } from "../../src/domain/agent"
 import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "../../src/domain/ids"
-import { failingLanguageModel, makeLanguageModel } from "../helpers/failing-language-model"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { tool, type ToolCapability } from "@gent/core/extensions/api"
 import { LanguageModelLayers } from "../../src/test-utils/language-model"
@@ -289,9 +288,7 @@ describe("context overflow", () => {
  */
 
 const unusedResolution = (): Effect.Effect<ProviderResolution> =>
-  Effect.succeed(
-    AiModel.make("test", "model", Layer.succeed(LanguageModel.LanguageModel, failingLanguageModel)),
-  )
+  Effect.succeed(AiModel.make("test", "model", LanguageModelLayers.failing))
 
 // oxlint-disable-next-line effect/noNullish -- The auth store answers undefined for a provider with no key.
 const noStoredAuth: AuthInfo | undefined = undefined
@@ -910,11 +907,7 @@ describe("Auth", () => {
  * listAuthProviders tests
  */
 
-const stubModel = AiModel.make(
-  "test",
-  "model",
-  Layer.succeed(LanguageModel.LanguageModel, failingLanguageModel),
-)
+const stubModel = AiModel.make("test", "model", LanguageModelLayers.failing)
 
 const testProviders: ModelDriverContribution[] = [
   { id: "anthropic", name: "Anthropic", resolveModel: () => Effect.succeed(stubModel) },
@@ -1136,14 +1129,43 @@ const testAuthStorage: AuthService = serializeAuthStore({
 })
 /** Create a fake upstream model with a stub LanguageModel layer */
 const fakeResolution = (): ProviderResolution =>
-  AiModel.make("test", "model", Layer.succeed(LanguageModel.LanguageModel, failingLanguageModel))
+  AiModel.make("test", "model", LanguageModelLayers.failing)
+// The live-path tests read the options gent hands the LanguageModel service
+// itself (the toolkit identity, disableToolCallResolution, the raw prompt),
+// which `LanguageModel.make` consumes before a `makeLanguageModelLayer`
+// stream sees them, so they stub the service. Unset methods fail.
+interface ServiceCallOptions {
+  readonly disableToolCallResolution?: boolean
+  readonly toolkit?: unknown
+  readonly prompt?: Prompt.RawInput
+}
+interface ServiceOverrides<Options extends ServiceCallOptions> {
+  readonly streamText?: (options: Options) => Stream.Stream<unknown, unknown>
+}
+const stubFailure = (method: string) =>
+  AiError.make({
+    module: "Test",
+    method,
+    reason: new AiError.UnknownError({ description: "stub" }),
+  })
+const makeLanguageModel = <Options extends ServiceCallOptions = ServiceCallOptions>(
+  overrides: ServiceOverrides<Options> = {},
+): LanguageModel.LanguageModel =>
+  // oxlint-disable-next-line effect/noAs, effect/noChainedTypeAssertions -- The overloaded service contract is adapted to one call shape here only.
+  ({
+    [LanguageModel.TypeId]: LanguageModel.TypeId,
+    generateText: () => Effect.fail(stubFailure("generateText")),
+    generateObject: () => Effect.fail(stubFailure("generateObject")),
+    streamText: () => Stream.fail(stubFailure("streamText")),
+    ...overrides,
+  }) as unknown as LanguageModel.LanguageModel
 const modelFromService = (
   provider: string,
   service: LanguageModel.LanguageModel,
 ): ProviderResolution =>
   AiModel.make(provider, "model", Layer.succeed(LanguageModel.LanguageModel, service))
 const assertProviderResolutionRejectsBareLayer = () => {
-  const bareLayer = Layer.succeed(LanguageModel.LanguageModel, failingLanguageModel)
+  const bareLayer = LanguageModelLayers.failing
   // @ts-expect-error -- ProviderResolution must come from Effect AI Model.make metadata.
   const resolution: ProviderResolution = bareLayer
   return resolution

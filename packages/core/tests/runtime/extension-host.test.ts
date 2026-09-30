@@ -120,7 +120,7 @@ import {
   ProviderAuthInfo,
   type ProviderResolution,
 } from "../../src/domain/driver"
-import { Model as AiModel, LanguageModel } from "effect/ai"
+import { Model as AiModel, type LanguageModel } from "effect/ai"
 import { ModelRegistry } from "../../src/runtime/provider"
 import { LanguageModelLayers, textStep, waitFor } from "../../src/test-utils/language-model"
 import {
@@ -131,7 +131,6 @@ import {
   ModelId,
   ProviderId,
 } from "../../src/domain/agent"
-import { failingLanguageModel } from "../helpers/failing-language-model"
 import * as AiTool from "effect/ai/Tool"
 import {
   bindRequestCapabilityExtension,
@@ -1523,9 +1522,7 @@ describe("resolveTurnProfile", () => {
  * regression breaks per-cwd extension resolution.
  */
 const stubResolution = (): Effect.Effect<ProviderResolution> =>
-  Effect.succeed(
-    AiModel.make("test", "model", Layer.succeed(LanguageModel.LanguageModel, failingLanguageModel)),
-  )
+  Effect.succeed(AiModel.make("test", "model", LanguageModelLayers.failing))
 const makeModel = (id: string, name?: string): ModelDriverContribution => ({
   id,
   name: Option.getOrElse(Option.fromUndefinedOr(name), () => id),
@@ -3794,13 +3791,7 @@ const makeProvider = (providerId: string, name?: string): ModelDriverContributio
   id: providerId,
   name: name ?? providerId,
   resolveModel: (modelName) =>
-    Effect.succeed(
-      AiModel.make(
-        providerId,
-        modelName,
-        Layer.succeed(LanguageModel.LanguageModel, failingLanguageModel),
-      ),
-    ),
+    Effect.succeed(AiModel.make(providerId, modelName, LanguageModelLayers.failing)),
 })
 const makeExtRegistry = (
   id: string,

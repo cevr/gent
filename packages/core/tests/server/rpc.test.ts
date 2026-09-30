@@ -80,7 +80,7 @@ import {
   RequestId,
   SessionId,
 } from "../../src/domain/ids"
-import { Model as AiModel, LanguageModel } from "effect/ai"
+import { Model as AiModel, type LanguageModel } from "effect/ai"
 import { BunServices } from "@effect/platform-bun"
 import type { ModelDriverContribution } from "../../src/domain/driver.js"
 import { type ExtensionHealthSnapshot, SetDriverOverrideInput } from "../../src/server/rpc.js"
@@ -93,7 +93,6 @@ import {
   type LoadedExtension,
   type SessionDeletedInput,
 } from "../../src/domain/extension.js"
-import { failingLanguageModel } from "../helpers/failing-language-model"
 import {
   CapabilityError,
   defineExtension,
@@ -484,11 +483,7 @@ const failingReadAuthStoreLayer = Layer.succeed(
     }),
   ),
 )
-const stubModel = AiModel.make(
-  "test",
-  "model",
-  Layer.succeed(LanguageModel.LanguageModel, failingLanguageModel),
-)
+const stubModel = AiModel.make("test", "model", LanguageModelLayers.failing)
 const makePersistingExtensions = (): ReadonlyArray<LoadedExtension> => {
   const pendingCallbacks = new Map<string, (code?: string) => string>()
   const oauthProvider: ModelDriverContribution = {
