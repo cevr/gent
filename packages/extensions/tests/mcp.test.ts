@@ -47,7 +47,11 @@ import { shippedPreset } from "./helpers/test-preset.js"
  * `MCP_FIXTURE_EXIT_AFTER_CALL` exits once it answered a call;
  * `count` is not listed while `MCP_FIXTURE_HIDE_COUNT` names a file that
  * exists, and with it `hide` writes that file and sends `list_changed`, and
- * `drop` writes it silently; a call to a tool not listed is answered with the
+ * `drop` writes it silently; with it, `MCP_FIXTURE_SWAP_LOG` adds `swap`,
+ * which sends `list_changed` and holds the answer to the next `tools/list`
+ * (count still listed) while it hides count and sends `list_changed` again,
+ * until a newer list is answered or 500 ms pass, and logs `list` for each
+ * `tools/list` asked and `listed` for each answered; a call to a tool not listed is answered with the
  * spec's unknown-tool error (the TypeScript SDK server's `isError` shape with
  * `MCP_FIXTURE_SDK_UNKNOWN`); `MCP_FIXTURE_COLLIDE` adds tools whose names
  * clean to one id;
@@ -88,6 +92,18 @@ if (hideFile) {
     { name: "hide", description: "Stop listing count, and say so.", inputSchema: { type: "object" } },
     { name: "drop", description: "Stop listing count silently.", inputSchema: { type: "object" } },
   )
+}
+const swapLog = process.env.MCP_FIXTURE_SWAP_LOG
+let swapping = false
+let held = null
+const release = () => {
+  if (held === null) return
+  const reply = held
+  held = null
+  reply()
+}
+if (swapLog) {
+  tools.push({ name: "swap", description: "Answer a list late, after a newer one.", inputSchema: { type: "object" } })
 }
 const listedTools = () => {
   if (hideFile && fs.existsSync(hideFile)) return tools.filter((entry) => entry.name !== "count")
@@ -156,6 +172,9 @@ const answer = (request) => {
   calls += 1
   const input = request.params.arguments ?? {}
   switch (request.params.name) {
+    case "swap":
+      swapping = true
+      return { result: { content: [{ type: "text", text: "swapping" }] } }
     case "hide":
     case "drop":
       fs.writeFileSync(hideFile, "")
@@ -201,12 +220,31 @@ process.stdin.on("data", (chunk) => {
     const request = JSON.parse(line)
     if (request.id === undefined) continue
     const answered = answer(request)
+    if (swapLog && request.method === "tools/list") {
+      fs.appendFileSync(swapLog, "list\n")
+      const reply = () => {
+        send({ id: request.id, ...answered })
+        fs.appendFileSync(swapLog, "listed\n")
+      }
+      if (swapping) {
+        // This answer lists count; it is held while count is hidden and a newer list is asked for.
+        swapping = false
+        fs.writeFileSync(hideFile, "")
+        held = reply
+        setTimeout(release, 500)
+        send({ method: "notifications/tools/list_changed" })
+      } else {
+        reply()
+        release()
+      }
+      continue
+    }
     if (request.method === "tools/call" && process.env.MCP_FIXTURE_EXIT_AFTER_CALL) {
       process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, ...answered }) + "\n", () => process.exit(0))
       return
     }
     send({ id: request.id, ...answered })
-    if (request.method === "tools/call" && request.params.name === "hide") {
+    if (request.method === "tools/call" && (request.params.name === "hide" || request.params.name === "swap")) {
       send({ method: "notifications/tools/list_changed" })
     }
   }
@@ -2036,6 +2074,61 @@ describe("mcp tools in the cell", () => {
         expect(next).toContain("mcp.fixture.echo")
         // The open connection relisted; no server started for it.
         expect(yield* fixture.starts).toBe(2)
+      }).pipe(
+        Effect.timeout("25 seconds"),
+        Effect.provide(Layer.provideMerge(withDataDir, platformLayer)),
+      ),
+    30_000,
+  )
+
+  it.scopedLive(
+    "relists of one server run one at a time, so an older list never lands after a newer one",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const fixture = yield* makeFixture
+        const hide = path.join(fixture.directory, "hide-count")
+        const log = path.join(fixture.directory, "swap-log")
+        const servers = {
+          fixture: {
+            ...fixture.stdio({ MCP_FIXTURE_HIDE_COUNT: hide, MCP_FIXTURE_SWAP_LOG: log }),
+            cwd: fixture.directory,
+          },
+        }
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          toolCallStep("cell", { code: "await tools.mcp.fixture.swap()" }),
+          textStep("done"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...shippedPreset,
+          extensionInputs: [
+            ...shippedPreset.extensionInputs,
+            McpServers("@test/mcp-swap", servers),
+          ],
+          providerLayer,
+        })
+        yield* client.message.send({ sessionId, branchId, content: "swap" })
+        expect(yield* cellResultAfterDone(client, branchId)).toMatchObject({ isFailure: false })
+        const lines = yield* waitFor(
+          fs
+            .readFileString(log)
+            .pipe(Effect.map((text) => text.split("\n").filter((line) => line !== ""))),
+          (entries) => entries.length >= 8,
+          10_000,
+          "setup's list, the connection's list, and the two relists",
+        )
+        // Each list is answered before the next is asked for: the held list waits out its 500 ms.
+        expect(lines).toEqual([
+          "list",
+          "listed",
+          "list",
+          "listed",
+          "list",
+          "listed",
+          "list",
+          "listed",
+        ])
       }).pipe(
         Effect.timeout("25 seconds"),
         Effect.provide(Layer.provideMerge(withDataDir, platformLayer)),

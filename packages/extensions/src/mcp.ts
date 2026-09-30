@@ -1568,6 +1568,12 @@ const mcpClientsLive = ({
       const blobStore = yield* makeBlobStore(blobs)
       const byKey = new Map(registered.map((entry) => [entry.server.key, entry]))
       const writePermit = yield* Semaphore.make(1)
+      /** One permit per server: its lists run one at a time, so an older list never lands last. */
+      const listPermits = new Map(
+        yield* Effect.forEach(registered, (entry) =>
+          Effect.map(Semaphore.make(1), (permit) => [entry.server.key, permit] as const),
+        ),
+      )
       const runFork = yield* FiberSet.makeRuntime<FileSystem.FileSystem | Path.Path>()
       /** The login each server waits for, so a second `/mcp login` replaces the first. */
       const pendingLogins = new Map<string, Fiber.Fiber<void>>()
@@ -1591,7 +1597,7 @@ const mcpClientsLive = ({
        * and a failed list is not either: both keep the last list and the
        * cached tools, and leave the server `degraded`.
        */
-      const relist = (server: McpServer, client: Client, instructions: Option.Option<string>) =>
+      const listNames = (server: McpServer, client: Client, instructions: Option.Option<string>) =>
         Effect.gen(function* () {
           const previous = known.get(server.key) ?? { tools: [] }
           const listed = yield* listTools(server, client)
@@ -1627,14 +1633,31 @@ const mcpClientsLive = ({
             )
           }),
         )
+      /**
+       * `listNames` under the server's list permit, handing the names to
+       * `apply` before the permit is released, so lists and their results
+       * land in the order they were asked for.
+       */
+      const relist = (
+        server: McpServer,
+        client: Client,
+        instructions: Option.Option<string>,
+        apply: (names: ReadonlySet<string>) => void,
+      ) =>
+        Option.match(Option.fromUndefinedOr(listPermits.get(server.key)), {
+          onNone: () => Effect.void,
+          onSome: (permit) =>
+            Semaphore.withPermit(
+              permit,
+              listNames(server, client, instructions).pipe(Effect.map((names) => apply(names))),
+            ),
+        })
       /** Lists an open connection's tools again, off the call that asked. */
       const refresh = (server: McpServer, connection: Connection) =>
         runFork(
-          relist(server, connection.client, connection.instructions).pipe(
-            Effect.map((listed) => {
-              connection.listed = listed
-            }),
-          ),
+          relist(server, connection.client, connection.instructions, (names) => {
+            connection.listed = names
+          }),
         )
       const clients = yield* RcMap.make({
         lookup: (key: string) =>
@@ -1654,10 +1677,13 @@ const mcpClientsLive = ({
               client,
               transport,
               instructions,
-              listed: yield* relist(entry.server, client, instructions),
+              listed: new Set(),
               closed: false,
               calls: 0,
             }
+            yield* relist(entry.server, client, instructions, (names) => {
+              connection.listed = names
+            })
             onToolsChanged = () => refresh(entry.server, connection)
             live.set(key, connection)
             // Runs before the client closes, so its own close event finds nothing to drop.
