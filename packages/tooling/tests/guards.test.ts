@@ -2787,7 +2787,7 @@ describe("the TUI app surface", () => {
     expect(
       findingsFor([
         { file: TUI_FILE, text: `export const formatTokens = 1\n` },
-        { file: TUI_CONSUMER, text: `import { formatTokens } from "../utils"\n` },
+        { file: TUI_CONSUMER, text: `import { formatTokens } from "./utils"\n` },
       ]),
     ).toEqual([])
   })
@@ -2795,7 +2795,7 @@ describe("the TUI app surface", () => {
   test("a TUI export nothing reaches is reported and fails the guard", () => {
     const findings = findingsFor([
       { file: TUI_FILE, text: `export const formatTokens = 1\nexport const orphan = 2\n` },
-      { file: TUI_CONSUMER, text: `import { formatTokens } from "../utils"\n` },
+      { file: TUI_CONSUMER, text: `import { formatTokens } from "./utils"\n` },
     ])
     expect(findings.map((finding) => finding.line)).toEqual([2])
     expect(findings[0]?.message).toContain("`orphan`")
@@ -3173,7 +3173,7 @@ export type SessionUpdate = typeof SessionUpdate.Type
         { file: EXTENSION_FILE, text: `export const findMatch = 1\n` },
         {
           file: "packages/extensions/tests/fs-tools.test.ts",
-          text: `import { findMatch } from "../../src/fs-tools/edit"\n`,
+          text: `import { findMatch } from "../src/fs-tools/edit"\n`,
         },
       ]),
     ).toEqual([])
@@ -3807,7 +3807,7 @@ describe("a namesake does not vouch for an export", () => {
       coreDeclaration,
       {
         file: TUI_FILE,
-        text: `import { isClientFile as coreIsClientFile } from '../${stem}.js'\nconst isClientFile = () => true\nexport const use = () => coreIsClientFile('a') && isClientFile()\n`,
+        text: `import { isClientFile as coreIsClientFile } from '../../../../packages/core/src/runtime/${stem}.js'\nconst isClientFile = () => true\nexport const use = () => coreIsClientFile('a') && isClientFile()\n`,
       },
       usedElsewhere,
     ])
@@ -3820,7 +3820,7 @@ describe("a namesake does not vouch for an export", () => {
       coreDeclaration,
       {
         file: TUI_FILE,
-        text: `import * as Core from '../${stem}.js'\nconst isClientFile = () => true\nexport const use = () => Core.isClientFile('a') && isClientFile()\n`,
+        text: `import * as Core from '../../../../packages/core/src/runtime/${stem}.js'\nconst isClientFile = () => true\nexport const use = () => Core.isClientFile('a') && isClientFile()\n`,
       },
       usedElsewhere,
     ])
@@ -3934,6 +3934,51 @@ describe("an export is read only through an import", () => {
       },
     ])
     expect(findings).toEqual([])
+  })
+
+  test("a name read through a package index that star-re-exports its module is live", () => {
+    const findings = findUnconsumedExports(
+      factsFor([
+        { file: "packages/extensions/src/notes.ts", text: "export const NotesExtension = 1\n" },
+        { file: "packages/extensions/src/index.ts", text: 'export * from "./notes.js"\n' },
+        {
+          file: "apps/tui/src/app.tsx",
+          text: 'import { NotesExtension } from "@gent/extensions"\nvoid NotesExtension\n',
+        },
+      ]),
+      new Map([
+        [
+          "packages/extensions/package.json",
+          '{ "name": "@gent/extensions", "exports": { ".": "./src/index.ts" } }',
+        ],
+      ]),
+    )
+    expect(findings).toEqual([])
+  })
+
+  test("a star re-export chain carries the read through each barrel", () => {
+    const findings = findingsFor([
+      {
+        file: "apps/tui/src/parts/row.tsx",
+        text: "export const Row = 1\nexport const Unread = 2\n",
+      },
+      { file: "apps/tui/src/parts/index.ts", text: 'export * from "./row"\n' },
+      { file: "apps/tui/src/barrel.ts", text: 'export * from "./parts"\n' },
+      { file: "apps/tui/src/app.tsx", text: 'import { Row } from "./barrel"\nvoid Row\n' },
+    ])
+    expect(names(findings)).toEqual(["Unread"])
+  })
+
+  test("an import of a same-named module elsewhere does not vouch for this one", () => {
+    const findings = findingsFor([
+      { file: "packages/core/src/runtime/format.ts", text: "export const render = 1\n" },
+      { file: "packages/extensions/src/format.ts", text: "export const render = 2\n" },
+      {
+        file: "packages/extensions/src/notes.ts",
+        text: 'import { render } from "./format.js"\nvoid render\n',
+      },
+    ])
+    expect(findings.map((finding) => finding.file)).toEqual(["packages/core/src/runtime/format.ts"])
   })
 })
 

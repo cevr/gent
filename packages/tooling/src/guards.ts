@@ -1,4 +1,4 @@
-import { Option, Schema } from "effect"
+import { Option, Predicate, Schema } from "effect"
 // A write or a caller in test support proves a reader works, not that
 // production supplies it; the lint rules read the same definitions.
 import { isShippedSource, isTestCode, isTestHarness, isTestSupport } from "./gent-rules"
@@ -3110,7 +3110,10 @@ export const findUnusedSuppressionApprovals = (
  *   owns through a bare `export { X }` with no `from` clause. A name is consumed
  *   once another file reads it at the module's path: imports it by name,
  *   re-exports it with `export { X } from`, or reads it off a namespace import
- *   of the module. A string, a test title, a `@ts-expect-error` line or a
+ *   of the module. The path is the repo module the specifier resolves to: a
+ *   relative one against the importer's directory, a package one through its
+ *   manifest's `exports`. A barrel's `export * from` forwards: a name read
+ *   through the barrel is read from each module it forwards. A string, a test title, a `@ts-expect-error` line or a
  *   binding of the reader's own that spells the name is no read. Core
  *   and the SDK are held to the strict reading: a name only its own module
  *   uses should drop the `export` keyword, and so are the extensions package
@@ -3641,6 +3644,8 @@ const namespaceMembersIn = (
 interface SpecifierRead {
   readonly specifier: string
   readonly names: ReadonlyArray<string>
+  /** `export * from "<specifier>"`: every name read through this file is read through that module. */
+  readonly forwardsAll: boolean
 }
 
 /**
@@ -3659,11 +3664,17 @@ const specifierReadsIn = (text: string): ReadonlyArray<SpecifierRead> => {
     .filter((statement) => !skip.has(statement.line))
     .map((statement) => {
       const named = namedImportsIn(statement.clause)
-      if (statement.keyword === "export") return { specifier: statement.specifier, names: named }
+      if (statement.keyword === "export") {
+        return {
+          specifier: statement.specifier,
+          names: named,
+          forwardsAll: statement.clause.trim() === "*",
+        }
+      }
       const members = namespaceAliasesIn(statement.clause).flatMap((alias) =>
         namespaceMembersIn(codeLines, alias, skip),
       )
-      return { specifier: statement.specifier, names: [...named, ...members] }
+      return { specifier: statement.specifier, names: [...named, ...members], forwardsAll: false }
     })
 }
 
@@ -3678,28 +3689,49 @@ const importedThrough = (
       .flatMap((read) => read.names),
   )
 
-/** The last path segment of an import specifier, without its extension. */
-const lastSegment = (specifier: string): string => {
-  const trimmed = specifier.replace(/\.[cm]?[jt]sx?$/, "").replace(/\/+$/, "")
-  const slash = trimmed.lastIndexOf("/")
-  if (slash === -1) return trimmed
-  return trimmed.slice(slash + 1)
+/** A module's repo path without its extension: `packages/core/src/domain/event`. */
+const moduleKeyOf = (path: string): string =>
+  path.replace(/\.[cm]?[jt]sx?$/, "").replace(/\/+$/, "")
+
+/** `directory` joined with a relative path; `.` and `..` segments fold away. */
+const joinedPath = (directory: string, relative: string): string => {
+  const parts: Array<string> = []
+  for (const segment of `${directory}/${relative}`.split("/")) {
+    if (segment === "" || segment === ".") continue
+    if (segment === "..") {
+      parts.pop()
+      continue
+    }
+    parts.push(segment)
+  }
+  return parts.join("/")
+}
+
+const directoryOf = (file: string): string => file.slice(0, Math.max(file.lastIndexOf("/"), 0))
+
+/**
+ * The module a specifier names, as a key. A relative specifier resolves
+ * against the importing file's directory to a repo path; a package specifier
+ * stays as written, without `.js`, until the manifests resolve it.
+ */
+const specifierKey = (file: string, specifier: string): string => {
+  if (!specifier.startsWith(".")) return moduleKeyOf(specifier)
+  return moduleKeyOf(joinedPath(directoryOf(file), specifier))
 }
 
 /**
- * The names a file answers to as an import target: its own basename, plus, for
- * a directory index, that directory's name. `import { X } from "../theme"`
- * reaches `theme/index.ts`.
+ * The keys a file answers to as an import target: its repo path, plus, for a
+ * directory index, that directory. `import { X } from "../theme"` reaches
+ * `theme/index.ts`, and no other module named `theme`.
  */
 const importTargetsOf = (file: string): ReadonlyArray<string> => {
-  const base = lastSegment(file)
-  if (base !== "index") return [base]
-  const withoutFile = file.slice(0, file.lastIndexOf("/"))
-  return [base, lastSegment(withoutFile)]
+  const key = moduleKeyOf(file)
+  if (!key.endsWith("/index") && key !== "index") return [key]
+  return [key, directoryOf(key)]
 }
 
 /**
- * Names this file reads from a path, keyed by that path's last segment.
+ * Names this file reads from a module, keyed by the module's key.
  *
  * This is the only read a module surface counts. Whether the tree mentions `X`
  * in a string, a test title or a binding of its own says nothing: a file
@@ -3707,11 +3739,12 @@ const importTargetsOf = (file: string): ReadonlyArray<string> => {
  * off a namespace import of that module.
  */
 const importsByTarget = (
+  file: string,
   reads: ReadonlyArray<SpecifierRead>,
 ): ReadonlyMap<string, ReadonlySet<string>> => {
   const byTarget = new Map<string, Set<string>>()
   for (const read of reads) {
-    const key = lastSegment(read.specifier)
+    const key = specifierKey(file, read.specifier)
     const names = Option.getOrElse(Option.fromNullishOr(byTarget.get(key)), () => {
       const created = new Set<string>()
       byTarget.set(key, created)
@@ -3725,8 +3758,10 @@ const importsByTarget = (
 /** What one file contributes to the whole-tree answer. */
 export interface ExportFacts {
   readonly declarations: ReadonlyArray<Declaration>
-  /** Names read from a path, keyed by that path's last segment. */
+  /** Names read from a module, keyed by the module's key (a package specifier until resolved). */
   readonly importsByTarget: ReadonlyMap<string, ReadonlySet<string>>
+  /** The modules this file forwards whole with `export * from`. */
+  readonly forwards: ReadonlyArray<string>
   /** Identifiers per line with only code left; empty unless the file's surface reads its own references. */
   readonly identifiersByLine: ReadonlyArray<ReadonlySet<string>>
   /** Names read through each entry-point specifier. */
@@ -3770,7 +3805,10 @@ export const collectExportFacts = (file: string, text: string): ExportFacts => {
   return {
     declarations,
     identifiersByLine,
-    importsByTarget: importsByTarget(reads),
+    importsByTarget: importsByTarget(file, reads),
+    forwards: reads
+      .filter((read) => read.forwardsAll)
+      .map((read) => specifierKey(file, read.specifier)),
     imported: importsIn(file, reads),
   }
 }
@@ -3801,13 +3839,14 @@ const referencedInOwnFile = (facts: ExportFacts, name: string): boolean => {
  */
 const reads = (
   facts: ExportFacts,
+  byModule: ReadonlyMap<string, ReadonlySet<string>>,
   declaration: Declaration,
   targets: ReadonlyArray<string>,
 ): boolean =>
   Option.match(declaration.surface.specifier, {
     onNone: () =>
       targets.some((target) =>
-        Option.exists(Option.fromNullishOr(facts.importsByTarget.get(target)), (names) =>
+        Option.exists(Option.fromNullishOr(byModule.get(target)), (names) =>
           names.has(declaration.name),
         ),
       ),
@@ -3845,6 +3884,89 @@ const messageFor = (file: string, declaration: Declaration): string =>
   })
 
 /**
+ * The module key each package specifier names, from the manifests' `exports`:
+ * `@gent/extensions` is `packages/extensions/src/index`. A specifier no
+ * manifest exports keeps its own text, so it names no repo module.
+ */
+const moduleResolver = (manifests: ReadonlyMap<string, string>): ((key: string) => string) => {
+  const byPackageSpecifier = new Map<string, string>()
+  const decode = Schema.decodeUnknownOption(Schema.fromJsonString(PackageJsonSchema))
+  for (const [manifest, text] of manifests) {
+    const json = decode(text)
+    if (Option.isNone(json)) continue
+    const { name, exports } = json.value
+    if (Predicate.isUndefined(name) || Predicate.isUndefined(exports)) continue
+    for (const [subpath, target] of Object.entries(exports)) {
+      let specifier = name
+      if (subpath !== ".") specifier = `${name}/${subpath.replace(/^\.\//, "")}`
+      byPackageSpecifier.set(
+        moduleKeyOf(specifier),
+        moduleKeyOf(joinedPath(directoryOf(manifest), target)),
+      )
+    }
+  }
+  return (key) => Option.getOrElse(Option.fromNullishOr(byPackageSpecifier.get(key)), () => key)
+}
+
+/** One file's reads, re-keyed so a package specifier names the module it resolves to. */
+const resolvedReads = (
+  byTarget: ReadonlyMap<string, ReadonlySet<string>>,
+  resolve: (key: string) => string,
+): ReadonlyMap<string, ReadonlySet<string>> => {
+  const resolved = new Map<string, Set<string>>()
+  for (const [key, names] of byTarget) {
+    const module = resolve(key)
+    const merged = Option.getOrElse(Option.fromNullishOr(resolved.get(module)), () => {
+      const created = new Set<string>()
+      resolved.set(module, created)
+      return created
+    })
+    for (const name of names) merged.add(name)
+  }
+  return resolved
+}
+
+/** For each module, the import targets of the files that forward it whole with `export *`. */
+const forwardersByModule = (
+  factsByFile: ReadonlyMap<string, ExportFacts>,
+  resolve: (key: string) => string,
+): ReadonlyMap<string, ReadonlyArray<string>> => {
+  const forwarders = new Map<string, Array<string>>()
+  for (const [file, facts] of factsByFile) {
+    for (const forwarded of facts.forwards) {
+      const module = resolve(forwarded)
+      const list = Option.getOrElse(Option.fromNullishOr(forwarders.get(module)), () => {
+        const created: Array<string> = []
+        forwarders.set(module, created)
+        return created
+      })
+      list.push(...importTargetsOf(file))
+    }
+  }
+  return forwarders
+}
+
+/**
+ * A module's targets plus every barrel that forwards it, through any chain of
+ * `export *`: a name read through such a barrel is read from the module.
+ */
+const forwardedTargets = (
+  targets: ReadonlyArray<string>,
+  forwarders: ReadonlyMap<string, ReadonlyArray<string>>,
+): ReadonlyArray<string> => {
+  const reached = new Set(targets)
+  const pending = [...targets]
+  for (let next = pending.pop(); Predicate.isNotUndefined(next); next = pending.pop()) {
+    for (const barrel of forwarders.get(next) ?? []) {
+      if (reached.has(barrel)) continue
+      reached.add(barrel)
+      pending.push(barrel)
+    }
+  }
+  return [...reached]
+}
+
+/**
  * Report declared exports no file that may consume them reads.
  *
  * `factsByFile` is the whole tree's reads, so this is one pass over
@@ -3856,16 +3978,28 @@ const messageFor = (file: string, declaration: Declaration): string =>
  */
 export const findUnconsumedExports = (
   factsByFile: ReadonlyMap<string, ExportFacts>,
+  manifests: ReadonlyMap<string, string> = new Map(),
 ): ReadonlyArray<Finding> => {
+  const resolve = moduleResolver(manifests)
+  const byModuleOf = new Map<string, ReadonlyMap<string, ReadonlySet<string>>>()
+  for (const [file, facts] of factsByFile) {
+    byModuleOf.set(file, resolvedReads(facts.importsByTarget, resolve))
+  }
+  const forwarders = forwardersByModule(factsByFile, resolve)
+
   const isConsumed = (file: string, declaration: Declaration): boolean => {
-    const targets = importTargetsOf(file)
+    const targets = forwardedTargets(importTargetsOf(file), forwarders)
     for (const [candidate, facts] of factsByFile) {
       if (!mayConsume(candidate, declaration.surface)) continue
       if (!withinLeaf(candidate, declaration.surface)) continue
       // The file being measured never vouches for its own export; whether its
       // own references count at all is the `ownFileCounts` rule below.
       if (candidate === file && Option.isNone(declaration.surface.specifier)) continue
-      if (reads(facts, declaration, targets)) return true
+      const byModule = Option.getOrElse(Option.fromNullishOr(byModuleOf.get(candidate)), () => {
+        const none: ReadonlyMap<string, ReadonlySet<string>> = new Map()
+        return none
+      })
+      if (reads(facts, byModule, declaration, targets)) return true
     }
     if (!declaration.surface.ownFileCounts) return false
     return Option.exists(Option.fromNullishOr(factsByFile.get(file)), (facts) =>
