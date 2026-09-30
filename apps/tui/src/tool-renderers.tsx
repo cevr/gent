@@ -1149,7 +1149,8 @@ function WriteToolRenderer(props: ToolRendererProps) {
   const { theme } = useTheme()
 
   const data = createMemo(() => decodeToolOutput(WriteOutputSchema, props.toolCall.output))
-  const path = createMemo(() => data()?.path ?? "")
+  // The input names the file, so the header shows it while the write runs.
+  const path = createMemo(() => getPath(props.toolCall.input))
   const subtitleHref = () => {
     if (isAbsPath(path())) return fileUrl(path())
     return Option.getOrUndefined(Option.none<string>())
@@ -1437,13 +1438,8 @@ function ReadSessionToolRenderer(props: ToolRendererProps) {
     return value
   }
 
-  return (
-    <ToolFrame
-      title="read_session"
-      subtitle={subtitle()}
-      status={props.toolCall.status}
-      expanded={props.expanded}
-    >
+  const Status = () => (
+    <>
       <Show when={props.toolCall.status === "running"}>
         <text style={{ fg: theme.textMuted }}>
           <span style={{ fg: theme.warning }}>⋯</span> Loading session…
@@ -1455,8 +1451,22 @@ function ReadSessionToolRenderer(props: ToolRendererProps) {
           <span style={{ fg: theme.success }}>✓</span> {Option.getOrElse(summary(), () => "")}
         </text>
       </Show>
+    </>
+  )
 
-      <Show when={props.expanded && Option.getOrUndefined(content())}>
+  // The frame picks the body: the status line when closed, and the content
+  // under it when open, by the caller's flag or by a click on the header.
+  return (
+    <ToolFrame
+      title="read_session"
+      subtitle={subtitle()}
+      status={props.toolCall.status}
+      expanded={props.expanded}
+      collapsedContent={<Status />}
+    >
+      <Status />
+
+      <Show when={Option.getOrUndefined(content())}>
         <box paddingLeft={2}>
           <text style={{ fg: theme.textMuted }}>
             {Option.match(content(), { onNone: () => "", onSome: renderContent })}

@@ -2731,6 +2731,118 @@ describe("read_session row", () => {
       expect(frame).toContain("✓ 4 messages, 2 branches")
     }),
   )
+
+  // A cell draws each op as a collapsed sub-row. A click on the row's header
+  // opens it, and the open row shows what the read returned.
+  it.live("a read_session op opened by a click shows the session it read", () =>
+    Effect.gen(function* () {
+      const output = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.JsonObject))({
+        sessionId: "session-read-1234",
+        content: "READ-SESSION-TREE",
+        messageCount: 4,
+        branchCount: 2,
+      })
+      const cell: ToolCall = {
+        id: "call-cell-read",
+        toolName: "cell",
+        status: "completed",
+        input: { code: "await tools.read_session({sessionId: 'session-read-1234'})" },
+        summary: absent,
+        output: absent,
+        operations: [
+          {
+            id: "op-read-session",
+            toolName: "read_session",
+            status: "completed",
+            input: { sessionId: "session-read-1234" },
+            summary: "done",
+            output,
+          },
+        ],
+      }
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <MessageList
+              items={[assistantToolMessage("assistant-cell-read", cell)]}
+              disclosure="full"
+              syntaxStyle={syntaxStyle}
+              streaming={false}
+            />
+          ),
+          { width: 100, height: 40 },
+        ),
+      )
+      const closed = yield* waitForFrame(
+        setup,
+        (next) => next.includes("4 messages"),
+        "the collapsed read_session op",
+      )
+      expect(closed).toContain("✓ 4 messages, 2 branches")
+      expect(closed).not.toContain("READ-SESSION-TREE")
+      const rows = closed.split("\n")
+      const row = rows.findIndex((line) => line.includes("read_session") && line.includes("▸"))
+      expect(row).toBeGreaterThanOrEqual(0)
+      const column = (rows[row] ?? "").indexOf("read_session")
+      yield* Effect.promise(() => setup.mockMouse.click(column, row))
+      const open = yield* waitForFrame(
+        setup,
+        (next) => next.includes("READ-SESSION-TREE"),
+        "the opened read_session op",
+      )
+      expect(open).toContain("✓ 4 messages, 2 branches")
+      destroyRenderSetup(setup)
+    }),
+  )
+})
+
+describe("write row", () => {
+  // The path is the call's input, so the header names the file before the write lands.
+  it.live("a running write op names its file", () =>
+    Effect.gen(function* () {
+      const cell: ToolCall = {
+        id: "call-cell-write",
+        toolName: "cell",
+        status: "running",
+        input: { code: "await tools.write({path: '/workspace/src/fresh-file.ts'})" },
+        summary: absent,
+        output: absent,
+        operations: [
+          {
+            id: "op-write",
+            toolName: "write",
+            status: "running",
+            input: { path: "/workspace/src/fresh-file.ts", content: "export {}" },
+            summary: absent,
+            output: absent,
+          },
+        ],
+      }
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <MessageList
+              items={[assistantToolMessage("assistant-cell-write", cell)]}
+              disclosure="full"
+              syntaxStyle={syntaxStyle}
+              streaming={true}
+            />
+          ),
+          { width: 100, height: 40 },
+        ),
+      )
+      // The op's own header row, apart from the cell row that also names the file.
+      const opRow = (next: string) =>
+        next.split("\n").find((line) => line.includes("#op-write")) ?? ""
+      const frame = yield* waitForFrame(
+        setup,
+        (next) => opRow(next).includes("fresh-file.ts"),
+        "the running write op header",
+      )
+      expect(opRow(frame)).toContain("fresh-file.ts")
+      destroyRenderSetup(setup)
+    }),
+  )
 })
 
 // ── native transcript markdown ──────────────────────────────────────────────
