@@ -1,5 +1,17 @@
 import { test } from "bun:test"
-import { Clock, Effect, Layer, Option, Predicate, Ref, Result, Schema, Stream } from "effect"
+import {
+  Clock,
+  Duration,
+  Effect,
+  Layer,
+  Option,
+  Predicate,
+  Ref,
+  Result,
+  Schema,
+  Stream,
+} from "effect"
+import * as AiError from "effect/unstable/ai/AiError"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import {
   ActorCommandId,
@@ -48,13 +60,24 @@ import {
   estimateTextTokens,
 } from "../../src/runtime/model-context"
 import { describe, expect, it } from "effect-bun-test"
-import { AgentDefinition, AgentName, Model, ModelId, ProviderId } from "../../src/domain/agent"
+import {
+  AgentDefinition,
+  AgentName,
+  DEFAULT_AGENT_NAME,
+  Model,
+  ModelId,
+  ProviderId,
+} from "../../src/domain/agent"
+import { omitUndefined } from "../../src/domain/guards"
+import { defineExtension, defineResource, ExtensionHost, tool } from "../../src/extensions/api"
+import { rangeCompactorLayer } from "../helpers/test-preset"
 import {
   LanguageModelLayers,
   type SequenceStep,
   textStep,
+  waitFor,
 } from "../../src/test-utils/language-model"
-import { finishPart, ModelRegistry, textDeltaPart } from "../../src/runtime/provider"
+import { finishPart, ModelRegistry, textDeltaPart, toolCallPart } from "../../src/runtime/provider"
 import { SessionRuntime } from "../../src/runtime/session"
 import { getSessionSnapshot } from "../../src/server/server"
 import {
@@ -63,7 +86,7 @@ import {
   MessageStorage,
   SessionStorage,
 } from "../../src/storage/storage"
-import { baseLocalLayerWithProvider } from "../../src/test-utils/harness"
+import { baseLocalLayerWithProvider, createRpcHarness } from "../../src/test-utils/harness"
 import { type AgentEvent, EventEnvelope, EventId, EventStore } from "../../src/domain/event"
 import * as Response from "effect/unstable/ai/Response"
 
@@ -1085,6 +1108,374 @@ describe("provider overflow recovery", () => {
   )
 })
 
+// ── cold prompt cache ───────────────────────────────────────────────────────
+
+/** A 1M window whose provider keeps a prompt cached for `promptCacheTtlMs`, when it says. */
+const coldCacheModel = (promptCacheTtlMs: Option.Option<number>) =>
+  Model.make({
+    id: ModelId.make("cold-cache/wide-window"),
+    name: "Wide window, cached prompts",
+    provider: ProviderId.make("cold-cache"),
+    contextLength: 1_000_000,
+    ...omitUndefined({ promptCacheTtlMs: Option.getOrUndefined(promptCacheTtlMs) }),
+  })
+const FIRST_PROMPT_MARK = "first-prompt-text"
+
+const WAIT_TOOL = "wait"
+
+/** A `wait` tool, so a turn can take a second step. */
+const waitToolExtension = defineExtension({
+  id: "test-cold-cache-wait",
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register(
+      "tool",
+      tool({
+        id: WAIT_TOOL,
+        description: "Returns once the wait is over.",
+        params: Schema.Struct({}),
+        output: Schema.String,
+        execute: () => Effect.succeed("done"),
+      }),
+    )
+  }),
+})
+
+const rangeCompactorExtension = defineExtension({
+  id: "test-cold-cache-compactor",
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register(
+      "resource",
+      defineResource({
+        id: "test-cold-cache-compactor/compactor",
+        scope: "process",
+        layer: rangeCompactorLayer,
+      }),
+    )
+  }),
+})
+
+/** A reply whose provider reports `inputTokens` for the request that asked for it. */
+const measuredReply = (text: string, inputTokens: number): SequenceStep => ({
+  parts: [
+    textDeltaPart(text),
+    finishPart({ finishReason: "stop", usage: { inputTokens, outputTokens: 10 } }),
+  ],
+})
+
+/**
+ * Two turns through the RPC surface. The first reply reports a request of
+ * `firstInputTokens`, so the second turn counts the window at that size. A
+ * cache lifetime of zero makes the first call's cache lapse before the
+ * second turn starts; one hour keeps it warm. With `firstReplyHoldMs`, the
+ * first reply streams only after that long, so its response runs that long
+ * after its request started. With `firstCallRateLimitedMs`, the first call
+ * is refused with that retry delay and the retry streams the first reply.
+ * With `switchModel`, the session moves to another model with the same
+ * lifetime before the second turn.
+ */
+const runColdCacheTurns = (params: {
+  readonly promptCacheTtlMs: Option.Option<number>
+  readonly firstInputTokens: number
+  readonly compactor: boolean
+  readonly steps: ReadonlyArray<SequenceStep>
+  readonly firstReplyHoldMs?: number
+  readonly firstCallRateLimitedMs?: number
+  readonly switchModel?: boolean
+}) =>
+  Effect.gen(function* () {
+    const hold = Option.fromUndefinedOr(params.firstReplyHoldMs)
+    const rateLimit = Option.fromUndefinedOr(params.firstCallRateLimitedMs)
+    const requests: Array<string> = []
+    const replies = [
+      {
+        ...measuredReply("first reply", params.firstInputTokens),
+        gated: Option.isSome(hold),
+      },
+      ...params.steps,
+    ]
+    const { layer: sequenceLayer, controls } = yield* LanguageModelLayers.sequence(
+      replies.map((step) => ({
+        ...step,
+        assertOptions: (options) => {
+          requests.push(encodeJson(options.prompt.content))
+        },
+      })),
+    )
+    // The rate-limited provider refuses its first call, then plays the replies in order.
+    const played = yield* Ref.make(0)
+    const rateLimitedLayer = (retryAfterMs: number) =>
+      LanguageModelLayers.testStream((options) =>
+        Effect.gen(function* () {
+          const index = yield* Ref.getAndUpdate(played, (count) => count + 1)
+          if (index === 0) {
+            return Stream.fail(
+              AiError.make({
+                module: "Test",
+                method: "streamText",
+                reason: new AiError.RateLimitError({ retryAfter: Duration.millis(retryAfterMs) }),
+              }),
+            )
+          }
+          requests.push(encodeJson(options.prompt.content))
+          return Stream.fromIterable(
+            Option.match(Option.fromUndefinedOr(replies[index - 1]), {
+              onNone: () => [],
+              onSome: (step) => step.parts,
+            }),
+          )
+        }),
+      )
+    const providerLayer = Option.match(rateLimit, {
+      onNone: () => sequenceLayer,
+      onSome: rateLimitedLayer,
+    })
+    const calls = Option.match(rateLimit, {
+      onNone: () => controls.callCount,
+      onSome: () => Ref.get(played),
+    })
+    const compactor = [rangeCompactorExtension].filter(() => params.compactor)
+    const model = coldCacheModel(params.promptCacheTtlMs)
+    const otherModel = Model.make({ ...model, id: ModelId.make("cold-cache/other-window") })
+    const { client, sessionId, branchId } = yield* createRpcHarness({
+      providerLayer,
+      agents: [AgentDefinition.make({ name: DEFAULT_AGENT_NAME, model: model.id })],
+      extensionInputs: [waitToolExtension, ...compactor],
+      extraLayers: [ModelRegistry.Test([model, otherModel])],
+    })
+    for (const content of [`${FIRST_PROMPT_MARK} one`, "second prompt"]) {
+      if (content === "second prompt" && params.switchModel === true) {
+        yield* client.session.updateSettings({
+          sessionId,
+          modelId: Option.some(otherModel.id),
+          reasoningLevel: Option.none(),
+        })
+      }
+      yield* client.message.send({ sessionId, branchId, content })
+      if (content !== "second prompt" && Option.isSome(hold)) {
+        const holdMs = hold.value
+        yield* controls.waitForCall(0)
+        const requestedAt = yield* Clock.currentTimeMillis
+        yield* waitFor(
+          Clock.currentTimeMillis,
+          (now) => now - requestedAt >= holdMs,
+          holdMs + 1_000,
+          "the first response ran its length",
+        )
+        yield* controls.emitAll(0)
+      }
+      yield* waitFor(
+        client.session.getSnapshot({ sessionId, branchId }),
+        (snapshot) =>
+          snapshot.runtime._tag === "Idle" &&
+          snapshot.messages.some(
+            (message) =>
+              message.role === "user" &&
+              message.parts.some((part) => part.type === "text" && part.text === content),
+          ) &&
+          snapshot.messages.at(-1)?.role === "assistant",
+        5_000,
+        "the turn settled",
+      )
+    }
+    const events = yield* client.session.events({ sessionId, branchId }).pipe(
+      Stream.takeUntil(({ event }) => event._tag === "StreamSynchronized"),
+      Stream.map(({ event }) => event),
+      Stream.runCollect,
+      Effect.map((all) => Array.from(all)),
+    )
+    const durable = events.flatMap((event) => {
+      if (event._tag !== "MessageReceived") return []
+      return [event.message]
+    })
+    return { events, durable, requests, calls: yield* calls }
+  }).pipe(Effect.scoped, Effect.timeout("8 seconds"))
+
+const handoffMarkers = (durable: ReadonlyArray<Message>) =>
+  durable.filter((message) =>
+    Option.exists(windowDetails(message), (details) =>
+      Predicate.isNotUndefined(details.summarized),
+    ),
+  )
+
+const secondProjection = (events: ReadonlyArray<AgentEvent>) =>
+  events.filter((event) => event._tag === "ModelContextProjected").at(1)
+
+describe("cold prompt cache", () => {
+  it.live("a large window whose prompt cache lapsed hands off before the turn's first call", () =>
+    Effect.gen(function* () {
+      const result = yield* runColdCacheTurns({
+        promptCacheTtlMs: Option.some(0),
+        firstInputTokens: 100_000,
+        compactor: true,
+        steps: [textStep("the summary of the first turn"), textStep("second reply")],
+      })
+
+      // First reply, the summary call, then the second turn's call.
+      expect(result.calls).toBe(3)
+      expect(result.requests[1]).toContain("summarize")
+      expect(result.requests[2]).not.toContain(FIRST_PROMPT_MARK)
+      expect(result.requests[2]).toContain("the summary of the first turn")
+      expect(handoffMarkers(result.durable)).toHaveLength(1)
+      const projected = secondProjection(result.events)
+      expect(projected?._tag === "ModelContextProjected" && projected.compacted).toBe(true)
+      expect(projected?._tag === "ModelContextProjected" && projected.estimatedTokens).toBeLessThan(
+        2_000,
+      )
+    }),
+  )
+
+  it.live("a large window whose prompt cache is still warm is sent whole", () =>
+    Effect.gen(function* () {
+      const result = yield* runColdCacheTurns({
+        promptCacheTtlMs: Option.some(60 * 60_000),
+        firstInputTokens: 100_000,
+        compactor: true,
+        steps: [textStep("second reply")],
+      })
+
+      expect(result.calls).toBe(2)
+      expect(result.requests[1]).toContain(FIRST_PROMPT_MARK)
+      expect(handoffMarkers(result.durable)).toHaveLength(0)
+      const projected = secondProjection(result.events)
+      expect(projected?._tag === "ModelContextProjected" && projected.compacted).toBe(false)
+    }),
+  )
+
+  it.live(
+    "a response that ran out the cache lifetime makes the next turn cold, however short the idle after it",
+    () =>
+      Effect.gen(function* () {
+        // The provider refreshes its cache when a request starts: the first
+        // request started 1.5s before the second turn, the lifetime is 1s.
+        const result = yield* runColdCacheTurns({
+          promptCacheTtlMs: Option.some(1_000),
+          firstInputTokens: 100_000,
+          compactor: true,
+          steps: [textStep("the summary of the first turn"), textStep("second reply")],
+          firstReplyHoldMs: 1_500,
+        })
+
+        expect(result.calls).toBe(3)
+        expect(result.requests[1]).toContain("summarize")
+        expect(handoffMarkers(result.durable)).toHaveLength(1)
+      }),
+  )
+
+  it.live("a turn on another model than the last request never hands off for a cold cache", () =>
+    Effect.gen(function* () {
+      // The last request's cache belongs to the model that wrote it; a switch
+      // reads no cache either way, and a handoff there would surprise.
+      const result = yield* runColdCacheTurns({
+        promptCacheTtlMs: Option.some(0),
+        firstInputTokens: 100_000,
+        compactor: true,
+        steps: [textStep("second reply"), textStep("spare reply")],
+        switchModel: true,
+      })
+
+      expect(result.calls).toBe(2)
+      expect(result.requests[1]).toContain(FIRST_PROMPT_MARK)
+      expect(handoffMarkers(result.durable)).toHaveLength(0)
+    }),
+  )
+
+  it.live("a retried request restarts the cache lifetime at the retry", () =>
+    Effect.gen(function* () {
+      // The first attempt is refused and retried 1.5s later; the retry is the
+      // request that refreshed the cache, so a 1s lifetime is still warm.
+      const result = yield* runColdCacheTurns({
+        promptCacheTtlMs: Option.some(1_000),
+        firstInputTokens: 100_000,
+        compactor: true,
+        steps: [textStep("second reply"), textStep("spare reply")],
+        firstCallRateLimitedMs: 1_500,
+      })
+
+      // The refused attempt, the retry, then the second turn's call.
+      expect(result.calls).toBe(3)
+      expect(result.requests[1]).toContain(FIRST_PROMPT_MARK)
+      expect(handoffMarkers(result.durable)).toHaveLength(0)
+    }),
+  )
+
+  it.live("a small window whose prompt cache lapsed is sent whole", () =>
+    Effect.gen(function* () {
+      const result = yield* runColdCacheTurns({
+        promptCacheTtlMs: Option.some(0),
+        firstInputTokens: 1_000,
+        compactor: true,
+        steps: [textStep("second reply")],
+      })
+
+      expect(result.calls).toBe(2)
+      expect(result.requests[1]).toContain(FIRST_PROMPT_MARK)
+      expect(handoffMarkers(result.durable)).toHaveLength(0)
+    }),
+  )
+
+  it.live("a model whose catalog names no cache lifetime never hands off for a cold start", () =>
+    Effect.gen(function* () {
+      const result = yield* runColdCacheTurns({
+        promptCacheTtlMs: Option.none(),
+        firstInputTokens: 100_000,
+        compactor: true,
+        steps: [textStep("second reply")],
+      })
+
+      expect(result.calls).toBe(2)
+      expect(result.requests[1]).toContain(FIRST_PROMPT_MARK)
+      expect(handoffMarkers(result.durable)).toHaveLength(0)
+    }),
+  )
+
+  it.live("a prompt cache that lapses inside a turn does not hand off before its next step", () =>
+    Effect.gen(function* () {
+      const result = yield* runColdCacheTurns({
+        promptCacheTtlMs: Option.some(0),
+        firstInputTokens: 1_000,
+        compactor: true,
+        steps: [
+          {
+            parts: [
+              toolCallPart(WAIT_TOOL, {}),
+              finishPart({
+                finishReason: "tool-calls",
+                usage: { inputTokens: 100_000, outputTokens: 10 },
+              }),
+            ],
+          },
+          textStep("second reply"),
+        ],
+      })
+
+      // The second turn's second step counts a large window past the lifetime,
+      // yet only a turn's first call hands off for a cold cache.
+      expect(result.calls).toBe(3)
+      expect(result.requests[2]).toContain(FIRST_PROMPT_MARK)
+      expect(handoffMarkers(result.durable)).toHaveLength(0)
+    }),
+  )
+
+  it.live("with no compactor a cold start keeps the whole history", () =>
+    Effect.gen(function* () {
+      const result = yield* runColdCacheTurns({
+        promptCacheTtlMs: Option.some(0),
+        firstInputTokens: 100_000,
+        compactor: false,
+        steps: [textStep("second reply")],
+      })
+
+      expect(result.calls).toBe(2)
+      expect(result.requests[1]).toContain(FIRST_PROMPT_MARK)
+      expect(result.durable.filter((message) => Option.isSome(windowDetails(message)))).toEqual([])
+      const projected = secondProjection(result.events)
+      expect(projected?._tag === "ModelContextProjected" && projected.compacted).toBe(false)
+    }),
+  )
+})
+
 // ── model context ledger ────────────────────────────────────────────────────
 
 describe("model context ledger", () => {
@@ -1597,6 +1988,8 @@ describe("turn window projection", () => {
         directive: Option.none(),
         measure: Option.none(),
         overflowed: false,
+        turnStart: false,
+        promptCache: Option.none(),
         persist: (message) => {
           persisted.push(message)
           return Effect.succeed(message)
@@ -1688,6 +2081,8 @@ describe("turn window projection", () => {
             directive: Option.some(ContextDirective.cases.Compact.make({})),
             measure: Option.none(),
             overflowed: false,
+            turnStart: false,
+            promptCache: Option.none(),
             persist: (message) => Effect.succeed(message),
             summaryModel,
           }).pipe(Effect.provide(Layer.mergeAll(compactor, publisher.layer)))
@@ -1765,6 +2160,8 @@ describe("turn window projection", () => {
         directive: Option.none(),
         measure: Option.none(),
         overflowed: false,
+        turnStart: false,
+        promptCache: Option.none(),
         persist: (message) => {
           persisted.push(message)
           return Effect.succeed(message)

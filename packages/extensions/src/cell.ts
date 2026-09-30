@@ -28,6 +28,7 @@ import {
   ExtensionId,
   getToolId,
   getToolPrompt,
+  headTailChars,
   InteractionPendingError,
   isSpawnedSession,
   type Message,
@@ -100,6 +101,7 @@ import {
   makeCellFrameReader,
   makeCellOutputScanner,
   maximumCallsPerCell,
+  maximumCellReplyBytes,
   maximumCellDisplayHeadLength,
   maximumCellDisplayLength,
   maximumCellSourceLength,
@@ -1056,6 +1058,11 @@ export class CellOperationHost extends Context.Service<
   {
     /** Selected host tools for the `tools` namespace. Absent leaves the worker's catalog unchanged. */
     readonly catalog?: CellCatalog
+    /**
+     * Answer one host call. The value and a failure's message each fit
+     * `maximumCellReplyBytes` as JSON: the reply crosses to the worker in one
+     * frame, and a frame past the cap ends the worker.
+     */
     readonly call: (
       request: Extract<CellResponse, { _tag: "HostCall" }>,
     ) => Effect.Effect<Schema.Json, CellEvaluationError>
@@ -1892,34 +1899,76 @@ export const executeBoundCellTool = Effect.fn("CellToolCall.executeBound")(funct
     )
 })
 
+const utf8Bytes = (text: string) => new TextEncoder().encode(text).byteLength
+
+/** The call that pages an inner tool call's stored result from the cell. */
+const readPointer = (toolCallId: string) => `context.read("${toolCallId}", { offset, limit })`
+
+/** A reply fits when its JSON, the bytes the frame carries, fits `maximumCellReplyBytes`. */
+const fitsFrame = (reply: Schema.Json) => utf8Bytes(encodeJson(reply)) <= maximumCellReplyBytes
+
+/**
+ * The one bound for every host reply, success value and failure message
+ * alike: `reply` when it fits the frame, or else the largest reply `cut`
+ * builds from a head and tail of at most `chars` characters that fits. It
+ * starts at one `context.read` page and halves: JSON escapes can make one
+ * character take six bytes.
+ */
+const boundReply = <A extends Schema.Json>(reply: A, cut: (chars: number) => A): A => {
+  if (fitsFrame(reply)) return reply
+  const fit = (chars: number): A => {
+    const shorter = cut(chars)
+    if (chars === 0 || fitsFrame(shorter)) return shorter
+    return fit(Math.floor(chars / 2))
+  }
+  return fit(MAXIMUM_READ_CHARS)
+}
+
+/**
+ * The value a host tool reply carries to the worker. The reply crosses the
+ * pipe in one frame, so a result whose JSON passes `maximumCellReplyBytes`
+ * crosses bounded: its JSON text's head and tail, its size, and a `read`
+ * pointer, the shape the model sees for a large result. A failure message
+ * whose JSON passes the bound is cut the same way and names the pointer. The
+ * full result stays stored under the inner tool call id, where
+ * `context.read` pages it.
+ */
 export const cellToolResultValue = Effect.fn("CellToolCall.resultValue")(function* (
   result: Prompt.ToolResultPart,
 ) {
-  const value = yield* Schema.encodeEffect(UnknownText)(result.result).pipe(
-    Effect.flatMap(Schema.decodeEffect(JsonText)),
-    Effect.mapError(
-      (cause) =>
-        new CellEvaluationError({
-          phase: "execute",
-          message: `Tool result is not JSON: ${String(cause)}`,
-          output: "",
-        }),
-    ),
-  )
-  if (result.isFailure) {
-    const message = yield* Option.match(decodeErrorOnly(value), {
-      onSome: ({ error }) => Effect.succeed(error),
-      onNone: () =>
-        Schema.encodeEffect(JsonText)(value).pipe(
-          Effect.mapError(
-            (cause) =>
-              new CellEvaluationError({ phase: "execute", message: String(cause), output: "" }),
-          ),
-        ),
+  const notJson = (cause: unknown) =>
+    new CellEvaluationError({
+      phase: "execute",
+      message: `Tool result is not JSON: ${String(cause)}`,
+      output: "",
     })
-    return yield* new CellEvaluationError({ phase: "execute", message, output: "" })
+  const text = yield* Schema.encodeEffect(UnknownText)(result.result).pipe(Effect.mapError(notJson))
+  const value = yield* Schema.decodeEffect(JsonText)(text).pipe(Effect.mapError(notJson))
+  if (!result.isFailure) {
+    return boundReply(value, (chars): Schema.Json => {
+      const cut = headTailChars(text, chars)
+      return {
+        truncated: true,
+        totalChars: text.length,
+        read: readPointer(result.id),
+        omittedChars: cut.omittedChars,
+        text: cut.text,
+      }
+    })
   }
-  return value
+  const message = Option.match(decodeErrorOnly(value), {
+    onSome: ({ error }) => error,
+    onNone: () => text,
+  })
+  return yield* new CellEvaluationError({
+    phase: "execute",
+    message: boundReply(
+      message,
+      (chars) =>
+        `${headTailChars(message, chars).text}\n\nThe failure is ${message.length} characters; ${readPointer(result.id)} pages the stored result.`,
+    ),
+    output: "",
+  })
 })
 
 /** A failure that is only `{ error }` throws that text; any other value throws as JSON. */
@@ -2467,6 +2516,13 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
               Effect.gen(function* () {
                 yield* prepare(current, admission.reset === true)
                 const value = yield* current.evaluate(admission.code)
+                // A worker that named a built-in it cannot put back is gone,
+                // and its note already says the next cell restores the
+                // namespace saved before this one: nothing is left to save.
+                if (current.isLost()) {
+                  recoveryPending = true
+                  return evaluated(value)
+                }
                 const lost = yield* saveNamespace(current)
                 return evaluated(withNote(value, lost))
               }),
@@ -2621,7 +2677,7 @@ export const CellTool = tool({
     "Call a host tool through its id path: await tools.read({ path }), await tools.delegate.start({ todo }). Run independent calls concurrently with Promise.all; chain dependent calls with sequential awaits.",
     "The cell is a full Bun process in the working directory with your user's privileges; nothing is sandboxed. Bun (Bun.file, Bun.write, Bun.$, Bun.spawn), bun:sqlite, fetch, process (cwd, env), node builtins through await import('node:fs/promises') or require('node:path'), and packages resolved from the working directory are all available. Use it directly to read, search, parse, and transform data.",
     "Network reads are plain fetch in the cell; parse HTML or JSON there. Past sessions live in data.db under process.env.GENT_DATA_DIR, else ~/.gent (bun:sqlite; tables sessions, messages, message_chunks, content_chunks, events), so search them with SQL instead of a host tool.",
-    "Shell that changes state (git, installs, deletes, network writes) goes through tools.bash({ command }): it adds the session trailer to each commit. Bun.$ and Bun.spawn are for short reads: queries, parsers, quick checks. Use host tools for work that needs permissions, durable records, and child agents.",
+    "Shell that changes state (git, installs, deletes, network writes) goes through tools.bash({ command }), so the command and its output stay in the session record. Bun.$ and Bun.spawn are for short reads: queries, parsers, quick checks. Use host tools for work that needs permissions, durable records, and child agents.",
     `A cell gets ${CELL_COMPUTE_DEADLINE_MS / 1000} seconds of its own compute; past that the worker is killed and bindings not yet saved are lost. An awaited host call stops that clock, so run builds, test suites, and other long commands through tools.bash({ command, timeout }) (timeout up to 600000 ms) and parse its stdout and stderr in the cell.`,
     "console output, process.stdout and process.stderr writes, and inherited output of spawned processes return with the cell result, before the value of the last expression. Output a spawned process writes after the cell ends is lost, so await the processes you start.",
     "The value of the last expression is the cell result; an undefined value shows nothing. Top-level await works; a top-level return does not.",

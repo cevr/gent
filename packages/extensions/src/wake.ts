@@ -31,7 +31,7 @@ import {
   tool,
 } from "@gent/core/extensions/api"
 import { makeBranchStateStore } from "./branch-state-store.js"
-import { runBashCommand } from "./exec-tools.js"
+import { runBashCommand, wholeCommandOutputText } from "./exec-tools.js"
 
 // Test seam: only tests read these exports. WakeAlarms and
 // WakeAlarmsLive let a test hold and cancel timers; rearmPendingAlarms runs the
@@ -422,10 +422,13 @@ const alarmWork = (
 
 const matches = (
   entry: Extract<WakeEntry, { readonly _tag: "monitor" }>,
-  result: { readonly exitCode: number; readonly stdout: string },
+  result: { readonly exitCode: number; readonly stdoutPieces: ReadonlyArray<string> },
 ): boolean => {
   if (Predicate.isUndefined(entry.until)) return result.exitCode === 0
-  return new RegExp(entry.until).test(result.stdout)
+  // The data, never the display: a cut display holds a marker `until` could
+  // match, and a match must not span the gap between the head and the tail.
+  const until = new RegExp(entry.until)
+  return result.stdoutPieces.some((piece) => until.test(piece))
 }
 
 const monitorWork = (
@@ -449,7 +452,11 @@ const monitorWork = (
       const budget = Math.max(0, entry.deadline - (yield* Clock.currentTimeMillis))
       // A check cut at the deadline is its own outcome: its empty output must
       // never be tested against `until` (".*" would match it).
-      const result = yield* Effect.scoped(runBashCommand(entry.command, Option.some(cwd))).pipe(
+      // A check keeps no file: only its verdict and its output's tail reach
+      // a message, and each stream's middle past the ends never reaches memory.
+      const result = yield* Effect.scoped(
+        runBashCommand(entry.command, Option.some(cwd), Option.none()),
+      ).pipe(
         Effect.map((ran) => ({ ...ran, cut: false })),
         Effect.timeoutOrElse({
           duration: Duration.millis(budget),
@@ -457,12 +464,19 @@ const monitorWork = (
             Effect.succeed({
               exitCode: 1,
               stdout: "",
+              stdoutPieces: [],
               stderr: "check still running at deadline",
               cut: true,
             }),
         }),
         Effect.catch((error) =>
-          Effect.succeed({ exitCode: 1, stdout: "", stderr: error.message, cut: false }),
+          Effect.succeed({
+            exitCode: 1,
+            stdout: "",
+            stdoutPieces: [],
+            stderr: error.message,
+            cut: false,
+          }),
         ),
       )
       lastOutput = [result.stdout, result.stderr].filter((text) => text.length > 0).join("\n")
@@ -728,7 +742,7 @@ const MonitorParams = Schema.Struct({
   ),
   until: Schema.optionalKey(
     Schema.String.annotate({
-      description: "Regular expression; when it matches the command's stdout the monitor is done.",
+      description: `Regular expression; when it matches the command's stdout the monitor is done. A stdout past ${wholeCommandOutputText} characters is matched on its head and on its tail, each apart.`,
     }),
   ),
   timeoutSeconds: Schema.optionalKey(

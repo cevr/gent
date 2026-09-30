@@ -637,7 +637,7 @@ export const effortAtOrAbove = <Level extends string>(
  * Core resolves a model through the driver seam and concatenates every
  * driver's `listModels`. Where a driver's list comes from is the driver's
  * concern, so the fetch, the parse, and the disk cache live here — shared by
- * the anthropic, openai, and api-key-compat drivers.
+ * the anthropic and openai drivers.
  *
  * One load per home directory. `Effect.cached` memoizes it, so several drivers
  * listing at once share one read and at most one fetch. There is no background
@@ -941,11 +941,19 @@ export const catalogSource = Effect.fn("ModelsDev.catalogSource")(function* (hom
 
 /**
  * A driver's `listModels`: its own models.dev entries, with the platform
- * services and the HTTP client provided from what setup captured.
+ * services and the HTTP client provided from what setup captured. Each entry
+ * carries `promptCacheTtl`, how long the driver's provider keeps a request's
+ * prompt cached; models.dev does not say.
  */
 export const driverListModels =
-  (source: CatalogSource, providerId: string) => (): Effect.Effect<ReadonlyArray<Model>> =>
+  (source: CatalogSource, providerId: string, promptCacheTtl: Duration.Duration) =>
+  (): Effect.Effect<ReadonlyArray<Model>> =>
     driverCatalog(source.home, providerId).pipe(
+      Effect.map((models) =>
+        models.map((model) =>
+          Model.make({ ...model, promptCacheTtlMs: Duration.toMillis(promptCacheTtl) }),
+        ),
+      ),
       // @effect-diagnostics-next-line strictEffectProvide:off The catalog owns its own HTTP client at the driver boundary; it outlives no scope.
       Effect.provide(FetchHttpClient.layer),
       Effect.provideContext(source.platform),
