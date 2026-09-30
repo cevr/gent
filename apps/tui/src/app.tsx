@@ -39,7 +39,7 @@ import {
   reasoningRows,
   SettingsPicker,
 } from "./pickers"
-import { useEnv, useWorkspace } from "./workspace"
+import { useWorkspace } from "./workspace"
 import {
   type StatusRowLabel,
   buildContextLabels,
@@ -48,11 +48,11 @@ import {
   formatCwdGit,
   overlayHoldsComposer,
   SessionControllerContext,
+  useExit,
 } from "./session"
 import { useExtensionUI } from "./extensions/host"
 import { Auth } from "./auth"
 import type { StatusLabelColor, WidgetSlot } from "./extensions/client-facets.js"
-import { useRenderer } from "@opentui/solid"
 
 // ── boot flow ───────────────────────────────────────────────────────────────
 
@@ -876,8 +876,7 @@ const decodeError = Schema.decodeUnknownOption(Schema.instanceOf(Error))
  * message.
  */
 function FatalScreen(props: { readonly error: unknown }) {
-  const renderer = useRenderer()
-  const env = useEnv()
+  const exit = useExit()
   const client = useClient()
   const cause = decodeError(props.error)
   const message = Option.match(cause, {
@@ -893,8 +892,8 @@ function FatalScreen(props: { readonly error: unknown }) {
   })
   useScopedKeyboard((event) => {
     if (event.ctrl !== true || (event.name !== "c" && event.name !== "d")) return false
-    renderer.destroy()
-    env.shutdown()
+    // A crash is when the reader most needs the session id: exit prints it.
+    exit()
     return true
   })
   return (

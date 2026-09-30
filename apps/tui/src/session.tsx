@@ -2688,6 +2688,30 @@ const ARMED_CUE = {
   interrupt: "ctrl+c again to exit",
 } satisfies Record<ArmedKey, string>
 
+/**
+ * The one way gent leaves: the session view's exit and the fatal screen's.
+ * The session id is the only way back into this conversation, and it is
+ * about to leave the screen. It is printed after the renderer is destroyed,
+ * so it lands in the terminal the reader keeps, not in the alternate screen.
+ * An in-memory store ends with the process, so it has nothing to resume.
+ */
+export const useExit = () => {
+  const client = useClient()
+  const renderer = useRenderer()
+  const env = useEnv()
+  return () => {
+    const leaving = client.sessionIdentity().pipe(Option.filter(() => env.resumable))
+    shutdownLog("exit.renderer-destroy")
+    renderer.destroy()
+    Option.match(leaving, {
+      onNone: () => {},
+      onSome: (session) => env.writeTerminal(`\nto resume: gent resume ${session.sessionId}\n`),
+    })
+    shutdownLog("exit.shutdown-signal")
+    env.shutdown()
+  }
+}
+
 export function createSessionController(props: {
   sessionId: SessionId
   branchId: BranchId
@@ -2705,23 +2729,7 @@ export function createSessionController(props: {
   const refusals = useComposerRefusals()
   const { takePrompt } = useComposerMemory()
   const { cast } = useRuntime()
-  const renderer = useRenderer()
-  const env = useEnv()
-  const exit = () => {
-    // The session id is the only way back into this conversation, and it is
-    // about to leave the screen. Printed after the renderer is destroyed so it
-    // lands in the terminal the reader keeps, not in the alternate screen.
-    // An in-memory store ends with the process, so it has nothing to resume.
-    const leaving = client.session().pipe(Option.filter(() => env.resumable))
-    shutdownLog("exit.renderer-destroy")
-    renderer.destroy()
-    Option.match(leaving, {
-      onNone: () => {},
-      onSome: (session) => env.writeTerminal(`\nto resume: gent resume ${session.sessionId}\n`),
-    })
-    shutdownLog("exit.shutdown-signal")
-    env.shutdown()
-  }
+  const exit = useExit()
   // ── exit and cancel ladder: the armed key ──
   //
   // A destructive second press is armed by the first, and the status row says

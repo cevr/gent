@@ -1417,8 +1417,9 @@ describe("App auth gate", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
   // A render throw replaces the whole view. The screen it leaves names a way
-  // out, ctrl+c takes it, and the client log keeps the error.
-  it.live("the fatal screen logs the error and exits on ctrl+c", () =>
+  // out, ctrl+c takes it and prints the way back, and the client log keeps
+  // the error.
+  it.live("the fatal screen logs the error and exits on ctrl+c with the resume hint", () =>
     Effect.gen(function* () {
       const [broken, setBroken] = createSignal(false)
       // A widget whose render throws once `broken` turns true: its decode fails.
@@ -1438,6 +1439,7 @@ describe("App auth gate", () => {
       })
       const logged: Array<string> = []
       const record = (msg: string) => logged.push(msg)
+      const written: Array<string> = []
       let shutdowns = 0
       const setup = yield* Effect.promise(() =>
         renderWithProviders(() => <App />, {
@@ -1447,6 +1449,7 @@ describe("App auth gate", () => {
           }),
           builtins: [...builtinClientModules, extension],
           log: { debug: () => {}, info: () => {}, warn: () => {}, error: record },
+          writeTerminal: (text) => written.push(text),
           initialSession: {
             id: SessionId.make("session-fatal"),
             activeBranchId: BranchId.make("branch-fatal"),
@@ -1472,6 +1475,7 @@ describe("App auth gate", () => {
       expect(logged).toContain("app.fatal")
       setup.mockInput.pressKey("c", { ctrl: true })
       yield* waitForFrame(setup, () => shutdowns === 1, "exit")
+      expect(written).toEqual(["\nto resume: gent resume session-fatal\n"])
       unmount()
     }).pipe(Effect.timeout("10 seconds")),
   )
