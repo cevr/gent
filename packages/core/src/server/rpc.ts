@@ -84,7 +84,7 @@ export type GentRpcError = typeof GentRpcError.Type
 
 // ── rpc payloads ────────────────────────────────────────────────────────────
 
-export { Branch, BranchTreeNode, Session }
+export { BranchTreeNode }
 
 export const CreateSessionInput = Schema.Struct({
   name: Schema.optional(Schema.String),
@@ -274,9 +274,7 @@ export const CallbackAuthInput = Schema.Struct({
 })
 export type CallbackAuthInput = typeof CallbackAuthInput.Type
 
-export { AuthProviderInfo, ListAuthProvidersPayload }
-export { EventEnvelope }
-export { QueueSnapshot }
+export { ListAuthProvidersPayload }
 
 /** Input shape for public extension RPC dispatch.
  *  `extensionId` + `capabilityId` route to the registered request;
