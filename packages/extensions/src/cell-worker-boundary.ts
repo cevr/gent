@@ -112,27 +112,140 @@ interface ToolCatalogView {
   readonly call: (id: string, input: unknown) => Promise<Schema.Json>
 }
 
-/**
- * `tools.search(query)`: the ids whose id or description holds a query word,
- * most words matched first, then by id. An empty query lists every id.
- */
-const searchCatalog = (entries: ReadonlyArray<CellCatalogEntry>, query: string) => {
-  const words = query
+/** Words of `text`: camelCase and `_ . / : -` split, lower-cased. */
+const searchText = (text: string) =>
+  text
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[^A-Za-z0-9]+/g, " ")
     .toLowerCase()
-    .split(/[^a-z0-9_]+/)
+    .trim()
+
+const searchTokens = (text: string) =>
+  searchText(text)
+    .split(" ")
     .filter((word) => word !== "")
-  return entries
-    .values()
-    .map((entry) => {
-      const text = `${entry.name} ${entry.description}`.toLowerCase()
-      return { entry, score: words.filter((word) => text.includes(word)).length }
+
+/** Each field a query is matched in, by weight: the id, its last segment, its namespace, the description. */
+const searchFields = (entry: CellCatalogEntry) => {
+  const segments = entry.name.split(".")
+  return [
+    { text: entry.name, weight: 12 },
+    { text: segments.at(-1) ?? "", weight: 10 },
+    { text: segments.slice(0, -1).join("."), weight: 8 },
+    { text: entry.description, weight: 5 },
+  ].map((field) => ({ raw: searchText(field.text), tokens: searchTokens(field.text), ...field }))
+}
+
+/**
+ * The score of `entry` for a query, or none when it matches too few query
+ * words: every word of a one- or two-word query, else 60%, unless the whole
+ * query appears in a field. Each field adds its weight times 14 for an exact
+ * match, 9 for a prefix, or 6 for the phrase inside it, then per word 4 for
+ * a whole word, 2 for a prefix either way (`issue` and `issues`; a field word
+ * shorter than 3 characters is never a prefix of the query word, so `0` does
+ * not match `042`), or 1 for a substring. Matching every word adds 25.
+ */
+const scoreEntry = (entry: CellCatalogEntry, phrase: string, words: ReadonlyArray<string>) => {
+  const matched = new Set<string>()
+  let score = 0
+  let phraseFound = false
+  for (const field of searchFields(entry)) {
+    if (field.raw === "") continue
+    score += field.weight * phrasePoints(field.raw, phrase)
+    phraseFound ||= field.raw.includes(phrase)
+    for (const word of words) {
+      const points = wordPoints(field, word)
+      if (points > 0) matched.add(word)
+      score += field.weight * points
+    }
+  }
+  const coverage = matched.size / words.length
+  let floor = 0.6
+  if (words.length <= 2) floor = 1
+  if (matched.size === 0 || (coverage < floor && !phraseFound)) return Option.none()
+  if (coverage === 1) return Option.some(score + 25)
+  return Option.some(score + Math.round(coverage * 10))
+}
+
+const phrasePoints = (raw: string, phrase: string) => {
+  if (raw === phrase) return 14
+  if (raw.startsWith(phrase)) return 9
+  if (raw.includes(phrase)) return 6
+  return 0
+}
+
+const wordPoints = (
+  field: { readonly raw: string; readonly tokens: ReadonlyArray<string> },
+  word: string,
+) => {
+  if (field.tokens.includes(word)) return 4
+  const prefixes = (token: string) =>
+    token.startsWith(word) || (token.length >= 3 && word.startsWith(token))
+  if (field.tokens.some(prefixes)) return 2
+  if (field.raw.includes(word)) return 1
+  return 0
+}
+
+/** One field of the options object model code passed, when it is there. */
+// oxlint-disable-next-line effect/noUnknownParameters -- model code passes any JavaScript value to the tool namespace
+const searchOption = (options: unknown, key: string): Option.Option<unknown> => {
+  if (!Predicate.isObjectKeyword(options)) return Option.none()
+  return Option.fromUndefinedOr(Reflect.get(options, key))
+}
+
+/** A whole non-negative number from model input, or `fallback`. */
+const countOption = (value: Option.Option<unknown>, fallback: number) => {
+  const count = Number(Option.getOrElse(value, () => fallback))
+  if (!Number.isFinite(count) || count < 0) return fallback
+  return Math.floor(count)
+}
+
+/** The page size of `tools.search` when the call names none. */
+const defaultSearchLimit = 20
+
+/**
+ * `tools.search(query, { namespace, limit, offset })`: the ids ranked by
+ * `scoreEntry`, then by id in code-unit order, as one page
+ * `{ items: { id, description }[], total, hasMore, nextOffset }`, 20 items
+ * unless `limit` says otherwise. `namespace` keeps the ids under that id
+ * prefix. An empty query lists every id in scope by id. `nextOffset` is set
+ * only when `hasMore` is true.
+ */
+const searchCatalog = (
+  entries: ReadonlyArray<CellCatalogEntry>,
+  query: string,
+  // oxlint-disable-next-line effect/noUnknownParameters -- model code passes any JavaScript value to the tool namespace
+  options: unknown,
+) => {
+  // Only a string names a namespace; any other value searches every id.
+  const namespace = searchOption(options, "namespace").pipe(
+    Option.filter(Predicate.isString),
+    Option.getOrElse(() => ""),
+  )
+  const limit = Math.max(1, countOption(searchOption(options, "limit"), defaultSearchLimit))
+  const offset = countOption(searchOption(options, "offset"), 0)
+  const phrase = searchText(query)
+  // A word the query repeats counts once toward coverage.
+  const words = [...new Set(searchTokens(query))]
+  const ranked = entries
+    .filter((entry) => namespace === "" || entry.name.startsWith(`${namespace}.`))
+    .flatMap((entry) => {
+      if (words.length === 0) return [{ entry, score: 0 }]
+      return Option.match(scoreEntry(entry, phrase, words), {
+        onNone: () => [],
+        onSome: (score) => [{ entry, score }],
+      })
     })
-    .filter((match) => words.length === 0 || match.score > 0)
-    .toArray()
     .toSorted(
       (left, right) => right.score - left.score || compareIds(left.entry.name, right.entry.name),
     )
+  const items = ranked
+    .slice(offset, offset + limit)
     .map((match) => ({ id: match.entry.name, description: match.entry.summary }))
+  const hasMore = offset + items.length < ranked.length
+  const page = { items, total: ranked.length, hasMore }
+  if (!hasMore) return page
+  return { ...page, nextOffset: offset + items.length }
 }
 
 /** A call with no argument sends an empty input, as `tools.delegate.list()` reads; `null` stays `null`. */
@@ -159,9 +272,10 @@ const isToolKey = (key: string | symbol): key is string =>
  * that carries its catalog entry (`id`, `description`, `guidelines`,
  * `parameters`), and reaches an id whose segment is reserved.
  *
- * The root also holds the discovery functions: `tools.search(query)` returns
- * `{ id, description }[]`, and `tools.describe(id)` returns the tool's typed
- * signature. Every id in the catalog is callable, listed in the prompt or not.
+ * The root also holds the discovery functions: `tools.search(query, options?)`
+ * returns one ranked page of `{ id, description }` (see `searchCatalog`), and
+ * `tools.describe(id)` returns the tool's typed signature. Every id in the
+ * catalog is callable, listed in the prompt or not.
  */
 const makeToolNamespace = (catalog: ToolCatalogView): ToolNode => {
   const nodes = new Map<string, ToolNode>()
@@ -195,7 +309,9 @@ const makeToolNamespace = (catalog: ToolCatalogView): ToolNode => {
   }
   // Model code may pass any value; `String` reads it as the query or id it names.
   const discovery = {
-    search: (query = "") => searchCatalog(catalog.entries(), String(query)),
+    // oxlint-disable-next-line effect/noUnknownParameters -- model code passes any JavaScript value to the tool namespace
+    search: (query = "", options?: unknown) =>
+      searchCatalog(catalog.entries(), String(query), options),
     describe: (id: string) =>
       Option.getOrThrowWith(
         Option.map(catalog.describe(String(id)), (entry) => entry.signature),

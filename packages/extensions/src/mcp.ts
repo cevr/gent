@@ -1,11 +1,18 @@
 import {
+  Cause,
+  Clock,
   Config,
+  ConfigProvider,
   Context,
+  Deferred,
   Duration,
   Effect,
+  Exit,
+  Fiber,
   FileSystem,
   Crypto,
   Equal,
+  FiberSet,
   JsonSchema,
   Layer,
   Option,
@@ -15,19 +22,40 @@ import {
   Result,
   Schema,
   SchemaRepresentation,
+  Schedule,
+  Scope,
   Semaphore,
 } from "effect"
-import { Hex } from "effect/encoding"
+import { Base64, Base64Url, Hex } from "effect/encoding"
+import { FetchHttpClient, HttpServer, HttpServerRequest, HttpServerResponse } from "effect/http"
+import { BunHttpServer } from "@effect/platform-bun"
+import {
+  auth,
+  extractResourceMetadataUrl,
+  type OAuthClientProvider,
+} from "@modelcontextprotocol/sdk/client/auth.js"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
+import { SSEClientTransport, SseError } from "@modelcontextprotocol/sdk/client/sse.js"
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
+import {
+  StreamableHTTPClientTransport,
+  StreamableHTTPError,
+} from "@modelcontextprotocol/sdk/client/streamableHttp.js"
+import {
+  ErrorCode,
+  McpError as ProtocolError,
+  ResultSchema,
+} from "@modelcontextprotocol/sdk/types.js"
+import { type SdkFetch, sdkFetch } from "./mcp-boundary.js"
 import {
   defineExtension,
   defineResource,
+  ExtensionContext,
   ExtensionHost,
   hasProjectScope,
   isRecord,
   omitUndefined,
+  request,
   resolveDataDir,
   tool,
   ToolResultFailure,
@@ -43,8 +71,8 @@ import {
 /**
  * One MCP server in the `mcpServers` shape Claude Code, Cursor, pi and
  * opencode share, so an entry pasted from any of them works. A `command`
- * entry runs over stdio; a `url` entry over streamable HTTP. Strings may name
- * environment variables as `${NAME}` or `${NAME:-default}`.
+ * entry runs over stdio; a `url` entry over streamable HTTP or SSE. Strings
+ * may name environment variables as `${NAME}` or `${NAME:-default}`.
  */
 const Shared = {
   /** `false` keeps the entry without starting it. */
@@ -64,6 +92,11 @@ const StdioServerConfig = Schema.Struct({
 const HttpServerConfig = Schema.Struct({
   url: Schema.String,
   headers: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+  /**
+   * The transport, as Claude Code writes it: `http` (or `streamable-http`)
+   * or `sse`. Absent or `auto`, streamable HTTP is tried first, then SSE.
+   */
+  type: Schema.optional(Schema.Literals(["http", "streamable-http", "sse", "auto"])),
   ...Shared,
 })
 
@@ -98,7 +131,8 @@ const sortedEntries = (record: Readonly<Record<string, string>> = {}) =>
 
 /**
  * What decides the tools a server lists: the entry as it runs, after
- * expansion, and for a stdio server the directory it runs in, in a fixed
+ * expansion, with its transport type, and for a stdio server the directory
+ * it runs in, in a fixed
  * order so key order never matters. It holds secrets, so only its SHA-256
  * digest is kept.
  */
@@ -114,9 +148,10 @@ const serverIdentity = (written: string, config: McpServerConfig, cwd: string) =
       config.timeoutMs ?? 0,
     ])
   }
+  // The transport as configured: `auto` is its own identity, whichever transport it reaches.
   return encodeKeyFields([
     written,
-    "http",
+    configuredTransport(config),
     config.url,
     sortedEntries(config.headers),
     config.timeoutMs ?? 0,
@@ -284,12 +319,24 @@ const readMcpConfig = Effect.fn("Mcp.readConfig")(function* (home: string, cwd: 
   return { ...user, ...project }
 })
 
+/** An enabled entry that cannot run, and why; `mcp.status` reports it. */
+interface MisconfiguredServer {
+  readonly name: string
+  readonly config: McpServerConfig
+  readonly reason: string
+}
+
+/**
+ * The enabled entries as servers, and the ones whose variables do not expand
+ * or whose key cannot be computed, which are reported and never started.
+ */
 const resolveServers = Effect.fn("Mcp.resolveServers")(function* (
   entries: Readonly<Record<string, McpServerConfig>>,
   sessionCwd: string,
 ) {
   const path = yield* Path.Path
   const servers: Array<McpServer> = []
+  const misconfigured: Array<MisconfiguredServer> = []
   const enabled = Object.entries(entries)
     .filter(([, config]) => config.enabled !== false)
     .toSorted(([left], [right]) => compareCodeUnits(left, right))
@@ -305,6 +352,7 @@ const resolveServers = Effect.fn("Mcp.resolveServers")(function* (
       yield* Effect.logWarning("mcp.server.config").pipe(
         Effect.annotateLogs({ server: written, error: expanded.failure }),
       )
+      misconfigured.push({ name, config, reason: expanded.failure })
       continue
     }
     let cwd = sessionCwd
@@ -316,11 +364,12 @@ const resolveServers = Effect.fn("Mcp.resolveServers")(function* (
       yield* Effect.logWarning("mcp.server.key").pipe(
         Effect.annotateLogs({ server: written, error: key.failure.message }),
       )
+      misconfigured.push({ name, config, reason: key.failure.message })
       continue
     }
     servers.push({ name, key: key.success, config: expanded.success, cwd })
   }
-  return servers
+  return { servers, misconfigured }
 })
 
 // ── catalog cache ───────────────────────────────────────────────────────────
@@ -330,6 +379,7 @@ const CatalogTool = Schema.Struct({
   name: Schema.String,
   description: Schema.optional(Schema.String),
   inputSchema: Schema.Json,
+  outputSchema: Schema.optional(Schema.Json),
   annotations: Schema.optional(
     Schema.Struct({
       readOnlyHint: Schema.optional(Schema.Boolean),
@@ -339,16 +389,51 @@ const CatalogTool = Schema.Struct({
 })
 type CatalogTool = typeof CatalogTool.Type
 
+/**
+ * One page of `tools/list` before its entries are read. Each entry decodes on
+ * its own, so one malformed entry never drops the page.
+ */
 const ListToolsPage = Schema.Struct({
-  tools: Schema.Array(CatalogTool),
-  nextCursor: Schema.optional(Schema.String),
+  tools: Schema.Array(Schema.Json),
+  nextCursor: Schema.optional(Schema.NullOr(Schema.String)),
 })
 
-/** Each server's tools, keyed by the hash of its entry, so an edited entry lists again. */
+/** A listed entry: `CatalogTool`, with a `null` description read as none. */
+const ListedTool = Schema.Struct({
+  ...CatalogTool.fields,
+  description: Schema.optional(Schema.NullOr(Schema.String)),
+})
+
+/** The listed entry as a `CatalogTool`, or why the spec's tool shape refuses it. */
+const catalogToolOf = (entry: Schema.Json) =>
+  Schema.decodeUnknownEffect(ListedTool)(entry).pipe(
+    Effect.map(({ description, ...rest }): CatalogTool => {
+      if (Predicate.isNotNull(description) && Predicate.isNotUndefined(description)) {
+        return { ...rest, description }
+      }
+      return rest
+    }),
+  )
+
+/** The `name` of a listed entry the tool shape refused, when it has one. */
+const NamedEntry = Schema.Struct({ name: Schema.String })
+
+/**
+ * A server's tools, the `instructions` its `initialize` answer carried, if
+ * any, and the names of the entries it listed that were skipped as malformed:
+ * they still take part in id allocation, so a tool's id does not move when a
+ * colliding entry turns malformed.
+ */
+const CatalogServer = Schema.Struct({
+  tools: Schema.Array(CatalogTool),
+  instructions: Schema.optional(Schema.String),
+  reserved: Schema.optional(Schema.Array(Schema.String)),
+})
+type CatalogServer = typeof CatalogServer.Type
+
+/** Each server's entry, keyed by the hash of its config, so an edited entry lists again. */
 const CatalogFile = Schema.fromJsonString(
-  Schema.Struct({
-    servers: Schema.Record(Schema.String, Schema.Struct({ tools: Schema.Array(CatalogTool) })),
-  }),
+  Schema.Struct({ servers: Schema.Record(Schema.String, CatalogServer) }),
 )
 type CatalogFile = typeof CatalogFile.Type
 
@@ -373,23 +458,805 @@ const readCatalog = Effect.fn("Mcp.readCatalog")(function* (file: string) {
  */
 const writeCatalogEntries = Effect.fn("Mcp.writeCatalogEntries")(function* (
   file: string,
-  entries: ReadonlyArray<readonly [key: string, tools: ReadonlyArray<CatalogTool>]>,
+  entries: ReadonlyArray<readonly [key: string, server: CatalogServer]>,
 ) {
   if (entries.length === 0) return
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
   const current = yield* readCatalog(file)
   const servers = { ...current.servers }
-  for (const [key, tools] of entries) servers[key] = { tools }
+  for (const [key, server] of entries) servers[key] = server
   yield* fs.makeDirectory(path.dirname(file), { recursive: true })
   yield* writeFileAtomic(file, yield* Schema.encodeEffect(CatalogFile)({ servers }))
 })
+
+// ── binary files ────────────────────────────────────────────────────────────
+
+/** A binary block larger than this is not written; its entry keeps its size and has no path. */
+const BLOB_FILE_LIMIT_MIB = 20
+const BLOB_FILE_LIMIT = BLOB_FILE_LIMIT_MIB * 1024 * 1024
+/** A file in `mcp-blobs` last written longer ago than this is removed, once per process. */
+const BLOB_MAX_AGE = Duration.days(14)
+
+const BLOB_EXTENSIONS: ReadonlyMap<string, string> = new Map([
+  ["image/png", "png"],
+  ["image/jpeg", "jpg"],
+  ["image/gif", "gif"],
+  ["image/webp", "webp"],
+  ["image/svg+xml", "svg"],
+  ["audio/mpeg", "mp3"],
+  ["audio/wav", "wav"],
+  ["audio/ogg", "ogg"],
+  ["application/pdf", "pdf"],
+  ["application/json", "json"],
+  ["text/plain", "txt"],
+])
+
+/** The file extension of a MIME type; any other type is `bin`. */
+const blobExtension = (mimeType: Option.Option<string>) =>
+  Option.getOrElse(
+    Option.flatMap(mimeType, (type) =>
+      Option.fromUndefinedOr(BLOB_EXTENSIONS.get(type.split(";")[0]?.trim().toLowerCase() ?? "")),
+    ),
+    () => "bin",
+  )
+
+const blobDirectory = Effect.fn("Mcp.blobDirectory")(function* (home: string) {
+  const path = yield* Path.Path
+  return path.join(yield* resolveDataDir(home), "mcp-blobs")
+})
+
+/**
+ * Removes the files in `directory` last written more than `BLOB_MAX_AGE` ago.
+ * A save that reuses a file sets its modification time to now, so a file
+ * any process named within `BLOB_MAX_AGE` stays. Each file is checked right
+ * before it is removed; a save that finds its file gone writes it again.
+ */
+const pruneBlobs = Effect.fn("Mcp.pruneBlobs")(function* (directory: string) {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const now = yield* Clock.currentTimeMillis
+  const names = yield* fs
+    .readDirectory(directory)
+    .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []))
+  for (const name of names) {
+    const file = path.join(directory, name)
+    const written = Option.flatMap(yield* Effect.option(fs.stat(file)), (info) => info.mtime)
+    if (Option.isSome(written) && now - written.value.getTime() > Duration.toMillis(BLOB_MAX_AGE)) {
+      yield* fs.remove(file).pipe(Effect.ignore)
+    }
+  }
+})
+
+/**
+ * Writes the binary blocks of a call result to `directory`, each once, as
+ * `<sha256>.<ext>`, so the cell reads them with Bun. A block past
+ * `BLOB_FILE_LIMIT`, or one that cannot be decoded or written, gets no file.
+ * The first write of the process removes files older than `BLOB_MAX_AGE`
+ * (see `pruneBlobs`); a reused file's modification time is set to now.
+ */
+const makeBlobStore = (directory: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+    const crypto = yield* Crypto.Crypto
+    const prune = yield* Effect.cached(
+      pruneBlobs(directory).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("mcp.blobs.prune.failed").pipe(
+            Effect.annotateLogs({ error: String(cause) }),
+          ),
+        ),
+      ),
+    )
+    const saveOne = (data: string, mimeType: Option.Option<string>) =>
+      Effect.gen(function* () {
+        if (base64Bytes(data) > BLOB_FILE_LIMIT) return Option.none<string>()
+        const bytes = Base64.decode(data)
+        if (Result.isFailure(bytes) || bytes.success.length > BLOB_FILE_LIMIT) {
+          return Option.none<string>()
+        }
+        yield* prune
+        const digest = Hex.encode(yield* crypto.digest("SHA-256", bytes.success))
+        const file = path.join(directory, `${digest}.${blobExtension(mimeType)}`)
+        // A reuse marks the file as just written, so no prune takes it now; a file gone is written again.
+        const now = (yield* Clock.currentTimeMillis) / 1000
+        const reused = yield* fs.utimes(file, now, now).pipe(
+          Effect.as(true),
+          Effect.orElseSucceed(() => false),
+        )
+        if (!reused) {
+          yield* fs.makeDirectory(directory, { recursive: true })
+          yield* writeFileAtomic(file, bytes.success)
+        }
+        return Option.some(file)
+      }).pipe(
+        Effect.provideService(FileSystem.FileSystem, fs),
+        Effect.provideService(Path.Path, path),
+        Effect.catchCause((cause) =>
+          Effect.logWarning("mcp.blob.unwritten").pipe(
+            Effect.annotateLogs({ error: String(cause) }),
+            Effect.as(Option.none<string>()),
+          ),
+        ),
+      )
+    return {
+      /** Each content block's file by index; none for a block that is not binary or was not written. */
+      save: (content: ReadonlyArray<Schema.Json>) =>
+        Effect.forEach(content, (block) =>
+          Option.match(binaryOf(block), {
+            onNone: () => Effect.succeed(Option.none<string>()),
+            onSome: (binary) => saveOne(binary.data, Option.fromUndefinedOr(binary.mimeType)),
+          }),
+        ),
+    }
+  })
+
+// ── oauth ───────────────────────────────────────────────────────────────────
+
+/** Tokens as the SDK hands them to `saveTokens`, kept as they came. */
+const StoredTokens = Schema.Struct({
+  access_token: Schema.String,
+  id_token: Schema.optional(Schema.String),
+  token_type: Schema.String,
+  expires_in: Schema.optional(Schema.Finite),
+  scope: Schema.optional(Schema.String),
+  refresh_token: Schema.optional(Schema.String),
+  issuer: Schema.optional(Schema.String),
+})
+type StoredTokens = typeof StoredTokens.Type
+
+/** The client the authorization server registered, as `saveClientInformation` hands it. */
+const StoredClient = Schema.Struct({
+  client_id: Schema.String,
+  client_secret: Schema.optional(Schema.String),
+  client_id_issued_at: Schema.optional(Schema.Finite),
+  client_secret_expires_at: Schema.optional(Schema.Finite),
+  token_endpoint_auth_method: Schema.optional(Schema.String),
+  issuer: Schema.optional(Schema.String),
+})
+type StoredClient = typeof StoredClient.Type
+
+const StoredLogin = Schema.Struct({
+  tokens: StoredTokens,
+  /** When the access token expires, in epoch milliseconds, when the server said. */
+  expiresAt: Schema.optional(Schema.Finite),
+  client: StoredClient,
+  /** The redirect URI the client registered with; a refresh names it again. */
+  redirectUri: Schema.String,
+  /**
+   * The protected resource metadata URL the server's 401 named in
+   * `WWW-Authenticate`, when it named one. A refresh finds the token
+   * endpoint through it; a server that serves its metadata off the
+   * well-known path is not found otherwise.
+   */
+  resourceMetadataUrl: Schema.optional(Schema.String),
+})
+type StoredLogin = typeof StoredLogin.Type
+
+/** `<data dir>/mcp-auth.json`, mode 0600: each login under `authKey`. */
+const AuthFile = Schema.fromJsonString(
+  Schema.Struct({ servers: Schema.Record(Schema.String, StoredLogin) }),
+)
+type AuthFile = typeof AuthFile.Type
+
+/** A token that expires within this long is refreshed before a dial. */
+const REFRESH_SKEW = Duration.seconds(60)
+/** A login waits this long for the browser's redirect. */
+const LOGIN_TIMEOUT = Duration.minutes(5)
+/**
+ * The requests a 401 may send again once a refresh gave a new token. They
+ * change nothing on the server; a `tools/call` is never sent twice.
+ */
+const REPLAYABLE: ReadonlySet<string> = new Set([
+  "initialize",
+  "notifications/initialized",
+  "ping",
+  "tools/list",
+  "GET",
+])
+
+/** The server refused the OAuth token, and no refresh gave one it takes. */
+class LoginRequired extends Schema.TaggedError<LoginRequired>()("LoginRequired", {
+  server: Schema.String,
+  message: Schema.String,
+}) {}
+
+const loginMessage = (name: string) =>
+  `the ${name} MCP server needs a login: run /mcp login ${name}`
+
+const loginRequired = (name: string) =>
+  new LoginRequired({ server: name, message: loginMessage(name) })
+
+type HttpServerConfig = typeof HttpServerConfig.Type
+
+/** A `url` entry signs in with OAuth unless it sends its own `Authorization` header. */
+const usesOAuth = (config: McpServerConfig): config is HttpServerConfig =>
+  "url" in config &&
+  !Object.keys(config.headers ?? {}).some((name) => name.toLowerCase() === "authorization")
+
+/**
+ * A login's key: the server's name and URL, not the entry's digest, so a
+ * login outlives an edit to the entry's other fields.
+ */
+const authKey = (server: McpServer, config: HttpServerConfig) => `${server.name} ${config.url}`
+
+/** The login file, the permit its writes take, and the services a fetch runs its refresh with. */
+interface AuthStore {
+  readonly file: string
+  readonly permit: Semaphore.Semaphore
+  readonly services: Context.Context<FileSystem.FileSystem | Path.Path | Crypto.Crypto>
+}
+
+const makeAuthStore = Effect.fn("Mcp.makeAuthStore")(function* (home: string) {
+  const path = yield* Path.Path
+  return {
+    file: path.join(yield* resolveDataDir(home), "mcp-auth.json"),
+    permit: yield* Semaphore.make(1),
+    services: yield* Effect.context<FileSystem.FileSystem | Path.Path | Crypto.Crypto>(),
+  }
+})
+
+const readLogins = (store: AuthStore) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    return yield* fs.readFileString(store.file).pipe(
+      Effect.flatMap(Schema.decodeUnknownEffect(AuthFile)),
+      Effect.orElseSucceed((): AuthFile => ({ servers: {} })),
+    )
+  })
+
+const readLogin = (store: AuthStore, key: string) =>
+  Effect.map(readLogins(store), (file) => Option.fromUndefinedOr(file.servers[key]))
+
+/** Stores one login; the file is written whole, atomically, readable by its owner only. */
+const writeLogin = (store: AuthStore, key: string, login: StoredLogin) =>
+  Semaphore.withPermit(
+    store.permit,
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const current = yield* readLogins(store)
+      const servers = { ...current.servers, [key]: login }
+      yield* fs.makeDirectory(path.dirname(store.file), { recursive: true })
+      yield* writeFileAtomic(store.file, yield* Schema.encodeEffect(AuthFile)({ servers }), {
+        mode: 0o600,
+      })
+    }),
+  )
+
+/** The SDK's tokens as stored; a refresh answer without a refresh token keeps the old one. */
+const storedTokens = (
+  tokens: StoredTokens,
+  previous: Option.Option<StoredTokens>,
+): StoredTokens => ({
+  access_token: tokens.access_token,
+  token_type: tokens.token_type,
+  ...omitUndefined({
+    id_token: tokens.id_token,
+    expires_in: tokens.expires_in,
+    scope: tokens.scope,
+    issuer: tokens.issuer,
+    refresh_token:
+      tokens.refresh_token ??
+      Option.getOrUndefined(
+        Option.flatMap(previous, (old) => Option.fromUndefinedOr(old.refresh_token)),
+      ),
+  }),
+})
+
+const storedClient = (client: StoredClient): StoredClient => ({
+  client_id: client.client_id,
+  ...omitUndefined({
+    client_secret: client.client_secret,
+    client_id_issued_at: client.client_id_issued_at,
+    client_secret_expires_at: client.client_secret_expires_at,
+    token_endpoint_auth_method: client.token_endpoint_auth_method,
+    issuer: client.issuer,
+  }),
+})
+
+const loginFrom = (
+  tokens: StoredTokens,
+  client: StoredClient,
+  redirectUri: string,
+  metadata: Option.Option<URL>,
+  now: number,
+): StoredLogin => ({
+  tokens,
+  client,
+  redirectUri,
+  ...omitUndefined({
+    expiresAt: Option.getOrUndefined(
+      Option.map(Option.fromUndefinedOr(tokens.expires_in), (seconds) => now + seconds * 1000),
+    ),
+    resourceMetadataUrl: Option.getOrUndefined(Option.map(metadata, (url) => url.href)),
+  }),
+})
+
+/** The options an SDK `auth()` run takes for `config`, with the resource metadata URL when known. */
+const authOptions = (config: HttpServerConfig, metadata: Option.Option<URL>) => ({
+  serverUrl: config.url,
+  ...Option.match(metadata, {
+    onNone: () => ({}),
+    onSome: (resourceMetadataUrl) => ({ resourceMetadataUrl }),
+  }),
+})
+
+/** The stored resource metadata URL of `login`, when it has a valid one. */
+const storedMetadata = (login: StoredLogin) =>
+  Option.flatMap(Option.fromUndefinedOr(login.resourceMetadataUrl), (href) =>
+    Option.liftThrowable(() => new URL(href))(),
+  )
+
+/** The server's `initialize` as a probe sends it, with no token. */
+const INITIALIZE_PROBE =
+  '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"gent","version":"1.0.0"}}}'
+
+/**
+ * The resource metadata URL the server names in its 401's
+ * `WWW-Authenticate`, read from one request with no token: an `initialize`
+ * POST, or the stream's GET for an `sse` entry. None when the server does not
+ * refuse it or names none; discovery then tries the well-known paths.
+ */
+const namedMetadata = (config: HttpServerConfig) =>
+  Effect.gen(function* () {
+    const fetchWeb = yield* FetchHttpClient.Fetch
+    const headers = new Headers(config.headers)
+    headers.set("Accept", "application/json, text/event-stream")
+    const init: RequestInit = { headers }
+    if (configuredTransport(config) !== "sse") {
+      headers.set("Content-Type", "application/json")
+      init.method = "POST"
+      init.body = INITIALIZE_PROBE
+    }
+    const response = yield* Effect.tryPromise(() => fetchWeb(config.url, init))
+    // Only the status and headers count; an `sse` stream's body never ends.
+    const body = Option.fromNullishOr(response.body)
+    if (Option.isSome(body)) yield* Effect.ignore(Effect.tryPromise(() => body.value.cancel()))
+    if (response.status !== 401) return Option.none<URL>()
+    return Option.fromUndefinedOr(extractResourceMetadataUrl(response))
+  }).pipe(Effect.orElseSucceed(() => Option.none<URL>()))
+
+/** gent's client as it registers with an authorization server: a public client on a loopback redirect. */
+const clientMetadataFor = (redirectUri: string) => ({
+  client_name: "gent",
+  redirect_uris: [redirectUri],
+  grant_types: ["authorization_code", "refresh_token"],
+  response_types: ["code"],
+  token_endpoint_auth_method: "none",
+})
+
+/** What an SDK `auth()` run saved: the client it registered, the tokens, the login URL and verifier. */
+interface AuthFlow {
+  client: Option.Option<StoredClient>
+  tokens: Option.Option<StoredTokens>
+  authorizationUrl: Option.Option<URL>
+  verifier: string
+}
+
+const emptyFlow = (client: Option.Option<StoredClient>): AuthFlow => ({
+  client,
+  tokens: Option.none(),
+  authorizationUrl: Option.none(),
+  verifier: "",
+})
+
+/**
+ * The SDK's `OAuthClientProvider` over one `AuthFlow`. It never opens a
+ * browser: where the SDK would send the user to log in, it keeps the
+ * authorization URL in the flow and the SDK's `auth` answers `REDIRECT`.
+ * `interactive` is a login's state; a login presents that URL, and a refresh
+ * that ends there has no token.
+ */
+const flowProvider = (
+  server: string,
+  redirectUri: string,
+  flow: AuthFlow,
+  previous: Option.Option<StoredLogin>,
+  interactive: Option.Option<string>,
+): OAuthClientProvider => ({
+  get redirectUrl() {
+    return redirectUri
+  },
+  get clientMetadata() {
+    return clientMetadataFor(redirectUri)
+  },
+  ...Option.match(interactive, {
+    onNone: () => ({}),
+    onSome: (state) => ({ state: () => state }),
+  }),
+  clientInformation: () => Option.getOrUndefined(flow.client),
+  saveClientInformation: (client) => {
+    flow.client = Option.some(storedClient(client))
+  },
+  tokens: () => Option.getOrUndefined(Option.map(previous, (login) => login.tokens)),
+  saveTokens: (tokens) => {
+    flow.tokens = Option.some(
+      storedTokens(
+        tokens,
+        Option.map(previous, (login) => login.tokens),
+      ),
+    )
+  },
+  redirectToAuthorization: (url) => {
+    flow.authorizationUrl = Option.some(url)
+  },
+  saveCodeVerifier: (verifier) => {
+    flow.verifier = verifier
+  },
+  codeVerifier: () => flow.verifier,
+})
+
+/**
+ * A new token for `login` from its refresh token, stored; none when it has
+ * no refresh token or the authorization server refused it. Discovery starts
+ * from `named`, the metadata URL a 401 just named, else the stored one.
+ */
+const refreshLogin = (
+  server: McpServer,
+  config: HttpServerConfig,
+  store: AuthStore,
+  login: StoredLogin,
+  named: Option.Option<URL>,
+) =>
+  Effect.gen(function* () {
+    if (Predicate.isUndefined(login.tokens.refresh_token)) return Option.none<StoredLogin>()
+    const now = yield* Clock.currentTimeMillis
+    const flow = emptyFlow(Option.some(login.client))
+    const provider = flowProvider(
+      server.name,
+      login.redirectUri,
+      flow,
+      Option.some(login),
+      Option.none(),
+    )
+    const metadata = Option.orElse(named, () => storedMetadata(login))
+    const result = yield* Effect.tryPromise(() => auth(provider, authOptions(config, metadata)))
+    if (result !== "AUTHORIZED" || Option.isNone(flow.tokens)) return Option.none<StoredLogin>()
+    const refreshed = loginFrom(
+      flow.tokens.value,
+      Option.getOrElse(flow.client, () => login.client),
+      login.redirectUri,
+      metadata,
+      now,
+    )
+    yield* writeLogin(store, authKey(server, config), refreshed)
+    return Option.some(refreshed)
+  }).pipe(
+    Effect.catchCause((cause) =>
+      Effect.logWarning("mcp.oauth.refresh.failed").pipe(
+        Effect.annotateLogs({ server: server.name, error: failureMessage(Cause.squash(cause)) }),
+        Effect.as(Option.none<StoredLogin>()),
+      ),
+    ),
+  )
+
+/** The stored login, refreshed first when its token expires within `REFRESH_SKEW`. */
+const loginBeforeDial = (server: McpServer, config: HttpServerConfig, store: AuthStore) =>
+  Effect.gen(function* () {
+    const login = yield* readLogin(store, authKey(server, config))
+    if (Option.isNone(login)) return login
+    const now = yield* Clock.currentTimeMillis
+    if (!nearExpiry(login.value, now)) return login
+    return yield* refreshUnlessFresh(
+      server,
+      config,
+      store,
+      (stored, at) => !nearExpiry(stored, at),
+      Option.none(),
+    )
+  })
+
+/** The login's token expires within `REFRESH_SKEW` of `now`. */
+const nearExpiry = (login: StoredLogin, now: number) =>
+  Option.exists(
+    Option.fromUndefinedOr(login.expiresAt),
+    (expiresAt) => expiresAt - Duration.toMillis(REFRESH_SKEW) <= now,
+  )
+
+/**
+ * Refreshes the stored login under its key's refresh lock, unless the login
+ * read again under the lock is `fresh`. So of two refreshes of one login, in
+ * this process or another, the second finds the token the first stored and
+ * uses it; it never redeems the refresh token the first already spent. None
+ * when there is no login, or the refresh or the lock failed.
+ */
+const refreshUnlessFresh = (
+  server: McpServer,
+  config: HttpServerConfig,
+  store: AuthStore,
+  fresh: (login: StoredLogin, now: number) => boolean,
+  named: Option.Option<URL>,
+) =>
+  Effect.gen(function* () {
+    const key = authKey(server, config)
+    const refresh = Effect.gen(function* () {
+      const login = yield* readLogin(store, key)
+      if (Option.isNone(login)) return login
+      if (fresh(login.value, yield* Clock.currentTimeMillis)) return login
+      return yield* refreshLogin(server, config, store, login.value, named)
+    })
+    return yield* refresh.pipe(underRefreshLock(store, key))
+  }).pipe(
+    Effect.catchCause((cause) =>
+      Effect.logWarning("mcp.oauth.refresh.failed").pipe(
+        Effect.annotateLogs({ server: server.name, error: failureMessage(Cause.squash(cause)) }),
+        Effect.as(Option.none<StoredLogin>()),
+      ),
+    ),
+  )
+
+/** A refresh lock older than this was left by a holder that died; no refresh takes this long. */
+const REFRESH_LOCK_STALE = Duration.seconds(30)
+/** How often a refresh tries a held lock again, and how many times before it gives up. */
+const REFRESH_LOCK_RETRY = { schedule: Schedule.spaced("50 millis"), times: 1200 }
+
+/** Another refresh of the same login held the lock for longer than a stale lock lives. */
+class RefreshLockBusy extends Schema.TaggedError<RefreshLockBusy>()("RefreshLockBusy", {
+  message: Schema.String,
+}) {}
+
+/**
+ * Runs an effect while holding the refresh lock of the login under `key`:
+ * `<data dir>/mcp-auth.<sha256 of key>.lock`, created with `wx`, so one
+ * holder at a time across every gent process on the data directory. The
+ * holder removes the file when done. A file older than `REFRESH_LOCK_STALE`
+ * is a dead holder's, and the next taker removes it first.
+ */
+const underRefreshLock =
+  (store: AuthStore, key: string) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const crypto = yield* Crypto.Crypto
+      const digest = yield* crypto.digest("SHA-256", new TextEncoder().encode(key))
+      const file = path.join(path.dirname(store.file), `mcp-auth.${Hex.encode(digest)}.lock`)
+      yield* fs.makeDirectory(path.dirname(file), { recursive: true })
+      const take = Effect.gen(function* () {
+        const taken = yield* fs.writeFileString(file, "", { flag: "wx", mode: 0o600 }).pipe(
+          Effect.as(true),
+          Effect.orElseSucceed(() => false),
+        )
+        if (taken) return
+        const now = yield* Clock.currentTimeMillis
+        const modified = Option.flatMap(yield* Effect.option(fs.stat(file)), (info) => info.mtime)
+        if (
+          Option.exists(
+            modified,
+            (at) => now - at.getTime() > Duration.toMillis(REFRESH_LOCK_STALE),
+          )
+        ) {
+          yield* Effect.ignore(fs.remove(file))
+        }
+        return yield* new RefreshLockBusy({ message: `the refresh lock ${file} stays held` })
+      })
+      return yield* Effect.acquireUseRelease(
+        Effect.retry(take, REFRESH_LOCK_RETRY),
+        () => effect,
+        () => Effect.ignore(fs.remove(file)),
+      )
+    })
+
+const JsonRpcMethod = Schema.fromJsonString(Schema.Struct({ method: Schema.String }))
+
+/** The JSON-RPC method a request sends, or `GET` for a stream a transport opens. */
+const requestMethod = (init: Option.Option<RequestInit>) => {
+  const method = Option.getOrElse(
+    Option.flatMap(init, (value) => Option.fromUndefinedOr(value.method)),
+    () => "GET",
+  )
+  if (method === "GET") return "GET"
+  return Option.match(
+    Option.flatMap(
+      Option.flatMap(init, (value) => Option.fromNullishOr(value.body)),
+      Schema.decodeUnknownOption(JsonRpcMethod),
+    ),
+    { onNone: () => "", onSome: (message) => message.method },
+  )
+}
+
+/** What a transport takes to send a server's OAuth token. */
+interface OAuthTransport {
+  readonly authProvider: OAuthClientProvider
+  readonly fetch: SdkFetch
+}
+
+/**
+ * The OAuth parts of a `url` entry's transport, when it signs in with OAuth.
+ * The provider only hands the SDK the stored bearer token; it never starts a
+ * login. The fetch answers each 401 or 403 before the SDK sees it: a 401 on
+ * a request in `REPLAYABLE` refreshes the token and sends that request once
+ * more, and any other refusal fails with `LoginRequired`, whose message names
+ * `/mcp login <server>`. So a `tools/call` is never sent twice.
+ */
+const oauthTransport = (server: McpServer, config: HttpServerConfig, store: AuthStore) =>
+  Effect.gen(function* () {
+    if (!usesOAuth(config)) return Option.none<OAuthTransport>()
+    let current = yield* loginBeforeDial(server, config, store)
+    const tokens = () => Option.getOrUndefined(Option.map(current, (login) => login.tokens))
+    const authProvider: OAuthClientProvider = {
+      ...flowProvider(server.name, "", emptyFlow(Option.none()), current, Option.none()),
+      get redirectUrl() {
+        return Option.getOrUndefined(Option.map(current, (login) => login.redirectUri))
+      },
+      tokens,
+    }
+    const fetchWeb = yield* FetchHttpClient.Fetch
+    const send = (url: string | URL, init: Option.Option<RequestInit>) =>
+      Effect.promise(() => fetchWeb(url, Option.getOrUndefined(init)))
+    const answer = (url: string | URL, init: Option.Option<RequestInit>) =>
+      Effect.gen(function* () {
+        const response = yield* send(url, init)
+        if (response.status !== 401 && response.status !== 403) return response
+        if (response.status === 401 && REPLAYABLE.has(requestMethod(init))) {
+          const refreshed = yield* Option.match(current, {
+            onNone: () => Effect.succeed(Option.none<StoredLogin>()),
+            // A stored token other than the refused one is another refresh's; it is used as it is.
+            onSome: (refused) =>
+              refreshUnlessFresh(
+                server,
+                config,
+                store,
+                (stored) => stored.tokens.access_token !== refused.tokens.access_token,
+                Option.fromUndefinedOr(extractResourceMetadataUrl(response)),
+              ),
+          })
+          if (Option.isSome(refreshed)) {
+            current = refreshed
+            const headers = new Headers(
+              Option.getOrUndefined(Option.map(init, (value) => value.headers)),
+            )
+            headers.set("Authorization", `Bearer ${refreshed.value.tokens.access_token}`)
+            const retried = yield* send(
+              url,
+              Option.some({ ...Option.getOrElse(init, () => ({})), headers }),
+            )
+            if (retried.status !== 401 && retried.status !== 403) return retried
+          }
+        }
+        return yield* loginRequired(server.name)
+      })
+    const transport: OAuthTransport = {
+      authProvider,
+      fetch: sdkFetch(store.services, answer),
+    }
+    return Option.some(transport)
+  })
+
+/** The login a `/mcp login` started: its URL, and the effect that waits for the redirect and finishes it. */
+interface LoginStart {
+  readonly url: string
+  readonly finish: Effect.Effect<StoredLogin, McpError>
+}
+
+/**
+ * Starts a login to `server`: a loopback listener on 127.0.0.1 for the
+ * redirect, the resource metadata URL the server names in a 401 (see
+ * `namedMetadata`), the SDK's client registration and PKCE authorization URL. The
+ * listener lives in `scope`. `finish` waits up to `LOGIN_TIMEOUT` for the
+ * redirect, exchanges its code, and stores the login.
+ */
+const startLogin = (
+  server: McpServer,
+  config: HttpServerConfig,
+  store: AuthStore,
+  scope: Scope.Scope,
+) =>
+  Effect.gen(function* () {
+    const crypto = yield* Crypto.Crypto
+    const state = Base64Url.encode(yield* crypto.randomBytes(24))
+    const code = yield* Deferred.make<string, McpError>()
+    const port = yield* serveRedirect(server, state, code).pipe(Scope.provide(scope))
+    const redirectUri = `http://127.0.0.1:${port}/callback`
+    const flow = emptyFlow(Option.none())
+    const metadata = yield* namedMetadata(config)
+    const provider = flowProvider(server.name, redirectUri, flow, Option.none(), Option.some(state))
+    const fail = (message: string) => new McpError({ server: server.name, message })
+    yield* Effect.tryPromise({
+      try: () => auth(provider, authOptions(config, metadata)),
+      catch: (cause) => fail(`login: ${failureMessage(cause)}`),
+    })
+    if (Option.isNone(flow.authorizationUrl)) {
+      return yield* fail("login: the authorization server gave no login URL")
+    }
+    const finish = Effect.gen(function* () {
+      const received = yield* Deferred.await(code).pipe(
+        Effect.timeoutOrElse({
+          duration: LOGIN_TIMEOUT,
+          orElse: () => Effect.fail(fail("login: no redirect came within 5 minutes")),
+        }),
+      )
+      yield* Effect.tryPromise({
+        try: () =>
+          auth(provider, { ...authOptions(config, metadata), authorizationCode: received }),
+        catch: (cause) => fail(`login: ${failureMessage(cause)}`),
+      })
+      if (Option.isNone(flow.tokens) || Option.isNone(flow.client)) {
+        return yield* fail("login: the authorization server gave no token")
+      }
+      const login = loginFrom(
+        flow.tokens.value,
+        flow.client.value,
+        redirectUri,
+        metadata,
+        yield* Clock.currentTimeMillis,
+      )
+      yield* writeLogin(store, authKey(server, config), login)
+      return login
+    }).pipe(
+      Effect.provideService(
+        FileSystem.FileSystem,
+        Context.get(store.services, FileSystem.FileSystem),
+      ),
+      Effect.provideService(Path.Path, Context.get(store.services, Path.Path)),
+      Effect.mapError((error) => {
+        if (error._tag === "McpError") return error
+        return fail(`login: ${error.message}`)
+      }),
+    )
+    const started: LoginStart = { url: flow.authorizationUrl.value.href, finish }
+    return started
+  })
+
+/** Closes a login's `scope` unless its start succeeded: a failed or interrupted start owns no listener. */
+const closeOnFailure = (scope: Scope.Closeable, exit: Exit.Exit<unknown, unknown>) => {
+  if (Exit.isSuccess(exit)) return Effect.void
+  return Scope.close(scope, exit)
+}
+
+/** The loopback listener for a login's redirect, on a free port; its port. */
+const serveRedirect = (
+  server: McpServer,
+  state: string,
+  code: Deferred.Deferred<string, McpError>,
+) =>
+  Effect.gen(function* () {
+    const app = Effect.gen(function* () {
+      const request = yield* HttpServerRequest.HttpServerRequest
+      const url = new URL(request.url, "http://127.0.0.1")
+      const param = (name: string) => Option.fromNullishOr(url.searchParams.get(name))
+      if (url.pathname !== "/callback") return HttpServerResponse.text("not found", { status: 404 })
+      // A request without this login's state is not its redirect; the wait goes on.
+      if (!Option.contains(param("state"), state)) {
+        return HttpServerResponse.text("this is not the login gent started", { status: 400 })
+      }
+      const refused = param("error")
+      if (Option.isSome(refused)) {
+        const message = Option.getOrElse(param("error_description"), () => refused.value)
+        yield* Deferred.fail(
+          code,
+          new McpError({ server: server.name, message: `login: ${message}` }),
+        )
+        return HttpServerResponse.text(`gent: the login failed: ${message}`, { status: 400 })
+      }
+      const received = param("code").pipe(Option.filter((value) => value !== ""))
+      if (Option.isNone(received)) {
+        return HttpServerResponse.text("the redirect carries no code", { status: 400 })
+      }
+      yield* Deferred.succeed(code, received.value)
+      return HttpServerResponse.text(`gent is logged in to ${server.name}. You can close this tab.`)
+    })
+    const context = yield* Layer.build(
+      HttpServer.serve(app).pipe(
+        Layer.provideMerge(BunHttpServer.layerServer({ port: 0, hostname: "127.0.0.1" })),
+      ),
+    )
+    const address = Context.get(context, HttpServer.HttpServer).address
+    if (address._tag === "UnixPathAddress") {
+      return yield* new McpError({ server: server.name, message: "login: no loopback port" })
+    }
+    return address.port
+  })
 
 // ── connections ─────────────────────────────────────────────────────────────
 
 class McpError extends Schema.TaggedError<McpError>()("McpError", {
   server: Schema.String,
   message: Schema.String,
+  /** The HTTP status the server answered a connect with, when it did. */
+  status: Schema.optional(Schema.Int),
 }) {}
 
 const failureMessage = (cause: unknown) => {
@@ -399,53 +1266,187 @@ const failureMessage = (cause: unknown) => {
 
 const timeoutOf = (server: McpServer) => server.config.timeoutMs ?? DEFAULT_TIMEOUT_MS
 
-const transportFor = (server: McpServer) => {
+/**
+ * The environment of this process. A stdio server runs with it, under its
+ * entry's `env`, as bash and the cell do: a proxy or CA variable in the
+ * user's shell reaches the server, and a restricted list would protect
+ * nothing the cell cannot already run (decided by consistency with bash and
+ * the cell; the cell runs full Bun).
+ */
+const hostEnvironment = Effect.gen(function* () {
+  const provider = yield* ConfigProvider.ConfigProvider
+  const environment = new Map<string, string>()
+  // The environment provider nests a name at each `_`; the walk joins the path back.
+  const walk = (path: ReadonlyArray<string>): Effect.Effect<void> =>
+    Effect.gen(function* () {
+      const loaded = yield* provider.load(path).pipe(
+        Effect.map(Option.fromUndefinedOr),
+        Effect.orElseSucceed(() => Option.none()),
+      )
+      if (Option.isNone(loaded)) return
+      const node = loaded.value
+      if (Predicate.isString(node.value) && path.length > 0) {
+        environment.set(path.join("_"), node.value)
+      }
+      let children: ReadonlyArray<string> = []
+      if (node._tag === "Record") children = [...node.keys]
+      if (node._tag === "Array") {
+        children = Array.from({ length: node.length }, (_, index) => String(index))
+      }
+      yield* Effect.forEach(children, (child) => walk([...path, child]), { discard: true })
+    })
+  yield* walk([])
+  return Object.fromEntries(environment)
+})
+
+/** The transport a connection runs over. */
+const TransportKind = Schema.Literals(["stdio", "streamable-http", "sse"])
+type TransportKind = typeof TransportKind.Type
+
+const transportFor = (
+  server: McpServer,
+  kind: TransportKind,
+  environment: Readonly<Record<string, string>>,
+  oauth: Option.Option<OAuthTransport>,
+) => {
   const config = server.config
   if ("command" in config) {
     return new StdioClientTransport({
       command: config.command,
       args: [...(config.args ?? [])],
-      env: { ...config.env },
+      env: { ...environment, ...config.env },
       cwd: server.cwd,
       // The server's own log would land in the terminal gent draws.
       stderr: "ignore",
     })
   }
-  return new StreamableHTTPClientTransport(new URL(config.url), {
+  const options = {
     requestInit: { headers: { ...config.headers } },
-  })
+    ...Option.getOrElse(oauth, () => ({})),
+  }
+  if (kind === "sse") return new SSEClientTransport(new URL(config.url), options)
+  return new StreamableHTTPClientTransport(new URL(config.url), options)
 }
 
-/** An initialized client; closing its scope closes the transport, and a stdio server with it. */
-const connect = (server: McpServer) =>
+/** The HTTP status a failed connect was answered with, when it has one. */
+const statusOf = (cause: unknown): Option.Option<number> => {
+  if (cause instanceof StreamableHTTPError || cause instanceof SseError) {
+    return Option.fromUndefinedOr(cause.code)
+  }
+  if (Schema.is(LoginRequired)(cause)) return Option.some(401)
+  return Option.none()
+}
+
+/**
+ * Statuses that say the server does not speak streamable HTTP at this URL,
+ * so `auto` tries SSE. 401 and 403 are about the credential, which SSE
+ * would refuse too, so they never fall back.
+ */
+const SSE_FALLBACK_STATUSES: ReadonlySet<number> = new Set([400, 404, 405, 406, 415, 422, 501])
+
+/** A close that has not finished within this long is abandoned. */
+const CLOSE_TIMEOUT = Duration.seconds(2)
+
+/** An initialized client over `kind`; closing its scope closes the transport. */
+const dial = (
+  server: McpServer,
+  kind: TransportKind,
+  environment: Readonly<Record<string, string>>,
+  oauth: Option.Option<OAuthTransport>,
+  onToolsChanged: Option.Option<() => void>,
+) =>
   Effect.gen(function* () {
+    const listChanged = Option.match(onToolsChanged, {
+      onNone: () => ({}),
+      onSome: (onChanged) => ({
+        listChanged: { tools: { autoRefresh: false, onChanged: () => onChanged() } },
+      }),
+    })
     const client = yield* Effect.acquireRelease(
-      Effect.sync(() => new Client({ name: "gent", version: "1.0.0" })),
-      (opened) => Effect.promise(() => opened.close()).pipe(Effect.ignore),
+      Effect.sync(() => new Client({ name: "gent", version: "1.0.0" }, listChanged)),
+      (opened) =>
+        Effect.tryPromise(() => opened.close()).pipe(Effect.timeout(CLOSE_TIMEOUT), Effect.ignore),
     )
     yield* Effect.tryPromise({
-      try: () => client.connect(transportFor(server)),
+      try: () => client.connect(transportFor(server, kind, environment, oauth)),
       catch: (cause) =>
-        new McpError({ server: server.name, message: `connect: ${failureMessage(cause)}` }),
-    }).pipe(
-      Effect.timeoutOrElse({
-        duration: timeoutOf(server),
-        orElse: () =>
-          Effect.fail(
-            new McpError({
-              server: server.name,
-              message: `connect timed out after ${timeoutOf(server)} ms`,
-            }),
-          ),
-      }),
-    )
-    return client
+        new McpError({
+          server: server.name,
+          message: `connect: ${failureMessage(cause)}`,
+          ...omitUndefined({ status: Option.getOrUndefined(statusOf(cause)) }),
+        }),
+    })
+    return {
+      client,
+      transport: kind,
+      instructions: Option.fromUndefinedOr(client.getInstructions()),
+    }
   })
 
-/** Every page of `tools/list`. */
+/**
+ * An initialized client and the transport it runs over; closing its scope
+ * closes the transport, and a stdio server with it. A `url` entry's `type`
+ * picks the transport: `http` (or `streamable-http`) and `sse` pin one, and
+ * `auto`, the default, tries streamable HTTP and then SSE when the server
+ * answers with a status in `SSE_FALLBACK_STATUSES`. A `url` entry without
+ * its own `Authorization` header signs in with its stored OAuth login (see
+ * `oauthTransport`). `onToolsChanged` runs on each
+ * `notifications/tools/list_changed` of a server that declares it sends them.
+ */
+const connect = (
+  server: McpServer,
+  auth: AuthStore,
+  onToolsChanged: Option.Option<() => void> = Option.none(),
+) =>
+  Effect.gen(function* () {
+    const config = server.config
+    if ("command" in config) {
+      return yield* dial(server, "stdio", yield* hostEnvironment, Option.none(), onToolsChanged)
+    }
+    const oauth = yield* oauthTransport(server, config, auth)
+    const type = config.type ?? "auto"
+    if (type === "sse") return yield* dial(server, "sse", {}, oauth, onToolsChanged)
+    const streamable = dial(server, "streamable-http", {}, oauth, onToolsChanged)
+    if (type !== "auto") return yield* streamable
+    return yield* streamable.pipe(
+      Effect.catchTag("McpError", (error) => {
+        if (!SSE_FALLBACK_STATUSES.has(error.status ?? 0)) return Effect.fail(error)
+        return dial(server, "sse", {}, oauth, onToolsChanged).pipe(
+          Effect.mapError(
+            (sse) =>
+              new McpError({
+                server: server.name,
+                message: `streamable HTTP ${error.message}; SSE ${sse.message}`,
+              }),
+          ),
+        )
+      }),
+    )
+  }).pipe(
+    Effect.timeoutOrElse({
+      duration: timeoutOf(server),
+      orElse: () =>
+        Effect.fail(
+          new McpError({
+            server: server.name,
+            message: `connect timed out after ${timeoutOf(server)} ms`,
+          }),
+        ),
+    }),
+  )
+
+/**
+ * Every page of `tools/list`. The request goes out with the SDK's loose
+ * result schema, not `client.listTools`, whose schema refuses the whole page
+ * for one malformed entry; each entry decodes here instead, and one the
+ * spec's tool shape refuses is skipped with a warning, its `name`, when it
+ * has one, kept in `reserved`. So the SDK keeps no output-schema validators,
+ * and the tool checks structured content itself.
+ */
 const listTools = (server: McpServer, client: Client) =>
   Effect.gen(function* () {
     const tools: Array<CatalogTool> = []
+    const reserved: Array<string> = []
     let cursor = Option.none<string>()
     for (let page = 0; page < 100; page++) {
       const params = Option.match(cursor, {
@@ -453,7 +1454,11 @@ const listTools = (server: McpServer, client: Client) =>
         onSome: (value) => ({ cursor: value }),
       })
       const listed = yield* Effect.tryPromise({
-        try: (signal) => client.listTools(params, { signal, timeout: timeoutOf(server) }),
+        try: (signal) =>
+          client.request({ method: "tools/list", params }, ResultSchema, {
+            signal,
+            timeout: timeoutOf(server),
+          }),
         catch: (cause) =>
           new McpError({ server: server.name, message: `tools/list: ${failureMessage(cause)}` }),
       }).pipe(
@@ -462,12 +1467,37 @@ const listTools = (server: McpServer, client: Client) =>
           (error) => new McpError({ server: server.name, message: failureMessage(error) }),
         ),
       )
-      tools.push(...listed.tools)
-      cursor = Option.fromUndefinedOr(listed.nextCursor)
+      for (const [index, entry] of listed.tools.entries()) {
+        const tool = yield* Effect.result(catalogToolOf(entry))
+        if (Result.isSuccess(tool)) {
+          tools.push(tool.success)
+          continue
+        }
+        const named = Schema.decodeUnknownOption(NamedEntry)(entry)
+        if (Option.isSome(named)) reserved.push(named.value.name)
+        yield* Effect.logWarning("mcp.tools.skipped").pipe(
+          Effect.annotateLogs({ server: server.name, entry: index, error: tool.failure.message }),
+        )
+      }
+      cursor = Option.fromNullishOr(listed.nextCursor)
       if (Option.isNone(cursor)) break
     }
-    return tools
+    return { tools, reserved }
   })
+
+/** A listing as the cache keeps it: `reserved` only when some entry was skipped. */
+const catalogServerOf = (
+  listed: { readonly tools: ReadonlyArray<CatalogTool>; readonly reserved: ReadonlyArray<string> },
+  instructions: Option.Option<string>,
+): CatalogServer => ({
+  tools: listed.tools,
+  ...omitUndefined({
+    instructions: Option.getOrUndefined(instructions),
+    reserved: Option.getOrUndefined(
+      Option.filter(Option.some(listed.reserved), (names) => names.length > 0),
+    ),
+  }),
+})
 
 /** The result fields a call reads; content blocks stay JSON. */
 const CallResult = Schema.Struct({
@@ -477,6 +1507,134 @@ const CallResult = Schema.Struct({
 })
 type CallResult = typeof CallResult.Type
 
+/**
+ * What a failed call says about its connection. `answered`: the server sent
+ * a JSON-RPC error, so the connection is sound. `expired`: HTTP 404 to a
+ * request that carried an `Mcp-Session-Id`, a session the server no longer
+ * knows, so it ran nothing. A 404 without a session says no such thing (a
+ * gateway can answer it after the server ran the call), so it is `kept`.
+ * `dead`: the transport failed (the connection closed, the call timed out,
+ * HTTP 400 or 408, a network error). `refused`: HTTP 401 or 403, the server
+ * no longer takes the entry's credential. `kept`: any other HTTP status,
+ * which says nothing about the connection. `stale`: the server answered that
+ * it has no such tool, so the catalog is out of date. `login`: the server
+ * refused the OAuth token and no refresh helped (see `oauthTransport`).
+ */
+const CallFailureKind = Schema.Literals([
+  "answered",
+  "expired",
+  "dead",
+  "refused",
+  "kept",
+  "stale",
+  "login",
+])
+type CallFailureKind = typeof CallFailureKind.Type
+
+const staleMessage = (name: string) =>
+  `the server no longer lists ${name}; the tool catalog was stale, and the next session registers the current list`
+
+const escapeRegExp = (text: string) => text.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&")
+
+/**
+ * Whether a server's answer says it has no tool `name`: the spec's
+ * `Unknown tool: name` (a -32602 error), or the TypeScript SDK server's
+ * `Tool name not found` (an `isError` result). The name is matched exactly,
+ * so a tool error that only mentions "not found" does not match.
+ */
+const isUnknownToolMessage = (message: string, name: string) =>
+  new RegExp(
+    `(?:unknown tool:?\\s*"?${escapeRegExp(name)}"?|tool\\s+"?${escapeRegExp(name)}"?\\s+(?:not found|is not available|does not exist))`,
+    "i",
+  ).test(message)
+
+/** HTTP statuses that end a connection: the request or the session is bad. */
+const DEAD_STATUSES: ReadonlySet<number> = new Set([400, 408])
+/** HTTP statuses that refuse the credential. */
+const REFUSED_STATUSES: ReadonlySet<number> = new Set([401, 403])
+
+/** JSON-RPC codes the SDK raises itself, for a closed connection or a timeout; no server sent them. */
+const CLIENT_RAISED: ReadonlySet<number> = new Set<number>([
+  ErrorCode.ConnectionClosed,
+  ErrorCode.RequestTimeout,
+])
+const INVALID_PARAMS: number = ErrorCode.InvalidParams
+
+/** `hadSession`: the request carried the transport's `Mcp-Session-Id`. */
+const failureKind = (cause: unknown, name: string, hadSession: boolean): CallFailureKind => {
+  if (Schema.is(LoginRequired)(cause)) return "login"
+  if (cause instanceof ProtocolError) {
+    if (CLIENT_RAISED.has(cause.code)) return "dead"
+    if (cause.code === INVALID_PARAMS && isUnknownToolMessage(cause.message, name)) return "stale"
+    return "answered"
+  }
+  if (cause instanceof StreamableHTTPError) {
+    const status = cause.code ?? 0
+    if (status === 404 && hadSession) return "expired"
+    if (REFUSED_STATUSES.has(status)) return "refused"
+    if (DEAD_STATUSES.has(status)) return "dead"
+    return "kept"
+  }
+  return "dead"
+}
+
+/** The failures that drop the connection: the next call dials again, with the credential as it is then. */
+const DROPPING_FAILURES: ReadonlySet<CallFailureKind> = new Set([
+  "dead",
+  "expired",
+  "refused",
+  "login",
+])
+
+/** A failed call's message, with the HTTP status the server answered, when it did. */
+const callFailureMessage = (name: string, cause: unknown) =>
+  Option.match(statusOf(cause), {
+    onNone: () => `${name}: ${failureMessage(cause)}`,
+    onSome: (status) => `${name}: ${failureMessage(cause)} (HTTP ${status})`,
+  })
+
+/** A failed call on one connection, and whether that connection had served a call before. */
+class CallFailed extends Schema.TaggedError<CallFailed>()("CallFailed", {
+  kind: CallFailureKind,
+  reused: Schema.Boolean,
+  message: Schema.String,
+}) {}
+
+/**
+ * A server's health as `mcp.status` reports it: `healthy` once a connect and
+ * its list worked, `expired` when the server refused the credential (401 or
+ * 403), `misconfigured` when the entry cannot run, `degraded` when the last
+ * connect, list or call failed or the server listed no tools, and `unknown`
+ * while this process has not connected to it.
+ */
+const McpHealth = Schema.Literals(["healthy", "expired", "misconfigured", "degraded", "unknown"])
+type McpHealth = typeof McpHealth.Type
+
+const McpServerStatus = Schema.Struct({
+  /** The id segment: `mcp.<name>.<tool>`. */
+  name: Schema.String,
+  /** The transport the open connection uses, else the one the entry names. */
+  transport: Schema.Literals(["stdio", "streamable-http", "sse", "auto"]),
+  health: McpHealth,
+  connected: Schema.Boolean,
+  tools: Schema.Int,
+  /** The `instructions` of the server's `initialize` answer. */
+  description: Schema.optional(Schema.String),
+  /** Why the health is not `healthy` or `unknown`. */
+  reason: Schema.optional(Schema.String),
+})
+type McpServerStatus = typeof McpServerStatus.Type
+
+const McpStatus = Schema.Struct({ servers: Schema.Array(McpServerStatus) })
+type McpStatus = typeof McpStatus.Type
+
+/** The transport an entry names before any connection opens. */
+const configuredTransport = (config: McpServerConfig): McpServerStatus["transport"] => {
+  if ("command" in config) return "stdio"
+  if (config.type === "http") return "streamable-http"
+  return config.type ?? "auto"
+}
+
 interface McpClientsService {
   /** Calls one tool on a server, opening its connection on first use. */
   readonly call: (
@@ -484,6 +1642,14 @@ interface McpClientsService {
     tool: string,
     input: Readonly<Record<string, Schema.Json>>,
   ) => Effect.Effect<CallResult, McpError>
+  /** Every configured server as this process sees it now, by name. */
+  readonly status: Effect.Effect<McpStatus>
+  /** Starts an OAuth login to the named server; the URL to open (see `login` in `mcpClientsLive`). */
+  readonly login: (name: string) => Effect.Effect<string, McpError>
+  /** Writes a result's binary blocks to files (see `makeBlobStore`); each block's file by index. */
+  readonly saveBlobs: (
+    content: ReadonlyArray<Schema.Json>,
+  ) => Effect.Effect<ReadonlyArray<Option.Option<string>>>
 }
 
 /**
@@ -495,43 +1661,180 @@ class McpClients extends Context.Service<McpClients, McpClientsService>()(
   "@gent/extensions/src/mcp/McpClients",
 ) {}
 
-/** A server this process registered, with the tools its registration read. */
-interface RegisteredServer {
+/** A server this process registered, with what its registration read. */
+interface RegisteredServer extends SetupCatalog {
   readonly server: McpServer
-  readonly tools: ReadonlyArray<CatalogTool>
 }
 
-/** An open connection and the tool names the server listed when it opened. */
+interface ServerHealth {
+  readonly health: McpHealth
+  readonly reason: Option.Option<string>
+}
+
+/** A refused credential is `expired`; any other failure leaves the server `degraded`. */
+const failureHealth = (error: McpError): ServerHealth => {
+  let health: McpHealth = "degraded"
+  if (error.status === 401 || error.status === 403) health = "expired"
+  return { health, reason: Option.some(error.message) }
+}
+
+/** A server listed at setup is `healthy`; one read from the cache is `unknown` until it connects. */
+const setupHealth = (entry: RegisteredServer): ServerHealth =>
+  Option.match(entry.failure, {
+    onSome: failureHealth,
+    onNone: (): ServerHealth => {
+      if (entry.listedNow) return { health: "healthy", reason: Option.none() }
+      return { health: "unknown", reason: Option.none() }
+    },
+  })
+
+/** An open connection and the tool names the server listed last. */
 interface Connection {
   readonly client: Client
-  readonly listed: ReadonlySet<string>
+  readonly transport: TransportKind
+  readonly instructions: Option.Option<string>
+  listed: ReadonlySet<string>
+  /** Set when the transport closed: the stdio server exited, or the HTTP transport ended. */
+  closed: boolean
+  /** Calls started on this connection. */
+  calls: number
 }
 
 /**
  * The connections of `registered`, each under its cache key, which names one
- * entry. Opening a connection lists the server's tools again: a tool it no
- * longer lists fails its call by name, and a list that differs from the one
- * registered is written to the cache, so the next session registers it. The
- * current session keeps the tools it registered; changing them live needs a
- * host seam to re-register an extension's tools.
+ * entry. The server's tools are listed again when a connection opens, when
+ * the server sends `notifications/tools/list_changed`, and when it answers a
+ * call as an unknown tool: a tool it no longer lists fails its call by name,
+ * and a list that differs from the last one is written to the cache, so the
+ * next session registers it. The current session keeps the tools it
+ * registered; changing them live needs a host seam to re-register an
+ * extension's tools.
+ *
+ * A connection is dropped when its transport closes and when a call on it
+ * fails in the transport (see `failureKind`); a JSON-RPC error leaves it
+ * open. A connection that closed before a call starts is replaced before the
+ * call is sent. A call on a reused connection answered 404 (the server
+ * forgot the session, so it ran nothing) is sent once more on a new
+ * connection; no other failure sends a call twice.
+ *
+ * Each server's health (see `McpHealth`) starts from its setup listing and
+ * follows its connects, lists and failed calls; `status` reads it.
  */
-const mcpClientsLive = (registered: ReadonlyArray<RegisteredServer>, file: string) =>
+const mcpClientsLive = ({
+  registered,
+  misconfigured,
+  file,
+  blobs,
+  auth,
+}: {
+  readonly registered: ReadonlyArray<RegisteredServer>
+  readonly misconfigured: ReadonlyArray<MisconfiguredServer>
+  /** The catalog cache. */
+  readonly file: string
+  /** The directory binary blocks are written to. */
+  readonly blobs: string
+  readonly auth: AuthStore
+}) =>
   Layer.effect(
     McpClients,
     Effect.gen(function* () {
+      const crypto = yield* Crypto.Crypto
+      const blobStore = yield* makeBlobStore(blobs)
       const byKey = new Map(registered.map((entry) => [entry.server.key, entry]))
       const writePermit = yield* Semaphore.make(1)
-      const relist = (entry: RegisteredServer, client: Client) =>
+      /** One permit per server: its lists run one at a time, so an older list never lands last. */
+      const listPermits = new Map(
+        yield* Effect.forEach(registered, (entry) =>
+          Effect.map(Semaphore.make(1), (permit) => [entry.server.key, permit] as const),
+        ),
+      )
+      const runFork = yield* FiberSet.makeRuntime<FileSystem.FileSystem | Path.Path>()
+      /** The layer's scope: each login's listener lives in a child of it. */
+      const layerScope = yield* Scope.Scope
+      /** The login each server waits for, so a second `/mcp login` replaces the first. */
+      const pendingLogins = new Map<string, Fiber.Fiber<void>>()
+      /** The connection each key holds now, so a late close never drops its successor. */
+      const live = new Map<string, Connection>()
+      /** Each server's last accepted entry, which a new list is compared with. */
+      const known = new Map(registered.map((entry) => [entry.server.key, entry.catalog]))
+      const health = new Map(registered.map((entry) => [entry.server.key, setupHealth(entry)]))
+      const setHealth = (key: string, state: McpHealth, reason: Option.Option<string>) => {
+        health.set(key, { health: state, reason })
+      }
+      const setFailed = (key: string, error: McpError) => {
+        health.set(key, failureHealth(error))
+      }
+      const namesOf = (tools: ReadonlyArray<CatalogTool>) =>
+        new Set(tools.map((listed) => listed.name))
+      /**
+       * The names the server lists now, written to the cache with its
+       * instructions when either changed. An empty list from a server that
+       * had tools is not trusted (a server whose auth broke can answer one),
+       * and a failed list is not either: both keep the last list and the
+       * cached tools, and leave the server `degraded`.
+       */
+      const listNames = (server: McpServer, client: Client, instructions: Option.Option<string>) =>
         Effect.gen(function* () {
-          const tools = yield* listTools(entry.server, client)
-          if (!Equal.equals(tools, entry.tools)) {
+          const previous = known.get(server.key) ?? { tools: [] }
+          const listed = yield* listTools(server, client)
+          const tools = listed.tools
+          if (tools.length === 0 && previous.tools.length > 0) {
+            yield* Effect.logWarning("mcp.server.relist.empty").pipe(
+              Effect.annotateLogs({ server: server.name }),
+            )
+            setHealth(
+              server.key,
+              "degraded",
+              Option.some(`listed no tools; kept the ${previous.tools.length} listed before`),
+            )
+            return namesOf(previous.tools)
+          }
+          const next = catalogServerOf(listed, instructions)
+          known.set(server.key, next)
+          setHealth(server.key, "healthy", Option.none())
+          if (!Equal.equals(next, previous)) {
             yield* Semaphore.withPermit(
               writePermit,
-              writeCatalogEntries(file, [[entry.server.key, tools]]),
+              writeCatalogEntries(file, [[server.key, next]]),
             )
           }
-          return new Set(tools.map((listed) => listed.name))
+          return namesOf(tools)
+        }).pipe(
+          Effect.catchCause((cause) => {
+            const message = failureMessage(Cause.squash(cause))
+            setHealth(server.key, "degraded", Option.some(message))
+            return Effect.logWarning("mcp.server.relist.failed").pipe(
+              Effect.annotateLogs({ server: server.name, error: message }),
+              Effect.as(namesOf(known.get(server.key)?.tools ?? [])),
+            )
+          }),
+        )
+      /**
+       * `listNames` under the server's list permit, handing the names to
+       * `apply` before the permit is released, so lists and their results
+       * land in the order they were asked for.
+       */
+      const relist = (
+        server: McpServer,
+        client: Client,
+        instructions: Option.Option<string>,
+        apply: (names: ReadonlySet<string>) => void,
+      ) =>
+        Option.match(Option.fromUndefinedOr(listPermits.get(server.key)), {
+          onNone: () => Effect.void,
+          onSome: (permit) =>
+            Semaphore.withPermit(
+              permit,
+              listNames(server, client, instructions).pipe(Effect.map((names) => apply(names))),
+            ),
         })
+      /** Lists an open connection's tools again, off the call that asked. */
+      const refresh = (server: McpServer, connection: Connection) =>
+        runFork(
+          relist(server, connection.client, connection.instructions, (names) => {
+            connection.listed = names
+          }),
+        )
       const clients = yield* RcMap.make({
         lookup: (key: string) =>
           Effect.gen(function* () {
@@ -539,55 +1842,247 @@ const mcpClientsLive = (registered: ReadonlyArray<RegisteredServer>, file: strin
             if (Predicate.isUndefined(entry)) {
               return yield* new McpError({ server: key, message: "not configured" })
             }
-            const client = yield* connect(entry.server)
-            // A server that cannot list again keeps the registered list.
-            const listed = yield* relist(entry, client).pipe(
-              Effect.orElseSucceed(() => new Set(entry.tools.map((listed) => listed.name))),
+            // The notification can only arrive once the connection below exists.
+            let onToolsChanged = () => {}
+            const { client, transport, instructions } = yield* connect(
+              entry.server,
+              auth,
+              Option.some(() => onToolsChanged()),
             )
-            return { client, listed } satisfies Connection
+            const connection: Connection = {
+              client,
+              transport,
+              instructions,
+              listed: new Set(),
+              closed: false,
+              calls: 0,
+            }
+            yield* relist(entry.server, client, instructions, (names) => {
+              connection.listed = names
+            })
+            onToolsChanged = () => refresh(entry.server, connection)
+            live.set(key, connection)
+            // Runs before the client closes, so its own close event finds nothing to drop.
+            yield* Effect.addFinalizer(() => Effect.sync(() => forget(key, connection)))
+            client.onclose = () => {
+              connection.closed = true
+              if (live.get(key) === connection) {
+                setHealth(key, "degraded", Option.some("the connection closed"))
+              }
+              runFork(evict(key, connection))
+            }
+            return connection
           }),
         idleTimeToLive: IDLE_TIME_TO_LIVE,
       })
-      return McpClients.of({
-        call: (server, name, input) =>
-          RcMap.get(clients, server.key).pipe(
-            // RcMap keeps a failed lookup until it idles out; drop it so the next call connects.
-            Effect.tapError(() => RcMap.invalidate(clients, server.key)),
-            Effect.filterOrFail(
-              (connection) => connection.listed.has(name),
-              () =>
-                new McpError({
-                  server: server.name,
-                  message: `the server no longer lists ${name}; the tool catalog was stale, and the next session registers the current list`,
+      /** Whether `connection` was the key's current one; it no longer is. */
+      const forget = (key: string, connection: Connection) => {
+        if (live.get(key) !== connection) return false
+        live.delete(key)
+        return true
+      }
+      const evict = (key: string, connection: Connection) =>
+        Effect.suspend(() => {
+          if (!forget(key, connection)) return Effect.void
+          return RcMap.invalidate(clients, key)
+        })
+      const acquire = (server: McpServer) =>
+        RcMap.get(clients, server.key).pipe(
+          // RcMap keeps a failed lookup until it idles out; drop it so the next call connects.
+          Effect.tapError((error) =>
+            Effect.andThen(
+              Effect.sync(() => setFailed(server.key, error)),
+              RcMap.invalidate(clients, server.key),
+            ),
+          ),
+        )
+      /** The key's connection; one whose transport already closed ran nothing, so it is replaced. */
+      const open = (server: McpServer) =>
+        Effect.gen(function* () {
+          const connection = yield* acquire(server)
+          if (!connection.closed) return connection
+          yield* evict(server.key, connection)
+          return yield* acquire(server)
+        })
+      /** One `tools/call` on the key's connection, which the failure's kind then drops or relists. */
+      const callOnce = (
+        server: McpServer,
+        name: string,
+        input: Readonly<Record<string, Schema.Json>>,
+      ) =>
+        Effect.gen(function* () {
+          const connection = yield* open(server)
+          if (!connection.listed.has(name)) {
+            return yield* new McpError({ server: server.name, message: staleMessage(name) })
+          }
+          const reused = connection.calls > 0
+          connection.calls += 1
+          // Read before the call: the transport sends this session id with it.
+          const hadSession = Predicate.isNotUndefined(connection.client.transport?.sessionId)
+          const send = Effect.gen(function* () {
+            const value = yield* Effect.tryPromise({
+              try: (signal) =>
+                // oxlint-disable-next-line effect/noNullish -- the SDK takes its default result schema positionally
+                connection.client.callTool({ name, arguments: input }, undefined, {
+                  signal,
+                  timeout: timeoutOf(server),
                 }),
-            ),
-            Effect.map((connection) => connection.client),
-            Effect.flatMap((client) =>
-              Effect.tryPromise({
-                try: (signal) =>
-                  // oxlint-disable-next-line effect/noNullish -- the SDK takes its default result schema positionally
-                  client.callTool({ name, arguments: input }, undefined, {
-                    signal,
-                    timeout: timeoutOf(server),
+              catch: (cause) => {
+                const kind = failureKind(cause, name, hadSession)
+                let message = callFailureMessage(name, cause)
+                if (kind === "stale") message = staleMessage(name)
+                return new CallFailed({ kind, reused, message })
+              },
+            })
+            const result = yield* Schema.decodeUnknownEffect(CallResult)(value).pipe(
+              Effect.mapError(
+                (error) =>
+                  new CallFailed({
+                    kind: "answered",
+                    reused,
+                    message: `${name}: ${error.message}`,
                   }),
-                catch: (cause) =>
-                  new McpError({
-                    server: server.name,
-                    message: `${name}: ${failureMessage(cause)}`,
-                  }),
-              }).pipe(
-                Effect.flatMap((value) =>
-                  Schema.decodeUnknownEffect(CallResult)(value).pipe(
-                    Effect.mapError(
-                      (error) =>
-                        new McpError({ server: server.name, message: `${name}: ${error.message}` }),
-                    ),
-                  ),
-                ),
               ),
+            )
+            if (result.isError === true && isUnknownToolMessage(resultText(result), name)) {
+              return yield* new CallFailed({ kind: "stale", reused, message: staleMessage(name) })
+            }
+            return result
+          })
+          return yield* send.pipe(
+            Effect.tapError((failed) => {
+              if (failed.kind === "dead") {
+                setHealth(server.key, "degraded", Option.some(failed.message))
+              }
+              if (failed.kind === "login" || failed.kind === "refused") {
+                setHealth(server.key, "expired", Option.some(failed.message))
+              }
+              if (DROPPING_FAILURES.has(failed.kind)) return evict(server.key, connection)
+              if (failed.kind === "stale") return Effect.sync(() => refresh(server, connection))
+              return Effect.void
+            }),
+          )
+        })
+      /** Waits for a started login's redirect, then connects with its token; closes `scope` at the end. */
+      const finishLogin = (server: McpServer, started: LoginStart, scope: Scope.Closeable) =>
+        Effect.gen(function* () {
+          yield* started.finish
+          // A connection opened before the login sends no token; the next one does.
+          const current = Option.fromUndefinedOr(live.get(server.key))
+          if (Option.isSome(current)) yield* evict(server.key, current.value)
+          yield* Effect.scoped(acquire(server))
+          yield* Effect.logInfo("mcp.oauth.login.done").pipe(
+            Effect.annotateLogs({ server: server.name }),
+          )
+        }).pipe(
+          Effect.catchCause((cause) => {
+            const message = failureMessage(Cause.squash(cause))
+            setHealth(server.key, "expired", Option.some(message))
+            return Effect.logWarning("mcp.oauth.login.failed").pipe(
+              Effect.annotateLogs({ server: server.name, error: message }),
+            )
+          }),
+          Effect.ensuring(Scope.close(scope, Exit.void)),
+          Effect.ensuring(Effect.sync(() => pendingLogins.delete(server.name))),
+        )
+      /**
+       * Starts a login to the server named `name` and returns its URL at
+       * once. A process fiber waits for the redirect, stores the tokens, and
+       * connects with them, which lists the tools into the cache; `/mcp`
+       * shows how it went. No turn and no request waits for the browser.
+       */
+      const login = (name: string) =>
+        Effect.gen(function* () {
+          const entry = Option.fromUndefinedOr(
+            registered.find(
+              (candidate) => candidate.server.name === name && usesOAuth(candidate.server.config),
             ),
+          )
+          if (Option.isNone(entry) || !usesOAuth(entry.value.server.config)) {
+            const names = registered
+              .filter((candidate) => usesOAuth(candidate.server.config))
+              .map((candidate) => candidate.server.name)
+            return yield* new McpError({
+              server: name,
+              message: `no MCP server named ${name} signs in with OAuth; these do: ${names.join(", ") || "none"}`,
+            })
+          }
+          const { server } = entry.value
+          const config = entry.value.server.config
+          const previous = Option.fromUndefinedOr(pendingLogins.get(name))
+          if (Option.isSome(previous)) yield* Fiber.interrupt(previous.value)
+          // The listener's scope is a child of the layer's from its creation. A
+          // start that fails or is interrupted closes it; a start that
+          // succeeds hands it to the finishing fiber in the same
+          // uninterruptible step, so no gap leaves the listener unowned.
+          return yield* Effect.uninterruptibleMask((restore) =>
+            Effect.gen(function* () {
+              const scope = yield* Scope.fork(layerScope)
+              const started = yield* restore(
+                startLogin(server, config, auth, scope).pipe(
+                  Effect.provideService(Crypto.Crypto, crypto),
+                  Effect.mapError((error) => {
+                    if (error._tag === "McpError") return error
+                    return new McpError({ server: name, message: `login: ${error.message}` })
+                  }),
+                ),
+              ).pipe(Effect.onExit((exit) => closeOnFailure(scope, exit)))
+              pendingLogins.set(name, runFork(finishLogin(server, started, scope)))
+              return started.url
+            }),
+          )
+        })
+      return McpClients.of({
+        login,
+        call: (server, name, input) =>
+          callOnce(server, name, input).pipe(
+            Effect.catchTag("CallFailed", (failed) => {
+              if (failed.kind === "expired" && failed.reused) return callOnce(server, name, input)
+              return Effect.fail(failed)
+            }),
+            Effect.mapError((error) => {
+              if (error._tag === "McpError") return error
+              return new McpError({ server: server.name, message: error.message })
+            }),
             Effect.scoped,
           ),
+        status: Effect.sync(() => {
+          const servers = registered.map(({ server }): McpServerStatus => {
+            const state = health.get(server.key) ?? { health: "unknown", reason: Option.none() }
+            const connection = Option.fromUndefinedOr(live.get(server.key)).pipe(
+              Option.filter((open) => !open.closed),
+            )
+            const catalog = known.get(server.key) ?? { tools: [] }
+            return {
+              name: server.name,
+              transport: Option.match(connection, {
+                onNone: () => configuredTransport(server.config),
+                onSome: (open) => open.transport,
+              }),
+              health: state.health,
+              connected: Option.isSome(connection),
+              tools: catalog.tools.length,
+              ...omitUndefined({
+                description: catalog.instructions,
+                reason: Option.getOrUndefined(state.reason),
+              }),
+            }
+          })
+          for (const entry of misconfigured) {
+            servers.push({
+              name: entry.name,
+              transport: configuredTransport(entry.config),
+              health: "misconfigured",
+              connected: false,
+              tools: 0,
+              reason: entry.reason,
+            })
+          }
+          return {
+            servers: servers.toSorted((left, right) => compareCodeUnits(left.name, right.name)),
+          }
+        }),
+        saveBlobs: blobStore.save,
       })
     }),
   )
@@ -598,22 +2093,36 @@ const mcpClientsLive = (registered: ReadonlyArray<RegisteredServer>, file: strin
 const AnyInput = Schema.Record(Schema.String, Schema.Json)
 
 /**
- * The tool's input schema, imported from its JSON Schema so the host checks
- * the input and the cell signature shows its types. Patterns are ignored: a
- * server's regular expressions do not run in gent.
+ * A tool's JSON Schema, imported as a schema of `A`, or `fallback` when the
+ * importer cannot read it. Patterns are ignored: a server's regular
+ * expressions do not run in gent.
  */
-const inputSchemaOf = (inputSchema: Schema.Json) =>
+const importJsonSchema = <A>(json: Schema.Json, fallback: Schema.Codec<A>): Schema.Codec<A> =>
   Result.try(() => {
-    if (!isRecord(inputSchema)) return AnyInput
-    let document = JsonSchema.fromSchemaDraft07(inputSchema)
-    const dialect = inputSchema["$schema"]
+    if (!isRecord(json)) return fallback
+    let document = JsonSchema.fromSchemaDraft07(json)
+    const dialect = json["$schema"]
     if (Predicate.isString(dialect) && dialect.includes("2020-12")) {
-      document = JsonSchema.fromSchemaDraft2020_12(inputSchema)
+      document = JsonSchema.fromSchemaDraft2020_12(json)
     }
     const imported = SchemaRepresentation.fromJsonSchemaDocument(document, { patterns: "ignore" })
     // `make` is the typed bridge from an AST: an imported schema needs no services.
-    return Schema.make<Schema.Codec<Readonly<Record<string, Schema.Json>>>>(imported.ast)
-  }).pipe(Result.getOrElse(() => AnyInput))
+    return Schema.make<Schema.Codec<A>>(imported.ast)
+  }).pipe(Result.getOrElse(() => fallback))
+
+/** The tool's input schema, so the host checks the input and the cell signature shows its types. */
+const inputSchemaOf = (inputSchema: Schema.Json) => importJsonSchema(inputSchema, AnyInput)
+
+/**
+ * The tool's result type. A tool that declares an `outputSchema` returns its
+ * structured content as that type, so the signature shows it; any other tool
+ * returns JSON.
+ */
+const outputSchemaOf = (listed: CatalogTool) =>
+  Option.match(Option.fromUndefinedOr(listed.outputSchema), {
+    onNone: () => Schema.Json,
+    onSome: (outputSchema) => importJsonSchema<Schema.Json>(outputSchema, Schema.Json),
+  })
 
 /** The bytes a base64 string decodes to. */
 const base64Bytes = (data: string) => {
@@ -622,6 +2131,14 @@ const base64Bytes = (data: string) => {
 }
 
 const isTextBlock = Schema.is(Schema.Struct({ type: Schema.Literal("text"), text: Schema.String }))
+
+/** A result's text blocks, joined. */
+const resultText = (result: CallResult) =>
+  (result.content ?? [])
+    .filter(isTextBlock)
+    .map((block) => block.text)
+    .join("\n")
+
 const isMediaBlock = Schema.is(
   Schema.Struct({
     type: Schema.Literals(["image", "audio"]),
@@ -646,29 +2163,51 @@ const isResource = Schema.is(
   }),
 )
 
-/** A call's content blocks sorted into text, other blocks, and binary data left out. */
+/** A block's binary data and MIME type, when it is an image, audio, or blob block. */
+const binaryOf = (block: Schema.Json) => {
+  if (isMediaBlock(block)) {
+    return Option.some({ data: block.data ?? "", mimeType: block.mimeType })
+  }
+  if (isBlobResource(block)) {
+    return Option.some({ data: block.resource.blob, mimeType: block.resource.mimeType })
+  }
+  return Option.none()
+}
+
+/** A call's content blocks sorted into text, other blocks, and binary blocks the cell reads from a file or not at all. */
 interface ProjectedContent {
   readonly texts: Array<string>
   readonly blocks: Array<Schema.Json>
-  readonly omitted: Array<Schema.Json>
+  readonly binary: Array<Schema.Json>
+  /** Binary blocks with no file: past the cap, or not written. */
+  unsaved: number
 }
 
-const projectContent = (content: ReadonlyArray<Schema.Json>): ProjectedContent => {
-  const projected: ProjectedContent = { texts: [], blocks: [], omitted: [] }
-  for (const block of content) {
+/** `saved` holds the file of each content block by index, where one was written. */
+const projectContent = (
+  content: ReadonlyArray<Schema.Json>,
+  saved: ReadonlyArray<Option.Option<string>>,
+): ProjectedContent => {
+  const projected: ProjectedContent = { texts: [], blocks: [], binary: [], unsaved: 0 }
+  for (const [index, block] of content.entries()) {
+    const path = Option.flatten(Option.fromUndefinedOr(saved[index]))
+    if (Option.isSome(binaryOf(block)) && Option.isNone(path)) projected.unsaved += 1
+    const file = omitUndefined({ path: Option.getOrUndefined(path) })
     if (isTextBlock(block)) {
       projected.texts.push(block.text)
     } else if (isMediaBlock(block)) {
-      projected.omitted.push({
+      projected.binary.push({
         type: block.type,
         ...omitUndefined({ mimeType: block.mimeType }),
         bytes: base64Bytes(block.data ?? ""),
+        ...file,
       })
     } else if (isBlobResource(block)) {
-      projected.omitted.push({
+      projected.binary.push({
         type: "resource",
         ...omitUndefined({ uri: block.resource.uri, mimeType: block.resource.mimeType }),
         bytes: base64Bytes(block.resource.blob),
+        ...file,
       })
     } else if (isResource(block)) {
       projected.blocks.push({ type: "resource", ...block.resource })
@@ -688,24 +2227,34 @@ const repeats = (text: string, value: Schema.Json) =>
     onSome: (parsed) => Equal.equals(parsed, value),
   })
 
-const omittedNote = (count: number) => {
-  let noun = "blocks"
-  if (count === 1) noun = "block"
-  return `${count} binary ${noun} omitted: the cell receives no image, audio or blob data`
+const blockCount = (count: number) => {
+  if (count === 1) return "1 binary block"
+  return `${count} binary blocks`
+}
+
+const binaryNote = (count: number, unsaved: number) => {
+  if (unsaved === 0) return `${blockCount(count)} saved to files: read each one from its path`
+  const omitted = `${blockCount(unsaved)} without a path omitted (over the ${BLOB_FILE_LIMIT_MIB} MiB file cap, or not written): the cell does not receive that data`
+  if (unsaved === count) return omitted
+  return `${omitted}; read the others from their paths`
 }
 
 /**
  * The value a call returns. Text alone is its joined text; structured content
  * alone (its text only repeating it) is that value. Anything else is an
  * object: `structuredContent`, `text`, the other blocks as `content`, and
- * `omitted` naming each image, audio, or blob block the cell does not
- * receive, with its MIME type and size, and a `note` saying so.
+ * `omitted` naming each image, audio, or blob block with its MIME type and
+ * size, and the `path` of the file it was saved to (see `saveBlobs`) when
+ * `saved` names one, and a `note` saying which the cell can read.
  */
-export const projectCallResult = (result: CallResult): Schema.Json => {
-  const { texts, blocks, omitted } = projectContent(result.content ?? [])
+export const projectCallResult = (
+  result: CallResult,
+  saved: ReadonlyArray<Option.Option<string>> = [],
+): Schema.Json => {
+  const { texts, blocks, binary, unsaved } = projectContent(result.content ?? [], saved)
   const text = texts.join("\n")
   const structured = Option.fromUndefinedOr(result.structuredContent)
-  if (blocks.length === 0 && omitted.length === 0) {
+  if (blocks.length === 0 && binary.length === 0) {
     if (Option.isNone(structured)) return text
     if (texts.length === 0 || repeats(text, structured.value)) return structured.value
   }
@@ -713,9 +2262,9 @@ export const projectCallResult = (result: CallResult): Schema.Json => {
   if (Option.isSome(structured)) value["structuredContent"] = structured.value
   if (texts.length > 0) value["text"] = text
   if (blocks.length > 0) value["content"] = blocks
-  if (omitted.length > 0) {
-    value["omitted"] = omitted
-    value["note"] = omittedNote(omitted.length)
+  if (binary.length > 0) {
+    value["omitted"] = binary
+    value["note"] = binaryNote(binary.length, unsaved)
   }
   return value
 }
@@ -728,11 +2277,13 @@ const toolDescription = (server: McpServer, listed: CatalogTool) => {
 
 /**
  * One host tool per listed MCP tool, each under its own segment (see
- * `allocateSegments`). A name the server lists twice is one tool.
+ * `allocateSegments`), allocated over the tools' names and the `reserved`
+ * names of skipped entries. A name the server lists twice is one tool.
  */
-const toolsFor = (server: McpServer, listed: ReadonlyArray<CatalogTool>) => {
+const toolsFor = (server: McpServer, catalog: CatalogServer) => {
+  const listed = catalog.tools
   const segments = allocateSegments(
-    listed.map((entry) => entry.name),
+    [...listed.map((entry) => entry.name), ...(catalog.reserved ?? [])],
     WIRE_SEGMENTS_LIMIT - server.name.length,
     "tool",
   )
@@ -741,6 +2292,9 @@ const toolsFor = (server: McpServer, listed: ReadonlyArray<CatalogTool>) => {
     const segment = segments.get(entry.name) ?? "tool"
     if (seen.has(entry.name)) return []
     seen.add(entry.name)
+    const output = outputSchemaOf(entry)
+    const typed = Predicate.isNotUndefined(entry.outputSchema)
+    const conforms = Schema.is(output)
     return [
       tool({
         id: `mcp.${server.name}.${segment}`,
@@ -748,11 +2302,11 @@ const toolsFor = (server: McpServer, listed: ReadonlyArray<CatalogTool>) => {
         readonly: entry.annotations?.readOnlyHint === true,
         destructive: entry.annotations?.destructiveHint === true,
         params: inputSchemaOf(entry.inputSchema),
-        output: Schema.Json,
+        output,
         execute: Effect.fn("Mcp.call")(function* (input) {
           const clients = yield* McpClients
           const result = yield* clients.call(server, entry.name, input)
-          const value = projectCallResult(result)
+          const value = projectCallResult(result, yield* clients.saveBlobs(result.content ?? []))
           if (result.isError === true) {
             // The host shape for a failed call, `{ error }`, with any non-text content beside it.
             if (Predicate.isString(value) && value.length > 0) {
@@ -765,17 +2319,32 @@ const toolsFor = (server: McpServer, listed: ReadonlyArray<CatalogTool>) => {
               result: { error: message, content: value },
             })
           }
-          return value
+          if (!typed) return value
+          // The spec asks a client to check structured content against the declared schema.
+          const structured = result.structuredContent
+          if (Predicate.isNotUndefined(structured) && conforms(structured)) return structured
+          let message = `${server.name}.${entry.name} returned structured content that does not match its output schema`
+          if (Predicate.isUndefined(structured)) {
+            message = `${server.name}.${entry.name} returned no structured content for its output schema`
+          }
+          return yield* new ToolResultFailure({
+            message,
+            result: { error: message, content: value },
+          })
         }),
       }),
     ]
   })
 }
 
-/** A server's tools, and whether setup listed them now (so they go to the cache). */
+/**
+ * A server's catalog entry, whether setup listed it now (so it goes to the
+ * cache), and the failure of a setup listing that did not work.
+ */
 interface SetupCatalog {
-  readonly tools: ReadonlyArray<CatalogTool>
+  readonly catalog: CatalogServer
   readonly listedNow: boolean
+  readonly failure: Option.Option<McpError>
 }
 
 /**
@@ -783,23 +2352,117 @@ interface SetupCatalog {
  * setup that lists them. A server that cannot list is reported and
  * contributes nothing; the other servers are unaffected.
  */
-const catalogFor = (server: McpServer, cache: CatalogFile): Effect.Effect<SetupCatalog> => {
+const catalogFor = (server: McpServer, cache: CatalogFile, auth: AuthStore) => {
   const cached = cache.servers[server.key]
   if (Predicate.isNotUndefined(cached)) {
-    return Effect.succeed({ tools: cached.tools, listedNow: false })
+    return Effect.succeed<SetupCatalog>({
+      catalog: cached,
+      listedNow: false,
+      failure: Option.none(),
+    })
   }
+  const unlisted = (error: McpError) =>
+    Effect.logWarning("mcp.server.unlisted").pipe(
+      Effect.annotateLogs({ server: server.name, error: error.message }),
+      Effect.as<SetupCatalog>({
+        catalog: { tools: [] },
+        listedNow: false,
+        failure: Option.some(error),
+      }),
+    )
   return Effect.scoped(
-    connect(server).pipe(Effect.flatMap((client) => listTools(server, client))),
+    Effect.gen(function* () {
+      const { client, instructions } = yield* connect(server, auth)
+      return catalogServerOf(yield* listTools(server, client), instructions)
+    }),
   ).pipe(
-    Effect.map((tools): SetupCatalog => ({ tools, listedNow: true })),
+    Effect.map((catalog): SetupCatalog => ({ catalog, listedNow: true, failure: Option.none() })),
+    Effect.catchTag("McpError", unlisted),
     Effect.catchCause((cause) =>
-      Effect.logWarning("mcp.server.unlisted").pipe(
-        Effect.annotateLogs({ server: server.name, error: String(cause) }),
-        Effect.as<SetupCatalog>({ tools: [], listedNow: false }),
-      ),
+      unlisted(new McpError({ server: server.name, message: String(Cause.squash(cause)) })),
     ),
   )
 }
+
+// ── status ──────────────────────────────────────────────────────────────────
+
+/**
+ * `mcp.status()`: every configured server with its transport, health, tool
+ * count and instructions. It reads this process's state and connects to
+ * nothing.
+ */
+const McpStatusTool = tool({
+  id: "mcp.status",
+  description:
+    "Report each configured MCP server: transport, health, connection, tool count, and the server's own instructions",
+  readonly: true,
+  params: Schema.Struct({}),
+  output: McpStatus,
+  execute: Effect.fn("Mcp.status")(function* () {
+    const clients = yield* McpClients
+    return yield* clients.status
+  }),
+})
+
+const statusLine = (server: McpServerStatus) => {
+  let tools = `${server.tools} tools`
+  if (server.tools === 1) tools = "1 tool"
+  let connected = "not connected"
+  if (server.connected) connected = "connected"
+  const facts = [server.health, tools, connected]
+  const reason = Option.match(Option.fromUndefinedOr(server.reason), {
+    onNone: () => "",
+    onSome: (text) => `\n  ${text}`,
+  })
+  const description = Option.match(Option.fromUndefinedOr(server.description), {
+    onNone: () => "",
+    onSome: (text) => `\n  ${firstLine(text)}`,
+  })
+  return `- ${server.name} (${server.transport}): ${facts.join(", ")}${reason}${description}`
+}
+
+const firstLine = (text: string) => text.trim().split("\n")[0] ?? ""
+
+/**
+ * `/mcp` shows `mcp.status` to the user. `/mcp login <server>` starts that
+ * server's OAuth login and shows the URL to open; the login finishes in the
+ * background, and `/mcp` shows the result. The URL is shown, not opened: the
+ * gent server may run on another machine than the browser.
+ */
+const McpCommand = request({
+  id: "mcp-command",
+  description: "Show the MCP servers, or log in to one",
+  slash: {
+    trigger: "mcp",
+    name: "MCP",
+    description: "/mcp · status of each MCP server · login <server>",
+    category: "Tools",
+  },
+  input: Schema.String,
+  output: Schema.Void,
+  execute: (input: string) =>
+    Effect.gen(function* () {
+      const ctx = yield* ExtensionContext
+      const clients = yield* McpClients
+      const words = input.trim().split(/\s+/)
+      if (words[0] === "login") {
+        const name = words[1] ?? ""
+        const content = yield* clients.login(name).pipe(
+          Effect.map(
+            (url) =>
+              `Open this URL to log in to the ${name} MCP server. gent waits 5 minutes for the redirect, then lists the server's tools; run /mcp to see the result.\n\n${url}`,
+          ),
+          Effect.catchTag("McpError", (error) => Effect.succeed(error.message)),
+        )
+        return yield* ctx.Interaction.present({ title: "MCP login", content })
+      }
+      const { servers } = yield* clients.status
+      yield* ctx.Interaction.present({
+        title: "MCP servers",
+        content: servers.map(statusLine).join("\n"),
+      })
+    }),
+})
 
 // ── extension ───────────────────────────────────────────────────────────────
 
@@ -813,13 +2476,14 @@ const registerServers = Effect.fn("Mcp.registerServers")(function* (
   entries: Readonly<Record<string, McpServerConfig>>,
 ) {
   const host = yield* ExtensionHost
-  const servers = yield* resolveServers(entries, host.cwd)
-  if (servers.length === 0) return
+  const { servers, misconfigured } = yield* resolveServers(entries, host.cwd)
+  if (servers.length === 0 && misconfigured.length === 0) return
   const file = yield* catalogPath(host.home)
   const cache = yield* readCatalog(file)
+  const auth = yield* makeAuthStore(host.home)
   const registered = yield* Effect.forEach(
     servers,
-    (server) => Effect.map(catalogFor(server, cache), (catalog) => ({ server, ...catalog })),
+    (server) => Effect.map(catalogFor(server, cache, auth), (catalog) => ({ server, ...catalog })),
     { concurrency: 8 },
   )
   // One write for every server listed now; a failed write only costs a relist.
@@ -827,23 +2491,28 @@ const registerServers = Effect.fn("Mcp.registerServers")(function* (
     file,
     registered
       .filter((entry) => entry.listedNow)
-      .map((entry): readonly [string, ReadonlyArray<CatalogTool>] => [
-        entry.server.key,
-        entry.tools,
-      ]),
+      .map((entry): readonly [string, CatalogServer] => [entry.server.key, entry.catalog]),
   ).pipe(Effect.ignore)
   yield* host.register(
     "resource",
     defineResource({
       id: `${extensionId}/clients`,
       scope: "process",
-      layer: mcpClientsLive(registered, file),
+      layer: mcpClientsLive({
+        registered,
+        misconfigured,
+        file,
+        blobs: yield* blobDirectory(host.home),
+        auth,
+      }),
     }),
   )
   yield* host.register(
     "tool",
-    ...registered.flatMap((entry) => toolsFor(entry.server, entry.tools)),
+    McpStatusTool,
+    ...registered.flatMap((entry) => toolsFor(entry.server, entry.catalog)),
   )
+  yield* host.register("request", McpCommand)
 })
 
 /**

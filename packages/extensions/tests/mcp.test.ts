@@ -1,17 +1,28 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import {
+  Clock,
   ConfigProvider,
   Context,
+  Deferred,
   Effect,
+  Fiber,
   FileSystem,
   Layer,
   Option,
   Path,
+  Predicate,
+  Queue,
   Schema,
   Stream,
 } from "effect"
 import { BunHttpServer, BunServices } from "@effect/platform-bun"
-import { HttpServer, HttpServerRequest, HttpServerResponse } from "effect/http"
+import {
+  FetchHttpClient,
+  HttpClient,
+  HttpServer,
+  HttpServerRequest,
+  HttpServerResponse,
+} from "effect/http"
 import type * as Prompt from "effect/ai/Prompt"
 import {
   BunGentPlatformLive,
@@ -23,7 +34,7 @@ import {
   toolCallStep,
   waitFor,
 } from "@gent/core/test-utils"
-import { getToolId, type ToolCapability } from "@gent/core/extensions/api"
+import { ExtensionId, getToolId, type ToolCapability } from "@gent/core/extensions/api"
 import { messagePartsText } from "@gent/core/protocol"
 import { McpExtension, McpServers, projectCallResult } from "../src/mcp.js"
 import { shippedPreset } from "./helpers/test-preset.js"
@@ -35,8 +46,23 @@ import { shippedPreset } from "./helpers/test-preset.js"
  * no SDK, so the test owns every byte it answers. Each start appends a line
  * to `MCP_FIXTURE_LOG` with its extra arguments, and `count` returns the calls
  * this process served. `MCP_FIXTURE_FAIL_ON_START=n` exits the nth start;
+ * `MCP_FIXTURE_EXIT_AFTER_CALL` exits once it answered a call;
  * `count` is not listed while `MCP_FIXTURE_HIDE_COUNT` names a file that
- * exists; `MCP_FIXTURE_COLLIDE` adds tools whose names clean to one id.
+ * exists, and with it `hide` writes that file and sends `list_changed`, and
+ * `drop` writes it silently; with it, `MCP_FIXTURE_SWAP_LOG` adds `swap`,
+ * which sends `list_changed` and holds the answer to the next `tools/list`
+ * (count still listed) while it hides count and sends `list_changed` again,
+ * until a newer list is answered or 500 ms pass, and logs `list` for each
+ * `tools/list` asked and `listed` for each answered; a call to a tool not listed is answered with the
+ * spec's unknown-tool error (the TypeScript SDK server's `isError` shape with
+ * `MCP_FIXTURE_SDK_UNKNOWN`); `MCP_FIXTURE_COLLIDE` adds tools whose names
+ * clean to one id;
+ * `MCP_FIXTURE_ENV_TOOL` adds `env`, which reads the server's environment;
+ * `MCP_FIXTURE_MALFORMED` adds four entries the spec's tool schema refuses, one named `a.b`, and `a_b`;
+ * `MCP_FIXTURE_BINARY` adds `image`, which returns an image and a blob;
+ * `MCP_FIXTURE_TYPED` adds `stats` and `badstats`, which declare an output
+ * schema, and only `stats` keeps it;
+ * `tools/list` answers no tools while `MCP_FIXTURE_EMPTY_LIST` names a file that exists.
  */
 const FIXTURE_SERVER = String.raw`
 const fs = require("node:fs")
@@ -62,13 +88,63 @@ const tools = [
   { name: "count", description: "Count calls this process served.", inputSchema: { type: "object", properties: {} } },
   { name: "repo.search/issues", description: "A name with separators.", inputSchema: { type: "object" } },
 ]
-if (process.env.MCP_FIXTURE_HIDE_COUNT && fs.existsSync(process.env.MCP_FIXTURE_HIDE_COUNT)) {
-  tools.splice(tools.findIndex((entry) => entry.name === "count"), 1)
+const hideFile = process.env.MCP_FIXTURE_HIDE_COUNT
+if (hideFile) {
+  tools.push(
+    { name: "hide", description: "Stop listing count, and say so.", inputSchema: { type: "object" } },
+    { name: "drop", description: "Stop listing count silently.", inputSchema: { type: "object" } },
+  )
+}
+const swapLog = process.env.MCP_FIXTURE_SWAP_LOG
+let swapping = false
+let held = null
+const release = () => {
+  if (held === null) return
+  const reply = held
+  held = null
+  reply()
+}
+if (swapLog) {
+  tools.push({ name: "swap", description: "Answer a list late, after a newer one.", inputSchema: { type: "object" } })
+}
+const listedTools = () => {
+  if (hideFile && fs.existsSync(hideFile)) return tools.filter((entry) => entry.name !== "count")
+  return tools
 }
 if (process.env.MCP_FIXTURE_COLLIDE) {
   for (const name of ["a/b", "a.b", "a_b_2", "get__x", "_x", "x_", "x".repeat(70) + "1", "x".repeat(70) + "2"]) {
     tools.push({ name, description: "Collides as " + name + ".", inputSchema: { type: "object" } })
   }
+}
+if (process.env.MCP_FIXTURE_ENV_TOOL) {
+  tools.push({
+    name: "env",
+    description: "Read a variable of the server's environment.",
+    inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] },
+  })
+}
+if (process.env.MCP_FIXTURE_MALFORMED) {
+  tools.push(
+    { name: "nulldesc", description: null, inputSchema: { type: "object" } },
+    { description: "An entry without a name.", inputSchema: { type: "object" } },
+    { name: "noschema", description: "An entry without an input schema." },
+    { name: "a.b", description: 5, inputSchema: { type: "object" } },
+    { name: "a_b", description: "Collides with a.b.", inputSchema: { type: "object" } },
+  )
+}
+if (process.env.MCP_FIXTURE_BINARY) {
+  tools.push({ name: "image", description: "Return an image and a blob.", inputSchema: { type: "object" } })
+}
+if (process.env.MCP_FIXTURE_TYPED) {
+  const outputSchema = {
+    type: "object",
+    properties: { open: { type: "integer" }, labels: { type: "array", items: { type: "string" } } },
+    required: ["open", "labels"],
+  }
+  tools.push(
+    { name: "stats", description: "Count open issues.", inputSchema: { type: "object" }, outputSchema },
+    { name: "badstats", description: "Break its own output schema.", inputSchema: { type: "object" }, outputSchema },
+  )
 }
 for (let index = 0; index < Number(process.env.MCP_FIXTURE_EXTRA ?? 0); index++) {
   tools.push({
@@ -84,13 +160,27 @@ for (let index = 0; index < Number(process.env.MCP_FIXTURE_EXTRA ?? 0); index++)
 const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\n")
 const answer = (request) => {
   if (request.method === "initialize") {
-    return { result: { protocolVersion: request.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "fixture", version: "1" } } }
+    return { result: { protocolVersion: request.params.protocolVersion, capabilities: { tools: { listChanged: true } }, serverInfo: { name: "fixture", version: "1" }, instructions: "Fixture server for tests.\nIt counts calls." } }
   }
-  if (request.method === "tools/list") return { result: { tools } }
+  if (request.method === "tools/list") {
+    if (process.env.MCP_FIXTURE_EMPTY_LIST && fs.existsSync(process.env.MCP_FIXTURE_EMPTY_LIST)) return { result: { tools: [] } }
+    return { result: { tools: listedTools() } }
+  }
   if (request.method !== "tools/call") return { error: { code: -32601, message: "no method " + request.method } }
+  if (!listedTools().some((entry) => entry.name === request.params.name)) {
+    if (process.env.MCP_FIXTURE_SDK_UNKNOWN) return { result: { content: [{ type: "text", text: "Tool " + request.params.name + " not found" }], isError: true } }
+    return { error: { code: -32602, message: "Unknown tool: " + request.params.name } }
+  }
   calls += 1
   const input = request.params.arguments ?? {}
   switch (request.params.name) {
+    case "swap":
+      swapping = true
+      return { result: { content: [{ type: "text", text: "swapping" }] } }
+    case "hide":
+    case "drop":
+      fs.writeFileSync(hideFile, "")
+      return { result: { content: [{ type: "text", text: "count hidden" }] } }
     case "echo":
       return { result: { content: [{ type: "text", text: String(input.text).repeat(input.times ?? 1) }] } }
     case "structured":
@@ -99,6 +189,22 @@ const answer = (request) => {
       return { result: { content: [{ type: "text", text: "fixture failure" }], isError: true } }
     case "count":
       return { result: { content: [{ type: "text", text: String(calls) }] } }
+    case "image":
+      return {
+        result: {
+          content: [
+            { type: "text", text: "a picture" },
+            { type: "image", data: Buffer.from("PNGDATA-1").toString("base64"), mimeType: "image/png" },
+            { type: "resource", resource: { uri: "file:///x.bin", mimeType: "application/octet-stream", blob: Buffer.from("BLOB").toString("base64") } },
+          ],
+        },
+      }
+    case "stats":
+      return { result: { content: [{ type: "text", text: "3 open" }], structuredContent: { open: 3, labels: ["bug"] } } }
+    case "badstats":
+      return { result: { content: [{ type: "text", text: "many open" }], structuredContent: { open: "many" } } }
+    case "env":
+      return { result: { content: [{ type: "text", text: process.env[input.name] ?? "unset" }] } }
     default:
       return { result: { content: [{ type: "text", text: "called " + request.params.name }] } }
   }
@@ -115,7 +221,34 @@ process.stdin.on("data", (chunk) => {
     if (line === "") continue
     const request = JSON.parse(line)
     if (request.id === undefined) continue
-    send({ id: request.id, ...answer(request) })
+    const answered = answer(request)
+    if (swapLog && request.method === "tools/list") {
+      fs.appendFileSync(swapLog, "list\n")
+      const reply = () => {
+        send({ id: request.id, ...answered })
+        fs.appendFileSync(swapLog, "listed\n")
+      }
+      if (swapping) {
+        // This answer lists count; it is held while count is hidden and a newer list is asked for.
+        swapping = false
+        fs.writeFileSync(hideFile, "")
+        held = reply
+        setTimeout(release, 500)
+        send({ method: "notifications/tools/list_changed" })
+      } else {
+        reply()
+        release()
+      }
+      continue
+    }
+    if (request.method === "tools/call" && process.env.MCP_FIXTURE_EXIT_AFTER_CALL) {
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, ...answered }) + "\n", () => process.exit(0))
+      return
+    }
+    send({ id: request.id, ...answered })
+    if (request.method === "tools/call" && (request.params.name === "hide" || request.params.name === "swap")) {
+      send({ method: "notifications/tools/list_changed" })
+    }
   }
 })
 `
@@ -151,9 +284,11 @@ const toolList = (contributions: { readonly tools?: ReadonlyArray<ToolCapability
     (): ReadonlyArray<ToolCapability> => [],
   )
 
+/** The ids of the servers' tools, without the extension's own `mcp.status`. */
 const toolIds = (contributions: { readonly tools?: ReadonlyArray<ToolCapability> }) =>
   toolList(contributions)
     .map((capability) => String(getToolId(capability)))
+    .filter((id) => id !== "mcp.status")
     .toSorted()
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Json))
@@ -210,6 +345,15 @@ const cellResultAfterDone = (
         .flatMap((message) => message.parts)
         .find((part): part is Prompt.ToolResultPart => part.type === "tool-result"),
     ),
+  )
+
+/** The `display` of a cell result, decoded by `schema`. */
+const cellDisplay = <A>(
+  result: Effect.Success<ReturnType<typeof cellResultAfterDone>>,
+  schema: Schema.Codec<A, string>,
+) =>
+  Schema.decodeUnknownEffect(Schema.Struct({ display: schema }))(result?.result).pipe(
+    Effect.map(({ display }) => display),
   )
 
 // ── config ──────────────────────────────────────────────────────────────────
@@ -414,6 +558,30 @@ describe("mcp config", () => {
   )
 
   it.scopedLive(
+    "a malformed tools/list entry is skipped and the rest of the list stays, its name still holding its id; a null description counts as none",
+    () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path
+        const fixture = yield* makeFixture
+        const extension = McpServers("@test/mcp-malformed", {
+          fixture: fixture.stdio({ MCP_FIXTURE_MALFORMED: "1" }),
+        })
+        const ids = toolIds(
+          yield* collectTestContributions(extension.setup, {
+            home: path.join(fixture.directory, "home"),
+            cwd: fixture.directory,
+          }),
+        )
+        expect(ids).toEqual(
+          ["a_b_2", "count", "echo", "fail", "nulldesc", "repo_search_issues", "structured"].map(
+            (name) => `mcp.fixture.${name}`,
+          ),
+        )
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(platformLayer)),
+    30_000,
+  )
+
+  it.scopedLive(
     "a server that cannot start contributes nothing and does not fail the extension",
     () =>
       Effect.gen(function* () {
@@ -447,35 +615,110 @@ const JsonRpcRequest = Schema.Struct({
 })
 const decodeRequest = Schema.decodeUnknownEffect(Schema.fromJsonString(JsonRpcRequest))
 
-/** An in-process streamable HTTP server that answers only a matching bearer token. */
-const httpFixtureApp = Effect.gen(function* () {
-  const request = yield* HttpServerRequest.HttpServerRequest
-  if (request.method !== "POST") return HttpServerResponse.empty({ status: 405 })
-  if (request.headers["authorization"] !== "Bearer fixture-token") {
-    return HttpServerResponse.text("unauthorized", { status: 401 })
-  }
-  const message = yield* Effect.flatMap(request.text, decodeRequest)
-  return Option.match(Option.fromUndefinedOr(message.id), {
-    onNone: () => HttpServerResponse.empty({ status: 202 }),
-    onSome: (id) =>
-      HttpServerResponse.jsonUnsafe({
-        jsonrpc: "2.0",
-        id,
-        result: answerHttp(message.method, Option.fromUndefinedOr(message.params)),
-      }),
-  })
-}).pipe(Effect.orElseSucceed(() => HttpServerResponse.text("bad request", { status: 400 })))
+/**
+ * The HTTP fixture's sessions: `initialize` opens one, and every other
+ * request names a live one or is answered 404, as the spec asks. The `forget`
+ * tool drops them all, as a restarted server does. A `stateless` fixture
+ * opens no sessions. `gone` answers the next request 404, as a gateway in
+ * front of the server can; `lock401` and `lock403` refuse every later
+ * request with that status, as a server that stopped taking the token does.
+ * `calls` names each `tools/call` the fixture received, refused or not.
+ */
+interface HttpSessions {
+  readonly live: Set<string>
+  opened: number
+  readonly stateless: boolean
+  refuseNext: number
+  refuseAll: number
+  readonly calls: Array<string>
+}
 
-/** The fixture's port; the server stops with the test scope. */
-const serveHttpFixture = Effect.gen(function* () {
+/** The status a fixture tool sets: `gone` for the next request, the locks for every later one. */
+const HTTP_FIXTURE_REFUSALS: ReadonlyMap<
+  string,
+  { readonly status: number; readonly once: boolean }
+> = new Map([
+  ["gone", { status: 404, once: true }],
+  ["lock401", { status: 401, once: false }],
+  ["lock403", { status: 403, once: false }],
+])
+
+/** The refusal the fixture answers `message` with now, if any; a `gone` refusal is used up. */
+const httpRefusal = (sessions: HttpSessions) => {
+  if (sessions.refuseAll !== 0) return Option.some(sessions.refuseAll)
+  if (sessions.refuseNext === 0) return Option.none<number>()
+  const status = sessions.refuseNext
+  sessions.refuseNext = 0
+  return Option.some(status)
+}
+
+/** The fixture's session for `message`: a new one for `initialize`, else the one it names if live. */
+const httpSession = (sessions: HttpSessions, method: string, named: string) => {
+  if (sessions.stateless) return Option.some("")
+  if (method === "initialize") {
+    sessions.opened += 1
+    const session = `session-${sessions.opened}`
+    sessions.live.add(session)
+    return Option.some(session)
+  }
+  return Option.liftPredicate(named, (session) => sessions.live.has(session))
+}
+
+/** An in-process streamable HTTP server that answers only a matching bearer token. */
+const httpFixtureApp = (sessions: HttpSessions) =>
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest
+    if (request.method !== "POST") return HttpServerResponse.empty({ status: 405 })
+    if (request.headers["authorization"] !== "Bearer fixture-token") {
+      return HttpServerResponse.text("unauthorized", { status: 401 })
+    }
+    const message = yield* Effect.flatMap(request.text, decodeRequest)
+    const params = Option.fromUndefinedOr(message.params)
+    const name = Option.flatMap(params, (value) =>
+      Option.filter(Option.fromUndefinedOr(value["name"]), Predicate.isString),
+    )
+    if (message.method === "tools/call") sessions.calls.push(Option.getOrElse(name, () => ""))
+    const refused = httpRefusal(sessions)
+    if (Option.isSome(refused)) return HttpServerResponse.text("refused", { status: refused.value })
+    const session = httpSession(sessions, message.method, request.headers["mcp-session-id"] ?? "")
+    if (Option.isNone(session)) return HttpServerResponse.text("unknown session", { status: 404 })
+    const result = answerHttp(message.method, params)
+    if (Option.contains(name, "forget")) sessions.live.clear()
+    const refusal = Option.flatMap(name, (tool) =>
+      Option.fromUndefinedOr(HTTP_FIXTURE_REFUSALS.get(tool)),
+    )
+    if (Option.isSome(refusal) && refusal.value.once) sessions.refuseNext = refusal.value.status
+    if (Option.isSome(refusal) && !refusal.value.once) sessions.refuseAll = refusal.value.status
+    const headers = new Headers()
+    if (session.value !== "") headers.set("mcp-session-id", session.value)
+    return Option.match(Option.fromUndefinedOr(message.id), {
+      onNone: () => HttpServerResponse.empty({ status: 202 }),
+      onSome: (id) => HttpServerResponse.jsonUnsafe({ jsonrpc: "2.0", id, result }, { headers }),
+    })
+  }).pipe(Effect.orElseSucceed(() => HttpServerResponse.text("bad request", { status: 400 })))
+
+/** The fixture's port and its sessions; the server stops with the test scope. */
+const serveHttpFixture = Effect.suspend(() => serveHttpFixtureWith({ stateless: false }))
+
+const serveHttpFixtureWith = Effect.fnUntraced(function* (options: {
+  readonly stateless: boolean
+}) {
+  const sessions: HttpSessions = {
+    live: new Set(),
+    opened: 0,
+    stateless: options.stateless,
+    refuseNext: 0,
+    refuseAll: 0,
+    calls: [],
+  }
   const context = yield* Layer.build(
-    HttpServer.serve(httpFixtureApp).pipe(
+    HttpServer.serve(httpFixtureApp(sessions)).pipe(
       Layer.provideMerge(BunHttpServer.layerServer({ port: 0, hostname: "127.0.0.1" })),
     ),
   )
   const address = Context.get(context, HttpServer.HttpServer).address
   if (address._tag === "UnixPathAddress") return yield* Effect.die("expected a TCP address")
-  return address.port
+  return { port: address.port, sessions }
 })
 
 const answerHttp = (
@@ -500,18 +743,55 @@ const answerHttp = (
           description: "Name the caller.",
           inputSchema: { type: "object", properties: {} },
         },
+        {
+          name: "forget",
+          description: "Drop every session.",
+          inputSchema: { type: "object", properties: {} },
+        },
+        {
+          name: "huge",
+          description: "Return an image one byte past 20 MiB.",
+          inputSchema: { type: "object", properties: {} },
+        },
+        ...[...HTTP_FIXTURE_REFUSALS.keys()].map((refusal) => ({
+          name: refusal,
+          description: `Refuse later requests (${refusal}).`,
+          inputSchema: { type: "object", properties: {} },
+        })),
+      ],
+    }
+  }
+  const name = Option.flatMap(params, (value) => Option.fromUndefinedOr(value["name"]))
+  if (Option.contains(name, "huge")) {
+    return {
+      content: [
+        {
+          type: "image",
+          data: Buffer.alloc(20 * 1024 * 1024 + 1).toString("base64"),
+          mimeType: "image/png",
+        },
       ],
     }
   }
   return { content: [{ type: "text", text: "http caller" }] }
 }
 
+const withFixtureToken = ConfigProvider.layer(
+  ConfigProvider.fromUnknown({ GENT_MCP_FIXTURE_TOKEN: "fixture-token" }),
+)
+
+/** The fixture as an entry, its token from a variable. */
+const httpEntry = (port: number) => ({
+  url: `http://127.0.0.1:${port}/mcp`,
+  headers: { Authorization: "Bearer ${GENT_MCP_FIXTURE_TOKEN}" },
+})
+
 describe("mcp over streamable http", () => {
   it.scopedLive(
     "a header variable expands, and the tool lists and answers over HTTP",
     () =>
       Effect.gen(function* () {
-        const port = yield* serveHttpFixture
+        const { port } = yield* serveHttpFixture
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
           toolCallStep("cell", { code: "await tools.mcp.remote.whoami()" }),
           textStep("done"),
@@ -520,12 +800,7 @@ describe("mcp over streamable http", () => {
           ...shippedPreset,
           extensionInputs: [
             ...shippedPreset.extensionInputs,
-            McpServers("@test/mcp-http", {
-              remote: {
-                url: `http://127.0.0.1:${port}/mcp`,
-                headers: { Authorization: "Bearer ${GENT_MCP_FIXTURE_TOKEN}" },
-              },
-            }),
+            McpServers("@test/mcp-http", { remote: httpEntry(port) }),
           ],
           providerLayer,
         })
@@ -538,16 +813,1054 @@ describe("mcp over streamable http", () => {
         })
       }).pipe(
         Effect.timeout("20 seconds"),
-        Effect.provide(
-          Layer.merge(
-            platformLayer,
-            ConfigProvider.layer(
-              ConfigProvider.fromUnknown({ GENT_MCP_FIXTURE_TOKEN: "fixture-token" }),
-            ),
-          ),
-        ),
+        Effect.provide(Layer.merge(platformLayer, withFixtureToken)),
       ),
     25_000,
+  )
+
+  it.scopedLive(
+    "a session the server forgot is answered 404, and the call opens a new session once",
+    () =>
+      Effect.gen(function* () {
+        const { port, sessions } = yield* serveHttpFixture
+        const code = [
+          "const first = await tools.mcp.remote.whoami()",
+          "await tools.mcp.remote.forget()",
+          "const second = await tools.mcp.remote.whoami()",
+          "JSON.stringify({ first, second })",
+        ].join("; ")
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          toolCallStep("cell", { code }),
+          textStep("done"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...shippedPreset,
+          extensionInputs: [
+            ...shippedPreset.extensionInputs,
+            McpServers("@test/mcp-http-session", { remote: httpEntry(port) }),
+          ],
+          providerLayer,
+        })
+        yield* client.message.send({ sessionId, branchId, content: "ask twice" })
+        const result = yield* cellResultAfterDone(client, branchId)
+        expect(result).toMatchObject({
+          name: "cell",
+          isFailure: false,
+          result: { display: encodeJson({ first: "http caller", second: "http caller" }) },
+        })
+        // Setup's listing, the first call's connection, and the one redial.
+        expect(sessions.opened).toBe(3)
+      }).pipe(
+        Effect.timeout("20 seconds"),
+        Effect.provide(Layer.merge(platformLayer, withFixtureToken)),
+      ),
+    25_000,
+  )
+
+  it.scopedLive(
+    "a 404 without a session is not a forgotten session: the call fails and is sent once",
+    () =>
+      Effect.gen(function* () {
+        const { port, sessions } = yield* serveHttpFixtureWith({ stateless: true })
+        const code = [
+          "const first = await tools.mcp.remote.whoami()",
+          "await tools.mcp.remote.gone()",
+          "let second = 'ran'; try { await tools.mcp.remote.whoami() } catch (error) { second = error.message }",
+          "JSON.stringify({ first, second })",
+        ].join("; ")
+        const result = yield* runHttpCell(port, code)
+        const shown = yield* cellDisplay(
+          result,
+          Schema.fromJsonString(Schema.Struct({ first: Schema.String, second: Schema.String })),
+        )
+        expect(shown.first).toBe("http caller")
+        expect(shown.second).toContain("404")
+        expect(sessions.calls).toEqual(["whoami", "gone", "whoami"])
+      }).pipe(
+        Effect.timeout("20 seconds"),
+        Effect.provide(Layer.merge(platformLayer, withFixtureToken)),
+      ),
+    25_000,
+  )
+
+  it.scopedLive(
+    "a server that starts refusing its bearer with 401 or 403 is expired",
+    () =>
+      Effect.gen(function* () {
+        const code = [
+          "for (const server of ['refused401', 'refused403']) {",
+          "  await tools.mcp[server].whoami()",
+          "  await tools.mcp[server][server === 'refused401' ? 'lock401' : 'lock403']()",
+          "  try { await tools.mcp[server].whoami() } catch {}",
+          "}",
+          "JSON.stringify(await tools.mcp.status())",
+        ].join("\n")
+        const first = yield* serveHttpFixture
+        const second = yield* serveHttpFixture
+        const result = yield* runHttpCell(first.port, code, second.port)
+        const status = yield* cellDisplay(result, StatusDisplay)
+        expect(
+          status.servers.map((server) => [server.name, server.health, server.reason ?? ""]),
+        ).toEqual([
+          ["refused401", "expired", expect.stringContaining("401")],
+          ["refused403", "expired", expect.stringContaining("403")],
+        ])
+      }).pipe(
+        Effect.timeout("20 seconds"),
+        Effect.provide(Layer.merge(platformLayer, withFixtureToken)),
+      ),
+    25_000,
+  )
+})
+
+/**
+ * A session whose model runs `code` in one cell over the HTTP fixture at
+ * `port` as `remote`, or, with `other`, over two fixtures as `refused401`
+ * and `refused403`; the cell's result.
+ */
+const runHttpCell = (port: number, code: string, other?: number) =>
+  Effect.gen(function* () {
+    const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+      toolCallStep("cell", { code }),
+      textStep("done"),
+    ])
+    const servers = Option.match(Option.fromUndefinedOr(other), {
+      onNone: () => ({ remote: httpEntry(port) }),
+      onSome: (second) => ({ refused401: httpEntry(port), refused403: httpEntry(second) }),
+    })
+    const { client, sessionId, branchId } = yield* createRpcHarness({
+      ...shippedPreset,
+      extensionInputs: [
+        ...shippedPreset.extensionInputs,
+        McpServers("@test/mcp-http-cell", servers),
+      ],
+      providerLayer,
+    })
+    yield* client.message.send({ sessionId, branchId, content: "run" })
+    return yield* cellResultAfterDone(client, branchId)
+  })
+
+// ── sse ─────────────────────────────────────────────────────────────────────
+
+/** What the SSE fixture saw: event streams asked for (with any token), and streamable HTTP posts it refused. */
+interface SseCounts {
+  streamRequests: number
+  streams: number
+  refusedPosts: number
+}
+
+/**
+ * An in-process server that speaks only the older SSE transport: `GET /sse`
+ * opens an event stream whose first event names the endpoint to post to, and
+ * each answer arrives on that stream. A streamable HTTP `POST /sse` is
+ * answered 405. Every request needs the fixture's bearer token.
+ */
+const serveSseFixture = Effect.gen(function* () {
+  const counts: SseCounts = { streamRequests: 0, streams: 0, refusedPosts: 0 }
+  const streams = new Map<string, Queue.Queue<string>>()
+  const app = Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest
+    const url = new URL(request.url, "http://127.0.0.1")
+    if (url.pathname === "/sse" && request.method === "GET") counts.streamRequests += 1
+    if (request.headers["authorization"] !== "Bearer fixture-token") {
+      return HttpServerResponse.text("unauthorized", { status: 401 })
+    }
+    if (url.pathname === "/sse" && request.method === "GET") {
+      counts.streams += 1
+      const session = `sse-${counts.streams}`
+      const queue = yield* Queue.unbounded<string>()
+      streams.set(session, queue)
+      yield* Queue.offer(queue, `event: endpoint\ndata: /messages?session=${session}\n\n`)
+      return HttpServerResponse.stream(Stream.fromQueue(queue).pipe(Stream.encodeText), {
+        contentType: "text/event-stream",
+      })
+    }
+    const queue = Option.fromUndefinedOr(streams.get(url.searchParams.get("session") ?? ""))
+    if (url.pathname !== "/messages" || request.method !== "POST" || Option.isNone(queue)) {
+      counts.refusedPosts += 1
+      return HttpServerResponse.empty({ status: 405 })
+    }
+    const message = yield* Effect.flatMap(request.text, decodeRequest)
+    const id = Option.fromUndefinedOr(message.id)
+    if (Option.isSome(id)) {
+      const result = answerHttp(message.method, Option.fromUndefinedOr(message.params))
+      const data = encodeJson({ jsonrpc: "2.0", id: id.value, result })
+      yield* Queue.offer(queue.value, `event: message\ndata: ${data}\n\n`)
+    }
+    return HttpServerResponse.empty({ status: 202 })
+  }).pipe(Effect.orElseSucceed(() => HttpServerResponse.text("bad request", { status: 400 })))
+  const context = yield* Layer.build(
+    HttpServer.serve(app).pipe(
+      Layer.provideMerge(BunHttpServer.layerServer({ port: 0, hostname: "127.0.0.1" })),
+    ),
+  )
+  const address = Context.get(context, HttpServer.HttpServer).address
+  if (address._tag === "UnixPathAddress") return yield* Effect.die("expected a TCP address")
+  return { port: address.port, counts }
+})
+
+describe("mcp over sse", () => {
+  it.scopedLive(
+    "an SSE server works pinned by type, and auto reaches it after streamable HTTP is refused",
+    () =>
+      Effect.gen(function* () {
+        const { port, counts } = yield* serveSseFixture
+        const sse = { ...httpEntry(port), url: `http://127.0.0.1:${port}/sse` }
+        const code = [
+          "const pinned = await tools.mcp.pinned.whoami()",
+          "const auto = await tools.mcp.auto.whoami()",
+          "JSON.stringify({ pinned, auto })",
+        ].join("; ")
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          toolCallStep("cell", { code }),
+          textStep("done"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...shippedPreset,
+          extensionInputs: [
+            ...shippedPreset.extensionInputs,
+            McpServers("@test/mcp-sse", { pinned: { ...sse, type: "sse" }, auto: sse }),
+          ],
+          providerLayer,
+        })
+        yield* client.message.send({ sessionId, branchId, content: "ask both" })
+        const result = yield* cellResultAfterDone(client, branchId)
+        expect(result).toMatchObject({
+          name: "cell",
+          isFailure: false,
+          result: { display: encodeJson({ pinned: "http caller", auto: "http caller" }) },
+        })
+        // Setup and the calls each open one stream per server; only auto posts first.
+        expect(counts).toEqual({ streamRequests: 4, streams: 4, refusedPosts: 2 })
+      }).pipe(
+        Effect.timeout("20 seconds"),
+        Effect.provide(Layer.merge(platformLayer, withFixtureToken)),
+      ),
+    25_000,
+  )
+
+  it.scopedLive(
+    "an entry that changes its type lists again instead of reading the other transport's catalog",
+    () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path
+        const fs = yield* FileSystem.FileSystem
+        const { port, counts } = yield* serveSseFixture
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-mcp-sse-type-" })
+        const entry = { ...httpEntry(port), url: `http://127.0.0.1:${port}/sse` }
+        const setup = (type: "sse" | "http") =>
+          collectTestContributions(
+            McpServers("@test/mcp-sse-type", { server: { ...entry, type } }).setup,
+            { home: path.join(directory, "home"), cwd: directory },
+          ).pipe(Effect.map(toolIds))
+        expect(yield* setup("sse")).toContain("mcp.server.whoami")
+        // Streamable HTTP at the same URL is refused, so it registers nothing.
+        expect(yield* setup("http")).toEqual([])
+        expect(counts.refusedPosts).toBe(1)
+      }).pipe(
+        Effect.timeout("20 seconds"),
+        Effect.provide(Layer.merge(platformLayer, withFixtureToken)),
+      ),
+    25_000,
+  )
+
+  it.scopedLive(
+    "auto does not try SSE when streamable HTTP is refused for the credential",
+    () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path
+        const fs = yield* FileSystem.FileSystem
+        const { port, counts } = yield* serveSseFixture
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-mcp-sse-" })
+        const extension = McpServers("@test/mcp-sse-401", {
+          auto: {
+            url: `http://127.0.0.1:${port}/sse`,
+            headers: { Authorization: "Bearer wrong-token" },
+          },
+        })
+        const contributions = yield* collectTestContributions(extension.setup, {
+          home: path.join(directory, "home"),
+          cwd: directory,
+        })
+        expect(toolIds(contributions)).toEqual([])
+        expect(counts).toEqual({ streamRequests: 0, streams: 0, refusedPosts: 0 })
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(platformLayer)),
+    25_000,
+  )
+})
+
+// ── status ──────────────────────────────────────────────────────────────────
+
+const StatusDisplay = Schema.fromJsonString(
+  Schema.Struct({
+    servers: Schema.Array(
+      Schema.Struct({
+        name: Schema.String,
+        transport: Schema.String,
+        health: Schema.String,
+        connected: Schema.Boolean,
+        tools: Schema.Int,
+        description: Schema.optional(Schema.String),
+        reason: Schema.optional(Schema.String),
+      }),
+    ),
+  }),
+)
+
+describe("mcp status", () => {
+  it.scopedLive(
+    "mcp.status and /mcp report each server's transport, health, tool count and instructions",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* makeFixture
+        const sse = yield* serveSseFixture
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          toolCallStep("cell", {
+            code: "await tools.mcp.fixture.count(); JSON.stringify(await tools.mcp.status())",
+          }),
+          textStep("done"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...shippedPreset,
+          extensionInputs: [
+            ...shippedPreset.extensionInputs,
+            McpServers("@test/mcp-status", {
+              dead: { command: "/nonexistent/gent-probe-x", timeoutMs: 2000 },
+              fixture: fixture.stdio(),
+              locked: {
+                url: `http://127.0.0.1:${sse.port}/sse`,
+                headers: { Authorization: "Bearer wrong-token" },
+              },
+              missing: {
+                url: "http://127.0.0.1:9/mcp",
+                headers: { authorization: "${GENT_MCP_UNSET}" },
+              },
+            }),
+          ],
+          providerLayer,
+        })
+        yield* client.message.send({ sessionId, branchId, content: "status" })
+        const result = yield* cellResultAfterDone(client, branchId)
+        expect(result).toMatchObject({ name: "cell", isFailure: false })
+        const status = yield* cellDisplay(result, StatusDisplay)
+        expect(status.servers.map((server) => [server.name, server.health])).toEqual([
+          ["dead", "degraded"],
+          ["fixture", "healthy"],
+          ["locked", "expired"],
+          ["missing", "misconfigured"],
+        ])
+        expect(status.servers[1]).toEqual({
+          name: "fixture",
+          transport: "stdio",
+          health: "healthy",
+          connected: true,
+          tools: 5,
+          description: "Fixture server for tests.\nIt counts calls.",
+        })
+        expect(status.servers[2]).toMatchObject({ transport: "auto", connected: false, tools: 0 })
+        expect(status.servers[3]?.reason).toBe("environment variable GENT_MCP_UNSET is not set")
+        yield* client.extension.request({
+          sessionId,
+          branchId,
+          extensionId: ExtensionId.make("@test/mcp-status"),
+          capabilityId: "mcp-command",
+          input: "",
+        })
+        const shown = yield* waitFor(
+          client.message.list({ branchId }),
+          (all) => all.some((message) => messagePartsText(message.parts).includes("- fixture")),
+          10_000,
+          "the /mcp report",
+        )
+        const report = shown
+          .map((message) => messagePartsText(message.parts))
+          .find((text) => text.includes("- fixture"))
+        expect(report).toContain(
+          "- fixture (stdio): healthy, 5 tools, connected\n  Fixture server for tests.",
+        )
+        expect(report).toContain(
+          "- missing (auto): misconfigured, 0 tools, not connected\n  environment variable GENT_MCP_UNSET is not set",
+        )
+      }).pipe(Effect.timeout("25 seconds"), Effect.provide(platformLayer)),
+    30_000,
+  )
+})
+
+// ── oauth ───────────────────────────────────────────────────────────────────
+
+/** What the OAuth fixture saw and holds. */
+interface OAuthFixtureState {
+  origin: string
+  /** Access tokens `/mcp` accepts; `revoke` clears them, not the refresh tokens. */
+  readonly valid: Set<string>
+  readonly refreshTokens: Set<string>
+  issued: number
+  refreshes: number
+  /** `tools/call` requests `/mcp` refused with 401. */
+  refusedCalls: number
+  /** `initialize` requests `/mcp` refused with 401. */
+  refusedInitializes: number
+  /** Refresh grants refused because their refresh token was already redeemed. */
+  failedRefreshes: number
+  readonly options: OAuthFixtureOptions
+  /** Refresh grants the fixture is answering now. */
+  refreshing: number
+  /** Done when a second refresh grant arrives while one is held. */
+  readonly secondRefresh: Deferred.Deferred<void>
+  /** The `redirect_uris` each registration named. */
+  readonly redirects: Array<string>
+  /** Open until the test lets registrations answer. */
+  readonly registerGate: Deferred.Deferred<void>
+}
+
+/**
+ * `headerOnly`: the resource metadata is served only at the path the 401's
+ * `WWW-Authenticate` names, and the authorization server lives under `/as`,
+ * so only a client that reads the header finds it. `overlapRefreshes`: a
+ * refresh grant is held until a second one arrives, or a second passes.
+ * `holdRegister`: a registration waits for `registerGate`.
+ */
+interface OAuthFixtureOptions {
+  readonly headerOnly: boolean
+  readonly overlapRefreshes: boolean
+  readonly holdRegister: boolean
+}
+
+const defaultOAuthFixture: OAuthFixtureOptions = {
+  headerOnly: false,
+  overlapRefreshes: false,
+  holdRegister: false,
+}
+
+/** Where the authorization server lives: the origin, or `/as` under `headerOnly`. */
+const authorizationPrefix = (state: OAuthFixtureState) => {
+  if (state.options.headerOnly) return "/as"
+  return ""
+}
+
+/** Where the 401's `WWW-Authenticate` points for the resource metadata. */
+const resourceMetadataUrl = (state: OAuthFixtureState) => {
+  if (state.options.headerOnly) return `${state.origin}/resource-metadata`
+  return `${state.origin}/.well-known/oauth-protected-resource/mcp`
+}
+
+const servesResourceMetadata = (state: OAuthFixtureState, pathname: string) => {
+  if (state.options.headerOnly) return pathname === "/resource-metadata"
+  return pathname.startsWith("/.well-known/oauth-protected-resource")
+}
+
+const FormParams = Schema.Struct({
+  grant_type: Schema.String,
+  code: Schema.optional(Schema.String),
+  refresh_token: Schema.optional(Schema.String),
+})
+
+const RpcMessage = Schema.fromJsonString(
+  Schema.Struct({
+    id: Schema.optional(Schema.Union([Schema.String, Schema.Finite])),
+    method: Schema.String,
+    params: Schema.optional(Schema.Record(Schema.String, Schema.Json)),
+  }),
+)
+
+type OAuthRequest = HttpServerRequest.HttpServerRequest
+
+const fixtureJson = (body: Schema.Json, status = 200) =>
+  HttpServerResponse.jsonUnsafe(body, { status })
+
+/** The next numbered token pair, which the fixture then accepts. */
+const issueTokens = (state: OAuthFixtureState) => {
+  state.issued += 1
+  const tokens = {
+    access_token: `token-${state.issued}`,
+    token_type: "Bearer",
+    expires_in: 3600,
+    refresh_token: `refresh-${state.issued}`,
+  }
+  state.valid.add(tokens.access_token)
+  state.refreshTokens.add(tokens.refresh_token)
+  return fixtureJson(tokens)
+}
+
+const authorizationServerMetadata = (state: OAuthFixtureState) =>
+  fixtureJson({
+    issuer: `${state.origin}${authorizationPrefix(state)}`,
+    authorization_endpoint: `${state.origin}${authorizationPrefix(state)}/authorize`,
+    token_endpoint: `${state.origin}${authorizationPrefix(state)}/token`,
+    registration_endpoint: `${state.origin}${authorizationPrefix(state)}/register`,
+    response_types_supported: ["code"],
+    grant_types_supported: ["authorization_code", "refresh_token"],
+    code_challenge_methods_supported: ["S256"],
+    token_endpoint_auth_methods_supported: ["none"],
+  })
+
+const ClientMetadata = Schema.fromJsonString(
+  Schema.Struct({ redirect_uris: Schema.Array(Schema.String) }),
+)
+
+const registerClient = (state: OAuthFixtureState, request: OAuthRequest) =>
+  Effect.gen(function* () {
+    const text = yield* request.text
+    const metadata = yield* Schema.decodeEffect(
+      Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json)),
+    )(text)
+    state.redirects.push(...(yield* Schema.decodeEffect(ClientMetadata)(text)).redirect_uris)
+    if (state.options.holdRegister) yield* Deferred.await(state.registerGate)
+    return fixtureJson({ ...metadata, client_id: "client-1", client_id_issued_at: 1 }, 201)
+  })
+
+/** Holds a refresh grant until a second one arrives, or one second passes. */
+const overlapRefresh = (state: OAuthFixtureState) =>
+  Effect.gen(function* () {
+    if (!state.options.overlapRefreshes) return
+    state.refreshing += 1
+    if (state.refreshing >= 2) {
+      yield* Deferred.succeed(state.secondRefresh, void 0)
+      return
+    }
+    yield* Deferred.await(state.secondRefresh).pipe(Effect.timeout("1 second"), Effect.ignore)
+  })
+
+/** The browser's part of a login: the user agrees at once, so it redirects with the code. */
+const authorize = (url: URL) => {
+  const redirect = new URL(url.searchParams.get("redirect_uri") ?? "")
+  redirect.searchParams.set("code", "code-1")
+  redirect.searchParams.set("state", url.searchParams.get("state") ?? "")
+  return HttpServerResponse.redirect(redirect.href, { status: 302 })
+}
+
+/** The code grant for `code-1`, and the refresh grant for a refresh token not yet used. */
+const exchangeToken = (state: OAuthFixtureState, request: OAuthRequest) =>
+  Effect.gen(function* () {
+    const form = yield* Effect.flatMap(request.text, (text) =>
+      Schema.decodeUnknownEffect(FormParams)(Object.fromEntries(new URLSearchParams(text))),
+    )
+    if (form.grant_type === "authorization_code" && form.code === "code-1")
+      return issueTokens(state)
+    const refresh = form.refresh_token ?? ""
+    if (form.grant_type === "refresh_token") yield* overlapRefresh(state)
+    if (form.grant_type === "refresh_token" && state.refreshTokens.has(refresh)) {
+      state.refreshTokens.delete(refresh)
+      state.refreshes += 1
+      return issueTokens(state)
+    }
+    if (form.grant_type === "refresh_token") state.failedRefreshes += 1
+    return fixtureJson({ error: "invalid_grant" }, 400)
+  })
+
+/** The JSON-RPC result of `/mcp` for an accepted token. */
+const mcpResult = (
+  state: OAuthFixtureState,
+  method: string,
+  name: Option.Option<Schema.Json>,
+  token: string,
+): Schema.Json => {
+  if (method === "initialize") {
+    return {
+      protocolVersion: "2025-06-18",
+      capabilities: { tools: {} },
+      serverInfo: { name: "oauth-fixture", version: "1" },
+    }
+  }
+  if (method === "tools/list") {
+    return {
+      tools: [
+        { name: "whoami", description: "Name the token.", inputSchema: { type: "object" } },
+        {
+          name: "revoke",
+          description: "Revoke every access token.",
+          inputSchema: { type: "object" },
+        },
+      ],
+    }
+  }
+  if (Option.contains(name, "revoke")) {
+    state.valid.clear()
+    return { content: [{ type: "text", text: "revoked" }] }
+  }
+  return { content: [{ type: "text", text: token }] }
+}
+
+/** `/mcp`: 401 with the resource metadata for a token it does not accept, else the result. */
+const answerMcp = (state: OAuthFixtureState, request: OAuthRequest) =>
+  Effect.gen(function* () {
+    const message = yield* Effect.flatMap(request.text, Schema.decodeUnknownEffect(RpcMessage))
+    const token = (request.headers["authorization"] ?? "").replace(/^Bearer /, "")
+    if (!state.valid.has(token)) {
+      if (message.method === "tools/call") state.refusedCalls += 1
+      if (message.method === "initialize") state.refusedInitializes += 1
+      return HttpServerResponse.text("unauthorized", {
+        status: 401,
+        headers: {
+          "www-authenticate": `Bearer resource_metadata="${resourceMetadataUrl(state)}"`,
+        },
+      })
+    }
+    const name = Option.flatMap(Option.fromUndefinedOr(message.params), (params) =>
+      Option.fromUndefinedOr(params["name"]),
+    )
+    const result = mcpResult(state, message.method, name, token)
+    return Option.match(Option.fromUndefinedOr(message.id), {
+      onNone: () => HttpServerResponse.empty({ status: 202 }),
+      onSome: (id) => fixtureJson({ jsonrpc: "2.0", id, result }),
+    })
+  })
+
+/**
+ * One local server that is both an MCP resource at `/mcp` and its OAuth
+ * authorization server: metadata, dynamic registration, an `/authorize` that
+ * redirects at once with a code, and `/token` for the code and refresh
+ * grants. Tokens are numbered in issue order.
+ */
+const oauthFixtureApp = (state: OAuthFixtureState) =>
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest
+    const url = new URL(request.url, state.origin)
+    const prefix = authorizationPrefix(state)
+    if (servesResourceMetadata(state, url.pathname)) {
+      return fixtureJson({
+        resource: `${state.origin}/mcp`,
+        authorization_servers: [`${state.origin}${prefix}`],
+      })
+    }
+    if (url.pathname === `/.well-known/oauth-authorization-server${prefix}`) {
+      return authorizationServerMetadata(state)
+    }
+    if (url.pathname === `${prefix}/register`) return yield* registerClient(state, request)
+    if (url.pathname === `${prefix}/authorize`) return authorize(url)
+    if (url.pathname === `${prefix}/token`) return yield* exchangeToken(state, request)
+    if (url.pathname !== "/mcp") return HttpServerResponse.empty({ status: 404 })
+    if (request.method !== "POST") return HttpServerResponse.empty({ status: 405 })
+    return yield* answerMcp(state, request)
+  }).pipe(Effect.orElseSucceed(() => HttpServerResponse.text("bad request", { status: 400 })))
+
+const serveOAuthFixture = Effect.suspend(() => serveOAuthFixtureWith(defaultOAuthFixture))
+
+const serveOAuthFixtureWith = Effect.fnUntraced(function* (options: OAuthFixtureOptions) {
+  const state: OAuthFixtureState = {
+    origin: "",
+    valid: new Set(),
+    refreshTokens: new Set(),
+    issued: 0,
+    refreshes: 0,
+    refusedCalls: 0,
+    refusedInitializes: 0,
+    failedRefreshes: 0,
+    options,
+    refreshing: 0,
+    secondRefresh: yield* Deferred.make<void>(),
+    redirects: [],
+    registerGate: yield* Deferred.make<void>(),
+  }
+  const context = yield* Layer.build(
+    HttpServer.serve(oauthFixtureApp(state)).pipe(
+      Layer.provideMerge(BunHttpServer.layerServer({ port: 0, hostname: "127.0.0.1" })),
+    ),
+  )
+  const address = Context.get(context, HttpServer.HttpServer).address
+  if (address._tag === "UnixPathAddress") return yield* Effect.die("expected a TCP address")
+  state.origin = `http://127.0.0.1:${address.port}`
+  return state
+})
+
+/** A scratch data directory, and the harness environment that uses it. */
+const makeDataDir = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem
+  const directory = yield* fs.realPath(
+    yield* fs.makeTempDirectoryScoped({ prefix: "gent-mcp-oauth-" }),
+  )
+  return {
+    directory,
+    layer: ConfigProvider.layer(ConfigProvider.fromUnknown({ GENT_DATA_DIR: directory })),
+  }
+})
+
+const oauthServers = (oauth: OAuthFixtureState) =>
+  McpServers("@test/mcp-oauth", { secure: { url: `${oauth.origin}/mcp` } })
+
+/** A session whose model runs `code` in one cell; the cell's result. */
+const runOAuthCell = (oauth: OAuthFixtureState, code: string) =>
+  Effect.gen(function* () {
+    const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+      toolCallStep("cell", { code }),
+      textStep("done"),
+    ])
+    const { client, sessionId, branchId } = yield* createRpcHarness({
+      ...shippedPreset,
+      extensionInputs: [...shippedPreset.extensionInputs, oauthServers(oauth)],
+      providerLayer,
+    })
+    yield* client.message.send({ sessionId, branchId, content: "who am I" })
+    return yield* cellResultAfterDone(client, branchId)
+  })
+
+/** A session with no model turns: `request` runs `/mcp <input>`, `shown` waits for a message. */
+const commandSession = (oauth: OAuthFixtureState) =>
+  Effect.gen(function* () {
+    const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+    const harness = yield* createRpcHarness({
+      ...shippedPreset,
+      extensionInputs: [...shippedPreset.extensionInputs, oauthServers(oauth)],
+      providerLayer,
+    })
+    const request = (input: string) =>
+      harness.client.extension.request({
+        sessionId: harness.sessionId,
+        branchId: harness.branchId,
+        extensionId: ExtensionId.make("@test/mcp-oauth"),
+        capabilityId: "mcp-command",
+        input,
+      })
+    const texts = harness.client.message
+      .list({ branchId: harness.branchId })
+      .pipe(Effect.map((all) => all.map((message) => messagePartsText(message.parts))))
+    const shown = (needle: string) =>
+      waitFor(texts, (all) => all.some((text) => text.includes(needle)), 10_000, needle).pipe(
+        Effect.map((all) => all.filter((text) => text.includes(needle)).at(-1) ?? ""),
+      )
+    return { request, shown }
+  })
+
+/** Stores a login whose token `token-0` expires in 30 s, inside the 60 s skew. */
+const storeExpiringLogin = (oauth: OAuthFixtureState, directory: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+    oauth.valid.add("token-0")
+    oauth.refreshTokens.add("refresh-0")
+    const now = yield* Clock.currentTimeMillis
+    yield* fs.writeFileString(
+      path.join(directory, "mcp-auth.json"),
+      encodeJson({
+        servers: {
+          [`secure ${oauth.origin}/mcp`]: {
+            tokens: { access_token: "token-0", token_type: "Bearer", refresh_token: "refresh-0" },
+            expiresAt: now + 30_000,
+            client: { client_id: "client-1" },
+            redirectUri: "http://127.0.0.1:9/callback",
+          },
+        },
+      }),
+    )
+  })
+
+/**
+ * One session: `/mcp` before the login, `/mcp login secure`, the browser's
+ * visit to the presented URL, and `/mcp` once the login listed the tools.
+ */
+const loginThroughCommand = (oauth: OAuthFixtureState, catalogFile: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const http = yield* HttpClient.HttpClient
+    const { request, shown } = yield* commandSession(oauth)
+    // Setup could not list: the server wants a login.
+    yield* request("")
+    const before = yield* shown("- secure")
+    yield* request("login secure")
+    const prompt = yield* shown("/authorize?")
+    const loginUrl = /http:\/\/127\.0\.0\.1:\d+\/\S*authorize\?\S+/.exec(prompt)?.[0] ?? ""
+    // The browser's part: the fixture redirects to gent's loopback listener at once.
+    const landing = yield* http.get(loginUrl).pipe(Effect.flatMap((response) => response.text))
+    yield* waitFor(
+      fs.readFileString(catalogFile).pipe(Effect.orElseSucceed(() => "")),
+      (text) => text.includes("whoami"),
+      10_000,
+      "the login lists the tools into the cache",
+    )
+    yield* request("")
+    const after = yield* shown("healthy")
+    return { before, prompt, landing, after }
+  }).pipe(Effect.provide(FetchHttpClient.layer))
+
+/**
+ * One cell: a call, `revoke`, a call the server refuses, and a call on the
+ * next connection, whose refused initialize refreshes the token.
+ */
+const revokeThenCall = (oauth: OAuthFixtureState) =>
+  Effect.gen(function* () {
+    const code = [
+      "const first = await tools.mcp.secure.whoami()",
+      "await tools.mcp.secure.revoke()",
+      "let refused = ''; try { await tools.mcp.secure.whoami() } catch (error) { refused = error.message }",
+      "const second = await tools.mcp.secure.whoami()",
+      "JSON.stringify({ first, refused, second })",
+    ].join("; ")
+    const result = yield* runOAuthCell(oauth, code)
+    expect(result).toMatchObject({ name: "cell", isFailure: false })
+    return yield* cellDisplay(
+      result,
+      Schema.fromJsonString(
+        Schema.Struct({ first: Schema.String, refused: Schema.String, second: Schema.String }),
+      ),
+    )
+  })
+
+describe("mcp oauth", () => {
+  it.scopedLive(
+    "/mcp login signs in through the loopback redirect, stores the token 0600, and the next session calls with it",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const oauth = yield* serveOAuthFixture
+        const data = yield* makeDataDir
+        const authFile = path.join(data.directory, "mcp-auth.json")
+        const catalogFile = path.join(data.directory, "mcp-catalog.json")
+        const first = yield* loginThroughCommand(oauth, catalogFile).pipe(
+          Effect.provide(data.layer),
+        )
+        expect(first.before).toContain(
+          "- secure (auto): expired, 0 tools, not connected\n  connect: the secure MCP server needs a login: run /mcp login secure",
+        )
+        expect(first.prompt).toContain("Open this URL to log in to the secure MCP server.")
+        expect(first.landing).toBe("gent is logged in to secure. You can close this tab.")
+        expect(first.after).toContain("- secure (streamable-http): healthy, 2 tools, connected")
+        const stored = yield* fs.readFileString(authFile)
+        expect(stored).toContain('"access_token":"token-1"')
+        expect(stored).toContain('"client_id":"client-1"')
+        const info = yield* fs.stat(authFile)
+        expect(Number(info.mode) & 0o777).toBe(0o600)
+        // A new session registers the listed tools and calls with the stored token.
+        const called = yield* runOAuthCell(oauth, "await tools.mcp.secure.whoami()").pipe(
+          Effect.provide(data.layer),
+        )
+        expect(called).toMatchObject({ isFailure: false, result: { display: "token-1" } })
+      }).pipe(Effect.timeout("40 seconds"), Effect.provide(platformLayer)),
+    45_000,
+  )
+
+  it.scopedLive(
+    "a token near expiry is refreshed before the dial; a refused initialize is refreshed and sent again; a refused call is not",
+    () =>
+      Effect.gen(function* () {
+        const oauth = yield* serveOAuthFixture
+        const data = yield* makeDataDir
+        yield* storeExpiringLogin(oauth, data.directory)
+        const shown = yield* revokeThenCall(oauth).pipe(Effect.provide(data.layer))
+        // Setup refreshed token-0 to token-1 before it dialed.
+        expect(shown.first).toBe("token-1")
+        expect(shown.refused).toContain(
+          "the secure MCP server needs a login: run /mcp login secure",
+        )
+        // The refused initialize was refreshed to token-2 and sent again.
+        expect(shown.second).toBe("token-2")
+        expect(oauth.refreshes).toBe(2)
+        expect(oauth.refusedInitializes).toBe(1)
+        // The refused call went out once.
+        expect(oauth.refusedCalls).toBe(1)
+      }).pipe(Effect.timeout("40 seconds"), Effect.provide(platformLayer)),
+    45_000,
+  )
+
+  it.scopedLive(
+    "two setups that find the same token near expiry redeem its refresh token once",
+    () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path
+        const oauth = yield* serveOAuthFixtureWith({
+          ...defaultOAuthFixture,
+          overlapRefreshes: true,
+        })
+        const data = yield* makeDataDir
+        yield* storeExpiringLogin(oauth, data.directory)
+        const home = path.join(data.directory, "home")
+        const setup = collectTestContributions(oauthServers(oauth).setup, {
+          home,
+          cwd: data.directory,
+        })
+        const [first, second] = yield* Effect.all([setup, setup], { concurrency: 2 }).pipe(
+          Effect.provide(data.layer),
+        )
+        // The second waiter read the rotated token instead of redeeming refresh-0 again.
+        expect(oauth.failedRefreshes).toBe(0)
+        expect(oauth.refreshes).toBe(1)
+        expect(toolIds(first)).toContain("mcp.secure.whoami")
+        expect(toolIds(second)).toContain("mcp.secure.whoami")
+      }).pipe(Effect.timeout("40 seconds"), Effect.provide(platformLayer)),
+    45_000,
+  )
+
+  it.scopedLive(
+    "a server whose resource metadata only its WWW-Authenticate header names logs in and refreshes",
+    () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path
+        const oauth = yield* serveOAuthFixtureWith({ ...defaultOAuthFixture, headerOnly: true })
+        const data = yield* makeDataDir
+        const catalogFile = path.join(data.directory, "mcp-catalog.json")
+        const first = yield* loginThroughCommand(oauth, catalogFile).pipe(
+          Effect.provide(data.layer),
+        )
+        expect(first.landing).toBe("gent is logged in to secure. You can close this tab.")
+        expect(first.after).toContain("- secure (streamable-http): healthy, 2 tools, connected")
+        // The refused initialize finds the token endpoint through the header too.
+        const shown = yield* revokeThenCall(oauth).pipe(Effect.provide(data.layer))
+        expect(shown.first).toBe("token-1")
+        expect(shown.second).toBe("token-2")
+        expect(oauth.refreshes).toBe(1)
+      }).pipe(Effect.timeout("40 seconds"), Effect.provide(platformLayer)),
+    45_000,
+  )
+
+  it.scopedLive(
+    "an interrupted /mcp login closes its loopback listener",
+    () =>
+      Effect.gen(function* () {
+        const http = yield* HttpClient.HttpClient
+        const oauth = yield* serveOAuthFixtureWith({ ...defaultOAuthFixture, holdRegister: true })
+        // The held registration answers before the fixture stops.
+        yield* Effect.addFinalizer(() => Deferred.succeed(oauth.registerGate, void 0))
+        const data = yield* makeDataDir
+        const { request } = yield* commandSession(oauth).pipe(Effect.provide(data.layer))
+        const login = yield* Effect.forkChild(request("login secure"))
+        // The registration names the listener's redirect; it waits there.
+        const redirect = yield* waitFor(
+          Effect.sync(() => oauth.redirects),
+          (redirects) => redirects.length > 0,
+          10_000,
+          "the login registers its redirect",
+        ).pipe(Effect.map((redirects) => redirects[0] ?? ""))
+        const listening = http.get(redirect).pipe(
+          Effect.as(true),
+          Effect.orElseSucceed(() => false),
+        )
+        expect(yield* listening).toBe(true)
+        yield* Fiber.interrupt(login)
+        yield* waitFor(listening, (up) => !up, 5_000, "the listener closes")
+      }).pipe(
+        Effect.provide(FetchHttpClient.layer),
+        Effect.timeout("40 seconds"),
+        Effect.provide(platformLayer),
+      ),
+    45_000,
+  )
+})
+
+// ── binary content ──────────────────────────────────────────────────────────
+
+const BinaryDisplay = Schema.fromJsonString(
+  Schema.Struct({
+    text: Schema.String,
+    omitted: Schema.Array(
+      Schema.Struct({
+        type: Schema.String,
+        mimeType: Schema.String,
+        bytes: Schema.Int,
+        path: Schema.optional(Schema.String),
+      }),
+    ),
+    note: Schema.String,
+    contents: Schema.Array(Schema.String),
+    named: Schema.Boolean,
+    again: Schema.String,
+    touched: Schema.Boolean,
+    rewritten: Schema.String,
+    huge: Schema.Struct({
+      omitted: Schema.Array(
+        Schema.Struct({
+          type: Schema.String,
+          mimeType: Schema.String,
+          bytes: Schema.Int,
+          path: Schema.optional(Schema.String),
+        }),
+      ),
+      note: Schema.String,
+    }),
+    files: Schema.Array(Schema.String),
+  }),
+)
+
+describe("mcp binary content", () => {
+  it.scopedLive(
+    "image and blob blocks are written once under the data directory, and the result names each file",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const fixture = yield* makeFixture
+        const { port } = yield* serveHttpFixture
+        const dataDir = path.join(fixture.directory, "data")
+        const blobs = path.join(dataDir, "mcp-blobs")
+        // One file past the 14-day prune age and one inside it.
+        yield* fs.makeDirectory(blobs, { recursive: true })
+        const stale = path.join(blobs, "stale.png")
+        const recent = path.join(blobs, "recent.png")
+        yield* fs.writeFileString(stale, "old")
+        yield* fs.writeFileString(recent, "new")
+        // In seconds, as `utimes` reads a number.
+        const fifteenDaysAgo = ((yield* Clock.currentTimeMillis) - 15 * 24 * 60 * 60 * 1000) / 1000
+        yield* fs.utimes(stale, fifteenDaysAgo, fifteenDaysAgo)
+        const code = [
+          "const result = await tools.mcp.fixture.image()",
+          "const contents = await Promise.all(result.omitted.map((entry) => Bun.file(entry.path).text()))",
+          "const hash = (text) => new Bun.CryptoHasher('sha256').update(text).digest('hex')",
+          "const named = result.omitted.every((entry, index) => entry.path.endsWith('/' + hash(contents[index]) + (index === 0 ? '.png' : '.bin')))",
+          // A reuse refreshes a file's age: the first file is aged past the prune age, the second removed.
+          "const nodeFs = require('node:fs')",
+          "const aged = Date.now() / 1000 - 20 * 24 * 60 * 60",
+          "nodeFs.utimesSync(result.omitted[0].path, aged, aged)",
+          "nodeFs.unlinkSync(result.omitted[1].path)",
+          "const again = (await tools.mcp.fixture.image()).omitted[0].path",
+          "const touched = Date.now() - nodeFs.statSync(again).mtimeMs < 60_000",
+          "const rewritten = nodeFs.readFileSync(result.omitted[1].path, 'utf8')",
+          // Over stdio the SDK refuses a message past 10 MiB, so the cap is reached over HTTP.
+          "const huge = await tools.mcp.remote.huge()",
+          `const files = require('node:fs').readdirSync(${encodeJson(blobs)}).sort()`,
+          "JSON.stringify({ ...result, contents, named, again, touched, rewritten, huge: { omitted: huge.omitted, note: huge.note }, files })",
+        ].join("; ")
+        const result = yield* Effect.gen(function* () {
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            toolCallStep("cell", { code }),
+            textStep("done"),
+          ])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...shippedPreset,
+            extensionInputs: [
+              ...shippedPreset.extensionInputs,
+              McpServers("@test/mcp-binary", {
+                fixture: fixture.stdio({ MCP_FIXTURE_BINARY: "1" }),
+                remote: httpEntry(port),
+              }),
+            ],
+            providerLayer,
+          })
+          yield* client.message.send({ sessionId, branchId, content: "fetch the picture" })
+          return yield* cellResultAfterDone(client, branchId)
+        }).pipe(
+          Effect.provide(
+            ConfigProvider.layer(
+              ConfigProvider.fromUnknown({
+                GENT_DATA_DIR: dataDir,
+                GENT_MCP_FIXTURE_TOKEN: "fixture-token",
+              }),
+            ),
+          ),
+        )
+        expect(result).toMatchObject({ name: "cell", isFailure: false })
+        const shown = yield* cellDisplay(result, BinaryDisplay)
+        expect(shown.text).toBe("a picture")
+        expect(shown.omitted.map((entry) => [entry.type, entry.mimeType, entry.bytes])).toEqual([
+          ["image", "image/png", 9],
+          ["resource", "application/octet-stream", 4],
+        ])
+        expect(shown.omitted.every((entry) => entry.path?.startsWith(`${blobs}/`))).toBe(true)
+        expect(shown.contents).toEqual(["PNGDATA-1", "BLOB"])
+        expect(shown.named).toBe(true)
+        expect(shown.again).toBe(shown.omitted[0]?.path ?? "")
+        expect(shown.touched).toBe(true)
+        expect(shown.rewritten).toBe("BLOB")
+        expect(shown.note).toBe("2 binary blocks saved to files: read each one from its path")
+        // Past the cap: the size and no file.
+        expect(shown.huge.omitted).toEqual([
+          { type: "image", mimeType: "image/png", bytes: 20 * 1024 * 1024 + 1 },
+        ])
+        expect(shown.huge.note).toContain("over the 20 MiB file cap")
+        // The stale file is pruned, the recent one kept, and each block is one file.
+        expect(shown.files).toHaveLength(3)
+        expect(shown.files).toContain("recent.png")
+        expect(shown.files).not.toContain("stale.png")
+      }).pipe(Effect.timeout("40 seconds"), Effect.provide(platformLayer)),
+    45_000,
   )
 })
 
@@ -587,23 +1900,33 @@ describe("mcp results", () => {
     })
   })
 
-  test("binary blocks are named as omitted, with their type, MIME type and size", () => {
+  test("binary blocks keep their type, MIME type and size, and name the file each was saved to", () => {
+    const content: ReadonlyArray<Schema.Json> = [
+      { type: "text", text: "see" },
+      { type: "image", data: "AAAA", mimeType: "image/png" },
+      { type: "resource", resource: { uri: "file:///x", blob: "AAAAAA==", mimeType: "x/y" } },
+    ]
     expect(
-      projectCallResult({
-        content: [
-          { type: "text", text: "see" },
-          { type: "image", data: "AAAA", mimeType: "image/png" },
-          { type: "resource", resource: { uri: "file:///x", blob: "AAAAAA==", mimeType: "x/y" } },
-        ],
-      }),
+      projectCallResult({ content }, [
+        Option.none(),
+        Option.some("/nonexistent/gent-probe-x/a.png"),
+        Option.none(),
+      ]),
     ).toEqual({
       text: "see",
       omitted: [
-        { type: "image", mimeType: "image/png", bytes: 3 },
+        { type: "image", mimeType: "image/png", bytes: 3, path: "/nonexistent/gent-probe-x/a.png" },
         { type: "resource", uri: "file:///x", mimeType: "x/y", bytes: 4 },
       ],
-      note: "2 binary blocks omitted: the cell receives no image, audio or blob data",
+      note: "1 binary block without a path omitted (over the 20 MiB file cap, or not written): the cell does not receive that data; read the others from their paths",
     })
+    expect(
+      projectCallResult({ content }, [
+        Option.none(),
+        Option.some("/nonexistent/gent-probe-x/a.png"),
+        Option.some("/nonexistent/gent-probe-x/b.bin"),
+      ]),
+    ).toMatchObject({ note: "2 binary blocks saved to files: read each one from its path" })
     expect(
       projectCallResult({
         content: [{ type: "audio", data: "AAAA", mimeType: "audio/wav" }],
@@ -612,7 +1935,7 @@ describe("mcp results", () => {
     ).toEqual({
       structuredContent: { ok: true },
       omitted: [{ type: "audio", mimeType: "audio/wav", bytes: 3 }],
-      note: "1 binary block omitted: the cell receives no image, audio or blob data",
+      note: "1 binary block without a path omitted (over the 20 MiB file cap, or not written): the cell does not receive that data",
     })
   })
 })
@@ -705,7 +2028,7 @@ describe("mcp tools in the cell", () => {
         const fixture = yield* makeFixture
         const { systems, recordSystem } = systemRecorder()
         const code = [
-          "const found = tools.search('extra_042').map((entry) => entry.id)",
+          "const found = tools.search('extra_042').items.map((entry) => entry.id)",
           "const signature = tools.describe('mcp.fixture.extra_042')",
           "const called = await tools.mcp.fixture.extra_042({ owner: 'o', repo: 'r', query: 'q' })",
           "JSON.stringify({ found, signature, called })",
@@ -740,6 +2063,52 @@ describe("mcp tools in the cell", () => {
             }),
           },
         })
+      }).pipe(Effect.timeout("25 seconds"), Effect.provide(platformLayer)),
+    30_000,
+  )
+
+  it.scopedLive(
+    "a tool with an output schema shows a typed result and returns its structured content",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* makeFixture
+        const { systems, recordSystem } = systemRecorder()
+        const code = [
+          "const signature = tools.describe('mcp.fixture.stats')",
+          "const stats = await tools.mcp.fixture.stats()",
+          "let broken = ''; try { await tools.mcp.fixture.badstats() } catch (error) { broken = error.message }",
+          "JSON.stringify({ signature, stats, broken })",
+        ].join("; ")
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          recordSystem(toolCallStep("cell", { code })),
+          textStep("done"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...shippedPreset,
+          extensionInputs: [
+            ...shippedPreset.extensionInputs,
+            McpServers("@test/mcp-typed", { fixture: fixture.stdio({ MCP_FIXTURE_TYPED: "1" }) }),
+          ],
+          providerLayer,
+        })
+        yield* client.message.send({ sessionId, branchId, content: "count the issues" })
+        const result = yield* cellResultAfterDone(client, branchId)
+        const typed =
+          "tools.mcp.fixture.stats(input?: {}): Promise<{ open: number; labels: string[] }>"
+        expect(systems[0] ?? "").toContain(`- ${typed} // Count open issues.`)
+        expect(result).toMatchObject({ name: "cell", isFailure: false })
+        const display = yield* cellDisplay(
+          result,
+          Schema.fromJsonString(
+            Schema.Struct({ signature: Schema.String, stats: Schema.Json, broken: Schema.String }),
+          ),
+        )
+        expect(display).toMatchObject({
+          signature: `${typed} // Count open issues.`,
+          stats: { open: 3, labels: ["bug"] },
+        })
+        expect(display.broken).toContain("does not match")
+        expect(display.broken).toContain("output schema")
       }).pipe(Effect.timeout("25 seconds"), Effect.provide(platformLayer)),
     30_000,
   )
@@ -800,6 +2169,207 @@ describe("mcp tools in the cell", () => {
   )
 
   it.scopedLive(
+    "a relist that answers no tools for a server that had some keeps the cached tools",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const fixture = yield* makeFixture
+        const empty = path.join(fixture.directory, "empty-list")
+        const servers = {
+          fixture: { ...fixture.stdio({ MCP_FIXTURE_EMPTY_LIST: empty }), cwd: fixture.directory },
+        }
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          toolCallStep("cell", { code: "await tools.mcp.fixture.echo({ text: 'kept' })" }),
+          textStep("done"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...shippedPreset,
+          extensionInputs: [
+            ...shippedPreset.extensionInputs,
+            McpServers("@test/mcp-empty", servers),
+          ],
+          providerLayer,
+        })
+        // The server answers an empty list from now on, as one with broken auth can.
+        yield* fs.writeFileString(empty, "")
+        yield* client.message.send({ sessionId, branchId, content: "echo" })
+        const result = yield* cellResultAfterDone(client, branchId)
+        expect(result).toMatchObject({
+          name: "cell",
+          isFailure: false,
+          result: { display: "kept" },
+        })
+        const next = yield* collectTestContributions(McpServers("@test/mcp-empty", servers).setup, {
+          home: path.join(fixture.directory, "home"),
+          cwd: fixture.directory,
+        })
+        expect(toolIds(next)).toHaveLength(5)
+        expect(yield* fixture.starts).toBe(2)
+      }).pipe(
+        Effect.timeout("25 seconds"),
+        Effect.provide(Layer.provideMerge(withDataDir, platformLayer)),
+      ),
+    30_000,
+  )
+
+  it.scopedLive(
+    "a list_changed notification on an open connection relists and writes the cache",
+    () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path
+        const fixture = yield* makeFixture
+        const hide = path.join(fixture.directory, "hide-count")
+        const servers = {
+          fixture: { ...fixture.stdio({ MCP_FIXTURE_HIDE_COUNT: hide }), cwd: fixture.directory },
+        }
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          toolCallStep("cell", { code: "await tools.mcp.fixture.hide()" }),
+          textStep("done"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...shippedPreset,
+          extensionInputs: [
+            ...shippedPreset.extensionInputs,
+            McpServers("@test/mcp-changed", servers),
+          ],
+          providerLayer,
+        })
+        yield* client.message.send({ sessionId, branchId, content: "hide count" })
+        expect(yield* cellResultAfterDone(client, branchId)).toMatchObject({
+          name: "cell",
+          isFailure: false,
+        })
+        const next = yield* waitFor(
+          collectTestContributions(McpServers("@test/mcp-changed", servers).setup, {
+            home: path.join(fixture.directory, "home"),
+            cwd: fixture.directory,
+          }).pipe(Effect.map(toolIds)),
+          (ids) => !ids.includes("mcp.fixture.count"),
+          10_000,
+          "the cache drops count",
+        )
+        expect(next).toContain("mcp.fixture.echo")
+        // The open connection relisted; no server started for it.
+        expect(yield* fixture.starts).toBe(2)
+      }).pipe(
+        Effect.timeout("25 seconds"),
+        Effect.provide(Layer.provideMerge(withDataDir, platformLayer)),
+      ),
+    30_000,
+  )
+
+  it.scopedLive(
+    "relists of one server run one at a time, so an older list never lands after a newer one",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const fixture = yield* makeFixture
+        const hide = path.join(fixture.directory, "hide-count")
+        const log = path.join(fixture.directory, "swap-log")
+        const servers = {
+          fixture: {
+            ...fixture.stdio({ MCP_FIXTURE_HIDE_COUNT: hide, MCP_FIXTURE_SWAP_LOG: log }),
+            cwd: fixture.directory,
+          },
+        }
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          toolCallStep("cell", { code: "await tools.mcp.fixture.swap()" }),
+          textStep("done"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...shippedPreset,
+          extensionInputs: [
+            ...shippedPreset.extensionInputs,
+            McpServers("@test/mcp-swap", servers),
+          ],
+          providerLayer,
+        })
+        yield* client.message.send({ sessionId, branchId, content: "swap" })
+        expect(yield* cellResultAfterDone(client, branchId)).toMatchObject({ isFailure: false })
+        const lines = yield* waitFor(
+          fs
+            .readFileString(log)
+            .pipe(Effect.map((text) => text.split("\n").filter((line) => line !== ""))),
+          (entries) => entries.length >= 8,
+          10_000,
+          "setup's list, the connection's list, and the two relists",
+        )
+        // Each list is answered before the next is asked for: the held list waits out its 500 ms.
+        expect(lines).toEqual([
+          "list",
+          "listed",
+          "list",
+          "listed",
+          "list",
+          "listed",
+          "list",
+          "listed",
+        ])
+      }).pipe(
+        Effect.timeout("25 seconds"),
+        Effect.provide(Layer.provideMerge(withDataDir, platformLayer)),
+      ),
+    30_000,
+  )
+
+  const unknownToolAnswers: ReadonlyArray<readonly [string, Readonly<Record<string, string>>]> = [
+    ["the spec's -32602 error", {}],
+    ["the TypeScript SDK server's isError result", { MCP_FIXTURE_SDK_UNKNOWN: "1" }],
+  ]
+  for (const [answer, answerEnv] of unknownToolAnswers) {
+    it.scopedLive(
+      `a call the server answers as an unknown tool (${answer}) names the stale catalog and relists`,
+      () =>
+        Effect.gen(function* () {
+          const path = yield* Path.Path
+          const fixture = yield* makeFixture
+          const hide = path.join(fixture.directory, "hide-count")
+          const servers = {
+            fixture: {
+              ...fixture.stdio({ MCP_FIXTURE_HIDE_COUNT: hide, ...answerEnv }),
+              cwd: fixture.directory,
+            },
+          }
+          const code = [
+            "await tools.mcp.fixture.drop()",
+            "let stale = ''; try { await tools.mcp.fixture.count() } catch (error) { stale = error.message }",
+            "stale",
+          ].join("; ")
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            toolCallStep("cell", { code }),
+            textStep("done"),
+          ])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...shippedPreset,
+            extensionInputs: [
+              ...shippedPreset.extensionInputs,
+              McpServers("@test/mcp-unknown", servers),
+            ],
+            providerLayer,
+          })
+          yield* client.message.send({ sessionId, branchId, content: "count" })
+          const result = yield* cellResultAfterDone(client, branchId)
+          expect(yield* cellDisplay(result, Schema.String)).toContain("no longer lists count")
+          yield* waitFor(
+            collectTestContributions(McpServers("@test/mcp-unknown", servers).setup, {
+              home: path.join(fixture.directory, "home"),
+              cwd: fixture.directory,
+            }).pipe(Effect.map(toolIds)),
+            (ids) => !ids.includes("mcp.fixture.count"),
+            10_000,
+            "the cache drops count",
+          )
+        }).pipe(
+          Effect.timeout("25 seconds"),
+          Effect.provide(Layer.provideMerge(withDataDir, platformLayer)),
+        ),
+      30_000,
+    )
+  }
+
+  it.scopedLive(
     "a failed connect is not kept: the next call connects again",
     () =>
       Effect.gen(function* () {
@@ -833,6 +2403,98 @@ describe("mcp tools in the cell", () => {
         })
         expect(yield* fixture.starts).toBe(3)
       }).pipe(Effect.timeout("25 seconds"), Effect.provide(platformLayer)),
+    30_000,
+  )
+
+  it.scopedLive(
+    "a server that exits after connecting is dropped: the next call starts it again",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* makeFixture
+        // A call can race the exit it follows and fail once (the server may
+        // have run it, so it is not sent again); each count gets two tries.
+        const code = [
+          "const counts = []",
+          "for (let index = 0; index < 3; index++) { let value = 'failed'; for (let attempt = 0; attempt < 2 && value === 'failed'; attempt++) { try { value = await tools.mcp.fixture.count() } catch (error) {} } counts.push(value) }",
+          "JSON.stringify(counts)",
+        ].join("; ")
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          toolCallStep("cell", { code }),
+          textStep("done"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...shippedPreset,
+          extensionInputs: [
+            ...shippedPreset.extensionInputs,
+            McpServers("@test/mcp-exit", {
+              fixture: { ...fixture.stdio({ MCP_FIXTURE_EXIT_AFTER_CALL: "1" }), timeoutMs: 5000 },
+            }),
+          ],
+          providerLayer,
+        })
+        yield* client.message.send({ sessionId, branchId, content: "count three times" })
+        const result = yield* cellResultAfterDone(client, branchId)
+        // Each call reaches a new process, which served one call and exited.
+        expect(result).toMatchObject({
+          name: "cell",
+          isFailure: false,
+          result: { display: encodeJson(["1", "1", "1"]) },
+        })
+        expect(yield* fixture.starts).toBe(4)
+      }).pipe(Effect.timeout("25 seconds"), Effect.provide(platformLayer)),
+    30_000,
+  )
+
+  it.scopedLive(
+    "a stdio server runs with the host environment, its entry's env winning",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* makeFixture
+        const code = [
+          "const host = await tools.mcp.fixture.env({ name: 'GENT_MCP_HOST_ONLY' })",
+          "const declared = await tools.mcp.fixture.env({ name: 'GENT_MCP_DECLARED' })",
+          "JSON.stringify({ host, declared })",
+        ].join("; ")
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          toolCallStep("cell", { code }),
+          textStep("done"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...shippedPreset,
+          extensionInputs: [
+            ...shippedPreset.extensionInputs,
+            McpServers("@test/mcp-env", {
+              fixture: fixture.stdio({
+                MCP_FIXTURE_ENV_TOOL: "1",
+                GENT_MCP_DECLARED: "from the entry",
+              }),
+            }),
+          ],
+          providerLayer,
+        })
+        yield* client.message.send({ sessionId, branchId, content: "read the environment" })
+        const result = yield* cellResultAfterDone(client, branchId)
+        expect(result).toMatchObject({
+          name: "cell",
+          isFailure: false,
+          result: {
+            display: encodeJson({ host: "from the host", declared: "from the entry" }),
+          },
+        })
+      }).pipe(
+        Effect.timeout("25 seconds"),
+        Effect.provide(
+          Layer.merge(
+            platformLayer,
+            // The gent process's environment, as a proxy or CA variable is in a user's shell.
+            ConfigProvider.layer(
+              ConfigProvider.fromEnv({
+                env: { GENT_MCP_HOST_ONLY: "from the host", GENT_MCP_DECLARED: "from the host" },
+              }),
+            ),
+          ),
+        ),
+      ),
     30_000,
   )
 })
