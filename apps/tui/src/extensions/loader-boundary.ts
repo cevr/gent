@@ -47,11 +47,7 @@ import {
   type WidgetSlot,
   unknownContributionKey,
 } from "./client-facets.js"
-import {
-  bindModuleSource,
-  buildClientExtension,
-  type ClientBuildNames,
-} from "../client-extension-build-adapter"
+import { bindModuleSource, buildClientExtension, type ClientBuildNames } from "../bun-adapter"
 import type { ToolRenderer } from "../tool-renderers"
 import type { Command } from "../commands"
 

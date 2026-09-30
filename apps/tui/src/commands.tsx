@@ -23,7 +23,7 @@ import {
   type SelectListApi,
   type SelectListRow,
 } from "./ui"
-import { textWidth } from "./text-width-adapter"
+import { textWidth } from "./bun-adapter"
 import { useTheme } from "./theme"
 import { useExtensionUI } from "./extensions/host"
 import { type Keybind, parseKeybind } from "./extensions/loader-boundary"

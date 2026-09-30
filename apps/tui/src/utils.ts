@@ -10,7 +10,7 @@ import {
   Schema,
 } from "effect"
 import { type Context, useContext } from "solid-js"
-import { textWidth } from "./text-width-adapter"
+import { textWidth } from "./bun-adapter"
 import {
   GentConnectionError,
   GentRpcError,

@@ -74,7 +74,7 @@ export {
 } from "./ui"
 export { useTheme } from "./theme"
 export { pastedLine, typedText, useScopedKeyboard, useTerminalDimensions } from "./terminal"
-export { textWidth } from "./text-width-adapter"
+export { textWidth } from "./bun-adapter"
 export {
   fitWidth,
   formatAge,

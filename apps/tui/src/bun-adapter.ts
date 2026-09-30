@@ -1,6 +1,17 @@
 import { Effect, Option, Schema } from "effect"
 import { createSolidTransformPlugin } from "@opentui/solid/bun-plugin"
 
+/*
+ * The TUI's whole Bun edge: the only TUI file that reads `Bun.*`.
+ */
+
+// ── text width ──────────────────────────────────────────────────────────────
+
+/** The terminal cells `text` takes. */
+export const textWidth = (text: string): number => Bun.stringWidth(text)
+
+// ── client extension build ──────────────────────────────────────────────────
+
 /**
  * Bun's side of loading a client extension file: compile it, and bind the
  * output as a module. The loader in `extensions/loader-boundary.ts` owns which

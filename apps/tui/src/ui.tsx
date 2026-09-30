@@ -24,7 +24,7 @@ import {
 } from "./terminal"
 import { useTheme } from "./theme"
 import { truncate } from "./utils"
-import { textWidth } from "./text-width-adapter"
+import { textWidth } from "./bun-adapter"
 import type { MessageRowProps } from "./extensions/client-facets"
 
 // ── spinner clock ───────────────────────────────────────────────────────────
