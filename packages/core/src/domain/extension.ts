@@ -25,6 +25,7 @@ import {
 import {
   getToolId,
   getToolMetadata,
+  hasWireParameters,
   isToolCapability,
   isWireToolId,
   type PromptSection,
@@ -1120,6 +1121,11 @@ const checkToolDescriptions = (tools: ReadonlyArray<ToolCapability>): Option.Opt
     if (Predicate.isUndefined(cap.description) || cap.description.trim() === "") {
       return Option.some(
         `tools[${i}] (${metadata.id}): tool requires a non-empty \`description\` (the model sees it as the tool description)`,
+      )
+    }
+    if (!hasWireParameters(cap)) {
+      return Option.some(
+        `tools[${i}] (${metadata.id}): tool parameters have no JSON Schema (the model sees them as one; use string keys)`,
       )
     }
   }

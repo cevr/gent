@@ -393,6 +393,34 @@ describe("defineExtension", () => {
       }
     }))
 
+  // The model sees a tool's parameters as JSON Schema; a schema that cannot be
+  // written as one would fail every model request that lists the tool.
+  test("a tool whose parameters have no JSON Schema is rejected at package validation", () =>
+    Effect.gen(function* () {
+      const exit = yield* Effect.exit(
+        validateExtensionPackage(
+          { id: ExtensionId.make("symbol-params") },
+          {
+            tools: [
+              tool({
+                id: "symbolic",
+                description: "A tool keyed by a symbol",
+                params: Schema.Struct({ [Symbol.for("gent-probe-key")]: Schema.String }),
+                output: Schema.Void,
+                execute: () => Effect.void,
+              }),
+            ],
+          },
+        ),
+      )
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        expect(Cause.pretty(exit.cause)).toContain(
+          "tools[0] (symbolic): tool parameters have no JSON Schema",
+        )
+      }
+    }))
+
   test("a tool id the wire mapping cannot carry back is rejected at package validation", () =>
     Effect.gen(function* () {
       const idsOf = (ids: ReadonlyArray<string>) =>

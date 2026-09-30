@@ -724,6 +724,14 @@ const toolIdFromWire = (name: string): string => name.replaceAll(WIRE_NAMESPACE_
 export const isWireToolId = (id: string): boolean =>
   TOOL_ID_PATTERN.test(id) && wireToolName(id).length <= WIRE_TOOL_NAME_MAX
 
+/**
+ * True when the tool's parameters can be written as the JSON Schema a model
+ * request lists (a symbol-keyed struct cannot). Extension validation rejects
+ * any other tool, so every loaded tool has one.
+ */
+export const hasWireParameters = (tool: ToolCapability): boolean =>
+  Result.isSuccess(Result.try(() => AiTool.getJsonSchema(tool)))
+
 /** A prompt as the provider sees it: every tool call and result under its tool's wire name. */
 export const toWirePrompt = (prompt: Prompt.Prompt): Prompt.Prompt =>
   Prompt.fromMessages(
