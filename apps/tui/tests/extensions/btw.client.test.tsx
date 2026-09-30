@@ -121,7 +121,7 @@ describe("fork pane", () => {
         yield* waitForFrame(setup, (frame) => frame.includes("then that"), "second answer")
         const frame = renderFrame(setup)
         expect(frame).toContain("btw: why?")
-        expect(frame).toContain("^o open")
+        expect(frame).toContain("ctrl+o open")
       }),
   )
 

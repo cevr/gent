@@ -59,6 +59,8 @@ export {
   ChromePanel,
   CollapsedRow,
   decoration,
+  keyHint,
+  KeyHints,
   PickerFrame,
   selectable,
   SelectList,

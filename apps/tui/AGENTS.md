@@ -121,6 +121,18 @@ has more than one branch. No branch is chosen yet, so there is nothing behind it
 to fall back to: Esc does nothing there, and its hint says `ctrl+c quit`. The
 command palette's "Branches" level switches branches after that.
 
+Every docked pane docks in one slot: under the status row, which sits right
+under the input (`StatusRow`, placed by `Composer`). The slash popup and the
+palette dock inside the composer after it; the model, reasoning, branch, fork,
+prompt-search and sign-in panes and the extension panes dock after the
+composer. The status row never moves when a pane opens. Every pane's key-hint
+row is data: `PickerFrame` takes `keys` and draws them in one vocabulary
+(`KeyHints` and `keyHintsLine` in `ui.tsx`, also exported to client
+extensions): lowercase keys, one `·` separator, Enter `select` on a row and
+`submit` on typed text, Esc `close` on a pane and `back` on a sub-screen. A
+narrow row drops the move hint first, then hints from the right, and keeps the
+way out. An ask's footer uses the same line.
+
 The footer (composer, trays, docked panes) never outgrows the split-footer
 region (`DockFooter`'s `maxHeight` in `app.tsx`). While a docked pane is open
 the trays hide (`TrayFrame` reads the `DockProvider` count each `PickerFrame`

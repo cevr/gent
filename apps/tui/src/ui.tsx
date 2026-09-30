@@ -24,6 +24,7 @@ import {
 } from "./terminal"
 import { useTheme } from "./theme"
 import { truncate } from "./utils"
+import { textWidth } from "./text-width-adapter"
 import type { MessageRowProps } from "./extensions/client-facets"
 
 // ── spinner clock ───────────────────────────────────────────────────────────
@@ -510,6 +511,53 @@ export const usePickerBody = (lines: () => PickerBodyLines): (() => Option.Optio
   return body.rows
 }
 
+// ── key hints ───────────────────────────────────────────────────────────────
+
+/** One key and what it does, as a pane's key-hint row draws it: `enter select`. */
+interface KeyHint {
+  readonly key: string
+  readonly verb: string
+}
+
+/**
+ * The one vocabulary of the key-hint rows: lowercase keys, one verb per key.
+ * Enter picks a row (`select`) or sends typed text (`submit`). Esc closes a
+ * pane and goes `back` from a sub-screen. A pane with a key of its own
+ * (`tab complete`, `d delete`) names it with {@link keyHint}.
+ */
+export const KeyHints = {
+  move: { key: "↑↓", verb: "move" },
+  filter: { key: "type", verb: "to filter" },
+  select: { key: "enter", verb: "select" },
+  submit: { key: "enter", verb: "submit" },
+  close: { key: "esc", verb: "close" },
+  back: { key: "esc", verb: "back" },
+  quit: { key: "ctrl+c", verb: "quit" },
+} satisfies Record<string, KeyHint>
+
+export const keyHint = (key: string, verb: string): KeyHint => ({ key, verb })
+
+const KEY_HINT_SEPARATOR = " · "
+
+/**
+ * The hint row at `width`: the hints joined by one separator. Too wide, it
+ * drops hints until it fits: the move hint first (the arrows need no
+ * telling), then the others from the right. The last hint, the way out,
+ * stays.
+ */
+export const keyHintsLine = (hints: ReadonlyArray<KeyHint>, width: number): string => {
+  const join = (shown: ReadonlyArray<KeyHint>) =>
+    shown.map((hint) => `${hint.key} ${hint.verb}`).join(KEY_HINT_SEPARATOR)
+  let shown = [...hints]
+  while (shown.length > 1 && textWidth(join(shown)) > width) {
+    const move = shown.findIndex((hint) => hint.key === KeyHints.move.key)
+    let drop = shown.length - 2
+    if (move >= 0 && move < shown.length - 1) drop = move
+    shown = shown.filter((_, index) => index !== drop)
+  }
+  return join(shown)
+}
+
 /** Two rules and one body row: below this the rules give way. */
 const PICKER_ROWS_RULED = 3
 /** Two rules and the title: the title keeps its row only past these and the body's required rows. */
@@ -533,7 +581,8 @@ export function PickerFrame(
     /** The muted heading row. A picker that carries counts puts them in here. */
     title: string
     children: JSX.Element
-    footer: JSX.Element
+    /** The key-hint row under the frame, in the one vocabulary ({@link KeyHints}). */
+    keys: ReadonlyArray<KeyHint>
     /**
      * One muted line under the list about the row under the cursor. A pane
      * that has one passes it always, `None` while it has nothing to say: the
@@ -690,7 +739,7 @@ export function PickerFrame(
       </box>
       <Show when={!squeezed() && !bare()}>
         <text height={1} flexShrink={0} wrapMode="none" truncate style={{ fg: theme.textMuted }}>
-          {props.footer}
+          {keyHintsLine(props.keys, sectionWidth())}
         </text>
       </Show>
     </box>

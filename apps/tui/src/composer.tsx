@@ -41,6 +41,8 @@ import {
   useRequiredContext,
 } from "./utils"
 import {
+  keyHint,
+  KeyHints,
   PickerFrame,
   PickerHost,
   selectable,
@@ -177,7 +179,7 @@ const runCommand = (
 
 // ── composer frame ──────────────────────────────────────────────────────────
 
-interface ComposerFrameProps {
+interface StatusRowProps {
   labels: readonly StatusRowLabel[]
   /**
    * How many of `labels`, counted from the end, are laid out from the right
@@ -190,7 +192,6 @@ interface ComposerFrameProps {
    * position has to be fixed and the left group is what gives way.
    */
   rightLabels?: number
-  children: JSX.Element
 }
 
 const SEPARATOR_WIDTH = 3
@@ -214,7 +215,15 @@ const layout = (labels: readonly StatusRowLabel[], budget: number) => {
   return { shown, used }
 }
 
-export function ComposerFrame(props: ComposerFrameProps) {
+/**
+ * The status row: the phase word, the cwd, the model and the extension
+ * labels, with the context gauge and the cost anchored right. It sits right
+ * under the input (the composer places it, `Composer`'s `statusRow`), and
+ * every docked pane, the autocomplete popup and the palette included, docks
+ * under it: the row never moves when a pane opens. The blank row above it is
+ * a dock spacer.
+ */
+export function StatusRow(props: StatusRowProps) {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
 
@@ -237,13 +246,47 @@ export function ComposerFrame(props: ComposerFrameProps) {
     return { left: left.shown, right: right.shown, gap }
   })
 
-  // The composer keeps its rows. While its autocomplete popup or command
-  // palette is open, that picker is the one child that gives way on a short
-  // terminal, so the frame may shrink by the picker's rows alone. Its blank
-  // rows (above the input, above the status row) give way first, while a
-  // docked pane is short (`useDockSpacer`).
-  const aboveInput = useDockSpacer()
   const aboveStatus = useDockSpacer()
+  return (
+    <box height={1} flexShrink={0} marginTop={aboveStatus()} overflow="hidden">
+      <text wrapMode="none">
+        <For each={groups().left}>
+          {(label, index) => (
+            <>
+              <Show when={index() > 0}>
+                <span style={{ fg: theme.textMuted }}> · </span>
+              </Show>
+              <span style={{ fg: label.color }}>{label.text}</span>
+            </>
+          )}
+        </For>
+        <Show when={groups().right.length > 0}>
+          <span>{" ".repeat(groups().gap)}</span>
+        </Show>
+        <For each={groups().right}>
+          {(label, index) => (
+            <>
+              <Show when={index() > 0}>
+                <span style={{ fg: theme.textMuted }}> · </span>
+              </Show>
+              <span style={{ fg: label.color }}>{label.text}</span>
+            </>
+          )}
+        </For>
+      </text>
+    </box>
+  )
+}
+
+/**
+ * The composer's frame. The composer keeps its rows. While its autocomplete
+ * popup or command palette is open, that picker is the one child that gives
+ * way on a short terminal, so the frame may shrink by the picker's rows
+ * alone. Its blank rows (above the input, above the status row) give way
+ * first, while a docked pane is short (`useDockSpacer`).
+ */
+export function ComposerFrame(props: { children: JSX.Element }) {
+  const aboveInput = useDockSpacer()
   return (
     <PickerHost>
       {(hosting) => {
@@ -255,33 +298,6 @@ export function ComposerFrame(props: ComposerFrameProps) {
           <box flexDirection="column" flexShrink={shrink()} paddingTop={aboveInput()}>
             <box flexDirection="column" flexShrink={shrink()}>
               {props.children}
-            </box>
-            <box height={1} flexShrink={0} marginTop={aboveStatus()} overflow="hidden">
-              <text wrapMode="none">
-                <For each={groups().left}>
-                  {(label, index) => (
-                    <>
-                      <Show when={index() > 0}>
-                        <span style={{ fg: theme.textMuted }}> · </span>
-                      </Show>
-                      <span style={{ fg: label.color }}>{label.text}</span>
-                    </>
-                  )}
-                </For>
-                <Show when={groups().right.length > 0}>
-                  <span>{" ".repeat(groups().gap)}</span>
-                </Show>
-                <For each={groups().right}>
-                  {(label, index) => (
-                    <>
-                      <Show when={index() > 0}>
-                        <span style={{ fg: theme.textMuted }}> · </span>
-                      </Show>
-                      <span style={{ fg: label.color }}>{label.text}</span>
-                    </>
-                  )}
-                </For>
-              </text>
             </box>
           </box>
         )
@@ -426,10 +442,7 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
   const loading = () => items.loading && !hasItems()
   const labelWidth = () => Math.max(8, Math.min(24, Math.floor(dimensions().width * 0.28)))
 
-  const footerHint = () => {
-    if (dimensions().width < 44) return "↑↓ Move · ↵ Run · ⇥ Complete · Esc"
-    return "↑↓ Navigate   Enter Run   Tab Complete   Esc Close"
-  }
+  const keys = [KeyHints.move, KeyHints.select, keyHint("tab", "complete"), KeyHints.close]
 
   const rows = (): ReadonlyArray<SelectListRow<AutocompleteItem>> =>
     visibleItems().map((item) =>
@@ -487,7 +500,7 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
   }
 
   return (
-    <PickerFrame title={title()} footer={footerHint()}>
+    <PickerFrame title={title()} keys={keys}>
       <SelectList
         id="autocomplete"
         // The composer owns the filter; the list draws it as its query row.
@@ -1278,6 +1291,8 @@ function GhostLine(props: { completion: string }) {
 }
 
 interface ComposerProps {
+  /** The status row, drawn under the input and above the docked pickers. */
+  statusRow?: JSX.Element
   children?: JSX.Element
 }
 
@@ -1399,6 +1414,8 @@ export function Composer(props: ComposerProps) {
       <Show when={Option.getOrUndefined(visibleGhost())}>
         {(completion) => <GhostLine completion={completion()} />}
       </Show>
+
+      {props.statusRow}
 
       <box
         flexDirection="column"

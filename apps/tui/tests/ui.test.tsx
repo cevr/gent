@@ -1,9 +1,12 @@
 /** @jsxImportSource @opentui/solid */
-import { describe, expect, it } from "effect-bun-test"
+import { describe, expect, it, test } from "effect-bun-test"
 import { Clock, Effect, Option } from "effect"
 import { createSignal } from "solid-js"
 import {
   decoration,
+  keyHint,
+  keyHintsLine,
+  KeyHints,
   pickerHeight,
   PickerFrame,
   selectable,
@@ -633,7 +636,7 @@ describe("picker height rule", () => {
       const setup = yield* Effect.promise(() =>
         renderWithProviders(
           () => (
-            <PickerFrame title="TITLE" footer="KEY-HINT" {...note}>
+            <PickerFrame title="TITLE" keys={[keyHint("KEY-HINT", "go")]} {...note}>
               <SelectList
                 id="frame-rows"
                 open={true}
@@ -682,6 +685,20 @@ describe("picker height rule", () => {
   )
 })
 
+describe("key hints", () => {
+  const keys = [KeyHints.move, KeyHints.select, keyHint("d", "delete"), KeyHints.close]
+
+  test("one spelling: lowercase keys joined by one separator", () => {
+    expect(keyHintsLine(keys, 80)).toBe("↑↓ move · enter select · d delete · esc close")
+  })
+
+  test("a narrow row drops the move hint first, then from the right, and keeps the way out", () => {
+    expect(keyHintsLine(keys, 36)).toBe("enter select · d delete · esc close")
+    expect(keyHintsLine(keys, 26)).toBe("enter select · esc close")
+    expect(keyHintsLine(keys, 4)).toBe("esc close")
+  })
+})
+
 describe("docked panes", () => {
   it.live("the thread pane keeps the picker's height rule", () =>
     Effect.gen(function* () {
@@ -706,7 +723,7 @@ describe("docked panes", () => {
           { width: 80, height: 40 },
         ),
       )
-      yield* waitForFrame(setup, (frame) => frame.includes("open session"), "thread pane")
+      yield* waitForFrame(setup, (frame) => frame.includes("enter select"), "thread pane")
       // One heading, one window, one detail line: three drawn lines.
       expect(renderedFrameRows(renderFrame(setup))).toBe(pickerHeight(3, 40))
     }),
@@ -797,7 +814,7 @@ const mountSqueezableFrame = (initial: number) =>
       renderWithProviders(
         () => (
           <box flexDirection="column" height={10} maxHeight={10}>
-            <PickerFrame height={height()} title="TITLE" footer="KEY-HINT">
+            <PickerFrame height={height()} title="TITLE" keys={[keyHint("KEY-HINT", "go")]}>
               <box flexDirection="column" flexGrow={1}>
                 <text>BODY-1</text>
               </box>

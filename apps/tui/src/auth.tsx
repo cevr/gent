@@ -13,6 +13,8 @@ import { useTheme } from "./theme"
 import { useClient, useRuntime } from "./client"
 import {
   ChromePanel,
+  keyHint,
+  KeyHints,
   PickerFrame,
   pickerHeight,
   selectable,
@@ -710,12 +712,12 @@ export function Auth(props: AuthProps) {
   // it would only open it again), and the way out is ctrl+c.
   const enforced = () => props.enforceAuth === true
   const listLeave = () => {
-    if (enforced()) return "ctrl+c quit"
-    return "esc close"
+    if (enforced()) return KeyHints.quit
+    return KeyHints.close
   }
-  const listFooter = () => {
-    if (Option.isSome(state().error)) return `r retry · ${listLeave()}`
-    return `↑↓ move · ↵ choose · d delete · ${listLeave()}`
+  const listKeys = () => {
+    if (Option.isSome(state().error)) return [keyHint("r", "retry"), listLeave()]
+    return [KeyHints.move, KeyHints.select, keyHint("d", "delete"), listLeave()]
   }
   const dismissList = () => {
     if (enforced()) return
@@ -818,7 +820,7 @@ export function Auth(props: AuthProps) {
       <SolidMatch when={screen()._tag === "List"}>
         <PickerFrame
           title={`Sign in · ${plural(catalog().providers.length, "provider")}`}
-          footer={listFooter()}
+          keys={listKeys()}
           error={state().error}
           detail={Option.map(successMessage(), (message) => `✓ ${message}`)}
         >
@@ -850,7 +852,7 @@ export function Auth(props: AuthProps) {
         {(current) => (
           <PickerFrame
             title={`Sign in · ${current().provider} · method`}
-            footer="↑↓ move · ↵ choose · esc back"
+            keys={[KeyHints.move, KeyHints.select, KeyHints.back]}
           >
             <SelectList
               id="auth-method"
@@ -872,7 +874,7 @@ export function Auth(props: AuthProps) {
           <PickerFrame
             height={pickerHeight(1, dimensions().height)}
             title={`Sign in · ${current().provider} · API key`}
-            footer="type or paste · ↵ save · esc back"
+            keys={[KeyHints.submit, KeyHints.back]}
           >
             <AuthTextLine
               label="API key ›"
@@ -890,7 +892,7 @@ export function Auth(props: AuthProps) {
           <PickerFrame
             height={oauthBodyRows(current()) + OAUTH_CHROME_ROWS}
             title={`Sign in · ${current().provider} · ${current().method.label}`}
-            footer="↵ continue · esc back"
+            keys={[KeyHints.submit, KeyHints.back]}
             error={state().error}
             detail={waitingNote(current())}
           >

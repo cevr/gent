@@ -2617,7 +2617,7 @@ describe("App auth gate", () => {
       expect(seen.size).toBe(1)
       const frame = renderFrame(view.setup)
       expect(frame).not.toContain("⇥")
-      expect(frame).toContain("Tab Complete")
+      expect(frame).toContain("tab complete")
     }).pipe(Effect.timeout("10 seconds")),
   )
   // A pane with no row on screen takes no keys: the reader cannot see what a
@@ -4139,14 +4139,14 @@ describe("agents view on the left arrow", () => {
     Effect.gen(function* () {
       const setup = yield* mountShortTerminalWithTrays(30)
       setup.mockInput.pressKey("p", { ctrl: true })
-      yield* waitForFrame(setup, (frame) => frame.includes("Esc Close"), "the palette root")
+      yield* waitForFrame(setup, (frame) => frame.includes("esc close"), "the palette root")
       // Theme is the first row.
       setup.mockInput.pressEnter()
-      yield* waitForFrame(setup, (frame) => frame.includes("Esc Back"), "the theme level")
+      yield* waitForFrame(setup, (frame) => frame.includes("esc back"), "the theme level")
       setup.mockInput.pressArrow("left")
       const frame = yield* waitForFrame(
         setup,
-        (current) => current.includes("Esc Close"),
+        (current) => current.includes("esc close"),
         "the palette root again",
       )
       expect(paneOpen(frame)).toBe(false)
@@ -4172,6 +4172,44 @@ describe("agents view on the left arrow", () => {
 })
 
 describe("TUI renderer surfaces", () => {
+  // One dock slot: the status row stays under the input, and the slash popup,
+  // the palette and the panes all dock under it.
+  it.live("every docked pane, the slash popup included, docks under the status row", () =>
+    Effect.gen(function* () {
+      const view = yield* mountIdleSession()
+      const statusRowAbove = (frame: string, title: string) => {
+        const lines = frame.split("\n")
+        const status = lines.findIndex((line) => line.startsWith("ready ·"))
+        const pane = lines.findIndex((line) => line.startsWith(title))
+        return status >= 0 && pane > status
+      }
+      yield* Effect.promise(() => view.setup.mockInput.typeText("/"))
+      const popup = yield* waitForFrame(
+        view.setup,
+        (frame) => frame.includes("Commands"),
+        "the slash popup",
+      )
+      expect(statusRowAbove(popup, "Commands")).toBe(true)
+      view.setup.mockInput.pressKey("c", { ctrl: true })
+      yield* waitForFrame(view.setup, (frame) => !frame.includes("Commands"), "the draft cleared")
+      view.setup.mockInput.pressKey("p", { ctrl: true })
+      const palette = yield* waitForFrame(
+        view.setup,
+        (frame) => frame.includes("esc close"),
+        "the palette",
+      )
+      expect(statusRowAbove(palette, "Commands")).toBe(true)
+      view.setup.mockInput.pressEscape()
+      yield* waitForFrame(view.setup, (frame) => !frame.includes("esc close"), "palette closed")
+      yield* typeCommand("/think")(view.setup)
+      const think = yield* waitForFrame(
+        view.setup,
+        (frame) => frame.includes("Reasoning ·"),
+        "the reasoning pane",
+      )
+      expect(statusRowAbove(think, "Reasoning ·")).toBe(true)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   it.live("a resumed session with turns behind it reads idle, not ready", () =>
     Effect.gen(function* () {
       const sessionId = SessionId.make("session-test")

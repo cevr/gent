@@ -26,7 +26,7 @@ import {
 } from "./terminal"
 import type { RGBA } from "@opentui/core"
 import { MessageList, NativeTranscript, splitFooterHeight } from "./message-list"
-import { Composer, ComposerFrame } from "./composer"
+import { Composer, ComposerFrame, StatusRow } from "./composer"
 import { DockFooter, DockProvider, useDockSpacer } from "./ui"
 import { CommandPalette, CommandProvider, useCommand } from "./commands"
 import {
@@ -775,17 +775,23 @@ export function Session(props: SessionProps) {
             </ActivityRow>
           </Show>
 
-          <ComposerFrame
-            labels={[
-              ...phaseLabels(),
-              ...connectionLabels(),
-              ...modelLabels(),
-              ...extensionLabels(),
-              ...rightAnchoredLabels(),
-            ]}
-            rightLabels={rightAnchoredLabels().length}
-          >
-            <Composer>
+          {/* One dock slot: every pane (the popup and the palette inside the
+              composer, the panes after it) docks under the status row. */}
+          <ComposerFrame>
+            <Composer
+              statusRow={
+                <StatusRow
+                  labels={[
+                    ...phaseLabels(),
+                    ...connectionLabels(),
+                    ...modelLabels(),
+                    ...extensionLabels(),
+                    ...rightAnchoredLabels(),
+                  ]}
+                  rightLabels={rightAnchoredLabels().length}
+                />
+              }
+            >
               <Composer.Autocomplete />
               <CommandPalette />
             </Composer>

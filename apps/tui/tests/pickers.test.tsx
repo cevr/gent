@@ -422,7 +422,7 @@ describe("PromptSearchPalette renderer", () => {
       expect(frame).toContain("Prompt search · 2")
       expect(frame).toContain("› fix")
       expect(frame).toContain("fix prompt search enter behavior")
-      expect(frame).toContain("type to filter · ↑↓ move · ↵ accept · esc cancel")
+      expect(frame).toContain("type to filter · ↑↓ move · enter select · esc close")
       // Typing and moving both report the entry under the cursor; the last
       // report is the second match in rank order.
       expect(events.at(-1)).toEqual({

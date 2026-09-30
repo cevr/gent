@@ -876,13 +876,13 @@ describe("Agents pane delete", () => {
 
       setup.mockInput.pressKey("x", { ctrl: true })
       yield* Effect.promise(() => setup.renderOnce())
-      expect(renderFrame(setup)).toContain("^x again to delete")
+      expect(renderFrame(setup)).toContain("ctrl+x again to delete")
       expect(deleted).toEqual([])
 
       setup.mockInput.pressKey("x", { ctrl: true })
       yield* Effect.promise(() => setup.renderOnce())
       expect(deleted).toEqual(["doomed"])
-      expect(renderFrame(setup)).not.toContain("^x again")
+      expect(renderFrame(setup)).not.toContain("ctrl+x again")
     }),
   )
 })
@@ -996,7 +996,7 @@ describe("Agents pane framing", () => {
           { width: 80, height: 40 },
         ),
       )
-      yield* waitForFrame(setup, (frame) => frame.includes("^t hide"), "agents pane")
+      yield* waitForFrame(setup, (frame) => frame.includes("ctrl+t hide"), "agents pane")
       const lines = renderFrame(setup).split("\n")
 
       // Ruled top and bottom, never the rounded box a docked pane draws.
@@ -1011,7 +1011,9 @@ describe("Agents pane framing", () => {
 
       // One muted footer line, immediately under the bottom rule.
       const bottom = lines.findLastIndex((line) => line.startsWith("────"))
-      expect(lines[bottom + 1]).toContain("↑↓ move   ↵ → open   ← esc close   ^x delete   ^t hide")
+      expect(lines[bottom + 1]).toContain(
+        "↑↓ move · enter select · ctrl+x delete · ctrl+t hide · esc close",
+      )
 
       // Every capability the pane had inside the bordered box still draws:
       // the section heading, the row, and the detail line, each on its own
@@ -1592,7 +1594,7 @@ describe("Subagent tray", () => {
               }}
             />
             <Show when={open()}>
-              <PickerFrame title="PANE" footer="">
+              <PickerFrame title="PANE" keys={[]}>
                 <box />
               </PickerFrame>
             </Show>
@@ -1605,7 +1607,7 @@ describe("Subagent tray", () => {
       expect(frame).toContain("working · delegate: child-a task")
       expect(frame).not.toContain("child-b")
       expect(frame).not.toContain("idle")
-      expect(frame).toContain("^t agents")
+      expect(frame).toContain("ctrl+t agents")
       // Mounting on a session fetched that session's rows.
       expect(refreshes).toEqual([""])
 
@@ -1646,7 +1648,7 @@ describe("Subagent tray", () => {
       )
       const frame = yield* waitForFrame(setup, (next) => next.includes("working"), "wide tray")
       // Padding counts display columns: each of these characters takes two.
-      expect(frame).toContain("^t agents")
+      expect(frame).toContain("ctrl+t agents")
     }),
   )
 

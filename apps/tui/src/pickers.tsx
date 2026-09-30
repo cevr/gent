@@ -2,7 +2,14 @@
 import { Effect, Match, Option, Schema } from "effect"
 import { matchSorter } from "match-sorter"
 import { createEffect, createMemo, createSignal, Show } from "solid-js"
-import { PickerFrame, selectable, SelectList, type SelectListRow, usePickerGeometry } from "./ui"
+import {
+  KeyHints,
+  PickerFrame,
+  selectable,
+  SelectList,
+  type SelectListRow,
+  usePickerGeometry,
+} from "./ui"
 import { useTheme } from "./theme"
 import { formatError, shortId, truncate } from "./utils"
 import { useClient, useRuntime } from "./client"
@@ -217,7 +224,7 @@ export function PromptSearchPalette(props: PromptSearchPaletteProps) {
         return (
           <PickerFrame
             title={`Prompt search · ${items().length}`}
-            footer={"type to filter · ↑↓ move · ↵ accept · esc cancel"}
+            keys={[KeyHints.filter, KeyHints.move, KeyHints.select, KeyHints.close]}
           >
             <SelectList
               id="prompt-search"
@@ -365,7 +372,7 @@ export function BranchPicker(props: BranchPickerProps) {
           follows the list. */}
       <PickerFrame
         title={`Resume: ${props.sessionName}`}
-        footer={"↑↓ move   ↵ resume branch   ctrl+c quit"}
+        keys={[KeyHints.move, KeyHints.select, KeyHints.quit]}
         error={error()}
       >
         <SelectList
@@ -446,7 +453,7 @@ export function MessagePicker(props: MessagePickerProps) {
     <Show when={props.open}>
       <PickerFrame
         title={`Fork from message · ${items().length}`}
-        footer={"↑↓ move · ↵ fork here · esc close"}
+        keys={[KeyHints.move, KeyHints.select, KeyHints.close]}
       >
         <SelectList
           id="message-picker"
@@ -561,7 +568,7 @@ export function SettingsPicker(props: SettingsPickerProps) {
     <Show when={props.open}>
       <PickerFrame
         title={`${props.title} · ${visible().length}`}
-        footer={"type to filter · ↑↓ move · ↵ select · esc close"}
+        keys={[KeyHints.filter, KeyHints.move, KeyHints.select, KeyHints.close]}
       >
         <SelectList
           id="settings-picker"

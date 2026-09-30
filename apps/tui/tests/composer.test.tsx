@@ -3,7 +3,7 @@ import { describe, expect, it, test } from "effect-bun-test"
 import {
   AutocompletePopup,
   Composer,
-  ComposerFrame,
+  StatusRow,
   createPasteManager,
   executeShell,
   isLargePaste,
@@ -409,14 +409,10 @@ const labels: StatusRowLabel[] = [
 const frameText = (width: number, rightLabels: number) =>
   Effect.gen(function* () {
     const setup = yield* Effect.promise(() =>
-      renderWithProviders(
-        () => (
-          <ComposerFrame labels={labels} rightLabels={rightLabels}>
-            <box />
-          </ComposerFrame>
-        ),
-        { width, height: 10 },
-      ),
+      renderWithProviders(() => <StatusRow labels={labels} rightLabels={rightLabels} />, {
+        width,
+        height: 10,
+      }),
     )
     yield* Effect.promise(() => setup.flush())
     return setup.captureCharFrame()
@@ -693,8 +689,8 @@ describe("Composer renderer", () => {
       expect(frame).toContain("/sessions")
       // The footer names both keys because they do different things: enter
       // runs the command it completes, tab only completes it.
-      expect(frame).toContain("Enter Run")
-      expect(frame).toContain("Tab Complete")
+      expect(frame).toContain("enter select")
+      expect(frame).toContain("tab complete")
       setup.renderer.destroy()
     }),
   )

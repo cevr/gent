@@ -18,6 +18,8 @@ import {
   defineClientExtension,
   messageRendererContribution,
   pastedLine,
+  keyHint,
+  KeyHints,
   PickerFrame,
   sessionQuery,
   typedText,
@@ -254,7 +256,7 @@ export function ForkPane(props: {
       <PickerFrame
         height={height()}
         title={title()}
-        footer="a parallel session from here · enter ask · ^o open · esc close"
+        keys={[KeyHints.submit, keyHint("ctrl+o", "open"), KeyHints.close]}
       >
         <ChromePanel.Body stickToBottom>
           <Show when={fork()}>
