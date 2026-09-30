@@ -109,6 +109,11 @@ updates this list in the same commit.
     message is summarised into one durable user-role marker that names the
     session, the branch, and the id range it replaced; every replaced message
     stays readable from the cell through `context.history` and `context.read`.
+    The marker leans on that discovery, not on a long summary: it lists the
+    user's messages by id with a one-line preview, oldest first so the
+    original task is always there (12 at most, then how many more), tells
+    the model to read the task and any message its next step depends on
+    before it continues, and carries a summary of at most 150 words.
     When the newest turn alone overflows, the handoff anchors inside the turn
     at a step boundary and keeps the newest steps that fit half the budget.
     A summary that cannot be produced degrades to truncation with a visible
