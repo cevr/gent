@@ -383,7 +383,7 @@ const exchangeCodeWithFetch = (
   codeVerifier: string,
 ): Effect.Effect<TokenResponse, OAuthError> =>
   exchangeCodeForTokens(code, redirectUri, codeVerifier).pipe(
-    // @effect-diagnostics-next-line strictEffectProvide:off OAuth token endpoint at extension boundary
+    // @effect-diagnostics-next-line strictEffectProvide:off -- OAuth token endpoint at extension boundary
     Effect.provide(FetchHttpClient.layer),
   )
 
@@ -393,7 +393,7 @@ const refreshAccessToken = (refreshToken: string): Effect.Effect<TokenResponse, 
     refresh_token: refreshToken,
     client_id: CLIENT_ID,
   }).pipe(
-    // @effect-diagnostics-next-line strictEffectProvide:off OAuth token endpoint at extension boundary
+    // @effect-diagnostics-next-line strictEffectProvide:off -- OAuth token endpoint at extension boundary
     Effect.provide(FetchHttpClient.layer),
   )
 
@@ -836,7 +836,7 @@ const allocateOpenAIDeviceAuthorization: Effect.Effect<
   OAuthError
 > = authorizeOpenAIDevice.pipe(
   Effect.map((flow) => ({ flow, close: Effect.void })),
-  // @effect-diagnostics-next-line strictEffectProvide:off device endpoints at extension boundary
+  // @effect-diagnostics-next-line strictEffectProvide:off -- device endpoints at extension boundary
   Effect.provide(FetchHttpClient.layer),
 )
 
@@ -1085,7 +1085,6 @@ const ensureBetaToken = (existing: Option.Option<string>, requiredToken: string)
  *   - `store: false` to prevent server-side conversation persistence
  */
 const isInstructionItem = (
-  // oxlint-disable-next-line effect/noUnknownParameters -- preserve vendor JSON fields that this transport adapter does not interpret
   item: unknown,
 ): item is { role: "system" | "developer"; content?: unknown } => {
   if (!isRecord(item)) return false

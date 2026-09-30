@@ -954,7 +954,7 @@ export const driverListModels =
           Model.make({ ...model, promptCacheTtlMs: Duration.toMillis(promptCacheTtl) }),
         ),
       ),
-      // @effect-diagnostics-next-line strictEffectProvide:off The catalog owns its own HTTP client at the driver boundary; it outlives no scope.
+      // @effect-diagnostics-next-line strictEffectProvide:off -- The catalog owns its own HTTP client at the driver boundary; it outlives no scope.
       Effect.provide(FetchHttpClient.layer),
       Effect.provideContext(source.platform),
     )

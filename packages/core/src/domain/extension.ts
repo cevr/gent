@@ -1058,7 +1058,7 @@ export const sealRuntimeLoadedEffect = <A, R = never>(opts: {
   readonly failureMessage: (cause: unknown) => string
   readonly defectMessage: (cause: unknown) => string
 }): Effect.Effect<A, ExtensionLoadError, R> => {
-  // @effect-diagnostics-next-line anyUnknownInErrorContext:off
+  // @effect-diagnostics-next-line anyUnknownInErrorContext:off -- extension setup is untyped until this membrane maps its failures to ExtensionLoadError.
   const sealed = Effect.suspend(opts.effect).pipe(
     Effect.catchEager((cause) =>
       Effect.fail(

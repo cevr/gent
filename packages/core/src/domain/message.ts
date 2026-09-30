@@ -1142,7 +1142,6 @@ const boundedInput = (input: unknown, budget: number): BoundedInput => {
   return kept
 }
 
-// oxlint-disable-next-line effect/noUnknownParameters -- A decoded JSON field is an external value; only scalars are kept.
 const isScalar = (value: unknown): value is Scalar =>
   Predicate.isString(value) || Predicate.isNumber(value) || Predicate.isBoolean(value)
 

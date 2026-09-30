@@ -141,7 +141,7 @@ describe("ref(capability)", () => {
       execute: () => Effect.succeed("ok"),
     })
 
-    // @ts-expect-error Tool capabilities are not request refs.
+    // @ts-expect-error -- Tool capabilities are not request refs.
     ref(capability)
   })
 })

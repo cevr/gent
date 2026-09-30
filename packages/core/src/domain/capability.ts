@@ -342,12 +342,10 @@ export function request(input: {
     output: input.output,
   }
   // CapabilityRef requires `Schema.Decoder<X, never>` for sync decoding at the
-  // dispatcher boundary. Author-supplied schemas always satisfy this — the
-  // overload signatures (above) constrain Input/Output to `Schema.Schema<X>`
-  // which has `DecodingServices: never`. The cast is at the implementation
-  // signature only; type-safety is restored by the public overloads.
-  // oxlint-disable-next-line effect/noAs, effect/noChainedTypeAssertions, typescript/no-unsafe-type-assertion -- The implementation overload erases the author schema types; public overloads restore them.
-  const refValue = {
+  // dispatcher boundary. The implementation signature erases Input/Output to
+  // `unknown`, and a `Schema.Codec<unknown, unknown, never, never>` is such a
+  // decoder; the public overloads restore the author types.
+  const refValue: CapabilityRef = {
     get extensionId() {
       if (Option.isNone(refState.extensionId)) {
         // oxlint-disable-next-line effect/noThrowStatement, effect/noNewError -- Reading an unbound capability reference is programmer misuse.
@@ -360,7 +358,7 @@ export function request(input: {
     capabilityId: refState.capabilityId,
     input: refState.input,
     output: refState.output,
-  } as unknown as CapabilityRef
+  }
   // A handler's own error becomes the wire error under the ids this factory
   // and the binding already hold; an unbound request leaves the error to the
   // registry, which names the ids it routed by.
@@ -373,9 +371,11 @@ export function request(input: {
       },
     })
   const effect: ErasedCapabilityEffect<RequestFailure> = (value) =>
-    // @effect-diagnostics-next-line anyUnknownInErrorContext:off — the erased handler crosses the runtime membrane; the public overloads keep authors typed.
+    // @effect-diagnostics-next-line anyUnknownInErrorContext:off -- the erased handler crosses the runtime membrane; the public overloads keep authors typed.
     Effect.mapError(input.execute(value), asCapabilityError)
-  const capability: RequestCapabilityApi = {
+  // The factory applies its private brand and typed reference here; the
+  // public overload restores the author's Input/Output.
+  const capability: RequestCapability = {
     _tag: "request",
     id: rpcId,
     slash: input.slash,
@@ -385,13 +385,11 @@ export function request(input: {
     output: input.output,
     effect,
     ref: refValue,
-  }
-  // oxlint-disable-next-line effect/noAs, effect/noChainedTypeAssertions, typescript/no-unsafe-type-assertion -- The factory applies its private brand and typed reference at the runtime membrane.
-  return Object.assign(capability, {
     [RequestCapabilityBrand]: true,
     [REQUEST_REF]: refValue,
     [REQUEST_REF_STATE]: refState,
-  }) as unknown as RequestCapability
+  }
+  return capability
 }
 
 export const bindRequestCapabilityExtension = <Input, Output>(
@@ -511,7 +509,6 @@ export type ToolCapability<Input = unknown, Output = unknown, Error = unknown> =
 const getToolMetadataOption = (tool: AiTool.Any): GentToolMetadata | undefined =>
   Context.get(tool.annotations, GentToolMetadataTag)
 
-// oxlint-disable-next-line effect/noUnknownParameters -- Native Effect tools are narrowed by their runtime predicates below.
 export const isToolCapability = (value: unknown): value is ToolCapability => {
   if (
     !(AiTool.isUserDefined(value) || AiTool.isDynamic(value) || AiTool.isProviderDefined(value)) ||

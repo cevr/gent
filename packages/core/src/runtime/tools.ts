@@ -793,7 +793,7 @@ const makeExecutionToolkit = (params: {
 
     const handlerMap: AiToolkit.HandlersFrom<ToolCapabilityMap> = {
       [toolName]: (decodedInput) =>
-        // @effect-diagnostics-next-line anyUnknownInErrorContext:off
+        // @effect-diagnostics-next-line anyUnknownInErrorContext:off -- an extension tool fails with unknown until normalizeToolExecutionError maps it.
         metadata
           .effect(decodedInput)
           .pipe(stopWithTurn, Effect.mapError(normalizeToolExecutionError))

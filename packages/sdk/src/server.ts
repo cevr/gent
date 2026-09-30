@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off — server primitive owns filesystem path resolution for gent's data directory
+// @effect-diagnostics nodeBuiltinImport:off -- server primitive owns filesystem path resolution for gent's data directory
 import {
   Clock,
   Context,
@@ -807,7 +807,7 @@ const probeServerLockEntryIdentity = (entry: ServerLockEntry): Effect.Effect<boo
   }).pipe(
     // One bound over the request and the body: a server can send headers and stall its body.
     Effect.timeout(IDENTITY_PROBE_TIMEOUT),
-    // @effect-diagnostics-next-line strictEffectProvide:off self-contained probe, no scope lifetime
+    // @effect-diagnostics-next-line strictEffectProvide:off -- self-contained probe, no scope lifetime
     Effect.provide(FetchHttpClient.layer),
     Effect.catchEager(() => Effect.succeed(false)),
   )
@@ -836,7 +836,7 @@ const holderBlocksMessage = (
 export const resolveServer = (
   options: GentServerOptions,
 ): Effect.Effect<GentServer, GentConnectionError, Scope.Scope> =>
-  // @effect-diagnostics-next-line strictEffectProvide:off
+  // @effect-diagnostics-next-line strictEffectProvide:off -- the public entry point provides the local platform it resolves on.
   Effect.provide(resolveServerInternal(options), LocalPlatformLayer)
 
 const resolveServerInternal = (

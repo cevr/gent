@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off — test fixture lifecycle comes from bun:test
+// @effect-diagnostics nodeBuiltinImport:off -- test fixture lifecycle comes from bun:test
 import {
   Cause,
   Clock,
@@ -190,7 +190,7 @@ export const oneGenerate = (
 ): Effect.Effect<void> =>
   LanguageModel.generateText({ prompt }).pipe(
     Effect.asVoid,
-    // @effect-diagnostics-next-line strictEffectProvide:off test entry point
+    // @effect-diagnostics-next-line strictEffectProvide:off -- test entry point: the probe owns its fake fetch layer.
     Effect.provide(Layer.provideMerge(layer, fakeFetchLayer(state, responder))),
     Effect.scoped,
     Effect.catchCause((cause) => Effect.die(cause)),

@@ -135,8 +135,6 @@ describe("BuildFingerprint", () => {
 
 // ── server lock ─────────────────────────────────────────────────────────────
 
-// @effect-diagnostics nodeBuiltinImport:off
-
 const PlatformBaseLayer = Layer.mergeAll(BunServices.layer, BunGentPlatformLive)
 const PlatformLayer = Layer.merge(
   PlatformBaseLayer,

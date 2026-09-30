@@ -2465,7 +2465,7 @@ describe("TUI session identity guard", () => {
 
 const nextLine = ["// @effect", "diagnostics-next-line"].join("-")
 const membraneFile = "packages/core/src/runtime/extension-host.ts"
-const membraneComment = `${nextLine} anyUnknownInErrorContext:off`
+const membraneComment = `${nextLine} anyUnknownInErrorContext:off -- the extension membrane erases the author effect channels and seals them here.`
 type Entries = NonNullable<Parameters<typeof findUnusedSuppressionApprovals>[1]>
 
 describe("suppression inventory guard", () => {

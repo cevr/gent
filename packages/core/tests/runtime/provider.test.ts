@@ -1229,7 +1229,7 @@ const modelFromService = (
   AiModel.make(provider, "model", Layer.succeed(LanguageModel.LanguageModel, service))
 const assertProviderResolutionRejectsBareLayer = () => {
   const bareLayer = Layer.succeed(LanguageModel.LanguageModel, failingLanguageModel)
-  // @ts-expect-error ProviderResolution must come from Effect AI Model.make metadata.
+  // @ts-expect-error -- ProviderResolution must come from Effect AI Model.make metadata.
   const resolution: ProviderResolution = bareLayer
   return resolution
 }

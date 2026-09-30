@@ -220,12 +220,12 @@ const sealErasedEffect = <A, E>(
   // Callers use this ONLY at host boundaries where the extension runtime has
   // already provided the required services.
 ): Effect.Effect<A, E> => {
-  // @effect-diagnostics-next-line anyUnknownInErrorContext:off
+  // @effect-diagnostics-next-line anyUnknownInErrorContext:off -- the extension membrane erases the author effect channels and seals them here.
   const sealed = Effect.suspend(effect).pipe(
     Effect.catchEager(handlers.onFailure),
     Effect.catchDefect(handlers.onDefect),
   )
-  // @effect-diagnostics-next-line anyUnknownInErrorContext:off
+  // @effect-diagnostics-next-line anyUnknownInErrorContext:off -- the extension membrane erases the author effect channels and seals them here.
   return sealed as Effect.Effect<A, E> // oxlint-disable-line effect/noAs, typescript/no-unsafe-type-assertion -- The membrane re-seals the extension effect after erasing its runtime channels. // eslint-disable-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
 }
 
@@ -236,9 +236,9 @@ const sealErasedEffect = <A, E>(
 const exitErasedEffect = <A>(
   effect: () => Effect.Effect<A, unknown, unknown>,
 ): Effect.Effect<Exit.Exit<A, unknown>> => {
-  // @effect-diagnostics-next-line anyUnknownInErrorContext:off
+  // @effect-diagnostics-next-line anyUnknownInErrorContext:off -- the extension membrane erases the author effect channels and seals them here.
   const exit = Effect.exit(Effect.suspend(effect))
-  // @effect-diagnostics-next-line anyUnknownInErrorContext:off
+  // @effect-diagnostics-next-line anyUnknownInErrorContext:off -- the extension membrane erases the author effect channels and seals them here.
   return exit as Effect.Effect<Exit.Exit<A, unknown>> // oxlint-disable-line effect/noAs, typescript/no-unsafe-type-assertion -- The membrane exposes the raw exit after erasing the extension effect channels. // eslint-disable-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
 }
 
@@ -330,7 +330,7 @@ interface RegisteredHook<Input> {
 const runHook = <Input>(input: Input, registered: RegisteredHook<Input>) =>
   Effect.gen(function* () {
     const exit = yield* exitErasedEffect(() =>
-      // @effect-diagnostics-next-line anyUnknownInErrorContext:off
+      // @effect-diagnostics-next-line anyUnknownInErrorContext:off -- the extension membrane erases the author effect channels and seals them here.
       registered.handler(input).pipe(provideExtensionLeaf({ extensionId: registered.extensionId })),
     )
     if (exit._tag === "Success") return
@@ -357,7 +357,7 @@ const collectTurnProjection = (
 const runTurnProjectionHook = (slot: HookTurnProjectionSlot, input: TurnProjectionInput) =>
   sealErasedEffect<Option.Option<ExtensionTurnProjection>, never>(
     () =>
-      // @effect-diagnostics-next-line anyUnknownInErrorContext:off
+      // @effect-diagnostics-next-line anyUnknownInErrorContext:off -- the extension membrane erases the author effect channels and seals them here.
       slot
         .handler(input)
         .pipe(
@@ -467,7 +467,7 @@ export const compileExtensionHooks = (
         for (const slot of systemPromptSlots) {
           current = yield* sealErasedEffect(
             () =>
-              // @effect-diagnostics-next-line anyUnknownInErrorContext:off
+              // @effect-diagnostics-next-line anyUnknownInErrorContext:off -- the extension membrane erases the author effect channels and seals them here.
               slot
                 .handler({ ...input, basePrompt: current })
                 .pipe(provideExtensionLeaf({ extensionId: slot.extensionId })),
@@ -712,7 +712,7 @@ const runExtensionCapability = (
 
     const output = yield* sealErasedEffect(
       () =>
-        // @effect-diagnostics-next-line anyUnknownInErrorContext:off
+        // @effect-diagnostics-next-line anyUnknownInErrorContext:off -- the extension membrane erases the author effect channels and seals them here.
         capability.effect(decodedInput),
       {
         onFailure: (error) => {
@@ -996,7 +996,7 @@ const buildResourceLayer = (
 
   return entries.reduce<ErasedResourceLayer>(
     (acc, { resource }) =>
-      // @effect-diagnostics-next-line anyUnknownInErrorContext:off — heterogeneous Resource layer enters the explicit eraseResourceLayer membrane.
+      // @effect-diagnostics-next-line anyUnknownInErrorContext:off -- heterogeneous Resource layer enters the explicit eraseResourceLayer membrane.
       Layer.merge(acc, eraseResourceLayer(resource.layer)),
     emptyErasedResourceLayer,
   )
@@ -1430,7 +1430,6 @@ const GentExtensionContract = Schema.Struct({
 const decodeGentExtensionContract = Schema.decodeUnknownOption(GentExtensionContract)
 
 /** Type guard for GentExtension shape */
-// oxlint-disable-next-line effect/noUnknownParameters -- Runtime module exports enter as untyped values.
 const isGentExtension = (value: unknown): value is LoadedUserExtension => {
   const decoded = decodeGentExtensionContract(value)
   return Option.isSome(decoded) && Effect.isEffect(decoded.value.setup)

@@ -885,7 +885,7 @@ const refreshViaOAuth = (
     }
     return creds.value
   }).pipe(
-    // @effect-diagnostics-next-line strictEffectProvide:off
+    // @effect-diagnostics-next-line strictEffectProvide:off -- the credential read owns its HTTP client at the extension boundary; it outlives no scope.
     Effect.provide(FetchHttpClient.layer),
   )
 

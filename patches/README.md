@@ -58,3 +58,19 @@ The patch rewrites every `effect/unstable/<module>` specifier in `dist` to
 `Hex.encode` from `effect/encoding`. It changes no behavior.
 
 Remove this patch when an effect-encore release imports the rc.118 paths.
+
+## `oxlint-plugin-effect@0.17.0`
+
+`.oxlintrc.json` extends `presets/recommended.json`. The preset declares
+`jsPlugins` and `rules` but no `plugins` key. oxlint reads a config without
+`plugins` as one that wants the default plugins, so extending the preset adds
+`unicorn` and `oxc` to the plugins gent names, and their correctness rules
+start to report (for example 328 `unicorn/consistent-function-scoping` and
+75 `unicorn/no-array-sort` findings). A shim config that extends the preset
+does not help: the preset itself carries the missing key.
+
+The patch adds `"plugins": []` to the preset, so the preset brings only its
+own plugin and the root config keeps the plugin list it declares.
+
+Remove this patch when an oxlint-plugin-effect release declares `plugins` in
+its presets, or when oxlint stops adding default plugins through `extends`.

@@ -618,7 +618,7 @@ describe("Capability factory-shape locks (compile-time)", () => {
       description: "x",
       params: NoInput,
       output: StringOutput,
-      // @ts-expect-error — `surface` is not part of the public tool authoring surface
+      // @ts-expect-error -- `surface` is not part of the public tool authoring surface
       surface: "slash",
       execute: () => Effect.succeed("x"),
     } satisfies ToolInput
@@ -652,7 +652,7 @@ describe("Capability factory-shape locks (compile-time)", () => {
 
     const good: Parameters<StateChanged> = []
 
-    // @ts-expect-error — extension identity is supplied by ExtensionContext, not a parameter
+    // @ts-expect-error -- extension identity is supplied by ExtensionContext, not a parameter
     const bad: Parameters<StateChanged> = [{ extensionId: ExtensionId.make("surface-locks") }]
 
     void good
@@ -714,7 +714,7 @@ describe("Capability factory-shape locks (compile-time)", () => {
       id: "write-core-context",
       input: NoInput,
       output: StringOutput,
-      // @ts-expect-error — request handlers receive decoded params only; host access comes from ExtensionContext
+      // @ts-expect-error -- request handlers receive decoded params only; host access comes from ExtensionContext
       execute: (_input, _ctx) => Effect.succeed("ok"),
     }
     void bad
@@ -766,7 +766,7 @@ describe("Capability factory-shape locks (compile-time)", () => {
   test("request({...}) rejects `params` field (tool-only)", () => {
     const badInput = {
       id: "bad-request",
-      // @ts-expect-error — `params` belongs to tool(), not request()
+      // @ts-expect-error -- `params` belongs to tool(), not request()
       params: NoInput,
       input: NoInput,
       output: StringOutput,
@@ -778,13 +778,13 @@ describe("Capability factory-shape locks (compile-time)", () => {
   })
 
   test("action factory and ActionCapability/ActionInput/ActionSurface are not part of the public API", () => {
-    // @ts-expect-error — `action(...)` factory was collapsed into `request({...slash: {...}})`
+    // @ts-expect-error -- `action(...)` factory was collapsed into `request({...slash: {...}})`
     type _BadAction = typeof PublicExtensionApi.action
-    // @ts-expect-error — ActionCapability type was removed; slash-presented capabilities are RequestCapability
+    // @ts-expect-error -- ActionCapability type was removed; slash-presented capabilities are RequestCapability
     type _BadActionCapability = PublicExtensionApi.ActionCapability
-    // @ts-expect-error — ActionInput type was removed; authors use RequestInput
+    // @ts-expect-error -- ActionInput type was removed; authors use RequestInput
     type _BadActionInput = PublicExtensionApi.ActionInput
-    // @ts-expect-error — ActionSurface was removed; slash presentation lives on `request({slash:...})`
+    // @ts-expect-error -- ActionSurface was removed; slash presentation lives on `request({slash:...})`
     type _BadActionSurface = PublicExtensionApi.ActionSurface
     expect(true).toBe(true)
   })
@@ -798,7 +798,7 @@ describe("Effect-purity locks (compile-time)", () => {
       description: "ok",
       params: Schema.Struct({}),
       output: Schema.String,
-      // @ts-expect-error — Promise handler must not be assignable to Effect-returning execute
+      // @ts-expect-error -- Promise handler must not be assignable to Effect-returning execute
       execute: () => promiseString,
     })
     expect(true).toBe(true)
@@ -808,7 +808,7 @@ describe("Effect-purity locks (compile-time)", () => {
     tool({
       id: "bad-read-tool",
       description: "bad",
-      // @ts-expect-error — tools import services instead of declaring read/write needs
+      // @ts-expect-error -- tools import services instead of declaring read/write needs
       needs: [{ tag: "todo", access: "write" }],
       params: Schema.Struct({}),
       output: Schema.String,
@@ -822,7 +822,7 @@ describe("Effect-purity locks (compile-time)", () => {
       id: "default-request-context",
       input: Schema.Struct({}),
       output: Schema.Void,
-      // @ts-expect-error — request handlers receive decoded input only; host access comes from ExtensionContext
+      // @ts-expect-error -- request handlers receive decoded input only; host access comes from ExtensionContext
       execute: (_input, _ctx) => Effect.void,
     }
     void bad
@@ -871,17 +871,17 @@ describe("Effect-purity locks (compile-time)", () => {
 
   test("removed hook slots are not part of the public hooks bag", () => {
     type HookKind = AnyExtensionHook["kind"]
-    // @ts-expect-error — messageInput hook was removed; mutations belong in tools/requests
+    // @ts-expect-error -- messageInput hook was removed; mutations belong in tools/requests
     const messageInput: HookKind = "messageInput"
-    // @ts-expect-error — contextMessages hook was removed; turnProjection composes prompt context
+    // @ts-expect-error -- contextMessages hook was removed; turnProjection composes prompt context
     const contextMessages: HookKind = "contextMessages"
-    // @ts-expect-error — permissionCheck hook was removed; permission policy is host-owned
+    // @ts-expect-error -- permissionCheck hook was removed; permission policy is host-owned
     const permissionCheck: HookKind = "permissionCheck"
-    // @ts-expect-error — toolExecute hook was removed; tools own their effect
+    // @ts-expect-error -- toolExecute hook was removed; tools own their effect
     const toolExecute: HookKind = "toolExecute"
-    // @ts-expect-error — turnBefore hook was removed; turnProjection runs at turn start
+    // @ts-expect-error -- turnBefore hook was removed; turnProjection runs at turn start
     const turnBefore: HookKind = "turnBefore"
-    // @ts-expect-error — messageOutput hook was removed; assistant parts persist directly
+    // @ts-expect-error -- messageOutput hook was removed; assistant parts persist directly
     const messageOutput: HookKind = "messageOutput"
     void messageInput
     void contextMessages
@@ -896,7 +896,7 @@ describe("Effect-purity locks (compile-time)", () => {
     defineExtension({
       id: "deleted-reactions-bucket-lock",
       setup: Effect.void,
-      // @ts-expect-error — lifecycle authoring uses host.on; reactions was deleted
+      // @ts-expect-error -- lifecycle authoring uses host.on; reactions was deleted
       reactions: {},
     })
     expect(true).toBe(true)
@@ -904,39 +904,39 @@ describe("Effect-purity locks (compile-time)", () => {
 
   test("hook handler field shape is locked to handler-only", () => {
     type TurnAfterSlot = Extract<AnyExtensionHook, { readonly kind: "turnAfter" }>
-    // @ts-expect-error — failureMode field was removed; runtime always isolates hook failures
+    // @ts-expect-error -- failureMode field was removed; runtime always isolates hook failures
     type _FailureMode = TurnAfterSlot["hook"]["failureMode"]
     expect(true).toBe(true)
   })
 
   test("ExtensionContext carries no facet for an Effect platform service", () => {
     type Ctx = PublicExtensionApi.ExtensionContextService
-    // @ts-expect-error — the Files facet was removed; extensions yield FileSystem.FileSystem and Path.Path
+    // @ts-expect-error -- the Files facet was removed; extensions yield FileSystem.FileSystem and Path.Path
     type _Files = Ctx["Files"]
-    // @ts-expect-error — the Process facet was removed; extensions run commands over ChildProcessSpawner and mint ids with Crypto
+    // @ts-expect-error -- the Process facet was removed; extensions run commands over ChildProcessSpawner and mint ids with Crypto
     type _Process = Ctx["Process"]
     expect(true).toBe(true)
   })
 
   test("ExtensionContext.Session exposes queries only — no branch/session/message mutations", () => {
     type SessionService = PublicExtensionApi.ExtensionContextService["Session"]
-    // @ts-expect-error — createBranch was removed; branch mutations route through the RPC client
+    // @ts-expect-error -- createBranch was removed; branch mutations route through the RPC client
     type _CreateBranch = SessionService["createBranch"]
-    // @ts-expect-error — forkBranch was removed; branch mutations route through the RPC client
+    // @ts-expect-error -- forkBranch was removed; branch mutations route through the RPC client
     type _ForkBranch = SessionService["forkBranch"]
-    // @ts-expect-error — switchBranch was removed; branch mutations route through the RPC client
+    // @ts-expect-error -- switchBranch was removed; branch mutations route through the RPC client
     type _SwitchBranch = SessionService["switchBranch"]
-    // @ts-expect-error — createChildSession was removed; session-tree mutations route through the RPC client
+    // @ts-expect-error -- createChildSession was removed; session-tree mutations route through the RPC client
     type _CreateChildSession = SessionService["createChildSession"]
-    // @ts-expect-error — getChildSessions was removed; session-tree reads route through the RPC client
+    // @ts-expect-error -- getChildSessions was removed; session-tree reads route through the RPC client
     type _GetChildSessions = SessionService["getChildSessions"]
-    // @ts-expect-error — getSessionAncestors was removed; session-tree reads route through the RPC client
+    // @ts-expect-error -- getSessionAncestors was removed; session-tree reads route through the RPC client
     type _GetSessionAncestors = SessionService["getSessionAncestors"]
-    // @ts-expect-error — deleteSession was removed; deletion routes through the RPC client
+    // @ts-expect-error -- deleteSession was removed; deletion routes through the RPC client
     type _DeleteSession = SessionService["deleteSession"]
-    // @ts-expect-error — deleteBranch was removed; deletion routes through the RPC client
+    // @ts-expect-error -- deleteBranch was removed; deletion routes through the RPC client
     type _DeleteBranch = SessionService["deleteBranch"]
-    // @ts-expect-error — deleteMessages was removed; message mutations route through the RPC client
+    // @ts-expect-error -- deleteMessages was removed; message mutations route through the RPC client
     type _DeleteMessages = SessionService["deleteMessages"]
     expect(true).toBe(true)
   })
@@ -948,7 +948,7 @@ describe("Effect-purity locks (compile-time)", () => {
         const host = yield* ExtensionHost
         yield* host.on(
           "turnAfter",
-          // @ts-expect-error — host authority comes from ExtensionContext, not a ctx parameter
+          // @ts-expect-error -- host authority comes from ExtensionContext, not a ctx parameter
           (_input: PublicExtensionApi.TurnAfterInput, _ctx: unknown) => Effect.void, // oxlint-disable-line effect/noUnknownParameters -- This invalid contract deliberately checks that a ctx parameter is rejected.
         )
       }),
@@ -957,115 +957,115 @@ describe("Effect-purity locks (compile-time)", () => {
   })
 
   test("private host and storage shapes stay out of the public API", () => {
-    // @ts-expect-error — raw host context is runtime plumbing; authors use typed handlers
+    // @ts-expect-error -- raw host context is runtime plumbing; authors use typed handlers
     type _BadHostContext = PublicExtensionApi.ExtensionHostContext
-    // @ts-expect-error — storage-layer errors are not public extension authoring API
+    // @ts-expect-error -- storage-layer errors are not public extension authoring API
     type _BadStorageError = PublicExtensionApi.StorageError
-    // @ts-expect-error — storage-layer search rows are not public extension authoring API
+    // @ts-expect-error -- storage-layer search rows are not public extension authoring API
     type _BadStorageSearchResult = PublicExtensionApi.SearchResult
-    // @ts-expect-error — generic capability token is internal; authors use concrete leaf factories
+    // @ts-expect-error -- generic capability token is internal; authors use concrete leaf factories
     type _BadCapabilityToken = PublicExtensionApi.CapabilityToken
-    // @ts-expect-error — resource-need labels are extension-authored, not centrally registered by core
+    // @ts-expect-error -- resource-need labels are extension-authored, not centrally registered by core
     type _BadLockRegistry = typeof PublicExtensionApi.LOCK_REGISTRY
-    // @ts-expect-error — generic capability contribution is internal; authors use concrete leaf factories
+    // @ts-expect-error -- generic capability contribution is internal; authors use concrete leaf factories
     type _BadCapabilityContribution = PublicExtensionApi.CapabilityContribution
-    // @ts-expect-error — generic capability contribution is internal; authors use concrete leaf factories
+    // @ts-expect-error -- generic capability contribution is internal; authors use concrete leaf factories
     type _BadAnyCapabilityContribution = PublicExtensionApi.AnyCapabilityContribution
-    // @ts-expect-error — audience flags are internal lowering details, not public authoring API
+    // @ts-expect-error -- audience flags are internal lowering details, not public authoring API
     type _BadAudience = PublicExtensionApi.Audience
-    // @ts-expect-error — read/write intent is not public request authoring API
+    // @ts-expect-error -- read/write intent is not public request authoring API
     type _BadIntent = PublicExtensionApi.Intent
-    // @ts-expect-error — model tool metadata is internal lowering detail
+    // @ts-expect-error -- model tool metadata is internal lowering detail
     type _BadModelAudienceFields = PublicExtensionApi.ModelAudienceFields
-    // @ts-expect-error — raw tool metadata is internal lowering detail
+    // @ts-expect-error -- raw tool metadata is internal lowering detail
     type _BadToolMetadataTag = typeof PublicExtensionApi.GentToolMetadataTag
-    // @ts-expect-error — tool execution ctx is runtime plumbing; authors yield ExtensionContext
+    // @ts-expect-error -- tool execution ctx is runtime plumbing; authors yield ExtensionContext
     type _BadToolCoreContext = PublicExtensionApi.ToolCoreContext
-    // @ts-expect-error — individual authority facades are collapsed into ExtensionContext
+    // @ts-expect-error -- individual authority facades are collapsed into ExtensionContext
     type _BadExtensionSession = typeof PublicExtensionApi.ExtensionSession
-    // @ts-expect-error — individual authority facades are collapsed into ExtensionContext
+    // @ts-expect-error -- individual authority facades are collapsed into ExtensionContext
     type _BadExtensionAgent = typeof PublicExtensionApi.ExtensionAgent
-    // @ts-expect-error — individual authority facades are collapsed into ExtensionContext
+    // @ts-expect-error -- individual authority facades are collapsed into ExtensionContext
     type _BadExtensionInteraction = typeof PublicExtensionApi.ExtensionInteraction
-    // @ts-expect-error — individual authority facades are collapsed into ExtensionContext
+    // @ts-expect-error -- individual authority facades are collapsed into ExtensionContext
     type _BadExtensionProcess = typeof PublicExtensionApi.ExtensionProcess
-    // @ts-expect-error — individual authority facades are collapsed into ExtensionContext
+    // @ts-expect-error -- individual authority facades are collapsed into ExtensionContext
     type _BadExtensionFiles = typeof PublicExtensionApi.ExtensionFiles
-    // @ts-expect-error — individual authority facades are collapsed into ExtensionContext
+    // @ts-expect-error -- individual authority facades are collapsed into ExtensionContext
     type _BadExtensionFileLock = typeof PublicExtensionApi.ExtensionFileLock
-    // @ts-expect-error — raw tool metadata is internal lowering detail
+    // @ts-expect-error -- raw tool metadata is internal lowering detail
     type _BadGetToolMetadata = typeof PublicExtensionApi.getToolMetadata
-    // @ts-expect-error — raw tool metadata is internal lowering detail
+    // @ts-expect-error -- raw tool metadata is internal lowering detail
     type _BadIsToolCapability = typeof PublicExtensionApi.isToolCapability
-    // @ts-expect-error — package shape validation is host loader plumbing, not authoring API
+    // @ts-expect-error -- package shape validation is host loader plumbing, not authoring API
     type _BadValidateExtensionPackage = typeof PublicExtensionApi.validateExtensionPackage
-    // @ts-expect-error — request refs are read via ref(...); the symbol stays private
+    // @ts-expect-error -- request refs are read via ref(...); the symbol stays private
     type _BadCapabilityRefSymbol = typeof PublicExtensionApi.CAPABILITY_REF
-    // @ts-expect-error — read/write authority is host facade behavior, not author branding ceremony
+    // @ts-expect-error -- read/write authority is host facade behavior, not author branding ceremony
     type _BadReadOnlyBrand = typeof PublicExtensionApi.ReadOnlyBrand
-    // @ts-expect-error — read/write authority is host facade behavior, not author branding ceremony
+    // @ts-expect-error -- read/write authority is host facade behavior, not author branding ceremony
     type _BadWithReadOnly = typeof PublicExtensionApi.withReadOnly
-    // @ts-expect-error — read/write authority is host facade behavior, not author branding ceremony
+    // @ts-expect-error -- read/write authority is host facade behavior, not author branding ceremony
     type _BadReadOnly = PublicExtensionApi.ReadOnly<ReadOnlyApi>
-    // @ts-expect-error — read/write authority is host facade behavior, not author branding ceremony
+    // @ts-expect-error -- read/write authority is host facade behavior, not author branding ceremony
     type _BadReadOnlyTag = PublicExtensionApi.ReadOnlyTag
     expect(true).toBe(true)
   })
 
   test("public extension api does not expose runtime engine tags or server routers", () => {
-    // @ts-expect-error — machine execution is not authoring surface
+    // @ts-expect-error -- machine execution is not authoring surface
     type _BadMachineExecute = PublicExtensionApi.MachineExecute
-    // @ts-expect-error — interaction pending reader is a storage seam, not authoring api
+    // @ts-expect-error -- interaction pending reader is a storage seam, not authoring api
     type _BadInteractionPendingReader = PublicExtensionApi.InteractionPendingReader
-    // @ts-expect-error — event publisher is an app/domain service, not extension api
+    // @ts-expect-error -- event publisher is an app/domain service, not extension api
     type _BadEventPublisher = PublicExtensionApi.EventPublisher
     expect(true).toBe(true)
   })
 
   test("public extension api does not expose host extension-loading helpers", () => {
-    // @ts-expect-error — disabled-extension config loading is host UI plumbing
+    // @ts-expect-error -- disabled-extension config loading is host UI plumbing
     type _BadReadDisabledExtensions = typeof PublicExtensionApi.readDisabledExtensions
-    // @ts-expect-error — ToolRunner is runtime engine plumbing
+    // @ts-expect-error -- ToolRunner is runtime engine plumbing
     type _BadToolRunner = typeof PublicExtensionApi.ToolRunner
-    // @ts-expect-error — external turn executors are removed; a driver is a model driver
+    // @ts-expect-error -- external turn executors are removed; a driver is a model driver
     type _BadExternalToolRunner = typeof PublicExtensionApi.ExternalToolRunner
-    // @ts-expect-error — external turn executors are removed; a driver is a model driver
+    // @ts-expect-error -- external turn executors are removed; a driver is a model driver
     type _BadExternalDriverRef = typeof PublicExtensionApi.ExternalDriverRef
-    // @ts-expect-error — todo lifecycle events are private; extensions publish state pulses
+    // @ts-expect-error -- todo lifecycle events are private; extensions publish state pulses
     type _BadTodoCreated = typeof PublicExtensionApi.TodoCreated
-    // @ts-expect-error — todo schemas belong to @gent/todo, not core author API
+    // @ts-expect-error -- todo schemas belong to @gent/todo, not core author API
     type _BadTodo = typeof PublicExtensionApi.Todo
-    // @ts-expect-error — todo ids belong to @gent/todo, not core author API
+    // @ts-expect-error -- todo ids belong to @gent/todo, not core author API
     type _BadTodoId = typeof PublicExtensionApi.TodoId
-    // @ts-expect-error — host platform is internal authority; public extensions use ExtensionContext facets
+    // @ts-expect-error -- host platform is internal authority; public extensions use ExtensionContext facets
     type _BadGentPlatform = typeof PublicExtensionApi.GentPlatform
-    // @ts-expect-error — platform live layers are composition-root plumbing
+    // @ts-expect-error -- platform live layers are composition-root plumbing
     type _BadBunGentPlatformLive = typeof PublicExtensionApi.BunGentPlatformLive
-    // @ts-expect-error — host signal errors pair with the internal platform service
+    // @ts-expect-error -- host signal errors pair with the internal platform service
     type _BadSignalError = typeof PublicExtensionApi.SignalError
-    // @ts-expect-error — durable message metadata schema is storage/runtime internals
+    // @ts-expect-error -- durable message metadata schema is storage/runtime internals
     type _BadMessageMetadata = typeof PublicExtensionApi.MessageMetadata
-    // @ts-expect-error — host-context errors are runtime internals, not authoring API
+    // @ts-expect-error -- host-context errors are runtime internals, not authoring API
     type _BadExtensionHostError = typeof PublicExtensionApi.ExtensionHostError
     // The event type is public (an extension reads its own branch's stream);
     // the constructors are not, so raw runtime events cannot be forged.
     type _AgentEventType = PublicExtensionApi.AgentEvent
     const forgeAgentEvent = () => {
-      // @ts-expect-error — raw runtime event constructors can forge product state
+      // @ts-expect-error -- raw runtime event constructors can forge product state
       void PublicExtensionApi.AgentEvent
     }
     void forgeAgentEvent
-    // @ts-expect-error — transport event envelopes are SDK/TUI plumbing, not authoring API
+    // @ts-expect-error -- transport event envelopes are SDK/TUI plumbing, not authoring API
     type _BadEventEnvelope = PublicExtensionApi.EventEnvelope
-    // @ts-expect-error — interaction wire state is client/runtime plumbing
+    // @ts-expect-error -- interaction wire state is client/runtime plumbing
     type _BadActiveInteraction = PublicExtensionApi.ActiveInteraction
-    // @ts-expect-error — the raw host platform is loop plumbing; authors read setup facts on host.host
+    // @ts-expect-error -- the raw host platform is loop plumbing; authors read setup facts on host.host
     type _BadExtensionHostPlatform = PublicExtensionApi.ExtensionHostPlatform
-    // @ts-expect-error — the host process error was removed with the Process facet; runProcess fails with ProcessError
+    // @ts-expect-error -- the host process error was removed with the Process facet; runProcess fails with ProcessError
     type _BadExtensionHostProcessError = typeof PublicExtensionApi.ExtensionHostProcessError
-    // @ts-expect-error — host file lock Tag is private; extensions reach file locks through ExtensionContext.FileLock
+    // @ts-expect-error -- host file lock Tag is private; extensions reach file locks through ExtensionContext.FileLock
     type _BadFileLockService = typeof PublicExtensionApi.FileLockService
-    // @ts-expect-error — capability access enforcement is runtime lowering, not author API
+    // @ts-expect-error -- capability access enforcement is runtime lowering, not author API
     type _BadRequireCapabilityWrite = typeof PublicExtensionApi.requireCapabilityWrite
 
     expect(true).toBe(true)
@@ -1076,7 +1076,7 @@ describe("Effect-purity locks (compile-time)", () => {
       id: "facts-only-read",
       input: Schema.Struct({}),
       output: Schema.String,
-      // @ts-expect-error — request handlers receive decoded params only; facts come from ExtensionContext/setup context
+      // @ts-expect-error -- request handlers receive decoded params only; facts come from ExtensionContext/setup context
       execute: (_input, _ctx) => Effect.succeed("ok"),
     }
     void bad
@@ -1088,10 +1088,10 @@ describe("Effect-purity locks (compile-time)", () => {
     // Setup must be assignable from a value (an Effect), not from a `() => Effect`.
     const okValue: SetupField = Effect.void
     void okValue
-    // @ts-expect-error — `setup` is no longer a thunk; ctx-as-param escape was removed
+    // @ts-expect-error -- `setup` is no longer a thunk; ctx-as-param escape was removed
     const badThunk: SetupField = (_ctx: unknown) => Effect.void // oxlint-disable-line effect/noUnknownParameters -- This invalid contract deliberately checks that setup is not a ctx thunk.
     void badThunk
-    // @ts-expect-error — `setup` is no longer a thunk; zero-arg thunks are also rejected
+    // @ts-expect-error -- `setup` is no longer a thunk; zero-arg thunks are also rejected
     const badZeroArg: SetupField = () => Effect.void
     void badZeroArg
     expect(true).toBe(true)
@@ -1103,15 +1103,15 @@ describe("Effect-purity locks (compile-time)", () => {
       const platform = host.host.osInfo.platform
       const home = host.host.homeDirectory
       const cwd = host.cwd
-      // @ts-expect-error — setup does not see its source path
+      // @ts-expect-error -- setup does not see its source path
       void host.source
-      // @ts-expect-error — setup has no process facade; commands run over ChildProcessSpawner
+      // @ts-expect-error -- setup has no process facade; commands run over ChildProcessSpawner
       void host.Process
-      // @ts-expect-error — host facts do not carry the parent process env
+      // @ts-expect-error -- host facts do not carry the parent process env
       void host.host.parentEnv
-      // @ts-expect-error — host facts cannot signal host processes
+      // @ts-expect-error -- host facts cannot signal host processes
       void host.host.signalPid
-      // @ts-expect-error — host facts cannot spawn host processes
+      // @ts-expect-error -- host facts cannot spawn host processes
       host.host.runProcess("git", ["status"])
       return `${platform}:${home.length}:${cwd}`
     })
@@ -1151,7 +1151,7 @@ describe("Effect-purity locks (compile-time)", () => {
       id: "bad-prompt-hook",
       setup: Effect.gen(function* () {
         const host = yield* ExtensionHost
-        // @ts-expect-error — Promise handler must not be assignable to Effect-returning systemPrompt
+        // @ts-expect-error -- Promise handler must not be assignable to Effect-returning systemPrompt
         yield* host.on("systemPrompt", () => promiseString)
       }),
     })
@@ -1165,14 +1165,14 @@ describe("Effect-purity locks (compile-time)", () => {
       id: "purity-hook",
       setup: Effect.gen(function* () {
         const host = yield* ExtensionHost
-        // @ts-expect-error — Promise handler must not be assignable to Effect-returning extension hook
+        // @ts-expect-error -- Promise handler must not be assignable to Effect-returning extension hook
         yield* host.on("turnAfter", () => promiseVoid)
       }),
     })
     defineResource({
       id: "test/extension-surface-locks/layer-promise",
       scope: "process",
-      // @ts-expect-error — Promise must not be assignable to a Resource layer
+      // @ts-expect-error -- Promise must not be assignable to a Resource layer
       layer: promiseVoid,
     })
     expect(true).toBe(true)

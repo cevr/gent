@@ -613,7 +613,6 @@ const clientModuleProblem = (value: unknown): Option.Option<string> => {
   return Option.none()
 }
 
-// eslint-disable-next-line effect/noUnknownParameters -- dynamic imports are parsed at this module boundary.
 const isExtensionClientModule = (value: unknown): value is AnyExtensionClientModule =>
   Option.isNone(clientModuleProblem(value))
 
