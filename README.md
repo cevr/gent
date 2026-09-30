@@ -17,8 +17,8 @@ bun run --cwd apps/tui dev  # TUI
 ```
 
 `gent` runs one server per database. The TUI binary starts a server or
-attaches to the one that already owns the database; `apps/server` is only
-needed for a standalone topology. `GENT_DATA_DIR` names the directory that
+attaches to the one that already owns the database; `gent server start` runs
+a standalone server in the foreground. `GENT_DATA_DIR` names the directory that
 holds `data.db` (default `~/.gent`).
 
 ## Where to Read Next

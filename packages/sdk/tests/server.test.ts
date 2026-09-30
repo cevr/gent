@@ -16,13 +16,7 @@ import * as ChildProcessSpawnerNs from "effect/unstable/process/ChildProcessSpaw
 import { dateFromMillis } from "@gent/core/protocol"
 import { BunGentPlatformLive } from "@gent/core/test-utils"
 import { GentPlatform } from "@gent/core/host"
-import {
-  BuildFingerprint,
-  dataPaths,
-  LaunchConfig,
-  serverLock,
-  ServerLockEntry,
-} from "../src/server"
+import { BuildFingerprint, dataPaths, serverLock, ServerLockEntry } from "../src/server"
 import { BunServices } from "@effect/platform-bun"
 import { homedir, hostname, tmpdir } from "node:os"
 import { Gent } from "../src/client"
@@ -129,111 +123,6 @@ describe("BuildFingerprint", () => {
         expect(result.fp2).toBe(result.fp3)
         expect(result.fp1).toMatch(/^bin-/)
       }),
-  )
-})
-
-// ── launch config ───────────────────────────────────────────────────────────
-
-/**
- * The launch values `apps/server/src/main.ts` reads its environment through.
- *
- * A launcher gets strings. Before this config, `Number()` accepted anything
- * finite and an unknown mode string fell through to the default, so a wrong
- * value ran instead of stopping: a misspelled `GENT_PROVIDER_MODE` selected
- * the live provider for a caller that asked for the scripted one. Each test
- * below names the value that used to pass.
- *
- * Every case drives the real `ConfigProvider`, so it exercises the same path
- * the launcher takes rather than a decoder called by hand.
- */
-
-/** Read `LaunchConfig` against an environment holding exactly `env`. */
-const launchWith = (env: Record<string, string>) =>
-  LaunchConfig.parse(ConfigProvider.fromEnvRecord(env))
-
-/** The failure `LaunchConfig` gives for `env`, as its rendered message. */
-const failureOf = (env: Record<string, string>) =>
-  Effect.gen(function* () {
-    const result = yield* Effect.result(launchWith(env))
-    if (result._tag === "Success") {
-      const named = Object.entries(env)
-        .map(([key, value]) => `${key}=${value}`)
-        .join(" ")
-      return yield* Effect.die(`expected a config failure for ${named}`)
-    }
-    return String(result.failure)
-  })
-
-describe("GENT_PORT", () => {
-  it.effect("an unset variable takes the fallback", () =>
-    Effect.gen(function* () {
-      const launch = yield* launchWith({})
-      expect(launch.port).toBe(3000)
-    }),
-  )
-
-  it.effect("a port inside the TCP range is taken as given", () =>
-    Effect.gen(function* () {
-      const launch = yield* launchWith({ GENT_PORT: "8080" })
-      expect(launch.port).toBe(8080)
-    }),
-  )
-
-  it.effect("a port above the TCP range fails", () =>
-    Effect.gen(function* () {
-      const failure = yield* failureOf({ GENT_PORT: "70000" })
-      expect(failure).toContain("GENT_PORT")
-      expect(failure).toContain("between 1 and 65535")
-    }),
-  )
-
-  it.effect("a negative port fails", () =>
-    Effect.gen(function* () {
-      const failure = yield* failureOf({ GENT_PORT: "-8080" })
-      expect(failure).toContain("GENT_PORT")
-      expect(failure).toContain("between 1 and 65535")
-    }),
-  )
-
-  it.effect("port zero fails: the launcher names a port its clients dial", () =>
-    Effect.gen(function* () {
-      const failure = yield* failureOf({ GENT_PORT: "0" })
-      expect(failure).toContain("GENT_PORT")
-      expect(failure).toContain("between 1 and 65535")
-    }),
-  )
-})
-
-describe("mode words", () => {
-  it.effect("unset variables take their fallbacks", () =>
-    Effect.gen(function* () {
-      const launch = yield* launchWith({})
-      expect(launch.providerMode).toBe("live")
-      expect(launch.persistenceMode).toBe("sqlite")
-    }),
-  )
-
-  it.effect("a known mode is taken as given", () =>
-    Effect.gen(function* () {
-      const launch = yield* launchWith({ GENT_PROVIDER_MODE: "debug-scripted" })
-      expect(launch.providerMode).toBe("debug-scripted")
-    }),
-  )
-
-  it.effect("a misspelled provider mode fails instead of selecting the live provider", () =>
-    Effect.gen(function* () {
-      const failure = yield* failureOf({ GENT_PROVIDER_MODE: "debug-script" })
-      expect(failure).toContain("GENT_PROVIDER_MODE")
-      expect(failure).toContain('"live" | "debug-scripted"')
-    }),
-  )
-
-  it.effect("a misspelled persistence mode fails instead of writing SQLite", () =>
-    Effect.gen(function* () {
-      const failure = yield* failureOf({ GENT_PERSISTENCE_MODE: "in-memory" })
-      expect(failure).toContain("GENT_PERSISTENCE_MODE")
-      expect(failure).toContain('"sqlite" | "memory"')
-    }),
   )
 })
 

@@ -1437,10 +1437,7 @@ export const findUnenabledPluginRules = (
  */
 const EXTERNALLY_SET: ReadonlyMap<string, string> = new Map([
   ["GENT_LOG_LEVEL", "a developer sets this by hand to raise log verbosity"],
-  ["GENT_PORT", "the operator of a standalone server picks its port"],
   ["GENT_AUTH_DIRECTORY", "the operator names the auth directory"],
-  ["GENT_PERSISTENCE_MODE", "the launcher picks sqlite or memory"],
-  ["GENT_PROVIDER_MODE", "the launcher picks the live or scripted provider"],
 ])
 
 /**
@@ -2157,7 +2154,8 @@ export const RETIRED_SURFACES: ReadonlyArray<RetiredSurface> = [
     on: "line",
     match: identifiers("positiveIntegerOr", "tcpPortOr", "knownModeOr", "LaunchConfigError"),
     scope: "shipped",
-    message: "Hand-written launch decoders are deleted; read the environment through LaunchConfig",
+    message:
+      "Hand-written launch decoders are deleted; `gent server start` reads its launch values as flags",
   },
   {
     on: "line",
@@ -3282,17 +3280,6 @@ const SCANNED_SURFACES: ReadonlyArray<ScannedSurface> = [
     leafOf: "apps/tui/",
   },
   {
-    // The server app is a launcher and a leaf: it reads the environment and
-    // calls `Gent.server`. Nothing imports it, so a name it exports is read by
-    // its own tests or by nothing at all.
-    prefix: "apps/server/src/",
-    outsideOf: [],
-    testsCount: true,
-    ownFileCounts: false,
-    specifier: Option.none(),
-    leafOf: "apps/server/",
-  },
-  {
     // An example extension is a leaf too: the loader reads its default
     // export, and its own tests may read a named one. A name nothing else
     // reads drops the `export` keyword.
@@ -3995,12 +3982,6 @@ const PACKAGE_SURFACES: ReadonlyArray<PackageSurface> = [
     alias: "@gent/tui",
     mustBePrivate: false,
     entryPoints: ["./extensions"],
-  },
-  {
-    packageJson: "apps/server/package.json",
-    alias: "@gent/server-http",
-    mustBePrivate: false,
-    entryPoints: [],
   },
   {
     packageJson: "packages/e2e/package.json",

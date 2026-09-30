@@ -415,6 +415,30 @@ export const readHome = Effect.map(
   Option.getOrElse(() => "/tmp"),
 )
 
+/** What a command asks of the server it starts. */
+interface ServerChoice {
+  readonly cwd: string
+  /** Keep state in memory instead of the shared SQLite file. */
+  readonly inMemory: boolean
+  readonly debug: boolean
+  /** Serve scripted responses instead of a real provider; `empty` serves none. */
+  readonly mock: Option.Option<{ readonly empty: boolean }>
+  readonly authDirectory: Option.Option<string>
+}
+
+/** The `Gent.server` options for a command's choice: the one launcher every command shares. */
+const serverOptions = (choice: ServerChoice) => {
+  let state = Gent.state.sqlite()
+  if (choice.inMemory) state = Gent.state.memory()
+  let provider = Gent.provider.live()
+  if (Option.isSome(choice.mock)) provider = Gent.provider.mock(choice.mock.value)
+  const base = { cwd: choice.cwd, state, provider, debug: choice.debug }
+  return Option.match(choice.authDirectory, {
+    onNone: () => base,
+    onSome: (authDirectory) => ({ ...base, authDirectory }),
+  })
+}
+
 /**
  * The one way a command reaches a running gent.
  *
@@ -422,27 +446,11 @@ export const readHome = Effect.map(
  * one in-process, which is what every caller wants when no url is given: the
  * bundle owns its own server for the life of the call.
  */
-export const resolveClientBundle = (options: {
-  readonly cwd: string
-  readonly connect: Option.Option<string>
-  /** Keep state in memory instead of the shared SQLite file. */
-  readonly inMemory: boolean
-  readonly debug: boolean
-  /** Serve scripted responses instead of a real provider; `empty` serves none. */
-  readonly mock: Option.Option<{ readonly empty: boolean }>
-  readonly authDirectory: Option.Option<string>
-}) => {
+export const resolveClientBundle = (
+  options: ServerChoice & { readonly connect: Option.Option<string> },
+) => {
   if (Option.isSome(options.connect)) return Gent.client(options.connect.value)
-  let state = Gent.state.sqlite()
-  if (options.inMemory) state = Gent.state.memory()
-  let provider = Gent.provider.live()
-  if (Option.isSome(options.mock)) provider = Gent.provider.mock(options.mock.value)
-  const base = { cwd: options.cwd, state, provider, debug: options.debug }
-  const configured = Option.match(options.authDirectory, {
-    onNone: () => base,
-    onSome: (authDirectory) => ({ ...base, authDirectory }),
-  })
-  return Effect.flatMap(Gent.server(configured), Gent.client)
+  return Effect.flatMap(Gent.server(serverOptions(options)), Gent.client)
 }
 
 export const sessions = Command.make(
@@ -591,9 +599,50 @@ const serverStop = Command.make(
     }),
 )
 
+/**
+ * Run a standalone server in the foreground until a signal stops it. A SQLite
+ * server on a fixed port still takes the data directory's lock and writes its
+ * entry, so a later `gent` finds and attaches to it.
+ */
+const serverStart = Command.make(
+  "start",
+  {
+    port: Flag.integer("port").pipe(
+      Flag.withDescription("Bind this TCP port"),
+      Flag.withDefault(3000),
+    ),
+    isolate: Flag.boolean("isolate").pipe(
+      Flag.withDescription("Keep state in memory: no data-directory database or lock"),
+      Flag.withDefault(false),
+    ),
+    mock: Flag.boolean("mock").pipe(
+      Flag.withDescription("Serve the scripted model instead of a real provider"),
+      Flag.withDefault(false),
+    ),
+  },
+  ({ port, isolate, mock }) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        let scripted = Option.none<{ readonly empty: boolean }>()
+        if (mock) scripted = Option.some({ empty: false })
+        const options = serverOptions({
+          cwd: process.cwd(),
+          inMemory: isolate,
+          debug: false,
+          mock: scripted,
+          authDirectory: yield* Config.option(Config.string("GENT_AUTH_DIRECTORY")),
+        })
+        const started = yield* Gent.server({ ...options, port })
+        // Process fixtures parse this raw stdout line.
+        yield* Console.log(`Gent server ready on ${started.url.replace("/rpc", "")}`)
+        return yield* Effect.never
+      }),
+    ),
+)
+
 export const server = Command.make("server", {}, () =>
-  Console.log("Usage: gent server <status|stop>"),
-).pipe(Command.withSubcommands([serverStatus, serverStop]))
+  Console.log("Usage: gent server <start|status|stop>"),
+).pipe(Command.withSubcommands([serverStart, serverStatus, serverStop]))
 
 /** How long the doctor waits for a confirmed server to report extension health. */
 const DOCTOR_QUERY_TIMEOUT = "5 seconds"

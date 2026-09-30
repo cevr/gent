@@ -102,7 +102,7 @@ updates this list in the same commit.
     `packages/core/src/domain/extension.ts`, `apps/tui/src/session.tsx`,
     `apps/tui/src/app.tsx`.
 16. **RPC is the application transport.** No parallel REST surface. Receipt:
-    `apps/server/src/`.
+    `packages/core/src/server/rpc.ts`.
 
 17. **Context leaves the window as a handoff, never as a loss.** When the
     window overflows or the model asks, the history before the newest user
@@ -1221,13 +1221,12 @@ File discovery is owned by the `@gent/fs-tools` extension, not core. `packages/e
 App entrypoints bind concrete Bun/OS behavior:
 
 - `apps/tui/src/main.tsx`
-- `apps/server/src/main.ts`
 
 Production rule:
 
 - `apps/tui/src/main.tsx` resolves a server via `Gent.server()` + `Gent.client()`
 - `--connect <url>` attaches to a remote server via `Gent.client({ url })`
-- `apps/server/src/main.ts` is the standalone durable server boundary
+- `gent server start` (`apps/tui/src/ops.ts`) runs a standalone durable server in the foreground
 
 ## Shared Server Discovery
 
@@ -1238,7 +1237,7 @@ Production rule:
 
 A start that finds a confirmed server of another build on the database fails with a message that names its pid; it never signals it. `gent server stop` is the explicit way to stop it.
 
-A fixed port (`apps/server`, `GENT_PORT`) changes only the attach decision. A SQLite server on a fixed port still takes the kernel lock and writes its entry, so the TUI finds and attaches to it; it never attaches to another server itself, and fails with the holder's pid when the database is owned. The standalone server runs until a signal stops it: there is no idle shutdown and no shared launch mode.
+A fixed port (`gent server start --port`) changes only the attach decision. A SQLite server on a fixed port still takes the kernel lock and writes its entry, so the TUI finds and attaches to it; it never attaches to another server itself, and fails with the holder's pid when the database is owned. The standalone server runs until a signal stops it: there is no idle shutdown and no shared launch mode.
 
 `packages/sdk/src/server.ts` resolves SQLite-backed clients through this single shared server record. Workspace isolation comes from the `x-gent-workspace-id` RPC header and workspace-prefixed AgentLoop actor entity IDs, not from per-workspace server processes.
 
@@ -1289,7 +1288,7 @@ Extension shape lives in:
 ### Dependency direction
 
 ```text
-apps/tui, apps/server, packages/sdk
+apps/tui, packages/sdk
     ↓               ↓            ↓
 @gent/extensions → @gent/core
                     (no reverse dep)

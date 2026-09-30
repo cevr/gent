@@ -10,8 +10,13 @@ pre-commit:
     - name: guards
       run: bun run guards
     # oxlint first, then the formatter, on the same staged files, so the
-    # formatter has the last word; each stages what it rewrote.
+    # formatter has the last word; each stages what it rewrote. oxlint and
+    # oxfmt check a path named on the command line even when
+    # `.oxlintignore` lists it, so the group excludes the rule fixtures here;
+    # an `.invalid` fixture breaks its rule on purpose.
     - name: lint+fmt
+      exclude:
+        - "packages/tooling/fixtures/**"
       group:
         piped: true
         jobs:

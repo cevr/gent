@@ -1,7 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off — server primitive owns filesystem path resolution for gent's data directory
 import {
   Clock,
-  Config,
   Context,
   Effect,
   Exit,
@@ -825,32 +824,6 @@ const ProviderSpec = Schema.Union([
   }),
 ]).pipe(Schema.toTaggedUnion("_tag"))
 type ProviderSpec = Schema.Schema.Type<typeof ProviderSpec>
-
-/**
- * Every launch value the standalone server reads from its environment.
- *
- * Each field stops the process at startup rather than letting a wrong value
- * run: a misspelled `GENT_PROVIDER_MODE` would otherwise quietly bill a live
- * provider for what the caller asked to run scripted. An unset variable takes
- * its default; a present but invalid one fails.
- *
- * This lives beside `GentServerOptions` because that is the surface it guards.
- * A launcher reads strings from its environment; this is where they become
- * values `Gent.server` accepts.
- */
-export const LaunchConfig = Config.all({
-  port: Config.port("GENT_PORT").pipe(Config.withDefault(3000)),
-  persistenceMode: Config.literals(["sqlite", "memory"], "GENT_PERSISTENCE_MODE").pipe(
-    Config.withDefault("sqlite"),
-  ),
-  providerMode: Config.literals(["live", "debug-scripted"], "GENT_PROVIDER_MODE").pipe(
-    Config.withDefault("live"),
-  ),
-  // `GENT_DATA_DIR` and the home directory are not read here: `dataPaths` and
-  // the platform own them, so the server and the doctor resolve one directory.
-  authDirectory: Config.option(Config.string("GENT_AUTH_DIRECTORY")),
-  shell: Config.option(Config.string("SHELL")),
-})
 
 export interface GentServerOptions {
   readonly cwd: string

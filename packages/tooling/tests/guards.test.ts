@@ -1768,19 +1768,11 @@ const RETIRED_CASES: ReadonlyArray<readonly [string, string, string]> = [
     "runAgentLoopTurnProfileOrLegacy()",
     "runAgentLoopTurnProfileOrLegacy",
   ],
-  [
-    "apps/server/src/main.ts",
-    'import { x } from "../core/src/resource-graph.js"',
-    "resource-graph",
-  ],
-  [
-    "apps/server/src/main.ts",
-    'import { x } from "./resource-graph-host.js"',
-    "resource-graph-host",
-  ],
-  ["apps/server/src/main.ts", 'import { x } from "./resource-leases"', "resource-leases"],
-  ["apps/server/src/main.ts", 'export { x } from "./resource-lifecycle.ts"', "resource-lifecycle"],
-  ["apps/server/src/main.ts", 'import { x } from "./live-profile.js"', "live-profile"],
+  ["apps/tui/src/main.tsx", 'import { x } from "../core/src/resource-graph.js"', "resource-graph"],
+  ["apps/tui/src/main.tsx", 'import { x } from "./resource-graph-host.js"', "resource-graph-host"],
+  ["apps/tui/src/main.tsx", 'import { x } from "./resource-leases"', "resource-leases"],
+  ["apps/tui/src/main.tsx", 'export { x } from "./resource-lifecycle.ts"', "resource-lifecycle"],
+  ["apps/tui/src/main.tsx", 'import { x } from "./live-profile.js"', "live-profile"],
   ["packages/core/src/runtime/x.ts", "const a = ExtensionRuntime", "ExtensionRuntime"],
   ["packages/core/src/runtime/x.ts", "const b = ExtensionTurnControl", "ExtensionTurnControl"],
   ["packages/core/src/runtime/x.ts", "const c = TurnEvent", "TurnEvent"],
@@ -1816,12 +1808,12 @@ const RETIRED_CASES: ReadonlyArray<readonly [string, string, string]> = [
   ["packages/sdk/src/x.ts", "sdkBoundary(x)", "sdkBoundary"],
   ["packages/sdk/src/x.ts", "runSdkBoundary(x)", "runSdkBoundary"],
   ["packages/sdk/src/x.ts", "type B = SdkBoundary", "SdkBoundary"],
-  ["apps/server/src/x.ts", 'env["GENT_TRACE_ID"]', "GENT_TRACE_ID"],
-  ["apps/server/src/x.ts", 'env["GENT_PARENT_SPAN_ID"]', "GENT_PARENT_SPAN_ID"],
-  ["apps/server/src/x.ts", "positiveIntegerOr(x)", "positiveIntegerOr"],
-  ["apps/server/src/x.ts", "tcpPortOr(x)", "tcpPortOr"],
-  ["apps/server/src/x.ts", "knownModeOr(x)", "knownModeOr"],
-  ["apps/server/src/x.ts", "new LaunchConfigError()", "LaunchConfigError"],
+  ["apps/tui/src/x.ts", 'env["GENT_TRACE_ID"]', "GENT_TRACE_ID"],
+  ["apps/tui/src/x.ts", 'env["GENT_PARENT_SPAN_ID"]', "GENT_PARENT_SPAN_ID"],
+  ["apps/tui/src/x.ts", "positiveIntegerOr(x)", "positiveIntegerOr"],
+  ["apps/tui/src/x.ts", "tcpPortOr(x)", "tcpPortOr"],
+  ["apps/tui/src/x.ts", "knownModeOr(x)", "knownModeOr"],
+  ["apps/tui/src/x.ts", "new LaunchConfigError()", "LaunchConfigError"],
   ["packages/extensions/src/x.ts", "type Q = AnyQueryContribution", "AnyQueryContribution"],
   ["packages/extensions/src/x.ts", "type C = CapabilityContribution", "CapabilityContribution"],
   ["packages/core/src/providers/x.ts", "Provider.Sequence([])", "Provider.Sequence"],
@@ -2845,36 +2837,6 @@ describe("the TUI app surface", () => {
   })
 })
 
-describe("the server app surface", () => {
-  const SERVER_FILE = "apps/server/src/main.ts"
-
-  test("the launcher exporting nothing is clean", () => {
-    expect(findingsFor([{ file: SERVER_FILE, text: `const program = 1\nvoid program\n` }])).toEqual(
-      [],
-    )
-  })
-
-  test("a server export nothing reaches is reported", () => {
-    const findings = findingsFor([
-      { file: SERVER_FILE, text: `const program = 1\nexport const orphan = program\n` },
-    ])
-    expect(findings.map((finding) => finding.line)).toEqual([2])
-    expect(findings[0]?.message).toContain("`orphan`")
-  })
-
-  test("a server test file keeps a name alive", () => {
-    expect(
-      findingsFor([
-        { file: SERVER_FILE, text: `export const orphan = 1\n` },
-        {
-          file: "apps/server/tests/main.test.ts",
-          text: `import { orphan } from "../src/main"\nvoid orphan\n`,
-        },
-      ]),
-    ).toEqual([])
-  })
-})
-
 describe("support module surface (test helpers, build scripts, testbed drivers)", () => {
   const HELPER = "packages/core/tests/server/session-mutations.ts"
 
@@ -3478,7 +3440,6 @@ const VALID_MANIFESTS: ReadonlyArray<readonly [string, PackageJson]> = [
   ],
   ["packages/sdk/package.json", { exports: { ".": "./src/index.ts" } }],
   ["apps/tui/package.json", { exports: { "./extensions": "./src/extensions.ts" } }],
-  ["apps/server/package.json", {}],
   ["packages/e2e/package.json", { private: true }],
   ["packages/tooling/package.json", { private: true }],
   ["examples/package.json", { private: true }],
@@ -3489,7 +3450,6 @@ const PACKAGE_NAMES = new Map([
   ["packages/extensions/package.json", "@gent/extensions"],
   ["packages/sdk/package.json", "@gent/sdk"],
   ["apps/tui/package.json", "@gent/tui"],
-  ["apps/server/package.json", "@gent/server-http"],
   ["packages/e2e/package.json", "@gent/e2e"],
   ["packages/tooling/package.json", "@gent/tooling"],
   ["examples/package.json", "@gent/examples"],
@@ -3537,7 +3497,7 @@ describe("host entry point", () => {
     for (const file of [
       "packages/e2e/src/pty-fixture.ts",
       "testbeds/gamut/gamut.ts",
-      "packages/tooling/fixtures/apps/server/src/launch.valid.ts",
+      "packages/tooling/fixtures/apps/tui/src/host-facts.valid.ts",
       "apps/tui/tests/headless-cli-exit.test.ts",
     ]) {
       expect(
@@ -3556,7 +3516,7 @@ describe("host entry point", () => {
     expect(
       findingsFor([
         { file: HOST_FILE, text: hostSource },
-        { file: "apps/server/src/main.ts", text: reading },
+        { file: "apps/tui/src/main.tsx", text: reading },
       ]),
     ).toEqual([])
   })
@@ -3697,7 +3657,6 @@ describe("package entry points", () => {
     for (const file of [
       "packages/e2e/package.json",
       "packages/tooling/package.json",
-      "apps/server/package.json",
       "examples/package.json",
     ]) {
       expect(

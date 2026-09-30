@@ -106,7 +106,7 @@ describe("sdk client helpers", () => {
 
 /**
  * `Gent.server` is the single server composition root. These tests pin the
- * options `apps/server/src/main.ts` needs from it — a fixed port and idle
+ * options `gent server start` needs from it — a fixed port and idle
  * shutdown — so the launcher never rebuilds a second root to get them back.
  */
 
@@ -209,7 +209,7 @@ const rejectedCalls = (calls: ReadonlyArray<SeededCall>) =>
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 // A user-shaped extension whose setup mints an id with Effect `Crypto`. The
-// TUI and `apps/server` both build their root through `Gent.server`.
+// TUI and `gent server start` both build their root through `Gent.server`.
 const cryptoSetupExtension = defineExtension({
   id: "crypto-setup",
   setup: Effect.gen(function* () {

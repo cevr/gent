@@ -268,9 +268,9 @@ const CASES: ReadonlyArray<RuleCase> = [
   },
   {
     rule: "gent/no-bun-outside-adapter",
-    invalid: "apps/server/src/main.ts",
-    valid: ["apps/server/src/launch.valid.ts"],
-    // process.execPath: the server launcher is not exempt
+    invalid: "apps/tui/src/host-facts.invalid.ts",
+    valid: ["apps/tui/src/host-facts.valid.ts"],
+    // process.execPath: the TUI host is not exempt
     expectedCount: 1,
   },
   {

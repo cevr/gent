@@ -5,7 +5,6 @@ describe("SDK public surface", () => {
   test("exports only stable runtime values", () => {
     expect(Object.keys(RuntimePublicSdk).sort()).toEqual([
       "Gent",
-      "LaunchConfig",
       "ServerLockEntry",
       "ServerLockStatus",
       "buildLogPaths",
