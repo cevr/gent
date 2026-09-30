@@ -12,6 +12,7 @@ import {
   promptOnScreen,
   readerPrompt,
   reasoningMarkdown,
+  type RetryOutcome,
   type SessionEvent,
   type SessionItem,
   SPLIT_FOOTER_RESERVED_OUTPUT_ROWS,
@@ -196,16 +197,40 @@ describe("session event labels", () => {
       attempt: 1,
       maxAttempts: 3,
       delayMs: 2000,
-      resolved: false,
+      outcome: "pending",
+      reason: "overloaded (529)",
       createdAt,
       seq: 1,
     }
 
-    expect(getSessionEventLabel(event, createdAt)).toBe("Retrying in 2s... 1/3")
-    expect(getSessionEventLabel(event, createdAt + 1_100)).toBe("Retrying in 1s... 1/3")
-    expect(getSessionEventLabel(event, createdAt + 2_000)).toBe("Retrying now... 1/3")
-    expect(getSessionEventLabel({ ...event, resolved: true }, createdAt + 20_000)).toBe(
-      "Retry 1/3 finished",
+    expect(getSessionEventLabel(event, createdAt)).toBe("Retrying in 2s... 1/3 · overloaded (529)")
+    expect(getSessionEventLabel(event, createdAt + 1_100)).toBe(
+      "Retrying in 1s... 1/3 · overloaded (529)",
+    )
+    expect(getSessionEventLabel(event, createdAt + 2_000)).toBe(
+      "Retrying now... 1/3 · overloaded (529)",
+    )
+    expect(getSessionEventLabel({ ...event, outcome: "retried" }, createdAt + 20_000)).toBe(
+      "Retried 1/3 · overloaded (529)",
+    )
+    expect(getSessionEventLabel({ ...event, reason: "" }, createdAt)).toBe("Retrying in 2s... 1/3")
+  })
+
+  test("a retry the turn's cancel cut short is not called finished", () => {
+    const event: SessionEvent = {
+      _tag: "retrying",
+      attempt: 2,
+      maxAttempts: 3,
+      delayMs: 2000,
+      outcome: "cancelled",
+      reason: "overloaded (529)",
+      createdAt: 1_000,
+      seq: 1,
+    }
+    expect(getSessionEventLabel(event, 30_000)).toBe("Retry 2/3 cancelled · overloaded (529)")
+    // The runtime went idle before the feed saw how the retry ended.
+    expect(getSessionEventLabel({ ...event, outcome: "stopped" }, 30_000)).toBe(
+      "Retry 2/3 stopped · overloaded (529)",
     )
   })
 })
@@ -1294,12 +1319,14 @@ describe("FX transcript treatment", () => {
 
   it.live("shares one resize subscription across transcript event rows", () =>
     Effect.gen(function* () {
-      const items: SessionItem[] = Array.from({ length: 12 }, (_, seq) => ({
+      const outcomes: ReadonlyArray<RetryOutcome> = [...Array(11).fill("retried"), "pending"]
+      const items: SessionItem[] = outcomes.map((outcome, seq) => ({
         _tag: "retrying",
         attempt: seq + 1,
         maxAttempts: 12,
         delayMs: 1_000,
-        resolved: seq < 11,
+        outcome,
+        reason: "overloaded",
         createdAt: seq,
         seq,
       }))

@@ -1,6 +1,11 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import { Effect } from "effect"
-import { entityIdOf, foldSessionMetrics, parseEntityId } from "../../src/domain/agent-loop"
+import {
+  entityIdOf,
+  foldSessionMetrics,
+  parseEntityId,
+  stepSessionMetrics,
+} from "../../src/domain/agent-loop"
 import { BranchId, MessageId, SessionId } from "../../src/domain/ids"
 import { DefaultWorkspaceId, WorkspaceId } from "../../src/server/workspace-rpc"
 import { AgentEvent } from "../../src/domain/event"
@@ -167,6 +172,43 @@ describe("session metrics fold", () => {
     expect(foldSessionMetrics(streaming).context?.contextLimitTokens).toBe(1_000_000)
     // Its own step ends: the count belongs to the window it is divided by.
     expect(foldSessionMetrics([...streaming, ended(20_000)]).lastInputTokens).toBe(20_000)
+  })
+
+  test("a snapshot's fold stepped by the live events equals the fold of the whole log", () => {
+    const projected = (compacted: boolean) =>
+      wrap(
+        AgentEvent.cases.ModelContextProjected.make({
+          sessionId,
+          branchId,
+          estimatedTokens: 5_000,
+          availableInputTokens: 95_000,
+          contextLimitTokens: 100_000,
+          omittedMessages: 0,
+          compacted,
+          costUsd: 0.125,
+        }),
+      )
+    const ended = wrap(
+      AgentEvent.cases.StreamEnded.make({
+        sessionId,
+        branchId,
+        usage: { inputTokens: 7_000, outputTokens: 1 },
+        costUsd: 0.25,
+        outcome: "Answered",
+      }),
+    )
+    const done = wrap(AgentEvent.cases.TurnCompleted.make({ sessionId, branchId, durationMs: 10 }))
+    const log = [projected(true), ended, done, projected(true), ended, projected(false)]
+    for (let cut = 0; cut <= log.length; cut++) {
+      const hydrated = foldSessionMetrics(log.slice(0, cut))
+      const live = log
+        .slice(cut)
+        .reduce((metrics, { event }) => stepSessionMetrics(metrics, event), hydrated)
+      expect(live).toEqual(foldSessionMetrics(log))
+    }
+    // The newest projection sets the gauge's window before its step ends.
+    expect(foldSessionMetrics(log).lastInputTokens).toBe(0)
+    expect(foldSessionMetrics(log).context?.compactions).toBe(2)
   })
 
   test("a branch with no projection carries no context block", () => {

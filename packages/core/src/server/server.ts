@@ -125,13 +125,22 @@ import {
   configHealthStatuses,
   ExtensionRegistry,
   type ExtensionRegistryService,
+  makeExtensionHostContextProvider,
+  makeExtensionHostPlatform,
   type ModelCatalogFailure,
   resolveExistingSessionBranch,
+  resolveTurnProfile,
+  RunOpener,
   SessionProfileCache,
 } from "../runtime/extension-host.js"
 import type { AgentName } from "../domain/agent.js"
 import { foldSessionMetrics, type SendUserMessagePayload } from "../domain/agent-loop.js"
-import { resolveSessionRoute } from "../runtime/turn.js"
+import {
+  type AgentLoopTurnProfile,
+  resolveSessionRoute,
+  runAgentLoopTurnProfile,
+  turnRegistry,
+} from "../runtime/turn.js"
 import { WideEvent, WideEventBoundary, withWideEvent } from "effect-wide-event"
 
 import { omitUndefined } from "../domain/guards.js"
@@ -322,6 +331,9 @@ type SwitchBranchParams = Parameters<SessionMutationsService["switchActiveBranch
 type SessionMutationError = Effect.Error<ReturnType<SessionMutationsService["switchActiveBranch"]>>
 type RenameSessionResult = Effect.Success<ReturnType<SessionMutationsService["renameSession"]>>
 
+/** How many deleted sessions' `sessionDeleted` hooks run at once. */
+const SESSION_DELETED_CONCURRENCY = 8
+
 const createSessionResult = (operation: StoredCreateSessionResult): CreateSessionResult => ({
   sessionId: operation.sessionId,
   branchId: operation.branchId,
@@ -342,6 +354,7 @@ const makeSessionMutationsService: Effect.Effect<
   | AgentLoopSessionGovernance
   | GentPlatform
   | ExtensionRegistry
+  | RuntimeEnvironment
 > = Effect.gen(function* () {
   const storageTransaction = yield* makeStorageTransaction
   const sessionStorage = yield* SessionStorage
@@ -461,6 +474,36 @@ const makeSessionMutationsService: Effect.Effect<
   const forgetDeletedSessionRuntimeStateForMutation = (sessionId: SessionId) =>
     eventStore.removeSession(sessionId)
 
+  // The host context the `sessionDeleted` hooks run under. No loop owns a
+  // deleted session, so no session control is wired.
+  const deletedSessionHostProvider = yield* makeExtensionHostContextProvider({
+    host: yield* makeExtensionHostPlatform,
+  })
+
+  /**
+   * The profile of a session's cwd, resolved while its rows still exist, for
+   * the hooks that run once they are gone. None when the session has no
+   * branch (it does not exist). The caller's scope holds the profile's lease.
+   */
+  const deletedSessionProfile = Effect.fn("SessionMutations.deletedSessionProfile")(function* (
+    sessionId: SessionId,
+  ) {
+    const branch = (yield* branchStorage.listBranches(sessionId))[0]
+    if (Predicate.isUndefined(branch)) return Option.none()
+    const profile = yield* resolveTurnProfile({
+      sessionId,
+      branchId: branch.id,
+      profileCache: Option.getOrUndefined(profileCache),
+      hostProvider: deletedSessionHostProvider,
+      defaults: { baseSections: [] },
+      opener: RunOpener.cases.Turn.make({ openedByClient: false }),
+    }).pipe(
+      Effect.provideService(ExtensionRegistry, launchRegistry),
+      Effect.provideService(SessionStorage, sessionStorage),
+    )
+    return Option.some(profile)
+  })
+
   const deleteSessionCascade = Effect.fn("SessionMutations.deleteSessionCascade")(function* (
     sessionId: SessionId,
   ) {
@@ -471,6 +514,18 @@ const makeSessionMutationsService: Effect.Effect<
     // cleanup pass. Any descendant created between pre-collect and the tx is
     // included in the authoritative set and cleaned up here too.
     const preTombstoned = yield* collectSessionTreeIds(sessionId)
+    // Each session's own profile, resolved while its rows still exist: sessions
+    // of one tree can live in different cwds with different extensions.
+    const profiles = new Map<SessionId, Option.Option<AgentLoopTurnProfile>>()
+    yield* Effect.forEach(
+      preTombstoned,
+      (id) =>
+        deletedSessionProfile(id).pipe(
+          Effect.tap((profile) => Effect.sync(() => profiles.set(id, profile))),
+        ),
+      { discard: true },
+    )
+    const rootProfile = Option.flatten(Option.fromUndefinedOr(profiles.get(sessionId)))
     yield* Effect.forEach(preTombstoned, cleanupSessionRuntimeStateForMutation, { discard: true })
     const cascadedIds = yield* sessionStorage.deleteSession(sessionId).pipe(
       // On failure we only restore `preTombstoned`: descendants created after pre-collect
@@ -493,7 +548,29 @@ const makeSessionMutationsService: Effect.Effect<
         ),
       { discard: true },
     )
-  })
+    // Each removed session is heard once, under its own profile. A descendant
+    // created after the pre-collect has no profile of its own; it is heard
+    // under the deleted session's. Each handler's failure is logged and isolated.
+    yield* Effect.forEach(
+      cascadedIds,
+      (deletedSessionId) =>
+        Option.match(
+          Option.orElse(
+            Option.flatten(Option.fromUndefinedOr(profiles.get(deletedSessionId))),
+            () => rootProfile,
+          ),
+          {
+            onNone: () => Effect.void,
+            onSome: (resolved) =>
+              turnRegistry(resolved)
+                .getResolved()
+                .extensionHooks.emitSessionDeleted({ sessionId: deletedSessionId })
+                .pipe(runAgentLoopTurnProfile(resolved)),
+          },
+        ),
+      { concurrency: SESSION_DELETED_CONCURRENCY, discard: true },
+    )
+  }, Effect.scoped)
 
   const sendInitialPrompt = Effect.fn("SessionMutations.sendInitialPrompt")(function* (
     operation: StoredCreateSessionResult,

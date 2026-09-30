@@ -57,6 +57,7 @@ import { inRuntime, waitForFrame, waitUntil, waitUntilAdvancing } from "./helper
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { InteractionRequestId } from "@gent/core/extensions/branch-tools"
 import { useSessionFeed } from "../src/session"
+import { getSessionEventLabel } from "../src/message-list"
 import { useExtensionUI } from "../src/extensions/host"
 import { ClientContext, type ClientRuntime } from "../src/extensions/client-facets"
 import { RpcClientDefect, RpcClientError } from "effect/unstable/rpc/RpcClientError"
@@ -394,6 +395,8 @@ const SECOND = {
   sessionId: SessionId.make("session-metrics-second"),
   branchId: BranchId.make("branch-metrics-second"),
 }
+/** The model the server resolves for the first session only. */
+const firstResolvedModel = ModelId.make("anthropic/first-session-model")
 
 /** A projection that fills most of the window: the value a reader would see as `ctx 90%`. */
 const busyContext = {
@@ -418,7 +421,7 @@ const snapshotOf = (
   lastEventId: nullValue,
   reasoningLevel: absent,
   resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
-  agent: AgentName.make("cowork"),
+  agent: AgentName.make("primary"),
   runtime: {
     _tag: "Idle",
     queue: emptyQueueSnapshot(),
@@ -542,17 +545,13 @@ describe("ClientProvider session metrics", () => {
       )
       const clientContext = yield* requireClient(ctx)
 
-      // The product path: a stream that ends with usage refreshes the metrics.
+      // The product path: a settings change reads what the server resolves.
       // Its reply stays in flight because the mock holds this session's answer.
       clientContext.applySessionEvent(
         EventEnvelope.make({
           id: EventId.make(1),
           createdAt: 0,
-          event: AgentEvent.cases.StreamEnded.make({
-            sessionId: FIRST.sessionId,
-            branchId: FIRST.branchId,
-            usage: { inputTokens: 9_000, outputTokens: 120 },
-          }),
+          event: AgentEvent.cases.SessionSettingsUpdated.make({ sessionId: FIRST.sessionId }),
         }),
       )
       yield* Effect.promise(() => setup.renderOnce())
@@ -560,24 +559,163 @@ describe("ClientProvider session metrics", () => {
 
       clientContext.switchSession(SECOND.sessionId, SECOND.branchId, "Second")
       yield* Effect.promise(() => setup.renderOnce())
-      expect(clientContext.cost()).toBe(0)
-      expect(Option.isNone(clientContext.sessionMetrics().context)).toBe(true)
+      expect(clientContext.model()).not.toBe(firstResolvedModel)
 
       // The first session's reply lands now, naming a session nobody is on.
-      yield* Deferred.succeed(
-        held,
-        snapshotOf(FIRST, { costUsd: 4.2, lastInputTokens: 9_000, context: busyContext }),
-      )
+      yield* Deferred.succeed(held, {
+        ...snapshotOf(FIRST, { costUsd: 4.2, lastInputTokens: 9_000, context: busyContext }),
+        resolvedModelId: firstResolvedModel,
+      })
       yield* Effect.promise(() => setup.renderOnce())
       yield* Effect.promise(() => setup.renderOnce())
 
-      // None of the first session's numbers come back.
+      // None of the first session's values come back.
+      expect(clientContext.model()).not.toBe(firstResolvedModel)
       expect(clientContext.cost()).toBe(0)
       expect(clientContext.sessionMetrics().latestInputTokens).toBe(0)
       expect(Option.isNone(clientContext.sessionMetrics().context)).toBe(true)
 
       setup.renderer.destroy()
     }),
+  )
+
+  it.live("live events move the totals on the snapshot's, with no snapshot read", () =>
+    Effect.gen(function* () {
+      let ctx = Option.none<ClientContextValue>()
+      let reads = 0
+      const client = createMockClient({
+        session: {
+          getSnapshot: () =>
+            Effect.sync(() => {
+              reads += 1
+              return snapshotOf(FIRST, { costUsd: 1, lastInputTokens: 9_000, context: busyContext })
+            }),
+        },
+      })
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <ClientProbe onReady={(c) => (ctx = Option.some(c))} />, {
+          client,
+          initialSession: {
+            id: FIRST.sessionId,
+            activeBranchId: FIRST.branchId,
+            name: "First",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        }),
+      )
+      const clientContext = yield* requireClient(ctx)
+      clientContext.applySessionSnapshot(
+        snapshotOf(FIRST, { costUsd: 1, lastInputTokens: 9_000, context: busyContext }),
+      )
+      yield* Effect.promise(() => setup.renderOnce())
+      const readsAfterHydrate = reads
+      const live = (id: number, event: AgentEvent) =>
+        clientContext.applySessionEvent(
+          EventEnvelope.make({ id: EventId.make(id), createdAt: 0, event }),
+        )
+
+      // A new step's projection moves the gauge before the step ends.
+      live(
+        10,
+        AgentEvent.cases.ModelContextProjected.make({
+          sessionId: FIRST.sessionId,
+          branchId: FIRST.branchId,
+          estimatedTokens: 95_000,
+          availableInputTokens: 5_000,
+          contextLimitTokens: 100_000,
+          omittedMessages: 0,
+          compacted: false,
+        }),
+      )
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(
+        Option.map(clientContext.sessionMetrics().context, (context) => context.estimatedTokens),
+      ).toEqual(Option.some(95_000))
+      expect(clientContext.sessionMetrics().latestInputTokens).toBe(0)
+
+      live(
+        11,
+        AgentEvent.cases.StreamEnded.make({
+          sessionId: FIRST.sessionId,
+          branchId: FIRST.branchId,
+          usage: { inputTokens: 96_000, outputTokens: 10 },
+          costUsd: 0.5,
+        }),
+      )
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(clientContext.cost()).toBe(1.5)
+      expect(clientContext.sessionMetrics().latestInputTokens).toBe(96_000)
+      expect(reads).toBe(readsAfterHydrate)
+
+      setup.renderer.destroy()
+    }),
+  )
+
+  it.live("a finished turn reads the model the next turn resolves to, once", () =>
+    Effect.gen(function* () {
+      let ctx = Option.none<ClientContextValue>()
+      let reads = 0
+      // The project config changes during the turn; the server resolves the new model.
+      let resolvedModelId = ModelId.make("anthropic/claude-sonnet-5")
+      const configModel = ModelId.make("anthropic/config-changed-model")
+      const client = createMockClient({
+        session: {
+          getSnapshot: () =>
+            Effect.sync(() => {
+              reads += 1
+              return {
+                ...snapshotOf(FIRST, { costUsd: 0, lastInputTokens: 0 }),
+                resolvedModelId,
+              }
+            }),
+        },
+      })
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <ClientProbe onReady={(c) => (ctx = Option.some(c))} />, {
+          client,
+          initialSession: {
+            id: FIRST.sessionId,
+            activeBranchId: FIRST.branchId,
+            name: "First",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        }),
+      )
+      const clientContext = yield* requireClient(ctx)
+      clientContext.applySessionSnapshot(snapshotOf(FIRST, { costUsd: 0, lastInputTokens: 0 }))
+      yield* Effect.promise(() => setup.renderOnce())
+      const readsAfterHydrate = reads
+      const live = (id: number, event: AgentEvent) =>
+        clientContext.applySessionEvent(
+          EventEnvelope.make({ id: EventId.make(id), createdAt: 0, event }),
+        )
+      resolvedModelId = configModel
+      // Two steps end: neither reads the snapshot.
+      for (const id of [10, 11]) {
+        live(
+          id,
+          AgentEvent.cases.StreamEnded.make({
+            sessionId: FIRST.sessionId,
+            branchId: FIRST.branchId,
+          }),
+        )
+      }
+      expect(reads).toBe(readsAfterHydrate)
+      live(
+        12,
+        AgentEvent.cases.TurnCompleted.make({
+          sessionId: FIRST.sessionId,
+          branchId: FIRST.branchId,
+          durationMs: 10,
+        }),
+      )
+      yield* waitUntil(() => clientContext.model() === configModel, "the next turn's model")
+      expect(reads).toBe(readsAfterHydrate + 1)
+
+      setup.renderer.destroy()
+    }).pipe(Effect.timeout("4 seconds")),
   )
 })
 
@@ -667,12 +805,12 @@ describe("ClientProvider session lifecycle", () => {
             createdAt: dateFromMillis(0),
             updatedAt: dateFromMillis(0),
           },
-          initialAgent: AgentName.make("deepwork"),
+          initialAgent: AgentName.make("secondary"),
         }),
       )
       if (Option.isNone(ctx)) return yield* Effect.die("client context not ready")
       const active = ctx.value
-      expect(active.agent()).toBe(AgentName.make("deepwork"))
+      expect(active.agent()).toBe(AgentName.make("secondary"))
       active.createSession()
       yield* waitForFrame(
         setup,
@@ -689,11 +827,11 @@ describe("ClientProvider session lifecycle", () => {
         lastEventId: 1,
         reasoningLevel: absent,
         resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
-        agent: AgentName.make("deepwork"),
+        agent: AgentName.make("secondary"),
         runtime: { _tag: "Idle", queue: emptyQueueSnapshot() },
         metrics: { turns: 0, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
       })
-      expect(active.agent()).toBe(AgentName.make("deepwork"))
+      expect(active.agent()).toBe(AgentName.make("secondary"))
     }),
   )
   it.live("choosing the session already in view keeps its settings, status and metrics", () =>
@@ -724,7 +862,7 @@ describe("ClientProvider session lifecycle", () => {
       expect(state.session).toMatchObject({ modelId: model, reasoningLevel: "high" })
       expect(client.isStreaming()).toBe(true)
       expect(client.cost()).toBe(1.5)
-      expect(client.agent()).toBe(AgentName.make("cowork"))
+      expect(client.agent()).toBe(AgentName.make("primary"))
       expect(client.sessionMetrics().latestInputTokens).toBe(9_000)
       expect(Option.isSome(client.sessionMetrics().context)).toBe(true)
     }),
@@ -1135,7 +1273,7 @@ describe("ClientProvider session lifecycle", () => {
         lastEventId: nullValue,
         reasoningLevel: absent,
         resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
-        agent: AgentName.make("cowork"),
+        agent: AgentName.make("primary"),
         runtime: {
           _tag: "Idle",
           queue: emptyQueueSnapshot(),
@@ -1159,7 +1297,7 @@ describe("ClientProvider session lifecycle", () => {
       )
       expect(client.model()).toBe("anthropic/claude-haiku-4-5-20251001")
       // The footer names the session's agent, which the snapshot carries.
-      expect(client.agent()).toBe(AgentName.make("cowork"))
+      expect(client.agent()).toBe(AgentName.make("primary"))
     }),
   )
   it.live("applySessionSnapshot refreshes the active session metadata", () =>
@@ -1185,7 +1323,7 @@ describe("ClientProvider session lifecycle", () => {
         lastEventId: nullValue,
         reasoningLevel: "high",
         resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
-        agent: AgentName.make("cowork"),
+        agent: AgentName.make("primary"),
         runtime: {
           _tag: "Idle",
           queue: emptyQueueSnapshot(),
@@ -1251,7 +1389,7 @@ describe("ClientProvider session lifecycle", () => {
         lastEventId: nullValue,
         reasoningLevel: "high",
         resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
-        agent: AgentName.make("cowork"),
+        agent: AgentName.make("primary"),
         runtime: {
           _tag: "Running",
           queue: emptyQueueSnapshot(),
@@ -1318,7 +1456,7 @@ describe("ClientProvider session lifecycle", () => {
         lastEventId: nullValue,
         reasoningLevel: "medium",
         resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
-        agent: AgentName.make("cowork"),
+        agent: AgentName.make("primary"),
         runtime: {
           _tag: "Running",
           queue: emptyQueueSnapshot(),
@@ -1380,7 +1518,7 @@ describe("ClientProvider session lifecycle", () => {
         lastEventId: nullValue,
         reasoningLevel: absent,
         resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
-        agent: AgentName.make("cowork"),
+        agent: AgentName.make("primary"),
         runtime: {
           _tag: "Idle",
           queue: emptyQueueSnapshot(),
@@ -1440,7 +1578,7 @@ const snapshotFor = (
   modelId: Option.getOrUndefined(Option.none()),
   reasoningLevel: Option.getOrUndefined(Option.none()),
   resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
-  agent: AgentName.make("cowork"),
+  agent: AgentName.make("primary"),
   runtime: {
     _tag: "Idle",
     queue: emptyQueueSnapshot(),
@@ -2214,8 +2352,9 @@ describe("useSessionFeed", () => {
           _tag: "turn-ended",
           steps: { count: 1, toolCalls: 1, costUsd: 0.01 },
         })
+        // The retry ran and failed; the error row says how the turn ended.
         const retry = events.find((event) => event._tag === "retrying")
-        expect(retry?._tag === "retrying" && retry.resolved).toBe(true)
+        expect(retry?._tag === "retrying" && retry.outcome).toBe("retried")
         dispose()
       })
     }),
@@ -2293,6 +2432,171 @@ describe("useSessionFeed", () => {
         dispose()
       })
     }),
+  )
+
+  it.live("a retry row sits above the answer of the attempt it waited for, and says why", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("retry-order-session")
+      const branchId = BranchId.make("retry-order-branch")
+      // The step opens its answer, the first attempt fails, and the retry answers.
+      const envelopes = [
+        makeEnvelope(1, AgentEvent.cases.StreamStarted.make({ sessionId, branchId })),
+        makeEnvelope(
+          2,
+          AgentEvent.cases.ProviderRetrying.make({
+            sessionId,
+            branchId,
+            attempt: 1,
+            maxAttempts: 3,
+            delayMs: 2_000,
+            error: "overloaded (529)\nretry-after: 2",
+          }),
+        ),
+        makeEnvelope(
+          3,
+          AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk: "the answer" }),
+        ),
+      ]
+      let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
+      const dispose = createRoot((disposeRoot) => {
+        const [active] = createSignal(makeSession(sessionId, branchId))
+        const client = feedClientStub({
+          sessionIdentity: identityOf(active),
+          client: createMockClient({
+            session: {
+              getSnapshot: () => Effect.succeed(snapshotFor(sessionId, branchId)),
+              events: () => Stream.concat(Stream.make(...envelopes), Stream.never),
+              watchRuntime: () => Stream.concat(Stream.make(runtimeSnapshot()), Stream.never),
+            },
+          }),
+          runtime: createMockRuntime(),
+        })
+        feed = Option.some(
+          useSessionFeed(
+            () => sessionId,
+            () => branchId,
+            client,
+            client.runtime.cast,
+            {
+              onInteraction: () => {},
+              onInteractionDismissed: () => {},
+              onBranchSwitch: () => {},
+              onQueueSnapshot: () => {},
+            },
+          ),
+        )
+        return disposeRoot
+      })
+      yield* waitUntil(
+        () =>
+          Option.isSome(feed) &&
+          feed.value.messages().some((message) => message.content === "the answer"),
+      )
+      yield* Effect.sync(() => {
+        if (Option.isNone(feed)) return
+        const items = feed.value.items()
+        expect(items.map((item) => item._tag)).toEqual(["retrying", "regular-message"])
+        const retry = items[0]
+        if (retry?._tag !== "retrying") return
+        // The answer streams, so the retry ran; its row names the provider's reason.
+        expect(retry.outcome).toBe("retried")
+        expect(getSessionEventLabel(retry)).toBe("Retried 1/3 · overloaded (529)")
+        dispose()
+      })
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
+  /** The retry row a feed shows once a cancel during the backoff ended the turn. */
+  const retryRowAfterBackoffCancel = (lastEventId: Option.Option<number>) =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("retry-cancel-session")
+      const branchId = BranchId.make("retry-cancel-branch")
+      // Core ends the cut stream before it completes the turn.
+      const envelopes = [
+        makeEnvelope(1, AgentEvent.cases.StreamStarted.make({ sessionId, branchId })),
+        makeEnvelope(
+          2,
+          AgentEvent.cases.ProviderRetrying.make({
+            sessionId,
+            branchId,
+            attempt: 1,
+            maxAttempts: 3,
+            delayMs: 2_000,
+            error: "overloaded (529)",
+          }),
+        ),
+        makeEnvelope(
+          3,
+          AgentEvent.cases.StreamEnded.make({
+            sessionId,
+            branchId,
+            interrupted: true,
+            outcome: "Interrupted",
+          }),
+        ),
+        makeEnvelope(
+          4,
+          AgentEvent.cases.TurnCompleted.make({
+            sessionId,
+            branchId,
+            durationMs: 1_000,
+            interrupted: true,
+          }),
+        ),
+      ]
+      let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
+      const dispose = createRoot((disposeRoot) => {
+        const [active] = createSignal(makeSession(sessionId, branchId))
+        const client = feedClientStub({
+          sessionIdentity: identityOf(active),
+          client: createMockClient({
+            session: {
+              getSnapshot: () =>
+                Effect.succeed(
+                  snapshotFor(sessionId, branchId, Option.getOrUndefined(lastEventId)),
+                ),
+              events: () => Stream.concat(Stream.make(...envelopes), Stream.never),
+              watchRuntime: () => Stream.concat(Stream.make(runtimeSnapshot()), Stream.never),
+            },
+          }),
+          runtime: createMockRuntime(),
+        })
+        feed = Option.some(
+          useSessionFeed(
+            () => sessionId,
+            () => branchId,
+            client,
+            client.runtime.cast,
+            {
+              onInteraction: () => {},
+              onInteractionDismissed: () => {},
+              onBranchSwitch: () => {},
+              onQueueSnapshot: () => {},
+            },
+          ),
+        )
+        return disposeRoot
+      })
+      yield* waitUntil(
+        () =>
+          Option.isSome(feed) && feed.value.items().some((item) => item._tag === "interruption"),
+      )
+      const retry = Option.flatMap(feed, (value) =>
+        Option.fromNullishOr(value.items().find((item) => item._tag === "retrying")),
+      )
+      dispose()
+      return retry
+    })
+
+  it.live("a cancel during the backoff reads cancelled, live and on replay", () =>
+    Effect.gen(function* () {
+      for (const lastEventId of [Option.none<number>(), Option.some(4)]) {
+        const retry = yield* retryRowAfterBackoffCancel(lastEventId)
+        expect(Option.isSome(retry)).toBe(true)
+        if (Option.isNone(retry) || retry.value._tag !== "retrying") continue
+        expect(getSessionEventLabel(retry.value)).toBe("Retry 1/3 cancelled · overloaded (529)")
+      }
+    }).pipe(Effect.timeout("4 seconds")),
   )
 
   const expectNestedCellOperation = (
@@ -3254,7 +3558,11 @@ describe("useSessionFeed", () => {
       )
       if (Option.isNone(feed)) return yield* Effect.die("feed did not initialize")
       const retry = feed.value.items().find((item) => item._tag === "retrying")
-      expect(retry?._tag === "retrying" && retry.resolved).toBe(true)
+      // The cancel cut the retry short: it did not finish.
+      expect(retry?._tag === "retrying" && retry.outcome).toBe("cancelled")
+      if (retry?._tag === "retrying") {
+        expect(getSessionEventLabel(retry)).toBe("Retry 1/3 cancelled · temporary provider failure")
+      }
       expect(feed.value.items().some((item) => item._tag === "interruption")).toBe(true)
       expect(feed.value.messages()[0]?.content).toContain("stored summary")
       dispose()

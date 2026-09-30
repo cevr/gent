@@ -35,6 +35,7 @@ import {
 } from "../domain/ids.js"
 import type { ExtensionHostContext, LoadedExtension, TurnProjection } from "../domain/extension.js"
 import * as Prompt from "effect/unstable/ai/Prompt"
+import type * as Response from "effect/unstable/ai/Response"
 import {
   getToolId,
   getToolMetadata,
@@ -45,6 +46,8 @@ import {
   toolResultSummary,
   ToolSchemaRevision,
   ToolSourceRevision,
+  toolIdFromWire,
+  wireToolName,
 } from "../domain/capability.js"
 import {
   ApprovalService,
@@ -667,10 +670,66 @@ export const CurrentBranchToolFeature = Context.Reference<BranchToolFeature<neve
 
 type ToolCapabilityMap = Record<string, ToolCapability>
 
-export function convertTools(
-  tools: ReadonlyArray<ToolCapability>,
-): AiToolkit.Toolkit<ToolCapabilityMap> {
-  return AiToolkit.make(...tools)
+// ── wire-tool-names ─────────────────────────────────────────────────────────
+
+/**
+ * The toolkit a model request declares: each tool under its wire name
+ * (`wireToolName`), with the tool's description, schemas and annotations.
+ * It is never run: the turn dispatches each call by the tool id
+ * `fromWireToolPart` gives back.
+ */
+export function convertTools(tools: ReadonlyArray<ToolCapability>) {
+  return AiToolkit.make(
+    ...tools.map((tool) =>
+      AiTool.dynamic(wireToolName(getToolId(tool)), {
+        description: tool.description,
+        parameters: tool.parametersSchema,
+        success: tool.successSchema,
+        failure: tool.failureSchema,
+      }).annotateMerge(tool.annotations),
+    ),
+  )
+}
+
+/** A prompt as the provider sees it: every tool call and result under its tool's wire name. */
+export const toWirePrompt = (prompt: Prompt.Prompt): Prompt.Prompt =>
+  Prompt.fromMessages(
+    prompt.content.map((message): Prompt.Message => {
+      switch (message.role) {
+        case "assistant":
+          return Prompt.makeMessage("assistant", {
+            content: message.content.map((part) => {
+              if (part.type === "tool-call" || part.type === "tool-result") {
+                return { ...part, name: wireToolName(part.name) }
+              }
+              return part
+            }),
+            options: message.options,
+          })
+        case "tool":
+          return Prompt.makeMessage("tool", {
+            content: message.content.map((part) => {
+              if (part.type === "tool-result") return { ...part, name: wireToolName(part.name) }
+              return part
+            }),
+            options: message.options,
+          })
+        default:
+          return message
+      }
+    }),
+  )
+
+/** A part of the model's reply, with each tool named by its id again. */
+export const fromWireToolPart = (part: Response.AnyPart): Response.AnyPart => {
+  switch (part.type) {
+    case "tool-params-start":
+    case "tool-call":
+    case "tool-result":
+      return { ...part, name: toolIdFromWire(part.name) }
+    default:
+      return part
+  }
 }
 
 type ToolCall = { toolCallId: ToolCallId; toolName: string; input: unknown }
@@ -788,7 +847,7 @@ const makeExecutionToolkit = (params: {
 }): Effect.Effect<ToolRunnerToolkit> =>
   Effect.gen(function* () {
     const metadata = getToolMetadata(params.tool)
-    const toolkit = convertTools([params.tool])
+    const toolkit = AiToolkit.make(params.tool)
     const toolName = String(getToolId(params.tool))
 
     const handlerMap: AiToolkit.HandlersFrom<ToolCapabilityMap> = {

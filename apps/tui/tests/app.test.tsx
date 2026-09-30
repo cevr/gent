@@ -132,7 +132,7 @@ describe("startup agent and headless auth", () => {
               messages: [],
               lastEventId: nullValue,
               reasoningLevel: absent,
-              agent: AgentName.make("deepwork"),
+              agent: AgentName.make("secondary"),
               runtime: {
                 _tag: idleTag,
                 queue: emptyQueueSnapshot(),
@@ -175,7 +175,7 @@ describe("startup agent and headless auth", () => {
         },
       }
       const agent = yield* resolveStartupAgent({ client, state })
-      expect(agent).toEqual(Option.some(AgentName.make("deepwork")))
+      expect(agent).toEqual(Option.some(AgentName.make("secondary")))
       // The session view's auth gate checks the providers itself, once mounted.
       expect(calls).toEqual([])
     }),
@@ -195,7 +195,7 @@ describe("startup agent and headless auth", () => {
               messages: [],
               lastEventId: nullValue,
               reasoningLevel: absent,
-              agent: AgentName.make("deepwork"),
+              agent: AgentName.make("secondary"),
               runtime: {
                 _tag: idleTag,
                 queue: emptyQueueSnapshot(),
@@ -241,7 +241,7 @@ describe("startup agent and headless auth", () => {
       const missing = yield* resolveHeadlessMissingProviders({ client, state })
       expect(missing).toEqual([ProviderId.make("openai")])
       expect(calls).toEqual([
-        { agentName: AgentName.make("deepwork"), sessionId: SessionId.make("session-a") },
+        { agentName: AgentName.make("secondary"), sessionId: SessionId.make("session-a") },
       ])
     }),
   )
@@ -371,7 +371,7 @@ describe("resolveInitialState", () => {
         updatedAt: dateFromMillis(0),
       })
       const admission = {
-        agent: AgentName.make("deepwork"),
+        agent: AgentName.make("secondary"),
         runSpec: { overrides: { maxSteps: 3 } },
       }
       const state = yield* resolveInitialState({
@@ -997,7 +997,7 @@ describe("App auth gate", () => {
         auth: {
           listProviders: (input: { agentName?: string }) => {
             calls.push(input)
-            if (input.agentName === "deepwork") {
+            if (input.agentName === "secondary") {
               return Effect.succeed([
                 {
                   provider: "openai",
@@ -1039,7 +1039,7 @@ describe("App auth gate", () => {
         ),
       )
       const clientContext = yield* requireClient(ctx)
-      applySnapshotAgent(clientContext, AgentName.make("deepwork"))
+      applySnapshotAgent(clientContext, AgentName.make("secondary"))
       const frame = yield* waitForFrame(
         setup,
         (next) => next.includes("Sign in ·"),
@@ -1060,7 +1060,7 @@ describe("App auth gate", () => {
         auth: {
           listProviders: (input: { agentName?: string; sessionId?: string }) => {
             calls.push(input)
-            if (input.agentName === "deepwork") {
+            if (input.agentName === "secondary") {
               return Effect.succeed([
                 {
                   provider: "openai",
@@ -1084,7 +1084,7 @@ describe("App auth gate", () => {
         renderWithProviders(() => <App />, {
           client,
           runtime,
-          initialAgent: AgentName.make("deepwork"),
+          initialAgent: AgentName.make("secondary"),
           initialSession: {
             id: SessionId.make("session-a"),
             activeBranchId: BranchId.make("branch-a"),
@@ -1103,7 +1103,7 @@ describe("App auth gate", () => {
       // name the route's session instead, which the harness could set to a
       // different id than the one the client held.
       expect(calls[0]).toEqual({
-        agentName: AgentName.make("deepwork"),
+        agentName: AgentName.make("secondary"),
         sessionId: SessionId.make("session-a"),
       })
       // The gate opens the auth overlay itself, and the branch picker is read
@@ -1268,7 +1268,7 @@ describe("App auth gate", () => {
               messages: [],
               lastEventId: nullValue,
               reasoningLevel: absent,
-              agent: AgentName.make("cowork"),
+              agent: AgentName.make("primary"),
               runtime: { _tag: idleTag, queue: emptyQueueSnapshot() },
               metrics: { turns: 0, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
             }),
@@ -3149,7 +3149,7 @@ describe("App auth gate", () => {
             // An agent is what makes the auth check runnable at all. Without one
             // the gate short-circuits before it reads the picker, and this test
             // proves nothing.
-            initialAgent: AgentName.make("cowork"),
+            initialAgent: AgentName.make("primary"),
             initialSession: {
               id: SessionId.make("session-a"),
               activeBranchId: BranchId.make("branch-a"),
@@ -3167,7 +3167,7 @@ describe("App auth gate", () => {
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
       yield* Effect.promise(() => setup.renderOnce())
-      expect(calls.map((call) => call.agentName)).toEqual(["cowork"])
+      expect(calls.map((call) => call.agentName)).toEqual(["primary"])
       setup.renderer.destroy()
     }),
   )
@@ -3205,7 +3205,7 @@ describe("App auth gate", () => {
         renderWithProviders(() => <App />, {
           client,
           runtime,
-          initialAgent: AgentName.make("cowork"),
+          initialAgent: AgentName.make("primary"),
           initialSession: {
             id: SessionId.make("session-a"),
             activeBranchId: BranchId.make("branch-a"),
@@ -3265,7 +3265,7 @@ describe("App auth gate", () => {
         renderWithProviders(() => <App />, {
           client,
           runtime: createMockRuntime(),
-          initialAgent: AgentName.make("cowork"),
+          initialAgent: AgentName.make("primary"),
           initialSession: {
             id: SessionId.make("session-a"),
             activeBranchId: BranchId.make("branch-a"),
@@ -3318,7 +3318,7 @@ describe("App auth gate", () => {
         renderWithProviders(() => <App />, {
           client,
           runtime: createMockRuntime(),
-          initialAgent: AgentName.make("cowork"),
+          initialAgent: AgentName.make("primary"),
           initialSession: {
             id: SessionId.make("session-a"),
             activeBranchId: BranchId.make("branch-a"),
@@ -3381,7 +3381,7 @@ describe("App auth gate", () => {
         renderWithProviders(() => <App />, {
           client,
           runtime,
-          initialAgent: AgentName.make("cowork"),
+          initialAgent: AgentName.make("primary"),
           initialSession: {
             id: SessionId.make("session-a"),
             activeBranchId: BranchId.make("branch-a"),
@@ -3437,7 +3437,7 @@ describe("App auth gate", () => {
         renderWithProviders(() => <App />, {
           client,
           runtime,
-          initialAgent: AgentName.make("cowork"),
+          initialAgent: AgentName.make("primary"),
           initialSession: {
             id: SessionId.make("session-a"),
             activeBranchId: BranchId.make("branch-a"),
@@ -3485,7 +3485,7 @@ describe("App auth gate", () => {
         renderWithProviders(() => <App />, {
           client,
           runtime,
-          initialAgent: AgentName.make("cowork"),
+          initialAgent: AgentName.make("primary"),
           initialSession: {
             id: SessionId.make("session-a"),
             activeBranchId: BranchId.make("branch-a"),
@@ -3538,7 +3538,7 @@ describe("App auth gate", () => {
               messages: [],
               lastEventId: nullValue,
               reasoningLevel: absent,
-              agent: "cowork",
+              agent: "primary",
               runtime: {
                 _tag: "Idle",
                 queue: emptyQueueSnapshot(),
@@ -3637,7 +3637,7 @@ describe("App auth gate", () => {
           {
             client,
             runtime,
-            initialAgent: AgentName.make("cowork"),
+            initialAgent: AgentName.make("primary"),
             initialSession: {
               id: alphaSessionId,
               activeBranchId: alphaBranchId,
@@ -3798,7 +3798,7 @@ describe("App auth gate", () => {
           {
             client,
             runtime,
-            initialAgent: AgentName.make("cowork"),
+            initialAgent: AgentName.make("primary"),
             initialSession: {
               id: SessionId.make("session-a"),
               activeBranchId: BranchId.make("branch-a"),
@@ -3814,7 +3814,7 @@ describe("App auth gate", () => {
       )
       const clientContext = yield* requireClient(ctx)
       yield* waitForFrame(setup, (frame) => frame.includes("Sign in ·"), "auth gate")
-      applySnapshotAgent(clientContext, AgentName.make("deepwork"))
+      applySnapshotAgent(clientContext, AgentName.make("secondary"))
       yield* waitForFrame(setup, () => sessionAuthChecks >= 2, "stale session auth check started")
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
@@ -3874,7 +3874,7 @@ describe("App auth gate", () => {
           {
             client,
             runtime,
-            initialAgent: AgentName.make("cowork"),
+            initialAgent: AgentName.make("primary"),
             initialSession: {
               id: SessionId.make("session-a"),
               activeBranchId: BranchId.make("branch-a"),
@@ -3936,7 +3936,7 @@ describe("App auth gate", () => {
           {
             client,
             runtime,
-            initialAgent: AgentName.make("cowork"),
+            initialAgent: AgentName.make("primary"),
             initialSession: {
               id: SessionId.make("session-a"),
               activeBranchId: BranchId.make("branch-a"),
@@ -3992,7 +3992,7 @@ describe("App auth gate", () => {
           renderWithProviders(() => <App />, {
             client,
             runtime: createMockRuntime(),
-            initialAgent: AgentName.make("cowork"),
+            initialAgent: AgentName.make("primary"),
             initialSession: {
               id: SessionId.make("session-a"),
               activeBranchId: BranchId.make("branch-a"),
@@ -4042,7 +4042,7 @@ describe("App auth gate", () => {
           {
             client,
             runtime,
-            initialAgent: AgentName.make("cowork"),
+            initialAgent: AgentName.make("primary"),
             initialSession: {
               id: SessionId.make("session-a"),
               activeBranchId: BranchId.make("branch-a"),
@@ -4457,7 +4457,7 @@ describe("TUI renderer surfaces", () => {
               lastEventId: nullValue,
               reasoningLevel: absent,
               resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
-              agent: AgentName.make("cowork"),
+              agent: AgentName.make("primary"),
               runtime: { _tag: idleTag, queue: emptyQueueSnapshot() },
               metrics: { turns: 3, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
             }),
@@ -4536,7 +4536,7 @@ describe("TUI renderer surfaces", () => {
         {
           _tag: "Steering",
           id: MessageId.make("m1"),
-          content: "switch to deepwork",
+          content: "switch to secondary",
           createdAt: 0,
         },
       ]
@@ -4555,7 +4555,7 @@ describe("TUI renderer surfaces", () => {
       )
       const frame = renderFrame(setup)
       expect(frame).toContain("queue")
-      expect(frame).toContain("[steer 1] switch to deepwork")
+      expect(frame).toContain("[steer 1] switch to secondary")
       expect(frame).toContain("[queued 1] line one +2 lines")
       expect(frame).toContain("cmd+up restore")
     }),
