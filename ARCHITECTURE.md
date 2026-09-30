@@ -133,6 +133,9 @@ updates this list in the same commit.
     snapshot (`foldSessionMetrics`) and applies each live event to them with
     the same step (`stepSessionMetrics`, `@gent/core/protocol`), so the gauge
     moves at a step's `ModelContextProjected` and no step re-reads the snapshot.
+    The resolved model and reasoning the footer shows are read again on a
+    settings change and once at a turn's end (`TurnCompleted`), since a turn
+    reads the project config again and no event reports a config edit.
     A request the provider refuses as too long (`RetryPolicy.contextOverflow`,
     one pattern list in `packages/core/src/domain/driver.ts`; the byte cap
     `request_too_large` is not an overflow) hands the window off once and runs

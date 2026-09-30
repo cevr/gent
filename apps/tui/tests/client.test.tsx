@@ -651,6 +651,72 @@ describe("ClientProvider session metrics", () => {
       setup.renderer.destroy()
     }),
   )
+
+  it.live("a finished turn reads the model the next turn resolves to, once", () =>
+    Effect.gen(function* () {
+      let ctx = Option.none<ClientContextValue>()
+      let reads = 0
+      // The project config changes during the turn; the server resolves the new model.
+      let resolvedModelId = ModelId.make("anthropic/claude-sonnet-5")
+      const configModel = ModelId.make("anthropic/config-changed-model")
+      const client = createMockClient({
+        session: {
+          getSnapshot: () =>
+            Effect.sync(() => {
+              reads += 1
+              return {
+                ...snapshotOf(FIRST, { costUsd: 0, lastInputTokens: 0 }),
+                resolvedModelId,
+              }
+            }),
+        },
+      })
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <ClientProbe onReady={(c) => (ctx = Option.some(c))} />, {
+          client,
+          initialSession: {
+            id: FIRST.sessionId,
+            activeBranchId: FIRST.branchId,
+            name: "First",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        }),
+      )
+      const clientContext = yield* requireClient(ctx)
+      clientContext.applySessionSnapshot(snapshotOf(FIRST, { costUsd: 0, lastInputTokens: 0 }))
+      yield* Effect.promise(() => setup.renderOnce())
+      const readsAfterHydrate = reads
+      const live = (id: number, event: AgentEvent) =>
+        clientContext.applySessionEvent(
+          EventEnvelope.make({ id: EventId.make(id), createdAt: 0, event }),
+        )
+      resolvedModelId = configModel
+      // Two steps end: neither reads the snapshot.
+      for (const id of [10, 11]) {
+        live(
+          id,
+          AgentEvent.cases.StreamEnded.make({
+            sessionId: FIRST.sessionId,
+            branchId: FIRST.branchId,
+          }),
+        )
+      }
+      expect(reads).toBe(readsAfterHydrate)
+      live(
+        12,
+        AgentEvent.cases.TurnCompleted.make({
+          sessionId: FIRST.sessionId,
+          branchId: FIRST.branchId,
+          durationMs: 10,
+        }),
+      )
+      yield* waitUntil(() => clientContext.model() === configModel, "the next turn's model")
+      expect(reads).toBe(readsAfterHydrate + 1)
+
+      setup.renderer.destroy()
+    }).pipe(Effect.timeout("4 seconds")),
+  )
 })
 
 // ── client session state ────────────────────────────────────────────────────

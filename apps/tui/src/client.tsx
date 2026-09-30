@@ -1127,8 +1127,10 @@ export function ClientProvider(props: ClientProviderProps) {
 
   /**
    * Read what the server resolves the next turn's model and reasoning to.
-   * Only a settings change moves them, and the server alone resolves the
-   * fallback, so this is the one read left; the totals come from the fold.
+   * A settings change moves them, and so can a project config edit, which
+   * the server reads each turn; the server alone resolves the fallback. It
+   * runs on a settings change and at a turn's end, never per step; the
+   * totals come from the fold.
    */
   const refreshResolvedSettings = (): void => {
     const currentSession = sessionOption()
@@ -1189,6 +1191,13 @@ export function ClientProvider(props: ClientProviderProps) {
           // The server resolves what the cleared/changed settings fall back to.
           refreshResolvedSettings()
         }
+        break
+      }
+
+      // The turn read the project config again, which no event reports: read
+      // what the next turn resolves to, once per turn, not once per step.
+      case "TurnCompleted": {
+        if (Option.contains(activeSessionId(), event.sessionId)) refreshResolvedSettings()
         break
       }
     }
