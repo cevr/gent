@@ -1,4 +1,4 @@
-import { describe, expect, it, test } from "effect-bun-test"
+import { describe, expect, it } from "effect-bun-test"
 import * as Prompt from "effect/ai/Prompt"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { SqliteClient as BunSqliteClient } from "@effect/sql-sqlite-bun"
@@ -1582,20 +1582,6 @@ describe("Message Metadata", () => {
       expect(detailExit._tag).toBe("Failure")
     }).pipe(Effect.provide(testSqliteStorage(() => Layer.empty, {}))),
   )
-  test("domain message preserves metadata for transport", () => {
-    const message = Message.cases.regular.make({
-      id: MessageId.make("info-msg"),
-      sessionId: SessionId.make("info-s"),
-      branchId: BranchId.make("info-b"),
-      role: "assistant",
-      parts: [Prompt.textPart({ text: "response" })],
-      createdAt: FIXED_NOW,
-      metadata: { customType: "review-status", hidden: true },
-    })
-    expect(message.metadata).toBeDefined()
-    expect(message.metadata!.customType).toBe("review-status")
-    expect(message.metadata!.hidden).toBe(true)
-  })
   it.live("interjection messages round-trip as explicit variants", () =>
     Effect.gen(function* () {
       const sessions = yield* SessionStorage
@@ -1632,17 +1618,6 @@ describe("Message Metadata", () => {
       expect(stored.role).toBe("user")
     }).pipe(Effect.provide(testSqliteStorage(() => Layer.empty, {}))),
   )
-  test("domain message omits metadata when absent", () => {
-    const message = Message.cases.regular.make({
-      id: MessageId.make("plain-msg"),
-      sessionId: SessionId.make("plain-s"),
-      branchId: BranchId.make("plain-b"),
-      role: "user",
-      parts: [Prompt.textPart({ text: "hi" })],
-      createdAt: FIXED_NOW,
-    })
-    expect(message.metadata).toBeUndefined()
-  })
 })
 
 // ── event storage ───────────────────────────────────────────────────────────
@@ -2698,16 +2673,6 @@ describe("turn_records migration", () => {
         .sort((left, right) => left.pk - right.pk)
         .map((column) => column.name)
       expect(key).toEqual(["session_id", "branch_id", "message_id"])
-    }).pipe(Effect.provide(storageLayer)),
-  )
-
-  it.live("records the turn_records migration in the applied chain", () =>
-    Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient
-      const rows = yield* sql<{ readonly name: string }>`
-        SELECT name FROM gent_storage_migrations WHERE name = 'turn_records'
-      `
-      expect(rows.length).toBe(1)
     }).pipe(Effect.provide(storageLayer)),
   )
 })

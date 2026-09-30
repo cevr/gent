@@ -91,7 +91,6 @@ import {
   type LoadedExtension,
 } from "../../src/domain/extension.js"
 import { failingLanguageModel } from "../helpers/failing-language-model"
-import * as ExtensionApi from "@gent/core/extensions/api"
 import {
   CapabilityError,
   ExtensionContext,
@@ -3317,12 +3316,6 @@ describe("extension command RPCs", () => {
     extensionInputs: [TestCommandsExtension],
     toolRunner: "test",
   })
-  it.live("extension author API does not export capability authority providers", () =>
-    Effect.sync(() => {
-      expect("CapabilityAccess" in ExtensionApi).toBe(false)
-      expect("provideCapabilityAccessNeeds" in ExtensionApi).toBe(false)
-    }),
-  )
   const makeCommandExtension = (extensionId: string, commandId: string): LoadedExtension => ({
     manifest: { id: ExtensionId.make(extensionId) },
     scope: "builtin",

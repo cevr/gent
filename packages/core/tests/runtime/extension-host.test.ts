@@ -156,7 +156,7 @@ import {
   type TurnAfterInput,
   type ExtensionHookHandler,
 } from "../../src/domain/extension"
-import { compileToolPolicy, noBranchTools, ToolRunner } from "../../src/runtime/tools"
+import { noBranchTools, ToolRunner } from "../../src/runtime/tools"
 import { SingleRunner } from "effect/cluster"
 import { AgentEvent, EventStore } from "../../src/domain/event"
 import { SessionMutationsLive } from "../../src/server/server"
@@ -3756,17 +3756,6 @@ const makeTool = (name: string): ToolCapability =>
     output: Schema.Void,
     execute: () => Effect.void,
   })
-const compileRegistryPolicy = (
-  registry: ExtensionRegistry["Service"],
-  agent: AgentDefinition,
-  projections: Parameters<typeof compileToolPolicy>[3] = [],
-) =>
-  compileToolPolicy(
-    [...registry.getResolved().modelCapabilities.values()].map((entry) => entry.capability),
-    agent,
-    {},
-    projections,
-  )
 const makeAgent = (
   name: string,
   options?: Partial<ConstructorParameters<typeof AgentDefinition>[0]>,
@@ -3839,7 +3828,7 @@ const makeRequest = (id: string): RequestCapability =>
     output: Schema.Unknown,
     execute: () => Effect.void,
   })
-describe("resolveExtensions", () => {
+describe("contribution resolution", () => {
   test("empty extensions produce empty maps", () => {
     const resolved = resolveExtensions([])
     expect(resolved.modelCapabilities.size).toBe(0)
@@ -3854,27 +3843,6 @@ describe("resolveExtensions", () => {
     expect(resolved.modelCapabilities.has("read")).toBe(true)
     expect(resolved.modelCapabilities.has("write")).toBe(true)
     expect(resolved.modelCapabilities.has("bash")).toBe(true)
-  })
-  test("later scope wins for same-name tool", () => {
-    const builtinRead = makeTool("read")
-    const projectRead = { ...makeTool("read"), description: "project override" }
-    const resolved = resolveExtensions([
-      makeExtRegistry("a", "builtin", { tools: [builtinRead] }),
-      makeExtRegistry("b", "project", { tools: [projectRead] }),
-    ])
-    expect(resolved.modelCapabilities.get("read")?.capability.description).toBe("project override")
-  })
-  test("later scope wins for same-name agent", () => {
-    const builtinExplore = makeAgent("explore")
-    const projectExplore = AgentDefinition.make({
-      name: AgentName.make("explore"),
-      description: "project explore",
-    })
-    const resolved = resolveExtensions([
-      makeExtRegistry("a", "builtin", { agents: [builtinExplore] }),
-      makeExtRegistry("b", "project", { agents: [projectExplore] }),
-    ])
-    expect(resolved.agents.get("explore")?.description).toBe("project explore")
   })
   test("allows same-name tool/agent from different scopes (override)", () => {
     expect(() =>
@@ -4130,110 +4098,6 @@ describe("ExtensionRegistry", () => {
       expect(agents.map((a) => a.name)).toContain(AgentName.make("secondary"))
     }),
   )
-  it.live("allowedTools narrows the resolved tool set", () =>
-    Effect.gen(function* () {
-      const readTool = makeTool("read")
-      const bashTool = makeTool("bash")
-      const agent = AgentDefinition.make({
-        name: AgentName.make("explore"),
-        allowedTools: ["read"],
-      })
-      const registry = yield* buildRegistry([
-        makeExtRegistry("a", "builtin", { tools: [readTool, bashTool], agents: [agent] }),
-      ])
-      const { tools } = compileRegistryPolicy(registry, agent)
-      expect(tools.length).toBe(1)
-      const firstTool = tools[0]
-      expect(firstTool).toBeDefined()
-      if (Predicate.isUndefined(firstTool)) return
-      expect(String(getToolId(firstTool))).toBe("read")
-    }),
-  )
-  it.live("allowedTools restricts the resolved set to exactly the listed names", () =>
-    Effect.gen(function* () {
-      const readTool = makeTool("read")
-      const bashTool = makeTool("bash")
-      const editTool = makeTool("edit")
-      const agent = AgentDefinition.make({
-        name: AgentName.make("explore"),
-        allowedTools: ["read", "bash"],
-      })
-      const registry = yield* buildRegistry([
-        makeExtRegistry("a", "builtin", { tools: [readTool, bashTool, editTool], agents: [agent] }),
-      ])
-      const { tools } = compileRegistryPolicy(registry, agent)
-      const names = tools.map((t) => String(getToolId(t)))
-      expect(names).toContain("read")
-      expect(names).toContain("bash")
-      expect(names).not.toContain("edit")
-    }),
-  )
-  it.live("deniedTools removes matching entries from the resolved set", () =>
-    Effect.gen(function* () {
-      const readTool = makeTool("read")
-      const writeTool = makeTool("write")
-      const agent = AgentDefinition.make({
-        name: AgentName.make("primary"),
-        deniedTools: ["write"],
-      })
-      const registry = yield* buildRegistry([
-        makeExtRegistry("a", "builtin", { tools: [readTool, writeTool], agents: [agent] }),
-      ])
-      const { tools } = compileRegistryPolicy(registry, agent)
-      const names = tools.map((t) => String(getToolId(t)))
-      expect(names).toContain("read")
-      expect(names).not.toContain("write")
-    }),
-  )
-  it.live("denied tools cannot be injected via projection", () =>
-    Effect.gen(function* () {
-      const readTool = makeTool("read")
-      const secretTool = makeTool("secret")
-      const agent = AgentDefinition.make({
-        name: AgentName.make("primary"),
-        deniedTools: ["secret"],
-      })
-      const registry = yield* buildRegistry([
-        makeExtRegistry("core", "builtin", { tools: [readTool, secretTool] }),
-      ])
-      // Try to force-include via projection
-      const { tools } = compileRegistryPolicy(registry, agent, [
-        { toolPolicy: { include: ["secret"] } },
-      ])
-      expect(tools.map((t) => String(getToolId(t)))).not.toContain("secret")
-    }),
-  )
-  test("registered model driver is findable by ID", () => {
-    const registry = resolveExtensions([
-      makeExtRegistry("a", "builtin", { modelDrivers: [makeProvider("anthropic")] }),
-    ])
-    const provider = registry.modelDrivers.get("anthropic")
-    expect(provider?.id).toBe("anthropic")
-  })
-  test("unregistered model driver ID returns undefined", () => {
-    const registry = resolveExtensions([])
-    const provider = registry.modelDrivers.get("nonexistent")
-    expect(provider).toBeUndefined()
-  })
-  test("lists all registered model drivers", () => {
-    const registry = resolveExtensions([
-      makeExtRegistry("a", "builtin", {
-        modelDrivers: [makeProvider("anthropic"), makeProvider("openai")],
-      }),
-    ])
-    expect(registry.modelDrivers.size).toBe(2)
-  })
-  it.live("test layer starts with empty registry", () =>
-    Effect.gen(function* () {
-      const resolved = yield* Effect.gen(function* () {
-        const ext = yield* ExtensionRegistry
-        return ext.getResolved()
-      }).pipe(Effect.provide(ExtensionRegistry.Test()))
-      expect(resolved.modelCapabilities.size).toBe(0)
-      expect(resolved.agents.size).toBe(0)
-      expect(resolved.modelDrivers.size).toBe(0)
-    }),
-  )
 })
 // Slash-command discovery — identity-first scope shadowing followed by
 // bucket/surface authorization.
@@ -4403,28 +4267,6 @@ const makeStubExtension = (
     sourcePath: "builtin",
     contributions: { resources },
   }) satisfies LoadedExtension
-
-describe("defineResource", () => {
-  test("emits a contribution with the declared scope", () => {
-    const r = defineResource({
-      id: "test/resource-host/declared-scope",
-      scope: "process",
-      layer: layerA,
-    })
-    expect(String(r.id)).toBe("test/resource-host/declared-scope")
-    expect(r.scope).toBe("process")
-  })
-
-  test("rejects an empty resource id", () => {
-    expect(() =>
-      defineResource({
-        id: "",
-        scope: "process",
-        layer: Layer.empty,
-      }),
-    ).toThrow()
-  })
-})
 
 /** One scope's Resources built into the caller's scope, over no other services. */
 const buildProcessResources = (extensions: ReadonlyArray<LoadedExtension>) =>

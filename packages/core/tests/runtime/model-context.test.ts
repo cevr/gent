@@ -1711,23 +1711,6 @@ describe("model context window", () => {
 
 // ── token estimation ────────────────────────────────────────────────────────
 
-describe("Token Estimation", () => {
-  test("estimateTokens calculates token count", () => {
-    const messages = [
-      Message.cases.regular.make({
-        id: MessageId.make("m1"),
-        sessionId: SessionId.make("s"),
-        branchId: BranchId.make("b"),
-        role: "user",
-        parts: [Prompt.textPart({ text: "Hello world" })], // 11 chars
-        createdAt: dateFromMillis(1_767_225_600_000),
-      }),
-    ]
-
-    const tokens = estimateTokens(messages)
-    expect(tokens).toBe(3) // ceil(11/4) = 3
-  })
-})
 describe("estimateTokens", () => {
   test("text parts", () => {
     const messages = [

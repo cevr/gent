@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { Option } from "effect"
+import { Option, Schema } from "effect"
 import {
   calculateCost,
   DriverRef,
@@ -8,6 +8,7 @@ import {
   ModelId,
   parseModelId,
   ProviderId,
+  RunSpecSchema,
 } from "../../src/domain/agent"
 
 // ── agent driver routing ────────────────────────────────────────────────────
@@ -87,6 +88,13 @@ describe("run spec construction", () => {
     expect(spec.overrides?.deniedTools).toEqual(["read"])
     expect(spec.overrides?.reasoningEffort).toBe("high")
     expect(spec.overrides?.systemPromptAddendum).toBe("extra")
+  })
+
+  test("a stored run spec that still carries the dropped parentToolCallId decodes", () => {
+    const decoded = Schema.decodeSync(Schema.fromJsonString(RunSpecSchema))(
+      '{"overrides":{"maxModelAttempts":32},"parentToolCallId":"tc-old"}',
+    )
+    expect(decoded).toEqual({ overrides: { maxModelAttempts: 32 } })
   })
 })
 

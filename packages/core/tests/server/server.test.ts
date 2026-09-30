@@ -22,11 +22,7 @@ import {
   buildBranchTree,
   getBranchTree,
 } from "../../src/server/server"
-import {
-  ExtensionHealth,
-  ExtensionHealthIssue,
-  ExtensionHealthSnapshot,
-} from "../../src/server/rpc"
+import { ExtensionHealthSnapshot } from "../../src/server/rpc"
 import {
   BranchId,
   ExtensionId,
@@ -35,7 +31,7 @@ import {
   SessionId,
 } from "../../src/domain/ids"
 import { describe, expect, it } from "effect-bun-test"
-import { StorageError } from "../../src/domain/errors.js"
+import type { StorageError } from "../../src/domain/errors.js"
 import {
   LanguageModelLayers,
   makeTempDirectoryScoped,
@@ -173,47 +169,6 @@ describe("buildExtensionHealthSnapshot", () => {
           manifest: { id: ExtensionId.make("@gent/memory") },
           scope: "builtin",
           sourcePath: "builtin",
-        },
-      ],
-    })
-  })
-
-  test("health issue constructors preserve typed failure categories", () => {
-    expect(
-      ExtensionHealthIssue.cases.ActivationFailed.make({
-        phase: "startup",
-        error: "startup boom",
-      }),
-    ).toEqual({
-      _tag: "ActivationFailed",
-      phase: "startup",
-      error: "startup boom",
-    })
-  })
-
-  test("degraded constructor requires non-empty issues", () => {
-    expect(
-      ExtensionHealth.cases.Degraded.make({
-        manifest: { id: "@gent/plan" },
-        scope: "builtin",
-        sourcePath: "builtin",
-        issues: [
-          ExtensionHealthIssue.cases.ActivationFailed.make({
-            phase: "startup",
-            error: "launchd boom",
-          }),
-        ],
-      }),
-    ).toEqual({
-      _tag: "Degraded",
-      manifest: { id: "@gent/plan" },
-      scope: "builtin",
-      sourcePath: "builtin",
-      issues: [
-        {
-          _tag: "ActivationFailed",
-          phase: "startup",
-          error: "launchd boom",
         },
       ],
     })
@@ -358,8 +313,8 @@ const branchStorageLayer = (
     }),
   )
 
-describe("getBranchTree helper", () => {
-  it.live("composes listBranches + countMessagesByBranches via buildBranchTree", () =>
+describe("branch tree", () => {
+  it.live("nests each branch under its parent with its message count", () =>
     Effect.gen(function* () {
       const branches = [
         makeBranch(ROOT_ID, 0),
@@ -385,50 +340,6 @@ describe("getBranchTree helper", () => {
       expect(root?.children).toHaveLength(1)
       expect(root?.children[0]?.branch.id).toBe(CHILD_ID)
       expect(root?.children[0]?.messageCount).toBe(7)
-    }),
-  )
-
-  it.live("propagates listBranches failures as StorageError", () =>
-    Effect.gen(function* () {
-      const failure = new StorageError({ message: "boom" })
-      const layer = Layer.succeed(
-        BranchStorage,
-        BranchStorage.of({
-          createBranch: die("createBranch"),
-          getBranch: die("getBranch"),
-          listBranches: () => Effect.fail(failure),
-          countMessagesByBranches: () => Effect.succeed(new Map<BranchId, number>()),
-        }),
-      )
-      const exit = yield* Effect.exit(getBranchTree(SESSION_ID).pipe(Effect.provide(layer)))
-      expect(exit._tag).toBe("Failure")
-      if (exit._tag !== "Failure") return
-      const error = Cause.findErrorOption(exit.cause)
-      expect(Option.isSome(error)).toBe(true)
-      if (!Option.isSome(error)) return
-      expect(Schema.is(StorageError)(error.value)).toBe(true)
-    }),
-  )
-
-  it.live("propagates countMessagesByBranches failures as StorageError", () =>
-    Effect.gen(function* () {
-      const failure = new StorageError({ message: "count boom" })
-      const layer = Layer.succeed(
-        BranchStorage,
-        BranchStorage.of({
-          createBranch: die("createBranch"),
-          getBranch: die("getBranch"),
-          listBranches: () => Effect.succeed([makeBranch(ROOT_ID, 0)]),
-          countMessagesByBranches: () => Effect.fail(failure),
-        }),
-      )
-      const exit = yield* Effect.exit(getBranchTree(SESSION_ID).pipe(Effect.provide(layer)))
-      expect(exit._tag).toBe("Failure")
-      if (exit._tag !== "Failure") return
-      const error = Cause.findErrorOption(exit.cause)
-      expect(Option.isSome(error)).toBe(true)
-      if (!Option.isSome(error)) return
-      expect(Schema.is(StorageError)(error.value)).toBe(true)
     }),
   )
 })

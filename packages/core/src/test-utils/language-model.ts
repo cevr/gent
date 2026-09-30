@@ -611,22 +611,6 @@ export const toolCallStep = (
   ],
 })
 
-export const textThenToolCallStep = (
-  text: string,
-  toolName: string,
-  input: DebugValue,
-  options?: { toolCallId?: ToolCallId },
-): SequenceStep => ({
-  parts: [
-    textDeltaPart(text),
-    toolCallPart(toolName, input, { toolCallId: options?.toolCallId ?? makeStepToolCallId() }),
-    finishPart({
-      finishReason: "tool-calls",
-      usage: { inputTokens: 10, outputTokens: Math.max(1, Math.ceil(text.length / 4)) + 20 },
-    }),
-  ],
-})
-
 export const multiToolCallStep = (
   ...calls: ReadonlyArray<{ toolName: string; input: DebugValue; toolCallId?: ToolCallId }>
 ): SequenceStep => ({

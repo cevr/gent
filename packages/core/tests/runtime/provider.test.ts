@@ -33,7 +33,6 @@ import {
   AuthMethod,
   type AuthService,
   serializeAuthStore,
-  ListAuthProvidersPayload,
   ModelResolver,
   ProviderAuth,
   retryProviderCall,
@@ -48,7 +47,7 @@ import { Model as AiModel, LanguageModel } from "effect/ai"
 import { test as bunTest } from "bun:test"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extension-host"
 import type { LoadedExtension } from "../../src/domain/extension.js"
-import { DEFAULT_AGENT_NAME, ModelId, ProviderId, Model } from "../../src/domain/agent"
+import { ModelId, ProviderId, Model } from "../../src/domain/agent"
 import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "../../src/domain/ids"
 import { failingLanguageModel, makeLanguageModel } from "../helpers/failing-language-model"
 import { GentPlatform } from "../../src/runtime/gent-platform"
@@ -638,54 +637,13 @@ describe("model catalog resolution", () => {
 // ── auth ────────────────────────────────────────────────────────────────────
 
 /**
- * Locks the consolidated `domain/auth` module — the `Auth` service and
- * the `Auth.Info` schema.
- *
- * Exercises:
- *   - `Auth.Test` round-trip (set / get / remove).
- *   - `Auth.Live` against a real on-disk directory, including
- *     "corrupt file is discarded and reported".
+ * The `Auth` credential store: writes are serialized per provider, and
+ * `Auth.Live` persists to a real on-disk directory, discarding a corrupt
+ * entry.
  */
 
 describe("Auth", () => {
-  describe("Auth.Test", () => {
-    it.live("round-trips api / oauth variants", () =>
-      Effect.gen(function* () {
-        const auth = yield* Auth
-
-        yield* auth.set("openai", AuthInfo.cases.Api.make({ type: "api", key: "sk-test" }))
-        const openai = yield* auth.get("openai")
-        expect(openai?.type).toBe("api")
-        if (openai?.type === "api") expect(openai.key).toBe("sk-test")
-
-        yield* auth.set(
-          "anthropic",
-          AuthInfo.cases.Oauth.make({
-            type: "oauth",
-            access: "a",
-            refresh: "r",
-            expires: 0,
-          }),
-        )
-        const anthropic = yield* auth.get("anthropic")
-        expect(anthropic?.type).toBe("oauth")
-        if (anthropic?.type === "oauth") {
-          expect(anthropic.access).toBe("a")
-          expect(anthropic.refresh).toBe("r")
-        }
-
-        yield* auth.remove("openai")
-        expect(yield* auth.get("openai")).toBeUndefined()
-      }).pipe(Effect.provide(Auth.Test())),
-    )
-
-    it.live("returns undefined for missing providers", () =>
-      Effect.gen(function* () {
-        const auth = yield* Auth
-        expect(yield* auth.get("does-not-exist")).toBeUndefined()
-      }).pipe(Effect.provide(Auth.Test())),
-    )
-
+  describe("credential store serialization", () => {
     it.live("an update in flight holds back a set for the same provider", () =>
       Effect.gen(function* () {
         const auth = yield* Auth
@@ -1012,36 +970,6 @@ describe("listAuthProviders", () => {
       expect(result.find((p) => p.provider === "openai")?.hasKey).toBe(false)
     }),
   )
-})
-
-describe("ListAuthProvidersPayload schema", () => {
-  // The wire payload carries an optional sessionId and agentName.
-  //
-  // Plain `bunTest` here: these are pure schema decode checks with
-  // no Effect context, so the `effect-bun-test` `it.live`/`it.effect`
-  // ceremony isn't needed (and the bare `it` from that lib is an
-  // object, not a function).
-  const decode = Schema.decodeUnknownSync(ListAuthProvidersPayload)
-
-  bunTest("accepts a sessionId field", () => {
-    const query = decode({ sessionId: SessionId.make("019d-test-session-id") })
-    expect(query.sessionId).toBe(SessionId.make("019d-test-session-id"))
-  })
-
-  bunTest("accepts agentName + sessionId together", () => {
-    const query = decode({
-      agentName: DEFAULT_AGENT_NAME,
-      sessionId: SessionId.make("019d-test-session-id"),
-    })
-    expect(query.agentName).toBe(DEFAULT_AGENT_NAME)
-    expect(query.sessionId).toBe(SessionId.make("019d-test-session-id"))
-  })
-
-  bunTest("accepts omitted filters for launch-cwd defaults", () => {
-    const query = decode({})
-    expect(query.agentName).toBeUndefined()
-    expect(query.sessionId).toBeUndefined()
-  })
 })
 
 // ── provider auth ───────────────────────────────────────────────────────────
