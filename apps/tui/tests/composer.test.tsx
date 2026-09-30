@@ -55,7 +55,7 @@ import { type ClientContextValue, type SessionIdentity, useClient } from "../src
 import { useExtensionUI } from "../src/extensions/host"
 import { type RenderWaitTimeoutError, waitForFrame } from "./helpers-boundary"
 import { useScopedKeyboard } from "../src/terminal"
-import { EnvProvider } from "../src/workspace"
+import { EnvProvider, useWorkspace } from "../src/workspace"
 import {
   type AutocompleteItem,
   autocompleteContribution,
@@ -97,12 +97,14 @@ const testLayer = scopedDataDir.pipe(
   Layer.provideMerge(Layer.merge(BunFileSystem.layer, BunServices.layer)),
 )
 const shellTest = it.scopedLive.layer(testLayer)
+/** The home `executeShell` is given: the test's `GENT_DATA_DIR` wins over it. */
+const PROBE_HOME = "/nonexistent/gent-probe-home"
 
 describe("executeShell", () => {
   shellTest("executes simple command", () =>
     Effect.gen(function* () {
       const testDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
-      const result = yield* executeShell("echo hello", testDir)
+      const result = yield* executeShell("echo hello", testDir, PROBE_HOME)
       expect(result.output).toBe("hello")
       expect(result.truncated).toBe(false)
     }),
@@ -111,7 +113,7 @@ describe("executeShell", () => {
   shellTest("captures stderr", () =>
     Effect.gen(function* () {
       const testDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
-      const result = yield* executeShell("echo error >&2", testDir)
+      const result = yield* executeShell("echo error >&2", testDir, PROBE_HOME)
       expect(result.output).toContain("error")
       expect(result.truncated).toBe(false)
     }),
@@ -120,7 +122,7 @@ describe("executeShell", () => {
   shellTest("respects cwd", () =>
     Effect.gen(function* () {
       const testDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
-      const result = yield* executeShell("pwd", testDir)
+      const result = yield* executeShell("pwd", testDir, PROBE_HOME)
       // macOS may resolve /var to /private/var
       expect(result.output.endsWith(testDir.split("/").pop()!)).toBe(true)
       expect(result.truncated).toBe(false)
@@ -130,7 +132,7 @@ describe("executeShell", () => {
   shellTest("handles multi-line output", () =>
     Effect.gen(function* () {
       const testDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
-      const result = yield* executeShell("echo -e 'line1\\nline2\\nline3'", testDir)
+      const result = yield* executeShell("echo -e 'line1\\nline2\\nline3'", testDir, PROBE_HOME)
       expect(result.output).toContain("line1")
       expect(result.output).toContain("line2")
       expect(result.output).toContain("line3")
@@ -141,7 +143,7 @@ describe("executeShell", () => {
   shellTest("handles empty output", () =>
     Effect.gen(function* () {
       const testDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
-      const result = yield* executeShell("true", testDir)
+      const result = yield* executeShell("true", testDir, PROBE_HOME)
       expect(result.output).toBe("")
       expect(result.truncated).toBe(false)
     }),
@@ -150,7 +152,7 @@ describe("executeShell", () => {
   shellTest("handles command with arguments", () =>
     Effect.gen(function* () {
       const testDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
-      const result = yield* executeShell("echo -n test", testDir)
+      const result = yield* executeShell("echo -n test", testDir, PROBE_HOME)
       expect(result.output).toBe("test")
     }),
   )
@@ -158,7 +160,7 @@ describe("executeShell", () => {
   shellTest("handles pipes", () =>
     Effect.gen(function* () {
       const testDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
-      const result = yield* executeShell("echo hello | tr 'h' 'H'", testDir)
+      const result = yield* executeShell("echo hello | tr 'h' 'H'", testDir, PROBE_HOME)
       expect(result.output).toBe("Hello")
     }),
   )
@@ -169,7 +171,7 @@ describe("executeShell", () => {
       const testDir = yield* fs.makeTempDirectoryScoped()
       const testFile = `${testDir}/test.txt`
       yield* fs.writeFileString(testFile, "file content")
-      const result = yield* executeShell(`cat ${testFile}`, testDir)
+      const result = yield* executeShell(`cat ${testFile}`, testDir, PROBE_HOME)
       expect(result.output).toBe("file content")
     }),
   )
@@ -178,7 +180,7 @@ describe("executeShell", () => {
     // Generate output with more than 2000 lines
     Effect.gen(function* () {
       const testDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
-      const result = yield* executeShell("seq 1 2500", testDir)
+      const result = yield* executeShell("seq 1 2500", testDir, PROBE_HOME)
       expect(result.truncated).toBe(true)
 
       // Output should be truncated to ~2000 lines
@@ -197,6 +199,7 @@ describe("executeShell", () => {
       const result = yield* executeShell(
         "for i in $(seq 1 600); do printf '%0.s█' {1..100}; echo; done",
         testDir,
+        PROBE_HOME,
       )
       expect(result.truncated).toBe(true)
 
@@ -215,6 +218,7 @@ describe("executeShell", () => {
       const result = yield* executeShell(
         "for i in $(seq 1 600); do printf 'é%.0s' {1..50}; echo; done",
         testDir,
+        PROBE_HOME,
       )
       expect(result.truncated).toBe(true)
       expect(new TextEncoder().encode(result.output).length).toBeLessThanOrEqual(50 * 1024)
@@ -229,7 +233,7 @@ describe("executeShell", () => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const testDir = yield* fs.makeTempDirectoryScoped()
-      const result = yield* executeShell("yes", testDir)
+      const result = yield* executeShell("yes", testDir, PROBE_HOME)
       expect(result.ended).toBe(true)
       expect(result.truncated).toBe(true)
       const savedPath = yield* Effect.fromOption(result.savedPath)
@@ -246,7 +250,9 @@ describe("executeShell", () => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const testDir = yield* fs.makeTempDirectoryScoped()
-      const fiber = yield* Effect.forkChild(executeShell("echo $$ > pid; exec sleep 30", testDir))
+      const fiber = yield* Effect.forkChild(
+        executeShell("echo $$ > pid; exec sleep 30", testDir, PROBE_HOME),
+      )
       const pidFile = `${testDir}/pid`
       const poll = Schedule.spaced("10 millis")
       yield* fs.exists(pidFile).pipe(Effect.repeat({ until: (started) => started, schedule: poll }))
@@ -263,7 +269,7 @@ describe("executeShell", () => {
   shellTest("a command inside the cap spills nothing", () =>
     Effect.gen(function* () {
       const testDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
-      const result = yield* executeShell("echo small", testDir)
+      const result = yield* executeShell("echo small", testDir, PROBE_HOME)
       expect(result.truncated).toBe(false)
       expect(Option.isNone(result.savedPath)).toBe(true)
     }),
@@ -280,9 +286,11 @@ describe("executeShell", () => {
         ConfigProvider.ConfigProvider,
         ConfigProvider.fromEnvRecord({ GENT_DATA_DIR: dataDir }),
       )
-      const result = yield* executeShell(`seq 1 ${lineCount} | sed 's/^/line /'`, testDir).pipe(
-        inDataDir,
-      )
+      const result = yield* executeShell(
+        `seq 1 ${lineCount} | sed 's/^/line /'`,
+        testDir,
+        PROBE_HOME,
+      ).pipe(inDataDir)
       expect(result.truncated).toBe(true)
 
       // The reader is handed a path, not just a stump of the output.
@@ -1201,6 +1209,39 @@ describe("Composer submit", () => {
       setup.mockInput.pressEnter()
       yield* waitForFrame(setup, () => submitted.length === 1, "submitted")
       expect(submitted[0]).toContain("marker-session.txt")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  // The spill file goes under the workspace's home, the one storage and the
+  // server lock read, not wherever the process's own home points.
+  submitTest("a !cmd's spill file lands under the workspace's home", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const dir = yield* fs.makeTempDirectoryScoped()
+      const submitted: Array<string> = []
+      let home = Option.none<string>()
+      const CaptureHome = () => {
+        home = Option.some(useWorkspace().home)
+        return <box />
+      }
+      const setup = yield* renderScoped(
+        () => (
+          <TestComposer onSubmit={(content) => submitted.push(content)}>
+            <CaptureHome />
+          </TestComposer>
+        ),
+        { cwd: dir },
+      )
+      yield* Effect.promise(() => setup.mockInput.typeText("!"))
+      yield* Effect.promise(() => setup.mockInput.typeText("seq 1 2500"))
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, () => submitted.length === 1, "submitted")
+      const saved = /saved to (\S+)\]/.exec(submitted[0] ?? "")
+      const workspaceHome = yield* Effect.fromOption(home)
+      expect(
+        Option.fromNullishOr(saved?.[1]).pipe(Option.map((p) => p.startsWith(`${workspaceHome}/`))),
+      ).toEqual(Option.some(true))
     }).pipe(Effect.timeout("10 seconds")),
   )
 

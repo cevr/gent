@@ -2,7 +2,6 @@ import { ProcessError } from "@gent/core/extensions/api"
 import { dataPaths } from "@gent/sdk"
 import { DateTime, Duration, Effect, FileSystem, Option, Path, Schema, Stream } from "effect"
 import { ChildProcess, type ChildProcessSpawner } from "effect/process"
-import { homedir } from "os"
 import {
   type Accessor,
   createContext,
@@ -72,7 +71,7 @@ import {
 } from "@opentui/core"
 import { useRenderer } from "@opentui/solid"
 import { isSlashCommandName, parseSlashCommand, useCommand } from "./commands"
-import { useEnv } from "./workspace"
+import { useEnv, useWorkspace } from "./workspace"
 import { openExternalEditor, resolveEditor } from "./os"
 import {
   type ActiveInteraction,
@@ -94,11 +93,12 @@ import {
  */
 
 /**
- * Spill files live beside the rest of the gent data, not in a temp directory.
+ * Spill files live beside the rest of the gent data under the workspace's
+ * home (the one storage reads), not in a temp directory.
  * A run with its own `GENT_DATA_DIR` keeps them there, off the real home.
  */
-const shellOutputDirectory = (): Effect.Effect<string> =>
-  Effect.map(dataPaths(homedir()), ({ dataDir }) => `${dataDir}/shell-output`)
+const shellOutputDirectory = (home: string): Effect.Effect<string> =>
+  Effect.map(dataPaths(home), ({ dataDir }) => `${dataDir}/shell-output`)
 
 /**
  * Past this many bytes of output a `!cmd` stops being read and ends: memory
@@ -114,7 +114,7 @@ export const SHELL_READ_CAP_BYTES = 8 * 1024 * 1024
  * says the output passed `SHELL_READ_CAP_BYTES`, so the command was ended
  * there and the file holds its first part.
  */
-export const executeShell = (command: string, cwd: string) =>
+export const executeShell = (command: string, cwd: string, home: string) =>
   Effect.gen(function* () {
     const { stdout, stderr, ended } = yield* runCommand(command, cwd)
     let fullOutput = stdout
@@ -132,7 +132,7 @@ export const executeShell = (command: string, cwd: string) =>
       }
     }
 
-    const savedPath = yield* saveFullOutput(command, fullOutput, ended)
+    const savedPath = yield* saveFullOutput({ command, home }, fullOutput, ended)
     return {
       output: kept.join("\n").trim(),
       truncated: true,
@@ -173,14 +173,14 @@ const shellMessage =
  * than a failed shell.
  */
 const saveFullOutput = (
-  command: string,
+  { command, home }: { readonly command: string; readonly home: string },
   output: string,
   ended: boolean,
 ): Effect.Effect<Option.Option<string>, never, FileSystem.FileSystem | Path.Path> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
-    const directory = yield* shellOutputDirectory()
+    const directory = yield* shellOutputDirectory(home)
     yield* fs.makeDirectory(directory, { recursive: true })
     const now = yield* DateTime.nowAsDate
     const stamp = now.toISOString().replaceAll(":", "-").replaceAll(".", "-")
@@ -814,6 +814,7 @@ function useComposerController(): ComposerController {
   const client = useClient()
   const renderer = useRenderer()
   const env = useEnv()
+  const workspace = useWorkspace()
   const { cast } = useRuntime()
   const history = usePromptHistory()
   const paste = createPasteManager()
@@ -1114,7 +1115,9 @@ function useComposerController(): ComposerController {
       sc
         .runShell(
           text,
-          client.cwdOf(target.sessionId).pipe(Effect.flatMap((cwd) => executeShell(text, cwd))),
+          client
+            .cwdOf(target.sessionId)
+            .pipe(Effect.flatMap((cwd) => executeShell(text, cwd, workspace.home))),
         )
         .pipe(
           Effect.map(shellMessage(text)),
