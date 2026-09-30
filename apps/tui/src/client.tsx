@@ -1282,6 +1282,8 @@ export function ClientProvider(props: ClientProviderProps) {
         Effect.catchEager((err) =>
           Effect.sync(() => {
             log.error("createSession.failed", { error: String(err) })
+            // An overtaken create failed for the view the reader left.
+            if (ownNavigation !== navigation) return
             showError(Option.some(formatError(err)))
           }),
         ),

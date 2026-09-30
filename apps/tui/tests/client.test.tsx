@@ -883,6 +883,41 @@ describe("ClientProvider session lifecycle", () => {
       expect(inView()).toEqual(Option.some(chosen))
     }).pipe(Effect.timeout("10 seconds")),
   )
+  // An overtaken create's failure belongs to the session the reader left:
+  // the one now in view shows nothing of it.
+  it.scopedLive("a create a later navigation overtook drops its failure too", () =>
+    Effect.gen(function* () {
+      const gate = yield* Deferred.make<void>()
+      const answered = yield* Deferred.make<void>()
+      const refused = yield* Schema.decodeEffect(GentRpcError)({
+        _tag: "InvalidStateError",
+        message: "create refused",
+      })
+      const client = createMockClient({
+        session: {
+          create: () =>
+            Deferred.await(gate).pipe(
+              Effect.andThen(Deferred.done(answered, Exit.void)),
+              Effect.andThen(Effect.fail(refused)),
+            ),
+        },
+      })
+      let ctx = Option.none<ClientContextValue>()
+      const setup = yield* renderScoped(
+        () => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />,
+        { client },
+      )
+      const active = yield* requireClientSessionState(ctx)
+      active.createSession()
+      const chosen = SessionId.make("session-chosen")
+      active.switchSession(chosen, BranchId.make("branch-chosen"), "Chosen")
+      yield* Deferred.done(gate, Exit.void)
+      yield* Deferred.await(answered)
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(active.session().pipe(Option.map((s) => s.sessionId))).toEqual(Option.some(chosen))
+      expect(active.error()).toEqual(Option.none())
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   it.live("choosing the session already in view keeps its settings, status and metrics", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()
