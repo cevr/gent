@@ -27,7 +27,7 @@ import {
 import type { RGBA } from "@opentui/core"
 import { MessageList, NativeTranscript, splitFooterHeight } from "./message-list"
 import { Composer, ComposerFrame, StatusRow } from "./composer"
-import { DockFooter, DockProvider, KeyHints, keyHintsLine, useDockSpacer } from "./ui"
+import { DockFooter, DockProvider, keyHint, KeyHints, keyHintsLine, useDockSpacer } from "./ui"
 import { CommandPalette, CommandProvider, useCommand } from "./commands"
 import {
   BranchPicker,
@@ -656,7 +656,10 @@ export function Session(props: SessionProps) {
     const a = controller.activity()
     const items: StatusRowLabel[] = []
     if (controller.uiState().transcriptExpanded) {
-      items.push({ text: "transcript · Esc to return", color: theme.textMuted })
+      items.push({
+        text: `transcript · ${keyHintsLine([keyHint("esc", "return")], 80)}`,
+        color: theme.textMuted,
+      })
     }
     // One footer line, one owner. An armed key's cue (`ctrl+c again to exit`)
     // comes first: it answers the key just pressed and lasts a second. A
@@ -723,7 +726,10 @@ export function Session(props: SessionProps) {
             <box height={1} flexShrink={0}>
               <text>
                 <span style={{ fg: theme.primary, bold: true }}>gent</span>
-                <span style={{ fg: theme.textMuted }}> · Ctrl+P for commands</span>
+                <span style={{ fg: theme.textMuted }}>
+                  {" "}
+                  · {keyHintsLine([keyHint("ctrl+p", "commands")], 80)}
+                </span>
               </text>
             </box>
           </Show>
@@ -948,7 +954,7 @@ function FatalScreen(props: { readonly error: unknown }) {
         <span style={{ fg: "red", bold: true }}>Fatal error</span>
       </text>
       <text>{message}</text>
-      <text>{keyHintsLine([KeyHints.quit], 80)}</text>
+      <text>{keyHintsLine([KeyHints.exit], 80)}</text>
     </box>
   )
 }

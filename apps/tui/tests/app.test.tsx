@@ -1733,6 +1733,19 @@ describe("App auth gate", () => {
       yield* waitForFrame(view.setup, () => view.shutdowns() > 0, "quit")
     }).pipe(Effect.timeout("10 seconds")),
   )
+  // Every hint row spells a key the same way: lowercase key, one verb.
+  it.live("the empty state and the transcript label use the hint spelling", () =>
+    Effect.gen(function* () {
+      const view = yield* mountIdleSession(createMockRuntime(), { kittyKeyboard: true })
+      yield* waitForFrame(view.setup, (frame) => frame.includes("gent · ctrl+p commands"), "empty")
+      view.setup.mockInput.pressKey("o", { ctrl: true, shift: true })
+      yield* waitForFrame(
+        view.setup,
+        (frame) => frame.includes("transcript · esc return"),
+        "transcript",
+      )
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   it.live("ctrl+j starts a new line under the kitty keyboard protocol", () =>
     Effect.gen(function* () {
       const view = yield* mountIdleSession(createMockRuntime(), { kittyKeyboard: true })
@@ -3250,7 +3263,7 @@ describe("App auth gate", () => {
   // The picker is where a resumed multi-branch session starts. With no branch
   // chosen there is nothing behind it to fall back to: Esc never quits, so it
   // does nothing here, and the hint names the way out.
-  it.live("Esc in the boot branch picker does nothing; its hint says ctrl+c quits", () =>
+  it.live("Esc in the boot branch picker does nothing; its hint says ctrl+c exits", () =>
     Effect.gen(function* () {
       let shutdowns = 0
       const setup = yield* mountBootBranchPicker
@@ -3258,7 +3271,7 @@ describe("App auth gate", () => {
       setup.renderer.destroy = () => {
         shutdowns += 1
       }
-      expect(renderFrame(setup)).toContain("ctrl+c quit")
+      expect(renderFrame(setup)).toContain("ctrl+c exit")
       setup.mockInput.pressEscape()
       // gent/no-sleep: allow a lone escape byte stays in the stdin parser until its timeout flushes it as a key
       yield* Effect.sleep("100 millis")
@@ -3538,7 +3551,7 @@ describe("App auth gate", () => {
         (frame) => frame.includes("Sign in · 1 provider"),
         "the provider list",
       )
-      expect(list).toContain("ctrl+c quit")
+      expect(list).toContain("ctrl+c exit")
       expect(list).not.toContain("esc close")
       const atList = loads
       setup.mockInput.pressEscape()

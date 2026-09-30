@@ -534,7 +534,7 @@ export const KeyHints = {
   back: { key: "esc", verb: "back" },
   /** Arms the row; a second press deletes it. */
   delete: { key: "ctrl+x", verb: "delete" },
-  quit: { key: "ctrl+c", verb: "quit" },
+  exit: { key: "ctrl+c", verb: "exit" },
 } satisfies Record<string, KeyHint>
 
 export const keyHint = (key: string, verb: string): KeyHint => ({ key, verb })

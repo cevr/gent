@@ -55,6 +55,7 @@ import {
   BUILTIN_TOOL_RENDERERS,
   ToolRenderersProvider,
   EditToolRenderer,
+  GenericToolRenderer,
   ReadToolRenderer,
   useToolRenderers,
 } from "../src/tool-renderers"
@@ -2238,6 +2239,31 @@ describe("FX transcript treatment", () => {
 })
 
 describe("compact file tool bodies", () => {
+  // One owner spells the "more lines" footer, in the preview rows and in a closed frame.
+  it.live("a closed generic frame names its hidden lines as the preview does", () =>
+    Effect.gen(function* () {
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <GenericToolRenderer
+              expanded={false}
+              toolCall={{
+                id: "call-generic-footer",
+                toolName: "unknown_fx_tool",
+                status: "completed",
+                input: absent,
+                summary: "first line",
+                output: "first line\nsecond line\nthird line",
+              }}
+            />
+          ),
+          { width: 80, height: 10 },
+        ),
+      )
+      expect(renderFrame(setup)).toContain("… +2 lines (ctrl+o)")
+      destroyRenderSetup(setup)
+    }),
+  )
   it.live("keeps the first and last read lines with the omitted count", () =>
     Effect.gen(function* () {
       const lines = Array.from({ length: 10 }, (_, i) => `read-line-${i + 1}`)

@@ -735,7 +735,7 @@ export function Auth(props: AuthProps) {
   // it would only open it again), and the way out is ctrl+c.
   const enforced = () => props.enforceAuth === true
   const listLeave = () => {
-    if (enforced()) return KeyHints.quit
+    if (enforced()) return KeyHints.exit
     return KeyHints.close
   }
   const listKeys = () => {

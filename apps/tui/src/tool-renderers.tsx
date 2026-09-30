@@ -25,6 +25,7 @@ import {
   formatGenericToolInput,
   formatGenericToolText,
   formatOperationLabels,
+  formatPreviewFooter,
   getString,
   isAbsPath,
   parseBashOutput,
@@ -222,10 +223,7 @@ export function GenericToolRenderer(props: ToolRendererProps) {
               <text style={{ fg: theme.textMuted }}>{summaryText()}</text>
             </Show>
             <Show when={isTruncated()}>
-              <text style={{ fg: theme.textMuted }}>
-                ... ({remainingLines()} more lines, <span style={{ fg: theme.info }}>ctrl+o</span>{" "}
-                to expand)
-              </text>
+              <text style={{ fg: theme.textMuted }}>{formatPreviewFooter(remainingLines())}</text>
             </Show>
           </box>
         </Show>

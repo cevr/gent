@@ -372,7 +372,7 @@ export function BranchPicker(props: BranchPickerProps) {
           follows the list. */}
       <PickerFrame
         title={`Resume: ${props.sessionName}`}
-        keys={[KeyHints.move, KeyHints.select, KeyHints.quit]}
+        keys={[KeyHints.move, KeyHints.select, KeyHints.exit]}
         error={error()}
       >
         <SelectList
