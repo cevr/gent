@@ -2,7 +2,6 @@ import {
   Cause,
   Clock,
   Config,
-  ConfigProvider,
   Context,
   Deferred,
   Duration,
@@ -62,8 +61,9 @@ import {
   writeFileAtomic,
 } from "@gent/core/extensions/api"
 
-// Test seam: `McpServers` (the extension over inline servers) and the config
-// and catalog schemas are read by tests; the shipped extension is
+// Test seam: `McpServers` (the extension over inline servers),
+// `HostEnvironment` (the environment a stdio server inherits) and
+// `projectCallResult` are read by tests; the shipped extension is
 // `McpExtension`, which reads the `mcp.json` files.
 
 // ── config ──────────────────────────────────────────────────────────────────
@@ -1352,50 +1352,23 @@ const timeoutOf = (server: McpServer) => server.config.timeoutMs ?? DEFAULT_TIME
  * nothing the cell cannot already run (decided by consistency with bash and
  * the cell; the cell runs full Bun).
  *
- * It is read from the ambient `ConfigProvider`, the environment seam every
- * other read here uses. Each setup reads it at most once (see
- * `HostEnvironment`): a name with a numeric segment (`DB_PORT_5432_TCP`)
- * makes its parent an array node, and the walk loads every index below the
- * largest one.
+ * It is the process's own flat name→value map, the store the spawner and the
+ * MCP SDK read too (decided by use-the-platform), so reading it is one pass
+ * over the variables, whatever numbers their names hold. An empty value stays
+ * `""`. The value is read once, at the first setup; a test provides its own.
  */
-const hostEnvironment = Effect.gen(function* () {
-  const provider = yield* ConfigProvider.ConfigProvider
-  const environment = new Map<string, string>()
-  // The environment provider nests a name at each `_`; the walk joins the path back.
-  const walk = (path: ReadonlyArray<string>, listed: boolean): Effect.Effect<void> =>
-    Effect.gen(function* () {
-      const loaded = yield* Effect.option(provider.load(path))
-      if (Option.isNone(loaded)) return
-      const node = loaded.value
-      if (Predicate.isUndefined(node)) {
-        // A record lists only names the environment holds, and the provider reads
-        // an empty value as missing: a listed name that loads nothing is set empty.
-        // An array node keeps only its length, so its missing and empty indices look alike.
-        if (listed) environment.set(path.join("_"), "")
-        return
-      }
-      if (Predicate.isString(node.value) && path.length > 0) {
-        environment.set(path.join("_"), node.value)
-      }
-      let children: ReadonlyArray<string> = []
-      if (node._tag === "Record") children = [...node.keys]
-      if (node._tag === "Array") {
-        children = Array.from({ length: node.length }, (_, index) => String(index))
-      }
-      const listsChildren = node._tag === "Record"
-      yield* Effect.forEach(children, (child) => walk([...path, child], listsChildren), {
-        discard: true,
-      })
-    })
-  yield* walk([], false)
-  return Object.fromEntries(environment)
-})
-
-/**
- * The host environment as setup hands it to every stdio dial: `hostEnvironment`
- * under `Effect.cached`, so each setup walks the environment once.
- */
-type HostEnvironment = Effect.Effect<Readonly<Record<string, string>>>
+export const HostEnvironment = Context.Reference<Readonly<Record<string, string>>>(
+  "@gent/extensions/mcp/HostEnvironment",
+  {
+    defaultValue: () =>
+      Object.fromEntries(
+        // oxlint-disable-next-line effect/noGlobals, node/no-process-env -- the process environment is the platform's own store, and Effect reads it only by name
+        Object.entries(process.env).filter((entry): entry is [string, string] =>
+          Predicate.isString(entry[1]),
+        ),
+      ),
+  },
+)
 
 /** The transport a connection runs over. */
 const TransportKind = Schema.Literals(["stdio", "streamable-http", "sse"])
@@ -1494,13 +1467,13 @@ const dial = (
 const connect = (
   server: McpServer,
   auth: AuthStore,
-  environment: HostEnvironment,
+  environment: Readonly<Record<string, string>>,
   onToolsChanged: Option.Option<() => void> = Option.none(),
 ) =>
   Effect.gen(function* () {
     const config = server.config
     if ("command" in config) {
-      return yield* dial(server, "stdio", yield* environment, Option.none(), onToolsChanged)
+      return yield* dial(server, "stdio", environment, Option.none(), onToolsChanged)
     }
     const oauth = yield* oauthTransport(server, config, auth)
     const type = config.type ?? "auto"
@@ -1825,7 +1798,7 @@ const mcpClientsLive = ({
   /** The directory binary blocks are written to. */
   readonly blobs: string
   readonly auth: AuthStore
-  readonly environment: HostEnvironment
+  readonly environment: Readonly<Record<string, string>>
 }) =>
   Layer.effect(
     McpClients,
@@ -2457,7 +2430,7 @@ const catalogFor = (
   server: McpServer,
   cache: CatalogFile,
   auth: AuthStore,
-  environment: HostEnvironment,
+  environment: Readonly<Record<string, string>>,
   now: number,
 ) => {
   const cached = cache.servers[server.key]
@@ -2596,8 +2569,8 @@ const McpCommand = request({
 const registerServers = Effect.fn("Mcp.registerServers")(function* (
   extensionId: string,
   entries: Readonly<Record<string, McpServerConfig>>,
-  environment: HostEnvironment,
 ) {
+  const environment = yield* HostEnvironment
   const host = yield* ExtensionHost
   const { servers, misconfigured } = yield* resolveServers(entries, host.cwd)
   // No server: `/mcp` still answers, and the model gets no status tool with nothing to report.
@@ -2658,7 +2631,7 @@ export const McpExtension = defineExtension({
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
     const entries = yield* readMcpConfig(host.home, host.cwd)
-    yield* registerServers("@gent/mcp", entries, yield* Effect.cached(hostEnvironment))
+    yield* registerServers("@gent/mcp", entries)
   }),
 })
 
@@ -2666,7 +2639,5 @@ export const McpExtension = defineExtension({
 export const McpServers = (id: string, entries: Readonly<Record<string, McpServerConfig>>) =>
   defineExtension({
     id,
-    setup: Effect.gen(function* () {
-      yield* registerServers(id, entries, yield* Effect.cached(hostEnvironment))
-    }),
+    setup: registerServers(id, entries),
   })

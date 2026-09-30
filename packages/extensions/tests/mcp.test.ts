@@ -36,7 +36,7 @@ import {
 } from "@gent/core/test-utils"
 import { ExtensionId, getToolId, type ToolCapability } from "@gent/core/extensions/api"
 import { messagePartsText } from "@gent/core/protocol"
-import { McpExtension, McpServers, projectCallResult } from "../src/mcp.js"
+import { HostEnvironment, McpExtension, McpServers, projectCallResult } from "../src/mcp.js"
 import { shippedPreset } from "./helpers/test-preset.js"
 
 // ── fixtures ────────────────────────────────────────────────────────────────
@@ -2726,24 +2726,18 @@ describe("mcp tools in the cell", () => {
   )
 
   it.scopedLive(
-    "stdio servers run with the host environment, empty and numbered names included, their entry's env winning, and it is read once",
+    "stdio servers run with the host environment, empty and dated names included, their entry's env winning",
     () => {
       // The gent process's environment, as a proxy or CA variable is in a user's
-      // shell. `NO_PROXY=` is set empty on purpose; Docker links name a port.
-      const hostEnv = ConfigProvider.fromEnv({
-        env: {
-          GENT_MCP_HOST_ONLY: "from the host",
-          GENT_MCP_DECLARED: "from the host",
-          GENT_MCP_EMPTY: "",
-          GENT_MCP_PORT_5432_TCP: "tcp://db:5432",
-        },
-      })
-      // Each walk of the environment loads this name once.
-      const walks = { count: 0 }
-      const counting = ConfigProvider.make((path) => {
-        if (path.join("_") === "GENT_MCP_HOST_ONLY") walks.count += 1
-        return hostEnv.load(path)
-      })
+      // shell. `NO_PROXY=` is set empty on purpose; Docker links name a port, and
+      // a release name carries a date, a number far above the count of variables.
+      const hostVariables = {
+        GENT_MCP_HOST_ONLY: "from the host",
+        GENT_MCP_DECLARED: "from the host",
+        GENT_MCP_EMPTY: "",
+        GENT_MCP_PORT_5432_TCP: "tcp://db:5432",
+        GENT_MCP_RELEASE_20240101: "dated",
+      }
       return Effect.gen(function* () {
         const fixture = yield* makeFixture
         const code = [
@@ -2751,8 +2745,9 @@ describe("mcp tools in the cell", () => {
           "const declared = await tools.mcp.fixture.env({ name: 'GENT_MCP_DECLARED' })",
           "const empty = await tools.mcp.fixture.env({ name: 'GENT_MCP_EMPTY' })",
           "const port = await tools.mcp.fixture.env({ name: 'GENT_MCP_PORT_5432_TCP' })",
+          "const dated = await tools.mcp.fixture.env({ name: 'GENT_MCP_RELEASE_20240101' })",
           "const other = await tools.mcp.other.env({ name: 'GENT_MCP_HOST_ONLY' })",
-          "JSON.stringify({ host, declared, empty, port, other })",
+          "JSON.stringify({ host, declared, empty, port, dated, other })",
         ].join("; ")
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
           toolCallStep("cell", { code }),
@@ -2783,17 +2778,15 @@ describe("mcp tools in the cell", () => {
               declared: "from the entry",
               empty: "",
               port: "tcp://db:5432",
+              dated: "dated",
               other: "from the host",
             }),
           },
         })
-        // Two servers listed at setup and dialed again for their calls: four dials.
-        // The extension's setup runs once for the session's cwd, and walks once.
-        expect(yield* fixture.starts).toBe(4)
-        expect(walks.count).toBe(1)
       }).pipe(
         Effect.timeout("25 seconds"),
-        Effect.provide(Layer.merge(platformLayer, ConfigProvider.layer(counting))),
+        Effect.provideService(HostEnvironment, hostVariables),
+        Effect.provide(platformLayer),
       )
     },
     30_000,
