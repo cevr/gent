@@ -834,18 +834,17 @@ function AppContent(props: AppProps) {
   // Read once and remember the answer: Solid re-reads a prop every time the
   // child touches it, so a getter that consumes the branches would hand the
   // first read `Some` and every read after it `None`.
-  const [bootBranches, setBootBranches] = createSignal(
-    Option.getOrElse(Option.fromNullishOr(props.initialBranches), () =>
-      Option.none<readonly Branch[]>(),
-    ),
+  // No computation reads it: the keyed child runs untracked, once per mount.
+  let bootBranches = Option.getOrElse(Option.fromNullishOr(props.initialBranches), () =>
+    Option.none<readonly Branch[]>(),
   )
 
   return (
     <box flexDirection="column" width="100%" height="100%">
       <Show when={active()} keyed>
         {(session) => {
-          const branches = bootBranches()
-          setBootBranches(Option.none())
+          const branches = bootBranches
+          bootBranches = Option.none()
           return (
             <Session
               sessionId={session.sessionId}
