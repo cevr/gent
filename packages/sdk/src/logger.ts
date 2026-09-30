@@ -244,11 +244,12 @@ const formatJsonLogger: Logger.Logger<unknown, string> = Logger.make(
       annots,
     )
 
-    if (!Predicate.isUndefined(fiber.currentSpan)) {
-      entry["traceId"] = fiber.currentSpan.traceId
-      entry["spanId"] = fiber.currentSpan.spanId
-      if (fiber.currentSpan._tag === "Span") {
-        entry["spanName"] = fiber.currentSpan.name
+    const span = fiber.cache.span
+    if (!Predicate.isUndefined(span)) {
+      entry["traceId"] = span.traceId
+      entry["spanId"] = span.spanId
+      if (span._tag === "Span") {
+        entry["spanName"] = span.name
       }
     }
 

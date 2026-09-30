@@ -674,7 +674,7 @@ const buildOwnedServer = (
     )
     const httpServer = Context.get(httpServerCtx, HttpServer.HttpServer)
     const port = Match.value(httpServer.address).pipe(
-      Match.tag("TcpAddress", (address) => address.port),
+      Match.tag("InetAddressV4", "InetAddressV6", (address) => address.port),
       Match.orElse(() => 0),
     )
     if (port === 0) {

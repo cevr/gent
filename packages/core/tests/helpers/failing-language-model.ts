@@ -1,5 +1,5 @@
 import { Effect, Stream } from "effect"
-import type { LanguageModel } from "effect/ai"
+import { LanguageModel } from "effect/ai"
 import type * as Prompt from "effect/ai/Prompt"
 import * as AiError from "effect/ai/AiError"
 
@@ -37,6 +37,7 @@ export const makeLanguageModel = <
 ): LanguageModel.LanguageModel =>
   // oxlint-disable-next-line effect/noAs, effect/noChainedTypeAssertions -- This helper is the named test boundary for adapting the overloaded model contract.
   ({
+    [LanguageModel.TypeId]: LanguageModel.TypeId,
     ...baseLanguageModel,
     ...overrides,
   }) as unknown as LanguageModel.LanguageModel
