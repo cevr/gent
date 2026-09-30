@@ -1700,10 +1700,8 @@ const explainedClientLayer = (
   )
 
 /**
- * Build the model-driver contribution given a pre-allocated credential
- * cache cell. Extracted from the inline `modelDrivers` factory so
- * tests can inject their own cell and assert that two `resolveModel`
- * calls share the same closure-owned cell. `crypto` is the host's Crypto,
+ * Build the model-driver contribution over a credential cache cell the
+ * caller allocated once: every `resolveModel` call shares it. `crypto` is the host's Crypto,
  * captured at setup; the browser OAuth flow draws its PKCE and state from it.
  */
 export const buildOpenAIModelDriver = (
@@ -1953,11 +1951,9 @@ export const OpenAIExtension = defineExtension({
   id: "@gent/provider-openai",
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
-    // Credential cache cell hoisted to extension-closure scope so it
-    // survives across `resolveModel` calls. One extension instance →
-    // one cell that lives until the runtime tears the extension down.
-    // Setup is Effectful, so the cache cell is allocated through
-    // SynchronizedRef.make instead of an unsafe closure escape hatch.
+    // One credential cell per extension instance, allocated at setup, so it
+    // survives across `resolveModel` calls until the runtime tears the
+    // extension down.
     const credentialCellRef =
       yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
     // Pending OAuth callbacks keyed by authorizationId. Entries

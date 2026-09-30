@@ -421,12 +421,6 @@ export class CellHost extends Context.Service<
   }
 >()("@gent/extensions/src/cell-worker-boundary/CellHost") {}
 
-/** Only run model source inside a dedicated worker process. Cells evaluate in the
- * worker's own realm, so the full Bun runtime, `require`, and dynamic `import` are
- * available and the process is the isolation unit: one evaluator per process.
- * The process owner enforces wall time, memory, cancellation, and host authority.
- * On interruption it must discard the worker; this adapter cannot stop an await.
- */
 const encodeJsonText = Schema.encodeSync(Schema.fromJsonString(Schema.Json))
 
 /** Indirect eval runs the compiled cell at global scope; replMode declares bindings as global vars. */
@@ -614,6 +608,13 @@ const errorDetail = (error: object): ReadonlyArray<string> => {
   return systemErrorFields(error)
 }
 
+/**
+ * Only run model source inside a dedicated worker process. Cells evaluate in the
+ * worker's own realm, so the full Bun runtime, `require`, and dynamic `import` are
+ * available and the process is the isolation unit: one evaluator per process.
+ * The process owner enforces wall time, memory, cancellation, and host authority.
+ * On interruption it must discard the worker; this adapter cannot stop an await.
+ */
 export const makeBunCellEvaluator = Effect.gen(function* () {
   const host = yield* CellHost
   const environment = yield* CellWorkerEnvironment
