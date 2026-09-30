@@ -46,6 +46,7 @@ import {
   McpError as ProtocolError,
   ResultSchema,
 } from "@modelcontextprotocol/sdk/types.js"
+import { compareIds } from "./cell-protocol.js"
 import { type SdkFetch, sdkFetch } from "./mcp-boundary.js"
 import {
   defineExtension,
@@ -120,14 +121,8 @@ interface McpServer {
 
 const encodeKeyFields = Schema.encodeSync(Schema.fromJsonString(Schema.Json))
 
-const compareCodeUnits = (left: string, right: string) => {
-  if (left < right) return -1
-  if (left > right) return 1
-  return 0
-}
-
 const sortedEntries = (record: Readonly<Record<string, string>> = {}) =>
-  Object.entries(record).toSorted(([left], [right]) => compareCodeUnits(left, right))
+  Object.entries(record).toSorted(([left], [right]) => compareIds(left, right))
 
 /**
  * What decides the tools a server lists: the entry as it runs, after
@@ -210,7 +205,7 @@ const allocateSegments = (
 ): ReadonlyMap<string, string> => {
   const allocated = new Map<string, string>()
   const taken = new Set<string>()
-  for (const name of [...new Set(names)].toSorted(compareCodeUnits)) {
+  for (const name of [...new Set(names)].toSorted(compareIds)) {
     const base = idSegment(name, limit, fallback)
     let segment = base
     for (let suffix = 2; taken.has(segment); suffix++) {
@@ -339,7 +334,7 @@ const resolveServers = Effect.fn("Mcp.resolveServers")(function* (
   const misconfigured: Array<MisconfiguredServer> = []
   const enabled = Object.entries(entries)
     .filter(([, config]) => config.enabled !== false)
-    .toSorted(([left], [right]) => compareCodeUnits(left, right))
+    .toSorted(([left], [right]) => compareIds(left, right))
   const names = allocateSegments(
     enabled.map(([written]) => written),
     SERVER_SEGMENT_LIMIT,
@@ -415,19 +410,10 @@ const catalogToolOf = (entry: Schema.Json) =>
     }),
   )
 
-/** The `name` of a listed entry the tool shape refused, when it has one. */
-const NamedEntry = Schema.Struct({ name: Schema.String })
-
-/**
- * A server's tools, the `instructions` its `initialize` answer carried, if
- * any, and the names of the entries it listed that were skipped as malformed:
- * they still take part in id allocation, so a tool's id does not move when a
- * colliding entry turns malformed.
- */
+/** A server's tools, and the `instructions` its `initialize` answer carried, if any. */
 const CatalogServer = Schema.Struct({
   tools: Schema.Array(CatalogTool),
   instructions: Schema.optional(Schema.String),
-  reserved: Schema.optional(Schema.Array(Schema.String)),
 })
 type CatalogServer = typeof CatalogServer.Type
 
@@ -1439,14 +1425,12 @@ const connect = (
  * Every page of `tools/list`. The request goes out with the SDK's loose
  * result schema, not `client.listTools`, whose schema refuses the whole page
  * for one malformed entry; each entry decodes here instead, and one the
- * spec's tool shape refuses is skipped with a warning, its `name`, when it
- * has one, kept in `reserved`. So the SDK keeps no output-schema validators,
- * and the tool checks structured content itself.
+ * spec's tool shape refuses is skipped with a warning. So the SDK keeps no
+ * output-schema validators, and the tool checks structured content itself.
  */
 const listTools = (server: McpServer, client: Client) =>
   Effect.gen(function* () {
     const tools: Array<CatalogTool> = []
-    const reserved: Array<string> = []
     let cursor = Option.none<string>()
     for (let page = 0; page < 100; page++) {
       const params = Option.match(cursor, {
@@ -1473,8 +1457,6 @@ const listTools = (server: McpServer, client: Client) =>
           tools.push(tool.success)
           continue
         }
-        const named = Schema.decodeUnknownOption(NamedEntry)(entry)
-        if (Option.isSome(named)) reserved.push(named.value.name)
         yield* Effect.logWarning("mcp.tools.skipped").pipe(
           Effect.annotateLogs({ server: server.name, entry: index, error: tool.failure.message }),
         )
@@ -1482,21 +1464,16 @@ const listTools = (server: McpServer, client: Client) =>
       cursor = Option.fromNullishOr(listed.nextCursor)
       if (Option.isNone(cursor)) break
     }
-    return { tools, reserved }
+    return tools
   })
 
-/** A listing as the cache keeps it: `reserved` only when some entry was skipped. */
+/** A listing as the cache keeps it. */
 const catalogServerOf = (
-  listed: { readonly tools: ReadonlyArray<CatalogTool>; readonly reserved: ReadonlyArray<string> },
+  tools: ReadonlyArray<CatalogTool>,
   instructions: Option.Option<string>,
 ): CatalogServer => ({
-  tools: listed.tools,
-  ...omitUndefined({
-    instructions: Option.getOrUndefined(instructions),
-    reserved: Option.getOrUndefined(
-      Option.filter(Option.some(listed.reserved), (names) => names.length > 0),
-    ),
-  }),
+  tools,
+  ...omitUndefined({ instructions: Option.getOrUndefined(instructions) }),
 })
 
 /** The result fields a call reads; content blocks stay JSON. */
@@ -1509,26 +1486,17 @@ type CallResult = typeof CallResult.Type
 
 /**
  * What a failed call says about its connection. `answered`: the server sent
- * a JSON-RPC error, so the connection is sound. `expired`: HTTP 404 to a
- * request that carried an `Mcp-Session-Id`, a session the server no longer
- * knows, so it ran nothing. A 404 without a session says no such thing (a
- * gateway can answer it after the server ran the call), so it is `kept`.
- * `dead`: the transport failed (the connection closed, the call timed out,
- * HTTP 400 or 408, a network error). `refused`: HTTP 401 or 403, the server
- * no longer takes the entry's credential. `kept`: any other HTTP status,
- * which says nothing about the connection. `stale`: the server answered that
- * it has no such tool, so the catalog is out of date. `login`: the server
- * refused the OAuth token and no refresh helped (see `oauthTransport`).
+ * a JSON-RPC error, or an HTTP status that says nothing about the connection
+ * (a 404 without a session included: a gateway can answer it after the server
+ * ran the call), so the connection stays. `expired`: HTTP 404 to a request
+ * that carried an `Mcp-Session-Id`, a session the server no longer knows, so
+ * it ran nothing. `dead`: the transport failed (the connection closed, the
+ * call timed out, HTTP 400 or 408, a network error). `refused`: HTTP 401 or
+ * 403, or an OAuth token no refresh helped (see `oauthTransport`): the server
+ * no longer takes the entry's credential. `stale`: the server answered that
+ * it has no such tool, so the catalog is out of date.
  */
-const CallFailureKind = Schema.Literals([
-  "answered",
-  "expired",
-  "dead",
-  "refused",
-  "kept",
-  "stale",
-  "login",
-])
+const CallFailureKind = Schema.Literals(["answered", "expired", "dead", "refused", "stale"])
 type CallFailureKind = typeof CallFailureKind.Type
 
 const staleMessage = (name: string) =>
@@ -1562,7 +1530,7 @@ const INVALID_PARAMS: number = ErrorCode.InvalidParams
 
 /** `hadSession`: the request carried the transport's `Mcp-Session-Id`. */
 const failureKind = (cause: unknown, name: string, hadSession: boolean): CallFailureKind => {
-  if (Schema.is(LoginRequired)(cause)) return "login"
+  if (Schema.is(LoginRequired)(cause)) return "refused"
   if (cause instanceof ProtocolError) {
     if (CLIENT_RAISED.has(cause.code)) return "dead"
     if (cause.code === INVALID_PARAMS && isUnknownToolMessage(cause.message, name)) return "stale"
@@ -1573,18 +1541,13 @@ const failureKind = (cause: unknown, name: string, hadSession: boolean): CallFai
     if (status === 404 && hadSession) return "expired"
     if (REFUSED_STATUSES.has(status)) return "refused"
     if (DEAD_STATUSES.has(status)) return "dead"
-    return "kept"
+    return "answered"
   }
   return "dead"
 }
 
 /** The failures that drop the connection: the next call dials again, with the credential as it is then. */
-const DROPPING_FAILURES: ReadonlySet<CallFailureKind> = new Set([
-  "dead",
-  "expired",
-  "refused",
-  "login",
-])
+const DROPPING_FAILURES: ReadonlySet<CallFailureKind> = new Set(["dead", "expired", "refused"])
 
 /** A failed call's message, with the HTTP status the server answered, when it did. */
 const callFailureMessage = (name: string, cause: unknown) =>
@@ -1776,8 +1739,7 @@ const mcpClientsLive = ({
       const listNames = (server: McpServer, client: Client, instructions: Option.Option<string>) =>
         Effect.gen(function* () {
           const previous = known.get(server.key) ?? { tools: [] }
-          const listed = yield* listTools(server, client)
-          const tools = listed.tools
+          const tools = yield* listTools(server, client)
           if (tools.length === 0 && previous.tools.length > 0) {
             yield* Effect.logWarning("mcp.server.relist.empty").pipe(
               Effect.annotateLogs({ server: server.name }),
@@ -1789,7 +1751,7 @@ const mcpClientsLive = ({
             )
             return namesOf(previous.tools)
           }
-          const next = catalogServerOf(listed, instructions)
+          const next = catalogServerOf(tools, instructions)
           known.set(server.key, next)
           setHealth(server.key, "healthy", Option.none())
           if (!Equal.equals(next, previous)) {
@@ -1954,7 +1916,7 @@ const mcpClientsLive = ({
               if (failed.kind === "dead") {
                 setHealth(server.key, "degraded", Option.some(failed.message))
               }
-              if (failed.kind === "login" || failed.kind === "refused") {
+              if (failed.kind === "refused") {
                 setHealth(server.key, "expired", Option.some(failed.message))
               }
               if (DROPPING_FAILURES.has(failed.kind)) return evict(server.key, connection)
@@ -2079,7 +2041,7 @@ const mcpClientsLive = ({
             })
           }
           return {
-            servers: servers.toSorted((left, right) => compareCodeUnits(left.name, right.name)),
+            servers: servers.toSorted((left, right) => compareIds(left.name, right.name)),
           }
         }),
         saveBlobs: blobStore.save,
@@ -2277,13 +2239,12 @@ const toolDescription = (server: McpServer, listed: CatalogTool) => {
 
 /**
  * One host tool per listed MCP tool, each under its own segment (see
- * `allocateSegments`), allocated over the tools' names and the `reserved`
- * names of skipped entries. A name the server lists twice is one tool.
+ * `allocateSegments`). A name the server lists twice is one tool.
  */
 const toolsFor = (server: McpServer, catalog: CatalogServer) => {
   const listed = catalog.tools
   const segments = allocateSegments(
-    [...listed.map((entry) => entry.name), ...(catalog.reserved ?? [])],
+    listed.map((entry) => entry.name),
     WIRE_SEGMENTS_LIMIT - server.name.length,
     "tool",
   )

@@ -1,6 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Fiber, FileSystem, Path, Stream } from "effect"
-import { BunServices } from "@effect/platform-bun"
+import { Effect, Fiber, Stream } from "effect"
 import * as Prompt from "effect/ai/Prompt"
 import {
   createRpcHarness,
@@ -13,12 +12,10 @@ import {
 import SessionNotesExtension from "../extensions/session-notes.js"
 
 /**
- * Acceptance for the one-file authoring reference: the example loads through
- * the public entries only and runs its tool, slash request, and turn
- * projection over the full RPC path.
+ * Acceptance for the one-file authoring reference: the example loads and runs
+ * its tool, slash request, and turn projection over the full RPC path. The
+ * `gent/core-entry-boundary` lint keeps its imports on the public entries.
  */
-
-const sessionNotesSourceUrl = new URL("../extensions/session-notes.ts", import.meta.url)
 
 /** The system text a model call received: where turn projections land. */
 const systemText = (prompt: Prompt.RawInput): string =>
@@ -100,16 +97,5 @@ describe("session notes reference extension", () => {
         expect(prompts.at(-1)).toContain("- ship the authoring loop")
       }).pipe(Effect.timeout("8 seconds")),
     10_000,
-  )
-
-  it.live("the reference source imports only the public extension API", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const path = yield* Path.Path
-      const source = yield* fs.readFileString(yield* path.fromFileUrl(sessionNotesSourceUrl))
-      expect(source).toContain('from "@gent/core/extensions/api"')
-      expect(source).not.toContain("@gent/core/host")
-      expect(source).not.toContain("@gent/core/src")
-    }).pipe(Effect.provide(BunServices.layer)),
   )
 })

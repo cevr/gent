@@ -39,7 +39,7 @@ import {
   FetchHttpClient,
   HttpBody,
   HttpClient,
-  type HttpClientRequest,
+  HttpClientRequest,
   HttpClientResponse,
 } from "effect/http"
 import { EncodeError, HttpClientError, TransportError } from "effect/http/HttpClientError"
@@ -1099,6 +1099,15 @@ const makeFakeClient = (state: FakeClientState): HttpClient.HttpClient =>
     }
     return Effect.succeed(HttpClientResponse.fromWeb(request, result))
   })
+/**
+ * The SDK's step over the Codex client, as `OpenAiClient.layer` runs it: the
+ * client sees the relative path the SDK posts, then the Codex base is prefixed.
+ */
+const underCodexBase = (client: HttpClient.HttpClient) =>
+  HttpClient.mapRequest(
+    client,
+    HttpClientRequest.prependUrl("https://chatgpt.com/backend-api/codex"),
+  )
 const JsonRecordSchema = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown))
 type JsonRecord = Schema.Schema.Type<typeof JsonRecordSchema>
 const decodeJsonRecord = (raw: string): Effect.Effect<JsonRecord> =>
@@ -1140,9 +1149,9 @@ describe("codexTransformClient — auth headers", () => {
         responder: () => new Response("ok", { status: 200 }),
       }
       const transform = buildCodexTransformClient(creds)
-      const wrapped = transform(makeFakeClient(fakeState))
+      const wrapped = underCodexBase(transform(makeFakeClient(fakeState)))
       yield* runOk(
-        wrapped.post("https://api.openai.com/v1/responses", {
+        wrapped.post("/responses", {
           body: jsonBody({ model: "gpt-5.4" }),
         }),
       )
@@ -1160,9 +1169,9 @@ describe("codexTransformClient — auth headers", () => {
         responder: () => new Response("ok", { status: 200 }),
       }
       const transform = buildCodexTransformClient(creds)
-      const wrapped = transform(makeFakeClient(fakeState))
+      const wrapped = underCodexBase(transform(makeFakeClient(fakeState)))
       yield* runOk(
-        wrapped.post("https://api.openai.com/v1/responses", {
+        wrapped.post("/responses", {
           headers: { authorization: "Bearer placeholder" },
           body: jsonBody({ model: "gpt-5.4" }),
         }),
@@ -1181,9 +1190,9 @@ describe("codexTransformClient — auth headers", () => {
         responder: () => new Response("ok", { status: 200 }),
       }
       const transform = buildCodexTransformClient(creds)
-      const wrapped = transform(makeFakeClient(fakeState))
+      const wrapped = underCodexBase(transform(makeFakeClient(fakeState)))
       yield* runOk(
-        wrapped.post("https://api.openai.com/v1/responses", {
+        wrapped.post("/responses", {
           body: jsonBody({ model: "gpt-5.4" }),
         }),
       )
@@ -1198,9 +1207,9 @@ describe("codexTransformClient — auth headers", () => {
         responder: () => new Response("ok", { status: 200 }),
       }
       const transform = buildCodexTransformClient(creds)
-      const wrapped = transform(makeFakeClient(fakeState))
+      const wrapped = underCodexBase(transform(makeFakeClient(fakeState)))
       yield* runOk(
-        wrapped.post("https://api.openai.com/v1/responses", {
+        wrapped.post("/responses", {
           body: jsonBody({ model: "gpt-5.4" }),
         }),
       )
@@ -1215,9 +1224,9 @@ describe("codexTransformClient — auth headers", () => {
         responder: () => new Response("ok", { status: 200 }),
       }
       const transform = buildCodexTransformClient(creds)
-      const wrapped = transform(makeFakeClient(fakeState))
+      const wrapped = underCodexBase(transform(makeFakeClient(fakeState)))
       yield* runOk(
-        wrapped.post("https://api.openai.com/v1/responses", {
+        wrapped.post("/responses", {
           body: jsonBody({ model: "gpt-5.4" }),
         }),
       )
@@ -1233,9 +1242,9 @@ describe("codexTransformClient — auth headers", () => {
         responder: () => new Response("ok", { status: 200 }),
       }
       const transform = buildCodexTransformClient(creds)
-      const wrapped = transform(makeFakeClient(fakeState))
+      const wrapped = underCodexBase(transform(makeFakeClient(fakeState)))
       yield* runOk(
-        wrapped.post("https://api.openai.com/v1/responses", {
+        wrapped.post("/responses", {
           headers: { originator: "custom-app", "user-agent": "custom-ua/1.0" },
           body: jsonBody({ model: "gpt-5.4" }),
         }),
@@ -1256,15 +1265,15 @@ describe("codexTransformClient — auth headers", () => {
         responder: () => new Response("ok", { status: 200 }),
       }
       const transform = buildCodexTransformClient(creds)
-      const wrapped = transform(makeFakeClient(fakeState))
+      const wrapped = underCodexBase(transform(makeFakeClient(fakeState)))
       yield* runOk(
-        wrapped.post("https://api.openai.com/v1/embeddings", {
+        wrapped.post("/embeddings", {
           body: jsonBody({ model: "text-embedding-3-small", input: "hello" }),
         }),
       )
       const seen = fakeState.captured[0]!
       expect(seen.method).toBe("POST")
-      expect(seen.url).toBe("https://api.openai.com/v1/embeddings")
+      expect(seen.url).toBe("https://chatgpt.com/backend-api/codex/embeddings")
       expect(seen.body).toBeDefined()
       const parsed = yield* decodeJsonRecord(seen.body ?? "{}")
       expect(parsed["model"]).toBe("text-embedding-3-small")
@@ -1277,7 +1286,7 @@ describe("codexTransformClient — auth headers", () => {
     Effect.gen(function* () {
       // When credentials are unavailable, the typed ProviderAuthError
       // must reach the client surface as the standard transport error
-      // type — that's what keeps the SDK's `transformClient` signature
+      // type — that keeps the base client signature
       // satisfied (`With<HttpClientError, never>`).
       const refreshFails: OpenAICredentialIO = {
         refresh: () => Effect.fail(new ProviderAuthError({ message: "no usable refresh token" })),
@@ -1294,10 +1303,10 @@ describe("codexTransformClient — auth headers", () => {
         responder: () => new Response("ok", { status: 200 }),
       }
       const transform = buildCodexTransformClient(creds)
-      const wrapped = transform(makeFakeClient(fakeState))
+      const wrapped = underCodexBase(transform(makeFakeClient(fakeState)))
       const result = yield* Effect.scoped(
         wrapped
-          .post("https://api.openai.com/v1/responses", {
+          .post("/responses", {
             body: jsonBody({ model: "gpt-5.4" }),
           })
           .pipe(Effect.exit),
@@ -1365,14 +1374,14 @@ describe("codexTransformClient — auth headers", () => {
         responder: () => new Response("ok", { status: 200 }),
       }
       const transform = buildCodexTransformClient(creds)
-      const wrapped = transform(makeFakeClient(fakeState))
+      const wrapped = underCodexBase(transform(makeFakeClient(fakeState)))
       yield* runOk(
-        wrapped.post("https://api.openai.com/v1/responses", {
+        wrapped.post("/responses", {
           body: jsonBody({ model: "gpt-5.4" }),
         }),
       )
       yield* runOk(
-        wrapped.post("https://api.openai.com/v1/responses", {
+        wrapped.post("/responses", {
           body: jsonBody({ model: "gpt-5.4" }),
         }),
       )
@@ -1392,34 +1401,19 @@ describe("codexTransformClient — URL/body/beta rewrite", () => {
   const buildWrapped = (state: FakeClientState) =>
     Effect.gen(function* () {
       const creds = yield* credentialCache(noopRefreshIO(), validAuthInfo({ access: "k1-access" }))
-      return buildCodexTransformClient(creds)(makeFakeClient(state))
+      return underCodexBase(buildCodexTransformClient(creds)(makeFakeClient(state)))
     })
-  it.scopedLive("rewrites /v1/responses URL to the Codex backend endpoint", () =>
-    Effect.gen(function* () {
-      const state = okResponse()
-      const wrapped = yield* buildWrapped(state)
-      yield* runOk(
-        wrapped.post("https://api.openai.com/v1/responses", {
-          body: jsonBody({ model: "gpt-5.4", input: [{ role: "user", content: "hi" }] }),
-        }),
-      )
-      expect(state.captured[0]!.url).toBe("https://chatgpt.com/backend-api/codex/responses")
-    }),
-  )
   it.scopedLive("does NOT rewrite paths that are not exactly responses", () =>
     Effect.gen(function* () {
       // Exact path equality avoids rewriting sub-resources and other APIs.
       const state = okResponse()
       const wrapped = yield* buildWrapped(state)
-      for (const url of [
-        "https://api.openai.com/v1/responses/foo",
-        "https://api.openai.com/v1/chat/completions",
-      ]) {
+      for (const url of ["/responses/foo", "/chat/completions"]) {
         yield* runOk(wrapped.post(url, { body: jsonBody({ model: "gpt-5.4" }) }))
       }
       expect(state.captured.map((request) => request.url)).toEqual([
-        "https://api.openai.com/v1/responses/foo",
-        "https://api.openai.com/v1/chat/completions",
+        "https://chatgpt.com/backend-api/codex/responses/foo",
+        "https://chatgpt.com/backend-api/codex/chat/completions",
       ])
       expect(state.captured[0]!.headers["openai-beta"]).toBeUndefined()
       expect(state.captured[1]!.headers["openai-beta"]).toBeUndefined()
@@ -1430,7 +1424,7 @@ describe("codexTransformClient — URL/body/beta rewrite", () => {
       const state = okResponse()
       const wrapped = yield* buildWrapped(state)
       yield* runOk(
-        wrapped.post("https://api.openai.com/v1/responses", {
+        wrapped.post("/responses", {
           body: jsonBody({ model: "gpt-5.4" }),
         }),
       )
@@ -1449,7 +1443,7 @@ describe("codexTransformClient — URL/body/beta rewrite", () => {
         const state = okResponse()
         const wrapped = yield* buildWrapped(state)
         yield* runOk(
-          wrapped.post("https://api.openai.com/v1/responses", {
+          wrapped.post("/responses", {
             headers: { "openai-beta": "custom=value" },
             body: jsonBody({ model: "gpt-5.4" }),
           }),
@@ -1464,7 +1458,7 @@ describe("codexTransformClient — URL/body/beta rewrite", () => {
       const state = okResponse()
       const wrapped = yield* buildWrapped(state)
       yield* runOk(
-        wrapped.post("https://api.openai.com/v1/responses", {
+        wrapped.post("/responses", {
           headers: { "openai-beta": "custom=value, responses=experimental" },
           body: jsonBody({ model: "gpt-5.4" }),
         }),
@@ -1478,7 +1472,7 @@ describe("codexTransformClient — URL/body/beta rewrite", () => {
       const wrapped = yield* buildWrapped(state)
       const structured = { role: "system", content: [{ type: "input_text", text: "structured" }] }
       yield* runOk(
-        wrapped.post("https://api.openai.com/v1/responses", {
+        wrapped.post("/responses", {
           body: jsonBody({
             model: "gpt-5.4",
             input: [
@@ -1505,7 +1499,7 @@ describe("codexTransformClient — URL/body/beta rewrite", () => {
       ]
       const update = { role: "system", content: "Today's date is now: 2026-09-09" }
       for (const tail of [history, [...history, update]]) {
-        yield* wrapped.post("https://api.openai.com/v1/responses", {
+        yield* wrapped.post("/responses", {
           body: jsonBody({
             model: "gpt-5.6-luna",
             instructions: "Fixed provider instructions.",
@@ -1535,7 +1529,7 @@ describe("codexTransformClient — URL/body/beta rewrite", () => {
         turnNoticesText([{ id: "stopped", content: "# Stopped children\n\n- one", keys: [] }]),
       )
       for (const tail of [conversation, [...conversation, { role: "system", content: notice }]]) {
-        yield* wrapped.post("https://api.openai.com/v1/responses", {
+        yield* wrapped.post("/responses", {
           body: jsonBody({
             model: "gpt-5.6-luna",
             input: [{ role: "system", content: "Fixed session instructions." }, ...tail],
@@ -1561,7 +1555,7 @@ describe("codexTransformClient — URL/body/beta rewrite", () => {
       const state = okResponse()
       const wrapped = yield* buildWrapped(state)
       yield* runOk(
-        wrapped.post("https://api.openai.com/v1/responses", {
+        wrapped.post("/responses", {
           body: jsonBody({
             model: "gpt-5.6-luna",
             max_output_tokens: 4096,
@@ -1584,7 +1578,7 @@ describe("codexTransformClient — URL/body/beta rewrite", () => {
         const state = okResponse()
         const wrapped = yield* buildWrapped(state)
         yield* runOk(
-          wrapped.post("https://api.openai.com/v1/responses", {
+          wrapped.post("/responses", {
             body: jsonBody({
               model: "gpt-5.4",
               input: [
@@ -1609,7 +1603,7 @@ describe("codexTransformClient — URL/body/beta rewrite", () => {
       const state = okResponse()
       const wrapped = yield* buildWrapped(state)
       yield* runOk(
-        wrapped.post("https://api.openai.com/v1/responses", {
+        wrapped.post("/responses", {
           body: jsonBody({ model: "gpt-5.4", input: [] }),
         }),
       )
@@ -1625,7 +1619,7 @@ describe("codexTransformClient — URL/body/beta rewrite", () => {
         const state = okResponse()
         const wrapped = yield* buildWrapped(state)
         yield* runOk(
-          wrapped.post("https://api.openai.com/v1/responses", {
+          wrapped.post("/responses", {
             body: jsonBody({
               model: "gpt-5.4",
               input: [{ role: "user", content: "hi" }],
@@ -1647,13 +1641,13 @@ describe("codexTransformClient — URL/body/beta rewrite", () => {
         input: [{ role: "system", content: "should-not-be-lifted" }],
       }
       yield* runOk(
-        wrapped.post("https://api.openai.com/v1/embeddings", {
+        wrapped.post("/embeddings", {
           body: jsonBody(original),
         }),
       )
       const parsed = yield* decodeJsonRecord(state.captured[0]!.body!)
       expect(parsed).toEqual(original)
-      expect(state.captured[0]!.url).toBe("https://api.openai.com/v1/embeddings")
+      expect(state.captured[0]!.url).toBe("https://chatgpt.com/backend-api/codex/embeddings")
     }),
   )
   it.scopedLive("auth headers still apply on Codex-rewritten requests", () =>
@@ -1666,9 +1660,9 @@ describe("codexTransformClient — URL/body/beta rewrite", () => {
         validAuthInfo({ access: "k1-access", accountId: "acc-123" }),
       )
       const state = okResponse()
-      const wrapped = buildCodexTransformClient(creds)(makeFakeClient(state))
+      const wrapped = underCodexBase(buildCodexTransformClient(creds)(makeFakeClient(state)))
       yield* runOk(
-        wrapped.post("https://api.openai.com/v1/responses", {
+        wrapped.post("/responses", {
           body: jsonBody({ model: "gpt-5.4" }),
         }),
       )
@@ -1726,9 +1720,9 @@ describe("codexTransformClient — 401 recovery", () => {
           new Response("ok", { status: 200 }),
         ),
       }
-      const wrapped = buildCodexTransformClient(creds)(makeFakeClient(state))
+      const wrapped = underCodexBase(buildCodexTransformClient(creds)(makeFakeClient(state)))
       const response = yield* runOk(
-        wrapped.post("https://api.openai.com/v1/responses", {
+        wrapped.post("/responses", {
           body: jsonBody({ model: "gpt-5.4" }),
         }),
       )
@@ -1764,9 +1758,9 @@ describe("codexTransformClient — 401 recovery", () => {
         captured: [],
         responder: () => new Response("unauthorized", { status: 401 }),
       }
-      const wrapped = buildCodexTransformClient(creds)(makeFakeClient(state))
+      const wrapped = underCodexBase(buildCodexTransformClient(creds)(makeFakeClient(state)))
       const response = yield* runOk(
-        wrapped.post("https://api.openai.com/v1/responses", {
+        wrapped.post("/responses", {
           body: jsonBody({ model: "gpt-5.4" }),
         }),
       )
@@ -1788,9 +1782,9 @@ describe("codexTransformClient — 401 recovery", () => {
         captured: [],
         responder: () => new Response("server error", { status: 500 }),
       }
-      const wrapped = buildCodexTransformClient(creds)(makeFakeClient(state))
+      const wrapped = underCodexBase(buildCodexTransformClient(creds)(makeFakeClient(state)))
       const response = yield* runOk(
-        wrapped.post("https://api.openai.com/v1/responses", {
+        wrapped.post("/responses", {
           body: jsonBody({ model: "gpt-5.4" }),
         }),
       )
@@ -1809,9 +1803,9 @@ describe("codexTransformClient — 401 recovery", () => {
         captured: [],
         responder: () => new Response("ok", { status: 200 }),
       }
-      const wrapped = buildCodexTransformClient(creds)(makeFakeClient(state))
+      const wrapped = underCodexBase(buildCodexTransformClient(creds)(makeFakeClient(state)))
       const response = yield* runOk(
-        wrapped.post("https://api.openai.com/v1/responses", {
+        wrapped.post("/responses", {
           body: jsonBody({ model: "gpt-5.4" }),
         }),
       )
@@ -1856,10 +1850,10 @@ describe("codexTransformClient — 401 recovery", () => {
           captured: [],
           responder: () => new Response("unauthorized", { status: 401 }),
         }
-        const wrapped = buildCodexTransformClient(creds)(makeFakeClient(state))
+        const wrapped = underCodexBase(buildCodexTransformClient(creds)(makeFakeClient(state)))
         const result = yield* Effect.scoped(
           wrapped
-            .post("https://api.openai.com/v1/responses", {
+            .post("/responses", {
               body: jsonBody({ model: "gpt-5.4" }),
             })
             .pipe(Effect.exit),
@@ -3559,7 +3553,7 @@ describe("buildOpenAIModelDriver — OAuth path uses external cache Ref", () => 
       const fetchState = makeFakeFetchState()
       yield* runOne(model, fetchState)
       const headers = fetchState.captured.at(-1)!.headers
-      // `OpenAiClient.layer({ transformClient: ... })` is built without
+      // `OpenAiClient.layer` over the Codex base client is built without
       // an `apiKey` field — the SDK only sets Bearer when apiKey is
       // defined. Counsel correction: dropping the placeholder entirely
       // avoids a brittle "scrub-the-placeholder" coupling between SDK
@@ -3658,71 +3652,66 @@ describe("buildOpenAIModelDriver — OAuth path uses external cache Ref", () => 
     }),
   )
 })
-describe("buildOpenAIModelDriver — 401 invalidate seam fires through the rewired layer", () => {
+describe("buildOpenAIModelDriver — 401 invalidate seam fires through the base client", () => {
   // Driver-level seam test. Proves the wiring, not the full retry-success
   // path. Asserts:
   //   1. the first wire attempt uses the seeded stale token (production
-  //      `mapRequestEffect` runs through the rewired
-  //      `OpenAiClient.layer({ transformClient })` path)
+  //      `mapRequestEffect` runs through the Codex base client under
+  //      `OpenAiClient.layer`)
   //   2. after the 401, invalidate fires on the closure-owned cell —
   //      the cell is marked invalidated and refresh token is preserved
-  it.live(
-    "401 fires invalidate on the closure-owned cell via OpenAiClient.layer({ transformClient })",
-    () =>
-      Effect.gen(function* () {
-        const credentialCellRef =
-          yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
-        yield* SynchronizedRef.set(
-          credentialCellRef,
-          makeDurableCell({
-            access: "stale-token",
-            refresh: "r",
-            expires: FAR_FUTURE_MS,
-            accountId: Option.none(),
-          }),
-        )
-        const driver = buildOpenAIModelDriver(
-          credentialCellRef,
-          noopCallbacks(),
-          Option.none(),
-          testCatalogSource(),
-          yield* hostCrypto,
-        )
-        const model = yield* driver.resolveModel("gpt-5.4", makeOAuthInfo())
-        const fetchState = makeFakeFetchState()
-        // 401 triggers tapError(invalidate). The retry's preprocess sees
-        // the invalidated cell and attempts a live refresh. Effect.exit preserves
-        // the failure so the post-condition assertions still run.
-        const responder = (req: CapturedRequest) => {
-          void req
-          return { status: 401, body: "unauthorized", headers: { "content-type": "text/plain" } }
-        }
-        const exit = yield* oneGenerate(model, fetchState, responder).pipe(
-          Effect.orDie,
-          Effect.exit,
-        )
-        expect(exit._tag).toBe("Failure")
-        // First wire attempt fired with the seeded token — proves the
-        // production mapRequestEffect ran preprocess through the rewired
-        // OpenAiClient.layer({ transformClient }) path.
-        expect(fetchState.captured.length).toBeGreaterThanOrEqual(1)
-        expect(fetchState.captured[0]!.headers["authorization"]).toBe("Bearer stale-token")
-        expect(fetchState.captured[0]!.url).toBe("https://chatgpt.com/backend-api/codex/responses")
-        // Driver-level seam: invalidate fired on the closure-owned cell
-        // after the 401:
-        //   - invalidated marked true (so the next request refreshes)
-        //   - .refresh preserved (rotated refresh token survives invalidate)
-        // If transformResponse weren't wired into the production layer,
-        // the cell would not be marked invalidated.
-        const finalCell = yield* SynchronizedRef.get(credentialCellRef)
-        expect(finalCell._tag).toBe("Durable")
-        if (finalCell._tag !== "Durable") {
-          return yield* Effect.die(new Error("expected durable credential cell"))
-        }
-        expect(finalCell.invalidated).toBe(true)
-        expect(finalCell.creds?.access).toBe("stale-token")
-        expect(finalCell.creds?.refresh).toBe("r")
-      }),
+  it.live("401 fires invalidate on the closure-owned cell through the base client", () =>
+    Effect.gen(function* () {
+      const credentialCellRef =
+        yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
+      yield* SynchronizedRef.set(
+        credentialCellRef,
+        makeDurableCell({
+          access: "stale-token",
+          refresh: "r",
+          expires: FAR_FUTURE_MS,
+          accountId: Option.none(),
+        }),
+      )
+      const driver = buildOpenAIModelDriver(
+        credentialCellRef,
+        noopCallbacks(),
+        Option.none(),
+        testCatalogSource(),
+        yield* hostCrypto,
+      )
+      const model = yield* driver.resolveModel("gpt-5.4", makeOAuthInfo())
+      const fetchState = makeFakeFetchState()
+      // 401 triggers tapError(invalidate). The retry's preprocess sees
+      // the invalidated cell and attempts a live refresh. Effect.exit preserves
+      // the failure so the post-condition assertions still run.
+      const responder = (req: CapturedRequest) => {
+        void req
+        return { status: 401, body: "unauthorized", headers: { "content-type": "text/plain" } }
+      }
+      const exit = yield* oneGenerate(model, fetchState, responder).pipe(Effect.orDie, Effect.exit)
+      expect(exit._tag).toBe("Failure")
+      // First wire attempt fired with the seeded token — proves the
+      // production mapRequestEffect ran preprocess through the Codex base client under
+      // OpenAiClient.layer.
+      expect(fetchState.captured.length).toBeGreaterThanOrEqual(1)
+      expect(fetchState.captured[0]!.headers["authorization"]).toBe("Bearer stale-token")
+      expect(fetchState.captured[0]!.url).toBe("https://chatgpt.com/backend-api/codex/responses")
+      // Driver-level seam: invalidate fired on the closure-owned cell
+      // after the 401:
+      //   - invalidated marked true (so the next request refreshes)
+      //   - .refresh preserved (rotated refresh token survives invalidate)
+      // If transformResponse weren't wired into the production layer,
+      // the cell would not be marked invalidated.
+      const finalCell = yield* SynchronizedRef.get(credentialCellRef)
+      expect(finalCell._tag).toBe("Durable")
+      if (finalCell._tag !== "Durable") {
+        return yield* Effect.die(new Error("expected durable credential cell"))
+      }
+      expect(finalCell.invalidated).toBe(true)
+      expect(finalCell.creds?.access).toBe("stale-token")
+      expect(finalCell.creds?.refresh).toBe("r")
+    }),
   )
 })
 describe("buildOpenAIModelDriver — API-key path is plain SDK", () => {

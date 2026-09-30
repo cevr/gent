@@ -2067,108 +2067,98 @@ export const makeCellToolHost = (
     },
 ): Effect.Effect<typeof CellOperationHost.Service, never, CellToolHostServices> =>
   Effect.map(Effect.context<CellToolHostServices>(), (services) =>
-    makeCellToolHostWith(params, services),
-  )
-
-const makeCellToolHostWith = (
-  params: CellToolHostParams &
-    CellContextHostParams & {
-      readonly toolBindings: ReadonlyMap<string, ResolvedToolCapability>
-      readonly catalog?: CellCatalog
-    },
-  services: Context.Context<CellToolHostServices>,
-): typeof CellOperationHost.Service =>
-  CellOperationHost.of({
-    catalog: params.catalog,
-    call: Effect.fn("CellToolHost.call")((request) =>
-      runAgentLoopTurnProfile(params.profile)(
-        Effect.gen(function* () {
-          yield* requireCellHostBranch(params)
-          // The context namespace never touches tool admission: reads are durable
-          // lookups and directives are idempotent until the next projection.
-          if (isContextCall(request.name)) {
-            return yield* handleContextCall({
-              branchId: params.cell.branchId,
-              name: request.name,
-              input: request.input,
-            }).pipe(Effect.provideService(ModelContextLedger, params.ledger))
-          }
-          const storage = (yield* CellStorage).operations
-          const captured = Option.fromUndefinedOr(params.toolBindings.get(request.name))
-          if (Option.isNone(captured))
-            return yield* new CellEvaluationError({
-              phase: "execute",
-              message: `Tool ${request.name} is not selected for this turn`,
-              output: "",
-            })
-          const identity = yield* innerOperationBindingIdentity(
-            captured.value,
-            params.profile.turnGenerationId,
-          )
-          if (Option.isNone(identity))
-            return yield* new CellEvaluationError({
-              phase: "execute",
-              message: `Tool ${request.name} has no bindable source identity`,
-              output: "",
-            })
-          const key = { cell: params.cell, operationId: request.operationId }
-          const admission = yield* storage
-            .admit({
-              ...key,
-              binding: identity.value,
-              input: request.input,
-            })
-            .pipe(
-              // Admission comes before the operation: nothing ran.
-              Effect.mapError(
-                (cause) =>
-                  new CellEvaluationError({
-                    phase: "execute",
-                    message: `Cell operation storage failed. The operation was not run: ${cause.message}`,
-                    output: "",
-                  }),
-              ),
-            )
-          if (!admission.admitted) {
-            if (admission.operation.state._tag === "Completed")
-              return yield* cellToolResultValue(admission.operation.state.result)
-            return yield* new CellEvaluationError({
-              phase: "execute",
-              message:
-                "Cell operation has no recorded result. Its effects may have occurred. It was not executed again.",
-              output: "",
-            })
-          }
-          const result = yield* executeBoundCellTool({
-            request,
-            toolCallId: admission.operation.toolCallId,
-            binding: captured,
-          }).pipe(
-            Effect.provideService(CurrentCellToolOperation, key),
-            Effect.provideService(CurrentInteractionOwner, cellInteractionOwner(key, storage)),
-            Effect.provideService(CurrentDispatchingCall, {
-              assistantMessageId: key.cell.assistantMessageId,
-              toolCallId: key.cell.toolCallId,
-            }),
-          )
-          yield* storage.complete(key, result)
-          return yield* cellToolResultValue(result)
-        }),
-      ).pipe(
-        Effect.catchTags({
-          StorageError: (cause) =>
-            Effect.fail(
-              new CellEvaluationError({
+    CellOperationHost.of({
+      catalog: params.catalog,
+      call: Effect.fn("CellToolHost.call")((request) =>
+        runAgentLoopTurnProfile(params.profile)(
+          Effect.gen(function* () {
+            yield* requireCellHostBranch(params)
+            // The context namespace never touches tool admission: reads are durable
+            // lookups and directives are idempotent until the next projection.
+            if (isContextCall(request.name)) {
+              return yield* handleContextCall({
+                branchId: params.cell.branchId,
+                name: request.name,
+                input: request.input,
+              }).pipe(Effect.provideService(ModelContextLedger, params.ledger))
+            }
+            const storage = (yield* CellStorage).operations
+            const captured = Option.fromUndefinedOr(params.toolBindings.get(request.name))
+            if (Option.isNone(captured))
+              return yield* new CellEvaluationError({
                 phase: "execute",
-                message: `Cell operation storage failed. Its effects may have occurred: ${cause.message}`,
+                message: `Tool ${request.name} is not selected for this turn`,
                 output: "",
+              })
+            const identity = yield* innerOperationBindingIdentity(
+              captured.value,
+              params.profile.turnGenerationId,
+            )
+            if (Option.isNone(identity))
+              return yield* new CellEvaluationError({
+                phase: "execute",
+                message: `Tool ${request.name} has no bindable source identity`,
+                output: "",
+              })
+            const key = { cell: params.cell, operationId: request.operationId }
+            const admission = yield* storage
+              .admit({
+                ...key,
+                binding: identity.value,
+                input: request.input,
+              })
+              .pipe(
+                // Admission comes before the operation: nothing ran.
+                Effect.mapError(
+                  (cause) =>
+                    new CellEvaluationError({
+                      phase: "execute",
+                      message: `Cell operation storage failed. The operation was not run: ${cause.message}`,
+                      output: "",
+                    }),
+                ),
+              )
+            if (!admission.admitted) {
+              if (admission.operation.state._tag === "Completed")
+                return yield* cellToolResultValue(admission.operation.state.result)
+              return yield* new CellEvaluationError({
+                phase: "execute",
+                message:
+                  "Cell operation has no recorded result. Its effects may have occurred. It was not executed again.",
+                output: "",
+              })
+            }
+            const result = yield* executeBoundCellTool({
+              request,
+              toolCallId: admission.operation.toolCallId,
+              binding: captured,
+            }).pipe(
+              Effect.provideService(CurrentCellToolOperation, key),
+              Effect.provideService(CurrentInteractionOwner, cellInteractionOwner(key, storage)),
+              Effect.provideService(CurrentDispatchingCall, {
+                assistantMessageId: key.cell.assistantMessageId,
+                toolCallId: key.cell.toolCallId,
               }),
-            ),
-        }),
-        Effect.provideContext(services),
+            )
+            yield* storage.complete(key, result)
+            return yield* cellToolResultValue(result)
+          }),
+        ).pipe(
+          Effect.catchTags({
+            StorageError: (cause) =>
+              Effect.fail(
+                new CellEvaluationError({
+                  phase: "execute",
+                  message: `Cell operation storage failed. Its effects may have occurred: ${cause.message}`,
+                  output: "",
+                }),
+              ),
+          }),
+          Effect.provideContext(services),
+        ),
       ),
-    ),
-  })
+    }),
+  )
 
 // ── execution ───────────────────────────────────────────────────────────────
 
@@ -2178,10 +2168,10 @@ const CELL_WORKER_BINARY = "gent-cell"
 /** The compiled build defines this symbol; a source run leaves it undeclared. */
 declare const __GENT_COMPILED__: unknown
 
-const isCompiledBuild = Effect.try({
-  try: () => __GENT_COMPILED__ === true,
-  catch: () => false,
-}).pipe(Effect.orElseSucceed(() => false))
+// An undeclared symbol throws a ReferenceError: a source run.
+const isCompiledBuild = Effect.try(() => __GENT_COMPILED__ === true).pipe(
+  Effect.orElseSucceed(() => false),
+)
 
 /**
  * Where the worker lives. A compiled build runs the `gent-cell` binary beside

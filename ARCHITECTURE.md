@@ -1333,9 +1333,7 @@ lists; every server setup listed goes to the cache in one write. A server
 that cannot list is logged and contributes nothing. `tools/list` goes out with
 the SDK's loose result schema and each entry decodes on its own: an entry the
 spec's tool shape refuses is skipped with a warning, and a `null` description
-counts as none. A skipped entry that has a name still takes part in id
-allocation (the cache keeps it as `reserved`), so skipping it never moves
-another tool's collision suffix. So the SDK keeps no output validators, and the tool checks
+counts as none. So the SDK keeps no output validators, and the tool checks
 structured content itself.
 
 Calls share one process Resource (`McpClients`): an `RcMap` opens a server's

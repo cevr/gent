@@ -558,7 +558,7 @@ describe("mcp config", () => {
   )
 
   it.scopedLive(
-    "a malformed tools/list entry is skipped and the rest of the list stays, its name still holding its id; a null description counts as none",
+    "a malformed tools/list entry is skipped and the rest of the list stays; a null description counts as none",
     () =>
       Effect.gen(function* () {
         const path = yield* Path.Path
@@ -573,7 +573,7 @@ describe("mcp config", () => {
           }),
         )
         expect(ids).toEqual(
-          ["a_b_2", "count", "echo", "fail", "nulldesc", "repo_search_issues", "structured"].map(
+          ["a_b", "count", "echo", "fail", "nulldesc", "repo_search_issues", "structured"].map(
             (name) => `mcp.fixture.${name}`,
           ),
         )
