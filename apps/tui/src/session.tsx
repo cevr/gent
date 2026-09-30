@@ -2103,7 +2103,6 @@ export function useSessionFeed(
   sessionId: () => SessionId,
   branchId: () => BranchId,
   client: SessionFeedClient,
-  cast: <A, E>(effect: Effect.Effect<A, E, never>) => void,
   callbacks: SessionFeedCallbacks,
   /** Read at send time, so the owner decides whether the prompt is still unsent. */
   takeInitialPrompt?: () => Option.Option<StartupPrompt>,
@@ -2275,11 +2274,13 @@ export function useSessionFeed(
       seq: eventSeq++,
     })
   }
-  const lastSeenEventIdByKey = new Map<string, number>()
+  // The session view mounts keyed on the identity (app.tsx), so one feed
+  // serves one session and branch: a switch remounts it, and the cleanup
+  // interrupts this feed's fiber. A reactivation of the same identity (the
+  // client's identity went none and came back) resumes from the cursor.
+  let lastSeenEventId = 0
   let processedEnvelopeIds = new Set<EventEnvelope["id"]>()
-
-  // Track the active key to guard against stale async writes and reset prompt state
-  let currentKey = Option.none<string>()
+  let activated = false
   const takeInitialPromptValue = Option.fromNullishOr(takeInitialPrompt)
   const canSendPromptValue = Option.fromNullishOr(canSendPrompt)
 
@@ -2363,10 +2364,10 @@ export function useSessionFeed(
     on([activeSessionKey, feedKey], ([active, key]) => {
       if (Option.isNone(active) || active.value !== key) return
 
-      // Reset all projection state on identity change
-      if (Option.isNone(currentKey) || currentKey.value !== key) {
+      // The first activation clears what the client held for another session.
+      if (!activated) {
         resetProjection()
-        currentKey = Option.some(key)
+        activated = true
       }
 
       const branch = branchId()
@@ -2391,19 +2392,13 @@ export function useSessionFeed(
                 lastEventId: snapshot.lastEventId,
               })
 
-              const snapshotApplied = yield* Effect.sync(() => {
-                if (Option.isNone(currentKey) || currentKey.value !== key) return false
+              yield* Effect.sync(() => {
                 client.applySessionSnapshot(snapshot)
                 callbacks.onQueueSnapshot(snapshot.runtime.queue)
                 setStore("messages", buildMessages(snapshot.messages))
-                return true
               })
-              if (!snapshotApplied) return yield* Effect.never
 
-              const after = Option.getOrElse(
-                Option.fromNullishOr(lastSeenEventIdByKey.get(key)),
-                () => 0,
-              )
+              const after = lastSeenEventId
 
               const eventStream = client.client.session.events({
                 sessionId: session,
@@ -2429,7 +2424,6 @@ export function useSessionFeed(
                     if (envelope.event._tag === "StreamSynchronized") {
                       yield* Deferred.succeed(eventsServed, void 0)
                     }
-                    if (Option.isNone(currentKey) || currentKey.value !== key) return
                     client.setConnectionIssue(Option.none())
                     yield* processEnvelope(
                       envelope,
@@ -2451,7 +2445,6 @@ export function useSessionFeed(
                     Deferred.succeed(runtimeServed, void 0).pipe(
                       Effect.andThen(
                         Effect.sync(() => {
-                          if (Option.isNone(currentKey) || currentKey.value !== key) return
                           client.setConnectionIssue(Option.none())
                           // The turn's own end, when it arrives, says how a stopped retry ended.
                           if (next._tag === "Idle") settleRetryingEvents(setStore, "stopped")
@@ -2468,10 +2461,7 @@ export function useSessionFeed(
                   Effect.forkScoped,
                 )
 
-              yield* Effect.sync(() => {
-                if (Option.isNone(currentKey) || currentKey.value !== key) return
-                setStreamReadyKey(Option.some(key))
-              })
+              yield* Effect.sync(() => setStreamReadyKey(Option.some(key)))
 
               return yield* Effect.raceFirst(Fiber.join(eventsFiber), Fiber.join(runtimeFiber))
             }).pipe(
@@ -2484,7 +2474,6 @@ export function useSessionFeed(
             label: "feed.events",
             log: client.log,
             onError: (err) => {
-              if (Option.isNone(currentKey) || currentKey.value !== key) return
               client.log.error("feed.error", {
                 key,
                 error: formatConnectionIssue(err),
@@ -2510,16 +2499,10 @@ export function useSessionFeed(
     snapshotLastEventId: Option.Option<number>,
   ): Effect.Effect<void> =>
     Effect.gen(function* () {
-      // Drop events if identity changed
-      if (Option.isNone(currentKey) || currentKey.value !== key) return
       if (envelope.event._tag === "StreamSynchronized") {
         // Replay is complete; later envelopes are live. The marker shares the cursor id
         // with the last replayed event, so it must not enter the duplicate set.
-        const lastSeen = Option.getOrElse(
-          Option.fromNullishOr(lastSeenEventIdByKey.get(key)),
-          () => 0,
-        )
-        lastSeenEventIdByKey.set(key, Math.max(lastSeen, envelope.event.lastEventId))
+        lastSeenEventId = Math.max(lastSeenEventId, envelope.event.lastEventId)
         client.finishReplay()
         client.log.info("feed.stream.synchronized", {
           key,
@@ -2532,11 +2515,7 @@ export function useSessionFeed(
         return
       }
       processedEnvelopeIds.add(envelope.id)
-      const lastSeen = Option.getOrElse(
-        Option.fromNullishOr(lastSeenEventIdByKey.get(key)),
-        () => 0,
-      )
-      lastSeenEventIdByKey.set(key, Math.max(lastSeen, envelope.id))
+      lastSeenEventId = Math.max(lastSeenEventId, envelope.id)
       if (Option.isSome(snapshotLastEventId) && envelope.id <= snapshotLastEventId.value) {
         // Historical navigation must not replace the branch selected for this snapshot.
         if (envelope.event._tag === "BranchSwitched") return
@@ -2576,7 +2555,6 @@ export function useSessionFeed(
   ): Effect.Effect<void> =>
     Effect.gen(function* () {
       const event = envelope.event
-      if (Option.isNone(currentKey) || currentKey.value !== key) return
       const live = pass === "live"
       if (live) client.log.debug("feed.event", { key, tag: event._tag })
       // A replayed row keeps the time it happened; a live row takes the clock.
@@ -2964,7 +2942,6 @@ export function createSessionController(props: {
     () => props.sessionId,
     () => props.branchId,
     client,
-    cast,
     {
       onInteraction,
       onInteractionDismissed: (requestId) => {
@@ -3105,13 +3082,10 @@ export function createSessionController(props: {
   })
 
   const openForkPicker = () => {
-    const sessionId = props.sessionId
-    const branchId = props.branchId
     cast(
-      client.client.message.list({ branchId }).pipe(
+      client.client.message.list({ branchId: props.branchId }).pipe(
         Effect.tap((messages) =>
           Effect.sync(() => {
-            if (props.sessionId !== sessionId || props.branchId !== branchId) return
             if (messages.length === 0) {
               client.setError("No messages to fork")
               return

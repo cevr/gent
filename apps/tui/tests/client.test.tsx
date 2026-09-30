@@ -1986,7 +1986,6 @@ describe("useSessionFeed", () => {
           () => sessionId,
           () => branchId,
           client,
-          runtime.cast,
           {
             onInteraction: () => {},
             onInteractionDismissed: () => {},
@@ -2081,7 +2080,6 @@ describe("useSessionFeed", () => {
           () => sessionId,
           () => branchId,
           client,
-          runtime.cast,
           {
             onInteraction: () => {},
             onInteractionDismissed: () => {},
@@ -2263,7 +2261,6 @@ describe("useSessionFeed", () => {
             () => sessionId,
             () => branchId,
             client,
-            client.runtime.cast,
             {
               onInteraction: () => {},
               onInteractionDismissed: () => {},
@@ -2360,7 +2357,6 @@ describe("useSessionFeed", () => {
             () => sessionId,
             () => branchId,
             client,
-            client.runtime.cast,
             {
               onInteraction: () => {},
               onInteractionDismissed: () => {},
@@ -2431,7 +2427,6 @@ describe("useSessionFeed", () => {
             () => sessionId,
             () => branchId,
             client,
-            client.runtime.cast,
             {
               onInteraction: () => {},
               onInteractionDismissed: () => {},
@@ -2521,7 +2516,6 @@ describe("useSessionFeed", () => {
             () => sessionId,
             () => branchId,
             client,
-            client.runtime.cast,
             {
               onInteraction: () => {},
               onInteractionDismissed: () => {},
@@ -2653,7 +2647,6 @@ describe("useSessionFeed", () => {
             () => sessionId,
             () => branchId,
             client,
-            client.runtime.cast,
             {
               onInteraction: () => {},
               onInteractionDismissed: () => {},
@@ -2703,7 +2696,6 @@ describe("useSessionFeed", () => {
           () => snapshot.sessionId,
           () => snapshot.branchId,
           client,
-          client.runtime.cast,
           {
             onInteraction: () => {},
             onInteractionDismissed: () => {},
@@ -3007,7 +2999,6 @@ describe("useSessionFeed", () => {
           () => sessionId,
           () => branchId,
           client,
-          client.runtime.cast,
           {
             onInteraction: (interaction) => {
               client.runtime.cast(Deferred.succeed(interactionSeen, interaction))
@@ -3173,7 +3164,6 @@ describe("useSessionFeed", () => {
               () => sessionId,
               () => branchId,
               client,
-              client.runtime.cast,
               {
                 onInteraction: () => {},
                 onInteractionDismissed: () => {},
@@ -3280,7 +3270,6 @@ describe("useSessionFeed", () => {
             () => sessionId,
             () => branchId,
             client,
-            client.runtime.cast,
             {
               onInteraction: () => {},
               onInteractionDismissed: () => {},
@@ -3363,7 +3352,6 @@ describe("useSessionFeed", () => {
             () => sessionId,
             () => branchId,
             client,
-            client.runtime.cast,
             {
               onInteraction: () => {},
               onInteractionDismissed: () => {},
@@ -3444,7 +3432,6 @@ describe("useSessionFeed", () => {
             () => sessionId,
             () => branchId,
             client,
-            client.runtime.cast,
             {
               onInteraction: () => {},
               onInteractionDismissed: () => {},
@@ -3527,7 +3514,6 @@ describe("useSessionFeed", () => {
             () => sessionId,
             () => branchId,
             client,
-            client.runtime.cast,
             {
               onInteraction: () => {},
               onInteractionDismissed: () => {},
