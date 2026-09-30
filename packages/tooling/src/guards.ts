@@ -522,13 +522,13 @@ export const findAliasTestLayers = (file: string, text: string): ReadonlyArray<F
   for (const [index, line] of lines.entries()) {
     const member = Option.fromNullishOr(MEMBER_PATTERN.exec(line))
     if (Option.isNone(member)) continue
-    const name = Option.getOrElse(Option.fromNullishOr(member.value[1]), () => "")
-    const head = Option.getOrElse(Option.fromNullishOr(member.value[2]), () => "")
+    const name = member.value[1] ?? ""
+    const head = member.value[2] ?? ""
     const alias = Option.fromNullishOr(
       ALIAS_BODY.exec(normalized(initializerFrom(lines, index, head, syntaxOf(file)))),
     )
     if (Option.isNone(alias)) continue
-    const service = Option.getOrElse(Option.fromNullishOr(alias.value[1]), () => "")
+    const service = alias.value[1] ?? ""
     findings.push({
       file,
       line: index + 1,
@@ -752,7 +752,7 @@ const EXTENSION_LOAD_SCOPES: ReadonlySet<string> = new Set(["builtin", "user", "
 const declaredResourceScopes = (text: string): ReadonlyArray<string> => {
   const match = Option.fromNullishOr(/export type ResourceScope =([^\n]*)/.exec(text))
   if (Option.isNone(match)) return []
-  const body = Option.getOrElse(Option.fromNullishOr(match.value[1]), () => "")
+  const body = match.value[1] ?? ""
   return [...body.matchAll(/"([a-z][A-Za-z0-9]*)"/g)].flatMap((literal) =>
     Option.match(Option.fromNullishOr(literal[1]), {
       onNone: (): ReadonlyArray<string> => [],
@@ -1666,7 +1666,7 @@ const inProduction = (uses: ReadonlyMap<string, ReadonlyArray<VariableUse>>) =>
 
 /** The line of an `EXTERNALLY_SET` entry in this file, for a finding that points at it. */
 const externallySetLine = (sourceTexts: ReadonlyMap<string, string>, name: string): number =>
-  Option.getOrElse(Option.fromNullishOr(sourceTexts.get(GUARDS_FILE)), () => "")
+  (sourceTexts.get(GUARDS_FILE) ?? "")
     .split("\n")
     .findIndex((line) => line.includes(`["${name}",`)) + 1
 
@@ -1864,7 +1864,7 @@ const listedNames = (list: string, specifier: RegExp): ReadonlyArray<ImportedNam
     Option.toArray(Option.fromNullishOr(specifier.exec(entry))).flatMap((parts) =>
       Option.toArray(Option.fromNullishOr(parts[1])).map((imported) => ({
         imported,
-        local: Option.getOrElse(Option.fromNullishOr(parts[2]), () => imported),
+        local: parts[2] ?? imported,
       })),
     ),
   )
@@ -1998,10 +1998,7 @@ const platformBunReExports = (
 ): ReadonlyArray<RegExpExecArray> => {
   const bound = new Set([...bindings.modules, ...bindings.namespaces, ...bindings.layers])
   const exportedLists = Array.from(code.matchAll(LOCAL_EXPORT_LIST)).filter((match) =>
-    listedNames(
-      Option.getOrElse(Option.fromNullishOr(match[1]), () => ""),
-      IMPORT_SPECIFIER,
-    ).some((name) => bound.has(name.imported)),
+    listedNames(match[1] ?? "", IMPORT_SPECIFIER).some((name) => bound.has(name.imported)),
   )
   const exportedAliases = alternation(Array.from(bound)).flatMap((names) =>
     Array.from(
@@ -2619,7 +2616,7 @@ const danglingLinkTargets = (
   line
     .replace(BACKTICKED, "")
     .matchAll(MARKDOWN_LINK)
-    .map((match) => Option.getOrElse(Option.fromNullishOr(match[1]), () => ""))
+    .map((match) => match[1] ?? "")
     .filter((target) => !NOT_REPO_TARGET.test(target))
     .filter((target) =>
       Option.match(resolveRelative(directory, target.replace(/#.*$/, "")), {
@@ -2648,7 +2645,7 @@ export const findSteeringFilePaths = (
     }
     if (inFence) continue
     for (const match of line.matchAll(BACKTICKED)) {
-      const claimed = Option.getOrElse(Option.fromNullishOr(match[1]), () => "")
+      const claimed = match[1] ?? ""
       if (!isPathClaim(claimed)) continue
       if (existsInTree(claimed, tracked, prefixes)) continue
       findings.push({
@@ -2955,6 +2952,23 @@ const RECORD_READ = /(?<!current)\.session\(\)/i
  */
 const SCOPE_LINES = 12
 
+/** The index of the first record read in the reactive scope the opener on line `index` starts. */
+const scopeRecordRead = (lines: ReadonlyArray<string>, index: number): Option.Option<number> => {
+  const opener = lines[index] ?? ""
+  const openerIndent = opener.length - opener.trimStart().length
+  const limit = Math.min(index + 1 + SCOPE_LINES, lines.length)
+  for (let cursor = index; cursor < limit; cursor += 1) {
+    const candidate = lines[cursor] ?? ""
+    // The scope closes when the nesting returns to the opener's column.
+    if (cursor > index && candidate.trim().length > 0) {
+      const indent = candidate.length - candidate.trimStart().length
+      if (indent <= openerIndent && !TRACKING_OPENER.test(candidate)) return Option.none()
+    }
+    if (RECORD_READ.test(candidate)) return Option.some(cursor)
+  }
+  return Option.none()
+}
+
 export const findTuiSessionIdentityReads = (file: string, text: string): ReadonlyArray<Finding> => {
   if (!TUI_SOURCE.test(file)) return []
 
@@ -2963,27 +2977,15 @@ export const findTuiSessionIdentityReads = (file: string, text: string): Readonl
   const findings: Finding[] = []
   for (const [index, line] of lines.entries()) {
     if (!TRACKING_OPENER.test(line)) continue
-    const openerIndent = line.length - line.trimStart().length
-    const limit = Math.min(index + 1 + SCOPE_LINES, lines.length)
-    for (let cursor = index; cursor < limit; cursor += 1) {
-      const candidate = Option.getOrElse(Option.fromNullishOr(lines[cursor]), () => "")
-      const trimmed = candidate.trim()
-      // The scope closes when the nesting returns to the opener's column.
-      if (cursor > index && trimmed.length > 0) {
-        const indent = candidate.length - candidate.trimStart().length
-        if (indent <= openerIndent && !TRACKING_OPENER.test(candidate)) break
-      }
-      if (!RECORD_READ.test(candidate)) continue
-      if (reported.has(cursor)) break
-      reported.add(cursor)
-      findings.push({
-        file,
-        line: cursor + 1,
-        message:
-          "this reactive scope reads the whole session record, so a rename or a model change re-runs it -- read `sessionIdentity()` or `activeSessionId()`, which move only when the session or the branch does",
-      })
-      break
-    }
+    const read = scopeRecordRead(lines, index)
+    if (Option.isNone(read) || reported.has(read.value)) continue
+    reported.add(read.value)
+    findings.push({
+      file,
+      line: read.value + 1,
+      message:
+        "this reactive scope reads the whole session record, so a rename or a model change re-runs it -- read `sessionIdentity()` or `activeSessionId()`, which move only when the session or the branch does",
+    })
   }
   return findings
 }
@@ -3204,10 +3206,7 @@ export const findUnusedSuppressionApprovals = (
   sources: ReadonlyMap<string, string>,
   entries: ReadonlyArray<ApprovedSuppressionEntry> = approvedSuppressionEntries,
 ): ReadonlyArray<Finding> => {
-  const entryLines = Option.getOrElse(
-    Option.fromNullishOr(sources.get(GUARDS_FILE)),
-    () => "",
-  ).split("\n")
+  const entryLines = (sources.get(GUARDS_FILE) ?? "").split("\n")
   const listed = new Map<string, number>()
   return entries.flatMap((entry) => {
     const comment = approvedComment(entry)
@@ -3226,7 +3225,7 @@ export const findUnusedSuppressionApprovals = (
         )
         .map(([index]) => index + 1)
         .toArray()
-      return Option.getOrElse(Option.fromNullishOr(lines.at(nth - 1)), () => 1)
+      return lines.at(nth - 1) ?? 1
     }
     if (nth > 1) {
       return [
@@ -3561,7 +3560,7 @@ const declaredNames = (
 const importedNames = (text: string): ReadonlySet<string> => {
   const names = new Set<string>()
   for (const match of text.matchAll(/^import\s+(?:type\s+)?\{([^}]*)\}/gm)) {
-    const inner = Option.getOrElse(Option.fromNullishOr(match[1]), () => "")
+    const inner = match[1] ?? ""
     for (const part of inner.split(",")) {
       const bound = part
         .trim()
@@ -3656,8 +3655,7 @@ const reExportedNames = (
 const IDENTIFIER = /[A-Za-z_$][\w$]*/g
 
 /** Every identifier-shaped word in a text, for a cheap "is this name mentioned" test. */
-const identifiersIn = (text: string): ReadonlySet<string> =>
-  new Set(Option.getOrElse(Option.fromNullishOr(text.match(IDENTIFIER)), () => []))
+const identifiersIn = (text: string): ReadonlySet<string> => new Set(text.match(IDENTIFIER) ?? [])
 
 /**
  * The text with comments, quoted strings and template text blanked, line count
@@ -3724,8 +3722,8 @@ const moduleStatementsIn = (text: string, syntax: Syntax): ReadonlyArray<ModuleS
     const opening = match.index + (match[0].length - match[0].trimStart().length)
     statements.push({
       keyword,
-      clause: Option.getOrElse(Option.fromNullishOr(match[2]), () => ""),
-      specifier: Option.getOrElse(Option.fromNullishOr(match[3]), () => ""),
+      clause: match[2] ?? "",
+      specifier: match[3] ?? "",
       line: code.slice(0, opening).split("\n").length,
     })
   }
@@ -3745,7 +3743,7 @@ const importedName = (entry: string): Option.Option<string> => {
 const namedImportsIn = (statement: string): ReadonlyArray<string> => {
   const braces = Option.fromNullishOr(/\{([^}]*)\}/s.exec(statement))
   if (Option.isNone(braces)) return []
-  const body = Option.getOrElse(Option.fromNullishOr(braces.value[1]), () => "")
+  const body = braces.value[1] ?? ""
   return body.split(",").flatMap((entry) =>
     Option.match(importedName(entry), {
       onNone: (): ReadonlyArray<string> => [],
@@ -3786,7 +3784,7 @@ const namespaceMembersIn = (
   const kept = lines.filter((_, index) => !skip.has(index + 1)).join("\n")
   const destructure = new RegExp(`\\b(?:const|let|var)\\s*\\{([^}]*)\\}\\s*=\\s*${alias}\\b`, "g")
   for (const match of kept.matchAll(destructure)) {
-    const inner = Option.getOrElse(Option.fromNullishOr(match[1]), () => "")
+    const inner = match[1] ?? ""
     for (const part of inner.split(",")) {
       const key = Option.fromNullishOr(/^\s*([A-Za-z_$][\w$]*)/.exec(part)?.[1])
       if (Option.isSome(key)) found.push(key.value)
@@ -4067,7 +4065,7 @@ const moduleResolver = (manifests: ReadonlyMap<string, string>): ((key: string) 
       )
     }
   }
-  return (key) => Option.getOrElse(Option.fromNullishOr(byPackageSpecifier.get(key)), () => key)
+  return (key) => byPackageSpecifier.get(key) ?? key
 }
 
 /** One file's reads, re-keyed so a package specifier names the module it resolves to. */
@@ -4287,7 +4285,7 @@ const packageFindings = (
     findings.push({
       file: surface.packageJson,
       line: 1,
-      message: `name: the package is ${Option.getOrElse(Option.fromNullishOr(packageJson.name), () => "unnamed")}, its package-surface row names ${surface.alias}; make them agree`,
+      message: `name: the package is ${packageJson.name ?? "unnamed"}, its package-surface row names ${surface.alias}; make them agree`,
     })
   }
   if (surface.mustBePrivate && packageJson.private !== true) {
@@ -4298,9 +4296,7 @@ const packageFindings = (
     })
   }
   const allowed = new Set(surface.entryPoints)
-  const exported = Object.keys(
-    Option.getOrElse(Option.fromNullishOr(packageJson.exports), () => ({})),
-  )
+  const exported = Object.keys(packageJson.exports ?? {})
   for (const key of exported) {
     if (allowed.has(key)) continue
     const supported = surface.entryPoints.join(", ") || "none"

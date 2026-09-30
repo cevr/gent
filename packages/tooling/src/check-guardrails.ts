@@ -240,7 +240,7 @@ const lintConfigFindings = Effect.fn("Tooling.lintConfigFindings")(function* (
     onSome: (read) => read.text,
   })
   const rootRules = new Set(Object.keys(config.rules ?? {}))
-  const pluginText = Option.getOrElse(Option.fromNullishOr(sourceTexts.get(LINT_PLUGIN)), () => "")
+  const pluginText = sourceTexts.get(LINT_PLUGIN) ?? ""
   return [
     ...findUnmatchedOverrideGlobs(OXLINT_CONFIG, configText, config, indexFiles),
     ...findUnmatchedIgnoreRows(OXLINT_IGNORE, ignoreText, indexFiles),
