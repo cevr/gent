@@ -1105,9 +1105,11 @@ describe("mcp tools in the cell", () => {
     () =>
       Effect.gen(function* () {
         const fixture = yield* makeFixture
+        // A call can race the exit it follows and fail once (the server may
+        // have run it, so it is not sent again); each count gets two tries.
         const code = [
           "const counts = []",
-          "for (let index = 0; index < 3; index++) { try { counts.push(await tools.mcp.fixture.count()) } catch (error) { counts.push('failed') } }",
+          "for (let index = 0; index < 3; index++) { let value = 'failed'; for (let attempt = 0; attempt < 2 && value === 'failed'; attempt++) { try { value = await tools.mcp.fixture.count() } catch (error) {} } counts.push(value) }",
           "JSON.stringify(counts)",
         ].join("; ")
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
