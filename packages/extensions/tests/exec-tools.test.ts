@@ -9,6 +9,7 @@ import {
   Layer,
   Option,
   Path,
+  Predicate,
   Ref,
   Schema,
   Scope,
@@ -537,7 +538,7 @@ describe("BashTool execution", () => {
   )
 
   it.live(
-    "keeps a huge command result whole",
+    "keeps a result past the model bound but within the kept ends whole, with no file",
     () =>
       Effect.gen(function* () {
         // One line per iteration, far past the model-facing bound.
@@ -547,13 +548,13 @@ describe("BashTool execution", () => {
         )
 
         // The tool returns the complete output: no head/tail marker, no
-        // spill path, first and last line both present.
+        // file, first and last line both present.
         expect(result.exitCode).toBe(0)
         expect(result.stdout.length).toBeGreaterThan(maximumModelToolResultChars)
         expect(result.stdout).toContain("line 1\n")
         expect(result.stdout).toContain(`line ${lineCount}`)
-        expect(result.stdout).not.toContain("lines truncated")
-        expect(result.stdout).not.toContain("Full output saved to")
+        expect(result.stdout).not.toContain("characters truncated")
+        expect(result.outputFile).toBeUndefined()
         const storedLines = result.stdout.trimEnd().split("\n")
         expect(storedLines).toHaveLength(lineCount)
       }).pipe(withProcessTimeout),
@@ -1527,6 +1528,98 @@ describe("background job output", () => {
         expect(notice[0]?.length ?? 0).toBeLessThanOrEqual(maximumModelToolResultChars)
         expect(notice[0]).toContain(`The whole output is in ${file} (`)
         expect(notice[0]).toContain("MID-RUN-MARK")
+      }).pipe(Effect.timeout("40 seconds")),
+    45_000,
+  )
+})
+
+describe("foreground command output", () => {
+  /** Live heap bytes after a full collection; Bun counts array buffers in it. */
+  const liveBytes = Effect.sync(() => {
+    Bun.gc(true)
+    return process.memoryUsage().heapUsed
+  })
+
+  it.scopedLive.layer(BunFileSystem.layer)(
+    "a foreground command's output past the kept ends goes to its file, not to server memory or the row",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-fg-stream-" })
+        const produced = `${directory}/produced`
+        const release = `${directory}/release`
+        const bytes = 96 * 1024 * 1024
+        const command = `head -c ${bytes} /dev/zero | tr '\\0' x; printf '\\nMID-RUN-MARK\\n'; printf 'on stderr\\n' >&2; touch ${produced}; while ! test -f ${release}; do sleep 0.02; done; printf 'after release\\n'`
+        const toolCallId = ToolCallId.make("fg-stream-call")
+        const calls = yield* Ref.make(0)
+        const providerLayer = LanguageModelLayers.testStream(() =>
+          Ref.updateAndGet(calls, (n) => n + 1).pipe(
+            Effect.map((call) => {
+              if (call === 1) {
+                return Stream.fromIterable([
+                  toolCallPart("bash", { command }, { toolCallId }),
+                  finishPart({ finishReason: "tool-calls" }),
+                ])
+              }
+              return Stream.fromIterable([
+                textDeltaPart(`reply ${call}`),
+                finishPart({ finishReason: "stop" }),
+              ])
+            }),
+          ),
+        )
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+          cwd: directory,
+          extraLayers: [RuntimeEnvironment.Live({ cwd: directory, home: directory })],
+        })
+        const file = `${directory}/.gent/background-bash/${sessionId}/${branchId}/${toolCallId}.txt`
+        const baseline = yield* liveBytes
+        yield* client.message.send({ sessionId, branchId, content: "run the command" })
+        yield* waitFor(fs.exists(produced), (exists) => exists, 20_000, "the command printed")
+
+        // The command printed 96 MiB and still runs; the server holds only its ends.
+        const held = (yield* liveBytes) - baseline
+        expect(held).toBeLessThan(bytes / 8)
+
+        yield* fs.writeFileString(release, "go")
+        const settled = yield* waitFor(
+          client.session.getSnapshot({ sessionId, branchId }),
+          (snapshot) =>
+            snapshot.runtime._tag === "Idle" &&
+            snapshot.messages.some((message) =>
+              message.parts.some((part) => part.type === "text" && part.text === "reply 2"),
+            ),
+          10_000,
+          "the command's result",
+        )
+        const stored = settled.messages
+          .flatMap((message) => message.parts)
+          .find((part) => part.type === "tool-result" && part.id === toolCallId)
+        if (Predicate.isUndefined(stored) || stored.type !== "tool-result")
+          return yield* Effect.die("Missing bash result")
+        const total =
+          bytes + "\nMID-RUN-MARK\n".length + "on stderr\n".length + "after release\n".length
+        const result = yield* Schema.decodeUnknownEffect(
+          Schema.Struct({
+            stdout: Schema.String,
+            stderr: Schema.String,
+            exitCode: Schema.Finite,
+            outputFile: Schema.String,
+            outputChars: Schema.Finite,
+          }),
+        )(stored.result)
+        // The row keeps each stream's ends and names the file with all of it.
+        expect(result.exitCode).toBe(0)
+        expect(result.stdout.length).toBeLessThanOrEqual(256 * 1024)
+        expect(result.stdout.startsWith("xxxx")).toBe(true)
+        expect(result.stdout).toContain("characters truncated")
+        expect(result.stdout.endsWith("MID-RUN-MARK\nafter release\n")).toBe(true)
+        expect(result.stderr).toBe("on stderr\n")
+        expect(result.outputFile).toBe(file)
+        expect(result.outputChars).toBe(total)
+        expect(Number((yield* fs.stat(file)).size)).toBe(total)
       }).pipe(Effect.timeout("40 seconds")),
     45_000,
   )

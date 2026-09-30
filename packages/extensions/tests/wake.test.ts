@@ -709,6 +709,46 @@ describe("wake", () => {
   )
 
   it.live(
+    "a check that prints past the kept ends still matches on its tail and shows it",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            toolCallStep("monitor", {
+              command:
+                "head -c 300000 /dev/zero | tr '\\0' x; echo; head -c 300000 /dev/zero | tr '\\0' y; echo; echo LAST-MARK",
+              everySeconds: 0.1,
+              timeoutSeconds: 10,
+              until: "LAST-MARK",
+              note: "read the long check",
+            }),
+            textStep("watching the long check"),
+            textStep("saw the long check"),
+          ])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+          })
+          yield* client.message.send({ sessionId, branchId, content: "watch the long check" })
+          const woken = yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              current.runtime._tag === "Idle" &&
+              hasWake(current.messages) &&
+              answered(current.messages, "saw the long check"),
+            8_000,
+            "the monitor matched and woke the loop",
+          )
+          const text = textOf(wakeOf(woken.messages))
+          expect(text).toContain("matched after 1 checks")
+          expect(text).toContain("yyy\nLAST-MARK")
+          expect(text).not.toContain("xxx")
+        }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+      ),
+    15_000,
+  )
+
+  it.live(
     "a monitor that never matches wakes at its deadline and says so",
     () =>
       Effect.scoped(

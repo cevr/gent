@@ -31,7 +31,7 @@ import {
   tool,
 } from "@gent/core/extensions/api"
 import { makeBranchStateStore } from "./branch-state-store.js"
-import { runBashCommand } from "./exec-tools.js"
+import { runBashCommand, wholeCommandOutputText } from "./exec-tools.js"
 
 // Test seam: only tests read these exports. WakeAlarms, WakeAlarmsService and
 // WakeAlarmsLive let a test hold and cancel timers; rearmPendingAlarms runs the
@@ -449,7 +449,11 @@ const monitorWork = (
       const budget = Math.max(0, entry.deadline - (yield* Clock.currentTimeMillis))
       // A check cut at the deadline is its own outcome: its empty output must
       // never be tested against `until` (".*" would match it).
-      const result = yield* Effect.scoped(runBashCommand(entry.command, Option.some(cwd))).pipe(
+      // A check keeps no file: only its verdict and its output's tail reach
+      // a message, and each stream's middle past the ends never reaches memory.
+      const result = yield* Effect.scoped(
+        runBashCommand(entry.command, Option.some(cwd), Option.none()),
+      ).pipe(
         Effect.map((ran) => ({ ...ran, cut: false })),
         Effect.timeoutOrElse({
           duration: Duration.millis(budget),
@@ -728,7 +732,7 @@ const MonitorParams = Schema.Struct({
   ),
   until: Schema.optionalKey(
     Schema.String.annotate({
-      description: "Regular expression; when it matches the command's stdout the monitor is done.",
+      description: `Regular expression; when it matches the command's stdout the monitor is done. A stdout past ${wholeCommandOutputText} characters is matched on its head and tail.`,
     }),
   ),
   timeoutSeconds: Schema.optionalKey(

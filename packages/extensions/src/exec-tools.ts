@@ -500,6 +500,13 @@ const BashResult = Schema.Struct({
   exitCode: Schema.Finite,
   /** Absent when the command ran to its end. A background command has no real exit code yet. */
   status: Schema.optional(Schema.Literals(["background"])),
+  /**
+   * The file with all of a foreground command's output, stdout and stderr in
+   * arrival order; present once the output passed what the result keeps whole.
+   */
+  outputFile: Schema.optionalKey(Schema.String),
+  /** The length of all the output in `outputFile`, in characters. */
+  outputChars: Schema.optionalKey(Schema.Finite),
 })
 
 const SIGKILL_DELAY_MS = 3000
@@ -558,39 +565,6 @@ export function stripBackground(cmd: string): string {
   return cmd.replace(/\s*&\s*$/, "")
 }
 
-const decodeUtf8 = (chunks: Iterable<Uint8Array>): string => {
-  const decoder = new TextDecoder()
-  let out = ""
-  // `stream: true` holds a partial multibyte sequence until the next chunk.
-  for (const chunk of chunks) out += decoder.decode(chunk, { stream: true })
-  return out + decoder.decode()
-}
-
-/**
- * Spawn `bash -c <command>` and collect stdout, stderr, exit code.
- * Scope owns the spawn finalizer — closing the scope kills the process
- * group via SIGTERM with SIGKILL fallback after SIGKILL_DELAY_MS.
- */
-export const runBashCommand = (command: string, cwd: Option.Option<string>) =>
-  Effect.gen(function* () {
-    const handle = yield* ChildProcess.make("bash", ["-c", command], {
-      cwd: Option.getOrUndefined(cwd),
-      stdin: "ignore",
-      stdout: "pipe",
-      stderr: "pipe",
-      forceKillAfter: Duration.millis(SIGKILL_DELAY_MS),
-    })
-    const [exitCode, stdoutChunks, stderrChunks] = yield* Effect.all(
-      [handle.exitCode, Stream.runCollect(handle.stdout), Stream.runCollect(handle.stderr)],
-      { concurrency: "unbounded" },
-    )
-    return {
-      stdout: decodeUtf8(stdoutChunks),
-      stderr: decodeUtf8(stderrChunks),
-      exitCode: Number(exitCode),
-    }
-  })
-
 const backgroundJobKey = (target: BackgroundBashTarget): BackgroundBashJobKey =>
   `${target.sessionId}:${target.branchId}:${target.toolCallId}`
 
@@ -635,19 +609,22 @@ const queueBackgroundFollowUp = (params: {
     )
   })
 
-// ── job output files ──
+// ── command output ──
 //
-// A job's file is the one owner of its output: stdout and stderr go to a
-// file under the data directory as they arrive, so the read tool (`tools.read`
-// in a cell) reads a running job's output, and a job that prints for hours
-// holds none of it in memory. Memory keeps the head and tail, enough for the
-// completion message; a cut message names the file for the middle. A file,
-// not a reader behind `context.read`: every agent has the read tool, and no
-// other module learns how a job keeps its output.
+// Every shell command runs through one spawn (`spawnBashCommand`): a
+// background job, a foreground call, and each monitor check. Output reaches
+// the caller as it arrives and memory keeps only the ends of each stream, so a
+// command that prints for hours holds none of the middle. The rest goes to a
+// file under the data directory: a background job's file opens at its start,
+// so the read tool (`tools.read` in a cell) reads a running job's output; a
+// foreground call's file opens only once its output passes what the result
+// keeps; a monitor check keeps no file, since only its verdict and its tail
+// reach a message. A file, not a reader behind `context.read`: every agent has
+// the read tool, and no other module learns how a command keeps its output.
 
 /**
  * `<data dir>/background-bash/<sessionId>/<branchId>/<toolCallId>.txt`: one
- * file per job key. The path is absolute: a relative `GENT_DATA_DIR` resolves
+ * file per bash call. The path is absolute: a relative `GENT_DATA_DIR` resolves
  * against the server's cwd, as the database does, and the read tool resolves
  * a relative path against the session cwd instead.
  */
@@ -661,33 +638,48 @@ const jobOutputFile = (path: Path.Path, dataDir: string, key: BackgroundBashJobK
   )
 
 /**
- * Characters of a job's output kept in memory at each end. A completion
- * message is at most `maximumModelToolResultChars`, so each end holds all a
- * message can show of it.
+ * Characters of a background job's output kept in memory at each end. A
+ * completion message is at most `maximumModelToolResultChars`, so each end
+ * holds all a message can show of it.
  */
 const jobOutputEndChars = maximumModelToolResultChars
 
-/** A job's output as memory keeps it: its ends, its length, and its file. */
-interface JobOutput {
-  /** The first `jobOutputEndChars` characters. */
+/**
+ * Characters of a foreground command's stdout, and of its stderr, kept at
+ * each end. A stream up to twice this comes back whole, so a cell parses most
+ * outputs whole, and the result stays within a cell's reply frame.
+ */
+const commandOutputEndChars = 128 * 1024
+
+/** The longest stream a foreground command or a monitor check keeps whole, as text for a description. */
+export const wholeCommandOutputText = (2 * commandOutputEndChars).toLocaleString("en-US")
+
+/** One output as memory keeps it: its ends and its length. */
+interface OutputEnds {
+  /** The first characters, up to the end size. */
   readonly head: string
-  /** The last `jobOutputEndChars` characters after the head. */
+  /** The last characters after the head, up to the end size. */
   readonly tail: string
   readonly totalChars: number
-  /** The file with all of it; none when the file could not be written. */
-  readonly file: Option.Option<string>
 }
 
-/** `output` after `text` arrives; each end stays within `jobOutputEndChars`. */
-const appendJobOutput = (output: JobOutput, text: string): JobOutput => {
-  const room = Math.max(0, jobOutputEndChars - output.head.length)
+const noOutput: OutputEnds = { head: "", tail: "", totalChars: 0 }
+
+/** `ends` after `text` arrives; each end stays within `endChars`. */
+const appendOutput = (ends: OutputEnds, text: string, endChars: number): OutputEnds => {
+  const room = Math.max(0, endChars - ends.head.length)
   const rest = text.slice(room)
   return {
-    ...output,
-    head: output.head + text.slice(0, room),
-    tail: `${output.tail}${rest}`.slice(-jobOutputEndChars),
-    totalChars: output.totalChars + text.length,
+    head: ends.head + text.slice(0, room),
+    tail: `${ends.tail}${rest}`.slice(-endChars),
+    totalChars: ends.totalChars + text.length,
   }
+}
+
+/** A background job's output as memory keeps it: its ends, its length, and its file. */
+interface JobOutput extends OutputEnds {
+  /** The file with all of it; none when the file could not be written. */
+  readonly file: Option.Option<string>
 }
 
 /** A cut never splits a surrogate pair: a lone half at the cut goes with the middle. */
@@ -697,9 +689,9 @@ const LOW_SURROGATE_START = /^[\uDC00-\uDFFF]/
 /**
  * The output within `maxChars`, as `headTailChars` cuts it. When the middle
  * never reached memory, the cut is made from the ends and the marker counts
- * the whole middle. Needs `maxChars` at most `2 * jobOutputEndChars`.
+ * the whole middle. Needs `maxChars` at most the two ends' size.
  */
-const cutJobOutput = (output: JobOutput, maxChars: number): string => {
+const cutJobOutput = (output: OutputEnds, maxChars: number): string => {
   const kept = output.head + output.tail
   if (output.totalChars === kept.length) return headTailChars(kept, maxChars).text
   const marker = (cut: number) => `\n\n... [${cut} characters truncated] ...\n\n`
@@ -711,6 +703,12 @@ const cutJobOutput = (output: JobOutput, maxChars: number): string => {
     tail = output.tail.slice(-(room - head.length)).replace(LOW_SURROGATE_START, "")
   }
   return `${head}${marker(output.totalChars - head.length - tail.length)}${tail}`
+}
+
+/** One stream as a foreground result keeps it: whole, or its ends around a marker that counts the middle. */
+const commandOutputText = (ends: OutputEnds): string => {
+  if (ends.totalChars === ends.head.length + ends.tail.length) return ends.head + ends.tail
+  return cutJobOutput(ends, 2 * commandOutputEndChars)
 }
 
 /**
@@ -730,46 +728,91 @@ const jobOutputText = (output: JobOutput, maxChars: number): string => {
   return headTailChars(`${cut}\n\n${where}`, maxChars).text
 }
 
+/** The file a command's output goes to, stdout and stderr in arrival order. */
+interface OutputFile {
+  /** Opens the file now, before any output: a reader finds it while the command runs. */
+  readonly open: Effect.Effect<void>
+  readonly write: (text: string) => Effect.Effect<void>
+  /** The file, when it holds all the output so far. */
+  readonly written: () => Option.Option<string>
+}
+
 /**
- * Spawn `bash -c <command>`. Its stdout and stderr go to `file` as they
- * arrive, in arrival order; memory keeps the ends. A file that cannot be
- * written is logged once, and the job runs on with only the ends. The scope
- * owns the spawn finalizer and the open file.
+ * An output file that opens once more than `openAfter` characters arrived,
+ * or at `open`; until then they wait in memory, so a short output never
+ * touches the disk. A file that cannot be written is logged once, and the
+ * command runs on without it. The scope owns the open file.
  */
-const streamBackgroundCommand = (command: string, cwd: Option.Option<string>, file: string) =>
+const makeOutputFile = (file: string, openAfter: number) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
+    const scope = yield* Scope.Scope
+    const encoder = new TextEncoder()
     const writeFailed = (cause: Cause.Cause<unknown>) =>
-      Effect.logWarning("exec-tools.background.output.write.failed").pipe(
+      Effect.logWarning("exec-tools.output.write.failed").pipe(
         Effect.annotateLogs({ file, cause: Cause.pretty(cause) }),
         Effect.as(Option.none<FileSystem.File>()),
       )
-    let sink = yield* fs
-      .makeDirectory(path.dirname(file), { recursive: true })
-      .pipe(
-        Effect.andThen(fs.open(file, { flag: "w" })),
-        Effect.asSome,
-        Effect.catchCause(writeFailed),
-      )
-    let output: JobOutput = {
-      head: "",
-      tail: "",
-      totalChars: 0,
-      file: Option.as(sink, file),
-    }
-    const encoder = new TextEncoder()
-    const record = (text: string) =>
+    let pending = ""
+    let sink = Option.none<FileSystem.File>()
+    let failed = false
+    const append = (text: string) =>
       Effect.gen(function* () {
-        if (text.length === 0) return
-        output = appendJobOutput(output, text)
         if (Option.isNone(sink)) return
-        const open = sink.value
-        sink = yield* open
+        const opened = sink.value
+        sink = yield* opened
           .writeAll(encoder.encode(text))
-          .pipe(Effect.as(Option.some(open)), Effect.catchCause(writeFailed))
-        if (Option.isNone(sink)) output = { ...output, file: Option.none() }
+          .pipe(Effect.as(Option.some(opened)), Effect.catchCause(writeFailed))
+        failed = Option.isNone(sink)
       })
+    const open = Effect.gen(function* () {
+      if (failed || Option.isSome(sink)) return
+      sink = yield* fs
+        .makeDirectory(path.dirname(file), { recursive: true })
+        .pipe(
+          Effect.andThen(fs.open(file, { flag: "w" })),
+          Effect.asSome,
+          Effect.catchCause(writeFailed),
+          Scope.provide(scope),
+        )
+      failed = Option.isNone(sink)
+      const held = pending
+      pending = ""
+      if (held.length > 0) yield* append(held)
+    })
+    const output: OutputFile = {
+      open,
+      write: (text) =>
+        Effect.gen(function* () {
+          if (failed) return
+          if (Option.isSome(sink)) return yield* append(text)
+          pending += text
+          if (pending.length > openAfter) yield* open
+        }),
+      written: () => {
+        if (failed) return Option.none()
+        return Option.as(sink, file)
+      },
+    }
+    return output
+  })
+
+/** Where each stream's decoded text goes as it arrives. */
+interface OutputSinks {
+  readonly stdout: (text: string) => Effect.Effect<void>
+  readonly stderr: (text: string) => Effect.Effect<void>
+}
+
+/**
+ * Spawn `bash -c <command>`: the one spawn every shell command shares. Each
+ * stream's text goes to its sink as it arrives, one piece at a time, in
+ * arrival order across the two; nothing else is kept. The scope owns the
+ * spawn finalizer: closing it kills the process group via SIGTERM, with
+ * SIGKILL after `SIGKILL_DELAY_MS`.
+ */
+const spawnBashCommand = (command: string, cwd: Option.Option<string>, sinks: OutputSinks) =>
+  Effect.gen(function* () {
     const handle = yield* ChildProcess.make("bash", ["-c", command], {
       cwd: Option.getOrUndefined(cwd),
       stdin: "ignore",
@@ -777,24 +820,117 @@ const streamBackgroundCommand = (command: string, cwd: Option.Option<string>, fi
       stderr: "pipe",
       forceKillAfter: Duration.millis(SIGKILL_DELAY_MS),
     })
+    const deliver = (sink: (text: string) => Effect.Effect<void>, text: string) => {
+      if (text.length === 0) return Effect.void
+      return sink(text)
+    }
     // One decoder per stream: `stream: true` holds a partial multibyte
     // sequence until that stream's next chunk.
     const stdout = new TextDecoder()
     const stderr = new TextDecoder()
     const texts = Stream.merge(
-      handle.stdout.pipe(Stream.map((chunk) => stdout.decode(chunk, { stream: true }))),
-      handle.stderr.pipe(Stream.map((chunk) => stderr.decode(chunk, { stream: true }))),
+      handle.stdout.pipe(
+        Stream.map((chunk) => ({
+          sink: sinks.stdout,
+          text: stdout.decode(chunk, { stream: true }),
+        })),
+      ),
+      handle.stderr.pipe(
+        Stream.map((chunk) => ({
+          sink: sinks.stderr,
+          text: stderr.decode(chunk, { stream: true }),
+        })),
+      ),
     )
     const [exitCode] = yield* Effect.all(
       [
         handle.exitCode,
-        Stream.runForEach(texts, record).pipe(
-          Effect.andThen(Effect.suspend(() => record(stdout.decode() + stderr.decode()))),
+        Stream.runForEach(texts, ({ sink, text }) => deliver(sink, text)).pipe(
+          Effect.andThen(Effect.suspend(() => deliver(sinks.stdout, stdout.decode()))),
+          Effect.andThen(Effect.suspend(() => deliver(sinks.stderr, stderr.decode()))),
         ),
       ],
       { concurrency: "unbounded" },
     )
-    return { exitCode: Number(exitCode), output }
+    return Number(exitCode)
+  })
+
+/** A command run to its end: each stream as the result keeps it, and the file with all of it. */
+interface CommandOutput {
+  readonly exitCode: number
+  readonly stdout: string
+  readonly stderr: string
+  /**
+   * The file with all the output, stdout and stderr in arrival order, and
+   * its length; none until the output passed what memory keeps whole, or
+   * when the file could not be written.
+   */
+  readonly spilled: Option.Option<{ readonly file: string; readonly totalChars: number }>
+}
+
+/**
+ * Run a command to its end: a foreground call, or a monitor check. Each
+ * stream comes back whole up to `2 * commandOutputEndChars` characters, else
+ * as its ends around a marker that counts the middle. Given a `spill` file,
+ * output past that also goes to the file, whole. The scope owns the process
+ * and the file.
+ */
+export const runBashCommand = (
+  command: string,
+  cwd: Option.Option<string>,
+  spill: Option.Option<string>,
+) =>
+  Effect.gen(function* () {
+    let stdout = noOutput
+    let stderr = noOutput
+    const file = yield* Option.match(spill, {
+      onNone: () => Effect.succeed(Option.none<OutputFile>()),
+      onSome: (path) => Effect.asSome(makeOutputFile(path, 2 * commandOutputEndChars)),
+    })
+    const toFile = (text: string) =>
+      Option.match(file, { onNone: () => Effect.void, onSome: (output) => output.write(text) })
+    const exitCode = yield* spawnBashCommand(command, cwd, {
+      stdout: (text) =>
+        Effect.suspend(() => {
+          stdout = appendOutput(stdout, text, commandOutputEndChars)
+          return toFile(text)
+        }),
+      stderr: (text) =>
+        Effect.suspend(() => {
+          stderr = appendOutput(stderr, text, commandOutputEndChars)
+          return toFile(text)
+        }),
+    })
+    const output: CommandOutput = {
+      exitCode,
+      stdout: commandOutputText(stdout),
+      stderr: commandOutputText(stderr),
+      spilled: Option.map(
+        Option.flatMap(file, (opened) => opened.written()),
+        (written) => ({ file: written, totalChars: stdout.totalChars + stderr.totalChars }),
+      ),
+    }
+    return output
+  })
+
+/**
+ * Spawn a background job. Its stdout and stderr go to `file` from the start,
+ * in arrival order; memory keeps the ends. The scope owns the process and
+ * the open file.
+ */
+const streamBackgroundCommand = (command: string, cwd: Option.Option<string>, file: string) =>
+  Effect.gen(function* () {
+    const sink = yield* makeOutputFile(file, 0)
+    yield* sink.open
+    let output = noOutput
+    const record = (text: string) =>
+      Effect.suspend(() => {
+        output = appendOutput(output, text, jobOutputEndChars)
+        return sink.write(text)
+      })
+    const exitCode = yield* spawnBashCommand(command, cwd, { stdout: record, stderr: record })
+    const job: JobOutput = { ...output, file: sink.written() }
+    return { exitCode, output: job }
   })
 
 /** The longest command a follow-up notice repeats; the rest is cut from its middle. */
@@ -1161,8 +1297,7 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
 export const BashTool = tool({
   id: "bash",
   destructive: true,
-  description:
-    "Execute shell command. Use for git, npm, system commands. Prefer dedicated tools for file ops. Large output is kept whole; the prompt shows the head and tail, and context.read(toolCallId, { offset, limit }) pages the rest.",
+  description: `Execute shell command. Use for git, npm, system commands. Prefer dedicated tools for file ops. stdout and stderr each come back whole up to ${wholeCommandOutputText} characters; past that the result keeps each one's head and tail, and outputFile names a file with all the output (outputChars long, stdout and stderr in arrival order): page it with the read tool's offset and limit.`,
   promptSnippet: "Execute shell commands",
   params: BashParams,
   output: BashResult,
@@ -1213,9 +1348,19 @@ export const BashTool = tool({
     // the spawn finalizer) instead of awaiting forceKillAfter on the
     // calling fiber: the tool returns immediately on timeout and the kill
     // happens async.
+    // Output past what the result keeps goes to the call's file, where a
+    // background job's output goes; a call with no host id keeps only the ends.
+    const dataDir = yield* resolveDataDir(ctx.home)
+    const spill = Option.map(Option.fromUndefinedOr(ctx.toolCallId), (toolCallId) =>
+      jobOutputFile(path, dataDir, {
+        sessionId: ctx.sessionId,
+        branchId: ctx.branchId,
+        toolCallId,
+      }),
+    )
     const spawnScope = yield* Scope.make()
     const closeSpawnScope = Scope.close(spawnScope, Exit.void).pipe(Effect.ignore)
-    const result = yield* runBashCommand(command, cwd).pipe(
+    const result = yield* runBashCommand(command, cwd, spill).pipe(
       Scope.provide(spawnScope),
       Effect.timeoutOrElse({
         duration: Duration.millis(timeout),
@@ -1234,13 +1379,17 @@ export const BashTool = tool({
       ),
     )
 
-    // The full result is stored and the transcript bounds the model-facing
-    // copy at `maximumModelToolResultChars`; the cell pages the rest with
-    // `context.read(toolCallId, { offset, limit })`.
+    // The stored result keeps each stream whole or its ends, and names the
+    // file with all of it; the transcript bounds the model-facing copy at
+    // `maximumModelToolResultChars`.
     return {
       stdout: result.stdout,
       stderr: result.stderr,
       exitCode: result.exitCode,
+      ...Option.match(result.spilled, {
+        onNone: () => ({}),
+        onSome: (spilled) => ({ outputFile: spilled.file, outputChars: spilled.totalChars }),
+      }),
     }
   }),
 })
