@@ -1,14 +1,35 @@
-import { Effect, Option, Schema } from "effect"
+import { Database } from "bun:sqlite"
+import { type Cause, Effect, Option, Schema } from "effect"
 import { createSolidTransformPlugin } from "@opentui/solid/bun-plugin"
 
 /*
- * The TUI's whole Bun edge: the only TUI file that reads `Bun.*`.
+ * The TUI's whole Bun edge: the only TUI file that reads `Bun.*` or a `bun:`
+ * module.
  */
 
 // ── text width ──────────────────────────────────────────────────────────────
 
 /** The terminal cells `text` takes. */
 export const textWidth = (text: string): number => Bun.stringWidth(text)
+
+// ── read-only sqlite ────────────────────────────────────────────────────────
+
+/**
+ * The database at `dbPath`, open read-only for the scope: each call runs one
+ * query and gives its rows, undecoded. Opening a missing or corrupt file, or
+ * a query that throws, fails.
+ */
+export const readonlySqlite = (dbPath: string) =>
+  Effect.acquireRelease(
+    Effect.try(() => new Database(dbPath, { readonly: true })),
+    (db) => Effect.sync(() => db.close()),
+  ).pipe(
+    Effect.map(
+      (db) =>
+        (sql: string): Effect.Effect<ReadonlyArray<unknown>, Cause.UnknownError> =>
+          Effect.try(() => db.query(sql).all()),
+    ),
+  )
 
 // ── client extension build ──────────────────────────────────────────────────
 
