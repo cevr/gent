@@ -1,5 +1,17 @@
 import { test } from "bun:test"
-import { Clock, Effect, Layer, Option, Predicate, Ref, Result, Schema, Stream } from "effect"
+import {
+  Clock,
+  Duration,
+  Effect,
+  Layer,
+  Option,
+  Predicate,
+  Ref,
+  Result,
+  Schema,
+  Stream,
+} from "effect"
+import * as AiError from "effect/unstable/ai/AiError"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import {
   ActorCommandId,
@@ -1158,7 +1170,10 @@ const measuredReply = (text: string, inputTokens: number): SequenceStep => ({
  * cache lifetime of zero makes the first call's cache lapse before the
  * second turn starts; one hour keeps it warm. With `firstReplyHoldMs`, the
  * first reply streams only after that long, so its response runs that long
- * after its request started.
+ * after its request started. With `firstCallRateLimitedMs`, the first call
+ * is refused with that retry delay and the retry streams the first reply.
+ * With `switchModel`, the session moves to another model with the same
+ * lifetime before the second turn.
  */
 const runColdCacheTurns = (params: {
   readonly promptCacheTtlMs: Option.Option<number>
@@ -1166,33 +1181,77 @@ const runColdCacheTurns = (params: {
   readonly compactor: boolean
   readonly steps: ReadonlyArray<SequenceStep>
   readonly firstReplyHoldMs?: number
+  readonly firstCallRateLimitedMs?: number
+  readonly switchModel?: boolean
 }) =>
   Effect.gen(function* () {
     const hold = Option.fromUndefinedOr(params.firstReplyHoldMs)
+    const rateLimit = Option.fromUndefinedOr(params.firstCallRateLimitedMs)
     const requests: Array<string> = []
-    const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence(
-      [
-        {
-          ...measuredReply("first reply", params.firstInputTokens),
-          gated: Option.isSome(hold),
-        },
-        ...params.steps,
-      ].map((step) => ({
+    const replies = [
+      {
+        ...measuredReply("first reply", params.firstInputTokens),
+        gated: Option.isSome(hold),
+      },
+      ...params.steps,
+    ]
+    const { layer: sequenceLayer, controls } = yield* LanguageModelLayers.sequence(
+      replies.map((step) => ({
         ...step,
         assertOptions: (options) => {
           requests.push(encodeJson(options.prompt.content))
         },
       })),
     )
+    // The rate-limited provider refuses its first call, then plays the replies in order.
+    const played = yield* Ref.make(0)
+    const rateLimitedLayer = (retryAfterMs: number) =>
+      LanguageModelLayers.testStream((options) =>
+        Effect.gen(function* () {
+          const index = yield* Ref.getAndUpdate(played, (count) => count + 1)
+          if (index === 0) {
+            return Stream.fail(
+              AiError.make({
+                module: "Test",
+                method: "streamText",
+                reason: new AiError.RateLimitError({ retryAfter: Duration.millis(retryAfterMs) }),
+              }),
+            )
+          }
+          requests.push(encodeJson(options.prompt.content))
+          return Stream.fromIterable(
+            Option.match(Option.fromUndefinedOr(replies[index - 1]), {
+              onNone: () => [],
+              onSome: (step) => step.parts,
+            }),
+          )
+        }),
+      )
+    const providerLayer = Option.match(rateLimit, {
+      onNone: () => sequenceLayer,
+      onSome: rateLimitedLayer,
+    })
+    const calls = Option.match(rateLimit, {
+      onNone: () => controls.callCount,
+      onSome: () => Ref.get(played),
+    })
     const compactor = [rangeCompactorExtension].filter(() => params.compactor)
     const model = coldCacheModel(params.promptCacheTtlMs)
+    const otherModel = Model.make({ ...model, id: ModelId.make("cold-cache/other-window") })
     const { client, sessionId, branchId } = yield* createRpcHarness({
       providerLayer,
       agents: [AgentDefinition.make({ name: DEFAULT_AGENT_NAME, model: model.id })],
       extensionInputs: [waitToolExtension, ...compactor],
-      extraLayers: [ModelRegistry.Test([model])],
+      extraLayers: [ModelRegistry.Test([model, otherModel])],
     })
     for (const content of [`${FIRST_PROMPT_MARK} one`, "second prompt"]) {
+      if (content === "second prompt" && params.switchModel === true) {
+        yield* client.session.updateSettings({
+          sessionId,
+          modelId: Option.some(otherModel.id),
+          reasoningLevel: Option.none(),
+        })
+      }
       yield* client.message.send({ sessionId, branchId, content })
       if (content !== "second prompt" && Option.isSome(hold)) {
         const holdMs = hold.value
@@ -1230,7 +1289,7 @@ const runColdCacheTurns = (params: {
       if (event._tag !== "MessageReceived") return []
       return [event.message]
     })
-    return { events, durable, requests, calls: yield* controls.callCount }
+    return { events, durable, requests, calls: yield* calls }
   }).pipe(Effect.scoped, Effect.timeout("8 seconds"))
 
 const handoffMarkers = (durable: ReadonlyArray<Message>) =>
@@ -1302,6 +1361,43 @@ describe("cold prompt cache", () => {
         expect(result.requests[1]).toContain("summarize")
         expect(handoffMarkers(result.durable)).toHaveLength(1)
       }),
+  )
+
+  it.live("a turn on another model than the last request never hands off for a cold cache", () =>
+    Effect.gen(function* () {
+      // The last request's cache belongs to the model that wrote it; a switch
+      // reads no cache either way, and a handoff there would surprise.
+      const result = yield* runColdCacheTurns({
+        promptCacheTtlMs: Option.some(0),
+        firstInputTokens: 100_000,
+        compactor: true,
+        steps: [textStep("second reply"), textStep("spare reply")],
+        switchModel: true,
+      })
+
+      expect(result.calls).toBe(2)
+      expect(result.requests[1]).toContain(FIRST_PROMPT_MARK)
+      expect(handoffMarkers(result.durable)).toHaveLength(0)
+    }),
+  )
+
+  it.live("a retried request restarts the cache lifetime at the retry", () =>
+    Effect.gen(function* () {
+      // The first attempt is refused and retried 1.5s later; the retry is the
+      // request that refreshed the cache, so a 1s lifetime is still warm.
+      const result = yield* runColdCacheTurns({
+        promptCacheTtlMs: Option.some(1_000),
+        firstInputTokens: 100_000,
+        compactor: true,
+        steps: [textStep("second reply"), textStep("spare reply")],
+        firstCallRateLimitedMs: 1_500,
+      })
+
+      // The refused attempt, the retry, then the second turn's call.
+      expect(result.calls).toBe(3)
+      expect(result.requests[1]).toContain(FIRST_PROMPT_MARK)
+      expect(handoffMarkers(result.durable)).toHaveLength(0)
+    }),
   )
 
   it.live("a small window whose prompt cache lapsed is sent whole", () =>

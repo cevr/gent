@@ -136,19 +136,27 @@ export const resolveMiss = (
   )
 }
 
-/** The request that last refreshed the cache: everything in its prompt should read back. */
+/** The last request that reported usage: everything in its prompt should read back. */
 interface CachedRequest {
   readonly promptTokens: number
   readonly model: string
-  readonly startedAt: number
-  readonly endedAt: number
-  readonly input: Option.Option<string>
   /**
    * Some request since the last reset reported cache activity. A later step
    * that reads nothing is then a total miss (a provider that reports reads
    * only, like OpenAI), not a provider that never reports caching.
    */
   readonly reportedCache: boolean
+}
+
+/**
+ * The last request that went out, with usage or without: an interrupted
+ * request read the cache too. The lifetime runs from its start, as the loop
+ * counts it; a retry starts it again when the retry goes out.
+ */
+interface Refresh {
+  readonly startedAt: number
+  readonly endedAt: number
+  readonly input: Option.Option<string>
 }
 
 interface Span {
@@ -181,6 +189,7 @@ export interface CacheScan {
 export const makeCacheScan = (): CacheScan => {
   let lastId = Number.NEGATIVE_INFINITY
   let previous = Option.none<CachedRequest>()
+  let refreshed = Option.none<Refresh>()
   let started = Option.none<{ readonly at: number; readonly input: Option.Option<string> }>()
   const openTools = new Map<string, { readonly name: string; readonly at: number }>()
   const openWaits = new Map<string, number>()
@@ -206,16 +215,16 @@ export const makeCacheScan = (): CacheScan => {
 
   /** Why a prefix outlived its lifetime: what took the time since the previous request started. */
   const expiredCause = (
-    prior: CachedRequest,
+    refresh: Refresh,
     gapMs: number,
     input: Option.Option<string>,
   ): CacheMissCause => {
-    const response = { name: "response", ms: Math.max(0, prior.endedAt - prior.startedAt) }
+    const response = { name: "response", ms: Math.max(0, refresh.endedAt - refresh.startedAt) }
     if (Option.isSome(covers(Option.some(response), gapMs))) {
       return CacheMissCause.cases.Response.make({ ms: response.ms })
     }
     const sameTurn =
-      Option.isSome(input) && Option.isSome(prior.input) && input.value === prior.input.value
+      Option.isSome(input) && Option.isSome(refresh.input) && input.value === refresh.input.value
     if (sameTurn) {
       const wait = covers(longest(waits), gapMs)
       if (Option.isSome(wait)) return CacheMissCause.cases.Approval.make({ ms: wait.value.ms })
@@ -233,6 +242,56 @@ export const makeCacheScan = (): CacheScan => {
     return CacheMissCause.cases.Idle.make({ ms: gapMs })
   }
 
+  /** The miss a request with usage paid, against the last request with usage and the last refresh. */
+  const scanMiss = (
+    envelope: EventEnvelope,
+    event: Extract<AgentEvent, { _tag: "StreamEnded" }>,
+    begun: { readonly at: number; readonly input: Option.Option<string> },
+  ): Option.Option<ScannedMiss> => {
+    const usage = Option.fromUndefinedOr(event.usage)
+    // A step with no usage (an interrupted stream) has no tokens to compare.
+    if (Option.isNone(usage) || usage.value.inputTokens <= 0) return Option.none()
+    const promptTokens = usage.value.inputTokens
+    const cacheReadTokens = usage.value.cacheReadTokens ?? 0
+    const cacheWriteTokens = usage.value.cacheWriteTokens ?? 0
+    const model = event.model ?? ""
+    const pricedModel = event.pricedModel ?? model
+    const reported = cacheReadTokens + cacheWriteTokens > 0
+    if (cacheWriteTokens > 0) writers.add(model)
+    const miss = Option.flatMap(
+      Option.all([previous, refreshed]),
+      ([prior, refresh]): Option.Option<ScannedMiss> => {
+        if (!reported && !prior.reportedCache) return Option.none()
+        const missedTokens = Math.min(prior.promptTokens, promptTokens) - cacheReadTokens
+        if (missedTokens <= NOISE_FLOOR_TOKENS) return Option.none()
+        // The lifetime runs from the start of the last request that went out,
+        // as the loop counts it; the lapse names what took that interval.
+        const sinceRefreshMs = Math.max(0, begun.at - refresh.startedAt)
+        return Option.some({
+          eventId: envelope.id,
+          startedAt: begun.at,
+          model,
+          pricedModel,
+          missedTokens,
+          inputTokens: promptTokens,
+          cacheReadTokens,
+          cacheWriteTokens,
+          billed: (event.costUsd ?? 0) > 0,
+          sinceRefreshMs,
+          modelSwitch: model !== prior.model,
+          explicitCache: writers.has(model),
+          lapse: expiredCause(refresh, sinceRefreshMs, begun.input),
+        })
+      },
+    )
+    previous = Option.some({
+      promptTokens,
+      model,
+      reportedCache: reported || Option.exists(previous, (prior) => prior.reportedCache),
+    })
+    return miss
+  }
+
   const settle = (
     envelope: EventEnvelope,
     event: Extract<AgentEvent, { _tag: "StreamEnded" }>,
@@ -242,46 +301,12 @@ export const makeCacheScan = (): CacheScan => {
       input: Option.fromUndefinedOr(event.messageId),
     }))
     started = Option.none()
-    const usage = Option.fromUndefinedOr(event.usage)
-    // A step with no usage (an interrupted stream) refreshed nothing we can count.
-    if (Option.isNone(usage) || usage.value.inputTokens <= 0) return Option.none()
-    const promptTokens = usage.value.inputTokens
-    const cacheReadTokens = usage.value.cacheReadTokens ?? 0
-    const cacheWriteTokens = usage.value.cacheWriteTokens ?? 0
-    const model = event.model ?? ""
-    const pricedModel = event.pricedModel ?? model
-    const reported = cacheReadTokens + cacheWriteTokens > 0
-    if (cacheWriteTokens > 0) writers.add(model)
-    const miss = Option.flatMap(previous, (prior): Option.Option<ScannedMiss> => {
-      if (!reported && !prior.reportedCache) return Option.none()
-      const missedTokens = Math.min(prior.promptTokens, promptTokens) - cacheReadTokens
-      if (missedTokens <= NOISE_FLOOR_TOKENS) return Option.none()
-      // The lifetime runs from the start of the previous request, as the loop
-      // counts it; the lapse names what took that interval.
-      const sinceRefreshMs = Math.max(0, begun.at - prior.startedAt)
-      return Option.some({
-        eventId: envelope.id,
-        startedAt: begun.at,
-        model,
-        pricedModel,
-        missedTokens,
-        inputTokens: promptTokens,
-        cacheReadTokens,
-        cacheWriteTokens,
-        billed: (event.costUsd ?? 0) > 0,
-        sinceRefreshMs,
-        modelSwitch: model !== prior.model,
-        explicitCache: writers.has(model),
-        lapse: expiredCause(prior, sinceRefreshMs, begun.input),
-      })
-    })
-    previous = Option.some({
-      promptTokens,
-      model,
+    const miss = scanMiss(envelope, event, begun)
+    // Every request that went out refreshed the cache, with usage or without.
+    refreshed = Option.some({
       startedAt: begun.at,
       endedAt: envelope.createdAt,
       input: begun.input,
-      reportedCache: reported || Option.exists(previous, (prior) => prior.reportedCache),
     })
     tools = []
     waits = []
@@ -308,6 +333,13 @@ export const makeCacheScan = (): CacheScan => {
           at: envelope.createdAt,
           input: Option.fromUndefinedOr(event.messageId),
         })
+        return Option.none()
+      case "ProviderRetrying":
+        // The refused attempt read nothing; the retry goes out `delayMs` later.
+        started = Option.map(started, (begun) => ({
+          ...begun,
+          at: envelope.createdAt + event.delayMs,
+        }))
         return Option.none()
       case "ToolCallStarted":
         // A call a cell admitted runs inside the cell's own span.
@@ -394,6 +426,7 @@ export const missText = (miss: CacheMiss, costUsd: number): string => {
 /** The events the fold reads; each names its session and branch. */
 const isBranchEvent = AgentEvent.isAnyOf([
   "StreamStarted",
+  "ProviderRetrying",
   "StreamEnded",
   "ToolCallStarted",
   "ToolCallSucceeded",

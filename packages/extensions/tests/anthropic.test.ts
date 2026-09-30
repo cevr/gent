@@ -2015,7 +2015,7 @@ describe("Anthropic prompt-cache lifetime", () => {
     { role: "user", content: [{ type: "text", text: "Run a cell." }] },
   ])
   /** The markers of one rendered request on each sign-in path: an API key, then Claude Code. */
-  const renderedMarkers = (promptCacheTtl: "5m" | "1h") =>
+  const renderedMarkers = (promptCacheTtl: "5m" | "1h", prompt: Prompt.Prompt = conversation) =>
     Effect.gen(function* () {
       const perPath: Array<ReadonlyArray<string>> = []
       for (const authInfo of [makeApiAuthInfo("test-key"), makeOAuthInfo()]) {
@@ -2034,13 +2034,41 @@ describe("Anthropic prompt-cache lifetime", () => {
         )
         const model = yield* driver.resolveModel("claude-opus-4-6", authInfo)
         const state = makeFakeFetchState()
-        yield* runContextRequest(model, state, conversation, "text")
+        yield* runContextRequest(model, state, prompt, "text")
         perPath.push(
           cacheMarkers(Option.getOrThrow(Option.fromUndefinedOr(state.captured[0]?.body))),
         )
       }
       return perPath
     })
+
+  it.live(
+    "a marker a message already carries takes the request's one lifetime, on both sign-in paths",
+    () =>
+      Effect.gen(function* () {
+        // The SDK renders a message's `cacheControl` option as a 5-minute
+        // marker; a 1-hour marker after it would break the ordering rule.
+        const marked = Prompt.fromMessages([
+          Prompt.makeMessage("system", { content: "Stable initial instructions." }),
+          Prompt.makeMessage("user", {
+            content: [Prompt.makePart("text", { text: "Run a cell." })],
+            options: { anthropic: { cacheControl: { type: "ephemeral" } } },
+          }),
+          Prompt.makeMessage("assistant", {
+            content: [Prompt.makePart("text", { text: "It ran." })],
+          }),
+          Prompt.makeMessage("user", {
+            content: [Prompt.makePart("text", { text: "Run it again." })],
+          }),
+        ])
+        for (const markers of yield* renderedMarkers("1h", marked)) {
+          expect(markers.length).toBeGreaterThanOrEqual(3)
+          for (const marker of markers) {
+            expect(marker).toBe('"cache_control":{"type":"ephemeral","ttl":"1h"}')
+          }
+        }
+      }).pipe(Effect.timeout("5 seconds")),
+  )
 
   it.live(
     "a rendered request asks for the 1-hour cache on every marker, on both sign-in paths",

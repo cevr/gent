@@ -1515,8 +1515,14 @@ const SHARED_PREFIX_MIN_CHARS = 4_096
  *
  * The Messages API takes `ttl` on `cache_control` with no beta header
  * (`CacheControlEphemeral` in `@effect/ai-anthropic`'s Generated schema). A
- * request must list longer-lived entries before shorter ones. The driver's
- * markers all carry one lifetime, and gent sets no other marker.
+ * request must list longer-lived entries before shorter ones, so every
+ * marker of a request carries the one lifetime, a marker the SDK rendered
+ * from a message's own `cacheControl` option too.
+ *
+ * The usage the API reports counts every write in one number, and the
+ * catalog prices it at one `cacheWrite` rate. One lifetime per request makes
+ * that rate exact: the catalog prices each Anthropic model's write at the
+ * multiple of input its lifetime costs.
  */
 type PromptCacheTtl = NonNullable<Generated.CacheControlEphemeral["ttl"]>
 
@@ -1526,6 +1532,21 @@ const PROMPT_CACHE_LIFETIME = {
   "5m": Duration.minutes(5),
   "1h": Duration.hours(1),
 } satisfies Record<PromptCacheTtl, Duration.Duration>
+/** A cache write's price as a multiple of base input, by lifetime (platform.claude.com prompt-caching pricing). */
+const PROMPT_CACHE_WRITE_INPUT_MULTIPLE = {
+  "5m": 1.25,
+  "1h": 2,
+} satisfies Record<PromptCacheTtl, number>
+
+/** The models with each cache write priced at the rate of the lifetime `ttl` names. */
+const withPromptCacheWritePrice =
+  (ttl: PromptCacheTtl) =>
+  (models: ReadonlyArray<Model>): ReadonlyArray<Model> =>
+    models.map((model) => {
+      if (Predicate.isUndefined(model.pricing)) return model
+      const cacheWrite = model.pricing.input * PROMPT_CACHE_WRITE_INPUT_MULTIPLE[ttl]
+      return Model.make({ ...model, pricing: { ...model.pricing, cacheWrite } })
+    })
 
 /** The `ANTHROPIC_PROMPT_CACHE_TTL` switch; a value other than `5m` or `1h` is reported and ignored. */
 export const readPromptCacheTtl: Effect.Effect<PromptCacheTtl> = Effect.gen(function* () {
@@ -1624,18 +1645,49 @@ const markSharedSystemEnd = (
   return markBlockAt(system, shared, marker)
 }
 
+/** The blocks with each marker they carry replaced by `marker`. */
+const withMarkerLifetime = (blocks: JsonValue, marker: JsonRecord): JsonValue => {
+  if (!isRecordArray(blocks)) return blocks
+  return blocks.map((block) => {
+    if (!hasCacheMarker(block)) return block
+    return { ...block, cache_control: marker }
+  })
+}
+
+/**
+ * The payload with every marker it already carries asking for `marker`'s
+ * lifetime. The SDK renders a message's `cacheControl` option as a marker
+ * of its own, with the 5-minute default; one lifetime per request keeps the
+ * longer-before-shorter ordering rule whatever the order of the markers.
+ */
+const withUniformLifetime = (payload: JsonRecord, marker: JsonRecord): JsonRecord => {
+  const result = { ...payload }
+  for (const key of ["tools", "system"]) {
+    if (key in payload) result[key] = withMarkerLifetime(payload[key], marker)
+  }
+  const messages = payload["messages"]
+  if (isRecordArray(messages)) {
+    result["messages"] = messages.map((message) => {
+      if (!("content" in message)) return message
+      return { ...message, content: withMarkerLifetime(message["content"], marker) }
+    })
+  }
+  return result
+}
+
 /**
  * The payload with `cache_control` at the end of the system prompt, on the
  * conversation tail, and at the end of the system prompt's shared part, each
- * asking for `ttl`.
+ * asking for `ttl`, as does every marker the payload already carries.
  */
 const markCacheBreakpoints = (
-  payload: JsonRecord,
+  rendered: JsonRecord,
   prefixEnd: CachePrefixEnd,
   ttl: PromptCacheTtl,
 ): JsonRecord => {
-  const result = { ...payload }
   const marker = cacheMarker(ttl)
+  const payload = withUniformLifetime(rendered, marker)
+  const result = { ...payload }
   let budget = CACHE_BREAKPOINT_LIMIT - countCacheMarkers(payload)
   const messages: Array<JsonRecord> = []
   if (isRecordArray(payload["messages"])) messages.push(...payload["messages"])
@@ -2343,11 +2395,11 @@ export const buildAnthropicModelDriver = (
   id: "anthropic",
   name: "Anthropic",
   envCredential: "ANTHROPIC_API_KEY",
-  // The lifetime every marker asks for; see `PromptCacheTtl`.
+  // The lifetime every marker asks for, and the write price it costs; see `PromptCacheTtl`.
   listModels: () =>
-    Effect.map(
-      driverListModels(catalog, "anthropic", PROMPT_CACHE_LIFETIME[promptCacheTtl])(),
-      withDocumentedWindows,
+    driverListModels(catalog, "anthropic", PROMPT_CACHE_LIFETIME[promptCacheTtl])().pipe(
+      Effect.map(withDocumentedWindows),
+      Effect.map(withPromptCacheWritePrice(promptCacheTtl)),
     ),
   retry: {
     ...DEFAULT_RETRY_POLICY,

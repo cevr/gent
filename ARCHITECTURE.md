@@ -149,12 +149,19 @@ updates this list in the same commit.
     each driver fills in `listModels`): Anthropic asks for the 1-hour cache on
     every marker, or 5 minutes with `ANTHROPIC_PROMPT_CACHE_TTL=5m`, and OpenAI
     says 30 minutes, as measured. The lifetime runs from the start of the
-    branch's last model request (its newest stored `StreamStarted`), since the
-    provider refreshes its cache when a request starts, and large is at least
-    `min(64k, availableInputTokens / 2)` tokens. A model whose catalog entry
-    names no lifetime never hands off for a cold cache, and with no compactor
-    installed the window stays whole. The loop sends no keep-alive calls to
-    hold a cache warm. The TUI's cache notice reads the same catalog lifetime.
+    branch's last model request (its newest stored `StreamStarted`, or a
+    `ProviderRetrying` plus its `delayMs` when the request was retried), since
+    the provider refreshes its cache when a request starts, and large is at
+    least `min(64k, availableInputTokens / 2)` tokens. The cache belongs to the
+    model of the last request (its newest `StreamEnded.model`): a turn on
+    another model never hands off for a cold cache. A model whose catalog entry
+    names no lifetime never hands off either, and with no compactor installed
+    the window stays whole. The loop sends no keep-alive calls to hold a cache
+    warm. The TUI's cache notice reads the same catalog lifetime and the same
+    request-start clock, an interrupted request included. Anthropic gives
+    every marker of a request the one lifetime, a marker the SDK rendered from
+    a message option too, and prices each model's `cacheWrite` at that
+    lifetime's multiple of input (2x for 1 hour, 1.25x for 5 minutes).
     Receipts: `packages/core/src/runtime/model-context.ts`,
     `packages/core/src/runtime/turn.ts`,
     `packages/extensions/src/compaction.ts`,

@@ -133,6 +133,8 @@ const makeHistory = () => {
     readonly model?: ModelId
     readonly pricedModel?: ModelId
     readonly costUsd?: number
+    /** Refused attempts inside the step: when each was refused, and the delay before its retry. */
+    readonly retries?: ReadonlyArray<{ readonly at: number; readonly delayMs: number }>
   }) => {
     at(
       opts.start,
@@ -143,6 +145,7 @@ const makeHistory = () => {
         step: 1,
       }),
     )
+    for (const refused of opts.retries ?? []) retry(refused.at, refused.delayMs)
     at(
       opts.end,
       AgentEvent.cases.StreamEnded.make({
@@ -194,6 +197,42 @@ const makeHistory = () => {
       AgentEvent.cases.InteractionResolved.make({ sessionId, branchId, requestId, approved: true }),
     )
   }
+  /** A request the reader interrupted: it went out, and its stream reported no usage. */
+  const interrupted = (start: number, end: number, turn: string) => {
+    at(
+      start,
+      AgentEvent.cases.StreamStarted.make({
+        sessionId,
+        branchId,
+        messageId: MessageId.make(turn),
+        step: 1,
+      }),
+    )
+    at(
+      end,
+      AgentEvent.cases.StreamEnded.make({
+        sessionId,
+        branchId,
+        messageId: MessageId.make(turn),
+        step: 1,
+        model: SONNET,
+        interrupted: true,
+      }),
+    )
+  }
+  /** The provider refused the request; the loop retries it `delayMs` later. */
+  const retry = (createdAt: number, delayMs: number) =>
+    at(
+      createdAt,
+      AgentEvent.cases.ProviderRetrying.make({
+        sessionId,
+        branchId,
+        attempt: 1,
+        maxAttempts: 3,
+        delayMs,
+        error: "rate limited",
+      }),
+    )
   const compaction = (createdAt: number) =>
     at(
       createdAt,
@@ -207,7 +246,7 @@ const makeHistory = () => {
         compacted: true,
       }),
     )
-  return { envelopes, input, step, tool, approval, compaction }
+  return { envelopes, input, step, interrupted, tool, approval, compaction }
 }
 
 /** The first step caches a 30k prefix; every scenario starts from it. */
@@ -416,6 +455,51 @@ describe("scanCacheMisses", () => {
       history.step({ start: nextStart, end: nextStart + 5 * SECOND, turn: "t2", usage: missedStep })
       const miss = onlyMiss(scanCacheMisses(history.envelopes))
       expect(miss.cause).toEqual(CacheMissCause.cases.Idle.make({ ms: nextStart - SECOND }))
+    }),
+  )
+
+  it.live("an interrupted request with no usage still restarts the lifetime", () =>
+    Effect.sync(() => {
+      const history = cachedFirstStep()
+      // The request went out 4m10s in and read the cache, then was interrupted.
+      history.input(4 * MINUTE, "t2")
+      history.interrupted(4 * MINUTE + 10 * SECOND, 4 * MINUTE + 20 * SECOND, "t2")
+      // 6m10s after the first request, 2m after the interrupted one.
+      history.input(6 * MINUTE, "t3")
+      history.step({
+        start: 6 * MINUTE + 10 * SECOND,
+        end: 7 * MINUTE,
+        turn: "t3",
+        usage: missedStep,
+      })
+      const miss = onlyMiss(scanCacheMisses(history.envelopes))
+      expect(miss.cause._tag).toBe("PrefixChanged")
+    }),
+  )
+
+  it.live("a retried request restarts the lifetime when the retry goes out", () =>
+    Effect.sync(() => {
+      const history = cachedFirstStep()
+      history.input(4 * MINUTE, "t2")
+      // Refused at once, retried 3m later: the retry reads the whole prefix.
+      const retryAt = 4 * MINUTE + 5 * SECOND + 3 * MINUTE
+      history.step({
+        start: 4 * MINUTE,
+        retries: [{ at: 4 * MINUTE + 5 * SECOND, delayMs: 3 * MINUTE }],
+        end: retryAt + 10 * SECOND,
+        turn: "t2",
+        usage: { inputTokens: 31_000, cacheReadTokens: 30_000, cacheWriteTokens: 1_000 },
+      })
+      // 5m30s after the refused attempt, 2m25s after the retry.
+      history.input(9 * MINUTE + 20 * SECOND, "t3")
+      history.step({
+        start: 9 * MINUTE + 30 * SECOND,
+        end: 10 * MINUTE,
+        turn: "t3",
+        usage: missedStep,
+      })
+      const miss = onlyMiss(scanCacheMisses(history.envelopes))
+      expect(miss.cause._tag).toBe("PrefixChanged")
     }),
   )
 
