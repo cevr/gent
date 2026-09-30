@@ -427,7 +427,7 @@ const isReconnectingState = ConnectionState.isAnyOf(["Connecting", "Reconnecting
  * What this UI can ask a running loop to do.
  *
  * Narrower than the wire `SteerCommand` on purpose. The domain also carries
- * `Interrupt`, which the loop folds into `Cancel` (`agent-loop.actor.ts:763`),
+ * `Interrupt`, which the loop handles as `Cancel` (`runtime/agent-loop.ts`),
  * and `wake` on an interjection, which this UI never needs: it interjects only
  * into a streaming turn, and an idle branch takes an ordinary `sendMessage`
  * that starts a turn by itself.
@@ -476,8 +476,8 @@ interface ClientTransportValue {
   // `ExtensionStateChanged` event seen on the active session for each
   // registered subscriber. The pulse carries no payload — consumers
   // refetch via the extension's typed `client.extension.request(...)`.
-  // Returns an unsubscribe function. Replaces a single-slot callback so
-  // multiple widgets can listen for their own extension's pulses.
+  // Returns an unsubscribe function; any number of widgets subscribe, each
+  // for its own extension's pulses.
   onExtensionStateChanged: (
     cb: (pulse: { sessionId: SessionId; branchId: BranchId; extensionId: string }) => void,
   ) => () => void

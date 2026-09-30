@@ -1582,8 +1582,8 @@ const createSessionCommandRegistry = (props: SessionCommandRegistryProps): void 
  * Session feed — keyed projection of server events into UI state.
  *
  * Takes explicit (sessionId, branchId) and subscribes exactly once per identity.
- * No dependency on client.session() or machine state — immune to the
- * UpdateBypass/UpdateSettings re-run footgun.
+ * It reads neither client.session() nor machine state, so a settings or name
+ * change on the session record never opens it again.
  */
 
 interface ReconnectOptions<E> {

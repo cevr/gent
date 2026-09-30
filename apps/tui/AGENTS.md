@@ -75,16 +75,18 @@ Startup blocks before render — `main.tsx` calls `waitForReady` + `resolveInter
 Providers wrap app in `main.tsx`:
 
 ```
-WorkspaceProvider → ClientProvider → ExtensionUIProvider → ComposerMemoryProvider → App
+EnvProvider → WorkspaceProvider → ClientProvider → ExtensionUIProvider → TerminalDimensionsProvider → ComposerMemoryProvider → App
 ```
 
-| Provider                   | Purpose                                             |
-| -------------------------- | --------------------------------------------------- |
-| `WorkspaceProvider`        | cwd, gitRoot, gitStatus - static workspace info     |
-| `ClientProvider`           | transport client, session state, event stream       |
-| `ExtensionUIProvider`      | extension loading, command list, composer dispatch  |
-| `ComposerMemoryProvider`   | drafts, refusals, prompt history, startup prompt    |
-| `SessionControllerContext` | session-scoped: auth gate, overlays, composer state |
+| Provider                     | Purpose                                             |
+| ---------------------------- | --------------------------------------------------- |
+| `EnvProvider`                | `$VISUAL`/`$EDITOR`, graceful `shutdown`            |
+| `WorkspaceProvider`          | cwd, gitRoot, gitStatus - static workspace info     |
+| `ClientProvider`             | transport client, session state, event stream       |
+| `ExtensionUIProvider`        | extension loading, command list, composer dispatch  |
+| `TerminalDimensionsProvider` | terminal width and height, one reactive reader      |
+| `ComposerMemoryProvider`     | drafts, refusals, prompt history, startup prompt    |
+| `SessionControllerContext`   | session-scoped: auth gate, overlays, composer state |
 
 State ownership rules:
 
