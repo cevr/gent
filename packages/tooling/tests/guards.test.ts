@@ -2678,6 +2678,24 @@ describe("the guards' lexer", () => {
     expect(["/[a]/", "/[`]/", "/`/", "/[/*]/"].map(findingsAfter)).toEqual([0, 0, 0, 0])
   })
 
+  test("a regex after a control-flow head or a comment is a regex; after a value, a slash divides", () => {
+    const homes = (source: string) =>
+      findSharedTestHomes("apps/tui/tests/probe.test.ts", `${source}\nconst env = { cwd: "/tmp" }`)
+        .length
+    expect(
+      [
+        "if (ok) /[/*]/.test(s)",
+        "while (next()) /[/*]/.test(s)",
+        "for (const s of all) /[/*]/.test(s)",
+        "if (ok) f(); else /[/*]/.test(s)",
+        "const re = /*comment*/ /[/*]/",
+        "const re = // a note\n  /[/*]/",
+        "const half = (a + b) / 2 /* a note */",
+        "const half = f(a) / 2 /* a note */",
+      ].map(homes),
+    ).toEqual([1, 1, 1, 1, 1, 1, 1, 1])
+  })
+
   test("JSX in a .tsx file is neither a string nor a regex", () => {
     const homes = (source: string) =>
       findSharedTestHomes("apps/tui/tests/probe.test.tsx", source).length

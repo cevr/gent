@@ -83,16 +83,68 @@ const commentEnd = (text: string, start: number, opener: string): number => {
 /** Characters after which a `/` opens a regex literal, and a `<` a JSX tag, rather than an operator. */
 const OPERAND_PRECEDERS = "(,=:[!&|?{};+-*%<>~^"
 const OPERAND_KEYWORD_BEFORE =
-  /(?:^|[^\w$])(?:return|typeof|case|void|delete|in|of|new|throw|yield|await)$/
+  /(?:^|[^\w$])(?:return|typeof|case|void|delete|in|of|new|throw|yield|await|else|do)$/
 
-/** Whether an operand starts at `at`: what precedes it cannot end a value. */
-const startsOperand = (text: string, at: number): boolean => {
+/** A statement head whose `(...)` ends in no value: `if (ok) /re/` starts an operand. */
+const CONTROL_HEAD = /(?:^|[^\w$.])(?:if|while|for(?:\s+await)?|with)\s*$/
+
+/**
+ * Where the `//` comment on the line from `lineStart` opens, if it opens
+ * before `end`. The line is lexed from its start, so a `//` in a string or a
+ * regex on it is text.
+ */
+const lineCommentStart = (text: string, lineStart: number, end: number): Option.Option<number> => {
+  if (!text.slice(lineStart, end).includes("//")) return Option.none()
+  const frames = [0]
+  let at = lineStart
+  while (at < end) {
+    const token = lexStep(text, at, frames, "ts")
+    if (token.kind === "comment" && text.startsWith("//", at)) return Option.some(at)
+    at = token.end
+  }
+  return Option.none()
+}
+
+/** The end of the last significant text before `at`: whitespace and comments skipped. */
+const significantEnd = (text: string, at: number): number => {
   let end = at
-  while (end > 0 && /\s/.test(text[end - 1] ?? "")) end -= 1
-  const before = text.slice(Math.max(0, end - 8), end)
-  if (before.length === 0) return true
-  if (OPERAND_PRECEDERS.includes(before.at(-1) ?? "")) return true
-  return OPERAND_KEYWORD_BEFORE.test(before)
+  for (;;) {
+    while (end > 0 && /\s/.test(text[end - 1] ?? "")) end -= 1
+    if (text.startsWith("*/", end - 2)) {
+      const blockOpen = text.lastIndexOf("/*", end - 3)
+      if (blockOpen === -1) return end
+      end = blockOpen
+      continue
+    }
+    const lineComment = lineCommentStart(text, text.lastIndexOf("\n", end - 1) + 1, end)
+    if (Option.isNone(lineComment)) return end
+    end = lineComment.value
+  }
+}
+
+/** Whether the `)` at `close` ends a control-flow head: `if (...)`, `while (...)`, `for (...)`. */
+const closesControlHead = (text: string, close: number): boolean => {
+  let depth = 0
+  for (let at = close; at >= 0; at -= 1) {
+    if (text[at] === ")") depth += 1
+    if (text[at] === "(") depth -= 1
+    if (depth === 0) return CONTROL_HEAD.test(text.slice(Math.max(0, at - 16), at))
+  }
+  return false
+}
+
+/**
+ * Whether an operand starts at `at`: the token before it, past whitespace
+ * and comments, cannot end a value. A `)` ends one unless it closes a
+ * control-flow head.
+ */
+const startsOperand = (text: string, at: number): boolean => {
+  const end = significantEnd(text, at)
+  if (end === 0) return true
+  const last = text[end - 1] ?? ""
+  if (OPERAND_PRECEDERS.includes(last)) return true
+  if (last === ")") return closesControlHead(text, end - 1)
+  return OPERAND_KEYWORD_BEFORE.test(text.slice(Math.max(0, end - 8), end))
 }
 
 /** The end of a regex literal that opens at `start`: past its flags, or at the line end. */
