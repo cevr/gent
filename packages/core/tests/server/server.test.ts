@@ -31,6 +31,7 @@ import {
   MessageId,
   ProcessGenerationId,
   SessionId,
+  WorkspaceId,
 } from "../../src/domain/ids"
 import { describe, expect, it } from "effect-bun-test"
 import { StorageError } from "../../src/domain/errors.js"
@@ -96,7 +97,7 @@ import { SqlClient, type SqlError } from "effect/sql"
 import { ModelResolver } from "../../src/runtime/provider"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
 import { RpcClient, RpcTest } from "effect/rpc"
-import { WORKSPACE_ID_HEADER, WorkspaceId } from "../../src/server/workspace-rpc"
+import { WORKSPACE_ID_HEADER } from "../../src/server/workspace-rpc"
 
 // ── fixtures ────────────────────────────────────────────────────────────────
 

@@ -29,8 +29,8 @@ import {
   RequestId,
   SessionId,
   ToolCallId,
+  DefaultWorkspaceId,
 } from "../../src/domain/ids"
-import { DefaultWorkspaceId } from "../../src/server/workspace-rpc"
 import {
   AgentLoopLiveActor,
   AgentLoopSessionGovernance,

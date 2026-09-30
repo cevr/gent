@@ -10,11 +10,10 @@ import {
 } from "../domain/message.js"
 import { AgentEvent, EventId } from "../domain/event.js"
 import { isReasoningEffort, ModelId } from "../domain/agent.js"
-import { BranchId, MessageId, SessionId } from "../domain/ids.js"
+import { BranchId, MessageId, SessionId, DefaultWorkspaceId } from "../domain/ids.js"
 import { Migrator, SqlClient } from "effect/sql"
 import { SqliteMigrator } from "@effect/sql-sqlite-bun"
 import { storageError, StorageError } from "../domain/errors.js"
-import { DefaultWorkspaceId } from "../server/workspace-rpc.js"
 
 // ── stored rows ─────────────────────────────────────────────────────────────
 

@@ -10,13 +10,12 @@ import { createE2ELayer } from "../../src/test-utils/harness"
 import { GentRpcs } from "../../src/server/rpc"
 import { RpcHandlersLive } from "../../src/server/server"
 import {
-  CurrentWorkspaceId,
   WORKSPACE_ID_HEADER,
-  WorkspaceId,
   provideWorkspaceIdHeader,
   workspaceHeadersForCwd,
   workspaceIdForCwd,
 } from "../../src/server/workspace-rpc"
+import { CurrentWorkspaceId, WorkspaceId } from "../../src/domain/ids"
 import { e2ePreset } from "../helpers/test-preset"
 
 const validWorkspaceId = WorkspaceId.make("a".repeat(64))

@@ -6,8 +6,13 @@ import {
   parseEntityId,
   stepSessionMetrics,
 } from "../../src/domain/agent-loop"
-import { BranchId, MessageId, SessionId } from "../../src/domain/ids"
-import { DefaultWorkspaceId, WorkspaceId } from "../../src/server/workspace-rpc"
+import {
+  BranchId,
+  MessageId,
+  SessionId,
+  DefaultWorkspaceId,
+  WorkspaceId,
+} from "../../src/domain/ids"
 import { AgentEvent } from "../../src/domain/event"
 import { ModelId } from "../../src/domain/agent"
 

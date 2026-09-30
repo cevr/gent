@@ -129,9 +129,10 @@ export const AgentEvent = Schema.TaggedUnion({
     /**
      * The step ran in a spawned child session (`isSpawnedSession`), whose
      * requests ask for the child cache lifetime: a client reads the step's
-     * lifetime with `promptCacheTtlMsFor(model, child)`. Absent on a step
-     * that reported no usage, and on rows written before it; such a step
-     * reads as a root session's.
+     * lifetime with `promptCacheTtlMsFor(model, child)`. A step that ends
+     * with its stream always carries it, `false` for a root session. Absent
+     * on a failed or interrupted step, and on rows written before the field;
+     * such a step reads as a root session's.
      */
     child: Schema.optional(Schema.Boolean),
     interrupted: Schema.optional(Schema.Boolean),

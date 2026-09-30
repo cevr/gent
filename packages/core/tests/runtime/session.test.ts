@@ -35,7 +35,17 @@ import {
   Session,
 } from "../../src/domain/message"
 import { followUpMessageIdForSource } from "../../src/domain/agent-loop"
-import { CurrentWorkspaceId } from "../../src/server/workspace-rpc"
+import {
+  CurrentWorkspaceId,
+  ActorCommandId,
+  BranchId,
+  ExtensionId,
+  InteractionRequestId,
+  MessageId,
+  RequestId,
+  SessionId,
+  ToolCallId,
+} from "../../src/domain/ids"
 import {
   finishPart,
   type LanguageModelStreamPart,
@@ -72,16 +82,6 @@ import {
   SessionProfileCache,
 } from "../../src/runtime/extension-host"
 import { AgentLoopLiveActor, AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
-import {
-  ActorCommandId,
-  BranchId,
-  ExtensionId,
-  InteractionRequestId,
-  MessageId,
-  RequestId,
-  SessionId,
-  ToolCallId,
-} from "../../src/domain/ids"
 import { InteractionPendingError } from "../../src/domain/interaction"
 import { noBranchTools, ToolRunner } from "../../src/runtime/tools"
 import { GentPlatform } from "../../src/runtime/gent-platform"

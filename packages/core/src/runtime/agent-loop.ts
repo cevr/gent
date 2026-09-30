@@ -34,6 +34,7 @@ import {
   MessageId,
   RpcId,
   type SessionId,
+  CurrentWorkspaceId,
 } from "../domain/ids.js"
 import type { AgentName } from "../domain/agent.js"
 import * as Prompt from "effect/ai/Prompt"
@@ -147,7 +148,6 @@ import type { StorageError } from "../domain/errors.js"
 import { type ModelRegistry, ModelResolver } from "./provider.js"
 import { GentPlatform } from "./gent-platform.js"
 import { Actor } from "effect-encore"
-import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 
 // ── session governance ──────────────────────────────────────────────────────
 
@@ -257,9 +257,8 @@ export class AgentLoopSessionGovernance extends Context.Service<
  * to, because storage decodes it. This module is the only code that reads or
  * writes its three compartments — every other file sees verbs.
  *
- * `wantsWakeOnRecovery` is the one exported function over a
- * loaded-but-not-yet-installed queue: startup has to decide whether to wake
- * before a loop exists to ask.
+ * `wantsWakeOnRecovery` decides from a loaded queue, before the loop is
+ * built over it, whether recovery wakes the loop.
  */
 
 /**

@@ -72,6 +72,8 @@ import {
   type RpcId,
   type SessionId,
   type ToolCallId,
+  CurrentWorkspaceId,
+  type WorkspaceId,
 } from "../domain/ids.js"
 import {
   bindRequestCapabilityExtension,
@@ -109,7 +111,6 @@ import {
   RuntimeEnvironment,
   type UserConfig,
 } from "./config.js"
-import { CurrentWorkspaceId, type WorkspaceId } from "../server/workspace-rpc.js"
 import {
   EventId,
   EventStore,
@@ -3107,7 +3108,7 @@ export const makeExtensionHostContextProvider = (
 
 // ── session-runtime-context ─────────────────────────────────────────────────
 
-export interface TurnProfileDefaults {
+interface TurnProfileDefaults {
   readonly baseSections: ReadonlyArray<PromptSection>
 }
 

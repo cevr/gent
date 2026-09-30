@@ -30,12 +30,20 @@ import {
 } from "../../src/server/rpc"
 import {
   WorkspaceRpcMiddleware,
-  CurrentWorkspaceId,
   WORKSPACE_ID_HEADER,
   workspaceHeadersForCwd,
   workspaceIdForCwd,
-  WorkspaceId,
 } from "../../src/server/workspace-rpc"
+import {
+  CurrentWorkspaceId,
+  WorkspaceId,
+  BranchId,
+  ExtensionId,
+  InteractionRequestId,
+  ProcessGenerationId,
+  RequestId,
+  SessionId,
+} from "../../src/domain/ids"
 import { describe, expect, it } from "effect-bun-test"
 import { RpcClient } from "effect/rpc"
 import { SqlClient } from "effect/sql"
@@ -44,7 +52,6 @@ import {
   textDeltaPart,
   Auth,
   AuthError,
-  AuthMethod,
   serializeAuthStore,
 } from "../../src/runtime/provider"
 import {
@@ -72,17 +79,13 @@ import {
   testTurnExtension,
 } from "../../src/test-utils/harness"
 import { e2ePreset, testAgent } from "../helpers/test-preset"
-import {
-  BranchId,
-  ExtensionId,
-  InteractionRequestId,
-  ProcessGenerationId,
-  RequestId,
-  SessionId,
-} from "../../src/domain/ids"
 import { Model as AiModel, type LanguageModel } from "effect/ai"
 import { BunServices } from "@effect/platform-bun"
-import { type ModelDriverContribution, ProviderAuthError } from "../../src/domain/driver.js"
+import {
+  AuthMethod,
+  type ModelDriverContribution,
+  ProviderAuthError,
+} from "../../src/domain/driver.js"
 import { type ExtensionHealthSnapshot, SetDriverOverrideInput } from "../../src/server/rpc.js"
 import {
   defineResource,

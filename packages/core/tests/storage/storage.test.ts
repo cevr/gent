@@ -32,16 +32,10 @@ import {
   TurnRecordStorage,
 } from "../../src/storage/storage"
 import { GentPlatform } from "../../src/runtime/gent-platform"
-import { CurrentWorkspaceId, DefaultWorkspaceId, WorkspaceId } from "../../src/server/workspace-rpc"
-import { Branch, dateFromMillis, Message, Session } from "../../src/domain/message"
 import {
-  ErrorOccurred,
-  MessageReceived,
-  SessionStarted,
-  ToolCallStarted,
-  ToolCallSucceeded,
-} from "../../src/domain/event"
-import {
+  CurrentWorkspaceId,
+  DefaultWorkspaceId,
+  WorkspaceId,
   BranchId,
   ExtensionId,
   MessageId,
@@ -50,6 +44,14 @@ import {
   ToolCallId,
   ToolId,
 } from "../../src/domain/ids"
+import { Branch, dateFromMillis, Message, Session } from "../../src/domain/message"
+import {
+  ErrorOccurred,
+  MessageReceived,
+  SessionStarted,
+  ToolCallStarted,
+  ToolCallSucceeded,
+} from "../../src/domain/event"
 import {
   ToolBindingIdentity,
   ToolBindingSource,

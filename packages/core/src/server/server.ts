@@ -14,7 +14,13 @@ import {
   Scope,
   Stream,
 } from "effect"
-import { BranchId, MessageId, type RequestId, SessionId } from "../domain/ids.js"
+import {
+  BranchId,
+  MessageId,
+  type RequestId,
+  SessionId,
+  CurrentWorkspaceId,
+} from "../domain/ids.js"
 import {
   Branch,
   type BranchTreeNode,
@@ -111,7 +117,7 @@ import {
   SessionRuntime,
   type SessionRuntimeError,
 } from "../runtime/session.js"
-import { CurrentWorkspaceId, workspaceIdForCwd, WorkspaceRpcMiddleware } from "./workspace-rpc.js"
+import { workspaceIdForCwd, WorkspaceRpcMiddleware } from "./workspace-rpc.js"
 import {
   Auth,
   AuthApi,

@@ -77,7 +77,6 @@ import {
   type SessionProfileCacheService,
   setupExtension,
   setupExtensions,
-  type TurnProfileDefaults,
   validateLoadedExtensions,
   loadRuntimeProfileDeclarations,
   scanRuntimeProfileExtensions,
@@ -96,8 +95,10 @@ import {
   BranchStorage,
 } from "../../src/storage/storage"
 import { StorageError } from "../../src/domain/errors"
-import { CurrentWorkspaceId, WorkspaceId, workspaceIdForCwd } from "../../src/server/workspace-rpc"
+import { workspaceIdForCwd } from "../../src/server/workspace-rpc"
 import {
+  CurrentWorkspaceId,
+  WorkspaceId,
   ActorCommandId,
   BranchId,
   ClientRequestGrant,
@@ -1379,7 +1380,7 @@ describe("resolveTurnProfile", () => {
         cwd: "/nonexistent/runtime-context-default",
         home: "/nonexistent/runtime-context-home",
       })
-      const defaults: TurnProfileDefaults = {
+      const defaults = {
         baseSections: [{ id: "default", content: "Default", priority: 1 }],
       }
       const testLayer = Layer.mergeAll(

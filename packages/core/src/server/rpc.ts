@@ -22,12 +22,11 @@ import {
   InteractionDecisionConflictError,
   InteractionRequestMismatchError,
 } from "../domain/interaction.js"
-import { DriverError, ProviderAuthError } from "../domain/driver.js"
+import { AuthMethod, DriverError, ProviderAuthError } from "../domain/driver.js"
 import { ConfigLoadError, ConfigWriteError } from "../runtime/config.js"
 import { SessionRuntimeError } from "../runtime/session.js"
 import {
   AuthAuthorization,
-  AuthMethod,
   AuthProviderInfo,
   ListAuthProvidersPayload,
 } from "../runtime/provider.js"

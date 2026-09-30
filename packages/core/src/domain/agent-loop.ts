@@ -16,13 +16,14 @@ import {
   MessageId,
   RequestId,
   SessionId,
+  CurrentWorkspaceId,
+  WorkspaceId,
 } from "./ids.js"
-import { CurrentWorkspaceId, WorkspaceId } from "../server/workspace-rpc.js"
 import { GentPlatform } from "../runtime/gent-platform.js"
 import * as Prompt from "effect/ai/Prompt"
 import { Actor } from "effect-encore"
 
-// ── agent-loop.state ────────────────────────────────────────────────────────
+// ── state ───────────────────────────────────────────────────────────────────
 
 export class AgentLoopError extends Schema.TaggedError<AgentLoopError>()("AgentLoopError", {
   message: Schema.String,
@@ -234,7 +235,7 @@ export const toWaitingForInteractionState = (params: {
     pendingRequestId: params.pendingRequestId,
   })
 
-// ── agent-loop.entity-id ────────────────────────────────────────────────────
+// ── entity-id ───────────────────────────────────────────────────────────────
 
 /*
  * Reversible entity-id encoding for the AgentLoop actor.
@@ -342,7 +343,7 @@ export const listWorkspaceLoops = (input: {
     ),
   )
 
-// ── agent-loop.protocol ─────────────────────────────────────────────────────
+// ── protocol ────────────────────────────────────────────────────────────────
 
 /** Route a branch-scoped command to its loop entity, keyed by the command id. */
 const branchTarget = (p: BranchCommandInput) => ({
@@ -628,7 +629,7 @@ export const AgentLoop = Actor.fromEntity(
   },
 )
 
-// ── agent-loop.client ───────────────────────────────────────────────────────
+// ── client ──────────────────────────────────────────────────────────────────
 //
 // The verbs a caller outside a loop uses to reach any branch's loop: the
 // session runtime for RPC callers, and the extension facade for a run that

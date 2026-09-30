@@ -23,6 +23,8 @@ import {
   type RequestId,
   SessionId,
   type ToolCallId,
+  CurrentWorkspaceId,
+  WorkspaceId,
 } from "../domain/ids.js"
 import {
   decodeToolBindingIdentity,
@@ -33,7 +35,6 @@ import {
   validateToolBindingIdentity,
 } from "../domain/capability.js"
 import { storageError, StorageError, storageErrorExcept } from "../domain/errors.js"
-import { CurrentWorkspaceId, WorkspaceId } from "../server/workspace-rpc.js"
 import {
   branchFromRow,
   type BranchRow,

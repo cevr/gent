@@ -28,6 +28,8 @@ import {
   type InteractionRequestId,
   type RequestId,
   type SessionId,
+  CurrentWorkspaceId,
+  type WorkspaceId,
 } from "../domain/ids.js"
 import { Actor } from "effect-encore"
 import {
@@ -50,7 +52,6 @@ import {
 } from "../domain/agent-loop.js"
 import { resolveExistingSessionBranch } from "./extension-host.js"
 import { GentPlatform } from "./gent-platform.js"
-import { CurrentWorkspaceId, type WorkspaceId } from "../server/workspace-rpc.js"
 
 // ── event-store-live ────────────────────────────────────────────────────────
 
