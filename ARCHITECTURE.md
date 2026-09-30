@@ -1255,6 +1255,36 @@ Explicit platform/runtime seams:
 
 File discovery is owned by the `@gent/fs-tools` extension, not core. `packages/extensions/src/fs-tools.ts` holds one stateless `listFiles` function over the platform services and one listing rule: an ignore authority decides which files grep may read. Inside a git work tree the authority is git: `git ls-files -z -t --cached --others --exclude-standard` below the search path, so every git exclude source applies; a sparse checkout's skip-worktree entries are dropped before the 100,000-file bound, and a name that is not valid UTF-8 is counted in grep's `unreadable` field. A git that does not answer within 10 seconds fails the search and asks for a narrower path; the walk does not stand in for it, because it misses `info/exclude` and the global excludes. A tracked path under a directory that is now a symbolic link is not listed. Outside a work tree a `FileSystem` walk reads each `.gitignore` from the search root down by gitignore(5); a test checks that matcher against real git. An ignored target named explicitly (`dist/`) is walked from its own root. No listing follows a symbolic link. grep reads 16 files at a time and reports matches in path order; it decodes a UTF-16 file by its byte order mark, skips binary files (a NUL byte in the first 8 KB), skips and counts files over 10 MB in `oversized`, and cuts a line over 500 characters around the match without splitting a surrogate pair. read, write, edit and grep decode a file once: a strict decode fails exactly when the bytes are not valid in the file's encoding, and only then does the replacing decode run and the text count as `lossy`. read streams a UTF-8 file over 4 MB in 1 MB chunks: it counts every line and decodes only the lines it shows, so its `lossy` covers those lines. read cuts a line over 2,000 characters with a `[N chars cut]` marker. The listing holds no state, so there is no Tag and no resource. The TUI's `@` popup reads the same listing through the read request `FilesRpc.List` (paths relative to the session cwd, sorted), so a user can name exactly the files the model can search. fff (`@ff-labs/fff-bun`) ranks them: it scans the session's directory, keeps its own pick frecency under `~/.gent/fff`, and the popup keeps only the listed paths, paging through fff's ranking until it holds 50 or has read five pages of 200; when the five pages run out first, the shared autocomplete matcher fills the rest from the listing. The listing and a read in flight are keyed by session, so a switch never ranks the session it left. Where fff cannot run, the shared autocomplete matcher ranks the listing. Core has no file-index concept, and there is no `ExtensionContext.Files` facet: tools yield `FileSystem` and `Path`.
 
+### MCP servers (mcp)
+
+The `@gent/mcp` extension (`packages/extensions/src/mcp.ts`) turns every
+configured MCP server into host tools with the id `mcp.<server>.<tool>`, so
+the cell reaches them as `await tools.mcp.<server>.<tool>(input)` and each
+call runs the host tool path: permission, events, operation receipt, and
+recovery. It uses only `@gent/core/extensions/api` and the client subpaths of
+`@modelcontextprotocol/sdk`; core has no MCP concept. Config is the
+`mcpServers` object Claude Code, Cursor, and opencode share, in
+`~/.gent/mcp.json` and, for a project root `trustedProjects` names, in
+`<project>/.gent/mcp.json` (a project entry wins by name). A `command` entry
+runs over stdio (its stderr is ignored, so it never draws on the TUI); a `url`
+entry runs over streamable HTTP with its `headers`. Strings expand `${NAME}`
+and `${NAME:-default}`; an entry whose variable is unset is skipped with a
+warning. Bearer tokens travel as headers; OAuth needs a credentials seam core
+does not have. Setup reads each server's tool list from
+`<data dir>/mcp-catalog.json`, keyed by a hash of the entry as written, so an
+edited entry lists again; on a miss setup connects once, lists, and writes the
+cache. A server that cannot list is logged and contributes nothing. Calls
+share one process Resource (`McpClients`): an `RcMap` opens a server's
+connection on its first call and closes it after five idle minutes. Each
+tool's input schema is imported from its JSON Schema (patterns ignored), so
+the host checks input and the catalog shows its types; a result is its
+`structuredContent`, else its joined text, else its blocks without binary
+data, and `isError` fails the call as `{ error }`. Server and tool names are
+cut to `[A-Za-z0-9_-]` with no `__`, 32 and 64 characters, so the provider
+wire name stays within 128. Many MCP tools collapse in the prompt catalog by
+the host tool catalog budget; the model reaches them with `tools.search` and
+`tools.describe`.
+
 App entrypoints bind concrete Bun/OS behavior:
 
 - `apps/tui/src/main.tsx`
