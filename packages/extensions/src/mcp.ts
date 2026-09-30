@@ -342,6 +342,7 @@ const CatalogTool = Schema.Struct({
   name: Schema.String,
   description: Schema.optional(Schema.String),
   inputSchema: Schema.Json,
+  outputSchema: Schema.optional(Schema.Json),
   annotations: Schema.optional(
     Schema.Struct({
       readOnlyHint: Schema.optional(Schema.Boolean),
@@ -899,22 +900,36 @@ const mcpClientsLive = (registered: ReadonlyArray<RegisteredServer>, file: strin
 const AnyInput = Schema.Record(Schema.String, Schema.Json)
 
 /**
- * The tool's input schema, imported from its JSON Schema so the host checks
- * the input and the cell signature shows its types. Patterns are ignored: a
- * server's regular expressions do not run in gent.
+ * A tool's JSON Schema, imported as a schema of `A`, or `fallback` when the
+ * importer cannot read it. Patterns are ignored: a server's regular
+ * expressions do not run in gent.
  */
-const inputSchemaOf = (inputSchema: Schema.Json) =>
+const importJsonSchema = <A>(json: Schema.Json, fallback: Schema.Codec<A>): Schema.Codec<A> =>
   Result.try(() => {
-    if (!isRecord(inputSchema)) return AnyInput
-    let document = JsonSchema.fromSchemaDraft07(inputSchema)
-    const dialect = inputSchema["$schema"]
+    if (!isRecord(json)) return fallback
+    let document = JsonSchema.fromSchemaDraft07(json)
+    const dialect = json["$schema"]
     if (Predicate.isString(dialect) && dialect.includes("2020-12")) {
-      document = JsonSchema.fromSchemaDraft2020_12(inputSchema)
+      document = JsonSchema.fromSchemaDraft2020_12(json)
     }
     const imported = SchemaRepresentation.fromJsonSchemaDocument(document, { patterns: "ignore" })
     // `make` is the typed bridge from an AST: an imported schema needs no services.
-    return Schema.make<Schema.Codec<Readonly<Record<string, Schema.Json>>>>(imported.ast)
-  }).pipe(Result.getOrElse(() => AnyInput))
+    return Schema.make<Schema.Codec<A>>(imported.ast)
+  }).pipe(Result.getOrElse(() => fallback))
+
+/** The tool's input schema, so the host checks the input and the cell signature shows its types. */
+const inputSchemaOf = (inputSchema: Schema.Json) => importJsonSchema(inputSchema, AnyInput)
+
+/**
+ * The tool's result type. A tool that declares an `outputSchema` returns its
+ * structured content as that type, so the signature shows it; any other tool
+ * returns JSON.
+ */
+const outputSchemaOf = (listed: CatalogTool) =>
+  Option.match(Option.fromUndefinedOr(listed.outputSchema), {
+    onNone: () => Schema.Json,
+    onSome: (outputSchema) => importJsonSchema<Schema.Json>(outputSchema, Schema.Json),
+  })
 
 /** The bytes a base64 string decodes to. */
 const base64Bytes = (data: string) => {
@@ -1050,6 +1065,9 @@ const toolsFor = (server: McpServer, listed: ReadonlyArray<CatalogTool>) => {
     const segment = segments.get(entry.name) ?? "tool"
     if (seen.has(entry.name)) return []
     seen.add(entry.name)
+    const output = outputSchemaOf(entry)
+    const typed = Predicate.isNotUndefined(entry.outputSchema)
+    const conforms = Schema.is(output)
     return [
       tool({
         id: `mcp.${server.name}.${segment}`,
@@ -1057,7 +1075,7 @@ const toolsFor = (server: McpServer, listed: ReadonlyArray<CatalogTool>) => {
         readonly: entry.annotations?.readOnlyHint === true,
         destructive: entry.annotations?.destructiveHint === true,
         params: inputSchemaOf(entry.inputSchema),
-        output: Schema.Json,
+        output,
         execute: Effect.fn("Mcp.call")(function* (input) {
           const clients = yield* McpClients
           const result = yield* clients.call(server, entry.name, input)
@@ -1074,7 +1092,18 @@ const toolsFor = (server: McpServer, listed: ReadonlyArray<CatalogTool>) => {
               result: { error: message, content: value },
             })
           }
-          return value
+          if (!typed) return value
+          // The spec asks a client to check structured content against the declared schema.
+          const structured = result.structuredContent
+          if (Predicate.isNotUndefined(structured) && conforms(structured)) return structured
+          let message = `${server.name}.${entry.name} returned structured content that does not match its output schema`
+          if (Predicate.isUndefined(structured)) {
+            message = `${server.name}.${entry.name} returned no structured content for its output schema`
+          }
+          return yield* new ToolResultFailure({
+            message,
+            result: { error: message, content: value },
+          })
         }),
       }),
     ]

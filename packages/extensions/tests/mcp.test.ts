@@ -44,6 +44,8 @@ import { shippedPreset } from "./helpers/test-preset.js"
  * `MCP_FIXTURE_SDK_UNKNOWN`); `MCP_FIXTURE_COLLIDE` adds tools whose names
  * clean to one id;
  * `MCP_FIXTURE_ENV_TOOL` adds `env`, which reads the server's environment;
+ * `MCP_FIXTURE_TYPED` adds `stats` and `badstats`, which declare an output
+ * schema, and only `stats` keeps it;
  * `tools/list` answers no tools while `MCP_FIXTURE_EMPTY_LIST` names a file that exists.
  */
 const FIXTURE_SERVER = String.raw`
@@ -93,6 +95,17 @@ if (process.env.MCP_FIXTURE_ENV_TOOL) {
     inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] },
   })
 }
+if (process.env.MCP_FIXTURE_TYPED) {
+  const outputSchema = {
+    type: "object",
+    properties: { open: { type: "integer" }, labels: { type: "array", items: { type: "string" } } },
+    required: ["open", "labels"],
+  }
+  tools.push(
+    { name: "stats", description: "Count open issues.", inputSchema: { type: "object" }, outputSchema },
+    { name: "badstats", description: "Break its own output schema.", inputSchema: { type: "object" }, outputSchema },
+  )
+}
 for (let index = 0; index < Number(process.env.MCP_FIXTURE_EXTRA ?? 0); index++) {
   tools.push({
     name: "extra_" + String(index).padStart(3, "0"),
@@ -133,6 +146,10 @@ const answer = (request) => {
       return { result: { content: [{ type: "text", text: "fixture failure" }], isError: true } }
     case "count":
       return { result: { content: [{ type: "text", text: String(calls) }] } }
+    case "stats":
+      return { result: { content: [{ type: "text", text: "3 open" }], structuredContent: { open: 3, labels: ["bug"] } } }
+    case "badstats":
+      return { result: { content: [{ type: "text", text: "many open" }], structuredContent: { open: "many" } } }
     case "env":
       return { result: { content: [{ type: "text", text: process.env[input.name] ?? "unset" }] } }
     default:
@@ -983,6 +1000,51 @@ describe("mcp tools in the cell", () => {
             }),
           },
         })
+      }).pipe(Effect.timeout("25 seconds"), Effect.provide(platformLayer)),
+    30_000,
+  )
+
+  it.scopedLive(
+    "a tool with an output schema shows a typed result and returns its structured content",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* makeFixture
+        const { systems, recordSystem } = systemRecorder()
+        const code = [
+          "const signature = tools.describe('mcp.fixture.stats')",
+          "const stats = await tools.mcp.fixture.stats()",
+          "let broken = ''; try { await tools.mcp.fixture.badstats() } catch (error) { broken = error.message }",
+          "JSON.stringify({ signature, stats, broken })",
+        ].join("; ")
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          recordSystem(toolCallStep("cell", { code })),
+          textStep("done"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...shippedPreset,
+          extensionInputs: [
+            ...shippedPreset.extensionInputs,
+            McpServers("@test/mcp-typed", { fixture: fixture.stdio({ MCP_FIXTURE_TYPED: "1" }) }),
+          ],
+          providerLayer,
+        })
+        yield* client.message.send({ sessionId, branchId, content: "count the issues" })
+        const result = yield* cellResultAfterDone(client, branchId)
+        const typed =
+          "tools.mcp.fixture.stats(input?: {}): Promise<{ open: number; labels: string[] }>"
+        expect(systems[0] ?? "").toContain(`- ${typed} // Count open issues.`)
+        expect(result).toMatchObject({ name: "cell", isFailure: false })
+        const display = yield* Schema.decodeUnknownEffect(
+          Schema.fromJsonString(
+            Schema.Struct({ signature: Schema.String, stats: Schema.Json, broken: Schema.String }),
+          ),
+        )(Reflect.get(result?.result ?? {}, "display"))
+        expect(display).toMatchObject({
+          signature: `${typed} // Count open issues.`,
+          stats: { open: 3, labels: ["bug"] },
+        })
+        expect(display.broken).toContain("does not match")
+        expect(display.broken).toContain("output schema")
       }).pipe(Effect.timeout("25 seconds"), Effect.provide(platformLayer)),
     30_000,
   )
