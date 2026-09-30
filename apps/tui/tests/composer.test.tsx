@@ -44,6 +44,7 @@ import { type RenderWaitTimeoutError, waitForFrame } from "./helpers-boundary"
 import { useScopedKeyboard } from "../src/terminal"
 import {
   type AutocompleteItem,
+  autocompleteContribution,
   clientContributions,
   defineClientExtension,
 } from "../src/extensions/client-facets"
@@ -477,6 +478,17 @@ function Contribute() {
   ])
   return <box />
 }
+/** Draws a marker once the client extensions contribute `count` sources on `prefix`. */
+function SourcesLoaded(props: { readonly prefix: string; readonly count: number }) {
+  const ui = useExtensionUI()
+  const loaded = () =>
+    ui.autocompleteItems().filter((c) => c.prefix === props.prefix).length >= props.count
+  return (
+    <Show when={loaded()}>
+      <text>sources loaded</text>
+    </Show>
+  )
+}
 function TestComposer(props: {
   readonly suspended?: boolean
   readonly onSubmit: (
@@ -552,6 +564,55 @@ function TestComposer(props: {
   )
 }
 describe("Composer renderer", () => {
+  // Two extensions may contribute rows under one prefix. The row the reader
+  // picks inserts and records through the extension that offered it.
+  it.live("a pick from the second contribution on a prefix uses that contribution's hooks", () =>
+    Effect.gen(function* () {
+      const picks: Array<string> = []
+      const source = (name: string, id: string) =>
+        defineClientExtension(`@test/pick-${name}`, {
+          setup: Effect.succeed(
+            clientContributions(
+              autocompleteContribution({
+                prefix: "%",
+                title: `Source ${name}`,
+                items: () => [{ id, label: `%${id}` }],
+                formatInsertion: (picked) => `<${name}:${picked}> `,
+                onSelect: (picked) => {
+                  picks.push(`${name}:${picked}`)
+                },
+              }),
+            ),
+          ),
+        })
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <TestComposer onSubmit={() => {}}>
+              <Composer.Autocomplete />
+              <SourcesLoaded prefix="%" count={2} />
+            </TestComposer>
+          ),
+          {
+            builtins: [...builtinClientModules, source("first", "alpha"), source("second", "beta")],
+          },
+        ),
+      )
+      yield* waitForFrame(setup, (frame) => frame.includes("sources loaded"), "both sources")
+      yield* Effect.promise(() => setup.mockInput.typeText("%"))
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("%alpha") && frame.includes("%beta"),
+        "rows from both sources",
+      )
+      setup.mockInput.pressArrow("down")
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressKey("RETURN")
+      const frame = yield* waitForFrame(setup, (next) => next.includes("┃ <"), "the inserted pick")
+      expect(frame).toContain("┃ <second:beta>")
+      expect(picks).toEqual(["second:beta"])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   it.live("a pending interaction waits for client extensions instead of being denied", () =>
     Effect.gen(function* () {
       const release = yield* Deferred.make<void>()
@@ -1437,8 +1498,8 @@ describe("AutocompletePopup renderer", () => {
               <ContributePopup items={slashItems} />
               <AutocompletePopup
                 state={{ type: "/", filter: "", triggerPos: 0 }}
-                onSelect={(value) => picked.push(value)}
-                onComplete={(value) => completed.push(value)}
+                onSelect={(pick) => picked.push(pick.item.id)}
+                onComplete={(pick) => completed.push(pick.item.id)}
                 onClose={() => {}}
                 onGhostChange={() => {}}
               />
@@ -1479,7 +1540,7 @@ describe("AutocompletePopup renderer", () => {
               <AutocompletePopup
                 state={{ type: "/", filter: "mo", triggerPos: 0 }}
                 onSelect={() => {}}
-                onComplete={(value) => completed.push(value)}
+                onComplete={(pick) => completed.push(pick.item.id)}
                 onClose={() => {}}
                 onGhostChange={(ghost) => ghosts.push(Option.getOrElse(ghost, () => ""))}
               />
@@ -1521,7 +1582,7 @@ describe("AutocompletePopup renderer", () => {
             return (
               <AutocompletePopup
                 state={{ type: "/", filter: filter(), triggerPos: 0 }}
-                onSelect={(value) => picked.push(value)}
+                onSelect={(pick) => picked.push(pick.item.id)}
                 onComplete={() => {}}
                 onClose={() => {}}
                 onGhostChange={() => {}}
@@ -1556,8 +1617,8 @@ describe("AutocompletePopup renderer", () => {
               <ContributePopup items={[]} />
               <AutocompletePopup
                 state={{ type: "/", filter: "zzz", triggerPos: 0 }}
-                onSelect={(value) => picked.push(value)}
-                onComplete={(value) => picked.push(value)}
+                onSelect={(pick) => picked.push(pick.item.id)}
+                onComplete={(pick) => picked.push(pick.item.id)}
                 onClose={() => {
                   closed += 1
                 }}

@@ -56,11 +56,13 @@ import { useExtensionUI } from "./extensions/host"
 import { type SessionIdentity, useClient, useRuntime } from "./client"
 import type {
   AutocompleteContribution,
-  AutocompleteItem,
   InteractionRendererComponent,
 } from "./extensions/client-facets.js"
 import { PromptRenderer } from "./interaction-renderers"
-import { runAutocompleteContributions } from "./extensions/loader-boundary"
+import {
+  runAutocompleteContributions,
+  type SourcedAutocompleteItem,
+} from "./extensions/loader-boundary"
 import { ghostCompletion } from "./autocomplete"
 import {
   decodePasteBytes,
@@ -330,9 +332,9 @@ interface AutocompletePopupProps {
    * Enter on the selected row. A slash command name completed this way runs;
    * see the composer controller for why the two keys differ.
    */
-  onSelect: (value: string) => void
+  onSelect: (pick: SourcedAutocompleteItem) => void
   /** Tab on the selected row: completes the text and stops there. */
-  onComplete: (value: string) => void
+  onComplete: (pick: SourcedAutocompleteItem) => void
   onClose: () => void
   /**
    * The completion the composer may offer as ghost text, or none.
@@ -373,7 +375,7 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
   // Fetch items from all contributions for this prefix, keyed on [prefix, filter]
   const [items] = createResource(
     (): readonly [string, string] => [props.state.type, props.state.filter],
-    ([prefix, filter]): Promise<AutocompleteItem[]> => {
+    ([prefix, filter]): Promise<SourcedAutocompleteItem[]> => {
       openOn(prefix)
       return runAutocompleteContributions(
         contributions(),
@@ -399,12 +401,12 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
    * It is cleared when the popup unmounts — a ghost outliving its popup would
    * offer a completion the composer can no longer perform.
    */
-  const [cursor, setCursor] = createSignal<Option.Option<AutocompleteItem>>(Option.none())
+  const [cursor, setCursor] = createSignal<Option.Option<SourcedAutocompleteItem>>(Option.none())
   createEffect(() => {
     const top = Option.fromNullishOr(visibleItems()[0])
     props.onGhostChange(
       ghostCompletion(
-        Option.orElse(cursor(), () => top),
+        Option.orElse(cursor(), () => top).pipe(Option.map((entry) => entry.item)),
         props.state.filter,
       ),
     )
@@ -448,9 +450,10 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
 
   const keys = [KeyHints.move, KeyHints.select, keyHint("tab", "complete"), KeyHints.close]
 
-  const rows = (): ReadonlyArray<SelectListRow<AutocompleteItem>> =>
-    visibleItems().map((item) =>
-      selectable(item, (isSelected, id) => {
+  const rows = (): ReadonlyArray<SelectListRow<SourcedAutocompleteItem>> =>
+    visibleItems().map((entry) =>
+      selectable(entry, (isSelected, id) => {
+        const item = entry.item
         const textColor = () => {
           if (isSelected()) return theme.primary
           return theme.text
@@ -517,7 +520,7 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
         )}
         open={hasItems()}
         rows={rows}
-        rowKey={(item) => item.id}
+        rowKey={(entry) => entry.item.id}
         sticky={() => Option.some(0)}
         api={(api) => (list = Option.some(api))}
         empty={emptyRow}
@@ -529,11 +532,11 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
           if (event.name !== "tab") return false
           Option.match(selected, {
             onNone: () => {},
-            onSome: (item) => props.onComplete(item.id),
+            onSome: (entry) => props.onComplete(entry),
           })
           return true
         }}
-        onSelect={(item) => props.onSelect(item.id)}
+        onSelect={(entry) => props.onSelect(entry)}
         onDismiss={props.onClose}
       />
     </PickerFrame>
@@ -609,9 +612,9 @@ interface ComposerController {
   readonly handleSubmitFromTextarea: () => void
   readonly resolveInteraction: (result: ApprovalResult) => void
   /** Enter on a row: completes, and dispatches when the row names a command. */
-  readonly handleAutocompleteSelect: (value: string) => void
+  readonly handleAutocompleteSelect: (pick: SourcedAutocompleteItem) => void
   /** Tab on a row: completes only, never dispatches. */
-  readonly handleAutocompleteComplete: (value: string) => void
+  readonly handleAutocompleteComplete: (pick: SourcedAutocompleteItem) => void
   readonly handleAutocompleteClose: () => void
 }
 
@@ -699,23 +702,17 @@ function useComposerController(): ComposerController {
    * the caret back so the argument can be typed. A tab that dispatched would
    * leave no way to reach an argument at all.
    */
-  const completeAutocomplete = (value: string, dispatch: boolean) => {
+  const completeAutocomplete = (pick: SourcedAutocompleteItem, dispatch: boolean) => {
     const state = autocompleteOption()
     if (Option.isNone(state) || Option.isNone(inputRef)) return
 
-    const contribution = Option.fromNullishOr(
-      extensionUI.autocompleteItems().find((c) => c.prefix === state.value.type),
-    )
-    // Notify contribution of selection (frecency tracking, etc.)
-    if (Option.isSome(contribution)) {
-      const onSelect = Option.fromNullishOr(contribution.value.onSelect)
-      if (Option.isSome(onSelect)) onSelect.value(value, state.value.filter)
-    }
+    // The row's own source records the pick (frecency) and formats its insertion.
+    const value = pick.item.id
+    const onSelect = Option.fromNullishOr(pick.source.onSelect)
+    if (Option.isSome(onSelect)) onSelect.value(value, state.value.filter)
     const beforeTrigger = inputRef.value.plainText.slice(0, state.value.triggerPos)
     let insertion = `${state.value.type}${value} `
-    const formatInsertion = Option.flatMap(contribution, (c) =>
-      Option.fromNullishOr(c.formatInsertion),
-    )
+    const formatInsertion = Option.fromNullishOr(pick.source.formatInsertion)
     if (Option.isSome(formatInsertion)) insertion = formatInsertion.value(value)
 
     // Completing a slash command name runs it, rather than parking it in the
@@ -761,12 +758,12 @@ function useComposerController(): ComposerController {
     focusTextarea()
   }
 
-  const handleAutocompleteSelect = (value: string) => {
-    completeAutocomplete(value, true)
+  const handleAutocompleteSelect = (pick: SourcedAutocompleteItem) => {
+    completeAutocomplete(pick, true)
   }
 
-  const handleAutocompleteComplete = (value: string) => {
-    completeAutocomplete(value, false)
+  const handleAutocompleteComplete = (pick: SourcedAutocompleteItem) => {
+    completeAutocomplete(pick, false)
   }
 
   const handleAutocompleteClose = () => {
@@ -1315,8 +1312,8 @@ function useComposerController(): ComposerController {
 interface ComposerContextValue {
   // eslint-disable-next-line effect/noNullish -- AutocompletePopup uses null for its closed Solid state.
   autocomplete: Accessor<AutocompleteState | null>
-  handleAutocompleteSelect: (value: string) => void
-  handleAutocompleteComplete: (value: string) => void
+  handleAutocompleteSelect: (pick: SourcedAutocompleteItem) => void
+  handleAutocompleteComplete: (pick: SourcedAutocompleteItem) => void
   handleAutocompleteClose: () => void
   setGhost: (ghost: Option.Option<string>) => void
 }

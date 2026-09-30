@@ -927,12 +927,21 @@ const toAutocompleteEffect = (
   return Effect.succeed(items)
 }
 
+/**
+ * A merged row and the contribution that offered it. Several contributions
+ * may share a prefix; a pick inserts and records through its own source.
+ */
+export interface SourcedAutocompleteItem {
+  readonly item: AutocompleteItem
+  readonly source: AutocompleteContribution
+}
+
 export const runAutocompleteContributions = (
   contributions: ReadonlyArray<AutocompleteContribution>,
   filter: string,
   clientRuntime: ClientRuntime,
   onFailure: (prefix: string, reason: string) => void,
-): Promise<AutocompleteItem[]> =>
+): Promise<SourcedAutocompleteItem[]> =>
   clientRuntime.runPromise(
     Effect.forEach(
       contributions,
@@ -942,10 +951,11 @@ export const runAutocompleteContributions = (
           catch: String,
         }).pipe(
           Effect.flatMap(toAutocompleteEffect),
+          Effect.map((items) => items.map((item) => ({ item, source: contribution }))),
           Effect.catch((reason) =>
             Effect.sync(() => {
               onFailure(contribution.prefix, reason)
-              return [] satisfies AutocompleteItem[]
+              return [] satisfies SourcedAutocompleteItem[]
             }),
           ),
         ),
@@ -953,12 +963,12 @@ export const runAutocompleteContributions = (
     ).pipe(
       Effect.map((results) => {
         const seen = new Set<string>()
-        const deduped: AutocompleteItem[] = []
+        const deduped: SourcedAutocompleteItem[] = []
         for (const batch of results) {
-          for (const item of batch) {
-            if (seen.has(item.id)) continue
-            seen.add(item.id)
-            deduped.push(item)
+          for (const entry of batch) {
+            if (seen.has(entry.item.id)) continue
+            seen.add(entry.item.id)
+            deduped.push(entry)
           }
         }
         return deduped

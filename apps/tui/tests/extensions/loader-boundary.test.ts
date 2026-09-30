@@ -924,7 +924,7 @@ describe("autocomplete Effect items() through the client transport", () => {
         }),
       )
       expect(failures).toEqual([])
-      expect(result).toEqual([{ id: "hello", label: "got:hello" }])
+      expect(result.map((entry) => entry.item)).toEqual([{ id: "hello", label: "got:hello" }])
       yield* Effect.promise(() => runtime.dispose())
     }),
   )
@@ -1151,7 +1151,7 @@ const skillItemsFor = (
     // A failing contribution answers with no rows, which would read as a
     // ranking result rather than the breakage it is.
     if (failures.length > 0) return yield* Effect.die(failures.join("; "))
-    return ids(items)
+    return ids(items.map((entry) => entry.item))
   })
 
 describe("skills autocomplete contribution", () => {
@@ -1288,7 +1288,7 @@ const skillsHarness = (home: string, names: ReadonlyArray<string>) =>
         // A failing contribution answers with no rows, which would read as a
         // ranking result rather than the breakage it is.
         if (failures.length > 0) return yield* Effect.die(failures.join("; "))
-        return ids(items)
+        return ids(items.map((entry) => entry.item))
       })
     return { contribution, rank, dispose: () => Effect.promise(() => runtime.dispose()) }
   })
