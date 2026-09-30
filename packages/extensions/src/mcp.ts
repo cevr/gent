@@ -22,6 +22,7 @@ import {
   Result,
   Schema,
   SchemaRepresentation,
+  Schedule,
   Scope,
   Semaphore,
 } from "effect"
@@ -937,12 +938,106 @@ const loginBeforeDial = (server: McpServer, config: HttpServerConfig, store: Aut
     const login = yield* readLogin(store, authKey(server, config))
     if (Option.isNone(login)) return login
     const now = yield* Clock.currentTimeMillis
-    const expiresAt = Option.fromUndefinedOr(login.value.expiresAt)
-    if (Option.isSome(expiresAt) && expiresAt.value - Duration.toMillis(REFRESH_SKEW) <= now) {
-      return yield* refreshLogin(server, config, store, login.value, Option.none())
-    }
-    return login
+    if (!nearExpiry(login.value, now)) return login
+    return yield* refreshUnlessFresh(
+      server,
+      config,
+      store,
+      (stored, at) => !nearExpiry(stored, at),
+      Option.none(),
+    )
   })
+
+/** The login's token expires within `REFRESH_SKEW` of `now`. */
+const nearExpiry = (login: StoredLogin, now: number) =>
+  Option.exists(
+    Option.fromUndefinedOr(login.expiresAt),
+    (expiresAt) => expiresAt - Duration.toMillis(REFRESH_SKEW) <= now,
+  )
+
+/**
+ * Refreshes the stored login under its key's refresh lock, unless the login
+ * read again under the lock is `fresh`. So of two refreshes of one login, in
+ * this process or another, the second finds the token the first stored and
+ * uses it; it never redeems the refresh token the first already spent. None
+ * when there is no login, or the refresh or the lock failed.
+ */
+const refreshUnlessFresh = (
+  server: McpServer,
+  config: HttpServerConfig,
+  store: AuthStore,
+  fresh: (login: StoredLogin, now: number) => boolean,
+  named: Option.Option<URL>,
+) =>
+  Effect.gen(function* () {
+    const key = authKey(server, config)
+    const refresh = Effect.gen(function* () {
+      const login = yield* readLogin(store, key)
+      if (Option.isNone(login)) return login
+      if (fresh(login.value, yield* Clock.currentTimeMillis)) return login
+      return yield* refreshLogin(server, config, store, login.value, named)
+    })
+    return yield* refresh.pipe(underRefreshLock(store, key))
+  }).pipe(
+    Effect.catchCause((cause) =>
+      Effect.logWarning("mcp.oauth.refresh.failed").pipe(
+        Effect.annotateLogs({ server: server.name, error: failureMessage(Cause.squash(cause)) }),
+        Effect.as(Option.none<StoredLogin>()),
+      ),
+    ),
+  )
+
+/** A refresh lock older than this was left by a holder that died; no refresh takes this long. */
+const REFRESH_LOCK_STALE = Duration.seconds(30)
+/** How often a refresh tries a held lock again, and how many times before it gives up. */
+const REFRESH_LOCK_RETRY = { schedule: Schedule.spaced("50 millis"), times: 1200 }
+
+/** Another refresh of the same login held the lock for longer than a stale lock lives. */
+class RefreshLockBusy extends Schema.TaggedError<RefreshLockBusy>()("RefreshLockBusy", {
+  message: Schema.String,
+}) {}
+
+/**
+ * Runs an effect while holding the refresh lock of the login under `key`:
+ * `<data dir>/mcp-auth.<sha256 of key>.lock`, created with `wx`, so one
+ * holder at a time across every gent process on the data directory. The
+ * holder removes the file when done. A file older than `REFRESH_LOCK_STALE`
+ * is a dead holder's, and the next taker removes it first.
+ */
+const underRefreshLock =
+  (store: AuthStore, key: string) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const crypto = yield* Crypto.Crypto
+      const digest = yield* crypto.digest("SHA-256", new TextEncoder().encode(key))
+      const file = path.join(path.dirname(store.file), `mcp-auth.${Hex.encode(digest)}.lock`)
+      yield* fs.makeDirectory(path.dirname(file), { recursive: true })
+      const take = Effect.gen(function* () {
+        const taken = yield* fs.writeFileString(file, "", { flag: "wx", mode: 0o600 }).pipe(
+          Effect.as(true),
+          Effect.orElseSucceed(() => false),
+        )
+        if (taken) return
+        const now = yield* Clock.currentTimeMillis
+        const modified = Option.flatMap(yield* Effect.option(fs.stat(file)), (info) => info.mtime)
+        if (
+          Option.exists(
+            modified,
+            (at) => now - at.getTime() > Duration.toMillis(REFRESH_LOCK_STALE),
+          )
+        ) {
+          yield* Effect.ignore(fs.remove(file))
+        }
+        return yield* new RefreshLockBusy({ message: `the refresh lock ${file} stays held` })
+      })
+      return yield* Effect.acquireUseRelease(
+        Effect.retry(take, REFRESH_LOCK_RETRY),
+        () => effect,
+        () => Effect.ignore(fs.remove(file)),
+      )
+    })
 
 const JsonRpcMethod = Schema.fromJsonString(Schema.Struct({ method: Schema.String }))
 
@@ -998,12 +1093,13 @@ const oauthTransport = (server: McpServer, config: HttpServerConfig, store: Auth
         if (response.status === 401 && REPLAYABLE.has(requestMethod(init))) {
           const refreshed = yield* Option.match(current, {
             onNone: () => Effect.succeed(Option.none<StoredLogin>()),
-            onSome: (login) =>
-              refreshLogin(
+            // A stored token other than the refused one is another refresh's; it is used as it is.
+            onSome: (refused) =>
+              refreshUnlessFresh(
                 server,
                 config,
                 store,
-                login,
+                (stored) => stored.tokens.access_token !== refused.tokens.access_token,
                 Option.fromUndefinedOr(extractResourceMetadataUrl(response)),
               ),
           })

@@ -1653,6 +1653,34 @@ describe("mcp oauth", () => {
   )
 
   it.scopedLive(
+    "two setups that find the same token near expiry redeem its refresh token once",
+    () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path
+        const oauth = yield* serveOAuthFixtureWith({
+          ...defaultOAuthFixture,
+          overlapRefreshes: true,
+        })
+        const data = yield* makeDataDir
+        yield* storeExpiringLogin(oauth, data.directory)
+        const home = path.join(data.directory, "home")
+        const setup = collectTestContributions(oauthServers(oauth).setup, {
+          home,
+          cwd: data.directory,
+        })
+        const [first, second] = yield* Effect.all([setup, setup], { concurrency: 2 }).pipe(
+          Effect.provide(data.layer),
+        )
+        // The second waiter read the rotated token instead of redeeming refresh-0 again.
+        expect(oauth.failedRefreshes).toBe(0)
+        expect(oauth.refreshes).toBe(1)
+        expect(toolIds(first)).toContain("mcp.secure.whoami")
+        expect(toolIds(second)).toContain("mcp.secure.whoami")
+      }).pipe(Effect.timeout("40 seconds"), Effect.provide(platformLayer)),
+    45_000,
+  )
+
+  it.scopedLive(
     "a server whose resource metadata only its WWW-Authenticate header names logs in and refreshes",
     () =>
       Effect.gen(function* () {
