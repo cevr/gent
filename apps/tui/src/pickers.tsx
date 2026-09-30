@@ -16,7 +16,7 @@ import { useClient, useRuntime } from "./client"
 import {
   type BranchId,
   type Message,
-  MessageId,
+  type MessageId,
   messagePartsImages,
   messagePartsText,
   type Model,
@@ -357,8 +357,8 @@ export function BranchPicker(props: BranchPickerProps) {
 // ── message picker ──────────────────────────────────────────────────────────
 
 interface PickerItem {
-  id: string
-  label: string
+  readonly id: MessageId
+  readonly label: string
 }
 
 interface MessagePickerProps {
@@ -407,8 +407,7 @@ export function MessagePicker(props: MessagePickerProps) {
           open={props.open}
           rows={rows}
           rowKey={(item) => item.id}
-          // SAFETY: PickerItem.id originates from domain Message.id which is a MessageId
-          onSelect={(item) => props.onSelect(MessageId.make(item.id))}
+          onSelect={(item) => props.onSelect(item.id)}
           onDismiss={props.onClose}
         />
       </PickerFrame>
