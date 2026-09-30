@@ -31,18 +31,16 @@ import {
  * alarm for a moved cache marker. On a provider that caches implicitly and
  * reports reads only, such a miss is no evidence and is not counted.
  *
+ * The cache lifetime is the model catalog's (`Model.promptCacheTtlMs`, as the
+ * model's driver says), so a miss is judged once the catalog is there. A model
+ * whose entry names no lifetime counts only a model switch: without a
+ * lifetime an expiry cannot be told from a changed prefix.
+ *
  * Nothing is stored and the model never sees it. A notice row shows a miss
  * large enough to matter; the status row shows the branch's total.
  */
 
 export const CACHE_EXTENSION_ID = "@gent/cache"
-
-/**
- * How long a provider keeps a cached prefix after the request that last read
- * or wrote it started. Anthropic's default marker and OpenAI's in-memory
- * retention both keep it five minutes; the catalog carries no TTL.
- */
-export const CACHE_TTL_MS = 5 * 60_000
 
 /** A miss at or under this is cache breakpoint granularity, not a lost prefix. */
 const NOISE_FLOOR_TOKENS = 1024
@@ -97,19 +95,68 @@ export interface CacheMiss {
   readonly cause: CacheMissCause
 }
 
-/** The request that last refreshed the cache: everything in its prompt should read back. */
+/** A lost prefix as the fold sees it, before the model's cache lifetime says why. */
+interface ScannedMiss extends Omit<CacheMiss, "cause"> {
+  /**
+   * How long after the previous request started this one started. The
+   * provider refreshes its cache when a request starts, so the lifetime runs
+   * from there, as the loop counts it when it decides a turn starts cold.
+   */
+  readonly sinceRefreshMs: number
+  /** The step ran on another model than the previous one; its cache holds nothing of the prefix. */
+  readonly modelSwitch: boolean
+  /** The model reported cache writes: it holds a written prefix for the lifetime. */
+  readonly explicitCache: boolean
+  /** What took that time, if it outlived the lifetime. */
+  readonly lapse: CacheMissCause
+}
+
+/**
+ * The miss and its cause by the model's cache lifetime. Time past the
+ * lifetime since the previous request started is the lapse's doing.
+ * Otherwise only an explicit cache's miss counts, as a changed prefix.
+ * With no lifetime only a model switch counts.
+ */
+export const resolveMiss = (
+  scanned: ScannedMiss,
+  lifetimeMs: Option.Option<number>,
+): Option.Option<CacheMiss> => {
+  const { sinceRefreshMs, modelSwitch, explicitCache, lapse, ...miss } = scanned
+  const cause = Option.flatMap(lifetimeMs, (lifetime) => {
+    if (sinceRefreshMs > lifetime) return Option.some(lapse)
+    return Option.liftPredicate(CacheMissCause.cases.PrefixChanged.make({}), () => explicitCache)
+  })
+  const switched = Option.liftPredicate(
+    CacheMissCause.cases.ModelSwitch.make({}),
+    () => modelSwitch,
+  )
+  return Option.map(
+    Option.orElse(switched, () => cause),
+    (value) => ({ ...miss, cause: value }),
+  )
+}
+
+/** The last request that reported usage: everything in its prompt should read back. */
 interface CachedRequest {
   readonly promptTokens: number
   readonly model: string
-  readonly startedAt: number
-  readonly endedAt: number
-  readonly input: Option.Option<string>
   /**
    * Some request since the last reset reported cache activity. A later step
    * that reads nothing is then a total miss (a provider that reports reads
    * only, like OpenAI), not a provider that never reports caching.
    */
   readonly reportedCache: boolean
+}
+
+/**
+ * The last request that went out, with usage or without: an interrupted
+ * request read the cache too. The lifetime runs from its start, as the loop
+ * counts it; a retry starts it again when the retry goes out.
+ */
+interface Refresh {
+  readonly startedAt: number
+  readonly endedAt: number
+  readonly input: Option.Option<string>
 }
 
 interface Span {
@@ -135,13 +182,14 @@ export interface CacheScan {
    * or below the last folded id is skipped, so a replay that repeats history
    * adds nothing.
    */
-  readonly fold: (envelope: EventEnvelope) => Option.Option<CacheMiss>
+  readonly fold: (envelope: EventEnvelope) => Option.Option<ScannedMiss>
 }
 
 /** One branch's incremental fold. Feed it that branch's envelopes in id order. */
 export const makeCacheScan = (): CacheScan => {
   let lastId = Number.NEGATIVE_INFINITY
   let previous = Option.none<CachedRequest>()
+  let refreshed = Option.none<Refresh>()
   let started = Option.none<{ readonly at: number; readonly input: Option.Option<string> }>()
   const openTools = new Map<string, { readonly name: string; readonly at: number }>()
   const openWaits = new Map<string, number>()
@@ -165,37 +213,18 @@ export const makeCacheScan = (): CacheScan => {
     waits = []
   }
 
-  /** The cause of a miss; none when the miss is no evidence that a prefix was lost. */
-  const classify = (
-    prior: CachedRequest,
-    model: string,
-    at: number,
-    input: Option.Option<string>,
-  ): Option.Option<CacheMissCause> => {
-    if (model !== prior.model) return Option.some(CacheMissCause.cases.ModelSwitch.make({}))
-    // The lifetime runs from the start of the request that refreshed the
-    // cache; the cause names what took that interval.
-    const gapMs = Math.max(0, at - prior.startedAt)
-    if (gapMs <= CACHE_TTL_MS) {
-      return Option.liftPredicate(CacheMissCause.cases.PrefixChanged.make({}), () =>
-        writers.has(model),
-      )
-    }
-    return Option.some(expiredCause(prior, gapMs, input))
-  }
-
-  /** Why a prefix outlived its lifetime: what took the gap since it was refreshed. */
+  /** Why a prefix outlived its lifetime: what took the time since the previous request started. */
   const expiredCause = (
-    prior: CachedRequest,
+    refresh: Refresh,
     gapMs: number,
     input: Option.Option<string>,
   ): CacheMissCause => {
-    const response = { name: "response", ms: Math.max(0, prior.endedAt - prior.startedAt) }
+    const response = { name: "response", ms: Math.max(0, refresh.endedAt - refresh.startedAt) }
     if (Option.isSome(covers(Option.some(response), gapMs))) {
       return CacheMissCause.cases.Response.make({ ms: response.ms })
     }
     const sameTurn =
-      Option.isSome(input) && Option.isSome(prior.input) && input.value === prior.input.value
+      Option.isSome(input) && Option.isSome(refresh.input) && input.value === refresh.input.value
     if (sameTurn) {
       const wait = covers(longest(waits), gapMs)
       if (Option.isSome(wait)) return CacheMissCause.cases.Approval.make({ ms: wait.value.ms })
@@ -213,17 +242,14 @@ export const makeCacheScan = (): CacheScan => {
     return CacheMissCause.cases.Idle.make({ ms: gapMs })
   }
 
-  const settle = (
+  /** The miss a request with usage paid, against the last request with usage and the last refresh. */
+  const scanMiss = (
     envelope: EventEnvelope,
     event: Extract<AgentEvent, { _tag: "StreamEnded" }>,
-  ): Option.Option<CacheMiss> => {
-    const begun = Option.getOrElse(started, () => ({
-      at: envelope.createdAt,
-      input: Option.fromUndefinedOr(event.messageId),
-    }))
-    started = Option.none()
+    begun: { readonly at: number; readonly input: Option.Option<string> },
+  ): Option.Option<ScannedMiss> => {
     const usage = Option.fromUndefinedOr(event.usage)
-    // A step with no usage (an interrupted stream) refreshed nothing we can count.
+    // A step with no usage (an interrupted stream) has no tokens to compare.
     if (Option.isNone(usage) || usage.value.inputTokens <= 0) return Option.none()
     const promptTokens = usage.value.inputTokens
     const cacheReadTokens = usage.value.cacheReadTokens ?? 0
@@ -232,37 +258,62 @@ export const makeCacheScan = (): CacheScan => {
     const pricedModel = event.pricedModel ?? model
     const reported = cacheReadTokens + cacheWriteTokens > 0
     if (cacheWriteTokens > 0) writers.add(model)
-    const miss = Option.flatMap(previous, (prior): Option.Option<CacheMiss> => {
-      if (!reported && !prior.reportedCache) return Option.none()
-      const missedTokens = Math.min(prior.promptTokens, promptTokens) - cacheReadTokens
-      if (missedTokens <= NOISE_FLOOR_TOKENS) return Option.none()
-      return Option.map(classify(prior, model, begun.at, begun.input), (cause) => ({
-        eventId: envelope.id,
-        startedAt: begun.at,
-        model,
-        pricedModel,
-        missedTokens,
-        inputTokens: promptTokens,
-        cacheReadTokens,
-        cacheWriteTokens,
-        billed: (event.costUsd ?? 0) > 0,
-        cause,
-      }))
-    })
+    const miss = Option.flatMap(
+      Option.all([previous, refreshed]),
+      ([prior, refresh]): Option.Option<ScannedMiss> => {
+        if (!reported && !prior.reportedCache) return Option.none()
+        const missedTokens = Math.min(prior.promptTokens, promptTokens) - cacheReadTokens
+        if (missedTokens <= NOISE_FLOOR_TOKENS) return Option.none()
+        // The lifetime runs from the start of the last request that went out,
+        // as the loop counts it; the lapse names what took that interval.
+        const sinceRefreshMs = Math.max(0, begun.at - refresh.startedAt)
+        return Option.some({
+          eventId: envelope.id,
+          startedAt: begun.at,
+          model,
+          pricedModel,
+          missedTokens,
+          inputTokens: promptTokens,
+          cacheReadTokens,
+          cacheWriteTokens,
+          billed: (event.costUsd ?? 0) > 0,
+          sinceRefreshMs,
+          modelSwitch: model !== prior.model,
+          explicitCache: writers.has(model),
+          lapse: expiredCause(refresh, sinceRefreshMs, begun.input),
+        })
+      },
+    )
     previous = Option.some({
       promptTokens,
       model,
+      reportedCache: reported || Option.exists(previous, (prior) => prior.reportedCache),
+    })
+    return miss
+  }
+
+  const settle = (
+    envelope: EventEnvelope,
+    event: Extract<AgentEvent, { _tag: "StreamEnded" }>,
+  ): Option.Option<ScannedMiss> => {
+    const begun = Option.getOrElse(started, () => ({
+      at: envelope.createdAt,
+      input: Option.fromUndefinedOr(event.messageId),
+    }))
+    started = Option.none()
+    const miss = scanMiss(envelope, event, begun)
+    // Every request that went out refreshed the cache, with usage or without.
+    refreshed = Option.some({
       startedAt: begun.at,
       endedAt: envelope.createdAt,
       input: begun.input,
-      reportedCache: reported || Option.exists(previous, (prior) => prior.reportedCache),
     })
     tools = []
     waits = []
     return miss
   }
 
-  const fold = (envelope: EventEnvelope): Option.Option<CacheMiss> => {
+  const fold = (envelope: EventEnvelope): Option.Option<ScannedMiss> => {
     if (envelope.id <= lastId) return Option.none()
     lastId = envelope.id
     const event = envelope.event
@@ -282,6 +333,13 @@ export const makeCacheScan = (): CacheScan => {
           at: envelope.createdAt,
           input: Option.fromUndefinedOr(event.messageId),
         })
+        return Option.none()
+      case "ProviderRetrying":
+        // The refused attempt read nothing; the retry goes out `delayMs` later.
+        started = Option.map(started, (begun) => ({
+          ...begun,
+          at: envelope.createdAt + event.delayMs,
+        }))
         return Option.none()
       case "ToolCallStarted":
         // A call a cell admitted runs inside the cell's own span.
@@ -368,6 +426,7 @@ export const missText = (miss: CacheMiss, costUsd: number): string => {
 /** The events the fold reads; each names its session and branch. */
 const isBranchEvent = AgentEvent.isAnyOf([
   "StreamStarted",
+  "ProviderRetrying",
   "StreamEnded",
   "ToolCallStarted",
   "ToolCallSucceeded",
@@ -394,8 +453,8 @@ interface PricedMiss {
 
 interface BranchMisses {
   readonly scan: CacheScan
-  readonly misses: Accessor<ReadonlyArray<CacheMiss>>
-  readonly setMisses: Setter<ReadonlyArray<CacheMiss>>
+  readonly misses: Accessor<ReadonlyArray<ScannedMiss>>
+  readonly setMisses: Setter<ReadonlyArray<ScannedMiss>>
   /** Each miss as priced the first time the catalog was there to price it. */
   readonly born: Map<number, PricedMiss>
 }
@@ -409,7 +468,7 @@ export default defineClientExtension(CACHE_EXTENSION_ID, {
       const branch = (key: string): BranchMisses => {
         const known = Option.fromUndefinedOr(branches.get(key))
         if (Option.isSome(known)) return known.value
-        const [misses, setMisses] = createSignal<ReadonlyArray<CacheMiss>>([])
+        const [misses, setMisses] = createSignal<ReadonlyArray<ScannedMiss>>([])
         const created = { scan: makeCacheScan(), misses, setMisses, born: new Map() }
         branches.set(key, created)
         return created
@@ -427,44 +486,52 @@ export default defineClientExtension(CACHE_EXTENSION_ID, {
         ),
       )
 
-      // No price is known until the catalog settles, so no miss is priced before then.
-      const prices = createMemo(() =>
+      // Neither a price nor a cache lifetime is known until the catalog
+      // settles, so no miss is judged or priced before then.
+      const catalogModels = createMemo(() =>
         Option.map(
           transport.modelCatalog(),
-          (catalog) =>
-            new Map<string, Option.Option<ModelPricing>>(
-              catalog.map((model) => [model.id, Option.fromUndefinedOr(model.pricing)]),
-            ),
+          (catalog) => new Map<string, Model>(catalog.map((model) => [model.id, model])),
         ),
       )
 
-      // A miss is priced once, when it is first read with the catalog, and its
-      // row is born then with its final text: scrollback never holds a row
-      // that changes after, and a later catalog reload rewrites nothing.
+      // A miss is judged and priced once, when it is first read with the
+      // catalog, and its row is born then with its final text: scrollback
+      // never holds a row that changes after, and a later catalog reload
+      // rewrites nothing. A miss the lifetime does not count costs nothing.
       const priceOnce = (
         born: Map<number, PricedMiss>,
-        miss: CacheMiss,
-        catalog: ReadonlyMap<string, Option.Option<ModelPricing>>,
+        scanned: ScannedMiss,
+        catalog: ReadonlyMap<string, Model>,
       ): PricedMiss => {
-        const known = Option.fromUndefinedOr(born.get(miss.eventId))
+        const known = Option.fromUndefinedOr(born.get(scanned.eventId))
         if (Option.isSome(known)) return known.value
-        const costUsd = missCostUsd(
-          miss,
-          Option.flatten(Option.fromUndefinedOr(catalog.get(miss.pricedModel))),
+        const model = Option.fromUndefinedOr(catalog.get(scanned.pricedModel))
+        const lifetime = Option.flatMap(model, (entry) =>
+          Option.fromUndefinedOr(entry.promptCacheTtlMs),
         )
-        const row = Option.some<NoticeRow>({
-          key: String(miss.eventId),
-          createdAt: miss.startedAt,
-          glyph: MISS_GLYPH,
-          color: "warning",
-          text: missText(miss, costUsd),
-        }).pipe(Option.filter(() => showsMissRow(miss, costUsd)))
-        const priced = { costUsd, row }
-        born.set(miss.eventId, priced)
+        const priced = Option.match(resolveMiss(scanned, lifetime), {
+          onNone: (): PricedMiss => ({ costUsd: 0, row: Option.none() }),
+          onSome: (miss): PricedMiss => {
+            const costUsd = missCostUsd(
+              miss,
+              Option.flatMap(model, (entry) => Option.fromUndefinedOr(entry.pricing)),
+            )
+            const row = Option.some<NoticeRow>({
+              key: String(miss.eventId),
+              createdAt: miss.startedAt,
+              glyph: MISS_GLYPH,
+              color: "warning",
+              text: missText(miss, costUsd),
+            }).pipe(Option.filter(() => showsMissRow(miss, costUsd)))
+            return { costUsd, row }
+          },
+        })
+        born.set(scanned.eventId, priced)
         return priced
       }
       const priced = (key: string): Option.Option<ReadonlyArray<PricedMiss>> =>
-        Option.map(prices(), (catalog) => {
+        Option.map(catalogModels(), (catalog) => {
           const target = branch(key)
           return target.misses().map((miss) => priceOnce(target.born, miss, catalog))
         })

@@ -717,15 +717,20 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
    * and no snapshot reads its namespace.
    */
   let unrestoredBuiltins: ReadonlyArray<string> = []
-  /** The notes for a put-back already done; a built-in it could not put back retires the worker. */
+  /**
+   * The notes for a put-back already done; a built-in it could not put back
+   * retires the worker. Each such built-in is named once: every later check
+   * finds it again.
+   */
   const repairNotes = (changed: string, repair: BuiltinRepair): ReadonlyArray<string> => {
     const notes: Array<string> = []
     if (repair.restored.length > 0)
       notes.push(`Put back built-ins ${changed}: ${repair.restored.join(", ")}`)
-    if (repair.unrestored.length > 0) {
-      unrestoredBuiltins = [...unrestoredBuiltins, ...repair.unrestored]
+    const named = repair.unrestored.filter((path) => !unrestoredBuiltins.includes(path))
+    if (named.length > 0) {
+      unrestoredBuiltins = [...unrestoredBuiltins, ...named]
       notes.push(
-        `Built-ins ${changed} that cannot be put back: ${repair.unrestored.join(", ")}. The host replaces this worker and restores the namespace it saved before this cell.`,
+        `Built-ins ${changed} that cannot be put back: ${named.join(", ")}. The host replaces this worker and restores the namespace it saved before this cell.`,
       )
     }
     return notes

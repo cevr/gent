@@ -3,8 +3,12 @@
   "ui": "tui",
   "globalDependencies": ["tsconfig.json", "package.json", "patches/*.patch"],
   "tasks": {
+    "transit": {
+      "dependsOn": ["^transit"],
+      "inputs": ["src/**", "tsconfig.json", "package.json"]
+    },
     "typecheck": {
-      "dependsOn": ["^typecheck"],
+      "dependsOn": ["transit"],
       "inputs": ["src/**", "tests/**", "integration/**", "tsconfig.json", "package.json"],
       "outputs": []
     },

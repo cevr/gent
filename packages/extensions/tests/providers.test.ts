@@ -4,6 +4,7 @@ import {
   Context,
   type Crypto,
   Deferred,
+  Duration,
   Effect,
   Fiber,
   FileSystem,
@@ -21,8 +22,10 @@ import { TestClock } from "effect/testing"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import type { ChildProcessSpawner } from "effect/unstable/process"
 import {
+  catalogSource,
   type CredentialCacheCell,
   driverCatalog,
+  driverListModels,
   EMPTY_CREDENTIAL_CELL,
   freshEnoughAt,
   modelsDevCatalog,
@@ -255,6 +258,7 @@ describe("models.dev catalog", () => {
             AnthropicPlatform.of({ platform: "darwin", home, env: {} }),
           ),
           { home, platform },
+          "1h",
         )
         const listModels = Option.getOrThrow(Option.fromUndefinedOr(driver.listModels))
         const windows = (yield* listModels()).map(
@@ -268,6 +272,80 @@ describe("models.dev catalog", () => {
           "anthropic/claude-sonnet-6 200000",
         ])
       }).pipe(Effect.provide(BunServices.layer)),
+  )
+
+  it.scopedLive("a driver's catalog names its provider's prompt-cache lifetime on each model", () =>
+    Effect.gen(function* () {
+      const home = yield* freshHome("cache-lifetime")
+      yield* writeCache(
+        home,
+        yield* stampedCache([
+          Model.make({
+            id: ModelId.make("anthropic/claude-opus-5"),
+            name: "Opus 5",
+            provider: ProviderId.make("anthropic"),
+            contextLength: 1_000_000,
+          }),
+        ]),
+      )
+      const source = yield* catalogSource(home)
+
+      const models = yield* driverListModels(source, "anthropic", Duration.minutes(5))()
+
+      expect(models.map((model) => model.promptCacheTtlMs)).toEqual([5 * 60_000])
+    }).pipe(Effect.provide(platformLayer)),
+  )
+
+  it.scopedLive(
+    "the Anthropic catalog names the lifetime its markers ask for, 1 hour or 5 minutes with the switch, and prices a cache write by it",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* freshHome("anthropic-cache-lifetime")
+        yield* writeCache(
+          home,
+          yield* stampedCache([
+            Model.make({
+              id: ModelId.make("anthropic/claude-opus-5"),
+              name: "Opus 5",
+              provider: ProviderId.make("anthropic"),
+              contextLength: 1_000_000,
+              // models.dev prices a write at the 5-minute rate, 1.25x input.
+              pricing: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+            }),
+          ]),
+        )
+        const platform = yield* Effect.context<
+          | FileSystem.FileSystem
+          | Path.Path
+          | ChildProcessSpawner.ChildProcessSpawner
+          | Crypto.Crypto
+        >()
+        const lifetimes = (promptCacheTtl: "5m" | "1h") =>
+          Effect.gen(function* () {
+            const driver = buildAnthropicModelDriver(
+              yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(
+                EMPTY_CREDENTIAL_CELL,
+              ),
+              Option.none(),
+              Context.add(
+                platform,
+                AnthropicPlatform,
+                AnthropicPlatform.of({ platform: "darwin", home, env: {} }),
+              ),
+              { home, platform },
+              promptCacheTtl,
+            )
+            const listModels = Option.getOrThrow(Option.fromUndefinedOr(driver.listModels))
+            return (yield* listModels()).map((model) => ({
+              lifetimeMs: model.promptCacheTtlMs,
+              // 10,000 tokens written to the cache, in USD.
+              writeCostUsd: (10_000 * (model.pricing?.cacheWrite ?? 0)) / 1_000_000,
+            }))
+          })
+        // A 1-hour write costs 2x input, a 5-minute one 1.25x.
+        expect(yield* lifetimes("1h")).toEqual([{ lifetimeMs: 60 * 60_000, writeCostUsd: 0.1 }])
+        expect(yield* lifetimes("5m")).toEqual([{ lifetimeMs: 5 * 60_000, writeCostUsd: 0.0625 }])
+      }).pipe(Effect.timeout("5 seconds"), Effect.provide(BunServices.layer)),
   )
 
   it.scopedLive("a cache older than a day refetches and rewrites the canonical models", () =>

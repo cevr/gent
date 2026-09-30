@@ -15,6 +15,7 @@ import {
   getModelOverride,
   MODEL_CONFIG,
   parseOAuthResponse,
+  readPromptCacheTtl,
   SYSTEM_IDENTITY_PREFIX,
   transformPayload as transformPayloadEffect,
   transformResponseContent,
@@ -24,6 +25,7 @@ import {
 import {
   Cause,
   Clock,
+  ConfigProvider,
   Context,
   type Crypto,
   FileSystem,
@@ -93,7 +95,7 @@ type JsonRecord = Schema.Schema.Type<typeof JsonRecordSchema>
 // with `node:crypto` `createHash`, which is synchronous.
 const transformPayload = (payload: JsonRecord): JsonRecord =>
   Effect.runSync(
-    transformPayloadEffect(payload).pipe(
+    transformPayloadEffect(payload, "1h").pipe(
       Effect.provide(Layer.merge(BunCrypto.layer, testPlatformLayer)),
     ),
   )
@@ -1719,17 +1721,23 @@ const driverServices = (platform: typeof testPlatform) =>
     >(),
     Context.add(AnthropicPlatform, platform),
   )
+type DriverArgs = Parameters<typeof buildAnthropicModelDriverLive>
+/** The driver over the test platform; its markers ask for `promptCacheTtl`, 1 hour unless a test sets the switch. */
 const buildAnthropicModelDriver = (
-  ...args: Parameters<typeof buildAnthropicModelDriverLive> extends [
-    infer CredentialCell,
-    infer EnvApiKey,
-    ...ReadonlyArray<unknown>,
-  ]
-    ? [CredentialCell, EnvApiKey]
-    : never
+  credentialCellRef: DriverArgs[0],
+  envApiKey: DriverArgs[1],
+  promptCacheTtl: DriverArgs[4] = "1h",
 ) =>
   driverServices(testPlatform).pipe(
-    Effect.map((services) => buildAnthropicModelDriverLive(...args, services, testCatalogSource())),
+    Effect.map((services) =>
+      buildAnthropicModelDriverLive(
+        credentialCellRef,
+        envApiKey,
+        services,
+        testCatalogSource(),
+        promptCacheTtl,
+      ),
+    ),
     Effect.provide(BunServices.layer),
   )
 // The Claude Code path reads the keychain, never the gent store.
@@ -1997,6 +2005,109 @@ describe("Anthropic chronological context", () => {
       }),
   )
 })
+/** Every `cache_control` marker in a request body, in wire order. */
+const cacheMarkers = (body: string): ReadonlyArray<string> =>
+  Array.from(body.matchAll(/"cache_control":\{[^}]*\}/g), (match) => match[0])
+
+describe("Anthropic prompt-cache lifetime", () => {
+  const conversation = Prompt.make([
+    { role: "system", content: "Stable initial instructions." },
+    { role: "user", content: [{ type: "text", text: "Run a cell." }] },
+  ])
+  /** The markers of one rendered request on each sign-in path: an API key, then Claude Code. */
+  const renderedMarkers = (promptCacheTtl: "5m" | "1h", prompt: Prompt.Prompt = conversation) =>
+    Effect.gen(function* () {
+      const perPath: Array<ReadonlyArray<string>> = []
+      for (const authInfo of [makeApiAuthInfo("test-key"), makeOAuthInfo()]) {
+        const credentialCellRef = yield* SynchronizedRef.make<
+          CredentialCacheCell<ClaudeCredentials>
+        >({
+          _tag: "Durable",
+          creds: { accessToken: "t", refreshToken: "r", expiresAt: FUTURE_MS },
+          at: yield* Clock.currentTimeMillis,
+          invalidated: false,
+        })
+        const driver = yield* buildAnthropicModelDriver(
+          credentialCellRef,
+          Option.none(),
+          promptCacheTtl,
+        )
+        const model = yield* driver.resolveModel("claude-opus-4-6", authInfo)
+        const state = makeFakeFetchState()
+        yield* runContextRequest(model, state, prompt, "text")
+        perPath.push(
+          cacheMarkers(Option.getOrThrow(Option.fromUndefinedOr(state.captured[0]?.body))),
+        )
+      }
+      return perPath
+    })
+
+  it.live(
+    "a marker a message already carries takes the request's one lifetime, on both sign-in paths",
+    () =>
+      Effect.gen(function* () {
+        // The SDK renders a message's `cacheControl` option as a 5-minute
+        // marker; a 1-hour marker after it would break the ordering rule.
+        const marked = Prompt.fromMessages([
+          Prompt.makeMessage("system", { content: "Stable initial instructions." }),
+          Prompt.makeMessage("user", {
+            content: [Prompt.makePart("text", { text: "Run a cell." })],
+            options: { anthropic: { cacheControl: { type: "ephemeral" } } },
+          }),
+          Prompt.makeMessage("assistant", {
+            content: [Prompt.makePart("text", { text: "It ran." })],
+          }),
+          Prompt.makeMessage("user", {
+            content: [Prompt.makePart("text", { text: "Run it again." })],
+          }),
+        ])
+        for (const markers of yield* renderedMarkers("1h", marked)) {
+          expect(markers.length).toBeGreaterThanOrEqual(3)
+          for (const marker of markers) {
+            expect(marker).toBe('"cache_control":{"type":"ephemeral","ttl":"1h"}')
+          }
+        }
+      }).pipe(Effect.timeout("5 seconds")),
+  )
+
+  it.live(
+    "a rendered request asks for the 1-hour cache on every marker, on both sign-in paths",
+    () =>
+      Effect.gen(function* () {
+        for (const markers of yield* renderedMarkers("1h")) {
+          expect(markers.length).toBeGreaterThanOrEqual(2)
+          for (const marker of markers) {
+            expect(marker).toBe('"cache_control":{"type":"ephemeral","ttl":"1h"}')
+          }
+        }
+      }).pipe(Effect.timeout("5 seconds")),
+  )
+
+  it.live("the 5-minute switch renders every marker with the 5-minute lifetime", () =>
+    Effect.gen(function* () {
+      for (const markers of yield* renderedMarkers("5m")) {
+        expect(markers.length).toBeGreaterThanOrEqual(2)
+        for (const marker of markers) {
+          expect(marker).toBe('"cache_control":{"type":"ephemeral","ttl":"5m"}')
+        }
+      }
+    }).pipe(Effect.timeout("5 seconds")),
+  )
+
+  it.live("ANTHROPIC_PROMPT_CACHE_TTL=5m sets the switch; unset or unknown keeps 1 hour", () =>
+    Effect.gen(function* () {
+      const read = (env: Record<string, string>) =>
+        readPromptCacheTtl.pipe(
+          Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))),
+        )
+      expect(yield* read({ ANTHROPIC_PROMPT_CACHE_TTL: "5m" })).toBe("5m")
+      expect(yield* read({ ANTHROPIC_PROMPT_CACHE_TTL: "1h" })).toBe("1h")
+      expect(yield* read({})).toBe("1h")
+      expect(yield* read({ ANTHROPIC_PROMPT_CACHE_TTL: "10m" })).toBe("1h")
+    }).pipe(Effect.timeout("5 seconds")),
+  )
+})
+
 const JsonRecordSchemaDriver = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown))
 type JsonRecordDriver = Schema.Schema.Type<typeof JsonRecordSchemaDriver>
 const parsePayload = (body: string): JsonRecordDriver =>
@@ -2125,6 +2236,7 @@ describe("buildAnthropicModelDriver — the host's platform", () => {
         Option.none(),
         services,
         testCatalogSource(),
+        "1h",
       )
       const fetchState = makeFakeFetchState()
       const model = yield* driver
@@ -2167,6 +2279,7 @@ describe("buildAnthropicModelDriver — refresh token order", () => {
         Option.none(),
         yield* driverServices(AnthropicPlatform.of({ platform: "linux", home, env: {} })),
         testCatalogSource(),
+        "1h",
       )
       const fetchState = makeFakeFetchState()
       const fetchLayer = fakeFetchLayer(fetchState, (request) => {
@@ -2220,6 +2333,7 @@ describe("buildAnthropicModelDriver — refresh writes only the keychain", () =>
         Option.none(),
         yield* driverServices(AnthropicPlatform.of({ platform: "linux", home, env: {} })),
         testCatalogSource(),
+        "1h",
       )
       const fetchState = makeFakeFetchState()
       const fetchLayer = fakeFetchLayer(fetchState, (request) => {
@@ -2274,6 +2388,7 @@ describe("buildAnthropicModelDriver — refresh writes only the keychain", () =>
         Option.none(),
         yield* driverServices(AnthropicPlatform.of({ platform: "linux", home, env: {} })),
         testCatalogSource(),
+        "1h",
       )
       const newerSignIn = encodeExternalJson({
         claudeAiOauth: {
@@ -2340,6 +2455,7 @@ describe("buildAnthropicModelDriver — refresh writes only the keychain", () =>
         Option.none(),
         yield* driverServices(AnthropicPlatform.of({ platform: "linux", home, env: {} })),
         testCatalogSource(),
+        "1h",
       )
       const fetchState = makeFakeFetchState()
       const fetchLayer = fakeFetchLayer(fetchState, (request) => {
@@ -2405,6 +2521,7 @@ describe("buildAnthropicModelDriver — refresh writes only the keychain", () =>
           Option.none(),
           yield* driverServices(AnthropicPlatform.of({ platform: "linux", home, env: {} })),
           testCatalogSource(),
+          "1h",
         )
         const fetchState = makeFakeFetchState()
         const fetchLayer = fakeFetchLayer(fetchState, (request) => {
@@ -2837,7 +2954,7 @@ describe("buildAnthropicModelDriver — prompt caching", () => {
           const plain = yield* sentFor(authInfo)
           const noticed = yield* sentFor(authInfo, {}, [notice])
           const update = noticed.messages.at(-1)?.content ?? []
-          // The SDK's wrap is the one the compatible drivers build.
+          // The patched SDK builds the same wrap as `hostContextUpdateText`.
           expect(update.map((block) => block.text)).toEqual([hostContextUpdateText(notice.content)])
           expect(update[0]?.text).toContain("# Stopped &lt;children&gt;")
           expect(update.some(isMarked)).toBe(false)

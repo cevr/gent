@@ -260,6 +260,32 @@ describe("cell namespace snapshot", () => {
     ])
   })
 
+  test("NaN, the infinities and -0 round-trip in numbers, typed arrays and dates", () => {
+    const source = createContext({})
+    runInContext(
+      [
+        "var zero = -0; var inf = -Infinity;",
+        "var floats = new Float64Array([NaN, Infinity, -Infinity, -0, 1.5]);",
+        "var halves = new Float32Array([NaN, -0]); var never = new Date(NaN);",
+      ].join("\n"),
+      source,
+    )
+    const snapshot = encodeSnapshot(new Map(Object.entries(source)))
+    expect(snapshot.omitted).toEqual([])
+    const target = createContext({})
+    restoreInto(target, snapshot.bindings)
+    const probe = runInContext(
+      [
+        "[Object.is(zero, -0), inf,",
+        " floats instanceof Float64Array && Array.from(floats, (x) => Object.is(x, -0) ? '-0' : String(x)).join(','),",
+        " Array.from(halves, (x) => Object.is(x, -0) ? '-0' : String(x)).join(','),",
+        " never instanceof Date && String(never.getTime())]",
+      ].join(""),
+      target,
+    )
+    expect(probe).toEqual([true, -Infinity, "NaN,Infinity,-Infinity,-0,1.5", "NaN,-0", "NaN"])
+  })
+
   test("an own __proto__ key round-trips as a key, not as the prototype", () => {
     const source = createContext({})
     runInContext(

@@ -12,7 +12,7 @@ import {
   findEffectVersionDrift,
   findRepoTempDirectories,
   findSharedTestHomes,
-  findHookWithoutGuards,
+  findPreCommitHookFindings,
   findIdentityEncodes,
   findPackageSurfaceFindings,
   findPlatformDuplicationViolations,
@@ -30,7 +30,6 @@ import {
   findUnshippedSkillFiles,
   findUnhashedSteeringFiles,
   BUNDLED_SKILLS_MODULE,
-  findUnneededOffs,
   findUnusedCatalogEntries,
   findUnusedDependencies,
   findUnusedSuppressionApprovals,
@@ -816,38 +815,55 @@ describe("shared test home checker", () => {
   })
 })
 
-// ── hook runs guards ────────────────────────────────────────────────────────
+// ── the pre-commit hook: the guards, and staged files only ─────────────────
 
 const hook = (...jobs: ReadonlyArray<string>): string =>
-  ["pre-commit:", "  parallel: false", "  jobs:", ...jobs].join("\n")
+  ["pre-commit:", "  parallel: true", "  jobs:", ...jobs].join("\n")
 
 const GUARDS = ["    - name: guards", "      run: bun run guards"]
 const LINT = [
-  "    - name: lint+fmt",
-  "      run: bun run lint:fix && bun run fmt",
+  "    - name: oxlint",
+  '      glob: "*.{ts,tsx}"',
+  "      run: env -u FORCE_COLOR NO_COLOR=1 bunx oxlint --fix {staged_files}",
   "      stage_fixed: true",
 ]
-const TEST = ["    - name: test", "      run: bun run test"]
+const FMT = [
+  "    - name: oxfmt",
+  "      run: env -u FORCE_COLOR NO_COLOR=1 bunx oxfmt {staged_files}",
+  "      stage_fixed: true",
+]
+
+/** The findings' lines and messages, for a hook of `jobs`. */
+const hookFindings = (...jobs: ReadonlyArray<string>) =>
+  findPreCommitHookFindings(HOOK_FILE, hook(...jobs)).map((finding) => [
+    finding.line,
+    finding.message,
+  ])
+
+/** A one-job hook after the guards: the job's `run:` sits on line 7. */
+const withGuards = (run: string) => hookFindings(...GUARDS, "    - name: job", `      run: ${run}`)
+
+const NOT_FAST = "is not one of the hook's fast commands"
 
 describe("pre-commit hook runs the guards", () => {
   test("accepts the guards job in any position, under any name", () => {
-    expect(findHookWithoutGuards(HOOK_FILE, hook(...GUARDS, ...LINT, ...TEST))).toEqual([])
-    expect(findHookWithoutGuards(HOOK_FILE, hook(...LINT, ...TEST, ...GUARDS))).toEqual([])
+    expect(hookFindings(...GUARDS, ...LINT, ...FMT)).toEqual([])
+    expect(hookFindings(...LINT, ...FMT, ...GUARDS)).toEqual([])
     const renamed = ["    - name: fast-checks", "      run: bun run guards"]
-    expect(findHookWithoutGuards(HOOK_FILE, hook(...renamed, ...LINT))).toEqual([])
+    expect(hookFindings(...renamed, ...LINT)).toEqual([])
   })
 
   test("flags a hook with no guards job", () => {
-    const findings = findHookWithoutGuards(HOOK_FILE, hook(...LINT, ...TEST))
+    const findings = findPreCommitHookFindings(HOOK_FILE, hook(...LINT, ...FMT))
     expect(findings).toHaveLength(1)
     expect(findings[0]?.message).toContain("runs no `bun run guards` job")
   })
 
   test("a guards job under another hook does not count", () => {
     const text = ["pre-push:", "  jobs:", ...GUARDS, "pre-commit:", "  jobs:", ...LINT].join("\n")
-    expect(findHookWithoutGuards(HOOK_FILE, text)).toHaveLength(1)
+    expect(findPreCommitHookFindings(HOOK_FILE, text)).toHaveLength(1)
     expect(
-      findHookWithoutGuards(
+      findPreCommitHookFindings(
         HOOK_FILE,
         ["pre-commit:", "  jobs:", ...LINT, "pre-push:", ...GUARDS].join("\n"),
       ),
@@ -856,20 +872,74 @@ describe("pre-commit hook runs the guards", () => {
 
   test("a comment that names the guards command does not count", () => {
     const comment = ["    # Run bun run guards before committing."]
-    expect(findHookWithoutGuards(HOOK_FILE, hook(...comment, ...LINT))).toHaveLength(1)
-    const trailing = ["    - name: lint", "      run: bun run lint:fix # then bun run guards"]
-    expect(findHookWithoutGuards(HOOK_FILE, hook(...trailing))).toHaveLength(1)
-    const named = ["    - name: bun run guards", "      run: bun run lint:fix"]
-    expect(findHookWithoutGuards(HOOK_FILE, hook(...named))).toHaveLength(1)
+    expect(hookFindings(...comment, ...LINT)).toHaveLength(1)
+    const trailing = [
+      "    - name: lint",
+      "      run: bunx oxlint --fix {staged_files} # bun run guards",
+    ]
+    expect(hookFindings(...trailing)).toHaveLength(1)
+    const named = ["    - name: bun run guards", "      run: bunx oxlint --fix {staged_files}"]
+    expect(hookFindings(...named)).toHaveLength(1)
   })
 
   test("accepts the guards command as one step of a compound run", () => {
-    const chained = ["    - name: checks", "      run: bun run guards && bun run lint:fix"]
-    expect(findHookWithoutGuards(HOOK_FILE, hook(...chained))).toEqual([])
+    const chained = ["    - name: checks", "      run: bun run guards && bunx oxfmt {staged_files}"]
+    expect(hookFindings(...chained)).toEqual([])
   })
 
   test("leaves every other file alone", () => {
-    expect(findHookWithoutGuards("package.json", hook(...LINT, ...TEST))).toEqual([])
+    expect(findPreCommitHookFindings("package.json", hook(...LINT))).toEqual([])
+  })
+})
+
+describe("pre-commit hook runs only its fast commands", () => {
+  test("flags every other spelling of a whole-tree step, at its run line", () => {
+    for (const run of [
+      "bun gate",
+      "turbo run test",
+      "bunx turbo run typecheck",
+      "env NO_COLOR=1 bun run gate",
+      "bun run test",
+    ]) {
+      expect(withGuards(run)).toEqual([[7, expect.stringContaining(`\`${run}\` ${NOT_FAST}`)]])
+    }
+  })
+
+  test("flags each step of a compound run on its own", () => {
+    expect(withGuards("bun run typecheck && bun run build").map(([line]) => line)).toEqual([7, 7])
+  })
+
+  test("oxlint or oxfmt over anything but the staged files is flagged", () => {
+    for (const run of [
+      "bunx oxlint --fix",
+      "bunx oxlint --fix . {staged_files}",
+      "bunx oxfmt {staged_files} {all_files}",
+      "bun run guards | tee guards.log",
+    ]) {
+      expect(withGuards(run)).toHaveLength(1)
+    }
+  })
+
+  test("the fast commands pass with their flags, environment and any spacing", () => {
+    expect(
+      withGuards(
+        "env -u FORCE_COLOR NO_COLOR=1  bunx oxlint --ignore-path=.oxlintignore --report-unused-disable-directives-severity=error --no-error-on-unmatched-pattern --fix   {staged_files}",
+      ),
+    ).toEqual([])
+    expect(withGuards("'bunx oxfmt --ignore-path=.oxlintignore {staged_files}'")).toEqual([])
+    expect(withGuards("bun  run   guards")).toEqual([])
+  })
+
+  test("a step under another hook does not count", () => {
+    const text = [
+      "pre-commit:",
+      "  jobs:",
+      ...GUARDS,
+      "pre-push:",
+      "  jobs:",
+      "    - run: bun run gate",
+    ].join("\n")
+    expect(findPreCommitHookFindings(HOOK_FILE, text)).toEqual([])
   })
 })
 
@@ -1106,121 +1176,6 @@ describe("a tsconfig plugin override must match a tracked file", () => {
         ),
       ],
     ])
-  })
-})
-
-describe('an override "off" must suppress a diagnostic', () => {
-  const configText = [
-    "{",
-    '  "overrides": [',
-    '    { "files": ["apps/tui/scripts/build.ts"],',
-    '      "rules": { "effect/noGlobals": "off", "gent/no-bun-outside-adapter": "off" } },',
-    '    { "files": ["**/tests/**"],',
-    '      "rules": {',
-    '        "typescript/no-explicit-any": "off"',
-    "      } }",
-    "  ]",
-    "}",
-  ].join("\n")
-  const config = {
-    overrides: [
-      {
-        files: ["apps/tui/scripts/build.ts"],
-        rules: { "effect/noGlobals": "off", "gent/no-bun-outside-adapter": "off" },
-      },
-      { files: ["**/tests/**"], rules: { "typescript/no-explicit-any": "off" } },
-    ],
-  }
-  const allHit = [
-    { file: "apps/tui/scripts/build.ts", code: "effect(noGlobals)" },
-    { file: "apps/tui/scripts/build.ts", code: "gent(no-bun-outside-adapter)" },
-    { file: "packages/core/tests/a.test.ts", code: "typescript(no-explicit-any)" },
-  ]
-
-  test("an off whose rule reports in the override's files is silent", () => {
-    expect(findUnneededOffs(CONFIG, configText, config, allHit)).toEqual([])
-  })
-
-  test("an off with no diagnostic is reported at its rule's line", () => {
-    const findings = findUnneededOffs(CONFIG, configText, config, allHit.slice(1))
-    expect(findings.map((finding) => [finding.line, finding.message])).toEqual([
-      [4, expect.stringContaining("turns off `effect/noGlobals`, which reports nothing")],
-    ])
-  })
-
-  test("a diagnostic in a file outside the override's globs does not count", () => {
-    const findings = findUnneededOffs(CONFIG, configText, config, [
-      ...allHit.slice(0, 2),
-      { file: "packages/core/src/a.ts", code: "typescript(no-explicit-any)" },
-    ])
-    expect(findings.map((finding) => finding.line)).toEqual([7])
-  })
-
-  test("a diagnostic another override also turns off belongs to neither", () => {
-    const shared = {
-      overrides: [
-        ...config.overrides,
-        { files: ["packages/core/tests/**"], rules: { "typescript/no-explicit-any": "off" } },
-      ],
-    }
-    const findings = findUnneededOffs(CONFIG, configText, shared, allHit)
-    expect(findings.map((finding) => finding.message)).toEqual([
-      expect.stringContaining('"**/tests/**" turns off `typescript/no-explicit-any`'),
-      expect.stringContaining('"packages/core/tests/**" turns off `typescript/no-explicit-any`'),
-    ])
-  })
-
-  test("a rule an override sets to a severity is not an off", () => {
-    const enabling = { overrides: [{ files: ["**/tests/**"], rules: { "effect/noAs": "error" } }] }
-    expect(findUnneededOffs(CONFIG, configText, enabling, [])).toEqual([])
-  })
-})
-
-describe('a root "off" must suppress a diagnostic', () => {
-  const configText = [
-    "{",
-    '  "rules": {',
-    '    "no-shadow": "off",',
-    '    "typescript/await-thenable": "off",',
-    '    "complexity": ["error", 20]',
-    "  },",
-    '  "overrides": [',
-    '    { "files": ["**/tests/**"], "rules": { "typescript/await-thenable": "error" } }',
-    "  ]",
-    "}",
-  ].join("\n")
-  const config = {
-    rules: {
-      "no-shadow": "off",
-      "typescript/await-thenable": "off",
-      complexity: ["error", 20],
-    },
-    overrides: [{ files: ["**/tests/**"], rules: { "typescript/await-thenable": "error" } }],
-  }
-
-  test("a root off whose rule reports somewhere is silent", () => {
-    const findings = findUnneededOffs(CONFIG, configText, config, [
-      { file: "packages/core/src/a.ts", code: "eslint(no-shadow)" },
-      { file: "packages/core/src/b.ts", code: "typescript(await-thenable)" },
-    ])
-    expect(findings).toEqual([])
-  })
-
-  test("a root off with no diagnostic is reported at its rule's line", () => {
-    const findings = findUnneededOffs(CONFIG, configText, config, [
-      { file: "packages/core/src/a.ts", code: "eslint(no-shadow)" },
-    ])
-    expect(findings.map((finding) => [finding.line, finding.message])).toEqual([
-      [4, expect.stringContaining("root config turns off `typescript/await-thenable`")],
-    ])
-  })
-
-  test("a diagnostic in a file an override sets the rule for does not count", () => {
-    const findings = findUnneededOffs(CONFIG, configText, config, [
-      { file: "packages/core/src/a.ts", code: "eslint(no-shadow)" },
-      { file: "packages/core/tests/a.test.ts", code: "typescript(await-thenable)" },
-    ])
-    expect(findings.map((finding) => finding.line)).toEqual([4])
   })
 })
 
@@ -3102,6 +3057,18 @@ export const plantedDeadSdkExport = "nothing imports this"
         {
           file: "apps/tui/src/app.tsx",
           text: "const label = `n = ${ { value: interpolated }.value } // not a comment`\nuse(label)\n",
+        },
+      ]),
+    ).toEqual([])
+  })
+
+  test("a name read in an interpolation after template text holding `//` is live", () => {
+    expect(
+      findingsFor([
+        { file: SDK_FILE, text: `export const afterSlashes = 1\n` },
+        {
+          file: "apps/tui/src/app.tsx",
+          text: "const label = `${ { value: 1 }.value } // ${ afterSlashes }`\nuse(label)\n",
         },
       ]),
     ).toEqual([])
