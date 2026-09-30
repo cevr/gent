@@ -1,6 +1,15 @@
 import { describe, expect, it } from "effect-bun-test"
 import { BunFileSystem } from "@effect/platform-bun"
-import { ConfigProvider, DateTime, Effect, FileSystem, Layer, Logger, Schema } from "effect"
+import {
+  ConfigProvider,
+  DateTime,
+  Effect,
+  FileSystem,
+  Layer,
+  Logger,
+  References,
+  Schema,
+} from "effect"
 import {
   buildLogPaths,
   ensureLogDir,
@@ -93,6 +102,8 @@ describe("the log directory", () => {
           yield* Effect.logInfo("after-prune").pipe(
             Effect.annotateLogs({ sessionId: "s-1" }),
             Effect.provide(Logger.layer([logger])),
+            // The test preload raises the default level; this line is Info.
+            Effect.provideService(References.MinimumLogLevel, "Info"),
           )
         }),
       )
