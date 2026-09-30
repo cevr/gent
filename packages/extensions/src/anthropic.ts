@@ -64,8 +64,7 @@ import { type AiError, Model as AiModel, type Response } from "effect/ai"
 
 // Test seam: only tests read these exports. The model table and its lookups
 // (MODEL_CONFIG, getModelOverride, getModelBetas), the billing header (SYSTEM_IDENTITY_PREFIX,
-// extractFirstUserMessageText, computeCch, computeVersionSuffix,
-// buildBillingHeaderValue), the wire transforms (transformPayload, transformResponseContent, transformStreamEvent)
+// extractFirstUserMessageText, buildBillingHeaderValue), the wire transforms (transformPayload, transformResponseContent, transformStreamEvent)
 // and the credential parsers (ClaudeCredentials,
 // updateCredentialBlob, parseOAuthResponse) are pure functions with unit tests.
 // AnthropicKeychainEnv, AnthropicPlatform, AnthropicCredentialIO,
@@ -316,7 +315,7 @@ const sha256Hex = (text: string): Effect.Effect<string, never, Crypto.Crypto> =>
  * doesn't match the first user message we send, so this MUST be
  * recomputed per request.
  */
-export const computeCch = (messageText: string): Effect.Effect<string, never, Crypto.Crypto> =>
+const computeCch = (messageText: string): Effect.Effect<string, never, Crypto.Crypto> =>
   sha256Hex(messageText).pipe(Effect.map((hex) => hex.slice(0, 5)))
 
 /**
@@ -326,7 +325,7 @@ export const computeCch = (messageText: string): Effect.Effect<string, never, Cr
  * then hashes the lot. Anthropic checks this against the version we
  * advertise in the same header.
  */
-export const computeVersionSuffix = (
+const computeVersionSuffix = (
   messageText: string,
   version: string,
 ): Effect.Effect<string, never, Crypto.Crypto> =>

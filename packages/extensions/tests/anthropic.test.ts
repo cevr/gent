@@ -8,8 +8,6 @@ import {
   buildBillingHeaderValue as buildBillingHeaderValueEffect,
   buildKeychainTransformClient,
   type ClaudeCredentials,
-  computeCch as computeCchEffect,
-  computeVersionSuffix as computeVersionSuffixEffect,
   extractFirstUserMessageText,
   getModelBetas,
   getModelOverride,
@@ -1399,9 +1397,6 @@ describe("updateCredentialBlob", () => {
  */
 
 // Each helper provides the host's crypto to the signing step it names.
-const computeCch = (text: string) => computeCchEffect(text).pipe(Effect.provide(BunCrypto.layer))
-const computeVersionSuffix = (text: string, version: string) =>
-  computeVersionSuffixEffect(text, version).pipe(Effect.provide(BunCrypto.layer))
 const buildBillingHeaderValue = (
   messages: Parameters<typeof buildBillingHeaderValueEffect>[0],
   version: string,
@@ -1448,81 +1443,37 @@ describe("extractFirstUserMessageText", () => {
   })
 })
 
-describe("computeCch", () => {
-  it.effect("returns the first 5 hex chars of sha256(text)", () =>
-    Effect.gen(function* () {
-      const text = "hello"
-      // sha256("hello") = 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824
-      const expected = "2cf24"
-      expect(yield* computeCch(text)).toBe(expected)
-    }),
-  )
-
-  it.effect("is stable across calls — same text → same hash", () =>
-    Effect.gen(function* () {
-      expect(yield* computeCch("hi")).toBe(yield* computeCch("hi"))
-    }),
-  )
-
-  it.effect("differs for different text — single-char change flips the hash", () =>
-    Effect.gen(function* () {
-      expect(yield* computeCch("hi")).not.toBe(yield* computeCch("hj"))
-    }),
-  )
-})
-
-describe("computeVersionSuffix", () => {
-  it.effect(
-    "samples chars 4, 7, 20 (zero-padded when shorter) and hashes with the salt + version",
-    () =>
-      Effect.gen(function* () {
-        // Short message: every sample falls back to "0".
-        const suffix = yield* computeVersionSuffix("hi", "2.1.80")
-        expect(suffix).toMatch(/^[0-9a-f]{3}$/)
-      }),
-  )
-
-  it.effect("differs when the version string changes", () =>
-    Effect.gen(function* () {
-      expect(yield* computeVersionSuffix("hello", "2.1.80")).not.toBe(
-        yield* computeVersionSuffix("hello", "2.1.81"),
-      )
-    }),
-  )
-
-  it.effect("is stable for the same (text, version) pair", () =>
-    Effect.gen(function* () {
-      expect(yield* computeVersionSuffix("hello world here is more", "2.1.80")).toBe(
-        yield* computeVersionSuffix("hello world here is more", "2.1.80"),
-      )
-    }),
-  )
-})
-
 describe("buildBillingHeaderValue", () => {
-  it.effect("formats `x-anthropic-billing-header: cc_version=V.S; cc_entrypoint=E; cch=H;`", () =>
+  it.effect("signs the first user message: cch is the first 5 hex digits of its sha256", () =>
     Effect.gen(function* () {
-      const messages = [{ role: "user", content: "hi" }]
-      const value = yield* buildBillingHeaderValue(messages, "2.1.80", "cli")
-      expect(value).toMatch(
-        /^x-anthropic-billing-header: cc_version=2\.1\.80\.[0-9a-f]{3}; cc_entrypoint=cli; cch=[0-9a-f]{5};$/,
-      )
-    }),
-  )
-
-  it.effect("computes cch from the first user message text", () =>
-    Effect.gen(function* () {
+      // sha256("hello") = 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824
       const value = yield* buildBillingHeaderValue(
         [
           { role: "assistant", content: "preamble" },
-          { role: "user", content: "the prompt" },
+          { role: "user", content: "hello" },
         ],
         "2.1.80",
         "cli",
       )
-      const expectedCch = yield* computeCch("the prompt")
-      expect(value).toContain(`cch=${expectedCch};`)
+      expect(value).toBe(
+        "x-anthropic-billing-header: cc_version=2.1.80.e14; cc_entrypoint=cli; cch=2cf24;",
+      )
     }),
+  )
+
+  it.effect(
+    "a message shorter than the sampled indices pads them, and the version is hashed in",
+    () =>
+      Effect.gen(function* () {
+        const sign = (version: string) =>
+          buildBillingHeaderValue([{ role: "user", content: "hi" }], version, "cli")
+        expect(yield* sign("2.1.80")).toBe(
+          "x-anthropic-billing-header: cc_version=2.1.80.7aa; cc_entrypoint=cli; cch=8f434;",
+        )
+        expect(yield* sign("2.1.81")).toBe(
+          "x-anthropic-billing-header: cc_version=2.1.81.c43; cc_entrypoint=cli; cch=8f434;",
+        )
+      }),
   )
 
   it.effect("matches a fixed vector byte for byte", () =>
