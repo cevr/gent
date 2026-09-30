@@ -19,6 +19,8 @@ import {
   findPackageSurfaceFindings,
   findPlatformDuplicationViolations,
   findReadersWithoutWriters,
+  findWritersWithoutReaders,
+  isManifest,
   findRetiredSurfaces,
   findSteeringFilePaths,
   findSuppressionInventoryFindings,
@@ -432,9 +434,6 @@ const packageSurfaceFindings = Effect.fn("Tooling.packageSurfaceFindings")(funct
   ]
 })
 
-/** A manifest: its `scripts` can set a `GENT_*` variable, the way an operator's shell does. */
-const isManifest = (file: string): boolean => /(?:^|\/)package\.json$/.test(file)
-
 /**
  * Route every scanned file to the finders that read it, then run the scans
  * that need the whole tree. The lint config and the package surfaces read
@@ -482,6 +481,8 @@ export const scanTrackedTexts = (
     ...findUnadaptedSeams(sourceTexts, adaptedSeams),
     // A GENT_* variable whose writer left: its reader is a branch nothing takes.
     ...findReadersWithoutWriters(new Map([...sourceTexts, ...manifestTexts])),
+    // A GENT_* variable whose reader left: its setter configures nothing.
+    ...findWritersWithoutReaders(new Map([...sourceTexts, ...manifestTexts])),
     // A bundled skill file the skills module does not import never ships.
     ...findUnshippedSkillFiles(sourceTexts.get(BUNDLED_SKILLS_MODULE) ?? "", indexFiles),
   )
