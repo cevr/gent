@@ -1767,8 +1767,11 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
         Effect.gen(function* () {
           let outcome = "the history before the kept messages is dropped"
           if (!params.overflowed) {
-            const plain = yield* Effect.fromResult(fit)
-            outcome = `continuing with ${plain.omittedMessageIds.length} older messages omitted`
+            outcome = Result.match(fit, {
+              onSuccess: (plain) =>
+                `continuing with ${plain.omittedMessageIds.length} older messages omitted`,
+              onFailure: () => "the window is still over budget",
+            })
           }
           yield* eventStore.publish(
             ErrorOccurred.make({

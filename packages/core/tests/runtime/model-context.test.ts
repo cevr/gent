@@ -2169,6 +2169,73 @@ describe("turn window projection", () => {
       expect(notices[0]?.notice).toBe(true)
     }),
   )
+
+  it.scopedLive("a failing compactor on a turn over budget still names the failure", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("degrade-turn-session")
+      const branchId = BranchId.make("degrade-turn-branch")
+      const message = (id: string, role: "user" | "assistant", text: string, at: number) =>
+        Message.cases.regular.make({
+          id: MessageId.make(id),
+          sessionId,
+          branchId,
+          role,
+          parts: [Prompt.textPart({ text })],
+          createdAt: dateFromMillis(at),
+        })
+      // The newest turn alone is over the window: its first step is huge.
+      const messages = [
+        message("old-user", "user", "earlier question", 1_000),
+        message("old-answer", "assistant", "earlier answer", 1_001),
+        message("turn-user", "user", "continue", 1_002),
+        message("turn-step-1", "assistant", `step ${"x".repeat(400_000)}`, 1_003),
+        message("turn-step-2", "assistant", "next step", 1_004),
+      ]
+      const budget = ModelContextBudget.make({
+        contextLimitTokens: 40_000,
+        reservedSystemTokens: 0,
+        reservedToolTokens: 0,
+        reservedOutputTokens: 4_096,
+      })
+      const failingCompactor = Layer.succeed(
+        ModelContextCompactor,
+        ModelContextCompactor.of({
+          compact: (request) =>
+            Effect.fail(
+              new ModelCompactionError({
+                modelId: request.modelId,
+                reason: "SummaryGenerationFailed",
+              }),
+            ),
+        }),
+      )
+      const publisher = yield* recordingPublisher
+
+      yield* Effect.exit(
+        projectContextWindow({
+          sessionId,
+          branchId,
+          modelId: modelIdTurnWindow,
+          messages,
+          budget,
+          directive: Option.none(),
+          measure: Option.none(),
+          overflowed: false,
+          turnStart: false,
+          promptCache: Option.none(),
+          persist: Effect.succeed,
+          summaryModel,
+        }).pipe(Effect.provide(Layer.mergeAll(failingCompactor, publisher.layer))),
+      )
+
+      const notices = (yield* Ref.get(publisher.published)).filter(
+        (event) => event._tag === "ErrorOccurred",
+      )
+      expect(notices).toHaveLength(1)
+      expect(notices[0]?.error).toContain("Context compaction failed (SummaryGenerationFailed)")
+      expect(notices[0]?.error).toContain("the window is still over budget")
+    }),
+  )
 })
 
 // ── ai transcript projection ────────────────────────────────────────────────
