@@ -2207,7 +2207,9 @@ export function useSessionFeed(
 
       case "StreamEnded":
         streamMessageId = Option.none()
-        settleRetryingEvents(setStore, "retried")
+        // A cut stream ends a retry that had not answered; a settled one means it ran.
+        if (event.interrupted === true) settleRetryingEvents(setStore, "cancelled")
+        else settleRetryingEvents(setStore, "retried")
         turnSteps = addStep(turnSteps, event)
         return
 

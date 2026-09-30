@@ -2440,6 +2440,99 @@ describe("useSessionFeed", () => {
     }).pipe(Effect.timeout("4 seconds")),
   )
 
+  /** The retry row a feed shows once a cancel during the backoff ended the turn. */
+  const retryRowAfterBackoffCancel = (lastEventId: Option.Option<number>) =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("retry-cancel-session")
+      const branchId = BranchId.make("retry-cancel-branch")
+      // Core ends the cut stream before it completes the turn.
+      const envelopes = [
+        makeEnvelope(1, AgentEvent.cases.StreamStarted.make({ sessionId, branchId })),
+        makeEnvelope(
+          2,
+          AgentEvent.cases.ProviderRetrying.make({
+            sessionId,
+            branchId,
+            attempt: 1,
+            maxAttempts: 3,
+            delayMs: 2_000,
+            error: "overloaded (529)",
+          }),
+        ),
+        makeEnvelope(
+          3,
+          AgentEvent.cases.StreamEnded.make({
+            sessionId,
+            branchId,
+            interrupted: true,
+            outcome: "Interrupted",
+          }),
+        ),
+        makeEnvelope(
+          4,
+          AgentEvent.cases.TurnCompleted.make({
+            sessionId,
+            branchId,
+            durationMs: 1_000,
+            interrupted: true,
+          }),
+        ),
+      ]
+      let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
+      const dispose = createRoot((disposeRoot) => {
+        const [active] = createSignal(makeSession(sessionId, branchId))
+        const client = feedClientStub({
+          sessionIdentity: identityOf(active),
+          client: createMockClient({
+            session: {
+              getSnapshot: () =>
+                Effect.succeed(
+                  snapshotFor(sessionId, branchId, Option.getOrUndefined(lastEventId)),
+                ),
+              events: () => Stream.concat(Stream.make(...envelopes), Stream.never),
+              watchRuntime: () => Stream.concat(Stream.make(runtimeSnapshot()), Stream.never),
+            },
+          }),
+          runtime: createMockRuntime(),
+        })
+        feed = Option.some(
+          useSessionFeed(
+            () => sessionId,
+            () => branchId,
+            client,
+            client.runtime.cast,
+            {
+              onInteraction: () => {},
+              onInteractionDismissed: () => {},
+              onBranchSwitch: () => {},
+              onQueueSnapshot: () => {},
+            },
+          ),
+        )
+        return disposeRoot
+      })
+      yield* waitUntil(
+        () =>
+          Option.isSome(feed) && feed.value.items().some((item) => item._tag === "interruption"),
+      )
+      const retry = Option.flatMap(feed, (value) =>
+        Option.fromNullishOr(value.items().find((item) => item._tag === "retrying")),
+      )
+      dispose()
+      return retry
+    })
+
+  it.live("a cancel during the backoff reads cancelled, live and on replay", () =>
+    Effect.gen(function* () {
+      for (const lastEventId of [Option.none<number>(), Option.some(4)]) {
+        const retry = yield* retryRowAfterBackoffCancel(lastEventId)
+        expect(Option.isSome(retry)).toBe(true)
+        if (Option.isNone(retry) || retry.value._tag !== "retrying") continue
+        expect(getSessionEventLabel(retry.value)).toBe("Retry 1/3 cancelled · overloaded (529)")
+      }
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
   const expectNestedCellOperation = (
     feed: ReturnType<typeof useSessionFeed>,
     innerId: ToolCallId,
