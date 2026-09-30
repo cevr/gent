@@ -9,7 +9,7 @@ import {
   TurnCompleted,
 } from "@gent/core/test-utils"
 import { describe, expect, it, test } from "effect-bun-test"
-import { Deferred, Effect, Option, Predicate, Schema } from "effect"
+import { Deferred, Effect, Exit, Option, Predicate, Schema } from "effect"
 import {
   AgentEvent,
   AgentName,
@@ -763,6 +763,72 @@ describe("ClientProvider session lifecycle", () => {
       })
       expect(active.agent()).toEqual(Option.some(AgentName.make("secondary")))
     }),
+  )
+  // A create answers late. Only the latest navigation may take the view: a
+  // create that a later /new or session switch has overtaken is dropped.
+  it.scopedLive("a create a later navigation overtook does not take the view", () =>
+    Effect.gen(function* () {
+      const created = (n: number) => ({
+        sessionId: SessionId.make(`session-created-${n}`),
+        branchId: BranchId.make(`branch-created-${n}`),
+        name: `Created ${n}`,
+      })
+      // Each create waits for its gate, then marks that it answered.
+      const pending = yield* Effect.forEach([0, 1, 2], () =>
+        Effect.all({ gate: Deferred.make<void>(), answered: Deferred.make<void>() }),
+      )
+      let calls = 0
+      const client = createMockClient({
+        session: {
+          create: () => {
+            const n = calls++
+            return Option.match(Option.fromUndefinedOr(pending[n]), {
+              onNone: () => Effect.succeed(created(n)),
+              onSome: ({ gate, answered }) =>
+                Deferred.await(gate).pipe(
+                  Effect.andThen(Deferred.done(answered, Exit.void)),
+                  Effect.as(created(n)),
+                ),
+            })
+          },
+        },
+      })
+      const release = (n: number) =>
+        Option.match(Option.fromUndefinedOr(pending[n]), {
+          onNone: () => Effect.die(`no create ${n}`),
+          onSome: ({ gate, answered }) =>
+            Deferred.done(gate, Exit.void).pipe(Effect.andThen(Deferred.await(answered))),
+        })
+      let ctx = Option.none<ClientContextValue>()
+      const setup = yield* renderScoped(
+        () => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />,
+        { client },
+      )
+      const active = yield* requireClientSessionState(ctx)
+      const inView = () => active.session().pipe(Option.map((s) => s.sessionId))
+      // Two /new: the second answers first and takes the view; the first
+      // answers after it and must not take the view back.
+      active.createSession()
+      active.createSession()
+      yield* waitUntil(() => calls === 2, "both creates sent")
+      yield* release(1)
+      yield* waitForFrame(
+        setup,
+        () => Option.contains(inView(), created(1).sessionId),
+        "the second create",
+      )
+      yield* release(0)
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(inView()).toEqual(Option.some(created(1).sessionId))
+      // A switch while a create is pending wins over the create's answer.
+      active.createSession()
+      yield* waitUntil(() => calls === 3, "the third create sent")
+      const chosen = SessionId.make("session-chosen")
+      active.switchSession(chosen, BranchId.make("branch-chosen"), "Chosen")
+      yield* release(2)
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(inView()).toEqual(Option.some(chosen))
+    }).pipe(Effect.timeout("10 seconds")),
   )
   it.live("choosing the session already in view keeps its settings, status and metrics", () =>
     Effect.gen(function* () {

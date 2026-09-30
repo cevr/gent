@@ -1225,12 +1225,18 @@ export function ClientProvider(props: ClientProviderProps) {
     finishReplay,
   }
 
+  // Each navigation (a create sent, a session switch) takes the next number.
+  // A create answers late, so it takes the view only while its number is the
+  // latest: a later /new or switch has overtaken it otherwise.
+  let navigation = 0
+
   const createSessionWith = (
     input: Pick<
       CreateSessionInput,
       "parentSessionId" | "parentBranchId" | "continueThread" | "initialPrompt"
     >,
   ) => {
+    const ownNavigation = ++navigation
     // The current session stays in view until the server answers: a create
     // it refuses leaves the reader where they were, with the reason.
     const createSessionEffect = Effect.fn("TUI.createSession")(function* () {
@@ -1244,6 +1250,10 @@ export function ClientProvider(props: ClientProviderProps) {
       createSessionEffect().pipe(
         Effect.tap((result) =>
           Effect.sync(() => {
+            if (ownNavigation !== navigation) {
+              log.info("createSession.overtaken", { sessionId: result.sessionId })
+              return
+            }
             // A new session is never the one in view, so extension health is
             // cleared unconditionally. The session's snapshot names its agent:
             // a handoff inherits its parent's, so assuming the default would
@@ -1295,7 +1305,10 @@ export function ClientProvider(props: ClientProviderProps) {
 
     switchSession: (sessionId, branchId, name) => {
       const current = sessionOption()
-      // Choosing the session already in view changes nothing. A reset here
+      // A switch overtakes any create still waiting, even a switch to the
+      // session already in view: the reader chose where to be.
+      navigation++
+      // Choosing the session already in view changes nothing else. A reset here
       // would clear its status, metrics and settings, and no snapshot comes to
       // restore them: the identity did not change, so the feed does not re-run.
       if (Option.exists(current, (value) => sameIdentity(value, { sessionId, branchId }))) return
