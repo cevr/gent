@@ -59,8 +59,14 @@ class OxlintRunError extends Schema.TaggedError<OxlintRunError>()("OxlintRunErro
   message: Schema.String,
 }) {}
 
-const FIXTURES_DIR = new URL("../fixtures", import.meta.url).pathname
-const FIXTURES_CONFIG = new URL("../fixtures/.oxlintrc.json", import.meta.url).pathname
+/** The fixture directory and its lint config, beside the tests directory that holds `testFile`. */
+const fixturesBeside = Effect.fn("fixturesBeside")(function* (testFile: URL) {
+  const path = yield* Path.Path
+  return {
+    dir: yield* path.fromFileUrl(new URL("../fixtures", testFile)),
+    config: yield* path.fromFileUrl(new URL("../fixtures/.oxlintrc.json", testFile)),
+  }
+})
 
 /** The bound on one oxlint run over a fixture set; about a second on an idle machine. */
 const OXLINT_RUN_BOUND = "20 seconds"
@@ -75,10 +81,11 @@ const decodeOxlintReport = Schema.decodeUnknownEffect(Schema.fromJsonString(Oxli
 const runOxlint = (fixtureFiles: ReadonlyArray<string>) =>
   Effect.scoped(
     Effect.gen(function* () {
+      const fixtures = yield* fixturesBeside(new URL(import.meta.url))
       const handle = yield* ChildProcess.make(
         "bunx",
-        ["oxlint", "--format=json", "-c", FIXTURES_CONFIG, ...fixtureFiles],
-        { cwd: FIXTURES_DIR },
+        ["oxlint", "--format=json", "-c", fixtures.config, ...fixtureFiles],
+        { cwd: fixtures.dir },
       )
       const [exitCode, stdout, stderr] = yield* Effect.all(
         [
@@ -469,6 +476,16 @@ effectDescribe("custom lint rules", () => {
       ).toEqual([INVALID_FIXTURES.length, VALID_FIXTURES.length])
       expect(validRun.exitCode).toBe(0)
       expect(validRun.report.diagnostics.length).toBe(0)
+    }).pipe(Effect.provide(BunServices.layer)),
+  )
+
+  it.live("the fixtures are found from a checkout whose path has a space", () =>
+    Effect.gen(function* () {
+      const testFile = new URL("file:///work/gent%20checkout/packages/tooling/tests/a.test.ts")
+      expect(yield* fixturesBeside(testFile)).toEqual({
+        dir: "/work/gent checkout/packages/tooling/fixtures",
+        config: "/work/gent checkout/packages/tooling/fixtures/.oxlintrc.json",
+      })
     }).pipe(Effect.provide(BunServices.layer)),
   )
 
