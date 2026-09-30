@@ -1202,14 +1202,14 @@ const buildReply = (latestUserText: string): string => {
   const lineCount = latestUserText.split("\n").filter((line) => line.trim().length > 0).length
   if (lineCount > 1) {
     return [
-      "cowork processed a merged queued turn.",
+      "gent processed a merged queued turn.",
       `Received ${lineCount} lines in one message block.`,
       `Tail: ${latestUserText.split("\n").at(-1) ?? latestUserText}`,
     ].join(" ")
   }
 
   return [
-    "cowork debug response.",
+    "gent debug response.",
     `Latest user message: ${latestUserText || "(empty)"}.`,
     "This turn is flowing through the real agent loop with a scripted language model.",
   ].join(" ")
