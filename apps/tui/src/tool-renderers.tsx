@@ -27,6 +27,7 @@ import {
   formatOperationLabels,
   formatPreviewFooter,
   getString,
+  formatBytes,
   isAbsPath,
   parseBashOutput,
   plural,
@@ -1135,12 +1136,6 @@ const WriteOutputSchema = Schema.Struct({
   path: Schema.String,
   bytesWritten: Schema.Finite,
 })
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes}B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`
-}
 
 function WriteToolRenderer(props: ToolRendererProps) {
   const { pathPlace } = useClient()

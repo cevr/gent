@@ -401,7 +401,8 @@ export type SessionItem = Message | SessionEvent
 
 type TerminalDimensions = { readonly width: number; readonly height: number }
 
-const isMessageItem = Predicate.or(
+/** A transcript item that is a message, not a session event row. */
+export const isMessageItem = Predicate.or(
   Predicate.isTagged("regular-message"),
   Predicate.isTagged("interjection-message"),
 )
@@ -869,10 +870,6 @@ export const transcriptFingerprint = (item: SessionItem): string => {
 
 // ── transcript display ──────────────────────────────────────────────────────
 
-const isMessage = Predicate.or(
-  Predicate.isTagged("regular-message"),
-  Predicate.isTagged("interjection-message"),
-)
 const isTextSegment = Predicate.or(Predicate.isTagged("text"), Predicate.isTagged("reasoning"))
 
 interface MessageBoundary {
@@ -889,7 +886,7 @@ interface TranscriptDisplayBoundary {
 }
 
 const itemKey = (item: SessionItem): string => {
-  if (isMessage(item)) return item.id
+  if (isMessageItem(item)) return item.id
   if (item._tag === "notice") return `notice:${item.key}`
   return `${item._tag}:${item.createdAt}:${item.seq}`
 }
@@ -902,7 +899,7 @@ const segmentContent = (segment: AssistantSegment): string => {
 function captureTranscriptDisplay(items: SessionItem[]): TranscriptDisplayBoundary {
   const messages = new Map<string, MessageBoundary>()
   for (const item of items) {
-    if (!isMessage(item)) continue
+    if (!isMessageItem(item)) continue
     messages.set(item.id, {
       content: item.content,
       reasoning: item.reasoning,
@@ -951,7 +948,7 @@ function projectTranscriptDisplay(
       visible.push(item)
       continue
     }
-    if (!isMessage(item)) continue
+    if (!isMessageItem(item)) continue
     const cleared = Option.fromNullishOr(boundary.messages.get(item.id))
     if (Option.isSome(cleared)) visible.push(projectMessage(item, cleared.value))
   }

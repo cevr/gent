@@ -58,6 +58,7 @@ import {
 } from "@gent/core/protocol"
 import {
   formatConnectionIssue,
+  extractUnknownMessage,
   formatError,
   formatTokens,
   type PathPlace,
@@ -104,6 +105,7 @@ import {
   type AssistantSegment,
   currentMillis,
   emptyTurnSteps,
+  isMessageItem,
   type Message,
   messageToolCalls,
   type RetryOutcome,
@@ -1034,16 +1036,6 @@ export const queuedDraftText = (queue: QueueState): string | undefined => {
 
 const isBlockingAuthGate = (state: AuthGateState): boolean => state === "open" || state === "error"
 
-// eslint-disable-next-line effect/noUnknownParameters -- auth failures cross the Effect and UI boundary.
-const formatAuthGateError = (error: unknown): string => {
-  if (error instanceof Error) return error.message
-  if (Predicate.isObject(error) && "message" in error) {
-    const message = error["message"]
-    if (Predicate.isString(message)) return message
-  }
-  return String(error)
-}
-
 // ── controller activity ─────────────────────────────────────────────────────
 
 // ── prompt history ──────────────────────────────────────────────────────────
@@ -1642,17 +1634,12 @@ type SessionFeedStore = {
   events: SessionEvent[]
 }
 
-const isMessage = Predicate.or(
-  Predicate.isTagged("regular-message"),
-  Predicate.isTagged("interjection-message"),
-)
-
 /** Transcript order: by time; a message before an event row at the same time; event rows by seq. */
 const compareSessionItems = (a: SessionItem, b: SessionItem): number => {
   if (a.createdAt !== b.createdAt) return a.createdAt - b.createdAt
-  if (!isMessage(a) && !isMessage(b)) return a.seq - b.seq
+  if (!isMessageItem(a) && !isMessageItem(b)) return a.seq - b.seq
   if (a._tag === b._tag) return 0
-  if (isMessage(a)) return -1
+  if (isMessageItem(a)) return -1
   return 1
 }
 
@@ -2813,7 +2800,9 @@ export function createSessionController(props: {
                   Effect.catchEager((error) =>
                     Effect.sync(() => {
                       updateControllerState((state) => failAuthCheck(state, version))
-                      client.setError(`Authentication check failed: ${formatAuthGateError(error)}`)
+                      client.setError(
+                        `Authentication check failed: ${extractUnknownMessage(error)}`,
+                      )
                     }),
                   ),
                 ),

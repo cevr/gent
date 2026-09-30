@@ -2812,7 +2812,7 @@ describe("write body", () => {
       )
       const frame = renderFrame(setup)
       expect(frame).toContain("write apps/tui/src/ops.ts")
-      expect(frame).toContain("7.2KB written")
+      expect(frame).toContain("7.2 KB written")
       expect(frame).not.toContain(cwd)
     }),
   )

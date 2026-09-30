@@ -38,6 +38,7 @@ import {
 import { BranchStorage, GentPlatform, MessageStorage, SessionStorage } from "@gent/core/host"
 import * as Prompt from "effect/ai/Prompt"
 import { Command, Flag } from "effect/cli"
+import { formatBytes } from "./utils"
 import * as Terminal from "effect/Terminal"
 
 // ── local health report ─────────────────────────────────────────────────────
@@ -311,12 +312,6 @@ export const resetStorage = (
     }
     return { archiveDir, archived }
   })
-
-const formatBytes = (bytes: number): string => {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-}
 
 const formatIssue = (issue: ExtensionHealthIssue): string =>
   Match.value(issue).pipe(
@@ -762,44 +757,48 @@ export const resumableSessions = (options: {
   readonly inMemory: boolean
 }): boolean => Option.isSome(options.connect) || !options.inMemory
 
-export const sessions = Command.make(
-  "sessions",
-  {
-    connect: Flag.String("connect").pipe(
-      Flag.withDescription("Connect to an existing gent server"),
-      Flag.optional,
-    ),
-  },
-  ({ connect }) =>
-    Effect.gen(function* () {
-      const bundle = yield* resolveClientBundle({
-        cwd: process.cwd(),
-        connect,
-        inMemory: false,
-        debug: false,
-        mock: Option.none(),
-        authDirectory: Option.none(),
-      })
-      yield* bundle.runtime.lifecycle.waitForReady
-      const allSessions = yield* bundle.client.session.list()
+/** `--connect <url>`: every command that can attach to a running server. */
+export const connectFlag = Flag.String("connect").pipe(
+  Flag.withDescription("Connect to an existing gent server"),
+  Flag.optional,
+)
 
-      if (allSessions.length === 0) {
-        yield* Console.log("No sessions found.")
-        return
-      }
+/** `--isolate`: every command that can start its own server. */
+export const isolateFlag = Flag.Boolean("isolate").pipe(
+  Flag.withDescription("Keep state in memory: no data-directory database or lock"),
+  Flag.withDefault(false),
+)
 
-      yield* Console.log("Sessions:")
-      for (const s of allSessions) {
-        const date = DateTime.make(s.updatedAt).pipe(
-          Option.match({
-            onNone: () => "unknown",
-            onSome: DateTime.formatIso,
-          }),
-        )
-        const name = Option.getOrElse(Option.fromNullishOr(s.name), () => "Unnamed")
-        yield* Console.log(`  ${s.id} - ${name} (${date})`)
-      }
-    }),
+export const sessions = Command.make("sessions", { connect: connectFlag }, ({ connect }) =>
+  Effect.gen(function* () {
+    const bundle = yield* resolveClientBundle({
+      cwd: process.cwd(),
+      connect,
+      inMemory: false,
+      debug: false,
+      mock: Option.none(),
+      authDirectory: Option.none(),
+    })
+    yield* bundle.runtime.lifecycle.waitForReady
+    const allSessions = yield* bundle.client.session.list()
+
+    if (allSessions.length === 0) {
+      yield* Console.log("No sessions found.")
+      return
+    }
+
+    yield* Console.log("Sessions:")
+    for (const s of allSessions) {
+      const date = DateTime.make(s.updatedAt).pipe(
+        Option.match({
+          onNone: () => "unknown",
+          onSome: DateTime.formatIso,
+        }),
+      )
+      const name = Option.getOrElse(Option.fromNullishOr(s.name), () => "Unnamed")
+      yield* Console.log(`  ${s.id} - ${name} (${date})`)
+    }
+  }),
 )
 
 /**
@@ -913,10 +912,7 @@ const serverStart = Command.make(
   "start",
   {
     port: Flag.Int("port").pipe(Flag.withDescription("Bind this TCP port"), Flag.withDefault(3000)),
-    isolate: Flag.Boolean("isolate").pipe(
-      Flag.withDescription("Keep state in memory: no data-directory database or lock"),
-      Flag.withDefault(false),
-    ),
+    isolate: isolateFlag,
     mock: Flag.Boolean("mock").pipe(
       Flag.withDescription("Serve the scripted model instead of a real provider"),
       Flag.withDefault(false),

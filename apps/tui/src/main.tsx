@@ -48,6 +48,8 @@ import {
 import { type GentClientBundle } from "@gent/sdk"
 import {
   CliStartupError,
+  connectFlag,
+  isolateFlag,
   reportFailureOnStderr,
   doctor,
   readHome,
@@ -112,10 +114,7 @@ const runHeadlessTurn = (
 
 // The inputs the TUI/headless entry takes. `resume` reuses them.
 const gentFlags = {
-  connect: Flag.String("connect").pipe(
-    Flag.withDescription("Connect to an existing gent server"),
-    Flag.optional,
-  ),
+  connect: connectFlag,
   session: Flag.String("session").pipe(
     Flag.withAlias("s"),
     Flag.withDescription("Session ID to continue"),
@@ -126,10 +125,7 @@ const gentFlags = {
     Flag.withDescription("Run in headless mode (no TUI, streams to stdout)"),
     Flag.withDefault(false),
   ),
-  isolate: Flag.Boolean("isolate").pipe(
-    Flag.withDescription("Keep state in memory: no data-directory database or lock"),
-    Flag.withDefault(false),
-  ),
+  isolate: isolateFlag,
   debug: Flag.Boolean("debug").pipe(
     Flag.withDescription("Launch TUI renderer playground for widgets and tool renderers"),
     Flag.withDefault(false),

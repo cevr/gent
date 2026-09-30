@@ -96,18 +96,8 @@ const nameFor = (row: AgentRowEntry): string =>
  * the row and the name is cut to what is left, so a long task never pushes
  * what the child is doing off the row.
  */
-const trayText = (row: AgentRowEntry, width: number): string => {
-  const head = "working · "
-  return Option.fromUndefinedOr(row.activity).pipe(
-    Option.map((activity) => {
-      const doing = truncate(activity, Math.floor(width / 2))
-      const nameWidth = width - textWidth(head) - textWidth(" · ") - textWidth(doing)
-      return `${head}${truncate(nameFor(row), nameWidth)} · ${doing}`
-    }),
-    Option.getOrElse(() => `${head}${nameFor(row)}`),
-    (text) => truncate(text, width),
-  )
-}
+const trayText = (row: AgentRowEntry, width: number): string =>
+  truncate(rowLabel("working · ", nameFor(row), row.activity ?? "", width), width)
 
 /**
  * Rows in the order their sessions were created. The listing orders by last

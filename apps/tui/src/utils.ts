@@ -155,6 +155,15 @@ export const getString = (input: ToolInput, key: string, fallback = ""): string 
     () => fallback,
   )
 
+// ── size formatting ─────────────────────────────────────────────────────────
+
+/** `512 B`, `7.2 KB`, `1.5 MB`: the doctor's database size and a write's receipt. */
+export const formatBytes = (bytes: number): string => {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
 // ── duration formatting ─────────────────────────────────────────────────────
 
 /**
@@ -297,8 +306,8 @@ export const formatError = (error: UiError): string => {
   }
 }
 
-// eslint-disable-next-line effect/noUnknownParameters -- Connection failures cross framework boundaries; inspect only their message property.
-const extractUnknownMessage = (error: unknown): string => {
+// eslint-disable-next-line effect/noUnknownParameters -- Connection and auth failures cross framework boundaries; inspect only their message property.
+export const extractUnknownMessage = (error: unknown): string => {
   if (error instanceof Error) return error.message
   if (Predicate.isString(error)) return error
   if (Predicate.isObject(error) && "message" in error) {
