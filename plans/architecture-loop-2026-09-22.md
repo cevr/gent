@@ -834,3 +834,33 @@ Owner requests first (2026-09-30):
 | ----- | ---------- | ------------------------------------------------------------ |
 | Hook  | `p21-hook` | R21-2: hook ≤10 s, lint-offs removed, gate speedups          |
 | Cold  | `p21-cold` | R21-1: cold-cache compaction at turn start, `promptCacheTtl` |
+
+### Pass 21 findings
+
+Reports in `~/.cache/gent-pass21/pass21-<area>.md` (core, extensions, tui, tooling, efficiency, ui). No area reported polish only. The ui area is new this pass (`.claude/skills/architecture-loop/ui.md`, owner request 2026-09-30): gent's rendered TUI against fx, pi and opencode in herdr panes.
+
+- Core: C21-1 a late Steer escapes a stop (the actor admits handlers concurrently; `steerLoop` returns at mailbox enqueue) — confirmed. C21-2 a leaf's capability context holds the full `ExtensionRegistry` (latent; no shipped reader). C21-3 a queued turn's residency hold leaks when the loop closes mid-handover.
+- Extensions: X21-1 (P1) a tool result over 1 MB kills the cell worker (1 MB frame cap). X21-2 snapshot NaN/±Infinity/-0 → 0. X21-3 foreground bash and monitor output held whole. X21-4 the trailer reader sized at ~2,730 lines. X21-5 a second "reset" note. X21-6 compat-driver comments.
+- TUI: TUI21-1 per-step full snapshot re-read. TUI21-2 enforced sign-in Esc loop. TUI21-3 … TUI21-8 polish.
+- Tooling: TL21-1 the dead-export guard counts any mention as a read (18 dead exports pass). TL21-2 tests log to the shared `/tmp/gent/logs`. TL21-3 `apps/server` is a 42-line second launcher. TL21-4 `join("")` false positive. TL21-5 stale `/tmp` background-bash dbs: nothing creates them since `0014d950a` — closed, trash leftovers. TL21-6 … TL21-9 polish (dead test env vars, dated gamut id preference, SDK playground seed, test-only `serverLock` verbs).
+- Efficiency: no real gent usage on this box (the owner's db holds one `SessionStarted`); measured on the owner's Claude Code and Codex transcripts. Claude Code: 36.6% of turn starts follow >5 min idle (window p50 208k). Codex: 6.1%. EF21-1 1-hour Anthropic cache costs 0.79× of 5-minute on replay. EF21-2 OpenAI caches stay warm 10-30 min (108/110). EF21-3 the TUI cache notice is a second owner of the TTL.
+- UI: UI21-1 (P1) Esc Esc on a draft quits; one ctrl+c on idle quits; no armed cue (fx and pi never quit on Esc). UI21-2 retry rows land under their answer. UI21-3 extension slash commands lose descriptions. UI21-4 15 key-hint spellings and two dock slots. UI21-5 raw absolute paths in tool rows. UI21-6 … UI21-13 polish.
+
+### Pass 21 decisions
+
+- Owner (2026-09-30): X21-4 drop the git trailer and its reader. X21-3 foreground output spills to the job file like background. EF21-1 Anthropic uses the 1-hour cache by default, one switch back to 5 minutes.
+- EF21-2: OpenAI catalog TTL 30 minutes (decided by real-usage-decides). EF21-3 + TUI note: the TTL lives on the catalog `Model` (`promptCacheTtl`), not the driver; the TUI cache notice reads it and measures from the last `StreamEnded` (decided by single owner). This amends R21-1's CD2.
+- UI21-1 + TUI21-2: one exit ladder like fx and pi: Esc never quits; Esc Esc clears a draft; ctrl+c arms with a cue on idle; ctrl+d on empty exits; enforced sign-in Esc does nothing (decided by least-surprise).
+- UI21-4: one key-hints row, one vocabulary, one dock slot (docked, never modal).
+- TL21-3: `gent server start` beside status and stop; delete `apps/server` (decided by subtract-before-you-add). TL21-2: logs follow the data directory.
+
+### Pass 21 triage
+
+| Batch | Rift        | Items                                                                                        |
+| ----- | ----------- | -------------------------------------------------------------------------------------------- |
+| Hook  | `p21-hook`  | R21-2                                                                                        |
+| Cold  | `p21-cold`  | R21-1, EF21-1, EF21-2, EF21-3                                                                |
+| Ext   | `p21-ext`   | X21-1 … X21-6                                                                                |
+| TUI   | `p21-tui`   | TUI21-2 … TUI21-8, UI21-1, UI21-3 … UI21-11, UI21-13                                         |
+| Core  | `p21-core`  | C21-1, C21-2, C21-3, TUI21-1, UI21-2, UI21-12, model-context.ts compat comments (after cold) |
+| Tools | `p21-tools` | TL21-1 … TL21-9 (after hook)                                                                 |
