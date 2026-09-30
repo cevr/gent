@@ -28,6 +28,7 @@ import {
   mergeRefused,
   noticeRowItems,
   runWithReconnect,
+  slashAutocompleteItems,
 } from "../src/session"
 import type { AutocompleteContribution, NoticeRow } from "../src/extensions/client-facets"
 import {
@@ -42,6 +43,8 @@ import {
 } from "@gent/core/protocol"
 import { BunServices } from "@effect/platform-bun"
 import { RGBA } from "@opentui/core"
+import type { Command } from "../src/commands"
+import { emptyFrecencyStore, frecencyLookup, recordPick } from "../src/autocomplete"
 
 // ── composer interaction state ──────────────────────────────────────────────
 
@@ -976,4 +979,105 @@ describe("reconnect", () => {
       expect(starts).toEqual([0, 1_000, 3_000, 7_000, 15_000, 16_000])
     }).pipe(Effect.provide(TestClock.layer()), Effect.timeout("4 seconds")),
   )
+})
+
+// ── slash autocomplete ──────────────────────────────────────────────────────
+
+/**
+ * The `/` items a reader's keystrokes reach, ranked by the session registry.
+ *
+ * The scorer has its own tests, but a scorer nobody calls ranks nothing, and a
+ * pick history nobody passes through changes no popup. These drive
+ * `slashAutocompleteItems` and assert the order a reader would see, so
+ * disconnecting it from the ranking or from the history fails here.
+ */
+
+/**
+ * A registration order that a substring filter gets wrong: `/fork` and
+ * `/auth` carry "ag" in their titles and register before `/agents` carries it
+ * in its name.
+ */
+const commands: ReadonlyArray<Command> = [
+  { id: "message.fork", title: "Fork from Message", slash: "fork", onSelect: () => {} },
+  { id: "auth.manage", title: "Manage API Keys", slash: "auth", onSelect: () => {} },
+  { id: "agents.view", title: "Agents", slash: "agents", aliases: ["tree"], onSelect: () => {} },
+  { id: "session.model", title: "Set Model", slash: "model", onSelect: () => {} },
+  { id: "session.think", title: "Set Reasoning", slash: "think", onSelect: () => {} },
+]
+
+const ids = (items: ReadonlyArray<{ readonly id: string }>): ReadonlyArray<string> =>
+  items.map((item) => item.id)
+
+describe("slash autocomplete contribution", () => {
+  test("puts the command named by the filter first", () => {
+    // Registration order would answer `fork, auth, agents`, and the
+    // preselected row is the one Tab completes and Enter runs.
+    expect(ids(slashAutocompleteItems(commands, "ag"))[0]).toBe("agents")
+  })
+
+  test("drops commands that match only through their title", () => {
+    const ranked = ids(slashAutocompleteItems(commands, "ag"))
+    expect(ranked).not.toContain("fork")
+    expect(ranked).not.toContain("auth")
+  })
+
+  test("still offers aliases", () => {
+    expect(ids(slashAutocompleteItems(commands, "tre"))).toContain("tree")
+  })
+
+  test("ranks a partially typed name onto its command", () => {
+    expect(ids(slashAutocompleteItems(commands, "mod"))[0]).toBe("model")
+    expect(ids(slashAutocompleteItems(commands, "thi"))[0]).toBe("think")
+  })
+
+  test("offers every command when nothing is typed yet", () => {
+    // One row per slash name plus the alias.
+    expect(ids(slashAutocompleteItems(commands, ""))).toEqual([
+      "fork",
+      "auth",
+      "agents",
+      "tree",
+      "model",
+      "think",
+    ])
+  })
+
+  test("offers nothing for a filter no command matches", () => {
+    expect(slashAutocompleteItems(commands, "zzzz")).toEqual([])
+  })
+})
+
+const NOW = 1_800_000_000_000
+
+/** `/think` and `/thread` tie on everything the matcher can see but length. */
+const commandsSeam: ReadonlyArray<Command> = [
+  { id: "session.think", title: "Set Reasoning", slash: "think", onSelect: () => {} },
+  { id: "session.thread", title: "Thread over sessions", slash: "thread", onSelect: () => {} },
+]
+
+describe("slash autocomplete reads pick history", () => {
+  test("answers /t with think for a reader who has picked nothing", () => {
+    expect(ids(slashAutocompleteItems(commandsSeam, "t"))[0]).toBe("think")
+  })
+
+  test("answers /thr with thread once the reader has picked it", () => {
+    // The seam: the contribution has to pass the history through to the
+    // ranker. A build that drops the third argument still answers `think`.
+    //
+    // Three characters, not one: ranking ignores pick history below
+    // FRECENCY_MIN_FILTER, so a one-character filter would pass this test for
+    // the wrong reason — it would answer `think` whether or not the history
+    // reached the ranker at all.
+    const store = recordPick(emptyFrecencyStore(), "/", "thread", NOW)
+    expect(ids(slashAutocompleteItems(commandsSeam, "thr", frecencyLookup(store, NOW)))[0]).toBe(
+      "thread",
+    )
+  })
+
+  test("keeps a picked command out of a filter it does not match", () => {
+    const store = recordPick(emptyFrecencyStore(), "/", "thread", NOW)
+    expect(ids(slashAutocompleteItems(commandsSeam, "think", frecencyLookup(store, NOW)))[0]).toBe(
+      "think",
+    )
+  })
 })

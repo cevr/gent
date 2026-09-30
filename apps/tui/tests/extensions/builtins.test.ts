@@ -10,10 +10,17 @@ import {
   makeHerdrReporter,
   rankListed,
 } from "../../src/extensions/builtins"
-import { readFrecencyStore } from "../../src/autocomplete"
+import {
+  emptyFrecencyStore,
+  frecencyLookup,
+  type FrecencyStoreValue,
+  readFrecencyStore,
+} from "../../src/autocomplete"
+import { runAutocompleteContributions } from "../../src/extensions/loader-boundary"
 import { BunServices } from "@effect/platform-bun"
 import {
   ConfigProvider,
+  DateTime,
   Deferred,
   Effect,
   Exit,
@@ -24,10 +31,12 @@ import {
   Path,
   Queue,
   Schema,
+  Schedule,
   Scope,
 } from "effect"
 import { AgentName, BranchId, SessionId } from "@gent/core/protocol"
 import {
+  type AutocompleteContribution,
   type AutocompleteItem,
   type ClientActivitySnapshot,
   type ClientRuntimeServices,
@@ -37,10 +46,12 @@ import {
 } from "../../src/extensions/client-facets"
 import { createMockClient, createMockRuntime } from "../render-harness-boundary"
 import {
+  makeClientExtensionRuntime,
   makeClientTestTransport,
   makePaneSlot,
   makePromiseHold,
   provideClientServices,
+  runClientExtensionSetup,
   runClientExtensionSetupWithRuntime,
 } from "../extension-test-harness-boundary"
 import { createSignal } from "solid-js"
@@ -1054,6 +1065,135 @@ describe("skills popup", () => {
       expect(
         Option.match(stored, { onNone: () => [], onSome: (store) => Object.keys(store.entries) }),
       ).toEqual(["$triage"])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+})
+
+/**
+ * The `$` items a reader's keystrokes reach, over the transport.
+ *
+ * Drives the real skills contribution against a temp home and returns the
+ * ranked ids and the contribution itself, so a test can also select a row.
+ * The contribution asks for an active session before its request; without
+ * one the call fails as `NoActiveSessionError` before any ranking happens.
+ */
+const skillsHarness = (home: string, names: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const runtime = makeClientExtensionRuntime({
+      // The extension writes its store under `home`, so the harness points at
+      // this test's temp directory. Left at the harness default, every run
+      // would share one file in /tmp and read a previous run's pick.
+      workspace: { cwd: home, home },
+      currentSession: () =>
+        Option.some({ sessionId: SessionId.make("sess-1"), branchId: BranchId.make("branch-1") }),
+      requestReply: names.map((name) => ({
+        name,
+        description: `The ${name} skill`,
+        level: "global",
+        content: "",
+        filePath: `/tmp/${name}.md`,
+      })),
+    })
+    yield* Effect.addFinalizer(() => Effect.promise(() => runtime.dispose()))
+    const contributions = yield* runClientExtensionSetup(runtime, builtinSkills)
+    const contribution = yield* Option.match(
+      Option.fromNullishOr(contributions.autocomplete?.[0]),
+      {
+        onNone: () => Effect.die("skills extension contributed no autocomplete"),
+        onSome: (entry) => Effect.succeed(entry satisfies AutocompleteContribution),
+      },
+    )
+    const rank = (filter: string) =>
+      Effect.gen(function* () {
+        const failures: Array<string> = []
+        const items = yield* Effect.promise(() =>
+          runAutocompleteContributions([contribution], filter, runtime, (prefix, reason) => {
+            failures.push(`${prefix}: ${reason}`)
+          }),
+        )
+        // A failing contribution answers with no rows, which would read as a
+        // ranking result rather than the breakage it is.
+        if (failures.length > 0) return yield* Effect.die(failures.join("; "))
+        return items.map((entry) => entry.item.id)
+      })
+    return { contribution, rank }
+  })
+
+/** Ranks `names` for `filter` with no pick history. */
+const skillItemsFor = (names: ReadonlyArray<string>, filter: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const harness = yield* skillsHarness(yield* fs.makeTempDirectoryScoped(), names)
+    return yield* harness.rank(filter)
+  })
+
+describe("skills autocomplete", () => {
+  filesTest("puts the closest skill name first rather than the first listed", () =>
+    Effect.gen(function* () {
+      // Plain substring filtering answered in host order, so `$tes` led with
+      // whichever skill happened to be listed first. `test` is the closest.
+      const names = ["code-style", "stacked", "test", "tdd", "teach"]
+      expect((yield* skillItemsFor(names, "tes"))[0]).toBe("test")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  filesTest("ranks a prefix above a mid-word match", () =>
+    Effect.gen(function* () {
+      const names = ["impeccable", "effect", "code-review"]
+      expect((yield* skillItemsFor(names, "eff"))[0]).toBe("effect")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  filesTest("finds a skill by letters scattered through its name", () =>
+    Effect.gen(function* () {
+      const names = ["code-review", "counsel", "test"]
+      expect(yield* skillItemsFor(names, "crv")).toContain("code-review")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  filesTest("offers every skill before anything is typed, and nothing for a miss", () =>
+    Effect.gen(function* () {
+      expect(yield* skillItemsFor(["effect", "test"], "")).toEqual(["effect", "test"])
+      expect(yield* skillItemsFor(["effect", "test"], "zzzz")).toEqual([])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  filesTest("answers $t with tdd before the reader picks anything", () =>
+    Effect.gen(function* () {
+      // The documented weakness: 12.760 against 12.680, decided by length.
+      expect((yield* skillItemsFor(["tdd", "test"], "t"))[0]).toBe("tdd")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  filesTest("writes a pick to the store when a row is selected", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const home = yield* fs.makeTempDirectoryScoped()
+      const harness = yield* skillsHarness(home, ["tdd", "test"])
+
+      // The write half. A contribution with no onSelect leaves nothing here.
+      const onSelect = Option.fromNullishOr(harness.contribution.onSelect)
+      expect(Option.isSome(onSelect)).toBe(true)
+      if (Option.isSome(onSelect)) onSelect.value("test", "t")
+
+      // The write is forked off the keystroke path, so it lands shortly after
+      // the callback returns. Retry rather than sleep: the assertion is "the
+      // pick arrives".
+      const weightOf = (loaded: Option.Option<FrecencyStoreValue>): number =>
+        frecencyLookup(
+          Option.getOrElse(loaded, () => emptyFrecencyStore()),
+          DateTime.toEpochMillis(DateTime.nowUnsafe()),
+        )("$", "test")
+
+      const recorded = yield* Effect.retry(
+        Effect.flatMap(readFrecencyStore(home), (loaded) => {
+          const weight = weightOf(loaded)
+          if (weight > 0) return Effect.succeed(weight)
+          return Effect.fail("not written yet")
+        }),
+        { times: 50, schedule: Schedule.spaced("10 millis") },
+      )
+      expect(recorded).toBeGreaterThan(0)
     }).pipe(Effect.timeout("10 seconds")),
   )
 })
