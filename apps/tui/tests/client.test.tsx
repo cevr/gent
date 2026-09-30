@@ -514,21 +514,28 @@ describe("ClientProvider session metrics", () => {
     }),
   )
 
-  it.live("a snapshot reply that arrives after a session switch is dropped", () =>
+  it.live("a route reply that arrives after a session switch is dropped", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()
-      const held = yield* Deferred.make<SessionSnapshot>()
+      const held = yield* Deferred.make<ModelId>()
       const asked: Array<string> = []
       const client = createMockClient({
         session: {
-          getSnapshot: (input: { sessionId: SessionId; branchId: BranchId }) => {
+          get: (input: { sessionId: SessionId }) => {
             asked.push(String(input.sessionId))
+            const view = (resolvedModelId: ModelId) => ({
+              id: input.sessionId,
+              createdAt: dateFromMillis(0),
+              updatedAt: dateFromMillis(0),
+              resolvedModelId,
+            })
             // Hold the first session's reply open so the switch lands first.
-            if (input.sessionId === FIRST.sessionId) return Deferred.await(held)
-            return Effect.succeed(
-              snapshotOf(SECOND, { costUsd: 0, lastInputTokens: 0, context: absent }),
-            )
+            if (input.sessionId === FIRST.sessionId)
+              return Deferred.await(held).pipe(Effect.map(view))
+            return Effect.succeed(view(ModelId.make("anthropic/second-session-model")))
           },
+          getSnapshot: () =>
+            Effect.succeed(snapshotOf(SECOND, { costUsd: 0, lastInputTokens: 0, context: absent })),
         },
       })
       const setup = yield* Effect.promise(() =>
@@ -562,18 +569,12 @@ describe("ClientProvider session metrics", () => {
       expect(clientContext.model()).not.toBe(firstResolvedModel)
 
       // The first session's reply lands now, naming a session nobody is on.
-      yield* Deferred.succeed(held, {
-        ...snapshotOf(FIRST, { costUsd: 4.2, lastInputTokens: 9_000, context: busyContext }),
-        resolvedModelId: firstResolvedModel,
-      })
+      yield* Deferred.succeed(held, firstResolvedModel)
       yield* Effect.promise(() => setup.renderOnce())
       yield* Effect.promise(() => setup.renderOnce())
 
-      // None of the first session's values come back.
+      // The first session's model does not come back.
       expect(clientContext.model()).not.toBe(firstResolvedModel)
-      expect(clientContext.cost()).toBe(0)
-      expect(clientContext.sessionMetrics().latestInputTokens).toBe(0)
-      expect(Option.isNone(clientContext.sessionMetrics().context)).toBe(true)
 
       setup.renderer.destroy()
     }),
@@ -656,18 +657,29 @@ describe("ClientProvider session metrics", () => {
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()
       let reads = 0
+      let snapshotReads = 0
       // The project config changes during the turn; the server resolves the new model.
       let resolvedModelId = ModelId.make("anthropic/claude-sonnet-5")
       const configModel = ModelId.make("anthropic/config-changed-model")
+      // The route is a narrow read: the snapshot, with every message, is not
+      // read again at a turn's end.
       const client = createMockClient({
         session: {
-          getSnapshot: () =>
+          get: () =>
             Effect.sync(() => {
               reads += 1
               return {
-                ...snapshotOf(FIRST, { costUsd: 0, lastInputTokens: 0 }),
+                id: FIRST.sessionId,
+                activeBranchId: FIRST.branchId,
+                createdAt: dateFromMillis(0),
+                updatedAt: dateFromMillis(0),
                 resolvedModelId,
               }
+            }),
+          getSnapshot: () =>
+            Effect.sync(() => {
+              snapshotReads += 1
+              return snapshotOf(FIRST, { costUsd: 0, lastInputTokens: 0 })
             }),
         },
       })
@@ -687,12 +699,13 @@ describe("ClientProvider session metrics", () => {
       clientContext.applySessionSnapshot(snapshotOf(FIRST, { costUsd: 0, lastInputTokens: 0 }))
       yield* Effect.promise(() => setup.renderOnce())
       const readsAfterHydrate = reads
+      const snapshotReadsAfterHydrate = snapshotReads
       const live = (id: number, event: AgentEvent) =>
         clientContext.applySessionEvent(
           EventEnvelope.make({ id: EventId.make(id), createdAt: 0, event }),
         )
       resolvedModelId = configModel
-      // Two steps end: neither reads the snapshot.
+      // Two steps end: neither reads the route.
       for (const id of [10, 11]) {
         live(
           id,
@@ -713,6 +726,7 @@ describe("ClientProvider session metrics", () => {
       )
       yield* waitUntil(() => clientContext.model() === configModel, "the next turn's model")
       expect(reads).toBe(readsAfterHydrate + 1)
+      expect(snapshotReads).toBe(snapshotReadsAfterHydrate)
 
       setup.renderer.destroy()
     }).pipe(Effect.timeout("4 seconds")),

@@ -1130,27 +1130,28 @@ export function ClientProvider(props: ClientProviderProps) {
    * A settings change moves them, and so can a project config edit, which
    * the server reads each turn; the server alone resolves the fallback. It
    * runs on a settings change and at a turn's end, never per step; the
-   * totals come from the fold.
+   * totals come from the fold. `session.get` answers the route without the
+   * conversation, so the read does not grow with the session's history.
    */
   const refreshResolvedSettings = (): void => {
     const currentSession = sessionOption()
     if (Option.isNone(currentSession)) return
     const s = currentSession.value
     cast(
-      client.session.getSnapshot({ sessionId: s.sessionId, branchId: s.branchId }).pipe(
-        Effect.tap((snapshot) =>
+      client.session.get({ sessionId: s.sessionId }).pipe(
+        Effect.tap((reply) =>
           Effect.sync(() => {
             // The session can change while this reply is in flight. Writing it
             // blind would restore the previous session's model over the new
-            // session's reset values, so a reply that no longer names the
-            // active branch is dropped.
+            // session's reset values, so a reply for a session the reader
+            // left, or for a session that is gone, is dropped.
+            const view = Option.fromNullishOr(reply)
             const active = sessionOption()
-            if (Option.isNone(active)) return
+            if (Option.isNone(view) || Option.isNone(active)) return
             if (active.value.sessionId !== s.sessionId) return
-            if (active.value.branchId !== s.branchId) return
             setAgentStore({
-              resolvedModelId: Option.some(snapshot.resolvedModelId),
-              resolvedReasoningLevel: Option.fromUndefinedOr(snapshot.resolvedReasoningLevel),
+              resolvedModelId: Option.fromUndefinedOr(view.value.resolvedModelId),
+              resolvedReasoningLevel: Option.fromUndefinedOr(view.value.resolvedReasoningLevel),
             })
           }),
         ),

@@ -173,6 +173,16 @@ export class SessionSnapshot extends Schema.Class<SessionSnapshot>("SessionSnaps
   metrics: SessionRuntimeMetrics,
 }) {}
 
+/**
+ * The stored session with the model and reasoning its next turn resolves to,
+ * as `session.get` answers it. A client that needs only the route reads this
+ * instead of the whole snapshot.
+ */
+export class SessionView extends Session.extend<SessionView>("SessionView")({
+  resolvedModelId: Schema.optional(ModelId),
+  resolvedReasoningLevel: Schema.optional(ReasoningEffort),
+}) {}
+
 export { SteerCommand }
 
 export const QueueTarget = Schema.Struct({
@@ -420,7 +430,7 @@ class SessionRpcs extends RpcGroup.make(
   }),
   Rpc.make("session.get", {
     payload: { sessionId: SessionId },
-    success: Schema.NullOr(Session),
+    success: Schema.NullOr(SessionView),
     error: GentRpcError,
   }),
   Rpc.make("session.delete", {

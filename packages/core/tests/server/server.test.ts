@@ -3323,6 +3323,10 @@ describe("message.send", () => {
         })
         expect(fresh.resolvedModelId).toBe(ModelId.make("openai/gpt-5.6-sol"))
         expect(fresh.resolvedReasoningLevel).toBe("low")
+        // `session.get` answers the same route without the conversation.
+        const freshView = yield* client.session.get({ sessionId: created.sessionId })
+        expect(freshView?.resolvedModelId).toBe(ModelId.make("openai/gpt-5.6-sol"))
+        expect(freshView?.resolvedReasoningLevel).toBe("low")
 
         const sessionModel = ModelId.make("custom/session-model")
         const stored = yield* client.session.updateSettings({
@@ -3339,6 +3343,9 @@ describe("message.send", () => {
         expect(withSettings.reasoningLevel).toBe("max")
         expect(withSettings.resolvedModelId).toBe(sessionModel)
         expect(withSettings.resolvedReasoningLevel).toBe("max")
+        const settingsView = yield* client.session.get({ sessionId: created.sessionId })
+        expect(settingsView?.resolvedModelId).toBe(sessionModel)
+        expect(settingsView?.resolvedReasoningLevel).toBe("max")
 
         yield* client.message.send({
           sessionId: created.sessionId,

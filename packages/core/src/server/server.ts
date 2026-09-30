@@ -74,6 +74,7 @@ import {
   type RespondInteractionInput,
   type SendMessageInput,
   SessionSnapshot,
+  SessionView,
   type SetAuthKeyInput,
   type SetDriverOverrideInput,
   SlashCommandInfo,
@@ -1038,6 +1039,40 @@ const resolveRegistryForCwd = Effect.fn("SessionQueries.resolveRegistryForCwd")(
   return profile.registryService
 })
 
+/**
+ * How the session's next turn routes: what the footer shows. Resolving it
+ * here keeps the precedence (session > config > agent) in one place with the
+ * turn. The agent roster is resolved data; the lease ends with the read.
+ */
+const readSessionRoute = Effect.fn("SessionQueries.readSessionRoute")(function* (session: Session) {
+  const registry = yield* resolveRegistryForCwd(Option.fromUndefinedOr(session.cwd)).pipe(
+    Effect.scoped,
+  )
+  const configService = yield* ConfigService
+  const config = yield* configService.get(session.cwd)
+  return resolveSessionRoute({
+    agents: [...registry.getResolved().agents.values()],
+    admission: Option.fromUndefinedOr(session.admission),
+    config,
+    session,
+  })
+})
+
+/** The stored session and its route, without the conversation. */
+const getSessionView = Effect.fn("SessionQueries.getSessionView")(function* (sessionId: SessionId) {
+  const sessionStorage = yield* SessionStorage
+  const session = yield* sessionStorage.getSession(sessionId)
+  if (Predicate.isUndefined(session)) return Option.none<SessionView>()
+  const route = yield* readSessionRoute(session)
+  return Option.some(
+    new SessionView({
+      ...session,
+      resolvedModelId: route.modelId,
+      resolvedReasoningLevel: Option.getOrUndefined(route.reasoningLevel),
+    }),
+  )
+})
+
 /** The one read the client hydrates from: persisted conversation plus live runtime state. */
 export const getSessionSnapshot = Effect.fn("SessionQueries.getSessionSnapshot")(function* (
   input: GetSessionSnapshotInput,
@@ -1091,20 +1126,7 @@ export const getSessionSnapshot = Effect.fn("SessionQueries.getSessionSnapshot")
     ),
   )
 
-  // The footer shows what the next turn would use; resolving it here keeps
-  // the precedence (session > config > agent) in one place with the turn.
-  // The agent roster is resolved data; the lease ends with the read.
-  const registry = yield* resolveRegistryForCwd(Option.fromUndefinedOr(session.cwd)).pipe(
-    Effect.scoped,
-  )
-  const configService = yield* ConfigService
-  const config = yield* configService.get(session.cwd)
-  const route = resolveSessionRoute({
-    agents: [...registry.getResolved().agents.values()],
-    admission: Option.fromUndefinedOr(session.admission),
-    config,
-    session,
-  })
+  const route = yield* readSessionRoute(session)
 
   // The snapshot carries no extension state: clients call the extension's
   // typed `client.extension.request(...)` on mount and refetch on
@@ -1315,9 +1337,9 @@ const RpcHandlers = GentRpcs.toLayer(
         relationshipStorage.getThreadSessions(sessionId),
 
       "session.get": ({ sessionId }: SessionIdPayload) =>
-        sessionStorage
-          .getSession(sessionId)
-          .pipe(Effect.map(Option.fromUndefinedOr), Effect.map(Option.getOrNull)),
+        rpc("session.get", getSessionView(sessionId).pipe(Effect.map(Option.getOrNull)), () => ({
+          sessionId,
+        })),
 
       "session.delete": ({ sessionId }: SessionIdPayload) =>
         rpc("session.delete", mutations.deleteSession(sessionId), () => ({ sessionId })),
