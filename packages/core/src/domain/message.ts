@@ -1112,6 +1112,9 @@ const fieldCost = (
 ): number =>
   costUpTo(encodeJson(name), cost, Infinity) + 1 + costUpTo(encodeJson(value), cost, Infinity) + 1
 
+// oxlint-disable-next-line effect/noNullish -- ToolInteraction's input, summary, output and duration are UndefinedOr wire fields.
+const absentField = undefined
+
 /**
  * An operation's input as its collapsed row reads it: top-level scalar fields.
  * Every field is kept whole or not at all, cheapest first, within `budget`,
@@ -1126,10 +1129,9 @@ type BoundedInput = string | Readonly<Record<string, Scalar>> | undefined
 const boundedInput = (input: unknown, budget: number): BoundedInput => {
   if (Predicate.isString(input)) {
     if (costUpTo(input, encodedOnce, budget) + 2 <= budget) return input
-    return Option.getOrUndefined(Option.none<string>())
+    return absentField
   }
-  if (!Predicate.isObject(input) || Array.isArray(input))
-    return Option.getOrUndefined(Option.none<string>())
+  if (!Predicate.isObject(input) || Array.isArray(input)) return absentField
   const fields = Object.entries(input)
     .filter((entry): entry is [string, Scalar] => isScalar(entry[1]))
     .map(([key, value]) => ({ key, value, cost: fieldCost(key, value, encodedOnce) }))
@@ -1227,7 +1229,7 @@ interface BoundedOutput {
   readonly cuts: ReadonlyArray<OutputCut>
 }
 
-const noOutput: BoundedOutput = { output: Option.getOrUndefined(Option.none()), cuts: [] }
+const noOutput: BoundedOutput = { output: absentField, cuts: [] }
 
 /** A cuttable field's value within its share, and the record of its cut. */
 interface FittedField {
@@ -1440,9 +1442,9 @@ const fitOperation = (raw: OperationRaw): ToolOperation => {
     id: ToolCallId.make(""),
     toolName: headWithin(raw.toolName, TOOL_NAME_BUDGET, encodedOnce),
     status: raw.status,
-    input: Option.getOrUndefined(Option.none()),
+    input: absentField,
     summary: raw.summary,
-    output: Option.getOrUndefined(Option.none()),
+    output: absentField,
     durationMs: raw.durationMs,
   }
   // `"input":` and `"output":` with their commas.
@@ -1502,9 +1504,9 @@ const admitOperation = (
       toolName: event.toolName,
       status: "running",
       input: event.input,
-      summary: Option.getOrUndefined(Option.none<string>()),
-      output: Option.getOrUndefined(Option.none<string>()),
-      durationMs: Option.getOrUndefined(Option.none<number>()),
+      summary: absentField,
+      output: absentField,
+      durationMs: absentField,
     }),
   )
   operations.set(parent, siblings)

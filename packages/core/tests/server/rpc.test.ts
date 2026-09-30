@@ -5337,7 +5337,8 @@ describe("namespaced client", () => {
     )
     const flat: GentRpcClient = new Proxy(Object.create(null), {
       get: (_target, property) => {
-        if (!Predicate.isString(property)) return Option.getOrUndefined(Option.none())
+        // oxlint-disable-next-line effect/noNullish -- A proxy answers undefined for a key it does not hold.
+        if (!Predicate.isString(property)) return undefined
         return Option.getOrUndefined(Option.fromNullishOr(handlers.get(property)))
       },
     })
@@ -5367,7 +5368,8 @@ describe("namespaced client", () => {
       let observed = Option.none<string>()
       const flat: GentRpcClient = new Proxy(Object.create(null), {
         get: (_target, property) => {
-          if (property !== "session.list") return Option.getOrUndefined(Option.none())
+          // oxlint-disable-next-line effect/noNullish -- A proxy answers undefined for a key it does not hold.
+          if (property !== "session.list") return undefined
           return () =>
             Effect.gen(function* () {
               const headers = yield* RpcClient.CurrentHeaders
@@ -5387,7 +5389,8 @@ describe("namespaced client", () => {
       let observed = Option.none<string>()
       const flat: GentRpcClient = new Proxy(Object.create(null), {
         get: (_target, property) => {
-          if (property !== "session.watchRuntime") return Option.getOrUndefined(Option.none())
+          // oxlint-disable-next-line effect/noNullish -- A proxy answers undefined for a key it does not hold.
+          if (property !== "session.watchRuntime") return undefined
           return () =>
             Stream.fromEffect(
               Effect.gen(function* () {

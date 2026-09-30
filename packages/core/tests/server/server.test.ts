@@ -858,7 +858,8 @@ describe("session queries", () => {
 
 // ── session command persistence ─────────────────────────────────────────────
 
-const absentModel = Option.getOrUndefined(Option.none<ModelId>())
+// oxlint-disable-next-line effect/noNullish -- The command leaves the model unset, as a client sends it.
+const absentModel = undefined
 
 describe("session command persistence", () => {
   it.live("message.send surfaces runtime failure and does not log message sent", () =>

@@ -204,7 +204,8 @@ describe("agent turn response collectors", () => {
       finishPart({ finishReason: "stop", usage: { inputTokens: 0, outputTokens: 0 } }),
     ).usage
     expect(responseUsage(usage)).toEqual(Option.some({ inputTokens: 0, outputTokens: 0 }))
-    for (const total of [Option.getOrUndefined(Option.none<number>()), -1, 1.5, Number.NaN]) {
+    // oxlint-disable-next-line effect/noNullish -- A provider can leave the count out.
+    for (const total of [undefined, -1, 1.5, Number.NaN]) {
       expect(responseUsage({ ...usage, inputTokens: { ...usage.inputTokens, total } })).toEqual(
         Option.none(),
       )
@@ -261,7 +262,8 @@ describe("agent turn response collectors", () => {
     const usage = Schema.decodeUnknownSync(Response.FinishPart)(
       finishPart({ finishReason: "stop", usage: { inputTokens: 100, outputTokens: 5 } }),
     ).usage
-    for (const count of [Option.getOrUndefined(Option.none<number>()), -1, 1.5, Number.NaN]) {
+    // oxlint-disable-next-line effect/noNullish -- A provider can leave the count out.
+    for (const count of [undefined, -1, 1.5, Number.NaN]) {
       expect(
         responseUsage({
           ...usage,

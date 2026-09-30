@@ -293,11 +293,14 @@ const unusedResolution = (): Effect.Effect<ProviderResolution> =>
     AiModel.make("test", "model", Layer.succeed(LanguageModel.LanguageModel, failingLanguageModel)),
   )
 
+// oxlint-disable-next-line effect/noNullish -- The auth store answers undefined for a provider with no key.
+const noStoredAuth: AuthInfo | undefined = undefined
+
 const authLayer = Layer.succeed(
   Auth,
   Auth.of(
     serializeAuthStore({
-      get: () => Effect.succeed(Option.getOrUndefined(Option.none<AuthInfo>())),
+      get: () => Effect.succeed(noStoredAuth),
       set: () => Effect.void,
       remove: () => Effect.void,
     }),
@@ -454,7 +457,7 @@ describe("model catalog resolution", () => {
           serializeAuthStore({
             get: (providerId) => {
               if (providerId !== "openai") {
-                return Effect.succeed(Option.getOrUndefined(Option.none<AuthInfo>()))
+                return Effect.succeed(noStoredAuth)
               }
               return Effect.succeed(AuthInfo.cases.Api.make({ type: "api", key: "sk-openai" }))
             },
@@ -1039,7 +1042,7 @@ const failingAuthStoreLayer = Layer.succeed(
   Auth,
   Auth.of(
     serializeAuthStore({
-      get: () => Effect.succeed(Option.getOrUndefined(Option.none<AuthInfo>())),
+      get: () => Effect.succeed(noStoredAuth),
       set: () => Effect.fail(new AuthError({ message: "write failed" })),
       remove: () => Effect.void,
     }),

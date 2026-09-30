@@ -24,7 +24,7 @@ import {
   toolCallReceipts,
 } from "../../src/domain/message"
 import { AgentEvent, EventEnvelope, EventId } from "../../src/domain/event"
-import { Option, Predicate, Schema } from "effect"
+import { Predicate, Schema } from "effect"
 import * as Response from "effect/ai/Response"
 
 describe("steer command", () => {
@@ -247,7 +247,8 @@ const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[
 // ── message part projection ─────────────────────────────────────────────────
 
 describe("message part projection", () => {
-  const absent = Option.getOrUndefined(Option.none<number>())
+  // oxlint-disable-next-line effect/noNullish -- The fixture names an absent wire field.
+  const absent = undefined
   const makeMessage = (
     id: string,
     role: "assistant" | "tool",
@@ -396,7 +397,8 @@ describe("message part projection", () => {
     const read = ToolCallId.make("tc-read")
     const lost = ToolCallId.make("tc-lost")
     const forked = ToolCallId.make("tc-forked")
-    const noText = Option.getOrUndefined(Option.none<string>())
+    // oxlint-disable-next-line effect/noNullish -- The fixture names an absent wire field.
+    const noText = undefined
     const envelope = (id: number, createdAt: number, event: AgentEvent) =>
       EventEnvelope.make({ id: EventId.make(id), createdAt, event })
     const events = [

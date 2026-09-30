@@ -1644,7 +1644,9 @@ describe("driver resolution", () => {
         if (driverId === "auth-a") {
           return Effect.succeed(ProviderAuthInfo.cases.Api.make({ key: "secret-a" }))
         }
-        return Effect.succeed(Option.getOrUndefined(Option.none<ProviderAuthInfo>()))
+        // oxlint-disable-next-line effect/noNullish -- The auth store answers undefined for a provider with no key.
+        const noKey: ProviderAuthInfo | undefined = undefined
+        return Effect.succeed(noKey)
       })
       // Each driver's listModels should have been called with the auth from resolveAuth(its id)
       const authAEntry = Option.fromUndefinedOr(seenAuth.find((s) => s.driverId === "auth-a"))
