@@ -501,7 +501,12 @@ const blobDirectory = Effect.fn("Mcp.blobDirectory")(function* (home: string) {
   return path.join(yield* resolveDataDir(home), "mcp-blobs")
 })
 
-/** Removes the files in `directory` last written more than `BLOB_MAX_AGE` ago. */
+/**
+ * Removes the files in `directory` last written more than `BLOB_MAX_AGE` ago.
+ * A save that reuses a file sets its modification time to now, so a file
+ * any process named within `BLOB_MAX_AGE` stays. Each file is checked right
+ * before it is removed; a save that finds its file gone writes it again.
+ */
 const pruneBlobs = Effect.fn("Mcp.pruneBlobs")(function* (directory: string) {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
@@ -522,7 +527,8 @@ const pruneBlobs = Effect.fn("Mcp.pruneBlobs")(function* (directory: string) {
  * Writes the binary blocks of a call result to `directory`, each once, as
  * `<sha256>.<ext>`, so the cell reads them with Bun. A block past
  * `BLOB_FILE_LIMIT`, or one that cannot be decoded or written, gets no file.
- * The first write of the process removes files older than `BLOB_MAX_AGE`.
+ * The first write of the process removes files older than `BLOB_MAX_AGE`
+ * (see `pruneBlobs`); a reused file's modification time is set to now.
  */
 const makeBlobStore = (directory: string) =>
   Effect.gen(function* () {
@@ -548,7 +554,13 @@ const makeBlobStore = (directory: string) =>
         yield* prune
         const digest = Hex.encode(yield* crypto.digest("SHA-256", bytes.success))
         const file = path.join(directory, `${digest}.${blobExtension(mimeType)}`)
-        if (!(yield* fs.exists(file))) {
+        // A reuse marks the file as just written, so no prune takes it now; a file gone is written again.
+        const now = (yield* Clock.currentTimeMillis) / 1000
+        const reused = yield* fs.utimes(file, now, now).pipe(
+          Effect.as(true),
+          Effect.orElseSucceed(() => false),
+        )
+        if (!reused) {
           yield* fs.makeDirectory(directory, { recursive: true })
           yield* writeFileAtomic(file, bytes.success)
         }

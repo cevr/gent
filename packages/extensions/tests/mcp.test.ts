@@ -1537,6 +1537,8 @@ const BinaryDisplay = Schema.fromJsonString(
     contents: Schema.Array(Schema.String),
     named: Schema.Boolean,
     again: Schema.String,
+    touched: Schema.Boolean,
+    rewritten: Schema.String,
     huge: Schema.Struct({
       omitted: Schema.Array(
         Schema.Struct({
@@ -1577,11 +1579,18 @@ describe("mcp binary content", () => {
           "const contents = await Promise.all(result.omitted.map((entry) => Bun.file(entry.path).text()))",
           "const hash = (text) => new Bun.CryptoHasher('sha256').update(text).digest('hex')",
           "const named = result.omitted.every((entry, index) => entry.path.endsWith('/' + hash(contents[index]) + (index === 0 ? '.png' : '.bin')))",
+          // A reuse refreshes a file's age: the first file is aged past the prune age, the second removed.
+          "const nodeFs = require('node:fs')",
+          "const aged = Date.now() / 1000 - 20 * 24 * 60 * 60",
+          "nodeFs.utimesSync(result.omitted[0].path, aged, aged)",
+          "nodeFs.unlinkSync(result.omitted[1].path)",
           "const again = (await tools.mcp.fixture.image()).omitted[0].path",
+          "const touched = Date.now() - nodeFs.statSync(again).mtimeMs < 60_000",
+          "const rewritten = nodeFs.readFileSync(result.omitted[1].path, 'utf8')",
           // Over stdio the SDK refuses a message past 10 MiB, so the cap is reached over HTTP.
           "const huge = await tools.mcp.remote.huge()",
           `const files = require('node:fs').readdirSync(${encodeJson(blobs)}).sort()`,
-          "JSON.stringify({ ...result, contents, named, again, huge: { omitted: huge.omitted, note: huge.note }, files })",
+          "JSON.stringify({ ...result, contents, named, again, touched, rewritten, huge: { omitted: huge.omitted, note: huge.note }, files })",
         ].join("; ")
         const result = yield* Effect.gen(function* () {
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
@@ -1622,6 +1631,8 @@ describe("mcp binary content", () => {
         expect(shown.contents).toEqual(["PNGDATA-1", "BLOB"])
         expect(shown.named).toBe(true)
         expect(shown.again).toBe(shown.omitted[0]?.path ?? "")
+        expect(shown.touched).toBe(true)
+        expect(shown.rewritten).toBe("BLOB")
         expect(shown.note).toBe("2 binary blocks saved to files: read each one from its path")
         // Past the cap: the size and no file.
         expect(shown.huge.omitted).toEqual([
