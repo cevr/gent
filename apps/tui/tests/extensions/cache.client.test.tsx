@@ -399,6 +399,26 @@ describe("scanCacheMisses", () => {
     }),
   )
 
+  it.live("the lifetime runs from the previous request's start, so its response uses it up", () =>
+    Effect.sync(() => {
+      const history = makeHistory()
+      history.input(0, "t1")
+      const responseEnd = SECOND + MINUTE
+      history.step({
+        start: SECOND,
+        end: responseEnd,
+        turn: "t1",
+        usage: { inputTokens: 30_000, cacheWriteTokens: 30_000 },
+      })
+      // 4m30s after the response ended, 5m31s after its request started.
+      const nextStart = responseEnd + 4 * MINUTE + 30 * SECOND
+      history.input(nextStart - SECOND, "t2")
+      history.step({ start: nextStart, end: nextStart + 5 * SECOND, turn: "t2", usage: missedStep })
+      const miss = onlyMiss(scanCacheMisses(history.envelopes))
+      expect(miss.cause).toEqual(CacheMissCause.cases.Idle.make({ ms: nextStart - SECOND }))
+    }),
+  )
+
   it.live("a miss inside the TTL on the same model is a changed prefix", () =>
     Effect.sync(() => {
       const history = cachedFirstStep()

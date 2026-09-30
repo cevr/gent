@@ -1564,7 +1564,12 @@ export const projectCurrentWindow = (params: {
  * cached after one.
  */
 export interface PromptCache {
-  /** When the newest `StreamEnded` of the branch was stored, in epoch milliseconds. */
+  /**
+   * When the branch's last model request started: the newest `StreamStarted`
+   * of the branch, in epoch milliseconds. The provider refreshes its cache
+   * when a request reads or writes it, so the lifetime runs from there, and
+   * a long response uses it up as idle time does.
+   */
   readonly lastCallAtMillis: number
   /** `Model.promptCacheTtlMs` of the model the turn calls. */
   readonly ttlMs: number

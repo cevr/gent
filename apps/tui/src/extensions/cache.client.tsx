@@ -60,7 +60,7 @@ export const CacheMissCause = Schema.TaggedUnion({
   ModelSwitch: {},
   /** Same model inside the cache lifetime, on a provider that writes its cache: the prefix itself changed. */
   PrefixChanged: {},
-  /** The previous response ran out the lifetime that began when its request started. */
+  /** The previous response itself took most of the lifetime, measured from its start. */
   Response: { ms: Schema.Finite },
   /** The cache expired while one tool call ran between two steps of a turn. */
   Tool: { toolName: Schema.String, ms: Schema.Finite },
@@ -98,38 +98,32 @@ export interface CacheMiss {
 /** A lost prefix as the fold sees it, before the model's cache lifetime says why. */
 interface ScannedMiss extends Omit<CacheMiss, "cause"> {
   /**
-   * How long after the previous step ended this request started: the idle
-   * time the loop measures from the branch's last `StreamEnded` when it
-   * decides a turn starts cold.
+   * How long after the previous request started this one started. The
+   * provider refreshes its cache when a request starts, so the lifetime runs
+   * from there, as the loop counts it when it decides a turn starts cold.
    */
-  readonly idleMs: number
-  /** How long the previous step's response ran. */
-  readonly responseMs: number
+  readonly sinceRefreshMs: number
   /** The step ran on another model than the previous one; its cache holds nothing of the prefix. */
   readonly modelSwitch: boolean
   /** The model reported cache writes: it holds a written prefix for the lifetime. */
   readonly explicitCache: boolean
-  /** What took the idle time, if it outlived the lifetime. */
+  /** What took that time, if it outlived the lifetime. */
   readonly lapse: CacheMissCause
 }
 
 /**
- * The miss and its cause by the model's cache lifetime. Idle past the
- * lifetime is the lapse's doing. A provider refreshes its cache when a
- * request starts, so a response that ran the rest of the lifetime expired it
- * too. Otherwise only an explicit cache's miss counts, as a changed prefix.
+ * The miss and its cause by the model's cache lifetime. Time past the
+ * lifetime since the previous request started is the lapse's doing.
+ * Otherwise only an explicit cache's miss counts, as a changed prefix.
  * With no lifetime only a model switch counts.
  */
 export const resolveMiss = (
   scanned: ScannedMiss,
   lifetimeMs: Option.Option<number>,
 ): Option.Option<CacheMiss> => {
-  const { idleMs, responseMs, modelSwitch, explicitCache, lapse, ...miss } = scanned
+  const { sinceRefreshMs, modelSwitch, explicitCache, lapse, ...miss } = scanned
   const cause = Option.flatMap(lifetimeMs, (lifetime) => {
-    if (idleMs > lifetime) return Option.some(lapse)
-    if (idleMs + responseMs > lifetime) {
-      return Option.some(CacheMissCause.cases.Response.make({ ms: responseMs }))
-    }
+    if (sinceRefreshMs > lifetime) return Option.some(lapse)
     return Option.liftPredicate(CacheMissCause.cases.PrefixChanged.make({}), () => explicitCache)
   })
   const switched = Option.liftPredicate(
@@ -210,12 +204,16 @@ export const makeCacheScan = (): CacheScan => {
     waits = []
   }
 
-  /** Why a prefix outlived its lifetime: what took the idle time since the previous step ended. */
+  /** Why a prefix outlived its lifetime: what took the time since the previous request started. */
   const expiredCause = (
     prior: CachedRequest,
     gapMs: number,
     input: Option.Option<string>,
   ): CacheMissCause => {
+    const response = { name: "response", ms: Math.max(0, prior.endedAt - prior.startedAt) }
+    if (Option.isSome(covers(Option.some(response), gapMs))) {
+      return CacheMissCause.cases.Response.make({ ms: response.ms })
+    }
     const sameTurn =
       Option.isSome(input) && Option.isSome(prior.input) && input.value === prior.input.value
     if (sameTurn) {
@@ -258,9 +256,9 @@ export const makeCacheScan = (): CacheScan => {
       if (!reported && !prior.reportedCache) return Option.none()
       const missedTokens = Math.min(prior.promptTokens, promptTokens) - cacheReadTokens
       if (missedTokens <= NOISE_FLOOR_TOKENS) return Option.none()
-      // Idle runs from the end of the previous step, as the loop counts it;
-      // the lapse names what took that interval.
-      const idleMs = Math.max(0, begun.at - prior.endedAt)
+      // The lifetime runs from the start of the previous request, as the loop
+      // counts it; the lapse names what took that interval.
+      const sinceRefreshMs = Math.max(0, begun.at - prior.startedAt)
       return Option.some({
         eventId: envelope.id,
         startedAt: begun.at,
@@ -271,11 +269,10 @@ export const makeCacheScan = (): CacheScan => {
         cacheReadTokens,
         cacheWriteTokens,
         billed: (event.costUsd ?? 0) > 0,
-        idleMs,
-        responseMs: Math.max(0, prior.endedAt - prior.startedAt),
+        sinceRefreshMs,
         modelSwitch: model !== prior.model,
         explicitCache: writers.has(model),
-        lapse: expiredCause(prior, idleMs, begun.input),
+        lapse: expiredCause(prior, sinceRefreshMs, begun.input),
       })
     })
     previous = Option.some({

@@ -2059,9 +2059,10 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
      * before that reply at that size (derived from the log, never kept beside
      * it). A row with no recorded overhead measures nothing.
      *
-     * The newest `StreamEnded` also says when the branch last called a model:
-     * the time it was stored. A turn that starts after its model's prompt
-     * cache lapsed may hand a large window off first.
+     * The newest `StreamStarted` says when the branch last called a model: the
+     * time it was stored, just before the request went out. The provider
+     * refreshes its cache when a request starts, so a turn that starts one
+     * lifetime after it may hand a large window off first.
      *
      * The cursor only bounds the read to the events since the last one it
      * saw; the values are always re-derived from the log.
@@ -2086,8 +2087,8 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         })),
       )
     }
-    const knownStepEnd = ({ event, createdAt }: EventEnvelope): Option.Option<number> =>
-      Option.liftPredicate(createdAt, () => event._tag === "StreamEnded")
+    const knownStepStart = ({ event, createdAt }: EventEnvelope): Option.Option<number> =>
+      Option.liftPredicate(createdAt, () => event._tag === "StreamStarted")
     interface KnownSteps {
       readonly cursor: number
       readonly model: Option.Option<ModelIdType>
@@ -2125,7 +2126,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         }),
         model: newest(events, knownStepModel, known.model),
         measure: newest(events, knownStepMeasure, known.measure),
-        lastCallAtMillis: newest(events, knownStepEnd, known.lastCallAtMillis),
+        lastCallAtMillis: newest(events, knownStepStart, known.lastCallAtMillis),
       }
       yield* Ref.set(lastKnownStep, current)
       return current

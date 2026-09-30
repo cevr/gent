@@ -1156,18 +1156,28 @@ const measuredReply = (text: string, inputTokens: number): SequenceStep => ({
  * Two turns through the RPC surface. The first reply reports a request of
  * `firstInputTokens`, so the second turn counts the window at that size. A
  * cache lifetime of zero makes the first call's cache lapse before the
- * second turn starts; one hour keeps it warm.
+ * second turn starts; one hour keeps it warm. With `firstReplyHoldMs`, the
+ * first reply streams only after that long, so its response runs that long
+ * after its request started.
  */
 const runColdCacheTurns = (params: {
   readonly promptCacheTtlMs: Option.Option<number>
   readonly firstInputTokens: number
   readonly compactor: boolean
   readonly steps: ReadonlyArray<SequenceStep>
+  readonly firstReplyHoldMs?: number
 }) =>
   Effect.gen(function* () {
+    const hold = Option.fromUndefinedOr(params.firstReplyHoldMs)
     const requests: Array<string> = []
     const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence(
-      [measuredReply("first reply", params.firstInputTokens), ...params.steps].map((step) => ({
+      [
+        {
+          ...measuredReply("first reply", params.firstInputTokens),
+          gated: Option.isSome(hold),
+        },
+        ...params.steps,
+      ].map((step) => ({
         ...step,
         assertOptions: (options) => {
           requests.push(encodeJson(options.prompt.content))
@@ -1184,6 +1194,18 @@ const runColdCacheTurns = (params: {
     })
     for (const content of [`${FIRST_PROMPT_MARK} one`, "second prompt"]) {
       yield* client.message.send({ sessionId, branchId, content })
+      if (content !== "second prompt" && Option.isSome(hold)) {
+        const holdMs = hold.value
+        yield* controls.waitForCall(0)
+        const requestedAt = yield* Clock.currentTimeMillis
+        yield* waitFor(
+          Clock.currentTimeMillis,
+          (now) => now - requestedAt >= holdMs,
+          holdMs + 1_000,
+          "the first response ran its length",
+        )
+        yield* controls.emitAll(0)
+      }
       yield* waitFor(
         client.session.getSnapshot({ sessionId, branchId }),
         (snapshot) =>
@@ -1260,6 +1282,26 @@ describe("cold prompt cache", () => {
       const projected = secondProjection(result.events)
       expect(projected?._tag === "ModelContextProjected" && projected.compacted).toBe(false)
     }),
+  )
+
+  it.live(
+    "a response that ran out the cache lifetime makes the next turn cold, however short the idle after it",
+    () =>
+      Effect.gen(function* () {
+        // The provider refreshes its cache when a request starts: the first
+        // request started 1.5s before the second turn, the lifetime is 1s.
+        const result = yield* runColdCacheTurns({
+          promptCacheTtlMs: Option.some(1_000),
+          firstInputTokens: 100_000,
+          compactor: true,
+          steps: [textStep("the summary of the first turn"), textStep("second reply")],
+          firstReplyHoldMs: 1_500,
+        })
+
+        expect(result.calls).toBe(3)
+        expect(result.requests[1]).toContain("summarize")
+        expect(handoffMarkers(result.durable)).toHaveLength(1)
+      }),
   )
 
   it.live("a small window whose prompt cache lapsed is sent whole", () =>
