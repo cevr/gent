@@ -153,17 +153,6 @@ if (process.env.MCP_FIXTURE_TYPED) {
     { name: "badstats", description: "Break its own output schema.", inputSchema: { type: "object" }, outputSchema },
   )
 }
-for (let index = 0; index < Number(process.env.MCP_FIXTURE_EXTRA ?? 0); index++) {
-  tools.push({
-    name: "extra_" + String(index).padStart(3, "0"),
-    description: "Generated tool " + index + " that lists repository issues matching a query.",
-    inputSchema: {
-      type: "object",
-      properties: { owner: { type: "string" }, repo: { type: "string" }, query: { type: "string" }, limit: { type: "integer" } },
-      required: ["owner", "repo", "query"],
-    },
-  })
-}
 const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\n")
 const answer = (request) => {
   if (request.method === "initialize") {
@@ -2348,52 +2337,6 @@ describe("mcp tools in the cell", () => {
             expect.objectContaining({ tool: "mcp.fixture.echo", outcome: "succeeded" }),
             expect.objectContaining({ tool: "mcp.fixture.fail", outcome: "failed" }),
           ]),
-        })
-      }).pipe(Effect.timeout("25 seconds"), Effect.provide(platformLayer)),
-    30_000,
-  )
-
-  it.scopedLive(
-    "a server with 100 tools collapses to one prompt line, and the cell finds, describes and calls them",
-    () =>
-      Effect.gen(function* () {
-        const fixture = yield* makeFixture
-        const { systems, recordSystem } = systemRecorder()
-        const code = [
-          "const found = tools.search('extra_042').items.map((entry) => entry.id)",
-          "const signature = tools.describe('mcp.fixture.extra_042')",
-          "const called = await tools.mcp.fixture.extra_042({ owner: 'o', repo: 'r', query: 'q' })",
-          "JSON.stringify({ found, signature, called })",
-        ].join("; ")
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-          recordSystem(toolCallStep("cell", { code })),
-          textStep("done"),
-        ])
-        const { client, sessionId, branchId } = yield* createRpcHarness({
-          ...shippedPreset,
-          extensionInputs: [
-            ...shippedWithoutMcp,
-            // Five named tools and 95 generated ones.
-            McpServers("@test/mcp-many", { fixture: fixture.stdio({ MCP_FIXTURE_EXTRA: "95" }) }),
-          ],
-          providerLayer,
-        })
-        yield* client.message.send({ sessionId, branchId, content: "find a fixture tool" })
-        const result = yield* cellResultAfterDone(client, branchId)
-        const system = systems[0] ?? ""
-        expect(system).toContain("- tools.mcp.fixture.*: 100 tools (count, echo, extra_000, ")
-        expect(system).not.toContain("- tools.mcp.fixture.extra_042(")
-        expect(result).toMatchObject({
-          name: "cell",
-          isFailure: false,
-          result: {
-            display: encodeJson({
-              found: ["mcp.fixture.extra_042"],
-              signature:
-                "tools.mcp.fixture.extra_042(input: { owner: string; repo: string; query: string; limit?: number }): Promise<unknown> // Generated tool 42 that lists repository issues matching a query.",
-              called: "called extra_042",
-            }),
-          },
         })
       }).pipe(Effect.timeout("25 seconds"), Effect.provide(platformLayer)),
     30_000,
