@@ -62,6 +62,19 @@ describe("gamut model families", () => {
     )
   })
 
+  test("a dated snapshot of a two-part release is no minor version", () => {
+    expect(
+      newestInFamily("anthropic/sonnet", ["claude-sonnet-4-5", "claude-sonnet-4-20250514"]),
+    ).toBe("anthropic/claude-sonnet-4-5")
+    expect(
+      newestInFamily("anthropic/opus", [
+        "claude-opus-6",
+        "claude-opus-6-1",
+        "claude-opus-6-20270101",
+      ]),
+    ).toBe("anthropic/claude-opus-6-1")
+  })
+
   test("every preset resolves against the catalog", () => {
     for (const [name, named] of Object.entries(PRESETS)) {
       const resolved = resolvePreset(named, catalog)
