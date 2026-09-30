@@ -1164,7 +1164,8 @@ limit, offset }?)` returns one page, `{ items: { id, description }[], total,
 hasMore, nextOffset }`, 20 items by default. It splits camelCase and
 `_ . / : -`, weighs the whole id over its last segment, its namespace and the
 description, adds exact, prefix and phrase bonuses, drops an id that matches
-fewer than all words of a one- or two-word query (60% of a longer one) unless
+fewer than all distinct words of a one- or two-word query (60% of a longer one;
+a repeated word counts once) unless
 the whole query appears in a field, and breaks ties by id in code-unit order
 (`searchCatalog` in `cell-worker-boundary.ts`). `namespace` keeps the ids under
 that prefix, and an empty query lists them by id. `tools.describe(id)`
@@ -1299,27 +1300,42 @@ A `url` entry without its own `Authorization` header signs in with OAuth, all
 inside the extension. `/mcp login <server>` runs the SDK's `auth()` with a
 provider that never opens a browser: it registers the client, starts a
 loopback listener on 127.0.0.1 for the redirect, and presents the
-authorization URL. A process fiber waits up to five minutes for the redirect,
+authorization URL. The listener's scope is a child of the extension's from
+its creation: a login start that fails or is interrupted closes it, and a
+start that succeeds hands it to the finishing fiber in one uninterruptible
+step. Before `auth()`, the login sends one request with no token and keeps the
+`resource_metadata` URL its 401 names in `WWW-Authenticate`; discovery starts
+there, so a server whose metadata is off the well-known path is found. A
+process fiber waits up to five minutes for the redirect,
 exchanges the code, and lists the tools into the cache, so no turn waits on a
 browser. The login lives in `<data dir>/mcp-auth.json` (mode 0600, written
-with `writeFileAtomic`), keyed by server name and URL. A token that expires
-within 60 seconds is refreshed before the dial. The transport's `fetch`
-answers each 401 or 403 before the SDK sees it: a 401 on `initialize`,
-`notifications/initialized`, `ping`, `tools/list` or the stream `GET` refreshes
-the token and sends that request once more; any other refusal, a `tools/call`
+with `writeFileAtomic`), keyed by server name and URL, with that metadata URL.
+A token that expires within 60 seconds is refreshed before the dial. The
+transport's `fetch` answers each 401 or 403 before the SDK sees it: a 401 on
+`initialize`, `notifications/initialized`, `ping`, `tools/list` or the stream
+`GET` refreshes the token (discovery starting from the metadata URL that 401
+names) and sends that request once more; any other refusal, a `tools/call`
 included, fails with "the <server> MCP server needs a login: run /mcp login
-<server>". So a call is never sent twice.
+<server>". So a call is never sent twice. A refresh holds the login's lock
+file, `<data dir>/mcp-auth.<sha256 of the key>.lock` (created with `wx`,
+removed when done, taken over when older than 30 seconds), and reads the login
+again under it: when another refresh, in this process or another, already
+stored a new token, it uses that token and never redeems the spent refresh
+token.
 
 Setup reads each server's tool list from `<data dir>/mcp-catalog.json`, keyed
-by the SHA-256 digest of the entry as it runs (its expanded values and, for
-stdio, its resolved directory), so an edited entry, a changed variable, or
-another project lists again; the file holds only the digest and the server's
-`initialize` instructions, never a token. On a miss setup connects once and
+by the SHA-256 digest of the entry as it runs (its expanded values, for a
+`url` entry its configured `type`, with `http` and `streamable-http` one
+value, and for stdio its resolved directory), so an edited entry, a changed
+variable, or another project lists again; the file holds only the digest and
+the server's `initialize` instructions, never a token. On a miss setup connects once and
 lists; every server setup listed goes to the cache in one write. A server
 that cannot list is logged and contributes nothing. `tools/list` goes out with
 the SDK's loose result schema and each entry decodes on its own: an entry the
 spec's tool shape refuses is skipped with a warning, and a `null` description
-counts as none. So the SDK keeps no output validators, and the tool checks
+counts as none. A skipped entry that has a name still takes part in id
+allocation (the cache keeps it as `reserved`), so skipping it never moves
+another tool's collision suffix. So the SDK keeps no output validators, and the tool checks
 structured content itself.
 
 Calls share one process Resource (`McpClients`): an `RcMap` opens a server's
@@ -1327,11 +1343,15 @@ connection on its first call and closes it after five idle minutes, and a
 failed connect is dropped from the map, so the next call connects again. A
 connection is dropped when its transport closes and when a call on it fails in
 the transport; a JSON-RPC error leaves it open, and a close that takes over two
-seconds is abandoned. A call on a reused connection answered 404 (the server
-forgot the session, so it ran nothing) is sent once more on a new connection.
+seconds is abandoned. A call that carried an `Mcp-Session-Id` on a reused
+connection and was answered 404 (the server forgot the session, so it ran
+nothing) is sent once more on a new connection; a 404 without a session
+leaves the connection open and is not sent again. A 401 or 403 on a call
+drops the connection and marks the server `expired`.
 The tools are listed again when a connection opens, when the server sends
 `notifications/tools/list_changed`, and when it answers a call as an unknown
-tool: a list that differs is written to the cache (under one permit), so the
+tool. One server's lists run one at a time, so an older list never lands
+last: a list that differs is written to the cache (under one permit), so the
 next session registers it, and a call to a tool the server no longer lists
 fails with a message naming the stale catalog. An empty or failed relist keeps
 the cached tools. The current session keeps the tools it registered; replacing
@@ -1355,8 +1375,11 @@ other result is an object of `structuredContent`, `text`, the other blocks as
 or blob block with its MIME type and size; the cell never receives the bytes.
 Each such block is written once to `<data dir>/mcp-blobs/<sha256>.<ext>` (the
 extension from its MIME type, else `bin`) and its entry gains that `path`; a
-block over 20 MiB is not written and has no path. The first save in a process
-removes the blob files last written over 14 days ago. `isError` fails the call as
+block over 20 MiB is not written and has no path. A save that finds its file
+already there sets the file's modification time to now, and writes it again
+when it is gone. The first save in a process removes the blob files last
+written over 14 days ago, checking each file's modification time right before
+it removes it, so a file a save just reused stays. `isError` fails the call as
 `{ error }`. Server and tool names become id segments in the tool id grammar:
 runs of `[A-Za-z0-9-]` joined by one `_`, no `_` at either end, and the wire
 name `mcp__<server>__<tool>` within 64 characters (a server takes at most 20).
