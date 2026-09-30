@@ -181,7 +181,7 @@ interface ServerIdentityApi {
   readonly buildFingerprint: string
 }
 
-// ── session-utils ───────────────────────────────────────────────────────────
+// ── session reads ───────────────────────────────────────────────────────────
 
 type MutableBranchTreeNode = Omit<BranchTreeNode, "children"> & {
   children: MutableBranchTreeNode[]
@@ -312,7 +312,7 @@ export const buildExtensionHealthSnapshot = (
   })
 }
 
-// ── session-mutations-live ──────────────────────────────────────────────────
+// ── session mutations ───────────────────────────────────────────────────────
 
 interface CreateSessionResult {
   readonly sessionId: SessionId
@@ -1022,7 +1022,7 @@ const makeSessionMutationsService: Effect.Effect<
 
 export const SessionMutationsLive = Layer.effect(SessionMutations, makeSessionMutationsService)
 
-// ── rpc-handlers ────────────────────────────────────────────────────────────
+// ── rpc handlers ────────────────────────────────────────────────────────────
 
 /**
  * The registry serving a cwd: its profile's when a profile cache is wired, else
@@ -1173,9 +1173,9 @@ const respondInteraction = Effect.fn("InteractionCommands.respond")(function* (
     .pipe(Effect.catchEager(() => Effect.void))
 })
 
-// ============================================================================
-// Handler helpers (yield Tags inside; no service-bag threading)
-// ============================================================================
+// ── rpc handler helpers ─────────────────────────────────────────────────────
+
+// Each helper yields its Tags; no service bag is threaded through.
 
 type BranchPayload = { readonly branchId: BranchId }
 type OptionalSessionPayload = { readonly sessionId?: SessionId }
@@ -1217,9 +1217,7 @@ const rpc = <A, E, R>(
     withWideEvent(WideEventBoundary.rpc(method, { requestId })),
   )
 
-// ============================================================================
-// RPC Handlers Layer
-// ============================================================================
+// ── rpc handlers layer ──────────────────────────────────────────────────────
 
 const RpcHandlers = GentRpcs.toLayer(
   Effect.gen(function* () {
@@ -1638,7 +1636,7 @@ export const makeInProcessClient = (
     Effect.map((flat) => makeNamespacedClient(flat, headers)),
   )
 
-// ── dependencies ────────────────────────────────────────────────────────────
+// ── server dependencies ─────────────────────────────────────────────────────
 
 interface DependencyOverrides {
   readonly authLayer?: Layer.Layer<Auth>
@@ -1939,15 +1937,13 @@ export const createDependencies = (config: DependenciesConfig) => {
   )
 }
 
-// ── server-routes ───────────────────────────────────────────────────────────
+// ── http routes ─────────────────────────────────────────────────────────────
 
-/**
- * Reusable HTTP route assembly for gent servers.
- *
- * Used by the SDK's owned-server path: `Gent.server` with its in-process HTTP listener.
- */
+// Reusable HTTP route assembly for gent servers.
+//
+// Used by the SDK's owned-server path: `Gent.server` with its in-process HTTP listener.
 
-// ── WebSocket lifecycle tracing ──
+// ── websocket lifecycle tracing ─────────────────────────────────────────────
 
 /**
  * Layer that registers WebSocket lifecycle tracing on the HttpRouter.
@@ -1996,7 +1992,7 @@ const wsTracingLayer: Layer.Layer<never, never, HttpRouter.HttpRouter> = HttpRou
   ),
 )
 
-// ── Route Assembly ──
+// ── route assembly ──────────────────────────────────────────────────────────
 
 interface ServerRoutesConfig {
   /** The identity `/_gent/identity` serves, verbatim. */

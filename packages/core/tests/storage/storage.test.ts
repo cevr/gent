@@ -992,7 +992,7 @@ describe("persisted loop queue format", () => {
     }
   }`
 
-  it.live("a row holding every optional field still decodes after the inbox move", () =>
+  it.live("a row holding every optional field still decodes", () =>
     Effect.gen(function* () {
       const sessions = yield* SessionStorage
       const branches = yield* BranchStorage

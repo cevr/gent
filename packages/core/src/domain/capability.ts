@@ -105,12 +105,8 @@ export const dateSection = (now: DateTime.Zoned): PromptSection => ({
 
 // ── capability ──────────────────────────────────────────────────────────────
 
-/** Shared extension callable primitives. Tool and request leaves are
- * independent; this file holds only errors, host contexts, and typed request
- * references used across those leaves.
- *
- * @module
- */
+// Shared extension callable primitives: the errors and host contexts that
+// the tool and request sections below both use.
 
 /** Failure raised by a Capability handler. Carries audience + id for diagnostics. */
 export class CapabilityError extends Schema.TaggedError<CapabilityError>()(
@@ -212,9 +208,9 @@ export interface CapabilityRef<Input = unknown, Output = unknown> {
   readonly output: Schema.Decoder<Output, never>
 }
 
-// ── capability/request ──────────────────────────────────────────────────────
+// ── request capability ──────────────────────────────────────────────────────
 
-/**
+/*
  * `request(...)` — typed factory for extension-to-extension Capabilities.
  *
  * Authors call `request({ id, input, output, execute })`.
@@ -225,8 +221,6 @@ export interface CapabilityRef<Input = unknown, Output = unknown> {
  * Host/session authority is imported through `ExtensionContext`; runtime
  * dispatch provides the `ExtensionContext` facade. Request handlers receive
  * decoded params only.
- *
- * @module
  */
 
 /**
@@ -415,9 +409,9 @@ export const ref = <Input, Output>(
   capability: RequestCapability<Input, Output>,
 ): CapabilityRef<Input, Output> => capability[REQUEST_REF]
 
-// ── capability/tool ─────────────────────────────────────────────────────────
+// ── tool capability ─────────────────────────────────────────────────────────
 
-/**
+/*
  * `tool(...)` — typed factory for LLM-callable Capabilities.
  *
  * Authors call `tool({ id, description, params, execute, ... })` directly.
@@ -428,8 +422,6 @@ export const ref = <Input, Output>(
  * Lowering: produces a branded native Effect AI tool annotated with Gent
  * metadata. Runtime code reads Gent-only fields from that annotation instead
  * of widening Effect's tool surface.
- *
- * @module
  */
 
 const ToolCapabilityBrand: unique symbol = Symbol("@gent/core/ToolCapability")

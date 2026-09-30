@@ -39,9 +39,7 @@ import { BranchId, InteractionRequestId, SessionId, ToolCallId } from "./ids.js"
  * dispatching owner is refused.
  */
 
-// ============================================================================
-// Approval schemas
-// ============================================================================
+// ── approval schemas ────────────────────────────────────────────────────────
 
 /** Request params for ctx.interaction.approve() */
 const ApprovalRequestSchema = Schema.Struct({
@@ -58,9 +56,7 @@ export const ApprovalDecisionSchema = Schema.Struct({
 })
 export type ApprovalDecision = Schema.Schema.Type<typeof ApprovalDecisionSchema>
 
-// ============================================================================
-// Interaction pending signal
-// ============================================================================
+// ── interaction pending signal ──────────────────────────────────────────────
 
 export class InteractionPendingError extends Schema.TaggedError<InteractionPendingError>(
   "@gent/core/src/domain/interaction/InteractionPendingError",
@@ -113,9 +109,7 @@ export class InteractionRequestMismatchError extends Schema.TaggedError<Interact
   branchId: BranchId,
 }) {}
 
-// ============================================================================
-// Durable interaction record
-// ============================================================================
+// ── durable interaction record ──────────────────────────────────────────────
 
 /** `taken`: its call took the answer and keeps it until the call or its turn ends. */
 export const InteractionRequestStatus = Schema.Literals(["pending", "taken", "resolved"])
@@ -172,9 +166,7 @@ export const { encode: encodeInteractionDecision, decode: decodeInteractionDecis
   "interaction decision",
 )
 
-// ============================================================================
-// Interaction service
-// ============================================================================
+// ── interaction service ─────────────────────────────────────────────────────
 
 /** A session branch: the scope that shows one request at a time. */
 interface BranchRef {

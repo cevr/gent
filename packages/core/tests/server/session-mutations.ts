@@ -272,7 +272,7 @@ export const failingDeleteSessionMutationsLayerWithMachineProbe = (
 /**
  * SessionMutations layer that injects a child-session create into the DB
  * between the pre-collect and the durable `deleteSession` tx. Simulates the
- * race the audit flagged: a new descendant committing after
+ * race of a new descendant committing after
  * `collectSessionTreeIds` runs but before the cascade tx opens. Fires once
  * for any deleteSession call, inserting a child pointed at the deleted root.
  */

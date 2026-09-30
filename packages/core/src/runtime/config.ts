@@ -35,7 +35,7 @@ export class RuntimeEnvironment extends Context.Service<
     Layer.succeed(RuntimeEnvironment, config)
 }
 
-// ── extensions/disabled ─────────────────────────────────────────────────────
+// ── disabled extensions ─────────────────────────────────────────────────────
 
 /**
  * Disabled-extension reader for a caller that has no `ConfigService`.
@@ -611,7 +611,7 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
     )
 }
 
-// ── extensions/project-trust ────────────────────────────────────────────────
+// ── project trust ───────────────────────────────────────────────────────────
 
 const TrustConfig = Schema.fromJsonString(
   Schema.Struct({ trustedProjects: UserConfig.fields.trustedProjects }),

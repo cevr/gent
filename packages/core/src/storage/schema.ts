@@ -16,7 +16,7 @@ import { SqliteMigrator } from "@effect/sql-sqlite-bun"
 import { StorageError } from "../domain/errors.js"
 import { DefaultWorkspaceId } from "../server/workspace-rpc.js"
 
-// ── sqlite/rows ─────────────────────────────────────────────────────────────
+// ── stored rows ─────────────────────────────────────────────────────────────
 
 // Schema decoders - Effect-based (no sync throws)
 const StoredPromptPart = Schema.Union([

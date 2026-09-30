@@ -28,9 +28,7 @@ import { ModelId, ReasoningEffort } from "./agent.js"
 
 // ── event ───────────────────────────────────────────────────────────────────
 
-// ============================================================================
-// Shared sub-schemas
-// ============================================================================
+// ── shared sub-schemas ──────────────────────────────────────────────────────
 
 export const UsageSchema = Schema.Struct({
   inputTokens: Schema.Finite,
@@ -55,8 +53,9 @@ export const QuestionSchema = Schema.Struct({
 })
 export type Question = typeof QuestionSchema.Type
 
-// ============================================================================
-// AgentEvent — the discriminated union of every event the runtime emits.
+// ── agent event ─────────────────────────────────────────────────────────────
+
+// The discriminated union of every event the runtime emits.
 //
 // Authored via upstream `Schema.TaggedUnion({...})` shorthand. Variant names
 // are also the wire `_tag` values, so the shorthand covers the full surface
@@ -65,7 +64,6 @@ export type Question = typeof QuestionSchema.Type
 // or — via the per-variant re-exports below — `SessionStarted.make`. Pattern
 // matching uses `AgentEvent.match({...})`; `_tag === "X"` narrowing works
 // unchanged. Wire shape: `{ _tag: "VariantName", ...fields }`.
-// ============================================================================
 
 export const EventId = Schema.Finite.pipe(Schema.brand("EventId"))
 export type EventId = typeof EventId.Type
@@ -310,13 +308,13 @@ export const AgentEvent = Schema.TaggedUnion({
 })
 export type AgentEvent = Schema.Schema.Type<typeof AgentEvent>
 
-// ============================================================================
-// Per-variant re-exports — same TaggedStruct identity as `AgentEvent.cases.X`,
+// ── per-variant re-exports ──────────────────────────────────────────────────
+
+// The same TaggedStruct identity as `AgentEvent.cases.X`,
 // exposed at module scope so consumers may import variants directly without
 // going through the union object. `SessionStarted.make(...)` and
 // `AgentEvent.cases.SessionStarted.make(...)` produce structurally identical
 // values; these are aliases, not parallel implementations.
-// ============================================================================
 
 export const SessionStarted = AgentEvent.cases.SessionStarted
 export type SessionStarted = typeof AgentEvent.cases.SessionStarted.Type
@@ -358,9 +356,9 @@ export const ExtensionStateChanged = AgentEvent.cases.ExtensionStateChanged
 export type ExtensionStateChanged = typeof AgentEvent.cases.ExtensionStateChanged.Type
 const StreamSynchronized = AgentEvent.cases.StreamSynchronized
 
-// ============================================================================
-// Interaction types — shared between server and client
-// ============================================================================
+// ── interaction types ───────────────────────────────────────────────────────
+
+// Shared between server and client.
 
 /** Active interaction — the generic InteractionPresented event */
 export type ActiveInteraction = InteractionPresented
@@ -372,9 +370,7 @@ export type ApprovalResult = {
   readonly editedContent?: string
 }
 
-// ============================================================================
-// EventEnvelope + EventStore
-// ============================================================================
+// ── event envelope and store ────────────────────────────────────────────────
 
 export class EventEnvelope extends Schema.Class<EventEnvelope>("EventEnvelope")({
   id: EventId,

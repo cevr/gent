@@ -67,7 +67,7 @@ import type {
 
 // ── resource ────────────────────────────────────────────────────────────────
 
-/**
+/*
  * Resource — long-lived state with explicit scope.
  *
  * One primitive carries the whole concept: "this extension owns a long-lived
@@ -82,15 +82,13 @@ import type {
  * Add a scope literal only together with its host lifecycle implementation.
  * Advertising `session`/`cwd` without a runtime owner makes impossible
  * lifetimes look supported.
- *
- * @module
  */
 
 /** Stable identity for a declared resource. */
 const ResourceId = Schema.NonEmptyString.pipe(Schema.brand("ResourceId"))
 type ResourceId = typeof ResourceId.Type
 
-// ── Scope discriminator + brand mapping ──
+// ── Scope discriminator + brand mapping ─────────────────────────────────────
 
 /**
  * Pure type-level scope brand used by Resource declarations. Encodes the
@@ -122,7 +120,7 @@ type ScopeOf<S extends ResourceScope> = S extends "process"
     ? BranchScope
     : never
 
-// ── The Resource contribution ──
+// ── The Resource contribution ───────────────────────────────────────────────
 
 /**
  * One Resource carries:
@@ -151,7 +149,7 @@ interface ResourceContribution<A, S extends ResourceScope, R = never, E = never>
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
 export type AnyResourceContribution = ResourceContribution<any, ResourceScope, any, any>
 
-// ── Smart constructor ──
+// ── Smart constructor ───────────────────────────────────────────────────────
 
 /** Spec type accepted by {@link defineResource}. */
 interface ResourceSpec<A, S extends ResourceScope, R = never, E = never> {
@@ -177,7 +175,7 @@ export const defineResource = <A, S extends ResourceScope, R = never, E = never>
 
 // ── contribution ────────────────────────────────────────────────────────────
 
-/**
+/*
  * Contribution buckets — the typed sub-arrays the loader seals from an
  * extension's `host.register(domain, ...values)` and `host.on(kind, handler)`
  * calls. The bucket name is the discrimination: a leaf carries no kind field.
@@ -189,11 +187,9 @@ export const defineResource = <A, S extends ResourceScope, R = never, E = never>
  * Resources are authored through `defineResource({ id, scope, layer })` in
  * this file. Each leaf carries a stable resource identity; the leaf is widened
  * by structural assignability at the bucket boundary.
- *
- * @module
  */
 
-// ── Typed buckets ──
+// ── Typed buckets ───────────────────────────────────────────────────────────
 
 /**
  * The set of buckets an extension may contribute to. Every field is optional;
@@ -425,7 +421,7 @@ export interface TurnUsage {
   readonly complete: boolean
 }
 
-// ── Lifecycle hooks ──
+// ── Lifecycle hooks ─────────────────────────────────────────────────────────
 //
 // Per-extension, per-session handlers run by the runtime at the prompt and
 // turn seams, once when a branch's loop opens in this process (`loopOpen`),
@@ -457,8 +453,9 @@ interface ExtensionHookSignatures {
    * (the session and its descendants), after the rows are gone, under the
    * profile of that session's own cwd, resolved before the delete. A handler
    * removes what the extension keeps for the session outside the database.
-   * `ExtensionContext` names the deleted session; its session verbs find no
-   * session. No user watches it, so it cannot ask. The delete waits for each
+   * Read the deleted session from the input: for a descendant created while
+   * the delete ran, `ExtensionContext` names the root session. Its session
+   * verbs find no session. No user watches it, so it cannot ask. The delete waits for each
    * handler up to `SESSION_DELETED_HOOK_TIMEOUT` (runtime/extension-host.ts),
    * then interrupts it and logs a warning.
    */
@@ -580,7 +577,7 @@ export interface GentExtension<R = ExtensionSetupServices> {
 
 // ── extension-host ──────────────────────────────────────────────────────────
 
-/**
+/*
  * `ExtensionHost` — the one service an extension's `setup` yields.
  *
  * It carries the setup-time facts (cwd, home, host facts)
@@ -594,8 +591,6 @@ export interface GentExtension<R = ExtensionSetupServices> {
  * registrations, validates them, and seals them into
  * `LoadedExtension.contributions`. There is no ctx parameter and no bucket
  * literal: authors yield the host inside `setup`.
- *
- * @module
  */
 
 /** Author-facing domain name → contribution bucket it lands in. */

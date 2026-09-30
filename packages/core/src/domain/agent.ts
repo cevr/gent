@@ -208,8 +208,6 @@ export const DEFAULT_AGENT_NAME = AgentName.make("main")
  * what it is: name, description, model, prompt, tool allow/deny, sampling
  * defaults, and driver routing. Per-run concerns (persistence/retention,
  * overrides, parent-tool linkage, tags) live on `RunSpec`.
- *
- * Built-in prompts moved to their owning extensions.
  */
 export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinition")({
   name: AgentName,
@@ -243,7 +241,7 @@ export const DEFAULT_MODEL_ID = ModelId.make("anthropic/claude-sonnet-5")
 export const resolveAgentModel = (agent: AgentDefinition): ModelId =>
   agent.model ?? DEFAULT_MODEL_ID
 
-// ── Runtime driver routing ──
+// ── driver routing ──────────────────────────────────────────────────────────
 
 /** The model driver a turn dispatches through, and the catalog id of the model it reaches. */
 export interface EffectiveModelDriver {
@@ -282,7 +280,9 @@ export const effectiveModelDriver = (
   })
 }
 
-// ── RunSpec — per-run dispatch configuration ──
+// ── run spec ────────────────────────────────────────────────────────────────
+
+// Per-run dispatch configuration.
 //
 // Separates per-run concerns from agent identity: `overrides` reshape the
 // agent's model, tools and prompt for every turn of the session.
@@ -334,5 +334,3 @@ export class SessionDepthLimitError extends Schema.TaggedError<SessionDepthLimit
     max: Schema.Int,
   },
 ) {}
-
-// ── steer ───────────────────────────────────────────────────────────────────

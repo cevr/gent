@@ -733,30 +733,30 @@ const stringifyDisplayValue = (value: JsonEncoderInput): string => {
   return encoded.success
 }
 
-// oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
+// oxlint-disable-next-line effect/noNullish -- A part projection answers undefined for a part of another kind.
 const messagePartText = (part: MessagePart): string | undefined => {
   if (part.type === "text") return part.text
-  // oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
+  // oxlint-disable-next-line effect/noNullish -- A part projection answers undefined for a part of another kind.
   return undefined
 }
 
-// oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
+// oxlint-disable-next-line effect/noNullish -- A part projection answers undefined for a part of another kind.
 const messagePartReasoning = (part: MessagePart): string | undefined => {
   if (part.type === "reasoning") return part.text
-  // oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
+  // oxlint-disable-next-line effect/noNullish -- A part projection answers undefined for a part of another kind.
   return undefined
 }
 
-// oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
+// oxlint-disable-next-line effect/noNullish -- A part projection answers undefined for a part of another kind.
 const messagePartImage = (part: MessagePart): ImagePartProjection | undefined => {
-  // oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
+  // oxlint-disable-next-line effect/noNullish -- A part projection answers undefined for a part of another kind.
   if (part.type !== "file" || !part.mediaType.startsWith("image/")) return undefined
   return { mediaType: part.mediaType }
 }
 
-// oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
+// oxlint-disable-next-line effect/noNullish -- A part projection answers undefined for a part of another kind.
 const messagePartToolCall = (part: MessagePart): ToolCallPartProjection | undefined => {
-  // oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
+  // oxlint-disable-next-line effect/noNullish -- A part projection answers undefined for a part of another kind.
   if (part.type !== "tool-call") return undefined
   return {
     id: part.id,
@@ -765,9 +765,9 @@ const messagePartToolCall = (part: MessagePart): ToolCallPartProjection | undefi
   }
 }
 
-// oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
+// oxlint-disable-next-line effect/noNullish -- A part projection answers undefined for a part of another kind.
 const messagePartToolResult = (part: MessagePart): ToolResultPartProjection | undefined => {
-  // oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
+  // oxlint-disable-next-line effect/noNullish -- A part projection answers undefined for a part of another kind.
   if (part.type !== "tool-result") return undefined
   return {
     id: part.id,
@@ -1717,12 +1717,13 @@ export class QueueSnapshot extends Schema.Class<QueueSnapshot>("QueueSnapshot")(
   followUp: Schema.Array(QueueEntryInfo),
 }) {}
 
-// ── Persisted queue ──
+// ── persisted queue ─────────────────────────────────────────────────────────
 //
 // The on-disk format of `agent_loop_queues.queue_json`. A row written by any
 // shipped build must still decode, so no field here is renamed, re-shaped, or
-// promoted from optional to required. `runtime/agent/loop-inbox.ts` is the
-// only module that interprets these values; this file declares their shape.
+// promoted from optional to required. The loop inbox in
+// `runtime/agent-loop.ts` is the only code that interprets these values; this
+// file declares their shape.
 
 /**
  * A branch that asks another branch for something: it steers that branch, or

@@ -83,7 +83,7 @@ export const GentRpcError = Schema.Union([
 
 export type GentRpcError = typeof GentRpcError.Type
 
-// ── transport-contract ──────────────────────────────────────────────────────
+// ── rpc payloads ────────────────────────────────────────────────────────────
 
 export { Branch, BranchTreeNode, Session }
 
@@ -338,9 +338,7 @@ export const ExtensionHealthSnapshot = Schema.Union([
 ]).pipe(Schema.toTaggedUnion("_tag"))
 export type ExtensionHealthSnapshot = Schema.Schema.Type<typeof ExtensionHealthSnapshot>
 
-// ---------------------------------------------------------------------------
-// Driver routing
-// ---------------------------------------------------------------------------
+// ── driver routing rpcs ─────────────────────────────────────────────────────
 
 /** Per-driver descriptor returned by `driver.list`. */
 export const DriverInfo = Schema.Struct({
@@ -369,9 +367,7 @@ export const ClearDriverOverrideInput = Schema.Struct({
 })
 export type ClearDriverOverrideInput = typeof ClearDriverOverrideInput.Type
 
-// ---------------------------------------------------------------------------
-// Connection lifecycle
-// ---------------------------------------------------------------------------
+// ── connection lifecycle rpcs ───────────────────────────────────────────────
 
 export class GentConnectionError extends Schema.TaggedError<GentConnectionError>()(
   "@gent/core/GentConnectionError",
@@ -396,7 +392,7 @@ export interface GentLifecycle {
   readonly waitForReady: Effect.Effect<void>
 }
 
-// ── rpcs/session ────────────────────────────────────────────────────────────
+// ── session rpcs ────────────────────────────────────────────────────────────
 
 class SessionRpcs extends RpcGroup.make(
   Rpc.make("session.create", {
@@ -501,11 +497,7 @@ class SessionRpcs extends RpcGroup.make(
   }),
 ) {}
 
-// ── rpcs/index ──────────────────────────────────────────────────────────────
-
-// ============================================================================
-// Auth
-// ============================================================================
+// ── auth rpcs ───────────────────────────────────────────────────────────────
 
 class AuthRpcs extends RpcGroup.make(
   Rpc.make("listProviders", {
@@ -536,9 +528,7 @@ class AuthRpcs extends RpcGroup.make(
   }),
 ).prefix("auth.") {}
 
-// ============================================================================
-// Extension + driver + model
-// ============================================================================
+// ── extension, driver and model rpcs ────────────────────────────────────────
 
 class ExtensionRpcs extends RpcGroup.make(
   Rpc.make("extension.request", {
@@ -576,17 +566,13 @@ class ExtensionRpcs extends RpcGroup.make(
   }),
 ) {}
 
-// ============================================================================
-// Merged RPC Group
-// ============================================================================
+// ── rpc group ───────────────────────────────────────────────────────────────
 
 export class GentRpcs extends RpcGroup.make()
   .merge(SessionRpcs, ExtensionRpcs, AuthRpcs)
   .middleware(WorkspaceRpcMiddleware) {}
 
-// ============================================================================
-// RPC Client Types
-// ============================================================================
+// ── rpc client types ────────────────────────────────────────────────────────
 
 // A call fails with its RPC's error or the transport's. `GentConnectionError`
 // belongs to connection setup (the SDK's server and client constructors); no
@@ -600,9 +586,9 @@ export type GentClientRpcError =
   | Rpc.Error<RpcGroupNs.Rpcs<typeof GentRpcs>>
   | RpcClientError.RpcClientError
 
-// ============================================================================
-// Namespaced client — typed nested view over the flat RPC transport
-// ============================================================================
+// ── namespaced client ───────────────────────────────────────────────────────
+
+// A typed nested view over the flat RPC transport.
 
 /**
  * Extract all unique namespace prefixes from a union of dotted string keys.

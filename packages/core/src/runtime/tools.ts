@@ -73,7 +73,7 @@ import type { CurrentAgentLoopTurnProfile } from "./turn.js"
 
 // ── turn-interruption ───────────────────────────────────────────────────────
 
-/**
+/*
  * Whether the turn now running has been interrupted.
  *
  * The loop, the turn executor and the branch's tools all need this one bit,
@@ -81,8 +81,6 @@ import type { CurrentAgentLoopTurnProfile } from "./turn.js"
  * begins the next one, while a running turn and the tools it dispatches only
  * ask. `interrupt` stops the turn now running, and `beginTurn` declares that a
  * fresh turn starts uninterrupted.
- *
- * @module
  */
 
 /** Asks whether the turn now running has been interrupted. */
@@ -1219,7 +1217,7 @@ export const executeToolCalls = Effect.fn("TurnHelpers.executeToolCalls")(functi
 
 // ── tool-policy ─────────────────────────────────────────────────────────────
 
-/**
+/*
  * The tool policy one turn runs with.
  *
  * Pure: it takes the resolved capabilities, the agent definition and the
@@ -1227,8 +1225,6 @@ export const executeToolCalls = Effect.fn("TurnHelpers.executeToolCalls")(functi
  * host may run, and what prompt sections the projections contribute. Nothing
  * here reaches a service, a layer or the filesystem — the registry resolves
  * the extensions, this compiles the policy they imply.
- *
- * @module
  */
 
 interface CompiledToolPolicy {

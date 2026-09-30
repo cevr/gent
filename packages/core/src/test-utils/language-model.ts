@@ -45,22 +45,20 @@ import {
 
 // ── fake-fetch ──────────────────────────────────────────────────────────────
 
-/**
- * Shared fake-`FetchHttpClient.Fetch` capture pattern for provider-extension
- * tests: drive one real request through the resolved layer and assert on the
- * captured outbound shape, not on the layer's structure.
- *
- * Use this helper to:
- *   1. Build a `Layer` that overrides `FetchHttpClient.Fetch` with a fake
- *      that captures every outbound request into a shared array.
- *   2. Run one `LanguageModel.generateText({prompt})` through any provider
- *      layer that requires `LanguageModel.LanguageModel`.
- *   3. Inspect captured request URL / method / headers / body to assert
- *      on the production wiring (auth headers, system blocks, betas, etc).
- *
- * The driver tests in `packages/extensions/tests/` (`anthropic.test.ts`,
- * `openai.test.ts`, `providers.test.ts`) are its consumers.
- */
+// Shared fake-`FetchHttpClient.Fetch` capture pattern for provider-extension
+// tests: drive one real request through the resolved layer and assert on the
+// captured outbound shape, not on the layer's structure.
+//
+// Use this helper to:
+//   1. Build a `Layer` that overrides `FetchHttpClient.Fetch` with a fake
+//      that captures every outbound request into a shared array.
+//   2. Run one `LanguageModel.generateText({prompt})` through any provider
+//      layer that requires `LanguageModel.LanguageModel`.
+//   3. Inspect captured request URL / method / headers / body to assert
+//      on the production wiring (auth headers, system blocks, betas, etc).
+//
+// The driver tests in `packages/extensions/tests/` (`anthropic.test.ts`,
+// `openai.test.ts`, `providers.test.ts`) are its consumers.
 
 export interface CapturedRequest {
   url: string
@@ -215,8 +213,6 @@ export const captureProviderStopReason = <A, E, R>(
   })
 
 // ── fixtures ────────────────────────────────────────────────────────────────
-
-/** Shared test fixtures for integration tests across packages. */
 
 /** Create a temp directory that is removed when the test scope closes. */
 export const makeTempDirectoryScoped = (prefix: string) =>
@@ -573,15 +569,8 @@ export const LanguageModelLayers = {
 
 // ── sequence-steps ──────────────────────────────────────────────────────────
 
-/**
- * Test step builders for scripted language-model sequences.
- *
- * `language-model` owns the low-level Effect AI stream-part helpers and
- * language-model layers. This module composes those parts into single
- * `SequenceStep`s.
- *
- * @module
- */
+// Step builders for scripted language-model sequences. Each composes the
+// stream-part helpers of `runtime/provider.ts` into one `SequenceStep`.
 
 let _stepCallIdCounter = 0
 const makeStepToolCallId = () => ToolCallId.make(`step-tc-${++_stepCallIdCounter}`)

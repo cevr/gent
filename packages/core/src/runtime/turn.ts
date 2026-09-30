@@ -167,7 +167,7 @@ import {
 import { GentPlatform } from "./gent-platform.js"
 import type { LoopInbox } from "./agent-loop.js"
 
-// ── agent-loop.utils ────────────────────────────────────────────────────────
+// ── prompt sections ─────────────────────────────────────────────────────────
 
 /**
  * Build the per-turn prompt sections (base + agent addendum + tool list +
@@ -271,7 +271,7 @@ const finalStepMessageIdForTurn = (messageId: MessageId): MessageId =>
 
 const toolCallsFromMessage = (message: Message) => messagePartsToolCallParts(message.parts)
 
-// ── agent-loop.turn-profile ─────────────────────────────────────────────────
+// ── turn profile ────────────────────────────────────────────────────────────
 
 export interface AgentLoopTurnProfile {
   readonly turnBaseSections: ReadonlyArray<PromptSection>
@@ -675,7 +675,7 @@ export const collectFailedModelTurnResponse = (params: {
 
 // ── turn-ledger ─────────────────────────────────────────────────────────────
 
-/**
+/*
  * What the turn now running has spent.
  *
  * A turn's token totals, tool-call count and step count accumulate across its
@@ -691,8 +691,6 @@ export const collectFailedModelTurnResponse = (params: {
  * `beginTurn` is the reset, and a writer says what its step observed rather
  * than how to merge it; the fold (which totals to add, which counts make the
  * total unreportable) lives here.
- *
- * @module
  */
 
 /**
@@ -3396,9 +3394,10 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       const maxSteps = Math.min(resolved.agent.maxSteps ?? MAX_TURN_STEPS, MAX_TURN_STEPS)
       if (params.step > maxSteps) {
         // The final step refuses its tool calls and stops, so only a resume
-        // past the budget lands here. Leaving the flags false publishes a `TurnCompleted` no caller can tell from a
-        // reply, and `apps/tui/src/headless.ts` reads exactly that flag to pick its
-        // exit code, so `gent -H` would exit 0 having printed nothing.
+        // past the budget lands here. Leaving the flags false publishes a
+        // `TurnCompleted` no caller can tell from a reply, and headless mode
+        // reads exactly that flag to pick its exit code, so `gent -H` would
+        // exit 0 having printed nothing.
         yield* Effect.logWarning("turn.max-steps-exceeded").pipe(
           Effect.annotateLogs({ step: params.step, max: maxSteps }),
         )

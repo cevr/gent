@@ -1011,11 +1011,9 @@ export const listModelCatalog = Effect.fn("ExtensionRegistry.listModelCatalog")(
 
 // ── resource-layer ──────────────────────────────────────────────────────────
 
-/**
+/*
  * Resource layer assembly: merges every Resource layer of one scope behind the
  * heterogeneous erasure membrane. Start work and disposal live in each layer.
- *
- * @module
  */
 
 interface ResourceEntry {
@@ -2039,7 +2037,7 @@ const buildSessionProfile = (params: {
  * profile stays live.
  */
 
-// ── SessionProfileCache ──
+// ── session profile cache ───────────────────────────────────────────────────
 
 interface SessionProfileCacheConfig {
   readonly home: string

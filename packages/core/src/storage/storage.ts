@@ -81,7 +81,7 @@ import type { MessageStorage as ClusterMessageStorage } from "effect/cluster"
 import { fromSqlClient as encoreSqlMessageStorage } from "effect-encore"
 
 const encodeSessionAdmission = Schema.encodeEffect(Schema.fromJsonString(SessionAdmission))
-// ── sqlite/owned-tool-call ──────────────────────────────────────────────────
+// ── owned tool call ─────────────────────────────────────────────────────────
 
 export interface OwnedToolCallAddress extends ToolCallBindingKey {
   readonly sessionId: SessionId
@@ -2005,10 +2005,9 @@ export type StorageTransaction = <A, E, R>(
 // `makeStorageTransaction` yields `SqlClient` once at layer-build time and
 // returns a closure that wraps each mutation in a transaction. Callers do not
 // thread `SqlClient` as a parameter and do not surface it on per-method
-// R-channels; the closure binds it through lexical scope (see project memory
-// "No context params — yield directly"). The factory shape lets the Live
-// layer construction yield sql at the top and produce a `storageTransaction`
-// helper bound to that sql for the lifetime of the layer.
+// R-channels; the closure binds it through lexical scope. The Live layer
+// yields sql once and holds the `storageTransaction` helper bound to it for
+// the lifetime of the layer.
 export const makeStorageTransaction: Effect.Effect<StorageTransaction, never, SqlClient.SqlClient> =
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient

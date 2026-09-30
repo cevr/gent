@@ -270,16 +270,8 @@ describe("buildExtensionHealthSnapshot", () => {
 
 // ── branch tree ─────────────────────────────────────────────────────────────
 
-/**
- * Regression suite for the `getBranchTree` pure helper.
- *
- * The helper replaces the old `SessionQueries.getBranchTree` plumbed
- * method (W35-C4). Pin its public contract — composition over
- * `BranchStorage.listBranches` + `BranchStorage.countMessagesByBranches`
- * + pure `buildBranchTree`, and propagation of a delegated failure as
- * `StorageError` — so future refactors cannot silently re-introduce a
- * service method or skip the typed-error surface.
- */
+// `getBranchTree` composes `BranchStorage.listBranches`,
+// `BranchStorage.countMessagesByBranches` and the pure `buildBranchTree`.
 
 const SESSION_ID = SessionId.make("test-session")
 const ROOT_ID = BranchId.make("branch-root")

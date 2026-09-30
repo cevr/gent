@@ -201,15 +201,13 @@ export const testExtensionHostContext = (
 
 // ── test-root ───────────────────────────────────────────────────────────────
 
-/**
- * What the test composition root shares with its presets: a working
- * directory and a home of its own (see `createE2ELayer`), a deterministic
- * server identity, and an agents extension. `createE2ELayer` is the one root;
- * the in-process layer and the RPC harness are presets over it. The stub
- * contexts above (`testExtensionHostContext`, `testToolContext`,
- * `testHostFacts`) have no scope to make a directory in, so their default cwd
- * is a path no test can create; a test that touches files passes its own.
- */
+// What the test composition root shares with its presets: a working
+// directory and a home of its own (see `createE2ELayer`), a deterministic
+// server identity, and an agents extension. `createE2ELayer` is the one root;
+// the in-process layer and the RPC harness are presets over it. The stub
+// contexts above (`testExtensionHostContext`, `testToolContext`,
+// `testHostFacts`) have no scope to make a directory in, so their default cwd
+// is a path no test can create; a test that touches files passes its own.
 
 const testAgentsExtension = (agents: ReadonlyArray<AgentDefinition>) =>
   defineExtension({
@@ -325,7 +323,7 @@ export const runToolWithCtx = <Input, Output, Error>(
 export const testLeafContext = (ctx: TestToolContext): ExtensionContextService =>
   Effect.runSync(provideExtensionServices(ctx, Effect.service(ExtensionContext)))
 
-// ── index ───────────────────────────────────────────────────────────────────
+// ── call recording ──────────────────────────────────────────────────────────
 
 // Call Record
 
@@ -451,7 +449,7 @@ export const RecordingEventStore: Layer.Layer<EventStore, never, SequenceRecorde
   }),
 )
 
-// ── Test Extension Host ──
+// ── test extension host ─────────────────────────────────────────────────────
 
 /** Facts the test extension host reports to `setup` Effects. */
 interface TestExtensionHostFacts {
@@ -713,7 +711,7 @@ export const storedEvents = Effect.fn("test.storedEvents")(function* (run: Harne
   return yield* (yield* EventStorage).listEvents(run)
 })
 
-// ── e2e-layer ───────────────────────────────────────────────────────────────
+// ── e2e layer ───────────────────────────────────────────────────────────────
 
 export interface E2ELayerConfig {
   /**
@@ -942,10 +940,8 @@ const e2eDependencies = (
 
 // ── in-process-layer ────────────────────────────────────────────────────────
 
-/**
- * In-process integration layer: the E2E root with the stub tool runner and
- * the scripted debug model. Use with `createRpcClient()`.
- */
+// In-process integration layer: the E2E root with the stub tool runner and
+// the scripted debug model. Use with `createRpcClient()`.
 
 interface InProcessLayerConfig {
   readonly agents: ReadonlyArray<AgentDefinition>
@@ -972,25 +968,23 @@ export const baseLocalLayer = (config: InProcessLayerConfig) =>
 
 // ── rpc-harness ─────────────────────────────────────────────────────────────
 
-/**
- * RPC acceptance harness — exercises the full per-request scope path that
- * production uses (`createRpcClient → RpcServer → registry dispatch → handler`).
- *
- * Use this for new extension RPC tests instead of hand-composing
- * `createRpcClient(createE2ELayer({...}))` + a session-create call. Direct-runtime
- * tests via `baseLocalLayer` bypass the per-request scope boundary
- * production uses; this harness asserts that boundary.
- *
- * The harness is intentionally thin: it folds the four lines every RPC test
- * already writes (build E2E layer → createRpcClient → session.create → return
- * client + ids) into a single yield. The seeded session runs in the layer's
- * own temp working directory; pass `cwd` to seed it elsewhere.
- *
- * The harness is exposed as `@gent/core/test-utils` so it can be imported from
- * any test file. Because `core` cannot reach into `@gent/extensions`, the
- * caller passes pre-loaded extensions and an agents bucket — the same
- * fragments callers already pass to `createE2ELayer`.
- */
+// RPC acceptance harness — exercises the full per-request scope path that
+// production uses (`createRpcClient → RpcServer → registry dispatch → handler`).
+//
+// Use this for new extension RPC tests instead of hand-composing
+// `createRpcClient(createE2ELayer({...}))` + a session-create call. Direct-runtime
+// tests via `baseLocalLayer` bypass the per-request scope boundary
+// production uses; this harness asserts that boundary.
+//
+// The harness is intentionally thin: it folds the four lines every RPC test
+// already writes (build E2E layer → createRpcClient → session.create → return
+// client + ids) into a single yield. The seeded session runs in the layer's
+// own temp working directory; pass `cwd` to seed it elsewhere.
+//
+// The harness is exposed as `@gent/core/test-utils` so it can be imported from
+// any test file. Because `core` cannot reach into `@gent/extensions`, the
+// caller passes pre-loaded extensions and an agents bucket — the same
+// fragments callers already pass to `createE2ELayer`.
 
 interface RpcHarnessConfig extends Omit<E2ELayerConfig, "toolRunner" | "cwd"> {
   /**

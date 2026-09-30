@@ -1317,7 +1317,7 @@ const measuredUnits = (
 
 // ── model-context-compactor ─────────────────────────────────────────────────
 
-/**
+/*
  * The context compaction seam.
  *
  * The loop decides when a window hands off: on overflow, when the model
@@ -1327,8 +1327,6 @@ const measuredUnits = (
  * notice the handoff marker carries. With none installed, an overflowing
  * transcript is simply truncated. The loop owns the marker, its ids, and the
  * transaction; the extension owns the summary prompt and the notice text.
- *
- * @module
  */
 
 /** Why a summary was not produced. Every failure degrades to a truncated window. */
@@ -1578,9 +1576,11 @@ export interface PromptCache {
 
 /**
  * The smallest window a cold start hands off. A cold resend of N tokens is a
- * cache write, 1.25 × N on Anthropic; the summary call reads at most ~33k
- * (the compactor's 32k input cap and its prompt) and the next call resends
- * only the summary and the new prompt. That breaks even near 34k; from 64k
+ * cache write, the catalog `cacheWrite` multiple of N (2 × N for Anthropic's
+ * one-hour cache); the summary call sends at most ~33k (the compactor's 32k
+ * input cap and its prompt), written to the cache at the same multiple, and
+ * the next call resends only the summary and the new prompt. That breaks even
+ * near 45k; from 64k
  * the handoff saves at least half the resend, which pays for the detail a
  * summary loses. A window whose input budget is under 128k hands off at half
  * that budget instead, so a small-window model can hand off at all.

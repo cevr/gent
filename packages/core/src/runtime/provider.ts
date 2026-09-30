@@ -61,10 +61,10 @@ import type * as AiToolkit from "effect/ai/Toolkit"
  * and the guard.
  * Each provider's auth blob is one URL-encoded JSON file under the configured
  * directory (default `~/.gent/auth/`), mode 0600, replaced atomically. The
- * schema is `Auth.Info`, a tagged enum with `Api | Oauth` variants.
+ * schema is `AuthInfo`, a tagged enum with `Api | Oauth` variants.
  */
 
-// ── Driver-facing wire types ────────────────────────────────────────────
+// ── auth method wire types ──────────────────────────────────────────────────
 
 const AuthMethodType = Schema.Literals(["oauth", "api"])
 type AuthMethodType = typeof AuthMethodType.Type
@@ -84,10 +84,10 @@ export class AuthAuthorization extends Schema.Class<AuthAuthorization>("AuthAuth
   instructions: Schema.optional(Schema.String),
 }) {}
 
-// ── Stored auth payload ─────────────────────────────────────────────────
+// ── stored auth ─────────────────────────────────────────────────────────────
 
 /**
- * `Auth.Info` — variants persisted in the store.
+ * `AuthInfo`: the variants persisted in the store.
  *
  * - `Api`   — bearer/API key; presented to the model driver as `key`.
  * - `Oauth` — refreshable bearer token + expiry; driver may rotate.
@@ -120,7 +120,7 @@ type AuthOauth = typeof AuthInfo.cases.Oauth.Type
 const AuthType = Schema.Literals(["api", "oauth"])
 type AuthType = typeof AuthType.Type
 
-// ── Auth-guard wire types ───────────────────────────────────────────────
+// ── auth guard wire types ───────────────────────────────────────────────────
 
 /** Where a provider's credential comes from: the auth store, or the driver's env variable. */
 const AuthSource = Schema.Literals(["none", "stored", "env"])
@@ -145,7 +145,7 @@ export const ListAuthProvidersPayload = Schema.Struct({
 })
 export type ListAuthProvidersPayload = typeof ListAuthProvidersPayload.Type
 
-// ── Auth service ────────────────────────────────────────────────────────
+// ── auth service ────────────────────────────────────────────────────────────
 
 export class AuthError extends Schema.TaggedError<AuthError>()("AuthError", {
   message: Schema.String,
@@ -422,7 +422,7 @@ export class Auth extends Context.Service<Auth, AuthService>()(
     })
 }
 
-// ── Auth guard ──────────────────────────────────────────────────────────
+// ── auth guard ──────────────────────────────────────────────────────────────
 
 /** True when the named env variable holds a non-empty value. */
 const envCredentialSet = (name: Option.Option<string>): Effect.Effect<boolean> =>
