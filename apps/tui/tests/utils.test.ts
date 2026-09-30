@@ -636,51 +636,49 @@ describe("toolArgSummary", () => {
   test("bash: first line of command", () => {
     expect(toolArgSummary("bash", { command: "ls -la" }, PLACE)).toBe("ls -la")
     expect(toolArgSummary("bash", { command: "echo hello\necho world" }, PLACE)).toBe("echo hello")
-    expect(toolArgSummary("bash", { cmd: "git status" }, PLACE)).toBe("git status")
     expect(toolArgSummary("bash", {}, PLACE)).toBe("")
   })
 
   test("read: path with optional range", () => {
-    expect(toolArgSummary("read", { file_path: "/tmp/foo.ts" }, PLACE)).toBe("/tmp/foo.ts")
-    expect(toolArgSummary("read", { file_path: "/tmp/foo.ts", offset: 10 }, PLACE)).toBe(
+    expect(toolArgSummary("read", { path: "/tmp/foo.ts" }, PLACE)).toBe("/tmp/foo.ts")
+    expect(toolArgSummary("read", { path: "/tmp/foo.ts", offset: 10 }, PLACE)).toBe(
       "/tmp/foo.ts:10",
     )
-    expect(toolArgSummary("read", { file_path: "/tmp/foo.ts", offset: 10, limit: 20 }, PLACE)).toBe(
+    expect(toolArgSummary("read", { path: "/tmp/foo.ts", offset: 10, limit: 20 }, PLACE)).toBe(
       "/tmp/foo.ts:10-29",
     )
-    expect(toolArgSummary("read", { file_path: "/tmp/foo.ts", limit: 50 }, PLACE)).toBe(
+    expect(toolArgSummary("read", { path: "/tmp/foo.ts", limit: 50 }, PLACE)).toBe(
       "/tmp/foo.ts:1-50",
     )
-    expect(toolArgSummary("read", { path: "/tmp/bar.ts" }, PLACE)).toBe("/tmp/bar.ts")
     expect(toolArgSummary("read", {}, PLACE)).toBe("")
   })
 
   test("read: shortens home paths", () => {
-    expect(toolArgSummary("read", { file_path: `${HOME}/src/app.ts` }, PLACE)).toBe("~/src/app.ts")
+    expect(toolArgSummary("read", { path: `${HOME}/src/app.ts` }, PLACE)).toBe("~/src/app.ts")
   })
 
   test("write: path with line count", () => {
-    expect(toolArgSummary("write", { file_path: "/tmp/foo.ts", content: "a\nb\nc" }, PLACE)).toBe(
+    expect(toolArgSummary("write", { path: "/tmp/foo.ts", content: "a\nb\nc" }, PLACE)).toBe(
       "/tmp/foo.ts (3 lines)",
     )
-    expect(toolArgSummary("write", { file_path: "/tmp/foo.ts", content: "single" }, PLACE)).toBe(
+    expect(toolArgSummary("write", { path: "/tmp/foo.ts", content: "single" }, PLACE)).toBe(
       "/tmp/foo.ts",
     )
-    expect(toolArgSummary("write", { file_path: "/tmp/foo.ts" }, PLACE)).toBe("/tmp/foo.ts")
+    expect(toolArgSummary("write", { path: "/tmp/foo.ts" }, PLACE)).toBe("/tmp/foo.ts")
     expect(toolArgSummary("write", {}, PLACE)).toBe("")
   })
 
   test("write: a final newline ends the last line, it does not start one", () => {
-    expect(toolArgSummary("write", { file_path: "/tmp/foo.ts", content: "a\nb\n" }, PLACE)).toBe(
+    expect(toolArgSummary("write", { path: "/tmp/foo.ts", content: "a\nb\n" }, PLACE)).toBe(
       "/tmp/foo.ts (2 lines)",
     )
-    expect(toolArgSummary("write", { file_path: "/tmp/foo.ts", content: "single\n" }, PLACE)).toBe(
+    expect(toolArgSummary("write", { path: "/tmp/foo.ts", content: "single\n" }, PLACE)).toBe(
       "/tmp/foo.ts",
     )
   })
 
   test("edit: shortened path", () => {
-    expect(toolArgSummary("edit", { file_path: `${HOME}/src/app.ts` }, PLACE)).toBe("~/src/app.ts")
+    expect(toolArgSummary("edit", { path: `${HOME}/src/app.ts` }, PLACE)).toBe("~/src/app.ts")
     expect(toolArgSummary("edit", {}, PLACE)).toBe("")
   })
 
@@ -717,10 +715,10 @@ describe("toolArgSummary", () => {
   test("degrades gracefully on bad input types", () => {
     expect(toolArgSummary("grep", { pattern: "ok", path: {} }, PLACE)).toBe("/ok/ in .")
     expect(
-      toolArgSummary("read", { file_path: "/tmp/f.ts", offset: "bad", limit: nullValue }, PLACE),
+      toolArgSummary("read", { path: "/tmp/f.ts", offset: "bad", limit: nullValue }, PLACE),
     ).toBe("/tmp/f.ts")
     expect(toolArgSummary("bash", { command: 123 }, PLACE)).toBe("")
-    expect(toolArgSummary("read", { file_path: nullValue }, PLACE)).toBe("")
+    expect(toolArgSummary("read", { path: nullValue }, PLACE)).toBe("")
   })
 
   test("a tool with no formatter shows its leading argument", () => {

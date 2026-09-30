@@ -769,17 +769,13 @@ export const sessions = Command.make(
       Flag.withDescription("Connect to an existing gent server"),
       Flag.optional,
     ),
-    isolate: Flag.Boolean("isolate").pipe(
-      Flag.withDescription("Keep state in memory: no data-directory database or lock"),
-      Flag.withDefault(false),
-    ),
   },
-  ({ connect, isolate }) =>
+  ({ connect }) =>
     Effect.gen(function* () {
       const bundle = yield* resolveClientBundle({
         cwd: process.cwd(),
         connect,
-        inMemory: isolate,
+        inMemory: false,
         debug: false,
         mock: Option.none(),
         authDirectory: Option.none(),

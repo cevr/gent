@@ -88,27 +88,22 @@ const waitFor = <A,>(
  * Finds elements by ID and scrolls to keep them visible in the viewport.
  */
 
-interface ScrollSyncOptions {
-  /** Synchronize only while the target list is mounted. */
-  enabled?: Accessor<boolean>
-  /** The scrollbox ref getter */
-  // eslint-disable-next-line effect/noNullish -- OpenTUI refs are absent before attachment and after cleanup.
-  getRef: () => ScrollBoxRenderable | undefined
-  /** Number of retries when element not found (default: 15) */
-  retries?: number
-  /** Delay between retries in ms (default: 30) */
-  retryDelay?: number
-}
+/** How often, and how far apart, the sync looks for a row that has not laid out yet. */
+const SCROLL_SYNC_TRIES = 15
+const SCROLL_SYNC_INTERVAL_MS = 30
 
 /**
- * ID-based scroll sync - finds element by ID and scrolls to keep it visible
+ * ID-based scroll sync - finds element by ID and scrolls to keep it visible.
+ * The scrollbox is absent before it attaches and after cleanup.
  */
-function useScrollSync(selectedId: Accessor<string>, options: ScrollSyncOptions) {
-  const { getRef, retries = 15, retryDelay = 30 } = options
+function useScrollSync(
+  selectedId: Accessor<string>,
+  getRef: () => Option.Option<ScrollBoxRenderable>,
+) {
   const renderer = useRenderer()
 
   const syncScroll = (id: string): Option.Option<true> => {
-    const scrollRef = Option.fromNullishOr(getRef())
+    const scrollRef = getRef()
     if (Option.isNone(scrollRef)) return Option.none()
 
     const children = scrollRef.value.getChildren()
@@ -128,7 +123,6 @@ function useScrollSync(selectedId: Accessor<string>, options: ScrollSyncOptions)
   }
 
   createEffect(() => {
-    if (options.enabled && !options.enabled()) return
     const id = selectedId()
     let fiber = Option.none<Fiber.Fiber<void>>()
     const afterLayout = () => {
@@ -136,8 +130,8 @@ function useScrollSync(selectedId: Accessor<string>, options: ScrollSyncOptions)
         Effect.runFork(
           waitFor(() => syncScroll(id), {
             label: `scroll-target ${id}`,
-            intervalMs: retryDelay,
-            timeoutMs: retries * retryDelay,
+            intervalMs: SCROLL_SYNC_INTERVAL_MS,
+            timeoutMs: SCROLL_SYNC_TRIES * SCROLL_SYNC_INTERVAL_MS,
           }).pipe(Effect.ignore),
         ),
       )
@@ -1110,9 +1104,10 @@ export function SelectList<A>(props: SelectListProps<A>) {
     }),
   )
 
-  useScrollSync(() => `${props.id}-row-${state().selectedIndex}`, {
-    getRef: () => Option.getOrUndefined(scrollRef),
-  })
+  useScrollSync(
+    () => `${props.id}-row-${state().selectedIndex}`,
+    () => scrollRef,
+  )
 
   // Report the cursor, closed panes included: a pane that fetches for the
   // selected row has to be told to stop when it closes. A pane that unmounts

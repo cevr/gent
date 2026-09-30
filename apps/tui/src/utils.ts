@@ -394,12 +394,8 @@ function getNumberArg(args: Schema.JsonObject, key: string) {
   return decodeNumber(args[key])
 }
 
-function getPathArg(args: Schema.JsonObject): string {
-  return getStringArg(args, "file_path", "path")
-}
-
 function summarizeRead(args: Schema.JsonObject, place: PathPlace): string {
-  const rawPath = getPathArg(args)
+  const rawPath = getStringArg(args, "path")
   if (rawPath.length === 0) return ""
 
   let text = displayPath(rawPath, place)
@@ -416,7 +412,7 @@ function summarizeRead(args: Schema.JsonObject, place: PathPlace): string {
 }
 
 function summarizeWrite(args: Schema.JsonObject, place: PathPlace): string {
-  const rawPath = getPathArg(args)
+  const rawPath = getStringArg(args, "path")
   if (rawPath.length === 0) return ""
 
   const lines = lineCount(getStringArg(args, "content"))
@@ -440,7 +436,7 @@ type ToolArgFormatter = (args: Schema.JsonObject, place: PathPlace) => string
 
 const toolArgFormatters = {
   bash: (args) => {
-    const command = getStringArg(args, "command", "cmd")
+    const command = getStringArg(args, "command")
     if (command.length === 0) return ""
     return command.split("\n")[0] ?? command
   },
@@ -451,7 +447,7 @@ const toolArgFormatters = {
   read: summarizeRead,
   write: summarizeWrite,
   edit: (args, place) => {
-    const rawPath = getPathArg(args)
+    const rawPath = getStringArg(args, "path")
     if (rawPath.length > 0) {
       return displayPath(rawPath, place)
     }
