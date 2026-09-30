@@ -15,6 +15,7 @@ import {
 import * as Prompt from "effect/ai/Prompt"
 import {
   renderSessionTree,
+  type SessionMessageDetails,
   sessionMessageBody,
   sessionMessageText,
   SessionToolsExtension,
@@ -305,7 +306,10 @@ describe("Session tools via model turn", () => {
 })
 
 describe("session message header", () => {
-  const from = { sessionId: SessionId.make("child-1"), relation: "child" }
+  const from = {
+    sessionId: SessionId.make("child-1"),
+    relation: "child",
+  } satisfies SessionMessageDetails["from"]
 
   test("a child's message says it is not the completion, before and after it", () => {
     const text = sessionMessageText({ from, message: "CI is green" })
