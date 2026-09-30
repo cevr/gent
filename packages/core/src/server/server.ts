@@ -1655,22 +1655,11 @@ interface DependencyOverrides {
   readonly extraLayers?: ReadonlyArray<Layer.Layer<never>>
 }
 
-/**
- * Wiring contract failure — fires only when a Layer that depends on the
- * pre-resolved base prompt sections is materialized before the resolver
- * Layer that populates that seed.
- *
- * In a correctly wired composition this is unreachable; surfacing it as
- * a typed error means the failure channel of the bootstrap layer carries
- * an explicit `BootstrapError` instead of an opaque defect.
- */
-class BootstrapError extends Schema.TaggedError<BootstrapError>()("BootstrapError", {
-  seed: Schema.Literals(["baseSections"]),
-}) {
-  override get message(): string {
-    return "Base prompt sections were not initialized"
-  }
-}
+/** The launch profile's base prompt sections, for the loop actor's defaults. */
+class LaunchBaseSections extends Context.Service<
+  LaunchBaseSections,
+  ReadonlyArray<PromptSection>
+>()("@gent/core/src/server/server/LaunchBaseSections") {}
 
 /**
  * Where a composition root keeps its state. `Disk` names the SQLite file it
@@ -1758,7 +1747,6 @@ const makeModelResolverLayer = <A, E, R>(
   })
 
 export const createDependencies = (config: DependenciesConfig) => {
-  let baseSectionsSeed = Option.none<ReadonlyArray<PromptSection>>()
   const runtimeEnvironmentLive = RuntimeEnvironment.Live({
     cwd: config.cwd,
     home: config.home,
@@ -1812,7 +1800,6 @@ export const createDependencies = (config: DependenciesConfig) => {
         const profile = yield* cache
           .resolve(config.cwd)
           .pipe(Effect.provideService(CurrentWorkspaceId, launchWorkspaceId))
-        baseSectionsSeed = Option.some(profile.baseSections)
         // `SessionProfile.layerContext` carries dynamically acquired resource
         // services, so its type intentionally cannot enumerate every service
         // contributed by an extension. Keep the stable registry services
@@ -1820,6 +1807,7 @@ export const createDependencies = (config: DependenciesConfig) => {
         // runtime for extension consumers.
         return Layer.mergeAll(
           Layer.succeed(ExtensionRegistry, profile.registryService),
+          Layer.succeed(LaunchBaseSections, profile.baseSections),
           Layer.succeedContext(profile.layerContext),
         )
       }),
@@ -1931,11 +1919,7 @@ export const createDependencies = (config: DependenciesConfig) => {
 
   const runtimeWithHandlers = Layer.provideMerge(
     Layer.unwrap(
-      Effect.gen(function* () {
-        if (Option.isNone(baseSectionsSeed))
-          return yield* new BootstrapError({ seed: "baseSections" })
-        return AgentLoopLiveActor({ baseSections: baseSectionsSeed.value })
-      }),
+      Effect.map(LaunchBaseSections, (baseSections) => AgentLoopLiveActor({ baseSections })),
     ),
     allWithRuntime,
   )
