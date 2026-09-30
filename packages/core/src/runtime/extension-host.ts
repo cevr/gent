@@ -1325,14 +1325,17 @@ const extensionDirectories = (
  * The gent entries re-export this module, so they are read on first use: a
  * static import here would evaluate them inside their own import cycle.
  */
+// gent/no-dynamic-imports: allow the entry imports this module; read it after both evaluate
+const loadExtensionApiEntry: RuntimeModuleSource = () => import("../extensions/api.js")
+// gent/no-dynamic-imports: allow the entry imports this module; read it after both evaluate
+const loadBranchToolsEntry: RuntimeModuleSource = () => import("../extensions/branch-tools.js")
+
 export const extensionEntryModules: ReadonlyMap<string, RuntimeModuleSource> = new Map<
   string,
   RuntimeModuleSource
 >([
-  // gent/no-dynamic-imports: allow the entry imports this module; read it after both evaluate
-  ["@gent/core/extensions/api", () => import("../extensions/api.js")],
-  // gent/no-dynamic-imports: allow the entry imports this module; read it after both evaluate
-  ["@gent/core/extensions/branch-tools", () => import("../extensions/branch-tools.js")],
+  ["@gent/core/extensions/api", loadExtensionApiEntry],
+  ["@gent/core/extensions/branch-tools", loadBranchToolsEntry],
   ["effect", () => EffectEntry],
 ])
 

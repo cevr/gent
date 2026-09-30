@@ -210,7 +210,7 @@ const decodeJsonc = Effect.fn("Tooling.decodeJsonc")(function* <
   S extends Schema.Top & { readonly DecodingServices: never },
 >(path: string, text: string, schema: S) {
   const parsed = yield* Effect.try({
-    try: (): unknown => Bun.JSONC.parse(text),
+    try: () => Bun.JSONC.parse(text),
     catch: (error) => `${path}: ${String(error)}`,
   })
   const value = yield* Schema.decodeUnknownEffect(schema)(parsed).pipe(

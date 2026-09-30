@@ -725,6 +725,10 @@ const clientOnlyModules: ReadonlyMap<string, RuntimeModuleSource> = new Map<
   ["solid-js/store", () => SolidStoreEntry],
 ])
 
+/** Import a built client file under the name its source was bound to. */
+// gent/no-dynamic-imports: allow TUI extension modules are discovered from user/project files at runtime
+const importBoundClientModule = (moduleId: string) => import(moduleId)
+
 /**
  * Bind the names every extension file reads (the two authoring entries and
  * `effect`) under their own names, and the client names under a prefix drawn
@@ -773,8 +777,7 @@ const provideClientExtensionModules = Effect.gen(function* () {
       )
       yield* bindModuleSource(name, contents)
       return yield* Effect.tryPromise({
-        // gent/no-dynamic-imports: allow TUI extension modules are discovered from user/project files at runtime
-        try: () => import(name),
+        try: () => importBoundClientModule(name),
         catch: (cause) =>
           new TuiExtensionImportError({ message: `Failed to load ${filePath}`, cause }),
       })
