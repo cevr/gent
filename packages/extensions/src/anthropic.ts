@@ -32,6 +32,7 @@ import {
   type ProviderHints,
   reportProviderStopReason,
   runProcess,
+  writeFileAtomic,
 } from "@gent/core/extensions/api"
 import {
   type CatalogSource,
@@ -619,13 +620,10 @@ const writeCredentialsFile = (
     if (exists) {
       raw = yield* fs.readFileString(credentialsFile).pipe(Effect.mapError(mapFsError))
     }
+    // Staged and renamed over the file, owner-only from the first byte: the
+    // claude CLI reading it at the same time sees the old or the new blob.
     return yield* compareAndWrite(raw, creds, base, (blob) =>
-      fs.writeFileString(credentialsFile, blob).pipe(
-        // chmod 0600 after write so the credentials file is not
-        // world-readable on first creation.
-        Effect.andThen(fs.chmod(credentialsFile, 0o600)),
-        Effect.mapError(mapFsError),
-      ),
+      writeFileAtomic(credentialsFile, blob, { mode: 0o600 }).pipe(Effect.mapError(mapFsError)),
     )
   })
 
