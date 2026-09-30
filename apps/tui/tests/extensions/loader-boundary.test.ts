@@ -46,7 +46,7 @@ import {
   makeClientTestTransport,
   makeUnreachableTransport,
 } from "../extension-test-harness-boundary"
-import { defineRequests, ExtensionId, ref, request } from "@gent/core/extensions/api"
+import { defineRequests, ExtensionId, getToolId, ref, request } from "@gent/core/extensions/api"
 import { inRuntime } from "../helpers-boundary"
 import { builtinClientModules } from "../../src/extensions/builtins"
 import { type Command, executeSlashCommand } from "../../src/commands"
@@ -1593,7 +1593,7 @@ describe("tool renderer reach", () => {
           cwd: "/nonexistent/gent-test-cwd",
           home: "/nonexistent/gent-test-home",
         })
-        for (const tool of contributions.tools ?? []) toolIds.add(tool.id)
+        for (const tool of contributions.tools ?? []) toolIds.add(getToolId(tool))
       }
       expect(loaded.failures).toEqual([])
       expect(loaded.renderers.has("delegate.start")).toBe(true)

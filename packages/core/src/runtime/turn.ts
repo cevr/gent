@@ -2953,7 +2953,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         const dispatching = params.nativeToolCalls.filter((call) =>
           Option.match(Option.fromUndefinedOr(params.toolBindings.get(call.name)), {
             onNone: () => false,
-            onSome: (entry) => entry.capability.dispatches === true,
+            onSome: (entry) => getToolMetadata(entry.capability).dispatches === true,
           }),
         )
         if (dispatching.length === 0) return params.toolBindings

@@ -3608,7 +3608,7 @@ const toolSignatureParts = Effect.fn("CellCatalog.toolSignatureParts")(function*
   tool: ToolCapability,
 ) {
   const parameters = yield* jsonSchemaOf(() => AiTool.getJsonSchema(tool))
-  const output = tool.output
+  const output = getToolMetadata(tool).output
   let result: JsonSchema.JsonSchema = {}
   if (Schema.isSchema(output)) {
     result = yield* jsonSchemaOf(() => AiTool.getJsonSchemaFromSchema(output))
@@ -3620,6 +3620,6 @@ const toolSignatureParts = Effect.fn("CellCatalog.toolSignatureParts")(function*
   }
   const resultType = boundedSchemaType(result, SIGNATURE_TYPE_LIMIT)
   const signature = `${toolPath(getToolId(tool))}(${input}): Promise<${resultType}>`
-  const summary = firstLine(getToolPrompt(tool).promptSnippet ?? tool.description)
+  const summary = firstLine(getToolPrompt(tool).promptSnippet ?? tool.description ?? "")
   return { signature, summary, parameters }
 })

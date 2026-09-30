@@ -60,7 +60,7 @@ import {
 } from "../src/wake.js"
 import { TestClock } from "effect/testing"
 import type { LanguageModel } from "effect/ai"
-import { toolResultSummary } from "@gent/core/extensions/branch-tools"
+import { getToolMetadata, toolResultSummary } from "@gent/core/extensions/branch-tools"
 import { BranchId, MessageId, SessionId, ToolCallId, SteerCommand } from "@gent/core/protocol"
 import {
   RequestId,
@@ -1405,12 +1405,12 @@ const wakeFileExists = (home: string) =>
 
 describe("wake tool claims", () => {
   test("monitor runs shell commands, so it does not claim to be readonly", () => {
-    expect(MonitorTool.readonly).toBe(false)
+    expect(getToolMetadata(MonitorTool).readonly).toBe(false)
   })
 
   test("wake and wake.cancel arm and cancel timers, so they do not claim to be readonly", () => {
-    expect(WakeTool.readonly).toBe(false)
-    expect(CancelTool.readonly).toBe(false)
+    expect(getToolMetadata(WakeTool).readonly).toBe(false)
+    expect(getToolMetadata(CancelTool).readonly).toBe(false)
   })
 })
 

@@ -63,6 +63,7 @@ import {
   defineExtension,
   ExtensionContext,
   ExtensionHost,
+  getToolId,
   tool,
   type ToolCapability,
   LoadedArtifactIdentity,
@@ -1826,7 +1827,7 @@ const deepUnionTools = [
 describe("tool signature bound", () => {
   for (const capability of deepUnionTools) {
     it.live(
-      `${String(capability.id)} renders within the type limit, in one pass over its definitions`,
+      `${getToolId(capability)} renders within the type limit, in one pass over its definitions`,
       () =>
         Effect.gen(function* () {
           const started = yield* Clock.currentTimeMillis
@@ -1845,7 +1846,7 @@ describe("tool signature bound", () => {
 
 describe("tool signature edges", () => {
   for (const [capability, expected] of edgeSignatures) {
-    it.effect(`${String(capability.id)} keeps its argument contract and a bounded line`, () =>
+    it.effect(`${getToolId(capability)} keeps its argument contract and a bounded line`, () =>
       Effect.gen(function* () {
         expect(yield* renderToolSignature(capability)).toBe(expected)
       }),
@@ -2033,7 +2034,7 @@ describe("tool signatures", () => {
   )
 
   for (const [capability, expected] of shippedSignatures) {
-    it.effect(`${String(capability.id)} renders its callable path and types`, () =>
+    it.effect(`${getToolId(capability)} renders its callable path and types`, () =>
       Effect.gen(function* () {
         expect(yield* renderToolSignature(capability)).toBe(expected)
       }),
