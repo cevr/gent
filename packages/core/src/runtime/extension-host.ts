@@ -198,13 +198,13 @@ const provideExtensionCapabilityContext = <A, E, R>(
 
 // ── extension-effect-membrane ───────────────────────────────────────────────
 
-type ErasedValue = Schema.Schema.Type<typeof Schema.Unknown>
-
 interface ErasedEffectHandlers<A, E> {
-  // This alias marks the intentional unknown channel at the single host
-  // membrane. The extension effect is parsed or handled after this point.
-  readonly onFailure: (error: ErasedValue) => Effect.Effect<A, E>
-  readonly onDefect: (defect: ErasedValue) => Effect.Effect<A, E>
+  // The single host membrane: an extension effect fails or dies with unknown
+  // values, parsed or handled after this point.
+  // oxlint-disable-next-line effect/noUnknownParameters -- The membrane erases the extension effect's error channel.
+  readonly onFailure: (error: unknown) => Effect.Effect<A, E>
+  // oxlint-disable-next-line effect/noUnknownParameters -- A defect is an unknown thrown value.
+  readonly onDefect: (defect: unknown) => Effect.Effect<A, E>
 }
 
 /**
@@ -228,7 +228,7 @@ const sealErasedEffect = <A, E>(
     Effect.catchDefect(handlers.onDefect),
   )
   // @effect-diagnostics-next-line anyUnknownInErrorContext:off -- the extension membrane erases the author effect channels and seals them here.
-  return sealed as Effect.Effect<A, E> // oxlint-disable-line effect/noAs, typescript/no-unsafe-type-assertion -- The membrane re-seals the extension effect after erasing its runtime channels. // eslint-disable-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
+  return sealed as Effect.Effect<A, E> // oxlint-disable-line effect/noAs, typescript/no-unsafe-type-assertion -- The membrane re-seals the extension effect after erasing its runtime channels.
 }
 
 /**
@@ -241,10 +241,10 @@ const exitErasedEffect = <A>(
   // @effect-diagnostics-next-line anyUnknownInErrorContext:off -- the extension membrane erases the author effect channels and seals them here.
   const exit = Effect.exit(Effect.suspend(effect))
   // @effect-diagnostics-next-line anyUnknownInErrorContext:off -- the extension membrane erases the author effect channels and seals them here.
-  return exit as Effect.Effect<Exit.Exit<A, unknown>> // oxlint-disable-line effect/noAs, typescript/no-unsafe-type-assertion -- The membrane exposes the raw exit after erasing the extension effect channels. // eslint-disable-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
+  return exit as Effect.Effect<Exit.Exit<A, unknown>> // oxlint-disable-line effect/noAs, typescript/no-unsafe-type-assertion -- The membrane exposes the raw exit after erasing the extension effect channels.
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Effect membrane owns erased runtime context boundary
+// oxlint-disable-next-line typescript/no-explicit-any -- The resource membrane erases heterogeneous service outputs.
 export type ErasedResourceLayer = Layer.Layer<any, never, never>
 
 /**
@@ -253,7 +253,7 @@ export type ErasedResourceLayer = Layer.Layer<any, never, never>
  */
 export const eraseResourceLayer = <A, E, R>(layer: Layer.Layer<A, E, R>): ErasedResourceLayer => {
   // oxlint-disable-next-line effect/noAs, effect/noChainedTypeAssertions, typescript/no-unsafe-type-assertion -- The resource membrane intentionally erases heterogeneous service output and requirements.
-  const erased = layer as unknown as ErasedResourceLayer // eslint-disable-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
+  const erased = layer as unknown as ErasedResourceLayer
   return erased
 }
 
@@ -1417,46 +1417,21 @@ const loadExtensionFile = Effect.fn("ExtensionLoader.loadExtensionFile")(functio
       }),
   })
 
-  // Find the extension — check default export, then named exports
-  const candidates: LoadedUserExtension[] = []
-  const seen = new Set<unknown>()
+  // The module's extensions: `default` is one of its entries, and a value
+  // exported under two names counts once.
+  const [result, second] = new Set(Object.values(mod).filter(isGentExtension))
 
-  if (!Predicate.isUndefined(mod["default"])) {
-    const resolved = resolveToGentExtension(mod["default"])
-    if (Option.isSome(resolved) && !seen.has(resolved.value)) {
-      seen.add(resolved.value)
-      candidates.push(resolved.value)
-    }
-  }
-
-  for (const [, value] of Object.entries(mod)) {
-    const resolved = resolveToGentExtension(value)
-    if (Option.isSome(resolved) && !seen.has(resolved.value)) {
-      seen.add(resolved.value)
-      candidates.push(resolved.value)
-    }
-  }
-
-  if (candidates.length === 0) {
+  if (Predicate.isUndefined(result)) {
     return yield* new ExtensionLoadError({
       extensionId: ExtensionId.make("unknown"),
       message: `No GentExtension found in ${filePath}. Export a defineExtension() result as default or named export.`,
     })
   }
 
-  if (candidates.length > 1) {
+  if (!Predicate.isUndefined(second)) {
     return yield* new ExtensionLoadError({
       extensionId: ExtensionId.make("unknown"),
       message: `Multiple GentExtension exports found in ${filePath}. Export exactly one.`,
-    })
-  }
-
-  // candidates.length === 1 guaranteed by checks above
-  const result = candidates[0]
-  if (Predicate.isUndefined(result)) {
-    return yield* new ExtensionLoadError({
-      extensionId: ExtensionId.make("unknown"),
-      message: `No extension in ${filePath}`,
     })
   }
   // Filesystem extensions are not trusted to name their own loaded artifact.
@@ -1477,13 +1452,6 @@ const decodeGentExtensionContract = Schema.decodeUnknownOption(GentExtensionCont
 const isGentExtension = (value: unknown): value is LoadedUserExtension => {
   const decoded = decodeGentExtensionContract(value)
   return Option.isSome(decoded) && Effect.isEffect(decoded.value.setup)
-}
-
-/** Extract a `GentExtension` from a module export; any other value is not one. */
-// oxlint-disable-next-line effect/noUnknownParameters -- Runtime module exports enter as untyped values.
-const resolveToGentExtension = (value: unknown): Option.Option<LoadedUserExtension> => {
-  if (isGentExtension(value)) return Option.some(value)
-  return Option.none()
 }
 
 // Full discovery + loading pipeline
@@ -1901,7 +1869,7 @@ export interface RuntimeProfileInputs {
  * membrane owns this erased context instead of naming a closed-world service
  * union here.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Resource services are heterogeneous at this explicit host membrane.
+// oxlint-disable-next-line typescript/no-explicit-any -- Resource services are heterogeneous at this explicit host membrane.
 type RuntimeProfileServiceContext = Context.Context<any>
 
 /** Services and immutable prompt inputs built for one session. */
@@ -2008,7 +1976,7 @@ const buildSessionProfile = (params: {
   Effect.gen(function* () {
     // Every resource is already built. Supplying that immutable context here is
     // the only resource-side operation in staging.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- The host membrane erases heterogeneous resource services at this boundary.
+    // oxlint-disable-next-line typescript/no-explicit-any -- The host membrane erases heterogeneous resource services at this boundary.
     const resourceLayer: Layer.Layer<any, never, never> = Layer.succeedContext(
       params.resourceContext,
     )
@@ -2491,37 +2459,6 @@ export class SessionProfileCache extends Context.Service<
         return SessionProfileCache.of({ resolve })
       }),
     )
-
-  static Test = (profiles?: Map<string, SessionProfile>): Layer.Layer<SessionProfileCache> => {
-    const cache = Option.getOrElse(
-      Option.fromUndefinedOr(profiles),
-      () => new Map<string, SessionProfile>(),
-    )
-    return Layer.succeed(
-      SessionProfileCache,
-      SessionProfileCache.of({
-        resolve: (cwd) =>
-          Effect.sync(() => {
-            const existing = Option.fromUndefinedOr(cache.get(cwd))
-            if (Option.isSome(existing)) return existing.value
-            const resolved = resolveExtensions([])
-            const layerContext = Effect.runSync(
-              Layer.build(ExtensionRegistry.fromResolved(resolved)).pipe(Effect.scoped),
-            )
-            const profile: SessionProfile = {
-              cwd,
-              resolved,
-              layerContext,
-              registryService: Context.get(layerContext, ExtensionRegistry),
-              baseSections: [],
-              generationId: ProcessGenerationId.make("test"),
-            }
-            cache.set(cwd, profile)
-            return profile
-          }),
-      }),
-    )
-  }
 }
 
 // ── approval-service ────────────────────────────────────────────────────────

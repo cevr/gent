@@ -3148,7 +3148,7 @@ const buildAgentLoopActorHandlers = (config: {
             )
             const rpcRegistry = turnRegistry(environment).getResolved().rpcRegistry
             const capabilityId = RpcId.make(operation.capabilityId)
-            let input: unknown = Option.getOrUndefined(Option.none())
+            let input: unknown
             if (operation.input._tag === "Present") input = operation.input.value
             const run = runExtensionRequest(
               environment,

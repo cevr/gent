@@ -64,6 +64,7 @@ import {
 } from "../../src/domain/agent"
 import {
   createE2ELayer,
+  fixedSessionProfiles,
   createRpcClient,
   createRpcHarness,
   registerContributions,
@@ -855,7 +856,7 @@ describe("provider login", () => {
             ...e2ePreset,
             providerLayer,
             extensions: [],
-            sessionProfileCacheLayer: SessionProfileCache.Test(new Map([[profileCwd, profile]])),
+            sessionProfileCacheLayer: fixedSessionProfiles(new Map([[profileCwd, profile]])),
           }),
         )
         const { sessionId } = yield* client.session.create({ cwd: profileCwd })
@@ -4007,7 +4008,7 @@ describe("extension requests and slash commands", () => {
             ...e2ePreset,
             providerLayer,
             extensions: [],
-            sessionProfileCacheLayer: SessionProfileCache.Test(
+            sessionProfileCacheLayer: fixedSessionProfiles(
               new Map([["/nonexistent/gent-test-profile-cwd", profile]]),
             ),
             cwd: "/nonexistent/gent-test-profile-cwd",
@@ -4076,7 +4077,7 @@ describe("extension requests and slash commands", () => {
             ...e2ePreset,
             providerLayer,
             extensions: [],
-            sessionProfileCacheLayer: SessionProfileCache.Test(
+            sessionProfileCacheLayer: fixedSessionProfiles(
               new Map([["/nonexistent/gent-test-profile-cwd", profile]]),
             ),
             cwd: "/nonexistent/gent-test-profile-cwd",
@@ -4098,7 +4099,7 @@ describe("extension requests and slash commands", () => {
         Effect.gen(function* () {
           const alphaProfile = yield* makeProfile(alphaCwd, [alphaExt])
           const betaProfile = yield* makeProfile(betaCwd, [betaExt])
-          const sessionProfileCacheLayer = SessionProfileCache.Test(
+          const sessionProfileCacheLayer = fixedSessionProfiles(
             new Map([
               [alphaCwd, alphaProfile],
               [betaCwd, betaProfile],
@@ -4590,9 +4591,7 @@ describe("extension resources", () => {
       yield* Effect.scoped(
         Effect.gen(function* () {
           const profile = yield* makeProfile(profileCwd, [ext])
-          const sessionProfileCacheLayer = SessionProfileCache.Test(
-            new Map([[profileCwd, profile]]),
-          )
+          const sessionProfileCacheLayer = fixedSessionProfiles(new Map([[profileCwd, profile]]))
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
           const { client, sessionId, branchId } = yield* createRpcHarness({
             ...e2ePreset,
@@ -5107,7 +5106,7 @@ describe("sessionDeleted hook", () => {
             ],
           },
         }
-        const sessionProfileCacheLayer = SessionProfileCache.Test(
+        const sessionProfileCacheLayer = fixedSessionProfiles(
           new Map([
             [parentCwd, yield* makeProfile(parentCwd, [])],
             [childCwd, yield* makeProfile(childCwd, [cleanup])],

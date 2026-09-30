@@ -25,11 +25,11 @@ import { DEFAULT_MAX_AGENT_RUN_DEPTH, SessionDepthLimitError } from "../domain/a
 import { NotFoundError } from "../domain/errors.js"
 import {
   ActorCommandId,
-  BranchId,
-  ExtensionId,
+  type BranchId,
+  type ExtensionId,
   type InteractionRequestId,
-  RequestId,
-  SessionId,
+  type RequestId,
+  type SessionId,
 } from "../domain/ids.js"
 import { Actor } from "effect-encore"
 import {
@@ -255,27 +255,20 @@ export class SessionRuntimeError extends Schema.TaggedError<SessionRuntimeError>
   },
 ) {}
 
-const SessionRuntimeTarget = Schema.Struct({
-  sessionId: SessionId,
-  branchId: BranchId,
-})
-type SessionRuntimeTarget = typeof SessionRuntimeTarget.Type
+interface SessionRuntimeTarget {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+}
 
-const ExtensionRequestPayload = Schema.Struct({
-  sessionId: SessionId,
-  branchId: BranchId,
-  extensionId: ExtensionId,
-  capabilityId: Schema.String,
-  input: Schema.Unknown,
-})
-type ExtensionRequestPayload = typeof ExtensionRequestPayload.Type
+interface ExtensionRequestPayload extends SessionRuntimeTarget {
+  readonly extensionId: ExtensionId
+  readonly capabilityId: string
+  readonly input: unknown
+}
 
-const DrainQueuedMessagesPayload = Schema.Struct({
-  sessionId: SessionId,
-  branchId: BranchId,
-  requestId: RequestId,
-})
-type DrainQueuedMessagesPayload = typeof DrainQueuedMessagesPayload.Type
+interface DrainQueuedMessagesPayload extends SessionRuntimeTarget {
+  readonly requestId: RequestId
+}
 
 export interface SessionRuntimeService {
   readonly sendUserMessage: (
@@ -318,17 +311,6 @@ const wrapError = (message: string, cause: Cause.Cause<unknown>) => {
   return new SessionRuntimeError({ message, cause })
 }
 
-const wrapStreamSessionRuntimeError = (
-  operation: string,
-  error: Schema.Schema.Type<typeof Schema.Unknown>,
-) => {
-  if (Schema.is(SessionRuntimeError)(error)) return error
-  return new SessionRuntimeError({
-    message: `${operation} failed`,
-    cause: error,
-  })
-}
-
 const makeLiveSessionRuntime = Effect.gen(function* () {
   // Resolve the actor client factory once at construction time. Per-method
   // dispatch uses `ActorRef.execute(op)`, which carries no requirement,
@@ -362,20 +344,19 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
       Effect.provideContext(storageContext),
     )
 
-  const toAgentLoopError = (error: Schema.Schema.Type<typeof Schema.Unknown>) => {
-    if (Schema.is(AgentLoopError)(error)) return error
-    return new AgentLoopError({
-      message: "AgentLoop state unavailable",
-      cause: error,
-    })
-  }
   const watchRuntimeState = Effect.fn("SessionRuntime.watchRuntimeState")(function* (
     input: SessionRuntimeTarget,
   ) {
     const workspaceId = yield* CurrentWorkspaceId
-    return actorState
-      .watch(entityIdOf(workspaceId, input.sessionId, input.branchId))
-      .pipe(Stream.mapError(toAgentLoopError))
+    return actorState.watch(entityIdOf(workspaceId, input.sessionId, input.branchId)).pipe(
+      Stream.mapError(
+        (cause) =>
+          new SessionRuntimeError({
+            message: "watchState failed: the loop state is unavailable",
+            cause,
+          }),
+      ),
+    )
   })
 
   const terminateRuntimeSession = Effect.fn("SessionRuntime.terminateRuntimeSession")(function* (
@@ -505,9 +486,7 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
     watchState: (input) =>
       Effect.gen(function* () {
         yield* requireSessionBranch(input)
-        return (yield* watchRuntimeState(input)).pipe(
-          Stream.mapError((error) => wrapStreamSessionRuntimeError("watchState", error)),
-        )
+        return yield* watchRuntimeState(input)
       }).pipe(Effect.catchCause((cause) => Effect.fail(wrapError("watchState failed", cause)))),
 
     terminateSession: (sessionId) =>

@@ -1517,11 +1517,6 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   overflowed: boolean
 }) {
   const extensionRegistry = yield* ExtensionRegistry
-  const publishEventOrDie = (event: ErrorOccurred | ProviderRetrying) =>
-    Effect.gen(function* () {
-      const eventStore = yield* EventStore
-      yield* eventStore.publish(event).pipe(Effect.orDie)
-    })
   const { resolved } = params
   const operations = yield* SessionOperationStorage
   // None: the agent sets no ceiling. Some(false): the turn spent it.
@@ -2561,10 +2556,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         yield* scope.turnLedger.noteCompaction(source.compaction.value.costUsd)
       yield* scope.turnLedger.noteNotices(params.resolved.notices)
 
-      const eventStore = yield* EventStore
-      const publishEventOrDie = (event: StreamStarted | StreamEnded) =>
-        eventStore.publish(event).pipe(Effect.orDie)
-
       yield* publishEventOrDie(
         StreamStarted.make({
           sessionId: scope.sessionId,
@@ -2926,7 +2917,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         )
 
     /** The turn context for a running turn: agent, prompt, model, and bindings. */
-    const resolveForState = (state: RunningState, turnProfile: AgentLoopTurnProfile) =>
+    const resolveForState = (turnProfile: AgentLoopTurnProfile) =>
       resolveTurnContext({
         branchId: scope.branchId,
         sessionId: scope.sessionId,
@@ -2936,7 +2927,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
 
     const resolveReplayHostBindings = Effect.fn("AgentLoop.resolveReplayHostBindings")(
       function* (params: {
-        readonly state: RunningState
         readonly turnProfile: AgentLoopTurnProfile
         readonly nativeToolCalls: ReadonlyArray<Prompt.ToolCallPart>
         readonly toolBindings: Map<string, ResolvedToolCapability>
@@ -2951,7 +2941,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           }),
         )
         if (dispatching.length === 0) return params.toolBindings
-        const resolved = yield* resolveForState(params.state, params.turnProfile)
+        const resolved = yield* resolveForState(params.turnProfile)
         // The turn's agent no longer exists: the resolve already published an
         // error that names it. A removed agent grants nothing, so its
         // dispatching calls lose their bindings and settle as failed; the next
@@ -3243,7 +3233,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         ),
       )
       const hostToolBindings = yield* resolveReplayHostBindings({
-        state: params.state,
         turnProfile: params.turnProfile,
         nativeToolCalls: nativeToolCalls.filter((toolCall) => !cutShortIds.has(toolCall.id)),
         toolBindings,
@@ -3349,7 +3338,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       /** The provider refused the last step as too long; this one hands the window off first. */
       readonly overflowed: boolean
     }) {
-      const resolvedAtBoundary = yield* resolveForState(params.state, params.turnProfile)
+      const resolvedAtBoundary = yield* resolveForState(params.turnProfile)
       // `resolveTurnContext` published `ErrorOccurred` and gave up — an unknown
       // agent, most often. The turn produced no answer, so say so rather than
       // publish a `TurnCompleted` no caller can tell from a reply.

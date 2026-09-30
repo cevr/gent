@@ -37,6 +37,7 @@ import {
   ExtensionId,
   type InteractionRequestId,
   type MessageId,
+  ProcessGenerationId,
   SessionId,
   ToolCallId,
   ToolId,
@@ -65,6 +66,7 @@ import {
   makeExtensionHostContextProvider,
   provideCurrentHostCtx,
   resolveExtensions,
+  type SessionProfile,
   SessionProfileCache,
 } from "../runtime/extension-host.js"
 import { ConfigService, RuntimeEnvironment } from "../runtime/config.js"
@@ -712,6 +714,40 @@ export const storedEvents = Effect.fn("test.storedEvents")(function* (run: Harne
 })
 
 // ── e2e layer ───────────────────────────────────────────────────────────────
+
+/**
+ * A session profile cache over fixed profiles, for per-cwd routing tests. A
+ * cwd with no profile gets one with no extensions; its registry is built once,
+ * in the layer's scope.
+ */
+export const fixedSessionProfiles = (
+  profiles: ReadonlyMap<string, SessionProfile> = new Map(),
+): Layer.Layer<SessionProfileCache> =>
+  Layer.effect(
+    SessionProfileCache,
+    Effect.gen(function* () {
+      const resolved = resolveExtensions([])
+      const layerContext = yield* Layer.build(ExtensionRegistry.fromResolved(resolved))
+      const cache = new Map(profiles)
+      return SessionProfileCache.of({
+        resolve: (cwd) =>
+          Effect.sync(() => {
+            const existing = Option.fromUndefinedOr(cache.get(cwd))
+            if (Option.isSome(existing)) return existing.value
+            const profile: SessionProfile = {
+              cwd,
+              resolved,
+              layerContext,
+              registryService: Context.get(layerContext, ExtensionRegistry),
+              baseSections: [],
+              generationId: ProcessGenerationId.make("test"),
+            }
+            cache.set(cwd, profile)
+            return profile
+          }),
+      })
+    }),
+  )
 
 export interface E2ELayerConfig {
   /**

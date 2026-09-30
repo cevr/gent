@@ -2897,7 +2897,7 @@ const makeRuntimeLayer = (
   const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
   const storageLayer = testSqliteStorage(noBranchTools.storage, noBranchTools.migrations)
   let toolRunnerLayer = ToolRunner.Test()
-  if (tools.length > 0) toolRunnerLayer = ToolRunner.Live
+  if (tools.length > 0) toolRunnerLayer = ToolRunner.Live.pipe(Layer.provide(BunServices.layer))
   const baseDeps = Layer.mergeAll(
     storageLayer,
     makeClusterRunnerLayer(storageLayer),

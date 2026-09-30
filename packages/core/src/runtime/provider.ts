@@ -66,11 +66,11 @@ import type * as AiToolkit from "effect/ai/Toolkit"
 
 // ── auth method wire types ──────────────────────────────────────────────────
 
-const AuthMethodType = Schema.Literals(["oauth", "api"])
-type AuthMethodType = typeof AuthMethodType.Type
+/** How a provider signs in: an API key or an OAuth login. */
+const AuthType = Schema.Literals(["api", "oauth"])
 
 export class AuthMethod extends Schema.Class<AuthMethod>("AuthMethod")({
-  type: AuthMethodType,
+  type: AuthType,
   label: Schema.String,
 }) {}
 
@@ -116,9 +116,6 @@ export const AuthApi = AuthInfo.cases.Api
 export type AuthApi = typeof AuthInfo.cases.Api.Type
 const AuthOauth = AuthInfo.cases.Oauth
 type AuthOauth = typeof AuthInfo.cases.Oauth.Type
-
-const AuthType = Schema.Literals(["api", "oauth"])
-type AuthType = typeof AuthType.Type
 
 // ── auth guard wire types ───────────────────────────────────────────────────
 

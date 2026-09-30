@@ -3470,7 +3470,10 @@ const host = testToolContext({
   branchId: branchIdToolCall,
   toolCallId,
 })
-const base = Layer.mergeAll(BunServices.layer, ToolRunner.Live, EventStore.Memory)
+const base = Layer.provideMerge(
+  Layer.mergeAll(ToolRunner.Live, EventStore.Memory),
+  BunServices.layer,
+)
 
 it.scopedLive("uses the exact selected capability and still enforces the input schema", () =>
   Effect.gen(function* () {

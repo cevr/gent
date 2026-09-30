@@ -574,8 +574,6 @@ export const LanguageModelLayers = {
 
 let _stepCallIdCounter = 0
 const makeStepToolCallId = () => ToolCallId.make(`step-tc-${++_stepCallIdCounter}`)
-type DebugValue = Schema.Schema.Type<typeof Schema.Unknown>
-
 export const textStep = (text: string): SequenceStep => ({
   parts: [
     textDeltaPart(text),
@@ -588,7 +586,8 @@ export const textStep = (text: string): SequenceStep => ({
 
 export const toolCallStep = (
   toolName: string,
-  input: DebugValue,
+  // oxlint-disable-next-line effect/noUnknownParameters -- Tool arguments enter the Effect AI codec as unknown JSON data.
+  input: unknown,
   options?: { toolCallId?: ToolCallId },
 ): SequenceStep => ({
   parts: [
@@ -601,7 +600,7 @@ export const toolCallStep = (
 })
 
 export const multiToolCallStep = (
-  ...calls: ReadonlyArray<{ toolName: string; input: DebugValue; toolCallId?: ToolCallId }>
+  ...calls: ReadonlyArray<{ toolName: string; input: unknown; toolCallId?: ToolCallId }>
 ): SequenceStep => ({
   parts: [
     ...calls.map((call) =>

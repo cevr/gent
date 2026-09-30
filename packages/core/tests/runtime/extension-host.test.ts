@@ -36,6 +36,7 @@ import {
   testHostFacts,
   testToolContext,
   ensureStorageParents,
+  fixedSessionProfiles,
   testSqliteStorage,
 } from "../../src/test-utils/harness"
 import { BunChildProcessSpawner, BunCrypto, BunFileSystem, BunServices } from "@effect/platform-bun"
@@ -3620,8 +3621,8 @@ export default { manifest: { id: "home-user" }, setup: Effect.void };`,
 
       const result = yield* discoverProfileExtensions({ home, cwd: noProjectCwd })
 
-      // None of the malformed files load — they hit `loadExtensionFile`'s
-      // `candidates.length === 0` branch via the `isGentExtension` guard.
+      // None of the malformed files load: the `isGentExtension` guard finds
+      // no extension in them.
       expect(result.active).toHaveLength(0)
       expect(result.failed.length).toBeGreaterThanOrEqual(4)
       for (const target of [fnSetupPath, objectSetupPath, nullSetupPath, validPath]) {
@@ -3630,6 +3631,33 @@ export default { manifest: { id: "home-user" }, setup: Effect.void };`,
         expect(entry?.error).toContain("No GentExtension found")
       }
     }).pipe(Effect.provide(fsLayer)),
+  )
+
+  it.scopedLive("one extension exported under two names loads once; two extensions fail", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const { home, userDir: dir } = yield* makeExtensionHome("gent-loader-test-")
+      const aliasedPath = path.join(dir, "aliased.ts")
+      const twoPath = path.join(dir, "two.ts")
+      yield* fs.writeFileString(
+        aliasedPath,
+        `import { Effect } from "effect"\nexport const ext = { manifest: { id: "@user/aliased" }, setup: Effect.void }\nexport default ext\n`,
+      )
+      yield* fs.writeFileString(
+        twoPath,
+        `import { Effect } from "effect"\nexport const a = { manifest: { id: "@user/two-a" }, setup: Effect.void }\nexport const b = { manifest: { id: "@user/two-b" }, setup: Effect.void }\n`,
+      )
+
+      const result = yield* discoverProfileExtensions({ home, cwd: noProjectCwd })
+
+      expect(result.active.map((ext) => ext.manifest.id)).toEqual([
+        ExtensionId.make("@user/aliased"),
+      ])
+      expect(result.failed.find((s) => s.sourcePath === twoPath)?.error).toContain(
+        "Multiple GentExtension exports",
+      )
+    }).pipe(Effect.timeout("20 seconds"), Effect.provide(fsLayer)),
   )
 
   // Load order decides which of two same-named services wins, so it must not
@@ -4717,7 +4745,7 @@ const makeMutationsLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageMod
     BunServices.layer,
     ModelRegistry.Test(),
     GentPlatform.Test(),
-    SessionProfileCache.Test(),
+    fixedSessionProfiles(),
     AgentLoopSessionGovernance.Live,
   )
   const sessionRuntimeLayer = Layer.provide(

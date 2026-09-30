@@ -1,3 +1,4 @@
+import { BunServices } from "@effect/platform-bun"
 import { describe, expect, it, test } from "effect-bun-test"
 import {
   Clock,
@@ -3591,7 +3592,7 @@ describe("tool binding replay", () => {
         const capability = makeTool()
         const layer = Layer.mergeAll(
           ExtensionRegistry.fromResolved(resolveExtensions([makeExtension(capability)])),
-          ToolRunner.Live,
+          ToolRunner.Live.pipe(Layer.provide(BunServices.layer)),
           GentPlatform.Test(),
         )
         const context = yield* Layer.build(layer)
