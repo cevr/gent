@@ -824,12 +824,12 @@ const GUARDS = ["    - name: guards", "      run: bun run guards"]
 const LINT = [
   "    - name: oxlint",
   '      glob: "*.{ts,tsx}"',
-  "      run: env -u FORCE_COLOR NO_COLOR=1 oxlint --fix {staged_files}",
+  "      run: env -u FORCE_COLOR NO_COLOR=1 bunx oxlint --fix {staged_files}",
   "      stage_fixed: true",
 ]
 const FMT = [
   "    - name: oxfmt",
-  "      run: env -u FORCE_COLOR NO_COLOR=1 oxfmt {staged_files}",
+  "      run: env -u FORCE_COLOR NO_COLOR=1 bunx oxfmt {staged_files}",
   "      stage_fixed: true",
 ]
 
@@ -839,6 +839,11 @@ const hookFindings = (...jobs: ReadonlyArray<string>) =>
     finding.line,
     finding.message,
   ])
+
+/** A one-job hook after the guards: the job's `run:` sits on line 7. */
+const withGuards = (run: string) => hookFindings(...GUARDS, "    - name: job", `      run: ${run}`)
+
+const NOT_FAST = "is not one of the hook's fast commands"
 
 describe("pre-commit hook runs the guards", () => {
   test("accepts the guards job in any position, under any name", () => {
@@ -868,14 +873,17 @@ describe("pre-commit hook runs the guards", () => {
   test("a comment that names the guards command does not count", () => {
     const comment = ["    # Run bun run guards before committing."]
     expect(hookFindings(...comment, ...LINT)).toHaveLength(1)
-    const trailing = ["    - name: lint", "      run: oxlint --fix {staged_files} # bun run guards"]
+    const trailing = [
+      "    - name: lint",
+      "      run: bunx oxlint --fix {staged_files} # bun run guards",
+    ]
     expect(hookFindings(...trailing)).toHaveLength(1)
-    const named = ["    - name: bun run guards", "      run: oxlint --fix {staged_files}"]
+    const named = ["    - name: bun run guards", "      run: bunx oxlint --fix {staged_files}"]
     expect(hookFindings(...named)).toHaveLength(1)
   })
 
   test("accepts the guards command as one step of a compound run", () => {
-    const chained = ["    - name: checks", "      run: bun run guards && oxfmt {staged_files}"]
+    const chained = ["    - name: checks", "      run: bun run guards && bunx oxfmt {staged_files}"]
     expect(hookFindings(...chained)).toEqual([])
   })
 
@@ -884,34 +892,45 @@ describe("pre-commit hook runs the guards", () => {
   })
 })
 
-describe("pre-commit hook runs none of the gate's whole-tree steps", () => {
-  test("flags each gate step at its run line, whatever the job's name", () => {
-    const tests = ["    - name: quick", "      run: bun run test"]
-    expect(hookFindings(...GUARDS, ...tests)).toEqual([
-      [7, expect.stringContaining("runs `bun run test`, a whole-tree gate step")],
-    ])
-    const typecheck = ["    - name: types", "      run: bun run typecheck && bun run build"]
-    expect(hookFindings(...GUARDS, ...typecheck).map(([line]) => line)).toEqual([7, 7])
+describe("pre-commit hook runs only its fast commands", () => {
+  test("flags every other spelling of a whole-tree step, at its run line", () => {
+    for (const run of [
+      "bun gate",
+      "turbo run test",
+      "bunx turbo run typecheck",
+      "env NO_COLOR=1 bun run gate",
+      "bun run test",
+    ]) {
+      expect(withGuards(run)).toEqual([[7, expect.stringContaining(`\`${run}\` ${NOT_FAST}`)]])
+    }
   })
 
-  test("flags the whole-tree lint and format scripts, with or without arguments", () => {
-    const wholeTree = [
-      "    - name: lint+fmt",
-      "      run: bun run lint:fix && bun run fmt --check",
-      "      stage_fixed: true",
-    ]
-    expect(hookFindings(...GUARDS, ...wholeTree)).toEqual([
-      [7, expect.stringContaining("`bun run lint:fix`")],
-      [7, expect.stringContaining("`bun run fmt --check`")],
-    ])
+  test("flags each step of a compound run on its own", () => {
+    expect(withGuards("bun run typecheck && bun run build").map(([line]) => line)).toEqual([7, 7])
   })
 
-  test("a staged-files command or a script that only shares a prefix is not a gate step", () => {
-    const near = ["    - name: near", "      run: bun run tests-report && bun run gateway"]
-    expect(hookFindings(...GUARDS, ...LINT, ...FMT, ...near)).toEqual([])
+  test("oxlint or oxfmt over anything but the staged files is flagged", () => {
+    for (const run of [
+      "bunx oxlint --fix",
+      "bunx oxlint --fix . {staged_files}",
+      "bunx oxfmt {staged_files} {all_files}",
+      "bun run guards | tee guards.log",
+    ]) {
+      expect(withGuards(run)).toHaveLength(1)
+    }
   })
 
-  test("a gate step under another hook does not count", () => {
+  test("the fast commands pass with their flags, environment and any spacing", () => {
+    expect(
+      withGuards(
+        "env -u FORCE_COLOR NO_COLOR=1  bunx oxlint --ignore-path=.oxlintignore --report-unused-disable-directives-severity=error --no-error-on-unmatched-pattern --fix   {staged_files}",
+      ),
+    ).toEqual([])
+    expect(withGuards("'bunx oxfmt --ignore-path=.oxlintignore {staged_files}'")).toEqual([])
+    expect(withGuards("bun  run   guards")).toEqual([])
+  })
+
+  test("a step under another hook does not count", () => {
     const text = [
       "pre-commit:",
       "  jobs:",

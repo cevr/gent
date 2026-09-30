@@ -1087,8 +1087,7 @@ export const findSharedTestHomes = (file: string, text: string): ReadonlyArray<F
 // ── the pre-commit hook: the guards, and staged files only ─────────────────
 
 /**
- * Guard: the pre-commit hook runs the guards, and none of the gate's
- * whole-tree steps.
+ * Guard: the pre-commit hook runs the guards, and only its fast commands.
  *
  * The hook's other jobs lint and format the staged files. None of them reads
  * what the guards read, so a hook without a `bun run guards` job commits a
@@ -1096,8 +1095,11 @@ export const findSharedTestHomes = (file: string, text: string): ReadonlyArray<F
  *
  * The hook finishes in under 10 s. Typecheck, build, the whole-tree lint and
  * format, and the tests take minutes; they are `bun run gate`'s, and CI runs
- * the gate. A hook job that runs one of those root scripts brings the
- * minutes back into every commit.
+ * the gate. A slow step has many spellings (`bun gate`, `turbo run test`,
+ * `env NO_COLOR=1 bun run gate`), so the rule names the fast commands instead:
+ * every step of a `pre-commit` job's `run:` is the guards script, or oxlint
+ * or oxfmt with flags on `{staged_files}` alone, after optional `env`
+ * settings. Anything else is a finding on its line.
  *
  * A job is found by the command it runs, not by its name.
  *
@@ -1108,21 +1110,16 @@ export const HOOK_FILE = "lefthook.yml"
 
 const GUARD_COMMAND = "bun run guards"
 
-/** The root scripts that read the whole tree: the gate and its parts. */
-const GATE_COMMANDS: ReadonlyArray<string> = [
-  "bun run gate",
-  "bun run typecheck",
-  "bun run build",
-  "bun run test",
-  "bun run test:e2e",
-  "bun run lint",
-  "bun run lint:fix",
-  "bun run fmt",
-  "bun run fmt:check",
-]
+/**
+ * oxlint or oxfmt through `bunx`, after optional `env` settings, with flags
+ * and the staged files as its only operand.
+ */
+const STAGED_FILES_COMMAND =
+  /^(?:env(?: -u \S+| [A-Za-z_][A-Za-z0-9_]*=\S*)* )?bunx (?:oxlint|oxfmt)(?: --?[A-Za-z][\w-]*(?:=\S+)?)* \{staged_files\}$/
 
-const isGateCommand = (command: string): boolean =>
-  GATE_COMMANDS.some((gate) => command === gate || command.startsWith(`${gate} `))
+/** The commands the hook may run: each one finishes in seconds. */
+const isFastCommand = (command: string): boolean =>
+  command === GUARD_COMMAND || STAGED_FILES_COMMAND.test(command)
 
 /** The `pre-commit` hook's own key, at the top level of the file. */
 const PRE_COMMIT = /^pre-commit:/
@@ -1152,13 +1149,16 @@ const preCommitLines = (text: string): ReadonlyArray<HookLine> => {
 /** A job's `run:` entry; a comment line never matches. */
 const RUN_ENTRY = /^\s*(?:-\s+)?run:\s*(.*)$/
 
-/** The commands a `run:` value executes, with its trailing comment and quotes removed. */
+/**
+ * The commands a `run:` value executes, with its trailing comment and quotes
+ * removed and each run of whitespace read as one space.
+ */
 const runCommands = (value: string): ReadonlyArray<string> =>
   value
     .replace(/\s+#.*$/, "")
     .replace(/^(["'])(.*)\1$/, "$2")
     .split(/&&|\|\||;/)
-    .map((command) => command.trim())
+    .map((command) => command.trim().replace(/\s+/g, " "))
 
 /** Each `run:` entry of the `pre-commit` hook: its line and the commands it executes. */
 const preCommitSteps = (text: string) =>
@@ -1173,11 +1173,13 @@ export const findPreCommitHookFindings = (file: string, text: string): ReadonlyA
   if (file !== HOOK_FILE) return []
   const steps = preCommitSteps(text)
   const findings: Array<Finding> = steps.flatMap(({ line, commands }) =>
-    commands.filter(isGateCommand).map((command) => ({
-      file,
-      line,
-      message: `the pre-commit hook runs \`${command}\`, a whole-tree gate step; the hook lints and formats the staged files only and finishes in under 10 s -- leave it to \`bun run gate\` and CI`,
-    })),
+    commands
+      .filter((command) => !isFastCommand(command))
+      .map((command) => ({
+        file,
+        line,
+        message: `\`${command}\` is not one of the hook's fast commands (\`${GUARD_COMMAND}\`, or \`bunx oxlint\` or \`bunx oxfmt\` on \`{staged_files}\`); the hook finishes in under 10 s -- leave whole-tree steps to \`bun run gate\` and CI`,
+      })),
   )
   if (steps.some(({ commands }) => commands.includes(GUARD_COMMAND))) return findings
   return [
