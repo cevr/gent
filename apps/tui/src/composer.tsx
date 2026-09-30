@@ -541,7 +541,11 @@ export function isLargePaste(inserted: string): boolean {
   return lineCount(inserted) >= PASTE_THRESHOLD_LINES || inserted.length >= PASTE_THRESHOLD_LENGTH
 }
 
-/** Per-controller: each composer owns its placeholder ids and store. */
+/**
+ * Per-controller: each composer owns its placeholder ids and store. A paste
+ * stays stored while the textarea's undo history can bring its chip back; the
+ * store clears only with that history, when the draft is reset.
+ */
 export function createPasteManager() {
   let idCounter = 0
   const store = new Map<string, string>()
@@ -556,14 +560,9 @@ export function createPasteManager() {
       return `[Pasted ${text.length} chars #${id}]`
     },
     expandPlaceholders(text: string): string {
-      return text.replace(/\[Pasted \d+ (?:lines|chars) #(\d+)\]/g, (match, id) => {
-        const content = Option.fromNullishOr(store.get(id))
-        if (Option.isSome(content)) {
-          store.delete(id)
-          return content.value
-        }
-        return match
-      })
+      return text.replace(/\[Pasted \d+ (?:lines|chars) #(\d+)\]/g, (match, id) =>
+        Option.getOrElse(Option.fromNullishOr(store.get(id)), () => match),
+      )
     },
     /** The chip that ends at `offset` and still holds its stored text. */
     chipEndingAt(text: string, offset: number): Option.Option<{ start: number; id: string }> {
@@ -573,9 +572,6 @@ export function createPasteManager() {
         Option.map((match) => ({ start: offset - match[0].length, id: match[1] ?? "" })),
         Option.filter((chip) => store.has(chip.id)),
       )
-    },
-    drop(id: string) {
-      store.delete(id)
     },
     clear() {
       store.clear()
@@ -663,7 +659,9 @@ function useComposerController(): ComposerController {
   }
 
   const clearInput = () => {
+    // setText drops the undo history, so no chip can come back for its paste.
     if (Option.isSome(inputRef)) inputRef.value.setText("")
+    paste.clear()
     resolvedTokens.length = 0
     sc.onComposerInteraction(ComposerInteractionEvent.cases.ClearDraft.make({}))
   }
@@ -781,8 +779,9 @@ function useComposerController(): ComposerController {
 
   /**
    * A paste chip is one unit. Backspace or a word delete at its end removes
-   * the whole chip and its stored text; editing it a character at a time
-   * would send the fragment and lose the paste.
+   * the whole chip in one undo step; editing it a character at a time would
+   * send the fragment and lose the paste. The stored text stays, so an undo
+   * gives back a chip that still sends its paste.
    */
   const removeChipBeforeCaret = (event: {
     readonly name?: string
@@ -796,7 +795,6 @@ function useComposerController(): ComposerController {
     const chip = paste.chipEndingAt(value, caret)
     if (Option.isNone(chip)) return false
     event.preventDefault()
-    paste.drop(chip.value.id)
     const next = value.slice(0, chip.value.start) + value.slice(caret)
     inputRef.value.replaceText(next)
     inputRef.value.cursorOffset = chip.value.start

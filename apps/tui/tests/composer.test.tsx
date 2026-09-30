@@ -288,7 +288,7 @@ describe("paste placeholders", () => {
     expect(paste.createPlaceholder("x\ny\nz")).toBe("[Pasted 3 lines #2]")
   })
 
-  test("each placeholder expands once to its paste; other text passes through", () => {
+  test("each placeholder expands to its paste until the store clears; other text passes through", () => {
     const paste = createPasteManager()
     const first = "first\npaste\ncontent"
     const line = "x".repeat(200)
@@ -297,8 +297,8 @@ describe("paste placeholders", () => {
     expect(paste.expandPlaceholders(`Start ${p1} middle ${p2} end`)).toBe(
       `Start ${first} middle ${line} end`,
     )
-    // A second expansion finds nothing left to substitute.
-    expect(paste.expandPlaceholders(p1)).toBe(p1)
+    // An undo can bring a chip back, so a second expansion still finds its paste.
+    expect(paste.expandPlaceholders(p1)).toBe(first)
     for (const input of ["text with [Pasted 5 lines #99] placeholder", "plain text", ""]) {
       expect(paste.expandPlaceholders(input)).toBe(input)
     }
@@ -730,6 +730,33 @@ describe("Composer renderer", () => {
       setup.mockInput.pressKey("RETURN")
       yield* Effect.promise(() => setup.renderOnce())
       expect(submitted).toEqual(["keep"])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  // The chip delete is one undo step. An undo brings the chip back, and the
+  // chip still sends the paste it stands for.
+  it.scopedLive("an undone chip delete sends the paste again", () =>
+    Effect.gen(function* () {
+      const submitted: Array<string> = []
+      // ctrl+- (undo) has a spelling only in the kitty keyboard protocol.
+      const setup = yield* renderScoped(
+        () => <TestComposer onSubmit={(content) => submitted.push(content)} />,
+        { kittyKeyboard: true },
+      )
+      const chip = "x".repeat(200)
+      yield* Effect.promise(() => setup.mockInput.typeText("keep "))
+      yield* Effect.promise(() => setup.mockInput.pasteBracketedText(chip))
+      yield* waitForFrame(setup, (frame) => frame.includes("[Pasted 200 chars #1]"), "the chip")
+      setup.mockInput.pressBackspace()
+      yield* waitForFrame(setup, (frame) => !frame.includes("Pasted"), "the chip deleted")
+      setup.mockInput.pressKey("-", { ctrl: true })
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("[Pasted 200 chars #1]"),
+        "the chip back",
+      )
+      setup.mockInput.pressKey("RETURN")
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(submitted).toEqual([`keep ${chip}`])
     }).pipe(Effect.timeout("10 seconds")),
   )
   it.live("suspended composer blocks enter submission", () =>
