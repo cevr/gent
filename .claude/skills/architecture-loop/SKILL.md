@@ -27,7 +27,7 @@ The SAFETY rules live once, in `.claude/skills/architecture-loop/safety.md` ([`s
 
 3. **Prior art, first pass only.** Read [`prior-art.md`](prior-art.md). Survey only what it does not already answer. Done when each new idea is a ledger row: adopt, or rejected with a reason.
 
-4. **Sweep.** Fill the brief template in [`prompts/sweep.md`](prompts/sweep.md) into `~/.cache/gent-pass<N>/pass<N>-sweep-brief.md`, then launch one read-only agent per area in one message. One area every pass is **efficiency**: what the harness sends to the model, measured as cost per task; its agent also reads [`efficiency.md`](efficiency.md). Done when every area has a report, including the areas that report no findings, and the ledger has an efficiency baseline row.
+4. **Sweep.** Fill the brief template in [`prompts/sweep.md`](prompts/sweep.md) into `~/.cache/gent-pass<N>/pass<N>-sweep-brief.md`, then launch one read-only agent per area in one message. One area every pass is **efficiency**: what the harness sends to the model, measured as cost per task; its agent also reads [`efficiency.md`](efficiency.md). Another area every pass is **ui**: gent's rendered TUI against the prior-art TUIs (vercel-labs/fx first), driven side by side in herdr panes; its agent also reads [`ui.md`](ui.md). Done when every area has a report, including the areas that report no findings, and the ledger has an efficiency baseline row and a UI matrix row.
 
 5. **Triage.** Group the findings into batches, one per set of files (core, extensions, TUI, tooling, efficiency, live fixes). Write the pass section of the ledger: the verdict, the decisions, and a triage table (batch, rift, items). Done when every finding is in a batch or rejected with a receipt.
 
