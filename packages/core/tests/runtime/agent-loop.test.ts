@@ -1044,6 +1044,70 @@ describe("continuation", () => {
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
     }).pipe(Effect.timeout("4 seconds")),
   )
+  // The actor runs its handlers concurrently, so a sender's stop can run
+  // before the handler of a steer the sender sent first. The steer's handler
+  // then admits it after the stop found nothing to take back.
+  it.live("a steer admitted after a stop that names it never runs", () =>
+    Effect.gen(function* () {
+      const requestId = RequestId.make("req-interject-after-stop")
+      const parent = { sessionId: SessionId.make("parent"), branchId: BranchId.make("parent") }
+      const promptTexts: Array<string> = []
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        { ...toolCallStep("echo", { text: "step 1" }), gated: true },
+        {
+          ...textStep("Done without the correction."),
+          assertOptions: (options) => {
+            for (const message of Prompt.make(options.prompt).content) {
+              if (message.role !== "user") continue
+              for (const part of message.content) {
+                if (part.type === "text") promptTexts.push(part.text)
+              }
+            }
+          },
+        },
+      ])
+      const eventsRef = yield* Ref.make<AgentEvent[]>([])
+      yield* Effect.gen(function* () {
+        const agentLoop = yield* makeAgentLoopService
+        const messageStorage = yield* MessageStorage
+        const fiber = yield* Effect.forkChild(
+          runAgentLoop(agentLoop, makeContMessage("a turn the steer would join")),
+        )
+        yield* controls.waitForCall(0)
+        // The stop's handler runs first; the steer it names is not admitted yet.
+        expect(
+          yield* stopAgentLoopMessage({
+            sessionId: contSessionId,
+            branchId: contBranchId,
+            messageId: interjectionMessageId(requestId),
+            requestId: "req-stop-before-admission",
+            requester: parent,
+          }),
+        ).toBe(false)
+        yield* steerAgentLoop(
+          {
+            _tag: "Interject",
+            sessionId: contSessionId,
+            branchId: contBranchId,
+            requestId,
+            message: "LATE-CORRECTION",
+            wake: true,
+          },
+          parent,
+        )
+        yield* controls.emitAll(0)
+        yield* Fiber.join(fiber)
+        yield* waitForPhase(agentLoop, { sessionId: contSessionId, branchId: contBranchId }, "Idle")
+        // The running turn reached its next step without the correction, and
+        // the correction opened no turn of its own.
+        expect(yield* controls.callCount).toBe(2)
+        expect(promptTexts).not.toContain("LATE-CORRECTION")
+        expect((yield* Ref.get(eventsRef)).filter(Schema.is(TurnCompleted))).toHaveLength(1)
+        const messages = yield* messageStorage.listMessages(contBranchId)
+        expect(messages.filter((message) => message._tag === "interjection")).toHaveLength(0)
+      }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
+    }).pipe(Effect.timeout("4 seconds")),
+  )
   it.live("a stop that names the running turn's message reports that it stopped the turn", () =>
     Effect.gen(function* () {
       const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
@@ -2760,6 +2824,8 @@ const makeHarness = (
     readonly completeFailedTurn?: (state: RunningState) => Effect.Effect<void>
     /** Settle the in-flight slot after each turn, as the real `runTurn` does. */
     readonly settles?: boolean
+    /** The entity's keep-alive switch; by default a hold switches nothing, as with no cluster. */
+    readonly keepAlive?: (enabled: boolean) => Effect.Effect<void>
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -2784,7 +2850,7 @@ const makeHarness = (
       }),
       startedRef: yield* Ref.make(true),
       turnSettled: () => Effect.succeed(false),
-      messageStored: () => Effect.succeed(false),
+      steerDecided: () => Effect.succeed(false),
     })
     const ranTurns = yield* Ref.make<ReadonlyArray<string>>([])
     const interruptedTurns = yield* Ref.make<ReadonlyArray<boolean>>([])
@@ -2801,8 +2867,7 @@ const makeHarness = (
       sideMutationSemaphore,
       interruptSemaphore: yield* Semaphore.make(1),
       turnWorkerQueue,
-      // No cluster here: a hold switches nothing.
-      residency: yield* makeHoldCount(() => Effect.void),
+      residency: yield* makeHoldCount(options.keepAlive ?? (() => Effect.void)),
       activeStreamRef: yield* Ref.make(Option.none<ActiveStreamHandle>()),
       turnInterruption,
       interruptToolWork: Effect.void,
@@ -3104,6 +3169,24 @@ describe("a start interrupted while it waits for the loop", () => {
       yield* Effect.yieldNow
       expect(yield* Ref.get(harness.ranTurns)).toEqual([])
       yield* Fiber.interrupt(loop)
+    }).pipe(Effect.timeout("2 seconds")),
+  )
+
+  it.live("closing the loop releases the hold of a turn handed over but not yet taken", () =>
+    Effect.gen(function* () {
+      const switched: Array<boolean> = []
+      const harness = yield* makeHarness(
+        { state: buildIdleState(), queue: emptyLoopQueueState() },
+        { settles: true, keepAlive: (enabled) => Effect.sync(() => switched.push(enabled)) },
+      )
+      // No worker runs, so the handed-over turn stays in the worker queue,
+      // as it does when the loop closes between a hand-over and the take.
+      yield* harness.worker.admitAndStart(queuedItem("handed-over"), { queueOnly: false })
+      expect(yield* TxQueue.size(harness.turnWorkerQueue)).toBe(1)
+      expect(switched).toEqual([true])
+      yield* Scope.close(harness.loopScope, Exit.void)
+      // The entity may passivate again: the keep-alive is off.
+      expect(switched).toEqual([true, false])
     }).pipe(Effect.timeout("2 seconds")),
   )
 
@@ -6119,7 +6202,7 @@ describe("wake admission", () => {
         startedRef: yield* Ref.make(true),
         turnSettled: (messageId) => Effect.succeed(messageId === MessageId.make("settled")),
         // The running turn opened on "busy", so its message is stored.
-        messageStored: (messageId) => Effect.succeed(messageId === MessageId.make("busy")),
+        steerDecided: (messageId) => Effect.succeed(messageId === MessageId.make("busy")),
       }).pipe(
         Effect.provideService(AgentLoopQueueStorage, {
           getQueueState: () => Ref.get(rows),
@@ -9659,7 +9742,7 @@ const replayCases = [
 
 const makeTool = (): ToolCapability =>
   tool({
-    id: "@test/replay-tool",
+    id: "replay_tool",
     description: "Replay test tool",
     params: Schema.Struct({ value: Schema.String }),
     output: Schema.String,
@@ -9680,7 +9763,7 @@ const makeExtension = (toolCapability: ToolCapability): LoadedExtension => ({
 
 const makeBinding = () =>
   ToolBindingIdentity.make({
-    toolId: ToolId.make("@test/replay-tool"),
+    toolId: ToolId.make("replay_tool"),
     extensionId: ExtensionId.make("@test/replay-extension"),
     source: ToolBindingSource.cases.Static.make({
       sourceRevision: ToolSourceRevision.make("source/legacy"),
@@ -9702,7 +9785,7 @@ describe("tool binding replay", () => {
         const context = yield* Layer.build(layer)
         yield* Effect.gen(function* () {
           const sessionId = SessionId.make("inner-operation-session")
-          const current = yield* captureCurrentToolBinding("@test/replay-tool")
+          const current = yield* captureCurrentToolBinding("replay_tool")
           if (Option.isNone(current) || Predicate.isUndefined(current.value.binding))
             return yield* Effect.die("Missing fixture binding")
           const binding = current.value.binding
@@ -9770,7 +9853,7 @@ describe("tool binding replay", () => {
           const address = { sessionId, branchId, assistantMessageId, toolCallId }
           const toolCall = Prompt.toolCallPart({
             id: toolCallId,
-            name: "@test/replay-tool",
+            name: "replay_tool",
             params: { value: "input" },
             providerExecuted: false,
           })
@@ -9857,7 +9940,7 @@ describe("tool binding replay", () => {
         const cache = yield* SessionProfileCache
         const profile = yield* cache.resolve((yield* RuntimeEnvironment).cwd)
         const generationId = profile.generationId
-        const current = yield* captureCurrentToolBinding("@test/replay-tool")
+        const current = yield* captureCurrentToolBinding("replay_tool")
         if (Option.isNone(current)) return yield* Effect.die("Expected captured capability")
         // A source-loaded extension has no build artifact, so no durable identity.
         expect(current.value.binding).toBeUndefined()
@@ -9912,7 +9995,7 @@ describe("tool binding replay", () => {
       const storageTransaction = yield* makeStorageTransaction
       const toolCallPart = Prompt.toolCallPart({
         id: toolCallId,
-        name: "@test/replay-tool",
+        name: "replay_tool",
         params: { value: "legacy" },
         providerExecuted: false,
       })
@@ -9937,7 +10020,7 @@ describe("tool binding replay", () => {
         branchId,
         messageId,
         parts: [toolCallPart],
-        toolBindings: new Map([["@test/replay-tool", entry]]),
+        toolBindings: new Map([["replay_tool", entry]]),
         storageTransaction,
       })
 
@@ -9967,7 +10050,7 @@ describe("tool binding replay", () => {
       const toolCallId = ToolCallId.make("binding-replay-result-call")
       const toolCall = Prompt.toolCallPart({
         id: toolCallId,
-        name: "@test/replay-tool",
+        name: "replay_tool",
         params: { value: "current" },
         providerExecuted: false,
       })
@@ -9981,7 +10064,7 @@ describe("tool binding replay", () => {
           parts: [
             Prompt.toolCallPart({
               id: toolCallId,
-              name: "@test/replay-tool",
+              name: "replay_tool",
               params: { value },
               providerExecuted: false,
             }),
@@ -9997,7 +10080,7 @@ describe("tool binding replay", () => {
           sessionId,
           branchId,
           toolCallId,
-          toolName: "@test/replay-tool",
+          toolName: "replay_tool",
           output: "old display",
           resultJson: encodeToolOutput({ value: "old" }),
         }),
@@ -10010,7 +10093,7 @@ describe("tool binding replay", () => {
           sessionId,
           branchId,
           toolCallId,
-          toolName: "@test/replay-tool",
+          toolName: "replay_tool",
           output: "current display",
           resultJson: encodeToolOutput({ value: "current" }),
         }),
@@ -10043,7 +10126,7 @@ describe("tool binding replay", () => {
           sessionId,
           branchId,
           toolCallId,
-          toolName: "@test/replay-tool",
+          toolName: "replay_tool",
           output: "unanchored display",
           resultJson: encodeToolOutput({ value: "unanchored" }),
         }),
@@ -10056,7 +10139,7 @@ describe("tool binding replay", () => {
         toolCalls: [
           Prompt.toolCallPart({
             id: toolCallId,
-            name: "@test/replay-tool",
+            name: "replay_tool",
             params: { value: "missing" },
             providerExecuted: false,
           }),
@@ -10088,7 +10171,7 @@ describe("tool binding replay", () => {
           parts: [
             Prompt.toolCallPart({
               id: toolCallId,
-              name: "@test/replay-tool",
+              name: "replay_tool",
               params: { value: id },
               providerExecuted: false,
             }),
@@ -10103,7 +10186,7 @@ describe("tool binding replay", () => {
           sessionId,
           branchId,
           toolCallId,
-          toolName: "@test/replay-tool",
+          toolName: "replay_tool",
           output: "current display",
           resultJson: encodeToolOutput({ value: "current" }),
         }),
@@ -10116,7 +10199,7 @@ describe("tool binding replay", () => {
           sessionId,
           branchId,
           toolCallId,
-          toolName: "@test/replay-tool",
+          toolName: "replay_tool",
           output: "later display",
           resultJson: encodeToolOutput({ value: "later" }),
         }),
@@ -10129,7 +10212,7 @@ describe("tool binding replay", () => {
         toolCalls: [
           Prompt.toolCallPart({
             id: toolCallId,
-            name: "@test/replay-tool",
+            name: "replay_tool",
             params: { value: "current" },
             providerExecuted: false,
           }),
@@ -10159,7 +10242,7 @@ describe("tool binding replay", () => {
         parts: [
           Prompt.toolCallPart({
             id: toolCallId,
-            name: "@test/replay-tool",
+            name: "replay_tool",
             params: { value: "corrupt" },
             providerExecuted: false,
           }),
@@ -10174,7 +10257,7 @@ describe("tool binding replay", () => {
           sessionId,
           branchId,
           toolCallId,
-          toolName: "@test/replay-tool",
+          toolName: "replay_tool",
           output: "display must not become authoritative",
           resultJson: "{invalid-json",
         }),
@@ -10188,7 +10271,7 @@ describe("tool binding replay", () => {
           toolCalls: [
             Prompt.toolCallPart({
               id: toolCallId,
-              name: "@test/replay-tool",
+              name: "replay_tool",
               params: { value: "corrupt" },
               providerExecuted: false,
             }),
@@ -10231,7 +10314,7 @@ describe("tool binding replay", () => {
                 const key = "same-session:same-branch:assistant:call"
                 const result = Prompt.toolResultPart({
                   id: "call",
-                  name: "@test/replay-tool",
+                  name: "replay_tool",
                   result: { value: "first-root" },
                   isFailure: false,
                   providerExecuted: false,
@@ -10258,7 +10341,7 @@ describe("tool binding replay", () => {
             const key = "shutdown-session:shutdown-branch:tool-result"
             const result = Prompt.toolResultPart({
               id: "shutdown-call",
-              name: "@test/replay-tool",
+              name: "replay_tool",
               result: "result",
               isFailure: false,
               providerExecuted: false,

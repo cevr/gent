@@ -26,6 +26,7 @@ import {
   getToolId,
   getToolMetadata,
   isToolCapability,
+  isWireToolId,
   type PromptSection,
   type RequestCapability,
   type ToolCapability,
@@ -427,8 +428,9 @@ export interface TurnUsage {
 // ── Lifecycle hooks ──
 //
 // Per-extension, per-session handlers run by the runtime at the prompt and
-// turn seams, and once when a branch's loop opens in this process
-// (`loopOpen`). Registered with `host.on(kind, handler)` inside `setup`.
+// turn seams, once when a branch's loop opens in this process (`loopOpen`),
+// and once when a session is deleted (`sessionDeleted`). Registered with
+// `host.on(kind, handler)` inside `setup`.
 // Failures are always isolated: the runtime logs a warning and lets later hooks
 // still fire.
 
@@ -450,6 +452,22 @@ interface ExtensionHookSignatures {
    * No user watches it, so it cannot ask.
    */
   readonly loopOpen: { readonly input: void; readonly output: void }
+  /**
+   * A session was deleted. It runs once for each session a delete removed
+   * (the session and its descendants), after the rows are gone, under the
+   * profile of that session's own cwd, resolved before the delete. A handler
+   * removes what the extension keeps for the session outside the database.
+   * `ExtensionContext` names the deleted session; its session verbs find no
+   * session. No user watches it, so it cannot ask. The delete waits for each
+   * handler up to `SESSION_DELETED_HOOK_TIMEOUT` (runtime/extension-host.ts),
+   * then interrupts it and logs a warning.
+   */
+  readonly sessionDeleted: { readonly input: SessionDeletedInput; readonly output: void }
+}
+
+/** One session a delete removed. */
+export interface SessionDeletedInput {
+  readonly sessionId: SessionId
 }
 
 type ExtensionHookKind = keyof ExtensionHookSignatures
@@ -691,6 +709,8 @@ const replayHook = (host: ExtensionHostService, slot: AnyExtensionHook): Effect.
     case "turnAfter":
       return host.on(slot.kind, slot.hook.handler)
     case "loopOpen":
+      return host.on(slot.kind, slot.hook.handler)
+    case "sessionDeleted":
       return host.on(slot.kind, slot.hook.handler)
   }
 }
@@ -1120,6 +1140,12 @@ const checkToolDescriptions = (tools: ReadonlyArray<ToolCapability>): Option.Opt
       )
     }
     const metadata = getToolMetadata(cap)
+    // The id goes to the provider as the tool's wire name (`wireToolName`).
+    if (!isWireToolId(metadata.id)) {
+      return Option.some(
+        `tools[${i}] (${metadata.id}): tool id must be dot-separated segments of letters, digits and \`-\` joined by single \`_\`, at most 64 characters with each dot counted as two (providers take only \`[a-zA-Z0-9_-]\`)`,
+      )
+    }
     // The description is sent to the model as part of the tool schema, so a
     // blank one is as useless as a missing one.
     if (Predicate.isUndefined(cap.description) || cap.description.trim() === "") {

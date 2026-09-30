@@ -779,8 +779,8 @@ describe("SessionRuntime", () => {
 
 // ── session metrics ─────────────────────────────────────────────────────────
 
-const cowork = AgentDefinition.make({
-  name: AgentName.make("cowork"),
+const primary = AgentDefinition.make({
+  name: AgentName.make("primary"),
   model: ModelId.make("test/priced"),
 })
 /** Names its model under another provider; its driver routes it to `test/priced`. */
@@ -801,12 +801,12 @@ const makeLayer = (
   models: readonly Model[] = [modelWithPricing],
 ) =>
   baseLocalLayerWithProvider(providerLayer, {
-    agents: [cowork, routed],
+    agents: [primary, routed],
     // `extraLayers` in `baseLocalLayerWithProvider` are merged AFTER the
     // default `ModelRegistry.Test()`, so later merges win the tag.
     extraLayers: [ModelRegistry.Test(models)],
   })
-const createSessionBranchSessionMetrics = (agent = AgentName.make("cowork")) =>
+const createSessionBranchSessionMetrics = (agent = AgentName.make("primary")) =>
   Effect.gen(function* () {
     const sessions = yield* SessionStorage
     const branches = yield* BranchStorage
@@ -1194,14 +1194,14 @@ describe("turn ledger", () => {
       yield* ledger.beginTurn(messageId)
       const usage = Option.some({ inputTokens: 100, outputTokens: 10 })
       yield* ledger.noteStep({
-        agent: AgentName.make("cowork"),
+        agent: AgentName.make("primary"),
         model: ModelId.make("test/priced"),
         usage,
         costUsd: Option.some(0.5),
         toolCallCount: 1,
       })
       yield* ledger.noteStep({
-        agent: AgentName.make("cowork"),
+        agent: AgentName.make("primary"),
         model: ModelId.make("custom/unpriced"),
         usage,
         costUsd: Option.none(),
@@ -1219,7 +1219,7 @@ describe("turn ledger", () => {
       yield* ledger.beginTurn(MessageId.make("ledger-priced"))
       for (const cost of [0.5, 0.25]) {
         yield* ledger.noteStep({
-          agent: AgentName.make("cowork"),
+          agent: AgentName.make("primary"),
           model: ModelId.make("test/priced"),
           usage: Option.some({ inputTokens: 100, outputTokens: 10 }),
           costUsd: Option.some(cost),

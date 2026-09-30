@@ -119,6 +119,8 @@ import {
   attachToolBindingIdentity,
   compileToolPolicy,
   convertTools,
+  fromWireToolPart,
+  toWirePrompt,
   executeToolCalls,
   processLocalReplayBindingKey,
   processLocalReplayResultKey,
@@ -270,12 +272,16 @@ const toolCallsFromMessage = (message: Message) => messagePartsToolCallParts(mes
 // ── agent-loop.turn-profile ─────────────────────────────────────────────────
 
 export interface AgentLoopTurnProfile {
-  readonly turnExtensionRegistry: ExtensionRegistryService
   readonly turnBaseSections: ReadonlyArray<PromptSection>
   readonly turnHostCtx: ExtensionHostContext
   /** Whether a user can answer in this turn (`turnCanAsk`). */
   readonly turnInteractive: boolean
-  readonly turnCapabilityContext?: Context.Context<never>
+  /**
+   * The services the turn and every extension leaf in it run with. It is the
+   * one owner of the turn's `ExtensionRegistry`: a loop that suspends an
+   * extension (a failed branch Resource) writes the narrowed registry here.
+   */
+  readonly turnCapabilityContext: Context.Context<ExtensionRegistry>
   /**
    * Identity of the process that built the profile. Absent for direct actor
    * tests and runtimes without a profile cache, where no process-local tool
@@ -289,23 +295,20 @@ export class CurrentAgentLoopTurnProfile extends Context.Service<
   AgentLoopTurnProfile
 >()("@gent/core/src/runtime/turn/CurrentAgentLoopTurnProfile") {}
 
+/** The turn's registry, as its capability context holds it. */
+export const turnRegistry = (profile: AgentLoopTurnProfile): ExtensionRegistryService =>
+  Context.get(profile.turnCapabilityContext, ExtensionRegistry)
+
 /** Provide one resolved turn profile to the complete effect. */
 export const runAgentLoopTurnProfile =
   (profile: AgentLoopTurnProfile) =>
-  <A, E, R>(effect: Effect.Effect<A, E, R>) => {
-    const { turnCapabilityContext = Context.empty() } = profile
-    // The registry is provided inside the capability context, which carries
-    // the profile's own registry too: a loop that suspends an extension (a
-    // failed branch Resource) narrows `turnExtensionRegistry`, and the turn
-    // reads the narrowed one.
-    return effect.pipe(
-      Effect.provideService(ExtensionRegistry, profile.turnExtensionRegistry),
+  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    effect.pipe(
       Effect.provideService(CurrentAgentLoopTurnProfile, profile),
-      Effect.provideContext(turnCapabilityContext),
+      Effect.provideContext(profile.turnCapabilityContext),
       provideCurrentCapabilityContext(profile.turnCapabilityContext),
       provideCurrentHostCtx(profile.turnHostCtx),
     )
-  }
 
 // ── turn-response ───────────────────────────────────────────────────────────
 
@@ -1722,12 +1725,16 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       costUsd: Option.getOrUndefined(compactionCostUsd),
     }),
   )
-  const prompt = toPrompt(projection.messages, {
-    systemPrompt: resolved.systemPrompt,
-    notices: resolved.notices.map(({ notice }) => notice),
-  })
+  // The provider sees each tool under its wire name, in the declarations and
+  // in the conversation's calls; the reply's parts name the tool ids again.
+  const prompt = toWirePrompt(
+    toPrompt(projection.messages, {
+      systemPrompt: resolved.systemPrompt,
+      notices: resolved.notices.map(({ notice }) => notice),
+    }),
+  )
   const toolkit = convertTools([...resolved.tools])
-  const rawStream = Stream.unwrap(
+  const wireStream = Stream.unwrap(
     resolveAdmittedModel(modelRequest).pipe(
       Effect.map((model) => {
         if (resolved.tools.length > 0) {
@@ -1749,6 +1756,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       }),
     ),
   )
+  const rawStream = wireStream.pipe(Stream.map(fromWireToolPart))
   // The raw stop reason the driver reports for this attempt's stream
   // (`ProviderStopReason`); a retried attempt starts with none.
   const stopReason = yield* Ref.make(Option.none<string>())

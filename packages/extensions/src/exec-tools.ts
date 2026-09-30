@@ -630,12 +630,31 @@ const queueBackgroundFollowUp = (params: {
  */
 const jobOutputFile = (path: Path.Path, dataDir: string, key: BackgroundBashJobKeyFields) =>
   path.resolve(
-    dataDir,
-    "background-bash",
-    key.sessionId,
+    sessionOutputDirectory(path, dataDir, key.sessionId),
     key.branchId,
     `${key.toolCallId.replace(/[^\w.:-]/g, "_")}.txt`,
   )
+
+/** `<data dir>/background-bash/<sessionId>`: every output file one session's calls kept. */
+const sessionOutputDirectory = (path: Path.Path, dataDir: string, sessionId: SessionId) =>
+  path.resolve(dataDir, "background-bash", sessionId)
+
+/**
+ * A deleted session's output files go with it (`sessionDeleted`): the files
+ * are the extension's own, outside the database, so nothing else removes them.
+ */
+const removeSessionOutputs = Effect.fn("ExecTools.removeSessionOutputs")(function* (
+  sessionId: SessionId,
+) {
+  const ctx = yield* ExtensionContext
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const dataDir = yield* resolveDataDir(ctx.home)
+  yield* fs.remove(sessionOutputDirectory(path, dataDir, sessionId), {
+    recursive: true,
+    force: true,
+  })
+})
 
 /**
  * Characters of a background job's output kept in memory at each end. A
@@ -1499,5 +1518,6 @@ export const ExecToolsExtension = defineExtension({
         ),
       ),
     )
+    yield* host.on("sessionDeleted", ({ sessionId }) => removeSessionOutputs(sessionId))
   }),
 })

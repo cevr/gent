@@ -557,7 +557,7 @@ describe("model input cap and measured size", () => {
 
 const CONTEXT_LIMIT_TOKENS = 40_000
 const modelId = ModelId.make("test/small-window")
-const agent = AgentDefinition.make({ name: AgentName.make("cowork"), model: modelId })
+const agent = AgentDefinition.make({ name: AgentName.make("primary"), model: modelId })
 const smallWindowModel = new Model({
   id: modelId,
   name: "Small Window",
@@ -675,7 +675,7 @@ const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 
 const wideModelId = ModelId.make("test/wide-window")
 const wideAgent = AgentDefinition.make({
-  name: AgentName.make("cowork"),
+  name: AgentName.make("primary"),
   model: wideModelId,
 })
 const sessionIdOverflow = SessionId.make("overflow-session")

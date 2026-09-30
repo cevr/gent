@@ -35,6 +35,7 @@ import {
   type ModelCatalogFailure,
 } from "./extension-host.js"
 import { causeMessage } from "../domain/guards.js"
+import { wireToolName } from "../domain/capability.js"
 import {
   DEFAULT_RETRY_POLICY,
   type PersistAuth,
@@ -1072,6 +1073,7 @@ export const textDeltaPart = (
   id = makeStreamPartId("text"),
 ): LanguageModelStreamPart => Response.makePart("text-delta", { id, delta: text })
 
+/** A model's call of the tool `toolName` names, as a provider sends it: under its wire name. */
 export const toolCallPart = (
   toolName: string,
   // oxlint-disable-next-line effect/noUnknownParameters -- Tool arguments enter the Effect AI codec as unknown JSON data.
@@ -1080,7 +1082,7 @@ export const toolCallPart = (
 ): LanguageModelStreamPart =>
   Response.makePart("tool-call", {
     id: options?.toolCallId ?? ToolCallId.make(makeStreamPartId("tool")),
-    name: toolName,
+    name: wireToolName(toolName),
     params: input,
     providerExecuted: false,
   })
@@ -1202,14 +1204,14 @@ const buildReply = (latestUserText: string): string => {
   const lineCount = latestUserText.split("\n").filter((line) => line.trim().length > 0).length
   if (lineCount > 1) {
     return [
-      "cowork processed a merged queued turn.",
+      "gent processed a merged queued turn.",
       `Received ${lineCount} lines in one message block.`,
       `Tail: ${latestUserText.split("\n").at(-1) ?? latestUserText}`,
     ].join(" ")
   }
 
   return [
-    "cowork debug response.",
+    "gent debug response.",
     `Latest user message: ${latestUserText || "(empty)"}.`,
     "This turn is flowing through the real agent loop with a scripted language model.",
   ].join(" ")
