@@ -1286,9 +1286,13 @@ function useComposerController(): ComposerController {
   }): boolean => {
     if (!(event.ctrl === true && event.name === "g")) return false
 
-    const currentContent = Option.getOrElse(
-      Option.map(inputRef, (renderable) => renderable.plainText),
-      () => "",
+    // The editor gets the draft as it would be sent: a paste chip is its
+    // text, so the paste can be edited there.
+    const currentContent = paste.expandPlaceholders(
+      Option.getOrElse(
+        Option.map(inputRef, (renderable) => renderable.plainText),
+        () => "",
+      ),
     )
     const editor = resolveEditor(env.visual, env.editor)
     cast(

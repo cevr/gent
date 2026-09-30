@@ -55,6 +55,7 @@ import { type ClientContextValue, type SessionIdentity, useClient } from "../src
 import { useExtensionUI } from "../src/extensions/host"
 import { type RenderWaitTimeoutError, waitForFrame } from "./helpers-boundary"
 import { useScopedKeyboard } from "../src/terminal"
+import { EnvProvider } from "../src/workspace"
 import {
   type AutocompleteItem,
   autocompleteContribution,
@@ -973,6 +974,44 @@ describe("Composer renderer", () => {
         yield* editAtChip(intoChip, (keys) => Effect.promise(() => keys.pasteBracketedText("pq"))),
       ).toEqual([`keep ${PASTE}pq tail`])
     }).pipe(Effect.timeout("10 seconds")),
+  )
+  // The editor gets the draft as it would be sent: a paste chip is its text,
+  // so the paste can be edited there.
+  it.scopedLive.layer(BunFileSystem.layer)(
+    "ctrl+g opens the draft with each paste chip as its text",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const dir = yield* fs.makeTempDirectoryScoped({ prefix: "gent-composer-editor-" })
+        const editorPath = `${dir}/editor.js`
+        const seen = `${dir}/seen`
+        // The editor copies what it was given and leaves the file as it is.
+        yield* fs.writeFileString(
+          editorPath,
+          `await Bun.write("${seen}", await Bun.file(process.argv.at(-1)).text());`,
+        )
+        const setup = yield* renderScoped(() => (
+          <EnvProvider
+            env={{
+              visual: Option.some(`bun ${editorPath}`),
+              editor: Option.none(),
+              shutdown: () => {},
+              resumable: true,
+              writeTerminal: () => {},
+            }}
+          >
+            <TestComposer onSubmit={() => {}} />
+          </EnvProvider>
+        ))
+        yield* Effect.promise(() => setup.mockInput.typeText("keep "))
+        yield* Effect.promise(() => setup.mockInput.pasteBracketedText(PASTE))
+        yield* waitForFrame(setup, (frame) => frame.includes("[Pasted"), "the paste chip")
+        setup.mockInput.pressKey("g", { ctrl: true })
+        yield* fs
+          .exists(seen)
+          .pipe(Effect.repeat({ until: (done) => done, schedule: Schedule.spaced("20 millis") }))
+        expect(yield* fs.readFileString(seen)).toBe(`keep ${PASTE}`)
+      }).pipe(Effect.timeout("10 seconds")),
   )
   it.live("suspended composer blocks enter submission", () =>
     Effect.gen(function* () {
