@@ -195,18 +195,8 @@ export const formatDuration = (ms: number, style: DurationStyle): string =>
 
 // ── error formatting ────────────────────────────────────────────────────────
 
-export interface ClientError {
-  readonly _tag: "ClientError"
-  readonly message: string
-}
-
-export const ClientError = (message: string): ClientError => ({
-  _tag: "ClientError",
-  message,
-})
-
-/** What the TUI shows: a call's error, a connection setup failure, or its own. */
-export type UiError = GentClientRpcError | GentConnectionError | ClientError
+/** What the TUI shows: a call's error or a connection setup failure. */
+export type UiError = GentClientRpcError | GentConnectionError
 
 /**
  * The `RpcClientError` reasons that mean the bytes did not make the round
@@ -264,8 +254,6 @@ export const SEND_RETRY = {
 
 export const formatError = (error: UiError): string => {
   switch (error._tag) {
-    case "ClientError":
-      return error.message
     case "StorageError":
       return `Storage: ${error.message}`
     case "SessionRuntimeError":
@@ -290,8 +278,14 @@ export const formatError = (error: UiError): string => {
       return `Connection: ${error.message}`
     case "@gent/core/GentConnectionError":
       return `Connection: ${error.message}`
-    default:
-      return "Unknown error"
+    case "ConfigLoadError":
+    case "ConfigWriteError":
+      return `Config ${error.path}: ${error.message}`
+    case "InteractionDecisionConflictError":
+    case "InteractionRequestMismatchError":
+      return `Interaction: ${error.message}`
+    case "WorkspaceHeaderError":
+      return `Workspace: ${error.message}`
   }
 }
 
@@ -305,20 +299,13 @@ const extractUnknownMessage = (error: unknown): string => {
   return String(error)
 }
 
-const isUiError = Schema.is(
-  Schema.Union([
-    GentRpcError,
-    GentConnectionError,
-    RpcClientError,
-    Schema.TaggedStruct("ClientError", { message: Schema.String }),
-  ]),
-)
+const isUiError = Schema.is(Schema.Union([GentRpcError, GentConnectionError, RpcClientError]))
 
 // eslint-disable-next-line effect/noUnknownParameters -- Validate transport and framework errors before applying domain error formatting.
 export const formatConnectionIssue = (error: unknown): string => {
   if (!isUiError(error)) return `connection issue: ${extractUnknownMessage(error)}`
   // The transport's reason tells a lost connection from an answer.
-  if (error._tag !== "ClientError" && error._tag !== "@gent/core/GentConnectionError") {
+  if (error._tag !== "@gent/core/GentConnectionError") {
     if (isConnectionLoss(error)) return "connection lost; retrying"
   }
   return `connection issue: ${formatError(error)}`

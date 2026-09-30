@@ -8,12 +8,11 @@ import {
 import { EventStoreError, StorageError } from "@gent/core/extensions/branch-tools"
 import { describe, expect, it, test } from "effect-bun-test"
 import { Effect, FileSystem, Option, Schema } from "effect"
-import { lineCount } from "@gent/core/protocol"
+import { GentRpcError, lineCount } from "@gent/core/protocol"
 import { RpcClientError } from "effect/rpc/RpcClientError"
 import { SocketCloseError } from "effect/socket/Socket"
 import {
   type ActivityCall,
-  ClientError,
   describeCellCode,
   expandFileRefs,
   fitWidth,
@@ -443,10 +442,6 @@ describe("formatDuration", () => {
 // ── format error ────────────────────────────────────────────────────────────
 
 describe("formatError", () => {
-  test("ClientError → message", () => {
-    expect(formatError(ClientError("connection lost"))).toBe("connection lost")
-  })
-
   test("StorageError → prefixed", () => {
     const err = new StorageError({ message: "disk full" })
     expect(formatError(err)).toBe("Storage: disk full")
@@ -483,6 +478,36 @@ describe("formatError", () => {
       reason: "catalog filter failed",
     })
     expect(formatError(err)).toBe("Driver openai: catalog filter failed")
+  })
+
+  // Each error the server can answer with says what failed, never "Unknown error".
+  test("config and interaction errors read by their own words", () => {
+    const decode = Schema.decodeUnknownSync(GentRpcError)
+    const cases: ReadonlyArray<readonly [unknown, string]> = [
+      [
+        { _tag: "ConfigLoadError", path: "/nonexistent/gent-probe-x/config.json", message: "bad" },
+        "Config /nonexistent/gent-probe-x/config.json: bad",
+      ],
+      [
+        { _tag: "ConfigWriteError", path: "/nonexistent/gent-probe-x/config.json", message: "ro" },
+        "Config /nonexistent/gent-probe-x/config.json: ro",
+      ],
+      [
+        { _tag: "InteractionDecisionConflictError", message: "answered", requestId: "req-1" },
+        "Interaction: answered",
+      ],
+      [
+        {
+          _tag: "InteractionRequestMismatchError",
+          message: "not the open request",
+          actualRequestId: "req-2",
+          sessionId: "session-1",
+          branchId: "branch-1",
+        },
+        "Interaction: not the open request",
+      ],
+    ]
+    for (const [input, expected] of cases) expect(formatError(decode(input))).toBe(expected)
   })
 })
 
