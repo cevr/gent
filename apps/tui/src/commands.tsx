@@ -1,19 +1,19 @@
 /** @jsxImportSource @opentui/solid */
-import { Array, Option, Predicate } from "effect"
+import { Array, Effect, Option, Predicate, Result } from "effect"
+import type { Branch } from "@gent/core/protocol"
 import {
   type Accessor,
   createContext,
   createEffect,
   createMemo,
-  createResource,
   createSignal,
   type JSX,
   Show,
 } from "solid-js"
-import { shortId, truncate, truncateStart, useRequiredContext } from "./utils"
+import { formatError, shortId, truncate, truncateStart, useRequiredContext } from "./utils"
 import { useTerminalDimensions } from "./terminal"
 import { matchSorter } from "match-sorter"
-import { useClient } from "./client"
+import { useClient, useRuntime } from "./client"
 import {
   keyHint,
   KeyHints,
@@ -240,15 +240,19 @@ interface PaletteItem {
   readonly onSelect: () => void
 }
 
-/** A structural level in the palette stack.
- *
- *  `source` is a Solid accessor — can be a plain function for sync levels
- *  or a `Resource` for async levels. Returns `undefined` while loading. */
+/**
+ * A level's rows: `None` while its request is pending, else the rows or the
+ * reason the request failed.
+ */
+type LevelRows = Option.Option<Result.Result<readonly PaletteItem[], string>>
+
+const levelRows = (items: readonly PaletteItem[]): LevelRows => Option.some(Result.succeed(items))
+
+/** A structural level in the palette stack; `source` is a Solid accessor. */
 interface PaletteLevel {
   readonly id: string
   readonly title: string
-  // eslint-disable-next-line effect/noNullish -- Solid Resource returns undefined while its request is pending.
-  readonly source: Accessor<readonly PaletteItem[] | undefined>
+  readonly source: Accessor<LevelRows>
   readonly onEnter?: () => void
 }
 
@@ -284,6 +288,7 @@ export function CommandPalette() {
   const ext = useExtensionUI()
   const { theme, selected, set, all, mode, setMode } = useTheme()
   const client = useClient()
+  const { cast } = useRuntime()
   const dimensions = useTerminalDimensions()
   const [state, setState] = createSignal(closedPalette)
   // The list owns the query and the cursor; the palette keeps a copy of the
@@ -307,7 +312,7 @@ export function CommandPalette() {
   const themeLevel = (): PaletteLevel => ({
     id: "theme",
     title: "Theme",
-    source: (): readonly PaletteItem[] => {
+    source: () => {
       const active = selected()
       const named = Object.keys(all())
         .filter((name) => name !== "system")
@@ -319,7 +324,7 @@ export function CommandPalette() {
             closePalette()
           },
         }))
-      return [
+      return levelRows([
         {
           id: "theme.system",
           title: selectedTitle("System", active === "system"),
@@ -330,7 +335,7 @@ export function CommandPalette() {
           },
         },
         ...named,
-      ]
+      ])
     },
   })
 
@@ -339,7 +344,7 @@ export function CommandPalette() {
   const modeLevel = (): PaletteLevel => ({
     id: "mode",
     title: "Mode",
-    source: (): readonly PaletteItem[] => {
+    source: () => {
       const current = mode()
       const item = (value: "dark" | "light", title: string): PaletteItem => ({
         id: `mode.${value}`,
@@ -349,27 +354,42 @@ export function CommandPalette() {
           closePalette()
         },
       })
-      return [item("dark", "Dark"), item("light", "Light")]
+      return levelRows([item("dark", "Dark"), item("light", "Light")])
     },
   })
 
+  // The list is read once per open. A failed read is the level's answer: the
+  // palette stays open and its row says why.
   const branchesLevel = (): PaletteLevel => {
-    const [branches] = createResource(() => client.runtime.run(client.listBranches))
+    const [branches, setBranches] = createSignal<
+      Option.Option<Result.Result<readonly Branch[], string>>
+    >(Option.none())
+    cast(
+      client.listBranches.pipe(
+        Effect.match({
+          onFailure: (error) =>
+            setBranches(Option.some(Result.fail(`Branches: ${formatError(error)}`))),
+          onSuccess: (items) => setBranches(Option.some(Result.succeed(items))),
+        }),
+      ),
+    )
+    const isCurrent = (branch: Branch) =>
+      Option.exists(client.session(), (session) => session.branchId === branch.id)
     return {
       id: "branches",
       title: "Branches",
       source: () =>
-        Option.getOrUndefined(
-          Option.map(Option.fromNullishOr(branches()), (items) =>
+        Option.map(
+          branches(),
+          Result.map((items) =>
             items.map((branch) => ({
               id: `branch.${branch.id}`,
               title: selectedTitle(
                 branch.name ?? `Branch ${shortId(branch.id)}`,
-                Option.exists(client.session(), (session) => session.branchId === branch.id),
+                isCurrent(branch),
               ),
               onSelect: () => {
-                if (!Option.exists(client.session(), (session) => session.branchId === branch.id))
-                  client.switchBranch(branch.id)
+                if (!isCurrent(branch)) client.switchBranch(branch.id)
                 closePalette()
               },
             })),
@@ -387,53 +407,53 @@ export function CommandPalette() {
   const rootLevel = (): PaletteLevel => ({
     id: "root",
     title: "Commands",
-    source: (): readonly PaletteItem[] => [
-      {
-        id: "theme",
-        title: "Theme",
-        description: "Switch color theme",
-        category: "Appearance",
-        onSelect: () => pushLevel(themeLevel()),
-      },
-      {
-        id: "mode",
-        title: "Mode",
-        description: "Dark or light variant",
-        category: "Appearance",
-        onSelect: () => pushLevel(modeLevel()),
-      },
-      {
-        id: "branches",
-        title: "Branches",
-        description: "Switch branches in this session",
-        category: "Session",
-        onSelect: () => pushLevel(branchesLevel()),
-      },
-      ...ext.commands().map((cmd) => ({
-        id: `ext:${cmd.id}`,
-        title: cmd.title,
-        description: cmd.description,
-        category: cmd.category ?? "General",
-        shortcut: cmd.keybind,
-        onSelect: () => {
-          cmd.onSelect()
-          closePalette()
+    source: () =>
+      levelRows([
+        {
+          id: "theme",
+          title: "Theme",
+          description: "Switch color theme",
+          category: "Appearance",
+          onSelect: () => pushLevel(themeLevel()),
         },
-      })),
-    ],
+        {
+          id: "mode",
+          title: "Mode",
+          description: "Dark or light variant",
+          category: "Appearance",
+          onSelect: () => pushLevel(modeLevel()),
+        },
+        {
+          id: "branches",
+          title: "Branches",
+          description: "Switch branches in this session",
+          category: "Session",
+          onSelect: () => pushLevel(branchesLevel()),
+        },
+        ...ext.commands().map((cmd) => ({
+          id: `ext:${cmd.id}`,
+          title: cmd.title,
+          description: cmd.description,
+          category: cmd.category ?? "General",
+          shortcut: cmd.keybind,
+          onSelect: () => {
+            cmd.onSelect()
+            closePalette()
+          },
+        })),
+      ]),
   })
 
   // ── Derived state ──
 
   const currentLevel = () => Array.last(state().levelStack)
 
-  /** `None` while the level's request is pending. */
-  const levelSource = createMemo(() =>
-    Option.flatMap(currentLevel(), (level) => Option.fromNullishOr(level.source())),
-  )
+  const levelSource = createMemo(() => Option.flatMap(currentLevel(), (level) => level.source()))
   const loading = () => Option.isNone(levelSource())
+  /** Why the level's request failed. */
+  const levelFailure = () => Option.flatMap(levelSource(), Result.getFailure)
   const levelItems = createMemo<readonly PaletteItem[]>(() =>
-    Option.getOrElse(levelSource(), (): readonly PaletteItem[] => []),
+    Option.getOrElse(Option.flatMap(levelSource(), Result.getSuccess), () => []),
   )
 
   const categories = createMemo(() => [
@@ -582,11 +602,19 @@ export function CommandPalette() {
     )
 
   const emptyRow = () => {
+    const failure = levelFailure()
     let label = "No matches"
     if (loading()) label = "Loading…"
+    let color = theme.textMuted
+    if (Option.isSome(failure)) {
+      label = failure.value
+      color = theme.error
+    }
     return (
       <box paddingLeft={1}>
-        <text style={{ fg: theme.textMuted }}>{label}</text>
+        <text wrapMode="none" truncate style={{ fg: color }}>
+          {label}
+        </text>
       </box>
     )
   }

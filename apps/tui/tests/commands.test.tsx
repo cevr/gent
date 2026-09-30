@@ -7,13 +7,18 @@ import {
   parseSlashCommand,
   useCommand,
 } from "../src/commands"
-import { createEffect, For, onCleanup, onMount } from "solid-js"
-import { Effect, Option } from "effect"
-import { BranchId, dateFromMillis, SessionId } from "@gent/core/protocol"
+import { createEffect, ErrorBoundary, For, onCleanup, onMount } from "solid-js"
+import { Effect, Option, Schema } from "effect"
+import { BranchId, dateFromMillis, GentRpcError, SessionId } from "@gent/core/protocol"
 import { type ClientContextValue, useClient } from "../src/client"
 import { useExtensionUI } from "../src/extensions/host"
 import type { AgentRowEntry } from "@gent/extensions/client"
-import { createMockClient, renderFrame, renderWithProviders } from "./render-harness-boundary"
+import {
+  createMockClient,
+  renderFrame,
+  renderScoped,
+  renderWithProviders,
+} from "./render-harness-boundary"
 import { waitForFrame } from "./helpers-boundary"
 import { makePaneSlot } from "./extension-test-harness-boundary"
 
@@ -259,6 +264,45 @@ describe("CommandPalette renderer", () => {
       setup.mockInput.pressEscape()
       yield* waitForFrame(setup, (frame) => frame.includes("esc close"), "root again")
     }),
+  )
+
+  // A failed branch list is the level's answer, not a crash: the palette
+  // stays open and says why, and Esc still steps back.
+  it.scopedLive("a branch list that fails shows why in the palette", () =>
+    Effect.gen(function* () {
+      const client = createMockClient({
+        branch: {
+          list: () =>
+            Effect.fail(
+              Schema.decodeSync(GentRpcError)({
+                _tag: "InvalidStateError",
+                message: "branch list refused",
+              }),
+            ),
+        },
+      })
+      const setup = yield* renderScoped(
+        () => (
+          <ErrorBoundary fallback={(error) => <text>crashed: {String(error)}</text>}>
+            <OpenPaletteOnMount />
+          </ErrorBoundary>
+        ),
+        { client, initialSession: rootSession, width: 90, height: 28 },
+      )
+      yield* waitForFrame(setup, (frame) => frame.includes("Branches"), "commands root")
+      setup.mockInput.pressArrow("up")
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      const failed = yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("branch list refused") || frame.includes("crashed"),
+        "the branch level answers",
+      )
+      expect(failed).not.toContain("crashed")
+      expect(failed).toContain("esc back")
+      setup.mockInput.pressEscape()
+      yield* waitForFrame(setup, (frame) => frame.includes("esc close"), "root again")
+    }).pipe(Effect.timeout("10 seconds")),
   )
 
   it.live("the palette Sessions item opens the agents pane and a row switches to it", () =>
