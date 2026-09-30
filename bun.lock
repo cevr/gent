@@ -17,7 +17,7 @@
         "lefthook": "^2.1.12",
         "oxfmt": "^0.71.0",
         "oxlint": "^1.86.0",
-        "oxlint-plugin-effect": "^0.17.0",
+        "oxlint-plugin-effect": "^0.17.1",
         "oxlint-tsgolint": "^7.0.2003",
         "turbo": "^2.10.12",
         "typescript": "^7.0.2",
@@ -130,9 +130,7 @@
   },
   "patchedDependencies": {
     "@opentui/core@0.5.11": "patches/@opentui%2Fcore@0.5.11.patch",
-    "effect-encore@0.31.0": "patches/effect-encore@0.31.0.patch",
     "@effect/ai-anthropic@4.0.0-rc.118": "patches/@effect%2Fai-anthropic@4.0.0-rc.118.patch",
-    "oxlint-plugin-effect@0.17.0": "patches/oxlint-plugin-effect@0.17.0.patch",
   },
   "overrides": {
     "@effect/ai-anthropic": "4.0.0-rc.118",
@@ -150,7 +148,7 @@
     "@types/picomatch": "^4.0.3",
     "effect": "4.0.0-rc.118",
     "effect-bun-test": "0.3.0",
-    "effect-encore": "^0.31.0",
+    "effect-encore": "^0.32.0",
     "effect-wide-event": "0.5.0",
     "picomatch": "^4.0.7",
     "solid-js": "^1.9.15",
@@ -592,7 +590,7 @@
 
     "effect-bun-test": ["effect-bun-test@0.3.0", "", { "peerDependencies": { "bun": "*", "effect": ">=3.19.0" } }, "sha512-P2xZ4HBZg4bFw2ePY4E5UB6EZ2d1L/HO13+KdoprTYFuc8B1uTpdn7V4UU6qyYiYsqTY9DZ1TFB94Ekx2YLA4g=="],
 
-    "effect-encore": ["effect-encore@0.31.0", "", { "peerDependencies": { "effect": ">=4.0.0-rc.112 <5" } }, "sha512-lhM3/WJNl+ff38G3BQo1mygS0JPS+w00HX5QxiXQZdtJrb/u+QcTlddqBFN/e7JCmADzdXHSDYvwKpZiC6xkwA=="],
+    "effect-encore": ["effect-encore@0.32.0", "", { "peerDependencies": { "effect": ">=4.0.0-rc.118 <5" } }, "sha512-s36xwsxyF5W4SHBjmVboguepRTtH+ByvLohBM7iK8mvY0JlN3sexGNK/+lOlclNQI/W1Oo0uATaVUglUxmFFyQ=="],
 
     "effect-wide-event": ["effect-wide-event@0.5.0", "", { "peerDependencies": { "effect": ">=4.0.0-beta.66" } }, "sha512-S/XCwsWxn4P6un71QQpB+mFPJIDdRprnK1tIm/RtrygdY9NRDTpgGgu2XPgSrUUQ7lWftXHEdEVs6VyfUqDV0A=="],
 
@@ -756,7 +754,7 @@
 
     "oxlint": ["oxlint@1.86.0", "", { "optionalDependencies": { "@oxlint/binding-android-arm-eabi": "1.86.0", "@oxlint/binding-android-arm64": "1.86.0", "@oxlint/binding-darwin-arm64": "1.86.0", "@oxlint/binding-darwin-x64": "1.86.0", "@oxlint/binding-freebsd-x64": "1.86.0", "@oxlint/binding-linux-arm-gnueabihf": "1.86.0", "@oxlint/binding-linux-arm-musleabihf": "1.86.0", "@oxlint/binding-linux-arm64-gnu": "1.86.0", "@oxlint/binding-linux-arm64-musl": "1.86.0", "@oxlint/binding-linux-ppc64-gnu": "1.86.0", "@oxlint/binding-linux-riscv64-gnu": "1.86.0", "@oxlint/binding-linux-riscv64-musl": "1.86.0", "@oxlint/binding-linux-s390x-gnu": "1.86.0", "@oxlint/binding-linux-x64-gnu": "1.86.0", "@oxlint/binding-linux-x64-musl": "1.86.0", "@oxlint/binding-openharmony-arm64": "1.86.0", "@oxlint/binding-win32-arm64-msvc": "1.86.0", "@oxlint/binding-win32-ia32-msvc": "1.86.0", "@oxlint/binding-win32-x64-msvc": "1.86.0" }, "peerDependencies": { "oxlint-tsgolint": ">=7.0.2003", "vite-plus": "*" }, "optionalPeers": ["oxlint-tsgolint", "vite-plus"], "bin": { "oxlint": "bin/oxlint" } }, "sha512-og0lhgvZfgGF//gOOmZXvtr+GmBbAGEnbEhv/QUg7UW2Wi4wHMnJbnMD+zuHgPdJxdklfgpPupdlAaAySyxrZg=="],
 
-    "oxlint-plugin-effect": ["oxlint-plugin-effect@0.17.0", "", { "dependencies": { "@oxlint/plugins": "^1.64.0" }, "peerDependencies": { "effect": ">=4.0.0-beta.66 <5" } }, "sha512-qw7bKcLg1eY5YjMYYPt7RRguISiwa52F4lkZiiLb3xBmDl0kWdGD/iRjPjAyY3tM3FkiKuMXJdPg4sSaAYuNUQ=="],
+    "oxlint-plugin-effect": ["oxlint-plugin-effect@0.17.1", "", { "dependencies": { "@oxlint/plugins": "^1.64.0" }, "peerDependencies": { "effect": ">=4.0.0-beta.66 <5" } }, "sha512-7PDSL8x69PLAkYrrNGRc3kEvxAQe0LSp0/24GduM2gnVaK9aShcZJieYsUkbVmg6QMY0kCBk+yG4WMdOO7mASQ=="],
 
     "oxlint-tsgolint": ["oxlint-tsgolint@7.0.2003", "", { "optionalDependencies": { "@oxlint-tsgolint/darwin-arm64": "7.0.2003", "@oxlint-tsgolint/darwin-x64": "7.0.2003", "@oxlint-tsgolint/linux-arm64": "7.0.2003", "@oxlint-tsgolint/linux-x64": "7.0.2003", "@oxlint-tsgolint/win32-arm64": "7.0.2003", "@oxlint-tsgolint/win32-x64": "7.0.2003" }, "bin": { "tsgolint": "./bin/tsgolint.js" } }, "sha512-VnK4zlqgmgq/7ZcjzCk/WpN8kKFsYGcB85Io9qT3wL4K8Un3RKmJkp793crNETieMusPMKOA4a+Mw2wbteI6TQ=="],
 
