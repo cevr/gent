@@ -4335,6 +4335,9 @@ const cellOnly = (step: SequenceStep): SequenceStep => ({
     expect(system).toContain("## Host Tools")
     expect(system).toContain("- tools.read(input: { path: string")
     expect(system).toContain("`await tools(id)` returns its full input schema")
+    expect(system).toContain("grant no permission to execute")
+    // The Host Tools section alone explains the discovery calls.
+    expect(system.split("tools.search(").length - 1).toBe(1)
     expect(system).not.toContain("tools.cell(")
   },
 })

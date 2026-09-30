@@ -1121,8 +1121,10 @@ set. Default cutover must retain a host binding set when the advertised model
 surface narrows to `cell`; it cannot reuse a cell-only advertised map for discovery.
 
 The catalog is instruction plus data, not a tool. When the surface narrows to
-`cell`, the cell extension's `systemPrompt` hook adds a `## Host Tools` section
-with one signature line per selected host tool: its callable path, an input
+`cell`, the cell extension's `systemPrompt` hook adds a `## Host Tools` section.
+Its heading is the one place that explains the discovery calls
+(`tools.search`, `tools.describe`, `tools(id)`); the cell guidelines do not
+repeat it. The section has one signature line per selected host tool: its callable path, an input
 type and a result type rendered from the JSON Schema, and the first line of its
 prompt snippet or description (`- tools.wake.cancel(input?: { wakeId?:
 string }): Promise<{ cancelled: string[] }> // Cancel a pending alarm ...`). Nested objects
