@@ -1895,8 +1895,14 @@ export const buildOpenAIModelDriver = (
             "OpenAI credentials unavailable: no ChatGPT OAuth, stored API key, or OPENAI_API_KEY env var",
         })
       }),
+    // OpenAI documents 5 to 10 minutes of inactivity for in-memory prompt
+    // caching, but a cache lives longer in practice: in the owner's Codex
+    // transcripts 238 of 244 requests after a 5-10 minute gap, and 108 of 110
+    // after a 10-30 minute gap, still read the cache. At 5 minutes about 45% of
+    // the turn starts a cold handoff would compact had a warm cache. The
+    // lifetime is 30 minutes.
     listModels: (authInfo) =>
-      driverListModels(catalog, "openai")().pipe(
+      driverListModels(catalog, "openai", Duration.minutes(30))().pipe(
         Effect.map((models) => {
           // When OAuth is active, filter to allowed models + zero pricing
           const auth = Option.fromNullishOr(authInfo)

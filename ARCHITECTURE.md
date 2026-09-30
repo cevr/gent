@@ -142,9 +142,23 @@ updates this list in the same commit.
     no copy, so the driver reports the raw word through `ProviderStopReason`,
     which the loop provides to each step's stream. An `"unknown"` finish alone
     is a finished answer.
+    A turn whose first call would resend a large window after the provider's
+    prompt cache lapsed hands the window off first, anchored at the new
+    prompt: a summary call and a small window cost less than a cold resend.
+    The model catalog names the cache lifetime (`Model.promptCacheTtlMs`, which
+    each driver fills in `listModels`): Anthropic asks for the 1-hour cache on
+    every marker, or 5 minutes with `ANTHROPIC_PROMPT_CACHE_TTL=5m`, and OpenAI
+    says 30 minutes, as measured. The last call is the newest stored
+    `StreamEnded` of the branch, and large is at least
+    `min(64k, availableInputTokens / 2)` tokens. A model whose catalog entry
+    names no lifetime never hands off for a cold cache, and with no compactor
+    installed the window stays whole. The loop sends no keep-alive calls to
+    hold a cache warm. The TUI's cache notice reads the same catalog lifetime.
     Receipts: `packages/core/src/runtime/model-context.ts`,
     `packages/core/src/runtime/turn.ts`,
-    `packages/extensions/src/compaction.ts`.
+    `packages/extensions/src/compaction.ts`,
+    `packages/extensions/src/anthropic.ts` (`PromptCacheTtl`),
+    `apps/tui/src/extensions/cache.client.tsx`.
 
 ### Known gaps
 

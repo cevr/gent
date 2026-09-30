@@ -941,11 +941,19 @@ export const catalogSource = Effect.fn("ModelsDev.catalogSource")(function* (hom
 
 /**
  * A driver's `listModels`: its own models.dev entries, with the platform
- * services and the HTTP client provided from what setup captured.
+ * services and the HTTP client provided from what setup captured. Each entry
+ * carries `promptCacheTtl`, how long the driver's provider keeps a request's
+ * prompt cached; models.dev does not say.
  */
 export const driverListModels =
-  (source: CatalogSource, providerId: string) => (): Effect.Effect<ReadonlyArray<Model>> =>
+  (source: CatalogSource, providerId: string, promptCacheTtl: Duration.Duration) =>
+  (): Effect.Effect<ReadonlyArray<Model>> =>
     driverCatalog(source.home, providerId).pipe(
+      Effect.map((models) =>
+        models.map((model) =>
+          Model.make({ ...model, promptCacheTtlMs: Duration.toMillis(promptCacheTtl) }),
+        ),
+      ),
       // @effect-diagnostics-next-line strictEffectProvide:off The catalog owns its own HTTP client at the driver boundary; it outlives no scope.
       Effect.provide(FetchHttpClient.layer),
       Effect.provideContext(source.platform),

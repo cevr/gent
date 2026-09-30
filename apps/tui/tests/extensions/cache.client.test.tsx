@@ -21,13 +21,13 @@ import { emptyQueueSnapshot, EventId, testAgent } from "@gent/core/test-utils"
 import { CHILD_COMPLETION_TYPE, WAKE_MESSAGE_TYPE } from "@gent/extensions/client"
 import cacheExtension, {
   CACHE_EXTENSION_ID,
-  CACHE_TTL_MS,
   type CacheMiss,
   CacheMissCause,
   type CacheScan,
   makeCacheScan,
   missCostUsd,
   missText,
+  resolveMiss,
   showsMissRow,
 } from "../../src/extensions/cache.client"
 import type { AnyExtensionClientModule, NoticeRow } from "../../src/extensions/client-facets"
@@ -50,6 +50,9 @@ const GPT = ModelId.make("openai/gpt-5.5")
 const SECOND = 1000
 const MINUTE = 60 * SECOND
 
+/** The cache lifetime both drivers name for their models. */
+const CACHE_LIFETIME_MS = 5 * MINUTE
+
 /** $/M: sonnet-5 as the catalog prices it; gpt with reads only, as OpenAI bills. */
 const models = [
   new Model({
@@ -57,25 +60,37 @@ const models = [
     name: "Sonnet 5",
     provider: ProviderId.make("anthropic"),
     pricing: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+    promptCacheTtlMs: CACHE_LIFETIME_MS,
   }),
   new Model({
     id: GPT,
     name: "GPT 5.5",
     provider: ProviderId.make("openai"),
     pricing: { input: 1.25, output: 10, cacheRead: 0.125 },
+    promptCacheTtlMs: CACHE_LIFETIME_MS,
   }),
 ]
+const catalogEntry = (model: string) =>
+  Option.fromUndefinedOr(models.find((entry) => entry.id === model))
 const priceOf = (model: string) =>
-  Option.flatMap(Option.fromUndefinedOr(models.find((entry) => entry.id === model)), (entry) =>
-    Option.fromUndefinedOr(entry.pricing),
-  )
+  Option.flatMap(catalogEntry(model), (entry) => Option.fromUndefinedOr(entry.pricing))
 
-/** Every counted miss in one branch's history, in order: one scan over the envelopes. */
-const scanCacheMisses = (envelopes: Iterable<EventEnvelope>): ReadonlyArray<CacheMiss> => {
+/**
+ * Every counted miss in one branch's history, in order: one scan over the
+ * envelopes, each miss judged by the lifetime `lifetimeOf` names for the
+ * model it was priced by (the test catalog's by default).
+ */
+const scanCacheMisses = (
+  envelopes: Iterable<EventEnvelope>,
+  lifetimeOf: (model: string) => Option.Option<number> = (model) =>
+    Option.flatMap(catalogEntry(model), (entry) => Option.fromUndefinedOr(entry.promptCacheTtlMs)),
+): ReadonlyArray<CacheMiss> => {
   const scan = makeCacheScan()
   const misses: Array<CacheMiss> = []
   for (const envelope of envelopes) {
-    const miss = scan.fold(envelope)
+    const miss = Option.flatMap(scan.fold(envelope), (scanned) =>
+      resolveMiss(scanned, lifetimeOf(scanned.pricedModel)),
+    )
     if (Option.isSome(miss)) misses.push(miss.value)
   }
   return misses
@@ -337,6 +352,29 @@ describe("scanCacheMisses", () => {
     }),
   )
 
+  it.live("a model whose catalog names no cache lifetime counts only a model switch", () =>
+    Effect.sync(() => {
+      const history = cachedFirstStep()
+      history.step({ start: 20 * SECOND, end: 30 * SECOND, turn: "t1", usage: missedStep })
+      history.input(14 * MINUTE, "t2")
+      history.step({
+        start: 14 * MINUTE + 10 * SECOND,
+        end: 15 * MINUTE,
+        turn: "t2",
+        usage: missedStep,
+      })
+      history.step({
+        start: 15 * MINUTE + 10 * SECOND,
+        end: 16 * MINUTE,
+        turn: "t2",
+        usage: missedStep,
+        model: OPUS,
+      })
+      const misses = scanCacheMisses(history.envelopes, () => Option.none())
+      expect(misses.map((miss) => miss.cause._tag)).toEqual(["ModelSwitch"])
+    }),
+  )
+
   it.live("a response that took most of the lifetime names the response, not a short pause", () =>
     Effect.sync(() => {
       const history = makeHistory()
@@ -364,10 +402,10 @@ describe("scanCacheMisses", () => {
   it.live("a miss inside the TTL on the same model is a changed prefix", () =>
     Effect.sync(() => {
       const history = cachedFirstStep()
-      // Start to start is what the TTL runs on: the gap after the first step ended is shorter.
+      // The response (9s) and the idle after it fill the lifetime exactly: still inside it.
       history.step({
-        start: 1 * SECOND + CACHE_TTL_MS,
-        end: 2 * SECOND + CACHE_TTL_MS,
+        start: 1 * SECOND + CACHE_LIFETIME_MS,
+        end: 2 * SECOND + CACHE_LIFETIME_MS,
         turn: "t1",
         usage: missedStep,
       })
@@ -688,6 +726,18 @@ describe("cache client extension", () => {
         "cache expired after 14m idle · 30k tokens re-billed ~$0.07",
       ])
       expect(extension.label()).toEqual([{ text: "cache waste $0.07", color: "textMuted" }])
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
+  it.scopedLive("a catalog that names no cache lifetime draws no expiry row", () =>
+    Effect.gen(function* () {
+      const unnamed = models.map(
+        ({ id, name, provider, pricing }) => new Model({ id, name, provider, pricing }),
+      )
+      const extension = yield* setupWithCatalog(Option.some(unnamed))
+      extension.deliver(twoMissHistory().envelopes)
+      expect(rowsOf(extension.rows())).toEqual([])
+      expect(extension.label()).toEqual([])
     }).pipe(Effect.timeout("4 seconds")),
   )
 
