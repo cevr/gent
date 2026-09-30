@@ -1422,7 +1422,7 @@ const relocateThirdPartyIntoFirstUser = (
  */
 export const transformPayload = (
   payload: JsonRecord,
-  promptCacheTtl: PromptCacheTtl,
+  promptCacheTtl: Option.Option<PromptCacheTtl>,
 ): Effect.Effect<JsonRecord, never, KeychainTransformRequirements> =>
   Effect.gen(function* () {
     let result = { ...payload }
@@ -1447,7 +1447,7 @@ export const transformPayload = (
     result["messages"] = messagesAfterRelocate
     result["system"] = yield* buildSystemArray(messagesAfterRelocate)
 
-    return markCacheBreakpoints(result, "first-user", promptCacheTtl)
+    return markRequestCache(result, "first-user", promptCacheTtl)
   })
 
 // ── Prompt caching ──
@@ -1740,6 +1740,20 @@ const markCacheBreakpoints = (
   return result
 }
 
+/**
+ * The payload marked for the request's cache lifetime. A request with none
+ * (its hints carry no `cacheKey`) writes no cache: no later request reads it.
+ */
+const markRequestCache = (
+  rendered: JsonRecord,
+  prefixEnd: CachePrefixEnd,
+  ttl: Option.Option<PromptCacheTtl>,
+): JsonRecord =>
+  Option.match(ttl, {
+    onNone: () => rendered,
+    onSome: (value) => markCacheBreakpoints(rendered, prefixEnd, value),
+  })
+
 // ── Response Transforms (incoming) ──
 
 /** Strip mcp_ prefix from tool_use content blocks in a non-streaming response */
@@ -1879,8 +1893,8 @@ const anthropicClientLayer = <R>(
  * The API-key path marks prompt-cache breakpoints and changes nothing else.
  * The Claude Code path marks its payload in `transformPayload`.
  */
-const apiKeyClientPath = (promptCacheTtl: PromptCacheTtl): ClientPath<never> => ({
-  payload: (payload) => Effect.succeed(markCacheBreakpoints(payload, "system", promptCacheTtl)),
+const apiKeyClientPath = (promptCacheTtl: Option.Option<PromptCacheTtl>): ClientPath<never> => ({
+  payload: (payload) => Effect.succeed(markRequestCache(payload, "system", promptCacheTtl)),
   message: (call) => call,
   stream: (call) => call,
 })
@@ -1892,7 +1906,7 @@ const apiKeyClientPath = (promptCacheTtl: PromptCacheTtl): ClientPath<never> => 
  */
 const claudeCodeClientPath = (
   creds: CredentialCache<ClaudeCredentials>,
-  promptCacheTtl: PromptCacheTtl,
+  promptCacheTtl: Option.Option<PromptCacheTtl>,
 ): ClientPath<KeychainTransformRequirements> => {
   const explain = explainCredentialFailure(creds)
   return {
@@ -2230,7 +2244,8 @@ interface AnthropicRequest {
   /** The output cap, and `temperature` where the model takes one. */
   readonly config: AnthropicConfig
   readonly plan: AnthropicRequestPlan
-  readonly promptCacheTtl: PromptCacheTtl
+  /** None when the hints carry no `cacheKey`: the request writes no cache. */
+  readonly promptCacheTtl: Option.Option<PromptCacheTtl>
 }
 
 const anthropicRequest = (
@@ -2253,7 +2268,8 @@ const anthropicRequest = (
       config = { ...config, temperature: temperature.value }
     }
   }
-  return { config, plan, promptCacheTtl }
+  const cacheKey = Option.flatMap(hints, (value) => Option.fromUndefinedOr(value.cacheKey))
+  return { config, plan, promptCacheTtl: Option.map(cacheKey, () => promptCacheTtl) }
 }
 
 /**

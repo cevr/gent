@@ -81,7 +81,10 @@ export interface ProviderHints {
   readonly reasoning?: string
   readonly maxTokens?: number
   readonly temperature?: number
-  /** Stable conversation identity for providers that support cache routing. */
+  /**
+   * Stable conversation identity: OpenAI routes the prompt cache by it, and
+   * Anthropic writes a prompt cache only for a request that names one.
+   */
   readonly cacheKey?: string
   /**
    * The catalog's `Model.reasoning` for the resolved model. A driver sends no

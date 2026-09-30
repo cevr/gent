@@ -92,7 +92,7 @@ type JsonRecord = Schema.Schema.Type<typeof JsonRecordSchema>
 
 /** The payload transform with the host's crypto and platform provided. */
 const transformPayload = (payload: JsonRecord) =>
-  transformPayloadEffect(payload, "1h").pipe(
+  transformPayloadEffect(payload, Option.some("1h")).pipe(
     Effect.provide(Layer.merge(BunCrypto.layer, testPlatformLayer)),
   )
 
@@ -2058,7 +2058,11 @@ describe("Anthropic prompt-cache lifetime", () => {
     { role: "user", content: [{ type: "text", text: "Run a cell." }] },
   ])
   /** The markers of one rendered request on each sign-in path: an API key, then Claude Code. */
-  const renderedMarkers = (promptCacheTtl: "5m" | "1h", prompt: Prompt.Prompt = conversation) =>
+  const renderedMarkers = (
+    promptCacheTtl: "5m" | "1h",
+    prompt: Prompt.Prompt = conversation,
+    hints: ProviderHints = { cacheKey: "session-cache-key" },
+  ) =>
     Effect.gen(function* () {
       const perPath: Array<ReadonlyArray<string>> = []
       for (const authInfo of [makeApiAuthInfo("test-key"), makeOAuthInfo()]) {
@@ -2075,7 +2079,7 @@ describe("Anthropic prompt-cache lifetime", () => {
           Option.none(),
           promptCacheTtl,
         )
-        const model = yield* driver.resolveModel("claude-opus-4-6", authInfo)
+        const model = yield* driver.resolveModel("claude-opus-4-6", authInfo, hints)
         const state = makeFakeFetchState()
         yield* runContextRequest(model, state, prompt, "text")
         perPath.push(
@@ -2124,6 +2128,16 @@ describe("Anthropic prompt-cache lifetime", () => {
           }
         }
       }).pipe(Effect.timeout("5 seconds")),
+  )
+
+  it.live("a request with no cache key writes no cache, on both sign-in paths", () =>
+    Effect.gen(function* () {
+      // A one-off request, such as a compaction summary, has no later request
+      // to read its entry back.
+      for (const markers of yield* renderedMarkers("1h", conversation, {})) {
+        expect(markers).toEqual([])
+      }
+    }).pipe(Effect.timeout("5 seconds")),
   )
 
   it.live("the 5-minute switch renders every marker with the 5-minute lifetime", () =>
@@ -2944,7 +2958,10 @@ describe("buildAnthropicModelDriver — prompt caching", () => {
         },
       )
       const driver = yield* buildAnthropicModelDriver(credentialCellRef, Option.none())
-      const model = yield* driver.resolveModel("claude-sonnet-4-6", authInfo)
+      // A conversation turn names its session as the cache key; the driver marks only such a request.
+      const model = yield* driver.resolveModel("claude-sonnet-4-6", authInfo, {
+        cacheKey: "session-cache-key",
+      })
       const state = makeFakeFetchState()
       yield* runCachingRequest(model, state, options, after, system)
       return yield* Schema.decodeEffect(CachedRequest)(

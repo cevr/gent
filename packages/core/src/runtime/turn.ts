@@ -80,6 +80,7 @@ import {
   credentialFailureMessage,
   isWindowFullStopReason,
   type ProviderAuthError,
+  type ProviderHints,
   ProviderStopReason,
 } from "../domain/driver.js"
 import {
@@ -1622,18 +1623,19 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
     reservedToolTokens: estimateToolSchemaTokens(resolved.tools),
     reservedOutputTokens,
   })
+  const turnHints = {
+    temperature: resolved.temperature,
+    reasoning: resolved.reasoning,
+    // The driver reads the catalog's word on reasoning, not the model name.
+    supportsReasoning: modelOption.value.reasoning,
+    // The request asks for no more output than the budget keeps free, so
+    // input within the budget plus the reply never passes the window.
+    maxTokens: reservedOutputTokens,
+  } satisfies ProviderHints
   const modelRequest: ResolveModelRequest = {
     modelId: resolved.modelId,
-    hints: {
-      temperature: resolved.temperature,
-      reasoning: resolved.reasoning,
-      cacheKey: params.sessionId,
-      // The driver reads the catalog's word on reasoning, not the model name.
-      supportsReasoning: modelOption.value.reasoning,
-      // The request asks for no more output than the budget keeps free, so
-      // input within the budget plus the reply never passes the window.
-      maxTokens: reservedOutputTokens,
-    },
+    // The session is the cache key: the next step reads this step's prefix.
+    hints: { ...turnHints, cacheKey: params.sessionId },
     driverId: Option.getOrUndefined(driverId),
   }
   const eventStore = yield* EventStore
@@ -1668,11 +1670,12 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
     persist: persistDurableMessage,
     // The summary is plain text under a small output cap. Reasoning tokens
     // count against that cap on some providers, so the summary asks for none
-    // and never inherits the turn's effort.
+    // and never inherits the turn's effort. Its prompt is unique, so it names
+    // no cache key: nothing would read its cache entry back.
     summaryModel: (maxTokens) =>
       resolveAdmittedModel({
         ...modelRequest,
-        hints: { ...modelRequest.hints, maxTokens, reasoning: "none" },
+        hints: { ...turnHints, maxTokens, reasoning: "none" },
       }).pipe(Effect.tap(() => Ref.set(summaryAdmitted, true))),
   })
 

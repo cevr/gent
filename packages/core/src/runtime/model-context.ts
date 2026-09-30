@@ -1577,12 +1577,11 @@ export interface PromptCache {
 /**
  * The smallest window a cold start hands off. A cold resend of N tokens is a
  * cache write, the catalog `cacheWrite` multiple of N (2 × N for Anthropic's
- * one-hour cache); the summary call sends at most ~33k (the compactor's 32k
- * input cap and its prompt), written to the cache at the same multiple, and
- * the next call resends only the summary and the new prompt. That breaks even
- * near 45k; from 64k
- * the handoff saves at least half the resend, which pays for the detail a
- * summary loses. A window whose input budget is under 128k hands off at half
+ * one-hour cache); the summary call reads at most ~33k at the base price (the
+ * compactor's 32k input cap and its prompt; it names no cache key, so it
+ * writes no cache), and the next call resends only the summary and the new
+ * prompt. That breaks even near 28k; from 64k the handoff saves at least half
+ * the resend, which pays for the detail a summary loses. A window whose input budget is under 128k hands off at half
  * that budget instead, so a small-window model can hand off at all.
  */
 const COLD_HANDOFF_MAX_THRESHOLD_TOKENS = 64_000

@@ -2326,7 +2326,7 @@ describe("native model compaction integration", () => {
     )
   })
 
-  it.live("the summary request asks for no reasoning, so thinking cannot spend its budget", () => {
+  it.live("the summary request asks for no reasoning and names no cache key", () => {
     const sessionId = SessionId.make("summary-reasoning-session")
     const branchId = BranchId.make("summary-reasoning-branch")
     const modelId = ModelId.make("summary-driver/model")
@@ -2399,10 +2399,15 @@ describe("native model compaction integration", () => {
         const summary = observedHints.filter((hints) => hints.maxTokens !== turnOutput)
         expect(summary).toHaveLength(1)
         expect(summary[0]?.reasoning).toBe("none")
+        // Nothing reads a summary prompt back, so it writes no cache entry.
+        expect(summary[0]?.cacheKey).toBeUndefined()
         // The turn itself keeps its own effort.
         expect(
           observedHints.filter((hints) => hints.maxTokens === turnOutput).at(-1)?.reasoning,
         ).toBe("high")
+        expect(
+          observedHints.filter((hints) => hints.maxTokens === turnOutput).at(-1)?.cacheKey,
+        ).toBe(sessionId)
       }),
     ).pipe(Effect.provide(layer), Effect.timeout("15 seconds"))
   })
