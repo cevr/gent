@@ -7,7 +7,6 @@ import {
   Deferred,
   Duration,
   Effect,
-  Encoding,
   Exit,
   Fiber,
   HashSet,
@@ -22,6 +21,7 @@ import {
   Semaphore,
   SynchronizedRef,
 } from "effect"
+import { Base64Url } from "effect/encoding"
 import {
   FetchHttpClient,
   Headers,
@@ -232,7 +232,7 @@ const generatePKCE: Effect.Effect<PkceCodes, OAuthError, Crypto.Crypto> = Effect
   const bytes = yield* crypto.randomBytes(43)
   const verifier = Array.from(bytes, (byte) => chars[byte % chars.length]).join("")
   const hash = yield* crypto.digest("SHA-256", new TextEncoder().encode(verifier))
-  return { verifier, challenge: Encoding.encodeBase64Url(hash) }
+  return { verifier, challenge: Base64Url.encode(hash) }
 }).pipe(
   Effect.mapError(
     (error) =>
@@ -246,7 +246,7 @@ const generatePKCE: Effect.Effect<PkceCodes, OAuthError, Crypto.Crypto> = Effect
 const parseJwtClaims = (token: string): Option.Option<typeof JwtClaimsSchema.Type> => {
   const parts = token.split(".")
   if (parts.length !== 3) return Option.none()
-  return Encoding.decodeBase64UrlString(parts[1] ?? "").pipe(
+  return Base64Url.decodeString(parts[1] ?? "").pipe(
     Result.getSuccess,
     Option.flatMap(decodeJwtClaims),
   )
@@ -563,7 +563,7 @@ const authorizeOpenAI: Effect.Effect<
         }),
     ),
   )
-  const state = Encoding.encodeBase64Url(stateBytes)
+  const state = Base64Url.encode(stateBytes)
   const port = yield* OAuthRedirectPort
   const redirectUri = `http://localhost:${port}/auth/callback`
   const authUrl = buildAuthorizeUrl(redirectUri, pkce, state)

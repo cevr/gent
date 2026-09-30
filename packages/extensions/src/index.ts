@@ -11,6 +11,7 @@ import * as EffectPlatformBun from "@effect/platform-bun"
 import * as EffectRoot from "effect"
 import * as EffectAi from "effect/ai"
 import * as EffectAiError from "effect/ai/AiError"
+import * as EffectEncoding from "effect/encoding"
 import * as EffectPrompt from "effect/ai/Prompt"
 import * as EffectResponse from "effect/ai/Response"
 import * as EffectTool from "effect/ai/Tool"
@@ -119,6 +120,7 @@ export const BuiltinExtensionModules: ReadonlyMap<string, () => object> = new Ma
   ["effect/ai/Prompt", () => EffectPrompt],
   ["effect/ai/Response", () => EffectResponse],
   ["effect/ai/Tool", () => EffectTool],
+  ["effect/encoding", () => EffectEncoding],
   ["effect/http", () => EffectHttp],
   ["effect/http/HttpClientError", () => EffectHttpClientError],
   ["effect/process", () => EffectProcess],

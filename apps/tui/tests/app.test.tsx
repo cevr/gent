@@ -7,7 +7,6 @@ import {
   Deferred,
   Duration,
   Effect,
-  Encoding,
   Exit,
   Fiber,
   Layer,
@@ -19,6 +18,7 @@ import {
   Scope,
   Stream,
 } from "effect"
+import { Base64 } from "effect/encoding"
 import { BunServices } from "@effect/platform-bun"
 import { TestClock } from "effect/testing"
 import { RpcClientError } from "effect/rpc/RpcClientError"
@@ -4163,7 +4163,7 @@ describe("App copy on select", () => {
   })
 
   /** The bytes an OSC 52 copy of `text` to the clipboard sends the terminal. */
-  const osc52 = (text: string) => `\u001b]52;c;${Encoding.encodeBase64(text)}\u001b\\`
+  const osc52 = (text: string) => `\u001b]52;c;${Base64.encode(text)}\u001b\\`
 
   /**
    * The enforced sign-in on its OAuth screen, the device URL `url` on screen,

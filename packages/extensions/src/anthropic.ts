@@ -5,7 +5,6 @@ import {
   Crypto,
   Duration,
   Effect,
-  Encoding,
   Exit,
   FileSystem,
   Layer,
@@ -17,6 +16,7 @@ import {
   Stream,
   SynchronizedRef,
 } from "effect"
+import { Hex } from "effect/encoding"
 import {
   AuthMethod,
   DEFAULT_RETRY_POLICY,
@@ -307,7 +307,7 @@ const sha256Hex = (text: string): Effect.Effect<string, never, Crypto.Crypto> =>
     const digest = yield* crypto
       .digest("SHA-256", new TextEncoder().encode(text))
       .pipe(Effect.orDie)
-    return Encoding.encodeHex(digest)
+    return Hex.encode(digest)
   })
 
 /**
