@@ -1,44 +1,23 @@
 /**
- * Oxlint JS plugin: gent custom rules
+ * Oxlint JS plugin: gent's own rules, one line each. Each rule's doc comment
+ * below states it in full.
  *
- * Rules:
- * - no-positional-log-error: flags Effect.logWarning("msg", error) (use annotateLogs)
- * - declared-workspace-imports: a workspace package imports only the
- *   workspace packages its manifest declares, and no relative path leaves it.
- * - core-entry-boundary: extensions read only the authoring entries of
- *   @gent/core (plus protocol for TUI client extensions), product code
- *   never reads @gent/core/test-utils, and the TUI host never reads
- *   @gent/extensions.
- * - no-promise-control-flow-in-tests: bans `.then`/`.catch`/`.finally`
- *   chains and `runPromise` in test files; `effect/*` rules already ban
- *   `async`, `await`, `try/finally` and the Promise constructor and statics.
- *
- * Six-primitive substrate rules:
- * - no-runpromise-outside-boundary: Effect.runPromise/runPromiseWith only allowed
- *   in *-boundary.ts files
- * - no-define-extension-throw: definePackage/defineExtension factories may not
- *   throw — must return Effect with typed error channel
- * - no-dynamic-imports: bans dynamic `import(...)`, `require(...)`, and
- *   createRequire bridges unless the exact expression opts in with an
- *   architectural allow comment. Compiled-binary safety.
- * - no-die-in-test-helpers: bans `Effect.die`/`dieMessage` in test code when the
- *   message describes a *timeout*. A timeout is an expected outcome, so dying
- *   on it escapes as "Unhandled error between tests" attributed to no test.
- *   Dying on a genuine impossible state (missing fixture, out-of-range index)
- *   stays allowed — that really is a defect.
- * - no-hand-rolled-tagged-union: bans inline `{ _tag: "X"; ... } | { _tag: "Y"; ... }`
- *   type literals; require `Schema.TaggedUnion` / `Schema.TaggedStruct` /
- *   `Schema.TaggedErrorClass` instead.
- * - no-sleep: bans `.sleep(...)` calls in test files. Opt out per-site with
- *   `// gent/no-sleep: allow <reason>` (retries, debounce probes, real-clock
- *   timing tests, deliberate fiber-pacing pauses in PTY/server fixtures).
- * - no-with-wrapper-call: bans `withX(otherCall(...))`,
- *   `withX(...)(otherCall(...))`, and `withX(callback)` wrapper-call style, and
- *   `withX` helpers that take an Effect or a callback (the last two outside
- *   `tests/`); pipe the inner Effect/value through the adapter instead.
- * - no-inert-it: bans a bare `it(...)` call where `it` came from
- *   `effect-bun-test`. That `it` is an object, not a function, so the call
- *   throws during module load and the file registers no tests at all.
+ * - core-entry-boundary: extensions read only the authoring entries of `@gent/core`.
+ * - declared-workspace-imports: a package imports only the workspace packages it declares.
+ * - no-positional-log-error: an error goes to `annotateLogs`, not a second log argument.
+ * - no-with-wrapper-call: an Effect is piped through an adapter, not wrapped in a `withX` call.
+ * - no-runpromise-outside-boundary: `Effect.runPromise` runs only in `*-boundary.ts` files.
+ * - no-define-extension-throw: an extension factory fails through its Effect, never a throw.
+ * - no-dynamic-imports: no `import(...)` or `require(...)` without an architectural allow comment.
+ * - no-promise-control-flow-in-tests: a test has no `.then`/`.catch`/`.finally` or `runPromise`.
+ * - no-bun-outside-adapter: `Bun.*` and host facts stay in the platform adapters.
+ * - no-hand-rolled-tagged-union: a tagged union is a Schema, not a `{ _tag }` literal union.
+ * - no-die-in-test-helpers: a test helper does not die on a timeout.
+ * - no-sleep: a test does not sleep without a `gent/no-sleep: allow <reason>` comment.
+ * - no-inert-it: `it` from effect-bun-test is not called bare.
+ * - child-session-writer-admits: a core child-session writer admits the nesting depth first.
+ * - no-lint-evasion: no spelling of `undefined` or `unknown` that only evades a rule.
+ * - no-identity-encode: a whole-object JSON encode decides no identity.
  */
 
 import { existsSync, readFileSync } from "node:fs"
@@ -1780,8 +1759,8 @@ const plugin: Plugin = {
      * `DEFAULT_MAX_AGENT_RUN_DEPTH` is enforced in one place,
      * `admitChildSessionDepth` (`packages/core/src/runtime/session.ts`). A
      * `new Session({ ... parentSessionId ... })` row is a child-session
-     * writer, and a writer that skips the admission (the compaction handoff
-     * once did) nests sessions without bound.
+     * writer, and a writer that skips the admission nests sessions without
+     * bound.
      *
      * What is required: before the write, the writer's innermost enclosing
      * function -- a declaration, a function expression, an arrow, or a method

@@ -173,9 +173,8 @@ export const ensureLogDir = (dir: string): Effect.Effect<void, never, FileSystem
 // ── logger ──────────────────────────────────────────────────────────────────
 
 /**
- * Custom Effect Logger — one JSON line per entry, appended to a file.
- *
- * Based on loggingsucks.com principles: structured key-value data.
+ * Custom Effect Logger — one JSON line per entry, appended to a file, its
+ * context as structured key-value data.
  *
  * Uses Effect.annotateLogs for context (sessionId, branchId, agent, model).
  * Uses Effect.withLogSpan for timing data.
@@ -285,9 +284,8 @@ export const makeJsonFileLogger = (
 /**
  * JSON file logger under the cwd's server log path.
  *
- * Cwd is threaded explicitly from the dependency graph so the server log
- * path matches the launcher's resolved cwd. Falling back to ambient env
- * risked the two ends hashing different identities.
+ * The cwd comes from the dependency graph, never the ambient environment, so
+ * the server and its launcher hash one identity and share one log path.
  */
 const GentLogger = (
   cwd: string,

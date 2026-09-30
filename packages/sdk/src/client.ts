@@ -218,8 +218,9 @@ export const Gent = {
         return yield* connectWs(serverOrUrl, workspaceHeadersForCwd(cwd))
       }
 
-      // One header rule for both transports: a client cwd names its
-      // workspace; without one, the client reads the server's workspace.
+      // A server handle, owned or attached: a client cwd names its workspace;
+      // without one, the client reads the server's workspace. A bare URL
+      // (above) carries no workspace, so without a cwd it names process.cwd().
       const headers = Option.fromNullishOr(options?.cwd).pipe(
         Option.match({
           onNone: () => ({ [WORKSPACE_ID_HEADER]: serverOrUrl.workspaceId }),

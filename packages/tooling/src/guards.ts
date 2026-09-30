@@ -1289,9 +1289,7 @@ export const findTestLaneDefaults = (file: string, text: string): ReadonlyArray<
  * @module
  */
 
-// ---------------------------------------------------------------------------
-// (a) An override whose files glob matches nothing
-// ---------------------------------------------------------------------------
+// ── (a) An override whose files glob matches nothing ────────────────────────
 
 /**
  * Turn one oxlint `files` glob into a matcher.
@@ -1440,9 +1438,7 @@ export const findUnmatchedTsconfigOverrides = (
       ]
     })
 
-// ---------------------------------------------------------------------------
-// (b) A plugin rule the root config never enables
-// ---------------------------------------------------------------------------
+// ── (b) A plugin rule the root config never enables ─────────────────────────
 
 /** The line a rule's `"<name>":` key sits on in the plugin text, for a finding that points at it. */
 const lineOfRule = (pluginText: string, rule: string): number =>
@@ -1469,9 +1465,7 @@ export const findUnenabledPluginRules = (
     }))
     .toArray()
 
-// ---------------------------------------------------------------------------
-// (c) A GENT_* variable with a reader but nothing to set it
-// ---------------------------------------------------------------------------
+// ── (c) A GENT_* variable with a reader but nothing to set it ───────────────
 
 /**
  * Variables a person or an external launcher supplies, so production holds no
@@ -2796,10 +2790,9 @@ export const findUnhashedSteeringFiles = (
  * `transitionSessionState` rebuilds the `Session` object for `UpdateName` and
  * `UpdateSettings`, so a rename or a `/model` change hands every reader a new
  * object carrying the same ids. An effect that tracks the record restarts for
- * a change it does not care about: the child-session tracker lost its fiber and
- * every projected row, the extension resources blanked and round-tripped, and
- * the slash-command list cleared for the duration of an RPC. One reducer
- * produced four defects that way.
+ * a change it does not care about: a fiber it owns is interrupted, the rows it
+ * projected are dropped and fetched again, and a list it loads is empty while
+ * the RPC runs.
  *
  * The client answers "which session" once, with `sessionIdentity()` and
  * `activeSessionId()` — memos with an equivalence on the ids. Anything that
@@ -4036,9 +4029,7 @@ export const findUnconsumedExports = (
   return findings
 }
 
-// ---------------------------------------------------------------------------
-// Package entry points
-// ---------------------------------------------------------------------------
+// ── Package entry points ────────────────────────────────────────────────────
 
 const DependencyMap = Schema.Record(Schema.String, Schema.String)
 
@@ -4264,9 +4255,7 @@ export const findPackageSurfaceFindings = (
   return [...unlisted, ...checked, ...pathFindings(tsconfigs)]
 }
 
-// ---------------------------------------------------------------------------
-// Declared dependencies
-// ---------------------------------------------------------------------------
+// ── Declared dependencies ───────────────────────────────────────────────────
 
 /** The installed manifest fields that say what a dependency offers. */
 export const InstalledPackageSchema = Schema.Struct({
