@@ -119,6 +119,8 @@ import {
   attachToolBindingIdentity,
   compileToolPolicy,
   convertTools,
+  fromWireToolPart,
+  toWirePrompt,
   executeToolCalls,
   processLocalReplayBindingKey,
   processLocalReplayResultKey,
@@ -1723,12 +1725,16 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       costUsd: Option.getOrUndefined(compactionCostUsd),
     }),
   )
-  const prompt = toPrompt(projection.messages, {
-    systemPrompt: resolved.systemPrompt,
-    notices: resolved.notices.map(({ notice }) => notice),
-  })
+  // The provider sees each tool under its wire name, in the declarations and
+  // in the conversation's calls; the reply's parts name the tool ids again.
+  const prompt = toWirePrompt(
+    toPrompt(projection.messages, {
+      systemPrompt: resolved.systemPrompt,
+      notices: resolved.notices.map(({ notice }) => notice),
+    }),
+  )
   const toolkit = convertTools([...resolved.tools])
-  const rawStream = Stream.unwrap(
+  const wireStream = Stream.unwrap(
     resolveAdmittedModel(modelRequest).pipe(
       Effect.map((model) => {
         if (resolved.tools.length > 0) {
@@ -1750,6 +1756,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       }),
     ),
   )
+  const rawStream = wireStream.pipe(Stream.map(fromWireToolPart))
   // The raw stop reason the driver reports for this attempt's stream
   // (`ProviderStopReason`); a retried attempt starts with none.
   const stopReason = yield* Ref.make(Option.none<string>())

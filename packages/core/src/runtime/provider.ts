@@ -35,6 +35,7 @@ import {
   type ModelCatalogFailure,
 } from "./extension-host.js"
 import { causeMessage } from "../domain/guards.js"
+import { wireToolName } from "../domain/capability.js"
 import {
   DEFAULT_RETRY_POLICY,
   type PersistAuth,
@@ -1072,6 +1073,7 @@ export const textDeltaPart = (
   id = makeStreamPartId("text"),
 ): LanguageModelStreamPart => Response.makePart("text-delta", { id, delta: text })
 
+/** A model's call of the tool `toolName` names, as a provider sends it: under its wire name. */
 export const toolCallPart = (
   toolName: string,
   // oxlint-disable-next-line effect/noUnknownParameters -- Tool arguments enter the Effect AI codec as unknown JSON data.
@@ -1080,7 +1082,7 @@ export const toolCallPart = (
 ): LanguageModelStreamPart =>
   Response.makePart("tool-call", {
     id: options?.toolCallId ?? ToolCallId.make(makeStreamPartId("tool")),
-    name: toolName,
+    name: wireToolName(toolName),
     params: input,
     providerExecuted: false,
   })

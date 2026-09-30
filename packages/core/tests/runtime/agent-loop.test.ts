@@ -9736,7 +9736,7 @@ const replayCases = [
 
 const makeTool = (): ToolCapability =>
   tool({
-    id: "@test/replay-tool",
+    id: "replay_tool",
     description: "Replay test tool",
     params: Schema.Struct({ value: Schema.String }),
     output: Schema.String,
@@ -9757,7 +9757,7 @@ const makeExtension = (toolCapability: ToolCapability): LoadedExtension => ({
 
 const makeBinding = () =>
   ToolBindingIdentity.make({
-    toolId: ToolId.make("@test/replay-tool"),
+    toolId: ToolId.make("replay_tool"),
     extensionId: ExtensionId.make("@test/replay-extension"),
     source: ToolBindingSource.cases.Static.make({
       sourceRevision: ToolSourceRevision.make("source/legacy"),
@@ -9779,7 +9779,7 @@ describe("tool binding replay", () => {
         const context = yield* Layer.build(layer)
         yield* Effect.gen(function* () {
           const sessionId = SessionId.make("inner-operation-session")
-          const current = yield* captureCurrentToolBinding("@test/replay-tool")
+          const current = yield* captureCurrentToolBinding("replay_tool")
           if (Option.isNone(current) || Predicate.isUndefined(current.value.binding))
             return yield* Effect.die("Missing fixture binding")
           const binding = current.value.binding
@@ -9847,7 +9847,7 @@ describe("tool binding replay", () => {
           const address = { sessionId, branchId, assistantMessageId, toolCallId }
           const toolCall = Prompt.toolCallPart({
             id: toolCallId,
-            name: "@test/replay-tool",
+            name: "replay_tool",
             params: { value: "input" },
             providerExecuted: false,
           })
@@ -9934,7 +9934,7 @@ describe("tool binding replay", () => {
         const cache = yield* SessionProfileCache
         const profile = yield* cache.resolve((yield* RuntimeEnvironment).cwd)
         const generationId = profile.generationId
-        const current = yield* captureCurrentToolBinding("@test/replay-tool")
+        const current = yield* captureCurrentToolBinding("replay_tool")
         if (Option.isNone(current)) return yield* Effect.die("Expected captured capability")
         // A source-loaded extension has no build artifact, so no durable identity.
         expect(current.value.binding).toBeUndefined()
@@ -9989,7 +9989,7 @@ describe("tool binding replay", () => {
       const storageTransaction = yield* makeStorageTransaction
       const toolCallPart = Prompt.toolCallPart({
         id: toolCallId,
-        name: "@test/replay-tool",
+        name: "replay_tool",
         params: { value: "legacy" },
         providerExecuted: false,
       })
@@ -10014,7 +10014,7 @@ describe("tool binding replay", () => {
         branchId,
         messageId,
         parts: [toolCallPart],
-        toolBindings: new Map([["@test/replay-tool", entry]]),
+        toolBindings: new Map([["replay_tool", entry]]),
         storageTransaction,
       })
 
@@ -10044,7 +10044,7 @@ describe("tool binding replay", () => {
       const toolCallId = ToolCallId.make("binding-replay-result-call")
       const toolCall = Prompt.toolCallPart({
         id: toolCallId,
-        name: "@test/replay-tool",
+        name: "replay_tool",
         params: { value: "current" },
         providerExecuted: false,
       })
@@ -10058,7 +10058,7 @@ describe("tool binding replay", () => {
           parts: [
             Prompt.toolCallPart({
               id: toolCallId,
-              name: "@test/replay-tool",
+              name: "replay_tool",
               params: { value },
               providerExecuted: false,
             }),
@@ -10074,7 +10074,7 @@ describe("tool binding replay", () => {
           sessionId,
           branchId,
           toolCallId,
-          toolName: "@test/replay-tool",
+          toolName: "replay_tool",
           output: "old display",
           resultJson: encodeToolOutput({ value: "old" }),
         }),
@@ -10087,7 +10087,7 @@ describe("tool binding replay", () => {
           sessionId,
           branchId,
           toolCallId,
-          toolName: "@test/replay-tool",
+          toolName: "replay_tool",
           output: "current display",
           resultJson: encodeToolOutput({ value: "current" }),
         }),
@@ -10120,7 +10120,7 @@ describe("tool binding replay", () => {
           sessionId,
           branchId,
           toolCallId,
-          toolName: "@test/replay-tool",
+          toolName: "replay_tool",
           output: "unanchored display",
           resultJson: encodeToolOutput({ value: "unanchored" }),
         }),
@@ -10133,7 +10133,7 @@ describe("tool binding replay", () => {
         toolCalls: [
           Prompt.toolCallPart({
             id: toolCallId,
-            name: "@test/replay-tool",
+            name: "replay_tool",
             params: { value: "missing" },
             providerExecuted: false,
           }),
@@ -10165,7 +10165,7 @@ describe("tool binding replay", () => {
           parts: [
             Prompt.toolCallPart({
               id: toolCallId,
-              name: "@test/replay-tool",
+              name: "replay_tool",
               params: { value: id },
               providerExecuted: false,
             }),
@@ -10180,7 +10180,7 @@ describe("tool binding replay", () => {
           sessionId,
           branchId,
           toolCallId,
-          toolName: "@test/replay-tool",
+          toolName: "replay_tool",
           output: "current display",
           resultJson: encodeToolOutput({ value: "current" }),
         }),
@@ -10193,7 +10193,7 @@ describe("tool binding replay", () => {
           sessionId,
           branchId,
           toolCallId,
-          toolName: "@test/replay-tool",
+          toolName: "replay_tool",
           output: "later display",
           resultJson: encodeToolOutput({ value: "later" }),
         }),
@@ -10206,7 +10206,7 @@ describe("tool binding replay", () => {
         toolCalls: [
           Prompt.toolCallPart({
             id: toolCallId,
-            name: "@test/replay-tool",
+            name: "replay_tool",
             params: { value: "current" },
             providerExecuted: false,
           }),
@@ -10236,7 +10236,7 @@ describe("tool binding replay", () => {
         parts: [
           Prompt.toolCallPart({
             id: toolCallId,
-            name: "@test/replay-tool",
+            name: "replay_tool",
             params: { value: "corrupt" },
             providerExecuted: false,
           }),
@@ -10251,7 +10251,7 @@ describe("tool binding replay", () => {
           sessionId,
           branchId,
           toolCallId,
-          toolName: "@test/replay-tool",
+          toolName: "replay_tool",
           output: "display must not become authoritative",
           resultJson: "{invalid-json",
         }),
@@ -10265,7 +10265,7 @@ describe("tool binding replay", () => {
           toolCalls: [
             Prompt.toolCallPart({
               id: toolCallId,
-              name: "@test/replay-tool",
+              name: "replay_tool",
               params: { value: "corrupt" },
               providerExecuted: false,
             }),
@@ -10308,7 +10308,7 @@ describe("tool binding replay", () => {
                 const key = "same-session:same-branch:assistant:call"
                 const result = Prompt.toolResultPart({
                   id: "call",
-                  name: "@test/replay-tool",
+                  name: "replay_tool",
                   result: { value: "first-root" },
                   isFailure: false,
                   providerExecuted: false,
@@ -10335,7 +10335,7 @@ describe("tool binding replay", () => {
             const key = "shutdown-session:shutdown-branch:tool-result"
             const result = Prompt.toolResultPart({
               id: "shutdown-call",
-              name: "@test/replay-tool",
+              name: "replay_tool",
               result: "result",
               isFailure: false,
               providerExecuted: false,

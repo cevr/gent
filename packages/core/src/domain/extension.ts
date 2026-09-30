@@ -26,6 +26,7 @@ import {
   getToolId,
   getToolMetadata,
   isToolCapability,
+  isWireToolId,
   type PromptSection,
   type RequestCapability,
   type ToolCapability,
@@ -1120,6 +1121,12 @@ const checkToolDescriptions = (tools: ReadonlyArray<ToolCapability>): Option.Opt
       )
     }
     const metadata = getToolMetadata(cap)
+    // The id goes to the provider as the tool's wire name (`wireToolName`).
+    if (!isWireToolId(metadata.id)) {
+      return Option.some(
+        `tools[${i}] (${metadata.id}): tool id must be dot-separated segments of letters, digits and \`-\` joined by single \`_\`, at most 64 characters with each dot counted as two (providers take only \`[a-zA-Z0-9_-]\`)`,
+      )
+    }
     // The description is sent to the model as part of the tool schema, so a
     // blank one is as useless as a missing one.
     if (Predicate.isUndefined(cap.description) || cap.description.trim() === "") {
