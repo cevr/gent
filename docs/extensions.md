@@ -461,10 +461,11 @@ builtin).
 
 ## In-tree Examples
 
-| Extension                              | Demonstrates                                 |
-| -------------------------------------- | -------------------------------------------- |
-| `packages/extensions/src/agents.ts`    | `tool` + turn projection prompt sections     |
-| `examples/extensions/session-notes.ts` | one-file tool + slash request + state + hook |
+| Extension                              | Demonstrates                                  |
+| -------------------------------------- | --------------------------------------------- |
+| `packages/extensions/src/agents.ts`    | `tool` + turn projection prompt sections      |
+| `packages/extensions/src/mcp.ts`       | tools read at setup + a lazy process resource |
+| `examples/extensions/session-notes.ts` | one-file tool + slash request + state + hook  |
 
 ## Surface Invariants
 

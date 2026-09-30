@@ -34,6 +34,7 @@ import { WakeExtension } from "./wake.js"
 import { BtwExtension } from "./btw.js"
 import { FsToolsExtension } from "./fs-tools.js"
 import { NetworkToolsExtension } from "./network-tools.js"
+import { McpExtension } from "./mcp.js"
 import { SessionToolsExtension } from "./session-tools.js"
 import { InteractionToolsExtension } from "./interaction-tools.js"
 
@@ -79,6 +80,7 @@ export const BuiltinExtensions: ReadonlyArray<
   FsToolsExtension,
   ExecToolsExtension,
   NetworkToolsExtension,
+  McpExtension,
   DelegateExtension,
   InteractionToolsExtension,
   SessionToolsExtension,

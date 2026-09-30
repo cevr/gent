@@ -20,7 +20,14 @@ import {
 /** A catalog that selects the named host tools, hashed by their names. */
 const catalogOf = (...names: ReadonlyArray<string>) => ({
   hash: names.join(","),
-  tools: names.map((name) => ({ name, description: name, guidelines: [], parameters: {} })),
+  tools: names.map((name) => ({
+    name,
+    description: name,
+    guidelines: [],
+    parameters: {},
+    signature: "",
+    summary: "",
+  })),
 })
 
 /** An uncaught error with no known origin, raised when no built-in was changed. */
@@ -244,7 +251,16 @@ describe("cell worker", () => {
           source: "tools('read').description",
           catalog: {
             hash: "a",
-            tools: [{ name: "read", description: "Read a file", guidelines: [], parameters: {} }],
+            tools: [
+              {
+                name: "read",
+                description: "Read a file",
+                guidelines: [],
+                parameters: {},
+                signature: "",
+                summary: "",
+              },
+            ],
           },
         }),
       )
@@ -270,7 +286,16 @@ describe("cell worker", () => {
           source: "Object.keys(tools).join(',')",
           catalog: {
             hash: "b",
-            tools: [{ name: "write", description: "Write a file", guidelines: [], parameters: {} }],
+            tools: [
+              {
+                name: "write",
+                description: "Write a file",
+                guidelines: [],
+                parameters: {},
+                signature: "",
+                summary: "",
+              },
+            ],
           },
         }),
       )
@@ -647,8 +672,17 @@ describe("Bun cell evaluation", () => {
           description: "Read a file",
           guidelines: ["Prefer read over bash"],
           parameters: { type: "object", properties: { path: { type: "string" } } },
+          signature: "tools.read(input: { path?: string }): Promise<unknown> // Read a file",
+          summary: "Read a file",
         },
-        { name: "write", description: "Write a file", guidelines: [], parameters: {} },
+        {
+          name: "write",
+          description: "Write a file",
+          guidelines: [],
+          parameters: {},
+          signature: "tools.write(input?: {}): Promise<unknown> // Write a file",
+          summary: "Write a file",
+        },
       ])
       const described = yield* kernel.evaluate(
         "const spec = tools('read'); `${spec.parameters.properties.path.type}:${spec.guidelines[0]}`",
@@ -656,6 +690,16 @@ describe("Bun cell evaluation", () => {
       expect(described.display).toBe("string:Prefer read over bash")
       const missing = yield* kernel.evaluate("tools('bash')").pipe(Effect.flip)
       expect(missing.message).toContain("tools.bash is not a host tool selected for this turn")
+      const signature = yield* kernel.evaluate("tools.describe('read')")
+      expect(signature.display).toBe(
+        "tools.read(input: { path?: string }): Promise<unknown> // Read a file",
+      )
+      const found = yield* kernel.evaluate("JSON.stringify(tools.search('file read'))")
+      expect(found.display).toBe(
+        '[{"id":"read","description":"Read a file"},{"id":"write","description":"Write a file"}]',
+      )
+      const unknownDescribe = yield* kernel.evaluate("tools.describe('bash')").pipe(Effect.flip)
+      expect(unknownDescribe.message).toContain("tools.bash is not a host tool")
       // Catalog reads are worker-local and never become host operations.
       expect(yield* Ref.get(calls)).toBe(0)
       // A reset clears the bindings, not the catalog.
@@ -774,7 +818,7 @@ describe("Bun cell evaluation", () => {
   )
 
   it.scopedLive(
-    "tools named describe are ordinary paths; tools(id) returns the catalog entry",
+    "tools named like a discovery key are reached by tools(id), which returns the catalog entry",
     () =>
       Effect.gen(function* () {
         const sent = yield* Ref.make<ReadonlyArray<string>>([])
@@ -782,9 +826,19 @@ describe("Bun cell evaluation", () => {
           { call: (name) => Ref.update(sent, (seen) => [...seen, name]).pipe(Effect.as(0)) },
           "describe",
           "describe.run",
+          "search",
+          "fs.search",
         )
-        yield* kernel.evaluate("await tools.describe({}); await tools.describe.run({})")
-        expect(yield* Ref.get(sent)).toEqual(["describe", "describe.run"])
+        yield* kernel.evaluate(
+          "await tools('describe')({}); await tools('describe.run')({}); await tools('search')({}); await tools.fs.search({})",
+        )
+        expect(yield* Ref.get(sent)).toEqual(["describe", "describe.run", "search", "fs.search"])
+        // The root keys stay discovery functions and never call the colliding tools.
+        const discovery = yield* kernel.evaluate(
+          "[typeof tools.search, typeof tools.describe, Object.keys(tools).join(',')]",
+        )
+        expect(discovery.display).toBe("[ 'function', 'function', 'fs' ]")
+        expect(yield* Ref.get(sent)).toHaveLength(4)
         const entry = yield* kernel.evaluate(
           "const spec = tools('describe.run'); [spec.id, spec.description, typeof spec.parameters]",
         )
