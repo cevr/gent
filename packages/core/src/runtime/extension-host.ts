@@ -56,6 +56,7 @@ import {
   sortExtensionsByScope,
   type SystemPromptInput,
   type ToolPolicyFragment,
+  type SessionDeletedInput,
   type TurnAfterInput,
   validateExtensionPackage,
 } from "../domain/extension.js"
@@ -298,6 +299,9 @@ interface CompiledExtensionHooks {
     readNotices: ReadonlyMap<ExtensionId, ReadonlySet<string>>,
   ) => Effect.Effect<void, never, CurrentExtensionHostContext>
   readonly emitLoopOpen: Effect.Effect<void, never, CurrentExtensionHostContext>
+  readonly emitSessionDeleted: (
+    input: SessionDeletedInput,
+  ) => Effect.Effect<void, never, CurrentExtensionHostContext>
 }
 
 /** A notice with the extension whose projection returned it. */
@@ -412,6 +416,7 @@ const collectHookSlot = (
     turnProjection: HookTurnProjectionSlot[]
     turnAfter: RegisteredHook<TurnAfterInput>[]
     loopOpen: RegisteredHook<void>[]
+    sessionDeleted: RegisteredHook<SessionDeletedInput>[]
   },
 ) => {
   switch (slot.kind) {
@@ -436,6 +441,12 @@ const collectHookSlot = (
         handler: slot.hook.handler,
       })
       return
+    case "sessionDeleted":
+      slots.sessionDeleted.push({
+        extensionId: ext.manifest.id,
+        handler: slot.hook.handler,
+      })
+      return
   }
 }
 
@@ -447,11 +458,13 @@ export const compileExtensionHooks = (
   const turnProjectionSlots: HookTurnProjectionSlot[] = []
   const turnAfterSlots: RegisteredHook<TurnAfterInput>[] = []
   const loopOpenSlots: RegisteredHook<void>[] = []
+  const sessionDeletedSlots: RegisteredHook<SessionDeletedInput>[] = []
   const hookSlots = {
     systemPrompt: systemPromptSlots,
     turnProjection: turnProjectionSlots,
     turnAfter: turnAfterSlots,
     loopOpen: loopOpenSlots,
+    sessionDeleted: sessionDeletedSlots,
   }
 
   for (const ext of sorted) {
@@ -533,6 +546,13 @@ export const compileExtensionHooks = (
       concurrency: Math.max(loopOpenSlots.length, 1),
       discard: true,
     }),
+
+    // Each extension removes its own data, so no handler waits for another.
+    emitSessionDeleted: (input) =>
+      Effect.forEach(sessionDeletedSlots, (slot) => runHook(input, slot), {
+        concurrency: Math.max(sessionDeletedSlots.length, 1),
+        discard: true,
+      }),
   }
 }
 

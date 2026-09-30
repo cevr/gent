@@ -428,8 +428,9 @@ export interface TurnUsage {
 // ── Lifecycle hooks ──
 //
 // Per-extension, per-session handlers run by the runtime at the prompt and
-// turn seams, and once when a branch's loop opens in this process
-// (`loopOpen`). Registered with `host.on(kind, handler)` inside `setup`.
+// turn seams, once when a branch's loop opens in this process (`loopOpen`),
+// and once when a session is deleted (`sessionDeleted`). Registered with
+// `host.on(kind, handler)` inside `setup`.
 // Failures are always isolated: the runtime logs a warning and lets later hooks
 // still fire.
 
@@ -451,6 +452,20 @@ interface ExtensionHookSignatures {
    * No user watches it, so it cannot ask.
    */
   readonly loopOpen: { readonly input: void; readonly output: void }
+  /**
+   * A session was deleted, with the descendants its delete removed. It runs
+   * once, after the rows are gone, with every deleted id in `sessionIds`.
+   * A handler removes what the extension keeps for those sessions outside the
+   * database. `ExtensionContext` names the deleted session, under the profile
+   * of its cwd; its session verbs find no session. No user watches it, so it
+   * cannot ask. The delete waits for every handler.
+   */
+  readonly sessionDeleted: { readonly input: SessionDeletedInput; readonly output: void }
+}
+
+/** The sessions one delete removed: the deleted session and its descendants. */
+export interface SessionDeletedInput {
+  readonly sessionIds: ReadonlyArray<SessionId>
 }
 
 type ExtensionHookKind = keyof ExtensionHookSignatures
@@ -692,6 +707,8 @@ const replayHook = (host: ExtensionHostService, slot: AnyExtensionHook): Effect.
     case "turnAfter":
       return host.on(slot.kind, slot.hook.handler)
     case "loopOpen":
+      return host.on(slot.kind, slot.hook.handler)
+    case "sessionDeleted":
       return host.on(slot.kind, slot.hook.handler)
   }
 }

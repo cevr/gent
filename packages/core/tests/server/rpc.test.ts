@@ -4994,6 +4994,63 @@ export default defineExtension({
   )
 })
 
+// ── session deletion hooks ──────────────────────────────────────────────────
+
+describe("sessionDeleted hook", () => {
+  it.live(
+    "an extension hears every session a delete removed, once, beside another's failing hook",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const heard: Array<{
+            readonly sessionIds: ReadonlyArray<SessionId>
+            readonly contextSessionId: SessionId
+          }> = []
+          const listener: GentExtension = {
+            manifest: { id: ExtensionId.make("@test/session-deleted-listener") },
+            setup: Effect.gen(function* () {
+              const host = yield* ExtensionHost
+              yield* host.on("sessionDeleted", ({ sessionIds }) =>
+                Effect.gen(function* () {
+                  const ctx = yield* ExtensionContext
+                  heard.push({ sessionIds, contextSessionId: ctx.sessionId })
+                }),
+              )
+            }),
+          }
+          const failing: GentExtension = {
+            manifest: { id: ExtensionId.make("@test/session-deleted-failing") },
+            setup: Effect.gen(function* () {
+              const host = yield* ExtensionHost
+              yield* host.on("sessionDeleted", () => Effect.fail("cannot clean up"))
+            }),
+          }
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            extensionInputs: [...e2ePreset.extensionInputs, failing, listener],
+          })
+          const child = yield* client.session.create({
+            parentSessionId: sessionId,
+            parentBranchId: branchId,
+          })
+          const bystander = yield* client.session.create({})
+
+          yield* client.session.delete({ sessionId })
+
+          // The delete returns after the hooks ran, with the rows gone.
+          expect(heard).toHaveLength(1)
+          expect(new Set(heard[0]?.sessionIds)).toEqual(new Set([sessionId, child.sessionId]))
+          expect(heard[0]?.contextSessionId).toBe(sessionId)
+          expect(yield* client.session.get({ sessionId })).toBeNull()
+          expect(yield* client.session.get({ sessionId: child.sessionId })).toBeNull()
+          expect(yield* client.session.get({ sessionId: bystander.sessionId })).not.toBeNull()
+        }).pipe(Effect.timeout("4 seconds")),
+      ),
+  )
+})
+
 // ── namespaced client ───────────────────────────────────────────────────────
 
 describe("namespaced client", () => {

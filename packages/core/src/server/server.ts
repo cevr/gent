@@ -125,13 +125,17 @@ import {
   configHealthStatuses,
   ExtensionRegistry,
   type ExtensionRegistryService,
+  makeExtensionHostContextProvider,
+  makeExtensionHostPlatform,
   type ModelCatalogFailure,
   resolveExistingSessionBranch,
+  resolveTurnProfile,
+  RunOpener,
   SessionProfileCache,
 } from "../runtime/extension-host.js"
 import type { AgentName } from "../domain/agent.js"
 import { foldSessionMetrics, type SendUserMessagePayload } from "../domain/agent-loop.js"
-import { resolveSessionRoute } from "../runtime/turn.js"
+import { resolveSessionRoute, runAgentLoopTurnProfile, turnRegistry } from "../runtime/turn.js"
 import { WideEvent, WideEventBoundary, withWideEvent } from "effect-wide-event"
 
 import { omitUndefined } from "../domain/guards.js"
@@ -342,6 +346,7 @@ const makeSessionMutationsService: Effect.Effect<
   | AgentLoopSessionGovernance
   | GentPlatform
   | ExtensionRegistry
+  | RuntimeEnvironment
 > = Effect.gen(function* () {
   const storageTransaction = yield* makeStorageTransaction
   const sessionStorage = yield* SessionStorage
@@ -461,9 +466,40 @@ const makeSessionMutationsService: Effect.Effect<
   const forgetDeletedSessionRuntimeStateForMutation = (sessionId: SessionId) =>
     eventStore.removeSession(sessionId)
 
+  // The host context the `sessionDeleted` hooks run under. No loop owns a
+  // deleted session, so no session control is wired.
+  const deletedSessionHostProvider = yield* makeExtensionHostContextProvider({
+    host: yield* makeExtensionHostPlatform,
+  })
+
+  /**
+   * The profile of a session's cwd, resolved while its rows still exist, for
+   * the hooks that run once they are gone. None when the session has no
+   * branch (it does not exist). The caller's scope holds the profile's lease.
+   */
+  const deletedSessionProfile = Effect.fn("SessionMutations.deletedSessionProfile")(function* (
+    sessionId: SessionId,
+  ) {
+    const branch = (yield* branchStorage.listBranches(sessionId))[0]
+    if (Predicate.isUndefined(branch)) return Option.none()
+    const profile = yield* resolveTurnProfile({
+      sessionId,
+      branchId: branch.id,
+      profileCache: Option.getOrUndefined(profileCache),
+      hostProvider: deletedSessionHostProvider,
+      defaults: { baseSections: [] },
+      opener: RunOpener.cases.Turn.make({ openedByClient: false }),
+    }).pipe(
+      Effect.provideService(ExtensionRegistry, launchRegistry),
+      Effect.provideService(SessionStorage, sessionStorage),
+    )
+    return Option.some(profile)
+  })
+
   const deleteSessionCascade = Effect.fn("SessionMutations.deleteSessionCascade")(function* (
     sessionId: SessionId,
   ) {
+    const profile = yield* deletedSessionProfile(sessionId)
     // Pre-collect is the best effort set we can tombstone BEFORE the durable
     // delete — so their runtimes stop accepting work while the tx runs. The
     // durable delete returns the authoritative set (the same rows the cascade
@@ -493,7 +529,18 @@ const makeSessionMutationsService: Effect.Effect<
         ),
       { discard: true },
     )
-  })
+    // The extensions hear the authoritative set once, under the deleted
+    // session's profile; each handler's failure is logged and isolated.
+    if (cascadedIds.length === 0) return
+    yield* Option.match(profile, {
+      onNone: () => Effect.void,
+      onSome: (resolved) =>
+        turnRegistry(resolved)
+          .getResolved()
+          .extensionHooks.emitSessionDeleted({ sessionIds: cascadedIds })
+          .pipe(runAgentLoopTurnProfile(resolved)),
+    })
+  }, Effect.scoped)
 
   const sendInitialPrompt = Effect.fn("SessionMutations.sendInitialPrompt")(function* (
     operation: StoredCreateSessionResult,

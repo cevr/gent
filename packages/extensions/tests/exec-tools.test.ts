@@ -1682,6 +1682,56 @@ describe("foreground command output", () => {
 
 describe("background bash after session deletion", () => {
   it.scopedLive.layer(BunFileSystem.layer)(
+    "a deleted session's output files go with it; another session's stay",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-fg-deleted-" })
+        const toolCallId = ToolCallId.make("fg-deleted-call")
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          // Past what a result keeps whole, so the output spills to its file.
+          toolCallStep(
+            "bash",
+            { command: "head -c 600000 /dev/zero | tr '\\0' x" },
+            { toolCallId },
+          ),
+          textStep("spilled"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+          cwd: directory,
+          extraLayers: [RuntimeEnvironment.Live({ cwd: directory, home: directory })],
+        })
+        const sessionFiles = `${directory}/.gent/background-bash/${sessionId}`
+        const file = `${sessionFiles}/${branchId}/${toolCallId}.txt`
+        const other = `${directory}/.gent/background-bash/other-session/branch/call.txt`
+        yield* fs.makeDirectory(`${directory}/.gent/background-bash/other-session/branch`, {
+          recursive: true,
+        })
+        yield* fs.writeFileString(other, "kept")
+        yield* client.message.send({ sessionId, branchId, content: "run the command" })
+        yield* waitFor(
+          client.session.getSnapshot({ sessionId, branchId }),
+          (snapshot) =>
+            snapshot.runtime._tag === "Idle" &&
+            snapshot.messages.some((message) =>
+              message.parts.some((part) => part.type === "text" && part.text === "spilled"),
+            ),
+          10_000,
+          "the spilled result",
+        )
+        expect(yield* fs.exists(file)).toBe(true)
+
+        yield* client.session.delete({ sessionId })
+
+        expect(yield* fs.exists(sessionFiles)).toBe(false)
+        expect(yield* fs.readFileString(other)).toBe("kept")
+      }).pipe(Effect.timeout("15 seconds")),
+    20_000,
+  )
+
+  it.scopedLive.layer(BunFileSystem.layer)(
     "a completion that lands after the session is deleted starts no turn",
     () =>
       Effect.gen(function* () {
