@@ -1040,9 +1040,9 @@ describe("recorded cell execution", () => {
     )
   }
 
-  // A built-in the worker cannot put back retires the worker. The snapshot
-  // after a good cell then fails, and the next cell once failed with "reset
-  // before evaluating" instead of restoring the namespace saved before it.
+  // A built-in the worker cannot put back retires the worker. The cell's
+  // result keeps the worker's one note, the host saves nothing after it, and
+  // the next cell restores the namespace saved before it.
   const stuckBuiltins: ReadonlyArray<{
     readonly name: string
     readonly source: string
@@ -1090,6 +1090,14 @@ describe("recorded cell execution", () => {
               "Built-ins the cell changed that cannot be put back: Map.prototype.stuck. The host replaces this worker",
             ),
           )
+          // The worker's note is the one note: it shows once, and no second
+          // note asks for a reset.
+          expect(changed).toHaveProperty(
+            stuck.reply,
+            expect.not.stringMatching(/cannot be put back[\s\S]*cannot be put back/),
+          )
+          expect(changed).toHaveProperty(stuck.reply, expect.not.stringContaining("not saved"))
+          expect(changed).toHaveProperty(stuck.reply, expect.not.stringContaining("reset"))
           expect((yield* run(after)).result).toMatchObject({
             display: "7",
             restored: { restored: ["kept"], omitted: [] },

@@ -2510,6 +2510,13 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
               Effect.gen(function* () {
                 yield* prepare(current, admission.reset === true)
                 const value = yield* current.evaluate(admission.code)
+                // A worker that named a built-in it cannot put back is gone,
+                // and its note already says the next cell restores the
+                // namespace saved before this one: nothing is left to save.
+                if (current.isLost()) {
+                  recoveryPending = true
+                  return evaluated(value)
+                }
                 const lost = yield* saveNamespace(current)
                 return evaluated(withNote(value, lost))
               }),
