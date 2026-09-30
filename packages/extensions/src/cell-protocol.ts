@@ -105,12 +105,23 @@ export const reservedToolSegments: ReadonlySet<string> = new Set([
 ])
 
 /**
+ * Root keys of `tools` that are discovery functions, not tool paths:
+ * `tools.search(query)` and `tools.describe(id)`. An id whose first segment is
+ * one of them is reached through `tools(id)`; deeper segments stay paths.
+ */
+export const toolDiscoveryKeys: ReadonlySet<string> = new Set(["search", "describe"])
+
+/**
  * The source a model writes to reach `id`: `tools.delegate.start`,
- * `tools["must-not-run"]`, or `tools("read.then")` when a segment is reserved.
+ * `tools["must-not-run"]`, or `tools("read.then")` when a segment is reserved
+ * or the first segment is a discovery key.
  */
 export const toolPath = (id: string): string => {
   const segments = id.split(".")
-  if (segments.some((segment) => reservedToolSegments.has(segment))) {
+  if (
+    toolDiscoveryKeys.has(segments[0] ?? "") ||
+    segments.some((segment) => reservedToolSegments.has(segment))
+  ) {
     return `tools(${encodeSegment(id)})`
   }
   return segments
@@ -127,6 +138,10 @@ export const CellCatalogEntry = Schema.Struct({
   description: Schema.String,
   guidelines: Schema.Array(Schema.String),
   parameters: Schema.Json,
+  /** The typed call line the host renders, which `tools.describe(id)` returns. */
+  signature: Schema.String,
+  /** The description's first line, which `tools.search(query)` returns. */
+  summary: Schema.String,
 })
 export type CellCatalogEntry = typeof CellCatalogEntry.Type
 

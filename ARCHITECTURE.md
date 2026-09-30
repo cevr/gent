@@ -1115,11 +1115,19 @@ with one signature line per selected host tool: its callable path, an input
 type and a result type rendered from the JSON Schema, and the first line of its
 prompt snippet or description (`- tools.wake.cancel(input?: { wakeId?:
 string }): Promise<{ cancelled: string[] }> // Cancel a pending alarm ...`). Nested objects
-inline while short and otherwise render as `object`. The section is rebuilt
-each turn, so live composition changes reach the model as ordinary instruction
-changes. `cell.ts` builds the data half from the same selected map: name,
-description, guidelines, and the actual Effect AI input schema, hashed over its
-encoding. `dispatchCell` hands it to the cell host; the kernel sends it inside
+inline while short and otherwise render as `object`. The signature lines take
+at most `HOST_TOOL_CATALOG_BUDGET` (8,000) characters (`renderHostToolCatalog`).
+A top-level id (read, edit, write, bash, grep, ...) is a host tool the model
+calls most, so it lists first; then each namespace (a dotted id's parent path,
+`mcp.github` for `mcp.github.search`) lists whole, in id order, while it fits.
+A namespace past the budget collapses to `- tools.mcp.github.*: 42 tools (a, b,
+…)`, and top-level ids past it share one `- more tools:` line. The text depends
+only on the tool set, so the cached prompt prefix stays byte-stable while the
+set does. The section is rebuilt each turn, so live composition changes reach
+the model as ordinary instruction changes. `cell.ts` builds the data half from
+the same selected map: name, description, guidelines, the actual Effect AI
+input schema, the rendered signature line, and its one-line summary, hashed
+over its encoding. `dispatchCell` hands it to the cell host; the kernel sends it inside
 `Evaluate` only when the hash differs from what the current worker holds, and
 clears that memory when a replacement worker starts, so the first cell on a new
 worker carries the full catalog. The worker keeps the catalog beside the
@@ -1140,7 +1148,13 @@ never call one. `tools(id)` is the one lookup by string: a local synchronous
 read that returns the tool as a function carrying its catalog entry (`id`,
 `description`, `guidelines`, `parameters`). It reaches an id with a reserved
 segment, which the prompt renders as `tools("read.then")(input)`; it records
-no operation receipt and grants no execution permission. A call with no
+no operation receipt and grants no execution permission. The root also holds
+two discovery functions (`toolDiscoveryKeys`): `tools.search(query)` returns
+`{ id, description }[]` for the ids whose id or description holds a query
+word, and `tools.describe(id)` returns the rendered signature line. They are
+local like `tools(id)`, and their results arrive as cell output, so discovery
+never changes the prompt. An id whose first segment is `search` or `describe`
+renders and is reached as `tools("search.x")`. A call with no
 argument sends `{}`; the signature marks `input?` only when the schema accepts
 `{}`. Enums past eight literals, and input or result types past 300 characters,
 render as their outer shape; a test holds every shipped tool's result under

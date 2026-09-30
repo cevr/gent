@@ -18,6 +18,7 @@ import { types } from "node:util"
 import {
   type CellCatalogEntry,
   reservedToolSegments,
+  toolDiscoveryKeys,
   toolPath,
   CellEvaluation,
   CellEvaluationError,
@@ -103,10 +104,32 @@ const nodeTarget = (path: string) =>
 type ToolNode = ReturnType<typeof nodeTarget>
 
 interface ToolCatalogView {
+  readonly entries: () => ReadonlyArray<CellCatalogEntry>
   readonly ids: () => ReadonlyArray<string>
   readonly describe: (id: string) => Option.Option<CellCatalogEntry>
   // oxlint-disable-next-line effect/noUnknownParameters -- model code passes any JavaScript value to the tool namespace
   readonly call: (id: string, input: unknown) => Promise<Schema.Json>
+}
+
+/**
+ * `tools.search(query)`: the ids whose id or description holds a query word,
+ * most words matched first, then by id. An empty query lists every id.
+ */
+const searchCatalog = (entries: ReadonlyArray<CellCatalogEntry>, query: string) => {
+  const words = query
+    .toLowerCase()
+    .split(/[^a-z0-9_]+/)
+    .filter((word) => word !== "")
+  return entries
+    .map((entry) => {
+      const text = `${entry.name} ${entry.description}`.toLowerCase()
+      return { entry, score: words.filter((word) => text.includes(word)).length }
+    })
+    .filter((match) => words.length === 0 || match.score > 0)
+    .toSorted(
+      (left, right) => right.score - left.score || left.entry.name.localeCompare(right.entry.name),
+    )
+    .map((match) => ({ id: match.entry.name, description: match.entry.summary }))
 }
 
 /** A call with no argument sends an empty input, as `tools.delegate.list()` reads; `null` stays `null`. */
@@ -132,17 +155,24 @@ const isToolKey = (key: string | symbol): key is string =>
  * `tools(id)` is the one lookup by string: it returns the tool as a function
  * that carries its catalog entry (`id`, `description`, `guidelines`,
  * `parameters`), and reaches an id whose segment is reserved.
+ *
+ * The root also holds the discovery functions: `tools.search(query)` returns
+ * `{ id, description }[]`, and `tools.describe(id)` returns the tool's typed
+ * signature. Every id in the catalog is callable, listed in the prompt or not.
  */
 const makeToolNamespace = (catalog: ToolCatalogView): ToolNode => {
   const nodes = new Map<string, ToolNode>()
   const isPrefix = (path: string) =>
     catalog.ids().some((id) => id === path || id.startsWith(`${path}.`))
+  /** A root key that is a discovery function is never a tool path. */
+  const isPathKey = (path: string, key: string | symbol): key is string =>
+    isToolKey(key) && !(path === "" && toolDiscoveryKeys.has(key))
   const children = (path: string) => {
     const names = catalog
       .ids()
       .filter((id) => path === "" || id.startsWith(`${path}.`))
       .map((id) => id.slice(path.length).replace(/^\./, "").split(".")[0] ?? "")
-      .filter(isToolKey)
+      .filter((key) => isPathKey(path, key))
     return [...new Set(names)].toSorted()
   }
   const unknown = (path: string) =>
@@ -160,23 +190,36 @@ const makeToolNamespace = (catalog: ToolCatalogView): ToolNode => {
       parameters: entry.parameters,
     })
   }
+  // Model code may pass any value; `String` reads it as the query or id it names.
+  const discovery = {
+    search: (query = "") => searchCatalog(catalog.entries(), String(query)),
+    describe: (id: string) =>
+      Option.getOrThrowWith(
+        Option.map(catalog.describe(String(id)), (entry) => entry.signature),
+        () => unknown(String(id)),
+      ),
+  }
+  const isDiscoveryKey = (path: string, key: string | symbol): key is keyof typeof discovery =>
+    path === "" && Predicate.isString(key) && toolDiscoveryKeys.has(key)
   const node = (path: string): ToolNode => {
     const existing = nodes.get(path)
     if (Predicate.isNotUndefined(existing)) return existing
     const handler: ProxyHandler<ToolNode> = {
       get: (target, key, receiver) => {
-        if (!isToolKey(key)) return Reflect.get(target, key, receiver)
+        if (isDiscoveryKey(path, key)) return discovery[key]
+        if (!isPathKey(path, key)) return Reflect.get(target, key, receiver)
         if (isPrefix(childPath(path, key))) return node(childPath(path, key))
         // oxlint-disable-next-line effect/noThrowStatement -- a thrown Error is the cell's failure contract inside model code
         throw unknown(childPath(path, key))
       },
       has: (target, key) => {
-        if (!isToolKey(key)) return Reflect.has(target, key)
+        if (isDiscoveryKey(path, key)) return true
+        if (!isPathKey(path, key)) return Reflect.has(target, key)
         return isPrefix(childPath(path, key))
       },
       ownKeys: () => children(path),
       getOwnPropertyDescriptor: (target, key) => {
-        if (isToolKey(key) && isPrefix(childPath(path, key))) {
+        if (isPathKey(path, key) && isPrefix(childPath(path, key))) {
           const value = node(childPath(path, key))
           return { value, enumerable: true, configurable: true, writable: false }
         }
@@ -564,6 +607,7 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
   // so a changed catalog changes the callable paths without rebuilding anything.
   let catalog: ReadonlyArray<CellCatalogEntry> = []
   const toolsNamespace = makeToolNamespace({
+    entries: () => catalog,
     ids: () => catalog.map((entry) => entry.name),
     describe: (id) =>
       Option.map(

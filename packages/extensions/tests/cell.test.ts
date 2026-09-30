@@ -1,4 +1,4 @@
-import { describe, expect, it } from "effect-bun-test"
+import { describe, expect, it, test } from "effect-bun-test"
 import {
   Cause,
   Clock,
@@ -121,6 +121,8 @@ import {
   openCellProcess,
   pageText,
   recoverCellExecution,
+  renderHostToolCatalog,
+  HOST_TOOL_CATALOG_BUDGET,
   renderToolSignature,
   resumeCellToolOperation,
 } from "../src/cell.js"
@@ -244,7 +246,14 @@ const unusedWorker = CellWorker.cases.Script.make({
 /** A catalog that selects the named host tools, hashed by their names. */
 const hostCatalog = (...names: ReadonlyArray<string>) => ({
   hash: names.join(","),
-  tools: names.map((name) => ({ name, description: name, guidelines: [], parameters: {} })),
+  tools: names.map((name) => ({
+    name,
+    description: name,
+    guidelines: [],
+    parameters: {},
+    signature: "",
+    summary: "",
+  })),
 })
 
 /** The session a handoff continues: the test session joins its thread. */
@@ -2316,7 +2325,16 @@ describe("cell worker process", () => {
         })
         const catalog = {
           hash: "read-v1",
-          tools: [{ name: "read", description: "Read a file", guidelines: [], parameters: {} }],
+          tools: [
+            {
+              name: "read",
+              description: "Read a file",
+              guidelines: [],
+              parameters: {},
+              signature: "",
+              summary: "",
+            },
+          ],
         }
         const host = CellOperationHost.of({ catalog, call: () => Effect.succeed(true) })
         const describe = "tools('read').description"
@@ -6692,6 +6710,14 @@ const collidingId = tool({
   execute: () => Effect.succeed(true),
 })
 
+const discoveryId = tool({
+  id: "search.issues",
+  description: "A namespace named like a discovery key.",
+  params: Schema.Struct({ query: Schema.String }),
+  output: Schema.Boolean,
+  execute: () => Effect.succeed(true),
+})
+
 class ClassResult extends Schema.Class<ClassResult>("ClassResult")({
   ok: Schema.Boolean,
   items: Schema.Array(Schema.String),
@@ -6786,6 +6812,10 @@ const edgeSignatures: ReadonlyArray<readonly [ToolCapability, string]> = [
     '- tools("read.then")(input: { path: string }): Promise<boolean> // A segment JavaScript probes.',
   ],
   [
+    discoveryId,
+    '- tools("search.issues")(input: { query: string }): Promise<boolean> // A namespace named like a discovery key.',
+  ],
+  [
     classResult,
     '- tools["class-result"](input?: { nested?: { ok: boolean; items: string[] } }): Promise<{ ok: boolean; items: string[] }> // Returns a class.',
   ],
@@ -6868,6 +6898,140 @@ describe("tool signature edges", () => {
       }),
     )
   }
+})
+
+// ── host tool catalog budget ────────────────────────────────────────────────
+
+/** A server-sized namespace: 100 tools under `mcp.fixture`. */
+const fixtureNamespaceTools = Array.from({ length: 100 }, (_, index) => {
+  const name = `tool_${String(index).padStart(3, "0")}`
+  return tool({
+    id: `mcp.fixture.${name}`,
+    description: `Fixture operation ${name} that returns its own name for the catalog budget test.`,
+    params: Schema.Struct({ query: Schema.String, limit: Schema.optional(Schema.Finite) }),
+    output: Schema.Struct({ echoed: Schema.String }),
+    execute: () => Effect.succeed({ echoed: name }),
+  })
+})
+
+const fixtureNamespace = defineExtension({
+  id: "@test/fixture-namespace",
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* Effect.forEach(fixtureNamespaceTools, (capability) => host.register("tool", capability))
+  }),
+})
+
+const catalogLine = (id: string, length: number) => ({
+  id,
+  line: `- ${`tools.${id}`.padEnd(length - 2, "x")}`,
+})
+
+describe("host tool catalog budget", () => {
+  test("a catalog over budget collapses a namespace and keeps the top-level tools whole", () => {
+    const big = Array.from({ length: 40 }, (_, index) =>
+      catalogLine(`mcp.big.op_${String(index).padStart(2, "0")}`, 300),
+    )
+    const rendered = renderHostToolCatalog([
+      catalogLine("read", 200),
+      catalogLine("bash", 200),
+      catalogLine("wake.cancel", 100),
+      ...big,
+    ])
+    const lines = rendered.split("\n")
+    expect(lines.map((line) => line.slice(0, 22))).toEqual([
+      "- tools.bashxxxxxxxxxx",
+      "- tools.mcp.big.*: 40 ",
+      "- tools.readxxxxxxxxxx",
+      "- tools.wake.cancelxxx",
+    ])
+    expect(lines[1]).toContain("(op_00, op_01, op_02")
+    expect(lines[1]?.endsWith("…)")).toBe(true)
+    expect(rendered.length).toBeLessThanOrEqual(HOST_TOOL_CATALOG_BUDGET)
+    // Under the budget every line lists, and the order is by id.
+    expect(renderHostToolCatalog(big.slice(0, 3)).split("\n")).toEqual(
+      big.slice(0, 3).map((entry) => entry.line),
+    )
+  })
+
+  test("top-level tools past the budget share one line", () => {
+    const many = Array.from({ length: 50 }, (_, index) =>
+      catalogLine(`t${String(index).padStart(2, "0")}`, 200),
+    )
+    const lines = renderHostToolCatalog(many).split("\n")
+    expect(lines.at(-1)).toMatch(/^- more tools: t\d\d, /)
+    expect(lines.length).toBeLessThan(many.length)
+  })
+
+  it.scopedLive(
+    "a 100-tool namespace collapses in a stable prompt, and the cell searches, describes, and calls its tools",
+    () =>
+      Effect.gen(function* () {
+        const systems: Array<string> = []
+        const recordSystem = (step: SequenceStep): SequenceStep => ({
+          ...step,
+          assertOptions: (options) => {
+            systems.push(
+              options.prompt.content
+                .filter((message) => message.role === "system")
+                .map((message) => String(message.content))
+                .join("\n"),
+            )
+          },
+        })
+        const code = [
+          "const found = tools.search('tool_042').map((entry) => entry.id)",
+          "const signature = tools.describe('mcp.fixture.tool_007')",
+          "const called = await tools.mcp.fixture.tool_003({ query: 'x' })",
+          "JSON.stringify({ found, signature, called })",
+        ].join("; ")
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          recordSystem(toolCallStep("cell", { code })),
+          recordSystem(textStep("done")),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...shippedPreset,
+          extensionInputs: [...shippedPreset.extensionInputs, fixtureNamespace],
+          providerLayer,
+        })
+        yield* client.message.send({ sessionId, branchId, content: "use the fixture" })
+        const messages = yield* waitFor(
+          client.message.list({ branchId }),
+          (all) =>
+            all.some(
+              (message) =>
+                message.role === "assistant" && messagePartsText(message.parts) === "done",
+            ),
+          10_000,
+          "assistant reply done",
+        )
+        const result = messages
+          .flatMap((message) => message.parts)
+          .find((part): part is Prompt.ToolResultPart => part.type === "tool-result")
+        expect(result).toMatchObject({
+          name: "cell",
+          isFailure: false,
+          result: {
+            display: encodeJson({
+              found: ["mcp.fixture.tool_042"],
+              signature:
+                "tools.mcp.fixture.tool_007(input: { query: string; limit?: number }): Promise<{ echoed: string }> // Fixture operation tool_007 that returns its own name for the catalog budget test.",
+              called: { echoed: "tool_003" },
+            }),
+          },
+        })
+        // The listing collapses the namespace, keeps the shipped tools, and
+        // is the same text on every step of the turn.
+        expect(systems).toHaveLength(2)
+        expect(systems[1]).toBe(systems[0])
+        const system = systems[0] ?? ""
+        expect(system).toContain("- tools.mcp.fixture.*: 100 tools (tool_000, tool_001")
+        expect(system).not.toContain("tools.mcp.fixture.tool_003(")
+        expect(system).toContain("- tools.read(input: { path: string")
+        expect(system).toContain("`tools.search(query)`")
+      }).pipe(Effect.timeout("15 seconds"), Effect.provide(platformLayer)),
+    20000,
+  )
 })
 
 describe("tool signatures", () => {
