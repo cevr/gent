@@ -243,7 +243,7 @@ Special prefixes at input start trigger different modes:
 
 - Type `!` at cursor position 0 → enters shell mode (prompt: `$`)
 - Submit executes command, output shown in chat
-- ESC or backspace at empty input exits shell mode; ESC on a shell draft arms its clear (see Keys)
+- ESC at an empty shell draft, or Backspace at the draft's start (it stands for deleting the `!`), exits shell mode; Backspace elsewhere edits the command; ESC on a shell draft arms its clear (see Keys)
 - Runs in the session's cwd; a spawn failure (the cwd is gone) is a refused submission (below)
 
 ### Refused submissions

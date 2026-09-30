@@ -1679,6 +1679,27 @@ describe("App auth gate", () => {
       expect(view.shutdowns()).toBe(0)
     }).pipe(Effect.timeout("10 seconds")),
   )
+  // The `!` is not in the draft: Backspace leaves shell mode only at the
+  // draft's start, where it stands for deleting the `!`. Anywhere else it
+  // deletes a character of the command.
+  it.live("Backspace in shell mode edits the command and leaves only at its start", () =>
+    Effect.gen(function* () {
+      const view = yield* mountIdleSession()
+      yield* Effect.promise(() => view.setup.mockInput.typeText("!l"))
+      yield* waitForFrame(view.setup, (frame) => frame.includes("┃ $ l"), "the shell draft")
+      view.setup.mockInput.pressBackspace()
+      yield* waitForFrame(view.setup, (frame) => !frame.includes("┃ $ l"), "the l deleted")
+      expect(renderFrame(view.setup)).toContain("┃ $")
+      yield* Effect.promise(() => view.setup.mockInput.typeText("ls"))
+      yield* waitForFrame(view.setup, (frame) => frame.includes("┃ $ ls"), "a second command")
+      view.setup.mockInput.pressArrow("left")
+      view.setup.mockInput.pressBackspace()
+      yield* waitForFrame(view.setup, (frame) => frame.includes("┃ $ s"), "the l deleted")
+      view.setup.mockInput.pressBackspace()
+      yield* waitForFrame(view.setup, (frame) => !frame.includes("┃ $"), "shell mode left")
+      expect(renderFrame(view.setup)).toContain("┃ s")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   it.live("ctrl+d on an empty composer exits; on a draft it does not", () =>
     Effect.gen(function* () {
       const view = yield* mountIdleSession()

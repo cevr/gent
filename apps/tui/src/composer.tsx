@@ -1243,7 +1243,8 @@ function useComposerController(): ComposerController {
       Option.map(inputRef, (renderable) => renderable.cursorOffset),
       () => 0,
     )
-    if (event.name === "backspace" && cursorOffset <= 1) {
+    // The `!` is not in the draft: Backspace at the start stands for deleting it.
+    if (event.name === "backspace" && cursorOffset === 0) {
       sc.onComposerInteraction(ComposerInteractionEvent.cases.ExitShell.make({}))
       clearAutocomplete()
       return true
