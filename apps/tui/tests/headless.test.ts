@@ -662,7 +662,7 @@ const exitCodeOf = (
 }
 
 const interruptedBy = (signal: Option.Option<"SIGINT" | "SIGTERM">, headless: boolean) =>
-  makeCliTeardown({ signal: () => signal, headless: () => headless })
+  makeCliTeardown({ signal: () => signal, interactive: () => !headless })
 
 describe("CLI teardown", () => {
   test("a signal ends a headless run non-zero: 130 for SIGINT, 143 for SIGTERM", () => {

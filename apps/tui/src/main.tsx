@@ -232,10 +232,10 @@ const runGent = ({
     }
 
     // Marked before anything slow runs: a signal while the bundle resolves
-    // (it can start a server) still exits the way a headless run does.
-    if (headless) {
+    // (it can start a server) already exits the way the chosen mode does.
+    if (!headless) {
       yield* Effect.sync(() => {
-        cliRun.headless = true
+        cliRun.interactive = true
       })
     }
 
@@ -485,11 +485,11 @@ const mainEffect = Effect.scoped(
 
 /**
  * What the teardown reads about the run: the signal that stopped it, and
- * whether it was a headless run. The process entry owns both.
+ * whether it was the interactive TUI. The process entry owns both.
  */
 const cliRun = {
   signal: Option.none<ExitSignal>(),
-  headless: false,
+  interactive: false,
 }
 
 const runCliMain = Runtime.makeRunMain(({ fiber, teardown }) => {
@@ -519,6 +519,9 @@ const runCliMain = Runtime.makeRunMain(({ fiber, teardown }) => {
 })
 
 runCliMain(mainEffect, {
-  teardown: makeCliTeardown({ signal: () => cliRun.signal, headless: () => cliRun.headless }),
+  teardown: makeCliTeardown({
+    signal: () => cliRun.signal,
+    interactive: () => cliRun.interactive,
+  }),
   disableErrorReporting: true,
 })

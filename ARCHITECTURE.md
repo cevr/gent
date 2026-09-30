@@ -1249,7 +1249,7 @@ Production rule:
 
 - `apps/tui/src/main.tsx` resolves a server via `Gent.server()` + `Gent.client()`
 - `--connect <url>` attaches to a remote server via `Gent.client({ url })`
-- `gent server start` (`apps/tui/src/ops.ts`) runs a standalone durable server in the foreground
+- `gent server start` (`apps/tui/src/ops.ts`) runs a standalone durable server in the foreground. Its flags (`--port`, `--isolate`, `--mock`) are the one way to choose how it launches; the environment names only where its data lives (`GENT_DATA_DIR`, `GENT_AUTH_DIRECTORY`). A signal stops it with exit 130 (SIGINT) or 143 (SIGTERM).
 
 ## Shared Server Discovery
 

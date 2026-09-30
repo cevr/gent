@@ -18,7 +18,8 @@ bun run --cwd apps/tui dev  # TUI
 
 `gent` runs one server per database. The TUI binary starts a server or
 attaches to the one that already owns the database; `gent server start` runs
-a standalone server in the foreground. `GENT_DATA_DIR` names the directory that
+a standalone server in the foreground; its flags (`--port`, `--isolate`, `--mock`)
+are the one way to choose how it launches. `GENT_DATA_DIR` names the directory that
 holds `data.db` (default `~/.gent`).
 
 ## Where to Read Next
