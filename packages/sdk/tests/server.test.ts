@@ -7,7 +7,6 @@ import {
   Layer,
   Option,
   Path,
-  Predicate,
   Exit,
   Ref,
   Schema,
@@ -15,7 +14,7 @@ import {
 } from "effect"
 import * as ChildProcessSpawnerNs from "effect/process/ChildProcessSpawner"
 import { dateFromMillis } from "@gent/core/protocol"
-import { BunGentPlatformLive } from "@gent/core/test-utils"
+import { BunGentPlatformLive, makeTempDirectoryScoped } from "@gent/core/test-utils"
 import { GentPlatform } from "@gent/core/host"
 import {
   BuildFingerprint,
@@ -25,7 +24,7 @@ import {
   ServerLockEntry,
 } from "../src/server"
 import { BunServices } from "@effect/platform-bun"
-import { homedir, hostname, tmpdir } from "node:os"
+import { homedir, hostname } from "node:os"
 import { Gent } from "../src/client"
 import { buildLogPaths } from "../src/logger"
 
@@ -36,39 +35,15 @@ import { buildLogPaths } from "../src/logger"
 // proves whether the cache is wired correctly.
 const COMPILED_BIN_PATH = "/tmp/fake-gent-binary"
 
-// Full GentPlatform override: same shape as GentPlatform.Test but with
-// execPath pointing at a fake compiled binary so isCompiledBinary(exe)
-// returns true and the stat branch fires.
+// GentPlatform.Test with execPath at a fake compiled binary, so
+// isCompiledBinary(exe) returns true and the stat branch fires.
 const PlatformCompiledBin: Layer.Layer<GentPlatform> = Layer.effect(
   GentPlatform,
   Effect.gen(function* () {
-    const counter = yield* Ref.make(0)
-    return GentPlatform.of({
-      bindModules: () => Effect.void,
-      randomId: Ref.updateAndGet(counter, (n) => n + 1).pipe(
-        Effect.map((n) => `bf-${String(n).padStart(8, "0")}`),
-      ),
-      osInfo: Effect.succeed({
-        platform: "linux",
-        arch: "x64",
-        release: "test-release",
-        hostname: "test-host",
-        type: "Linux",
-      }),
-      pid: Effect.succeed(1),
-      execPath: Effect.succeed(COMPILED_BIN_PATH),
-      homeDirectory: Effect.succeed("/nonexistent/gent-test-home"),
-      signal: () => Effect.void,
-      hash: (_alg, input) => {
-        let text = input
-        if (!Predicate.isString(text)) text = new TextDecoder().decode(text)
-        let h = 5381
-        for (let i = 0; i < text.length; i += 1) h = (h * 33) ^ text.charCodeAt(i)
-        return (h >>> 0).toString(16).padStart(64, "0")
-      },
-    })
+    const platform = yield* GentPlatform
+    return GentPlatform.of({ ...platform, execPath: Effect.succeed(COMPILED_BIN_PATH) })
   }),
-)
+).pipe(Layer.provide(GentPlatform.Test("bf")))
 
 // FileSystem.layerNoop with a counter-driven stat: each stat call returns a
 // fresh mtime. Cached: first mtime is locked in. Uncached: every read sees a
@@ -149,15 +124,7 @@ const provideFs = <A, E>(
   >,
 ): Effect.Effect<A, E, Scope.Scope> => effect.pipe(Effect.provide(PlatformLayer))
 
-const makeTmpHomeScoped = Effect.gen(function* () {
-  const fs = yield* FileSystem.FileSystem
-  const path = yield* Path.Path
-  const platform = yield* GentPlatform
-  const dir = path.join(tmpdir(), `gent-server-lock-test-${yield* platform.randomId}`)
-  yield* fs.makeDirectory(dir, { recursive: true })
-  yield* Effect.addFinalizer(() => fs.remove(dir, { recursive: true }).pipe(Effect.ignore))
-  return dir
-})
+const makeTmpHomeScoped = makeTempDirectoryScoped("gent-server-lock-test-")
 
 const makeEntry = (overrides?: Partial<ServerLockEntry>) =>
   new ServerLockEntry({
@@ -170,26 +137,6 @@ const makeEntry = (overrides?: Partial<ServerLockEntry>) =>
     startedAt: 1_767_225_600_000,
     ...overrides,
   })
-
-describe("Build Fingerprint", () => {
-  it.live("BuildFingerprint.current returns a non-empty string", () =>
-    Effect.gen(function* () {
-      const bf = yield* BuildFingerprint
-      const fp = yield* bf.current
-      expect(fp).toBeTruthy()
-      expect(fp.length).toBeGreaterThan(0)
-    }).pipe(Effect.provide(PlatformLayer)),
-  )
-
-  it.live("BuildFingerprint.current is cached across calls", () =>
-    Effect.gen(function* () {
-      const bf = yield* BuildFingerprint
-      const fp1 = yield* bf.current
-      const fp2 = yield* bf.current
-      expect(fp1).toBe(fp2)
-    }).pipe(Effect.provide(PlatformLayer)),
-  )
-})
 
 /**
  * Trap SIGTERM to this process and run `onSigterm` in its place. A server that
@@ -381,55 +328,25 @@ describe("Server Lock", () => {
           expect(attached._tag).toBe("Attached")
           expect(attached.url).toBe(owner.url)
 
+          // The attached server's endpoint names the owner the entry names, build included.
           const response = yield* Effect.promise(() =>
             Bun.fetch(`${attached.url.replace("/rpc", "")}/_gent/identity`),
           )
           const identity = yield* Effect.promise(() => response.json()).pipe(
             Effect.flatMap(
               Schema.decodeUnknownEffect(
-                Schema.Struct({ serverId: Schema.String, pid: Schema.Finite }),
+                Schema.Struct({
+                  serverId: Schema.String,
+                  pid: Schema.Finite,
+                  buildFingerprint: Schema.String,
+                }),
               ),
             ),
           )
           expect(identity.serverId).toBe(ownerEntry.serverId)
           expect(identity.pid).toBe(process.pid)
+          expect(identity.buildFingerprint).toBe(ownerEntry.buildFingerprint)
         }).pipe(Effect.timeout("20 seconds")),
-      ),
-  )
-
-  it.scopedLive(
-    "the lock and the identity endpoint name one build, so a second server attaches",
-    () =>
-      provideFs(
-        Effect.gen(function* () {
-          const home = yield* makeTmpHomeScoped
-          const options = {
-            cwd: home,
-            state: Gent.state.sqlite({ home }),
-            provider: Gent.provider.mock(),
-          }
-          const owner = yield* Gent.server(options)
-          expect(owner._tag).toBe("Owned")
-          const entry = Option.getOrThrow(yield* serverLockFile.read(home))
-          const response = yield* Effect.promise(() =>
-            Bun.fetch(`${owner.url.replace("/rpc", "")}/_gent/identity`),
-          )
-          const identity = yield* Effect.promise(() => response.json()).pipe(
-            Effect.flatMap(
-              Schema.decodeUnknownEffect(Schema.Struct({ buildFingerprint: Schema.String })),
-            ),
-          )
-          expect(identity.buildFingerprint).toBe(entry.buildFingerprint)
-          const second = yield* Gent.server(options)
-          expect(second._tag).toBe("Attached")
-        }).pipe(
-          // An environment that names a build fingerprint must not split the two records.
-          Effect.provideService(
-            ConfigProvider.ConfigProvider,
-            ConfigProvider.fromEnvRecord({ GENT_BUILD_FINGERPRINT: "operator-pinned" }),
-          ),
-          Effect.timeout("20 seconds"),
-        ),
       ),
   )
 
@@ -642,6 +559,18 @@ describe("Server Lock Ownership", () => {
         }),
       ),
     30_000,
+  )
+
+  it.scopedLive("a status read of a data directory that does not exist creates nothing", () =>
+    provideFs(
+      Effect.gen(function* () {
+        const home = yield* makeTmpHomeScoped
+        const { dataDir } = yield* dataPaths(home)
+        expect((yield* serverLock.status(home))._tag).toBe("None")
+        expect((yield* serverLock.stop(home))._tag).toBe("None")
+        expect(yield* (yield* FileSystem.FileSystem).exists(dataDir)).toBe(false)
+      }),
+    ),
   )
 
   it.scopedLive("status reads the kernel lock, not the pid the entry names", () =>
@@ -914,9 +843,8 @@ describe("serverLock.stop", () => {
           .pipe(Effect.provideService(FileSystem.FileSystem, racing))
         expect(result._tag).toBe("Removed")
         expect(paused).toBe(true)
-        if (newOwnerTookLock) {
-          expect(Option.getOrThrow(yield* serverLockFile.read(home)).serverId).toBe("new-owner")
-        }
+        // The cleanup holds the kernel lock through the removal: the new owner waits.
+        expect(newOwnerTookLock).toBe(false)
       }),
     ),
   )

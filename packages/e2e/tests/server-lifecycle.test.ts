@@ -3,18 +3,27 @@
  * Tests the identity route, the ready bound, a signal stop, and reconnects.
  */
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Exit, Option, Random, Schedule, Scope } from "effect"
+import { hostname } from "node:os"
+import { Effect, Exit, Option, Random, Schedule, Schema, Scope } from "effect"
 import { Gent } from "@gent/sdk"
-import { makeTempDirectoryScoped } from "@gent/core/test-utils"
+import { makeTempDirectoryScoped, waitFor } from "@gent/core/test-utils"
 import {
   killProcess,
   spawnServer,
   stopProcess,
   waitForProcessExit,
-  waitUntil,
 } from "../src/server-process-fixture"
 
 const randomLifecyclePort = Random.nextIntBetween(19_000, 20_000)
+
+/** What `/_gent/identity` serves. */
+const ServerIdentity = Schema.Struct({
+  serverId: Schema.String,
+  pid: Schema.Finite,
+  hostname: Schema.String,
+  dbPath: Schema.String,
+  buildFingerprint: Schema.String,
+})
 
 /** Whether a server answers the identity route on `port` within `within`. */
 const answersWithin = (port: number, within: `${number} seconds`) =>
@@ -86,13 +95,15 @@ describe("server lifecycle", () => {
           const response = yield* Effect.promise(() => Bun.fetch(`${baseUrl}/_gent/identity`))
           expect(response.ok).toBe(true)
 
-          const identity = yield* Effect.promise(() => response.json())
+          const identity = yield* Effect.promise(() => response.json()).pipe(
+            Effect.flatMap(Schema.decodeUnknownEffect(ServerIdentity)),
+          )
           expect(identity.pid).toBe(proc.pid)
-          expect(identity.hostname).toBeTruthy()
-          expect(identity.dbPath).toBeTruthy()
-          expect(identity.serverId).toBeTruthy()
-          expect(identity.buildFingerprint).toBeTruthy()
-          expect(identity.buildFingerprint).not.toBe("unknown")
+          expect(identity.hostname).toBe(hostname())
+          // `--isolate` keeps state in memory: the server owns no database file.
+          expect(identity.dbPath).toBe(":memory:")
+          expect(identity.serverId).not.toBe("")
+          expect(identity.buildFingerprint).toMatch(/^(src|bin)-/)
         }),
       ).pipe(Effect.timeout("12 seconds")),
     15_000,
@@ -140,7 +151,10 @@ describe("server lifecycle", () => {
           const port = yield* randomLifecyclePort
           const first = yield* spawnServer({ dataDir, port })
 
-          const clientScope = yield* Scope.make()
+          // The client closes before the restarted server stops; a failed run closes it too.
+          const clientScope = yield* Effect.acquireRelease(Scope.make(), (scope) =>
+            Scope.close(scope, Exit.void),
+          )
           const bundle = yield* Gent.client(first.url).pipe(
             Effect.provideService(Scope.Scope, clientScope),
           )
@@ -157,16 +171,21 @@ describe("server lifecycle", () => {
           first.proc.kill("SIGKILL")
           yield* Effect.promise(() => first.proc.exited)
 
-          const sawReconnecting = yield* waitUntil(() => states.includes("Reconnecting"), 5_000)
-          expect(sawReconnecting).toBe(true)
+          yield* waitFor(
+            Effect.succeed(states),
+            (seen) => seen.includes("Reconnecting"),
+            5_000,
+            "the client to notice the lost server",
+          )
 
           yield* spawnServer({ dataDir, port })
 
-          const reconnected = yield* waitUntil(
-            () => bundle.runtime.lifecycle.getState()._tag === "Connected",
+          yield* waitFor(
+            Effect.sync(() => bundle.runtime.lifecycle.getState()._tag),
+            (state) => state === "Connected",
             10_000,
+            "the client to reconnect",
           )
-          expect(reconnected).toBe(true)
 
           yield* bundle.client.session.list()
 

@@ -514,6 +514,28 @@ const callExpressionArgs = (node: AstNode): ReadonlyArray<AstNode> => {
   return args.filter(isAstNode)
 }
 
+/**
+ * The dotted text of a name: `Option.none` for a member expression,
+ * `Schema.Schema.Type` for a qualified type name. Anything else, a computed
+ * member included, has none.
+ */
+const dottedName = (node: AstNode | undefined): string | undefined => {
+  if (node === undefined) return undefined
+  if (node.type === "Identifier") return getStringField(node, "name")
+  const joined = (left: AstNode | undefined, right: AstNode | undefined) => {
+    const head = dottedName(left)
+    const tail = right === undefined ? undefined : getStringField(right, "name")
+    return head === undefined || tail === undefined ? undefined : `${head}.${tail}`
+  }
+  if (node.type === "TSQualifiedName") {
+    return joined(getNodeField(node, "left"), getNodeField(node, "right"))
+  }
+  if (node.type === "MemberExpression" && fieldOf(node, "computed") !== true) {
+    return joined(getNodeField(node, "object"), getNodeField(node, "property"))
+  }
+  return undefined
+}
+
 const unaryCallExpressionArg = (node: AstNode): AstNode | undefined => {
   const args = callExpressionArgs(node)
   if (args.length !== 1) return undefined
@@ -1736,6 +1758,51 @@ const plugin: Plugin = {
                 node: writer,
               })
             }
+          },
+        }
+      },
+    },
+
+    /**
+     * Flags the spellings of `undefined` and `unknown` that exist only to get
+     * past `effect/noNullish` and `effect/noUnknownParameters`:
+     *
+     * - `Option.getOrUndefined(Option.none())`, which is `undefined`;
+     * - `Schema.Schema.Type<typeof Schema.Unknown>`, which is `unknown`.
+     *
+     * Each hides the value the evaded rule was about and costs the reader a
+     * double take. Where absence or an unknown value is honest, write
+     * `undefined` or `unknown` with one scoped disable of the evaded rule and
+     * its reason.
+     */
+    "no-lint-evasion": {
+      create(context) {
+        return {
+          CallExpression(node) {
+            if (!isAstNode(node)) return
+            if (dottedName(getNodeField(node, "callee")) !== "Option.getOrUndefined") return
+            const [argument] = callExpressionArgs(node)
+            if (argument?.type !== "CallExpression") return
+            if (dottedName(getNodeField(argument, "callee")) !== "Option.none") return
+            context.report({
+              message:
+                "`Option.getOrUndefined(Option.none())` is `undefined` spelled to pass `effect/noNullish`. Write `undefined` with a scoped disable and its reason, or model the absence as an `Option`.",
+              node,
+            })
+          },
+          TSTypeReference(node) {
+            if (!isAstNode(node)) return
+            if (dottedName(getNodeField(node, "typeName")) !== "Schema.Schema.Type") return
+            const typeArguments = getNodeField(node, "typeArguments")
+            if (typeArguments === undefined) return
+            const [argument] = getNodeArrayField(typeArguments, "params") ?? []
+            if (argument?.type !== "TSTypeQuery") return
+            if (dottedName(getNodeField(argument, "exprName")) !== "Schema.Unknown") return
+            context.report({
+              message:
+                "`Schema.Schema.Type<typeof Schema.Unknown>` is `unknown` spelled to pass `effect/noUnknownParameters`. Write `unknown` with a scoped disable and its reason, or name the type the value has.",
+              node,
+            })
           },
         }
       },

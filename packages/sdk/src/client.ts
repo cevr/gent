@@ -115,7 +115,7 @@ interface GentClientOptions {
  *  connect/disconnect via hooks and project onto GentLifecycle. */
 const connectWs = (
   url: string,
-  headers = workspaceHeadersForCwd(process.cwd()),
+  headers: Headers.Input,
 ): Effect.Effect<GentClientBundle<Scope.Scope>, never, Scope.Scope> =>
   Effect.gen(function* () {
     const scope = yield* Effect.scope

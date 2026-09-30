@@ -19,6 +19,8 @@ import {
   findPackageSurfaceFindings,
   findPlatformDuplicationViolations,
   findReadersWithoutWriters,
+  findWritersWithoutReaders,
+  isManifest,
   findRetiredSurfaces,
   findSteeringFilePaths,
   findSuppressionInventoryFindings,
@@ -66,30 +68,26 @@ const fileNames = (output: string): ReadonlyArray<string> =>
  * made; outside a hook it is what the next commit holds. An untracked file
  * never satisfies a check: a clean clone would not hold it.
  */
-export const indexFileNames = (root: string, env: typeof Bun.env) =>
+const indexEntries = (root: string, env: typeof Bun.env) =>
   Effect.promise(() =>
-    Bun.$`git ls-files --cached`
+    Bun.$`git ls-files --stage`
       .cwd(root)
       .env({ ...env })
       .text(),
-  ).pipe(Effect.map(fileNames))
+  ).pipe(
+    Effect.map((output) =>
+      fileNames(output).map((row) => ({
+        file: row.slice(row.indexOf("\t") + 1),
+        // A symlink (git mode 120000) is not a second file: its target is read
+        // under its own name, so reading the link too would report every
+        // finding twice.
+        symlink: row.startsWith("120000 "),
+      })),
+    ),
+  )
 
-/**
- * Tracked symlinks (git mode 120000). A symlink is not a second file: its
- * target is read under its own name, so reading the link too would report
- * every finding twice.
- */
-const trackedSymlinks = Effect.promise(() => Bun.$`git ls-files --stage`.text()).pipe(
-  Effect.map(
-    (output) =>
-      new Set(
-        output
-          .split("\n")
-          .filter((row) => row.startsWith("120000 "))
-          .map((row) => row.slice(row.indexOf("\t") + 1)),
-      ),
-  ),
-)
+export const indexFileNames = (root: string, env: typeof Bun.env) =>
+  Effect.map(indexEntries(root, env), (entries) => entries.map((entry) => entry.file))
 
 /** One tracked file the scan reads: its path and its text. */
 export interface TrackedText {
@@ -159,19 +157,20 @@ export const trackedTexts = (
     onSome: () => indexTexts(root, env, files),
   })
 
-/** The file set under `root` and a reader of its texts, both under git's environment `env`. */
+/**
+ * The file set under `root` and a reader of its texts, both under git's
+ * environment `env`: this process's own unless one is given, so a hook's
+ * index in a hook.
+ */
 export interface FileSet {
   readonly files: Effect.Effect<ReadonlyArray<string>>
   readonly texts: (files: ReadonlyArray<string>) => Effect.Effect<ReadonlyArray<TrackedText>>
 }
 
-export const fileSet = (root: string, env: typeof Bun.env): FileSet => ({
+export const fileSet = (root: string, env: typeof Bun.env = Bun.env): FileSet => ({
   files: indexFileNames(root, env),
   texts: (files) => trackedTexts(root, env, files),
 })
-
-/** The file set under this process's own git environment: a hook's index, in a hook. */
-export const processFileSet = (root: string): FileSet => fileSet(root, Bun.env)
 
 /** The texts of the file set, by path; every repo file a guard reads comes from here. */
 type RepoTexts = ReadonlyMap<string, string>
@@ -191,10 +190,10 @@ const readRepoJsonc = <S extends Schema.Top & { readonly DecodingServices: never
   schema: S,
 ) =>
   Effect.flatMap(
-    Effect.fromOption(Option.fromNullishOr(texts.get(path))).pipe(
+    Effect.fromOption(readTrackedFile(texts, path)).pipe(
       Effect.mapError(() => `${path}: not in the git index`),
     ),
-    (text) => decodeJsonc(path, text, schema),
+    ({ text }) => decodeJsonc(path, text, schema),
   )
 
 const readInstalledJsonc = <S extends Schema.Top & { readonly DecodingServices: never }>(
@@ -435,9 +434,6 @@ const packageSurfaceFindings = Effect.fn("Tooling.packageSurfaceFindings")(funct
   ]
 })
 
-/** A manifest: its `scripts` can set a `GENT_*` variable, the way an operator's shell does. */
-const isManifest = (file: string): boolean => /(?:^|\/)package\.json$/.test(file)
-
 /**
  * Route every scanned file to the finders that read it, then run the scans
  * that need the whole tree. The lint config and the package surfaces read
@@ -485,6 +481,8 @@ export const scanTrackedTexts = (
     ...findUnadaptedSeams(sourceTexts, adaptedSeams),
     // A GENT_* variable whose writer left: its reader is a branch nothing takes.
     ...findReadersWithoutWriters(new Map([...sourceTexts, ...manifestTexts])),
+    // A GENT_* variable whose reader left: its setter configures nothing.
+    ...findWritersWithoutReaders(new Map([...sourceTexts, ...manifestTexts])),
     // A bundled skill file the skills module does not import never ships.
     ...findUnshippedSkillFiles(sourceTexts.get(BUNDLED_SKILLS_MODULE) ?? "", indexFiles),
   )
@@ -492,12 +490,12 @@ export const scanTrackedTexts = (
 }
 
 const program = Effect.gen(function* () {
-  const indexFiles = yield* indexFileNames(".", Bun.env)
-  const symlinks = yield* trackedSymlinks
+  const entries = yield* indexEntries(".", Bun.env)
+  const indexFiles = entries.map((entry) => entry.file)
   const read = yield* trackedTexts(
     ".",
     Bun.env,
-    indexFiles.filter((file) => !symlinks.has(file)),
+    entries.filter((entry) => !entry.symlink).map((entry) => entry.file),
   )
   const texts: RepoTexts = new Map(read.map(({ file, text }) => [file, text]))
   const textFiles = read.filter(
