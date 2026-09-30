@@ -18,8 +18,9 @@ export class NotFoundError extends Schema.TaggedError<NotFoundError>()("NotFound
   message: Schema.String,
 }) {}
 
-// A session snapshot read that cannot be completed: the server could not read
-// the session's events or its runtime state.
+// A request the server cannot carry out as stated: a session snapshot read
+// whose events or runtime state cannot be read, or a session create that
+// names a parent branch or thread without its parent session.
 export class InvalidStateError extends Schema.TaggedError<InvalidStateError>()(
   "InvalidStateError",
   { message: Schema.String },

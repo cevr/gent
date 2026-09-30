@@ -614,10 +614,10 @@ const makeSessionMutationsService: Effect.Effect<
     const admission = requestedAdmission(input.admission)
     if (Predicate.isUndefined(input.parentSessionId)) {
       if (!Predicate.isUndefined(input.parentBranchId)) {
-        return yield* new NotFoundError({ message: "parentBranchId requires parentSessionId" })
+        return yield* new InvalidStateError({ message: "parentBranchId requires parentSessionId" })
       }
       if (input.continueThread === true) {
-        return yield* new NotFoundError({ message: "continueThread requires parentSessionId" })
+        return yield* new InvalidStateError({ message: "continueThread requires parentSessionId" })
       }
       return { threadId: Option.none<SessionId>(), admission }
     }

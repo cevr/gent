@@ -478,21 +478,28 @@ describe("session queries", () => {
     ),
   )
 
-  it.live("createSession rejects parent branch without parent session through the public API", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { client } = yield* makeClient()
-        const result = yield* Effect.result(
-          client.session.create({
-            name: "Dangling branch parent",
-            cwd: process.cwd(),
-            parentBranchId: BranchId.make("dangling-parent-branch"),
-          }),
-        )
+  it.live(
+    "a create that names a parent branch or thread but no parent session is invalid, and stores nothing",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { client } = yield* makeClient()
+          const danglingBranch = yield* client.session
+            .create({
+              name: "Dangling branch parent",
+              cwd: process.cwd(),
+              parentBranchId: BranchId.make("dangling-parent-branch"),
+            })
+            .pipe(Effect.flip)
+          const danglingThread = yield* client.session
+            .create({ name: "Dangling thread", cwd: process.cwd(), continueThread: true })
+            .pipe(Effect.flip)
 
-        expect(result._tag).toBe("Failure")
-      }).pipe(Effect.timeout("4 seconds")),
-    ),
+          expect(danglingBranch._tag).toBe("InvalidStateError")
+          expect(danglingThread._tag).toBe("InvalidStateError")
+          expect(yield* client.session.list()).toHaveLength(0)
+        }).pipe(Effect.timeout("4 seconds")),
+      ),
   )
 })
 
@@ -805,22 +812,6 @@ describe("session command persistence", () => {
       expect(exit._tag).toBe("Failure")
       expect((yield* sessions.getSession(sessionId))?.reasoningLevel).toBeUndefined()
     }).pipe(Effect.provide(failingSessionMutationsLayer), Effect.timeout("4 seconds")),
-  )
-
-  it.live("rejects session creation with parent branch but no parent session", () =>
-    Effect.gen(function* () {
-      const mutations = yield* SessionMutations
-      const sessions = yield* SessionStorage
-
-      const exit = yield* Effect.exit(
-        mutations.createSession({
-          parentBranchId: BranchId.make("dangling-parent-branch"),
-        }),
-      )
-
-      expect(exit._tag).toBe("Failure")
-      expect(yield* sessions.listSessions).toHaveLength(0)
-    }).pipe(Effect.provide(sessionMutationsLayer), Effect.timeout("4 seconds")),
   )
 })
 
