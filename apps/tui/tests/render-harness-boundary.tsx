@@ -227,6 +227,33 @@ export const createMockRuntime = (): GentRuntime => ({
   },
 })
 
+/** A mock runtime whose connection state a test moves: `emit` a drop, then a reconnect. */
+export const createMutableRuntime = (initialState: ConnectionState) => {
+  let state = initialState
+  const listeners = new Set<(state: ConnectionState) => void>()
+  const runtime: GentRuntime = {
+    ...createMockRuntime(),
+    lifecycle: {
+      getState: () => state,
+      subscribe: (listener) => {
+        listeners.add(listener)
+        listener(state)
+        return () => {
+          listeners.delete(listener)
+        }
+      },
+      waitForReady: Effect.void,
+    },
+  }
+  return {
+    runtime,
+    emit: (nextState: ConnectionState) => {
+      state = nextState
+      for (const listener of listeners) listener(nextState)
+    },
+  }
+}
+
 const toInitialSession = (
   session: Option.Option<DomainSession | Session>,
 ): Option.Option<Session> =>

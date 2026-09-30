@@ -19,6 +19,7 @@ import {
   AgentName,
   assistantMessageIdForTurn,
   BranchId,
+  ConnectionState,
   dateFromMillis,
   EventEnvelope,
   GentRpcError,
@@ -46,7 +47,12 @@ import {
   useClient,
 } from "../src/client"
 import { createRoot, createSignal, onMount } from "solid-js"
-import { createMockClient, createMockRuntime, renderWithProviders } from "./render-harness-boundary"
+import {
+  createMockClient,
+  createMockRuntime,
+  createMutableRuntime,
+  renderWithProviders,
+} from "./render-harness-boundary"
 import { inRuntime, waitForFrame, waitUntil, waitUntilAdvancing } from "./helpers-boundary"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { InteractionRequestId } from "@gent/core/extensions/branch-tools"
@@ -927,6 +933,83 @@ describe("ClientProvider session lifecycle", () => {
       const error = client.error()
       expect(error).toBe("Driver openai: catalog filter failed")
     }),
+  )
+  it.live("a model catalog that failed to load is read again after a reconnect", () =>
+    Effect.gen(function* () {
+      let ctx = Option.none<ClientContextValue>()
+      let listings = 0
+      const lifecycle = createMutableRuntime(
+        ConnectionState.cases.Connected.make({ generation: 0 }),
+      )
+      const mockClient = createMockClient({
+        model: {
+          list: () =>
+            Effect.suspend(() => {
+              listings += 1
+              if (listings === 1) {
+                return Effect.fail({ _tag: "DriverError", driver: "openai", reason: "dropped" })
+              }
+              return Effect.succeed([])
+            }),
+        },
+      })
+      yield* Effect.promise(() =>
+        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
+          client: mockClient,
+          runtime: lifecycle.runtime,
+        }),
+      )
+      const client = yield* requireClientSessionState(ctx)
+      yield* waitUntil(() => Predicate.isNotNullish(client.error()), "the failed load")
+      lifecycle.emit(ConnectionState.cases.Reconnecting.make({ attempt: 1, generation: 1 }))
+      lifecycle.emit(ConnectionState.cases.Connected.make({ generation: 1 }))
+      yield* waitUntil(() => listings === 2, "the reconnect reads the catalog again")
+      expect(listings).toBe(2)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  it.live("a settings change on the session in view does not read extension health again", () =>
+    Effect.gen(function* () {
+      let ctx = Option.none<ClientContextValue>()
+      const healthReads: Array<Option.Option<SessionId>> = []
+      const mockClient = createMockClient({
+        session: {
+          updateSettings: () =>
+            Effect.succeed({
+              modelId: ModelId.make("openai/gpt-5.6-luna"),
+              reasoningLevel: absent,
+            }),
+        },
+        extension: {
+          listStatus: (input: { readonly sessionId?: SessionId }) =>
+            Effect.sync(() => {
+              healthReads.push(Option.fromUndefinedOr(input.sessionId))
+              return { _tag: "Healthy" satisfies "Healthy", extensions: [] }
+            }),
+        },
+      })
+      yield* Effect.promise(() =>
+        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
+          client: mockClient,
+          initialSession: {
+            id: FIRST.sessionId,
+            activeBranchId: FIRST.branchId,
+            name: "First",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        }),
+      )
+      const client = yield* requireClientSessionState(ctx)
+      yield* waitUntil(() => healthReads.length === 1, "the mount read")
+      yield* client.updateSessionSettings({ modelId: Option.none() })
+      expect(client.session()?.modelId).toBe(ModelId.make("openai/gpt-5.6-luna"))
+      client.switchSession(SECOND.sessionId, SECOND.branchId, "Second")
+      yield* waitUntil(
+        () => healthReads.some((read) => Option.contains(read, SECOND.sessionId)),
+        "the switch reads the next session's health",
+      )
+      expect(healthReads).toEqual([Option.some(FIRST.sessionId), Option.some(SECOND.sessionId)])
+    }).pipe(Effect.timeout("10 seconds")),
   )
   it.live("a failing RPC through surfaceError lands the formatted text in the error line", () =>
     Effect.gen(function* () {

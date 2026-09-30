@@ -55,6 +55,7 @@ import {
 import {
   createMockClient,
   createMockRuntime,
+  createMutableRuntime,
   renderFrame,
   renderWithProviders,
   applySnapshotAgent,
@@ -3763,31 +3764,6 @@ const HealthControlsProbe = (props: {
   }
   return <text>{failedActivation().join(",")}</text>
 }
-const createMutableRuntime = (initialState: ConnectionState) => {
-  let state = initialState
-  const listeners = new Set<(state: ConnectionState) => void>()
-  const runtime: GentRuntime = {
-    ...createMockRuntime(),
-    lifecycle: {
-      getState: () => state,
-      subscribe: (listener) => {
-        listeners.add(listener)
-        listener(state)
-        return () => {
-          listeners.delete(listener)
-        }
-      },
-      waitForReady: Effect.void,
-    },
-  }
-  return {
-    runtime,
-    emit: (nextState: ConnectionState) => {
-      state = nextState
-      for (const listener of listeners) listener(nextState)
-    },
-  }
-}
 
 // ── copy on select ──────────────────────────────────────────────────────────
 
@@ -4022,6 +3998,44 @@ describe("agents view on the left arrow", () => {
 })
 
 describe("TUI renderer surfaces", () => {
+  it.live("a resumed session with turns behind it reads idle, not ready", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-test")
+      const branchId = BranchId.make("branch-test")
+      const client = createMockClient({
+        session: {
+          getSnapshot: () =>
+            Effect.succeed({
+              sessionId,
+              branchId,
+              messages: [],
+              lastEventId: nullValue,
+              reasoningLevel: absent,
+              resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
+              agent: AgentName.make("cowork"),
+              runtime: { _tag: idleTag, queue: emptyQueueSnapshot() },
+              metrics: { turns: 3, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
+            }),
+        },
+      })
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <App />, {
+          client,
+          runtime: createMockRuntime(),
+          initialSession: {
+            id: sessionId,
+            activeBranchId: branchId,
+            name: "Resumed",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        }),
+      )
+      yield* waitForFrame(setup, (drawn) => drawn.includes("idle ·"), "the resumed status")
+      expect(renderFrame(setup)).not.toContain("ready ·")
+      setup.renderer.destroy()
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   it.live("MessageList renders user labels and assistant reasoning", () =>
     Effect.gen(function* () {
       const items: SessionItem[] = [

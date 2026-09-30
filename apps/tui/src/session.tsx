@@ -960,24 +960,15 @@ interface SessionControllerState {
 const emptyQueueState = (): QueueState => ({ steering: [], followUp: [] })
 
 /**
- * The gate starts closed: the session's first auth check runs at mount and
- * holds the startup prompt while it checks.
+ * The gate starts closed with no agent checked: the session's first auth check
+ * runs at mount and holds the startup prompt until it answers for the agent.
  */
-export const initialSessionControllerState = (input: {
-  readonly agent?: string
-}): SessionControllerState => {
-  const state: SessionControllerState = {
-    authGate: "closed",
-    authCheckVersion: 0,
-    queue: emptyQueueState(),
-    elapsed: 0,
-  }
-  const agent = Option.fromNullishOr(input.agent)
-  return Option.match(agent, {
-    onNone: () => state,
-    onSome: (value) => ({ ...state, validatedAgent: value }),
-  })
-}
+export const initialSessionControllerState = (): SessionControllerState => ({
+  authGate: "closed",
+  authCheckVersion: 0,
+  queue: emptyQueueState(),
+  elapsed: 0,
+})
 
 export const beginAuthCheck = (state: SessionControllerState): SessionControllerState => ({
   ...state,
@@ -1659,7 +1650,6 @@ type ToolResultEvent = Extract<AgentEvent, { _tag: "ToolCallSucceeded" | "ToolCa
 interface SessionFeed {
   items: () => SessionItem[]
   messages: () => Message[]
-  turnCount: () => number
   // eslint-disable-next-line effect/noNullish -- Solid accessor omits an inactive tool.
   activeTool: () => string | undefined
 }
@@ -2156,7 +2146,6 @@ export function useSessionFeed(
     messages: [],
     events: [],
   })
-  const [turnCount, setTurnCount] = createSignal(0)
   const [runningCalls, setRunningCalls] = createSignal<ReadonlyArray<RunningCall>>([])
   const [streamReadyKey, setStreamReadyKey] = createSignal<Option.Option<string>>(Option.none())
   let streamMessageId = Option.none<string>()
@@ -2318,7 +2307,6 @@ export function useSessionFeed(
 
   const resetProjection = () => {
     setStore({ messages: [], events: [] })
-    setTurnCount(0)
     setRunningCalls([])
     setStreamReadyKey(Option.none())
     streamMessageId = Option.none()
@@ -2630,7 +2618,6 @@ export function useSessionFeed(
         case "StreamStarted":
           resolveRetryingEvents(setStore)
           if (!live) break
-          setTurnCount((n) => n + 1)
           setRunningCalls([])
           yield* openStreamedAnswer(event, stampedAt)
           break
@@ -2648,7 +2635,6 @@ export function useSessionFeed(
   return {
     items,
     messages: () => store.messages,
-    turnCount,
     activeTool: () => Option.getOrUndefined(runningLabel(runningCalls())),
   }
 }
@@ -2678,10 +2664,7 @@ export interface SessionController {
   uiState: () => ReturnType<typeof SessionUiState.initial>
   /** The `ctrl+r` palette: its state, its entries, and its key handling. */
   promptSearch: PromptSearchController
-  activity: () =>
-    | { phase: "idle"; turn: number }
-    | { phase: "thinking"; turn: number }
-    | { phase: "tool"; turn: number; toolInfo: string }
+  activity: () => { phase: "idle" } | { phase: "thinking" } | { phase: "tool"; toolInfo: string }
   phaseLabel: () => string
   elapsed: () => number
   onComposerInteraction: (event: ComposerInteractionEvent) => void
@@ -2814,11 +2797,7 @@ export function createSessionController(props: {
   const branchPickerOpen = createMemo(() => uiState().overlay._tag === "branches")
 
   // ── Auth gate ──
-  const [controllerState, setControllerState] = createSignal(
-    initialSessionControllerState({
-      agent: client.agent(),
-    }),
-  )
+  const [controllerState, setControllerState] = createSignal(initialSessionControllerState())
   const authGateState = () => controllerState().authGate
   const validatedAgent = () => controllerState().validatedAgent
   const queueState = () => controllerState().queue
@@ -3092,12 +3071,12 @@ export function createSessionController(props: {
   })
 
   const activity = (): ReturnType<SessionController["activity"]> => {
-    if (!client.isStreaming()) return { phase: "idle", turn: feed.turnCount() }
+    if (!client.isStreaming()) return { phase: "idle" }
     const tool = Option.fromNullishOr(feed.activeTool())
     if (Option.isSome(tool)) {
-      return { phase: "tool", turn: feed.turnCount(), toolInfo: tool.value }
+      return { phase: "tool", toolInfo: tool.value }
     }
-    return { phase: "thinking", turn: feed.turnCount() }
+    return { phase: "thinking" }
   }
 
   createEffect(() => {
@@ -3142,7 +3121,7 @@ export function createSessionController(props: {
     const nextActivity = activity()
     switch (nextActivity.phase) {
       case "idle":
-        if (nextActivity.turn > 0) return "idle"
+        if (Option.exists(client.turnsStarted(), (turns) => turns > 0)) return "idle"
         return "ready"
       case "thinking":
         return thinkingWord

@@ -587,6 +587,8 @@ interface ClientAgentValue {
   // Derived accessors
   /** Whether a turn runs; an error on screen does not change it. */
   isStreaming: () => boolean
+  /** How many turns the branch in view has started; None until its first snapshot lands. */
+  turnsStarted: () => Option.Option<number>
   isError: () => boolean
   // eslint-disable-next-line effect/noNullish -- UI agent accessors expose null outside the error state.
   error: () => string | null
@@ -796,44 +798,6 @@ export function ClientProvider(props: ClientProviderProps) {
     }),
   )
 
-  // The catalog is the active session's profile: a project model driver
-  // appears once that session is active, a disabled one disappears.
-  let modelCatalogLoadVersion = 0
-  createEffect(
-    on(activeSessionId, (sessionId) => {
-      const version = ++modelCatalogLoadVersion
-      const request = omitUndefined({ sessionId: Option.getOrUndefined(sessionId) })
-      cast(
-        Effect.all({
-          models: client.model.list(request),
-          drivers: client.driver.list(request),
-        }).pipe(
-          Effect.tap(({ models, drivers }) =>
-            Effect.sync(() => {
-              if (version !== modelCatalogLoadVersion) return
-              const modelsById: Record<string, Model> = {}
-              for (const model of models) modelsById[model.id] = model
-              const agentsByName: Record<string, AgentDefinition> = {}
-              for (const agent of drivers.agents) agentsByName[agent.name] = agent
-              const driverIds = drivers.drivers.map((driver) => driver.id)
-              setModelStore({ modelsById, agentsByName, driverIds, settled: true })
-            }),
-          ),
-          Effect.catchEager((err) =>
-            Effect.sync(() => {
-              if (version !== modelCatalogLoadVersion) return
-              const error = formatError(err)
-              log.error("model.list.failed", { error })
-              setAgentStore({ error: Option.some(error) })
-              // A reader waiting for the catalog goes on with what it holds.
-              setModelStore({ settled: true })
-            }),
-          ),
-        ),
-      )
-    }),
-  )
-
   // Agent state (derived from events)
   const [agentStore, setAgentStore] = createStore<AgentState>({
     agent: initialAgent,
@@ -980,16 +944,19 @@ export function ClientProvider(props: ClientProviderProps) {
     return isReconnectingState(state.value)
   }
 
-  let extensionHealthLoadVersion = 0
+  // The server reads below follow the open connection and the session's
+  // identity. Both keys are memos: a rename or a settings change on the session
+  // record reads nothing again, and a reconnect reads again.
+  const connectionAndSession = (): readonly [Option.Option<number>, Option.Option<SessionId>] => [
+    connectedGeneration(),
+    activeSessionId(),
+  ]
 
-  const extensionHealthDependencies = (): readonly [
-    Option.Option<number>,
-    Option.Option<SessionId>,
-  ] => [connectedGeneration(), Option.map(sessionOption(), (value) => value.sessionId)]
+  let extensionHealthLoadVersion = 0
 
   createEffect(
     on(
-      extensionHealthDependencies,
+      connectionAndSession,
       ([epoch, sessionId]) => {
         const version = ++extensionHealthLoadVersion
         if (Option.isNone(epoch)) {
@@ -1018,6 +985,46 @@ export function ClientProvider(props: ClientProviderProps) {
       },
       { defer: false },
     ),
+  )
+
+  // The catalog is the active session's profile: a project model driver
+  // appears once that session is active, a disabled one disappears. A load
+  // that failed in a dropped connection is read again on the reconnect.
+  let modelCatalogLoadVersion = 0
+  createEffect(
+    on(connectionAndSession, ([epoch, sessionId]) => {
+      const version = ++modelCatalogLoadVersion
+      if (Option.isNone(epoch)) return
+      const request = omitUndefined({ sessionId: Option.getOrUndefined(sessionId) })
+      cast(
+        Effect.all({
+          models: client.model.list(request),
+          drivers: client.driver.list(request),
+        }).pipe(
+          Effect.tap(({ models, drivers }) =>
+            Effect.sync(() => {
+              if (version !== modelCatalogLoadVersion) return
+              const modelsById: Record<string, Model> = {}
+              for (const model of models) modelsById[model.id] = model
+              const agentsByName: Record<string, AgentDefinition> = {}
+              for (const agent of drivers.agents) agentsByName[agent.name] = agent
+              const driverIds = drivers.drivers.map((driver) => driver.id)
+              setModelStore({ modelsById, agentsByName, driverIds, settled: true })
+            }),
+          ),
+          Effect.catchEager((err) =>
+            Effect.sync(() => {
+              if (version !== modelCatalogLoadVersion) return
+              const error = formatError(err)
+              log.error("model.list.failed", { error })
+              setAgentStore({ error: Option.some(error) })
+              // A reader waiting for the catalog goes on with what it holds.
+              setModelStore({ settled: true })
+            }),
+          ),
+        ),
+      )
+    }),
   )
 
   const applySessionRuntime: ClientTransportValue["applySessionRuntime"] = (input) => {
@@ -1451,6 +1458,7 @@ export function ClientProvider(props: ClientProviderProps) {
     resolvedReasoningLevel: () => agentStore.resolvedReasoningLevel,
     // Derived accessors
     isStreaming: () => agentStore.running,
+    turnsStarted: () => agentStore.turnsStarted,
     isError: () => Option.isSome(agentStore.error),
     error: () => Option.getOrNull(agentStore.error),
     sessionMetrics,
