@@ -1473,11 +1473,7 @@ const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] =>
       const sessionReasoningLevel = Schema.decodeUnknownOption(ReasoningEffort)(
         reasoningLevel.value,
       )
-      props.cast(
-        props.client
-          .updateSessionSettings({ reasoningLevel: sessionReasoningLevel })
-          .pipe(props.client.surfaceError),
-      )
+      props.cast(props.client.updateSessionSettings({ reasoningLevel: sessionReasoningLevel }))
     },
   },
   {
@@ -1494,7 +1490,7 @@ const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] =>
         return
       }
       const apply = (modelId: Option.Option<ModelId>) =>
-        props.cast(props.client.updateSessionSettings({ modelId }).pipe(props.client.surfaceError))
+        props.cast(props.client.updateSessionSettings({ modelId }))
       if (query === "default" || query === "off") {
         apply(Option.none())
         return
@@ -3264,12 +3260,12 @@ export function createSessionController(props: {
 
   const onModelSelect = (modelId: ModelId) => {
     closeOverlay()
-    cast(client.updateSessionSettings({ modelId: Option.some(modelId) }).pipe(client.surfaceError))
+    cast(client.updateSessionSettings({ modelId: Option.some(modelId) }))
   }
 
   const onReasoningSelect = (level: Option.Option<ReasoningEffort>) => {
     closeOverlay()
-    cast(client.updateSessionSettings({ reasoningLevel: level }).pipe(client.surfaceError))
+    cast(client.updateSessionSettings({ reasoningLevel: level }))
   }
 
   const onForkSelect = (messageId: MessageId) => {

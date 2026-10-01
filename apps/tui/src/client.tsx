@@ -240,17 +240,33 @@ const SessionSchema: Schema.Schema<Session> = Schema.Struct({
   cwd: Schema.optional(Schema.String),
 })
 
+/**
+ * Every update names the session it read. A reply or event can land after
+ * the shell left that session, so an update for another session changes
+ * nothing.
+ */
 export const SessionStateEvent = Schema.TaggedUnion({
   Activated: { session: SessionSchema },
-  UpdateName: { name: Schema.String },
-  /** The session's cwd, read after a switch; ignored once the shell left that session. */
+  UpdateName: { sessionId: SessionId, name: Schema.String },
+  /** The session's cwd, read after a switch. */
   UpdateCwd: { sessionId: SessionId, cwd: Schema.String },
   UpdateSettings: {
+    sessionId: SessionId,
     modelId: Schema.UndefinedOr(ModelId),
     reasoningLevel: Schema.UndefinedOr(ReasoningEffort),
   },
 })
 export type SessionStateEvent = Schema.Schema.Type<typeof SessionStateEvent>
+
+/** Apply an update to the session it names; the session in view stays otherwise. */
+const updateNamed = (
+  session: Session,
+  update: { readonly sessionId: SessionId },
+  apply: (session: Session) => Session,
+): Session => {
+  if (session.sessionId !== update.sessionId) return session
+  return apply(session)
+}
 
 /**
  * The session in view. The client always holds one: the process starts on a
@@ -260,16 +276,14 @@ export function transitionSessionState(session: Session, event: SessionStateEven
   return Match.value(event).pipe(
     Match.tagsExhaustive({
       Activated: (activated) => activated.session,
-      UpdateName: (update) => ({ ...session, name: update.name }),
-      UpdateCwd: (update) => {
-        if (session.sessionId !== update.sessionId) return session
-        return { ...session, cwd: update.cwd }
-      },
-      UpdateSettings: (update) => ({
-        ...session,
-        modelId: update.modelId,
-        reasoningLevel: update.reasoningLevel,
-      }),
+      UpdateName: (update) => updateNamed(session, update, (s) => ({ ...s, name: update.name })),
+      UpdateCwd: (update) => updateNamed(session, update, (s) => ({ ...s, cwd: update.cwd })),
+      UpdateSettings: (update) =>
+        updateNamed(session, update, (s) => ({
+          ...s,
+          modelId: update.modelId,
+          reasoningLevel: update.reasoningLevel,
+        })),
     }),
   )
 }
@@ -521,9 +535,11 @@ interface ClientSessionValue {
   switchSession: (sessionId: SessionId, branchId: BranchId, name: string) => void
   /**
    * Change the session's settings. Only the fields the change names are sent;
-   * the server merges them into what it stores, and its reply is folded back.
+   * the server merges them into what it stores, and its reply is folded back
+   * into the session it changed. A refusal is held for that session too
+   * (`setErrorIn`), so a reader who switched away does not see it.
    */
-  updateSessionSettings: (change: SessionSettingsChange) => Effect.Effect<void, GentClientRpcError>
+  updateSessionSettings: (change: SessionSettingsChange) => Effect.Effect<void>
 
   // Sync data fetching helpers (return Effects for caller to run)
   listBranches: Effect.Effect<readonly Branch[], GentClientRpcError>
@@ -1062,26 +1078,36 @@ export function ClientProvider(props: ClientProviderProps) {
     }
   }
 
+  /**
+   * The one rule for a settings change, from the server's event or from the
+   * reply to the shell's own update: it applies to the session it names.
+   */
+  const applySettings = (
+    update: Extract<SessionStateEvent, { readonly _tag: "UpdateSettings" }>,
+  ): void => {
+    if (session().sessionId !== update.sessionId) return
+    dispatchSession(update)
+    // The server resolves what the cleared/changed settings fall back to.
+    refreshResolvedSettings()
+  }
+
   const applySessionMetadataEvent = (event: EventEnvelope["event"]): void => {
     switch (event._tag) {
       case "SessionNameUpdated": {
-        if (event.sessionId === session().sessionId) {
-          dispatchSession(SessionStateEvent.cases.UpdateName.make({ name: event.name }))
-        }
+        dispatchSession(
+          SessionStateEvent.cases.UpdateName.make({ sessionId: event.sessionId, name: event.name }),
+        )
         break
       }
 
       case "SessionSettingsUpdated": {
-        if (event.sessionId === session().sessionId) {
-          dispatchSession(
-            SessionStateEvent.cases.UpdateSettings.make({
-              modelId: event.modelId,
-              reasoningLevel: event.reasoningLevel,
-            }),
-          )
-          // The server resolves what the cleared/changed settings fall back to.
-          refreshResolvedSettings()
-        }
+        applySettings(
+          SessionStateEvent.cases.UpdateSettings.make({
+            sessionId: event.sessionId,
+            modelId: event.modelId,
+            reasoningLevel: event.reasoningLevel,
+          }),
+        )
         break
       }
 
@@ -1282,12 +1308,16 @@ export function ClientProvider(props: ClientProviderProps) {
       const s = session()
       return client.session.updateSettings({ ...change, sessionId: s.sessionId }).pipe(
         Effect.tap((result) =>
-          Effect.sync(() => {
-            dispatchSession(SessionStateEvent.cases.UpdateSettings.make(result))
-            refreshResolvedSettings()
-          }),
+          Effect.sync(() =>
+            applySettings(
+              SessionStateEvent.cases.UpdateSettings.make({ ...result, sessionId: s.sessionId }),
+            ),
+          ),
         ),
         Effect.asVoid,
+        Effect.catchEager((error) =>
+          Effect.sync(() => agentValue.setErrorIn(s, formatError(error))),
+        ),
       )
     },
 
