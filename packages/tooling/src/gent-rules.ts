@@ -234,19 +234,29 @@ const requireSourceOf = (node: AstNode): string | undefined => {
   return getStringField(arg, "value")
 }
 
-/** `new URL(import.meta.url)`: the operand a hand-rolled file path reads `.pathname` from. */
+/** Whether `node` reads `import.meta.<field>` for one of `fields`. */
+const readsImportMeta = (node: AstNode | undefined, fields: ReadonlySet<string>): boolean => {
+  if (node?.type !== "MemberExpression") return false
+  if (getNodeField(node, "object")?.type !== "MetaProperty") return false
+  const property = getNodeField(node, "property")
+  return property !== undefined && fields.has(getStringField(property, "name") ?? "")
+}
+
+const IMPORT_META_URL: ReadonlySet<string> = new Set(["url"])
+
+/** Bun's and Node's file path facts on `import.meta`. */
+const IMPORT_META_PATH_FACTS: ReadonlySet<string> = new Set(["dir", "dirname", "filename", "path"])
+
+/**
+ * `new URL(import.meta.url)` or `new URL("./x.ts", import.meta.url)`: the
+ * operand a hand-rolled file path reads `.pathname` from.
+ */
 const isImportMetaUrlConstruction = (node: AstNode | undefined): boolean => {
   if (node?.type !== "NewExpression") return false
   const callee = getNodeField(node, "callee")
   if (callee?.type !== "Identifier" || getStringField(callee, "name") !== "URL") return false
-  const [arg] = getNodeArrayField(node, "arguments") ?? []
-  if (arg?.type !== "MemberExpression") return false
-  const meta = getNodeField(arg, "object")
-  const property = getNodeField(arg, "property")
-  return (
-    meta?.type === "MetaProperty" &&
-    property !== undefined &&
-    getStringField(property, "name") === "url"
+  return (getNodeArrayField(node, "arguments") ?? []).some((arg) =>
+    readsImportMeta(arg, IMPORT_META_URL),
   )
 }
 
@@ -623,23 +633,33 @@ const plugin: Plugin = {
      * No module path hand-rolled off its own URL.
      *
      * In core and shipped-extension source outside `test-utils/`, a member
-     * read off `new URL(import.meta.url)`, as `.pathname`, builds a file path
-     * by hand; Effect `Path.fromFileUrl` reads it. The TUI, the SDK and the
-     * server launcher are process hosts and read their own paths.
-     * `effect/noGlobals` holds the host globals themselves, through
-     * `globalThis` and computed members too.
+     * read off `new URL(import.meta.url)` or `new URL("./x.ts", import.meta.url)`,
+     * as `.pathname`, builds a file path by hand, and `import.meta.dir`,
+     * `.dirname`, `.filename` and `.path` are the host's own path facts;
+     * Effect `Path.fromFileUrl` reads the URL. The upstream
+     * `effect/noModulePathFacts` (oxlint-plugin-effect) retires this rule
+     * once it ships. The TUI, the SDK and the server launcher are process
+     * hosts and read their own paths. `effect/noGlobals` holds the host
+     * globals themselves, through `globalThis` and computed members too.
      */
     "no-hand-rolled-module-path": {
       create(context) {
         if (!protectedHostFactFilename(ruleSubject(context))) return {}
         return {
           MemberExpression(node) {
-            if (!isAstNode(node) || !isImportMetaUrlConstruction(getNodeField(node, "object"))) {
+            if (!isAstNode(node)) return
+            if (readsImportMeta(node, IMPORT_META_PATH_FACTS)) {
+              context.report({
+                message:
+                  "`import.meta` path facts are the host's; read the module's path with Effect `Path.fromFileUrl(new URL(import.meta.url))`.",
+                node,
+              })
               return
             }
+            if (!isImportMetaUrlConstruction(getNodeField(node, "object"))) return
             context.report({
               message:
-                "`new URL(import.meta.url)` read as a path is hand-rolled; use Effect `Path.fromFileUrl`.",
+                "`new URL(…, import.meta.url)` read as a path is hand-rolled; use Effect `Path.fromFileUrl`.",
               node,
             })
           },
