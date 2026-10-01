@@ -463,6 +463,9 @@ function UserMessage(props: MessageRowProps & { customType?: string; fullDetail:
   )
 }
 
+/** The columns an answer is indented by; its text is fitted to the rest. */
+const ANSWER_INDENT = 2
+
 function AssistantMessage(props: {
   content: string
   reasoning: string
@@ -506,7 +509,7 @@ function AssistantMessage(props: {
   })
 
   return (
-    <box marginTop={contentMargin()} paddingLeft={2} flexDirection="column">
+    <box marginTop={contentMargin()} paddingLeft={ANSWER_INDENT} flexDirection="column">
       {/* The feed writes a segment for every assistant part, so an answer with
           no segments has no text, no reasoning, no image and no tool call to
           draw either. */}
@@ -542,7 +545,10 @@ function AssistantMessage(props: {
                   // Mermaid blocks draw as ASCII art once the text settles.
                   const renderContent = () => {
                     if (props.streaming) return segment.content
-                    return replaceMermaidBlocks(segment.content, props.dimensions().width)
+                    return replaceMermaidBlocks(
+                      segment.content,
+                      props.dimensions().width - ANSWER_INDENT,
+                    )
                   }
                   return (
                     <markdown
