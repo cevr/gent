@@ -99,9 +99,8 @@ import { readHome } from "./ops"
 const CLIENT_LOG_DIR = Effect.runSync(Effect.flatMap(readHome, dataPaths)).logDir
 const CLIENT_LOG_PATH = buildLogPaths(process.cwd(), CLIENT_LOG_DIR).client
 
-// Clock-bypass: `shutdownLog` runs after Effect runtime teardown, so we
-// cannot yield `Clock.currentTimeMillis` here. `Date.now()` is the standard
-// sync-land alternative.
+// `shutdownLog` runs after the Effect runtime is torn down, so it cannot
+// yield `Clock`; it reads the wall clock with `DateTime.nowUnsafe`.
 const isoNow = () => DateTime.formatIso(DateTime.nowUnsafe())
 const encodeLogEntry = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 

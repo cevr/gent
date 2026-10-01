@@ -187,12 +187,11 @@ export const frecencyLookup =
  * Persistence for autocomplete frecency — the impure edge around the pure
  * ranker above.
  *
- * Shaped after `usePromptHistory` in `session.tsx`, which has the same needs: a
- * `Schema.Struct` encoded with `Schema.fromJsonString`, a path under
- * `~/.cache/gent/`, a read that answers `Option.none()` for anything it cannot
- * use, and a write that ends in `Effect.ignoreCause`. Following it rather than
- * inventing a second convention means one place to look for "where does the
- * TUI keep per-reader state".
+ * It keeps the TUI's one convention for per-reader state, which
+ * `usePromptHistory` in `session.tsx` keeps too: a `Schema.Struct` encoded
+ * with `Schema.fromJsonString`, a path under `~/.cache/gent/`, a read that
+ * answers `Option.none()` for anything it cannot use, and a write that ends in
+ * `Effect.ignoreCause`.
  *
  * Degrading is the whole contract of the read. A missing file is a new reader,
  * an empty file is an interrupted write, and unparseable content is a file
@@ -312,9 +311,9 @@ export const clearFrecencyStore = (
  * This is the only write, and the file is the only copy: every reader ranks
  * through `readFrecencyLookup`.
  *
- * Reading inside the gate is the point. The alternative — folding into a
- * cached value — is what lost picks: the cache goes stale the moment another
- * surface writes, and nothing tells it so.
+ * The file is read inside the gate. A cached value goes stale the moment
+ * another surface writes, and nothing tells it so; a pick folded into it
+ * would drop that surface's picks.
  */
 export const recordFrecencyPick = (
   home: string,
@@ -339,10 +338,9 @@ export const recordFrecencyPick = (
  * Relevance ranking for the composer's autocomplete rows, and the completion
  * the ghost line offers.
  *
- * A plain substring filter in registration order answers `/ag` with `/fork`
- * ("Fork from Mess**ag**e" contains the filter, and it registers before
- * `/agents`), so the reader who types the first two letters of a command gets
- * another one under the cursor. The rows are ranked instead.
+ * The rows are ranked, not filtered in registration order: `/ag` puts
+ * `/agents` under the cursor, though "Fork from Mess**ag**e" contains the
+ * filter too and registers first.
  *
  * The matcher here is a subsequence scorer in the fzy tradition, written out
  * rather than taken from a package: it costs no dependency, and a general
@@ -498,8 +496,7 @@ const scoreItem = (item: AutocompleteItem, filter: string): number => {
 /**
  * How a caller opts into pick history.
  *
- * Both fields are optional and default to "no history", so every existing call
- * site keeps ranking purely by match quality.
+ * Both fields are optional. Without them a call ranks by match quality alone.
  */
 interface RankOptions {
   /** The prefix the rows were offered under, namespacing the store keys. */

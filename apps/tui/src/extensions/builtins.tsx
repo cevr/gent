@@ -872,10 +872,10 @@ export const builtinSkills = defineClientExtension("@gent/skills-ui", {
   }),
 })
 
-// Builtins keep their precise `R` locally; the load membrane erases them in
-// one place when `loader-boundary.ts` runs `runtime.runPromise(...)`.
 // ── builtin module registry ─────────────────────────────────────────────────
 
+// Each builtin keeps its precise `R` where it is defined; the list holds them
+// erased, and `loader-boundary.ts` provides it once, in `runtime.runPromise`.
 export const builtinClientModules: ReadonlyArray<AnyExtensionClientModule> = [
   builtinAgentsView,
   builtinBtw,

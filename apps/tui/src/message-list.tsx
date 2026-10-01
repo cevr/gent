@@ -80,18 +80,13 @@ import { insert, RendererContext, useRenderer } from "@opentui/solid"
 /**
  * Reasoning summaries, prepared for the markdown renderer.
  *
- * A model emits reasoning as a run of summaries, and each one is its own bold
- * markdown heading. `messagePartsReasoning` joins the parts with an empty
- * string, so the headings collide and the pane showed one unreadable line:
+ * A model emits reasoning as a run of summaries, each its own bold markdown
+ * heading, and `messagePartsReasoning` joins the parts with an empty string:
  *
  *     **Verifying final test output****Refactoring LedgerStore.list…**
  *
- * The literal asterisks were there because reasoning rendered as plain text
- * rather than through the markdown element the reply uses.
- *
- * Splitting the run back into summaries and joining them with a blank line
- * gives markdown the paragraph break it needs, so each summary renders as its
- * own line with the emphasis applied rather than printed.
+ * The run is split back into summaries and joined with a blank line, the
+ * paragraph break markdown needs to draw each summary as its own line.
  */
 
 /** A bold span that ends where the next one begins, with no separator between. */
@@ -506,7 +501,6 @@ function AssistantMessage(props: {
     return groups
   })
 
-  // Replace mermaid code blocks with rendered ASCII art (skip while streaming)
   return (
     <box marginTop={contentMargin()} paddingLeft={2} flexDirection="column">
       {/* The feed writes a segment for every assistant part, so an answer with
@@ -541,6 +535,7 @@ function AssistantMessage(props: {
                   />
                 ),
                 text: (segment) => {
+                  // Mermaid blocks draw as ASCII art once the text settles.
                   const renderContent = () => {
                     if (props.streaming) return segment.content
                     return replaceMermaidBlocks(segment.content, props.dimensions().width)

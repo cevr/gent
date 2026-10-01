@@ -1049,8 +1049,6 @@ export const queuedDraftText = (queue: QueueState): Option.Option<string> => {
 
 const isBlockingAuthGate = (state: AuthGateState): boolean => state === "open" || state === "error"
 
-// ── controller activity ─────────────────────────────────────────────────────
-
 // ── prompt history ──────────────────────────────────────────────────────────
 
 /**

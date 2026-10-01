@@ -1479,8 +1479,8 @@ function useComposerController(): ComposerController {
     // An open popup is not a reason to swallow enter. A popup with rows has
     // already consumed the key through its own list; one without rows has
     // nothing to select, and the draft underneath is what the reader meant to
-    // send. Both cases fall through to the textarea keybindings below.
-    // All other Enter variants (bare, shift, ctrl) fall through to textarea keybindings
+    // send. Both cases, and every other Enter variant (bare, shift, ctrl), fall
+    // through to the textarea keybindings below.
   }
 
   createEffect(() => {

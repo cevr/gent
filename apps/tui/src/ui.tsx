@@ -55,20 +55,14 @@ export const useSpinnerClock = (): Accessor<number> =>
 
 // ── scroll sync ─────────────────────────────────────────────────────────────
 
-/**
- * useScrollSync Hook
- *
- * Provides ID-based scroll synchronization for scrollbox components.
- * Finds elements by ID and scrolls to keep them visible in the viewport.
- */
-
 /** How often, and how far apart, the sync looks for a row that has not laid out yet. */
 const SCROLL_SYNC_TRIES = 15
 const SCROLL_SYNC_INTERVAL_MS = 30
 
 /**
- * ID-based scroll sync - finds element by ID and scrolls to keep it visible.
- * The scrollbox is absent before it attaches and after cleanup.
+ * Keeps the row with the selected id in the scrollbox's viewport, scrolling
+ * the least that shows it. The scrollbox is absent before it attaches and
+ * after cleanup.
  */
 function useScrollSync(
   selectedId: Accessor<string>,
