@@ -1,5 +1,5 @@
 import { Effect, Layer, Match, Option, Predicate } from "effect"
-import type { Context, Scope } from "effect"
+import type { Context, Fiber, Scope } from "effect"
 import { RpcClient, RpcSerialization } from "effect/rpc"
 import type { Headers } from "effect/http"
 import { Socket } from "effect/socket"
@@ -26,8 +26,35 @@ import {
   type GentServer,
   type GentServerOptions,
 } from "./server.js"
-// `runtime-boundary.ts` owns the Effect→Promise edge for `GentRuntime.run`.
-import { makeGentRuntime as makeRuntime, type GentRuntime } from "./runtime-boundary.js"
+
+// ---------------------------------------------------------------------------
+// GentRuntime — execution surface for the caller
+// ---------------------------------------------------------------------------
+
+/**
+ * Runs an effect on the services the connection captured. A caller that wants
+ * a result yields the client's RPC effect itself, so interrupting the caller
+ * interrupts the RPC; the runtime only starts fibers a sync caller cannot run.
+ */
+export interface GentRuntime<Services = unknown> {
+  /** Fire-and-forget — run an effect without awaiting result */
+  readonly cast: <A, E, R extends Services>(effect: Effect.Effect<A, E, R>) => void
+  /** Fork with a handle — caller can join/interrupt */
+  readonly fork: <A, E, R extends Services>(effect: Effect.Effect<A, E, R>) => Fiber.Fiber<A, E>
+  /** Connection lifecycle */
+  readonly lifecycle: GentLifecycle
+}
+
+const makeRuntime = <Services>(
+  services: Context.Context<Services>,
+  lifecycle: GentLifecycle,
+): GentRuntime<Services> => ({
+  cast: (effect) => {
+    Effect.runForkWith(services)(effect)
+  },
+  fork: (effect) => Effect.runForkWith(services)(effect),
+  lifecycle,
+})
 
 // ---------------------------------------------------------------------------
 // Static lifecycle for non-supervised connections

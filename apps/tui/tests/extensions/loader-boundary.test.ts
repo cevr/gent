@@ -48,7 +48,7 @@ import { defineRequests, ExtensionId, getToolId, ref, request } from "@gent/core
 import { inRuntime } from "../helpers-boundary"
 import { builtinClientModules } from "../../src/extensions/builtins"
 import { type Command, executeSlashCommand } from "../../src/commands"
-import { createMockClient, createMockRuntime } from "../render-harness-boundary"
+import { createMockClient } from "../render-harness-boundary"
 import * as EffectEntry from "effect"
 import * as ProtocolEntry from "@gent/core/protocol"
 import * as ClientExtensionEntry from "@gent/tui/extensions"
@@ -1565,7 +1565,6 @@ export default defineClientExtension("@test/dup", {
     const activeSessionRuntime = makeClientExtensionRuntime({
       transport: {
         client: createMockClient({ extension: { request: () => Effect.void } }),
-        runtime: createMockRuntime(),
         currentSession: () => ({
           sessionId: SessionId.make("test-session-id"),
           branchId: BranchId.make("test-branch-id"),

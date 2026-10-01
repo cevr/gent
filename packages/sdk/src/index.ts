@@ -1,6 +1,5 @@
 // Client constructors
-export { Gent, type GentClientBundle } from "./client.js"
-export type { GentRuntime } from "./runtime-boundary.js"
+export { Gent, type GentClientBundle, type GentRuntime } from "./client.js"
 
 // Server discovery: the shared lock file clients read to find, and stop, a running server
 export { serverLock, ServerLockEntry, ServerLockStatus } from "./server.js"

@@ -1,7 +1,9 @@
 import { describe, expect, it, test } from "effect-bun-test"
-import { Deferred, Effect, Exit, Option, Scope } from "effect"
+import { Deferred, Effect, Exit, Fiber, Option, Scope } from "effect"
 import { createMemo, createRoot, createSignal } from "solid-js"
 import { BranchId, SessionId } from "@gent/core/protocol"
+import { ref } from "@gent/core/extensions/api"
+import { WakeRpc } from "@gent/extensions/client"
 import {
   ClientContext,
   clientContributions,
@@ -84,6 +86,35 @@ describe("transport-only extension widgets", () => {
         yield* Scope.close(uiScope, Exit.void)
         expect(calls).toEqual(["cleanup", "runtime"])
       }),
+  )
+})
+
+// ── transport ───────────────────────────────────────────────────────────────
+
+describe("transport", () => {
+  // A session switch or a closed pane interrupts the read that asked; the RPC
+  // must stop with it, or its reply still runs for a session nobody views.
+  it.scopedLive("interrupting a request interrupts its RPC", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>()
+      const interrupted = yield* Deferred.make<void>()
+      yield* provideClientServices(
+        Effect.gen(function* () {
+          const { transport } = yield* ClientContext
+          const fiber = yield* Effect.forkChild(transport.request(ref(WakeRpc.Pending), {}))
+          yield* Deferred.await(started)
+          yield* Fiber.interrupt(fiber)
+        }),
+        {
+          requestEffect: () =>
+            Deferred.done(started, Exit.void).pipe(
+              Effect.andThen(Effect.never),
+              Effect.onInterrupt(() => Deferred.done(interrupted, Exit.void)),
+            ),
+        },
+      )
+      yield* Deferred.await(interrupted).pipe(Effect.timeout("2 seconds"))
+    }),
   )
 })
 

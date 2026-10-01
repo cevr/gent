@@ -222,8 +222,6 @@ export const createMockRuntime = (
   },
   fork: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     Effect.runForkWith(Context.makeUnsafe<R>(new Map(services)))(effect),
-  run: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    Effect.runPromiseWith(Context.makeUnsafe<R>(new Map(services)))(effect),
   lifecycle: {
     getState: () => ConnectionState.cases.Connected.make({ generation: 0 }),
     subscribe: (listener) => {

@@ -752,7 +752,7 @@ describe("driver routing through the client transport", () => {
       const transport = makeClientTestTransport()
       const client = createMockClient({ driver: { set: () => Effect.fail(rejected) } })
       const layer = contextLayer({
-        transport: { ...transport, client, runtime: createMockRuntime() },
+        transport: { ...transport, client },
       })
       return Effect.gen(function* () {
         const { transport: service } = yield* ClientContext
