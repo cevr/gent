@@ -134,6 +134,24 @@ describe("inline mermaid replace", () => {
     })
   }
 
+  // A `;` is a separator only between statements. A style value and a
+  // comment are not statements: a split there draws their text as nodes.
+  const notStatements: ReadonlyArray<readonly [string, string]> = [
+    ["graph LR\n  Alpha-->Beta\n  classDef hot fill:#f9f;stroke:#333", "stroke"],
+    ["graph LR\n  Alpha-->Beta\n  style Alpha fill:#f9f;stroke:#333", "stroke"],
+    ["graph LR\n  Alpha-->Beta\n  linkStyle 0 stroke:#f00;color:red", "color"],
+    ["graph LR\n  Alpha-->Beta; style Alpha fill:#f9f;stroke:#333", "stroke"],
+    ["graph LR\n  Alpha-->Beta %% note; Gamma-->Delta", "Gamma"],
+  ]
+  for (const [source, notDrawn] of notStatements) {
+    test(`${source.replaceAll("\n", " \\n ")} draws no ${notDrawn} node`, () => {
+      const drawn = uncached(`\`\`\`mermaid\n${source}\n\`\`\``, 120)
+      expect(drawn).toContain("Alpha")
+      expect(drawn).toContain("Beta")
+      expect(drawn).not.toContain(notDrawn)
+    })
+  }
+
   // Only an edge statement is an edge: a subgraph title keeps its text.
   test("a subgraph title stays as written", () => {
     const drawn = uncached(
