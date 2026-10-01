@@ -1658,23 +1658,28 @@ describe("App draft, shell and exit keys", () => {
       yield* waitForFrame(view.setup, () => view.shutdowns() > 0, "quit")
     }).pipe(Effect.timeout("10 seconds")),
   )
-  it.scopedLive("ctrl+c over the palette on an idle composer closes it and arms nothing", () =>
-    Effect.gen(function* () {
-      const view = yield* mountIdleSession()
-      view.setup.mockInput.pressKey("p", { ctrl: true })
-      yield* waitForFrame(view.setup, (frame) => frame.includes("Commands"), "palette")
-      view.setup.mockInput.pressKey("c", { ctrl: true })
-      const frame = yield* waitForFrame(
-        view.setup,
-        (next) => !next.includes("Commands"),
-        "palette closed",
-      )
-      expect(frame).not.toContain(CTRL_C_CUE)
-      view.setup.mockInput.pressKey("c", { ctrl: true })
-      yield* waitForFrame(view.setup, (next) => next.includes(CTRL_C_CUE), "the exit cue")
-      expect(view.shutdowns()).toBe(0)
-    }).pipe(Effect.timeout("10 seconds")),
-  )
+  for (const [protocol, kittyKeyboard] of [
+    ["legacy", false],
+    ["kitty", true],
+  ] as const) {
+    it.scopedLive(`ctrl+c over the palette closes it and arms nothing (${protocol} keys)`, () =>
+      Effect.gen(function* () {
+        const view = yield* mountIdleSession(createMockRuntime(), { kittyKeyboard })
+        view.setup.mockInput.pressKey("p", { ctrl: true })
+        yield* waitForFrame(view.setup, (frame) => frame.includes("Commands"), "palette")
+        view.setup.mockInput.pressKey("c", { ctrl: true })
+        const frame = yield* waitForFrame(
+          view.setup,
+          (next) => !next.includes("Commands"),
+          "palette closed",
+        )
+        expect(frame).not.toContain(CTRL_C_CUE)
+        view.setup.mockInput.pressKey("c", { ctrl: true })
+        yield* waitForFrame(view.setup, (next) => next.includes(CTRL_C_CUE), "the exit cue")
+        expect(view.shutdowns()).toBe(0)
+      }).pipe(Effect.timeout("10 seconds")),
+    )
+  }
   // The name column fits the longest name it shows; the description gives
   // way instead.
   it.scopedLive("the palette keeps command names whole and cuts the description", () =>

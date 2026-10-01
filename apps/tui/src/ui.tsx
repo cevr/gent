@@ -858,9 +858,10 @@ export function transitionSelectList(
 
 // ── Component ─────────────────────────────────────────────────────
 
-/** A printable ASCII character is filter input; anything else is a key. */
+/** Printable ASCII without shortcut modifiers is filter input. */
 const printableChar = (event: ScopedKeyboardEvent): Option.Option<string> =>
   Option.filter(Option.fromNullishOr(event.sequence), (sequence) => {
+    if (event.ctrl || event.meta || event.option || event.super || event.hyper) return false
     if (sequence.length !== 1) return false
     const code = sequence.charCodeAt(0)
     return code >= 32 && code <= 126
