@@ -76,11 +76,11 @@ export function headTailChars(text: string, maxChars: number = 64_000): HeadTail
   // The widest marker this text can need; a smaller count only shortens it.
   const room = maxChars - marker(total).length
   if (room < 0) {
-    const head = headWithin(text, maxChars, utf16Units)
+    const head = headChars(text, maxChars)
     return { text: head, truncated: true, totalChars: total, omittedChars: total - head.length }
   }
-  const head = headWithin(text, Math.floor(room / 2), utf16Units)
-  const tail = tailWithin(text, room - head.length, utf16Units)
+  const head = headChars(text, Math.floor(room / 2))
+  const tail = tailChars(text, room - head.length)
   const omittedChars = total - head.length - tail.length
   return {
     text: `${head}${marker(omittedChars)}${tail}`,
@@ -948,7 +948,6 @@ const CUT_MARKER = "…"
 
 /** The encoded size of one code point: once for an input field, twice for an output string (JSON in a JSON string). */
 type CodePointCost = (codePoint: string) => number
-const utf16Units: CodePointCost = (codePoint) => codePoint.length
 /** A string as JSON writes it inside quotes: the escaped text, quotes left off. */
 const jsonStringBody = (text: string): string => encodeJson(text).slice(1, -1)
 /**

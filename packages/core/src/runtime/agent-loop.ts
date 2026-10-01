@@ -137,7 +137,8 @@ import {
   sessionWorkingDirectory,
   suspendExtensions,
 } from "./extension-host.js"
-import type { ConfigService, RuntimeEnvironment } from "./config.js"
+import type { ConfigService } from "./config.js"
+import { RuntimeEnvironment } from "./config.js"
 import type {
   CapabilityError,
   CapabilityNotFoundError,
@@ -1684,6 +1685,7 @@ const makeAgentLoopBehavior = (
   Effect.gen(function* () {
     yield* ModelResolver
     const extensionRegistry = yield* ExtensionRegistry
+    const runtimeEnvironment = yield* RuntimeEnvironment
     const eventStore = yield* EventStore
     yield* ToolCallBindingStorage
     yield* TurnRecordStorage
@@ -1764,6 +1766,7 @@ const makeAgentLoopBehavior = (
           defaults: { baseSections },
         }).pipe(
           Effect.provideService(ExtensionRegistry, extensionRegistry),
+          Effect.provideService(RuntimeEnvironment, runtimeEnvironment),
           asAgentLoopError(`Cannot read session ${sessionId} for its profile`),
         ),
       )
@@ -2625,9 +2628,9 @@ const buildAgentLoopActorHandlers = (config: {
     })
 
     /**
-     * Re-entrant admission: the caller already holds the side-mutation permit
-     * (a running turn, a tool invocation, or an extension request). The item is
-     * queued durably here; the turn starts after the permit is released.
+     * Re-entrant admission from this branch's facade. The queue has its own
+     * permit, so requests that answer during a turn can also enqueue. The
+     * item starts once the side-mutation permit is available.
      */
     const admitFollowUp = Effect.fn("AgentLoopActor.admitFollowUp")(function* (
       handle: AgentLoopBehavior,
@@ -3178,8 +3181,8 @@ const buildAgentLoopActorHandlers = (config: {
               // cannot see a `scope: "branch"` service.
               Effect.provideContext(yield* handle.branchContext),
             )
-            // A request that does not change this branch's loop state answers
-            // while a turn runs; anything else waits for the permit the turn holds.
+            // Reads, extension-owned writes and independently serialized queue
+            // verbs answer during a turn; other mutations wait for its permit.
             if (rpcRegistry.answersDuringTurn(operation.extensionId, capabilityId)) {
               return yield* run
             }

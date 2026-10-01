@@ -290,10 +290,10 @@ export interface RequestInput<
    * holds the permit until it ends, so a client read or a `/btw` fork would
    * freeze for the whole turn.
    *
-   * Set it when the request does not change this branch's loop state (its
-   * queue, follow-ups or messages). Reads qualify, and so do writes outside
-   * the branch's loop: another session, a process resource, an extension
-   * file under its own lock. Default: the request waits for the turn.
+   * Reads and extension-owned writes under their own lock qualify. The
+   * Session facade's queued send and dequeueFollowUp also qualify: their
+   * queue owner serializes admission and removal independently of the turn.
+   * Changes that need the branch's side-mutation permit wait for the turn.
    */
   readonly answersDuringTurn?: boolean
   /** Optional slash-command presentation for public transport clients. */

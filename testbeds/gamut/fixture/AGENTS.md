@@ -27,12 +27,18 @@ A child runs as the `delegate` agent. The roster below says which role needs
 `overrides` on its `delegate.start` call. Do not invent other models.
 
 <!-- roster -->
-- Worker (fix or feature): the `delegate` agent, paired in `.gent/config.json` as `openai/gpt-6-luna` at `max`. Pass no model override.
-- Reviewer (second opinion on a diff): `overrides.modelId` = `openai/gpt-6-sol`, `overrides.reasoningEffort` = `high`
+
+- Worker (fix or feature): the `delegate` agent, paired in `.gent/config.json` as `openai/gpt-6.1-sol` at `high`.
+- Reviewer (second opinion on a diff): `overrides.modelId` = `openai/gpt-6.1-sol`, `overrides.reasoningEffort` = `high`
+- Repetitive mechanical changes following an established pattern only: `overrides.modelId` = `openai/gpt-6-luna`, `overrides.reasoningEffort` = `max`. Include transformation rules, worked examples, and the validation command in the task.
+
 <!-- /roster -->
 
 Children have no history. Each prompt must name the task, the files, the
 expected behaviour, and the command that proves it.
+
+Before changing a running child's model, save a compact handoff with its task,
+files, ownership, and validation receipts, then restart from that handoff.
 
 ## Rules for children
 

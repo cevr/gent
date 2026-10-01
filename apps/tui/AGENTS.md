@@ -11,7 +11,7 @@
 - **render() is async** - Use `Effect.promise(() => render(...))`, not `Effect.sync`.
 - **File naming** - All files kebab-case: `message-list.tsx`, `workspace.tsx`.
 - **Error boundaries** - A failure travels in the Effect error channel and shows in the status row or the open pane's note row. No try/catch (`effect/noTryCatch`).
-- **Exit pattern** - Exit through `useExit()` (`session.tsx`): it leaves the terminal through `leaveTerminal` (`message-list.tsx`: commit the live transcript tail with `flushTranscriptForExit`, then `renderer.destroy()`), then runs `useEnv().shutdown()`. A signal takes the same path: the entry's hold on the renderer (`holdUntilRendererDestroyed`) runs `leaveTerminal` when it is interrupted. Never `process.exit()` — it bypasses Effect scope finalizers (server lock cleanup, SQLite WAL checkpoint).
+- **Exit pattern** - Exit through `useExit()` (`session.tsx`): it leaves the terminal through `leaveTerminal` (`message-list.tsx`: commit the live transcript tail with `flushTranscriptForExit`, then `renderer.destroy()`), then runs `useEnv().shutdown()`. SIGINT and SIGTERM take the same path: the entry's hold on the renderer (`holdUntilRendererDestroyed`) runs `leaveTerminal` when it is interrupted, and the renderer leaves both signals to gent (`exitSignals` in `main.tsx`), so its own listener does not destroy it first. Never `process.exit()` — it bypasses Effect scope finalizers (server lock cleanup, SQLite WAL checkpoint).
 - **Intrinsic names** - Take the names from the opentui catalogue: some multi-word intrinsics use underscores (`tab_select`, `ascii_font`), `scrollbox` is one word.
 - **Use `<For>`** - Never `.map()` for JSX lists; use `<For each={items}>{item => ...}</For>`.
 
@@ -205,8 +205,13 @@ a committed row, which takes a full-width row's last cell (a table's right
 border). A whole item whose highlight does not settle, and every whole item
 at exit, commits as plain text (`PlainHistoryContext`); the plain layout has
 other rows, so rows of an item the live view shows in part commit as drawn. Closing the palette or a
-picker replays nothing, and no replay clears the terminal's saved lines.
-Exit commits the live tail first (`leaveTerminal`), and the renderer is
+picker replays nothing, so the shell's lines above gent stay. A replay (a
+resize, a disclosure change, an item changed in history, `/clear`, another
+session or branch) writes history again, so its reset clears the terminal's
+saved lines first (`resetHistory`): the old copy would show each row twice.
+Exit commits the live tail first (`leaveTerminal`; over the palette, a pane
+that holds the composer or the expanded transcript it takes the terminal's
+screen back first, as scrollback takes no rows from the alternate one), and the renderer is
 created with `clearOnShutdown: false`, so exit leaves every turn on screen.
 
 Answer markdown draws each top-level block on its own
@@ -224,6 +229,8 @@ library through `DiagramLibraryContext`.
 The transcript pins the reader's last prompt in one row (`↑ <first line>`) above
 the live tail while that prompt's own row is off screen: cut off the top of the
 live viewport, or deep enough in native history that the terminal no longer
+shows it. A prompt whose row history took among the live item's cut rows counts
+as on screen while the terminal still
 shows it (`promptOnScreen` in `message-list.tsx`, reckoned as if the row were
 drawn so it never flickers). It is derived from the displayed items, so it
 follows the branch and session in view. `readerPrompt` decides whose message

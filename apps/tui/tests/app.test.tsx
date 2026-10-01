@@ -44,13 +44,13 @@ import {
   AgentEvent,
   EventEnvelope,
   type ExtensionHealthSnapshot,
-  type ExtensionStatusScope,
   type GentClientRpcError,
   type QueueEntryInfo,
 } from "@gent/core/protocol"
 import {
   emptyQueueSnapshot,
   EventId,
+  type ExtensionStatusScope,
   makeTempDirectoryScoped,
   testAgent,
 } from "@gent/core/test-utils"
