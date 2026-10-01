@@ -216,7 +216,9 @@ created with `clearOnShutdown: false`, so exit leaves every turn on screen.
 
 Answer markdown draws each top-level block on its own
 (`internalBlockMode="top-level"`), so a heading never shows its `#` marks
-before its highlight lands. A ` ```mermaid ` fence is its own block,
+before its highlight lands. Answer tables keep a grid, fit their content
+within the answer and pad each cell by one column (`ANSWER_TABLE`).
+A ` ```mermaid ` fence is its own block,
 drawn by `useDiagramCodeBlocks` (`mermaid.ts`; beautiful-mermaid loads on
 the first fence, and history waits for the load to end; a failed load
 shows the fence as code): compact boxes in theme colors, no wrap, no

@@ -3361,6 +3361,31 @@ const committedTextOf = (event: CliRendererExternalOutputEvent) =>
 // last character: a table's right border is lost in history. Committed rows
 // keep the last column free.
 describe("native transcript rows in history", () => {
+  it.scopedLive("a small answer table fits its content with space inside each border", () =>
+    Effect.gen(function* () {
+      const table = "| Name | Place |\n| --- | --- |\n| gent | home |"
+      const setup = yield* renderScoped(
+        () => (
+          <MessageList
+            items={[assistant("table", table)]}
+            disclosure="collapsed"
+            syntaxStyle={syntaxStyle}
+          />
+        ),
+        { width: 120, height: 14 },
+      )
+      const frame = yield* waitForFrame(
+        setup,
+        (text) => text.includes("gent") && text.includes("┌"),
+        "the answer table",
+      )
+      expect(frame).toContain("│ Name │ Place │")
+      expect(frame).toContain("│ gent │ home  │")
+      const top = frame.split("\n").find((row) => row.includes("┌"))
+      expect(top?.trim()).toBe("┌──────┬───────┐")
+    }).pipe(Effect.timeout("5 seconds")),
+  )
+
   it.scopedLive(
     "a table wider than the answer keeps its right border in history",
     () =>

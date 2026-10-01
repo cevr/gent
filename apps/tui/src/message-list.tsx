@@ -677,9 +677,10 @@ const plainRenderable = (
  * before its highlight lands comes from its inline tokens: a heading never
  * shows its `#` marks, in the live view or in a row that reaches history
  * without its highlight. Tables keep their grid, which the top-level mode
- * would otherwise trade for borderless columns.
+ * would otherwise trade for borderless columns, with one column of padding
+ * and a width fitted to their content within the answer.
  */
-const ANSWER_TABLE = { style: "grid" } as const
+const ANSWER_TABLE = { style: "grid", cellPaddingX: 1, widthMode: "content" } as const
 
 function AssistantMessage(props: {
   content: string
