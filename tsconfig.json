@@ -28,7 +28,7 @@
         // `cryptoRandomUUID` diagnostics, through `globalThis` and aliases too.
         // `newPromise` stays on: `effect/noNewPromise` misses
         // `new globalThis.Promise` and an alias of `Promise`. Where oxlint turns
-        // `effect/noGlobals` off (the gamut driver and its tests, the capture
+        // `effect/noGlobals` off (the gamut driver, the capture
         // preload), the overrides below turn on each diagnostic for a global
         // the file does not use.
         "diagnosticSeverity": {
@@ -141,27 +141,6 @@
               "diagnosticSeverity": {
                 "cryptoRandomUUID": "error",
                 "cryptoRandomUUIDInEffect": "error",
-                "globalFetch": "error",
-                "globalFetchInEffect": "error",
-                "globalRandom": "error",
-                "globalRandomInEffect": "error",
-                "globalTimers": "error",
-                "globalTimersInEffect": "error",
-                "processEnv": "error",
-                "processEnvInEffect": "error"
-              }
-            }
-          },
-          {
-            "include": ["testbeds/gamut/tests/**/*.ts"],
-            "options": {
-              "diagnosticSeverity": {
-                "cryptoRandomUUID": "error",
-                "cryptoRandomUUIDInEffect": "error",
-                "globalConsole": "error",
-                "globalConsoleInEffect": "error",
-                "globalDate": "error",
-                "globalDateInEffect": "error",
                 "globalFetch": "error",
                 "globalFetchInEffect": "error",
                 "globalRandom": "error",
