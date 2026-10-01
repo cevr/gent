@@ -28,8 +28,9 @@
         // `cryptoRandomUUID` diagnostics, and `effect/noNewPromise` holds
         // `newPromise`, through `globalThis` and aliases too. Where oxlint drops
         // the `effect/noGlobals` built-in bans (the gamut driver, the capture
-        // preload), the overrides below turn on each diagnostic for a global
-        // the file does not use. The style suggestions are off (`strictBooleanExpressions`,
+        // preload), that file's `noGlobals` members in `.oxlintrc.json` list
+        // each global it does not use, so oxlint stays the one owner there
+        // too. The style suggestions are off (`strictBooleanExpressions`,
         // `effectMapFlatten`, `missedPipeableOpportunity`, `unnecessaryPipe`,
         // `unnecessaryPipeChain`), and so is `unstableApiUsage`: gent builds on
         // the `@stability unstable` surface (ai, sql, process, http, rpc, cli,
@@ -136,41 +137,6 @@
             "options": {
               "diagnosticSeverity": {
                 "strictEffectProvide": "off"
-              }
-            }
-          },
-          {
-            // The driver prints and stamps with `console` and `Date`.
-            "include": ["testbeds/gamut/gamut.ts"],
-            "options": {
-              "diagnosticSeverity": {
-                "cryptoRandomUUID": "error",
-                "cryptoRandomUUIDInEffect": "error",
-                "globalFetch": "error",
-                "globalFetchInEffect": "error",
-                "globalRandom": "error",
-                "globalRandomInEffect": "error",
-                "globalTimers": "error",
-                "globalTimersInEffect": "error",
-                "processEnv": "error",
-                "processEnvInEffect": "error"
-              }
-            }
-          },
-          {
-            // The preload stamps with `Date`, replaces `fetch` and reads its
-            // environment.
-            "include": ["docs/architecture/fetch-capture.ts"],
-            "options": {
-              "diagnosticSeverity": {
-                "cryptoRandomUUID": "error",
-                "cryptoRandomUUIDInEffect": "error",
-                "globalConsole": "error",
-                "globalConsoleInEffect": "error",
-                "globalRandom": "error",
-                "globalRandomInEffect": "error",
-                "globalTimers": "error",
-                "globalTimersInEffect": "error"
               }
             }
           }

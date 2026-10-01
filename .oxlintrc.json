@@ -282,7 +282,9 @@
       "files": ["testbeds/gamut/gamut.ts"],
       "rules": {
         "effect/noAsyncFunction": "off",
-        // The script reaches the host directly; only the retired Bun members stay out.
+        // The script reaches the host through Bun's shell, `console` and `Date`;
+        // these members are the bans it keeps, and noGlobals is their one owner.
+        // `process.env` is held by `node/no-process-env` from the root rules.
         "effect/noGlobals": [
           "error",
           {
@@ -291,6 +293,23 @@
               "Bun": {
                 "properties": ["Glob", "randomUUIDv7"],
                 "use": "Effect FileSystem to list files, GentPlatform.randomId for ids"
+              },
+              "fetch": {
+                "use": "Bun's $ shell, as the models.dev read does with curl"
+              },
+              "setTimeout": {
+                "use": "a deadline from Date.now() polled by the driver's own wait, or Effect.sleep"
+              },
+              "setInterval": {
+                "use": "the driver's own poll loop, or Effect Schedule"
+              },
+              "Math": {
+                "properties": ["random"],
+                "use": "GentPlatform.randomId or Effect Random"
+              },
+              "crypto": {
+                "properties": ["randomUUID"],
+                "use": "GentPlatform.randomId or Effect Crypto"
               }
             }
           }
@@ -315,7 +334,9 @@
       "rules": {
         "effect/noAs": "off",
         "effect/noAsyncFunction": "off",
-        // The preload reaches the host directly; only the retired Bun members stay out.
+        // The preload replaces `fetch`, stamps with `Date` and reads its
+        // environment; these members are the bans it keeps, and noGlobals is
+        // their one owner.
         "effect/noGlobals": [
           "error",
           {
@@ -324,6 +345,23 @@
               "Bun": {
                 "properties": ["Glob", "randomUUIDv7"],
                 "use": "Effect FileSystem to list files, GentPlatform.randomId for ids"
+              },
+              "console": {
+                "use": "the capture log the preload writes under its scratch directory"
+              },
+              "setTimeout": {
+                "use": "a deadline from Date.now() polled by the driver's own wait, or Effect.sleep"
+              },
+              "setInterval": {
+                "use": "the driver's own poll loop, or Effect Schedule"
+              },
+              "Math": {
+                "properties": ["random"],
+                "use": "GentPlatform.randomId or Effect Random"
+              },
+              "crypto": {
+                "properties": ["randomUUID"],
+                "use": "GentPlatform.randomId or Effect Crypto"
               }
             }
           }
