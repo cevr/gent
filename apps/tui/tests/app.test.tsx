@@ -4679,6 +4679,29 @@ describe("App clipboard", () => {
       expect(runs.length).toBe(1)
     }).pipe(Effect.timeout("8 seconds")),
   )
+
+  // Inside tmux OpenTUI sends the DCS-wrapped OSC 52, which tmux drops by
+  // default, so a sent write proves nothing there: only tmux's exit does. A
+  // tmux too old for `load-buffer -w`, or with `set-clipboard off`, exits 1.
+  it.scopedLive("inside tmux a copy tmux refuses is no copy, though OSC 52 was sent", () =>
+    Effect.gen(function* () {
+      const runs: Array<{ args: ReadonlyArray<string>; stdin: string }> = []
+      const { setup, output } = yield* mountOAuthScreen(
+        deviceUrl,
+        recordedTmux(runs, tmuxEnv, ["false"]),
+      )
+
+      setup.mockInput.pressKey("y", { ctrl: true })
+      const frame = yield* waitForFrame(
+        setup,
+        (next) => next.includes("Could not reach the clipboard"),
+        "the unreachable note",
+      )
+      expect(frame).not.toContain("URL copied")
+      expect(output.written()).toContain(Base64.encode(deviceUrl))
+      expect(runs.length).toBe(1)
+    }).pipe(Effect.timeout("8 seconds")),
+  )
 })
 
 // ── agents view on the left arrow ───────────────────────────────────────────
