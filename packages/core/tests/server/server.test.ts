@@ -20,8 +20,6 @@ import {
   buildExtensionHealthSnapshot,
   getSessionSnapshot,
   SessionMutationsLive,
-  buildBranchTree,
-  getBranchTree,
   RpcHandlersLive,
 } from "../../src/server/server"
 import { ExtensionHealthSnapshot, GentRpcs } from "../../src/server/rpc"
@@ -94,7 +92,7 @@ import {
   EventStoreError,
 } from "../../src/domain/event"
 import { BunServices } from "@effect/platform-bun"
-import { SqlClient, type SqlError } from "effect/sql"
+import { SqlClient } from "effect/sql"
 import { ModelResolver } from "../../src/runtime/provider"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
 import { RpcClient, RpcTest } from "effect/rpc"
@@ -341,38 +339,9 @@ const racySessionMutationsLayer = (params: {
       }),
   })
 
-/**
- * Session mutations whose first read of `sessionId` is followed at once by a
- * racing writer's committed change (`racingWrite`, raw SQL). It stands for a
- * `/model` switch or a rename tool call that lands between a mutation's read
- * and its write.
- */
-const interleavedSessionMutationsLayer = (params: {
-  readonly sessionId: SessionId
-  readonly racingWrite: (sql: SqlClient.SqlClient) => Effect.Effect<unknown, SqlError.SqlError>
-}) =>
-  sessionMutationsTestLayer({
-    sessionStorage: (sessions) =>
-      Effect.gen(function* () {
-        const sql = yield* SqlClient.SqlClient
-        let fired = false
-        return SessionStorage.of({
-          ...sessions,
-          getSession: (id: SessionId) =>
-            Effect.gen(function* () {
-              const found = yield* sessions.getSession(id)
-              if (fired || id !== params.sessionId) return found
-              fired = true
-              yield* params.racingWrite(sql).pipe(Effect.orDie)
-              return found
-            }),
-        })
-      }),
-  })
-
 // ── extension health ────────────────────────────────────────────────────────
 
-describe("buildExtensionHealthSnapshot", () => {
+describe("extension health snapshot", () => {
   test("reports one typed issue row per failed extension", () => {
     const snapshot = buildExtensionHealthSnapshot([
       {
@@ -546,69 +515,54 @@ describe("buildExtensionHealthSnapshot", () => {
 
 // ── branch tree ─────────────────────────────────────────────────────────────
 
-// `getBranchTree` composes `BranchStorage.listBranches`,
-// `BranchStorage.countMessagesByBranches` and the pure `buildBranchTree`.
-
-const SESSION_ID = SessionId.make("test-session")
-const ROOT_ID = BranchId.make("branch-root")
-const CHILD_ID = BranchId.make("branch-child")
-const ORPHAN_ID = BranchId.make("branch-orphan")
-
-const makeBranch = (id: BranchId, createdMs: number, parentBranchId?: BranchId) => {
-  const base = {
-    id,
-    sessionId: SESSION_ID,
-    createdAt: dateFromMillis(createdMs),
-  }
-  if (Predicate.isUndefined(parentBranchId)) return new Branch(base)
-  return new Branch({ ...base, parentBranchId })
-}
-
-const die = (label: string) => (): Effect.Effect<never, StorageError, never> =>
-  Effect.die(`${label} not wired in test`)
-
-const branchStorageLayer = (
-  branches: ReadonlyArray<Branch>,
-  counts: ReadonlyMap<BranchId, number>,
-) =>
-  Layer.succeed(
-    BranchStorage,
-    BranchStorage.of({
-      createBranch: die("createBranch"),
-      getBranch: die("getBranch"),
-      listBranches: () => Effect.succeed(branches),
-      countMessagesByBranches: () => Effect.succeed(counts),
-    }),
-  )
-
 describe("branch tree", () => {
   it.live("nests each branch under its parent with its message count", () =>
-    Effect.gen(function* () {
-      const branches = [
-        makeBranch(ROOT_ID, 0),
-        makeBranch(CHILD_ID, 100, ROOT_ID),
-        makeBranch(ORPHAN_ID, 50),
-      ]
-      const counts = new Map<BranchId, number>([
-        [ROOT_ID, 3],
-        [CHILD_ID, 7],
-        [ORPHAN_ID, 1],
-      ])
-      const tree = yield* getBranchTree(SESSION_ID).pipe(
-        Effect.provide(branchStorageLayer(branches, counts)),
-      )
-      // Assert exact equality against the pure builder. A regression
-      // that drops listBranches' or countMessagesByBranches' values
-      // (e.g. passing [] or an empty map) would fail this equality.
-      expect(tree).toEqual(buildBranchTree(branches, counts))
-      // Sanity check the shape so the equality target is non-trivial.
-      expect(tree).toHaveLength(2)
-      const root = tree.find((node) => node.branch.id === ROOT_ID)
-      expect(root?.messageCount).toBe(3)
-      expect(root?.children).toHaveLength(1)
-      expect(root?.children[0]?.branch.id).toBe(CHILD_ID)
-      expect(root?.children[0]?.messageCount).toBe(7)
-    }),
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          textStep("first reply"),
+        ])
+        const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
+        const { sessionId, branchId: rootId } = yield* client.session.create({})
+        yield* client.message.send({ sessionId, branchId: rootId, content: "hello" })
+        const rootMessages = yield* waitFor(
+          client.message.list({ branchId: rootId }),
+          (messages) => messages.some((message) => message.role === "assistant"),
+          5_000,
+          "the first reply",
+        )
+        const prompt = rootMessages.find((message) => message.role === "user")
+        if (Predicate.isUndefined(prompt)) return yield* Effect.die("prompt missing")
+        const { branchId: forkId } = yield* client.branch.fork({
+          sessionId,
+          fromBranchId: rootId,
+          atMessageId: prompt.id,
+        })
+        const { branchId: siblingId } = yield* client.branch.create({ sessionId })
+        const forkMessages = yield* client.message.list({ branchId: forkId })
+
+        const tree = yield* client.branch.getTree({ sessionId })
+
+        expect(
+          tree.map((node) => ({
+            id: node.branch.id,
+            messageCount: node.messageCount,
+            children: node.children.map((child) => ({
+              id: child.branch.id,
+              messageCount: child.messageCount,
+              children: child.children.length,
+            })),
+          })),
+        ).toEqual([
+          {
+            id: rootId,
+            messageCount: rootMessages.length,
+            children: [{ id: forkId, messageCount: forkMessages.length, children: 0 }],
+          },
+          { id: siblingId, messageCount: 0, children: [] },
+        ])
+      }).pipe(Effect.timeout("8 seconds")),
+    ),
   )
 })
 
@@ -910,13 +864,13 @@ describe("session command persistence", () => {
     }).pipe(Effect.provide(failingSessionMutationsLayer), Effect.timeout("4 seconds")),
   )
 
-  it.live("a rename keeps a model change that lands between its read and its write", () => {
-    const sessionId = SessionId.make("session-rename-race")
-    const branchId = BranchId.make("branch-rename-race")
-    return Effect.gen(function* () {
+  it.live("a long name is cut whole: an emoji at the limit and a space before it go", () =>
+    Effect.gen(function* () {
       const mutations = yield* SessionMutations
       const sessions = yield* SessionStorage
       const branches = yield* BranchStorage
+      const sessionId = SessionId.make("session-rename-cut")
+      const branchId = BranchId.make("branch-rename-cut")
       yield* createActiveSessionFixture({
         sessions,
         branches,
@@ -926,65 +880,28 @@ describe("session command persistence", () => {
         name: "before",
       })
 
-      yield* mutations.renameSession({ sessionId, name: "after" })
+      const emojiAtLimit = yield* mutations.renameSession({
+        sessionId,
+        name: `${"a".repeat(79)}😀 tail`,
+      })
+      expect(emojiAtLimit).toEqual({ renamed: true, name: "a".repeat(79) })
+      expect((yield* sessions.getSession(sessionId))?.name).toBe("a".repeat(79))
 
-      const stored = yield* sessions.getSession(sessionId)
-      expect(stored?.name).toBe("after")
-      expect(stored?.modelId).toBe(ModelId.make("racer/model"))
-    }).pipe(
-      Effect.provide(
-        interleavedSessionMutationsLayer({
-          sessionId,
-          racingWrite: (sql) =>
-            sql`UPDATE sessions SET model_id = ${"racer/model"} WHERE id = ${sessionId}`,
-        }),
-      ),
-      Effect.timeout("4 seconds"),
-    )
-  })
-
-  it.live(
-    "a rename that expects the default name keeps a name set between its read and its write",
-    () => {
-      const sessionId = SessionId.make("session-rename-expected")
-      const branchId = BranchId.make("branch-rename-expected")
-      return Effect.gen(function* () {
-        const mutations = yield* SessionMutations
-        const sessions = yield* SessionStorage
-        const branches = yield* BranchStorage
-        yield* createActiveSessionFixture({
-          sessions,
-          branches,
-          sessionId,
-          branchId,
-          now: FIXED_NOW,
-          name: DEFAULT_SESSION_NAME,
-        })
-
-        const result = yield* mutations.renameSession({
-          sessionId,
-          name: "from the first message",
-          expectedName: DEFAULT_SESSION_NAME,
-        })
-
-        expect(result).toEqual({ renamed: false })
-        expect((yield* sessions.getSession(sessionId))?.name).toBe("asked for by the user")
-      }).pipe(
-        Effect.provide(
-          interleavedSessionMutationsLayer({
-            sessionId,
-            racingWrite: (sql) =>
-              sql`UPDATE sessions SET name = ${"asked for by the user"} WHERE id = ${sessionId}`,
-          }),
-        ),
-        Effect.timeout("4 seconds"),
-      )
-    },
+      const spaceAtLimit = yield* mutations.renameSession({
+        sessionId,
+        name: `${"b".repeat(79)} tail`,
+      })
+      expect(spaceAtLimit).toEqual({ renamed: true, name: "b".repeat(79) })
+      expect((yield* sessions.getSession(sessionId))?.name).toBe("b".repeat(79))
+    }).pipe(Effect.provide(sessionMutationsLayer), Effect.timeout("4 seconds")),
   )
 
-  it.live("a settings change keeps a rename that lands between its read and its write", () => {
-    const sessionId = SessionId.make("session-settings-race")
-    const branchId = BranchId.make("branch-settings-race")
+  // The read and the write of each mutation share one write transaction, so
+  // no writer lands between them; what stays to check is that each write
+  // keeps the fields it does not name.
+  it.live("a rename and a settings change each keep the other's fields", () => {
+    const sessionId = SessionId.make("session-columns")
+    const branchId = BranchId.make("branch-columns")
     return Effect.gen(function* () {
       const mutations = yield* SessionMutations
       const sessions = yield* SessionStorage
@@ -1003,22 +920,54 @@ describe("session command persistence", () => {
         modelId: Option.some(ModelId.make("chosen/model")),
         reasoningLevel: Option.some("high"),
       })
+      yield* mutations.renameSession({ sessionId, name: "after" })
+      yield* mutations.updateSettings({ sessionId, reasoningLevel: Option.some("low") })
 
       const stored = yield* sessions.getSession(sessionId)
-      expect(stored?.name).toBe("renamed meanwhile")
+      expect(stored?.name).toBe("after")
       expect(stored?.modelId).toBe(ModelId.make("chosen/model"))
-      expect(stored?.reasoningLevel).toBe("high")
-    }).pipe(
-      Effect.provide(
-        interleavedSessionMutationsLayer({
-          sessionId,
-          racingWrite: (sql) =>
-            sql`UPDATE sessions SET name = ${"renamed meanwhile"} WHERE id = ${sessionId}`,
-        }),
-      ),
-      Effect.timeout("4 seconds"),
-    )
+      expect(stored?.reasoningLevel).toBe("low")
+    }).pipe(Effect.provide(sessionMutationsLayer), Effect.timeout("4 seconds"))
   })
+
+  it.live("a rename that expects the default name keeps a name the user set first", () =>
+    Effect.gen(function* () {
+      const mutations = yield* SessionMutations
+      const sessions = yield* SessionStorage
+      const branches = yield* BranchStorage
+      const named = SessionId.make("session-rename-expected")
+      const unnamed = SessionId.make("session-rename-default")
+      yield* createActiveSessionFixture({
+        sessions,
+        branches,
+        sessionId: named,
+        branchId: BranchId.make("branch-rename-expected"),
+        now: FIXED_NOW,
+        name: "asked for by the user",
+      })
+      yield* createActiveSessionFixture({
+        sessions,
+        branches,
+        sessionId: unnamed,
+        branchId: BranchId.make("branch-rename-default"),
+        now: FIXED_NOW,
+        name: DEFAULT_SESSION_NAME,
+      })
+      const fromFirstMessage = {
+        name: "from the first message",
+        expectedName: DEFAULT_SESSION_NAME,
+      }
+
+      expect(yield* mutations.renameSession({ sessionId: named, ...fromFirstMessage })).toEqual({
+        renamed: false,
+      })
+      expect((yield* sessions.getSession(named))?.name).toBe("asked for by the user")
+      expect(yield* mutations.renameSession({ sessionId: unnamed, ...fromFirstMessage })).toEqual({
+        renamed: true,
+        name: "from the first message",
+      })
+    }).pipe(Effect.provide(sessionMutationsLayer), Effect.timeout("4 seconds")),
+  )
 
   it.live("rolls back active branch switch when event publication fails", () =>
     Effect.gen(function* () {
@@ -1677,14 +1626,11 @@ describe("session.delete", () => {
  * replay-to-live handoff are not dropped.
  */
 
-// `retries: false` turns off the debug model's synthetic 429s, which fire on
-// a hash of the user text; without it a message's own wording decides whether
-// the turn retries.
 const makeDebugClient = () =>
   createRpcClient(
     createE2ELayer({
       ...e2ePreset,
-      providerLayer: LanguageModelLayers.debug({ retries: false }),
+      providerLayer: LanguageModelLayers.debug(),
     }),
   )
 
@@ -2125,9 +2071,7 @@ describe("session queue and runtime watch", () => {
  */
 
 // The debug model answers every turn, so a test may send more than one
-// message without scripting a step per send. `retries: false` turns off its
-// synthetic 429s, which fire on a hash of the user text and would otherwise
-// make a message's own wording decide whether the turn retries.
+// message without scripting a step per send.
 describe("session transport contract", () => {
   it.live(
     "a created session appears in list and get with an empty snapshot and queue",

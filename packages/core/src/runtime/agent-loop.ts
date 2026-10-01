@@ -52,6 +52,7 @@ import {
   type RequesterBranch,
   requesterBranchKey,
   SteeringQueueEntryInfo,
+  type SteerCommand,
 } from "../domain/message.js"
 import {
   AgentLoopQueueStorage,
@@ -77,7 +78,6 @@ import {
   FollowUpQueueFull,
   type HandlerRequest,
   type LoopState,
-  type MessageType,
   parseEntityId,
   type QueueFollowUpInput,
   dequeueFollowUpOn,
@@ -90,7 +90,6 @@ import {
   type RunningState,
   type SessionRuntimeState,
   SessionRuntimeStateSchema,
-  type SteerCommandType,
   type SteerInput,
   steerLoop,
   submitUserMessage,
@@ -532,7 +531,7 @@ const turnAdmitted = (s: AgentLoopState, messageId: MessageId): boolean =>
  * one question.
  */
 
-export const canStartTurnNow = (s: AgentLoopState): boolean =>
+const canStartTurnNow = (s: AgentLoopState): boolean =>
   s.state._tag === "Idle" && Predicate.isUndefined(s.startingState)
 
 /** How many failures this branch had recorded, or 0 if it has had none. */
@@ -1549,7 +1548,7 @@ type DequeueFollowUp = (input: {
  * Steers the loop's own branch re-entrantly. The grant is read at admission,
  * inside the caller, so a client request's steer is admitted while it is live.
  */
-type InterjectCommand = Extract<SteerCommandType, { readonly _tag: "Interject" }>
+type InterjectCommand = Extract<SteerCommand, { readonly _tag: "Interject" }>
 
 type SteerOwnBranch = (
   command: InterjectCommand,
@@ -1586,7 +1585,7 @@ class AgentLoopFollowUp extends Context.Service<AgentLoopFollowUp, AgentLoopFoll
  *
  * The holds are counted, because the entity has one keep-alive switch: the
  * first hold turns it on and the last release turns it off. An entity with
- * no hold passivates as before. The local test actor has no cluster and no
+ * no hold passivates when idle. The local test actor has no cluster and no
  * reaper, so there a hold does nothing.
  */
 interface AgentLoopResidencyService {
@@ -2547,7 +2546,7 @@ const buildAgentLoopActorHandlers = (config: {
     type FollowUpInput = {
       /** Keys the message id so repeated admissions and later removal target one item. */
       readonly sourceId?: string
-      readonly message?: MessageType
+      readonly message?: Message
       readonly content?: string
       readonly metadata?: MessageMetadata
       readonly wake?: boolean
@@ -3051,7 +3050,7 @@ const buildAgentLoopActorHandlers = (config: {
 
     const applySteer = Effect.fn("AgentLoopActor.applySteer")(function* (
       commandId: ActorCommandId,
-      command: SteerCommandType,
+      command: SteerCommand,
       sender: Option.Option<RequesterBranch>,
     ) {
       yield* ensureTarget(command)

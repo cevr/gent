@@ -588,7 +588,12 @@ const resolver = (layer: Layer.Layer<LanguageModel.LanguageModel>): Layer.Layer<
 export const LanguageModelLayers = {
   resolver,
   testStream,
-  debug: ScriptedLanguageModel.debug,
+  /**
+   * The scripted model without its rate-limit retries unless a test asks for
+   * them (`retries: true`): a retry pays the real backoff.
+   */
+  debug: (options?: Parameters<typeof ScriptedLanguageModel.debug>[0]) =>
+    ScriptedLanguageModel.debug({ retries: false, ...options }),
   get empty() {
     return ScriptedLanguageModel.empty
   },

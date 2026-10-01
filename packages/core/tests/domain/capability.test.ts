@@ -340,7 +340,7 @@ describe("turn prompt composition", () => {
     expect(result).not.toContain("Prefer grep over bash")
   })
 
-  test("never renders a delegation roster: children inherit the current agent", () => {
+  test("the prompt never renders a delegation roster", () => {
     const tools = [makeTool("delegate", { description: "Delegate work" })]
     const result = compileSystemPrompt(buildTurnPromptSections(baseSections, agent, tools))
     expect(result).not.toContain("## Delegation Targets")

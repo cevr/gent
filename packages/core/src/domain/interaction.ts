@@ -8,7 +8,8 @@ import { BranchId, InteractionRequestId, SessionId, ToolCallId } from "./ids.js"
 /**
  * Cold interaction mechanics.
  *
- * Tools call `ctx.interaction.approve({ text, metadata? })` to request human input.
+ * Tools call `ctx.Interaction.approve({ text, metadata? })` on
+ * `ExtensionContext` to request human input.
  * The approval service generates a requestId, persists to storage,
  * publishes InteractionPresented, then fails with InteractionPendingError.
  * The agent loop machine catches this and parks in WaitingForInteraction.
@@ -41,14 +42,14 @@ import { BranchId, InteractionRequestId, SessionId, ToolCallId } from "./ids.js"
 
 // ── approval schemas ────────────────────────────────────────────────────────
 
-/** Request params for ctx.interaction.approve() */
+/** Request params for ctx.Interaction.approve() */
 const ApprovalRequestSchema = Schema.Struct({
   text: Schema.String,
   metadata: Schema.optional(Schema.Unknown),
 })
 export type ApprovalRequest = Schema.Schema.Type<typeof ApprovalRequestSchema>
 
-/** Decision returned from ctx.interaction.approve() */
+/** Decision returned from ctx.Interaction.approve() */
 export const ApprovalDecisionSchema = Schema.Struct({
   approved: Schema.Boolean,
   notes: Schema.optional(Schema.String),

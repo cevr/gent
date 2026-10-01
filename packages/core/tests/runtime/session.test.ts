@@ -62,9 +62,7 @@ import {
   createE2ELayer,
   createRpcClient,
   createRpcHarness,
-  RecordingEventStore,
   runtimeHostContext,
-  SequenceRecorder,
   testSqliteStorage,
 } from "../../src/test-utils/harness"
 import {
@@ -84,6 +82,7 @@ import {
   SessionProfileCache,
 } from "../../src/runtime/extension-host"
 import { AgentLoopLiveActor, AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
+import { EventStore } from "../../src/domain/event"
 import { InteractionPendingError } from "../../src/domain/interaction"
 import { noBranchTools, ToolRunner } from "../../src/runtime/tools"
 import { GentPlatform } from "../../src/runtime/gent-platform"
@@ -144,8 +143,7 @@ const makeRuntimeLayer = (
   profileCacheLayer?: Layer.Layer<SessionProfileCache>,
 ) => {
   const resolvedExtensions = makeTestExtensions(tools)
-  const recorderLayer = SequenceRecorder.Live
-  const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
+  const eventStoreLayer = EventStore.Memory
   const storageLayer = testSqliteStorage(noBranchTools.storage, noBranchTools.migrations)
   const baseDepsWithoutProfile = Layer.mergeAll(
     storageLayer,
@@ -154,7 +152,6 @@ const makeRuntimeLayer = (
     LanguageModelLayers.resolver(providerLayer),
     ExtensionRegistry.fromResolved(resolvedExtensions),
     eventStoreLayer,
-    recorderLayer,
     ToolRunner.Test(),
     ApprovalService.Test(),
     RuntimeEnvironment.Live({
@@ -184,8 +181,7 @@ const makeLiveToolRuntimeLayer = (
   tools: ReadonlyArray<ToolCapability>,
 ) => {
   const resolvedExtensions = makeTestExtensions(tools)
-  const recorderLayer = SequenceRecorder.Live
-  const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
+  const eventStoreLayer = EventStore.Memory
   const storageLayer = testSqliteStorage(noBranchTools.storage, noBranchTools.migrations)
   const baseDeps = Layer.mergeAll(
     storageLayer,
@@ -194,7 +190,6 @@ const makeLiveToolRuntimeLayer = (
     LanguageModelLayers.resolver(providerLayer),
     ExtensionRegistry.fromResolved(resolvedExtensions),
     eventStoreLayer,
-    recorderLayer,
     RuntimeEnvironment.Live({
       cwd: "/nonexistent/gent-test-cwd",
       home: "/nonexistent/gent-test-home",

@@ -501,9 +501,6 @@ const RequestExtensionFields = {
   input: ExtensionRequestInputEnvelope,
 }
 
-export type MessageType = Schema.Schema.Type<typeof Message>
-export type SteerCommandType = Schema.Schema.Type<typeof SteerCommand>
-
 type FieldsInput<F extends Schema.Struct.Fields> = Schema.Struct<F>["Type"]
 export type TurnSubmissionInput = FieldsInput<typeof TurnSubmissionFields>
 export type QueueFollowUpInput = FieldsInput<typeof QueueFollowUpFields>
@@ -719,7 +716,7 @@ export const submitUserMessage = Effect.fn("AgentLoop.client.submitUserMessage")
  * is NOT what's being relaxed here.
  */
 export const steerLoop = Effect.fn("AgentLoop.client.steer")(function* (
-  command: SteerCommandType,
+  command: SteerCommand,
   sender?: RequesterBranch,
 ) {
   const payload = {

@@ -10,6 +10,7 @@ import {
 import * as Prompt from "effect/ai/Prompt"
 import type * as Response from "effect/ai/Response"
 import * as AiTool from "effect/ai/Tool"
+import type { TurnNotice } from "./extension.js"
 import { clipSummary, summarizeOutput } from "./message.js"
 
 // ── prompt ──────────────────────────────────────────────────────────────────
@@ -92,18 +93,35 @@ export function environmentSection(options: {
   }
 }
 
+/** A date line: the user's local date with its time zone (a UTC date is a day ahead every evening west of Greenwich). */
+const dateLine = (day: DateTime.Zoned): string =>
+  `Date: ${DateTime.formatIsoDate(day)} (${DateTime.zoneToString(day.zone)})`
+
 /**
- * Today's date, written per turn right after the environment section, so a
- * process that runs past midnight tells the model the new date. It is the
- * user's local date with its time zone: a UTC date is a day ahead for every
- * evening west of Greenwich. It changes the system prompt, and with it the
- * cached prefix, at most once a day.
+ * The date in the system prompt, right after the environment section: the
+ * day the session tree's root session started. It is fixed for the tree, so
+ * the cached prefix stays byte-identical past midnight and a child reads its
+ * parent's cache entry. `dateNotice` tells a later turn today's date.
  */
-export const dateSection = (now: DateTime.Zoned): PromptSection => ({
+export const dateSection = (day: DateTime.Zoned): PromptSection => ({
   id: "date",
-  content: `Date: ${DateTime.formatIsoDate(now)} (${DateTime.zoneToString(now.zone)})`,
+  content: dateLine(day),
   priority: 61,
 })
+
+/**
+ * Today's date as a turn notice, after the conversation, when today is not
+ * the prompt's date: the model learns the new date without a rewrite of the
+ * cached prefix. Nothing stores it.
+ */
+export const dateNotice = (
+  prompted: DateTime.Zoned,
+  today: DateTime.Zoned,
+): Option.Option<TurnNotice> =>
+  Option.liftPredicate(
+    { id: "date", content: dateLine(today), keys: [] },
+    () => DateTime.formatIsoDate(prompted) !== DateTime.formatIsoDate(today),
+  )
 
 // ── capability ──────────────────────────────────────────────────────────────
 
