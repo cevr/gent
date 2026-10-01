@@ -1,37 +1,27 @@
 /**
  * Oxlint JS plugin: gent's own rules, one line each. Each rule's doc comment
- * below states it in full.
+ * below states it in full. A generic Effect rule lives in oxlint-plugin-effect;
+ * a rule here is gent's own, or holds a line upstream does not hold yet and
+ * names the upstream change that retires it.
  *
  * - core-entry-boundary: extensions read only the authoring entries of `@gent/core`.
  * - declared-workspace-imports: a package imports only the workspace packages it declares.
- * - no-positional-log-error: an error goes to `annotateLogs`, not a second log argument.
- * - no-with-wrapper-call: an Effect is piped through an adapter, not wrapped in a `withX` call.
- * - no-runpromise-outside-boundary: `Effect.runPromise` runs only in `*-boundary.ts` files.
  * - no-define-extension-throw: an extension factory fails through its Effect, never a throw.
- * - no-dynamic-imports: no `import(...)` or `require(...)` without an architectural allow comment.
- * - no-promise-control-flow-in-tests: a test has no `.then`/`.catch`/`.finally` or `runPromise`.
- * - no-bun-outside-adapter: `Bun.*` and host facts stay in the platform adapters.
- * - no-hand-rolled-tagged-union: a tagged union is a Schema, not a `{ _tag }` literal union.
- * - no-die-in-test-helpers: a test helper does not die on a timeout.
- * - no-sleep: a test does not sleep without a `gent/no-sleep: allow <reason>` comment.
- * - no-inert-it: `it` from effect-bun-test is not called bare.
+ * - no-dynamic-imports: no `import(...)` or `require(...)` without an architectural allow
+ *   comment (until upstream 0.19.0 `effect/noDynamicImports` strict mode).
+ * - no-bun-outside-adapter: `Bun.*` and host facts stay in the platform adapters (until
+ *   upstream 0.19.0).
+ * - no-runtime-run-promise-in-tests: test code runs no Effect through a runtime's `runPromise`.
+ * - no-with-wrapper-helper-in-test-code: test code outside a `tests/` tree has no `withX` helper.
+ * - no-wrapped-sleep-in-tests: test code waits on no sleep wrapped in a larger expression.
+ * - no-timeout-die-payload-in-tests: test code dies on no timeout spelled in an object payload.
  * - child-session-writer-admits: a core child-session writer admits the nesting depth first.
- * - no-lint-evasion: no spelling of `undefined` or `unknown` that only evades a rule.
  * - no-identity-encode: a whole-object JSON encode decides no identity.
  */
 
 import { existsSync, readFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import type { Context, Plugin, Range } from "@oxlint/plugins"
-
-const LOG_METHODS = new Set([
-  "logInfo",
-  "logWarning",
-  "logError",
-  "logDebug",
-  "logTrace",
-  "logFatal",
-])
 
 /**
  * The view a structural walk takes of any ESTree node: a `type` tag and the
@@ -53,16 +43,21 @@ const fieldOf = (node: AstNode, field: string): unknown => Reflect.get(node, fie
 const isAstNode = (value: unknown): value is AstNode =>
   isRecord(value) && typeof value["type"] === "string" && Array.isArray(value["range"])
 
-const walkAst = (node: unknown, visit: (n: AstNode) => void): void => {
+/** Visit `node` and its descendants, leaving out each subtree `skip` names. */
+const walkAst = (
+  node: unknown,
+  visit: (n: AstNode) => void,
+  skip: (n: AstNode) => boolean = () => false,
+): void => {
   if (Array.isArray(node)) {
-    for (const child of node) walkAst(child, visit)
+    for (const child of node) walkAst(child, visit, skip)
     return
   }
-  if (!isAstNode(node)) return
+  if (!isAstNode(node) || skip(node)) return
   visit(node)
   for (const key in node) {
     if (key === "type" || key === "loc" || key === "range" || key === "parent") continue
-    walkAst(fieldOf(node, key), visit)
+    walkAst(fieldOf(node, key), visit, skip)
   }
 }
 
@@ -283,44 +278,6 @@ const importTypeSourceOf = (node: AstNode): string | undefined => {
   return literal === undefined ? undefined : getStringField(literal, "value")
 }
 
-const PROMISE_CHAIN_METHODS = new Set(["then", "catch", "finally"])
-
-/** An Effect module: `effect`, its subpaths, and the `@effect/*` packages. */
-const EFFECT_MODULE = /^(?:effect(?:\/.*)?|@effect\/.+)$/
-
-/**
- * The local names an Effect-module import binds, by name or as a namespace:
- * `import { Stream } from "effect"`, `import * as Layer from "effect/Layer"`.
- * Such a receiver's `catch` is a combinator, not a Promise chain; any other
- * receiver, capitalised or not, may hold a Promise.
- */
-const effectModuleBindings = (node: AstNode): ReadonlyArray<string> => {
-  if (!EFFECT_MODULE.test(importSourceOf(node) ?? "")) return []
-  return (getNodeArrayField(node, "specifiers") ?? [])
-    .filter(
-      (specifier) =>
-        specifier.type === "ImportSpecifier" || specifier.type === "ImportNamespaceSpecifier",
-    )
-    .map(specifierLocalName)
-}
-
-const promiseChainMethodName = (
-  node: AstNode,
-  effectBindings: ReadonlySet<string>,
-): string | undefined => {
-  if (node.type !== "CallExpression") return undefined
-  const callee = getNodeField(node, "callee")
-  if (callee?.type !== "MemberExpression") return undefined
-  const object = getNodeField(callee, "object")
-  if (object?.type === "Identifier" && effectBindings.has(getStringField(object, "name") ?? "")) {
-    return undefined
-  }
-  const prop = getNodeField(callee, "property")
-  if (prop?.type !== "Identifier") return undefined
-  const name = getStringField(prop, "name")
-  return name !== undefined && PROMISE_CHAIN_METHODS.has(name) ? name : undefined
-}
-
 const RUN_PROMISE_METHODS = new Set(["runPromise", "runPromiseWith", "runPromiseExit"])
 
 const runPromiseMethodName = (node: AstNode): string | undefined => {
@@ -469,8 +426,6 @@ const hostMemberMessage = (member: {
   if (!hostFact) return undefined
   return `\`${member.object}${suffix}\` is not allowed here. Route host process and OS facts through \`GentPlatform\` or an adapter-local Effect service.`
 }
-
-const isRunPromiseReference = (node: AstNode): boolean => runPromiseMethodName(node) !== undefined
 
 const wrapperFunctionName = (node: AstNode | undefined): string | undefined => {
   if (node === undefined) return undefined
@@ -630,6 +585,84 @@ const withWrapperDefinitionKind = (fn: AstNode | undefined): "effect" | "callbac
   return undefined
 }
 
+const SLEEP_CALLS = new Set(["Effect.sleep", "Bun.sleep", "Bun.sleepSync"])
+
+/** The dotted name of a sleep call, `Effect.sleep` or `Bun.sleep`, or undefined. */
+const sleepCallName = (node: AstNode): string | undefined => {
+  if (node.type !== "CallExpression") return undefined
+  const name = dottedName(getNodeField(node, "callee"))
+  return name !== undefined && SLEEP_CALLS.has(name) ? name : undefined
+}
+
+const isFunctionLike = (node: AstNode): boolean =>
+  isFunctionNode(node) || node.type === "FunctionDeclaration"
+
+/**
+ * Whether a wait is a statement of its own: `yield*`, `await` or `void`
+ * around it, then an expression statement. That is the one shape
+ * `effect/noFixedWaitInTests` reports when it waits on a bare sleep.
+ */
+const isUpstreamWaitedStatement = (wait: AstNode): boolean => {
+  let current = wait
+  let parent = getNodeField(current, "parent")
+  while (
+    parent !== undefined &&
+    ((parent.type === "YieldExpression" && fieldOf(parent, "delegate") === true) ||
+      parent.type === "AwaitExpression" ||
+      (parent.type === "UnaryExpression" && getStringField(parent, "operator") === "void"))
+  ) {
+    current = parent
+    parent = getNodeField(current, "parent")
+  }
+  return parent?.type === "ExpressionStatement"
+}
+
+const TIMEOUT_TEXT = /tim(?:ed|e)\s*out|timeout|waiting for|gave up/i
+
+/** The text of a string literal or of a template part; anything else has none. */
+const literalTexts = (node: AstNode): ReadonlyArray<string> => {
+  if (node.type === "Literal") {
+    const value = fieldOf(node, "value")
+    return typeof value === "string" ? [value] : []
+  }
+  if (node.type !== "TemplateElement") return []
+  // The text sits under `value: { cooked, raw }`, a record with no `type`.
+  const value = fieldOf(node, "value")
+  if (!isRecord(value)) return []
+  const text = typeof value["cooked"] === "string" ? value["cooked"] : value["raw"]
+  return typeof text === "string" ? [text] : []
+}
+
+/**
+ * The message text `effect/noTimeoutDieInTests` (0.18.0) reads from a die
+ * argument: string literals, templates, `+` concatenations, and the
+ * arguments of a constructor or call, but not the fields of an object.
+ */
+const upstreamDieTexts = (node: AstNode): ReadonlyArray<string> => {
+  if (node.type === "Literal") return literalTexts(node)
+  if (node.type === "TemplateLiteral") {
+    return (getNodeArrayField(node, "quasis") ?? []).flatMap(literalTexts)
+  }
+  if (node.type === "BinaryExpression" && getStringField(node, "operator") === "+") {
+    return [getNodeField(node, "left"), getNodeField(node, "right")]
+      .filter((side) => side !== undefined)
+      .flatMap(upstreamDieTexts)
+  }
+  if (node.type === "NewExpression" || node.type === "CallExpression") {
+    return callExpressionArgs(node).flatMap(upstreamDieTexts)
+  }
+  return []
+}
+
+/** Every string a die argument spells, at any depth. */
+const allTexts = (node: AstNode): ReadonlyArray<string> => {
+  const texts: string[] = []
+  walkAst(node, (inner) => {
+    texts.push(...literalTexts(inner))
+  })
+  return texts
+}
+
 /** Locate a named property's arrow-function value inside an object literal. */
 const findArrowInObject = (objExpr: AstNode, propName: string): AstNode | undefined => {
   if (objExpr.type !== "ObjectExpression") return undefined
@@ -721,21 +754,6 @@ const createRequireAliasName = (node: AstNode): string | undefined => {
     return undefined
   }
   return getStringField(id, "name")
-}
-
-/** The local name an import specifier binds. */
-const specifierLocalName = (specifier: AstNode): string => {
-  const local = getNodeField(specifier, "local")
-  return (local === undefined ? undefined : getStringField(local, "name")) ?? ""
-}
-
-/** The exported name an `import { x as y }` specifier reads: `x`, identifier or string. */
-const specifierImportedName = (specifier: AstNode): string | undefined => {
-  const imported = getNodeField(specifier, "imported")
-  if (imported === undefined) return undefined
-  return imported.type === "Identifier"
-    ? getStringField(imported, "name")
-    : getStringField(imported, "value")
 }
 
 // ── a whole-object encode decides no identity ───────────────────────────────
@@ -1080,183 +1098,6 @@ const plugin: Plugin = {
     },
 
     /**
-     * Flags Effect.logWarning("msg", error) — the second positional arg
-     * is treated as a Cause, not a structured annotation.
-     *
-     * Valid:   Effect.logWarning("msg").pipe(Effect.annotateLogs({ error: String(e) }))
-     * Invalid: Effect.logWarning("msg", someError)
-     */
-    "no-positional-log-error": {
-      create(context) {
-        return {
-          CallExpression(node) {
-            if (node.callee.type !== "MemberExpression") return
-            if (node.callee.object.type !== "Identifier" || node.callee.object.name !== "Effect")
-              return
-            if (node.callee.property.type !== "Identifier") return
-            if (!LOG_METHODS.has(node.callee.property.name)) return
-            if (node.arguments.length < 2) return
-
-            context.report({
-              message: `Don't pass error as second arg to \`Effect.${node.callee.property.name}\`. Use \`.pipe(Effect.annotateLogs({ error: String(e) }))\` instead.`,
-              node,
-            })
-          },
-        }
-      },
-    },
-
-    /**
-     * Flags `withX` wrapper style, in calls and in definitions.
-     *
-     * - `withX(otherCall(...))`, `withX(otherCall(...), arg)`, and
-     *   `withX(...)(otherCall(...))` hide the value being transformed behind
-     *   the adapter. Prefer `otherCall(...).pipe(withX)` so the transformation
-     *   order reads left-to-right.
-     * - `withX(callback)` and `withX(arg, callback)` invert control. Expose an
-     *   Effect value or provider and continue with `.pipe(...)`.
-     * - A `withX` definition that takes an `Effect.Effect` parameter (at any
-     *   curried level, and inside `Effect.fn` or `Effect.fnUntraced`) or a
-     *   callback parameter is the helper those calls need.
-     *
-     * The callback and definition checks skip `tests/`, where a local `withX`
-     * fixture helper is allowed.
-     *
-     * A `withX(...)` passed straight to `.pipe(...)` is an adapter factory,
-     * and `withWideEvent(boundary)` is the wide-event library's adapter.
-     */
-    "no-with-wrapper-call": {
-      create(context) {
-        // Callback calls and helper definitions are product-code rules; a test
-        // may keep a local `withX` fixture helper.
-        const inTests = inTestsTree(context)
-        const reportDefinition = (
-          name: string | undefined,
-          fn: AstNode | undefined,
-          node: AstNode,
-        ) => {
-          if (inTests || name === undefined || !/^with[A-Z]/.test(name)) return
-          const kind = withWrapperDefinitionKind(fn)
-          if (kind === "effect") {
-            context.report({
-              message: `\`${name}(effect, ...)\` wrapper helpers are banned; expose a pipeable provider and call it from \`.pipe(...)\`.`,
-              node,
-            })
-          }
-          if (kind === "callback") {
-            context.report({
-              message: `\`${name}(callback)\` wrapper helpers are banned; expose an Effect value or provider and continue with \`.pipe(...)\`.`,
-              node,
-            })
-          }
-        }
-        return {
-          CallExpression(node) {
-            const call = withWrapperCall(node)
-            if (call === undefined) return
-            if (call.kind === "invocation") {
-              context.report({
-                message: `Avoid \`${call.name}(...innerCall)\` wrapper style. Pipe the inner call through \`${call.name}\` instead.`,
-                node,
-              })
-              return
-            }
-            if (inTests) return
-            context.report({
-              message: `Avoid \`${call.name}(callback)\` wrapper style. Expose an Effect value or provider and continue with \`.pipe(...)\`.`,
-              node,
-            })
-          },
-          VariableDeclarator(node) {
-            const id = getNodeField(node, "id")
-            const name = id?.type === "Identifier" ? getStringField(id, "name") : undefined
-            reportDefinition(name, getNodeField(node, "init"), node)
-          },
-          FunctionDeclaration(node) {
-            const id = getNodeField(node, "id")
-            const name = id === undefined ? undefined : getStringField(id, "name")
-            reportDefinition(name, { ...node, type: "FunctionExpression" }, node)
-          },
-        }
-      },
-    },
-
-    /**
-     * Flags `Effect.runPromise(...)` and `Effect.runPromiseWith(...)` outside
-     * sanctioned SDK-boundary files.
-     *
-     * Sanctioned call sites:
-     *   - File path matches `*-boundary.ts`
-     *   - File path under `tests/**`, `**\/*.test.ts`, `**\/*.test.tsx`
-     *
-     * Anywhere else: error. SDK edges must be explicit.
-     */
-    "no-runpromise-outside-boundary": {
-      create(context) {
-        const filename = context.filename
-
-        // Allow inside any *-boundary.ts file (the convention for SDK edges)
-        if (/-boundary\.ts$/.test(filename)) return {}
-        // Allow tests
-        if (inTestsTree(context)) return {}
-        if (/\.test\.tsx?$/.test(filename)) return {}
-
-        // `RUN_PROMISE_METHODS` are the Promise edges, as `Effect` statics and
-        // as `ManagedRuntime` / `Runtime` instance methods alike.
-        // `runSync`/`runFork`/`runForkWith` are NOT in the set: they're
-        // Effect-internal (no Promise edge) and used heavily by Solid signal
-        // lanes, PubSub.unbounded eager-build, etc.
-
-        return {
-          CallExpression(node) {
-            if (node.callee.type !== "MemberExpression") return
-            const obj = node.callee.object
-            const prop = node.callee.property
-            if (prop.type !== "Identifier") return
-
-            // Static `Effect.runPromise(...)` / `runPromiseWith` / `runPromiseExit`.
-            if (obj.type === "Identifier" && obj.name === "Effect") {
-              if (!RUN_PROMISE_METHODS.has(prop.name)) return
-              context.report({
-                message: `\`Effect.${prop.name}\` may only be called inside a \`*-boundary.ts\` file. Move the Promise edge into a boundary module.`,
-                node,
-              })
-              return
-            }
-
-            // Instance-method `<obj>.runPromise(...)` / `runPromiseWith(...)`
-            // calls. Flags when the object identifier (or, for nested chains,
-            // the immediate object's rightmost identifier) names a runtime —
-            // `runtime`, `clientRuntime`, `serverRuntime`, or ends in
-            // `Runtime`. Catches both `runtime.runPromise(...)` and
-            // `extensionUI.clientRuntime.runPromise(...)`.
-            if (!RUN_PROMISE_METHODS.has(prop.name)) return
-            // Resolve the rightmost identifier of the object expression — this
-            // handles both `runtime.runPromise(...)` (Identifier object) and
-            // `extensionUI.clientRuntime.runPromise(...)` (nested member chain).
-            let runtimeName: string | undefined
-            if (obj.type === "Identifier") {
-              runtimeName = obj.name
-            } else if (obj.type === "MemberExpression" && obj.property.type === "Identifier") {
-              runtimeName = obj.property.name
-            }
-            if (runtimeName === undefined) return
-            const isRuntimeName =
-              runtimeName === "runtime" ||
-              runtimeName === "clientRuntime" ||
-              runtimeName === "serverRuntime" ||
-              /Runtime$/.test(runtimeName)
-            if (!isRuntimeName) return
-            context.report({
-              message: `\`${runtimeName}.${prop.name}\` is a runtime-instance Promise edge — it may only be called inside a \`*-boundary.ts\` file. Move the call into a boundary module.`,
-              node,
-            })
-          },
-        }
-      },
-    },
-
-    /**
      * Flags `throw` statements inside the body of a function passed as a
      * `setup` property to `definePackage(...)` / `defineExtension(...)`.
      *
@@ -1346,6 +1187,10 @@ const plugin: Plugin = {
      * Invalid: const fs = require("node:fs")
      *
      * The allow comment must include a non-empty reason.
+     *
+     * Stricter than `effect/noDynamicImports` in 0.18.0, which accepts a
+     * named or lazily bound `import()`. Goes when gent consumes
+     * oxlint-plugin-effect 0.19.0, whose strict mode holds this line.
      */
     "no-dynamic-imports": {
       create(context) {
@@ -1387,60 +1232,6 @@ const plugin: Plugin = {
     },
 
     /**
-     * Bans Promise-chain control flow and `runPromise` in test files.
-     *
-     * A test returns an Effect from `it.live` / `it.scopedLive`, so cleanup
-     * runs through finalizers and composes with `Effect.scoped`. A `.then`,
-     * `.catch` or `.finally` chain, or a `runPromise` edge, steps outside that
-     * graph. `async`, `await`, `try/finally`, `new Promise` and the Promise
-     * statics are the `effect/*` rules' to report, everywhere, tests included.
-     */
-    "no-promise-control-flow-in-tests": {
-      create(context) {
-        const filename = context.filename
-        if (!isTest(ruleSubject(context))) return {}
-        if (isBoundaryFilename(filename)) return {}
-
-        // Filled as the import declarations are visited, before any call.
-        const effectBindings = new Set<string>()
-        return {
-          ImportDeclaration(node) {
-            if (!isAstNode(node)) return
-            for (const name of effectModuleBindings(node)) effectBindings.add(name)
-          },
-          CallExpression(node) {
-            if (!isAstNode(node)) return
-            const callee = getNodeField(node, "callee")
-            if (callee !== undefined && isRunPromiseReference(callee)) {
-              const method = runPromiseMethodName(callee)
-              context.report({
-                message: `Do not use \`${method}\` in tests. Import \`it\` from \`effect-bun-test\` and return an Effect directly from \`it.live(...)\` / \`it.scopedLive(...)\`; keep runtime Promise boundaries out of tests.`,
-                node,
-              })
-              return
-            }
-            const args = getNodeArrayField(node, "arguments") ?? []
-            const runPromiseArg = args.find(isRunPromiseReference)
-            if (runPromiseArg !== undefined) {
-              const method = runPromiseMethodName(runPromiseArg)
-              context.report({
-                message: `Do not pipe tests to \`${method}\`. Import \`it\` from \`effect-bun-test\` and return the Effect directly from \`it.live(...)\` / \`it.scopedLive(...)\`.`,
-                node: runPromiseArg,
-              })
-              return
-            }
-            const method = promiseChainMethodName(node, effectBindings)
-            if (method === undefined) return
-            context.report({
-              message: `Do not use Promise-chain \`.${method}(...)\` control flow in tests. Import \`it\` from \`effect-bun-test\`; use \`yield*\` in \`Effect.gen\`, \`Effect.all([...])\` for concurrency, and \`Effect.scoped\` / \`it.scopedLive\` for cleanup.`,
-              node,
-            })
-          },
-        }
-      },
-    },
-
-    /**
      * Bans `Bun.*` references and host process and OS facts everywhere except
      * platform adapter, tooling, and test harness boundaries. The TUI build
      * script is exempt by its `.oxlintrc.json` override.
@@ -1469,6 +1260,9 @@ const plugin: Plugin = {
      * `new URL(import.meta.url).pathname`. This rule is the one owner of the
      * host-fact bans; a site that is a deliberate exception carries a
      * line-local suppression with its reason.
+     *
+     * Goes when gent consumes oxlint-plugin-effect 0.19.0, whose generic
+     * form of this rule replaces it.
      */
     "no-bun-outside-adapter": {
       create(context) {
@@ -1528,278 +1322,199 @@ const plugin: Plugin = {
     },
 
     /**
-     * Flags hand-rolled `_tag` discriminated unions written as type
-     * literals — a union of two-or-more `{ _tag: "X"; ... }` shapes.
+     * Test code runs no Effect through a runtime's `runPromise`.
      *
-     * Use `Schema.TaggedUnion`, `Schema.TaggedStruct`, or
-     * `Schema.TaggedErrorClass` instead. Those give per-variant
-     * `.cases.<Name>.make({...})` constructors, structural `_tag`
-     * discrimination, and Schema-encode/decode for free.
+     * Holds the line where oxlint-plugin-effect 0.18.0 leaves a gap:
+     * `effect/noEffectRunInTests` reads only the `Effect.run*` statics and
+     * `ManagedRuntime.make`, and `effect/noRunPromise` skips test code, so
+     * `runtime.runPromise(...)` in a test passes both. Goes when an upstream
+     * release reports a runtime's runners in test code; none has yet.
      *
-     * Detected: any `TSUnionType` with ≥2 `TSTypeLiteral` members each
-     * having a `_tag: "Pascal"` property.
-     *
-     * Limitations: AST-only. Does not flag types defined via interface
-     * heritage or hand-rolled union of named type aliases — only the
-     * inline-type-literal form. Construction-site form
-     * (`{ _tag: "X" } satisfies SomeUnion`) is not covered here; it's
-     * already vanishingly rare in this codebase.
+     * Reported in test code (`isTestCode`) outside `-boundary` files: a call
+     * or a reference of `runPromise`, `runPromiseWith` or `runPromiseExit` on
+     * any receiver but the `Effect` module, whose statics are upstream's.
      */
-    "no-hand-rolled-tagged-union": {
+    "no-runtime-run-promise-in-tests": {
       create(context) {
-        const isReportableTagLiteral = (member: AstNode): boolean => {
-          if (member.type !== "TSPropertySignature") return false
-          const key = getNodeField(member, "key")
-          if (key === undefined) return false
-          let keyName: string | undefined
-          if (key.type === "Identifier") keyName = getStringField(key, "name")
-          else if (key.type === "StringLiteral" || key.type === "Literal")
-            keyName = getStringField(key, "value")
-          if (keyName !== "_tag") return false
-          const annotation = getNodeField(member, "typeAnnotation")
-          if (annotation === undefined) return false
-          const inner = getNodeField(annotation, "typeAnnotation")
-          if (inner === undefined || inner.type !== "TSLiteralType") return false
-          const literal = getNodeField(inner, "literal")
-          if (literal === undefined) return false
-          if (literal.type !== "StringLiteral" && literal.type !== "Literal") return false
-          const value = getStringField(literal, "value")
-          if (value === undefined || value.length === 0) return false
-          // Pascal-case heuristic — keeps the rule from chasing
-          // schema-internal lowercase wire tags like "regular" /
-          // "interjection" that legitimately appear inside Schema
-          // metadata. `Schema.TaggedUnion` member names are PascalCase
-          // by convention.
-          const first = value.charAt(0)
-          return first === first.toUpperCase() && first !== first.toLowerCase()
-        }
-
-        const literalHasTag = (literal: AstNode): boolean => {
-          if (literal.type !== "TSTypeLiteral") return false
-          const members = getNodeArrayField(literal, "members")
-          if (members === undefined) return false
-          return members.some(isReportableTagLiteral)
-        }
-
+        const subject = ruleSubject(context)
+        if (!isTestCode(subject) || isBoundaryFilename(subject)) return {}
         return {
-          TSUnionType(node) {
+          MemberExpression(node) {
             if (!isAstNode(node)) return
-            const types = getNodeArrayField(node, "types")
-            if (types === undefined || types.length < 2) return
-            let tagged = 0
-            for (const t of types) {
-              if (literalHasTag(t)) tagged += 1
-              if (tagged >= 2) break
-            }
-            if (tagged < 2) return
-            context.report({
-              message:
-                "Hand-rolled `_tag` discriminated union — use `Schema.TaggedUnion` (preferred) or `Schema.TaggedStruct` / `Schema.TaggedErrorClass`. Construct via `.cases.<Name>.make({...})`. See packages/core/CLAUDE.md.",
-              node,
-            })
-          },
-        }
-      },
-    },
-
-    /**
-     * Bans `Effect.die` / `Effect.dieMessage` in test code when the message
-     * describes a timeout.
-     *
-     * A timeout is an expected outcome. Dying on it escapes the failing
-     * assertion as "Unhandled error between tests", attributed to no test.
-     * Dying on a genuine impossible state (a missing fixture, an out-of-range
-     * index) stays allowed: that really is a defect.
-     *
-     * Opt out per site with `// gent/no-die-in-test-helpers: allow <reason>`
-     * on the line above the call or trailing it.
-     */
-    "no-die-in-test-helpers": {
-      create(context) {
-        // Match on the message text the call carries. A structural test is not
-        // available here — whether a die is a timeout is a statement about
-        // intent, and the message is where that intent is written down.
-        const TIMEOUT_TEXT = /tim(?:ed|e)\s*out|timeout|waiting for|gave up/i
-        const mentionsTimeout = (node: AstNode): boolean => {
-          let found = false
-          walkAst(node, (inner) => {
-            if (found) return
-            if (inner.type === "Literal") {
-              const raw = getStringField(inner, "raw")
-              if (raw !== undefined && TIMEOUT_TEXT.test(raw)) found = true
+            const method = runPromiseMethodName(node)
+            if (method === undefined) return
+            const receiver = getNodeField(node, "object")
+            if (receiver?.type === "Identifier" && getStringField(receiver, "name") === "Effect") {
               return
             }
-            if (inner.type === "TemplateElement") {
-              // The text sits under `value: { cooked, raw }` — a bare record
-              // with no `type`, so it is not reachable via `getNodeField`.
-              const value = fieldOf(inner, "value")
-              if (!isRecord(value)) return
-              const cooked = value["cooked"]
-              const raw = value["raw"]
-              const text = typeof cooked === "string" ? cooked : raw
-              if (typeof text === "string" && TIMEOUT_TEXT.test(text)) found = true
-            }
+            context.report({
+              message: `Do not run Effects through \`.${method}\` in test code. Return the Effect from \`it.live(...)\` / \`it.scopedLive(...)\`, or keep the Promise edge in a \`-boundary\` file.`,
+              node,
+            })
+          },
+        }
+      },
+    },
+
+    /**
+     * Test code outside a `tests/` tree holds no `withX` callback wrapper.
+     *
+     * Holds the line where oxlint-plugin-effect 0.18.0 leaves a gap:
+     * `effect/noWithWrapperCall` skips its callback and definition checks in
+     * every test module, while gent allows a local `withX` fixture helper only
+     * in a `tests/` tree. The harness (`@gent/e2e`, core's `test-utils`), the
+     * `integration/` trees and test files elsewhere stay held to them. Goes
+     * when an upstream release lets a project narrow that exemption; none has
+     * yet.
+     *
+     * Reported there: a `withX(callback)` call, and a `withX` definition that
+     * takes an `Effect.Effect` (at any curried level, inside `Effect.fn` too)
+     * or a callback parameter. `withWideEvent` is the wide-event adapter.
+     */
+    "no-with-wrapper-helper-in-test-code": {
+      create(context) {
+        if (!isTestCode(ruleSubject(context)) || inTestsTree(context)) return {}
+        const reportDefinition = (
+          name: string | undefined,
+          fn: AstNode | undefined,
+          node: AstNode,
+        ) => {
+          if (name === undefined || !/^with[A-Z]/.test(name)) return
+          const kind = withWrapperDefinitionKind(fn)
+          if (kind === undefined) return
+          context.report({
+            message: `\`${name}(${kind}, ...)\` wrapper helpers are banned outside a \`tests/\` tree; expose a pipeable provider or an Effect value and continue with \`.pipe(...)\`.`,
+            node,
           })
-          return found
         }
-
-        if (!isTestCode(ruleSubject(context))) return {}
-
         return {
           CallExpression(node) {
-            if (!isAstNode(node)) return
-            const callee = getNodeField(node, "callee")
-            if (callee?.type !== "MemberExpression") return
-            const prop = getNodeField(callee, "property")
-            if (prop?.type !== "Identifier") return
-            const method = getStringField(prop, "name")
-            if (method !== "die" && method !== "dieMessage") return
-            const obj = getNodeField(callee, "object")
-            if (obj?.type !== "Identifier") return
-            if (getStringField(obj, "name") !== "Effect") return
-            // Only *timeouts* are the bug. `Effect.die` for an impossible state
-            // — a lookup that must succeed, an out-of-range index — is correct:
-            // that really is a defect, and dying names it as one. A timeout is
-            // an expected outcome, so dying on it drops the diagnostic and
-            // detaches the failure from the test that caused it.
-            if (!mentionsTimeout(node)) return
-            if (hasAllowComment(context, node, "no-die-in-test-helpers", true)) return
+            const call = withWrapperCall(node)
+            if (call?.kind !== "callback") return
             context.report({
-              message: `\`Effect.${method}(...)\` in test code — a defect escapes the failing assertion and surfaces as "Unhandled error between tests", attributed to no test in particular. Fail with a typed error instead (\`Schema.TaggedError\`, then \`yield* new MyError({...})\`) so the timeout or precondition failure lands on the test that caused it. If this site genuinely models an unrecoverable defect, add \`// gent/no-die-in-test-helpers: allow <reason>\` on the line directly above the call.`,
+              message: `Avoid \`${call.name}(callback)\` wrapper style. Expose an Effect value or provider and continue with \`.pipe(...)\`.`,
               node,
             })
           },
-        }
-      },
-    },
-    /**
-     * Bans `.sleep(...)` calls in test files.
-     *
-     * Why: `Effect.sleep("0 millis")` / `Effect.sleep("10 millis")` is the
-     * canonical "wait for the next tick" anti-pattern in this codebase —
-     * tests that need to wait for a state transition should use `Deferred`,
-     * `controls.waitForCall`, or `waitFor` polling helpers, not a fixed
-     * delay. Non-zero sleeps in tests usually indicate a missing
-     * synchronisation primitive and produce flaky timing-coupled assertions.
-     *
-     * Legitimate uses do exist:
-     *   - real-clock timing assertions (idle-timeout eviction in
-     *     server-lifecycle, headless CLI exit timeout fallback)
-     *   - deliberate fiber-pacing in PTY / subprocess fixtures, where the
-     *     OS-level scheduler needs to be exercised
-     *   - retry / backoff sleeps when the retry helper is itself the
-     *     subject under test
-     *
-     * Opt out per-site by placing
-     * `// gent/no-sleep: allow <reason>` on the line directly above the
-     * call. The reason must be non-empty so the carveout encodes why this
-     * specific sleep is intentional.
-     *
-     * Matches both `Effect.sleep(...)` and `Bun.sleep(...)`. Scoped to test
-     * code (`isTestCode`): the tests, their `tests/` and `integration/`
-     * trees, and the harness (`packages/e2e`, core's `test-utils`). The rule
-     * does NOT apply to product code — production retries/timeouts/debounces
-     * are unaffected.
-     */
-    "no-sleep": {
-      create(context) {
-        // A lint fixture is judged as the file at its mirrored path, and it
-        // keeps the allow-comment carveout, so the fixture tests count the
-        // diagnostics on the invalid fixture and none on the valid one.
-        if (!isTestCode(ruleSubject(context))) return {}
-
-        return {
-          CallExpression(node) {
-            if (!isAstNode(node)) return
-            const callee = getNodeField(node, "callee")
-            if (callee?.type !== "MemberExpression") return
-            const prop = getNodeField(callee, "property")
-            if (prop?.type !== "Identifier") return
-            if (getStringField(prop, "name") !== "sleep") return
-            // Restrict to recognized sleep call shapes — `Effect.sleep(...)`
-            // and `Bun.sleep(...)`. Other `.sleep(...)` on unrelated
-            // objects (e.g., a domain object exposing a `sleep` action)
-            // would be false positives and aren't worth catching here.
-            const obj = getNodeField(callee, "object")
-            if (obj?.type !== "Identifier") return
-            const objectName = getStringField(obj, "name")
-            if (objectName !== "Effect" && objectName !== "Bun") return
-            if (hasAllowComment(context, node, "no-sleep", true)) return
-            context.report({
-              message: `\`${objectName}.sleep(...)\` in test code — replace fixed delays with deterministic synchronisation: \`Deferred\` for coordination, \`controls.waitForCall(...)\` / \`controls.waitForStreamStart()\` for sequence-provider gating, or \`waitFor\` polling helpers for projection convergence. If this site is a real-clock timing assertion, OS-level fiber pacing, or a retry/backoff test, add \`// gent/no-sleep: allow <reason>\` on the line directly above the call.`,
-              node,
-            })
+          VariableDeclarator(node) {
+            const id = getNodeField(node, "id")
+            const name = id?.type === "Identifier" ? getStringField(id, "name") : undefined
+            reportDefinition(name, getNodeField(node, "init"), node)
+          },
+          FunctionDeclaration(node) {
+            const id = getNodeField(node, "id")
+            const name = id === undefined ? undefined : getStringField(id, "name")
+            reportDefinition(name, { ...node, type: "FunctionExpression" }, node)
           },
         }
       },
     },
 
     /**
-     * Flags a bare `it(...)` call in a file that imports `it` from
-     * `effect-bun-test`.
+     * Test code waits on no sleep wrapped in a larger expression.
      *
-     * That `it` is a plain object holding the four runners — `it.live`,
-     * `it.scopedLive`, `it.effect`, `it.scoped` — and has no call signature.
-     * Calling it throws a `TypeError` while the module body is still
-     * evaluating, so Bun registers nothing from the file: every test the file
-     * declares, not just the bare one, disappears. The run reports the loss as
-     * "Unhandled error between tests" with `0 fail`, attributed to no test, so
-     * the assertions inside look like they passed.
+     * Holds the line where oxlint-plugin-effect 0.18.0 leaves a gap:
+     * `effect/noFixedWaitInTests` reports a sleep only when a statement waits
+     * on the sleep itself (`yield* Effect.sleep(...)`), so
+     * `yield* Effect.sleep(...).pipe(...)` or a sleep raced inside a waited
+     * call passes. Goes when an upstream release reports a sleep anywhere in
+     * a waited expression; none has yet.
      *
-     * A synchronous test belongs on `test(...)` from `bun:test`. A test that
-     * returns an Effect belongs on one of the four runners.
-     *
-     * What is reported: a `CallExpression` whose callee is the identifier
-     * bound by an `effect-bun-test` import, under whatever local name that
-     * import gives it, or `ns.it` through a namespace import of the package.
-     * A member call such as `it.live(...)` is the correct
-     * form and is untouched, and so is a file that never imports `it` from
-     * `effect-bun-test` — the `it` from `bun:test` is callable.
+     * Reported in test code (`isTestCode`): an `Effect.sleep`, `Bun.sleep` or
+     * `Bun.sleepSync` call inside the argument of a `yield*` or an `await`,
+     * outside a nested function, unless it is upstream's case. Also reported:
+     * a sleep stored under a name (a variable's initialiser or an object
+     * field, outside a nested function), since a later `yield* pause` waits
+     * on it where no rule sees the sleep. A sleep a function builds and
+     * returns, or hands to a mock as the subject's own delay, stays allowed.
      */
-    "no-inert-it": {
+    "no-wrapped-sleep-in-tests": {
       create(context) {
-        // The local name `it` is bound to, which `import { it as spec }`
-        // makes something other than "it". Empty until an import binds it,
-        // so a file that never imports from effect-bun-test reports nothing.
-        const inertNames = new Set<string>()
-        // `import * as ebt from "effect-bun-test"` makes `ebt.it(...)` the same call.
-        const namespaces = new Set<string>()
-        const inertCallee = (callee: AstNode | undefined): string | undefined => {
-          if (callee?.type === "Identifier") {
-            const name = getStringField(callee, "name")
-            return name !== undefined && inertNames.has(name) ? name : undefined
-          }
-          if (callee?.type !== "MemberExpression") return undefined
-          const object = getNodeField(callee, "object")
-          const property = getNodeField(callee, "property")
-          const namespace =
-            object?.type === "Identifier" ? getStringField(object, "name") : undefined
-          if (namespace === undefined || !namespaces.has(namespace)) return undefined
-          if (property?.type !== "Identifier" || getStringField(property, "name") !== "it") {
-            return undefined
-          }
-          return `${namespace}.it`
+        if (!isTestCode(ruleSubject(context))) return {}
+        const reported = new Set<AstNode>()
+        const report = (node: AstNode, sleep: string, how: string) => {
+          reported.add(node)
+          context.report({
+            message: `\`${sleep}(...)\` ${how} in test code — replace the fixed delay with deterministic synchronisation (\`Deferred\`, \`controls.waitForCall(...)\`, a \`waitFor\` poll, or \`TestClock.adjust\`). A real-clock wait that is the subject takes a line-local suppression with its reason.`,
+            node,
+          })
+        }
+        // A waited expression inside a stored value is visitWait's to report.
+        const skipStored = (node: AstNode) =>
+          isFunctionLike(node) || node.type === "YieldExpression" || node.type === "AwaitExpression"
+        const visitStored = (value: AstNode | undefined) => {
+          if (value === undefined) return
+          walkAst(
+            value,
+            (inner) => {
+              const sleep = sleepCallName(inner)
+              if (sleep === undefined || reported.has(inner)) return
+              report(inner, sleep, "stored under a name")
+            },
+            skipStored,
+          )
+        }
+        const visitWait = (wait: AstNode) => {
+          const argument = getNodeField(wait, "argument")
+          if (argument === undefined) return
+          walkAst(
+            argument,
+            (inner) => {
+              const sleep = sleepCallName(inner)
+              if (sleep === undefined || reported.has(inner)) return
+              if (inner === argument && isUpstreamWaitedStatement(wait)) return
+              report(inner, sleep, "waited")
+            },
+            isFunctionLike,
+          )
         }
         return {
-          ImportDeclaration(node) {
-            if (!isAstNode(node) || importSourceOf(node) !== "effect-bun-test") return
-            for (const specifier of getNodeArrayField(node, "specifiers") ?? []) {
-              const local = specifierLocalName(specifier)
-              if (specifier.type === "ImportNamespaceSpecifier") namespaces.add(local)
-              if (
-                specifier.type === "ImportSpecifier" &&
-                specifierImportedName(specifier) === "it"
-              ) {
-                inertNames.add(local)
-              }
-            }
+          YieldExpression(node) {
+            if (isAstNode(node) && fieldOf(node, "delegate") === true) visitWait(node)
           },
+          AwaitExpression(node) {
+            if (isAstNode(node)) visitWait(node)
+          },
+          VariableDeclarator(node) {
+            if (isAstNode(node)) visitStored(getNodeField(node, "init"))
+          },
+          Property(node) {
+            if (isAstNode(node)) visitStored(getNodeField(node, "value"))
+          },
+        }
+      },
+    },
+
+    /**
+     * Test code does not die on a timeout spelled in an object payload.
+     *
+     * Holds the line where oxlint-plugin-effect 0.18.0 leaves a gap:
+     * `effect/noTimeoutDieInTests` reads a die's message from string
+     * literals, templates and constructor arguments, so
+     * `Effect.die(new WaitForError({ message: "timed out ..." }))` passes it.
+     * Goes when an upstream release reads the strings inside an object
+     * argument; none has yet.
+     *
+     * Reported in test code (`isTestCode`): an `Effect.die` or
+     * `Effect.dieMessage` call whose arguments spell a timeout at any depth
+     * but not where upstream reads it. A die on an impossible state stays
+     * allowed: that really is a defect.
+     */
+    "no-timeout-die-payload-in-tests": {
+      create(context) {
+        if (!isTestCode(ruleSubject(context))) return {}
+        const mentionsTimeout = (texts: ReadonlyArray<string>) =>
+          texts.some((text) => TIMEOUT_TEXT.test(text))
+        return {
           CallExpression(node) {
             if (!isAstNode(node)) return
-            const name = inertCallee(getNodeField(node, "callee"))
-            if (name === undefined) return
+            const callee = dottedName(getNodeField(node, "callee"))
+            if (callee !== "Effect.die" && callee !== "Effect.dieMessage") return
+            const args = callExpressionArgs(node)
+            if (!mentionsTimeout(args.flatMap(allTexts))) return
+            if (mentionsTimeout(args.flatMap(upstreamDieTexts))) return
             context.report({
-              message: `\`${name}(...)\` from "effect-bun-test" is not callable — it is the object holding \`${name}.live\`, \`${name}.scopedLive\`, \`${name}.effect\` and \`${name}.scoped\`. Calling it throws while the module loads, so Bun registers none of this file's tests and reports the loss as an error attributed to no test. Use \`test(...)\` from "bun:test" for a synchronous body, or \`${name}.live\` / \`${name}.scopedLive\` for one that returns an Effect.`,
+              message: `\`${callee}(...)\` on a timeout in test code — the defect surfaces detached from the test that waited. Fail with a typed error (\`Effect.timeout\` fails with a \`TimeoutError\`; \`Effect.timeoutOrElse\` maps it to your own).`,
               node,
             })
           },
@@ -1918,51 +1633,6 @@ const plugin: Plugin = {
                 node: writer,
               })
             }
-          },
-        }
-      },
-    },
-
-    /**
-     * Flags the spellings of `undefined` and `unknown` that exist only to get
-     * past `effect/noNullish` and `effect/noUnknownParameters`:
-     *
-     * - `Option.getOrUndefined(Option.none())`, which is `undefined`;
-     * - `Schema.Schema.Type<typeof Schema.Unknown>`, which is `unknown`.
-     *
-     * Each hides the value the evaded rule was about and costs the reader a
-     * double take. Where absence or an unknown value is honest, write
-     * `undefined` or `unknown` with one scoped disable of the evaded rule and
-     * its reason.
-     */
-    "no-lint-evasion": {
-      create(context) {
-        return {
-          CallExpression(node) {
-            if (!isAstNode(node)) return
-            if (dottedName(getNodeField(node, "callee")) !== "Option.getOrUndefined") return
-            const [argument] = callExpressionArgs(node)
-            if (argument?.type !== "CallExpression") return
-            if (dottedName(getNodeField(argument, "callee")) !== "Option.none") return
-            context.report({
-              message:
-                "`Option.getOrUndefined(Option.none())` is `undefined` spelled to pass `effect/noNullish`. Write `undefined` with a scoped disable and its reason, or model the absence as an `Option`.",
-              node,
-            })
-          },
-          TSTypeReference(node) {
-            if (!isAstNode(node)) return
-            if (dottedName(getNodeField(node, "typeName")) !== "Schema.Schema.Type") return
-            const typeArguments = getNodeField(node, "typeArguments")
-            if (typeArguments === undefined) return
-            const [argument] = getNodeArrayField(typeArguments, "params") ?? []
-            if (argument?.type !== "TSTypeQuery") return
-            if (dottedName(getNodeField(argument, "exprName")) !== "Schema.Unknown") return
-            context.report({
-              message:
-                "`Schema.Schema.Type<typeof Schema.Unknown>` is `unknown` spelled to pass `effect/noUnknownParameters`. Write `unknown` with a scoped disable and its reason, or name the type the value has.",
-              node,
-            })
           },
         }
       },

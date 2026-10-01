@@ -1943,7 +1943,7 @@ describe("mcp oauth", () => {
           ...fs,
           writeFileString: (file, data, options) => {
             if (file !== lock) return fs.writeFileString(file, data, options)
-            // gent/no-sleep: allow the create must outlast the dial's real 200 ms timeout
+            // The create must outlast the dial's real 200 ms timeout
             return Effect.sleep("500 millis").pipe(
               Effect.andThen(fs.writeFileString(file, data, options)),
             )

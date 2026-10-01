@@ -71,7 +71,8 @@ export const createMockClient = (overrides?: NamespaceOverrides): GentNamespaced
   const noRpcError = <A,>(value: A) => Effect.succeed(value)
   // eslint-disable-next-line effect/noNullish -- a wire field the server leaves unset is present and undefined.
   const absent = undefined
-  const nullValue = Option.getOrNull(Option.none())
+  // eslint-disable-next-line effect/noNullish -- JSON on the wire carries null here; the test hands it on as is.
+  const nullValue = null
 
   const mocks = {
     session: {
@@ -512,7 +513,8 @@ export const applySnapshotAgent = (client: ClientContextValue, agent: AgentName)
     modelId: session.modelId,
     reasoningLevel: session.reasoningLevel,
     messages: [],
-    lastEventId: Option.getOrNull(Option.none()),
+    // eslint-disable-next-line effect/noNullish -- JSON on the wire carries null here; the test hands it on as is.
+    lastEventId: null,
     resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
     agent,
     runtime: { _tag: "Idle", queue: emptyQueueSnapshot() },
