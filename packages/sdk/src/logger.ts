@@ -66,7 +66,7 @@ const GentTracerLive: Layer.Layer<never> = Layer.unwrap(
 
 /**
  * Log path resolution — logs follow the data directory, in
- * `<GENT_DATA_DIR or ~/.gent>/logs` (`dataPaths(home).logDir` in server.ts,
+ * `<GENT_DATA_DIR or ~/.gent>/logs` (`dataPaths(home).logDir` in discovery.ts,
  * the data-path owner), so an isolated run keeps its logs beside its database
  * and its doctor reads them.
  *

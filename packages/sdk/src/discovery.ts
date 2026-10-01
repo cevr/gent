@@ -1,5 +1,5 @@
 import { Effect, Exit, FileSystem, Match, Option, Path, Predicate, Schema, Scope } from "effect"
-import type { Layer } from "effect"
+import type { Context, Layer } from "effect"
 import { join as pathJoin, resolve as pathResolve } from "node:path"
 import { Database } from "bun:sqlite"
 import type { ChildProcessSpawner } from "effect/process"
@@ -11,12 +11,13 @@ import {
   type SessionStorage,
   workspaceIdForCwd,
   BunPlatformLive,
+  type RpcHandlersLive,
   resolveDataDir,
 } from "@gent/core/host"
 import { runProcess, type GentExtension } from "@gent/core/extensions/api"
 import { FetchHttpClient, HttpClient } from "effect/http"
 import type { BranchToolFeature } from "@gent/core/extensions/branch-tools"
-import type { buildOwnedServer, getOwnedInternal, startOwnedServer } from "./server.js"
+import type { buildOwnedServer, startOwnedServer } from "./server.js"
 
 /**
  * Shared-server discovery: where gent keeps its durable state, the lock that
@@ -550,6 +551,17 @@ export const GentServer = Schema.Union([
 ]).pipe(Schema.toTaggedUnion("_tag"))
 export type GentServer = Schema.Schema.Type<typeof GentServer>
 
+/**
+ * The RPC handlers of each server this process built, keyed by its handle's
+ * identity, so the handle stays opaque. The server root writes an entry when
+ * it builds a server; `Gent.client` reads it to serve the owned server in
+ * process, without loading the server root again.
+ */
+export const ownedHandlers = new WeakMap<
+  GentServer,
+  Context.Context<Layer.Success<typeof RpcHandlersLive>>
+>()
+
 export const state = {
   sqlite: (options?: { readonly home?: string }): StateSpec =>
     StateSpec.cases.Sqlite.make(options ?? {}),
@@ -578,11 +590,10 @@ export const resolveHome = (stateSpec: StateSpec, homeDirectory: string): string
 
 // ── server root load ────────────────────────────────────────────────────────
 
-/** What `Gent.server` and `Gent.client` call on the server root (`server.ts`). */
+/** What `resolveServer` calls on the server root (`server.ts`). */
 interface ServerRoot {
   readonly buildOwnedServer: typeof buildOwnedServer
   readonly startOwnedServer: typeof startOwnedServer
-  readonly getOwnedInternal: typeof getOwnedInternal
 }
 
 /**
@@ -591,7 +602,7 @@ interface ServerRoot {
  * never evaluates. Each run imports again: the module registry keeps a module
  * that loaded, and nothing here keeps a failed or interrupted load.
  */
-export const loadServerRoot: Effect.Effect<ServerRoot, GentConnectionError> = Effect.tryPromise({
+const loadServerRoot: Effect.Effect<ServerRoot, GentConnectionError> = Effect.tryPromise({
   // oxlint-disable-next-line effect/noDynamicImports -- the server stack loads when this process builds a server, not at launch
   try: (): Promise<ServerRoot> => import("./server.js"),
   catch: (error) =>

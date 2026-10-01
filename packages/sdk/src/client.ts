@@ -19,7 +19,7 @@ import {
   workspaceHeadersForCwd,
 } from "@gent/core/host"
 import {
-  loadServerRoot,
+  ownedHandlers,
   resolveServer,
   state as stateFactories,
   provider as providerFactories,
@@ -245,14 +245,14 @@ export const Gent = {
         Match.tagsExhaustive({
           Owned: (ownedServer) =>
             Effect.gen(function* () {
-              // The server root built this handle, so its module is already loaded.
-              const root = yield* loadServerRoot
-              const internal = yield* Effect.fromOption(root.getOwnedInternal(ownedServer)).pipe(
+              const handlers = yield* Effect.fromOption(
+                Option.fromUndefinedOr(ownedHandlers.get(ownedServer)),
+              ).pipe(
                 Effect.mapError(
                   () => new GentConnectionError({ message: "owned server internal state missing" }),
                 ),
               )
-              return yield* inProcessBundle<Scope.Scope>(internal.handlerContext, headers)
+              return yield* inProcessBundle<Scope.Scope>(handlers, headers)
             }),
           Attached: (attachedServer) => connectWs(attachedServer.url, headers),
         }),

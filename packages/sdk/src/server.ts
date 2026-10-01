@@ -22,6 +22,7 @@ import {
   GentServer,
   type GentServerOptions,
   type LocalPlatform,
+  ownedHandlers,
   type ProviderSpec,
   resolveHome,
   ServerLockEntry,
@@ -38,27 +39,11 @@ import {
  * server, so a launch that attaches never evaluates the stack.
  */
 
-type BuiltRpcHandlers = Layer.Success<typeof RpcHandlersLive>
-
-// ── Internal state for owned servers ──
-
-interface OwnedServerInternal {
-  readonly handlerContext: Context.Context<BuiltRpcHandlers>
-  readonly serverId: string
-}
-
 /** A server this process built, and the id its lock entry and identity name. */
 interface OwnedServer {
   readonly server: GentServer
   readonly serverId: string
 }
-
-/** WeakMap keyed by GentServer object identity — keeps handler context private */
-const ownedInternals = new WeakMap<GentServer, OwnedServerInternal>()
-
-/** @internal — used by Gent.client to access owned server handler context */
-export const getOwnedInternal = (server: GentServer): Option.Option<OwnedServerInternal> =>
-  Option.fromNullishOr(ownedInternals.get(server))
 
 // ── Language model layer from spec ──
 
@@ -194,10 +179,7 @@ export const buildOwnedServer = (
       url,
       workspaceId: workspaceIdForCwd(options.cwd),
     })
-    ownedInternals.set(server, {
-      handlerContext: rpcHandlersContext,
-      serverId,
-    })
+    ownedHandlers.set(server, rpcHandlersContext)
 
     return { server, serverId }
   })
