@@ -6,8 +6,8 @@
  *
  * - core-entry-boundary: extensions read only the authoring entries of `@gent/core`.
  * - declared-workspace-imports: a package imports only the workspace packages it declares.
- * - no-host-fact-bypass: no host global read where `effect/noGlobals` does not look.
- * - no-platform-module-export-alias: no module exports an alias of an `@effect/platform-*` binding.
+ * - no-hand-rolled-module-path: no file path read off `new URL(import.meta.url)` in core.
+ * - no-retired-bun-member: no `Bun.Glob` or `Bun.randomUUIDv7` where `effect/noGlobals` is off.
  * - child-session-writer-admits: a core child-session writer admits the nesting depth first.
  * - no-identity-encode: a whole-object JSON encode decides no identity.
  */
@@ -149,37 +149,6 @@ const importSourceOf = (node: AstNode): string | undefined => {
   return getStringField(source, "value")
 }
 
-/** An `@effect/platform-*` package or one of its modules: `@effect/platform-bun/BunPath`. */
-const PLATFORM_PACKAGE = /^@effect\/platform-[a-z-]+(?:\/|$)/
-
-/** Wrappers that keep the value they wrap: `x as T`, `x satisfies T`, `x!`, `a?.b`. */
-const VALUE_WRAPPERS = new Set([
-  "TSAsExpression",
-  "TSSatisfiesExpression",
-  "TSNonNullExpression",
-  "ChainExpression",
-])
-
-/** A layer name, `layer` or `layerServer`: a read `effect/noPlatformLayerOutsideEntry` reports itself. */
-const LAYER_NAME = /^layer/
-
-/**
- * The name an alias is read off: `A` for `A`, `A.b`, `A?.b` and `A as T`. A
- * chain through a layer member (`A.layer`) is no alias: the upstream rule
- * reports that read where it stands.
- */
-const aliasRoot = (node: AstNode | undefined): string | undefined => {
-  if (node === undefined) return undefined
-  if (VALUE_WRAPPERS.has(node.type)) return aliasRoot(getNodeField(node, "expression"))
-  if (node.type === "MemberExpression") {
-    const property = getNodeField(node, "property")
-    const name = property === undefined ? undefined : getStringField(property, "name")
-    if (LAYER_NAME.test(name ?? "")) return undefined
-    return aliasRoot(getNodeField(node, "object"))
-  }
-  return node.type === "Identifier" ? getStringField(node, "name") : undefined
-}
-
 /** The absolute path a relative specifier names, or undefined for a package specifier. */
 const resolvedRelativeSource = (filename: string, source: string): string | undefined => {
   if (!source.startsWith("./") && !source.startsWith("../")) return undefined
@@ -246,17 +215,6 @@ const importTypeSourceOf = (node: AstNode): string | undefined => {
 }
 
 /**
- * The files that may touch `Bun.*` and host facts directly, judged by the
- * repo-relative path a rule sees (`ruleSubject`): the platform impl, the
- * adapters, the tooling, and test code.
- */
-const platformBoundaryFilename = (subject: string): boolean =>
-  /(?:^|\/)runtime\/gent-platform-bun\.ts$/.test(subject) ||
-  /-adapter\.tsx?$/.test(subject) ||
-  /^packages\/tooling\//.test(subject) ||
-  isTestCode(subject)
-
-/**
  * Core and shipped-extension source, outside the test harness: the code that
  * also takes its working directory and host modules through Effect services.
  * The TUI, the SDK and the server launcher are process hosts; they read their
@@ -292,11 +250,8 @@ const isImportMetaUrlConstruction = (node: AstNode | undefined): boolean => {
   )
 }
 
-/** The host globals the project bans of `effect/noGlobals` hold. */
-const HOST_GLOBALS = new Set(["Bun", "process"])
-
-/** The name a member expression reads: `b` for `a.b` and for `a["b"]`. */
-const memberPropertyName = (node: AstNode): string | undefined => {
+/** The name a member expression reads when it is static: `b` for `a.b` and for `a["b"]`. */
+const staticMemberName = (node: AstNode): string | undefined => {
   const property = getNodeField(node, "property")
   if (property === undefined) return undefined
   if (fieldOf(node, "computed") !== true) return getStringField(property, "name")
@@ -304,22 +259,12 @@ const memberPropertyName = (node: AstNode): string | undefined => {
   return typeof value === "string" ? value : undefined
 }
 
-/**
- * A host global read where `effect/noGlobals` does not look: `globalThis.Bun`,
- * `globalThis.process` (dotted or computed), or a computed member of `Bun`.
- */
-const hostBypassMessage = (node: AstNode): string | undefined => {
+/** `Bun`, `globalThis.Bun` or `globalThis["Bun"]`. */
+const isBunValue = (node: AstNode | undefined): boolean => {
+  if (node?.type === "Identifier") return getStringField(node, "name") === "Bun"
+  if (node?.type !== "MemberExpression" || staticMemberName(node) !== "Bun") return false
   const object = getNodeField(node, "object")
-  if (object?.type !== "Identifier") return undefined
-  const objectName = getStringField(object, "name")
-  const property = memberPropertyName(node)
-  if (objectName === "globalThis" && HOST_GLOBALS.has(property ?? "")) {
-    return `\`globalThis.${property}\` reads a host global past \`effect/noGlobals\`. Route it through an Effect platform service (\`GentPlatform\`, \`FileSystem\`, \`ChildProcessSpawner\`, \`Config\`); host globals stay in adapter, tooling and test code.`
-  }
-  if (objectName === "Bun" && fieldOf(node, "computed") === true) {
-    return "A computed `Bun[...]` member reads Bun past `effect/noGlobals`. Route it through an Effect platform service; Bun stays in adapter, tooling and test code."
-  }
-  return undefined
+  return object?.type === "Identifier" && getStringField(object, "name") === "globalThis"
 }
 
 /** The `Bun` members retired everywhere, and their replacements. */
@@ -327,33 +272,6 @@ const RETIRED_BUN_MEMBERS: ReadonlyMap<string, string> = new Map([
   ["Glob", "`Bun.Glob` is retired; list files through Effect `FileSystem`."],
   ["randomUUIDv7", "`Bun.randomUUIDv7` is adapter-only; use `GentPlatform.randomId`."],
 ])
-
-/** `globalThis.Bun` or `globalThis["Bun"]`. */
-const isGlobalThisBun = (node: AstNode | undefined): boolean => {
-  if (node?.type !== "MemberExpression") return false
-  const object = getNodeField(node, "object")
-  return (
-    object?.type === "Identifier" &&
-    getStringField(object, "name") === "globalThis" &&
-    memberPropertyName(node) === "Bun"
-  )
-}
-
-/**
- * The retired `Bun` member a read names where `effect/noGlobals` does not
- * look: `globalThis.Bun.Glob`, `globalThis["Bun"].Glob` or `Bun["Glob"]`.
- */
-const bypassedRetiredBunMember = (node: AstNode): string | undefined => {
-  const object = getNodeField(node, "object")
-  const viaGlobalThis = isGlobalThisBun(object)
-  const computedBun =
-    object?.type === "Identifier" &&
-    getStringField(object, "name") === "Bun" &&
-    fieldOf(node, "computed") === true
-  if (!viaGlobalThis && !computedBun) return undefined
-  const property = memberPropertyName(node)
-  return property !== undefined && RETIRED_BUN_MEMBERS.has(property) ? property : undefined
-}
 
 const callExpressionArgs = (node: AstNode): ReadonlyArray<AstNode> => {
   const args = fieldOf(node, "arguments")
@@ -725,163 +643,53 @@ const plugin: Plugin = {
     },
 
     /**
-     * A host fact read where `effect/noGlobals` does not look.
+     * No module path hand-rolled off its own URL.
      *
-     * `.oxlintrc.json` bans `Bun.*` and the host process and OS facts through
-     * the project bans of `effect/noGlobals` and `effect/noNodeBuiltinImport`;
-     * core and shipped-extension source also take `process.cwd()` and the
-     * `os`, `bun`, `crypto` and `url` modules through services. Upstream
-     * (0.20.0) reads a global's member only as `Global.member`, so three
-     * spellings pass it, and this rule reports them:
-     *
-     * - `globalThis.Bun` and `globalThis.process`, dotted or computed, as in
-     *   `globalThis.process.cwd()`;
-     * - a computed member of `Bun`, as in `Bun["spawn"]`;
-     * - in core and shipped-extension source outside `test-utils/`, a file
-     *   path hand-rolled as `new URL(import.meta.url).pathname`, where Effect
-     *   `Path.fromFileUrl` reads it.
-     *
-     * Exempt by filename, as the upstream project bans are by override:
-     * `runtime/gent-platform-bun.ts`, `*-adapter.ts`, the tooling, and test
-     * code. The retired `Bun.Glob` and `Bun.randomUUIDv7` stay banned in
-     * those files too, as the built-in bans of `effect/noGlobals` keep the
-     * dotted spelling: `globalThis.Bun.Glob`, `globalThis["Bun"].Glob` and
-     * `Bun["Glob"]` are reported in every file, and `randomUUIDv7` is allowed
-     * in the platform impl only. Goes when an upstream release reads these
-     * spellings.
+     * In core and shipped-extension source outside `test-utils/`, a member
+     * read off `new URL(import.meta.url)`, as `.pathname`, builds a file path
+     * by hand; Effect `Path.fromFileUrl` reads it. The TUI, the SDK and the
+     * server launcher are process hosts and read their own paths.
+     * `effect/noGlobals` holds the host globals themselves, through
+     * `globalThis` and computed members too.
      */
-    "no-host-fact-bypass": {
+    "no-hand-rolled-module-path": {
       create(context) {
-        const subject = ruleSubject(context)
-        const platformImpl = /(?:^|\/)runtime\/gent-platform-bun\.ts$/.test(subject)
-        const reportRetired = (node: AstNode): boolean => {
-          const member = bypassedRetiredBunMember(node)
-          if (member === undefined || (platformImpl && member === "randomUUIDv7")) return false
-          context.report({ message: RETIRED_BUN_MEMBERS.get(member) ?? member, node })
-          return true
-        }
-        if (platformBoundaryFilename(subject)) {
-          return {
-            MemberExpression(node) {
-              if (isAstNode(node)) reportRetired(node)
-            },
-          }
-        }
-        const protectedFile = protectedHostFactFilename(subject)
+        if (!protectedHostFactFilename(ruleSubject(context))) return {}
         return {
           MemberExpression(node) {
-            if (!isAstNode(node) || reportRetired(node)) return
-            if (protectedFile && isImportMetaUrlConstruction(getNodeField(node, "object"))) {
-              context.report({
-                message:
-                  "`new URL(import.meta.url)` read as a path is hand-rolled; use Effect `Path.fromFileUrl`.",
-                node,
-              })
+            if (!isAstNode(node) || !isImportMetaUrlConstruction(getNodeField(node, "object"))) {
               return
             }
-            const message = hostBypassMessage(node)
-            if (message !== undefined) context.report({ message, node })
+            context.report({
+              message:
+                "`new URL(import.meta.url)` read as a path is hand-rolled; use Effect `Path.fromFileUrl`.",
+              node,
+            })
           },
         }
       },
     },
 
     /**
-     * No module hands a platform package on under an exported alias.
+     * No retired `Bun` member in a file that turns `effect/noGlobals` off.
      *
-     * `effect/noPlatformLayerOutsideEntry` keeps the `@effect/platform-*`
-     * layers in the platform entry files: it follows each read of a binding a
-     * module takes from a platform package, and reports a re-export. Upstream
-     * (0.20.0) follows the reads inside the module only, so
-     * `export const Services = BunServices` passes it, and every importer of
-     * `Services` then provides `Services.layer` where no rule sees it.
-     *
-     * Reported outside test code: an exported `const`, `let` or `var` whose
-     * value is a binding imported from an `@effect/platform-*` package or
-     * module, or a member of one (`PlatformBun.BunServices`), or a local alias
-     * of one, however many steps away (`const Local = BunServices`, or
-     * `const { BunServices: Local } = PlatformBun`). A layer read
-     * (`BunServices.layer`, `import { layer }`) is left to upstream, which
-     * reports it where it stands. The platform entry files are exempt by
-     * their `.oxlintrc.json` override, as they are from the upstream rule.
-     * Goes when an upstream release follows an exported alias.
+     * The built-in bans of `effect/noGlobals` hold `Bun.Glob` and
+     * `Bun.randomUUIDv7` in every spelling, but a plain Bun script (the gamut
+     * driver, the capture preload) turns that rule off, and its `members`
+     * option only adds bans to the built-in list. `.oxlintrc.json` enables
+     * this rule in those overrides: `Bun.Glob`, `Bun["Glob"]`,
+     * `globalThis.Bun.Glob` and `globalThis["Bun"].Glob` are reported, as is
+     * each spelling of `randomUUIDv7`.
      */
-    "no-platform-module-export-alias": {
+    "no-retired-bun-member": {
       create(context) {
-        if (isTestCode(ruleSubject(context))) return {}
-        const platformBindings = new Set<string>()
-        const exported: Array<{ readonly node: AstNode; readonly root: string }> = []
-        /** Each local name, and the name its value is read off. */
-        const localAliases = new Map<string, string>()
-        const platformRoot = (name: string): string | undefined => {
-          const seen = new Set<string>()
-          let current: string | undefined = name
-          while (current !== undefined && !seen.has(current)) {
-            if (platformBindings.has(current)) return current
-            seen.add(current)
-            current = localAliases.get(current)
-          }
-          return undefined
-        }
         return {
-          VariableDeclarator(node) {
+          MemberExpression(node) {
             if (!isAstNode(node)) return
-            const root = aliasRoot(getNodeField(node, "init"))
-            const id = getNodeField(node, "id")
-            if (root === undefined || id === undefined) return
-            if (id.type === "Identifier") {
-              const name = getStringField(id, "name")
-              if (name !== undefined) localAliases.set(name, root)
-              return
-            }
-            if (id.type !== "ObjectPattern") return
-            for (const property of getNodeArrayField(id, "properties") ?? []) {
-              const key = getNodeField(property, "key")
-              const value = getNodeField(property, "value")
-              const keyName = key === undefined ? undefined : getStringField(key, "name")
-              if (keyName === undefined || LAYER_NAME.test(keyName)) continue
-              if (value?.type !== "Identifier") continue
-              const name = getStringField(value, "name")
-              if (name !== undefined) localAliases.set(name, root)
-            }
-          },
-          ImportDeclaration(node) {
-            if (!isAstNode(node) || getStringField(node, "importKind") === "type") return
-            const source = importSourceOf(node) ?? ""
-            if (!PLATFORM_PACKAGE.test(source)) return
-            for (const specifier of getNodeArrayField(node, "specifiers") ?? []) {
-              if (getStringField(specifier, "importKind") === "type") continue
-              // `import { layer as l }` is reported at the import upstream.
-              const imported = getNodeField(specifier, "imported")
-              if (
-                LAYER_NAME.test(
-                  imported === undefined ? "" : (getStringField(imported, "name") ?? ""),
-                )
-              )
-                continue
-              const local = getNodeField(specifier, "local")
-              const name = local === undefined ? undefined : getStringField(local, "name")
-              if (name !== undefined) platformBindings.add(name)
-            }
-          },
-          ExportNamedDeclaration(node) {
-            if (!isAstNode(node)) return
-            const declaration = getNodeField(node, "declaration")
-            if (declaration?.type !== "VariableDeclaration") return
-            for (const declarator of getNodeArrayField(declaration, "declarations") ?? []) {
-              const root = aliasRoot(getNodeField(declarator, "init"))
-              if (root !== undefined) exported.push({ node: declarator, root })
-            }
-          },
-          "Program:exit"() {
-            for (const alias of exported) {
-              const root = platformRoot(alias.root)
-              if (root === undefined) continue
-              context.report({
-                message: `exports an alias of \`${root}\`, a binding from an @effect/platform package, which hands its layers to every importer where no rule follows them; import the package where it is used, or yield the service the platform entry provides`,
-                node: alias.node,
-              })
-            }
+            const member = staticMemberName(node)
+            if (member === undefined || !RETIRED_BUN_MEMBERS.has(member)) return
+            if (!isBunValue(getNodeField(node, "object"))) return
+            context.report({ message: RETIRED_BUN_MEMBERS.get(member) ?? member, node })
           },
         }
       },

@@ -22,6 +22,7 @@ import {
   findTuiSessionIdentityReads,
   findUnadaptedSeams,
   findUnconsumedExports,
+  enabledLintRules,
   findUnenabledPluginRules,
   findUnmatchedIgnoreRows,
   findUnmatchedOverrideGlobs,
@@ -1150,7 +1151,7 @@ describe("a defined rule must be enabled", () => {
   }`
   const defined = ["no-sleep", "no-make-unsafe"]
 
-  test("a rule the root config enables is silent", () => {
+  test("a rule the lint config enables is silent", () => {
     const findings = findUnenabledPluginRules(
       PLUGIN,
       plugin,
@@ -1160,12 +1161,12 @@ describe("a defined rule must be enabled", () => {
     expect(findings).toEqual([])
   })
 
-  test("a rule the root config never enables is reported", () => {
+  test("a rule the lint config never enables is reported", () => {
     // no-make-unsafe shipped unenabled, and could not be enabled at all:
     // seven live makeUnsafe calls would have failed it.
     const findings = findUnenabledPluginRules(PLUGIN, plugin, defined, new Set(["gent/no-sleep"]))
     expect(messages(findings)).toEqual([
-      expect.stringContaining("`gent/no-make-unsafe` is defined but the root config never enables"),
+      expect.stringContaining("`gent/no-make-unsafe` is defined but the lint config never enables"),
     ])
   })
 
@@ -1187,6 +1188,19 @@ describe("a defined rule must be enabled", () => {
     expect(findings.map((finding) => [finding.line, finding.message.split("`")[1]])).toEqual([
       [1, "gent/no-make-unsafe"],
     ])
+  })
+
+  test("a rule only an override enables counts as enabled, and a rule set off nowhere else does not", () => {
+    // no-retired-bun-member is on only where effect/noGlobals is off; the
+    // root block never names it.
+    const enabled = enabledLintRules({
+      rules: { "gent/no-sleep": "error", "gent/no-make-unsafe": "off" },
+      overrides: [
+        { files: ["testbeds/gamut/gamut.ts"], rules: { "gent/no-retired-bun-member": "error" } },
+        { files: ["tools/**"], rules: { "gent/no-sleep": ["off"] } },
+      ],
+    })
+    expect([...enabled].toSorted()).toEqual(["gent/no-retired-bun-member", "gent/no-sleep"])
   })
 })
 
