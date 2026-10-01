@@ -30,14 +30,15 @@ describe("app bootstrap", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
+          const cwd = yield* repoRoot
           const { client } = yield* Gent.test(localLayer())
-          const first = yield* client.session.create({ cwd: repoRoot })
+          const first = yield* client.session.create({ cwd })
           // oxlint-disable-next-line effect/noFixedWaitInTests -- real-clock gap so the second session's createdAt sorts strictly after the first
           yield* Effect.sleep("5 millis")
-          const second = yield* client.session.create({ cwd: repoRoot })
+          const second = yield* client.session.create({ cwd })
           const state = yield* resolveInteractiveState({
             client,
-            cwd: repoRoot,
+            cwd,
             session: Option.none(),
             continue_: true,
             prompt: Option.none(),
@@ -55,10 +56,11 @@ describe("app bootstrap", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
+          const cwd = yield* repoRoot
           const { client } = yield* Gent.test(localLayer())
           const state = yield* resolveInteractiveState({
             client,
-            cwd: repoRoot,
+            cwd,
             session: Option.none(),
             continue_: true,
             prompt: Option.some("bootstrap prompt"),
@@ -79,6 +81,7 @@ describe("session lifecycle", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
+          const cwd = yield* repoRoot
           const { client, runtime } = yield* Gent.test(
             baseLocalLayerWithProvider(LanguageModelLayers.debug({ retries: false })),
           )
@@ -86,7 +89,7 @@ describe("session lifecycle", () => {
           // Pre-resolve bootstrap (same as main.tsx now does)
           const { bootstrap } = yield* resolveInteractiveBootstrap({
             client,
-            cwd: repoRoot,
+            cwd,
             continue_: false,
           })
           expect(bootstrap.initialSession).toBeDefined()
@@ -103,7 +106,7 @@ describe("session lifecycle", () => {
               runtime,
               initialPrompt: bootstrap.initialPrompt,
               initialSession: bootstrap.initialSession,
-              cwd: repoRoot,
+              cwd,
               width: 100,
               height: 32,
             },
@@ -133,6 +136,7 @@ describe("session lifecycle", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
+          const cwd = yield* repoRoot
           const { client, runtime } = yield* Gent.test(
             baseLocalLayerWithProvider(LanguageModelLayers.debug({ retries: false })),
           )
@@ -140,7 +144,7 @@ describe("session lifecycle", () => {
           // Pre-resolve bootstrap
           const { bootstrap } = yield* resolveInteractiveBootstrap({
             client,
-            cwd: repoRoot,
+            cwd,
             continue_: false,
           })
           const setup = yield* renderScoped(
@@ -155,7 +159,7 @@ describe("session lifecycle", () => {
               runtime,
               initialPrompt: bootstrap.initialPrompt,
               initialSession: bootstrap.initialSession,
-              cwd: repoRoot,
+              cwd,
               width: 100,
               height: 32,
             },

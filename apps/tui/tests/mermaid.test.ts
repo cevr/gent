@@ -158,7 +158,7 @@ describe("inline mermaid replace", () => {
   it.scopedLive("a diagram drawn on a color terminal holds no escape codes", () =>
     Effect.gen(function* () {
       const path = yield* Path.Path
-      const module = path.resolve(import.meta.dir, "../src/mermaid.ts")
+      const module = yield* path.fromFileUrl(new URL("../src/mermaid.ts", import.meta.url))
       const diagram = "```mermaid\ngraph TD\n  A-->B\n  A-->C\n```"
       const draw = [
         "Object.assign(process.stdout, { isTTY: true })",
@@ -169,7 +169,7 @@ describe("inline mermaid replace", () => {
       const searchPath = yield* Config.String("PATH")
       // eslint-disable-next-line effect/noGlobals -- the color terminal is process-wide, so the child process is the boundary under test.
       const child = Bun.spawn(["bun", "-e", draw], {
-        cwd: path.resolve(import.meta.dir, ".."),
+        cwd: path.resolve(yield* path.fromFileUrl(new URL("..", import.meta.url))),
         env: { PATH: searchPath, COLORTERM: "truecolor", TERM: "xterm-256color" },
         stdout: "pipe",
       })

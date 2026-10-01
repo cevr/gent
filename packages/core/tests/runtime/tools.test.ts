@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Context, Effect, Exit, Layer, Option, Predicate, Schema, Stream } from "effect"
+import { Context, Effect, Exit, Layer, Option, Order, Predicate, Schema, Stream } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { InteractionPendingError } from "../../src/domain/interaction"
 import {
@@ -1199,9 +1199,9 @@ describe("extension model surface over RPC", () => {
             assertOptions: (options) => {
               let expected = ["bridge", "cell"]
               if (selected) expected = ["bridge"]
-              expect(
-                options.tools.map((tool) => tool.name).sort((a, b) => a.localeCompare(b)),
-              ).toEqual(expected)
+              expect(options.tools.map((tool) => tool.name).toSorted(Order.String)).toEqual(
+                expected,
+              )
             },
           },
           textStep("finished"),

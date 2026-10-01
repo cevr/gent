@@ -52,7 +52,7 @@ describe("the repo's compiler options", () => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
-      const repoRoot = path.resolve(import.meta.dir, "..", "..", "..")
+      const repoRoot = path.resolve(yield* path.fromFileUrl(new URL("../../..", import.meta.url)))
       const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-native-error-" })
       yield* fs.writeFileString(
         path.join(directory, "b1.ts"),
@@ -101,7 +101,14 @@ describe("the steering files the check reads", () => {
       // Git's whole environment: no hook's `GIT_INDEX_FILE`, no user config.
       const env = { PATH: yield* Config.String("PATH"), HOME: repoRoot }
       const git = (args: ReadonlyArray<string>) =>
-        spawner.exitCode(ChildProcess.make("git", args, { cwd: repoRoot, env, extendEnv: false }))
+        spawner.exitCode(
+          ChildProcess.make("git", args, {
+            cwd: repoRoot,
+            env,
+            extendEnv: false,
+            forceKillAfter: "2 seconds",
+          }),
+        )
       yield* fs.writeFileString(path.join(repoRoot, "AGENTS.md"), "# Agents\n")
       yield* fs.makeDirectory(path.join(repoRoot, "docs"))
       yield* fs.writeFileString(path.join(repoRoot, "docs", "draft.md"), "# Draft\n")

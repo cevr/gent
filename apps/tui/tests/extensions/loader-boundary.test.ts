@@ -856,7 +856,7 @@ export default tui.defineClientExtension("@user/client-entries", {
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
         const path = yield* Path.Path
-        const dir = path.resolve(import.meta.dir, "../../src/extensions")
+        const dir = yield* path.fromFileUrl(new URL("../../src/extensions", import.meta.url))
         const files = (yield* fs.readDirectory(dir)).filter(
           (file) => /\.client\.tsx?$/.test(file) || /^builtins\.tsx?$/.test(file),
         )

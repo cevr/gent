@@ -1092,6 +1092,7 @@ describe("every guard reads one file set, the git index", () => {
         cwd: root,
         env: yield* scratchEnv(root, extra),
         extendEnv: false,
+        forceKillAfter: "2 seconds",
       })
       expect(yield* spawner.exitCode(command)).toBe(ChildProcessSpawner.ExitCode(0))
     })
@@ -2676,6 +2677,7 @@ describe("the directive grammar is the language service's", () => {
         const output = yield* spawner.string(
           ChildProcess.make(path.join(repo, "node_modules", ".bin", "tsc"), ["-p", dir], {
             cwd: dir,
+            forceKillAfter: "5 seconds",
           }),
           { includeStderr: true },
         )

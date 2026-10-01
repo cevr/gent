@@ -49,6 +49,9 @@
       { "allow": ["withWideEvent"], "testFiles": ["**/tests/**"] }
     ],
     "effect/noTimeoutDieInTests": "error",
+    // A test's data directory and its user and project config directories are
+    // its own, beside the generic home keys the rule knows.
+    "effect/noSharedTestHome": ["error", { "keys": ["GENT_DATA_DIR", "userDir", "projectDir"] }],
     // No `import(...)` or `require(...)`: the compiled binary needs every module
     // reachable through a static import. A deliberate load keeps a line-local
     // suppression with its reason.
