@@ -1843,7 +1843,7 @@ Log destinations:
 - `<hash>-<ts>-client.log` — TUI-side JSON lines (`clientLog` and `clientTraceLogger` in `apps/tui/src/client.tsx`); `<hash>` names the cwd, `<ts>` the process start
 - Spans go to an OTLP endpoint when `OTEL_EXPORTER_OTLP_ENDPOINT` is set (`GentTracerLive`); no trace file is written
 
-Request-ID correlation: TUI generates `crypto.randomUUID()` at `sendMessage`/`createSession`, passes via `requestId` field in transport contract. Server threads into log annotations and RPC wide event boundaries.
+Request-ID correlation: TUI generates a request id with `randomId` (`apps/tui/src/utils.ts`, Effect `Random`) at `sendMessage`/`createSession`, passes via `requestId` field in transport contract. Server threads into log annotations and RPC wide event boundaries.
 
 ## Non-Goals
 
