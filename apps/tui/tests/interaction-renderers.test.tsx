@@ -89,7 +89,7 @@ describe("AskUserRenderer", () => {
                     },
                   ],
                 },
-              } satisfies ActiveInteraction
+              } satisfies InteractionPresented
             }
             resolve={(r) => results.push(r)}
           />
