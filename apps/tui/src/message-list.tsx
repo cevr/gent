@@ -428,6 +428,8 @@ interface MessageBase {
   /** Ordered parts for interleaved rendering; the one owner of the message's tool calls. */
   segments?: AssistantSegment[]
   metadata?: MessageMetadataInfo
+  /** An answer built from streamed chunks: the step's stored answer replaces it. */
+  draft?: true
 }
 
 interface RegularMessage extends MessageBase {
@@ -945,6 +947,30 @@ export const transcriptFingerprint = (item: SessionItem): string => {
   return encodeFingerprint([item._tag, item.createdAt, item.seq])
 }
 
+/** A call still running, a cell's inner operation included. */
+const isRunningCall = (call: ToolCall): boolean =>
+  call.status === "running" || (call.operations ?? []).some(isRunningCall)
+
+/**
+ * Whether an item draws its last look, which is all history may take. While
+ * a turn runs, a streamed answer waits for the stored answer that replaces
+ * it, a queued follow-up has not run, a pending retry counts down, and a
+ * running call has rows still to change. Once no turn runs, every item is
+ * final: nothing is left to change them, and a row that does change later
+ * is replayed.
+ */
+const isFinalItem = (item: SessionItem, turnRunning: boolean): boolean => {
+  if (!turnRunning) return true
+  if (isMessageItem(item))
+    return (
+      item.draft !== true &&
+      Predicate.isUndefined(item.pendingMode) &&
+      !messageToolCalls(item).some(isRunningCall)
+    )
+  if (item._tag === "retrying") return item.outcome !== "pending"
+  return true
+}
+
 // ── transcript display ──────────────────────────────────────────────────────
 
 const isTextSegment = Predicate.or(Predicate.isTagged("text"), Predicate.isTagged("reasoning"))
@@ -1245,6 +1271,8 @@ export function NativeTranscript(props: NativeTranscriptProps) {
    * behind it do not land before it.
    */
   let commitEpoch = 0
+  /** Rows commits moved into history since the region was last sized. */
+  let releasedRows = 0
   /** The tries each item's highlights missed, by fingerprint, until it lands. */
   const unsettledTries = new Map<string, number>()
   let displayRevision = 0
@@ -1341,16 +1369,18 @@ export function NativeTranscript(props: NativeTranscriptProps) {
    * commit from the alternate screen. An item that did not commit stays in the
    * live view, so closing the overlay still shows it.
    *
-   * The footer is left exactly as it is. Changing it here would run OpenTUI's
-   * `applyScreenMode` in the middle of the commit, and that path rewrites the
-   * screen with `ESC[nS`, which drops the rows instead of scrolling them into
-   * scrollback. `splitFooterHeight` keeps the output region large enough
-   * instead, so the commit needs no footer of its own.
+   * The rows move in place. `handOver` takes the item out of the live view
+   * and shrinks the split region by its rows before the rows are queued, so
+   * the region's top stays where it was and the commit writes the rows into
+   * the space the item left, moving the region back down to the last row.
+   * In the other order the commit would scroll the screen first and the
+   * shrink would then leave the item's rows empty under the status row.
    */
   const commitItems = (
     items: SessionItem[],
     epoch: number,
     lastTry: boolean,
+    handOver: (rows: number) => void,
   ): Effect.Effect<CommitOutcome> =>
     Effect.suspend(() => {
       // An item queued behind one that came back waits for the next pass.
@@ -1393,6 +1423,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
             if (!settled && !lastTry) return Effect.succeed("unsettled")
             return Effect.sync(() => {
               if (!settled) surface.render()
+              handOver(surface.height)
               surface.commitRows(0, surface.height)
               return "landed"
             })
@@ -1419,23 +1450,35 @@ export function NativeTranscript(props: NativeTranscriptProps) {
   }
 
   /**
-   * Hands one item to native history and, only once its rows land, drops it
+   * Hands one item to native history and, only as its rows land, drops it
    * from the live view. A commit that could not happen leaves the counters
    * untouched, so the item stays visible and a later pass retries it.
    */
   const write = (item: SessionItem, fingerprintValue: string) => {
     const tries = unsettledTries.get(fingerprintValue) ?? 0
     const epoch = commitEpoch
+    // The live tail gives up the item's rows in the same update that drops
+    // it, so the region shrinks before the rows are queued, not a layout later.
+    const handOver = (rows: number) => {
+      const liveRowsOfItem = itemHeights.get(item) ?? rows
+      releasedRows += rows
+      batch(() => {
+        committed = [...committed, fingerprintValue]
+        setCommittedCount(committed.length)
+        setLiveHeight((height) => Math.max(0, height - liveRowsOfItem))
+      })
+      // Sized here as well as by the effect: the commit is queued next, and
+      // a commit queued before the shrink would scroll the screen first.
+      untrack(() => sizeRegion(false))
+    }
     enqueueNative(
-      commitItems([item], epoch, tries + 1 >= SETTLE_TRIES).pipe(
+      commitItems([item], epoch, tries + 1 >= SETTLE_TRIES, handOver).pipe(
         Effect.andThen((outcome) =>
           Effect.sync(() => {
             if (outcome === "stale") return
             if (outcome === "unsettled") unsettledTries.set(fingerprintValue, tries + 1)
             if (outcome !== "landed") return rewind()
             unsettledTries.delete(fingerprintValue)
-            committed = [...committed, fingerprintValue]
-            setCommittedCount(committed.length)
           }),
         ),
         Effect.onError(() => Effect.sync(rewind)),
@@ -1489,22 +1532,28 @@ export function NativeTranscript(props: NativeTranscriptProps) {
       return
     }
     const returning = renderer.screenMode === "alternate-screen"
-    renderer.footerHeight = splitFooterHeight(
-      dimensions().height,
-      props.footerHeight + stickyRows() + Math.max(1, liveHeight()),
-    )
+    sizeRegion(returning || replayPending())
     renderer.screenMode = "split-footer"
     renderer.externalOutputMode = "capture-stdout"
     renderer.useMouse = false
     if ((returning || replayPending()) && !settlingNative) {
       settlingNative = true
       renderer.once("frame", finishNativeReturn)
-      // Layout and content changes invalidate saved snapshots.
-      // Clear before the layout frame; replay only after its measurements arrive.
-      const clearSavedLines = replayPending()
+      // The reset clears the screen, and the live tail no longer holds the
+      // recent transcript, so a return from the alternate screen replays all
+      // of history as a resize does. Clear before the layout frame; replay
+      // only after its measurements arrive.
+      if (returning)
+        untrack(() =>
+          batch(() => {
+            committed = []
+            queued = 0
+            setCommittedCount(0)
+          }),
+        )
       enqueueNative(
         Effect.sync(() => {
-          renderer.resetSplitFooterForReplay({ clearSavedLines })
+          renderer.resetSplitFooterForReplay({ clearSavedLines: true })
           renderer.requestRender()
         }),
       )
@@ -1539,37 +1588,32 @@ export function NativeTranscript(props: NativeTranscriptProps) {
 
   // Scrollback is immutable, so nothing commits until every client renderer
   // has loaded and every notice-row source has answered; the live view draws
-  // the rows it has meanwhile.
+  // the rows it has meanwhile. Each item commits once it is final, in
+  // transcript order, during a turn too: the split region holds the footer
+  // and the items still in flight only, and an item leaves it by moving into
+  // history in place, never by a shrink that leaves its rows empty under the
+  // status row.
   createEffect(() => {
     if (!ext.loaded() || !props.settled) return
-    if (!nativeOutputReady() || props.streaming || props.expanded || props.overlayOpen) return
+    if (!nativeOutputReady() || props.expanded || props.overlayOpen) return
     const items = displayedItems()
     const next = items.map((item) => transcriptFingerprint(item))
-    measurementVersion()
+    const turnRunning = props.streaming
     retryVersion()
-    // The rows the live tail really has: the pinned prompt takes one.
-    const available = liveRows() - stickyRows()
     untrack(() => {
       const prefixMatches = committed.every((value, index) => next[index] === value)
       if (!prefixMatches) {
         requestReplay()
         return
       }
-      let remainingHeight = 0
-      for (const item of items.slice(queued)) {
-        remainingHeight += itemHeights.get(item) ?? 0
-      }
-      while (queued < items.length && remainingHeight > available) {
+      while (queued < items.length) {
         const item = items[queued]
-        if (!item) break
-        const height = Option.fromNullishOr(itemHeights.get(item))
-        if (Option.isNone(height)) break
+        if (!item || !isFinalItem(item, turnRunning)) break
         const value = next[queued]
         if (!Predicate.isString(value)) break
         // A completed item has one owner: native history or the live view. The
         // live view keeps it until the queued commit reports that it landed.
         write(item, value)
-        remainingHeight -= height.value
         queued++
       }
       const currentItems = new Set(items)
@@ -1647,6 +1691,27 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     return Math.min(Math.max(1, liveHeight()), liveRows() - stickyRows())
   }
 
+  /**
+   * Sizes the split region. It shrinks only by the rows a commit moved into
+   * history (`releasedRows`), which the commit then writes into the space
+   * the region left. Any other shrink (a docked pane or the suggestions
+   * closing, the composer losing lines) would leave its rows empty under
+   * the status row, so the region keeps them above the live tail, and the
+   * next rows the tail grows take them. A replay clears the screen and
+   * starts from the rows the region wants.
+   */
+  function sizeRegion(replaying: boolean) {
+    const height = dimensions().height
+    const wanted = splitFooterHeight(
+      height,
+      props.footerHeight + stickyRows() + Math.max(1, liveHeight()),
+    )
+    let held = Math.min(splitFooterHeight(height, height), renderer.footerHeight - releasedRows)
+    if (replaying) held = wanted
+    releasedRows = 0
+    renderer.footerHeight = Math.max(wanted, held)
+  }
+
   // A footer that takes the whole split region (a docked pane, its blank rows
   // given way) leaves the live tail no row. The scrollbox keeps its set height
   // and would draw its last row over the footer's first, so the tail reads its
@@ -1658,6 +1723,9 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     <box
       flexDirection="column"
       flexShrink={1}
+      // Rows the region holds beyond the tail's own sit under it, above the
+      // footer, never under the status row.
+      flexGrow={1}
       minHeight={0}
       // A basis, not the content's height: hidden rows must not end the measure.
       flexBasis={stickyRows() + viewportHeight()}

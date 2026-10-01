@@ -84,6 +84,7 @@ import { type ClientContextValue, useClient } from "../src/client"
 import {
   type RenderWaitTimeoutError,
   waitForFrame,
+  waitForTerminal,
   waitUntil,
   waitUntilAdvancing,
 } from "./helpers-boundary"
@@ -913,7 +914,7 @@ describe("notice rows", () => {
       answer("silent", [
         { key: "late", createdAt: 1, glyph: "◌", color: "warning", text: "LATE-NOTICE-ROW" },
       ])
-      yield* waitForFrame(setup, (frame) => frame.includes("LATE-NOTICE-ROW"), "the late row")
+      yield* waitForTerminal(setup, (text) => text.includes("LATE-NOTICE-ROW"), "the late row")
     }).pipe(Effect.timeout("10 seconds")),
   )
 
@@ -929,7 +930,7 @@ describe("notice rows", () => {
       answer("prompt", [
         { key: "on-time", createdAt: 1, glyph: "◌", color: "info", text: "ON-TIME-ROW" },
       ])
-      yield* waitForFrame(setup, (frame) => frame.includes("ON-TIME-ROW"), "the on-time row")
+      yield* waitForTerminal(setup, (text) => text.includes("ON-TIME-ROW"), "the on-time row")
       // Both holds end at the same instant; the stuck source's warning lands
       // after its release, so wait on the warning, then give every hold one
       // more step before reading the whole log.

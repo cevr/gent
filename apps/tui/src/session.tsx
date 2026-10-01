@@ -1891,6 +1891,7 @@ const ensureAssistantMessage = (
         images: [],
         createdAt,
         segments: [{ _tag: "text", content }],
+        draft: true,
       })
     }),
   )

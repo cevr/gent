@@ -34,7 +34,7 @@ import type { AnyExtensionClientModule, NoticeRow } from "../../src/extensions/c
 import { App } from "../../src/app"
 import { provideClientServices } from "../extension-test-harness-boundary"
 import { createMockClient, createMockRuntime, renderScoped } from "../render-harness-boundary"
-import { waitForFrame } from "../helpers-boundary"
+import { waitForFrame, waitForTerminal } from "../helpers-boundary"
 
 // ── history builder ─────────────────────────────────────────────────────────
 
@@ -1033,7 +1033,7 @@ describe("cache client extension", () => {
         catalog: Effect.succeed(models),
         extension: cacheExtension,
       })
-      yield* waitForFrame(setup.rendered, (frame) => frame.includes(`◌ ${IDLE_ROW}`), "miss row")
+      yield* waitForTerminal(setup.rendered, (text) => text.includes(`◌ ${IDLE_ROW}`), "miss row")
       yield* waitForFrame(
         setup.rendered,
         (frame) => frame.includes("cache waste $0.07"),
@@ -1053,9 +1053,9 @@ describe("cache client extension", () => {
       // The feed opens and replays without waiting for the extension.
       yield* waitForFrame(setup.rendered, () => setup.feedOpened(), "feed open", 4000)
       yield* Deferred.succeed(loaded, void 0)
-      yield* waitForFrame(
+      yield* waitForTerminal(
         setup.rendered,
-        (frame) => frame.includes(`◌ ${IDLE_ROW}`),
+        (text) => text.includes(`◌ ${IDLE_ROW}`),
         "miss row",
         4000,
       )
@@ -1076,18 +1076,18 @@ describe("cache client extension", () => {
       yield* waitForFrame(setup.rendered, () => setup.feedOpened(), "feed open", 4000)
       // The feed has replayed; the rows wait for the prices.
       for (let pass = 0; pass < 10; pass++) {
-        yield* waitForFrame(setup.rendered, (frame) => {
-          record(frame)
+        yield* waitForTerminal(setup.rendered, (text) => {
+          record(text)
           return true
         })
       }
       expect(drawn).toEqual([])
       yield* Deferred.succeed(catalogReady, void 0)
-      yield* waitForFrame(
+      yield* waitForTerminal(
         setup.rendered,
-        (frame) => {
-          record(frame)
-          return frame.includes(`◌ ${IDLE_ROW}`)
+        (text) => {
+          record(text)
+          return text.includes(`◌ ${IDLE_ROW}`)
         },
         "priced miss row",
         4000,

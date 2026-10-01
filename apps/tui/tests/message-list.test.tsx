@@ -67,7 +67,7 @@ import {
 } from "../src/tool-renderers"
 import { destroyRenderSetup, renderFrame, renderScoped } from "./render-harness-boundary"
 import { makeSettleHold, makeSettleTimeouts } from "./scrollback-hold-boundary"
-import { waitForFrame } from "./helpers-boundary"
+import { waitForFrame, waitForTerminal } from "./helpers-boundary"
 import { useExtensionUI } from "../src/extensions/host"
 import { builtinClientModules } from "../src/extensions/builtins"
 import { clientContributions, defineClientExtension } from "../src/extensions/client-facets"
@@ -853,7 +853,10 @@ describe("transcript message rows", () => {
             // Check native cells: string offsets do not match terminal columns for wide glyphs.
             const capture = (event: CliRendererExternalOutputEvent) => {
               const { snapshot } = event
-              savedText.push(new TextDecoder().decode(snapshot.getRealCharBytes(false)))
+              const text = new TextDecoder().decode(snapshot.getRealCharBytes(false))
+              savedText.push(text)
+              // The answer commits on its own, after the user rows: it has no border.
+              if (text.includes("ANSWER-END")) return
               for (let row = 0; row < snapshot.height; row++) {
                 const cells = snapshot.buffers.char.subarray(
                   row * snapshot.width,
@@ -909,7 +912,17 @@ describe("transcript message rows", () => {
         for (const view of views) {
           setDisclosure(view.disclosure)
           if (setup.renderer.terminalWidth !== view.width) setup.resize(view.width, 14)
-          yield* Effect.promise(() => setup.flush())
+          // Both items are final, so each view commits them all; the answer lands last.
+          yield* Effect.promise(() => setup.flush()).pipe(
+            Effect.repeat({
+              until: () => savedText.join("").includes("ANSWER-END"),
+              schedule: Schedule.spaced("10 millis"),
+            }),
+            Effect.timeout("4 seconds"),
+            Effect.ignore,
+          )
+          // The frame drawn after the last commit: a committed row leaves it.
+          yield* Effect.promise(() => setup.renderOnce())
           const cells = leadingCells.splice(0)
           expect(cells.length).toBeGreaterThan(10)
           expect(cells.filter((cell) => cell !== 0x2503)).toEqual([])
@@ -2539,8 +2552,16 @@ describe("transcript block spacing", () => {
         for (const level of levels) {
           savedText.splice(0)
           setDisclosure(level)
-          yield* Effect.promise(() => setup.flush())
-          yield* Effect.promise(() => setup.flush())
+          // Every item is final, so the replay commits each one: one snapshot apiece.
+          yield* Effect.promise(() => setup.flush()).pipe(
+            Effect.repeat({
+              until: () => savedText.length >= history.length,
+              schedule: Schedule.spaced("10 millis"),
+            }),
+            Effect.timeout("4 seconds"),
+            Effect.ignore,
+          )
+          yield* Effect.promise(() => setup.renderOnce())
         }
         const lines = (savedText.join("") + renderFrame(setup))
           .split("\n")
@@ -3285,6 +3306,179 @@ describe("native transcript footer room", () => {
   )
 })
 
+// ── native transcript rows under the footer ─────────────────────────────────
+
+/**
+ * The split region sits on the terminal's last rows. OpenTUI keeps the
+ * region's top row when it shrinks, so a shrink that no commit fills leaves
+ * the freed rows empty under the status row. These tests read the region's
+ * place from the renderer: its top offset plus its height is the terminal's
+ * height when no row is left under it.
+ */
+
+interface RoomSetup {
+  readonly items: () => ListMessage[]
+  readonly streaming: () => boolean
+  readonly footer: () => number
+  readonly onRenderer: (renderer: CliRenderer) => void
+}
+
+const roomTranscript = (options: RoomSetup) => {
+  const renderer = useRenderer()
+  options.onRenderer(renderer)
+  return (
+    <NativeTranscript
+      items={options.items()}
+      settled
+      streaming={options.streaming()}
+      footerHeight={options.footer()}
+      expanded={false}
+      disclosure="collapsed"
+      displayRevision={0}
+      overlayOpen={false}
+      renderItems={(visible) => (
+        <MessageList
+          items={visible}
+          disclosure="collapsed"
+          syntaxStyle={syntaxStyle}
+          openAnswer={Option.none()}
+        />
+      )}
+    >
+      <box />
+    </NativeTranscript>
+  )
+}
+
+/** The renderer's region offset: the terminal rows above the split region. OpenTUI keeps it private. */
+const RegionPlace = Schema.Struct({ renderOffset: Schema.Finite })
+
+/** The rows between the split region's last row and the terminal's last row. */
+const rowsUnderRegion = (renderer: CliRenderer): number =>
+  renderer.terminalHeight -
+  (Schema.decodeUnknownSync(RegionPlace)(renderer).renderOffset + renderer.height)
+
+const committedTextOf = (event: CliRendererExternalOutputEvent) =>
+  new TextDecoder().decode(event.snapshot.getRealCharBytes(false))
+
+describe("native transcript rows under the footer", () => {
+  it.scopedLive(
+    "a docked pane that closes leaves no empty row under the footer",
+    () =>
+      Effect.gen(function* () {
+        const [footer, setFooter] = createSignal(3)
+        const committedText: string[] = []
+        let screen = Option.none<CliRenderer>()
+        const items = [
+          ...Array.from({ length: 3 }, (_, index) =>
+            assistant(`item-${index}`, longBody(`ITEM-${index}`)),
+          ),
+          assistant("tail", "TAIL"),
+        ]
+        const setup = yield* renderScoped(
+          () =>
+            roomTranscript({
+              items: () => items,
+              streaming: () => false,
+              footer,
+              onRenderer: (renderer) => {
+                screen = Option.some(renderer)
+                renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+                  committedText.push(committedTextOf(event))
+                })
+              },
+            }),
+          { width: 60, height: 14 },
+        )
+        yield* Effect.promise(() => setup.flush()).pipe(
+          Effect.repeat({
+            until: () => committedText.join("").includes("ITEM-2 line 12"),
+            schedule: Schedule.spaced("10 millis"),
+          }),
+          Effect.timeout("6 seconds"),
+          Effect.ignore,
+        )
+        const renderer = Option.getOrThrow(screen)
+        // A pane docks in the footer, then closes.
+        setFooter(9)
+        yield* Effect.promise(() => setup.flush())
+        yield* Effect.promise(() => setup.flush())
+        setFooter(3)
+        yield* Effect.promise(() => setup.flush())
+        yield* Effect.promise(() => setup.flush())
+        expect(rowsUnderRegion(renderer)).toBe(0)
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
+  )
+
+  it.scopedLive(
+    "a turn's final items reach history while it runs, and leave no empty row behind",
+    () =>
+      Effect.gen(function* () {
+        const [items, setItems] = createSignal<ListMessage[]>([
+          assistant("earlier", longBody("EARLIER")),
+        ])
+        const [streaming, setStreaming] = createSignal(true)
+        const committedText: string[] = []
+        let screen = Option.none<CliRenderer>()
+        const setup = yield* renderScoped(
+          () =>
+            roomTranscript({
+              items,
+              streaming,
+              footer: () => 3,
+              onRenderer: (renderer) => {
+                screen = Option.some(renderer)
+                renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+                  committedText.push(committedTextOf(event))
+                })
+              },
+            }),
+          { width: 60, height: 14 },
+        )
+        const flushUntil = (marker: string) =>
+          Effect.promise(() => setup.flush()).pipe(
+            Effect.repeat({
+              until: () => committedText.join("").includes(marker),
+              schedule: Schedule.spaced("10 millis"),
+            }),
+            Effect.timeout("4 seconds"),
+            Effect.ignore,
+          )
+        yield* flushUntil("EARLIER line 12")
+        // The answer streams: a draft stays in the live view.
+        setItems([
+          assistant("earlier", longBody("EARLIER")),
+          { ...assistant("answer", "STEP-ONE draft"), draft: true },
+        ])
+        yield* Effect.promise(() => setup.flush())
+        yield* Effect.promise(() => setup.flush())
+        expect(committedText.join("")).not.toContain("STEP-ONE")
+        // The stored answer replaces the draft while the turn still runs.
+        setItems([
+          assistant("earlier", longBody("EARLIER")),
+          assistant("answer", "STEP-ONE stored"),
+          { ...assistant("next", "STEP-TWO draft"), draft: true },
+        ])
+        yield* flushUntil("STEP-ONE stored")
+        expect(committedText.join("")).toContain("EARLIER line 12")
+        expect(committedText.join("")).toContain("STEP-ONE stored")
+        expect(committedText.join("")).not.toContain("STEP-TWO")
+        // The turn ends: what is left commits, and its rows leave none behind.
+        setStreaming(false)
+        yield* flushUntil("STEP-TWO draft")
+        yield* Effect.promise(() => setup.flush())
+        expect(committedText.join("")).toContain("STEP-TWO draft")
+        const renderer = Option.getOrThrow(screen)
+        expect(rowsUnderRegion(renderer)).toBe(0)
+        // Each commit took its own rows out of the region: what is left is the
+        // footer and the empty live tail's one row.
+        expect(renderer.height).toBe(4)
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
+  )
+})
+
 // ── native transcript mouse ─────────────────────────────────────────────────
 
 describe("native transcript mouse tracking", () => {
@@ -3828,8 +4022,14 @@ describe("sticky last prompt", () => {
   it.scopedLive("no pinned row while the prompt is on screen", () =>
     Effect.gen(function* () {
       const setup = yield* mountTranscript(() => [prompt("p1", "ASK-ONE"), reply("r1", 1)], {})
-      expect(count(renderFrame(setup), "ASK-ONE")).toBe(1)
-      expect(renderFrame(setup)).not.toContain("↑ ASK-ONE")
+      // Both items are final and move to history; the terminal shows the prompt once.
+      const text = yield* waitForTerminal(
+        setup,
+        (next) => next.includes("ASK-ONE") && !renderFrame(setup).includes("ASK-ONE"),
+        "the prompt in history",
+      )
+      expect(count(text, "ASK-ONE")).toBe(1)
+      expect(text).not.toContain("↑ ASK-ONE")
     }).pipe(Effect.timeout("10 seconds")),
   )
 
@@ -3939,9 +4139,13 @@ describe("sticky last prompt", () => {
       Effect.gen(function* () {
         const HISTORY = 2_000
         let roleReads = 0
-        /** An assistant row that counts every read of its role: a scan of history reads it. */
+        /**
+         * An assistant row that counts every read of its role: a scan of history
+         * reads it. Each is a draft, so none commits while the turn runs and the
+         * whole history stays in the live view, the largest view the pin reads.
+         */
         const counted = (id: string): SessionItem => {
-          const item = reply(id, 1)
+          const item: ListMessage = { ...reply(id, 1), draft: true }
           const { role } = item
           Object.defineProperty(item, "role", {
             get: () => {
@@ -3952,6 +4156,8 @@ describe("sticky last prompt", () => {
           return item
         }
         const history: SessionItem[] = [
+          // A draft ahead of the prompt keeps the prompt in the live view too.
+          { ...reply("d0", 1), draft: true },
           prompt("p0", "ASK-ONE"),
           ...Array.from({ length: HISTORY }, (_, index) => counted(`h${index}`)),
         ]
