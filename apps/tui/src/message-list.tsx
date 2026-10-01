@@ -40,7 +40,6 @@ import {
   useSpinnerClock,
 } from "./ui"
 import {
-  type Accessor,
   batch,
   createEffect,
   createMemo,
@@ -82,7 +81,7 @@ import {
   lineCount,
   MODEL_CHANGE_MESSAGE_TYPE,
 } from "@gent/core/protocol"
-import { useMermaidBlocks } from "./mermaid"
+import { mermaidCodeBlocks } from "./mermaid"
 import type { DisclosureLevel } from "./session"
 import { insert, RendererContext, useRenderer } from "@opentui/solid"
 
@@ -460,8 +459,6 @@ export const messageToolCalls = (message: Pick<MessageBase, "segments">): Readon
   )
 export type SessionItem = Message | SessionEvent
 
-type TerminalDimensions = { readonly width: number; readonly height: number }
-
 /** A transcript item that is a message, not a session event row. */
 export const isMessageItem = Predicate.or(
   Predicate.isTagged("regular-message"),
@@ -536,11 +533,15 @@ function AssistantMessage(props: {
   disclosure: DisclosureLevel
   fullDetail: boolean
   syntaxStyle: () => SyntaxStyle
-  streaming: boolean
-  dimensions: Accessor<TerminalDimensions>
 }) {
   const { theme } = useTheme()
-  const replaceMermaidBlocks = useMermaidBlocks()
+  // One hook for the message's life: a new hook would rebuild every block.
+  const diagrams = mermaidCodeBlocks(useRenderer(), () => ({
+    text: theme.text,
+    border: theme.textMuted,
+    line: theme.textMuted,
+    arrow: theme.text,
+  }))
 
   const hasContent = () => {
     if (props.content.length > 0) return true
@@ -605,26 +606,17 @@ function AssistantMessage(props: {
                     fullDetail={props.fullDetail}
                   />
                 ),
-                text: (segment) => {
-                  // Mermaid blocks draw as ASCII art once the text settles.
-                  const renderContent = () => {
-                    if (props.streaming) return segment.content
-                    return replaceMermaidBlocks(
-                      segment.content,
-                      props.dimensions().width - ANSWER_INDENT,
-                    )
-                  }
-                  return (
-                    <markdown
-                      syntaxStyle={props.syntaxStyle()}
-                      streaming
-                      internalBlockMode="top-level"
-                      tableOptions={ANSWER_TABLE}
-                      content={renderContent()}
-                      conceal
-                    />
-                  )
-                },
+                text: (segment) => (
+                  <markdown
+                    syntaxStyle={props.syntaxStyle()}
+                    streaming
+                    internalBlockMode="top-level"
+                    tableOptions={ANSWER_TABLE}
+                    renderNode={diagrams}
+                    content={segment.content}
+                    conceal
+                  />
+                ),
               }),
             )
           }
@@ -820,13 +812,9 @@ interface MessageListProps {
   disclosure: DisclosureLevel
   fullDetail?: boolean
   syntaxStyle: () => SyntaxStyle
-  /** The answer the step in flight streams into: it draws as text, its diagrams once it settles. */
-  openAnswer: Option.Option<string>
 }
 
 export function MessageList(props: MessageListProps) {
-  const dimensions = useTerminalDimensions()
-
   return (
     <box flexDirection="column">
       <For each={props.items}>
@@ -847,8 +835,6 @@ export function MessageList(props: MessageListProps) {
                     disclosure={props.disclosure}
                     fullDetail={props.fullDetail === true}
                     syntaxStyle={props.syntaxStyle}
-                    streaming={Option.contains(props.openAnswer, item.id)}
-                    dimensions={dimensions}
                   />
                 }
               >

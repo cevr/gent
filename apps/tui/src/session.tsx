@@ -1638,8 +1638,6 @@ type ToolResultEvent = Extract<AgentEvent, { _tag: "ToolCallSucceeded" | "ToolCa
 interface SessionFeed {
   items: () => SessionItem[]
   messages: () => Message[]
-  /** The answer the step in flight streams into; none between steps. */
-  openAnswer: () => Option.Option<string>
   /** The label of the tool that runs now; none between tools. */
   activeTool: () => Option.Option<string>
 }
@@ -2628,7 +2626,6 @@ export function useSessionFeed(
   return {
     items,
     messages: () => store.messages,
-    openAnswer,
     activeTool: () => runningLabel(runningCalls()),
   }
 }
@@ -2660,8 +2657,6 @@ export interface SessionController {
    */
   itemsSettled: () => boolean
   messages: () => Message[]
-  /** The answer the step in flight streams into: the one row drawn as streaming. */
-  openAnswer: () => Option.Option<string>
   /** The providers the newest auth check read: the status row names a provider by them. */
   authProviders: () => ReadonlyArray<AuthProviderInfo>
   forkMessages: () => readonly DurableMessage[]
@@ -3532,7 +3527,6 @@ export function createSessionController(props: {
     items,
     itemsSettled: noticeRowsSettled,
     messages: feed.messages,
-    openAnswer: feed.openAnswer,
     authProviders,
     forkMessages: () => {
       const overlay = uiState().overlay

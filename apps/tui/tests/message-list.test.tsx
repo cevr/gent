@@ -243,14 +243,7 @@ describe("session event labels", () => {
         seq: 1,
       }
       const setup = yield* renderScoped(
-        () => (
-          <MessageList
-            items={[event]}
-            disclosure="collapsed"
-            syntaxStyle={syntaxStyle}
-            openAnswer={Option.none()}
-          />
-        ),
+        () => <MessageList items={[event]} disclosure="collapsed" syntaxStyle={syntaxStyle} />,
         { width: 80, height: 10 },
       )
       yield* waitForFrame(setup, (frame) => frame.includes("Retrying in 1s... 1/3"), "countdown")
@@ -272,14 +265,7 @@ describe("session event labels", () => {
         seq: 1,
       }
       const setup = yield* renderScoped(
-        () => (
-          <MessageList
-            items={[event]}
-            disclosure="collapsed"
-            syntaxStyle={syntaxStyle}
-            openAnswer={Option.none()}
-          />
-        ),
+        () => <MessageList items={[event]} disclosure="collapsed" syntaxStyle={syntaxStyle} />,
         { width: 40, height: 10 },
       )
       const frame = yield* waitForFrame(setup, (next) => next.includes("Retried 1/3"), "the row")
@@ -604,25 +590,14 @@ function RegisteredToolMessageLists(props: { items: SessionItem[]; fullDetail?: 
   const renderers = useToolRenderers()
   return (
     <Show when={renderers().size > 0} fallback={<text>loading renderers</text>}>
-      <MessageList
-        items={props.items}
-        disclosure="collapsed"
-        syntaxStyle={syntaxStyle}
-        openAnswer={Option.none()}
-      />
-      <MessageList
-        items={props.items}
-        disclosure="preview"
-        syntaxStyle={syntaxStyle}
-        openAnswer={Option.none()}
-      />
+      <MessageList items={props.items} disclosure="collapsed" syntaxStyle={syntaxStyle} />
+      <MessageList items={props.items} disclosure="preview" syntaxStyle={syntaxStyle} />
       <Show when={props.fullDetail}>
         <MessageList
           items={props.items}
           disclosure="preview"
           fullDetail
           syntaxStyle={syntaxStyle}
-          openAnswer={Option.none()}
         />
       </Show>
     </Show>
@@ -642,7 +617,6 @@ function LoadedMessageList(props: { items: SessionItem[]; fullDetail?: boolean }
         disclosure="collapsed"
         fullDetail={props.fullDetail}
         syntaxStyle={syntaxStyle}
-        openAnswer={Option.none()}
       />
     </Show>
   )
@@ -778,12 +752,7 @@ describe("transcript message rows", () => {
         metadata: { customType: "prompt-present", hidden: true },
       }
       const setup = yield* renderScoped(() => (
-        <MessageList
-          items={[message]}
-          disclosure="collapsed"
-          syntaxStyle={syntaxStyle}
-          openAnswer={Option.none()}
-        />
+        <MessageList items={[message]} disclosure="collapsed" syntaxStyle={syntaxStyle} />
       ))
       expect(renderFrame(setup)).toContain("INFORMATION-SHOWN")
     }),
@@ -798,12 +767,7 @@ describe("transcript message rows", () => {
         userMessage("interjection-message", "steer-user", "switch now", "steer"),
       ]
       const setup = yield* renderScoped(() => (
-        <MessageList
-          items={items}
-          disclosure="collapsed"
-          syntaxStyle={syntaxStyle}
-          openAnswer={Option.none()}
-        />
+        <MessageList items={items} disclosure="collapsed" syntaxStyle={syntaxStyle} />
       ))
       const frame = renderFrame(setup)
       expect(frame).toContain("┃")
@@ -886,7 +850,6 @@ describe("transcript message rows", () => {
                     items={visible}
                     disclosure={disclosure()}
                     syntaxStyle={syntaxStyle}
-                    openAnswer={Option.none()}
                   />
                 )}
               >
@@ -1056,14 +1019,7 @@ describe("transcript message rows", () => {
         ),
       ]
       const setup = yield* renderScoped(
-        () => (
-          <MessageList
-            items={items}
-            disclosure="collapsed"
-            syntaxStyle={syntaxStyle}
-            openAnswer={Option.none()}
-          />
-        ),
+        () => <MessageList items={items} disclosure="collapsed" syntaxStyle={syntaxStyle} />,
         { width: 32, height: 16 },
       )
       const frame = renderFrame(setup)
@@ -1088,12 +1044,7 @@ describe("transcript message rows", () => {
         seq,
       }))
       const setup = yield* renderScoped(() => (
-        <MessageList
-          items={items}
-          disclosure="collapsed"
-          syntaxStyle={syntaxStyle}
-          openAnswer={Option.none()}
-        />
+        <MessageList items={items} disclosure="collapsed" syntaxStyle={syntaxStyle} />
       ))
       expect(setup.renderer.listenerCount("resize")).toBe(1)
     }),
@@ -1145,12 +1096,7 @@ describe("native history before the client extensions load", () => {
                 displayRevision={0}
                 overlayOpen={false}
                 renderItems={(visible) => (
-                  <MessageList
-                    items={visible}
-                    disclosure="collapsed"
-                    syntaxStyle={syntaxStyle}
-                    openAnswer={Option.none()}
-                  />
+                  <MessageList items={visible} disclosure="collapsed" syntaxStyle={syntaxStyle} />
                 )}
               >
                 <box />
@@ -1208,12 +1154,7 @@ describe("native history before the client extensions load", () => {
               displayRevision={0}
               overlayOpen={false}
               renderItems={(visible) => (
-                <MessageList
-                  items={visible}
-                  disclosure="collapsed"
-                  syntaxStyle={syntaxStyle}
-                  openAnswer={Option.none()}
-                />
+                <MessageList items={visible} disclosure="collapsed" syntaxStyle={syntaxStyle} />
               )}
             >
               <box />
@@ -1294,24 +1235,13 @@ describe("rows that fold until full detail is on", () => {
       const setup = yield* renderScoped(
         () => (
           <>
-            <MessageList
-              items={items}
-              disclosure="collapsed"
-              syntaxStyle={syntaxStyle}
-              openAnswer={Option.none()}
-            />
-            <MessageList
-              items={items}
-              disclosure="full"
-              syntaxStyle={syntaxStyle}
-              openAnswer={Option.none()}
-            />
+            <MessageList items={items} disclosure="collapsed" syntaxStyle={syntaxStyle} />
+            <MessageList items={items} disclosure="full" syntaxStyle={syntaxStyle} />
             <MessageList
               items={items}
               disclosure="collapsed"
               fullDetail={true}
               syntaxStyle={syntaxStyle}
-              openAnswer={Option.none()}
             />
           </>
         ),
@@ -1332,14 +1262,7 @@ describe("rows that fold until full detail is on", () => {
         metadata: { customType: MODEL_CHANGE_MESSAGE_TYPE },
       }
       const setup = yield* renderScoped(
-        () => (
-          <MessageList
-            items={[notice]}
-            disclosure="collapsed"
-            syntaxStyle={syntaxStyle}
-            openAnswer={Option.none()}
-          />
-        ),
+        () => <MessageList items={[notice]} disclosure="collapsed" syntaxStyle={syntaxStyle} />,
         { width: 100, height: 10 },
       )
       const frame = renderFrame(setup)
@@ -1414,18 +1337,8 @@ describe("tool frame identity", () => {
       const items: SessionItem[] = [unknownFailureMessage("call-unknown-7")]
       const setup = yield* renderScoped(() => (
         <>
-          <MessageList
-            items={items}
-            disclosure="collapsed"
-            syntaxStyle={syntaxStyle}
-            openAnswer={Option.none()}
-          />
-          <MessageList
-            items={items}
-            disclosure="preview"
-            syntaxStyle={syntaxStyle}
-            openAnswer={Option.none()}
-          />
+          <MessageList items={items} disclosure="collapsed" syntaxStyle={syntaxStyle} />
+          <MessageList items={items} disclosure="preview" syntaxStyle={syntaxStyle} />
         </>
       ))
       const frame = renderFrame(setup)
@@ -2016,14 +1929,7 @@ describe("cell rows", () => {
     Effect.gen(function* () {
       const items: SessionItem[] = [bashMessage("call-bash-7", 25)]
       const setup = yield* renderScoped(
-        () => (
-          <MessageList
-            items={items}
-            disclosure="preview"
-            syntaxStyle={syntaxStyle}
-            openAnswer={Option.none()}
-          />
-        ),
+        () => <MessageList items={items} disclosure="preview" syntaxStyle={syntaxStyle} />,
         { width: 80, height: 40 },
       )
       const frame = renderFrame(setup)
@@ -2056,7 +1962,6 @@ describe("cell rows", () => {
                   disclosure={disclosure()}
                   fullDetail={fullDetail()}
                   syntaxStyle={syntaxStyle}
-                  openAnswer={Option.none()}
                 />
               </Show>
             )
@@ -2107,14 +2012,7 @@ describe("cell rows", () => {
     Effect.gen(function* () {
       const items: SessionItem[] = [bashMessage("call-bash-8", 25)]
       const setup = yield* renderScoped(
-        () => (
-          <MessageList
-            items={items}
-            disclosure="collapsed"
-            syntaxStyle={syntaxStyle}
-            openAnswer={Option.none()}
-          />
-        ),
+        () => <MessageList items={items} disclosure="collapsed" syntaxStyle={syntaxStyle} />,
         { width: 80, height: 20 },
       )
       const frame = renderFrame(setup)
@@ -2143,14 +2041,7 @@ describe("bash row line counts", () => {
         }),
       ]
       const setup = yield* renderScoped(
-        () => (
-          <MessageList
-            items={items}
-            disclosure="preview"
-            syntaxStyle={syntaxStyle}
-            openAnswer={Option.none()}
-          />
-        ),
+        () => <MessageList items={items} disclosure="preview" syntaxStyle={syntaxStyle} />,
         { width: 80, height: 40 },
       )
       const rows = renderFrame(setup)
@@ -2174,7 +2065,6 @@ describe("bash row line counts", () => {
             items={[assistantToolMessage("assistant-cut", cutBashCall)]}
             disclosure="preview"
             syntaxStyle={syntaxStyle}
-            openAnswer={Option.none()}
           />
         ),
         { width: 80, height: 20 },
@@ -2410,7 +2300,6 @@ describe("transcript block spacing", () => {
                 disclosure={view.disclosure}
                 fullDetail={view.fullDetail}
                 syntaxStyle={syntaxStyle}
-                openAnswer={Option.none()}
               />
             ),
             { width: 100, height: 80 },
@@ -2534,7 +2423,6 @@ describe("transcript block spacing", () => {
                     items={visible}
                     disclosure={disclosure()}
                     syntaxStyle={syntaxStyle}
-                    openAnswer={Option.none()}
                   />
                 )}
               >
@@ -2728,12 +2616,7 @@ describe("write body", () => {
           const renderers = useToolRenderers()
           return (
             <Show when={renderers().size > 0}>
-              <MessageList
-                items={items}
-                disclosure="preview"
-                syntaxStyle={syntaxStyle}
-                openAnswer={Option.none()}
-              />
+              <MessageList items={items} disclosure="preview" syntaxStyle={syntaxStyle} />
             </Show>
           )
         },
@@ -2805,14 +2688,7 @@ describe("read_session row", () => {
           }),
         ]
         const setup = yield* renderScoped(
-          () => (
-            <MessageList
-              items={items}
-              disclosure="full"
-              syntaxStyle={syntaxStyle}
-              openAnswer={Option.none()}
-            />
-          ),
+          () => <MessageList items={items} disclosure="full" syntaxStyle={syntaxStyle} />,
           { width: 100, height: 40 },
         )
         const frame = yield* waitForFrame(setup, (text) => text.includes(shown), "read_session row")
@@ -2856,7 +2732,6 @@ describe("read_session row", () => {
             items={[assistantToolMessage("assistant-cell-read", cell)]}
             disclosure="full"
             syntaxStyle={syntaxStyle}
-            openAnswer={Option.none()}
           />
         ),
         { width: 100, height: 40 },
@@ -2911,7 +2786,6 @@ describe("write row", () => {
             items={[assistantToolMessage("assistant-cell-write", cell)]}
             disclosure="full"
             syntaxStyle={syntaxStyle}
-            openAnswer={Option.some("assistant-cell-write")}
           />
         ),
         { width: 100, height: 40 },
@@ -2954,7 +2828,6 @@ describe("native transcript markdown", () => {
             items={[assistant("diagram", diagram)]}
             disclosure="collapsed"
             syntaxStyle={syntaxStyle}
-            openAnswer={Option.none()}
           />
         ),
         { width: 48, height: 30 },
@@ -2968,25 +2841,51 @@ describe("native transcript markdown", () => {
     }),
   )
 
-  // The open answer streams wherever it sorts: a row dated after it does not
-  // settle it, so its half-written diagram stays text.
-  it.scopedLive("the open answer stays text with a row after it", () =>
+  // The diagram builds while its fence streams: each complete statement
+  // draws, and the statement still being written waits for its line to end.
+  it.scopedLive("a diagram draws while its fence streams, one complete statement at a time", () =>
     Effect.gen(function* () {
-      const diagram = "```mermaid\ngraph LR\n  Alpha-->Beta\n```"
       const notice: SessionEvent = { _tag: "interruption", createdAt: 1, seq: 1 }
       const setup = yield* renderScoped(
         () => (
           <MessageList
-            items={[assistant("open", diagram), notice]}
+            items={[
+              assistant("open", "```mermaid\ngraph LR\n  Alpha-->Beta\n  Beta-->Gam"),
+              notice,
+            ]}
             disclosure="collapsed"
             syntaxStyle={syntaxStyle}
-            openAnswer={Option.some("open")}
           />
         ),
         { width: 60, height: 20 },
       )
       const frame = yield* waitForFrame(setup, (next) => next.includes("Alpha"), "the answer")
-      expect(frame).toContain("Alpha-->Beta")
+      expect(frame).toContain("┌")
+      expect(frame).toContain("Beta")
+      expect(frame).not.toContain("Alpha-->Beta")
+      expect(frame).not.toContain("Gam")
+    }),
+  )
+
+  // A source the diagram library cannot read keeps its fence: the reader
+  // sees the code as written, not an empty block.
+  it.scopedLive("a diagram that does not parse shows its source as a code block", () =>
+    Effect.gen(function* () {
+      const setup = yield* renderScoped(
+        () => (
+          <MessageList
+            items={[assistant("broken", "```mermaid\nnot a diagram {{{\n```")]}
+            disclosure="collapsed"
+            syntaxStyle={syntaxStyle}
+          />
+        ),
+        { width: 60, height: 20 },
+      )
+      const frame = yield* waitForFrame(
+        setup,
+        (next) => next.includes("not a diagram {{{"),
+        "the diagram's source",
+      )
       expect(frame).not.toContain("┌")
     }),
   )
@@ -3022,12 +2921,7 @@ describe("native transcript markdown", () => {
               displayRevision={0}
               overlayOpen={false}
               renderItems={(visible) => (
-                <MessageList
-                  items={visible}
-                  disclosure="collapsed"
-                  syntaxStyle={syntaxStyle}
-                  openAnswer={Option.none()}
-                />
+                <MessageList items={visible} disclosure="collapsed" syntaxStyle={syntaxStyle} />
               )}
             >
               <box />
@@ -3125,12 +3019,7 @@ describe("native transcript markdown", () => {
                 displayRevision={0}
                 overlayOpen={false}
                 renderItems={(visible) => (
-                  <MessageList
-                    items={visible}
-                    disclosure="collapsed"
-                    syntaxStyle={boldHeadings}
-                    openAnswer={Option.none()}
-                  />
+                  <MessageList items={visible} disclosure="collapsed" syntaxStyle={boldHeadings} />
                 )}
               >
                 <box />
@@ -3267,12 +3156,7 @@ describe("native transcript footer room", () => {
                   displayRevision={0}
                   overlayOpen={false}
                   renderItems={(visible) => (
-                    <MessageList
-                      items={visible}
-                      disclosure="collapsed"
-                      syntaxStyle={syntaxStyle}
-                      openAnswer={Option.none()}
-                    />
+                    <MessageList items={visible} disclosure="collapsed" syntaxStyle={syntaxStyle} />
                   )}
                 >
                   <box />
@@ -3338,12 +3222,7 @@ const roomTranscript = (options: RoomSetup) => {
       displayRevision={0}
       overlayOpen={false}
       renderItems={(visible) => (
-        <MessageList
-          items={visible}
-          disclosure="collapsed"
-          syntaxStyle={syntaxStyle}
-          openAnswer={Option.none()}
-        />
+        <MessageList items={visible} disclosure="collapsed" syntaxStyle={syntaxStyle} />
       )}
     >
       <box />
@@ -3661,12 +3540,7 @@ const transcript = (options: {
       displayRevision={0}
       overlayOpen={false}
       renderItems={(visible) => (
-        <MessageList
-          items={visible}
-          disclosure="collapsed"
-          syntaxStyle={syntaxStyle}
-          openAnswer={Option.none()}
-        />
+        <MessageList items={visible} disclosure="collapsed" syntaxStyle={syntaxStyle} />
       )}
     >
       <box />
@@ -3762,12 +3636,7 @@ const transcriptCommit = (options: {
       displayRevision={options.displayRevision()}
       overlayOpen={options.overlayOpen()}
       renderItems={(visible) => (
-        <MessageList
-          items={visible}
-          disclosure="collapsed"
-          syntaxStyle={syntaxStyle}
-          openAnswer={Option.none()}
-        />
+        <MessageList items={visible} disclosure="collapsed" syntaxStyle={syntaxStyle} />
       )}
     >
       <box />
@@ -4044,12 +3913,7 @@ describe("sticky last prompt", () => {
               displayRevision={0}
               overlayOpen={false}
               renderItems={(visible) => (
-                <MessageList
-                  items={visible}
-                  disclosure="collapsed"
-                  syntaxStyle={syntaxStyle}
-                  openAnswer={Option.none()}
-                />
+                <MessageList items={visible} disclosure="collapsed" syntaxStyle={syntaxStyle} />
               )}
             >
               <box />
@@ -4479,14 +4343,7 @@ describe("tool group rows", () => {
   // The session in view runs where the TUI launched unless a test says otherwise.
   const groupRows = (items: SessionItem[], width: number, sessionCwd = cwd) =>
     renderScoped(
-      () => (
-        <MessageList
-          items={items}
-          disclosure="preview"
-          syntaxStyle={syntaxStyle}
-          openAnswer={Option.none()}
-        />
-      ),
+      () => <MessageList items={items} disclosure="preview" syntaxStyle={syntaxStyle} />,
       {
         width,
         height: 20,
@@ -4630,12 +4487,7 @@ describe("message rows", () => {
         } satisfies ListMessage,
       ]
       const setup = yield* renderScoped(() => (
-        <MessageList
-          items={items}
-          disclosure="collapsed"
-          syntaxStyle={syntaxStyle}
-          openAnswer={Option.none()}
-        />
+        <MessageList items={items} disclosure="collapsed" syntaxStyle={syntaxStyle} />
       ))
       yield* Effect.promise(() => setup.renderOnce())
       const frame = renderFrame(setup)
