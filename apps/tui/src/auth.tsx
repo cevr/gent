@@ -257,17 +257,23 @@ const providerFor = (catalog: AuthCatalog, provider: string): Option.Option<Auth
   Option.fromNullishOr(catalog.providers.find((entry) => entry.provider === provider))
 
 /**
- * What the pane calls a provider: its driver's name ("OpenCode"), or its
- * id when the server sends no name. A name two providers share carries the
- * id beside it: "Mirror (mirror-a)".
+ * What gent calls a provider, in the pane and in headless errors alike: its
+ * driver's name ("OpenCode"), or its id when the server sends no name. A
+ * name two of `providers` share carries the id beside it: "Mirror (mirror-a)".
  */
-const providerLabel = (catalog: AuthCatalog, provider: string): string =>
+export const providerLabel = (
+  providers: ReadonlyArray<AuthProviderInfo>,
+  provider: string,
+): string =>
   Option.match(
-    Option.flatMap(providerFor(catalog, provider), (entry) => Option.fromUndefinedOr(entry.name)),
+    Option.flatMap(
+      Option.fromNullishOr(providers.find((entry) => entry.provider === provider)),
+      (entry) => Option.fromUndefinedOr(entry.name),
+    ),
     {
       onNone: () => provider,
       onSome: (name) => {
-        if (catalog.providers.filter((entry) => entry.name === name).length > 1)
+        if (providers.filter((entry) => entry.name === name).length > 1)
           return `${name} (${provider})`
         return name
       },
@@ -325,7 +331,7 @@ export function Auth(props: AuthProps) {
   const send = (event: AuthEvent) => setState((current) => transitionAuth(current, event))
   const catalog = () => catalogOf(state())
   /** What the pane calls `provider` ({@link providerLabel}). */
-  const label = (provider: string) => providerLabel(catalog(), provider)
+  const label = (provider: string) => providerLabel(catalog().providers, provider)
 
   const [autoPrompted, setAutoPrompted] = createSignal(false)
   const [flashNote, setFlashNote] = createSignal(Option.none<string>())

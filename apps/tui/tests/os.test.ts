@@ -1,6 +1,7 @@
-import { describe, expect, test } from "effect-bun-test"
-import { Option } from "effect"
-import { parseEditorCommand, resolveEditor } from "../src/os"
+import { describe, expect, it, test } from "effect-bun-test"
+import { BunServices } from "@effect/platform-bun"
+import { Effect, Option } from "effect"
+import { openExternalEditor, parseEditorCommand, resolveEditor } from "../src/os"
 
 // ── external editor ─────────────────────────────────────────────────────────
 
@@ -33,4 +34,24 @@ describe("external editor", () => {
       expect([setting, parseEditorCommand(setting)]).toEqual([setting, command])
     }
   })
+
+  it.live(
+    "the editor's exit decides the result: zero applies the file, non-zero cancels, no program fails",
+    () =>
+      Effect.gen(function* () {
+        const run = (editor: string) =>
+          openExternalEditor(
+            "draft",
+            () => {},
+            () => {},
+            editor,
+          )
+        const applied = yield* run("true")
+        const cancelled = yield* run("false")
+        const failed = yield* run("/nonexistent/gent-probe-x")
+        expect(applied).toEqual({ _tag: "applied", content: "draft" })
+        expect(cancelled).toEqual({ _tag: "cancelled" })
+        expect(failed._tag).toBe("error")
+      }).pipe(Effect.timeout("10 seconds"), Effect.provide(BunServices.layer)),
+  )
 })

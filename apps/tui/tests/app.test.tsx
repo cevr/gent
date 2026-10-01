@@ -35,7 +35,6 @@ import {
   GentRpcError,
   MessageId,
   ModelId,
-  ProviderId,
   Message as StoredMessage,
   Session,
   SessionId,
@@ -56,7 +55,7 @@ import {
   QueueWidget,
   resolveHeadlessState,
   resolveInteractiveState,
-  resolveHeadlessMissingProviders,
+  resolveHeadlessMissingSignIns,
   resolveInteractiveBootstrap,
 } from "../src/app"
 import {
@@ -198,7 +197,7 @@ describe("startup agent and headless auth", () => {
       expect(calls).toEqual([])
     }),
   )
-  it.live("a headless session checks auth for the agent it was created with", () =>
+  it.live("a headless session names the missing sign-ins of the agent it was created with", () =>
     Effect.gen(function* () {
       const calls: Array<{
         agentName?: AgentName
@@ -231,8 +230,40 @@ describe("startup agent and headless auth", () => {
             calls.push(input)
             return Effect.succeed([
               {
+                provider: "opencode",
+                name: "OpenCode",
+                hasKey: false,
+                required: true,
+                source: noAuthSource,
+                authType: absent,
+              },
+              {
                 provider: "openai",
                 hasKey: false,
+                required: true,
+                source: noAuthSource,
+                authType: absent,
+              },
+              {
+                provider: "anthropic",
+                name: "Anthropic",
+                hasKey: true,
+                required: true,
+                source: noAuthSource,
+                authType: absent,
+              },
+              {
+                provider: "mirror-a",
+                name: "Mirror",
+                hasKey: false,
+                required: true,
+                source: noAuthSource,
+                authType: absent,
+              },
+              {
+                provider: "mirror-b",
+                name: "Mirror",
+                hasKey: true,
                 required: true,
                 source: noAuthSource,
                 authType: absent,
@@ -255,8 +286,10 @@ describe("startup agent and headless auth", () => {
         },
         prompt: "hi",
       }
-      const missing = yield* resolveHeadlessMissingProviders({ client, state })
-      expect(missing).toEqual([ProviderId.make("openai")])
+      // Named as `/auth` names them: the driver's name, else its id, and a
+      // name two drivers share keeps the id beside it.
+      const missing = yield* resolveHeadlessMissingSignIns({ client, state })
+      expect(missing).toEqual(["OpenCode", "openai", "Mirror (mirror-a)"])
       expect(calls).toEqual([
         { agentName: AgentName.make("secondary"), sessionId: SessionId.make("session-a") },
       ])
@@ -280,7 +313,7 @@ describe("startup agent and headless auth", () => {
         session: { ...sessionA, activeBranchId: absent },
         prompt: "hi",
       }
-      yield* resolveHeadlessMissingProviders({ client, state })
+      yield* resolveHeadlessMissingSignIns({ client, state })
       expect(calls).toEqual([{ agentName: DEFAULT_AGENT_NAME, sessionId: sessionA.id }])
     }),
   )
@@ -4676,6 +4709,29 @@ describe("App clipboard", () => {
 
       setup.mockInput.pressKey("y", { ctrl: true })
       yield* waitForFrame(setup, (next) => next.includes("URL copied"), "the copied note")
+      expect(runs.length).toBe(1)
+    }).pipe(Effect.timeout("8 seconds")),
+  )
+
+  // Inside tmux OpenTUI sends the DCS-wrapped OSC 52, which tmux drops by
+  // default, so a sent write proves nothing there: only tmux's exit does. A
+  // tmux too old for `load-buffer -w`, or with `set-clipboard off`, exits 1.
+  it.scopedLive("inside tmux a copy tmux refuses is no copy, though OSC 52 was sent", () =>
+    Effect.gen(function* () {
+      const runs: Array<{ args: ReadonlyArray<string>; stdin: string }> = []
+      const { setup, output } = yield* mountOAuthScreen(
+        deviceUrl,
+        recordedTmux(runs, tmuxEnv, ["false"]),
+      )
+
+      setup.mockInput.pressKey("y", { ctrl: true })
+      const frame = yield* waitForFrame(
+        setup,
+        (next) => next.includes("Could not reach the clipboard"),
+        "the unreachable note",
+      )
+      expect(frame).not.toContain("URL copied")
+      expect(output.written()).toContain(Base64.encode(deviceUrl))
       expect(runs.length).toBe(1)
     }).pipe(Effect.timeout("8 seconds")),
   )
