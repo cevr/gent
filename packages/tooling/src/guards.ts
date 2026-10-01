@@ -1,4 +1,5 @@
 import { Option, Predicate, Schema } from "effect"
+import picomatch from "picomatch"
 import {
   type Expression,
   type ParseResult,
@@ -41,6 +42,8 @@ interface SourceForms {
   readonly errors: ReadonlyArray<CommentBody>
   /** Each comment, its body trimmed, and the line its body starts on. */
   readonly comments: ReadonlyArray<CommentBody>
+  /** Process-shaped identifiers and test titles, rather than product strings. */
+  readonly names: ReadonlyArray<CommentBody>
   /** Comments blanked. */
   readonly code: string
   /**
@@ -127,6 +130,7 @@ interface ModuleSyntax {
 interface ParsedText {
   readonly errors: ReadonlyArray<CommentBody>
   readonly comments: ReadonlyArray<CommentBody>
+  readonly names: ReadonlyArray<CommentBody>
   readonly spans: ReadonlyArray<Span>
   readonly module: ModuleSyntax
 }
@@ -230,10 +234,38 @@ const parsedText = (file: string, text: string): ParsedText => {
     return { line: lineAt(text, comment.start - shift + 2 + lead), body: comment.value.trim() }
   })
   const dynamicReads: Array<ModuleRead> = []
+  const names: Array<CommentBody> = []
+  const isTestCallee = (node: Expression | Super): boolean => {
+    if (node.type === "Identifier") return ["test", "it", "describe"].includes(node.name)
+    if (node.type === "MemberExpression") return isTestCallee(node.object)
+    if (node.type === "CallExpression") return isTestCallee(node.callee)
+    return false
+  }
   const dynamicRead = (specifier: string, start: number, read: Partial<ModuleRead>) => {
     dynamicReads.push({ specifier, line: lineOf(start), names: [], namespaces: [], ...read })
   }
   new Visitor({
+    Identifier: (node) => {
+      if (!PROCESS_NAME.test(node.name)) return
+      names.push({ line: lineOf(node.start), body: node.name })
+    },
+    CallExpression: (node) => {
+      if (!isTestCallee(node.callee)) return
+      const title = node.arguments[0]
+      if (
+        title?.type === "Literal" &&
+        Predicate.isString(title.value) &&
+        PROCESS_NAME.test(title.value)
+      ) {
+        names.push({ line: lineOf(title.start), body: title.value })
+      }
+      if (title?.type === "TemplateLiteral") {
+        for (const part of title.quasis) {
+          if (!PROCESS_NAME.test(part.value.raw)) continue
+          names.push({ line: lineOf(part.start), body: part.value.raw })
+        }
+      }
+    },
     MemberExpression: (node) => {
       if (node.computed || node.property.type !== "Identifier") return
       const name = node.property.name
@@ -285,6 +317,7 @@ const parsedText = (file: string, text: string): ParsedText => {
   return {
     errors,
     comments,
+    names,
     spans: spans
       .map((span) => ({ ...span, start: span.start - shift, end: span.end - shift }))
       .sort((a, b) => a.start - b.start),
@@ -329,10 +362,11 @@ const sourceForms = (file: string, text: string): SourceForms => {
   let cache = sourceFormsCache[parseLanguage(file)]
   if (isJsonFile(file)) cache = sourceFormsCache.json
   return Option.getOrElse(Option.fromNullishOr(cache.get(text)), () => {
-    const { errors, comments, spans, module } = parsedText(file, text)
+    const { errors, comments, names, spans, module } = parsedText(file, text)
     const forms: SourceForms = {
       errors,
       comments,
+      names,
       code: blankedSpans(text, spans, ["comment"], false),
       codeOnly: blankedSpans(text, spans, ["comment", "string", "template", "jsx-text"], false),
       module,
@@ -801,17 +835,20 @@ const PROCESS_NAME =
 
 export const findProcessNames = (file: string, text: string): ReadonlyArray<Finding> => {
   if (!PROCESS_NAME_ROOT.test(file)) return []
-  return text.split("\n").flatMap((line, index) =>
-    Option.match(Option.fromNullishOr(PROCESS_NAME.exec(line)?.[0]), {
-      onNone: () => [],
-      onSome: (token) => [
-        {
-          file,
-          line: index + 1,
-          message: `\`${token}\` names the process that made this code, not what it does; name the behavior, and leave the id to the ledger`,
-        },
-      ],
-    }),
+  const forms = sourceForms(file, text)
+  return [...forms.comments, ...forms.names].flatMap(({ body, line }) =>
+    body.split("\n").flatMap((part, index) =>
+      Option.match(Option.fromNullishOr(PROCESS_NAME.exec(part)?.[0]), {
+        onNone: () => [],
+        onSome: (token) => [
+          {
+            file,
+            line: line + index,
+            message: `\`${token}\` names the process that made this code, not what it does; name the behavior, and leave the id to the ledger`,
+          },
+        ],
+      }),
+    ),
   )
 }
 
@@ -2387,6 +2424,87 @@ export const TurboTypecheckInputsSchema = Schema.Struct({
   }),
 })
 
+export const TurboTaskInputsSchema = Schema.Struct({
+  tasks: Schema.optionalKey(
+    Schema.Record(
+      Schema.String,
+      Schema.Struct({
+        // Turbo owns validation of deferred input objects; this guard reads only paths.
+        inputs: Schema.optionalKey(
+          Schema.NullOr(Schema.Array(Schema.Union([Schema.String, Schema.Struct({})]))),
+        ),
+      }),
+    ),
+  ),
+})
+
+/** Wax accepts a one-member brace group; Picomatch needs a comma to treat it as a group. */
+const turboBraceGroups = (glob: string): string => {
+  const groups: Array<{ start: number; comma: boolean }> = []
+  let out = ""
+  let escaped = false
+  let inClass = false
+  for (const char of glob) {
+    if (escaped) {
+      out += char
+      escaped = false
+      continue
+    }
+    if (char === "\\") escaped = true
+    else if (char === "[") inClass = true
+    else if (char === "]") inClass = false
+    else if (!inClass && char === "{") groups.push({ start: out.length, comma: false })
+    else if (!inClass && char === ",") {
+      const group = groups.at(-1)
+      if (group) group.comma = true
+    } else if (!inClass && char === "}") {
+      const group = groups.pop()
+      if (group && !group.comma) out += `,${out.slice(group.start + 1)}`
+    }
+    out += char
+  }
+  return out
+}
+
+/** Package task inputs resolve relative to that package; inherited/default inputs are Turbo tokens. */
+export const findDeadTurboInputs = (
+  file: string,
+  tasks: typeof TurboTaskInputsSchema.Type.tasks,
+  trackedFiles: ReadonlyArray<string>,
+): ReadonlyArray<Finding> => {
+  const directory = file.slice(0, file.lastIndexOf("/") + 1)
+  const patternOf = (input: string) => {
+    const root = "$TURBO_ROOT$/"
+    let path = directory + input
+    if (input.startsWith(root)) path = input.slice(root.length)
+    const parts: Array<string> = []
+    for (const part of path.split("/")) {
+      if (part === "..") parts.pop()
+      else if (part !== "." && part !== "") parts.push(part)
+    }
+    const glob = turboBraceGroups(parts.join("/"))
+    // Turbo accepts directory inputs and includes dotfiles in explicit inputs.
+    return picomatch([glob, `${glob}/**`], { dot: true, noext: true })
+  }
+  return Object.entries(tasks ?? {}).flatMap(([task, config]) =>
+    (config.inputs ?? [])
+      .filter(Predicate.isString)
+      .filter(
+        (input) =>
+          !input.startsWith("!") && input !== "$TURBO_DEFAULT$" && input !== "$TURBO_EXTENDS$",
+      )
+      .filter((input) => {
+        const matches = patternOf(input)
+        return !trackedFiles.some((path) => matches(path))
+      })
+      .map((input) => ({
+        file,
+        line: 1,
+        message: `the ${task} input \`${input}\` matches no tracked file; delete it`,
+      })),
+  )
+}
+
 /**
  * Guard: the guide check's cache key reads exactly the steering prose.
  *
@@ -2437,16 +2555,7 @@ export const findUnhashedSteeringFiles = (
     .toArray()
   // An input that matches nothing hashes nothing: it is dead, like an
   // override glob that matches no file.
-  const dead = inputs
-    .values()
-    .filter((input) => !input.startsWith("!"))
-    .filter((input) => !trackedFiles.some((path) => repoGlob(input).test(path)))
-    .map((input) => ({
-      file,
-      line: 1,
-      message: `the typecheck input \`${input}\` matches no tracked file; delete it`,
-    }))
-    .toArray()
+  const dead = findDeadTurboInputs(file, { typecheck: { inputs } }, trackedFiles)
   return [...unhashed, ...dead]
 }
 

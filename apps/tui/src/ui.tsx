@@ -1378,6 +1378,7 @@ export function GutterText(props: GutterTextProps) {
       <For each={props.lines}>
         {(line, index) => {
           const lineNum = () => startLine() + index()
+          // oxlint-disable-next-line gent/no-code-unit-padding -- lineNum adds numeric line indices; decimal digits and default space padding are ASCII
           const gutter = () => String(lineNum()).padStart(gutterWidth())
           return (
             <text>

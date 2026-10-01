@@ -30,6 +30,8 @@ import {
   findUnparsedSources,
   findUnshippedSkillFiles,
   findUnhashedSteeringFiles,
+  findDeadTurboInputs,
+  TurboTaskInputsSchema,
   BUNDLED_SKILLS_MODULE,
   findUnusedCatalogEntries,
   findUnusedDependencies,
@@ -448,6 +450,26 @@ describe("process name guard", () => {
   test("plans and files outside the source roots are not read", () => {
     expect(findProcessNames("plans/a.ts", `// ${tokens[0]}`)).toEqual([])
     expect(findProcessNames("scripts/a.ts", `// ${tokens[0]}`)).toEqual([])
+  })
+
+  test("product strings, regexes and JSX text keep ledger-like names", () => {
+    const id = tokens[6]
+    expect(
+      findProcessNames(
+        "apps/tui/src/a.tsx",
+        `const header = "X-${id}"; const code = "${id}"; const pattern = /${id}/; const view = <text>${id}</text>`,
+      ),
+    ).toEqual([])
+  })
+
+  test("test and suite titles still name the behavior", () => {
+    const id = tokens[6]
+    expect(
+      findProcessNames(
+        "packages/core/tests/a.test.ts",
+        `describe("${id} fix", () => {});\nit.live("${id} fix", () => {});\ntest.each([])(\`${id} fix\`, () => {})`,
+      ).map((finding) => finding.line),
+    ).toEqual([1, 2, 3])
   })
 })
 
@@ -2135,6 +2157,87 @@ describe("guide check inputs", () => {
 })
 
 // ── suppression inventory ───────────────────────────────────────────────────
+
+test("package task inputs resolve parent paths and leave Turbo tokens to Turbo", () => {
+  const tracked = ["packages/core/src/a.ts", "apps/tui/scripts/build.ts"]
+  expect(
+    findDeadTurboInputs(
+      "packages/tooling/turbo.json",
+      {
+        typecheck: { inputs: ["$TURBO_EXTENDS$", "../core/src/**"] },
+      },
+      tracked,
+    ),
+  ).toEqual([])
+  expect(
+    findDeadTurboInputs(
+      "apps/tui/turbo.json",
+      {
+        typecheck: { inputs: ["$TURBO_DEFAULT$", "../../packages/core/src/**"] },
+        build: { inputs: ["$TURBO_ROOT$/apps/tui/scripts/**", "scripts/missing.ts"] },
+      },
+      tracked,
+    ),
+  ).toMatchObject([
+    { message: "the build input `scripts/missing.ts` matches no tracked file; delete it" },
+  ])
+})
+
+test("Turbo deferred and default inputs need no tracked output", () => {
+  const config = Schema.decodeSync(TurboTaskInputsSchema)({
+    tasks: {
+      build: {
+        inputs: [
+          "$TURBO_DEFAULT$",
+          "$TURBO_EXTENDS$",
+          { mode: "jit", globs: ["src/generated/**"], withDefaults: true },
+          { mode: "dependencyOutputs", globs: ["dist/**/*.d.ts"], from: ["^check-types"] },
+        ],
+      },
+      // eslint-disable-next-line effect/noNullish -- Turbo's JSON config accepts null to use default inputs.
+      test: { inputs: null },
+    },
+  })
+  expect(findDeadTurboInputs("packages/tooling/turbo.json", config.tasks, [])).toEqual([])
+})
+
+test("Turbo directory and compound globs match tracked files", () => {
+  expect(
+    findDeadTurboInputs(
+      "packages/tooling/turbo.json",
+      {
+        build: {
+          inputs: [
+            "src",
+            "src/",
+            "sr*",
+            "src/*.{ts,tsx}",
+            "src/[ab].ts",
+            "{src/a.ts}",
+            "{src/{a,b}.ts}",
+            "src/[^b].ts",
+            "src/**/.hidden.ts",
+            "src/a\\*.ts",
+          ],
+        },
+      },
+      [
+        "packages/tooling/src/a.ts",
+        "packages/tooling/src/.hidden.ts",
+        "packages/tooling/src/a*.ts",
+      ],
+    ),
+  ).toEqual([])
+  expect(
+    findDeadTurboInputs(
+      "packages/tooling/turbo.json",
+      {
+        build: { inputs: ["{src/missing.ts}"] },
+      },
+      ["packages/tooling/src/a.ts"],
+    ),
+  ).toHaveLength(1)
+})
 
 const nextLine = ["// @effect", "diagnostics-next-line"].join("-")
 const membraneFile = "packages/core/src/runtime/extension-host.ts"

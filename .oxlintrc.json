@@ -144,6 +144,11 @@
   },
   "overrides": [
     {
+      // Terminal columns measure display width. Numeric gutters and ids keep precise local reasons.
+      "files": ["apps/tui/src/**"],
+      "rules": { "gent/no-code-unit-padding": "error" }
+    },
+    {
       // Core and shipped-extension source also take their working directory
       // and host modules through Effect services: `RuntimeEnvironment` or the
       // extension context's `cwd`, `GentPlatform`, Effect `Crypto` and `Path`.
