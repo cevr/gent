@@ -1,4 +1,6 @@
-import { renderMermaidASCII } from "beautiful-mermaid"
+import type * as BeautifulMermaid from "beautiful-mermaid"
+import { useRenderer } from "@opentui/solid"
+import { type Accessor, createMemo, createSignal } from "solid-js"
 import {
   createMarkdownCodeBlockRenderer,
   type MarkdownCodeBlockRenderer,
@@ -200,11 +202,15 @@ interface Diagram {
 }
 
 /** The diagram of `source`, or none when beautiful-mermaid cannot read it. */
-const drawDiagram = (source: string, colors: DiagramColors): Option.Option<Diagram> =>
+const drawDiagram = (
+  library: DiagramLibrary,
+  source: string,
+  colors: DiagramColors,
+): Option.Option<Diagram> =>
   Effect.runSync(
     Effect.option(
       Effect.try(() =>
-        renderMermaidASCII(spaceEdgeArrows(source), {
+        library.renderMermaidASCII(spaceEdgeArrows(source), {
           ...COMPACT,
           colorMode: "truecolor",
           theme: PART_MARKS,
@@ -220,6 +226,44 @@ const drawDiagram = (source: string, colors: DiagramColors): Option.Option<Diagr
     })),
   )
 
+// ── library ─────────────────────────────────────────────────────────────────
+
+type DiagramLibrary = typeof BeautifulMermaid
+
+/**
+ * beautiful-mermaid loads on the first mermaid fence, not at launch: most
+ * sessions draw no diagram. The load runs once; the signal tells every
+ * reader when it lands.
+ */
+const [library, setLibrary] = createSignal(Option.none<DiagramLibrary>())
+
+const loadLibrary = Effect.runSync(
+  Effect.cached(
+    // oxlint-disable-next-line effect/noDynamicImports -- the diagram library loads on the first mermaid fence, not at launch
+    Effect.promise(() => import("beautiful-mermaid")).pipe(
+      Effect.tap((loaded) => Effect.sync(() => setLibrary(Option.some(loaded)))),
+    ),
+  ),
+)
+
+/** The library, once loaded; asking for it starts the load. Reactive. */
+const askLibrary = (): Option.Option<DiagramLibrary> => {
+  const loaded = library()
+  if (Option.isNone(loaded)) Effect.runFork(loadLibrary)
+  return loaded
+}
+
+/** A ```mermaid or ~~~mermaid fence opens on one of the lines. */
+const DIAGRAM_FENCE = /^[ \t]*(?:`{3,}|~{3,})[ \t]*mermaid\b/m
+
+/**
+ * Whether `markdown` draws as it will stay: it holds no mermaid fence, or the
+ * library its diagrams need has loaded. A fence starts the load. Reactive, so
+ * native history can wait for the load before it commits the item.
+ */
+export const diagramsDrawable = (markdown: string): boolean =>
+  !DIAGRAM_FENCE.test(markdown) || Option.isSome(askLibrary())
+
 // ── code-block renderer ─────────────────────────────────────────────────────
 
 /** The widest a diagram draws, as opencode's: a wider one is cut at the right. */
@@ -233,8 +277,10 @@ const completeStatements = (text: string): string =>
   text.slice(0, Math.max(0, text.lastIndexOf("\n")))
 
 /**
- * The answer's markdown hook for ```mermaid fences, drawing on `ctx`.
+ * The answer's markdown hook for ```mermaid fences, drawing on `ctx` with
+ * `library`.
  *
+ * - Before the library loads, a fence asks for it and draws as its code block.
  * - While the fence streams, the diagram draws its complete statements and
  *   redraws as each line ends. When the statements so far do not draw, the
  *   fence keeps its last diagram, keyed by the block's stable id as opencode
@@ -245,20 +291,30 @@ const completeStatements = (text: string): string =>
  *   `DIAGRAM_MAX_WIDTH` columns of the answer; a wider one is cut at the
  *   right. The native transcript has no mouse, so it does not scroll sideways.
  */
-export const mermaidCodeBlocks = (
+const mermaidCodeBlocks = (
   ctx: RenderContext,
+  library: Option.Option<DiagramLibrary>,
   colors: () => DiagramColors,
 ): MarkdownOptions["renderNode"] => {
   const lastDrawn = new Map<string, Diagram>()
-  const shownDiagram = (text: string, raw: string, block: Option.Option<string>) => {
-    if (fenceClosed(raw)) return drawDiagram(text, colors())
-    return Option.orElse(drawDiagram(completeStatements(text), colors()), () =>
+  const shownDiagram = (
+    loaded: DiagramLibrary,
+    text: string,
+    raw: string,
+    block: Option.Option<string>,
+  ) => {
+    if (fenceClosed(raw)) return drawDiagram(loaded, text, colors())
+    return Option.orElse(drawDiagram(loaded, completeStatements(text), colors()), () =>
       Option.flatMap(block, (id) => Option.fromUndefinedOr(lastDrawn.get(id))),
     )
   }
   const mermaid: MarkdownCodeBlockRenderer = (token, context) => {
+    if (Option.isNone(library)) askLibrary()
     const block = Option.fromNullishOr(context.defaultRender()?.id)
-    const shown = Option.map(shownDiagram(token.text, token.raw, block), (diagram) => {
+    const diagram = Option.flatMap(library, (loaded) =>
+      shownDiagram(loaded, token.text, token.raw, block),
+    )
+    const shown = Option.map(diagram, (diagram) => {
       Option.map(block, (id) => lastDrawn.set(id, diagram))
       return new TextRenderable(ctx, {
         content: diagram.text,
@@ -275,4 +331,16 @@ export const mermaidCodeBlocks = (
     return Option.getOrUndefined(shown)
   }
   return createMarkdownCodeBlockRenderer({ mermaid })
+}
+
+/**
+ * The markdown hook of one answer, for the renderer it draws on. It is one
+ * value until the library loads, then one more: a new hook rebuilds every
+ * block of the answer, so its fences draw as diagrams.
+ */
+export const useDiagramCodeBlocks = (
+  colors: () => DiagramColors,
+): Accessor<MarkdownOptions["renderNode"]> => {
+  const ctx = useRenderer()
+  return createMemo(() => mermaidCodeBlocks(ctx, library(), colors))
 }

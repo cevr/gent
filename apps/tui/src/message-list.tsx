@@ -81,7 +81,7 @@ import {
   lineCount,
   MODEL_CHANGE_MESSAGE_TYPE,
 } from "@gent/core/protocol"
-import { mermaidCodeBlocks } from "./mermaid"
+import { diagramsDrawable, useDiagramCodeBlocks } from "./mermaid"
 import type { DisclosureLevel } from "./session"
 import { insert, RendererContext, useRenderer } from "@opentui/solid"
 
@@ -535,8 +535,8 @@ function AssistantMessage(props: {
   syntaxStyle: () => SyntaxStyle
 }) {
   const { theme } = useTheme()
-  // One hook for the message's life: a new hook would rebuild every block.
-  const diagrams = mermaidCodeBlocks(useRenderer(), () => ({
+  // The hook changes once, when the diagram library loads: a new hook rebuilds every block.
+  const diagrams = useDiagramCodeBlocks(() => ({
     text: theme.text,
     border: theme.textMuted,
     line: theme.textMuted,
@@ -612,7 +612,7 @@ function AssistantMessage(props: {
                     streaming
                     internalBlockMode="top-level"
                     tableOptions={ANSWER_TABLE}
-                    renderNode={diagrams}
+                    renderNode={diagrams()}
                     content={segment.content}
                     conceal
                   />
@@ -1631,6 +1631,18 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     const next = items.map((item) => transcriptFingerprint(item))
     const turnRunning = props.streaming
     retryVersion()
+    // An answer with a diagram commits once the diagram library has loaded,
+    // so history never keeps its fence as code. Read here, outside `untrack`,
+    // so the load runs this again.
+    const undrawn = new Set(
+      items.filter(
+        (item, index) =>
+          index >= queued &&
+          isMessageItem(item) &&
+          item.role === "assistant" &&
+          !diagramsDrawable(item.content),
+      ),
+    )
     untrack(() => {
       const prefixMatches = committed.every((value, index) => next[index] === value)
       if (!prefixMatches) {
@@ -1639,7 +1651,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
       }
       while (queued < items.length) {
         const item = items[queued]
-        if (!item || !isFinalItem(item, turnRunning)) break
+        if (!item || !isFinalItem(item, turnRunning) || undrawn.has(item)) break
         const value = next[queued]
         if (!Predicate.isString(value)) break
         // A completed item has one owner: native history or the live view. The

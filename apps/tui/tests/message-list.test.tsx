@@ -2832,7 +2832,8 @@ describe("native transcript markdown", () => {
         ),
         { width: 48, height: 30 },
       )
-      const rows = renderFrame(setup).split("\n")
+      const frame = yield* waitForFrame(setup, (next) => next.includes("┌"), "the diagram")
+      const rows = frame.split("\n")
       const labelRow = Option.getOrThrow(
         Option.fromUndefinedOr(rows.find((row) => row.includes("Alpha"))),
       )
@@ -2859,7 +2860,7 @@ describe("native transcript markdown", () => {
         ),
         { width: 60, height: 20 },
       )
-      const frame = yield* waitForFrame(setup, (next) => next.includes("Alpha"), "the answer")
+      const frame = yield* waitForFrame(setup, (next) => next.includes("┌"), "the diagram")
       expect(frame).toContain("┌")
       expect(frame).toContain("Beta")
       expect(frame).not.toContain("Alpha-->Beta")
@@ -2868,13 +2869,16 @@ describe("native transcript markdown", () => {
   )
 
   // A source the diagram library cannot read keeps its fence: the reader
-  // sees the code as written, not an empty block.
+  // sees the code as written, not an empty block. The diagram before it
+  // shows the library has loaded.
   it.scopedLive("a diagram that does not parse shows its source as a code block", () =>
     Effect.gen(function* () {
+      const content =
+        "```mermaid\ngraph LR\n  Alpha-->Beta\n```\n\n```mermaid\nnot a diagram {{{\n```"
       const setup = yield* renderScoped(
         () => (
           <MessageList
-            items={[assistant("broken", "```mermaid\nnot a diagram {{{\n```")]}
+            items={[assistant("broken", content)]}
             disclosure="collapsed"
             syntaxStyle={syntaxStyle}
           />
@@ -2883,10 +2887,11 @@ describe("native transcript markdown", () => {
       )
       const frame = yield* waitForFrame(
         setup,
-        (next) => next.includes("not a diagram {{{"),
-        "the diagram's source",
+        (next) => next.includes("┌") && next.includes("not a diagram {{{"),
+        "the diagram and the source after it",
       )
-      expect(frame).not.toContain("┌")
+      expect(frame).toContain("not a diagram {{{")
+      expect(frame).not.toContain("Alpha-->Beta")
     }),
   )
 

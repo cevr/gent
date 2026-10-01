@@ -1,8 +1,9 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it } from "effect-bun-test"
-import { Effect } from "effect"
-import { SyntaxStyle } from "@opentui/core"
-import { MessageList } from "../src/message-list"
+import { Effect, Schedule } from "effect"
+import { type CliRendererExternalOutputEvent, SyntaxStyle } from "@opentui/core"
+import { useRenderer } from "@opentui/solid"
+import { MessageList, NativeTranscript } from "../src/message-list"
 import { renderScoped } from "./render-harness-boundary"
 import { waitForFrame } from "./helpers-boundary"
 
@@ -35,7 +36,8 @@ const drawn = (source: string, width = 120) =>
       ),
       { width, height: 40 },
     )
-    return yield* waitForFrame(setup, (frame) => frame.trim().length > 0, "the answer")
+    // The diagram library loads on the first fence: the fence draws as code until then.
+    return yield* waitForFrame(setup, (frame) => frame.includes("┌"), "the diagram")
   }).pipe(Effect.timeout("5 seconds"))
 
 /** The rows from the diagram's first box top to its last box bottom. */
@@ -45,6 +47,65 @@ const diagramRows = (frame: string): ReadonlyArray<string> => {
   const last = rows.findLastIndex((row) => row.includes("┘"))
   return rows.slice(first, last + 1)
 }
+
+// The diagram library loads once a process, on the first fence. This test
+// runs first in its file, so the library has not loaded when the answer
+// is first ready to commit.
+describe("mermaid diagrams in native history", () => {
+  it.scopedLive("an answer with a diagram reaches history as the diagram, not its fence", () =>
+    Effect.gen(function* () {
+      const committed: string[] = []
+      const content = "```mermaid\ngraph LR\n  Alpha-->Beta\n```"
+      const setup = yield* renderScoped(
+        () => {
+          const renderer = useRenderer()
+          renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+            committed.push(new TextDecoder().decode(event.snapshot.getRealCharBytes(false)))
+          })
+          return (
+            <NativeTranscript
+              items={[
+                {
+                  _tag: "regular-message",
+                  id: "diagram",
+                  role: "assistant",
+                  content,
+                  reasoning: "",
+                  images: [],
+                  createdAt: 0,
+                  segments: [{ _tag: "text", content }],
+                },
+              ]}
+              settled
+              streaming={false}
+              footerHeight={3}
+              expanded={false}
+              disclosure="collapsed"
+              displayRevision={0}
+              overlayOpen={false}
+              renderItems={(visible) => (
+                <MessageList items={visible} disclosure="collapsed" syntaxStyle={syntaxStyle} />
+              )}
+            >
+              <box />
+            </NativeTranscript>
+          )
+        },
+        { width: 60, height: 20 },
+      )
+      yield* Effect.promise(() => setup.flush()).pipe(
+        Effect.repeat({
+          until: () => committed.join("").includes("Alpha"),
+          schedule: Schedule.spaced("10 millis"),
+        }),
+        Effect.timeout("4 seconds"),
+        Effect.ignore,
+      )
+      expect(committed.join("")).toContain("┌")
+      expect(committed.join("")).not.toContain("graph LR")
+    }).pipe(Effect.timeout("8 seconds")),
+  )
+})
 
 describe("mermaid diagrams", () => {
   it.scopedLive("a diagram draws in place of its fence", () =>
