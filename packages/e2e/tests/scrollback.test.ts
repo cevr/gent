@@ -14,7 +14,7 @@
  * visible: the live view looked correct the whole time.
  */
 import { describe, expect, it } from "effect-bun-test"
-import { Effect } from "effect"
+import { Effect, Option } from "effect"
 import { waitFor } from "@gent/core/test-utils"
 import {
   countRows,
@@ -24,6 +24,7 @@ import {
   seedAndSpawn,
   settleAndCapture,
   settlePty,
+  signalAndExit,
   type TestContext,
 } from "../src/pty-fixture"
 
@@ -133,6 +134,53 @@ describe("E2E: Scrollback ownership", () => {
         // the screen without a scrollable output region would show the same
         // ordered rows on screen and keep nothing above it.
         expect(historyText(grid).length).toBeGreaterThan(0)
+      }).pipe(Effect.timeout(EFFECT_TIMEOUT)),
+    TEST_TIMEOUT,
+  )
+
+  // A signal from outside (`kill`, a closing multiplexer) leaves the terminal
+  // as ctrl+c twice does: the transcript stays above the shell prompt.
+  for (const signal of ["SIGTERM", "SIGINT"] as const) {
+    it.scopedLive(
+      `${signal} from outside leaves every message on screen`,
+      () =>
+        Effect.gen(function* () {
+          const ctx = yield* seedAndSpawn(["--mock-empty"], SHORT_SCREEN)
+          yield* submitMessages(ctx, 2)
+          expect(Option.isSome(yield* signalAndExit(ctx, signal, "10 seconds"))).toBe(true)
+          const rows = gridText(yield* settleAndCapture(ctx, SETTLE))
+          for (const index of [1, 2]) {
+            expect([index, countRows(rows, messageText(index))]).toEqual([index, 1])
+          }
+        }).pipe(Effect.timeout(EFFECT_TIMEOUT)),
+      TEST_TIMEOUT,
+    )
+  }
+
+  // At 80x24 a 5-row prompt whose turn retries fills the screen: history
+  // takes the prompt's top rows as the turn ends. The rows read on with no
+  // row added or lost between history and the screen.
+  it.scopedLive(
+    "a multiline prompt whose turn retries keeps its rows together at 80x24",
+    () =>
+      Effect.gen(function* () {
+        const ctx = yield* seedAndSpawn(["--debug"], { cols: 80, rows: 24 })
+        yield* ptyWaitFor(ctx, "ready", { timeout: 25_000 })
+        yield* settlePty(ctx, TYPED)
+        ctx.pty.write("/new")
+        yield* settlePty(ctx, TYPED)
+        ctx.pty.write(ENTER)
+        yield* settlePty(ctx, SETTLE)
+        const prompt = ["longg", "row two", "row three", "row four", "row five"]
+        ctx.pty.write(prompt.join("\n"))
+        yield* settlePty(ctx, TYPED)
+        ctx.pty.write(ENTER)
+        yield* ptyWaitFor(ctx, "Retried 2/3", { timeout: 25_000 })
+        const grid = yield* settleAndCapture(ctx, { quietMs: 1_500, timeoutMs: 25_000 })
+        const rows = [...grid.history, ...grid.visible].map((row) => row.trimEnd())
+        const first = rows.findIndex((row) => row === "┃ longg")
+        expect(first).toBeGreaterThanOrEqual(0)
+        expect(rows.slice(first, first + prompt.length)).toEqual(prompt.map((row) => `┃ ${row}`))
       }).pipe(Effect.timeout(EFFECT_TIMEOUT)),
     TEST_TIMEOUT,
   )

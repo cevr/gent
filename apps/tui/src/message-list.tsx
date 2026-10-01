@@ -1302,8 +1302,13 @@ interface PromptGeometry {
   readonly liveHeight: number
   /** The rows the live tail may take before the pinned row takes one. */
   readonly liveRows: number
-  /** The rows of native history the terminal shows above the app, the pinned row drawn. */
+  /**
+   * The rows of native history the terminal shows above the app, the pinned
+   * row drawn, less the top rows of the first live item that history holds.
+   */
   readonly scrollbackRows: number
+  /** The top rows of the first live item that history holds. */
+  readonly cut: number
 }
 
 /**
@@ -1314,7 +1319,9 @@ interface PromptGeometry {
  * A live prompt is on screen while its row is at or below the viewport's top:
  * the viewport sticks to the bottom, so a live tail taller than it cuts rows
  * off the top. A committed prompt is on screen while it and the history rows
- * after it fit in the rows the terminal shows above the app. An unmeasured
+ * after it fit in the rows the terminal shows above the app; so is a prompt
+ * whose text row history holds among the live item's cut rows, while the
+ * terminal shows the rows of history from that row on. An unmeasured
  * height met before the answer is known counts as on screen, so nothing is
  * pinned on a guess.
  *
@@ -1332,6 +1339,10 @@ export const promptOnScreen = (geometry: PromptGeometry): boolean => {
     }
     return Option.some(total)
   }
+  // The cut rows are history's last rows, so the text row is `cut` less its
+  // own row above the region: on screen while the terminal shows that many.
+  if (geometry.index === geometry.committed && geometry.cut > PROMPT_TEXT_ROW)
+    return geometry.cut - PROMPT_TEXT_ROW <= geometry.scrollbackRows + geometry.cut
   if (geometry.index < geometry.committed) {
     const past = geometry.scrollbackRows + PROMPT_TEXT_ROW
     return Option.match(rowsUpTo(geometry.index, geometry.committed, past), {
@@ -1824,7 +1835,11 @@ export function NativeTranscript(props: NativeTranscriptProps) {
           })
           const start = Math.min(rows.from, end)
           const undo = handOver(end - start)
-          return Effect.try(() => surface.commitRows(start, end)).pipe(
+          // The rows end on their last row. A trailing newline would leave the
+          // terminal on an empty row that OpenTUI counts as history, so on a
+          // short screen the region would start a row under the rows: a blank
+          // row between them. The next commit starts on a new row itself.
+          return Effect.try(() => surface.commitRows(start, end, { trailingNewline: false })).pipe(
             Effect.as<CommitOutcome>("landed"),
             Effect.catch(() =>
               Effect.sync((): CommitOutcome => {
@@ -1966,12 +1981,44 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     queuedRows = 0
   }
 
+  /**
+   * Starts history again from the screen's top. Every caller writes the
+   * transcript's rows again, so the reset also clears the terminal's saved
+   * lines: the copy they hold would show each row twice. Scrollback cannot
+   * lose some of its rows and keep others, so the shell's lines above gent go
+   * too. Only the first transcript keeps them: nothing of gent is above it.
+   */
+  const resetHistory = () => renderer.resetSplitFooterForReplay({ clearSavedLines: true })
+
+  /**
+   * Draws the split region on the terminal's own screen again. A return from
+   * the alternate screen starts it at the place it left (`leftRegion`),
+   * under the cursor row the output mode reads.
+   */
+  const enterRegion = (returning: Option.Option<RegionPlace>) => {
+    renderer.screenMode = "split-footer"
+    Option.map(returning, (place) => renderer.setCursorPosition(1, place.top, false))
+    renderer.externalOutputMode = "capture-stdout"
+    renderer.useMouse = false
+  }
+
   // At exit every item the live view still holds commits, final or not,
   // plain; a commit still settling stops waiting. The queue's order makes
-  // the drain wait for all of them.
+  // the drain wait for all of them. Exit over the alternate screen (the
+  // palette, a pane that holds the composer, the expanded transcript) takes
+  // the terminal's screen back first: scrollback takes no rows from there.
   const flushForExit = Effect.suspend(() => {
     Deferred.doneUnsafe(leaving, Exit.void)
-    if (disposed || !canCommitNatively() || props.expanded || props.overlayOpen) return Effect.void
+    if (disposed) return Effect.void
+    const away = Option.filter(leftRegion, () => renderer.screenMode === "alternate-screen")
+    if (Option.isSome(away)) {
+      leftRegion = Option.none()
+      renderer.footerHeight = away.value.rows
+      enterRegion(away)
+      // A resize while away left history for the old width: it starts again.
+      if (replayPending()) enqueueNative(Effect.sync(resetHistory))
+    }
+    if (!canCommitNatively()) return Effect.void
     const items = displayedItems()
     const next = items.map((item) => transcriptFingerprint(item))
     if (!committed.every((value, index) => next[index] === value)) return Effect.void
@@ -1992,13 +2039,16 @@ export function NativeTranscript(props: NativeTranscriptProps) {
   onMount(() => {
     renderer.footerHeight = props.footerHeight
     // The first transcript finds the renderer made in this mode; a later one
-    // (another session) finds the alternate screen the last one left.
-    if (renderer.screenMode !== "split-footer") renderer.screenMode = "split-footer"
+    // (another session or branch) finds the alternate screen the last one left.
+    const later = renderer.screenMode !== "split-footer"
+    if (later) renderer.screenMode = "split-footer"
     renderer.externalOutputMode = "capture-stdout"
     // Native history scrolls in the terminal. Mouse tracking would swallow the wheel.
     renderer.useMouse = false
     // A new transcript must not inherit the previous screen's cursor origin.
-    renderer.resetSplitFooterForReplay()
+    // A later one writes its own history, which may share rows with the last.
+    if (later) resetHistory()
+    else renderer.resetSplitFooterForReplay()
     setReady(true)
   })
 
@@ -2049,21 +2099,16 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     leftRegion = Option.none()
     if (Option.isSome(returning) && !replayPending()) renderer.footerHeight = returning.value.rows
     else sizeRegion(replayPending())
-    renderer.screenMode = "split-footer"
-    // The region starts under the cursor row the output mode reads.
-    Option.map(returning, (place) => renderer.setCursorPosition(1, place.top, false))
-    renderer.externalOutputMode = "capture-stdout"
-    renderer.useMouse = false
+    enterRegion(returning)
     if (replayPending() && !settlingNative) {
       settlingNative = true
       renderer.once("frame", finishNativeReturn)
-      // A resize or a disclosure change replays all of history: the reset
-      // clears the screen, not the terminal's saved lines, which hold the
-      // reader's own shell. Clear before the layout frame; replay only after
-      // its measurements arrive.
+      // A resize, a disclosure change or an item that changed in history
+      // replays all of history (`resetHistory`). Clear before the layout
+      // frame; replay only after its measurements arrive.
       enqueueNative(
         Effect.sync(() => {
-          renderer.resetSplitFooterForReplay()
+          resetHistory()
           renderer.requestRender()
         }),
       )
@@ -2093,9 +2138,10 @@ export function NativeTranscript(props: NativeTranscriptProps) {
         setPartialRows(0)
         setCommittedCount(0)
       })
-      // The renderer reset joins the commit queue rather than jumping it, so
-      // the queue stays the single writer of scrollback.
-      enqueueNative(Effect.sync(() => renderer.resetSplitFooterForReplay()))
+      // The reset takes the dismissed rows out of scrollback as well. It joins
+      // the commit queue rather than jumping it, so the queue stays the
+      // single writer of scrollback.
+      enqueueNative(Effect.sync(resetHistory))
     })
   })
 
@@ -2275,6 +2321,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
         height -
         splitFooterHeight(height, props.footerHeight + 1 + Math.max(1, liveHeight())) -
         cut,
+      cut,
     })
     if (onScreen) return Option.none()
     return Option.some(prompt.value.text)

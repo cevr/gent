@@ -428,6 +428,12 @@ export const renderWithProviders = (
       setup.renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
         history.push(snapshotText(event.snapshot))
       })
+      // A terminal keeps its saved lines through a reset, unless the reset clears them.
+      const reset = setup.renderer.resetSplitFooterForReplay.bind(setup.renderer)
+      setup.renderer.resetSplitFooterForReplay = (resetOptions) => {
+        if (resetOptions?.clearSavedLines === true) history.splice(0)
+        reset(resetOptions)
+      }
       histories.set(setup.renderer, history)
       yield* Effect.promise(() =>
         render(

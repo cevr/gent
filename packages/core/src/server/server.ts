@@ -149,6 +149,7 @@ import {
   resolveExistingSessionBranch,
   resolveTurnProfile,
   RunOpener,
+  type SessionProfile,
   SessionProfileCache,
 } from "../runtime/extension-host.js"
 import type { AgentName } from "../domain/agent.js"
@@ -469,6 +470,7 @@ const makeSessionMutationsService: Effect.Effect<
    * the hooks that run once they are gone. None when the session has no
    * branch (it does not exist). The caller's scope holds the profile's lease.
    */
+  const runtimeEnvironment = yield* RuntimeEnvironment
   const deletedSessionProfile = Effect.fn("SessionMutations.deletedSessionProfile")(function* (
     sessionId: SessionId,
   ) {
@@ -484,6 +486,7 @@ const makeSessionMutationsService: Effect.Effect<
     }).pipe(
       Effect.provideService(ExtensionRegistry, launchRegistry),
       Effect.provideService(SessionStorage, sessionStorage),
+      Effect.provideService(RuntimeEnvironment, runtimeEnvironment),
     )
     return Option.some(profile)
   })
@@ -1266,7 +1269,7 @@ const LOGIN_LEASE = Duration.minutes(10)
 
 /** The profile a pending login holds; see "login leases" in `RpcHandlers`. */
 interface LoginLease {
-  readonly registry: ExtensionRegistryService
+  readonly profile: Pick<SessionProfile, "registryService" | "layerContext">
   readonly scope: Scope.Closeable
   /** Callbacks running on the lease. */
   inFlight: number
@@ -1352,23 +1355,41 @@ const RpcHandlers = GentRpcs.toLayer(
 
     const sessionCwd = (sessionId: SessionId) => loadSession(sessionId).pipe(Effect.map(cwdOf))
 
-    // The caller's scope holds the profile's lease while it reads the registry.
-    const registryForCwd = (cwd: Option.Option<string>) =>
-      resolveRegistryForCwd(cwd).pipe(Effect.provideService(ExtensionRegistry, extensionRegistry))
+    // The caller's scope holds the profile's lease while it uses its services.
+    const profileForCwd = Effect.fn("RpcHandlers.profileForCwd")(function* (
+      cwd: Option.Option<string>,
+    ): Effect.fn.Return<
+      Pick<SessionProfile, "registryService" | "layerContext">,
+      never,
+      Scope.Scope
+    > {
+      const profileCache = yield* Effect.serviceOption(SessionProfileCache)
+      if (Option.isNone(profileCache)) {
+        return {
+          registryService: extensionRegistry,
+          layerContext: Context.make(ExtensionRegistry, extensionRegistry),
+        }
+      }
+      return yield* profileCache.value.resolve(Option.getOrElse(cwd, () => runtimeEnvironment.cwd))
+    })
+
+    const resolveSessionProfile = (sessionId: SessionId) =>
+      sessionCwd(sessionId).pipe(Effect.flatMap(profileForCwd))
 
     const resolveSessionRegistry = (
       sessionId: SessionId,
     ): Effect.Effect<ExtensionRegistryService, StorageError | NotFoundError, Scope.Scope> =>
-      sessionCwd(sessionId).pipe(Effect.flatMap(registryForCwd))
+      resolveSessionProfile(sessionId).pipe(Effect.map((profile) => profile.registryService))
 
-    const underRegistry = <A, E>(
-      registry: ExtensionRegistryService,
+    const underProfile = <A, E>(
+      profile: Pick<SessionProfile, "registryService" | "layerContext">,
       effect: Effect.Effect<A, E, ExtensionRegistry | Auth | GentPlatform>,
     ) =>
       effect.pipe(
-        Effect.provideService(ExtensionRegistry, registry),
+        Effect.provideService(ExtensionRegistry, profile.registryService),
         Effect.provideService(Auth, authStore),
         Effect.provideService(GentPlatform, platform),
+        Effect.provideContext(profile.layerContext),
       )
 
     /** Provider login runs against the drivers of the session's own profile. */
@@ -1376,8 +1397,8 @@ const RpcHandlers = GentRpcs.toLayer(
       sessionId: SessionId,
       effect: Effect.Effect<A, E, ExtensionRegistry | Auth | GentPlatform>,
     ) =>
-      resolveSessionRegistry(sessionId).pipe(
-        Effect.flatMap((registry) => underRegistry(registry, effect)),
+      resolveSessionProfile(sessionId).pipe(
+        Effect.flatMap((profile) => underProfile(profile, effect)),
         Effect.scoped,
       )
 
@@ -1402,12 +1423,12 @@ const RpcHandlers = GentRpcs.toLayer(
       Effect.gen(function* () {
         const scope = yield* Scope.fork(handlersScope)
         const authorized = yield* Effect.gen(function* () {
-          const registry = yield* resolveSessionRegistry(input.sessionId).pipe(Scope.provide(scope))
-          const authorization = yield* underRegistry(
-            registry,
+          const profile = yield* resolveSessionProfile(input.sessionId).pipe(Scope.provide(scope))
+          const authorization = yield* underProfile(
+            profile,
             authorizeProvider(input.sessionId, input.provider, input.method),
           )
-          return { registry, authorization }
+          return { profile, authorization }
         }).pipe(Effect.onError(() => Scope.close(scope, Exit.void)))
         if (Option.isNone(authorized.authorization)) {
           yield* Scope.close(scope, Exit.void)
@@ -1415,7 +1436,7 @@ const RpcHandlers = GentRpcs.toLayer(
         }
         const authorizationId = authorized.authorization.value.authorizationId
         const lease: LoginLease = {
-          registry: authorized.registry,
+          profile: authorized.profile,
           scope,
           inFlight: 0,
           done: false,
@@ -1451,7 +1472,7 @@ const RpcHandlers = GentRpcs.toLayer(
           lease.inFlight++
         }),
         () =>
-          underRegistry(lease.registry, run).pipe(
+          underProfile(lease.profile, run).pipe(
             Effect.tap(() =>
               Effect.sync(() => {
                 lease.done = true
@@ -1596,15 +1617,13 @@ const RpcHandlers = GentRpcs.toLayer(
       // The catalog and the drivers are the requesting session's profile:
       // its project drivers count, its disabled extensions do not.
       "model.list": ({ sessionId }: SessionIdPayload) =>
-        Effect.gen(function* () {
-          const registry = yield* resolveSessionRegistry(sessionId)
-          const catalog = yield* modelCatalog().pipe(
-            Effect.provideService(ExtensionRegistry, registry),
-            Effect.provideService(Auth, authStore),
+        inSessionProfile(
+          sessionId,
+          modelCatalog().pipe(
             Effect.provideService(ModelCatalogRecord, catalogRecord),
-          )
-          return catalog.models
-        }).pipe(Effect.scoped),
+            Effect.map((catalog) => catalog.models),
+          ),
+        ),
 
       "driver.list": ({ sessionId }: SessionIdPayload) =>
         Effect.gen(function* () {
@@ -1638,7 +1657,8 @@ const RpcHandlers = GentRpcs.toLayer(
           // The models a turn in this session would run: the session's
           // registry and config, then its model override, as the turn does.
           const cwd = cwdOf(session)
-          const registry = yield* registryForCwd(cwd)
+          const profile = yield* profileForCwd(cwd)
+          const registry = profile.registryService
           const config = yield* configService.get(Option.getOrUndefined(cwd))
           const agents = [...registry.getResolved().agents.values()]
           // The driver a turn routes through: the agent's driver, else the
@@ -1649,10 +1669,11 @@ const RpcHandlers = GentRpcs.toLayer(
           const admissions = [Option.fromUndefinedOr(session.admission)]
           if (!Predicate.isUndefined(agentName)) admissions.push(Option.some({ agent: agentName }))
           const driverIds = admissions.flatMap((admission) => Option.toArray(driverFor(admission)))
-          return yield* listAuthProviders(driverIds).pipe(
-            Effect.provideService(ExtensionRegistry, registry),
-            Effect.provideService(Auth, authStore),
-            Effect.mapError((error) => authPersistenceError("read", "*", error)),
+          return yield* underProfile(
+            profile,
+            listAuthProviders(driverIds).pipe(
+              Effect.mapError((error) => authPersistenceError("read", "*", error)),
+            ),
           )
         }).pipe(Effect.scoped),
 
@@ -1693,7 +1714,8 @@ const RpcHandlers = GentRpcs.toLayer(
             Session: ({ id }) => sessionCwd(id),
             Launch: () => Effect.succeedNone,
           })
-          const registry = yield* registryForCwd(cwd)
+          const profile = yield* profileForCwd(cwd)
+          const registry = profile.registryService
           const resolved = registry.getResolved()
           // Config files are read on each call, so a fixed file clears here
           // without a restart.
@@ -1710,11 +1732,12 @@ const RpcHandlers = GentRpcs.toLayer(
           const failures = yield* Option.match(recorded, {
             onSome: Effect.succeed,
             onNone: () =>
-              modelCatalog().pipe(
-                Effect.provideService(ExtensionRegistry, registry),
-                Effect.provideService(Auth, authStore),
-                Effect.provideService(ModelCatalogRecord, catalogRecord),
-                Effect.map((catalog) => catalog.failures),
+              underProfile(
+                profile,
+                modelCatalog().pipe(
+                  Effect.provideService(ModelCatalogRecord, catalogRecord),
+                  Effect.map((catalog) => catalog.failures),
+                ),
               ),
           })
           return buildExtensionHealthSnapshot(
@@ -1793,6 +1816,8 @@ interface DependencyOverrides {
   >
   readonly configServiceLayer?: Layer.Layer<ConfigService>
   readonly modelRegistryLayer?: Layer.Layer<ModelRegistry>
+  /** Replaces the auth-backed live resolver (a scripted or fixed model). */
+  readonly modelResolverLayer?: Layer.Layer<ModelResolver>
   readonly toolRunnerLayer?: Layer.Layer<ToolRunner>
   readonly sessionProfileCacheLayer?: Layer.Layer<SessionProfileCache>
   readonly extraLayers?: ReadonlyArray<Layer.Layer<never>>
@@ -1814,7 +1839,7 @@ export const StateLocation = Schema.TaggedUnion({
 })
 export type StateLocation = typeof StateLocation.Type
 
-interface DependenciesConfig {
+interface DependenciesConfig<A = never> {
   cwd: string
   home: string
   platform: string
@@ -1833,9 +1858,6 @@ interface DependenciesConfig {
   state: StateLocation
   /** A failed extension fails the profile build. Test roots set it; production leaves one broken extension out and runs. */
   failOnExtensionFailure: boolean
-  /** Model resolver override. When set, replaces the auth-backed live resolver.
-   *  Must be a fully-provided layer (no requirements, no errors). */
-  modelResolverOverride?: Layer.Layer<ModelResolver, never, never>
   /** Extensions to load. Composition roots pass this in. */
   extensions: ReadonlyArray<GentExtension<ExtensionSetupServices>>
   /**
@@ -1845,7 +1867,7 @@ interface DependenciesConfig {
    * fails on first use, and a default would hide that until run time. A
    * deployment whose tools are all stateless passes `noBranchTools`.
    */
-  branchTools: BranchToolFeature<never>
+  branchTools: BranchToolFeature<A>
   /** Internal composition-root knobs used by tests to preset the production root. */
   overrides?: DependencyOverrides
 }
@@ -1867,7 +1889,7 @@ const platformServicesLive = Layer.provideMerge(
   childProcessSpawnerLive,
 )
 
-const makeStorageLayer = (config: DependenciesConfig) => {
+const makeStorageLayer = <A>(config: DependenciesConfig<A>) => {
   const branchTools = config.branchTools
   if (config.state._tag === "Memory")
     return SqliteStorage.MemoryWithSql(branchTools.storage, branchTools.migrations)
@@ -1880,7 +1902,7 @@ const makeClusterRunnerLayer = (state: StateLocation) => {
   return SingleRunner.layer({ runnerStorage })
 }
 
-export const createDependencies = (config: DependenciesConfig) => {
+export const createDependencies = <A = never>(config: DependenciesConfig<A>) => {
   const runtimeEnvironmentLive = RuntimeEnvironment.Live({
     cwd: config.cwd,
     home: config.home,
@@ -1926,24 +1948,19 @@ export const createDependencies = (config: DependenciesConfig) => {
       const profile = yield* cache
         .resolve(config.cwd)
         .pipe(Effect.provideService(CurrentWorkspaceId, launchWorkspaceId))
-      // `SessionProfile.layerContext` carries dynamically acquired resource
-      // services, so its type intentionally cannot enumerate every service
-      // contributed by an extension. Keep the stable registry services
-      // explicit at this package boundary while retaining that context at
-      // runtime for extension consumers.
+      // Only the launch registry and prompt sections join the server context.
+      // The profile's resource services stay in the profile: a turn, a
+      // request or a hook reads them from its session's profile, so one
+      // project's extension services never reach another project's turn.
       return Layer.mergeAll(
         Layer.succeed(ExtensionRegistry, profile.registryService),
         Layer.succeed(LaunchBaseSections, profile.baseSections),
-        Layer.succeedContext(profile.layerContext),
       )
     }),
   )
 
   const modelRegistryLive = config.overrides?.modelRegistryLayer ?? ModelRegistry.Live
-  const modelResolverLive = Option.getOrElse(
-    Option.fromUndefinedOr(config.modelResolverOverride),
-    () => ModelResolver.Live,
-  )
+  const modelResolverLive = config.overrides?.modelResolverLayer ?? ModelResolver.Live
   // ApprovalService — single handler for all interaction types
   const approvalServiceLive = config.overrides?.approvalLayer ?? ApprovalService.Live
   const toolRunnerLive = config.overrides?.toolRunnerLayer ?? ToolRunner.Live

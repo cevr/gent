@@ -74,7 +74,7 @@ export {
   ProviderAuthInfo,
   reportProviderStopReason,
 } from "../domain/driver.js"
-export { type ApprovalDecision, InteractionPendingError } from "../domain/interaction.js"
+export { InteractionPendingError } from "../domain/interaction.js"
 export type {
   ModelDriverContribution,
   ProviderAuthorizationResult,
@@ -127,15 +127,8 @@ export {
   type ToolInput,
   type ToolCapability,
 } from "../domain/capability.js"
-export {
-  defineRequests,
-  ref,
-  request,
-  type RequestCapability,
-  type RequestInput,
-} from "../domain/capability.js"
+export { defineRequests, ref, request, type RequestInput } from "../domain/capability.js"
 export type { CapabilityRef } from "../domain/capability.js"
-export { CapabilityError } from "../domain/capability.js"
 export { ToolResultFailure } from "../domain/message.js"
 export {
   ExtensionContext,
