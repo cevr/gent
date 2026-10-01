@@ -1,6 +1,6 @@
-import { describe, expect, it } from "effect-bun-test"
+import { describe, expect, it, test } from "effect-bun-test"
 import { Effect, Fiber, FileSystem, Schema, Stream } from "effect"
-import { AskUserTool, HandoffTool, PromptTool } from "../src/interaction-tools.js"
+import { AskUserMetadata, AskUserTool, HandoffTool, PromptTool } from "../src/interaction-tools.js"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/protocol"
 import {
   createRpcHarness,
@@ -40,6 +40,26 @@ const makeCtx = (
     readonly interaction: typeof interaction
   }
 }
+
+describe("ask-user wire", () => {
+  // The metadata JSON as an interaction stored it before the call limits: a
+  // long header and five options.
+  test("a question stored before the call limits decodes for the client", () => {
+    const options = ["A", "B", "C", "D", "E"]
+      .map((label) => `{"label":"${label}","description":"${label}"}`)
+      .join(",")
+    const stored = `{"type":"ask-user","questions":[{"question":"Pick one","header":"Which of these deployment targets first?","markdown":"**context**","options":[${options}],"multiple":false}]}`
+    const decoded = Schema.decodeSync(Schema.fromJsonString(AskUserMetadata))(stored)
+    expect(decoded.questions[0]?.options?.map((option) => option.label)).toEqual([
+      "A",
+      "B",
+      "C",
+      "D",
+      "E",
+    ])
+    expect(decoded.questions[0]?.header).toBe("Which of these deployment targets first?")
+  })
+})
 
 describe("AskUser Tool", () => {
   it.live("asks questions and returns answers", () => {

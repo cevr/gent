@@ -38,21 +38,6 @@ export const UsageSchema = Schema.Struct({
 })
 export type Usage = typeof UsageSchema.Type
 
-const QuestionOptionSchema = Schema.Struct({
-  label: Schema.String,
-  description: Schema.optional(Schema.String),
-})
-export type QuestionOption = typeof QuestionOptionSchema.Type
-
-export const QuestionSchema = Schema.Struct({
-  question: Schema.String,
-  header: Schema.optional(Schema.String),
-  markdown: Schema.optional(Schema.String),
-  options: Schema.optional(Schema.Array(QuestionOptionSchema)),
-  multiple: Schema.optional(Schema.Boolean),
-})
-export type Question = typeof QuestionSchema.Type
-
 // ── agent event ─────────────────────────────────────────────────────────────
 
 // The discriminated union of every event the runtime emits.

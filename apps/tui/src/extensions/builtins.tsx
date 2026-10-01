@@ -15,7 +15,6 @@ import {
 import {
   type ActiveExtensionSession,
   type AnyExtensionClientModule,
-  AskUserRenderer,
   autocompleteContribution,
   BUILTIN_TOOL_RENDERERS,
   type ClientActivitySnapshot,
@@ -25,11 +24,8 @@ import {
   CollapsedRow,
   defineClientExtension,
   formatFileRef,
-  HandoffRenderer,
-  interactionRendererContribution,
   isReferenceablePath,
   messageRendererContribution,
-  PromptRenderer,
   rankAutocompleteItems,
   readFrecencyLookup,
   recordFrecencyPick,
@@ -63,6 +59,7 @@ import builtinAgentsView from "./agents.client"
 import builtinBtw from "./btw.client"
 import builtinCache from "./cache.client"
 import builtinDelegate from "./delegate.client"
+import builtinInteractions from "./interaction-tools.client"
 import builtinWake from "./wake.client"
 import builtinThreadView from "./thread-view.client"
 
@@ -786,7 +783,8 @@ const builtinSessionMessages = defineClientExtension(SESSION_TOOLS_EXTENSION_ID,
 // ── tool renderer extensions ────────────────────────────────────────────────
 
 /**
- * Builtin tool and interaction renderers for the TUI.
+ * Builtin tool renderers for the TUI. The interaction renderers are the
+ * `@gent/interaction-tools` client extension in `interaction-tools.client.tsx`.
  */
 
 const builtinTools = defineClientExtension("@gent/tools", {
@@ -795,16 +793,6 @@ const builtinTools = defineClientExtension("@gent/tools", {
       ...BUILTIN_TOOL_RENDERERS.map((entry) =>
         rendererContribution(entry.toolNames, entry.component),
       ),
-    ),
-  ),
-})
-
-const builtinInteractions = defineClientExtension("@gent/interaction-tools", {
-  setup: Effect.succeed(
-    clientContributions(
-      interactionRendererContribution(PromptRenderer, "prompt"),
-      interactionRendererContribution(AskUserRenderer, "ask-user"),
-      interactionRendererContribution(HandoffRenderer, "handoff"),
     ),
   ),
 })

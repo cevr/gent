@@ -14,8 +14,6 @@ export {
   AgentEvent,
   EventEnvelope,
   InteractionPresented,
-  type QuestionOption,
-  QuestionSchema,
 } from "./domain/event.js"
 // One decision schema; the client names its type `ApprovalResult`.
 export {

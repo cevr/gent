@@ -2,7 +2,6 @@
 import { createEffect, createSignal, createUniqueId, For, type JSX, Show } from "solid-js"
 import { type ScrollBoxRenderable, SyntaxStyle } from "@opentui/core"
 import { Effect, Option, Schema } from "effect"
-import { type QuestionOption, QuestionSchema } from "@gent/core/protocol"
 import { useTheme } from "./theme"
 import { useScopedKeyboard, useTerminalDimensions } from "./terminal"
 import { keyHint, keyHintsLine, KeyHints } from "./ui"
@@ -15,24 +14,31 @@ import { openExternalEditor, resolveEditor } from "./os"
 // ── option list ─────────────────────────────────────────────────────────────
 
 /**
- * Shared option-list UI for interaction renderers.
- * Renders a question with options, optional markdown, freeform input, and keyboard navigation.
+ * Shared option-list UI for interaction renderers, the host's and a client
+ * extension's. Renders a question with options, optional markdown, freeform
+ * input, and keyboard navigation.
  */
 
 const markdownSyntaxStyle = SyntaxStyle.create()
+
+/** One pick of an option list. */
+interface OptionListChoice {
+  readonly label: string
+  readonly description?: string
+}
 
 interface OptionListProps {
   readonly header?: string
   readonly question: string
   readonly markdown?: string
-  readonly options?: readonly QuestionOption[]
+  readonly options?: readonly OptionListChoice[]
   readonly multiple?: boolean
   readonly progress?: string
   readonly onSubmit: (selections: readonly string[]) => void
   readonly onCancel: () => void
 }
 
-function OptionList(props: OptionListProps): JSX.Element {
+export function OptionList(props: OptionListProps): JSX.Element {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
 
@@ -339,7 +345,7 @@ const firstChoice = (selections: readonly string[]): Option.Option<string> =>
  * A yes/no pick: approved only on "yes". The first selection that is none of
  * the list's own labels is free text the reader typed, and it goes as notes.
  */
-const yesNoAnswer = (
+export const yesNoAnswer = (
   selections: readonly string[],
   labels: readonly string[],
 ): InteractionAnswer => {
@@ -351,76 +357,6 @@ const yesNoAnswer = (
     onNone: () => ({ approved }),
     onSome: (value) => ({ approved, notes: value }),
   })
-}
-
-// ── ask user renderer ───────────────────────────────────────────────────────
-
-const decodeAskUserMetadata = Schema.decodeUnknownOption(
-  Schema.Struct({ type: Schema.Literal("ask-user"), questions: Schema.Array(QuestionSchema) }),
-)
-const encodeAnswers = Schema.encodeSync(
-  Schema.fromJsonString(Schema.Array(Schema.Array(Schema.String))),
-)
-
-export function AskUserRenderer(props: InteractionRendererProps) {
-  const meta = () => decodeAskUserMetadata(props.event.metadata)
-  const questions = () =>
-    Option.getOrElse(
-      Option.map(meta(), (metadata) => metadata.questions),
-      () => [],
-    )
-  const [questionIndex, setQuestionIndex] = createSignal(0)
-  const [answers, setAnswers] = createSignal<string[][]>([])
-
-  const currentQuestion = () => Option.fromNullishOr(questions()[questionIndex()])
-
-  const handleSubmit = (selections: readonly string[]) => {
-    const nextAnswers = [...answers(), [...selections]]
-    setAnswers(nextAnswers)
-
-    if (questionIndex() < questions().length - 1) {
-      setQuestionIndex((i) => i + 1)
-    } else {
-      // All questions answered — encode as JSON for structured roundtrip
-      props.resolve({ approved: true, notes: encodeAnswers(nextAnswers) })
-    }
-  }
-
-  const progress = () => {
-    if (questions().length <= 1) return Option.none<string>()
-    return Option.some(`(${questionIndex() + 1}/${questions().length})`)
-  }
-
-  return (
-    <Show
-      when={Option.getOrUndefined(currentQuestion())}
-      keyed
-      fallback={
-        <OptionList
-          header="Question"
-          question={props.event.text}
-          options={[{ label: "Yes" }, { label: "No" }]}
-          onSubmit={(selections) => props.resolve(yesNoAnswer(selections, ["yes", "no"]))}
-          onCancel={() => props.resolve({ approved: false })}
-        />
-      }
-    >
-      {(q) => (
-        <OptionList
-          header={q.header}
-          question={q.question}
-          markdown={q.markdown}
-          options={Option.getOrUndefined(
-            Option.map(Option.fromNullishOr(q.options), (options) => [...options]),
-          )}
-          multiple={q.multiple}
-          progress={Option.getOrUndefined(progress())}
-          onSubmit={handleSubmit}
-          onCancel={() => props.resolve({ approved: false })}
-        />
-      )}
-    </Show>
-  )
 }
 
 // ── prompt renderer ─────────────────────────────────────────────────────────
