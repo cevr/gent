@@ -70,6 +70,15 @@ const goalOn = ({ client, sessionId, branchId }: GoalHarness) =>
       ),
     )
 
+const goalCommandOn = ({ client, sessionId, branchId }: GoalHarness, input: string) =>
+  client.extension.request({
+    sessionId,
+    branchId,
+    extensionId: GOAL_EXTENSION_ID,
+    capabilityId: "goal-command",
+    input,
+  })
+
 const sampleGoal: GoalState = {
   goalId: "g1",
   branchId: BranchId.make("b1"),
@@ -178,6 +187,11 @@ describe("goals", () => {
           }
           // A change the goal's state does not allow names the change and the state.
           yield* command("pause")
+          const pausedResume = yield* Effect.exit(command("resume"))
+          expect(Exit.isFailure(pausedResume)).toBe(true)
+          if (Exit.isFailure(pausedResume)) {
+            expect(Cause.pretty(pausedResume.cause)).toContain("budget is spent")
+          }
           const pausedTwice = yield* Effect.exit(command("pause"))
           expect(Exit.isFailure(pausedTwice)).toBe(true)
           if (Exit.isFailure(pausedTwice)) {
@@ -785,8 +799,8 @@ describe("goal interrupted turn", () => {
           5_000,
           "the interrupted turn is charged",
         )
-        // The person stopped the turn: the goal stays active and nothing wakes the branch.
-        expect(Option.map(charged, (goal) => goal.status)).toEqual(Option.some("active"))
+        // Stopping work pauses the durable goal until an explicit resume.
+        expect(Option.map(charged, (goal) => goal.status)).toEqual(Option.some("paused"))
         expect(Option.map(charged, (goal) => goal.continuationsUsed)).toEqual(Option.some(0))
         const snapshot = yield* client.session.getSnapshot({ sessionId, branchId })
         const goalMessages = snapshot.messages.filter(
@@ -823,6 +837,131 @@ describe("goal interrupted turn", () => {
         expect(Option.map(finalized, (goal) => goal.tokensUsed)).toEqual(Option.some(42))
       }).pipe(Effect.timeout("10 seconds")),
     12_000,
+  )
+})
+
+describe("goal stop commands", () => {
+  for (const verb of ["clear", "cancel", "stop"]) {
+    it.scopedLive(
+      `${verb} removes the goal and cannot be resumed`,
+      () =>
+        Effect.gen(function* () {
+          const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+            { ...textStep("working"), gated: true },
+          ])
+          const harness = yield* createRpcHarness({ ...e2ePreset, providerLayer })
+          yield* goalCommandOn(harness, "Write the pelican poem")
+          yield* controls.waitForCall(0)
+          yield* goalCommandOn(harness, verb).pipe(Effect.timeout("2 seconds"))
+          expect(yield* goalOn(harness)).toEqual(Option.none())
+          yield* controls.emitAll(0)
+          yield* waitFor(
+            harness.client.session.getSnapshot(harness),
+            (snapshot) => snapshot.runtime._tag === "Idle",
+            5_000,
+            "the cleared goal's last turn ends",
+          )
+          const resumed = yield* Effect.exit(goalCommandOn(harness, "resume"))
+          expect(Exit.isFailure(resumed)).toBe(true)
+          if (Exit.isFailure(resumed)) expect(Cause.pretty(resumed.cause)).toContain("No goal")
+          expect(yield* goalOn(harness)).toEqual(Option.none())
+          yield* controls.assertDone
+        }).pipe(Effect.timeout("10 seconds")),
+      12_000,
+    )
+  }
+
+  it.scopedLive(
+    "pause answers during work and resume keeps the same objective and usage",
+    () =>
+      Effect.gen(function* () {
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          { ...textStep("goal work"), gated: true },
+          { ...textStep("unrelated work"), gated: true },
+          { ...textStep("resumed work"), gated: true },
+        ])
+        const harness = yield* createRpcHarness({ ...e2ePreset, providerLayer })
+        const command = (input: string) => goalCommandOn(harness, input)
+        const idle = () =>
+          waitFor(
+            harness.client.session.getSnapshot(harness),
+            (snapshot) => snapshot.runtime._tag === "Idle",
+            5_000,
+            "the paused goal's turn ends",
+          )
+        yield* command("--budget 1000 Write the pelican poem")
+        yield* controls.waitForCall(0)
+        yield* command("pause").pipe(Effect.timeout("2 seconds"))
+        const paused = Option.getOrThrow(yield* goalOn(harness))
+        expect(paused.status).toBe("paused")
+        yield* controls.emitAll(0)
+        yield* idle()
+        expect(yield* controls.callCount).toBe(1)
+        const charged = Option.getOrThrow(yield* goalOn(harness))
+        expect(charged.status).toBe("paused")
+        expect(charged.tokensUsed).toBeGreaterThan(paused.tokensUsed)
+        expect(charged.timeUsedMs).toBeGreaterThan(paused.timeUsedMs)
+        expect(charged.pausedTurnStartedAtMs).toBeUndefined()
+        yield* harness.client.message.send({ ...harness, content: "An unrelated question" })
+        yield* controls.waitForCall(1)
+        yield* controls.emitAll(1)
+        yield* idle()
+        expect(yield* goalOn(harness)).toEqual(Option.some(charged))
+        yield* command("resume")
+        yield* controls.waitForCall(2)
+        const resumed = Option.getOrThrow(yield* goalOn(harness))
+        expect(resumed.goalId).toBe(paused.goalId)
+        expect(resumed.objective).toBe(paused.objective)
+        expect(resumed.tokensUsed).toBe(charged.tokensUsed)
+        expect(resumed.timeUsedMs).toBe(charged.timeUsedMs)
+        expect(resumed.tokenBudget).toBe(paused.tokenBudget)
+        expect(resumed.continuationsUsed).toBe(paused.continuationsUsed + 1)
+        expect(resumed.status).toBe("active")
+        yield* command("pause").pipe(Effect.timeout("2 seconds"))
+        yield* controls.emitAll(2)
+        const settled = yield* idle()
+        expect(
+          settled.messages.filter((m) => m.metadata?.customType === GOAL_CONTEXT_MESSAGE_TYPE),
+        ).toHaveLength(2)
+        yield* controls.assertDone
+      }).pipe(Effect.timeout("12 seconds")),
+    15_000,
+  )
+
+  it.scopedLive(
+    "a resume before the current turn ends leaves only one continuation",
+    () =>
+      Effect.gen(function* () {
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          { ...textStep("first pass"), gated: true },
+          { ...textStep("second pass"), gated: true },
+        ])
+        const harness = yield* createRpcHarness({ ...e2ePreset, providerLayer })
+        yield* goalCommandOn(harness, "Write the pelican poem")
+        yield* controls.waitForCall(0)
+        yield* goalCommandOn(harness, "pause").pipe(Effect.timeout("2 seconds"))
+        yield* goalCommandOn(harness, "resume").pipe(Effect.timeout("2 seconds"))
+        yield* controls.emitAll(0)
+        yield* controls.waitForCall(1)
+        expect((yield* harness.client.queue.get(harness)).followUp).toHaveLength(0)
+        yield* goalCommandOn(harness, "pause").pipe(Effect.timeout("2 seconds"))
+        yield* controls.emitAll(1)
+        const settled = yield* waitFor(
+          harness.client.session.getSnapshot(harness),
+          (snapshot) => snapshot.runtime._tag === "Idle",
+          5_000,
+          "the resumed goal stops after pause",
+        )
+        expect(
+          settled.messages.filter((m) => m.metadata?.customType === GOAL_CONTEXT_MESSAGE_TYPE),
+        ).toHaveLength(2)
+        expect(yield* controls.callCount).toBe(2)
+        expect(Option.map(yield* goalOn(harness), (goal) => goal.status)).toEqual(
+          Option.some("paused"),
+        )
+        yield* controls.assertDone
+      }).pipe(Effect.timeout("12 seconds")),
+    15_000,
   )
 })
 
