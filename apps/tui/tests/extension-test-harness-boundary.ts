@@ -1,6 +1,6 @@
 import { Deferred, Effect, Option, type Scope } from "effect"
 import { createSignal } from "solid-js"
-import type { BranchId, EventEnvelope, Model, SessionId } from "@gent/core/protocol"
+import { BranchId, type EventEnvelope, type Model, SessionId } from "@gent/core/protocol"
 import type {
   ClientActivitySnapshot,
   ClientContextDeps,
@@ -17,15 +17,19 @@ import { makeClientRuntime } from "../src/extensions/host"
 import { createMockClient, createMockRuntime } from "./render-harness-boundary"
 
 type ActiveClientSession = { readonly sessionId: SessionId; readonly branchId: BranchId }
-// eslint-disable-next-line effect/noNullish -- Test harness ref mirrors the SDK's absent active-session state.
-type ActiveClientSessionRef = { value: ActiveClientSession | undefined }
+
+/** The session in view when a test names none: the client always holds one. */
+const TEST_SESSION: ActiveClientSession = {
+  sessionId: SessionId.make("test-session"),
+  branchId: BranchId.make("test-branch"),
+}
 
 interface ClientExtensionHarnessOptions {
   readonly transport?: ClientShellTransport
   /** Shell callbacks a test wants to observe; the rest stay no-ops. */
   readonly shell?: Partial<ClientShell>
-  readonly currentSession?: () => Option.Option<ActiveClientSession>
-  readonly activeSession?: ActiveClientSessionRef
+  /** The session in view; `TEST_SESSION` when the test names none. */
+  readonly currentSession?: () => ActiveClientSession
   readonly requestDeferred?: Deferred.Deferred<unknown, never>
   /** Answers every extension request; it sees the session the request names. */
   readonly requestEffect?: (request: ActiveClientSession) => Effect.Effect<unknown, Error>
@@ -64,7 +68,7 @@ export const testClientContextDeps = (
   }))
   return {
     transport: Option.getOrElse(Option.fromUndefinedOr(deps.transport), () =>
-      makeClientTestTransport({ currentSession: () => Option.none() }),
+      makeClientTestTransport(),
     ),
     workspace: { sessionCwd: Effect.succeed(workspace.cwd), ...workspace },
     shell: {
@@ -122,7 +126,7 @@ export const makeClientTestTransport = (
     runtime,
     currentSession: Option.getOrElse(
       Option.fromUndefinedOr(opts.currentSession),
-      () => () => Option.fromNullishOr(opts.activeSession?.value),
+      () => () => TEST_SESSION,
     ),
     onExtensionStateChanged: () => () => {},
     onSessionEvent: (cb) => {
@@ -154,7 +158,8 @@ export const makeUnreachableTransport = (): ClientShellTransport => ({
   runtime: new Proxy(createMockRuntime(), {
     get: (_target, method) => () => throwOnAccess(`runtime.${String(method)}`),
   }),
-  currentSession: () => Option.none(),
+  // The session in view is the shell's own state, not a transport call.
+  currentSession: () => TEST_SESSION,
   onExtensionStateChanged: () => () => {},
   onSessionEvent: () => () => {},
   modelCatalog: () => Option.none(),

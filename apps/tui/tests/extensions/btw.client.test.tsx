@@ -65,8 +65,7 @@ const makeServer = () => {
 }
 
 const onSession = {
-  currentSession: () =>
-    Option.some({ sessionId: SessionId.make("s"), branchId: BranchId.make("s-branch") }),
+  currentSession: () => ({ sessionId: SessionId.make("s"), branchId: BranchId.make("s-branch") }),
 }
 
 describe("fork pane", () => {
@@ -142,7 +141,7 @@ describe("fork pane", () => {
           // The first read (the pane following its session) stays out.
           progress: () => Deferred.await(hold).pipe(Effect.as(Option.none())),
         }),
-        { currentSession: () => Option.some(current()) },
+        { currentSession: () => current() },
       )
       controller.ask("why?")
       setCurrent(second)
@@ -177,7 +176,7 @@ describe("fork pane", () => {
               }).pipe(Effect.as(Option.none())),
           }),
           {
-            currentSession: () => Option.some(current()),
+            currentSession: () => current(),
             shell: { notify: (message) => notices.push(message) },
           },
         )
@@ -305,7 +304,7 @@ describe("fork pane", () => {
           progress: () => Effect.succeedNone,
         }),
         {
-          currentSession: () => Option.some(current()),
+          currentSession: () => current(),
           shell: { cast: queue.cast, notify: (message) => notices.push(message) },
         },
       )
@@ -352,7 +351,7 @@ describe("fork pane across a session switch", () => {
           },
         })
         const transport = {
-          ...makeClientTestTransport({ currentSession: () => Option.some(current()) }),
+          ...makeClientTestTransport({ currentSession: () => current() }),
           client,
         }
         const runtime = makeClientExtensionRuntime({ transport })

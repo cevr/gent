@@ -101,16 +101,15 @@ const branchId = BranchId.make("branch-resource")
  */
 const identityMemo = (record: () => { readonly name: string }) =>
   createMemo(
-    (): Option.Option<SessionIdentity> => {
+    (): SessionIdentity => {
       // Track the record so a rename re-runs this body, exactly as the client does.
       record()
-      return Option.some({ sessionId, branchId })
+      return { sessionId, branchId }
     },
-    Option.none<SessionIdentity>(),
+    { sessionId, branchId },
     {
-      equals: Option.makeEquivalence<SessionIdentity>(
-        (left, right) => left.sessionId === right.sessionId && left.branchId === right.branchId,
-      ),
+      equals: (left, right) =>
+        left.sessionId === right.sessionId && left.branchId === right.branchId,
     },
   )
 
@@ -167,8 +166,10 @@ describe("sessionQuery", () => {
           fetch: (session) => Effect.succeed(String(session.sessionId)),
         }),
         {
-          currentSession: () =>
-            Option.some({ sessionId: SessionId.make(active()), branchId: BranchId.make("b") }),
+          currentSession: () => ({
+            sessionId: SessionId.make(active()),
+            branchId: BranchId.make("b"),
+          }),
         },
       )
       yield* waitUntil(() => query.value() === "a", "first session")
@@ -201,8 +202,10 @@ describe("sessionQuery", () => {
           },
         }),
         {
-          currentSession: () =>
-            Option.some({ sessionId: SessionId.make(active()), branchId: BranchId.make("b") }),
+          currentSession: () => ({
+            sessionId: SessionId.make(active()),
+            branchId: BranchId.make("b"),
+          }),
         },
       )
       yield* waitUntil(() => reads.length === 1, "a's read started")

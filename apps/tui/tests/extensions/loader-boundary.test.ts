@@ -1004,8 +1004,8 @@ export default {
  *
  * This proves the contribution-time adapter path:
  * Effect items() → runtime.runPromise → typed transport → decoded reply.
- * Success returns the items; a missing session yields a typed
- * `NoActiveSessionError` that the helper reports and turns into no rows.
+ * Success returns the items; a failed request is reported by the helper and
+ * turns into no rows.
  */
 
 class AutocompleteTestError extends Schema.TaggedError<AutocompleteTestError>()(
@@ -1020,22 +1020,17 @@ const { ListThingsRpc } = defineRequests(ExtensionId.make("@test/autocomplete"),
     execute: () => Effect.succeed([]),
   }),
 })
-type FakeSession = Option.Option<{ sessionId: SessionId; branchId: BranchId }>
 const makeFakeTransport = (
   opts: {
-    readonly currentSession?: () => FakeSession
     readonly requestReply?: unknown
     readonly requestEffect?: () => Effect.Effect<unknown, Error>
   } = {},
 ): ClientShellTransport =>
   makeClientTestTransport({
-    currentSession:
-      opts.currentSession ??
-      (() =>
-        Option.some({
-          sessionId: SessionId.make("sess-1"),
-          branchId: BranchId.make("branch-1"),
-        })),
+    currentSession: () => ({
+      sessionId: SessionId.make("sess-1"),
+      branchId: BranchId.make("branch-1"),
+    }),
     requestEffect: opts.requestEffect,
     requestReply: opts.requestReply ?? [],
   })
@@ -1058,7 +1053,7 @@ describe("autocomplete Effect items() through the client transport", () => {
           Effect.gen(function* () {
             const { transport: t } = yield* ClientContext
             // Touch the transport so the test proves the service resolved.
-            expect(Option.isSome(t.currentSession())).toBe(true)
+            expect(t.currentSession().sessionId).toBe(SessionId.make("sess-1"))
             return [
               { id: filter, label: `got:${filter}` },
             ] satisfies ReadonlyArray<AutocompleteItem>
@@ -1075,25 +1070,13 @@ describe("autocomplete Effect items() through the client transport", () => {
       yield* Effect.promise(() => runtime.dispose())
     }),
   )
-  it.live("transport.request fails with NoActiveSessionError when no session active", () =>
-    Effect.gen(function* () {
-      const transport = makeFakeTransport({ currentSession: () => Option.none() })
-      const runtime = makeTestRuntime(transport)
-      const exit = yield* Effect.exit(inRuntime(runtime, listThings))
-      expect(exit._tag).toBe("Failure")
-      if (exit._tag === "Failure") {
-        // The cause should carry the typed NoActiveSessionError.
-        const causeStr = String(exit.cause)
-        expect(causeStr).toContain("NoActiveSessionError")
-      }
-      yield* Effect.promise(() => runtime.dispose())
-    }),
-  )
   it.live("a contribution whose transport call fails is reported and contributes no rows", () =>
     Effect.gen(function* () {
       // One broken contribution must not empty the popup for the rest, so the
       // helper names it to the caller's log and returns its rows as none.
-      const transport = makeFakeTransport({ currentSession: () => Option.none() })
+      const transport = makeFakeTransport({
+        requestEffect: () => Effect.fail(new AutocompleteTestError({ message: "transport down" })),
+      })
       const runtime = makeTestRuntime(transport)
       const contribution: AutocompleteContribution = {
         prefix: "$",
@@ -1112,7 +1095,7 @@ describe("autocomplete Effect items() through the client transport", () => {
       )
       expect(result).toEqual([])
       expect(failures.length).toBe(1)
-      expect(failures[0]).toContain("NoActiveSessionError")
+      expect(failures[0]).toContain("transport down")
       yield* Effect.promise(() => runtime.dispose())
     }),
   )
@@ -1162,9 +1145,10 @@ describe("autocomplete Effect items() through the client transport", () => {
         runtime,
         ClientContext.use((context) => Effect.succeed(context.transport)),
       )
-      expect(resolved.currentSession()).toEqual(
-        Option.some({ sessionId: SessionId.make("sess-1"), branchId: BranchId.make("branch-1") }),
-      )
+      expect(resolved.currentSession()).toEqual({
+        sessionId: SessionId.make("sess-1"),
+        branchId: BranchId.make("branch-1"),
+      })
       expect("run" in resolved).toBe(false)
       expect("cast" in resolved).toBe(false)
       yield* Effect.promise(() => runtime.dispose())
@@ -1519,11 +1503,10 @@ export default defineClientExtension("@test/dup", {
       transport: {
         client: createMockClient({ extension: { request: () => Effect.void } }),
         runtime: createMockRuntime(),
-        currentSession: () =>
-          Option.some({
-            sessionId: SessionId.make("test-session-id"),
-            branchId: BranchId.make("test-branch-id"),
-          }),
+        currentSession: () => ({
+          sessionId: SessionId.make("test-session-id"),
+          branchId: BranchId.make("test-branch-id"),
+        }),
         onExtensionStateChanged: () => () => {},
         onSessionEvent: () => () => {},
         modelCatalog: () => Option.none(),

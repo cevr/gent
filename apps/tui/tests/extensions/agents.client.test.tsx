@@ -26,6 +26,9 @@ import {
   provideClientServices,
 } from "../extension-test-harness-boundary"
 
+/** A session in view that no listed row is. */
+const ELSEWHERE = { sessionId: SessionId.make("elsewhere"), branchId: BranchId.make("elsewhere") }
+
 // ── agents controller ───────────────────────────────────────────────────────
 
 /**
@@ -75,7 +78,6 @@ describe("Agents controller detail", () => {
               onSome: (gate) => Deferred.await(gate),
             }),
         ),
-        { currentSession: () => Option.none() },
       )
 
       // Select the first row, then move on before its reply arrives.
@@ -103,7 +105,6 @@ describe("Agents controller detail", () => {
           () => Effect.succeed([]),
           () => Deferred.await(gate),
         ),
-        { currentSession: () => Option.none() },
       )
 
       controller.select(Option.some(row("only")))
@@ -131,8 +132,10 @@ describe("Agents controller reload", () => {
           () => Effect.never,
         ),
         {
-          currentSession: () =>
-            Option.some({ sessionId: SessionId.make("only"), branchId: BranchId.make("only") }),
+          currentSession: () => ({
+            sessionId: SessionId.make("only"),
+            branchId: BranchId.make("only"),
+          }),
         },
       )
 
@@ -163,8 +166,10 @@ describe("Agents controller listing scope", () => {
             () => Effect.never,
           ),
           {
-            currentSession: () =>
-              Option.some({ sessionId: SessionId.make("here"), branchId: BranchId.make("here") }),
+            currentSession: () => ({
+              sessionId: SessionId.make("here"),
+              branchId: BranchId.make("here"),
+            }),
             shell: { pane },
           },
         )
@@ -193,7 +198,6 @@ describe("Agents controller stored rows", () => {
             return Effect.succeed(detail(1))
           },
         ),
-        { currentSession: () => Option.none() },
       )
       controller.select(Option.some(row("stored", false)))
       expect(asked).toEqual([])
@@ -233,7 +237,7 @@ describe("Agents pane refresh while open", () => {
           () => Effect.sync(listed),
           () => Effect.sync(() => ({ ...detail(turns), status })),
         ).pipe(Effect.provideService(Clock.Clock, clock)),
-        { currentSession: () => Option.some(parentKey), shell: { pane } },
+        { currentSession: () => parentKey, shell: { pane } },
       )
       controller.refresh("")
       yield* waitUntil(() => controller.rows().length === 2, "first listing")
@@ -278,7 +282,7 @@ describe("Agents pane refresh while open", () => {
             }),
           () => Effect.succeed(detail(1)),
         ).pipe(Effect.provideService(Clock.Clock, clock)),
-        { currentSession: () => Option.some(parentKey) },
+        { currentSession: () => parentKey },
       )
       controller.refresh("")
       yield* waitUntil(() => controller.rows().length === 1, "first listing")
@@ -321,7 +325,7 @@ describe("Agents pane refresh while open", () => {
               return detail(detailReads)
             }),
         ).pipe(Effect.provideService(Clock.Clock, clock)),
-        { currentSession: () => Option.some(parentKey), shell: { pane } },
+        { currentSession: () => parentKey, shell: { pane } },
       )
       controller.refresh("")
       yield* waitUntil(() => controller.rows().length === 1, "first listing")
@@ -373,7 +377,7 @@ describe("Agents pane refresh while open", () => {
                 return { ...detail(1), status: "Running", costUsd: detailReads / 100 }
               }),
           ).pipe(Effect.provideService(Clock.Clock, clock)),
-          { currentSession: () => Option.some(parentKey), shell: { pane } },
+          { currentSession: () => parentKey, shell: { pane } },
         )
         controller.refresh("")
         yield* waitUntil(() => controller.rows().length === 1, "first listing")
@@ -435,7 +439,7 @@ describe("Agents pane refresh while open", () => {
               },
             ),
         ).pipe(Effect.provideService(Clock.Clock, clock)),
-        { currentSession: () => Option.some(parentKey), shell: { pane } },
+        { currentSession: () => parentKey, shell: { pane } },
       )
       controller.refresh("")
       yield* waitUntil(() => controller.rows().length === 1, "first listing")
@@ -480,10 +484,10 @@ describe("Agents pane refresh while open", () => {
             () => Effect.never,
           ).pipe(Effect.provideService(Clock.Clock, clock)),
           {
-            currentSession: () => Option.some(parentKey),
+            currentSession: () => parentKey,
             shell: { pane },
             transport: {
-              ...makeClientTestTransport({ currentSession: () => Option.some(parentKey) }),
+              ...makeClientTestTransport({ currentSession: () => parentKey }),
               onExtensionStateChanged: (cb) => {
                 pulses.add(cb)
                 return () => {
@@ -559,7 +563,7 @@ describe("Agents pane navigation", () => {
           open={open()}
           controller={{
             rows: () => [parent, child],
-            current: () => Option.none(),
+            current: () => ELSEWHERE,
             error: () => Option.none(),
             loading: () => false,
             refresh: () => {},
@@ -598,7 +602,7 @@ describe("Agents pane navigation", () => {
           open={open()}
           controller={{
             rows: () => [rowPane("agents-root", "Alpha", 0)],
-            current: () => Option.none(),
+            current: () => ELSEWHERE,
             error: () => Option.none(),
             loading: () => false,
             refresh: (query) => queries.push(query),
@@ -645,11 +649,10 @@ describe("Agents pane navigation", () => {
             open={true}
             controller={{
               rows,
-              current: () =>
-                Option.some({
-                  sessionId: SessionId.make("agents-root"),
-                  branchId: BranchId.make("agents-root-branch"),
-                }),
+              current: () => ({
+                sessionId: SessionId.make("agents-root"),
+                branchId: BranchId.make("agents-root-branch"),
+              }),
               error: () => Option.none(),
               loading: () => false,
               refresh: () => {},
@@ -700,7 +703,7 @@ describe("Agents pane navigation", () => {
           open={true}
           controller={{
             rows: () => [parent, child],
-            current: () => Option.none(),
+            current: () => ELSEWHERE,
             error: () => Option.none(),
             loading: () => false,
             refresh: () => {},
@@ -760,7 +763,7 @@ describe("Agents pane navigation", () => {
           open={true}
           controller={{
             rows: () => [busy],
-            current: () => Option.none(),
+            current: () => ELSEWHERE,
             error: () => Option.none(),
             loading: () => false,
             refresh: () => {},
@@ -802,7 +805,7 @@ describe("Agents pane navigation", () => {
           open={open()}
           controller={{
             rows: () => [rowPane("toggle", "Alpha", 0)],
-            current: () => Option.none(),
+            current: () => ELSEWHERE,
             error: () => Option.none(),
             loading: () => false,
             refresh: () => {},
@@ -845,7 +848,7 @@ describe("Agents pane delete", () => {
           open={true}
           controller={{
             rows: () => [rowPane("doomed", "Alpha", 0)],
-            current: () => Option.none(),
+            current: () => ELSEWHERE,
             error: () => Option.none(),
             loading: () => false,
             refresh: () => {},
@@ -908,7 +911,7 @@ describe("Agents pane reopen", () => {
           },
         ),
         {
-          currentSession: () => Option.some({ sessionId: live.sessionId, branchId: live.branchId }),
+          currentSession: () => ({ sessionId: live.sessionId, branchId: live.branchId }),
         },
       )
 
@@ -960,7 +963,7 @@ describe("Agents pane framing", () => {
               open={true}
               controller={{
                 rows: () => [idle],
-                current: () => Option.none(),
+                current: () => ELSEWHERE,
                 error: () => Option.none(),
                 loading: () => false,
                 refresh: () => {},
@@ -1029,7 +1032,7 @@ describe("Agents pane framing", () => {
             open={true}
             controller={{
               rows: () => [wide],
-              current: () => Option.none(),
+              current: () => ELSEWHERE,
               error: () => Option.none(),
               loading: () => false,
               refresh: () => {},
@@ -1079,7 +1082,7 @@ describe("Agents pane framing", () => {
             open={true}
             controller={{
               rows: () => [aged],
-              current: () => Option.none(),
+              current: () => ELSEWHERE,
               error: () => Option.none(),
               loading: () => false,
               refresh: () => {},
@@ -1131,7 +1134,7 @@ describe("Agents pane framing", () => {
             open={true}
             controller={{
               rows: () => [aged],
-              current: () => Option.none(),
+              current: () => ELSEWHERE,
               error: () => Option.none(),
               loading: () => false,
               refresh: () => {},
@@ -1192,7 +1195,7 @@ describe("Agents pane framing", () => {
             open={true}
             controller={{
               rows: () => [rowPane("erred", "Alpha", 0)],
-              current: () => Option.none(),
+              current: () => ELSEWHERE,
               error: () => Option.some("listing failed"),
               loading: () => false,
               refresh: () => {},
@@ -1267,7 +1270,7 @@ describe("agents pane rows", () => {
           open={true}
           controller={{
             rows: () => listed,
-            current: () => Option.none(),
+            current: () => ELSEWHERE,
             error: () => Option.none(),
             loading: () => false,
             refresh: () => {},
@@ -1434,8 +1437,7 @@ describe("idle middle parent", () => {
   ]
   const controllerOver = (open: () => boolean) => ({
     rows: () => nested,
-    current: () =>
-      Option.some({ sessionId: SessionId.make("main"), branchId: BranchId.make("main-branch") }),
+    current: () => ({ sessionId: SessionId.make("main"), branchId: BranchId.make("main-branch") }),
     error: () => Option.none(),
     loading: () => false,
     refresh: () => {},
@@ -1551,11 +1553,10 @@ describe("Subagent tray", () => {
           <SubagentTray
             controller={{
               rows: () => rows,
-              current: () =>
-                Option.some({
-                  sessionId: SessionId.make("root"),
-                  branchId: BranchId.make("root-branch"),
-                }),
+              current: () => ({
+                sessionId: SessionId.make("root"),
+                branchId: BranchId.make("root-branch"),
+              }),
               error: () => Option.none(),
               loading: () => false,
               refresh: (query) => {
@@ -1600,11 +1601,10 @@ describe("Subagent tray", () => {
           <SubagentTray
             controller={{
               rows: () => wide,
-              current: () =>
-                Option.some({
-                  sessionId: SessionId.make("root"),
-                  branchId: BranchId.make("root-branch"),
-                }),
+              current: () => ({
+                sessionId: SessionId.make("root"),
+                branchId: BranchId.make("root-branch"),
+              }),
               error: () => Option.none(),
               loading: () => false,
               refresh: () => {},
@@ -1629,8 +1629,7 @@ describe("Subagent tray", () => {
         <SubagentTray
           controller={{
             rows: () => rows,
-            current: () =>
-              Option.some({ sessionId: SessionId.make("child-b"), branchId: BranchId.make("b") }),
+            current: () => ({ sessionId: SessionId.make("child-b"), branchId: BranchId.make("b") }),
             error: () => Option.none(),
             loading: () => false,
             refresh: () => {},
@@ -1683,7 +1682,7 @@ describe("Agents controller across a session switch", () => {
       const gate = yield* Deferred.make<ReadonlyArray<AgentRowEntry>>()
 
       // The shell starts on "first"; the test moves it while the fetch is out.
-      let active = Option.some(key("first"))
+      let active = key("first")
 
       const controller = yield* provideClientServices(
         makeAgentsController(
@@ -1695,7 +1694,7 @@ describe("Agents controller across a session switch", () => {
 
       // Fetch for "first" goes out, then the shell switches to "second".
       controller.refresh("")
-      active = Option.some(key("second"))
+      active = key("second")
 
       // The in-flight reply carries the previous session's rows.
       yield* Deferred.succeed(gate, [rowStaleReply("first")])
@@ -1714,7 +1713,7 @@ describe("Agents controller across a session switch", () => {
         ["ab", second],
       ])
 
-      const active = Option.some(key("only"))
+      const active = key("only")
       const controller = yield* provideClientServices(
         makeAgentsController(
           ({ query }) =>
@@ -1745,7 +1744,7 @@ describe("Agents controller across a session switch", () => {
     Effect.gen(function* () {
       const gate = yield* Deferred.make<ReadonlyArray<AgentRowEntry>>()
 
-      let active = Option.some(key("first"))
+      let active = key("first")
       const controller = yield* provideClientServices(
         makeAgentsController(
           () => Deferred.await(gate),
@@ -1756,7 +1755,7 @@ describe("Agents controller across a session switch", () => {
 
       controller.refresh("")
       expect(controller.loading()).toBe(true)
-      active = Option.some(key("second"))
+      active = key("second")
 
       yield* Deferred.succeed(gate, [rowStaleReply("first")])
       yield* Effect.yieldNow

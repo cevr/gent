@@ -218,7 +218,7 @@ describe("thread pane", () => {
           controller={{
             windows: () => [base, second],
             sessions: () => 1,
-            current: () => Option.some({ sessionId, branchId }),
+            current: () => ({ sessionId, branchId }),
             error: () => Option.none(),
             loading: () => false,
             refresh: () => {},
@@ -263,7 +263,7 @@ describe("Thread controller across a session switch", () => {
     Effect.gen(function* () {
       const gate = yield* Deferred.make<ReadonlyArray<Session>>()
 
-      let active = Option.some(key("first"))
+      let active = key("first")
 
       const controller = yield* provideClientServices(
         makeThreadController(
@@ -275,7 +275,7 @@ describe("Thread controller across a session switch", () => {
       )
 
       controller.refresh()
-      active = Option.some(key("second"))
+      active = key("second")
 
       yield* Deferred.succeed(gate, [
         new Session({

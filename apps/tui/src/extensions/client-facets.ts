@@ -25,7 +25,7 @@ import {
   type GentNamespacedClient,
 } from "@gent/core/protocol"
 import type { GentRuntime } from "@gent/sdk"
-import { omitUndefined, type CapabilityRef } from "@gent/core/extensions/api"
+import type { CapabilityRef } from "@gent/core/extensions/api"
 import { createEffect, createRoot, createSignal, on } from "solid-js"
 import type { ToolRenderer } from "../tool-renderers"
 import type { Command } from "../commands"
@@ -135,16 +135,17 @@ export interface ExtensionAgentDetail {
  * with `makeClientRuntime`, and `loadTuiExtensions` runs each setup on it.
  */
 export interface ClientTransport {
-  /** Active (sessionId, branchId); `None` before a session is mounted. */
-  readonly currentSession: () => Option.Option<ActiveExtensionSession>
+  /**
+   * The (sessionId, branchId) in view. The client starts with a session and
+   * only ever moves to another, so there is no time without one. A reactive
+   * read: it changes only when the session or the branch moves.
+   */
+  readonly currentSession: () => ActiveExtensionSession
   readonly request: <Input, Output>(
     ref: CapabilityRef<Input, Output>,
     input: Input,
     activeSession?: ActiveExtensionSession,
-  ) => Effect.Effect<
-    Output,
-    NoActiveSessionError | ClientTransportRequestError | ClientTransportReplyDecodeError
-  >
+  ) => Effect.Effect<Output, ClientTransportRequestError | ClientTransportReplyDecodeError>
   /** Subscribe to `ExtensionStateChanged` pulses from the active session.
    *  Returns an unsubscribe function. Multiple subscribers receive each
    *  pulse independently. Widgets use this to invalidate cached state
@@ -235,18 +236,17 @@ const transportFacet = (payload: ClientShellTransport): ClientTransport => ({
   // Drivers belong to the active session's profile: its project drivers count.
   driverSet: ({ agentName, driverId }) =>
     shellRead(payload, "driver.set", (client) =>
-      client.driver.set({ agentName, driver: { id: driverId }, ...activeSessionPayload(payload) }),
+      client.driver.set({
+        agentName,
+        driver: { id: driverId },
+        sessionId: payload.currentSession().sessionId,
+      }),
     ).pipe(Effect.asVoid),
   driverClear: (input) =>
     shellRead(payload, "driver.clear", (client) => client.driver.clear(input)).pipe(Effect.asVoid),
 })
 
 // ── request helper ────────────────────────────────────────────────────────
-
-class NoActiveSessionError extends Schema.TaggedError<NoActiveSessionError>()(
-  "NoActiveSessionError",
-  {},
-) {}
 
 class ClientTransportRequestError extends Schema.TaggedError<ClientTransportRequestError>()(
   "ClientTransportRequestError",
@@ -268,27 +268,15 @@ class ClientTransportReplyDecodeError extends Schema.TaggedError<ClientTransport
   },
 ) {}
 
-const currentOrActiveSession = (
-  transport: ClientShellTransport,
-  activeSession?: ActiveExtensionSession,
-): Effect.Effect<ActiveExtensionSession, NoActiveSessionError> => {
-  const session = Option.orElse(Option.fromNullishOr(activeSession), transport.currentSession)
-  if (Option.isNone(session)) return Effect.fail(new NoActiveSessionError())
-  return Effect.succeed(session.value)
-}
-
 const requestExtensionAt = <Input, Output>(
   transport: ClientShellTransport,
   ref: CapabilityRef<Input, Output>,
   input: Input,
   activeSession?: ActiveExtensionSession,
-): Effect.Effect<
-  Output,
-  NoActiveSessionError | ClientTransportRequestError | ClientTransportReplyDecodeError,
-  never
-> =>
+): Effect.Effect<Output, ClientTransportRequestError | ClientTransportReplyDecodeError, never> =>
   Effect.gen(function* () {
-    const session = yield* currentOrActiveSession(transport, activeSession)
+    // A request names its session, or goes to the one in view.
+    const session = Option.getOrElse(Option.fromNullishOr(activeSession), transport.currentSession)
     const reply = yield* Effect.tryPromise({
       try: () =>
         transport.runtime.run(
@@ -319,14 +307,6 @@ const requestExtensionAt = <Input, Output>(
           }),
       ),
     )
-  })
-
-/** `{ sessionId }` of the active session, or `{}` before one exists. */
-const activeSessionPayload = (transport: ClientShellTransport) =>
-  omitUndefined({
-    sessionId: Option.getOrUndefined(
-      Option.map(transport.currentSession(), (session) => session.sessionId),
-    ),
   })
 
 /** One shell RPC read, with its failure named by the RPC it came from. */
@@ -565,7 +545,7 @@ export const sessionQuery = <A>(opts: {
       const [loading, setLoading] = createSignal(false)
 
       const isCurrent = (session: ActiveExtensionSession): boolean =>
-        Option.exists(transport.currentSession(), (now) => sameSession(now, session))
+        sameSession(transport.currentSession(), session)
 
       const settle = (session: ActiveExtensionSession, write: () => void) => {
         setLoading(false)
@@ -577,25 +557,20 @@ export const sessionQuery = <A>(opts: {
 
       // The session is read when the read starts, so a read queued behind a
       // switch asks the session the shell moved to.
-      const refresh = coalescedRead(shell.cast, () =>
-        Option.match(transport.currentSession(), {
-          onNone: () => Effect.void,
-          onSome: (session) => {
-            setLoading(true)
-            return opts.fetch(session).pipe(
-              Effect.match({
-                onFailure: (failure) =>
-                  settle(session, () => setError(Option.some(failure.message))),
-                onSuccess: (value) =>
-                  settle(session, () => {
-                    setStored(Option.some({ session, value }))
-                    setError(Option.none())
-                  }),
+      const refresh = coalescedRead(shell.cast, () => {
+        const session = transport.currentSession()
+        setLoading(true)
+        return opts.fetch(session).pipe(
+          Effect.match({
+            onFailure: (failure) => settle(session, () => setError(Option.some(failure.message))),
+            onSuccess: (value) =>
+              settle(session, () => {
+                setStored(Option.some({ session, value }))
+                setError(Option.none())
               }),
-            )
-          },
-        }),
-      )
+          }),
+        )
+      })
 
       // `currentSession` is the client's identity accessor, so this fires only
       // when the session or the branch moves, never for a rename or a model change.

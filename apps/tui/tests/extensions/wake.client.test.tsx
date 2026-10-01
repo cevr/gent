@@ -161,7 +161,7 @@ describe("wake tray reads", () => {
         for (const cb of pulses) cb({ ...session, extensionId })
       }
       const options = {
-        currentSession: () => Option.some(session),
+        currentSession: () => session,
         requestEffect: () =>
           Queue.offer(reads, void 0).pipe(
             Effect.as({ now: 0, entries: [] } satisfies WakePendingType),

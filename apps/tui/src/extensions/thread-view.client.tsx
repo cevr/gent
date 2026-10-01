@@ -242,7 +242,7 @@ interface Loaded {
 interface ThreadController {
   readonly windows: () => ReadonlyArray<ThreadWindow>
   readonly sessions: () => number
-  readonly current: () => Option.Option<{ sessionId: string; branchId: string }>
+  readonly current: () => { readonly sessionId: string; readonly branchId: string }
   readonly error: () => Option.Option<string>
   readonly loading: () => boolean
   readonly refresh: () => void
@@ -358,12 +358,10 @@ export function ThreadPane(props: {
   const [cursor, setCursor] = createSignal(Option.none<ThreadWindow>())
 
   const windows = () => props.controller.windows()
-  const isCurrent = (window: ThreadWindow): boolean =>
-    Option.match(props.controller.current(), {
-      onNone: () => false,
-      onSome: (active) =>
-        active.sessionId === window.sessionId && active.branchId === window.branchId,
-    })
+  const isCurrent = (window: ThreadWindow): boolean => {
+    const active = props.controller.current()
+    return active.sessionId === window.sessionId && active.branchId === window.branchId
+  }
 
   // The same framing the slash-command popup and the agents pane use: ruled
   // off top and bottom under the composer, so a row budgets the picker's

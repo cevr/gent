@@ -58,12 +58,11 @@ import { ref } from "@gent/core/extensions/api"
 /** Descendants of `root` at any depth, in the server's parent-before-child order. */
 const subtreeRows = (
   rows: ReadonlyArray<AgentRowEntry>,
-  root: Option.Option<{ readonly sessionId: string }>,
+  root: { readonly sessionId: string },
 ): ReadonlyArray<AgentRowEntry> => {
-  if (Option.isNone(root)) return []
-  const known = new Set<string>([root.value.sessionId])
+  const known = new Set<string>([root.sessionId])
   const descendants: Array<AgentRowEntry> = []
-  let pending = rows.filter((row) => row.sessionId !== root.value.sessionId)
+  let pending = rows.filter((row) => row.sessionId !== root.sessionId)
   for (;;) {
     const next = pending.filter(
       (row) => Predicate.isNotUndefined(row.parentSessionId) && known.has(row.parentSessionId),
@@ -139,7 +138,7 @@ export function SubagentTray(props: { controller: AgentsController }) {
   // Switching sessions changes whose subtree the tray lists; refetch for it.
   createEffect(
     on(
-      () => Option.getOrUndefined(Option.map(props.controller.current(), (row) => row.sessionId)),
+      () => props.controller.current().sessionId,
       () => props.controller.refresh(""),
     ),
   )
@@ -197,7 +196,7 @@ const AGENTS_VIEW_EXTENSION_ID = "@gent/agents-view"
 interface AgentsController {
   readonly rows: () => ReadonlyArray<AgentRowEntry>
   /** The loop the shell is currently on, so the pane can mark and preselect it. */
-  readonly current: () => Option.Option<ActiveExtensionSession>
+  readonly current: () => ActiveExtensionSession
   readonly error: () => Option.Option<string>
   readonly loading: () => boolean
   readonly refresh: (query: string) => void
@@ -291,13 +290,10 @@ export const makeAgentsController = (
     // The open pane lists the workspace under the reader's filter. The closed
     // pane leaves only the tray, which draws the current session's subtree,
     // so it reads that subtree alone: its cost follows the subtree, not the
-    // number of stored sessions. With no current session it has nothing to draw.
+    // number of stored sessions.
     const read = (): Effect.Effect<ReadonlyArray<AgentRowEntry>, { readonly message: string }> => {
       if (open()) return fetchRows({ query })
-      return Option.match(transport.currentSession(), {
-        onNone: () => Effect.succeed(empty),
-        onSome: (current) => fetchRows({ query, root: current.sessionId }),
-      })
+      return fetchRows({ query, root: transport.currentSession().sessionId })
     }
     const listing = yield* sessionQuery({
       initial: empty,
@@ -535,11 +531,10 @@ export function AgentsPane(props: {
   // The row a first Ctrl+X armed; the second press on it deletes, any other key disarms.
   const [armed, setArmed] = createSignal(Option.none<string>())
 
-  const isCurrent = (row: AgentRowEntry): boolean =>
-    Option.match(props.controller.current(), {
-      onNone: () => false,
-      onSome: (active) => active.sessionId === row.sessionId && active.branchId === row.branchId,
-    })
+  const isCurrent = (row: AgentRowEntry): boolean => {
+    const active = props.controller.current()
+    return active.sessionId === row.sessionId && active.branchId === row.branchId
+  }
 
   // Filtering is the server's job — it owns the same search the projection
   // tests cover — so typing refetches rather than filtering a local copy.

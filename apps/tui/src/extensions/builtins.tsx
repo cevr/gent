@@ -342,20 +342,14 @@ export const builtinFiles = defineClientExtension("@gent/files-ui", {
      */
     interface Asker {
       readonly key: string
-      readonly session: Option.Option<ActiveExtensionSession>
+      readonly session: ActiveExtensionSession
     }
     const askingSession = (): Asker => {
       const session = transport.currentSession()
-      return {
-        key: Option.match(session, { onNone: () => "", onSome: (s) => String(s.sessionId) }),
-        session,
-      }
+      return { key: String(session.sessionId), session }
     }
     const fetchListing = ({ key: session, session: asked }: Asker, generation: number) =>
-      Option.match(asked, {
-        onNone: () => Effect.succeed<ReadonlyArray<string>>([]),
-        onSome: (active) => transport.request(ref(FilesRpc.List), {}, active),
-      }).pipe(
+      transport.request(ref(FilesRpc.List), {}, asked).pipe(
         Effect.map((paths) => paths.filter(isReferenceablePath)),
         // A failed listing offers nothing until the popup opens again.
         Effect.orElseSucceed((): ReadonlyArray<string> => []),

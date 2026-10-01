@@ -837,7 +837,7 @@ const setupWithCatalog = (initial: Option.Option<ReadonlyArray<Model>>) =>
     const session = { sessionId, branchId }
     const [catalog, setCatalog] = createSignal(initial)
     const contributions = yield* provideClientServices(cacheExtension.setup, {
-      currentSession: () => Option.some(session),
+      currentSession: () => session,
       sessionEventSubscribers: subscribers,
       modelCatalog: catalog,
     })
@@ -992,7 +992,7 @@ describe("cache client extension", () => {
       const subscribers = new Set<(envelope: EventEnvelope) => void>()
       const session = { sessionId, branchId }
       const contributions = yield* provideClientServices(cacheExtension.setup, {
-        currentSession: () => Option.some(session),
+        currentSession: () => session,
         sessionEventSubscribers: subscribers,
         modelCatalog: () => Option.some(models),
       })
