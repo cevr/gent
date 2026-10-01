@@ -652,7 +652,10 @@ Shape:
   `Model.kind: "classifier"`, so they share its id, auth, env credential and
   catalog; the TUI picker leaves them out, and the turn refuses one by name
   (`ModelContextCapabilityFailure.ClassifierModel`) before any chat
-  `resolveModel`, whichever agent, config or override named it.
+  `resolveModel`, whichever agent, config or override named it. A driver
+  declares `resolveDecisionModel` only when it lists a classifier, so the
+  cell shows its `models.decide` guideline when such a driver has a stored or
+  env credential, with no catalog read.
   `DecisionModelResolver`
   (`runtime/provider.ts`, in the loop's runtime services) picks the named
   catalog classifier. With none named it takes a classifier whose driver has a
