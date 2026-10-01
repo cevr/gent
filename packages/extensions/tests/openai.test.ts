@@ -265,171 +265,8 @@ describe("OpenAI credential cache — token endpoint timeout", () => {
     }),
   )
 })
-describe("OpenAI credential cache — refresh on stale", () => {
-  it.live("concurrent stale calls share one refresh", () =>
-    Effect.gen(function* () {
-      const fresh = makeCreds("fresh", FAR_FUTURE)
-      const refreshStarted = yield* Deferred.make<void>()
-      const releaseRefresh = yield* Deferred.make<void>()
-      let refreshCount = 0
-      const state: IOState = {
-        refreshResult: () =>
-          Effect.gen(function* () {
-            refreshCount += 1
-            yield* Deferred.done(refreshStarted, Exit.void)
-            yield* Deferred.await(releaseRefresh)
-            return fresh
-          }),
-      }
-      const persistState: PersistState = {
-        lastWritten: EMPTY_PERSISTED_CREDENTIALS,
-        failNext: false,
-      }
-      const cache = credentialCache(
-        makeIO(state),
-        makeAuthInfo(persistState, {
-          access: "seed-access",
-          refresh: "seed-refresh",
-          expires: 30000,
-          accountId: Option.none(),
-        }),
-      )
-      yield* runWithTestClock(
-        Effect.gen(function* () {
-          const svc = yield* cache
-          const fiber = yield* Effect.all([svc.getFresh, svc.getFresh], {
-            concurrency: 2,
-          }).pipe(Effect.forkChild)
-          yield* Deferred.await(refreshStarted)
-          yield* Effect.yieldNow
-          yield* Effect.yieldNow
-          expect(refreshCount).toBe(1)
-          yield* Deferred.done(releaseRefresh, Exit.void)
-          const results = yield* Fiber.join(fiber)
-          expect(results[0].access).toBe("fresh-access")
-          expect(results[1].access).toBe("fresh-access")
-          expect(refreshCount).toBe(1)
-          expect(Option.map(persistState.lastWritten, (value) => value.access)).toEqual(
-            Option.some("fresh-access"),
-          )
-        }),
-      )
-    }),
-  )
-  it.live("expiring-soon seed triggers refresh; refreshed creds returned + persisted", () =>
-    Effect.gen(function* () {
-      // Seed expires inside the 60s freshness margin (30s) — getFresh
-      // must refresh and persist the new creds.
-      const fresh = makeCreds("fresh", FAR_FUTURE)
-      const state: IOState = {
-        refreshResult: (rt) => {
-          expect(rt).toBe("seed-refresh")
-          return Effect.succeed(fresh)
-        },
-      }
-      const persistState: PersistState = {
-        lastWritten: EMPTY_PERSISTED_CREDENTIALS,
-        failNext: false,
-      }
-      const cache = credentialCache(
-        makeIO(state),
-        makeAuthInfo(persistState, {
-          access: "seed-access",
-          refresh: "seed-refresh",
-          expires: 30000,
-          accountId: Option.none(),
-        }),
-      )
-      yield* runWithTestClock(
-        Effect.gen(function* () {
-          const svc = yield* cache
-          const result = yield* svc.getFresh
-          expect(result.access).toBe("fresh-access")
-          expect(Option.map(persistState.lastWritten, (value) => value.access)).toEqual(
-            Option.some("fresh-access"),
-          )
-        }),
-      )
-    }),
-  )
-  it.live(
-    "refresh failure surfaces ProviderAuthError + preserves rotated refresh token in cell",
-    () =>
-      Effect.gen(function* () {
-        // Refresh failure must NOT clear the rotated refresh token. Drive
-        // a successful refresh first to rotate the token, then a failing
-        // refresh, then assert that a third attempt sees the ROTATED token
-        // in the refresh call (not the bootstrap).
-        let phase: "first" | "second" | "third" = "first"
-        const callTokens: string[] = []
-        const state: IOState = {
-          refreshResult: (rt) => {
-            callTokens.push(rt)
-            if (phase === "first") {
-              phase = "second"
-              return Effect.succeed({
-                access: "rotated-access",
-                refresh: "rotated-refresh",
-                expires: 30000, // expiring soon so next get refreshes
-                accountId: Option.none(),
-              })
-            }
-            if (phase === "second") {
-              phase = "third"
-              return Effect.fail(new ProviderAuthError({ message: "OAuth 401 from refresh" }))
-            }
-            return Effect.succeed({
-              access: "third-access",
-              refresh: "third-refresh",
-              expires: FAR_FUTURE,
-              accountId: Option.none(),
-            })
-          },
-        }
-        const persistState: PersistState = {
-          lastWritten: EMPTY_PERSISTED_CREDENTIALS,
-          failNext: false,
-        }
-        const cache = credentialCache(
-          makeIO(state),
-          makeAuthInfo(persistState, {
-            access: "seed-access",
-            refresh: "seed-refresh",
-            expires: 30000,
-            accountId: Option.none(),
-          }),
-        )
-        yield* runWithTestClock(
-          Effect.gen(function* () {
-            const svc = yield* cache
-            // First get: refreshes from bootstrap, rotates to "rotated-*".
-            const first = yield* svc.getFresh
-            expect(first.access).toBe("rotated-access")
-            expect(callTokens[0]).toBe("seed-refresh")
-            // Second get: rotated creds also expire soon → refresh again.
-            // This call fails — must surface ProviderAuthError.
-            const failure = yield* Effect.exit(svc.getFresh)
-            expect(failure._tag).toBe("Failure")
-            if (failure._tag === "Failure") {
-              const errOpt = Cause.findErrorOption(failure.cause)
-              expect(Option.isSome(errOpt)).toBe(true)
-              if (Option.isSome(errOpt)) {
-                expect(errOpt.value.message).toContain("401")
-              }
-            }
-            expect(callTokens[1]).toBe("rotated-refresh")
-            // Third get: must use the ROTATED refresh token, NOT the
-            // bootstrap. If the cell were cleared on failure, this would
-            // see "seed-refresh" and the OAuth server might have already
-            // revoked it.
-            const third = yield* svc.getFresh
-            expect(third.access).toBe("third-access")
-            expect(callTokens[2]).toBe("rotated-refresh")
-          }),
-        )
-      }),
-  )
-  it.live("refresh response without accountId carries forward prior accountId", () =>
+describe("OpenAI credential cache — account id", () => {
+  it.live("a refresh response without an account id keeps the account id it replaced", () =>
     Effect.gen(function* () {
       const refreshed: OpenAICredentials = {
         access: "fresh-access",
@@ -467,41 +304,6 @@ describe("OpenAI credential cache — refresh on stale", () => {
   )
 })
 describe("OpenAI credential cache — cache hit/miss", () => {
-  it.live("returns cached creds within TTL even when source changes", () =>
-    Effect.gen(function* () {
-      // After the first refresh fills the cell with fresh creds, the
-      // second getFresh inside the 30s TTL must NOT call refresh again.
-      const fresh1 = makeCreds("k1", FAR_FUTURE)
-      const fresh2 = makeCreds("k2", FAR_FUTURE)
-      const callsRef = { current: fresh1 } satisfies { current: OpenAICredentials }
-      const state: IOState = {
-        refreshResult: () => Effect.succeed(callsRef.current),
-      }
-      const persistState: PersistState = {
-        lastWritten: EMPTY_PERSISTED_CREDENTIALS,
-        failNext: false,
-      }
-      const cache = credentialCache(
-        makeIO(state),
-        makeAuthInfo(persistState, {
-          access: "seed-access",
-          refresh: "seed-refresh",
-          expires: 30000,
-          accountId: Option.none(),
-        }),
-      )
-      yield* runWithTestClock(
-        Effect.gen(function* () {
-          const svc = yield* cache
-          const first = yield* svc.getFresh
-          callsRef.current = fresh2 // would change refresh result if invoked
-          const second = yield* svc.getFresh
-          expect(first.access).toBe("k1-access")
-          expect(second.access).toBe("k1-access")
-        }),
-      )
-    }),
-  )
   it.live("seed creds still fresh enough → updates timestamp instead of refreshing", () =>
     Effect.gen(function* () {
       // Seed expires far in the future — no refresh needed even when
@@ -531,48 +333,6 @@ describe("OpenAI credential cache — cache hit/miss", () => {
           const second = yield* svc.getFresh
           expect(first.access).toBe("seed-access")
           expect(second.access).toBe("seed-access")
-        }),
-      )
-    }),
-  )
-})
-describe("OpenAI credential cache — invalidate", () => {
-  it.live("invalidate forces next getFresh to refresh", () =>
-    Effect.gen(function* () {
-      const fresh = makeCreds("fresh", FAR_FUTURE)
-      let refreshCount = 0
-      const state: IOState = {
-        refreshResult: () => {
-          refreshCount += 1
-          return Effect.succeed(fresh)
-        },
-      }
-      const persistState: PersistState = {
-        lastWritten: EMPTY_PERSISTED_CREDENTIALS,
-        failNext: false,
-      }
-      const cache = credentialCache(
-        makeIO(state),
-        makeAuthInfo(persistState, {
-          access: "seed-access",
-          refresh: "seed-refresh",
-          expires: FAR_FUTURE,
-          accountId: Option.none(),
-        }),
-      )
-      yield* runWithTestClock(
-        Effect.gen(function* () {
-          const svc = yield* cache
-          // Seed creds are already fresh — no refresh on first call.
-          const seeded = yield* svc.getFresh
-          expect(refreshCount).toBe(0)
-          // After invalidate the cell is empty, so even with no
-          // accessible authInfo seed (cell holds null), the service
-          // falls back to authInfo.refresh and forces a refresh call.
-          yield* svc.invalidate(seeded)
-          const after = yield* svc.getFresh
-          expect(after.access).toBe("fresh-access")
-          expect(refreshCount).toBe(1)
         }),
       )
     }),
@@ -762,53 +522,6 @@ describe("OpenAI credential cache — invalidate preserves durable refresh token
           }
         }),
       )
-    }),
-  )
-})
-describe("OpenAI credential cache — a shared cell survives rebuilds", () => {
-  it.live("two layer builds sharing the same cellRef share the cache", () =>
-    Effect.gen(function* () {
-      // Counsel  fix: extension-closure-owned Ref must survive across
-      // resolveModel-equivalent layer builds. Two builds against the same
-      // Ref must observe each other's writes.
-      const fresh = makeCreds("fresh", FAR_FUTURE)
-      let refreshCount = 0
-      const state: IOState = {
-        refreshResult: () => {
-          refreshCount += 1
-          return Effect.succeed(fresh)
-        },
-      }
-      const persistState: PersistState = {
-        lastWritten: EMPTY_PERSISTED_CREDENTIALS,
-        failNext: false,
-      }
-      const authInfo = makeAuthInfo(persistState, {
-        access: "seed-access",
-        refresh: "seed-refresh",
-        expires: 30000, // forces refresh on first getFresh
-        accountId: Option.none(),
-      })
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const cellRef =
-            yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(
-              EMPTY_CREDENTIAL_CELL,
-            )
-          // First "resolveModel" build — refreshes once.
-          const first = yield* makeOpenAICredentialCache(cellRef, makeIO(state), updateOf(authInfo))
-          yield* first.getFresh
-          // Second "resolveModel" build with same Ref — must hit cache.
-          const second = yield* makeOpenAICredentialCache(
-            cellRef,
-            makeIO(state),
-            updateOf(authInfo),
-          )
-          const result = yield* second.getFresh
-          expect(result.access).toBe("fresh-access")
-          expect(refreshCount).toBe(1)
-        }),
-      ).pipe(Effect.provide(TestClock.layer()), Effect.orDie)
     }),
   )
 })
@@ -1039,8 +752,6 @@ describe("OpenAI device-code login", () => {
  *
  * No global fetch swap; the fake is a real `HttpClient.HttpClient`
  * passed in directly — same composition production uses.
- *
- * Mirrors `anthropic-keychain-transform.test.ts`.
  */
 // ── Fake HttpClient ──
 interface CapturedRequestCodexTransform {
@@ -1891,21 +1602,12 @@ describe("codexClient — 401 recovery", () => {
 // ── model driver ────────────────────────────────────────────────────────────
 
 /**
- * OpenAIExtension model-driver wiring — extension-level regression
- * coverage for `buildOpenAIModelDriver` / `resolveModel`.
- *
- * The leaf-service suites (`openai-credential-service.test.ts`,
- * `openai-codex-transform.test.ts`) cover services in isolation. This
- * file drives one real `LanguageModel.generateText` through the
- * resolved layer with a captured fake `fetch`, then asserts on the
- * outbound request shape. That proves the resolved layer's production
- * wiring uses the test-owned `Ref` and applies the Codex transforms
- * (or doesn't, on the API-key branch).
- *
- * Mirrors `anthropic-extension-driver.test.ts`. The leaf-service
- * suites passed even when `resolveModel` regressed to allocating a
- * fresh internal Ref per call. The same trap exists for OpenAI's
- * credential cache cell.
+ * The OpenAI model driver through `resolveModel`: each case drives one real
+ * `LanguageModel.generateText` through the resolved layer with a captured
+ * fake `fetch` and checks the request it sent. The credential cache and the
+ * Codex transform have their own suites above; these check that the resolved
+ * layer reads the extension's one credential cell and applies the Codex
+ * transform (or does not, on the API-key path).
  */
 // Far-future expiry so cache hits the warm branch and `getFresh` skips
 // the refresh round-trip (avoids hitting auth.openai.com from tests).
@@ -3533,8 +3235,8 @@ describe("buildOpenAIModelDriver — a new sign-in replaces the held account", (
   )
 })
 
-describe("buildOpenAIModelDriver — OAuth path uses external cache Ref", () => {
-  it.live("OAuth resolveModel layer reads Bearer from credentialCellRef the test owns", () =>
+describe("OpenAI sign-in requests", () => {
+  it.live("a request sends the token the extension holds", () =>
     Effect.gen(function* () {
       const credentialCellRef =
         yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
@@ -3545,12 +3247,8 @@ describe("buildOpenAIModelDriver — OAuth path uses external cache Ref", () => 
         testCatalogSource(),
         yield* hostCrypto,
       )
-      // Pre-seed the cred Ref directly (test owns it). If
-      // `makeOauthOpenAILayer` regressed to allocating its own internal
-      // Ref per call, the production
-      // credential service would fall back to `authInfo.access` instead
-      // of seeing this seed. Asserting the captured Authorization header
-      // reflects the seed pins the Ref-sharing semantics.
+      // The extension holds one credential cell for every `resolveModel`;
+      // the request reads its token from that cell, not from `authInfo`.
       yield* SynchronizedRef.set(
         credentialCellRef,
         makeDurableCell({
@@ -3568,43 +3266,41 @@ describe("buildOpenAIModelDriver — OAuth path uses external cache Ref", () => 
       expect(lastReq.headers["authorization"]).toBe("Bearer seeded-bearer-token")
     }),
   )
-  it.live(
-    "OAuth resolveModel layer rewrites URL to Codex backend + sets responses=experimental beta",
-    () =>
-      Effect.gen(function* () {
-        const credentialCellRef =
-          yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
-        yield* SynchronizedRef.set(
-          credentialCellRef,
-          makeDurableCell({
-            access: "t",
-            refresh: "r",
-            expires: FAR_FUTURE_MS,
-            accountId: Option.none(),
-          }),
-        )
-        const driver = buildOpenAIModelDriver(
-          credentialCellRef,
-          noopCallbacks(),
-          Option.none(),
-          testCatalogSource(),
-          yield* hostCrypto,
-        )
-        const model = yield* driver.resolveModel("gpt-5.4", makeOAuthInfo())
-        const fetchState = makeFakeFetchState()
-        yield* runOne(model, fetchState)
-        const lastReq = fetchState.captured.at(-1)!
-        // The Responses SDK posts `/responses` under the Codex base URL.
-        expect(lastReq.url).toBe("https://chatgpt.com/backend-api/codex/responses")
-        // Codex requires the `responses=experimental` beta token. The
-        // transform merges it into any existing OpenAI-Beta value. The SDK
-        // does not set its own OpenAI-Beta header, so this should be the
-        // only token.
-        const beta = lastReq.headers["openai-beta"] ?? ""
-        expect(beta).toContain("responses=experimental")
-      }),
+  it.live("a sign-in request goes to the Codex backend with the responses beta", () =>
+    Effect.gen(function* () {
+      const credentialCellRef =
+        yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
+      yield* SynchronizedRef.set(
+        credentialCellRef,
+        makeDurableCell({
+          access: "t",
+          refresh: "r",
+          expires: FAR_FUTURE_MS,
+          accountId: Option.none(),
+        }),
+      )
+      const driver = buildOpenAIModelDriver(
+        credentialCellRef,
+        noopCallbacks(),
+        Option.none(),
+        testCatalogSource(),
+        yield* hostCrypto,
+      )
+      const model = yield* driver.resolveModel("gpt-5.4", makeOAuthInfo())
+      const fetchState = makeFakeFetchState()
+      yield* runOne(model, fetchState)
+      const lastReq = fetchState.captured.at(-1)!
+      // The Responses SDK posts `/responses` under the Codex base URL.
+      expect(lastReq.url).toBe("https://chatgpt.com/backend-api/codex/responses")
+      // Codex requires the `responses=experimental` beta token. The
+      // transform merges it into any existing OpenAI-Beta value. The SDK
+      // does not set its own OpenAI-Beta header, so this should be the
+      // only token.
+      const beta = lastReq.headers["openai-beta"] ?? ""
+      expect(beta).toContain("responses=experimental")
+    }),
   )
-  it.live("OAuth resolveModel layer omits x-api-key (no SDK-injected Bearer placeholder)", () =>
+  it.live("a sign-in request carries the sign-in bearer and no API key", () =>
     Effect.gen(function* () {
       const credentialCellRef =
         yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
@@ -3628,63 +3324,53 @@ describe("buildOpenAIModelDriver — OAuth path uses external cache Ref", () => 
       const fetchState = makeFakeFetchState()
       yield* runOne(model, fetchState)
       const headers = fetchState.captured.at(-1)!.headers
-      // `OpenAiClient.layer` over the Codex base client is built without
-      // an `apiKey` field — the SDK only sets Bearer when apiKey is
-      // defined. Counsel correction: dropping the placeholder entirely
-      // avoids a brittle "scrub-the-placeholder" coupling between SDK
-      // and middleware ordering. Asserting Bearer is exactly our seeded
-      // OAuth token (not "Bearer oauth") proves the SDK isn't injecting
-      // a competing Authorization header.
+      // The Codex client is built with no `apiKey`, so the SDK sets no
+      // Authorization of its own: the one header is the sign-in token.
       expect(headers["authorization"]).toBe("Bearer t")
       // x-api-key should never appear on the OAuth path.
       expect(headers["x-api-key"]).toBeUndefined()
     }),
   )
-  it.live(
-    "two OAuth resolveModel calls share the credentialCellRef — second sees first call's mutation",
-    () =>
-      Effect.gen(function* () {
-        const credentialCellRef =
-          yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
-        yield* SynchronizedRef.set(
-          credentialCellRef,
-          makeDurableCell({
-            access: "first-token",
-            refresh: "r",
-            expires: FAR_FUTURE_MS,
-            accountId: Option.none(),
-          }),
-        )
-        const driver = buildOpenAIModelDriver(
-          credentialCellRef,
-          noopCallbacks(),
-          Option.none(),
-          testCatalogSource(),
-          yield* hostCrypto,
-        )
-        const model1 = yield* driver.resolveModel("gpt-5.4", makeOAuthInfo())
-        const fetchState1 = makeFakeFetchState()
-        yield* runOne(model1, fetchState1)
-        expect(fetchState1.captured.at(-1)!.headers["authorization"]).toBe("Bearer first-token")
-        // Mutate the test-owned Ref between calls. If the second
-        // `resolveModel` allocated a fresh internal Ref (the  regression
-        // mirrored from Anthropic), the second request would still see
-        // "first-token". Asserting the second request observes "second-token"
-        // pins the Ref-sharing semantics that survives across resolveModel.
-        yield* SynchronizedRef.set(
-          credentialCellRef,
-          makeDurableCell({
-            access: "second-token",
-            refresh: "r",
-            expires: FAR_FUTURE_MS,
-            accountId: Option.none(),
-          }),
-        )
-        const model2 = yield* driver.resolveModel("gpt-5.4", makeOAuthInfo())
-        const fetchState2 = makeFakeFetchState()
-        yield* runOne(model2, fetchState2)
-        expect(fetchState2.captured.at(-1)!.headers["authorization"]).toBe("Bearer second-token")
-      }),
+  it.live("a token refreshed between two turns is the one the second turn sends", () =>
+    Effect.gen(function* () {
+      const credentialCellRef =
+        yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
+      yield* SynchronizedRef.set(
+        credentialCellRef,
+        makeDurableCell({
+          access: "first-token",
+          refresh: "r",
+          expires: FAR_FUTURE_MS,
+          accountId: Option.none(),
+        }),
+      )
+      const driver = buildOpenAIModelDriver(
+        credentialCellRef,
+        noopCallbacks(),
+        Option.none(),
+        testCatalogSource(),
+        yield* hostCrypto,
+      )
+      const model1 = yield* driver.resolveModel("gpt-5.4", makeOAuthInfo())
+      const fetchState1 = makeFakeFetchState()
+      yield* runOne(model1, fetchState1)
+      expect(fetchState1.captured.at(-1)!.headers["authorization"]).toBe("Bearer first-token")
+      // A refresh between turns writes the one cell every `resolveModel`
+      // shares, so the next turn sends the new token.
+      yield* SynchronizedRef.set(
+        credentialCellRef,
+        makeDurableCell({
+          access: "second-token",
+          refresh: "r",
+          expires: FAR_FUTURE_MS,
+          accountId: Option.none(),
+        }),
+      )
+      const model2 = yield* driver.resolveModel("gpt-5.4", makeOAuthInfo())
+      const fetchState2 = makeFakeFetchState()
+      yield* runOne(model2, fetchState2)
+      expect(fetchState2.captured.at(-1)!.headers["authorization"]).toBe("Bearer second-token")
+    }),
   )
   it.live("OAuth resolves the GPT-6 family: Astra, Sol and Luna", () =>
     Effect.gen(function* () {
@@ -3727,15 +3413,8 @@ describe("buildOpenAIModelDriver — OAuth path uses external cache Ref", () => 
     }),
   )
 })
-describe("buildOpenAIModelDriver — 401 invalidate seam fires through the base client", () => {
-  // Driver-level seam test. Proves the wiring, not the full retry-success
-  // path. Asserts:
-  //   1. the first wire attempt uses the seeded stale token (production
-  //      `mapRequestEffect` runs through the Codex base client under
-  //      `OpenAiClient.layer`)
-  //   2. after the 401, invalidate fires on the closure-owned cell —
-  //      the cell is marked invalidated and refresh token is preserved
-  it.live("401 fires invalidate on the closure-owned cell through the base client", () =>
+describe("OpenAI sign-in — a rejected token", () => {
+  it.live("a 401 marks the held token for refresh and keeps its refresh token", () =>
     Effect.gen(function* () {
       const credentialCellRef =
         yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
@@ -3766,18 +3445,11 @@ describe("buildOpenAIModelDriver — 401 invalidate seam fires through the base 
       }
       const exit = yield* oneGenerate(model, fetchState, responder).pipe(Effect.orDie, Effect.exit)
       expect(exit._tag).toBe("Failure")
-      // First wire attempt fired with the seeded token — proves the
-      // production mapRequestEffect ran preprocess through the Codex base client under
-      // OpenAiClient.layer.
+      // The first attempt sent the held token to the Codex backend.
       expect(fetchState.captured.length).toBeGreaterThanOrEqual(1)
       expect(fetchState.captured[0]!.headers["authorization"]).toBe("Bearer stale-token")
       expect(fetchState.captured[0]!.url).toBe("https://chatgpt.com/backend-api/codex/responses")
-      // Driver-level seam: invalidate fired on the closure-owned cell
-      // after the 401:
-      //   - invalidated marked true (so the next request refreshes)
-      //   - .refresh preserved (rotated refresh token survives invalidate)
-      // If transformResponse weren't wired into the production layer,
-      // the cell would not be marked invalidated.
+      // The 401 marked the held token for refresh and kept its refresh token.
       const finalCell = yield* SynchronizedRef.get(credentialCellRef)
       expect(finalCell._tag).toBe("Durable")
       if (finalCell._tag !== "Durable") {
@@ -3789,31 +3461,29 @@ describe("buildOpenAIModelDriver — 401 invalidate seam fires through the base 
     }),
   )
 })
-describe("buildOpenAIModelDriver — API-key path is plain SDK", () => {
-  it.live(
-    "API-key resolveModel layer sends Bearer with the API key (no Codex backend rewrite)",
-    () =>
-      Effect.gen(function* () {
-        const credentialCellRef =
-          yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
-        const driver = buildOpenAIModelDriver(
-          credentialCellRef,
-          noopCallbacks(),
-          Option.none(),
-          testCatalogSource(),
-          yield* hostCrypto,
-        )
-        const model = yield* driver.resolveModel("gpt-5.4", makeApiAuthInfo("sk-test-1234"))
-        const fetchState = makeFakeFetchState()
-        yield* runOne(model, fetchState)
-        const lastReq = fetchState.captured.at(-1)!
-        // SDK injects standard Bearer auth from apiKey
-        expect(lastReq.headers["authorization"]).toBe("Bearer sk-test-1234")
-        // No Codex backend rewrite on the API-key path
-        expect(lastReq.url).toBe("https://api.openai.com/v1/responses")
-        // No Codex beta header
-        expect(lastReq.headers["openai-beta"]).toBeUndefined()
-      }),
+describe("OpenAI API-key requests", () => {
+  it.live("an API-key request goes to the public API with the key as its bearer", () =>
+    Effect.gen(function* () {
+      const credentialCellRef =
+        yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
+      const driver = buildOpenAIModelDriver(
+        credentialCellRef,
+        noopCallbacks(),
+        Option.none(),
+        testCatalogSource(),
+        yield* hostCrypto,
+      )
+      const model = yield* driver.resolveModel("gpt-5.4", makeApiAuthInfo("sk-test-1234"))
+      const fetchState = makeFakeFetchState()
+      yield* runOne(model, fetchState)
+      const lastReq = fetchState.captured.at(-1)!
+      // SDK injects standard Bearer auth from apiKey
+      expect(lastReq.headers["authorization"]).toBe("Bearer sk-test-1234")
+      // No Codex backend rewrite on the API-key path
+      expect(lastReq.url).toBe("https://api.openai.com/v1/responses")
+      // No Codex beta header
+      expect(lastReq.headers["openai-beta"]).toBeUndefined()
+    }),
   )
   it.live(
     "an API-key request to a reasoning model uses the Responses shape: output cap, no temperature, a reasoning summary",

@@ -13,9 +13,8 @@ import { runToolWithCtx, testToolContext } from "@gent/core/test-utils"
  * wire format (Exa MCP over JSON or SSE).
  *
  * The seam is `HttpClient.HttpClient`: a fake client built with
- * `HttpClient.make` returns canned responses, exactly as
- * `tests/anthropic/anthropic-keychain-transform.test.ts` does. No global
- * fetch swap, no network.
+ * `HttpClient.make` returns canned responses, as the keychain client tests in
+ * `anthropic.test.ts` do. No global fetch swap, no network.
  */
 
 const ctx = testToolContext()

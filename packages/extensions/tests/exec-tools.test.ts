@@ -1415,10 +1415,8 @@ describe("BashTool execution", () => {
  * Exec-tools RPC acceptance test — exercises the `bash` tool through a real
  * agent turn (LLM emits the tool call, runtime dispatches it inside the
  * per-request scope, BunChildProcessSpawner from BunServices spawns a real
- * process). The existing `bash.test.ts` calls the executor directly via
+ * process). The tool tests above call the executor directly through
  * `runToolWithCtx`, which bypasses the scope boundary production uses.
- *
- * Maps W37 S6 C14 (audit L5-P1-2).
  */
 
 describe("ExecToolsExtension (bash) via model turn", () => {

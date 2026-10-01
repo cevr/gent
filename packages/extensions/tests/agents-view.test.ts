@@ -489,8 +489,8 @@ describe("agents view live activity", () => {
  * Agents view RPC acceptance — exercises AgentsViewExtension through the full
  * request(...) path with per-request scopes, matching production behavior.
  *
- * The projection itself is covered by pure tests in `projection.test.ts`. What
- * this file adds is the wiring: that `listSessions` and `listActiveLoops` reach
+ * The projection itself is covered by the pure tests above. This RPC block
+ * adds the wiring: that `listSessions` and `listActiveLoops` reach
  * real host facets rather than their `unavailable` defaults. Both facets die
  * when unwired, so a passing assertion here is proof the seam is connected.
  */
