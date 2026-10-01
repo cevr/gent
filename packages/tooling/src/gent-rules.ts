@@ -6,7 +6,6 @@
  *
  * - core-entry-boundary: extensions read only the authoring entries of `@gent/core`.
  * - declared-workspace-imports: a package imports only the workspace packages it declares.
- * - no-define-extension-throw: an extension factory fails through its Effect, never a throw.
  * - no-host-fact-bypass: no host global read where `effect/noGlobals` does not look.
  * - no-platform-module-export-alias: no module exports an alias of an `@effect/platform-*` binding.
  * - child-session-writer-admits: a core child-session writer admits the nesting depth first.
@@ -384,37 +383,6 @@ const dottedName = (node: AstNode | undefined): string | undefined => {
   return undefined
 }
 
-/** Locate a named property's arrow-function value inside an object literal. */
-const findArrowInObject = (objExpr: AstNode, propName: string): AstNode | undefined => {
-  if (objExpr.type !== "ObjectExpression") return undefined
-  const properties = fieldOf(objExpr, "properties")
-  if (!Array.isArray(properties)) return undefined
-  for (const propRaw of properties) {
-    if (!isAstNode(propRaw) || propRaw.type !== "Property") continue
-    const key = getNodeField(propRaw, "key")
-    if (key === undefined) continue
-    const matches =
-      (key.type === "Identifier" && getStringField(key, "name") === propName) ||
-      (key.type === "StringLiteral" && getStringField(key, "value") === propName)
-    if (!matches) continue
-    const value = getNodeField(propRaw, "value")
-    if (value === undefined) continue
-    if (value.type === "ArrowFunctionExpression" || value.type === "FunctionExpression") {
-      return value
-    }
-  }
-  return undefined
-}
-
-/** Locate a named property's arrow value in the first object-literal arg of a CallExpression. */
-const findArrowInFirstArg = (node: AstNode, propName: string): AstNode | undefined => {
-  const args = fieldOf(node, "arguments")
-  if (!Array.isArray(args) || args.length === 0) return undefined
-  const arg = args[0]
-  if (!isAstNode(arg)) return undefined
-  return findArrowInObject(arg, propName)
-}
-
 // ── a whole-object encode decides no identity ───────────────────────────────
 
 /**
@@ -752,76 +720,6 @@ const plugin: Plugin = {
           ImportExpression: reportSource,
           TSImportType: (node) => report(node, importTypeSourceOf(node)),
           CallExpression: (node) => report(node, requireSourceOf(node)),
-        }
-      },
-    },
-
-    /**
-     * Flags `throw` statements inside the body of a function passed as a
-     * `setup` property to `definePackage(...)` / `defineExtension(...)`.
-     *
-     * The factory's `setup` callback is called by the loader during extension
-     * load; a synchronous `throw` becomes a defect at the load site instead
-     * of a typed `ExtensionLoadError` on the Effect channel. The  fix
-     * (wrapping the call in `Effect.try`) routes the defect, but the lint
-     * rule prevents authors from writing the bug in the first place.
-     *
-     * Valid:   definePackage({ id, setup: () => Effect.fail(new ExtensionLoadError(...)) })
-     * Valid:   definePackage({ id, setup: () => Effect.gen(function* () { ... }) })
-     * Invalid: definePackage({ id, setup: () => { throw new Error("missing config") } })
-     *
-     * Detection: walks the first object-literal argument for a `setup` property
-     * whose value is an arrow/function expression, then reports any
-     * `ThrowStatement` directly inside that callback's body (not inside a
-     * further-nested function — those are deferred runtime calls).
-     *
-     * NOTE:  ships the rule;  introduces `definePackage` whose setup is
-     * Effect-typed, at which point this rule's bite is exact.
-     */
-    "no-define-extension-throw": {
-      create(context) {
-        const FACTORIES = new Set(["definePackage", "defineExtension"])
-        const FUNCTION_BOUNDARY_TYPES = new Set([
-          "ArrowFunctionExpression",
-          "FunctionExpression",
-          "FunctionDeclaration",
-        ])
-        const findThrowsInBody = (fn: AstNode, report: (n: AstNode) => void): void => {
-          const visit = (n: unknown): void => {
-            if (Array.isArray(n)) {
-              for (const c of n) visit(c)
-              return
-            }
-            if (!isAstNode(n)) return
-            // Stop at any nested function — those are deferred callbacks.
-            if (FUNCTION_BOUNDARY_TYPES.has(n.type)) return
-            if (n.type === "ThrowStatement") {
-              report(n)
-              return
-            }
-            for (const key in n) {
-              if (key === "type" || key === "loc" || key === "range" || key === "parent") continue
-              visit(fieldOf(n, key))
-            }
-          }
-          // Don't apply the function-boundary stop to the immediate setup body
-          // (it IS the function), only to its descendants.
-          visit(fieldOf(fn, "body"))
-        }
-        return {
-          CallExpression(node) {
-            if (node.callee.type !== "Identifier") return
-            if (!FACTORIES.has(node.callee.name)) return
-            const factoryName = node.callee.name
-            const setupFn = findArrowInFirstArg(node, "setup")
-            if (setupFn === undefined) return
-            findThrowsInBody(setupFn, (n) => {
-              context.report({
-                message: `${factoryName}'s \`setup\` callback must surface failures via the Effect channel, not throw synchronously. Use \`Effect.fail(new ExtensionLoadError({ ... }))\` so the loader can route the error.`,
-                node: n,
-              })
-            })
-          },
         }
       },
     },

@@ -10,7 +10,10 @@ Sources used:
 
 `effect-tsgo` reads the Effect diagnostics from the `@effect/language-service`
 plugin entry in `tsconfig.json`. Gent runs every rule as an error except
-`strictBooleanExpressions` and pipe-shaped suggestions. Test files inherit the
+`strictBooleanExpressions`, pipe-shaped suggestions, and the rules an oxlint
+rule holds at every site, so one site takes one suppression:
+`effect/noAsyncFunction` holds `asyncFunction` and `effect/noNodeBuiltinImport`
+holds `nodeBuiltinImport`. Test files inherit the
 same catalog, with `strictEffectProvide` disabled through an override because
 test layers intentionally provide partial worlds.
 
@@ -64,7 +67,7 @@ binary is not part of the compiler path.
 
 | Rule                       | Severity |
 | -------------------------- | -------- |
-| `asyncFunction`            | error    |
+| `asyncFunction`            | off      |
 | `cryptoRandomUUID`         | error    |
 | `cryptoRandomUUIDInEffect` | error    |
 | `extendsNativeError`       | error    |
@@ -80,7 +83,7 @@ binary is not part of the compiler path.
 | `globalTimersInEffect`     | error    |
 | `instanceOfSchema`         | error    |
 | `newPromise`               | error    |
-| `nodeBuiltinImport`        | error    |
+| `nodeBuiltinImport`        | off      |
 | `preferSchemaOverJson`     | error    |
 | `processEnv`               | error    |
 | `processEnvInEffect`       | error    |

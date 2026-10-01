@@ -121,6 +121,53 @@ describe("blanket eslint disable checker", () => {
     ])
   })
 
+  test("a directive in a block comment that spans lines is read like one on a line", () => {
+    // oxlint reads a block comment's trimmed body, so a directive on the
+    // second line of a block comment disables its rule to the end of the file.
+    const oxDirective = ["oxlint", "disable"].join("-")
+    const text = [
+      "/*",
+      `  ${oxDirective} effect/noNullish -- a reason`,
+      "*/",
+      "export const a = null",
+      "/*",
+      `  ${directive}`,
+      "*/",
+      "export const b = null",
+    ].join("\n")
+    expect(findBannedEslintDisableBlocks("sample.ts", text)).toMatchObject([
+      { file: "sample.ts", line: 2 },
+      { file: "sample.ts", line: 6 },
+    ])
+    expect(findBlanketEslintDisables("sample.ts", text)).toMatchObject([
+      { file: "sample.ts", line: 6 },
+    ])
+  })
+
+  test("a directive after JSX text with an apostrophe is read", () => {
+    // A one-letter component is JSX: its text is not a string opener that
+    // swallows the comment after the element.
+    const text = [
+      `const x = <X>it's fine</X>; /* ${directive} */`,
+      `const y = <Row>it's fine</Row>; /* ${directive} */`,
+    ].join("\n")
+    expect(findBlanketEslintDisables("sample.tsx", text)).toMatchObject([
+      { file: "sample.tsx", line: 1 },
+      { file: "sample.tsx", line: 2 },
+    ])
+  })
+
+  test("a directive spelled inside a string or after other comment text is not one", () => {
+    const text = [
+      `const a = "// ${directive}"`,
+      `const b = '/* ${directive} effect/noNullish */'`,
+      `// see the ${directive} ban`,
+      `/* note: ${directive} is banned */`,
+    ].join("\n")
+    expect(findBannedEslintDisableBlocks("sample.ts", text)).toEqual([])
+    expect(findBlanketEslintDisables("sample.ts", text)).toEqual([])
+  })
+
   test("allows block comments only in explicit fixture files", () => {
     expect(
       findBannedEslintDisableBlocks(
@@ -205,6 +252,21 @@ describe("vendor model pin guard", () => {
         "ModelId.make('openai/gpt-5.1')",
       ).length,
     ).toBe(1)
+  })
+
+  test("a model id of every shipped driver is reported", () => {
+    const pins = [
+      '"anthropic/claude-x"',
+      '"openai/gpt-x"',
+      '"opencode/jev-1.13"',
+      '"opencode-go/deepseek-v4.1-flash"',
+      '"typesafe/jev-latest"',
+    ]
+    expect(
+      findCoreVendorModelPins("packages/core/src/runtime/turn.ts", pins.join("\n")).map(
+        (finding) => finding.line,
+      ),
+    ).toEqual([1, 2, 3, 4, 5])
   })
 
   test("the declaration site, other packages and non-vendor paths are not reported", () => {
@@ -2390,8 +2452,9 @@ describe("the guards' lexer", () => {
         'mount({ cwd: pick(<text>it\'s</text>, dir), note: "/tmp/log" })',
         'mount({ cwd: pick(<box title="a/b" />, dir), note: "/tmp/log" })',
         'mount({ cwd: pick(<><text>{`it\'s`}</text></>, dir), note: "/tmp/log" })',
+        'mount({ cwd: pick(<X>it\'s</X>, dir), note: "/tmp/log" })',
       ].map(homes),
-    ).toEqual([0, 0, 0, 0, 0])
+    ).toEqual([0, 0, 0, 0, 0, 0])
   })
 
   test("a type parameter list is code, in a .tsx and a .ts file", () => {
@@ -2403,11 +2466,12 @@ describe("the guards' lexer", () => {
       homes(tsx, 'const f = <A>(a: A) => a; const env = { cwd: "/tmp" }'),
       homes(tsx, 'const f = <Row = unknown,>(x: Row) => x; const env = { cwd: "/tmp" }'),
       homes(tsx, 'const f = <Row=unknown,>(x: Row) => x; const env = { cwd: "/tmp" }'),
+      homes(tsx, 'type F = <Row>(x: Row) => Row; const env = { cwd: "/tmp" }'),
       homes(
         "apps/tui/tests/probe.test.ts",
         'const f = <Row>(a: Row) => a; const env = { cwd: "/tmp" }',
       ),
-    ]).toEqual([1, 1, 1, 1, 1, 1])
+    ]).toEqual([1, 1, 1, 1, 1, 1, 1])
   })
 
   test("a defaulted type parameter in a .tsx file hides no read after it", () => {
