@@ -19,6 +19,9 @@ import { causeMessage } from "../domain/guards.js"
 import { BunServices } from "@effect/platform-bun"
 import { GentPlatform, type RuntimeModuleSource, SignalError } from "./gent-platform.js"
 
+/** The compiled build defines this symbol; a source run leaves it undeclared. */
+declare const __GENT_COMPILED__: unknown
+
 /** The specifiers bound in this process. Bun keeps a plugin for the process lifetime. */
 const boundModules = new Set<string>()
 
@@ -70,6 +73,10 @@ export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.succeed(
     pid: Effect.sync(() => process.pid),
 
     execPath: Effect.sync(() => process.execPath),
+
+    // The one reader of the build's define. An undeclared symbol throws a
+    // ReferenceError: a source run.
+    compiled: Effect.try(() => __GENT_COMPILED__ === true).pipe(Effect.orElseSucceed(() => false)),
 
     homeDirectory: Effect.sync(() => os.homedir()),
 

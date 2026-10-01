@@ -36,12 +36,7 @@ import {
 import { runProcess, type GentExtension } from "@gent/core/extensions/api"
 import { BunHttpServer } from "@effect/platform-bun"
 import { FetchHttpClient, Headers, HttpClient, HttpRouter, HttpServer } from "effect/http"
-import {
-  BuiltinExtensionModules,
-  BuiltinExtensions,
-  CellBranchTools,
-  isCompiledBuild,
-} from "@gent/extensions"
+import { BuiltinExtensionModules, BuiltinExtensions, CellBranchTools } from "@gent/extensions"
 import type { BranchToolFeature } from "@gent/core/extensions/branch-tools"
 import type { LanguageModel } from "effect/ai"
 import { GentLogLevel, GentObservability } from "./logger.js"
@@ -125,21 +120,19 @@ type BuildFingerprintServices =
   | GentPlatform
 
 /**
- * Compute a build fingerprint from local sources (no env). A compiled gent,
- * as `compiled` reports it, names its build by the binary's mtime, wherever
- * the binary is installed; a source run by the checkout's git hash. A build
- * neither names is `"unknown"`. `resolveServer` reads it once, so the lock
- * entry and the identity endpoint name one build.
+ * This process's build fingerprint, from local sources (no env). A compiled
+ * gent (`GentPlatform.compiled`) names its build by the binary's mtime,
+ * wherever the binary is installed; a source run by the checkout's git hash.
+ * A build neither names is `"unknown"`. `resolveServer` reads it once, so the
+ * lock entry and the identity endpoint name one build.
  */
-export const buildFingerprint = (
-  compiled: Effect.Effect<boolean>,
-): Effect.Effect<string, never, BuildFingerprintServices> =>
-  Effect.gen(function* () {
+export const buildFingerprint: Effect.Effect<string, never, BuildFingerprintServices> = Effect.gen(
+  function* () {
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
     const platform = yield* GentPlatform
 
-    if (yield* compiled) {
+    if (yield* platform.compiled) {
       const info = yield* fs.stat(yield* platform.execPath).pipe(Effect.option)
       // A binary with no stat, or no mtime, names no build: two such builds
       // would otherwise share one fingerprint and attach to each other.
@@ -171,11 +164,8 @@ export const buildFingerprint = (
     if (result.length > 0) return `src-${result}`
 
     return UNKNOWN_BUILD
-  })
-
-/** This process's fingerprint: compiled-ness is the build's own define (`isCompiledBuild`). */
-export const ownBuildFingerprint: Effect.Effect<string, never, BuildFingerprintServices> =
-  buildFingerprint(isCompiledBuild)
+  },
+)
 
 // ── server-lock ─────────────────────────────────────────────────────────────
 
@@ -846,7 +836,7 @@ const resolveServerInternal = (
     const stateSpec = options.state ?? state.sqlite()
     const providerSpec = options.provider ?? provider.live()
     // Read once: the lock entry and the identity endpoint name one build.
-    const fingerprint = yield* ownBuildFingerprint
+    const fingerprint = yield* buildFingerprint
 
     // Memory state has nothing to share: owned outright, no lock.
     if (stateSpec._tag === "Memory") {
