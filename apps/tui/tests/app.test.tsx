@@ -1645,6 +1645,23 @@ describe("App draft, shell and exit keys", () => {
       expect(view.shutdowns()).toBe(0)
     }).pipe(Effect.timeout("10 seconds")),
   )
+  // The name column fits the longest name it shows; the description gives
+  // way instead.
+  it.scopedLive("the palette keeps command names whole and cuts the description", () =>
+    Effect.gen(function* () {
+      const view = yield* mountIdleSession(createMockRuntime(), { width: 80 })
+      view.setup.mockInput.pressKey("p", { ctrl: true })
+      yield* waitForFrame(view.setup, (frame) => frame.includes("Commands"), "palette")
+      yield* Effect.promise(() => view.setup.mockInput.typeText("ranking"))
+      const frame = yield* waitForFrame(
+        view.setup,
+        (next) => next.includes("› ranking"),
+        "the filtered palette",
+      )
+      expect(frame).toContain("Reset Autocomplete Ranking")
+      expect(frame).toContain("Forget which")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   it.scopedLive("ctrl+c on a draft clears it and never quits over it", () =>
     Effect.gen(function* () {
       const view = yield* mountIdleSession()

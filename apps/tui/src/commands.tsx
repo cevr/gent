@@ -489,9 +489,15 @@ export function CommandPalette() {
 
   const hasDetails = () =>
     filteredItems().some((item) => Boolean(item.description?.trim() || item.shortcut))
+  // The name column fits the longest name in view, up to 60% of the row, and
+  // the description gives way: a name is what the reader picks by.
   const labelWidth = () => {
     if (!hasDetails()) return dimensions().width
-    return Math.max(8, Math.min(24, Math.floor(dimensions().width * 0.28)))
+    const longest = filteredItems().reduce(
+      (width, item) => Math.max(width, textWidth(item.title)),
+      0,
+    )
+    return Math.max(8, Math.min(longest + 2, Math.floor(dimensions().width * 0.6)))
   }
 
   const keys = () => {
