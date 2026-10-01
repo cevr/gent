@@ -5,7 +5,6 @@ import {
   type BranchId,
   DEFAULT_AGENT_NAME,
   ModelId,
-  type ProviderId,
   ReasoningEffort,
   type SessionAdmission,
   SessionId,
@@ -51,7 +50,7 @@ import {
   useExit,
 } from "./session"
 import { useExtensionUI } from "./extensions/host"
-import { Auth } from "./auth"
+import { Auth, providerLabel } from "./auth"
 import type { StatusLabelColor, WidgetSlot } from "./extensions/client-facets.js"
 
 // ── boot flow ───────────────────────────────────────────────────────────────
@@ -232,13 +231,14 @@ const resolveStartupAgent = (input: {
 }
 
 /**
- * The required providers the headless run's agent has no credential for. A
- * headless run has no reader to sign in, so it stops before its turn.
+ * The sign-ins the headless run's agent is missing: each required provider
+ * with no credential, by the label `/auth` shows (`providerLabel`).
+ * A headless run has no reader to sign in, so it stops before its turn.
  */
-export const resolveHeadlessMissingProviders = (input: {
+export const resolveHeadlessMissingSignIns = (input: {
   client: Pick<GentNamespacedClient, "auth" | "session">
   state: HeadlessState
-}): Effect.Effect<readonly ProviderId[], GentClientRpcError> =>
+}): Effect.Effect<ReadonlyArray<string>, GentClientRpcError> =>
   Effect.gen(function* () {
     const agent = yield* sessionAgent(input.client, input.state.session)
     // The session id lets its cwd resolve project-level driver overrides.
@@ -248,7 +248,7 @@ export const resolveHeadlessMissingProviders = (input: {
     })
     return providers
       .filter((provider) => provider.required && !provider.hasKey)
-      .map((provider) => provider.provider)
+      .map((provider) => providerLabel(providers, provider.provider))
   })
 
 /** The stored session `-s` names, or the startup error that it does not exist. */
