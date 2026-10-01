@@ -112,11 +112,12 @@ export const SHELL_READ_CAP_BYTES = 8 * 1024 * 1024
  * `@file` cap (`inlineHead`). The caller sees `truncated` when the cap drops
  * output, and `savedPath` names the file holding all that was read. `ended`
  * says the output passed `SHELL_READ_CAP_BYTES`, so the command was ended
- * there and the file holds its first part.
+ * there and the file holds its first part. `exitCode` is the command's exit
+ * status, absent when the command was ended.
  */
 export const executeShell = (command: string, cwd: string, home: string) =>
   Effect.gen(function* () {
-    const { stdout, stderr, ended } = yield* runCommand(command, cwd)
+    const { stdout, stderr, ended, exitCode } = yield* runCommand(command, cwd)
     let fullOutput = stdout
     if (stderr.length > 0) fullOutput = `${stdout}\n${stderr}`
 
@@ -128,6 +129,7 @@ export const executeShell = (command: string, cwd: string, home: string) =>
         output: fullOutput.trim(),
         truncated: false,
         ended,
+        exitCode,
         savedPath: Option.none<string>(),
       }
     }
@@ -137,32 +139,39 @@ export const executeShell = (command: string, cwd: string, home: string) =>
       output: kept.join("\n").trim(),
       truncated: true,
       ended,
+      exitCode,
       savedPath,
     }
   })
 
 /**
- * The message a `!cmd` sends: the command, then its inline output. A cut
- * names the spill file, so the rest stays reachable.
+ * The message a `!cmd` sends: the command, then its inline output, then a
+ * note for each thing the output does not say. A failed command names its
+ * exit status; a cut names the spill file, so the rest stays reachable.
  */
 const shellMessage =
   (command: string) =>
   (result: Effect.Success<ReturnType<typeof executeShell>>): string => {
-    const message = `$ ${command}\n\n${result.output}`
-    if (!result.truncated) return message
-    let cut = "output truncated"
-    let saved = "full output saved to"
-    if (result.ended) {
-      cut = `output past ${SHELL_READ_CAP_BYTES} bytes not read; the command was ended`
-      saved = "the output read is saved to"
+    const notes: Array<string> = []
+    const failed = Option.filter(result.exitCode, (code) => code !== 0)
+    if (Option.isSome(failed)) notes.push(`exit ${failed.value}`)
+    if (result.truncated) {
+      let cut = "output truncated"
+      let saved = "full output saved to"
+      if (result.ended) {
+        cut = `output past ${SHELL_READ_CAP_BYTES} bytes not read; the command was ended`
+        saved = "the output read is saved to"
+      }
+      notes.push(
+        Option.match(result.savedPath, {
+          onNone: () => cut,
+          onSome: (path) => `${cut}; ${saved} ${path}`,
+        }),
+      )
     }
-    return (
-      message +
-      Option.match(result.savedPath, {
-        onNone: () => `\n\n[${cut}]`,
-        onSome: (path) => `\n\n[${cut}; ${saved} ${path}]`,
-      })
-    )
+    const message = `$ ${command}\n\n${result.output}`
+    if (notes.length === 0) return message
+    return [message.trimEnd(), ...notes.map((note) => `[${note}]`)].join("\n\n")
   }
 
 /**
@@ -220,6 +229,8 @@ interface ShellOutput {
   readonly stderr: string
   /** The output passed the cap: reading stopped there and the command was ended. */
   readonly ended: boolean
+  /** The command's exit status; absent when it was ended at the cap. */
+  readonly exitCode: Option.Option<number>
 }
 
 /**
@@ -258,8 +269,14 @@ const runCommand = (
       )
       const ended = bytes >= SHELL_READ_CAP_BYTES
       // Both streams closed: the command is done, or about to be.
-      if (!ended) yield* handle.exitCode
-      return { stdout: decodeUtf8(stdout, ended), stderr: decodeUtf8(stderr, ended), ended }
+      let exitCode = Option.none<number>()
+      if (!ended) exitCode = Option.some(yield* handle.exitCode)
+      return {
+        stdout: decodeUtf8(stdout, ended),
+        stderr: decodeUtf8(stderr, ended),
+        ended,
+        exitCode,
+      }
     }),
   ).pipe(
     Effect.mapError(
