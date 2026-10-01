@@ -50,7 +50,7 @@ import {
   useExit,
 } from "./session"
 import { useExtensionUI } from "./extensions/host"
-import { Auth } from "./auth"
+import { Auth, providerLabel } from "./auth"
 import type { StatusLabelColor, WidgetSlot } from "./extensions/client-facets.js"
 
 // ── boot flow ───────────────────────────────────────────────────────────────
@@ -232,7 +232,7 @@ const resolveStartupAgent = (input: {
 
 /**
  * The sign-ins the headless run's agent is missing: each required provider
- * with no credential, by its driver's name as `/auth` shows it, else its id.
+ * with no credential, by the label `/auth` shows (`providerLabel`).
  * A headless run has no reader to sign in, so it stops before its turn.
  */
 export const resolveHeadlessMissingSignIns = (input: {
@@ -248,9 +248,7 @@ export const resolveHeadlessMissingSignIns = (input: {
     })
     return providers
       .filter((provider) => provider.required && !provider.hasKey)
-      .map((provider) =>
-        Option.getOrElse(Option.fromUndefinedOr(provider.name), () => provider.provider),
-      )
+      .map((provider) => providerLabel(providers, provider.provider))
   })
 
 /** The stored session `-s` names, or the startup error that it does not exist. */

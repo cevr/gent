@@ -252,6 +252,22 @@ describe("startup agent and headless auth", () => {
                 source: noAuthSource,
                 authType: absent,
               },
+              {
+                provider: "mirror-a",
+                name: "Mirror",
+                hasKey: false,
+                required: true,
+                source: noAuthSource,
+                authType: absent,
+              },
+              {
+                provider: "mirror-b",
+                name: "Mirror",
+                hasKey: true,
+                required: true,
+                source: noAuthSource,
+                authType: absent,
+              },
             ])
           },
         },
@@ -270,9 +286,10 @@ describe("startup agent and headless auth", () => {
         },
         prompt: "hi",
       }
-      // Named as `/auth` names them: the driver's name, else its id.
+      // Named as `/auth` names them: the driver's name, else its id, and a
+      // name two drivers share keeps the id beside it.
       const missing = yield* resolveHeadlessMissingSignIns({ client, state })
-      expect(missing).toEqual(["OpenCode", "openai"])
+      expect(missing).toEqual(["OpenCode", "openai", "Mirror (mirror-a)"])
       expect(calls).toEqual([
         { agentName: AgentName.make("secondary"), sessionId: SessionId.make("session-a") },
       ])
