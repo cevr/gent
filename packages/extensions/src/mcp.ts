@@ -1347,6 +1347,7 @@ const serveRedirect = (
     })
     const context = yield* Layer.build(
       HttpServer.serve(app).pipe(
+        // oxlint-disable-next-line effect/noPlatformLayerOutsideEntry -- the OAuth redirect listener of `/mcp login` binds a free loopback port for one sign-in; no entry provides an HTTP server, and a user extension may start its own listener
         Layer.provideMerge(BunHttpServer.layerServer({ port: 0, hostname: "127.0.0.1" })),
       ),
     )

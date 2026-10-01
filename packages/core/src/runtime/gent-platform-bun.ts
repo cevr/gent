@@ -1,9 +1,9 @@
 /**
- * `BunGentPlatformLive` — Bun-runtime implementation of `GentPlatform`. This is
- * the ONLY file in the codebase allowed to reference the `Bun` global; the
- * platform duplication guards reject `Bun.randomUUIDv7()` everywhere else.
- * The broader no-bun lint keeps other `Bun.*` calls inside adapter-shaped
- * files, scripts, tooling, e2e harnesses, and tests.
+ * `BunGentPlatformLive` — Bun-runtime implementation of `GentPlatform`. It is the
+ * one owner of `Bun.randomUUIDv7()`. The `effect/noGlobals` project bans in
+ * `.oxlintrc.json` keep other `Bun.*` calls inside this file, the adapters,
+ * tooling, the e2e harness and tests; a deliberate exception elsewhere carries
+ * a line-local suppression with its reason.
  *
  * It is also the sole sanctioned home for raw `process.*` access (pid,
  * execPath, kill, exit) and Node `os` info — every other source file routes
@@ -56,6 +56,7 @@ export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.succeed(
   GentPlatform.of({
     bindModules: bindBunModules,
 
+    // oxlint-disable-next-line effect/noGlobals -- GentPlatform.randomId is the one owner of Bun's UUIDv7
     randomId: Effect.sync(() => Bun.randomUUIDv7()),
 
     osInfo: Effect.sync(() => ({

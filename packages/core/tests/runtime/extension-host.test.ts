@@ -3193,7 +3193,7 @@ const boundEntries = {
   effect: EffectEntry,
 }
 
-// gent/no-dynamic-imports: allow the test reads the exports of an extension file it wrote
+// oxlint-disable-next-line effect/noDynamicImports -- the test reads the exports of an extension file it wrote
 const importFile = (file: string) => Effect.promise(() => import(file))
 
 /**

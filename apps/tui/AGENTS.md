@@ -105,7 +105,7 @@ State ownership rules:
 - One workflow, one owner. If a flow has modes/transitions, give it one reducer or machine.
 - Shared caches live under a provider/registry scope, not module globals.
 - Projections stay local and dumb. Do not promote derived display state into a second writer.
-- Render-local view unions in `src/` may be plain `_tag` unions. The root `CLAUDE.md` rule requiring `Schema.TaggedUnion` covers wire and domain data; a union built inline by one projection and matched in the same file decodes nothing, so a schema would add a runtime decode to a path with no untrusted input.
+- Render-local view unions in `src/` are Schema unions too (`effect/preferSchemaTaggedUnion` reads every tag spelling): `Schema.TaggedStruct` variants with `Schema.toTaggedUnion("_tag")` for a lowercase or kebab-case tag. Test the tag with `_tag ===` on a value whose payload holds class instances; `.guards` runs the full schema check.
 - Auth is a view (`auth.tsx`); when the session controller's auth gate detects missing required providers it docks in the footer like every pane, one `PickerFrame` per screen (provider list, methods, the key line, the OAuth wait).
 - There is no router. `client.session()` says which session shows, `switchSession` is its one writer, and `App` keys the session mount on it.
 - `useRuntime()` is zero-arg — reads `useClient()` internally.

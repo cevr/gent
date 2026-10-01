@@ -15,7 +15,6 @@ import {
   findSharedTestHomes,
   findPreCommitHookFindings,
   findPackageSurfaceFindings,
-  findPlatformDuplicationViolations,
   findReadersWithoutWriters,
   findWritersWithoutReaders,
   isManifest,
@@ -69,6 +68,7 @@ const fileNames = (output: string): ReadonlyArray<string> =>
  */
 const indexEntries = (root: string, env: typeof Bun.env) =>
   Effect.promise(() =>
+    // oxlint-disable-next-line effect/noGlobals -- the guard runner is a plain Bun process that reads the git index and its environment
     Bun.$`git ls-files --stage`
       .cwd(root)
       .env({ ...env })
@@ -99,6 +99,7 @@ const diskTexts = (root: string, files: ReadonlyArray<string>) =>
   Effect.forEach(
     files,
     Effect.fnUntraced(function* (file: string) {
+      // oxlint-disable-next-line effect/noGlobals -- the guard runner is a plain Bun process that reads the git index and its environment
       const source = Bun.file(`${root}/${file}`)
       if (!(yield* Effect.promise(() => source.exists()))) return Option.none<TrackedText>()
       return Option.some({ file, text: yield* Effect.promise(() => source.text()) })
@@ -115,6 +116,7 @@ const diskTexts = (root: string, files: ReadonlyArray<string>) =>
 const indexTexts = (root: string, env: typeof Bun.env, files: ReadonlyArray<string>) =>
   Effect.map(
     Effect.promise(() =>
+      // oxlint-disable-next-line effect/noGlobals -- the guard runner is a plain Bun process that reads the git index and its environment
       Bun.$`git cat-file --batch < ${new Response(files.map((file) => `:${file}\n`).join(""))}`
         .cwd(root)
         .env({ ...env })
@@ -166,6 +168,7 @@ interface FileSet {
   readonly texts: (files: ReadonlyArray<string>) => Effect.Effect<ReadonlyArray<TrackedText>>
 }
 
+// oxlint-disable-next-line effect/noGlobals -- the guard runner is a plain Bun process that reads the git index and its environment
 export const fileSet = (root: string, env: typeof Bun.env = Bun.env): FileSet => ({
   files: indexFileNames(root, env),
   texts: (files) => trackedTexts(root, env, files),
@@ -200,6 +203,7 @@ const readInstalledJsonc = <S extends Schema.Top & { readonly DecodingServices: 
   schema: S,
 ) =>
   Effect.flatMap(
+    // oxlint-disable-next-line effect/noGlobals -- the guard runner is a plain Bun process that reads the git index and its environment
     Effect.promise(() => Bun.file(path).text()),
     (text) => decodeJsonc(path, text, schema),
   )
@@ -274,7 +278,6 @@ const ANY_FILE_FINDERS: ReadonlyArray<FileFinder> = [
 
 /** Findings a source file answers on its own, without the rest of the tree. */
 const SOURCE_FILE_FINDERS: ReadonlyArray<FileFinder> = [
-  findPlatformDuplicationViolations,
   findCoreFeatureIndependenceFindings,
   findCoreVendorModelPins,
   findE2eFixtureImportFindings,
@@ -300,6 +303,7 @@ const readInstalled = Effect.fn("Tooling.readInstalled")(function* (
 ) {
   for (const base of bases) {
     const path = `${base}node_modules/${name}/package.json`
+    // oxlint-disable-next-line effect/noGlobals -- the guard runner is a plain Bun process that reads the git index and its environment
     if (!(yield* Effect.promise(() => Bun.file(path).exists()))) continue
     const read = yield* Effect.result(readInstalledJsonc(path, InstalledPackageSchema))
     if (Result.isSuccess(read)) return Option.some(installedDependency(name, read.success.value))
@@ -490,10 +494,12 @@ export const scanTrackedTexts = (
 }
 
 const program = Effect.gen(function* () {
+  // oxlint-disable-next-line effect/noGlobals -- the guard runner is a plain Bun process that reads the git index and its environment
   const entries = yield* indexEntries(".", Bun.env)
   const indexFiles = entries.map((entry) => entry.file)
   const read = yield* trackedTexts(
     ".",
+    // oxlint-disable-next-line effect/noGlobals -- the guard runner is a plain Bun process that reads the git index and its environment
     Bun.env,
     entries.filter((entry) => !entry.symlink).map((entry) => entry.file),
   )

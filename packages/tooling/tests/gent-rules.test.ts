@@ -253,58 +253,43 @@ const CASES: ReadonlyArray<RuleCase> = [
     expectedCount: 1,
   },
   {
-    rule: "gent/no-dynamic-imports",
-    invalid: "no-dynamic-imports.invalid.ts",
-    valid: ["no-dynamic-imports.valid.ts"],
-    expectedCount: 7,
-  },
-  {
-    rule: "gent/no-bun-outside-adapter",
-    invalid: "no-bun-outside-adapter.invalid.ts",
-    // valid file lives at `runtime/gent-platform-bun.ts` — the canonical
-    // GentPlatform live impl. That path is the only allowlist entry.
-    valid: ["runtime/gent-platform-bun.ts"],
-    // 5 Bun.* member expressions + 4 process host probes + 3 os host facts
-    expectedCount: 12,
-  },
-  {
-    rule: "gent/no-bun-outside-adapter",
-    invalid: "runtime/retired-adapter.ts",
-    valid: ["runtime/fallback-adapter.ts"],
-    // Bun.Glob and Bun.randomUUIDv7, banned even in an adapter
-    expectedCount: 2,
-  },
-  {
-    rule: "gent/no-bun-outside-adapter",
-    invalid: "packages/sdk/src/host-facts.invalid.ts",
-    valid: ["packages/sdk/src/host-facts.valid.ts"],
-    // process.platform, process.pid, Bun.spawn: the SDK is not exempt
-    expectedCount: 3,
-  },
-  {
-    rule: "gent/no-bun-outside-adapter",
-    invalid: "packages/core/src/runtime/host-facts.invalid.ts",
-    valid: ["packages/core/src/runtime/host-facts.valid.ts"],
-    // Eight host module imports (os, bun, crypto and url, with and without
-    // node:, and a side-effect import), process.cwd and globalThis.process.cwd,
-    // a hand-rolled file path, a dynamic import, three require forms, and
-    // bare createHash, randomBytes and fileURLToPath calls
-    expectedCount: 18,
-  },
-  {
-    rule: "gent/no-bun-outside-adapter",
-    invalid: "packages/extensions/src/host-facts.invalid.ts",
-    // The test harness backs the platform, so it is exempt
-    valid: ["packages/core/src/test-utils/host-facts.valid.ts"],
-    // os import, process.cwd, and bare createHash, randomBytes and fileURLToPath
+    // Core reads no host global past effect/noGlobals and hand-rolls no path;
+    // the platform impl and the harness back the platform and are exempt.
+    rule: "gent/no-host-fact-bypass",
+    invalid: "packages/core/src/runtime/no-host-fact-bypass.invalid.ts",
+    valid: [
+      "packages/core/src/runtime/no-host-fact-bypass.valid.ts",
+      "runtime/gent-platform-bun.ts",
+      "packages/core/src/test-utils/no-host-fact-bypass.valid.ts",
+    ],
+    // globalThis.process, globalThis.Bun, a computed globalThis["process"],
+    // a computed Bun member, and a hand-rolled file path
     expectedCount: 5,
   },
   {
-    rule: "gent/no-bun-outside-adapter",
-    invalid: "apps/tui/src/host-facts.invalid.ts",
-    valid: ["apps/tui/src/host-facts.valid.ts"],
-    // process.execPath: the TUI host is not exempt
+    // The TUI host is a process host: only the global bypass applies.
+    rule: "gent/no-host-fact-bypass",
+    invalid: "apps/tui/src/no-host-fact-bypass.invalid.ts",
+    valid: ["packages/core/src/runtime/no-host-fact-bypass.valid.ts"],
+    // globalThis.process.execPath
     expectedCount: 1,
+  },
+  {
+    // The harness reaches Bun, but the retired members stay out in any spelling.
+    rule: "gent/no-host-fact-bypass",
+    invalid: "packages/e2e/src/no-host-fact-bypass.invalid.ts",
+    valid: ["packages/e2e/src/no-host-fact-bypass.valid.ts", "runtime/gent-platform-bun.ts"],
+    // globalThis.Bun.Glob, globalThis["Bun"].randomUUIDv7, Bun["Glob"]
+    expectedCount: 3,
+  },
+  {
+    // An exported alias carries a platform binding past the upstream layer rule.
+    rule: "gent/no-platform-module-export-alias",
+    invalid: "packages/core/src/runtime/no-platform-module-export-alias.invalid.ts",
+    valid: ["packages/core/src/runtime/no-platform-module-export-alias.valid.ts"],
+    // a named import, a namespace member, a cast module, a let, a local alias,
+    // an alias of an alias, a destructured alias, and a member of an alias
+    expectedCount: 8,
   },
   {
     // A child-session writer admits the depth in its own function, first.
@@ -331,46 +316,6 @@ const CASES: ReadonlyArray<RuleCase> = [
     // broken across lines, an encoder called where it is built, and three
     // in-place structs with a field of open or unknown encoding
     expectedCount: 16,
-  },
-  {
-    // The harness is test code; a runtime's runPromise passes both upstream rules.
-    rule: "gent/no-runtime-run-promise-in-tests",
-    invalid: "packages/core/src/test-utils/no-runtime-run-promise-in-tests.invalid.ts",
-    valid: [
-      "packages/core/tests/no-runtime-run-promise-in-tests.valid.ts",
-      "packages/core/tests/no-runtime-run-promise-in-tests-boundary.ts",
-      "packages/sdk/src/no-runtime-run-promise-in-tests.valid.ts",
-    ],
-    // a runtime call, a nested runtime, another receiver, and a piped reference
-    expectedCount: 4,
-  },
-  {
-    // Upstream skips these checks in every test module; gent only in tests/.
-    rule: "gent/no-with-wrapper-helper-in-test-code",
-    invalid: "apps/tui/integration/no-with-wrapper-helper-in-test-code.invalid.test.ts",
-    valid: ["packages/core/tests/no-with-wrapper-helper-in-test-code.valid.ts"],
-    // two callback calls; an Effect, a callback and an Effect.fn definition
-    expectedCount: 5,
-  },
-  {
-    // Upstream reports a sleep only when a statement waits on it alone.
-    rule: "gent/no-wrapped-sleep-in-tests",
-    invalid: "packages/core/src/test-utils/no-wrapped-sleep-in-tests.invalid.ts",
-    valid: ["packages/core/tests/no-wrapped-sleep-in-tests.valid.ts"],
-    // piped, raced, sequenced, bound, and an awaited Bun.sleep in a race;
-    // stored under a const, an object field, a piped const, and a Bun.sleep const
-    expectedCount: 9,
-  },
-  {
-    // Upstream reads a die message only from strings and constructor arguments.
-    rule: "gent/no-timeout-die-payload-in-tests",
-    invalid: "packages/core/src/test-utils/no-timeout-die-payload-in-tests.invalid.ts",
-    valid: [
-      "packages/core/tests/no-timeout-die-payload-in-tests.valid.ts",
-      "packages/sdk/src/no-timeout-die-payload-in-tests.valid.ts",
-    ],
-    // a typed error payload, a plain object, and an object inside a constructor
-    expectedCount: 3,
   },
 ]
 

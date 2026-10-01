@@ -1371,9 +1371,9 @@ const extensionDirectories = (
  * The gent entries re-export this module, so they are read on first use: a
  * static import here would evaluate them inside their own import cycle.
  */
-// gent/no-dynamic-imports: allow the entry imports this module; read it after both evaluate
+// oxlint-disable-next-line effect/noDynamicImports -- the entry imports this module; read it after both evaluate
 const loadExtensionApiEntry: RuntimeModuleSource = () => import("../extensions/api.js")
-// gent/no-dynamic-imports: allow the entry imports this module; read it after both evaluate
+// oxlint-disable-next-line effect/noDynamicImports -- the entry imports this module; read it after both evaluate
 const loadBranchToolsEntry: RuntimeModuleSource = () => import("../extensions/branch-tools.js")
 
 export const extensionEntryModules: ReadonlyMap<string, RuntimeModuleSource> = new Map<
@@ -1392,7 +1392,7 @@ const provideExtensionModules: Effect.Effect<void, never, GentPlatform> = GentPl
 
 // Loading — import extension files via Bun native import()
 
-// gent/no-dynamic-imports: allow extension modules are discovered from user/project files at runtime
+// oxlint-disable-next-line effect/noDynamicImports -- extension modules are discovered from user/project files at runtime
 const importExtensionModule = (filePath: string) => import(filePath)
 
 /**

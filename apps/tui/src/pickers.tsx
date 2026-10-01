@@ -37,28 +37,27 @@ import {
  * cursor once the reader has moved it. The composer previews that entry as
  * the cursor moves, keeps it on accept, and gets the draft back on cancel.
  */
-export type PromptSearchState =
-  | { readonly _tag: "closed" }
-  | {
-      readonly _tag: "open"
-      readonly draftBeforeOpen: string
-      /**
-       * The entry under the cursor. `None` until the reader moves or types —
-       * the list sits on the first entry when it opens, but the composer
-       * keeps the draft until they choose — and `None` again when nothing
-       * matches the query.
-       */
-      readonly highlighted: Option.Option<string>
-    }
-
-export const PromptSearchState = {
-  closed: (): PromptSearchState => ({ _tag: "closed" }),
-  open: (draftBeforeOpen: string): PromptSearchState => ({
-    _tag: "open",
-    draftBeforeOpen,
-    highlighted: Option.none(),
+export const PromptSearchState = Schema.Union([
+  Schema.TaggedStruct("closed", {}),
+  Schema.TaggedStruct("open", {
+    draftBeforeOpen: Schema.String,
+    /**
+     * The entry under the cursor. `None` until the reader moves or types —
+     * the list sits on the first entry when it opens, but the composer
+     * keeps the draft until they choose — and `None` again when nothing
+     * matches the query.
+     */
+    highlighted: Schema.Option(Schema.String),
   }),
-}
+]).pipe(Schema.toTaggedUnion("_tag"))
+export type PromptSearchState = Schema.Schema.Type<typeof PromptSearchState>
+
+/** The palette's closed state. */
+export const closedPromptSearch = (): PromptSearchState => PromptSearchState.cases.closed.make({})
+
+/** The palette as it opens over `draftBeforeOpen`, nothing highlighted yet. */
+export const openPromptSearch = (draftBeforeOpen: string): PromptSearchState =>
+  PromptSearchState.cases.open.make({ draftBeforeOpen, highlighted: Option.none() })
 
 export const PromptSearchEvent = Schema.TaggedUnion({
   Open: { draftBeforeOpen: Schema.String },
@@ -133,7 +132,7 @@ export function transitionPromptSearch(
   return Match.value(event).pipe(
     Match.tagsExhaustive({
       Open: (event): PromptSearchTransitionResult => ({
-        state: PromptSearchState.open(event.draftBeforeOpen),
+        state: openPromptSearch(event.draftBeforeOpen),
         effects: [],
       }),
       Highlight: (event): PromptSearchTransitionResult => {
@@ -144,14 +143,14 @@ export function transitionPromptSearch(
       Accept: (): PromptSearchTransitionResult => {
         if (state._tag !== "open") return unchanged
         return {
-          state: PromptSearchState.closed(),
+          state: closedPromptSearch(),
           effects: [preview(state), PromptSearchEffect.cases.Close.make({})],
         }
       },
       Cancel: (): PromptSearchTransitionResult => {
         if (state._tag !== "open") return unchanged
         return {
-          state: PromptSearchState.closed(),
+          state: closedPromptSearch(),
           effects: [
             PromptSearchEffect.cases.Preview.make({ text: state.draftBeforeOpen }),
             PromptSearchEffect.cases.Close.make({}),

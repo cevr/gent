@@ -1,7 +1,7 @@
 import { Effect, Option, Predicate, Record, Schema } from "effect"
 import {
   type AgentName,
-  type Branch,
+  Branch,
   type BranchId,
   DEFAULT_AGENT_NAME,
   ModelId,
@@ -12,7 +12,7 @@ import {
   type GentClientRpcError,
   type GentNamespacedClient,
   type QueueEntryInfo,
-  type Session as DomainSession,
+  Session as DomainSession,
 } from "@gent/core/protocol"
 import { type Session as ClientSession, useClient } from "./client"
 import { formatCost, formatDuration, isConversation, randomId, truncate } from "./utils"
@@ -89,14 +89,18 @@ export class AppBootstrapError extends Schema.TaggedError<AppBootstrapError>()(
 }
 
 /** Where the interactive start lands: the session, or its branch picker when it has more than one branch. */
-type InteractiveState =
-  | { _tag: "session"; session: DomainSession; prompt?: string }
-  | {
-      _tag: "branchPicker"
-      session: DomainSession
-      branches: readonly Branch[]
-      prompt?: string
-    }
+const InteractiveState = Schema.Union([
+  Schema.TaggedStruct("session", {
+    session: DomainSession,
+    prompt: Schema.optionalKey(Schema.String),
+  }),
+  Schema.TaggedStruct("branchPicker", {
+    session: DomainSession,
+    branches: Schema.Array(Branch),
+    prompt: Schema.optionalKey(Schema.String),
+  }),
+]).pipe(Schema.toTaggedUnion("_tag"))
+type InteractiveState = Schema.Schema.Type<typeof InteractiveState>
 
 /** The session a headless run sends its one prompt to. */
 export interface HeadlessState {

@@ -54,6 +54,7 @@ const spawnWithDir = (
         rows: size.rows,
         cwd: tuiDir,
         env: {
+          // oxlint-disable-next-line effect/noGlobals -- the fixture hands the test's environment to the real TUI process
           ...Bun.env,
           GENT_DATA_DIR: tempDir,
           GENT_AUTH_DIRECTORY: `${tempDir}/auth`,

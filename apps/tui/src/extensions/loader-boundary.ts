@@ -736,7 +736,7 @@ const clientOnlyModules: ReadonlyMap<string, RuntimeModuleSource> = new Map<
 ])
 
 /** Import a built client file under the name its source was bound to. */
-// gent/no-dynamic-imports: allow TUI extension modules are discovered from user/project files at runtime
+// oxlint-disable-next-line effect/noDynamicImports -- TUI extension modules are discovered from user/project files at runtime
 const importBoundClientModule = (moduleId: string) => import(moduleId)
 
 /**

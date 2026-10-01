@@ -32,18 +32,10 @@
     "gent/declared-workspace-imports": "error",
     // Custom — definePackage/defineExtension factories must not throw
     "gent/no-define-extension-throw": "error",
-    // Custom — no dynamic `import(...)` or `require(...)` (compiled-binary safety)
-    "gent/no-dynamic-imports": "error",
-    // Custom — no Bun.* outside adapter, entrypoint, tooling, and test harness boundaries
-    "gent/no-bun-outside-adapter": "error",
-    // Custom — test code runs no Effect through a runtime's runPromise (upstream gap)
-    "gent/no-runtime-run-promise-in-tests": "error",
-    // Custom — test code outside a tests/ tree has no withX helper (upstream gap)
-    "gent/no-with-wrapper-helper-in-test-code": "error",
-    // Custom — test code waits on no sleep wrapped in a larger expression (upstream gap)
-    "gent/no-wrapped-sleep-in-tests": "error",
-    // Custom — test code dies on no timeout spelled in an object payload (upstream gap)
-    "gent/no-timeout-die-payload-in-tests": "error",
+    // Custom — no host global read where effect/noGlobals does not look (upstream gap)
+    "gent/no-host-fact-bypass": "error",
+    // Custom — no module exports an alias of an @effect/platform-* binding (upstream gap)
+    "gent/no-platform-module-export-alias": "error",
     // Custom — a child-session writer admits the depth in its own function
     "gent/child-session-writer-admits": "error",
     // Custom — a whole-object JSON encode decides no identity (shipped source)
@@ -52,8 +44,57 @@
     // Effect opt-in rules: house policy the preset leaves off.
     "effect/noPositionalLogArguments": "error",
     "effect/noRunPromise": "error",
-    "effect/noWithWrapperCall": ["error", { "allow": ["withWideEvent"] }],
+    // A local `withX` fixture helper stays only in a `tests/` tree; the
+    // harness and the `integration/` trees are held to the rule.
+    "effect/noWithWrapperCall": [
+      "error",
+      { "allow": ["withWideEvent"], "testFiles": ["**/tests/**"] }
+    ],
     "effect/noTimeoutDieInTests": "error",
+    // No `import(...)` or `require(...)`: the compiled binary needs every module
+    // reachable through a static import. A deliberate load keeps a line-local
+    // suppression with its reason.
+    "effect/noDynamicImports": ["error", { "allowNamedBoundaries": false }],
+    // Only the platform entry files provide a platform layer; everything else
+    // yields the service the entry provides.
+    "effect/noPlatformLayerOutsideEntry": [
+      "error",
+      { "layers": ["BunPlatformLive", "BunGentPlatformLive"] }
+    ],
+    // `Bun.*` and host process and OS facts stay in the platform adapters, the
+    // tooling and the test code (overrides below).
+    "effect/noGlobals": [
+      "error",
+      {
+        "members": {
+          "Bun": {
+            "use": "an Effect platform service (GentPlatform, FileSystem, ChildProcessSpawner, KeyValueStore, Config); Bun stays in adapter, tooling and test code"
+          },
+          "process": {
+            "properties": ["execPath", "kill", "pid", "platform"],
+            "use": "GentPlatform or an adapter-local Effect service"
+          }
+        }
+      }
+    ],
+    "effect/noNodeBuiltinImport": [
+      "error",
+      {
+        "modules": {
+          "os": {
+            "members": ["homedir", "hostname", "release"],
+            "use": "GentPlatform (osInfo, homeDirectory)"
+          },
+          "process": {
+            "members": ["execPath", "kill", "pid", "platform"],
+            "use": "GentPlatform or an adapter-local Effect service"
+          },
+          "bun": {
+            "use": "an Effect platform service (GentPlatform, FileSystem, ChildProcessSpawner, KeyValueStore, Config); Bun stays in adapter, tooling and test code"
+          }
+        }
+      }
+    ],
 
     // TypeScript - no any
     "typescript/no-explicit-any": "error",
@@ -104,6 +145,93 @@
   },
   "overrides": [
     {
+      // Core and shipped-extension source also take their working directory
+      // and host modules through Effect services: `RuntimeEnvironment` or the
+      // extension context's `cwd`, `GentPlatform`, Effect `Crypto` and `Path`.
+      "files": ["packages/core/src/**", "packages/extensions/src/**"],
+      "rules": {
+        "effect/noGlobals": [
+          "error",
+          {
+            "members": {
+              "Bun": {
+                "use": "an Effect platform service (GentPlatform, FileSystem, ChildProcessSpawner, KeyValueStore, Config); Bun stays in adapter, tooling and test code"
+              },
+              "process": {
+                "properties": ["cwd", "execPath", "kill", "pid", "platform"],
+                "use": "GentPlatform, RuntimeEnvironment, or the extension context's cwd"
+              }
+            }
+          }
+        ],
+        "effect/noNodeBuiltinImport": [
+          "error",
+          {
+            "modules": {
+              "os": { "use": "GentPlatform (osInfo, homeDirectory)" },
+              "bun": { "use": "an Effect platform service" },
+              "crypto": {
+                "use": "Effect Crypto for random bytes and ids, GentPlatform.hash for digests"
+              },
+              "url": { "use": "Effect Path.fromFileUrl" },
+              "process": {
+                "members": ["cwd", "execPath", "kill", "pid", "platform"],
+                "use": "GentPlatform, RuntimeEnvironment, or the extension context's cwd"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      // The platform adapters, the tooling and the test code may reach Bun and
+      // the host directly. The retired `Bun.Glob` and `Bun.randomUUIDv7` stay
+      // out: the built-in `noGlobals` bans hold the global, the `bun` module
+      // ban below holds an import, and `gent/no-host-fact-bypass` holds
+      // `globalThis.Bun` and a computed member.
+      "files": [
+        "packages/core/src/runtime/gent-platform-bun.ts",
+        "**/*-adapter.ts",
+        "packages/tooling/**",
+        "packages/e2e/**",
+        "packages/core/src/test-utils/**",
+        "**/tests/**",
+        "**/integration/**",
+        "**/*.test.ts",
+        "**/*.test.tsx"
+      ],
+      "rules": {
+        "effect/noGlobals": "error",
+        "effect/noNodeBuiltinImport": [
+          "error",
+          {
+            "modules": {
+              "bun": {
+                "members": ["Glob", "randomUUIDv7"],
+                "use": "Effect FileSystem to list files, GentPlatform.randomId for ids"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      // The platform entry files: each provides the platform layer once.
+      "files": [
+        "packages/core/src/runtime/gent-platform.ts",
+        "packages/core/src/runtime/gent-platform-bun.ts",
+        "packages/core/src/host.ts",
+        "packages/sdk/src/server.ts",
+        "apps/tui/src/main.tsx",
+        "apps/tui/scripts/build.ts",
+        "packages/tooling/src/check-guide-code.ts"
+      ],
+      "rules": {
+        "effect/noPlatformLayerOutsideEntry": "off",
+        "gent/no-platform-module-export-alias": "off"
+      }
+    },
+    {
       // A `-boundary` file holds its module's Promise edges: the runtime runs
       // there, in a test's harness (.ts or .tsx) and in product code (.ts).
       "files": ["**/*-boundary.ts", "**/*-boundary.tsx"],
@@ -119,19 +247,11 @@
       }
     },
     {
-      // GentPlatform implements Bun/OS capabilities at the runtime boundary.
-      "files": ["packages/core/src/runtime/gent-platform-bun.ts"],
-      "rules": {
-        "effect/noGlobals": "off"
-      }
-    },
-    {
       // The lint plugin runs inside oxlint's Node host, not in an Effect
       // runtime, and reads fields of oxlint's untyped AST nodes by name.
       "files": ["packages/tooling/src/gent-rules.ts"],
       "rules": {
         "effect/noNodeBuiltinImport": "off",
-        "effect/noGlobals": "off",
         "effect/noNullish": "off",
         "effect/noReflectGet": "off",
         "effect/noRuntimeTypeof": "off",
@@ -142,24 +262,9 @@
       }
     },
     {
-      "files": ["packages/e2e/src/*-fixture.ts"],
-      "rules": {
-        "effect/noGlobals": "off"
-      }
-    },
-    {
       "files": ["packages/sdk/src/server.ts"],
       "rules": {
         "effect/noNodeBuiltinImport": "off"
-      }
-    },
-    {
-      // The TUI build is an Effect program run by `bun scripts/build.ts`. Only
-      // its `Bun.build` call needs the exemption; every other rule, the
-      // workspace imports included, still reads it.
-      "files": ["apps/tui/scripts/build.ts"],
-      "rules": {
-        "gent/no-bun-outside-adapter": "off"
       }
     },
     {
@@ -182,8 +287,7 @@
         "effect/noThrowStatement": "off",
         "effect/noTryCatch": "off",
         "effect/noUnknownParameters": "off",
-        "eslint/no-await-in-loop": "off",
-        "gent/no-bun-outside-adapter": "off"
+        "eslint/no-await-in-loop": "off"
       }
     },
     {
@@ -207,18 +311,11 @@
       }
     },
     {
-      "files": ["packages/tooling/src/check-guardrails.ts"],
-      "rules": {
-        "effect/noGlobals": "off"
-      }
-    },
-    {
       // The cell value reader reads any JavaScript value a cell made, null and
       // undefined included, through descriptors and the intrinsics it saves
       // from the realm's globals when it loads, before any cell runs.
       "files": ["packages/extensions/src/cell-value.ts"],
       "rules": {
-        "effect/noGlobals": "off",
         "effect/noNullish": "off",
         "effect/noObjectParameters": "off",
         "effect/noReflectApply": "off",
@@ -266,7 +363,6 @@
       // after the process's last test.
       "files": ["packages/tooling/src/test-preload.ts"],
       "rules": {
-        "effect/noGlobals": "off",
         "effect/noModuleMocks": "off",
         "effect/noNodeBuiltinImport": "off",
         "effect/noTestLifecycleHooks": "off"

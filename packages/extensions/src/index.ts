@@ -123,6 +123,7 @@ export const BuiltinExtensionModules: ReadonlyMap<string, () => object> = new Ma
   ["@effect/ai-openai", () => EffectAiOpenAi],
   ["@effect/ai-openai-compat", () => EffectAiOpenAiCompat],
   ["@effect/ai-typesafe", () => EffectAiTypeSafe],
+  // oxlint-disable-next-line effect/noPlatformLayerOutsideEntry -- a user extension resolves @effect/platform-bun here to share the instances a shipped extension imports; it provides no layer
   ["@effect/platform-bun", () => EffectPlatformBun],
   ["effect", () => EffectRoot],
   ["effect/ai", () => EffectAi],

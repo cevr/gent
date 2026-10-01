@@ -5,13 +5,7 @@ import { createContext, createMemo, For, type JSX as SolidJSX, Show, useContext 
 import { buildSyntaxStyle, useTheme } from "./theme"
 import { useClient } from "./client"
 import { GutterText, ToolCallIdentityProvider, ToolFrame } from "./ui"
-import {
-  formatHeadTail,
-  headTail,
-  lineCount,
-  type OutputCut,
-  splitLines,
-} from "@gent/core/protocol"
+import { formatHeadTail, headTail, lineCount, OutputCut, splitLines } from "@gent/core/protocol"
 import {
   type ActivityOperation,
   CellOperationReceipts,
@@ -63,6 +57,26 @@ export interface ToolCall {
   /** Where a reloaded op's output strings were cut to fit the snapshot. */
   cuts?: ReadonlyArray<OutputCut>
 }
+
+/**
+ * The schema of a `ToolCall`. The feed updates a call in place inside its
+ * store as receipts arrive, so the interface stays the mutable type and the
+ * schema is checked against it.
+ */
+export const ToolCallSchema: Schema.Codec<ToolCall> = Schema.Struct({
+  id: Schema.String,
+  toolName: Schema.String,
+  status: Schema.Literals(["running", "completed", "error"]),
+  input: Schema.Unknown,
+  summary: Schema.optionalKey(Schema.String),
+  output: Schema.optionalKey(Schema.String),
+  operations: Schema.optionalKey(
+    Schema.mutable(Schema.Array(Schema.suspend((): Schema.Codec<ToolCall> => ToolCallSchema))),
+  ),
+  startedAt: Schema.optionalKey(Schema.Finite),
+  durationMs: Schema.optionalKey(Schema.Finite),
+  cuts: Schema.optionalKey(Schema.Array(OutputCut)),
+})
 
 export interface ToolRendererProps {
   toolCall: ToolCall
@@ -256,9 +270,20 @@ export function GenericToolRenderer(props: ToolRendererProps) {
  * left only part of names the side it lost: `end` for a head line that stops
  * early, `start` for a tail line that starts late.
  */
-type WindowedLine =
-  | { _tag: "line"; text: string; lineNum: number; part?: "end" | "start" }
-  | { _tag: "elision"; count: number; unit: "lines" | "chars" }
+const LineElision = Schema.TaggedStruct("elision", {
+  count: Schema.Finite,
+  unit: Schema.Literals(["lines", "chars"]),
+})
+
+const WindowedLine = Schema.Union([
+  Schema.TaggedStruct("line", {
+    text: Schema.String,
+    lineNum: Schema.Finite,
+    part: Schema.optionalKey(Schema.Literals(["end", "start"])),
+  }),
+  LineElision,
+]).pipe(Schema.toTaggedUnion("_tag"))
+type WindowedLine = Schema.Schema.Type<typeof WindowedLine>
 
 /** A line's text as drawn: a part of a line is marked on the side it lost. */
 const drawnText = (row: Extract<WindowedLine, { _tag: "line" }>): string => {
@@ -395,9 +420,11 @@ const windowRows = (
   ]
 }
 
-type GutterPart =
-  | { readonly _tag: "run"; readonly startLine: number; readonly lines: ReadonlyArray<string> }
-  | { readonly _tag: "elision"; readonly count: number; readonly unit: "lines" | "chars" }
+const GutterPart = Schema.Union([
+  Schema.TaggedStruct("run", { startLine: Schema.Finite, lines: Schema.Array(Schema.String) }),
+  LineElision,
+]).pipe(Schema.toTaggedUnion("_tag"))
+type GutterPart = Schema.Schema.Type<typeof GutterPart>
 
 /** Rows as runs of consecutive lines, each drawn by a gutter from its first number, split at elisions. */
 const gutterParts = (rows: ReadonlyArray<WindowedLine>): ReadonlyArray<GutterPart> => {
@@ -984,9 +1011,14 @@ export function ReadToolRenderer(props: ToolRendererProps) {
  * Expanded: unified diff view with syntax highlighting
  */
 
-type DiffLine =
-  | { _tag: "line"; text: string; kind: "add" | "remove" | "context" }
-  | { _tag: "elision"; count: number }
+const DiffLine = Schema.Union([
+  Schema.TaggedStruct("line", {
+    text: Schema.String,
+    kind: Schema.Literals(["add", "remove", "context"]),
+  }),
+  Schema.TaggedStruct("elision", { count: Schema.Finite }),
+]).pipe(Schema.toTaggedUnion("_tag"))
+type DiffLine = Schema.Schema.Type<typeof DiffLine>
 
 type DiffLineKind = Extract<DiffLine, { _tag: "line" }>["kind"]
 
@@ -1163,11 +1195,12 @@ function WriteToolRenderer(props: ToolRendererProps) {
  * Expanded: all matches with line numbers per file
  */
 
-interface GrepMatch {
-  readonly file: string
-  readonly line: number
-  readonly content: string
-}
+const GrepMatchSchema = Schema.Struct({
+  file: Schema.String,
+  line: Schema.Finite,
+  content: Schema.String,
+})
+type GrepMatch = Schema.Schema.Type<typeof GrepMatchSchema>
 
 interface GrepOutput {
   readonly matches: readonly GrepMatch[]
@@ -1181,15 +1214,11 @@ interface GrepOutput {
 }
 
 /** The expanded body's parts: each file's run of matches, and the gap a cut left. */
-type GrepPart =
-  | { readonly _tag: "file"; readonly file: string; readonly matches: ReadonlyArray<GrepMatch> }
-  | { readonly _tag: "gap"; readonly count: number }
-
-const GrepMatchSchema = Schema.Struct({
-  file: Schema.String,
-  line: Schema.Finite,
-  content: Schema.String,
-})
+const GrepPart = Schema.Union([
+  Schema.TaggedStruct("file", { file: Schema.String, matches: Schema.Array(GrepMatchSchema) }),
+  Schema.TaggedStruct("gap", { count: Schema.Finite }),
+]).pipe(Schema.toTaggedUnion("_tag"))
+type GrepPart = Schema.Schema.Type<typeof GrepPart>
 
 const GrepOutputSchema = Schema.Struct({
   matches: Schema.Array(GrepMatchSchema),

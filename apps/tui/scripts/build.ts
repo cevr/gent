@@ -32,6 +32,7 @@ const build = Effect.gen(function* () {
   const outfile = path.join(binDir, "gent")
   const artifactId = yield* crypto.randomUUIDv4
   const buildResult = yield* Effect.promise(() =>
+    // oxlint-disable-next-line effect/noGlobals -- the build script is its own process entry, and Bun.build has no Effect service
     Bun.build({
       entrypoints: [path.join(rootDir, "src/main.tsx")],
       target: "bun",

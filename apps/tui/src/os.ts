@@ -96,10 +96,12 @@ const EditorProcessOutcome = Schema.TaggedUnion({
   SpawnError: { message: Schema.String },
 })
 
-type EditorResult =
-  | { _tag: "applied"; content: string }
-  | { _tag: "cancelled" }
-  | { _tag: "error"; message: string }
+const EditorResult = Schema.Union([
+  Schema.TaggedStruct("applied", { content: Schema.String }),
+  Schema.TaggedStruct("cancelled", {}),
+  Schema.TaggedStruct("error", { message: Schema.String }),
+]).pipe(Schema.toTaggedUnion("_tag"))
+type EditorResult = Schema.Schema.Type<typeof EditorResult>
 
 export const openExternalEditor = (
   currentContent: string,
@@ -120,19 +122,17 @@ export const openExternalEditor = (
         .makeTempFileScoped({ prefix: "gent-edit-", suffix: ".md" })
         .pipe(Effect.result)
       if (tmpFile._tag === "Failure") {
-        return {
-          _tag: "error",
+        return EditorResult.cases.error.make({
           message: `Failed to create tmp file: ${tmpFile.failure.message}`,
-        }
+        })
       }
       const tmpPath = tmpFile.success
 
       const writeResult = yield* fs.writeFileString(tmpPath, currentContent).pipe(Effect.result)
       if (writeResult._tag === "Failure") {
-        return {
-          _tag: "error",
+        return EditorResult.cases.error.make({
           message: `Failed to write tmp file: ${writeResult.failure.message}`,
-        }
+        })
       }
 
       yield* Effect.sync(suspend)
@@ -152,16 +152,18 @@ export const openExternalEditor = (
       )
 
       if (editorOutcome._tag === "SpawnError") {
-        return { _tag: "error", message: `Editor failed: ${editorOutcome.message}` }
+        return EditorResult.cases.error.make({ message: `Editor failed: ${editorOutcome.message}` })
       }
       if (editorOutcome.value !== 0) {
-        return { _tag: "cancelled" }
+        return EditorResult.cases.cancelled.make({})
       }
 
       const content = yield* fs.readFileString(tmpPath).pipe(Effect.result)
       if (content._tag === "Failure") {
-        return { _tag: "error", message: `Failed to read tmp file: ${content.failure.message}` }
+        return EditorResult.cases.error.make({
+          message: `Failed to read tmp file: ${content.failure.message}`,
+        })
       }
-      return { _tag: "applied", content: content.success }
+      return EditorResult.cases.applied.make({ content: content.success })
     }),
   )

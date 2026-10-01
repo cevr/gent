@@ -7,14 +7,8 @@
  * - core-entry-boundary: extensions read only the authoring entries of `@gent/core`.
  * - declared-workspace-imports: a package imports only the workspace packages it declares.
  * - no-define-extension-throw: an extension factory fails through its Effect, never a throw.
- * - no-dynamic-imports: no `import(...)` or `require(...)` without an architectural allow
- *   comment (until upstream 0.19.0 `effect/noDynamicImports` strict mode).
- * - no-bun-outside-adapter: `Bun.*` and host facts stay in the platform adapters (until
- *   upstream 0.19.0).
- * - no-runtime-run-promise-in-tests: test code runs no Effect through a runtime's `runPromise`.
- * - no-with-wrapper-helper-in-test-code: test code outside a `tests/` tree has no `withX` helper.
- * - no-wrapped-sleep-in-tests: test code waits on no sleep wrapped in a larger expression.
- * - no-timeout-die-payload-in-tests: test code dies on no timeout spelled in an object payload.
+ * - no-host-fact-bypass: no host global read where `effect/noGlobals` does not look.
+ * - no-platform-module-export-alias: no module exports an alias of an `@effect/platform-*` binding.
  * - child-session-writer-admits: a core child-session writer admits the nesting depth first.
  * - no-identity-encode: a whole-object JSON encode decides no identity.
  */
@@ -43,24 +37,6 @@ const fieldOf = (node: AstNode, field: string): unknown => Reflect.get(node, fie
 const isAstNode = (value: unknown): value is AstNode =>
   isRecord(value) && typeof value["type"] === "string" && Array.isArray(value["range"])
 
-/** Visit `node` and its descendants, leaving out each subtree `skip` names. */
-const walkAst = (
-  node: unknown,
-  visit: (n: AstNode) => void,
-  skip: (n: AstNode) => boolean = () => false,
-): void => {
-  if (Array.isArray(node)) {
-    for (const child of node) walkAst(child, visit, skip)
-    return
-  }
-  if (!isAstNode(node) || skip(node)) return
-  visit(node)
-  for (const key in node) {
-    if (key === "type" || key === "loc" || key === "range" || key === "parent") continue
-    walkAst(fieldOf(node, key), visit, skip)
-  }
-}
-
 const getStringField = (n: AstNode, field: string): string | undefined => {
   const v = fieldOf(n, field)
   return typeof v === "string" ? v : undefined
@@ -75,40 +51,6 @@ const getNodeArrayField = (n: AstNode, field: string): AstNode[] | undefined => 
   const v = fieldOf(n, field)
   if (!Array.isArray(v)) return undefined
   return v.filter(isAstNode)
-}
-
-const getLocLine = (node: AstNode, edge: "start" | "end"): number | undefined => {
-  const loc = fieldOf(node, "loc")
-  if (!isRecord(loc)) return undefined
-  const point = loc[edge]
-  if (!isRecord(point)) return undefined
-  const line = point["line"]
-  return typeof line === "number" ? line : undefined
-}
-
-/**
- * Whether a `// gent/<rule>: allow <reason>` comment sits on the line above
- * `node`, or, when `sameLine` holds, trails it on its own line. The reason
- * must be non-empty, so the carve-out says why this one site is intentional.
- */
-const hasAllowComment = (
-  context: Context,
-  node: AstNode,
-  rule: string,
-  sameLine: boolean,
-): boolean => {
-  const startLine = getLocLine(node, "start")
-  if (startLine === undefined) return false
-  const allow = new RegExp(`\\bgent/${rule}:\\s*allow\\s+\\S`)
-  return context.sourceCode
-    .getAllComments()
-    .filter(isAstNode)
-    .some((comment) => {
-      const endLine = getLocLine(comment, "end")
-      const placed = endLine === startLine - 1 || (sameLine && endLine === startLine)
-      const value = getStringField(comment, "value")
-      return placed && value !== undefined && allow.test(value)
-    })
 }
 
 /** A lint fixture: a file the rule tests run through the rules. */
@@ -175,12 +117,6 @@ export const ruleSubject = (context: Pick<Context, "filename" | "cwd">): string 
   return fixtureSubject(filename.startsWith(root) ? filename.slice(root.length) : filename)
 }
 
-/** A file in a `tests/` tree, judged repo-relative. */
-const inTestsTree = (context: Context): boolean => /(?:^|\/)tests\//.test(ruleSubject(context))
-
-/** A `-boundary` file holds a module's Promise edges; in a test tree it is a test's. */
-const isBoundaryFilename = (filename: string): boolean => /-boundary\.tsx?$/.test(filename)
-
 const isExtensionFilename = (filename: string): boolean => {
   if (/\/extensions\/(?:api|branch-tools)\.ts$/.test(filename)) return false
   if (filename.endsWith("apps/tui/src/extensions/loader-boundary.ts")) return false
@@ -212,6 +148,37 @@ const importSourceOf = (node: AstNode): string | undefined => {
   const source = getNodeField(node, "source")
   if (source === undefined) return undefined
   return getStringField(source, "value")
+}
+
+/** An `@effect/platform-*` package or one of its modules: `@effect/platform-bun/BunPath`. */
+const PLATFORM_PACKAGE = /^@effect\/platform-[a-z-]+(?:\/|$)/
+
+/** Wrappers that keep the value they wrap: `x as T`, `x satisfies T`, `x!`, `a?.b`. */
+const VALUE_WRAPPERS = new Set([
+  "TSAsExpression",
+  "TSSatisfiesExpression",
+  "TSNonNullExpression",
+  "ChainExpression",
+])
+
+/** A layer name, `layer` or `layerServer`: a read `effect/noPlatformLayerOutsideEntry` reports itself. */
+const LAYER_NAME = /^layer/
+
+/**
+ * The name an alias is read off: `A` for `A`, `A.b`, `A?.b` and `A as T`. A
+ * chain through a layer member (`A.layer`) is no alias: the upstream rule
+ * reports that read where it stands.
+ */
+const aliasRoot = (node: AstNode | undefined): string | undefined => {
+  if (node === undefined) return undefined
+  if (VALUE_WRAPPERS.has(node.type)) return aliasRoot(getNodeField(node, "expression"))
+  if (node.type === "MemberExpression") {
+    const property = getNodeField(node, "property")
+    const name = property === undefined ? undefined : getStringField(property, "name")
+    if (LAYER_NAME.test(name ?? "")) return undefined
+    return aliasRoot(getNodeField(node, "object"))
+  }
+  return node.type === "Identifier" ? getStringField(node, "name") : undefined
 }
 
 /** The absolute path a relative specifier names, or undefined for a package specifier. */
@@ -261,6 +228,7 @@ const owningWorkspace = (dir: string): Workspace | undefined => {
   const parent = dirname(dir)
   let owner: Workspace | undefined
   if (existsSync(manifestPath)) {
+    // oxlint-disable-next-line effect/noGlobals -- the lint plugin runs in oxlint's Node host and reads a manifest it does not own
     owner = workspaceOf(dir, JSON.parse(readFileSync(manifestPath, "utf8")))
   } else if (parent !== dir) {
     owner = owningWorkspace(parent)
@@ -278,30 +246,16 @@ const importTypeSourceOf = (node: AstNode): string | undefined => {
   return literal === undefined ? undefined : getStringField(literal, "value")
 }
 
-const RUN_PROMISE_METHODS = new Set(["runPromise", "runPromiseWith", "runPromiseExit"])
-
-const runPromiseMethodName = (node: AstNode): string | undefined => {
-  if (node.type !== "MemberExpression") return undefined
-  const prop = getNodeField(node, "property")
-  if (prop?.type !== "Identifier") return undefined
-  const name = getStringField(prop, "name")
-  return name !== undefined && RUN_PROMISE_METHODS.has(name) ? name : undefined
-}
-
 /**
- * The files that may touch `Bun.*` and host facts directly. Fixtures sit under
- * `packages/tooling/fixtures/` and run through the rule, so only the canonical
- * platform file and adapter names exempt one there.
+ * The files that may touch `Bun.*` and host facts directly, judged by the
+ * repo-relative path a rule sees (`ruleSubject`): the platform impl, the
+ * adapters, the tooling, and test code.
  */
-const platformBoundaryFilename = (filename: string): boolean => {
-  if (/\/runtime\/gent-platform-bun\.ts$/.test(filename)) return true
-  if (/-adapter\.tsx?$/.test(filename)) return true
-  if (LINT_FIXTURE.test(filename)) return false
-  return /\/packages\/tooling\//.test(filename) || isTestCode(filename)
-}
-
-const HOST_PROCESS_MEMBERS = new Set(["execPath", "kill", "platform", "pid"])
-const HOST_OS_MEMBERS = new Set(["hostname", "homedir", "release"])
+const platformBoundaryFilename = (subject: string): boolean =>
+  /(?:^|\/)runtime\/gent-platform-bun\.ts$/.test(subject) ||
+  /-adapter\.tsx?$/.test(subject) ||
+  /^packages\/tooling\//.test(subject) ||
+  isTestCode(subject)
 
 /**
  * Core and shipped-extension source, outside the test harness: the code that
@@ -309,26 +263,8 @@ const HOST_OS_MEMBERS = new Set(["hostname", "homedir", "release"])
  * The TUI, the SDK and the server launcher are process hosts; they read their
  * own working directory.
  */
-const protectedHostFactFilename = (filename: string): boolean =>
-  /\/packages\/(?:core|extensions)\/src\//.test(filename) && !/\/test-utils\//.test(filename)
-
-/** Host modules protected source reaches only through a service, and which one. */
-const HOST_MODULE_MESSAGES: ReadonlyMap<string, string> = new Map([
-  ["os", "Host OS facts come from `GentPlatform` (`osInfo`, `homeDirectory`)."],
-  ["bun", "Direct `bun` imports are adapter-only; use Effect platform services."],
-  [
-    "crypto",
-    "Random bytes and ids come from Effect `Crypto`; digests come from `GentPlatform.hash`.",
-  ],
-  ["url", "Turn a file URL into a path with Effect `Path.fromFileUrl`."],
-])
-
-/** Host functions protected source calls bare only after importing them from a host module. */
-const HOST_FUNCTION_MESSAGES: ReadonlyMap<string, string> = new Map([
-  ["createHash", "Digests come from `GentPlatform.hash`."],
-  ["randomBytes", "Random bytes come from Effect `Crypto`."],
-  ["fileURLToPath", "Turn a file URL into a path with Effect `Path.fromFileUrl`."],
-])
+const protectedHostFactFilename = (subject: string): boolean =>
+  /^packages\/(?:core|extensions)\/src\//.test(subject) && !/\/test-utils\//.test(subject)
 
 /** The module a `require("x")` or `module.require("x")` call names. */
 const requireSourceOf = (node: AstNode): string | undefined => {
@@ -339,21 +275,6 @@ const requireSourceOf = (node: AstNode): string | undefined => {
   const [arg] = getNodeArrayField(node, "arguments") ?? []
   if (arg === undefined) return undefined
   return getStringField(arg, "value")
-}
-
-/** A bare call to a host function: `createHash(...)`, not `platform.createHash(...)`. */
-const hostFunctionMessage = (node: AstNode): string | undefined => {
-  const callee = getNodeField(node, "callee")
-  if (callee?.type !== "Identifier") return undefined
-  const name = getStringField(callee, "name")
-  if (name === undefined) return undefined
-  const message = HOST_FUNCTION_MESSAGES.get(name)
-  return message === undefined ? undefined : `\`${name}()\` is not allowed here. ${message}`
-}
-
-const hostModuleMessage = (source: string): string | undefined => {
-  const message = HOST_MODULE_MESSAGES.get(source.replace(/^node:/, ""))
-  return message === undefined ? undefined : `\`${source}\` is not allowed here. ${message}`
 }
 
 /** `new URL(import.meta.url)`: the operand a hand-rolled file path reads `.pathname` from. */
@@ -372,74 +293,67 @@ const isImportMetaUrlConstruction = (node: AstNode | undefined): boolean => {
   )
 }
 
+/** The host globals the project bans of `effect/noGlobals` hold. */
+const HOST_GLOBALS = new Set(["Bun", "process"])
+
+/** The name a member expression reads: `b` for `a.b` and for `a["b"]`. */
+const memberPropertyName = (node: AstNode): string | undefined => {
+  const property = getNodeField(node, "property")
+  if (property === undefined) return undefined
+  if (fieldOf(node, "computed") !== true) return getStringField(property, "name")
+  const value = fieldOf(property, "value")
+  return typeof value === "string" ? value : undefined
+}
+
 /**
- * The name a member expression's object resolves to: `process` for both
- * `process` and `globalThis.process`.
+ * A host global read where `effect/noGlobals` does not look: `globalThis.Bun`,
+ * `globalThis.process` (dotted or computed), or a computed member of `Bun`.
  */
-const hostObjectName = (object: AstNode | undefined): string | undefined => {
-  if (object?.type === "Identifier") return getStringField(object, "name")
-  if (object?.type !== "MemberExpression") return undefined
-  const root = getNodeField(object, "object")
-  const prop = getNodeField(object, "property")
-  if (root?.type !== "Identifier" || getStringField(root, "name") !== "globalThis") return undefined
-  return prop?.type === "Identifier" ? getStringField(prop, "name") : undefined
-}
-
-/** `object.property` for an identifier-rooted (or `globalThis`-rooted) member expression. */
-const hostMember = (
-  node: AstNode,
-): { readonly object: string; readonly property: string | undefined } | undefined => {
-  const objectName = hostObjectName(getNodeField(node, "object"))
-  if (objectName === undefined) return undefined
-  const prop = getNodeField(node, "property")
-  let property: string | undefined
-  if (prop?.type === "Identifier") property = getStringField(prop, "name")
-  else if (prop?.type === "StringLiteral") property = getStringField(prop, "value")
-  return { object: objectName, property }
-}
-
-const retiredBunMessage = (
-  member: { readonly object: string; readonly property: string | undefined },
-  platformImpl: boolean,
-): string | undefined => {
-  if (member.object !== "Bun") return undefined
-  if (member.property === "Glob") {
-    return "`Bun.Glob` is retired; list files through Effect `FileSystem`."
+const hostBypassMessage = (node: AstNode): string | undefined => {
+  const object = getNodeField(node, "object")
+  if (object?.type !== "Identifier") return undefined
+  const objectName = getStringField(object, "name")
+  const property = memberPropertyName(node)
+  if (objectName === "globalThis" && HOST_GLOBALS.has(property ?? "")) {
+    return `\`globalThis.${property}\` reads a host global past \`effect/noGlobals\`. Route it through an Effect platform service (\`GentPlatform\`, \`FileSystem\`, \`ChildProcessSpawner\`, \`Config\`); host globals stay in adapter, tooling and test code.`
   }
-  if (member.property === "randomUUIDv7" && !platformImpl) {
-    return "`Bun.randomUUIDv7` is adapter-only; use `GentPlatform.randomId`."
+  if (objectName === "Bun" && fieldOf(node, "computed") === true) {
+    return "A computed `Bun[...]` member reads Bun past `effect/noGlobals`. Route it through an Effect platform service; Bun stays in adapter, tooling and test code."
   }
   return undefined
 }
 
-const hostMemberMessage = (member: {
-  readonly object: string
-  readonly property: string | undefined
-}): string | undefined => {
-  const suffix = member.property !== undefined ? `.${member.property}` : ""
-  if (member.object === "Bun") {
-    return `\`Bun${suffix}\` is not allowed here. Route platform I/O through an Effect service (e.g., \`GentPlatform\`, \`FileSystem\`, \`ChildProcess\`, \`KeyValueStore\`, \`Config\`). Bun APIs are allowed only in adapter, tooling, and test harness boundaries.`
-  }
-  const hostFact =
-    (member.object === "process" && HOST_PROCESS_MEMBERS.has(member.property ?? "")) ||
-    (member.object === "os" && HOST_OS_MEMBERS.has(member.property ?? ""))
-  if (!hostFact) return undefined
-  return `\`${member.object}${suffix}\` is not allowed here. Route host process and OS facts through \`GentPlatform\` or an adapter-local Effect service.`
+/** The `Bun` members retired everywhere, and their replacements. */
+const RETIRED_BUN_MEMBERS: ReadonlyMap<string, string> = new Map([
+  ["Glob", "`Bun.Glob` is retired; list files through Effect `FileSystem`."],
+  ["randomUUIDv7", "`Bun.randomUUIDv7` is adapter-only; use `GentPlatform.randomId`."],
+])
+
+/** `globalThis.Bun` or `globalThis["Bun"]`. */
+const isGlobalThisBun = (node: AstNode | undefined): boolean => {
+  if (node?.type !== "MemberExpression") return false
+  const object = getNodeField(node, "object")
+  return (
+    object?.type === "Identifier" &&
+    getStringField(object, "name") === "globalThis" &&
+    memberPropertyName(node) === "Bun"
+  )
 }
 
-const wrapperFunctionName = (node: AstNode | undefined): string | undefined => {
-  if (node === undefined) return undefined
-  if (node.type === "Identifier") {
-    const name = getStringField(node, "name")
-    return name !== undefined && /^with[A-Z]/.test(name) ? name : undefined
-  }
-  if (node.type === "MemberExpression") {
-    const prop = getNodeField(node, "property")
-    if (prop?.type !== "Identifier") return undefined
-    const name = getStringField(prop, "name")
-    return name !== undefined && /^with[A-Z]/.test(name) ? name : undefined
-  }
-  return undefined
+/**
+ * The retired `Bun` member a read names where `effect/noGlobals` does not
+ * look: `globalThis.Bun.Glob`, `globalThis["Bun"].Glob` or `Bun["Glob"]`.
+ */
+const bypassedRetiredBunMember = (node: AstNode): string | undefined => {
+  const object = getNodeField(node, "object")
+  const viaGlobalThis = isGlobalThisBun(object)
+  const computedBun =
+    object?.type === "Identifier" &&
+    getStringField(object, "name") === "Bun" &&
+    fieldOf(node, "computed") === true
+  if (!viaGlobalThis && !computedBun) return undefined
+  const property = memberPropertyName(node)
+  return property !== undefined && RETIRED_BUN_MEMBERS.has(property) ? property : undefined
 }
 
 const callExpressionArgs = (node: AstNode): ReadonlyArray<AstNode> => {
@@ -468,199 +382,6 @@ const dottedName = (node: AstNode | undefined): string | undefined => {
     return joined(getNodeField(node, "object"), getNodeField(node, "property"))
   }
   return undefined
-}
-
-const unaryCallExpressionArg = (node: AstNode): AstNode | undefined => {
-  const args = callExpressionArgs(node)
-  if (args.length !== 1) return undefined
-  const [arg] = args
-  return arg?.type === "CallExpression" ? arg : undefined
-}
-
-const isFunctionNode = (node: AstNode | undefined): boolean =>
-  node?.type === "ArrowFunctionExpression" || node?.type === "FunctionExpression"
-
-/** True when `node` is a direct argument of a `.pipe(...)` call: an adapter factory, not a wrapper. */
-const isPipeArgument = (node: AstNode): boolean => {
-  const parent = getNodeField(node, "parent")
-  if (parent?.type !== "CallExpression") return false
-  const callee = getNodeField(parent, "callee")
-  if (callee?.type !== "MemberExpression") return false
-  const prop = getNodeField(callee, "property")
-  return prop?.type === "Identifier" && getStringField(prop, "name") === "pipe"
-}
-
-type WrapperCallKind = "invocation" | "callback"
-
-/**
- * The wrapper kind of a `withX` call: `withX(innerCall(), ...)` and
- * `withX(...)(innerCall())` wrap an invocation; `withX(..., callback)` wraps a
- * callback. `withWideEvent(boundary(...))` and any `withX(...)` passed straight
- * to `.pipe(...)` are adapter factories, not wrappers.
- */
-const withWrapperCall = (
-  node: AstNode,
-): { readonly name: string; readonly kind: WrapperCallKind } | undefined => {
-  if (node.type !== "CallExpression" || isPipeArgument(node)) return undefined
-  const callee = getNodeField(node, "callee")
-  const args = callExpressionArgs(node)
-  const directName = wrapperFunctionName(callee)
-  if (directName !== undefined && directName !== "withWideEvent") {
-    if (args[0]?.type === "CallExpression") return { name: directName, kind: "invocation" }
-    if (callee?.type === "Identifier" && args.some(isFunctionNode)) {
-      return { name: directName, kind: "callback" }
-    }
-  }
-  if (callee?.type !== "CallExpression") return undefined
-  const higherOrderName = wrapperFunctionName(getNodeField(callee, "callee"))
-  if (higherOrderName !== undefined && unaryCallExpressionArg(node)) {
-    return { name: higherOrderName, kind: "invocation" }
-  }
-  return undefined
-}
-
-const isEffectTypeAnnotation = (annotation: AstNode | undefined): boolean => {
-  const type = annotation === undefined ? undefined : getNodeField(annotation, "typeAnnotation")
-  if (type?.type !== "TSTypeReference") return false
-  const typeName = getNodeField(type, "typeName")
-  if (typeName?.type !== "TSQualifiedName") return false
-  const left = getNodeField(typeName, "left")
-  const right = getNodeField(typeName, "right")
-  return (
-    getStringField(left ?? typeName, "name") === "Effect" &&
-    getStringField(right ?? typeName, "name") === "Effect"
-  )
-}
-
-const isCallbackTypeAnnotation = (annotation: AstNode | undefined): boolean => {
-  const type = annotation === undefined ? undefined : getNodeField(annotation, "typeAnnotation")
-  return type?.type === "TSFunctionType"
-}
-
-/** The parameters of a function and of every function its body returns directly (curried form). */
-const curriedParams = (fn: AstNode | undefined): ReadonlyArray<ReadonlyArray<AstNode>> => {
-  const levels: Array<ReadonlyArray<AstNode>> = []
-  let current = fn
-  while (current !== undefined && isFunctionNode(current)) {
-    levels.push(getNodeArrayField(current, "params") ?? [])
-    current = getNodeField(current, "body")
-  }
-  return levels
-}
-
-const EFFECT_FN_NAMES = new Set(["fn", "fnUntraced"])
-
-const isEffectFnCallee = (callee: AstNode | undefined): boolean => {
-  if (callee?.type !== "MemberExpression") return false
-  const object = getNodeField(callee, "object")
-  const property = getNodeField(callee, "property")
-  return (
-    object?.type === "Identifier" &&
-    getStringField(object, "name") === "Effect" &&
-    EFFECT_FN_NAMES.has(getStringField(property ?? callee, "name") ?? "")
-  )
-}
-
-/**
- * The function a definition runs. `Effect.fn(body)`, `Effect.fn("name")(body)`,
- * and the `fnUntraced` forms yield their generator body; anything else yields itself.
- */
-const definitionFunction = (init: AstNode | undefined): AstNode | undefined => {
-  if (init?.type !== "CallExpression") return init
-  const callee = getNodeField(init, "callee")
-  const traced =
-    isEffectFnCallee(callee) ||
-    (callee?.type === "CallExpression" && isEffectFnCallee(getNodeField(callee, "callee")))
-  if (!traced) return init
-  return callExpressionArgs(init).find(isFunctionNode)
-}
-
-/** Why a `withX` definition is a wrapper helper, or undefined when it is not one. */
-const withWrapperDefinitionKind = (fn: AstNode | undefined): "effect" | "callback" | undefined => {
-  const levels = curriedParams(definitionFunction(fn))
-  const annotations = (params: ReadonlyArray<AstNode>) =>
-    params.map((param) => getNodeField(param, "typeAnnotation"))
-  if (levels.some((params) => annotations(params).some(isEffectTypeAnnotation))) return "effect"
-  if (annotations(levels[0] ?? []).some(isCallbackTypeAnnotation)) return "callback"
-  return undefined
-}
-
-const SLEEP_CALLS = new Set(["Effect.sleep", "Bun.sleep", "Bun.sleepSync"])
-
-/** The dotted name of a sleep call, `Effect.sleep` or `Bun.sleep`, or undefined. */
-const sleepCallName = (node: AstNode): string | undefined => {
-  if (node.type !== "CallExpression") return undefined
-  const name = dottedName(getNodeField(node, "callee"))
-  return name !== undefined && SLEEP_CALLS.has(name) ? name : undefined
-}
-
-const isFunctionLike = (node: AstNode): boolean =>
-  isFunctionNode(node) || node.type === "FunctionDeclaration"
-
-/**
- * Whether a wait is a statement of its own: `yield*`, `await` or `void`
- * around it, then an expression statement. That is the one shape
- * `effect/noFixedWaitInTests` reports when it waits on a bare sleep.
- */
-const isUpstreamWaitedStatement = (wait: AstNode): boolean => {
-  let current = wait
-  let parent = getNodeField(current, "parent")
-  while (
-    parent !== undefined &&
-    ((parent.type === "YieldExpression" && fieldOf(parent, "delegate") === true) ||
-      parent.type === "AwaitExpression" ||
-      (parent.type === "UnaryExpression" && getStringField(parent, "operator") === "void"))
-  ) {
-    current = parent
-    parent = getNodeField(current, "parent")
-  }
-  return parent?.type === "ExpressionStatement"
-}
-
-const TIMEOUT_TEXT = /tim(?:ed|e)\s*out|timeout|waiting for|gave up/i
-
-/** The text of a string literal or of a template part; anything else has none. */
-const literalTexts = (node: AstNode): ReadonlyArray<string> => {
-  if (node.type === "Literal") {
-    const value = fieldOf(node, "value")
-    return typeof value === "string" ? [value] : []
-  }
-  if (node.type !== "TemplateElement") return []
-  // The text sits under `value: { cooked, raw }`, a record with no `type`.
-  const value = fieldOf(node, "value")
-  if (!isRecord(value)) return []
-  const text = typeof value["cooked"] === "string" ? value["cooked"] : value["raw"]
-  return typeof text === "string" ? [text] : []
-}
-
-/**
- * The message text `effect/noTimeoutDieInTests` (0.18.0) reads from a die
- * argument: string literals, templates, `+` concatenations, and the
- * arguments of a constructor or call, but not the fields of an object.
- */
-const upstreamDieTexts = (node: AstNode): ReadonlyArray<string> => {
-  if (node.type === "Literal") return literalTexts(node)
-  if (node.type === "TemplateLiteral") {
-    return (getNodeArrayField(node, "quasis") ?? []).flatMap(literalTexts)
-  }
-  if (node.type === "BinaryExpression" && getStringField(node, "operator") === "+") {
-    return [getNodeField(node, "left"), getNodeField(node, "right")]
-      .filter((side) => side !== undefined)
-      .flatMap(upstreamDieTexts)
-  }
-  if (node.type === "NewExpression" || node.type === "CallExpression") {
-    return callExpressionArgs(node).flatMap(upstreamDieTexts)
-  }
-  return []
-}
-
-/** Every string a die argument spells, at any depth. */
-const allTexts = (node: AstNode): ReadonlyArray<string> => {
-  const texts: string[] = []
-  walkAst(node, (inner) => {
-    texts.push(...literalTexts(inner))
-  })
-  return texts
 }
 
 /** Locate a named property's arrow-function value inside an object literal. */
@@ -692,68 +413,6 @@ const findArrowInFirstArg = (node: AstNode, propName: string): AstNode | undefin
   const arg = args[0]
   if (!isAstNode(arg)) return undefined
   return findArrowInObject(arg, propName)
-}
-
-/** Classification for a CallExpression that smells like dynamic loading. */
-type DynamicLoadKind = "require" | "moduleRequire" | "createRequire"
-
-const DYNAMIC_LOAD_MESSAGES: Readonly<Record<DynamicLoadKind, string>> = {
-  require:
-    "`require(...)` is forbidden — use a top-level static `import` statement. CommonJS dynamic loading defeats static analysis, leaks into the compiled binary unpredictably, and is the wrong primitive in an ESM Bun project. If this exact site is a documented architectural exception, add `// gent/no-dynamic-imports: allow <reason>` immediately above it.",
-  moduleRequire:
-    "`module.require(...)` is forbidden — use a top-level static `import` statement. Same rationale as bare `require`: it bypasses static analysis. If this exact site is a documented architectural exception, add `// gent/no-dynamic-imports: allow <reason>` immediately above it.",
-  createRequire:
-    "`createRequire(...)` / createRequire aliases are forbidden — use a top-level static `import` statement. The createRequire bridge from `node:module` is the canonical way to smuggle CommonJS into ESM and is exactly what this rule is meant to catch. If this exact site is a documented architectural exception, add `// gent/no-dynamic-imports: allow <reason>` immediately above it.",
-}
-
-/** Return the dynamic-load kind for a CallExpression's callee, or undefined. */
-const classifyDynamicLoadCall = (
-  callee: AstNode | undefined,
-  createRequireAliases: ReadonlySet<string>,
-): DynamicLoadKind | undefined => {
-  if (callee === undefined) return undefined
-  // Bare `require(...)`
-  if (callee.type === "Identifier" && getStringField(callee, "name") === "require") {
-    return "require"
-  }
-  if (callee.type === "Identifier") {
-    const name = getStringField(callee, "name")
-    if (name !== undefined && createRequireAliases.has(name)) return "createRequire"
-  }
-  // `module.require(...)`
-  if (callee.type === "MemberExpression") {
-    const obj = getNodeField(callee, "object")
-    const prop = getNodeField(callee, "property")
-    if (
-      obj?.type === "Identifier" &&
-      getStringField(obj, "name") === "module" &&
-      prop?.type === "Identifier" &&
-      getStringField(prop, "name") === "require"
-    ) {
-      return "moduleRequire"
-    }
-  }
-  // `createRequire(import.meta.url)("x")` — outer call's callee is a
-  // CallExpression whose callee is `Identifier{name:"createRequire"}`.
-  if (callee.type === "CallExpression") {
-    const inner = getNodeField(callee, "callee")
-    if (inner?.type === "Identifier" && getStringField(inner, "name") === "createRequire") {
-      return "createRequire"
-    }
-  }
-  return undefined
-}
-
-const createRequireAliasName = (node: AstNode): string | undefined => {
-  if (node.type !== "VariableDeclarator") return undefined
-  const id = getNodeField(node, "id")
-  const init = getNodeField(node, "init")
-  if (id?.type !== "Identifier" || init?.type !== "CallExpression") return undefined
-  const callee = getNodeField(init, "callee")
-  if (callee?.type !== "Identifier" || getStringField(callee, "name") !== "createRequire") {
-    return undefined
-  }
-  return getStringField(id, "name")
 }
 
 // ── a whole-object encode decides no identity ───────────────────────────────
@@ -1168,128 +827,52 @@ const plugin: Plugin = {
     },
 
     /**
-     * Bans dynamic `import("...")` expressions and `require(...)` calls
-     * across the codebase.
+     * A host fact read where `effect/noGlobals` does not look.
      *
-     * Why: dynamic imports defeat static analysis (typecheck, bundler graph,
-     * dead-code elimination) and hide test/runtime coupling. The repo's
-     * compiled-binary deployment (`Bun.build` for the TUI) requires every
-     * module to be reachable through static imports — dynamic `import(...)`
-     * results in load failures at runtime in the binary.
+     * `.oxlintrc.json` bans `Bun.*` and the host process and OS facts through
+     * the project bans of `effect/noGlobals` and `effect/noNodeBuiltinImport`;
+     * core and shipped-extension source also take `process.cwd()` and the
+     * `os`, `bun`, `crypto` and `url` modules through services. Upstream
+     * (0.20.0) reads a global's member only as `Global.member`, so three
+     * spellings pass it, and this rule reports them:
      *
-     * Allowed: expression-level opt-in only. Put
-     * `// gent/no-dynamic-imports: allow <reason>` immediately above the exact
-     * dynamic load. This keeps the unusual boundary visible at the call site
-     * and prevents whole-file exceptions from hiding new dynamic loads.
+     * - `globalThis.Bun` and `globalThis.process`, dotted or computed, as in
+     *   `globalThis.process.cwd()`;
+     * - a computed member of `Bun`, as in `Bun["spawn"]`;
+     * - in core and shipped-extension source outside `test-utils/`, a file
+     *   path hand-rolled as `new URL(import.meta.url).pathname`, where Effect
+     *   `Path.fromFileUrl` reads it.
      *
-     * Valid:   import { foo } from "./foo.js"
-     * Invalid: const foo = await import("./foo.js")
-     * Invalid: const fs = require("node:fs")
-     *
-     * The allow comment must include a non-empty reason.
-     *
-     * Stricter than `effect/noDynamicImports` in 0.18.0, which accepts a
-     * named or lazily bound `import()`. Goes when gent consumes
-     * oxlint-plugin-effect 0.19.0, whose strict mode holds this line.
+     * Exempt by filename, as the upstream project bans are by override:
+     * `runtime/gent-platform-bun.ts`, `*-adapter.ts`, the tooling, and test
+     * code. The retired `Bun.Glob` and `Bun.randomUUIDv7` stay banned in
+     * those files too, as the built-in bans of `effect/noGlobals` keep the
+     * dotted spelling: `globalThis.Bun.Glob`, `globalThis["Bun"].Glob` and
+     * `Bun["Glob"]` are reported in every file, and `randomUUIDv7` is allowed
+     * in the platform impl only. Goes when an upstream release reads these
+     * spellings.
      */
-    "no-dynamic-imports": {
+    "no-host-fact-bypass": {
       create(context) {
-        const createRequireAliases = new Set<string>()
-
-        const reportUnlessAllowed = (node: AstNode, message: string): void => {
-          if (hasAllowComment(context, node, "no-dynamic-imports", false)) return
-          context.report({ message, node })
+        const subject = ruleSubject(context)
+        const platformImpl = /(?:^|\/)runtime\/gent-platform-bun\.ts$/.test(subject)
+        const reportRetired = (node: AstNode): boolean => {
+          const member = bypassedRetiredBunMember(node)
+          if (member === undefined || (platformImpl && member === "randomUUIDv7")) return false
+          context.report({ message: RETIRED_BUN_MEMBERS.get(member) ?? member, node })
+          return true
         }
-
+        if (platformBoundaryFilename(subject)) {
+          return {
+            MemberExpression(node) {
+              if (isAstNode(node)) reportRetired(node)
+            },
+          }
+        }
+        const protectedFile = protectedHostFactFilename(subject)
         return {
-          Program(node) {
-            walkAst(node, (child) => {
-              const alias = createRequireAliasName(child)
-              if (alias !== undefined) createRequireAliases.add(alias)
-            })
-          },
-          VariableDeclarator(node) {
-            if (!isAstNode(node)) return
-            const alias = createRequireAliasName(node)
-            if (alias === undefined) return
-            reportUnlessAllowed(node, DYNAMIC_LOAD_MESSAGES.createRequire)
-          },
-          ImportExpression(node) {
-            reportUnlessAllowed(
-              node,
-              `Dynamic \`import(...)\` is forbidden — use a top-level static import. Dynamic imports defeat static analysis and break the compiled-binary build (Bun.build cannot resolve runtime-determined module paths). If this exact site is a documented architectural exception, add \`// gent/no-dynamic-imports: allow <reason>\` immediately above it.`,
-            )
-          },
-          CallExpression(node) {
-            const callee: unknown = node.callee
-            if (!isAstNode(callee)) return
-            const kind = classifyDynamicLoadCall(callee, createRequireAliases)
-            if (kind === undefined) return
-            reportUnlessAllowed(node, DYNAMIC_LOAD_MESSAGES[kind])
-          },
-        }
-      },
-    },
-
-    /**
-     * Bans `Bun.*` references and host process and OS facts everywhere except
-     * platform adapter, tooling, and test harness boundaries. The TUI build
-     * script is exempt by its `.oxlintrc.json` override.
-     * The `Bun` global is a platform-specific runtime API, and `process.pid`,
-     * `process.platform`, `os.hostname()` and the rest are host facts; product
-     * code routes both through Effect platform services (`GentPlatform`,
-     * `FileSystem`, `ChildProcess`, `KeyValueStore`, `Config`) so the runtime
-     * is portable and the I/O boundary is explicit.
-     *
-     * Exempt by filename:
-     *   - `runtime/gent-platform-bun.ts` (the GentPlatform live impl)
-     *   - `*-adapter.ts` / `*-adapter.tsx` files (platform-specific adapters)
-     *   - `**\/packages/tooling/**` (CI helpers)
-     *   - `**\/packages/e2e/**` (test infrastructure spawning real processes)
-     *   - `*.test.ts` and files under `tests/`
-     *
-     * Two retired APIs are banned even inside those exemptions, outside
-     * `tests/`: `Bun.Glob` (files are listed through Effect `FileSystem`) and
-     * `Bun.randomUUIDv7` (only `runtime/gent-platform-bun.ts` may call it;
-     * everyone else uses `GentPlatform.randomId`).
-     *
-     * Core and shipped-extension source (outside `test-utils/`) is held to
-     * three more host facts: `process.cwd()` (the working directory comes
-     * from `RuntimeEnvironment` or the extension context), imports of the
-     * `os`, `bun`, `crypto` and `url` modules, and a file path hand-rolled as
-     * `new URL(import.meta.url).pathname`. This rule is the one owner of the
-     * host-fact bans; a site that is a deliberate exception carries a
-     * line-local suppression with its reason.
-     *
-     * Goes when gent consumes oxlint-plugin-effect 0.19.0, whose generic
-     * form of this rule replaces it.
-     */
-    "no-bun-outside-adapter": {
-      create(context) {
-        const filename = context.filename
-        const platformImpl = /\/runtime\/gent-platform-bun\.ts$/.test(filename)
-        const inTests = inTestsTree(context)
-        const protectedFile =
-          protectedHostFactFilename(filename) && !platformBoundaryFilename(filename)
-        const reportHostModule = (node: AstNode) => {
-          if (!protectedFile) return
-          const source = importSourceOf(node)
-          if (source === undefined) return
-          const message = hostModuleMessage(source)
-          if (message !== undefined) context.report({ message, node })
-        }
-        return {
-          ImportDeclaration: reportHostModule,
-          ImportExpression: reportHostModule,
-          CallExpression(node) {
-            if (!protectedFile || !isAstNode(node)) return
-            const source = requireSourceOf(node)
-            const message =
-              source === undefined ? hostFunctionMessage(node) : hostModuleMessage(source)
-            if (message !== undefined) context.report({ message, node })
-          },
           MemberExpression(node) {
-            if (!isAstNode(node)) return
+            if (!isAstNode(node) || reportRetired(node)) return
             if (protectedFile && isImportMetaUrlConstruction(getNodeField(node, "object"))) {
               context.report({
                 message:
@@ -1298,23 +881,7 @@ const plugin: Plugin = {
               })
               return
             }
-            const member = hostMember(node)
-            if (member === undefined) return
-            const retired = retiredBunMessage(member, platformImpl)
-            if (retired !== undefined && !inTests) {
-              context.report({ message: retired, node })
-              return
-            }
-            if (protectedFile && member.object === "process" && member.property === "cwd") {
-              context.report({
-                message:
-                  "`process.cwd` is not allowed here. The working directory comes from `RuntimeEnvironment` or the extension context's `cwd`.",
-                node,
-              })
-              return
-            }
-            if (platformBoundaryFilename(filename)) return
-            const message = hostMemberMessage(member)
+            const message = hostBypassMessage(node)
             if (message !== undefined) context.report({ message, node })
           },
         }
@@ -1322,201 +889,101 @@ const plugin: Plugin = {
     },
 
     /**
-     * Test code runs no Effect through a runtime's `runPromise`.
+     * No module hands a platform package on under an exported alias.
      *
-     * Holds the line where oxlint-plugin-effect 0.18.0 leaves a gap:
-     * `effect/noEffectRunInTests` reads only the `Effect.run*` statics and
-     * `ManagedRuntime.make`, and `effect/noRunPromise` skips test code, so
-     * `runtime.runPromise(...)` in a test passes both. Goes when an upstream
-     * release reports a runtime's runners in test code; none has yet.
+     * `effect/noPlatformLayerOutsideEntry` keeps the `@effect/platform-*`
+     * layers in the platform entry files: it follows each read of a binding a
+     * module takes from a platform package, and reports a re-export. Upstream
+     * (0.20.0) follows the reads inside the module only, so
+     * `export const Services = BunServices` passes it, and every importer of
+     * `Services` then provides `Services.layer` where no rule sees it.
      *
-     * Reported in test code (`isTestCode`) outside `-boundary` files: a call
-     * or a reference of `runPromise`, `runPromiseWith` or `runPromiseExit` on
-     * any receiver but the `Effect` module, whose statics are upstream's.
+     * Reported outside test code: an exported `const`, `let` or `var` whose
+     * value is a binding imported from an `@effect/platform-*` package or
+     * module, or a member of one (`PlatformBun.BunServices`), or a local alias
+     * of one, however many steps away (`const Local = BunServices`, or
+     * `const { BunServices: Local } = PlatformBun`). A layer read
+     * (`BunServices.layer`, `import { layer }`) is left to upstream, which
+     * reports it where it stands. The platform entry files are exempt by
+     * their `.oxlintrc.json` override, as they are from the upstream rule.
+     * Goes when an upstream release follows an exported alias.
      */
-    "no-runtime-run-promise-in-tests": {
+    "no-platform-module-export-alias": {
       create(context) {
-        const subject = ruleSubject(context)
-        if (!isTestCode(subject) || isBoundaryFilename(subject)) return {}
+        if (isTestCode(ruleSubject(context))) return {}
+        const platformBindings = new Set<string>()
+        const exported: Array<{ readonly node: AstNode; readonly root: string }> = []
+        /** Each local name, and the name its value is read off. */
+        const localAliases = new Map<string, string>()
+        const platformRoot = (name: string): string | undefined => {
+          const seen = new Set<string>()
+          let current: string | undefined = name
+          while (current !== undefined && !seen.has(current)) {
+            if (platformBindings.has(current)) return current
+            seen.add(current)
+            current = localAliases.get(current)
+          }
+          return undefined
+        }
         return {
-          MemberExpression(node) {
+          VariableDeclarator(node) {
             if (!isAstNode(node)) return
-            const method = runPromiseMethodName(node)
-            if (method === undefined) return
-            const receiver = getNodeField(node, "object")
-            if (receiver?.type === "Identifier" && getStringField(receiver, "name") === "Effect") {
+            const root = aliasRoot(getNodeField(node, "init"))
+            const id = getNodeField(node, "id")
+            if (root === undefined || id === undefined) return
+            if (id.type === "Identifier") {
+              const name = getStringField(id, "name")
+              if (name !== undefined) localAliases.set(name, root)
               return
             }
-            context.report({
-              message: `Do not run Effects through \`.${method}\` in test code. Return the Effect from \`it.live(...)\` / \`it.scopedLive(...)\`, or keep the Promise edge in a \`-boundary\` file.`,
-              node,
-            })
+            if (id.type !== "ObjectPattern") return
+            for (const property of getNodeArrayField(id, "properties") ?? []) {
+              const key = getNodeField(property, "key")
+              const value = getNodeField(property, "value")
+              const keyName = key === undefined ? undefined : getStringField(key, "name")
+              if (keyName === undefined || LAYER_NAME.test(keyName)) continue
+              if (value?.type !== "Identifier") continue
+              const name = getStringField(value, "name")
+              if (name !== undefined) localAliases.set(name, root)
+            }
           },
-        }
-      },
-    },
-
-    /**
-     * Test code outside a `tests/` tree holds no `withX` callback wrapper.
-     *
-     * Holds the line where oxlint-plugin-effect 0.18.0 leaves a gap:
-     * `effect/noWithWrapperCall` skips its callback and definition checks in
-     * every test module, while gent allows a local `withX` fixture helper only
-     * in a `tests/` tree. The harness (`@gent/e2e`, core's `test-utils`), the
-     * `integration/` trees and test files elsewhere stay held to them. Goes
-     * when an upstream release lets a project narrow that exemption; none has
-     * yet.
-     *
-     * Reported there: a `withX(callback)` call, and a `withX` definition that
-     * takes an `Effect.Effect` (at any curried level, inside `Effect.fn` too)
-     * or a callback parameter. `withWideEvent` is the wide-event adapter.
-     */
-    "no-with-wrapper-helper-in-test-code": {
-      create(context) {
-        if (!isTestCode(ruleSubject(context)) || inTestsTree(context)) return {}
-        const reportDefinition = (
-          name: string | undefined,
-          fn: AstNode | undefined,
-          node: AstNode,
-        ) => {
-          if (name === undefined || !/^with[A-Z]/.test(name)) return
-          const kind = withWrapperDefinitionKind(fn)
-          if (kind === undefined) return
-          context.report({
-            message: `\`${name}(${kind}, ...)\` wrapper helpers are banned outside a \`tests/\` tree; expose a pipeable provider or an Effect value and continue with \`.pipe(...)\`.`,
-            node,
-          })
-        }
-        return {
-          CallExpression(node) {
-            const call = withWrapperCall(node)
-            if (call?.kind !== "callback") return
-            context.report({
-              message: `Avoid \`${call.name}(callback)\` wrapper style. Expose an Effect value or provider and continue with \`.pipe(...)\`.`,
-              node,
-            })
+          ImportDeclaration(node) {
+            if (!isAstNode(node) || getStringField(node, "importKind") === "type") return
+            const source = importSourceOf(node) ?? ""
+            if (!PLATFORM_PACKAGE.test(source)) return
+            for (const specifier of getNodeArrayField(node, "specifiers") ?? []) {
+              if (getStringField(specifier, "importKind") === "type") continue
+              // `import { layer as l }` is reported at the import upstream.
+              const imported = getNodeField(specifier, "imported")
+              if (
+                LAYER_NAME.test(
+                  imported === undefined ? "" : (getStringField(imported, "name") ?? ""),
+                )
+              )
+                continue
+              const local = getNodeField(specifier, "local")
+              const name = local === undefined ? undefined : getStringField(local, "name")
+              if (name !== undefined) platformBindings.add(name)
+            }
           },
-          VariableDeclarator(node) {
-            const id = getNodeField(node, "id")
-            const name = id?.type === "Identifier" ? getStringField(id, "name") : undefined
-            reportDefinition(name, getNodeField(node, "init"), node)
-          },
-          FunctionDeclaration(node) {
-            const id = getNodeField(node, "id")
-            const name = id === undefined ? undefined : getStringField(id, "name")
-            reportDefinition(name, { ...node, type: "FunctionExpression" }, node)
-          },
-        }
-      },
-    },
-
-    /**
-     * Test code waits on no sleep wrapped in a larger expression.
-     *
-     * Holds the line where oxlint-plugin-effect 0.18.0 leaves a gap:
-     * `effect/noFixedWaitInTests` reports a sleep only when a statement waits
-     * on the sleep itself (`yield* Effect.sleep(...)`), so
-     * `yield* Effect.sleep(...).pipe(...)` or a sleep raced inside a waited
-     * call passes. Goes when an upstream release reports a sleep anywhere in
-     * a waited expression; none has yet.
-     *
-     * Reported in test code (`isTestCode`): an `Effect.sleep`, `Bun.sleep` or
-     * `Bun.sleepSync` call inside the argument of a `yield*` or an `await`,
-     * outside a nested function, unless it is upstream's case. Also reported:
-     * a sleep stored under a name (a variable's initialiser or an object
-     * field, outside a nested function), since a later `yield* pause` waits
-     * on it where no rule sees the sleep. A sleep a function builds and
-     * returns, or hands to a mock as the subject's own delay, stays allowed.
-     */
-    "no-wrapped-sleep-in-tests": {
-      create(context) {
-        if (!isTestCode(ruleSubject(context))) return {}
-        const reported = new Set<AstNode>()
-        const report = (node: AstNode, sleep: string, how: string) => {
-          reported.add(node)
-          context.report({
-            message: `\`${sleep}(...)\` ${how} in test code — replace the fixed delay with deterministic synchronisation (\`Deferred\`, \`controls.waitForCall(...)\`, a \`waitFor\` poll, or \`TestClock.adjust\`). A real-clock wait that is the subject takes a line-local suppression with its reason.`,
-            node,
-          })
-        }
-        // A waited expression inside a stored value is visitWait's to report.
-        const skipStored = (node: AstNode) =>
-          isFunctionLike(node) || node.type === "YieldExpression" || node.type === "AwaitExpression"
-        const visitStored = (value: AstNode | undefined) => {
-          if (value === undefined) return
-          walkAst(
-            value,
-            (inner) => {
-              const sleep = sleepCallName(inner)
-              if (sleep === undefined || reported.has(inner)) return
-              report(inner, sleep, "stored under a name")
-            },
-            skipStored,
-          )
-        }
-        const visitWait = (wait: AstNode) => {
-          const argument = getNodeField(wait, "argument")
-          if (argument === undefined) return
-          walkAst(
-            argument,
-            (inner) => {
-              const sleep = sleepCallName(inner)
-              if (sleep === undefined || reported.has(inner)) return
-              if (inner === argument && isUpstreamWaitedStatement(wait)) return
-              report(inner, sleep, "waited")
-            },
-            isFunctionLike,
-          )
-        }
-        return {
-          YieldExpression(node) {
-            if (isAstNode(node) && fieldOf(node, "delegate") === true) visitWait(node)
-          },
-          AwaitExpression(node) {
-            if (isAstNode(node)) visitWait(node)
-          },
-          VariableDeclarator(node) {
-            if (isAstNode(node)) visitStored(getNodeField(node, "init"))
-          },
-          Property(node) {
-            if (isAstNode(node)) visitStored(getNodeField(node, "value"))
-          },
-        }
-      },
-    },
-
-    /**
-     * Test code does not die on a timeout spelled in an object payload.
-     *
-     * Holds the line where oxlint-plugin-effect 0.18.0 leaves a gap:
-     * `effect/noTimeoutDieInTests` reads a die's message from string
-     * literals, templates and constructor arguments, so
-     * `Effect.die(new WaitForError({ message: "timed out ..." }))` passes it.
-     * Goes when an upstream release reads the strings inside an object
-     * argument; none has yet.
-     *
-     * Reported in test code (`isTestCode`): an `Effect.die` or
-     * `Effect.dieMessage` call whose arguments spell a timeout at any depth
-     * but not where upstream reads it. A die on an impossible state stays
-     * allowed: that really is a defect.
-     */
-    "no-timeout-die-payload-in-tests": {
-      create(context) {
-        if (!isTestCode(ruleSubject(context))) return {}
-        const mentionsTimeout = (texts: ReadonlyArray<string>) =>
-          texts.some((text) => TIMEOUT_TEXT.test(text))
-        return {
-          CallExpression(node) {
+          ExportNamedDeclaration(node) {
             if (!isAstNode(node)) return
-            const callee = dottedName(getNodeField(node, "callee"))
-            if (callee !== "Effect.die" && callee !== "Effect.dieMessage") return
-            const args = callExpressionArgs(node)
-            if (!mentionsTimeout(args.flatMap(allTexts))) return
-            if (mentionsTimeout(args.flatMap(upstreamDieTexts))) return
-            context.report({
-              message: `\`${callee}(...)\` on a timeout in test code — the defect surfaces detached from the test that waited. Fail with a typed error (\`Effect.timeout\` fails with a \`TimeoutError\`; \`Effect.timeoutOrElse\` maps it to your own).`,
-              node,
-            })
+            const declaration = getNodeField(node, "declaration")
+            if (declaration?.type !== "VariableDeclaration") return
+            for (const declarator of getNodeArrayField(declaration, "declarations") ?? []) {
+              const root = aliasRoot(getNodeField(declarator, "init"))
+              if (root !== undefined) exported.push({ node: declarator, root })
+            }
+          },
+          "Program:exit"() {
+            for (const alias of exported) {
+              const root = platformRoot(alias.root)
+              if (root === undefined) continue
+              context.report({
+                message: `exports an alias of \`${root}\`, a binding from an @effect/platform package, which hands its layers to every importer where no rule follows them; import the package where it is used, or yield the service the platform entry provides`,
+                node: alias.node,
+              })
+            }
           },
         }
       },

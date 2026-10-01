@@ -48,8 +48,9 @@ import { causeMessage } from "../domain/guards.js"
  * (`${prefix}-00000001`, ...) and stubs the rest with safe defaults so
  * tests can use it as a drop-in replacement for the live platform.
  *
- * The `no-bun-outside-adapter` lint rule restricts `Bun.*` usage to
- * `GentPlatform.Live`'s implementation file (`gent-platform-bun.ts`).
+ * The `effect/noGlobals` project bans in `.oxlintrc.json` keep `Bun.*` out of
+ * product code but for `GentPlatform.Live`'s implementation file
+ * (`gent-platform-bun.ts`) and the adapters.
  */
 
 export interface GentPlatformOsInfo {

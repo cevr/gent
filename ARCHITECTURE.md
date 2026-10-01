@@ -96,11 +96,23 @@ updates this list in the same commit.
     (through `@gent/core/extensions/api`) and the TUI (through
     `@gent/core/host`) all call it. Host facts core cannot get from
     Effect (OS info, executable path, home directory) stay on `GentPlatform`.
+    The lint holds the edge outside the platform impl, the adapters, the
+    tooling and test code: `effect/noGlobals` and `effect/noNodeBuiltinImport`
+    ban `Bun.*`, the `bun` module, `process.execPath`, `kill`, `pid` and
+    `platform`, and `os.homedir`, `hostname` and `release`, read as a global
+    or through an import, and in core and
+    shipped-extension source also `process.cwd` and the `os`, `crypto` and
+    `url` modules; `gent/no-host-fact-bypass` holds the `globalThis.Bun`,
+    `globalThis.process` and computed `Bun[...]` spellings. A read through a
+    local alias of `globalThis` or `Reflect.get` is not caught.
+    `effect/noPlatformLayerOutsideEntry` and
+    `gent/no-platform-module-export-alias` keep the Bun platform layers in the
+    platform entry files.
     The TUI session controller owns screen state, views render and dispatch;
     app-specific UI facets live at the app edge. Receipts:
     `packages/core/src/runtime/gent-platform.ts`,
     `packages/core/src/domain/extension.ts`, `apps/tui/src/session.tsx`,
-    `apps/tui/src/app.tsx`.
+    `apps/tui/src/app.tsx`, `.oxlintrc.json`.
 16. **RPC is the application transport.** No parallel REST surface. Receipt:
     `packages/core/src/server/rpc.ts`.
 

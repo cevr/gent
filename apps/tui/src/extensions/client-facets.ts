@@ -30,8 +30,8 @@ import { createEffect, createRoot, createSignal, on } from "solid-js"
 import type { ToolRenderer } from "../tool-renderers"
 import type { Command } from "../commands"
 import type { JSX } from "@opentui/solid"
-import type { RGBA } from "@opentui/core"
-import type { NamedThemeColor } from "../theme"
+import { RGBA } from "@opentui/core"
+import { NamedThemeColor } from "../theme"
 
 // ── effect boundary ─────────────────────────────────────────────────────────
 
@@ -708,7 +708,8 @@ interface InteractionRendererContribution {
 }
 
 /** A theme color by name, or a resolved one. */
-export type StatusLabelColor = RGBA | NamedThemeColor
+export const StatusLabelColor = Schema.Union([Schema.instanceOf(RGBA), NamedThemeColor])
+export type StatusLabelColor = Schema.Schema.Type<typeof StatusLabelColor>
 
 export interface StatusLabelItem {
   readonly text: string
