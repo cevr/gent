@@ -1174,18 +1174,17 @@ function useComposerController(): ComposerController {
   }
 
   /**
-   * Only a known command name is a command: a path, a typo or a pasted line
-   * that starts with `/` is a message. The name is read from the draft as
-   * typed, so text from a paste chip never names one. While a command source
-   * is still answering, the session holds the command until it can tell.
+   * A draft that starts with `/name` goes to the session, which decides
+   * whether the name is a command: only a known command name is one, and a
+   * path, a typo or a pasted line that starts with `/` goes out as a message
+   * through `send`. The session asks the command sources again before it
+   * calls a name unknown. The name is read from the draft as typed, so text
+   * from a paste chip never names one.
    */
   const submitSlashCommand = (draft: string, text: string) => {
     const named = parseSlashCommand(draft)
     if (Option.isNone(named)) return false
     const [cmd] = named.value
-    if (extensionUI.commandsSettled() && !isSlashCommandName(cmd, extensionUI.commands())) {
-      return false
-    }
     // The arguments take the paste they name.
     const args = Option.match(parseSlashCommand(text), {
       onNone: () => "",

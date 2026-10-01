@@ -3177,8 +3177,10 @@ export function createSessionController(props: {
   // A command sent before every command source has answered (the client
   // extensions' load, the session's server slash list) may belong to one of
   // them: it waits for them to settle, then resolves. Only settled sources
-  // decide that a name is no command. A command still held when the session
-  // view goes comes back to its draft.
+  // decide that a name is no command, and a name they lack lists the server's
+  // commands once more first: an extension can register a command after the
+  // session listed them. A command still held when the session view goes
+  // comes back to its draft.
   let heldSlashCommands: ReadonlyArray<SlashSubmission> = []
   createEffect(
     on(ext.commandsSettled, (settled) => {
@@ -3198,11 +3200,14 @@ export function createSessionController(props: {
 
   const onSlashCommand = (command: SlashSubmission): Effect.Effect<void> =>
     Effect.sync(() => {
-      if (!ext.commandsSettled() && !isSlashCommandName(command.cmd, ext.commands())) {
-        heldSlashCommands = [...heldSlashCommands, command]
+      if (isSlashCommandName(command.cmd, ext.commands())) {
+        runSlashCommand(command)
         return
       }
-      runSlashCommand(command)
+      // Held first: a listing that answers at once settles before this returns.
+      const settled = ext.commandsSettled()
+      heldSlashCommands = [...heldSlashCommands, command]
+      if (settled) ext.refreshCommands()
     })
 
   const onModelSelect = (modelId: ModelId) => {

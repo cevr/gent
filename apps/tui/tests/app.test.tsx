@@ -2352,6 +2352,67 @@ describe("App auth gate", () => {
         expect(sent).toEqual([])
       }).pipe(Effect.timeout("10 seconds")),
   )
+  // A command an extension registers after the session listed its commands is
+  // still a command: a name the list lacks is checked against a fresh list
+  // before it goes to the model, and a name no list carries still goes there.
+  it.scopedLive("a server command registered after the listing runs, not sent as a message", () =>
+    Effect.gen(function* () {
+      const requests: Array<unknown> = []
+      const sent: Array<string> = []
+      let listings = 0
+      let ext = Option.none<ReturnType<typeof useExtensionUI>>()
+      const setup = yield* renderScoped(
+        () => (
+          <>
+            <App />
+            <ExtensionUIProbe onReady={(value) => (ext = Option.some(value))} />
+          </>
+        ),
+        {
+          client: createMockClient({
+            auth: { listProviders: () => Effect.succeed([]) },
+            branch: { getTree: () => Effect.succeed([]) },
+            message: recordSends(sent),
+            extension: {
+              // The first listing is from before the extension registered.
+              listSlashCommands: () =>
+                Effect.sync(() => {
+                  listings += 1
+                  if (listings === 1) return []
+                  return [{ name: "late", extensionId: "@test/late", capabilityId: "late" }]
+                }),
+              request: (input: { readonly capabilityId: string; readonly input: unknown }) =>
+                Effect.sync(() => {
+                  if (input.capabilityId === "late") requests.push(input.input)
+                }),
+            },
+          }),
+          runtime: createMockRuntime(),
+          builtins: builtinClientModules,
+          initialSession: {
+            id: SessionId.make("session-a"),
+            activeBranchId: BranchId.make("branch-a"),
+            name: "Session A",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        },
+      )
+      yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
+      yield* waitForFrame(
+        setup,
+        () => Option.exists(ext, (value) => value.commandsSettled()),
+        "the commands settled",
+      )
+      yield* typeCommand("/late now")(setup)
+      yield* waitForFrame(setup, () => requests.length + sent.length > 0, "the command answered")
+      expect(requests).toEqual(["now"])
+      expect(sent).toEqual([])
+      yield* typeCommand("/nowhere else")(setup)
+      yield* waitForFrame(setup, () => sent.length > 0, "the message sent")
+      expect(sent).toEqual(["/nowhere else"])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   // A server command the server refuses says so on the status row.
   it.scopedLive("a server slash command that fails shows why", () =>
     Effect.gen(function* () {

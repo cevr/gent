@@ -281,12 +281,15 @@ at 2000 lines or 50 KB of UTF-8, counted by the core line rule.
 A command sent before every command source has answered (the client
 extensions' load and the session's server slash list, `commandsSettled` in
 `extensions/host.tsx`) waits for them, then resolves. Only a known command
-name is a command: once every source has answered, a line whose first word
-names no command (a path, a typo, a pasted log line) goes out as a message,
-and a draft that starts with a paste chip is never a command. A
-command still waiting when the session view goes comes back to its draft too.
-The server list is read once per session and connection: a listing that a
-dropped connection cut short is no answer, and the reconnect reads it again.
+name is a command, and the session decides which names are known. A name
+the settled sources lack makes the session read the server list once more
+(`refreshCommands`), since an extension can register a command after the
+last listing; a line whose first word still names no command (a path, a
+typo, a pasted log line) then goes out as a message. A draft that starts
+with a paste chip is never a command. A command still waiting when the
+session view goes comes back to its draft too. The server list is read once
+per session and connection and on each refresh: a listing that a dropped
+connection cut short is no answer, and the reconnect reads it again.
 
 ## Extensions
 

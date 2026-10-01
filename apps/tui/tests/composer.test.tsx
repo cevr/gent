@@ -2145,6 +2145,8 @@ function ContributeSlashEnter() {
 
 function TestComposerSlashEnter(props: {
   readonly onSlashCommand: (cmd: string, args: string) => void
+  /** Stands in for the session's verdict that a name is no command. */
+  readonly noCommand?: (cmd: string) => boolean
   /** A draft sent as a message. */
   readonly onSubmit?: (content: string) => void
   readonly children?: JSX.Element
@@ -2179,10 +2181,11 @@ function TestComposerSlashEnter(props: {
         transitionComposerInteraction(current, event, ext.autocompleteItems()),
       ),
     onSubmit: (content: string) => Effect.sync(() => props.onSubmit?.(content)),
-    onSlashCommand: ({ cmd, args }: SlashSubmission) => {
-      props.onSlashCommand(cmd, args)
-      return Effect.void
-    },
+    onSlashCommand: ({ cmd, args, send }: SlashSubmission) =>
+      Effect.sync(() => {
+        if (props.noCommand?.(cmd) === true) send()
+        else props.onSlashCommand(cmd, args)
+      }),
     // The command runs as given: this harness has no ctrl+c ladder to stop it.
     runShell: <A, E, R>(_command: string, run: Effect.Effect<A, E, R>) => run,
     onRestoreQueue: () => {},
@@ -2350,9 +2353,10 @@ describe("Composer slash Enter", () => {
     }),
   )
 
-  // Only a known command name is a command. A path, a typo or a pasted log
-  // line that starts with `/` is text for the model.
-  it.scopedLive("a draft whose first word names no command is sent as a message", () =>
+  // Only a known command name is a command, and the session decides which
+  // names are known. A path, a typo or a pasted log line that starts with `/`
+  // that it calls no command goes out whole as text for the model.
+  it.scopedLive("a draft whose first word the session calls no command is sent as a message", () =>
     Effect.gen(function* () {
       for (const draft of ["/xyz", "/tmp/x.log what is this?"]) {
         const dispatched: Array<Dispatched> = []
@@ -2361,6 +2365,7 @@ describe("Composer slash Enter", () => {
           () => (
             <TestComposerSlashEnter
               onSlashCommand={(cmd, args) => dispatched.push({ cmd, args })}
+              noCommand={(cmd) => cmd === "xyz" || cmd === "tmp/x.log"}
               onSubmit={(content) => submitted.push(content)}
             >
               <Composer.Autocomplete />
