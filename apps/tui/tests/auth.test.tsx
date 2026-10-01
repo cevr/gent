@@ -26,6 +26,7 @@ import {
   renderScoped,
 } from "./render-harness-boundary"
 import { waitForFrame } from "./helpers-boundary"
+import { ProviderAuthError } from "@gent/core/extensions/api"
 import { onMount } from "solid-js"
 
 // ── auth state ──────────────────────────────────────────────────────────────
@@ -212,6 +213,11 @@ function ClientProbe(props: { readonly onReady: (ctx: ClientContextValue) => voi
   onMount(() => props.onReady(client))
   return <box />
 }
+/** Lands a snapshot naming `agent` before the panes after it mount, as the session view does. */
+function SnapshotAgent(props: { readonly agent: AgentName }) {
+  applySnapshotAgent(useClient(), props.agent)
+  return <box />
+}
 /**
  * Build a services Context that includes a test `LinkOpener` impl.
  *
@@ -246,11 +252,18 @@ describe("Auth route", () => {
         },
       })
       const runtime = createMockRuntime()
-      yield* renderScoped(() => <Auth sessionId={activeSessionId} />, {
-        client,
-        runtime,
-        initialAgent: AgentName.make("helper:google"),
-      })
+      yield* renderScoped(
+        () => (
+          <>
+            <SnapshotAgent agent={AgentName.make("helper:google")} />
+            <Auth sessionId={activeSessionId} />
+          </>
+        ),
+        {
+          client,
+          runtime,
+        },
+      )
       expect(calls).toEqual([{ agentName: "helper:google", sessionId: activeSessionId }])
     }),
   )
@@ -348,6 +361,42 @@ describe("Auth route", () => {
       expect(deleted).toEqual(["openai"])
     }).pipe(Effect.timeout("10 seconds")),
   )
+  // A row with nothing stored has nothing to delete, so its hints leave
+  // ctrl+x out; the hint returns on a row that stores a key.
+  it.scopedLive("ctrl+x delete is offered only on a row that stores a key", () =>
+    Effect.gen(function* () {
+      const client = createMockClient({
+        auth: {
+          listProviders: () =>
+            Effect.succeed([
+              {
+                provider: ProviderId.make("anthropic"),
+                hasKey: false,
+                required: false,
+                source: "none",
+                authType: absent,
+              },
+              {
+                provider: ProviderId.make("openai"),
+                hasKey: true,
+                required: false,
+                source: "stored",
+                authType: "api",
+              },
+            ]),
+          listMethods: () => Effect.succeed({ openai: [apiMethodRoute] }),
+        },
+      })
+      const setup = yield* renderScoped(() => <Auth sessionId={activeSessionId} />, {
+        client,
+        runtime: createMockRuntime(),
+      })
+      const list = yield* waitForFrame(setup, (frame) => frame.includes("enter select"))
+      expect(list).not.toContain("ctrl+x delete")
+      setup.mockInput.pressArrow("down")
+      yield* waitForFrame(setup, (frame) => frame.includes("ctrl+x delete"), "the stored row")
+    }).pipe(Effect.timeout("4 seconds")),
+  )
   // The session's profile decides which driver owns a sign-in, so a typed
   // key is saved in that profile, as a sign-out is.
   it.scopedLive("a typed key is saved in the session's profile", () =>
@@ -402,7 +451,6 @@ describe("Auth route", () => {
       yield* renderScoped(() => <Auth sessionId={activeSessionId} />, {
         client,
         runtime: createMockRuntime(),
-        initialAgent: AgentName.make("helper:google"),
       })
       expect(methodCalls).toEqual([{ sessionId: activeSessionId }])
     }).pipe(Effect.timeout("10 seconds")),
@@ -441,6 +489,7 @@ describe("Auth route", () => {
       const setup = yield* renderScoped(
         () => (
           <>
+            <SnapshotAgent agent={AgentName.make("primary")} />
             <ClientProbe onReady={(c) => (ctx = Option.some(c))} />
             <Auth sessionId={activeSessionId} />
           </>
@@ -448,7 +497,6 @@ describe("Auth route", () => {
         {
           client,
           runtime,
-          initialAgent: AgentName.make("primary"),
         },
       )
       expect(pending.map((entry) => entry.agentName)).toEqual(["primary"])
@@ -532,7 +580,6 @@ describe("Auth route", () => {
         {
           client,
           runtime,
-          initialAgent: AgentName.make("primary"),
         },
       )
       yield* waitForFrame(setup, (frame) => frame.includes("anthropic"))
@@ -645,7 +692,6 @@ describe("Auth route", () => {
         {
           client,
           runtime,
-          initialAgent: AgentName.make("primary"),
         },
       )
       yield* waitForFrame(setup, (frame) => frame.includes("anthropic"))
@@ -724,7 +770,6 @@ describe("Auth route", () => {
         client,
         runtime,
         services,
-        initialAgent: AgentName.make("primary"),
       })
       yield* waitForFrame(setup, (frame) => frame.includes("anthropic"))
       setup.mockInput.pressEnter()
@@ -744,6 +789,217 @@ describe("Auth route", () => {
       ])
     }),
   )
+  /** One optional provider whose only method is a browser OAuth sign-in. */
+  const browserSignIn = (
+    callback: (input: { readonly code?: string }) => Effect.Effect<void>,
+  ): Effect.Effect<ReturnType<typeof createMockClient>> =>
+    Effect.succeed(
+      createMockClient({
+        auth: {
+          listProviders: () =>
+            Effect.succeed([
+              {
+                provider: "anthropic",
+                hasKey: false,
+                required: false,
+                source: "none",
+                authType: absent,
+              },
+            ]),
+          listMethods: () => Effect.succeed({ anthropic: [oauthMethodRoute] }),
+          authorize: () =>
+            Effect.succeed({
+              authorizationId: "auth-wait",
+              url: "https://example.com/oauth",
+              method: "auto",
+            }),
+          callback,
+        },
+      }),
+    )
+
+  // A browser that cannot reach the loopback redirect (ssh, a devbox) leaves
+  // the code in the address bar; the reader pastes it while the wait runs.
+  it.scopedLive("a code pasted while a browser sign-in waits signs in with it", () =>
+    Effect.gen(function* () {
+      const sent: Array<string> = []
+      const client = yield* browserSignIn((input) => {
+        const code = Option.fromUndefinedOr(input.code)
+        sent.push(Option.getOrElse(code, () => "<browser wait>"))
+        // The redirect never comes; only a pasted code finishes the sign-in.
+        if (Option.isNone(code)) return Effect.never
+        return Effect.void
+      })
+      const services = yield* servicesWithLinkOpener(() => Effect.void)
+      const setup = yield* renderScoped(() => <Auth sessionId={activeSessionId} />, {
+        client,
+        runtime: createMockRuntime(),
+        services,
+      })
+      yield* waitForFrame(setup, (frame) => frame.includes("anthropic"))
+      setup.mockInput.pressEnter()
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("Waiting for sign-in") && sent.length === 1,
+        "the browser wait",
+      )
+      // A bare Enter while the browser wait runs starts no second wait.
+      setup.mockInput.pressEnter()
+      yield* Effect.promise(() => setup.mockInput.typeText("pasted-code"))
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("Authenticated anthropic via OAuth"),
+        "the pasted code signs in",
+      )
+      expect(sent).toEqual(["<browser wait>", "pasted-code"])
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
+  // The server holds the login (and its loopback port) while a browser wait
+  // is in flight, so a wait the reader left must end with the screen.
+  it.scopedLive("Esc on a waiting browser sign-in interrupts its wait", () =>
+    Effect.gen(function* () {
+      const waiting = yield* Deferred.make<void>()
+      const interrupted = yield* Deferred.make<void>()
+      const client = yield* browserSignIn(() =>
+        Deferred.done(waiting, Exit.void).pipe(
+          Effect.andThen(Effect.never),
+          Effect.onInterrupt(() => Deferred.done(interrupted, Exit.void)),
+        ),
+      )
+      const services = yield* servicesWithLinkOpener(() => Effect.void)
+      const setup = yield* renderScoped(() => <Auth sessionId={activeSessionId} />, {
+        client,
+        runtime: createMockRuntime(),
+        services,
+      })
+      yield* waitForFrame(setup, (frame) => frame.includes("anthropic"))
+      setup.mockInput.pressEnter()
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      yield* Deferred.await(waiting)
+      setup.mockInput.pressEscape()
+      yield* Deferred.await(interrupted)
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
+  // A code trades once. A browser wait that took the redirect may be
+  // exchanging it when the reader pastes a code: the server holds the paste
+  // behind that exchange, so the wait must run on to store the credential.
+  it.scopedLive(
+    "a code pasted while the browser exchanges its grant lets the exchange finish",
+    () =>
+      Effect.gen(function* () {
+        const waiting = yield* Deferred.make<void>()
+        const redirect = yield* Deferred.make<void>()
+        const exchanging = yield* Deferred.make<void>()
+        const stored = yield* Deferred.make<void>()
+        const client = yield* browserSignIn((input) => {
+          // The pasted code waits behind the exchange, then takes its outcome.
+          if (Option.isSome(Option.fromUndefinedOr(input.code))) return Deferred.await(stored)
+          return Deferred.done(waiting, Exit.void).pipe(
+            Effect.andThen(Deferred.await(redirect)),
+            Effect.andThen(Deferred.done(exchanging, Exit.void)),
+            Effect.andThen(Effect.yieldNow),
+            Effect.andThen(Deferred.done(stored, Exit.void)),
+          )
+        })
+        const services = yield* servicesWithLinkOpener(() => Effect.void)
+        const setup = yield* renderScoped(() => <Auth sessionId={activeSessionId} />, {
+          client,
+          runtime: createMockRuntime(),
+          services,
+        })
+        yield* waitForFrame(setup, (frame) => frame.includes("anthropic"))
+        setup.mockInput.pressEnter()
+        yield* Effect.promise(() => setup.renderOnce())
+        setup.mockInput.pressEnter()
+        yield* Deferred.await(waiting)
+        yield* Effect.promise(() => setup.mockInput.typeText("pasted-code"))
+        yield* Effect.promise(() => setup.renderOnce())
+        yield* Deferred.done(redirect, Exit.void)
+        yield* Deferred.await(exchanging)
+        setup.mockInput.pressEnter()
+        yield* waitForFrame(
+          setup,
+          (frame) => frame.includes("Authenticated anthropic via OAuth"),
+          "the exchange stores the credential and the paste takes its outcome",
+        )
+      }).pipe(Effect.timeout("4 seconds")),
+  )
+
+  // The pane reloads its catalog after a browser sign-in. A code sent in
+  // that window would ask the server for a login it already finished.
+  it.scopedLive("a code typed after the browser signed in sends no second callback", () =>
+    Effect.gen(function* () {
+      const callbacks: Array<string> = []
+      const reload = yield* Deferred.make<void>()
+      let loads = 0
+      const provider = {
+        provider: "anthropic",
+        hasKey: false,
+        required: false,
+        source: "none" as const,
+        authType: absent,
+      }
+      const client = createMockClient({
+        auth: {
+          listProviders: () =>
+            Effect.suspend(() => {
+              loads++
+              // The reload after the sign-in waits until the test lets it go.
+              if (loads === 1) return Effect.succeed([provider])
+              return Deferred.await(reload).pipe(Effect.as([provider]))
+            }),
+          listMethods: () => Effect.succeed({ anthropic: [oauthMethodRoute] }),
+          authorize: () =>
+            Effect.succeed({
+              authorizationId: "auth-wait",
+              url: "https://example.com/oauth",
+              method: "auto",
+            }),
+          callback: (input: { readonly code?: string }) => {
+            const code = Option.fromUndefinedOr(input.code)
+            callbacks.push(Option.getOrElse(code, () => "<browser wait>"))
+            if (Option.isNone(code)) return Effect.void
+            return Effect.fail(
+              new ProviderAuthError({ message: "callback state is missing or expired" }),
+            )
+          },
+        },
+      })
+      const services = yield* servicesWithLinkOpener(() => Effect.void)
+      const setup = yield* renderScoped(() => <Auth sessionId={activeSessionId} />, {
+        client,
+        runtime: createMockRuntime(),
+        services,
+      })
+      yield* waitForFrame(setup, (frame) => frame.includes("anthropic"))
+      setup.mockInput.pressEnter()
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("Authenticated anthropic via OAuth") && loads === 2,
+        "the browser signs in and the reload starts",
+      )
+      yield* Effect.promise(() => setup.mockInput.typeText("late-code"))
+      setup.mockInput.pressEnter()
+      yield* Effect.promise(() => setup.renderOnce())
+      yield* Deferred.done(reload, Exit.void)
+      const frame = yield* waitForFrame(
+        setup,
+        (next) => next.includes("Authenticated anthropic via OAuth") && loads === 2,
+        "the reload lands",
+      )
+      expect(frame).not.toContain("expired")
+      expect(callbacks).toEqual(["<browser wait>"])
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
   it.scopedLive("ignores stale oauth opener failures after the selected agent changes", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()
@@ -817,7 +1073,6 @@ describe("Auth route", () => {
           client,
           runtime,
           services,
-          initialAgent: AgentName.make("primary"),
         },
       )
       yield* waitForFrame(setup, (frame) => frame.includes("anthropic"))
@@ -890,7 +1145,6 @@ describe("Auth route", () => {
         client,
         runtime,
         services,
-        initialAgent: AgentName.make("primary"),
       })
       yield* waitForFrame(setup, (frame) => frame.includes("anthropic"))
       setup.mockInput.pressEnter()
@@ -973,7 +1227,6 @@ describe("Auth route", () => {
         client,
         runtime: createMockRuntime(),
         services,
-        initialAgent: AgentName.make("primary"),
       })
       yield* waitForFrame(setup, (frame) => frame.includes("openai"))
       setup.mockInput.pressEnter()
@@ -1036,6 +1289,7 @@ describe("Auth route", () => {
         const setup = yield* renderScoped(
           () => (
             <>
+              <SnapshotAgent agent={AgentName.make("primary")} />
               <ClientProbe onReady={(c) => (ctx = Option.some(c))} />
               <Auth sessionId={activeSessionId} />
             </>
@@ -1044,7 +1298,6 @@ describe("Auth route", () => {
             client,
             runtime: createMockRuntime(),
             services,
-            initialAgent: AgentName.make("primary"),
           },
         )
         yield* waitForFrame(setup, (frame) => frame.includes("openai"))
@@ -1092,7 +1345,6 @@ describe("Auth route", () => {
         client,
         runtime: createMockRuntime(),
         services,
-        initialAgent: AgentName.make("primary"),
       })
       yield* waitForFrame(setup, (frame) => frame.includes("openai"))
       setup.mockInput.pressEnter()
@@ -1142,7 +1394,6 @@ describe("Auth route", () => {
         client,
         runtime: createMockRuntime(),
         services,
-        initialAgent: AgentName.make("main"),
         initialSession: {
           id: SessionId.make("session-oauth"),
           activeBranchId: BranchId.make("branch-oauth"),

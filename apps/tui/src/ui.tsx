@@ -499,6 +499,10 @@ export const KeyHints = {
   submit: { key: "enter", verb: "submit" },
   close: { key: "esc", verb: "close" },
   back: { key: "esc", verb: "back" },
+  /** Stops what runs: a turn, an ask. */
+  cancel: { key: "esc", verb: "cancel" },
+  // OpenTUI reads Alt/Option as meta; cmd (super) reaches only a kitty-protocol terminal.
+  restoreQueue: { key: "alt+up", verb: "restore" },
   /** Arms the row; a second press deletes it. */
   delete: { key: "ctrl+x", verb: "delete" },
   exit: { key: "ctrl+c", verb: "exit" },
@@ -506,7 +510,7 @@ export const KeyHints = {
 
 export const keyHint = (key: string, verb: string): KeyHint => ({ key, verb })
 
-const KEY_HINT_SEPARATOR = " · "
+export const KEY_HINT_SEPARATOR = " · "
 
 /**
  * The hint row at `width`: the hints joined by one separator. Too wide, it
@@ -1001,8 +1005,22 @@ interface SelectListProps<A> {
    * mounts still lands on the right row.
    */
   readonly sticky?: (values: ReadonlyArray<A>) => Option.Option<number>
-  /** Drawn in place of the list when it holds nothing selectable. */
-  readonly empty?: () => JSX.Element
+  /**
+   * The rows are still on their way. The list's one empty row reads
+   * `Loading…` while they are, else `No matches` under a query, else
+   * `Nothing here`.
+   */
+  readonly loading?: () => boolean
+  /**
+   * The query of a list whose filter the pane owns (the composer's popup);
+   * the empty row reads it to tell `No matches` from `Nothing here`.
+   */
+  readonly query?: () => string
+  /**
+   * Drawn in place of the empty row, when Some: a state the empty row does
+   * not name, such as a failure the reader can retry.
+   */
+  readonly empty?: () => Option.Option<JSX.Element>
   /**
    * Keys the pane claims before the list sees them. Return true to consume.
    * The value under the cursor is passed so a pane need not track it.
@@ -1044,6 +1062,24 @@ export function SelectList<A>(props: SelectListProps<A>) {
       }),
     )
   const selected = (): Option.Option<A> => Option.fromNullishOr(values()[state().selectedIndex])
+  const emptyRow = () =>
+    Option.getOrElse(
+      Option.flatMap(Option.fromUndefinedOr(props.empty), (empty) => empty()),
+      () => {
+        const query = Option.match(Option.fromUndefinedOr(props.query), {
+          onNone: () => state().query,
+          onSome: (owned) => owned(),
+        })
+        let label = "Nothing here"
+        if (query.length > 0) label = "No matches"
+        if (props.loading?.() === true) label = "Loading…"
+        return (
+          <box paddingLeft={1}>
+            <text style={{ fg: theme.textMuted }}>{label}</text>
+          </box>
+        )
+      },
+    )
 
   /** Where the sticky rule wants the cursor, if the pane has one. */
   const anchor = (entries: ReadonlyArray<A>): Option.Option<number> =>
@@ -1280,7 +1316,7 @@ export function SelectList<A>(props: SelectListProps<A>) {
       </Show>
 
       <ChromePanel.Body ref={(value) => (scrollRef = Option.some(value))}>
-        <Show when={values().length > 0} fallback={props.empty?.()}>
+        <Show when={values().length > 0} fallback={emptyRow()}>
           <For each={indexed()}>
             {(entry) =>
               Option.match(entry.index, {

@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { DateTime, Effect, Option, Predicate, Schedule } from "effect"
+import { DateTime, Effect, Option, Order, Predicate, Schedule } from "effect"
 import { createEffect, createSignal, For, on, Show } from "solid-js"
 import {
   type AgentRowEntry,
@@ -108,7 +108,8 @@ const inStartOrder = (rows: ReadonlyArray<AgentRowEntry>): ReadonlyArray<AgentRo
   rows.toSorted((left, right) => {
     const byStart = (left.createdAt ?? 0) - (right.createdAt ?? 0)
     if (byStart !== 0) return byStart
-    return `${left.sessionId}:${left.branchId}`.localeCompare(
+    return Order.String(
+      `${left.sessionId}:${left.branchId}`,
       `${right.sessionId}:${right.branchId}`,
     )
   })
@@ -511,12 +512,6 @@ export const detailLabel = (detail: Option.Option<ExtensionAgentDetail>): string
     },
   })
 
-/** An empty list means one of two different things; say which. */
-const emptyLabel = (loading: boolean): string => {
-  if (loading) return "loading…"
-  return "no agents"
-}
-
 export function AgentsPane(props: {
   open: boolean
   onClose: () => void
@@ -692,7 +687,7 @@ export function AgentsPane(props: {
       {/* A heading opens each section, so the pane draws more lines than it
           has rows; the frame adds the detail line under them. */}
       <PickerFrame
-        title={`Agents · ${countsLabel(visible())}`}
+        title={`Sessions · ${countsLabel(visible())}`}
         keys={[
           KeyHints.move,
           KeyHints.select,
@@ -745,9 +740,7 @@ export function AgentsPane(props: {
             }
             return false
           }}
-          empty={() => (
-            <text style={{ fg: theme.textMuted }}>{emptyLabel(props.controller.loading())}</text>
-          )}
+          loading={props.controller.loading}
           onSelect={props.onSelect}
           onDismiss={props.onClose}
         />

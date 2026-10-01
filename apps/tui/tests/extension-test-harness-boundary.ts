@@ -14,7 +14,7 @@ import type {
 } from "../src/extensions/client-facets"
 import { BunServices } from "@effect/platform-bun"
 import { makeClientRuntime } from "../src/extensions/host"
-import { createMockClient, createMockRuntime } from "./render-harness-boundary"
+import { createMockClient } from "./render-harness-boundary"
 
 type ActiveClientSession = { readonly sessionId: SessionId; readonly branchId: BranchId }
 
@@ -110,9 +110,7 @@ export const makeClientTestTransport = (
       request: (request: ActiveClientSession) => {
         const requestEffect = Option.fromNullishOr(opts.requestEffect)
         if (Option.isSome(requestEffect)) {
-          return requestEffect
-            .value({ sessionId: request.sessionId, branchId: request.branchId })
-            .pipe(Effect.orDie)
+          return requestEffect.value({ sessionId: request.sessionId, branchId: request.branchId })
         }
         const requestDeferred = Option.fromNullishOr(opts.requestDeferred)
         if (Option.isSome(requestDeferred)) return Deferred.await(requestDeferred.value)
@@ -120,10 +118,8 @@ export const makeClientTestTransport = (
       },
     },
   })
-  const runtime = createMockRuntime()
   return {
     client,
-    runtime,
     currentSession: Option.getOrElse(
       Option.fromUndefinedOr(opts.currentSession),
       () => () => TEST_SESSION,
@@ -143,7 +139,7 @@ export const makeClientTestTransport = (
 const throwOnAccess = (label: string): never =>
   Effect.runSync(Effect.die(`unexpected transport call in pure load test: ${label}`))
 
-/** A transport whose every client and runtime call fails the test, for a load that must not reach it. */
+/** A transport whose every client call fails the test, for a load that must not reach it. */
 export const makeUnreachableTransport = (): ClientShellTransport => ({
   client: new Proxy(createMockClient(), {
     get: (_target, prop) =>
@@ -154,9 +150,6 @@ export const makeUnreachableTransport = (): ClientShellTransport => ({
             throwOnAccess(`client.${String(prop)}.${String(method)}`),
         },
       ),
-  }),
-  runtime: new Proxy(createMockRuntime(), {
-    get: (_target, method) => () => throwOnAccess(`runtime.${String(method)}`),
   }),
   // The session in view is the shell's own state, not a transport call.
   currentSession: () => TEST_SESSION,

@@ -303,12 +303,12 @@ describe("select list sticky selection", () => {
             if (index < 0) return Option.none()
             return Option.some(index)
           }}
-          empty={() => <text>nothing yet</text>}
+          loading={() => rows().length === 0}
           onSelect={() => {}}
           onDismiss={() => {}}
         />
       ))
-      yield* waitForFrame(setup, () => renderFrame(setup).includes("nothing yet"), "empty")
+      yield* waitForFrame(setup, () => renderFrame(setup).includes("Loading…"), "loading")
 
       setRows(fruits)
       yield* waitForFrame(setup, () => renderFrame(setup).includes("> Cherry"), "anchored")
@@ -499,7 +499,31 @@ describe("select list rows", () => {
     }),
   )
 
-  it.scopedLive("draws the empty fallback when nothing is selectable", () =>
+  // One empty row for every list: the words name the state, the same in each pane.
+  it.scopedLive("an empty list says loading, no matches, or nothing here", () =>
+    Effect.gen(function* () {
+      const [loading, setLoading] = createSignal(true)
+      const setup = yield* renderScoped(() => (
+        <SelectList
+          id="fruit"
+          open={true}
+          rows={(): ReadonlyArray<SelectListRow<Fruit>> => []}
+          rowKey={(fruit) => fruit.id}
+          filter={{ onQueryChange: () => {} }}
+          loading={loading}
+          onSelect={() => {}}
+          onDismiss={() => {}}
+        />
+      ))
+      yield* waitForFrame(setup, (frame) => frame.includes("Loading…"), "loading")
+      setLoading(false)
+      yield* waitForFrame(setup, (frame) => frame.includes("Nothing here"), "nothing here")
+      yield* Effect.promise(() => setup.mockInput.typeText("kiwi"))
+      yield* waitForFrame(setup, (frame) => frame.includes("No matches"), "no matches")
+    }),
+  )
+
+  it.scopedLive("a pane's own empty row replaces the list's, when it has one", () =>
     Effect.gen(function* () {
       const setup = yield* renderScoped(() => (
         <SelectList
@@ -507,13 +531,13 @@ describe("select list rows", () => {
           open={true}
           rows={(): ReadonlyArray<SelectListRow<Fruit>> => []}
           rowKey={(fruit) => fruit.id}
-          empty={() => <text>nothing matches</text>}
+          empty={() => Option.some(<text>Press r to retry.</text>)}
           onSelect={() => {}}
           onDismiss={() => {}}
         />
       ))
-      yield* waitForFrame(setup, () => renderFrame(setup).includes("nothing matches"), "empty")
-      expect(renderFrame(setup)).not.toContain("Apple")
+      yield* waitForFrame(setup, (frame) => frame.includes("Press r to retry."), "own row")
+      expect(renderFrame(setup)).not.toContain("Nothing here")
     }),
   )
 })

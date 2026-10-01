@@ -859,7 +859,7 @@ describe("Effect-purity locks (compile-time)", () => {
     // @ts-expect-error -- transport event envelopes are SDK/TUI plumbing, not authoring API
     type _BadEventEnvelope = PublicExtensionApi.EventEnvelope
     // @ts-expect-error -- interaction wire state is client/runtime plumbing
-    type _BadActiveInteraction = PublicExtensionApi.ActiveInteraction
+    type _BadInteractionPresented = PublicExtensionApi.InteractionPresented
     // @ts-expect-error -- the raw host platform is loop plumbing; authors read setup facts on host.host
     type _BadExtensionHostPlatform = PublicExtensionApi.ExtensionHostPlatform
     // @ts-expect-error -- host file lock Tag is private; extensions reach file locks through ExtensionContext.FileLock

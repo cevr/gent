@@ -435,7 +435,11 @@ const readColorFgBg = Config.option(Config.String("COLORFGBG")).pipe(
 const readDarwinAppearance = Effect.gen(function* () {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
   const exitCode = yield* spawner
-    .exitCode(ChildProcess.make("defaults", ["read", "-g", "AppleInterfaceStyle"]))
+    .exitCode(
+      ChildProcess.make("defaults", ["read", "-g", "AppleInterfaceStyle"], {
+        forceKillAfter: "2 seconds",
+      }),
+    )
     .pipe(Effect.orElseSucceed(() => 1))
   if (exitCode === 0) return "dark"
   return "light"

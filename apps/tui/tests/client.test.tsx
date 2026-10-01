@@ -41,6 +41,7 @@ import {
 } from "../src/client"
 import { createSignal, onMount, Show } from "solid-js"
 import {
+  applySnapshotAgent,
   createMockClient,
   createMutableRuntime,
   defaultTestSession,
@@ -501,6 +502,66 @@ describe("ClientProvider session metrics", () => {
     }),
   )
 
+  it.scopedLive("a route reply a newer read replaced is dropped", () =>
+    Effect.gen(function* () {
+      let ctx = Option.none<ClientContextValue>()
+      const held = yield* Deferred.make<ModelId>()
+      let reads = 0
+      // The read to hold: the first settings read, after the mount's own.
+      let holdRead = 0
+      const client = createMockClient({
+        session: {
+          get: (input: { sessionId: SessionId }) => {
+            reads += 1
+            const view = (resolvedModelId: ModelId) => ({
+              id: input.sessionId,
+              createdAt: dateFromMillis(0),
+              updatedAt: dateFromMillis(0),
+              resolvedModelId,
+            })
+            // The held read's reply lands after the newer one's.
+            if (reads === holdRead) return Deferred.await(held).pipe(Effect.map(view))
+            return Effect.succeed(view(ModelId.make("anthropic/newer-settings-model")))
+          },
+        },
+      })
+      const setup = yield* renderScoped(
+        () => <ClientProbe onReady={(c) => (ctx = Option.some(c))} />,
+        {
+          client,
+          initialSession: {
+            id: FIRST.sessionId,
+            activeBranchId: FIRST.branchId,
+            name: "First",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        },
+      )
+      const clientContext = yield* requireClient(ctx)
+      holdRead = reads + 1
+      const settingsChanged = (id: number) =>
+        clientContext.applySessionEvent(
+          EventEnvelope.make({
+            id: EventId.make(id),
+            createdAt: 0,
+            event: AgentEvent.cases.SessionSettingsUpdated.make({ sessionId: FIRST.sessionId }),
+          }),
+        )
+      settingsChanged(1)
+      settingsChanged(2)
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(clientContext.model()).toBe(ModelId.make("anthropic/newer-settings-model"))
+
+      // The older read answers last, for settings the session no longer has.
+      yield* Deferred.succeed(held, firstResolvedModel)
+      yield* Effect.promise(() => setup.renderOnce())
+      yield* Effect.promise(() => setup.renderOnce())
+
+      expect(clientContext.model()).toBe(ModelId.make("anthropic/newer-settings-model"))
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
   it.scopedLive("live events move the totals on the snapshot's, with no snapshot read", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()
@@ -794,11 +855,12 @@ describe("ClientProvider session lifecycle", () => {
               createdAt: dateFromMillis(0),
               updatedAt: dateFromMillis(0),
             },
-            initialAgent: AgentName.make("secondary"),
           },
         )
         if (Option.isNone(ctx)) return yield* Effect.die("client context not ready")
         const active = ctx.value
+        // The resumed session's snapshot names its agent.
+        applySnapshotAgent(active, AgentName.make("secondary"))
         expect(active.agent()).toEqual(Option.some(AgentName.make("secondary")))
         active.createSession()
         yield* waitForFrame(
@@ -2011,5 +2073,29 @@ describe("ClientProvider errors", () => {
       expect(client.isStreaming()).toBe(true)
       expect(client.error()).toEqual(Option.none())
     }),
+  )
+})
+
+describe("ClientProvider connection", () => {
+  // The status row and the activity report read `isReconnecting`, so both
+  // wire states that mean "not connected yet" have to answer true.
+  it.scopedLive("the client reads as reconnecting while it connects or reconnects", () =>
+    Effect.gen(function* () {
+      const lifecycle = createMutableRuntime(
+        ConnectionState.cases.Connected.make({ generation: 0 }),
+      )
+      const ReconnectProbe = () => {
+        const client = useClient()
+        return <text>{`reconnecting:${String(client.isReconnecting())}`}</text>
+      }
+      const setup = yield* renderScoped(() => <ReconnectProbe />, { runtime: lifecycle.runtime })
+      yield* waitForFrame(setup, (frame) => frame.includes("reconnecting:false"), "connected")
+      lifecycle.emit(ConnectionState.cases.Reconnecting.make({ attempt: 1, generation: 1 }))
+      yield* waitForFrame(setup, (frame) => frame.includes("reconnecting:true"), "reconnecting")
+      lifecycle.emit(ConnectionState.cases.Connected.make({ generation: 1 }))
+      yield* waitForFrame(setup, (frame) => frame.includes("reconnecting:false"), "reconnected")
+      lifecycle.emit(ConnectionState.cases.Connecting.make({}))
+      yield* waitForFrame(setup, (frame) => frame.includes("reconnecting:true"), "connecting")
+    }).pipe(Effect.timeout("10 seconds")),
   )
 })

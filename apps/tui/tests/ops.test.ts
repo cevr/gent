@@ -32,6 +32,7 @@ import {
   ServerLockEntry,
   ServerLockStatus,
 } from "@gent/sdk"
+import { textWidth } from "../src/bun-adapter"
 import { makeClientTraceLogger } from "../src/client"
 import {
   extensionHealthFromSnapshot,
@@ -46,6 +47,7 @@ import {
   refuseResetWhileServing,
   reportFailureOnStderr,
   resetStorage,
+  resolveClientBundle,
   resumableSessions,
   seedDebugSession,
 } from "../src/ops"
@@ -165,6 +167,41 @@ describe("resumable sessions", () => {
     expect(resumableSessions({ connect: server, inMemory: true })).toBe(true)
     expect(resumableSessions({ connect: server, inMemory: false })).toBe(true)
   })
+})
+
+// A scripted model needs no sign-in. Only the server this run starts serves
+// one: a connected server chose its own model, so its sign-in gate stays.
+describe("scripted model", () => {
+  const mockEmpty = (cwd: string) => ({
+    cwd,
+    inMemory: true,
+    debug: false,
+    mock: Option.some({ empty: true }),
+    authDirectory: Option.some(cwd),
+  })
+
+  it.live("--mock-empty on a server this run starts serves a scripted model", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const cwd = yield* makeTempDirectoryScoped("gent-scripted-local-")
+        const bundle = yield* resolveClientBundle({ ...mockEmpty(cwd), connect: Option.none() })
+        expect(bundle.scriptedModel).toBe(true)
+      }).pipe(Effect.timeout("10 seconds")),
+    ),
+  )
+
+  it.live("--mock-empty with --connect keeps the connected server's model", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const cwd = yield* makeTempDirectoryScoped("gent-scripted-connect-")
+        const bundle = yield* resolveClientBundle({
+          ...mockEmpty(cwd),
+          connect: Option.some("ws://127.0.0.1:9/nonexistent-loop-probe"),
+        })
+        expect(bundle.scriptedModel).toBe(false)
+      }).pipe(Effect.timeout("10 seconds")),
+    ),
+  )
 })
 
 describe("startup failure report", () => {
@@ -444,6 +481,28 @@ describe("local health", () => {
       ["older", "older", "/work/older"],
     ])
     expect(formatSessionList([child])).toBe("No sessions found.")
+  })
+
+  // A name from a CJK or emoji prompt is wider on screen than its code
+  // units: the columns after it stay under their headers.
+  test("the sessions listing aligns its columns by display width", () => {
+    const named = (id: string, name: string) =>
+      new Session({
+        id: SessionId.make(id),
+        name,
+        cwd: `/work/${id}`,
+        createdAt: dateFromMillis(0),
+        updatedAt: dateFromMillis(0),
+      })
+    const [header = "", rule = "", ...rows] = formatSessionList([
+      named("a", "plain name"),
+      named("b", "日本語のテスト"),
+      named("c", "ship it 🚀"),
+    ]).split("\n")
+    const columnOf = (line: string, text: string) => textWidth(line.slice(0, line.indexOf(text)))
+    const cwdColumn = columnOf(header, "CWD")
+    expect(rows.map((row) => columnOf(row, "/work/"))).toEqual([cwdColumn, cwdColumn, cwdColumn])
+    expect(textWidth(rule)).toBe(Math.max(...rows.map(textWidth), textWidth(header)))
   })
 
   test("server status wider than the terminal prints one field per line", () => {

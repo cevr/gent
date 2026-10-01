@@ -111,30 +111,23 @@ describe("headless CLI", () => {
     20000,
   )
 
+  // Headless-only input without -H is refused, not dropped. The positional
+  // prompt is headless input, as --help says; the TUI takes its startup
+  // prompt from -p. One table, three spawns run at once.
   it.scopedLive(
-    "--agent without -H is refused, not dropped",
+    "headless-only input without -H is refused, not dropped",
     () =>
       Effect.gen(function* () {
-        const { exitCode, stderr } = yield* runGent(["--agent", "main"])
-        expect(exitCode).toBe(1)
-        expect(stderr).toBe(
+        const refused = yield* Effect.all(
+          [runGent(["--agent", "main"]), runGent(["fix the tests"]), runGent(["--approve-all"])],
+          { concurrency: "unbounded" },
+        )
+        expect(refused.map(({ exitCode }) => exitCode)).toEqual([1, 1, 1])
+        expect(refused.map(({ stderr }) => stderr)).toEqual([
           "CliStartupError: --agent applies to headless mode; add -H with a prompt\n",
-        )
-      }).pipe(Effect.provide(BunServices.layer)),
-    20000,
-  )
-
-  // The positional prompt is headless input, as --help says; the TUI takes
-  // its startup prompt from -p. Without -H the prompt is refused, not dropped.
-  it.scopedLive(
-    "a prompt argument without -H is refused, not dropped",
-    () =>
-      Effect.gen(function* () {
-        const { exitCode, stderr } = yield* runGent(["fix the tests"])
-        expect(exitCode).toBe(1)
-        expect(stderr).toBe(
           "CliStartupError: a prompt argument needs -H; use -p to start the TUI with a prompt\n",
-        )
+          "CliStartupError: --approve-all applies to headless mode; add -H with a prompt\n",
+        ])
       }).pipe(Effect.provide(BunServices.layer)),
     20000,
   )
@@ -160,19 +153,6 @@ describe("headless CLI", () => {
         })
         expect(stderr).toBe("HeadlessUnansweredError: the turn ended without an answer\n")
         expect(exitCode).toBe(1)
-      }).pipe(Effect.provide(BunServices.layer)),
-    20000,
-  )
-
-  it.scopedLive(
-    "--approve-all without -H is refused",
-    () =>
-      Effect.gen(function* () {
-        const { exitCode, stderr } = yield* runGent(["--approve-all"])
-        expect(exitCode).toBe(1)
-        expect(stderr).toBe(
-          "CliStartupError: --approve-all applies to headless mode; add -H with a prompt\n",
-        )
       }).pipe(Effect.provide(BunServices.layer)),
     20000,
   )
