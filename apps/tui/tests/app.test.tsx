@@ -1292,94 +1292,117 @@ describe("App sign-in pane", () => {
       expect(line.length).toBeLessThanOrEqual(setup.renderer.terminalWidth)
     }).pipe(Effect.timeout("10 seconds")),
   )
-  it.scopedLive(
-    "a send refused after a switch waits in its own session, draft and reason both",
-    () =>
-      Effect.gen(function* () {
-        // The reader sends in A and moves to B before A's server answers. The
-        // refusal belongs to A: B shows none of it, and A has both on return.
-        const sessionA = SessionId.make("session-a")
-        const branchA = BranchId.make("branch-a")
-        const sessionB = SessionId.make("session-b")
-        const branchB = BranchId.make("branch-b")
-        const sentOut = yield* Deferred.make<void>()
-        const answer = yield* Deferred.make<void>()
-        const answered = yield* Deferred.make<void>()
-        const client = createMockClient({
-          auth: { listProviders: () => Effect.succeed([]) },
-          branch: { getTree: () => Effect.succeed([]) },
-          session: {
-            getSnapshot: (input: { readonly sessionId: SessionId; readonly branchId: BranchId }) =>
-              Effect.succeed({
-                sessionId: input.sessionId,
-                branchId: input.branchId,
-                messages: [],
-                lastEventId: nullValue,
-                reasoningLevel: absent,
-                agent: AgentName.make("primary"),
-                runtime: { _tag: idleTag, queue: emptyQueueSnapshot() },
-                metrics: { turns: 0, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
-              }),
-          },
-          message: {
-            send: () =>
-              Deferred.complete(sentOut, Effect.void).pipe(
-                Effect.andThen(Deferred.await(answer)),
-                Effect.andThen(Effect.fail(refusedInA)),
-                Effect.ensuring(Deferred.complete(answered, Effect.void)),
-              ),
-          },
-        })
-        let ctx = Option.none<ClientContextValue>()
-        const setup = yield* renderScoped(
-          () => (
-            <>
-              <App />
-              <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
-            </>
-          ),
-          {
-            client,
-            runtime: createMockRuntime(),
-            initialSession: {
-              id: sessionA,
-              activeBranchId: branchA,
-              name: "Session A",
-              createdAt: dateFromMillis(0),
-              updatedAt: dateFromMillis(0),
+  for (const [outcome, superseded] of [
+    ["clears its reason", false],
+    ["keeps a newer error", true],
+  ] as const) {
+    it.scopedLive(
+      `a send refused after a switch restores its draft and ${outcome} when edited`,
+      () =>
+        Effect.gen(function* () {
+          // The reader sends in A and moves to B before A's server answers. The
+          // refusal belongs to A: B shows none of it, and A has both on return.
+          const sessionA = SessionId.make("session-a")
+          const branchA = BranchId.make("branch-a")
+          const sessionB = SessionId.make("session-b")
+          const branchB = BranchId.make("branch-b")
+          const sentOut = yield* Deferred.make<void>()
+          const answer = yield* Deferred.make<void>()
+          const answered = yield* Deferred.make<void>()
+          const client = createMockClient({
+            auth: { listProviders: () => Effect.succeed([]) },
+            branch: { getTree: () => Effect.succeed([]) },
+            session: {
+              getSnapshot: (input: {
+                readonly sessionId: SessionId
+                readonly branchId: BranchId
+              }) =>
+                Effect.succeed({
+                  sessionId: input.sessionId,
+                  branchId: input.branchId,
+                  messages: [],
+                  lastEventId: nullValue,
+                  reasoningLevel: absent,
+                  agent: AgentName.make("primary"),
+                  runtime: { _tag: idleTag, queue: emptyQueueSnapshot() },
+                  metrics: { turns: 0, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
+                }),
             },
-          },
-        )
-        yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session A")
-        if (Option.isNone(ctx)) return yield* Effect.die("client context not ready")
-        const clientCtx = ctx.value
-        yield* Effect.promise(() => setup.mockInput.typeText("keep me in A"))
-        yield* Effect.promise(() => setup.renderOnce())
-        setup.mockInput.pressEnter()
-        yield* Deferred.await(sentOut)
-        clientCtx.switchSession(sessionB, branchB, "Session B")
-        yield* waitForFrame(
-          setup,
-          () => clientCtx.sessionIdentity().sessionId === sessionB,
-          "session B",
-        )
-        yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session B view")
-        yield* Deferred.complete(answer, Effect.void)
-        yield* Deferred.await(answered)
-        // A few frames for anything the refusal would draw in B.
-        for (let frame = 0; frame < 3; frame++) {
-          yield* Effect.yieldNow
+            message: {
+              send: () =>
+                Deferred.complete(sentOut, Effect.void).pipe(
+                  Effect.andThen(Deferred.await(answer)),
+                  Effect.andThen(Effect.fail(refusedInA)),
+                  Effect.ensuring(Deferred.complete(answered, Effect.void)),
+                ),
+            },
+          })
+          let ctx = Option.none<ClientContextValue>()
+          const setup = yield* renderScoped(
+            () => (
+              <>
+                <App />
+                <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
+              </>
+            ),
+            {
+              client,
+              runtime: createMockRuntime(),
+              initialSession: {
+                id: sessionA,
+                activeBranchId: branchA,
+                name: "Session A",
+                createdAt: dateFromMillis(0),
+                updatedAt: dateFromMillis(0),
+              },
+            },
+          )
+          yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session A")
+          if (Option.isNone(ctx)) return yield* Effect.die("client context not ready")
+          const clientCtx = ctx.value
+          yield* Effect.promise(() => setup.mockInput.typeText("keep me in A"))
           yield* Effect.promise(() => setup.renderOnce())
-        }
-        const inB = renderFrame(setup)
-        expect(inB).not.toContain("send refused in A")
-        expect(inB).not.toContain("keep me in A")
-        expect(clientCtx.error()).toEqual(Option.none())
-        clientCtx.switchSession(sessionA, branchA, "Session A")
-        yield* waitForFrame(setup, (frame) => frame.includes("keep me in A"), "draft back in A")
-        yield* waitForFrame(setup, (frame) => frame.includes("send refused in A"), "reason in A")
-      }).pipe(Effect.timeout("10 seconds")),
-  )
+          setup.mockInput.pressEnter()
+          yield* Deferred.await(sentOut)
+          clientCtx.switchSession(sessionB, branchB, "Session B")
+          yield* waitForFrame(
+            setup,
+            () => clientCtx.sessionIdentity().sessionId === sessionB,
+            "session B",
+          )
+          yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session B view")
+          yield* Deferred.complete(answer, Effect.void)
+          yield* Deferred.await(answered)
+          // A few frames for anything the refusal would draw in B.
+          for (let frame = 0; frame < 3; frame++) {
+            yield* Effect.yieldNow
+            yield* Effect.promise(() => setup.renderOnce())
+          }
+          const inB = renderFrame(setup)
+          expect(inB).not.toContain("send refused in A")
+          expect(inB).not.toContain("keep me in A")
+          expect(clientCtx.error()).toEqual(Option.none())
+          clientCtx.switchSession(sessionA, branchA, "Session A")
+          yield* waitForFrame(setup, (frame) => frame.includes("keep me in A"), "draft back in A")
+          yield* waitForFrame(setup, (frame) => frame.includes("send refused in A"), "reason in A")
+          if (superseded) {
+            clientCtx.setErrorIn({ sessionId: sessionA, branchId: branchA }, "a newer server error")
+            yield* waitForFrame(
+              setup,
+              (frame) => frame.includes("a newer server error"),
+              "newer error",
+            )
+          }
+          setup.mockInput.pressKey("u", { ctrl: true })
+          yield* waitForFrame(
+            setup,
+            (frame) => !frame.includes("keep me in A") && !frame.includes("send refused in A"),
+            "the returned draft and its refusal gone",
+          )
+          if (superseded) expect(renderFrame(setup)).toContain("a newer server error")
+        }).pipe(Effect.timeout("10 seconds")),
+    )
+  }
   it.scopedLive("the startup prompt belongs to the boot session, not the next one", () =>
     Effect.gen(function* () {
       // The boot picker re-mounts the session view on the chosen branch, so
@@ -2521,6 +2544,12 @@ describe("App slash commands", () => {
         view.setup,
         (frame) => !frame.includes("/zzq") && !frame.includes("Unknown command"),
         "the draft and its refusal gone",
+      )
+      yield* typeCommand("/zzq")(view.setup)
+      yield* waitForFrame(
+        view.setup,
+        (frame) => frame.includes("Unknown command: /zzq") && frame.includes("┃ /zzq"),
+        "a later refusal and its draft",
       )
     }).pipe(Effect.timeout("4 seconds")),
   )

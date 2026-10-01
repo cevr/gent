@@ -51,7 +51,7 @@ import {
   usePickerGeometry,
 } from "./ui"
 import { useExtensionUI } from "./extensions/host"
-import { sameIdentity, type SessionIdentity, useClient, useRuntime } from "./client"
+import { type SessionIdentity, useClient, useRuntime } from "./client"
 import type {
   AutocompleteContribution,
   InteractionRendererComponent,
@@ -1110,38 +1110,18 @@ function useComposerController(): ComposerController {
     if (error._tag === "ProcessError") return `Shell: ${error.message}`
     return formatError(error)
   }
-  // A refusal's reason belongs to the draft it gave back: when the reader
-  // changes that draft in its own session, the reason leaves the status row.
-  // A session switch changes the draft too; the reason stays held for its
-  // session then.
-  let standingRefusal = Option.none<{
-    readonly target: SessionIdentity
-    readonly reason: string
-    readonly draft: string
-  }>()
   const refuse = (
     target: SessionIdentity,
     refused: Parameters<typeof refusals.refuse>[1],
     reason: string,
   ) => {
     client.setErrorIn(target, reason)
-    refusals.refuse(target.branchId, refused)
-    standingRefusal = Option.liftPredicate(
-      { target, reason, draft: sc.interactionState().draft },
-      () => sameIdentity(client.sessionIdentity(), target),
-    )
+    refusals.refuse(target.branchId, refused, () => client.dismissErrorIn(target, reason))
   }
   createEffect(
     on(
       () => sc.interactionState().draft,
-      (draft) => {
-        if (Option.isNone(standingRefusal)) return
-        const standing = standingRefusal.value
-        if (draft === standing.draft) return
-        standingRefusal = Option.none()
-        if (!sameIdentity(client.sessionIdentity(), standing.target)) return
-        client.dismissErrorIn(standing.target, standing.reason)
-      },
+      (draft) => refusals.changed(client.sessionIdentity().branchId, draft),
       { defer: true },
     ),
   )

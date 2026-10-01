@@ -528,7 +528,9 @@ interface ComposerRefusals {
   /** The next submission's place in send order. */
   readonly nextOrder: () => number
   readonly link: (branchId: BranchId, link: ComposerLink) => () => void
-  readonly refuse: (branchId: BranchId, refused: RefusedSubmission) => void
+  readonly refuse: (branchId: BranchId, refused: RefusedSubmission, dismiss: () => void) => void
+  /** Editing a restored draft dismisses its reason, including after a session switch. */
+  readonly changed: (branchId: BranchId, draft: string) => void
   /**
    * A submit took the whole draft, refused texts included. When it sends one
    * refused text unchanged whose reply was lost, this is that send's request id.
@@ -643,6 +645,7 @@ export function ComposerMemoryProvider(props: ParentProps<ComposerMemoryProvider
   }
   const links = new Map<BranchId, ComposerLink>()
   const blocks = new Map<BranchId, RefusedBlock>()
+  const standing = new Map<BranchId, { readonly draft: string; readonly dismiss: () => void }>()
   let sent = 0
   const refusals: ComposerRefusals = {
     nextOrder: () => sent++,
@@ -652,7 +655,7 @@ export function ComposerMemoryProvider(props: ParentProps<ComposerMemoryProvider
         if (links.get(branchId) === link) links.delete(branchId)
       }
     },
-    refuse: (branchId, refused) => {
+    refuse: (branchId, refused, dismiss) => {
       const live = Option.fromUndefinedOr(links.get(branchId))
       const current = Option.match(live, {
         onSome: (link) => link.current(),
@@ -674,6 +677,13 @@ export function ComposerMemoryProvider(props: ParentProps<ComposerMemoryProvider
         onSome: (link) => link.apply(merged.draft),
         onNone: () => drafts.set(branchId, merged.draft),
       })
+      standing.set(branchId, { draft: merged.draft.draft, dismiss })
+    },
+    changed: (branchId, draft) => {
+      const refused = Option.fromUndefinedOr(standing.get(branchId))
+      if (Option.isNone(refused) || refused.value.draft === draft) return
+      standing.delete(branchId)
+      refused.value.dismiss()
     },
     submitted: (branchId, text) => {
       const block = Option.fromUndefinedOr(blocks.get(branchId))
@@ -3030,12 +3040,11 @@ export function createSessionController(props: {
           content,
           refuse: (target, reason, lost) => {
             client.setErrorIn(target, reason)
-            refusals.refuse(target.branchId, {
-              order,
-              text: content,
-              shell: false,
-              requestId: lost,
-            })
+            refusals.refuse(
+              target.branchId,
+              { order, text: content, shell: false, requestId: lost },
+              () => client.dismissErrorIn(target, reason),
+            )
           },
         }
       }),

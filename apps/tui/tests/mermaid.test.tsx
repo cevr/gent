@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it } from "effect-bun-test"
-import { Deferred, type Duration, Effect, Schedule } from "effect"
+import { Deferred, type Duration, Effect, Option, Schedule } from "effect"
 import * as BeautifulMermaid from "beautiful-mermaid"
 import { type CliRendererExternalOutputEvent, SyntaxStyle } from "@opentui/core"
 import { useRenderer } from "@opentui/solid"
@@ -220,6 +220,40 @@ describe("mermaid diagrams", () => {
       }),
     )
   }
+
+  it.scopedLive("a diagram neither spacing can render keeps its source", () =>
+    Effect.gen(function* () {
+      const library = makeDiagramLibrary(Effect.succeed(BeautifulMermaid))
+      const content = "```mermaid\nunsupported-diagram\nAlpha-->Beta\n```"
+      const setup = yield* renderScoped(() => (
+        <DiagramLibraryContext.Provider value={library}>
+          <MessageList
+            items={[
+              {
+                _tag: "regular-message",
+                id: "invalid-diagram",
+                role: "assistant",
+                content,
+                reasoning: "",
+                images: [],
+                createdAt: 0,
+                segments: [{ _tag: "text", content }],
+              },
+            ]}
+            disclosure="collapsed"
+            syntaxStyle={syntaxStyle}
+          />
+        </DiagramLibraryContext.Provider>
+      ))
+      const frame = yield* waitForFrame(
+        setup,
+        (next) => Option.isSome(library.loaded()) && next.includes("Alpha-->Beta"),
+        "the source after both drawings fail",
+      )
+      expect(frame).toContain("unsupported-diagram")
+      expect(frame).not.toContain("┌")
+    }).pipe(Effect.timeout("5 seconds")),
+  )
 
   // A diagram does not wrap: one wider than the answer is cut at its right
   // edge, so its row of boxes stays one row.
