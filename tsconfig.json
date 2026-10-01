@@ -28,9 +28,15 @@
         // `cryptoRandomUUID` diagnostics, through `globalThis` and aliases too.
         // `newPromise` stays on: `effect/noNewPromise` misses
         // `new globalThis.Promise` and an alias of `Promise`. Where oxlint turns
-        // `effect/noGlobals` off (the gamut driver, the capture
-        // preload), the overrides below turn on each diagnostic for a global
-        // the file does not use.
+        // `effect/noGlobals` off (the gamut driver, the capture preload), the
+        // overrides below turn on each diagnostic for a global the file does
+        // not use. The style suggestions are off (`strictBooleanExpressions`,
+        // `effectMapFlatten`, `missedPipeableOpportunity`, `unnecessaryPipe`,
+        // `unnecessaryPipeChain`), and so is `unstableApiUsage`: gent builds on
+        // the `@stability unstable` surface (ai, sql, process, http, rpc, cli,
+        // socket), pins exact versions and takes each break at the bump. Every
+        // other diagnostic is an error. A test turns `strictEffectProvide` off:
+        // a test layer provides a partial world on purpose.
         "diagnosticSeverity": {
           "anyUnknownInErrorContext": "error",
           "asyncFunction": "off",
