@@ -4,12 +4,23 @@
  */
 import { describe, expect, it } from "effect-bun-test"
 import { hostname } from "node:os"
-import { Effect, Exit, Option, Random, Schedule, Schema, Scope } from "effect"
+import { BunHttpServer } from "@effect/platform-bun"
+import { Effect, Exit, Option, Schedule, Schema, Scope } from "effect"
 import { Gent } from "@gent/sdk"
 import { makeTempDirectoryScoped, waitFor } from "@gent/core/test-utils"
 import { exitWithin, killProcess, spawnServer, stopProcess } from "../src/server-process-fixture"
 
-const randomLifecyclePort = Random.nextIntBetween(19_000, 20_000)
+/**
+ * A port the kernel just handed out and took back: a listener binds port 0,
+ * the kernel picks a free port, and the listener closes before the server
+ * under test binds it. A random pick from a range can land on a port another
+ * lane's server holds.
+ */
+const freePort = Effect.gen(function* () {
+  const { address } = yield* BunHttpServer.make({ port: 0 })
+  if (address._tag === "UnixPathAddress") return yield* Effect.die("a TCP listener has no path")
+  return address.port
+}).pipe(Effect.scoped, Effect.orDie)
 
 /** What `/_gent/identity` serves. */
 const ServerIdentity = Schema.Struct({
@@ -35,7 +46,7 @@ describe("server lifecycle", () => {
     "a server that misses its ready bound is stopped",
     () =>
       Effect.gen(function* () {
-        const port = yield* randomLifecyclePort
+        const port = yield* freePort
         const spawned = yield* Effect.scoped(
           Effect.gen(function* () {
             const dataDir = yield* makeTempDirectoryScoped("gent-lifecycle-")
@@ -83,7 +94,7 @@ describe("server lifecycle", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const dataDir = yield* makeTempDirectoryScoped("gent-lifecycle-")
-          const port = yield* randomLifecyclePort
+          const port = yield* freePort
           const { url, proc } = yield* spawnServer({ dataDir, port })
 
           const baseUrl = url.replace("/rpc", "")
@@ -110,7 +121,7 @@ describe("server lifecycle", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const dataDir = yield* makeTempDirectoryScoped("gent-lifecycle-")
-          const port = yield* randomLifecyclePort
+          const port = yield* freePort
           const { proc } = yield* spawnServer({ dataDir, port })
           yield* killProcess(proc, "SIGTERM")
           // A shell chain after an interrupted server must not read success.
@@ -126,7 +137,7 @@ describe("server lifecycle", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const dataDir = yield* makeTempDirectoryScoped("gent-lifecycle-")
-          const port = yield* randomLifecyclePort
+          const port = yield* freePort
           const { proc } = yield* spawnServer({ dataDir, port })
           yield* killProcess(proc, "SIGINT")
           expect(yield* Effect.promise(() => proc.exited)).toBe(130)
@@ -141,7 +152,7 @@ describe("server lifecycle", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const dataDir = yield* makeTempDirectoryScoped("gent-lifecycle-")
-          const port = yield* randomLifecyclePort
+          const port = yield* freePort
           const first = yield* spawnServer({ dataDir, port })
 
           // The client closes before the restarted server stops; a failed run closes it too.

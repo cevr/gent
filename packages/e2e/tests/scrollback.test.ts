@@ -62,7 +62,7 @@ const submitMessages = (ctx: TestContext, count: number) =>
 
 describe("E2E: Scrollback ownership", () => {
   it.scopedLive(
-    "a transcript taller than the screen leaves history from the first message on",
+    "a transcript taller than the screen leaves history from the first message on, each row once",
     () =>
       Effect.gen(function* () {
         const ctx = yield* seedAndSpawn(["--mock-empty"], SHORT_SCREEN)
@@ -86,23 +86,12 @@ describe("E2E: Scrollback ownership", () => {
         for (const position of positions) expect(position).toBeGreaterThanOrEqual(0)
         expect(positions[0]).toBeLessThan(positions[1] ?? -1)
         expect(positions[1]).toBeLessThan(positions[2] ?? -1)
-      }).pipe(Effect.timeout(EFFECT_TIMEOUT)),
-    TEST_TIMEOUT,
-  )
 
-  it.scopedLive(
-    "committed rows are written to history once, not repainted into it twice",
-    () =>
-      Effect.gen(function* () {
-        const ctx = yield* seedAndSpawn(["--mock-empty"], SHORT_SCREEN)
-        yield* submitMessages(ctx, 4)
-
-        const grid = yield* settleAndCapture(ctx, SETTLE)
+        // Committed rows are written to history once: a commit that also
+        // repaints leaves the same row in the terminal twice. Counting is
+        // what catches it; `toContain` cannot.
         const rows = gridText(grid)
-
-        // A commit that also repaints leaves the same row in the terminal
-        // twice. Counting is what catches it; `toContain` cannot.
-        for (const index of [1, 2, 3, 4]) {
+        for (const index of [1, 2, 3, 4, 5]) {
           expect(countRows(rows, messageText(index))).toBe(1)
         }
       }).pipe(Effect.timeout(EFFECT_TIMEOUT)),
