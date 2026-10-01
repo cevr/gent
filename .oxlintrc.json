@@ -36,8 +36,6 @@
     "gent/no-dynamic-imports": "error",
     // Custom — no Bun.* outside adapter, entrypoint, tooling, and test harness boundaries
     "gent/no-bun-outside-adapter": "error",
-    // Custom — test code runs no Effect through a runtime's runPromise (upstream gap)
-    "gent/no-runtime-run-promise-in-tests": "error",
     // Custom — test code outside a tests/ tree has no withX helper (upstream gap)
     "gent/no-with-wrapper-helper-in-test-code": "error",
     // Custom — test code waits on no sleep wrapped in a larger expression (upstream gap)

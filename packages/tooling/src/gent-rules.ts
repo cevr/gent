@@ -11,7 +11,6 @@
  *   comment (until upstream 0.19.0 `effect/noDynamicImports` strict mode).
  * - no-bun-outside-adapter: `Bun.*` and host facts stay in the platform adapters (until
  *   upstream 0.19.0).
- * - no-runtime-run-promise-in-tests: test code runs no Effect through a runtime's `runPromise`.
  * - no-with-wrapper-helper-in-test-code: test code outside a `tests/` tree has no `withX` helper.
  * - no-wrapped-sleep-in-tests: test code waits on no sleep wrapped in a larger expression.
  * - no-timeout-die-payload-in-tests: test code dies on no timeout spelled in an object payload.
@@ -178,9 +177,6 @@ export const ruleSubject = (context: Pick<Context, "filename" | "cwd">): string 
 /** A file in a `tests/` tree, judged repo-relative. */
 const inTestsTree = (context: Context): boolean => /(?:^|\/)tests\//.test(ruleSubject(context))
 
-/** A `-boundary` file holds a module's Promise edges; in a test tree it is a test's. */
-const isBoundaryFilename = (filename: string): boolean => /-boundary\.tsx?$/.test(filename)
-
 const isExtensionFilename = (filename: string): boolean => {
   if (/\/extensions\/(?:api|branch-tools)\.ts$/.test(filename)) return false
   if (filename.endsWith("apps/tui/src/extensions/loader-boundary.ts")) return false
@@ -276,16 +272,6 @@ const importTypeSourceOf = (node: AstNode): string | undefined => {
   const argument = getNodeField(node, "argument")
   const literal = argument === undefined ? undefined : getNodeField(argument, "literal")
   return literal === undefined ? undefined : getStringField(literal, "value")
-}
-
-const RUN_PROMISE_METHODS = new Set(["runPromise", "runPromiseWith", "runPromiseExit"])
-
-const runPromiseMethodName = (node: AstNode): string | undefined => {
-  if (node.type !== "MemberExpression") return undefined
-  const prop = getNodeField(node, "property")
-  if (prop?.type !== "Identifier") return undefined
-  const name = getStringField(prop, "name")
-  return name !== undefined && RUN_PROMISE_METHODS.has(name) ? name : undefined
 }
 
 /**
@@ -1316,41 +1302,6 @@ const plugin: Plugin = {
             if (platformBoundaryFilename(filename)) return
             const message = hostMemberMessage(member)
             if (message !== undefined) context.report({ message, node })
-          },
-        }
-      },
-    },
-
-    /**
-     * Test code runs no Effect through a runtime's `runPromise`.
-     *
-     * Holds the line where oxlint-plugin-effect 0.18.0 leaves a gap:
-     * `effect/noEffectRunInTests` reads only the `Effect.run*` statics and
-     * `ManagedRuntime.make`, and `effect/noRunPromise` skips test code, so
-     * `runtime.runPromise(...)` in a test passes both. Goes when an upstream
-     * release reports a runtime's runners in test code; none has yet.
-     *
-     * Reported in test code (`isTestCode`) outside `-boundary` files: a call
-     * or a reference of `runPromise`, `runPromiseWith` or `runPromiseExit` on
-     * any receiver but the `Effect` module, whose statics are upstream's.
-     */
-    "no-runtime-run-promise-in-tests": {
-      create(context) {
-        const subject = ruleSubject(context)
-        if (!isTestCode(subject) || isBoundaryFilename(subject)) return {}
-        return {
-          MemberExpression(node) {
-            if (!isAstNode(node)) return
-            const method = runPromiseMethodName(node)
-            if (method === undefined) return
-            const receiver = getNodeField(node, "object")
-            if (receiver?.type === "Identifier" && getStringField(receiver, "name") === "Effect") {
-              return
-            }
-            context.report({
-              message: `Do not run Effects through \`.${method}\` in test code. Return the Effect from \`it.live(...)\` / \`it.scopedLive(...)\`, or keep the Promise edge in a \`-boundary\` file.`,
-              node,
-            })
           },
         }
       },

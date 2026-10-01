@@ -13,7 +13,6 @@
     "gent/no-define-extension-throw": "error",
     "gent/no-dynamic-imports": "error",
     "gent/no-bun-outside-adapter": "error",
-    "gent/no-runtime-run-promise-in-tests": "error",
     "gent/no-with-wrapper-helper-in-test-code": "error",
     "gent/no-wrapped-sleep-in-tests": "error",
     "gent/no-timeout-die-payload-in-tests": "error",

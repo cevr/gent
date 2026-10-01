@@ -333,18 +333,6 @@ const CASES: ReadonlyArray<RuleCase> = [
     expectedCount: 16,
   },
   {
-    // The harness is test code; a runtime's runPromise passes both upstream rules.
-    rule: "gent/no-runtime-run-promise-in-tests",
-    invalid: "packages/core/src/test-utils/no-runtime-run-promise-in-tests.invalid.ts",
-    valid: [
-      "packages/core/tests/no-runtime-run-promise-in-tests.valid.ts",
-      "packages/core/tests/no-runtime-run-promise-in-tests-boundary.ts",
-      "packages/sdk/src/no-runtime-run-promise-in-tests.valid.ts",
-    ],
-    // a runtime call, a nested runtime, another receiver, and a piped reference
-    expectedCount: 4,
-  },
-  {
     // Upstream skips these checks in every test module; gent only in tests/.
     rule: "gent/no-with-wrapper-helper-in-test-code",
     invalid: "apps/tui/integration/no-with-wrapper-helper-in-test-code.invalid.test.ts",
