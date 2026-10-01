@@ -1041,3 +1041,10 @@ Owner questions:
 | p26-tooling    | /workspaces/.rifts/p26-tooling | T26-1..8, GR-3, GR-4, GR-7..11, sort rows, R26-tooling-_, R26-e2e-_ (gamut turn end), upstream effect-oxlint branch                        |
 | p26-tui        | /workspaces/.rifts/p26-tui     | TUI26-1..8, R26-tui-a-1..4, R26-tui-b-1..3, UI26-1..3, UI26-5..7, R26-sdk-*, GR-5, session-scoped write helper, test verdicts              |
 | p26-extensions | after p26-core merges          | EX26-1..9, R26-ext-a-1..2, R26-ext-b-1..6, R26-tui-b-4, ask_user ownership (renderer to a client extension), safe-cut sites, test verdicts |
+
+Owner decisions (2026-10-01, Pass 26):
+
+- North stars, set by the owner: Effect-native; Actor model; Lean core, maximal expressiveness; Cheap per task (maximum efficiency and cache rate); One interaction model. "Single files" moves to the owner rules (p26-tooling edits NORTH_STAR.md).
+- GR-2: `sessionId` is required on every session-scoped RPC (batch p26-session-id after p26-core and p26-tui merge).
+- UIQ26-1: an unknown slash command is refused in the composer (p26-tui).
+- New owner request: cold start to a minimum (2.7 s vs fx 0.1 s). A read-only profile runs first (`coldstart.md`); its proposals become a batch.
