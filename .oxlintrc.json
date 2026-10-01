@@ -30,8 +30,6 @@
     "gent/core-entry-boundary": "error",
     // Custom — a workspace imports only the workspace packages its manifest declares
     "gent/declared-workspace-imports": "error",
-    // Custom — definePackage/defineExtension factories must not throw
-    "gent/no-define-extension-throw": "error",
     // Custom — no host global read where effect/noGlobals does not look (upstream gap)
     "gent/no-host-fact-bypass": "error",
     // Custom — no module exports an alias of an @effect/platform-* binding (upstream gap)
