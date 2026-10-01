@@ -5468,7 +5468,7 @@ describe("TUI renderer surfaces", () => {
             ChildProcess.make(
               "git",
               ["-c", "user.email=probe@gent.test", "-c", "user.name=probe", ...args],
-              { cwd },
+              { cwd, forceKillAfter: "2 seconds" },
             ),
           )
         const statusRow = Effect.gen(function* () {
@@ -5515,7 +5515,7 @@ describe("TUI renderer surfaces", () => {
             ChildProcess.make(
               "git",
               ["-c", "user.email=probe@gent.test", "-c", "user.name=probe", ...args],
-              { cwd },
+              { cwd, forceKillAfter: "2 seconds" },
             ),
           )
         const repo = `${root}/repo`

@@ -21,9 +21,11 @@ const homesTest = it.scopedLive.layer(BunServices.layer)
  */
 const HOMES_BUN_TIMEOUT_MS = 90_000
 
-const APP_DIR = new URL("..", import.meta.url).pathname
-const HARNESS = new URL("../tests/render-harness-boundary.tsx", import.meta.url).pathname
-const PRELOAD = new URL("../../../packages/tooling/src/test-preload.ts", import.meta.url).pathname
+/** How long a child `bun test` may ignore SIGTERM from the closing scope before it gets SIGKILL. */
+const CHILD_KILL_GRACE = "2 seconds"
+
+/** The harness as a file URL, which the sandboxed test file imports. */
+const HARNESS = import.meta.resolve("../tests/render-harness-boundary.tsx")
 
 /** A test file that renders once through the harness; it lives in the sandbox, so its imports resolve from here. */
 const RENDER_ONCE = `import { it } from "${import.meta.resolve("effect-bun-test")}"
@@ -32,7 +34,7 @@ import { renderScoped } from "${HARNESS}"
 it.scopedLive("renders once", () => renderScoped(() => undefined))
 `
 
-const WORKSPACE = new URL("../src/workspace.tsx", import.meta.url).pathname
+const WORKSPACE = import.meta.resolve("../src/workspace.tsx")
 const WRITING_RENDERS = 100
 
 /**
@@ -83,10 +85,15 @@ const runTestFile = (sandbox: string, source: string) =>
     const file = path.join(sandbox, "render.test.ts")
     yield* fs.writeFileString(file, source)
     const PATH = yield* Config.String("PATH")
-    const handle = yield* ChildProcess.make("bun", ["test", "--preload", PRELOAD, file], {
-      cwd: APP_DIR,
+    const appDir = yield* path.fromFileUrl(new URL("..", import.meta.url))
+    const preload = yield* path.fromFileUrl(
+      new URL("../../../packages/tooling/src/test-preload.ts", import.meta.url),
+    )
+    const handle = yield* ChildProcess.make("bun", ["test", "--preload", preload, file], {
+      cwd: appDir,
       env: { PATH, TMPDIR: sandbox, HOME: sandbox, NO_COLOR: "1" },
       extendEnv: false,
+      forceKillAfter: CHILD_KILL_GRACE,
     })
     const [exitCode, output] = yield* Effect.all(
       [handle.exitCode, Stream.mkString(Stream.decodeText(handle.all))],

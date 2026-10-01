@@ -13,20 +13,25 @@ import { userInfo } from "node:os"
  */
 const captureTest = it.scopedLive.layer(BunServices.layer)
 
-const PRELOAD = new URL("../../../docs/architecture/fetch-capture.ts", import.meta.url).pathname
+/** How long a started preload may ignore SIGTERM from the closing scope before it gets SIGKILL. */
+const CAPTURE_KILL_GRACE = "2 seconds"
 
 /** Start the preload with `env` alone; its combined output and exit code. */
 const startCapture = (root: string, env: Readonly<Record<string, string>>) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
+    const preload = yield* path.fromFileUrl(
+      new URL("../../../docs/architecture/fetch-capture.ts", import.meta.url),
+    )
     const started = path.join(root, "started.ts")
     yield* fs.writeFileString(started, 'console.log("STARTED")\n')
     const PATH = yield* Config.String("PATH")
-    const handle = yield* ChildProcess.make("bun", ["--preload", PRELOAD, started], {
+    const handle = yield* ChildProcess.make("bun", ["--preload", preload, started], {
       cwd: root,
       env: { PATH, ...env },
       extendEnv: false,
+      forceKillAfter: CAPTURE_KILL_GRACE,
     })
     const [exitCode, output] = yield* Effect.all(
       [handle.exitCode, Stream.mkString(Stream.decodeText(handle.all))],

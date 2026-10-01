@@ -39,7 +39,7 @@ const makeChildEnv = (homeDir: string, env: ReturnType<typeof createWorkerEnv>) 
 const runGent = (args: ReadonlyArray<string>, options: { readonly keyless?: boolean } = {}) =>
   Effect.gen(function* () {
     const path = yield* Path.Path
-    const appDir = path.resolve(import.meta.dir, "..")
+    const appDir = path.resolve(yield* path.fromFileUrl(new URL("..", import.meta.url)))
     const homeDir = yield* makeTempDir
     const env = createWorkerEnv(homeDir)
     const mode: Array<string> = []
@@ -236,7 +236,7 @@ describe("compiled binary", () => {
         const fs = yield* FileSystem.FileSystem
         const path = yield* Path.Path
         // `bun run test:e2e` builds the binary first (turbo `dependsOn`).
-        const binary = path.resolve(import.meta.dir, "..", "bin", "gent")
+        const binary = yield* path.fromFileUrl(new URL("../bin/gent", import.meta.url))
         expect({ binary, exists: yield* fs.exists(binary) }).toEqual({ binary, exists: true })
         // The system temp directory: no node_modules above it.
         const homeDir = yield* makeTempDir

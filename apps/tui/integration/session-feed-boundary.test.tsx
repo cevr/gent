@@ -19,11 +19,12 @@ describe("session feed boundary", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
+          const cwd = yield* repoRoot
           const { layer: signalLayer, controls } = yield* LanguageModelLayers.signal(
             "gent debug response. Latest user message: queued. This turn is flowing through the real agent loop with a scripted provider.",
           )
           const { client, runtime } = yield* Gent.test(baseLocalLayerWithProvider(signalLayer))
-          const created = yield* client.session.create({ cwd: repoRoot })
+          const created = yield* client.session.create({ cwd })
           const setup = yield* renderScoped(
             () => (
               <Session
@@ -36,7 +37,7 @@ describe("session feed boundary", () => {
               client,
               runtime,
               initialSession: makeSessionState(created),
-              cwd: repoRoot,
+              cwd,
               width: 100,
               height: 32,
             },
@@ -70,11 +71,12 @@ describe("session feed boundary", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
+          const cwd = yield* repoRoot
           const { layer: signalLayer, controls } = yield* LanguageModelLayers.signal(
             "gent debug response. First turn complete.",
           )
           const { client, runtime } = yield* Gent.test(baseLocalLayerWithProvider(signalLayer))
-          const created = yield* client.session.create({ cwd: repoRoot })
+          const created = yield* client.session.create({ cwd })
           const setup = yield* renderScoped(
             () => (
               <Session
@@ -87,7 +89,7 @@ describe("session feed boundary", () => {
               client,
               runtime,
               initialSession: makeSessionState(created),
-              cwd: repoRoot,
+              cwd,
               width: 100,
               height: 32,
             },
@@ -135,10 +137,11 @@ describe("session feed boundary", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
+          const cwd = yield* repoRoot
           const { client, runtime } = yield* Gent.test(
             baseLocalLayerWithProvider(LanguageModelLayers.failing),
           )
-          const created = yield* client.session.create({ cwd: repoRoot })
+          const created = yield* client.session.create({ cwd })
           const setup = yield* renderScoped(
             () => (
               <Session
@@ -151,7 +154,7 @@ describe("session feed boundary", () => {
               client,
               runtime,
               initialSession: makeSessionState(created),
-              cwd: repoRoot,
+              cwd,
               width: 100,
               height: 32,
             },

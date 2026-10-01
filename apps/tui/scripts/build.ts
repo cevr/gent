@@ -10,7 +10,7 @@ const build = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
   const crypto = yield* Crypto.Crypto
-  const rootDir = path.join(import.meta.dir, "..")
+  const rootDir = path.resolve(yield* path.fromFileUrl(new URL("..", import.meta.url)))
   const binDir = path.join(rootDir, "bin")
 
   yield* Effect.log("Building gent...")

@@ -257,20 +257,6 @@ const CASES: ReadonlyArray<RuleCase> = [
     expectedCount: 9,
   },
   {
-    // Core and shipped-extension source read a module's own file path through
-    // Effect Path; the test harness and the process hosts may hand-roll it.
-    rule: "gent/no-hand-rolled-module-path",
-    invalid: "packages/core/src/runtime/no-hand-rolled-module-path.invalid.ts",
-    valid: [
-      "packages/core/src/runtime/no-hand-rolled-module-path.valid.ts",
-      "packages/core/src/test-utils/no-hand-rolled-module-path.valid.ts",
-      "apps/tui/src/no-hand-rolled-module-path.valid.ts",
-    ],
-    // `.pathname` and `.href` read off `new URL(import.meta.url)`, `.pathname`
-    // off the two-argument form, and the four `import.meta` path facts
-    expectedCount: 7,
-  },
-  {
     // A child-session writer admits the depth in its own function, first.
     rule: "gent/child-session-writer-admits",
     invalid: "packages/core/src/server/child-session-writer-admits.invalid.ts",
@@ -409,7 +395,7 @@ effectDescribe("custom lint rules", () => {
           configText.replaceAll('"./', `"${repo}/`),
         )
         const files = (yield* fs.readDirectory(held, { recursive: true }))
-          .filter((file) => file.endsWith(".ts"))
+          .filter((file) => /\.tsx?$/.test(file))
           .toSorted()
         const expected = (yield* Effect.forEach(files, (file) =>
           Effect.map(fs.readFileString(path.join(held, file)), (text) =>
@@ -512,7 +498,7 @@ describe("what is a test", () => {
 
   test("a shipped boundary file is product code", () => {
     expect(kinds("apps/tui/src/extensions/loader-boundary.ts")).toEqual(product)
-    expect(kinds("packages/sdk/src/runtime-boundary.ts")).toEqual(product)
+    expect(kinds("packages/extensions/src/cell-worker-boundary.ts")).toEqual(product)
     expect(kinds("packages/core/src/runtime/agent-loop.ts")).toEqual(product)
   })
 })

@@ -70,7 +70,10 @@ interface GitInfo {
 const gitCommand = (cwd: string, args: ReadonlyArray<string>) =>
   Effect.scoped(
     Effect.gen(function* () {
-      const handle = yield* ChildProcess.make("git", [...args], { cwd })
+      const handle = yield* ChildProcess.make("git", [...args], {
+        cwd,
+        forceKillAfter: "2 seconds",
+      })
       const chunks = yield* Stream.runCollect(handle.stdout)
       const decoder = new TextDecoder()
       return chunks.reduce((acc, chunk) => acc + decoder.decode(chunk), "").trim()
