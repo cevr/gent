@@ -3,7 +3,7 @@ import { Headers } from "effect/http"
 import { RpcMiddleware } from "effect/rpc"
 import { CurrentWorkspaceId, WorkspaceId } from "../domain/ids.js"
 // @effect-diagnostics nodeBuiltinImport:off -- the workspace id is a wire constant, see workspaceIdForCwd
-// oxlint-disable-next-line effect/noNodeBuiltinImport, gent/no-bun-outside-adapter -- a client and its server derive the wire id in separate processes; it is pinned to node:crypto sha256, not an adapter's hash
+// oxlint-disable-next-line effect/noNodeBuiltinImport -- a client and its server derive the wire id in separate processes; it is pinned to node:crypto sha256, not an adapter's hash
 import { createHash } from "node:crypto"
 // @effect-diagnostics nodeBuiltinImport:off -- the workspace id canonicalizes its cwd before hashing
 // oxlint-disable-next-line effect/noNodeBuiltinImport -- sync, context-free canonicalization: the wire id must not depend on a Path layer being wired
@@ -27,7 +27,6 @@ export const WORKSPACE_ID_HEADER = "x-gent-workspace-id"
  * Sync because SDK client construction needs it outside an Effect context.
  */
 export const workspaceIdForCwd = (cwd: string): WorkspaceId =>
-  // oxlint-disable-next-line gent/no-bun-outside-adapter -- the wire id is pinned to node:crypto sha256; see above
   WorkspaceId.make(createHash("sha256").update(resolvePath(cwd)).digest("hex"))
 
 /**

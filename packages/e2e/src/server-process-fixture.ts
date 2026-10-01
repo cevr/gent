@@ -98,11 +98,13 @@ export const spawnServer = ({
   Effect.gen(function* () {
     const proc = yield* Effect.acquireRelease(
       Effect.sync(() =>
+        // oxlint-disable-next-line effect/noGlobals -- the fixture spawns the real server process with the test's environment
         Bun.spawn(
           ["bun", "src/main.tsx", "server", "start", "--port", String(port), "--isolate", "--mock"],
           {
             cwd: tuiDirectory,
             env: {
+              // oxlint-disable-next-line effect/noGlobals -- the fixture spawns the real server process with the test's environment
               ...Bun.env,
               GENT_DATA_DIR: dataDir,
             },

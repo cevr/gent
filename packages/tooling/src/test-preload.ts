@@ -46,7 +46,9 @@ Reflect.defineProperty(References.MinimumLogLevel, "defaultValue", {
 const testHome = mkdtempSync(join(tmpdir(), "gent-test-home-"))
 // A child process reads HOME as it starts. This process's `homedir()` read it
 // before this file ran, so the `os` module answers for it, under both names.
+// oxlint-disable-next-line effect/noGlobals -- the preload sets the test process's environment before any Effect runtime
 Bun.env["HOME"] = testHome
+// oxlint-disable-next-line effect/noGlobals -- the preload sets the test process's environment before any Effect runtime
 Reflect.deleteProperty(Bun.env, "GENT_DATA_DIR")
 const osWithTestHome = { ...os, homedir: () => testHome }
 for (const specifier of ["node:os", "os"]) {

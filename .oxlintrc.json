@@ -32,8 +32,8 @@
     "gent/declared-workspace-imports": "error",
     // Custom — definePackage/defineExtension factories must not throw
     "gent/no-define-extension-throw": "error",
-    // Custom — no Bun.* outside adapter, entrypoint, tooling, and test harness boundaries
-    "gent/no-bun-outside-adapter": "error",
+    // Custom — no host global read where effect/noGlobals does not look (upstream gap)
+    "gent/no-host-fact-bypass": "error",
     // Custom — a child-session writer admits the depth in its own function
     "gent/child-session-writer-admits": "error",
     // Custom — a whole-object JSON encode decides no identity (shipped source)
@@ -221,19 +221,11 @@
       }
     },
     {
-      // GentPlatform implements Bun/OS capabilities at the runtime boundary.
-      "files": ["packages/core/src/runtime/gent-platform-bun.ts"],
-      "rules": {
-        "effect/noGlobals": "off"
-      }
-    },
-    {
       // The lint plugin runs inside oxlint's Node host, not in an Effect
       // runtime, and reads fields of oxlint's untyped AST nodes by name.
       "files": ["packages/tooling/src/gent-rules.ts"],
       "rules": {
         "effect/noNodeBuiltinImport": "off",
-        "effect/noGlobals": "off",
         "effect/noNullish": "off",
         "effect/noReflectGet": "off",
         "effect/noRuntimeTypeof": "off",
@@ -244,24 +236,9 @@
       }
     },
     {
-      "files": ["packages/e2e/src/*-fixture.ts"],
-      "rules": {
-        "effect/noGlobals": "off"
-      }
-    },
-    {
       "files": ["packages/sdk/src/server.ts"],
       "rules": {
         "effect/noNodeBuiltinImport": "off"
-      }
-    },
-    {
-      // The TUI build is an Effect program run by `bun scripts/build.ts`. Only
-      // its `Bun.build` call needs the exemption; every other rule, the
-      // workspace imports included, still reads it.
-      "files": ["apps/tui/scripts/build.ts"],
-      "rules": {
-        "gent/no-bun-outside-adapter": "off"
       }
     },
     {
@@ -284,8 +261,7 @@
         "effect/noThrowStatement": "off",
         "effect/noTryCatch": "off",
         "effect/noUnknownParameters": "off",
-        "eslint/no-await-in-loop": "off",
-        "gent/no-bun-outside-adapter": "off"
+        "eslint/no-await-in-loop": "off"
       }
     },
     {
@@ -309,18 +285,11 @@
       }
     },
     {
-      "files": ["packages/tooling/src/check-guardrails.ts"],
-      "rules": {
-        "effect/noGlobals": "off"
-      }
-    },
-    {
       // The cell value reader reads any JavaScript value a cell made, null and
       // undefined included, through descriptors and the intrinsics it saves
       // from the realm's globals when it loads, before any cell runs.
       "files": ["packages/extensions/src/cell-value.ts"],
       "rules": {
-        "effect/noGlobals": "off",
         "effect/noNullish": "off",
         "effect/noObjectParameters": "off",
         "effect/noReflectApply": "off",
@@ -368,7 +337,6 @@
       // after the process's last test.
       "files": ["packages/tooling/src/test-preload.ts"],
       "rules": {
-        "effect/noGlobals": "off",
         "effect/noModuleMocks": "off",
         "effect/noNodeBuiltinImport": "off",
         "effect/noTestLifecycleHooks": "off"

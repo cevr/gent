@@ -2041,8 +2041,8 @@ export const findPlatformDuplicationViolations = (
  * `plans/`, it holds dated receipts that name what existed at the time.
  *
  * Retired `Bun.*` members (`Bun.Glob`, `Bun.randomUUIDv7` outside the platform
- * adapter) are banned by the `gent/no-bun-outside-adapter` rule in
- * `gent-rules.ts` instead, because only the AST sees a member access.
+ * adapter) are banned by the built-in bans of `effect/noGlobals` instead,
+ * because only the AST sees a member access.
  *
  * @module
  */

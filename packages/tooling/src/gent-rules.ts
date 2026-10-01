@@ -7,8 +7,7 @@
  * - core-entry-boundary: extensions read only the authoring entries of `@gent/core`.
  * - declared-workspace-imports: a package imports only the workspace packages it declares.
  * - no-define-extension-throw: an extension factory fails through its Effect, never a throw.
- * - no-bun-outside-adapter: `Bun.*` and host facts stay in the platform adapters (until
- *   upstream 0.19.0).
+ * - no-host-fact-bypass: no host global read where `effect/noGlobals` does not look.
  * - child-session-writer-admits: a core child-session writer admits the nesting depth first.
  * - no-identity-encode: a whole-object JSON encode decides no identity.
  */
@@ -117,9 +116,6 @@ export const ruleSubject = (context: Pick<Context, "filename" | "cwd">): string 
   return fixtureSubject(filename.startsWith(root) ? filename.slice(root.length) : filename)
 }
 
-/** A file in a `tests/` tree, judged repo-relative. */
-const inTestsTree = (context: Context): boolean => /(?:^|\/)tests\//.test(ruleSubject(context))
-
 const isExtensionFilename = (filename: string): boolean => {
   if (/\/extensions\/(?:api|branch-tools)\.ts$/.test(filename)) return false
   if (filename.endsWith("apps/tui/src/extensions/loader-boundary.ts")) return false
@@ -200,6 +196,7 @@ const owningWorkspace = (dir: string): Workspace | undefined => {
   const parent = dirname(dir)
   let owner: Workspace | undefined
   if (existsSync(manifestPath)) {
+    // oxlint-disable-next-line effect/noGlobals -- the lint plugin runs in oxlint's Node host and reads a manifest it does not own
     owner = workspaceOf(dir, JSON.parse(readFileSync(manifestPath, "utf8")))
   } else if (parent !== dir) {
     owner = owningWorkspace(parent)
@@ -218,19 +215,15 @@ const importTypeSourceOf = (node: AstNode): string | undefined => {
 }
 
 /**
- * The files that may touch `Bun.*` and host facts directly. Fixtures sit under
- * `packages/tooling/fixtures/` and run through the rule, so only the canonical
- * platform file and adapter names exempt one there.
+ * The files that may touch `Bun.*` and host facts directly, judged by the
+ * repo-relative path a rule sees (`ruleSubject`): the platform impl, the
+ * adapters, the tooling, and test code.
  */
-const platformBoundaryFilename = (filename: string): boolean => {
-  if (/\/runtime\/gent-platform-bun\.ts$/.test(filename)) return true
-  if (/-adapter\.tsx?$/.test(filename)) return true
-  if (LINT_FIXTURE.test(filename)) return false
-  return /\/packages\/tooling\//.test(filename) || isTestCode(filename)
-}
-
-const HOST_PROCESS_MEMBERS = new Set(["execPath", "kill", "platform", "pid"])
-const HOST_OS_MEMBERS = new Set(["hostname", "homedir", "release"])
+const platformBoundaryFilename = (subject: string): boolean =>
+  /(?:^|\/)runtime\/gent-platform-bun\.ts$/.test(subject) ||
+  /-adapter\.tsx?$/.test(subject) ||
+  /^packages\/tooling\//.test(subject) ||
+  isTestCode(subject)
 
 /**
  * Core and shipped-extension source, outside the test harness: the code that
@@ -238,26 +231,8 @@ const HOST_OS_MEMBERS = new Set(["hostname", "homedir", "release"])
  * The TUI, the SDK and the server launcher are process hosts; they read their
  * own working directory.
  */
-const protectedHostFactFilename = (filename: string): boolean =>
-  /\/packages\/(?:core|extensions)\/src\//.test(filename) && !/\/test-utils\//.test(filename)
-
-/** Host modules protected source reaches only through a service, and which one. */
-const HOST_MODULE_MESSAGES: ReadonlyMap<string, string> = new Map([
-  ["os", "Host OS facts come from `GentPlatform` (`osInfo`, `homeDirectory`)."],
-  ["bun", "Direct `bun` imports are adapter-only; use Effect platform services."],
-  [
-    "crypto",
-    "Random bytes and ids come from Effect `Crypto`; digests come from `GentPlatform.hash`.",
-  ],
-  ["url", "Turn a file URL into a path with Effect `Path.fromFileUrl`."],
-])
-
-/** Host functions protected source calls bare only after importing them from a host module. */
-const HOST_FUNCTION_MESSAGES: ReadonlyMap<string, string> = new Map([
-  ["createHash", "Digests come from `GentPlatform.hash`."],
-  ["randomBytes", "Random bytes come from Effect `Crypto`."],
-  ["fileURLToPath", "Turn a file URL into a path with Effect `Path.fromFileUrl`."],
-])
+const protectedHostFactFilename = (subject: string): boolean =>
+  /^packages\/(?:core|extensions)\/src\//.test(subject) && !/\/test-utils\//.test(subject)
 
 /** The module a `require("x")` or `module.require("x")` call names. */
 const requireSourceOf = (node: AstNode): string | undefined => {
@@ -268,21 +243,6 @@ const requireSourceOf = (node: AstNode): string | undefined => {
   const [arg] = getNodeArrayField(node, "arguments") ?? []
   if (arg === undefined) return undefined
   return getStringField(arg, "value")
-}
-
-/** A bare call to a host function: `createHash(...)`, not `platform.createHash(...)`. */
-const hostFunctionMessage = (node: AstNode): string | undefined => {
-  const callee = getNodeField(node, "callee")
-  if (callee?.type !== "Identifier") return undefined
-  const name = getStringField(callee, "name")
-  if (name === undefined) return undefined
-  const message = HOST_FUNCTION_MESSAGES.get(name)
-  return message === undefined ? undefined : `\`${name}()\` is not allowed here. ${message}`
-}
-
-const hostModuleMessage = (source: string): string | undefined => {
-  const message = HOST_MODULE_MESSAGES.get(source.replace(/^node:/, ""))
-  return message === undefined ? undefined : `\`${source}\` is not allowed here. ${message}`
 }
 
 /** `new URL(import.meta.url)`: the operand a hand-rolled file path reads `.pathname` from. */
@@ -301,59 +261,34 @@ const isImportMetaUrlConstruction = (node: AstNode | undefined): boolean => {
   )
 }
 
+/** The host globals the project bans of `effect/noGlobals` hold. */
+const HOST_GLOBALS = new Set(["Bun", "process"])
+
+/** The name a member expression reads: `b` for `a.b` and for `a["b"]`. */
+const memberPropertyName = (node: AstNode): string | undefined => {
+  const property = getNodeField(node, "property")
+  if (property === undefined) return undefined
+  if (fieldOf(node, "computed") !== true) return getStringField(property, "name")
+  const value = fieldOf(property, "value")
+  return typeof value === "string" ? value : undefined
+}
+
 /**
- * The name a member expression's object resolves to: `process` for both
- * `process` and `globalThis.process`.
+ * A host global read where `effect/noGlobals` does not look: `globalThis.Bun`,
+ * `globalThis.process` (dotted or computed), or a computed member of `Bun`.
  */
-const hostObjectName = (object: AstNode | undefined): string | undefined => {
-  if (object?.type === "Identifier") return getStringField(object, "name")
-  if (object?.type !== "MemberExpression") return undefined
-  const root = getNodeField(object, "object")
-  const prop = getNodeField(object, "property")
-  if (root?.type !== "Identifier" || getStringField(root, "name") !== "globalThis") return undefined
-  return prop?.type === "Identifier" ? getStringField(prop, "name") : undefined
-}
-
-/** `object.property` for an identifier-rooted (or `globalThis`-rooted) member expression. */
-const hostMember = (
-  node: AstNode,
-): { readonly object: string; readonly property: string | undefined } | undefined => {
-  const objectName = hostObjectName(getNodeField(node, "object"))
-  if (objectName === undefined) return undefined
-  const prop = getNodeField(node, "property")
-  let property: string | undefined
-  if (prop?.type === "Identifier") property = getStringField(prop, "name")
-  else if (prop?.type === "StringLiteral") property = getStringField(prop, "value")
-  return { object: objectName, property }
-}
-
-const retiredBunMessage = (
-  member: { readonly object: string; readonly property: string | undefined },
-  platformImpl: boolean,
-): string | undefined => {
-  if (member.object !== "Bun") return undefined
-  if (member.property === "Glob") {
-    return "`Bun.Glob` is retired; list files through Effect `FileSystem`."
+const hostBypassMessage = (node: AstNode): string | undefined => {
+  const object = getNodeField(node, "object")
+  if (object?.type !== "Identifier") return undefined
+  const objectName = getStringField(object, "name")
+  const property = memberPropertyName(node)
+  if (objectName === "globalThis" && HOST_GLOBALS.has(property ?? "")) {
+    return `\`globalThis.${property}\` reads a host global past \`effect/noGlobals\`. Route it through an Effect platform service (\`GentPlatform\`, \`FileSystem\`, \`ChildProcessSpawner\`, \`Config\`); host globals stay in adapter, tooling and test code.`
   }
-  if (member.property === "randomUUIDv7" && !platformImpl) {
-    return "`Bun.randomUUIDv7` is adapter-only; use `GentPlatform.randomId`."
+  if (objectName === "Bun" && fieldOf(node, "computed") === true) {
+    return "A computed `Bun[...]` member reads Bun past `effect/noGlobals`. Route it through an Effect platform service; Bun stays in adapter, tooling and test code."
   }
   return undefined
-}
-
-const hostMemberMessage = (member: {
-  readonly object: string
-  readonly property: string | undefined
-}): string | undefined => {
-  const suffix = member.property !== undefined ? `.${member.property}` : ""
-  if (member.object === "Bun") {
-    return `\`Bun${suffix}\` is not allowed here. Route platform I/O through an Effect service (e.g., \`GentPlatform\`, \`FileSystem\`, \`ChildProcess\`, \`KeyValueStore\`, \`Config\`). Bun APIs are allowed only in adapter, tooling, and test harness boundaries.`
-  }
-  const hostFact =
-    (member.object === "process" && HOST_PROCESS_MEMBERS.has(member.property ?? "")) ||
-    (member.object === "os" && HOST_OS_MEMBERS.has(member.property ?? ""))
-  if (!hostFact) return undefined
-  return `\`${member.object}${suffix}\` is not allowed here. Route host process and OS facts through \`GentPlatform\` or an adapter-local Effect service.`
 }
 
 const callExpressionArgs = (node: AstNode): ReadonlyArray<AstNode> => {
@@ -827,62 +762,32 @@ const plugin: Plugin = {
     },
 
     /**
-     * Bans `Bun.*` references and host process and OS facts everywhere except
-     * platform adapter, tooling, and test harness boundaries. The TUI build
-     * script is exempt by its `.oxlintrc.json` override.
-     * The `Bun` global is a platform-specific runtime API, and `process.pid`,
-     * `process.platform`, `os.hostname()` and the rest are host facts; product
-     * code routes both through Effect platform services (`GentPlatform`,
-     * `FileSystem`, `ChildProcess`, `KeyValueStore`, `Config`) so the runtime
-     * is portable and the I/O boundary is explicit.
+     * A host fact read where `effect/noGlobals` does not look.
      *
-     * Exempt by filename:
-     *   - `runtime/gent-platform-bun.ts` (the GentPlatform live impl)
-     *   - `*-adapter.ts` / `*-adapter.tsx` files (platform-specific adapters)
-     *   - `**\/packages/tooling/**` (CI helpers)
-     *   - `**\/packages/e2e/**` (test infrastructure spawning real processes)
-     *   - `*.test.ts` and files under `tests/`
+     * `.oxlintrc.json` bans `Bun.*` and the host process and OS facts through
+     * the project bans of `effect/noGlobals` and `effect/noNodeBuiltinImport`;
+     * core and shipped-extension source also take `process.cwd()` and the
+     * `os`, `bun`, `crypto` and `url` modules through services. Upstream
+     * (0.20.0) reads a global's member only as `Global.member`, so three
+     * spellings pass it, and this rule reports them:
      *
-     * Two retired APIs are banned even inside those exemptions, outside
-     * `tests/`: `Bun.Glob` (files are listed through Effect `FileSystem`) and
-     * `Bun.randomUUIDv7` (only `runtime/gent-platform-bun.ts` may call it;
-     * everyone else uses `GentPlatform.randomId`).
+     * - `globalThis.Bun` and `globalThis.process`, dotted or computed, as in
+     *   `globalThis.process.cwd()`;
+     * - a computed member of `Bun`, as in `Bun["spawn"]`;
+     * - in core and shipped-extension source outside `test-utils/`, a file
+     *   path hand-rolled as `new URL(import.meta.url).pathname`, where Effect
+     *   `Path.fromFileUrl` reads it.
      *
-     * Core and shipped-extension source (outside `test-utils/`) is held to
-     * three more host facts: `process.cwd()` (the working directory comes
-     * from `RuntimeEnvironment` or the extension context), imports of the
-     * `os`, `bun`, `crypto` and `url` modules, and a file path hand-rolled as
-     * `new URL(import.meta.url).pathname`. This rule is the one owner of the
-     * host-fact bans; a site that is a deliberate exception carries a
-     * line-local suppression with its reason.
-     *
-     * Goes when gent consumes oxlint-plugin-effect 0.19.0, whose generic
-     * form of this rule replaces it.
+     * Exempt by filename, as the upstream project bans are by override:
+     * `runtime/gent-platform-bun.ts`, `*-adapter.ts`, the tooling, and test
+     * code. Goes when an upstream release reads these spellings.
      */
-    "no-bun-outside-adapter": {
+    "no-host-fact-bypass": {
       create(context) {
-        const filename = context.filename
-        const platformImpl = /\/runtime\/gent-platform-bun\.ts$/.test(filename)
-        const inTests = inTestsTree(context)
-        const protectedFile =
-          protectedHostFactFilename(filename) && !platformBoundaryFilename(filename)
-        const reportHostModule = (node: AstNode) => {
-          if (!protectedFile) return
-          const source = importSourceOf(node)
-          if (source === undefined) return
-          const message = hostModuleMessage(source)
-          if (message !== undefined) context.report({ message, node })
-        }
+        const subject = ruleSubject(context)
+        if (platformBoundaryFilename(subject)) return {}
+        const protectedFile = protectedHostFactFilename(subject)
         return {
-          ImportDeclaration: reportHostModule,
-          ImportExpression: reportHostModule,
-          CallExpression(node) {
-            if (!protectedFile || !isAstNode(node)) return
-            const source = requireSourceOf(node)
-            const message =
-              source === undefined ? hostFunctionMessage(node) : hostModuleMessage(source)
-            if (message !== undefined) context.report({ message, node })
-          },
           MemberExpression(node) {
             if (!isAstNode(node)) return
             if (protectedFile && isImportMetaUrlConstruction(getNodeField(node, "object"))) {
@@ -893,28 +798,13 @@ const plugin: Plugin = {
               })
               return
             }
-            const member = hostMember(node)
-            if (member === undefined) return
-            const retired = retiredBunMessage(member, platformImpl)
-            if (retired !== undefined && !inTests) {
-              context.report({ message: retired, node })
-              return
-            }
-            if (protectedFile && member.object === "process" && member.property === "cwd") {
-              context.report({
-                message:
-                  "`process.cwd` is not allowed here. The working directory comes from `RuntimeEnvironment` or the extension context's `cwd`.",
-                node,
-              })
-              return
-            }
-            if (platformBoundaryFilename(filename)) return
-            const message = hostMemberMessage(member)
+            const message = hostBypassMessage(node)
             if (message !== undefined) context.report({ message, node })
           },
         }
       },
     },
+
     /**
      * Every child-session writer in core admits the nesting depth.
      *

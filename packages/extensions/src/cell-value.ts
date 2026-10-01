@@ -889,6 +889,7 @@ export const encodeSnapshot = (namespace: ReadonlyMap<string, unknown>): CellSna
       omitted.push({ name, reason: encoded.reason })
       continue
     }
+    // oxlint-disable-next-line effect/noGlobals -- the reader measures the encoded size of a value it already encoded
     const size = byteLength(JSON.stringify(encoded))
     if (size > maximumSnapshotBindingBytes || total + size > maximumSnapshotBytes) {
       omitted.push({ name, reason: "too-large" })
