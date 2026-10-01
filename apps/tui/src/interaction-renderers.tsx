@@ -247,7 +247,11 @@ export function OptionList(props: OptionListProps): JSX.Element {
           <Show when={Option.getOrUndefined(Option.fromNullishOr(props.markdown))} keyed>
             {(markdown) => (
               <box marginTop={1} paddingRight={1}>
-                <markdown syntaxStyle={markdownSyntaxStyle} content={markdown} />
+                <markdown
+                  syntaxStyle={markdownSyntaxStyle}
+                  content={markdown}
+                  internalBlockMode="top-level"
+                />
               </box>
             )}
           </Show>
