@@ -2102,8 +2102,8 @@ const startToolCall = (
 // ── Hook ──
 
 export function useSessionFeed(
-  sessionId: () => SessionId,
-  branchId: () => BranchId,
+  sessionId: SessionId,
+  branchId: BranchId,
   client: SessionFeedClient,
   callbacks: SessionFeedCallbacks,
   /** Read at send time, so the owner decides whether the prompt is still unsent. */
@@ -2115,7 +2115,7 @@ export function useSessionFeed(
     events: [],
   })
   const [runningCalls, setRunningCalls] = createSignal<ReadonlyArray<RunningCall>>([])
-  const [streamReadyKey, setStreamReadyKey] = createSignal<Option.Option<string>>(Option.none())
+  const [streamReady, setStreamReady] = createSignal(false)
   let streamMessageId = Option.none<string>()
   let eventSeq = 0
   // The steps of the turn in flight; TurnCompleted spends them on its label.
@@ -2277,33 +2277,25 @@ export function useSessionFeed(
     })
   }
   // The session view mounts keyed on the identity (app.tsx), so one feed
-  // serves one session and branch: a switch remounts it, and the cleanup
-  // interrupts this feed's fiber. A reactivation of the same identity (the
-  // client's identity went none and came back) resumes from the cursor.
+  // serves one session and branch for its whole life: a switch remounts it,
+  // and the cleanup interrupts this feed's fiber. The cursor carries a
+  // reconnect's replay on from where the last attempt stopped.
   let lastSeenEventId = 0
-  let processedEnvelopeIds = new Set<EventEnvelope["id"]>()
-  let activated = false
+  const processedEnvelopeIds = new Set<EventEnvelope["id"]>()
   const takeInitialPromptValue = Option.fromNullishOr(takeInitialPrompt)
   const canSendPromptValue = Option.fromNullishOr(canSendPrompt)
 
-  const resetProjection = () => {
-    setStore({ messages: [], events: [] })
-    setRunningCalls([])
-    setStreamReadyKey(Option.none())
-    streamMessageId = Option.none()
-    eventSeq = 0
-    processedEnvelopeIds = new Set()
-    client.resetSessionEvents()
-  }
+  // The events the client held for the session before this one are not this feed's.
+  client.resetSessionEvents()
 
   const items = createMemo((): SessionItem[] =>
     [...store.messages, ...store.events].sort(compareSessionItems),
   )
 
-  // Keyed subscription — re-runs only when sessionId:branchId identity changes
-  const feedKey = createMemo(() => `${sessionId()}:${branchId()}`)
+  const feedKey = `${sessionId}:${branchId}`
 
-  // Wait for the client to hold this session before subscribing
+  // The client names the session in view. It moves first on a switch; the
+  // feed stops then, before the view that holds it unmounts.
   const activeSessionKey = createMemo(
     () => `${client.sessionIdentity().sessionId}:${client.sessionIdentity().branchId}`,
   )
@@ -2315,59 +2307,51 @@ export function useSessionFeed(
     )
 
   createEffect(
-    on(
-      [activeSessionKey, feedKey, streamReadyKey, canSendPromptNow],
-      ([active, key, readyKey, canSend]) => {
-        if (active !== key) return
-        if (Option.isNone(readyKey) || readyKey.value !== key || !canSend) return
-        const startup = Option.flatMap(takeInitialPromptValue, (take) => take())
-        if (Option.isNone(startup)) return
-        const prompt = startup.value
-        if (prompt.content === "") return
+    on([activeSessionKey, streamReady, canSendPromptNow], ([active, ready, canSend]) => {
+      if (active !== feedKey) return
+      if (!ready || !canSend) return
+      const startup = Option.flatMap(takeInitialPromptValue, (take) => take())
+      if (Option.isNone(startup)) return
+      const prompt = startup.value
+      if (prompt.content === "") return
 
-        const session = sessionId()
-        const branch = branchId()
-        client.log.info("feed.sendInitialPrompt", {
-          sessionId: session,
-          branchId: branch,
-        })
-        client.runtime.cast(
-          Effect.gen(function* () {
-            const requestId = yield* randomId
-            yield* client.client.message
-              .send({ sessionId: session, branchId: branch, content: prompt.content, requestId })
-              .pipe(
-                // A lost connection retries under the one request id; after
-                // the last try the prompt is refused like a composer send.
-                Effect.retry(SEND_RETRY),
-                Effect.catchEager((err) =>
-                  Effect.sync(() =>
-                    prompt.refuse(
-                      { sessionId: session, branchId: branch },
-                      formatError(err),
-                      lostRequest(err, requestId),
-                    ),
+      const session = sessionId
+      const branch = branchId
+      client.log.info("feed.sendInitialPrompt", {
+        sessionId: session,
+        branchId: branch,
+      })
+      client.runtime.cast(
+        Effect.gen(function* () {
+          const requestId = yield* randomId
+          yield* client.client.message
+            .send({ sessionId: session, branchId: branch, content: prompt.content, requestId })
+            .pipe(
+              // A lost connection retries under the one request id; after
+              // the last try the prompt is refused like a composer send.
+              Effect.retry(SEND_RETRY),
+              Effect.catchEager((err) =>
+                Effect.sync(() =>
+                  prompt.refuse(
+                    { sessionId: session, branchId: branch },
+                    formatError(err),
+                    lostRequest(err, requestId),
                   ),
                 ),
-              )
-          }),
-        )
-      },
-    ),
+              ),
+            )
+        }),
+      )
+    }),
   )
 
   createEffect(
-    on([activeSessionKey, feedKey], ([active, key]) => {
-      if (active !== key) return
+    on(activeSessionKey, (active) => {
+      if (active !== feedKey) return
 
-      // The first activation clears what the client held for another session.
-      if (!activated) {
-        resetProjection()
-        activated = true
-      }
-
-      const branch = branchId()
-      const session = sessionId()
+      const key = feedKey
+      const branch = branchId
+      const session = sessionId
       client.log.info("feed.activate", { key })
 
       const streamFiber = client.runtime.fork(
@@ -2457,7 +2441,7 @@ export function useSessionFeed(
                   Effect.forkScoped,
                 )
 
-              yield* Effect.sync(() => setStreamReadyKey(Option.some(key)))
+              yield* Effect.sync(() => setStreamReady(true))
 
               return yield* Effect.raceFirst(Fiber.join(eventsFiber), Fiber.join(runtimeFiber))
             }).pipe(
@@ -2951,8 +2935,8 @@ export function createSessionController(props: {
   }
 
   const feed = useSessionFeed(
-    () => props.sessionId,
-    () => props.branchId,
+    props.sessionId,
+    props.branchId,
     client,
     {
       onInteraction,

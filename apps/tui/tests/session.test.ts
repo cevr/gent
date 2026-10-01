@@ -1235,8 +1235,8 @@ describe("useSessionFeed", () => {
       const dispose = createRoot((disposeRoot) => {
         const [active] = createSignal(makeSession(sessionId, branchId))
         useSessionFeed(
-          () => sessionId,
-          () => branchId,
+          sessionId,
+          branchId,
           feedClientStub({
             sessionIdentity: identityOf(active),
             // The feed waits on its snapshot forever: only an interrupt ends it.
@@ -1298,21 +1298,16 @@ describe("useSessionFeed", () => {
           },
           applySessionEvent: () => setActive(makeSession(sessionId, nextBranchId)),
         })
-        useSessionFeed(
-          () => sessionId,
-          () => branchId,
-          client,
-          {
-            onInteraction: () => {},
-            onInteractionDismissed: () => {},
-            onQueueSnapshot: () => {},
-            onBranchSwitch: (nextSession, nextBranch) => {
-              expect(nextSession).toBe(sessionId)
-              expect(nextBranch).toBe(nextBranchId)
-              runtime.cast(Deferred.succeed(switched, void 0))
-            },
+        useSessionFeed(sessionId, branchId, client, {
+          onInteraction: () => {},
+          onInteractionDismissed: () => {},
+          onQueueSnapshot: () => {},
+          onBranchSwitch: (nextSession, nextBranch) => {
+            expect(nextSession).toBe(sessionId)
+            expect(nextBranch).toBe(nextBranchId)
+            runtime.cast(Deferred.succeed(switched, void 0))
           },
-        )
+        })
         return disposeRoot
       })
       yield* Deferred.await(switched).pipe(
@@ -1392,17 +1387,12 @@ describe("useSessionFeed", () => {
           }),
           runtime,
         })
-        useSessionFeed(
-          () => sessionId,
-          () => branchId,
-          client,
-          {
-            onInteraction: () => {},
-            onInteractionDismissed: () => {},
-            onQueueSnapshot: () => {},
-            onBranchSwitch: () => {},
-          },
-        )
+        useSessionFeed(sessionId, branchId, client, {
+          onInteraction: () => {},
+          onInteractionDismissed: () => {},
+          onQueueSnapshot: () => {},
+          onBranchSwitch: () => {},
+        })
         return disposeRoot
       })
       yield* waitUntilAdvancing(
@@ -1573,17 +1563,12 @@ describe("useSessionFeed", () => {
         })
 
         feed = Option.some(
-          useSessionFeed(
-            () => sessionId,
-            () => branchId,
-            client,
-            {
-              onInteraction: () => {},
-              onInteractionDismissed: () => {},
-              onBranchSwitch: () => {},
-              onQueueSnapshot: () => {},
-            },
-          ),
+          useSessionFeed(sessionId, branchId, client, {
+            onInteraction: () => {},
+            onInteractionDismissed: () => {},
+            onBranchSwitch: () => {},
+            onQueueSnapshot: () => {},
+          }),
         )
         return disposeRoot
       })
@@ -1669,17 +1654,12 @@ describe("useSessionFeed", () => {
           runtime: createMockRuntime(),
         })
         feed = Option.some(
-          useSessionFeed(
-            () => sessionId,
-            () => branchId,
-            client,
-            {
-              onInteraction: () => {},
-              onInteractionDismissed: () => {},
-              onBranchSwitch: () => {},
-              onQueueSnapshot: () => {},
-            },
-          ),
+          useSessionFeed(sessionId, branchId, client, {
+            onInteraction: () => {},
+            onInteractionDismissed: () => {},
+            onBranchSwitch: () => {},
+            onQueueSnapshot: () => {},
+          }),
         )
         return disposeRoot
       })
@@ -1739,17 +1719,12 @@ describe("useSessionFeed", () => {
           runtime: createMockRuntime(),
         })
         feed = Option.some(
-          useSessionFeed(
-            () => sessionId,
-            () => branchId,
-            client,
-            {
-              onInteraction: () => {},
-              onInteractionDismissed: () => {},
-              onBranchSwitch: () => {},
-              onQueueSnapshot: () => {},
-            },
-          ),
+          useSessionFeed(sessionId, branchId, client, {
+            onInteraction: () => {},
+            onInteractionDismissed: () => {},
+            onBranchSwitch: () => {},
+            onQueueSnapshot: () => {},
+          }),
         )
         return disposeRoot
       })
@@ -1828,17 +1803,12 @@ describe("useSessionFeed", () => {
           runtime: createMockRuntime(),
         })
         feed = Option.some(
-          useSessionFeed(
-            () => sessionId,
-            () => branchId,
-            client,
-            {
-              onInteraction: () => {},
-              onInteractionDismissed: () => {},
-              onBranchSwitch: () => {},
-              onQueueSnapshot: () => {},
-            },
-          ),
+          useSessionFeed(sessionId, branchId, client, {
+            onInteraction: () => {},
+            onInteractionDismissed: () => {},
+            onBranchSwitch: () => {},
+            onQueueSnapshot: () => {},
+          }),
         )
         return disposeRoot
       })
@@ -1959,17 +1929,12 @@ describe("useSessionFeed", () => {
           runtime: createMockRuntime(),
         })
         feed = Option.some(
-          useSessionFeed(
-            () => sessionId,
-            () => branchId,
-            client,
-            {
-              onInteraction: () => {},
-              onInteractionDismissed: () => {},
-              onBranchSwitch: () => {},
-              onQueueSnapshot: () => {},
-            },
-          ),
+          useSessionFeed(sessionId, branchId, client, {
+            onInteraction: () => {},
+            onInteractionDismissed: () => {},
+            onBranchSwitch: () => {},
+            onQueueSnapshot: () => {},
+          }),
         )
         return disposeRoot
       })
@@ -2008,17 +1973,12 @@ describe("useSessionFeed", () => {
         runtime: createMockRuntime(),
       })
       feed = Option.some(
-        useSessionFeed(
-          () => snapshot.sessionId,
-          () => snapshot.branchId,
-          client,
-          {
-            onInteraction: () => {},
-            onInteractionDismissed: () => {},
-            onBranchSwitch: () => {},
-            onQueueSnapshot: () => {},
-          },
-        ),
+        useSessionFeed(snapshot.sessionId, snapshot.branchId, client, {
+          onInteraction: () => {},
+          onInteractionDismissed: () => {},
+          onBranchSwitch: () => {},
+          onQueueSnapshot: () => {},
+        }),
       )
       return disposeRoot
     })
@@ -2311,21 +2271,16 @@ describe("useSessionFeed", () => {
           },
         })
 
-        useSessionFeed(
-          () => sessionId,
-          () => branchId,
-          client,
-          {
-            onInteraction: (interaction) => {
-              client.runtime.cast(Deferred.succeed(interactionSeen, interaction))
-            },
-            onInteractionDismissed: () => {},
-            onBranchSwitch: (nextSessionId, nextBranchId) => {
-              branchSwitches.push({ sessionId: nextSessionId, branchId: nextBranchId })
-            },
-            onQueueSnapshot: () => {},
+        useSessionFeed(sessionId, branchId, client, {
+          onInteraction: (interaction) => {
+            client.runtime.cast(Deferred.succeed(interactionSeen, interaction))
           },
-        )
+          onInteractionDismissed: () => {},
+          onBranchSwitch: (nextSessionId, nextBranchId) => {
+            branchSwitches.push({ sessionId: nextSessionId, branchId: nextBranchId })
+          },
+          onQueueSnapshot: () => {},
+        })
         return disposeRoot
       })
 
@@ -2476,17 +2431,12 @@ describe("useSessionFeed", () => {
             },
           })
           feed = Option.some(
-            useSessionFeed(
-              () => sessionId,
-              () => branchId,
-              client,
-              {
-                onInteraction: () => {},
-                onInteractionDismissed: () => {},
-                onBranchSwitch: () => {},
-                onQueueSnapshot: () => {},
-              },
-            ),
+            useSessionFeed(sessionId, branchId, client, {
+              onInteraction: () => {},
+              onInteractionDismissed: () => {},
+              onBranchSwitch: () => {},
+              onQueueSnapshot: () => {},
+            }),
           )
           return disposeRoot
         })
@@ -2582,17 +2532,12 @@ describe("useSessionFeed", () => {
           },
         })
         feed = Option.some(
-          useSessionFeed(
-            () => sessionId,
-            () => branchId,
-            client,
-            {
-              onInteraction: () => {},
-              onInteractionDismissed: () => {},
-              onBranchSwitch: () => {},
-              onQueueSnapshot: () => {},
-            },
-          ),
+          useSessionFeed(sessionId, branchId, client, {
+            onInteraction: () => {},
+            onInteractionDismissed: () => {},
+            onBranchSwitch: () => {},
+            onQueueSnapshot: () => {},
+          }),
         )
         return disposeRoot
       })
@@ -2664,17 +2609,12 @@ describe("useSessionFeed", () => {
           runtime: createMockRuntime(),
         })
         feed = Option.some(
-          useSessionFeed(
-            () => sessionId,
-            () => branchId,
-            client,
-            {
-              onInteraction: () => {},
-              onInteractionDismissed: () => {},
-              onBranchSwitch: () => {},
-              onQueueSnapshot: () => {},
-            },
-          ),
+          useSessionFeed(sessionId, branchId, client, {
+            onInteraction: () => {},
+            onInteractionDismissed: () => {},
+            onBranchSwitch: () => {},
+            onQueueSnapshot: () => {},
+          }),
         )
         return disposeRoot
       })
@@ -2744,17 +2684,12 @@ describe("useSessionFeed", () => {
           runtime: createMockRuntime(),
         })
         feed = Option.some(
-          useSessionFeed(
-            () => sessionId,
-            () => branchId,
-            client,
-            {
-              onInteraction: () => {},
-              onInteractionDismissed: () => {},
-              onBranchSwitch: () => {},
-              onQueueSnapshot: () => {},
-            },
-          ),
+          useSessionFeed(sessionId, branchId, client, {
+            onInteraction: () => {},
+            onInteractionDismissed: () => {},
+            onBranchSwitch: () => {},
+            onQueueSnapshot: () => {},
+          }),
         )
         return disposeRoot
       })
@@ -2826,17 +2761,12 @@ describe("useSessionFeed", () => {
           runtime: createMockRuntime(),
         })
         feed = Option.some(
-          useSessionFeed(
-            () => sessionId,
-            () => branchId,
-            client,
-            {
-              onInteraction: () => {},
-              onInteractionDismissed: () => {},
-              onBranchSwitch: () => {},
-              onQueueSnapshot: () => {},
-            },
-          ),
+          useSessionFeed(sessionId, branchId, client, {
+            onInteraction: () => {},
+            onInteractionDismissed: () => {},
+            onBranchSwitch: () => {},
+            onQueueSnapshot: () => {},
+          }),
         )
         return disposeRoot
       })
