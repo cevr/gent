@@ -482,6 +482,23 @@ describe("repo temp directory guard", () => {
     expect(findRepoTempDirectories(testFile, source).map((finding) => finding.line)).toEqual([2])
   })
 
+  test("a bound name spelled inside a string literal is no repo path", () => {
+    const sources = [
+      [
+        'const login = path.resolve(import.meta.dir, "fixtures")',
+        'const dir = yield* fs.makeTempDirectoryScoped({ prefix: "gent-login-" })',
+      ],
+      [
+        'const login = path.resolve(import.meta.dir, "fixtures")',
+        'const label = "login screen"',
+        "const dir = yield* fs.makeTempDirectoryScoped({ prefix: label })",
+      ],
+    ]
+    expect(
+      sources.map((source) => findRepoTempDirectories(testFile, source.join("\n")).length),
+    ).toEqual([0, 0])
+  })
+
   test("a directory option naming a binding from import.meta is reported", () => {
     const source = [
       'const packageRoot = path.resolve(import.meta.dir, "../../..")',

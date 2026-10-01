@@ -946,15 +946,24 @@ export const findRepoTempDirectories = (file: string, text: string): ReadonlyArr
   const syntax = syntaxOf(file)
   const code = withoutComments(text, syntax)
   const lines = code.split("\n")
+  // The same lines with strings and template text blanked: a bound name is
+  // read only where it is code, so `"gent-login-"` does not name `login`.
+  const codeLines = codeOnly(text, syntax).split("\n")
   // A name bound from a repo path, or from another such name, is a repo path.
   const bound = new Set<string>()
-  const namesBound = (value: string): boolean =>
-    value.split(/[^\w$]+/).some((word) => bound.has(word))
-  const namesRepo = (value: string): boolean => REPO_PATH.test(value) || namesBound(value)
-  for (const line of lines) {
+  const namesBound = (codeText: string): boolean =>
+    codeText.split(/[^\w$]+/).some((word) => bound.has(word))
+  const namesRepo = (value: string, valueCode: string): boolean =>
+    REPO_PATH.test(value) || namesBound(valueCode)
+  for (const [index, line] of lines.entries()) {
     const binding = Option.fromNullishOr(BINDING.exec(line))
-    if (Option.isSome(binding) && namesRepo(binding.value[2] ?? ""))
-      bound.add(binding.value[1] ?? "")
+    const bindingCode = Option.fromNullishOr(BINDING.exec(codeLines[index] ?? ""))
+    if (Option.isNone(binding)) continue
+    const valueCode = Option.match(bindingCode, {
+      onNone: () => "",
+      onSome: (match) => match[2] ?? "",
+    })
+    if (namesRepo(binding.value[2] ?? "", valueCode)) bound.add(binding.value[1] ?? "")
   }
   const reported = new Set<number>()
   // A temp directory call: report the first line of its arguments that names a repo path.
@@ -966,7 +975,10 @@ export const findRepoTempDirectories = (file: string, text: string): ReadonlyArr
       reported.add(first)
       continue
     }
-    const hit = argumentText.split("\n").findIndex(namesRepo)
+    const argumentCode = codeOnly(argumentText, syntax).split("\n")
+    const hit = argumentText
+      .split("\n")
+      .findIndex((line, index) => namesRepo(line, argumentCode[index] ?? ""))
     if (hit !== -1) reported.add(first + hit)
   }
   // A tmp segment joined to a repo path on one line.
