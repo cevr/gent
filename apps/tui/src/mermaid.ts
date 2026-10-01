@@ -114,10 +114,41 @@ const spaceLineArrows = (line: string): string => {
     .join("")
 }
 
+/**
+ * Mermaid reads `;` as a statement separator; beautiful-mermaid 1.1.3 reads
+ * one statement per line, so `graph TD;` names no diagram and `A-->B; B-->C`
+ * loses its second edge. Each statement goes on its own line. A `;` inside
+ * written text, and a `%%` comment, stay as written.
+ */
+const splitStatements = (line: string): ReadonlyArray<string> => {
+  if (!line.includes(";") || line.trim().startsWith("%%")) return [line]
+  const statements: Array<string> = []
+  let current = ""
+  line.split(WRITTEN_TEXT).forEach((part, index) => {
+    // The split puts each quoted or shaped run at an odd index.
+    if (index % 2 === 1) {
+      current += part
+      return
+    }
+    const [first = "", ...rest] = part.split(";")
+    current += first
+    for (const next of rest) {
+      statements.push(current)
+      current = next
+    }
+  })
+  statements.push(current)
+  return statements.filter((statement) => statement.trim().length > 0)
+}
+
+/**
+ * The flowchart source beautiful-mermaid draws as Mermaid does: one statement
+ * per line, and a space between each id and the dash arrow written against it.
+ */
 const spaceEdgeArrows = (source: string): string => {
   const lines = source.split("\n")
   if (!isFlowchart(lines)) return source
-  return lines.map(spaceLineArrows).join("\n")
+  return lines.flatMap(splitStatements).map(spaceLineArrows).join("\n")
 }
 
 /**

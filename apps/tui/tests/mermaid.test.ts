@@ -116,6 +116,24 @@ describe("inline mermaid replace", () => {
     }
   }
 
+  // Mermaid reads `;` as a statement separator, after the header too. Each
+  // drawing names every node of every statement.
+  const statements: ReadonlyArray<readonly [string, ReadonlyArray<string>]> = [
+    ["graph TD;\n  Alpha-->Beta\n  Beta-->Gamma", ["Alpha", "Beta", "Gamma"]],
+    ["graph TD\n  Alpha-->Beta; Beta-->Gamma", ["Alpha", "Beta", "Gamma"]],
+    ["graph TD\n  Alpha --> Beta; Beta --> Gamma", ["Alpha", "Beta", "Gamma"]],
+    ["graph LR; Alpha --> Beta", ["Alpha", "Beta"]],
+    ["flowchart LR\n  Alpha-->Beta;", ["Alpha", "Beta"]],
+    ['graph LR\n  Alpha["a;b"]-->Beta', ["a;b", "Beta"]],
+  ]
+  for (const [source, nodes] of statements) {
+    test(`${source.replaceAll("\n", " \\n ")} draws every statement`, () => {
+      const drawn = uncached(`\`\`\`mermaid\n${source}\n\`\`\``, 120)
+      expect(drawn).not.toContain("```mermaid")
+      for (const text of nodes) expect(drawn).toContain(text)
+    })
+  }
+
   // Only an edge statement is an edge: a subgraph title keeps its text.
   test("a subgraph title stays as written", () => {
     const drawn = uncached(
