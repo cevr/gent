@@ -437,19 +437,56 @@ const lineAt = (code: string, index: number): number => code.slice(0, index).spl
 // ── a lint directive names its rules ────────────────────────────────────────
 
 /**
- * oxlint honors both spellings, `eslint-disable` and `oxlint-disable`, so each
- * pattern matches both. A blanket directive names no rule; a file-wide
- * directive, written as a block or a line comment, disables its rules to the
- * end of the file or the next enable.
+ * oxlint reads a directive from a comment's body, trimmed: the text after
+ * `//`, or between `/*` and `*\/` across any number of lines. It honors both
+ * spellings, `eslint-disable` and `oxlint-disable`, so each pattern matches
+ * both. A blanket directive names no rule; a file-wide directive, written as
+ * a block or a line comment, disables its rules to the end of the file or the
+ * next enable.
  *
  * `effect/requireSuppressionReason` reports a blanket `-next-line` directive,
  * but not a blanket `-line` or file-wide one: that directive disables every
  * rule on its own line, the upstream rule with them. So the guards read them.
  */
-const blanketDisableDirective =
-  /(?:\/\*\s*(?:es|ox)lint-disable(?:-next-line|-line)?\s*(?:\*\/|--|$))|(?:\/\/\s*(?:es|ox)lint-disable(?:-next-line|-line)?\s*(?:--|$))/
+const blanketDisableDirective = /^(?:es|ox)lint-disable(?:-next-line|-line)?\s*(?:--|$)/
 
-const blockDisableDirective = /(?:\/\*|\/\/)\s*(?:es|ox)lint-disable(?:\s|$)/
+const fileWideDisableDirective = /^(?:es|ox)lint-disable(?:\s|$)/
+
+/** A comment's trimmed body, and the line it starts on. */
+interface CommentBody {
+  readonly line: number
+  readonly body: string
+}
+
+/** Each comment of a source text, its body trimmed, keyed by the text: both directive guards read one lex. */
+const commentCache = () => new Map<string, ReadonlyArray<CommentBody>>()
+
+const commentBodyCache = { ts: commentCache(), tsx: commentCache() }
+
+/** A comment token's body: after `//`, or between `/*` and its `*\/` when it has one. */
+const COMMENT_BODY = /^(?:\/\/([^]*)|\/\*([^]*?)(?:\*\/)?)$/
+
+/** Every comment token of `text`, read by the lexer, so a `//` in a string is text. */
+const commentBodies = (text: string, syntax: Syntax): ReadonlyArray<CommentBody> => {
+  const cache = commentBodyCache[syntax]
+  return Option.getOrElse(Option.fromNullishOr(cache.get(text)), () => {
+    const bodies: Array<CommentBody> = []
+    const frames = [0]
+    let at = 0
+    while (at < text.length) {
+      const token = lexStep(text, at, frames, syntax)
+      if (token.kind === "comment") {
+        const [, line = "", block = ""] = COMMENT_BODY.exec(text.slice(at, token.end)) ?? []
+        const raw = line + block
+        const lead = raw.length - raw.trimStart().length
+        bodies.push({ line: lineAt(text, at + 2 + lead), body: raw.trim() })
+      }
+      at = token.end
+    }
+    cache.set(text, bodies)
+    return bodies
+  })
+}
 
 /** A file inside a fixture directory; a basename such as `pty-fixture.ts` is not one. */
 const fixtureFilePattern = /(?:^|\/)(?:fixtures?|__fixtures__)\//
@@ -459,11 +496,11 @@ const isExplicitFixtureFile = (file: string): boolean => fixtureFilePattern.test
 const DISABLE_MESSAGE =
   "blanket and file-wide lint-disable comments (eslint- or oxlint- spelling) are banned; use line-local suppressions with exact rules"
 
-/** Every line of `text` a directive pattern matches. */
+/** Every comment of a source file whose body is a directive `directive` matches. */
 const directiveLines = (file: string, text: string, directive: RegExp): ReadonlyArray<Finding> =>
-  text.split("\n").flatMap((line, index) => {
-    if (!directive.test(line)) return []
-    return [{ file, line: index + 1, message: DISABLE_MESSAGE }]
+  commentBodies(text, syntaxOf(file)).flatMap(({ line, body }) => {
+    if (!directive.test(body)) return []
+    return [{ file, line, message: DISABLE_MESSAGE }]
   })
 
 export const findBlanketEslintDisables = (file: string, text: string): ReadonlyArray<Finding> =>
@@ -474,7 +511,7 @@ export const findBannedEslintDisableBlocks = (
   text: string,
 ): ReadonlyArray<Finding> => {
   if (isExplicitFixtureFile(file)) return []
-  return directiveLines(file, text, blockDisableDirective)
+  return directiveLines(file, text, fileWideDisableDirective)
 }
 
 // ── core names no feature built on it ───────────────────────────────────────

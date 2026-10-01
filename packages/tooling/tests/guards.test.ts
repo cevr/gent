@@ -121,6 +121,40 @@ describe("blanket eslint disable checker", () => {
     ])
   })
 
+  test("a directive in a block comment that spans lines is read like one on a line", () => {
+    // oxlint reads a block comment's trimmed body, so a directive on the
+    // second line of a block comment disables its rule to the end of the file.
+    const oxDirective = ["oxlint", "disable"].join("-")
+    const text = [
+      "/*",
+      `  ${oxDirective} effect/noNullish -- a reason`,
+      "*/",
+      "export const a = null",
+      "/*",
+      `  ${directive}`,
+      "*/",
+      "export const b = null",
+    ].join("\n")
+    expect(findBannedEslintDisableBlocks("sample.ts", text)).toMatchObject([
+      { file: "sample.ts", line: 2 },
+      { file: "sample.ts", line: 6 },
+    ])
+    expect(findBlanketEslintDisables("sample.ts", text)).toMatchObject([
+      { file: "sample.ts", line: 6 },
+    ])
+  })
+
+  test("a directive spelled inside a string or after other comment text is not one", () => {
+    const text = [
+      `const a = "// ${directive}"`,
+      `const b = '/* ${directive} effect/noNullish */'`,
+      `// see the ${directive} ban`,
+      `/* note: ${directive} is banned */`,
+    ].join("\n")
+    expect(findBannedEslintDisableBlocks("sample.ts", text)).toEqual([])
+    expect(findBlanketEslintDisables("sample.ts", text)).toEqual([])
+  })
+
   test("allows block comments only in explicit fixture files", () => {
     expect(
       findBannedEslintDisableBlocks(

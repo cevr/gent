@@ -268,16 +268,19 @@ type FileFinder = (file: string, text: string) => ReadonlyArray<Finding>
 
 /** Findings any scanned file answers on its own: source, config, docs and the hook. */
 const ANY_FILE_FINDERS: ReadonlyArray<FileFinder> = [
-  findBlanketEslintDisables,
-  findBannedEslintDisableBlocks,
   findSuppressionInventoryFindings,
   findPreCommitHookFindings,
   findRetiredSurfaces,
   findTestLaneDefaults,
 ]
 
-/** Findings a source file answers on its own, without the rest of the tree. */
+/**
+ * Findings a source file answers on its own, without the rest of the tree.
+ * The lint directive guards are here: oxlint reads directives only in source.
+ */
 const SOURCE_FILE_FINDERS: ReadonlyArray<FileFinder> = [
+  findBlanketEslintDisables,
+  findBannedEslintDisableBlocks,
   findCoreFeatureIndependenceFindings,
   findCoreVendorModelPins,
   findE2eFixtureImportFindings,
