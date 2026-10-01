@@ -21,6 +21,7 @@ None stated by the owner. A candidate that trades one north star for another is 
 
 Propose nothing against these.
 
+- Every sweep, apply and counsel agent reads `ARCHITECTURE.md` in full before the code: its numbered rules are the invariants a change must keep, and its receipts name where each lives.
 - Children wake, never block.
 - The cell runs in full Bun, with no sandbox.
 - `effect-wide-event` stays.
