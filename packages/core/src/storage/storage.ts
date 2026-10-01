@@ -145,13 +145,16 @@ export interface SessionStorageService {
   /**
    * Each write sets only the columns it names, so two writers that touch
    * different fields of one session (a rename and a `/model` switch) never
-   * restore each other's old value.
+   * restore each other's old value. A rename with an `expectedName` writes
+   * only while the stored name is still that one, in the same statement, and
+   * answers whether it wrote.
    */
   readonly renameSession: (
     id: SessionId,
     name: string,
     updatedAt: Date,
-  ) => Effect.Effect<void, StorageError>
+    expectedName?: Option.Option<string>,
+  ) => Effect.Effect<boolean, StorageError>
   readonly updateSessionSettings: (
     id: SessionId,
     settings: Pick<Session, "modelId" | "reasoningLevel">,
@@ -316,9 +319,15 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
         ).pipe(Effect.mapError(storageError("Failed to list sessions"))),
 
         renameSession: Effect.fn("SessionStorage.renameSession")(
-          function* (id, name, updatedAt) {
+          function* (id, name, updatedAt, expectedName = Option.none()) {
             const workspaceId = yield* CurrentWorkspaceId
-            yield* sql`UPDATE sessions SET name = ${name}, updated_at = ${updatedAt.getTime()} WHERE id = ${id} AND workspace_id = ${workspaceId}`
+            const written = yield* Option.match(expectedName, {
+              onNone: () =>
+                sql`UPDATE sessions SET name = ${name}, updated_at = ${updatedAt.getTime()} WHERE id = ${id} AND workspace_id = ${workspaceId} RETURNING id`,
+              onSome: (expected) =>
+                sql`UPDATE sessions SET name = ${name}, updated_at = ${updatedAt.getTime()} WHERE id = ${id} AND workspace_id = ${workspaceId} AND name = ${expected} RETURNING id`,
+            })
+            return written.length > 0
           },
           Effect.mapError(storageError("Failed to rename session")),
         ),

@@ -902,9 +902,10 @@ interface ProfileClassifiers {
     modelId: Option.Option<string>,
   ) => Effect.Effect<ResolvedDecisionModel, DecisionModelError, Scope.Scope>
   /**
-   * Whether some driver that lists a classifier has a stored or env
-   * credential, so a call that names no model has one to resolve. An auth
-   * store that fails to read counts as none.
+   * Whether some driver that serves classifiers (it declares
+   * `resolveDecisionModel`) has a stored or env credential, so a call that
+   * names no model has one to resolve. It reads no catalog. An auth store
+   * that fails to read counts as none.
    */
   readonly hasCredential: Effect.Effect<boolean>
 }
@@ -913,13 +914,6 @@ interface DecisionModelResolverService {
   /** The classifiers of the caller's profile, read from its `ExtensionRegistry`. */
   readonly profile: Effect.Effect<ProfileClassifiers, never, ExtensionRegistry>
 }
-
-/**
- * The drivers whose catalog lists a classifier, per profile, keyed weakly by
- * the profile's driver map. Every classifier catalog run with no failure
- * writes it, so `hasCredential` reads a profile's catalog once, not each turn.
- */
-type ClassifierServers = WeakMap<ModelDrivers, ReadonlySet<string>>
 
 /** The model-name suffix of an alias that tracks its provider's newest model. */
 const LATEST_ALIAS = "-latest"
@@ -942,19 +936,21 @@ const classifierAuth = (auth: AuthService, allDrivers: ModelDrivers, driverId: s
     ),
   )
 
+/** The drivers that serve classifiers: each declares `resolveDecisionModel`. */
+const classifierDrivers = (allDrivers: ModelDrivers): ModelDrivers =>
+  new Map(
+    [...allDrivers].filter(([, driver]) => Predicate.isNotUndefined(driver.resolveDecisionModel)),
+  )
+
 /**
  * The classifier models the profile's classifier drivers list, and the
- * catalogs that failed; a failed one leaves its models out. A run with no
- * failure records which drivers serve a classifier.
+ * catalogs that failed; a failed one leaves its models out.
  */
 const classifierCatalog = Effect.fn("DecisionModelResolver.catalog")(function* (
   auth: AuthService,
   allDrivers: ModelDrivers,
-  servers: ClassifierServers,
 ) {
-  const drivers = new Map(
-    [...allDrivers].filter(([, driver]) => Predicate.isNotUndefined(driver.resolveDecisionModel)),
-  )
+  const drivers = classifierDrivers(allDrivers)
   const catalog = yield* listModelCatalog(drivers, (driverId) =>
     classifierAuth(auth, allDrivers, driverId).pipe(
       Effect.map(Option.getOrUndefined),
@@ -970,31 +966,19 @@ const classifierCatalog = Effect.fn("DecisionModelResolver.catalog")(function* (
     if (model.kind !== "classifier" || Predicate.isUndefined(driver)) return []
     return [{ model, driver }]
   })
-  if (catalog.failures.length === 0) {
-    servers.set(allDrivers, new Set(classifiers.map((entry) => entry.driver.id)))
-  }
   return { drivers, classifiers, failures: catalog.failures }
 })
 
 /**
- * Whether some driver that lists a classifier has a stored or env
- * credential. The catalog comes from the profile's record when one exists.
- * A failed read counts as none.
+ * Whether some driver that serves classifiers has a stored or env
+ * credential. A driver declares `resolveDecisionModel` only when it lists a
+ * classifier, so no catalog is read. A failed read counts as none.
  */
 const classifierAvailable = Effect.fn("DecisionModelResolver.hasCredential")(
-  function* (auth: AuthService, allDrivers: ModelDrivers, servers: ClassifierServers) {
-    const serving = yield* Option.match(Option.fromUndefinedOr(servers.get(allDrivers)), {
-      onSome: Effect.succeed,
-      onNone: () =>
-        classifierCatalog(auth, allDrivers, servers).pipe(
-          Effect.map(({ classifiers }) => new Set(classifiers.map((entry) => entry.driver.id))),
-        ),
-    })
-    for (const driverId of serving) {
-      const driver = Option.fromUndefinedOr(allDrivers.get(driverId))
-      if (Option.isNone(driver)) continue
+  function* (auth: AuthService, allDrivers: ModelDrivers) {
+    for (const [driverId, driver] of classifierDrivers(allDrivers)) {
       const stored = yield* classifierAuth(auth, allDrivers, driverId)
-      if (Option.isSome(stored) || (yield* driverEnvReady(driver.value))) return true
+      if (Option.isSome(stored) || (yield* driverEnvReady(driver))) return true
     }
     return false
   },
@@ -1009,12 +993,11 @@ const classifierAvailable = Effect.fn("DecisionModelResolver.hasCredential")(
 const resolveDecisionModel = Effect.fn("DecisionModelResolver.resolve")(function* (
   auth: AuthService,
   allDrivers: ModelDrivers,
-  servers: ClassifierServers,
   requested: Option.Option<string>,
 ) {
   const storedAuth = (driverId: string) => classifierAuth(auth, allDrivers, driverId)
   // A call that cannot resolve a classifier names each catalog that failed.
-  const { drivers, classifiers, failures } = yield* classifierCatalog(auth, allDrivers, servers)
+  const { drivers, classifiers, failures } = yield* classifierCatalog(auth, allDrivers)
   let failed = ""
   if (failures.length > 0)
     failed = `. Classifier catalogs that failed: ${failures.map((failure) => `${failure.driverId} (${failure.error})`).join(", ")}`
@@ -1105,13 +1088,12 @@ export class DecisionModelResolver extends Context.Service<
     DecisionModelResolver,
     Effect.gen(function* () {
       const auth = yield* Auth
-      const servers: ClassifierServers = new WeakMap()
       return DecisionModelResolver.of({
         profile: Effect.map(ExtensionRegistry, (registry) => {
           const drivers = registry.getResolved().modelDrivers
           return {
-            resolve: (modelId) => resolveDecisionModel(auth, drivers, servers, modelId),
-            hasCredential: classifierAvailable(auth, drivers, servers),
+            resolve: (modelId) => resolveDecisionModel(auth, drivers, modelId),
+            hasCredential: classifierAvailable(auth, drivers),
           }
         }),
       })

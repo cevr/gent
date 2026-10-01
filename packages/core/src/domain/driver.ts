@@ -343,7 +343,10 @@ export interface ModelDriverContribution {
   /**
    * Resolve a classifier model name to an Effect AI `DecisionModel` with its
    * auth and endpoint baked in. The driver lists those models in `listModels`
-   * with `kind: "classifier"`. Absent when the driver serves no classifier.
+   * with `kind: "classifier"`. Declare it only when `listModels` lists a
+   * classifier with or without a credential: a credential for a driver that
+   * declares it makes the cell's `models.decide` guideline show, and no
+   * catalog is read to check.
    */
   readonly resolveDecisionModel?: (
     modelName: string,

@@ -536,6 +536,12 @@ export const SessionAdmission = Schema.Struct({
 })
 export type SessionAdmission = typeof SessionAdmission.Type
 
+/**
+ * The name a session created without one gets. `@gent/session-tools` names a
+ * session that still has it from its first user message at a turn end.
+ */
+export const DEFAULT_SESSION_NAME = "New Chat"
+
 export class Session extends Schema.Class<Session>("Session")({
   id: SessionId,
   name: Schema.optional(Schema.String),

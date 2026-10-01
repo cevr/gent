@@ -2,6 +2,8 @@ import { Predicate, Schema } from "effect"
 /** Shared type guards for narrowing unknown/JSON boundary values. */
 
 const JsonRecord = Schema.Record(Schema.String, Schema.Unknown)
+/** A string-keyed record of JSON boundary data: what `isRecord` narrows to. */
+export type JsonRecord = typeof JsonRecord.Type
 
 /** Narrow an unknown value to a string-keyed record. */
 export const isRecord = Schema.is(JsonRecord)
