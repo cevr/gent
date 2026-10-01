@@ -2753,6 +2753,77 @@ describe("useSessionFeed", () => {
     }).pipe(Effect.timeout("4 seconds")),
   )
 
+  // A step that streamed nothing (the provider failed first, or a cancel
+  // during the backoff) stores no answer, so a reload draws none.
+  for (const pass of ["replay", "live"] as const) {
+    it.live(`a step that streamed nothing draws no answer (${pass})`, () =>
+      Effect.gen(function* () {
+        const { sessionId, branchId, started } = midStepIds(`feed-silent-${pass}`)
+        const envelopes = [
+          makeEnvelope(1, started),
+          makeEnvelope(
+            2,
+            AgentEvent.cases.ProviderRetrying.make({
+              sessionId,
+              branchId,
+              attempt: 1,
+              maxAttempts: 3,
+              delayMs: 100,
+              error: "overloaded",
+            }),
+          ),
+          makeEnvelope(
+            3,
+            AgentEvent.cases.TurnCompleted.make({
+              sessionId,
+              branchId,
+              durationMs: 1_000,
+              interrupted: true,
+            }),
+          ),
+        ]
+        let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
+        const dispose = createRoot((disposeRoot) => {
+          const [active] = createSignal(makeSession(sessionId, branchId))
+          const client = feedClientStub({
+            sessionIdentity: identityOf(active),
+            client: createMockClient({
+              session: {
+                getSnapshot: () =>
+                  Effect.succeed(snapshotFor(sessionId, branchId, { replay: 3, live: 0 }[pass])),
+                events: () => Stream.concat(Stream.make(...envelopes), Stream.never),
+                watchRuntime: () => Stream.concat(Stream.make(runtimeSnapshot()), Stream.never),
+              },
+            }),
+            runtime: createMockRuntime(),
+          })
+          feed = Option.some(
+            useSessionFeed(
+              sessionId,
+              branchId,
+              client,
+              {
+                onInteraction: () => {},
+                onInteractionDismissed: () => {},
+                onBranchSwitch: () => {},
+                onQueueSnapshot: () => {},
+              },
+              noStartupPrompt,
+              () => true,
+            ),
+          )
+          return disposeRoot
+        })
+        yield* waitUntil(() =>
+          Option.exists(feed, (value) =>
+            value.items().some((item) => item._tag === "interruption"),
+          ),
+        ).pipe(Effect.ensuring(Effect.sync(dispose)))
+        expect(assistantContents(feed)).toEqual([])
+      }).pipe(Effect.timeout("4 seconds")),
+    )
+  }
+
   it.live("starts a late tool call on the message the event names, not the newest one", () =>
     Effect.gen(function* () {
       const sessionId = SessionId.make("session-feed-late-tool")

@@ -1812,27 +1812,6 @@ const settleRetryingEvents = (
   )
 }
 
-/**
- * The retry's request goes out `delayMs` after its row; the answer the retry
- * gives dates from then, so the row sits above it. An answer the failed
- * attempt already wrote into keeps its place. Core's own clock readers date
- * the request the same way (`knownRequestStart` in turn.ts).
- */
-const dateAnswerFromRetry = (
-  setStore: SetStoreFunction<SessionFeedStore>,
-  id: string,
-  requestAt: number,
-) => {
-  setStore(
-    produce((draft) => {
-      const answer = Option.fromNullishOr(draft.messages.find((message) => message.id === id))
-      if (Option.isNone(answer) || answer.value.content !== "") return
-      if (messageToolCalls(answer.value).length > 0) return
-      answer.value.createdAt = requestAt
-    }),
-  )
-}
-
 type MessageWithMetadata = {
   readonly metadata?: {
     readonly customType?: string
@@ -2117,6 +2096,8 @@ export function useSessionFeed(
   const [runningCalls, setRunningCalls] = createSignal<ReadonlyArray<RunningCall>>([])
   const [streamReady, setStreamReady] = createSignal(false)
   let streamMessageId = Option.none<string>()
+  // When the open answer's request went out: its row, drawn with the first chunk, sorts there.
+  let answerStartedAt = 0
   let eventSeq = 0
   // The steps of the turn in flight; TurnCompleted spends them on its label.
   let turnSteps = emptyTurnSteps
@@ -2163,6 +2144,9 @@ export function useSessionFeed(
 
       case "ToolCallStarted":
         setRunningCalls((calls) => startCall(calls, event, client.pathPlace()))
+        // A call is content too: it draws the open answer's row if no chunk did.
+        if (Predicate.isUndefined(event.parentToolCallId))
+          drawOpenAnswer(Option.fromUndefinedOr(event.assistantMessageId))
         startToolCall(setStore, event, receivedAt)
         return
 
@@ -2179,8 +2163,10 @@ export function useSessionFeed(
           createdAt: stampedAt,
           seq: eventSeq++,
         })
-        if (Option.isSome(streamMessageId))
-          dateAnswerFromRetry(setStore, streamMessageId.value, stampedAt + event.delayMs)
+        // The retry's request goes out `delayMs` after its row; an answer not
+        // yet drawn dates from then, so the row sits above it. Core's own
+        // clock readers date the request the same way (`knownRequestStart`).
+        answerStartedAt = stampedAt + event.delayMs
         return
 
       case "ErrorOccurred":
@@ -2232,9 +2218,10 @@ export function useSessionFeed(
   // Core publishes each chunk as a stored event and stores the step's answer
   // (its `MessageReceived`) only when the step ends. So the answer in
   // progress is built from chunks, stored and live alike: a `StreamStarted`
-  // opens it, each chunk extends it, and the step's live `MessageReceived`
-  // replaces it with the stored answer (`applySettledEvent`). A step whose
-  // answer the snapshot holds is settled: its replayed chunks add nothing.
+  // opens it, its first content (a chunk, or a tool call) draws its row, each
+  // later chunk extends it, and the step's live `MessageReceived` replaces it
+  // with the stored answer (`applySettledEvent`). A step whose answer the
+  // snapshot holds is settled: its replayed chunks add nothing.
 
   /** The ids of the answers the latest snapshot holds. */
   let snapshotAnswers: ReadonlySet<string> = new Set()
@@ -2255,10 +2242,13 @@ export function useSessionFeed(
   }
 
   /**
-   * Open the message this step's answer belongs to. The durable input id and
-   * step name it, so a later chunk or receipt finds the same owner. A
-   * replayed start opens only an answer the snapshot does not hold; one with
-   * no input id cannot say, so it opens nothing.
+   * Open the answer this step streams into. The durable input id and step
+   * name it, so a later chunk or receipt finds the same owner. A replayed
+   * start opens only an answer the snapshot does not hold; one with no input
+   * id cannot say, so it opens nothing. Opening draws nothing: the row comes
+   * with the first chunk, so a step that streamed nothing (a provider that
+   * failed first, a cancel during the backoff) draws no answer, live or on
+   * a reload.
    */
   const openStreamedAnswer = (
     event: Extract<AgentEvent, { _tag: "StreamStarted" }>,
@@ -2269,19 +2259,19 @@ export function useSessionFeed(
       const durable = Option.map(Option.fromUndefinedOr(event.messageId), (inputId) =>
         String(assistantMessageIdForTurn(inputId, event.step)),
       )
+      answerStartedAt = stampedAt
       if (!live) {
         streamMessageId = Option.filter(durable, (id) => !snapshotAnswers.has(id))
-        if (Option.isSome(streamMessageId))
-          ensureAssistantMessage(setStore, "", streamMessageId.value, stampedAt)
         return
       }
-      const id = yield* Option.match(durable, { onNone: () => randomId, onSome: Effect.succeed })
-      streamMessageId = Option.some(id)
-      ensureAssistantMessage(setStore, "", id, stampedAt)
+      streamMessageId = Option.some(
+        yield* Option.match(durable, { onNone: () => randomId, onSome: Effect.succeed }),
+      )
     })
 
   /**
-   * A chunk extends the open answer. A replayed chunk with no open answer
+   * A chunk extends the open answer; the first one draws its row, dated when
+   * the answer's request went out. A replayed chunk with no open answer
    * belongs to a settled step; a live one opens a local answer (a history
    * stream with no start).
    */
@@ -2292,12 +2282,27 @@ export function useSessionFeed(
   ): Effect.Effect<void> =>
     Effect.gen(function* () {
       if (!live && Option.isNone(streamMessageId)) return
-      const id = yield* streamMessageId.pipe(
-        Option.match({ onNone: () => randomId, onSome: Effect.succeed }),
-      )
+      if (Option.isNone(streamMessageId)) answerStartedAt = stampedAt
+      const id = yield* Option.match(streamMessageId, {
+        onNone: () => randomId,
+        onSome: Effect.succeed,
+      })
       streamMessageId = Option.some(id)
-      ensureAssistantMessage(setStore, chunk, id, stampedAt)
+      ensureAssistantMessage(setStore, chunk, id, answerStartedAt)
     })
+
+  /**
+   * Draw the open answer's row, empty, when its first content is a tool call
+   * (`named` is the answer the call names, when it names one). An answer
+   * already drawn, or a call for another answer, draws nothing.
+   */
+  const drawOpenAnswer = (named: Option.Option<string>) => {
+    if (Option.isNone(streamMessageId)) return
+    const id = streamMessageId.value
+    if (Option.isSome(named) && named.value !== id) return
+    if (store.messages.some((message) => message.id === id)) return
+    ensureAssistantMessage(setStore, "", id, answerStartedAt)
+  }
 
   /** The transcript row that closes a turn: an interruption or a duration. */
   const appendTurnEndRow = (
