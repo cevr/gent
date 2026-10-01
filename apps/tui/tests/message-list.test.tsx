@@ -4199,6 +4199,74 @@ describe("native transcript exit", () => {
     15_000,
   )
 
+  // The palette or a pane that holds the composer draws on the alternate
+  // screen. Exit over it takes the terminal's own screen back first, so what
+  // the live view holds still reaches history, after what history holds.
+  for (const over of ["overlay", "expanded"] as const) {
+    it.scopedLive(
+      `exit over the ${over} view moves the live view into history, every row once`,
+      () =>
+        Effect.gen(function* () {
+          const history: string[] = []
+          let screen = Option.none<CliRenderer>()
+          const [open, setOpen] = createSignal(false)
+          const setup = yield* renderScoped(
+            () => {
+              const renderer = useRenderer()
+              screen = Option.some(renderer)
+              renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+                history.push(committedTextOf(event))
+              })
+              return (
+                <NativeTranscript
+                  items={[
+                    assistant("first", longBody("KEPT-0")),
+                    assistant("second", longBody("LIVE-0")),
+                  ]}
+                  settled
+                  streaming={false}
+                  footerHeight={3}
+                  paneOpen={false}
+                  expanded={over === "expanded" && open()}
+                  disclosure="collapsed"
+                  displayRevision={0}
+                  overlayOpen={over === "overlay" && open()}
+                  renderItems={(visible) => (
+                    <MessageList items={visible} disclosure="collapsed" syntaxStyle={syntaxStyle} />
+                  )}
+                >
+                  <box />
+                </NativeTranscript>
+              )
+            },
+            { width: 60, height: 14 },
+          )
+          yield* waitForFrame(
+            setup,
+            () => history.join("").includes("KEPT-0 line 1"),
+            "history",
+            6_000,
+          )
+          yield* waitForFrame(setup, (frame) => frame.includes("LIVE-0 line 12"), "the live tail")
+          setOpen(true)
+          yield* Effect.promise(() => setup.flush())
+          const renderer = Option.getOrThrow(screen)
+          expect(renderer.screenMode).toBe("alternate-screen")
+          yield* flushTranscriptForExit(renderer)
+          const counts = bodyRowCounts(history.join(""))
+          for (const label of ["KEPT-0", "LIVE-0"]) {
+            for (let line = 1; line <= 12; line++) {
+              const row = `${label} line ${line}`
+              expect([row, counts.get(row)]).toEqual([row, 1])
+            }
+          }
+          const text = history.join("")
+          expect(text.indexOf("KEPT-0 line 12")).toBeLessThan(text.indexOf("LIVE-0 line 1"))
+        }).pipe(Effect.timeout("10 seconds")),
+      15_000,
+    )
+  }
+
   // A signal interrupts the fiber that holds the process open. It leaves the
   // terminal as the reader's exit does: history first, then the renderer.
   it.scopedLive(

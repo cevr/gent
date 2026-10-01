@@ -209,7 +209,9 @@ picker replays nothing, so the shell's lines above gent stay. A replay (a
 resize, a disclosure change, an item changed in history, `/clear`, another
 session or branch) writes history again, so its reset clears the terminal's
 saved lines first (`resetHistory`): the old copy would show each row twice.
-Exit commits the live tail first (`leaveTerminal`), and the renderer is
+Exit commits the live tail first (`leaveTerminal`; over the palette, a pane
+that holds the composer or the expanded transcript it takes the terminal's
+screen back first, as scrollback takes no rows from the alternate one), and the renderer is
 created with `clearOnShutdown: false`, so exit leaves every turn on screen.
 
 Answer markdown draws each top-level block on its own

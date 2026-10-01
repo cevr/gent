@@ -1966,12 +1966,44 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     queuedRows = 0
   }
 
+  /**
+   * Starts history again from the screen's top. Every caller writes the
+   * transcript's rows again, so the reset also clears the terminal's saved
+   * lines: the copy they hold would show each row twice. Scrollback cannot
+   * lose some of its rows and keep others, so the shell's lines above gent go
+   * too. Only the first transcript keeps them: nothing of gent is above it.
+   */
+  const resetHistory = () => renderer.resetSplitFooterForReplay({ clearSavedLines: true })
+
+  /**
+   * Draws the split region on the terminal's own screen again. A return from
+   * the alternate screen starts it at the place it left (`leftRegion`),
+   * under the cursor row the output mode reads.
+   */
+  const enterRegion = (returning: Option.Option<RegionPlace>) => {
+    renderer.screenMode = "split-footer"
+    Option.map(returning, (place) => renderer.setCursorPosition(1, place.top, false))
+    renderer.externalOutputMode = "capture-stdout"
+    renderer.useMouse = false
+  }
+
   // At exit every item the live view still holds commits, final or not,
   // plain; a commit still settling stops waiting. The queue's order makes
-  // the drain wait for all of them.
+  // the drain wait for all of them. Exit over the alternate screen (the
+  // palette, a pane that holds the composer, the expanded transcript) takes
+  // the terminal's screen back first: scrollback takes no rows from there.
   const flushForExit = Effect.suspend(() => {
     Deferred.doneUnsafe(leaving, Exit.void)
-    if (disposed || !canCommitNatively() || props.expanded || props.overlayOpen) return Effect.void
+    if (disposed) return Effect.void
+    const away = Option.filter(leftRegion, () => renderer.screenMode === "alternate-screen")
+    if (Option.isSome(away)) {
+      leftRegion = Option.none()
+      renderer.footerHeight = away.value.rows
+      enterRegion(away)
+      // A resize while away left history for the old width: it starts again.
+      if (replayPending()) enqueueNative(Effect.sync(resetHistory))
+    }
+    if (!canCommitNatively()) return Effect.void
     const items = displayedItems()
     const next = items.map((item) => transcriptFingerprint(item))
     if (!committed.every((value, index) => next[index] === value)) return Effect.void
@@ -1988,15 +2020,6 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     })
   })
   exitFlushes.set(renderer, flushForExit)
-
-  /**
-   * Starts history again from the screen's top. Every caller writes the
-   * transcript's rows again, so the reset also clears the terminal's saved
-   * lines: the copy they hold would show each row twice. Scrollback cannot
-   * lose some of its rows and keep others, so the shell's lines above gent go
-   * too. Only the first transcript keeps them: nothing of gent is above it.
-   */
-  const resetHistory = () => renderer.resetSplitFooterForReplay({ clearSavedLines: true })
 
   onMount(() => {
     renderer.footerHeight = props.footerHeight
@@ -2061,11 +2084,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     leftRegion = Option.none()
     if (Option.isSome(returning) && !replayPending()) renderer.footerHeight = returning.value.rows
     else sizeRegion(replayPending())
-    renderer.screenMode = "split-footer"
-    // The region starts under the cursor row the output mode reads.
-    Option.map(returning, (place) => renderer.setCursorPosition(1, place.top, false))
-    renderer.externalOutputMode = "capture-stdout"
-    renderer.useMouse = false
+    enterRegion(returning)
     if (replayPending() && !settlingNative) {
       settlingNative = true
       renderer.once("frame", finishNativeReturn)
