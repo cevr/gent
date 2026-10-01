@@ -272,11 +272,14 @@
     {
       // The gamut driver is a plain Bun script, not an Effect program: it
       // drives herdr, git and SQLite with async shell calls, and its polls
-      // wait one step at a time. Its tests read it as such. Type assertions
-      // stay banned (`effect/noAs`, `typescript/no-unsafe-type-assertion`):
-      // the driver decodes the SQLite rows it reads.
-      "files": ["testbeds/gamut/gamut.ts", "testbeds/gamut/tests/**"],
+      // wait one step at a time, and it reads the file system through Node.
+      // Type assertions stay banned (`effect/noAs`,
+      // `typescript/no-unsafe-type-assertion`): the driver decodes the SQLite
+      // rows it reads. Its tests keep every rule, with line suppressions where
+      // they write raw rows.
+      "files": ["testbeds/gamut/gamut.ts"],
       "rules": {
+        "effect/noAsyncFunction": "off",
         // The script reaches the host directly; only the retired Bun members stay out.
         "effect/noGlobals": [
           "error",
@@ -292,6 +295,7 @@
         ],
         "effect/noKnownValueWidening": "off",
         "effect/noNewError": "off",
+        "effect/noNodeBuiltinImport": "off",
         "effect/noNullish": "off",
         "effect/noTernary": "off",
         "effect/noThrowStatement": "off",
@@ -301,20 +305,11 @@
       }
     },
     {
-      // The driver itself awaits shell calls and reads the file system through
-      // Node. Its tests use neither, so both rules hold there.
-      "files": ["testbeds/gamut/gamut.ts"],
-      "rules": {
-        "effect/noAsyncFunction": "off",
-        "effect/noNodeBuiltinImport": "off"
-      }
-    },
-    {
       // The efficiency capture preload replaces the global fetch before gent
       // loads, so it is plain Bun, not an Effect program: it reads its
       // environment, the operator's script JSON and each request body, and
       // throws before the run starts when the environment is unsafe.
-      "files": [".claude/skills/architecture-loop/fetch-capture.ts"],
+      "files": ["docs/architecture/fetch-capture.ts"],
       "rules": {
         "effect/noAs": "off",
         "effect/noAsyncFunction": "off",

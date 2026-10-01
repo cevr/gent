@@ -133,15 +133,23 @@ const closesControlHead = (text: string, close: number): boolean => {
   return false
 }
 
+/** A postfix `++` or `--` that ends at `end`: it follows an identifier, a `)` or a `]`. */
+const endsPostfixUpdate = (text: string, end: number): boolean => {
+  const update = text.slice(end - 2, end)
+  if (update !== "++" && update !== "--") return false
+  return /[\w$)\]]/.test(text[end - 3] ?? "")
+}
+
 /**
  * Whether an operand starts at `at`: the token before it, past whitespace
  * and comments, cannot end a value. A `)` ends one unless it closes a
- * control-flow head.
+ * control-flow head; a postfix `++` or `--` ends one.
  */
 const startsOperand = (text: string, at: number): boolean => {
   const end = significantEnd(text, at)
   if (end === 0) return true
   const last = text[end - 1] ?? ""
+  if (endsPostfixUpdate(text, end)) return false
   if (OPERAND_PRECEDERS.includes(last)) return true
   if (last === ")") return closesControlHead(text, end - 1)
   return OPERAND_KEYWORD_BEFORE.test(text.slice(Math.max(0, end - 8), end))
@@ -169,20 +177,57 @@ const regexEnd = (text: string, start: number): number => {
 
 /**
  * A tag name after `<`, and what follows it. A `,`, an `extends` or a `=`
- * after the name, or `>(` right after it, makes the `<` a type parameter
- * list: `.tsx` spells a generic arrow `<A,>(a: A) => a`, with a constraint
- * `<A extends B,>` or a default `<A = B,>`, and a generic function type
- * `<A>(a: A) => A`. No JSX tag name is followed by `=`. Any other name,
- * one letter or more (`<X>it's</X>`), opens an element.
+ * after the name makes the `<` a type parameter list: `.tsx` spells a
+ * generic arrow `<A,>(a: A) => a`, with a constraint `<A extends B,>` or a
+ * default `<A = B,>`. No JSX tag name is followed by `=`. A `>(` right after
+ * the name is a generic function type `<A>(a: A) => A` only when `=>`
+ * follows the parenthesised group; `<b>(it's)</b>` is an element. Any other
+ * name, one letter or more (`<X>it's</X>`), opens an element.
  */
 const JSX_OPENER = /^<(?:>|[A-Za-z_$][\w$.:-]*(\s*(?:,|=|extends\b)|>\()?)/
+
+/** Whether `=>` is the next token from `at`, past whitespace and comments. */
+const arrowAt = (text: string, at: number): boolean => {
+  let next = at
+  for (;;) {
+    while (/\s/.test(text[next] ?? "")) next += 1
+    const opener = text.slice(next, next + 2)
+    if (opener !== "//" && opener !== "/*") return opener === "=>"
+    next = commentEnd(text, next, opener)
+  }
+}
+
+/**
+ * Whether `=>` follows the parenthesised group that opens at `open`. The
+ * group is walked by the lexer, so a bracket in a string or a comment is text.
+ */
+const arrowFollowsGroup = (text: string, open: number): boolean => {
+  const frames = [0]
+  let depth = 0
+  let at = open
+  while (at < text.length) {
+    const token = lexStep(text, at, frames, "ts")
+    for (
+      let index = at;
+      token.kind === "code" && frames.length === 1 && index < token.end;
+      index += 1
+    ) {
+      if (text[index] === "(") depth += 1
+      if (text[index] === ")") depth -= 1
+      if (depth === 0) return arrowAt(text, index + 1)
+    }
+    at = token.end
+  }
+  return false
+}
 
 /** Whether the `<` at `at` opens a JSX element. */
 const opensJsx = (text: string, at: number): boolean => {
   if (!startsOperand(text, at)) return false
   const opener = Option.fromNullishOr(JSX_OPENER.exec(text.slice(at, at + 64)))
   if (Option.isNone(opener)) return false
-  const [, typeParameter] = opener.value
+  const [match, typeParameter] = opener.value
+  if (typeParameter === ">(") return !arrowFollowsGroup(text, at + match.length - 1)
   return Predicate.isUndefined(typeParameter)
 }
 
@@ -925,15 +970,24 @@ export const findRepoTempDirectories = (file: string, text: string): ReadonlyArr
   const syntax = syntaxOf(file)
   const code = withoutComments(text, syntax)
   const lines = code.split("\n")
+  // The same lines with strings and template text blanked: a bound name is
+  // read only where it is code, so `"gent-login-"` does not name `login`.
+  const codeLines = codeOnly(text, syntax).split("\n")
   // A name bound from a repo path, or from another such name, is a repo path.
   const bound = new Set<string>()
-  const namesBound = (value: string): boolean =>
-    value.split(/[^\w$]+/).some((word) => bound.has(word))
-  const namesRepo = (value: string): boolean => REPO_PATH.test(value) || namesBound(value)
-  for (const line of lines) {
+  const namesBound = (codeText: string): boolean =>
+    codeText.split(/[^\w$]+/).some((word) => bound.has(word))
+  const namesRepo = (value: string, valueCode: string): boolean =>
+    REPO_PATH.test(value) || namesBound(valueCode)
+  for (const [index, line] of lines.entries()) {
     const binding = Option.fromNullishOr(BINDING.exec(line))
-    if (Option.isSome(binding) && namesRepo(binding.value[2] ?? ""))
-      bound.add(binding.value[1] ?? "")
+    const bindingCode = Option.fromNullishOr(BINDING.exec(codeLines[index] ?? ""))
+    if (Option.isNone(binding)) continue
+    const valueCode = Option.match(bindingCode, {
+      onNone: () => "",
+      onSome: (match) => match[2] ?? "",
+    })
+    if (namesRepo(binding.value[2] ?? "", valueCode)) bound.add(binding.value[1] ?? "")
   }
   const reported = new Set<number>()
   // A temp directory call: report the first line of its arguments that names a repo path.
@@ -945,7 +999,10 @@ export const findRepoTempDirectories = (file: string, text: string): ReadonlyArr
       reported.add(first)
       continue
     }
-    const hit = argumentText.split("\n").findIndex(namesRepo)
+    const argumentCode = codeOnly(argumentText, syntax).split("\n")
+    const hit = argumentText
+      .split("\n")
+      .findIndex((line, index) => namesRepo(line, argumentCode[index] ?? ""))
     if (hit !== -1) reported.add(first + hit)
   }
   // A tmp segment joined to a repo path on one line.
@@ -1729,6 +1786,72 @@ export const findWritersWithoutReaders = (
     )
 }
 
+/** A `define:` record handed to `Bun.build`: the compiled build's constants. */
+const DEFINE_RECORD_OPEN = /\bdefine\s*:\s*\{/g
+const DEFINE_KEY = /(?:^|[{,\s])["']?(__GENT_[A-Z0-9_]+__)["']?\s*:/g
+/** The reader of a define: an ambient `declare const` the bundler replaces. */
+const DEFINE_READER = /\bdeclare\s+const\s+(__GENT_[A-Z0-9_]+__)\b/g
+
+/** A define key or its reader, and where it is. */
+interface VariableSite {
+  readonly name: string
+  readonly file: string
+  readonly line: number
+}
+
+/**
+ * Guard: a build define and its reader come in pairs.
+ *
+ * The build script hands `Bun.build` a `define` record of `__GENT_*__`
+ * constants, and the source reads each through a `declare const`. A
+ * misspelled or deleted define leaves its reader undefined, so the compiled
+ * binary behaves as a source run, and no test sees it: the tests run the
+ * source. A define with no reader sets nothing. So each define key needs a
+ * reader, and each reader a define, outside test support.
+ */
+export const findUnpairedBuildDefines = (
+  sourceTexts: ReadonlyMap<string, string>,
+): ReadonlyArray<Finding> => {
+  const defines: Array<VariableSite> = []
+  const readers: Array<VariableSite> = []
+  for (const [file, text] of sourceTexts) {
+    if (file === GUARDS_FILE || file === GUARDS_TEST_FILE || isTestSupport(file)) continue
+    if (!text.includes("__GENT_")) continue
+    const syntax = syntaxOf(file)
+    const code = withoutComments(text, syntax)
+    for (const match of code.matchAll(DEFINE_RECORD_OPEN)) {
+      const open = match.index + match[0].length - 1
+      const keys = namesMatchingAt(bracketedAt(code, open, syntax), DEFINE_KEY, open)
+      defines.push(...keys.map((key) => ({ name: key.name, line: lineAt(code, key.at), file })))
+    }
+    // A reader is code: `declare const` spelled in a string declares nothing.
+    const declarations = codeOnly(text, syntax)
+    for (const reader of namesMatchingAt(declarations, DEFINE_READER)) {
+      readers.push({ name: reader.name, line: lineAt(declarations, reader.at), file })
+    }
+  }
+  const defined = new Set(defines.map((define) => define.name))
+  const read = new Set(readers.map((reader) => reader.name))
+  return [
+    ...defines
+      .values()
+      .filter((define) => !read.has(define.name))
+      .map((define) => ({
+        file: define.file,
+        line: define.line,
+        message: `build define \`${define.name}\` has no \`declare const\` reader, so it sets nothing; delete it, or read it`,
+      })),
+    ...readers
+      .values()
+      .filter((reader) => !defined.has(reader.name))
+      .map((reader) => ({
+        file: reader.file,
+        line: reader.line,
+        message: `\`${reader.name}\` is read but no build \`define\` sets it, so the compiled binary reads it undefined, as a source run does; add the define, or delete the reader`,
+      })),
+  ]
+}
+
 // ── a deleted surface stays deleted ─────────────────────────────────────────
 
 /**
@@ -2168,8 +2291,9 @@ export const findRetiredSurfaces = (file: string, text: string): ReadonlyArray<F
 
 /**
  * Steering prose: what an agent is told to read before it changes the code.
- * The root `AGENTS.md`, `CLAUDE.md` and `ARCHITECTURE.md`, a package's own
- * `AGENTS.md` or `CLAUDE.md`, `docs/` but its dated research, a testbed's
+ * The root `AGENTS.md`, `CLAUDE.md` and `ARCHITECTURE.md`, the root
+ * `NORTH_STAR.md` and `PRIOR_ARTS.md` the architecture loop reads, a package's
+ * own `AGENTS.md` or `CLAUDE.md`, `docs/` but its dated research, a testbed's
  * `README.md` (the root `CLAUDE.md` sends agents to the gamut one), the
  * dependency patch notes in `patches/README.md`, the project skills under
  * `.claude/skills/`, and the skills gent ships to its own model under
@@ -2178,7 +2302,7 @@ export const findRetiredSurfaces = (file: string, text: string): ReadonlyArray<F
  * this set.
  */
 const STEERING_PROSE =
-  /^(?:(?:AGENTS|CLAUDE|ARCHITECTURE)\.md|(?:apps|packages)\/[^/]+\/(?:AGENTS|CLAUDE)\.md|docs\/(?!research\/).+\.md|testbeds\/[^/]+\/README\.md|patches\/README\.md|\.claude\/skills\/.+\.md|packages\/extensions\/src\/skills\/bundled\/.+\.md)$/
+  /^(?:(?:AGENTS|CLAUDE|ARCHITECTURE|NORTH_STAR|PRIOR_ARTS)\.md|(?:apps|packages)\/[^/]+\/(?:AGENTS|CLAUDE)\.md|docs\/(?!research\/).+\.md|testbeds\/[^/]+\/README\.md|patches\/README\.md|\.claude\/skills\/.+\.md|packages\/extensions\/src\/skills\/bundled\/.+\.md)$/
 
 export const isSteeringFile = (file: string): boolean => STEERING_PROSE.test(file)
 
@@ -2188,8 +2312,30 @@ const SOURCE_ROOT = /^(?:packages|apps|plans|testbeds|examples|docs|patches|\.cl
 /** Text between backticks, which is what marks a reference as a path. */
 const BACKTICKED = /`([^`\n]+)`/g
 
-/** A fence opens or closes a block whose contents are commands, not prose. */
-const FENCE = /^\s*```/
+/** A fence: three or more backticks or tildes, at any indent (a list item indents its fences). */
+const FENCE = /^\s*(`{3,}|~{3,})/
+
+/** A closing fence: the fence alone on its line. */
+const FENCE_CLOSE = /^\s*(`{3,}|~{3,})\s*$/
+
+/**
+ * Whether each line of `text` is fenced: a fence line, or a line inside a
+ * block whose contents are commands, not prose. A block closes on a bare
+ * fence of its own character at least as long as the opener, so a ````
+ * block can show a ``` line, and a ~~~ block closes only on tildes.
+ */
+const fencedLines = (text: string): ReadonlyArray<boolean> => {
+  let opener = ""
+  return text.split("\n").map((line) => {
+    if (opener === "") {
+      opener = FENCE.exec(line)?.[1] ?? ""
+      return opener !== ""
+    }
+    const close = FENCE_CLOSE.exec(line)?.[1] ?? ""
+    if (close.startsWith(opener)) opener = ""
+    return true
+  })
+}
 
 /** Stands for a set of paths: a glob, or a brace expansion over filenames. */
 const MULTI_PATH = /[*{}]/
@@ -2280,13 +2426,9 @@ export const findSteeringFilePaths = (
   const prefixes = directoryPrefixesOf(trackedFiles)
   const directory = file.slice(0, Math.max(file.lastIndexOf("/"), 0))
   const findings: Finding[] = []
-  let inFence = false
+  const fenced = fencedLines(text)
   for (const [index, line] of text.split("\n").entries()) {
-    if (FENCE.test(line)) {
-      inFence = !inFence
-      continue
-    }
-    if (inFence) continue
+    if (fenced[index] === true) continue
     for (const match of line.matchAll(BACKTICKED)) {
       const claimed = match[1] ?? ""
       if (!isPathClaim(claimed)) continue
@@ -2306,6 +2448,116 @@ export const findSteeringFilePaths = (
     }
   }
   return findings
+}
+
+/**
+ * A receipt in steering prose: one or more backticked names, then `in`, then
+ * a backticked code path, across line breaks. `a`, `b` and `c` in `x.ts`
+ * names three; a call `f()` names `f`.
+ */
+const RECEIPT =
+  /((?:`[A-Za-z_$][\w$.]*(?:\(\))?`(?:,\s*(?:(?:and|or)\s+)?|\s+(?:and|or)\s+))*`[A-Za-z_$][\w$.]*(?:\(\))?`)\s+in\s+`([^`\s]+\.[cm]?[jt]sx?)`/g
+
+/** One backticked name of a receipt; a dotted name is read by its last segment. */
+const RECEIPT_NAME = /`(?:[\w$]+\.)*([A-Za-z_$][\w$]*)(?:\(\))?`/g
+
+/** A sentence end, or a blank line that ends a paragraph. */
+const SENTENCE_END = /[.!?]\s|\n[ \t]*\n/g
+
+/**
+ * Whether the pair at `at` is stated as a receipt: it opens a parenthesis
+ * (`(`name` in `path`)`), or its sentence runs from a `Receipt:` or
+ * `Receipts:` label. Any other pair is prose, such as "avoid `x` in `y.ts`",
+ * which asserts nothing about where `x` lives.
+ */
+const isStatedReceipt = (prose: string, at: number): boolean => {
+  const before = prose.slice(Math.max(0, at - 600), at)
+  if (/\(\s*$/.test(before)) return true
+  const sentenceStart = Option.match(
+    Option.fromUndefinedOr(before.matchAll(SENTENCE_END).toArray().at(-1)),
+    {
+      onNone: () => 0,
+      onSome: (end) => end.index + end[0].length,
+    },
+  )
+  return /\bReceipts?:/.test(before.slice(sentenceStart))
+}
+
+/** The text with each fenced block's lines blank, so offsets keep their lines. */
+const withoutFences = (text: string): string => {
+  const fenced = fencedLines(text)
+  return text
+    .split("\n")
+    .map((line, index) => {
+      if (fenced[index] === true) return ""
+      return line
+    })
+    .join("\n")
+}
+
+/**
+ * Guard: a "`name` in `path`" receipt in steering prose names a word the
+ * file holds. A pair is a receipt only where the prose states one
+ * (`isStatedReceipt`): in parentheses, or after a `Receipt:` label.
+ *
+ * The path check proves the file exists, not that the name still lives in
+ * it: a renamed or deleted function leaves the receipt pointing at a file
+ * that no longer holds it. A path resolves to the tracked file it names, or,
+ * when it is short (`runtime/turn.ts`), to every tracked file outside a
+ * fixture directory whose path ends with it; one of them must hold the name
+ * as a word. A short path that resolves to no file is reported; a full path
+ * that resolves to none is the path check's report.
+ */
+export const findStaleSteeringReceipts = (
+  texts: ReadonlyMap<string, string>,
+  trackedFiles: ReadonlyArray<string>,
+): ReadonlyArray<Finding> => {
+  const tracked = new Set(trackedFiles)
+  const resolve = (path: string): ReadonlyArray<string> => {
+    if (tracked.has(path)) return [path]
+    return trackedFiles.filter((file) => file.endsWith(`/${path}`) && !isExplicitFixtureFile(file))
+  }
+  /** The messages for one receipt: its path ends no file, or a name its files do not hold. */
+  const receiptMessages = (names: string, path: string): ReadonlyArray<string> => {
+    const candidates = resolve(path)
+    if (candidates.length === 0) {
+      if (isPathClaim(path)) return []
+      return [
+        `steering receipt names \`${path}\`, which ends no staged or committed file -- point it at the path that exists`,
+      ]
+    }
+    const candidateTexts = candidates.flatMap((candidate) =>
+      Option.toArray(Option.fromUndefinedOr(texts.get(candidate))),
+    )
+    if (candidateTexts.length === 0) return []
+    return names
+      .matchAll(RECEIPT_NAME)
+      .map((nameMatch) => nameMatch[1] ?? "")
+      .filter((name) => {
+        const word = new RegExp(`(?<![\\w$])${name.replaceAll("$", "\\$")}(?![\\w$])`)
+        return !candidateTexts.some((candidate) => word.test(candidate))
+      })
+      .map(
+        (name) =>
+          `steering receipt names \`${name}\` in \`${path}\`, which that file does not hold -- point the receipt at the name that does the work today, or drop it`,
+      )
+      .toArray()
+  }
+  return [...texts].flatMap(([file, text]) => {
+    if (!isSteeringFile(file)) return []
+    const prose = withoutFences(text)
+    return prose
+      .matchAll(RECEIPT)
+      .filter((match) => isStatedReceipt(prose, match.index))
+      .flatMap((match) =>
+        receiptMessages(match[1] ?? "", match[2] ?? "").map((message) => ({
+          file,
+          line: lineAt(prose, match.index),
+          message,
+        })),
+      )
+      .toArray()
+  })
 }
 
 // ── every bundled skill file ships ──────────────────────────────────────────
@@ -2531,15 +2783,18 @@ export const findTuiSessionIdentityReads = (file: string, text: string): Readonl
  * absent), and the guard fails when the file holds more or fewer: a new site
  * of a reviewed comment is a new suppression and needs its own review. An
  * entry listed twice fails as well.
+ *
+ * The language service honors a directive anywhere in a file's text, a string
+ * literal too: the marker, then whitespace, then a `rule:severity` flag,
+ * whose rule is a name or `*`. So the scan reads each line for that form, not
+ * only the comment tokens. A
+ * directive without `-next-line` suppresses its rules from there to the end
+ * of the file; like a file-wide lint disable, it is banned outright.
  */
-
-/** `next-line` suppresses the following line; `file` suppresses the whole module. */
-type SuppressionScope = "next-line" | "file"
 
 interface ApprovedSuppressionEntry {
   readonly file: string
-  readonly scope: SuppressionScope
-  /** Everything after the directive: rule flags and the reason. */
+  /** Everything after `// @effect-diagnostics-next-line `: rule flags and the reason. */
   readonly text: string
   /**
    * How many identical comments the file holds; absent means one. The guard
@@ -2548,93 +2803,71 @@ interface ApprovedSuppressionEntry {
   readonly count?: number
 }
 
-const directiveMarker = ["@effect", "diagnostics"].join("-")
+const directiveMarker = "@effect-diagnostics"
 
-const directivePrefix = {
-  "next-line": `// ${directiveMarker}-next-line`,
-  file: `// ${directiveMarker}`,
-} satisfies Record<SuppressionScope, string>
+/** The form the language service honors; the capture is `-next-line`, or empty for the file scope. */
+const HONORED_DIRECTIVE = /@effect-diagnostics(-next-line)?\s+(?:[\w/]+|\*):[a-z]/
 
 const approvedComment = (entry: ApprovedSuppressionEntry): string =>
-  `${directivePrefix[entry.scope]} ${entry.text}`
+  `// ${directiveMarker}-next-line ${entry.text}`
 
 /** Matching ignores line churn: an entry is keyed by file and exact comment text. */
 const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
   {
     file: "packages/sdk/src/server.ts",
-    scope: "next-line",
     text: "strictEffectProvide:off -- the public entry point provides the local platform it resolves on.",
   },
   {
     file: "packages/sdk/src/server.ts",
-    scope: "next-line",
     text: "strictEffectProvide:off -- self-contained probe, no scope lifetime",
   },
   {
     file: "packages/core/src/domain/extension.ts",
-    scope: "next-line",
     text: "anyUnknownInErrorContext:off -- extension setup is untyped until this membrane maps its failures to ExtensionLoadError.",
   },
   {
     file: "packages/tooling/src/check-guide-code.ts",
-    scope: "next-line",
     text: "strictEffectProvide:off -- the script's process entry provides the platform once.",
   },
   {
     file: "packages/core/src/test-utils/language-model.ts",
-    scope: "next-line",
     text: "strictEffectProvide:off -- test entry point: the probe owns its fake fetch layer.",
   },
   {
     file: "packages/core/src/runtime/tools.ts",
-    scope: "next-line",
     text: "anyUnknownInErrorContext:off -- an extension tool fails with unknown until normalizeToolExecutionError maps it.",
   },
   {
     file: "packages/core/src/domain/capability.ts",
-    scope: "next-line",
     text: "anyUnknownInErrorContext:off -- the erased handler crosses the runtime membrane; the public overloads keep authors typed.",
   },
   {
     file: "packages/core/src/runtime/extension-host.ts",
-    scope: "next-line",
     text: "anyUnknownInErrorContext:off -- the extension membrane erases the author effect channels and seals them here.",
     count: 8,
   },
   {
     file: "packages/core/src/runtime/extension-host.ts",
-    scope: "next-line",
     text: "anyUnknownInErrorContext:off -- heterogeneous Resource layer enters the explicit eraseResourceLayer membrane.",
   },
   {
     file: "packages/extensions/src/openai.ts",
-    scope: "next-line",
     text: "strictEffectProvide:off -- OAuth token endpoint at extension boundary",
     count: 2,
   },
   {
     file: "packages/extensions/src/openai.ts",
-    scope: "next-line",
     text: "strictEffectProvide:off -- device endpoints at extension boundary",
   },
   {
     file: "packages/extensions/src/anthropic.ts",
-    scope: "next-line",
     text: "strictEffectProvide:off -- the credential read owns its HTTP client at the extension boundary; it outlives no scope.",
   },
   {
     file: "packages/extensions/src/providers.ts",
-    scope: "next-line",
     text: "strictEffectProvide:off -- The catalog owns its own HTTP client at the driver boundary; it outlives no scope.",
   },
 ]
-
-/**
- * The guards that write the marker out to recognise it. Each spells
- * `@effect-diagnostics` in a pattern, a table entry or a message, so scanning
- * them reports the description of a suppression instead of a suppression.
- */
-const DESCRIBES_THE_MARKER = new Set([GUARDS_FILE, "packages/tooling/tests/guards.test.ts"])
 
 const approvedCount = (entry: ApprovedSuppressionEntry): number => entry.count ?? 1
 
@@ -2665,11 +2898,18 @@ export const findSuppressionInventoryFindings = (
   entries: ReadonlyArray<ApprovedSuppressionEntry> = approvedSuppressionEntries,
 ): ReadonlyArray<Finding> => {
   const findings: Finding[] = []
-  if (DESCRIBES_THE_MARKER.has(file)) return findings
-
   const seenByComment = new Map<string, number>()
   for (const [index, line] of text.split("\n").entries()) {
-    if (!line.includes(directiveMarker)) continue
+    const directive = Option.fromNullishOr(HONORED_DIRECTIVE.exec(line))
+    if (Option.isNone(directive)) continue
+    if (Predicate.isUndefined(directive.value[1])) {
+      findings.push({
+        file,
+        line: index + 1,
+        message: `a file-scope ${directiveMarker} directive suppresses its rules to the end of the file and is banned, like a file-wide lint disable; use ${directiveMarker}-next-line on the one line, with an approved entry`,
+      })
+      continue
+    }
     const comment = line.trim()
     const seen = (seenByComment.get(comment) ?? 0) + 1
     seenByComment.set(comment, seen)

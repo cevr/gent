@@ -10,6 +10,8 @@
         "../AGENTS.md",
         "../CLAUDE.md",
         "../ARCHITECTURE.md",
+        "../NORTH_STAR.md",
+        "../PRIOR_ARTS.md",
         "../apps/*/AGENTS.md",
         "../apps/*/CLAUDE.md",
         "../packages/*/AGENTS.md",

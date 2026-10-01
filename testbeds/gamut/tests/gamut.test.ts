@@ -331,6 +331,7 @@ describe("gamut failure line", () => {
 describe("gamut open turns", () => {
   // A bare `MessageReceived` is a user message: the prompt, a wake, a child's completion.
   const eventJson = (tag: string, role: string): string =>
+    // oxlint-disable-next-line effect/noTernary, effect/noGlobals -- a raw SQLite row for the driver's queries, as the stored JSON spells it
     tag === "MessageReceived" ? JSON.stringify({ _tag: tag, message: { role } }) : "{}"
   const insert = (db: Database, session: string, tag: string, role = "user") =>
     db.run("INSERT INTO events (session_id, event_tag, event_json) VALUES (?, ?, ?)", [
@@ -431,6 +432,7 @@ describe("gamut up arguments", () => {
   test("reads the preset, the prompt after --prompt, and --no-build in any order", () => {
     expect(parseUpArgs(["opus-luna"])).toEqual({
       preset: "opus-luna",
+      // oxlint-disable-next-line effect/noNullish -- the driver reads an absent prompt as undefined
       prompt: undefined,
       build: true,
     })
@@ -482,6 +484,7 @@ describe("gamut status", () => {
     const pulse = (extensionId: string) =>
       db.run("INSERT INTO events (event_tag, event_json) VALUES (?, ?)", [
         "ExtensionStateChanged",
+        // oxlint-disable-next-line effect/noGlobals -- a raw SQLite row for the driver's queries, as the stored JSON spells it
         JSON.stringify({ _tag: "ExtensionStateChanged", extensionId }),
       ])
     expect(extensionPulses(db)).toEqual([])

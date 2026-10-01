@@ -1,6 +1,6 @@
-// Process entry: the efficiency capture preload (`efficiency.md`,
-// `safety.md` exception 1). Loaded with `bun --preload` into a headless gent
-// run, it replaces `fetch`:
+// Process entry: the efficiency capture preload (`efficiency.md`; the capture
+// rule in `NORTH_STAR.md` → Owner rules). Loaded with `bun --preload` into a
+// headless gent run, it replaces `fetch`:
 // - an Anthropic Messages request is saved to `$CAP_DIR/req-NNN.json` and
 //   answered with the next scripted step of `$CAP_DIR/script.json` as SSE;
 // - an OpenAI or ChatGPT request is saved to `$CAP_DIR/oai-req-NNN.json` and

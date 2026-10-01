@@ -73,7 +73,7 @@ updates this list in the same commit.
     turn under an agent or run-spec model override writes none; the turn after
     it notices the change back. An effort change, or a branch with no settled
     step, writes nothing. Receipts: `modelChangeNotice` in
-    `packages/core/src/runtime/model-context.ts`, `lastKnownModel` in
+    `packages/core/src/runtime/model-context.ts`, `readKnownSteps` in
     `packages/core/src/runtime/turn.ts`.
 12. **Tool guidance lives on the tool and follows the active tool list.**
     `promptGuidelines` are deduped per turn from the post-policy tools only.
