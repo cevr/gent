@@ -2466,13 +2466,10 @@ export class SessionProfileCache extends Context.Service<
 // ── approval-service ────────────────────────────────────────────────────────
 
 /**
- * Layer-scoped approval service.
- *
- * Wraps `makeInteractionService` with the fixed approval schema.
- * Long-lived — one instance per server scope, so storedResolutions
- * survive across tool re-executions for cold resume.
- *
- * Tools access this indirectly via `ctx.interaction.approve()` on ToolCapabilityContext.
+ * The approval service: `makeInteractionService` with the fixed approval
+ * schema, one per server scope. Requests and resolutions live in
+ * `InteractionStorage`, so a tool that runs again takes its stored answer.
+ * Tools reach it through `ctx.Interaction.approve()` on `ExtensionContext`.
  */
 
 const logStoreFailure =

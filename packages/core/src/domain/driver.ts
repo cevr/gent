@@ -1,8 +1,8 @@
 /**
  * Model driver primitives. A `ModelDriverContribution` wraps an LLM provider:
  * auth, `listModels`, and `resolveModel` returning a model that provides an
- * `effect/ai` `LanguageModel`. The gent providers
- * (anthropic, openai) register one each. A driver that serves classifier
+ * `effect/ai` `LanguageModel`. Each shipped provider extension registers
+ * one. A driver that serves classifier
  * models also resolves them to an `effect/ai` `DecisionModel`
  * (`resolveDecisionModel`).
  *

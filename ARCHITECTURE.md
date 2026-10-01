@@ -77,8 +77,7 @@ updates this list in the same commit.
     `packages/core/src/runtime/turn.ts`.
 12. **Tool guidance lives on the tool and follows the active tool list.**
     `promptGuidelines` are deduped per turn from the post-policy tools only.
-    Receipts: `buildTurnPromptSections` in
-    `packages/core/src/runtime/turn.ts`,
+    Receipt: `buildTurnPromptSections` in
     `packages/core/src/runtime/turn.ts`.
 13. **The cell runs in full Bun.** No sandbox, no interpreter; network reads,
     HTML parsing, and past-session queries happen in the cell. Receipt:
@@ -1780,13 +1779,13 @@ Use the smallest honest boundary:
 
 ```text
 tests/
-├── domain/        # auth, agent, event, message, skills, ...
-├── extensions/    # api, registry, compile-tool-policy, hooks, loader, ...
-├── providers/     # provider, provider-auth, provider-resolution, anthropic-keychain
-├── runtime/       # session-runtime, agent-loop, retry, agent-runner, tool-runner, ...
-├── server/        # rpcs, session-queries, system-prompt
-├── storage/       # sqlite-storage and the focused sub-storages
-└── test-utils/    # sequence
+├── domain/        # agent, agent-loop, capability, event, extension, message, ...
+├── extensions/    # api
+├── helpers/       # agent-loop (the actor test root), test-preset
+├── runtime/       # agent-loop, config, extension-host, model-context, provider, session, tools, turn, ...
+├── server/        # rpc, server, workspace-rpc
+├── storage/       # schema, storage
+└── test-utils/    # index, language-model
 ```
 
 One test file per source file. No god tests. Names match source owners.
@@ -1832,7 +1831,7 @@ Wide event boundaries (one structured log per unit of work) via `effect-wide-eve
 | ------------ | ------------- | ----------------------- |
 | Agent turn   | `agent-loop`  | `runtime/agent-loop.ts` |
 | Tool call    | `tool-runner` | `runtime/tools.ts`      |
-| Model stream | `model`       | `runtime/agent-loop.ts` |
+| Model stream | `provider`    | `runtime/turn.ts`       |
 | RPC request  | `rpc`         | `server/server.ts`      |
 
 Logging conventions:

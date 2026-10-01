@@ -693,7 +693,7 @@ describe("context compaction degrade path", () => {
         return { events, durable, metrics }
       }).pipe(Effect.provide(layer), Effect.timeout("8 seconds"))
       expect(yield* controls.callCount).toBe(1)
-      // The notice text is the projection's; tests/runtime/agent/turn-window.test.ts reads it.
+      // The notice text is the projection's; the "turn window projection" tests read it.
       // The notice is marked as one: the turn went on and completed.
       expect(result.events.filter((event) => event._tag === "ErrorOccurred")).toEqual([
         expect.objectContaining({ notice: true }),

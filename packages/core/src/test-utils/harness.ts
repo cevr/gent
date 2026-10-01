@@ -310,11 +310,9 @@ export const testToolContext = (overrides?: TestToolContextOverrides): TestToolC
 }
 
 /**
- * Test-only adapter for invoking a tool's effect with a wired
- * `ExtensionContext`. Production wraps tool execution in
- * `provideExtensionServices`; tests provide the service directly so mocks
- * stay observable. Keep this helper test-only — production code never wires
- * `ExtensionContext` at the tool boundary.
+ * Runs a tool's effect over a stub host context, wired through
+ * `provideExtensionServices` as production wires a tool call, so a test
+ * reads the stub's recorded calls.
  */
 export const runToolWithCtx = <Input, Output, Error>(
   tool: ToolCapability<Input, Output, Error>,

@@ -365,7 +365,7 @@ export interface TurnAfterInput {
    * A turn can end without an answer two ways, and they need different
    * handling: an interrupt is expected, a broken stream is a fault. Both facts
    * ride on this one input so a handler picks one action for the turn. A
-   * handler that reads neither treats every turn alike, as before.
+   * handler that reads neither treats every turn alike.
    *
    * The driver already retries a stream that breaks before any output, and the
    * loop already spends its continuations on one that breaks after partial

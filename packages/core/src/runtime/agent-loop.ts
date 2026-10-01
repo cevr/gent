@@ -1586,7 +1586,7 @@ class AgentLoopFollowUp extends Context.Service<AgentLoopFollowUp, AgentLoopFoll
  *
  * The holds are counted, because the entity has one keep-alive switch: the
  * first hold turns it on and the last release turns it off. An entity with
- * no hold passivates as before. The local test actor has no cluster and no
+ * no hold passivates when idle. The local test actor has no cluster and no
  * reaper, so there a hold does nothing.
  */
 interface AgentLoopResidencyService {
