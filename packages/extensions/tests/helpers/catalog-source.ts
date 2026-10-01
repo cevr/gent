@@ -16,6 +16,7 @@ const platformLayer = Layer.merge(BunFileSystem.layer, Path.layer)
  * and whatever a driver writes there goes with the process's home. (A process
  * `exit` handler does not run under `bun test`, so it could not remove it.)
  */
+// oxlint-disable-next-line effect/noEffectRunInTests -- A driver takes the source as a plain value where a test builds it; the module builds it once at load.
 const source = Effect.runSync(
   Effect.gen(function* () {
     const path = yield* Path.Path

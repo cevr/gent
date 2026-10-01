@@ -141,7 +141,7 @@ const makeFakeFetch =
     }
     state.captured.push(captured)
 
-    // oxlint-disable-next-line gent/no-runpromise-outside-boundary -- This adapter implements the Promise-based Fetch interface.
+    // oxlint-disable-next-line gent/no-runpromise-outside-boundary, effect/noEffectRunInTests -- This adapter implements the Promise-based Fetch interface.
     return Effect.runPromise(
       Effect.map(
         asEffect(responder(captured)),

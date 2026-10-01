@@ -9,6 +9,18 @@
     "perf": "error"
   },
   "plugins": ["typescript", "import", "node"],
+  "settings": {
+    // Test code beyond `*.test.*`: the helpers in `tests/` and `integration/`
+    // trees, and the harness (`@gent/e2e`, core's `test-utils`).
+    "effect": {
+      "testFiles": [
+        "**/tests/**",
+        "**/integration/**",
+        "packages/e2e/**",
+        "packages/core/src/test-utils/**"
+      ]
+    }
+  },
   // The Effect preset loads its own plugin and enables every recommended rule;
   // a rule below overrides it only where gent deliberately differs.
   "extends": ["./node_modules/oxlint-plugin-effect/presets/recommended.json"],
@@ -50,7 +62,11 @@
     // Off until the gent rule each duplicates is deleted: gent/no-sleep and
     // gent/no-lint-evasion hold these lines and their carve-outs today.
     "effect/noFixedWaitInTests": "off",
-    "effect/noLintEvasion": "off",
+    "effect/noLintEvasion": "error",
+    "effect/noPositionalLogArguments": "error",
+    "effect/noRunPromise": "error",
+    "effect/noWithWrapperCall": ["error", { "allow": ["withWideEvent"] }],
+    "effect/noTimeoutDieInTests": "error",
 
     // TypeScript - no any
     "typescript/no-explicit-any": "error",
@@ -100,6 +116,16 @@
     "typescript/no-unnecessary-template-expression": "off"
   },
   "overrides": [
+    {
+      // A `-boundary` file holds its module's Promise edges: the runtime runs
+      // there, in product code and in a test's harness alike.
+      "files": ["**/*-boundary.ts", "**/*-boundary.tsx"],
+      "rules": {
+        "effect/noRunPromise": "off",
+        "effect/noPromiseChainsInTests": "off",
+        "effect/noEffectRunInTests": "off"
+      }
+    },
     {
       // GentPlatform implements Bun/OS capabilities at the runtime boundary.
       "files": ["packages/core/src/runtime/gent-platform-bun.ts"],

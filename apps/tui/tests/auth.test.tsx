@@ -191,7 +191,8 @@ describe("auth-state", () => {
 
 // eslint-disable-next-line effect/noNullish -- a wire field the server leaves unset is present and undefined.
 const absent = undefined
-const nullValue = Option.getOrNull(Option.none())
+// eslint-disable-next-line effect/noNullish -- JSON on the wire carries null here; the test hands it on as is.
+const nullValue = null
 const apiMethodRoute = { label: "API key", type: "api" } satisfies { label: string; type: "api" }
 const oauthMethodRoute = { label: "Browser OAuth", type: "oauth" } satisfies {
   label: string

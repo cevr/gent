@@ -99,7 +99,8 @@ import { seedDebugSession } from "../src/ops"
 
 // eslint-disable-next-line effect/noNullish -- a wire field the server leaves unset is present and undefined.
 const absent = undefined
-const nullValue = Option.getOrNull(Option.none())
+// eslint-disable-next-line effect/noNullish -- JSON on the wire carries null here; the test hands it on as is.
+const nullValue = null
 const idleTag = "Idle" satisfies "Idle"
 const refusedInA = Schema.decodeSync(GentRpcError)({
   _tag: "InvalidStateError",
