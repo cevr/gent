@@ -76,7 +76,8 @@ export const resolveThemeColor = (theme: Theme, color: RGBA | NamedThemeColor): 
   return color
 }
 
-type ThemeMode = "dark" | "light" | "system"
+/** What `detectColorScheme` reads off the terminal. */
+type ThemeMode = "dark" | "light"
 
 type HexColor = `#${string}`
 type RefName = string
@@ -520,15 +521,10 @@ export function ThemeProvider(props: ThemeProviderProps) {
   const renderer = useRenderer()
 
   // Mode is resolved by the host (main.tsx) before render so theme detection
-  // never runs in the synchronous render path. Fall back to "dark" if absent
-  // (e.g. debug harnesses that don't set it).
-  const initialMode = (): "dark" | "light" => {
-    if (props.mode === "dark" || props.mode === "light") return props.mode
-    return "dark"
-  }
-
+  // never runs in the synchronous render path. A render that names none (a
+  // test of <App />) draws dark.
   const [store, setStore] = createStore<ThemeStore>({
-    mode: initialMode(),
+    mode: Option.getOrElse(Option.fromNullishOr(props.mode), (): ThemeMode => "dark"),
     active: "fx",
   })
 
