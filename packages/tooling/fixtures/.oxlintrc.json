@@ -12,6 +12,7 @@
     "gent/declared-workspace-imports": "error",
     "gent/no-define-extension-throw": "error",
     "gent/no-host-fact-bypass": "error",
+    "gent/no-platform-module-export-alias": "error",
     "gent/child-session-writer-admits": "error",
     "gent/no-identity-encode": "error"
   }

@@ -15,7 +15,6 @@ import {
   findSharedTestHomes,
   findPreCommitHookFindings,
   findPackageSurfaceFindings,
-  findPlatformDuplicationViolations,
   findReadersWithoutWriters,
   findWritersWithoutReaders,
   isManifest,
@@ -279,7 +278,6 @@ const ANY_FILE_FINDERS: ReadonlyArray<FileFinder> = [
 
 /** Findings a source file answers on its own, without the rest of the tree. */
 const SOURCE_FILE_FINDERS: ReadonlyArray<FileFinder> = [
-  findPlatformDuplicationViolations,
   findCoreFeatureIndependenceFindings,
   findCoreVendorModelPins,
   findE2eFixtureImportFindings,

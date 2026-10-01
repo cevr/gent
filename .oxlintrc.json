@@ -34,6 +34,8 @@
     "gent/no-define-extension-throw": "error",
     // Custom — no host global read where effect/noGlobals does not look (upstream gap)
     "gent/no-host-fact-bypass": "error",
+    // Custom — no module exports an alias of an @effect/platform-* binding (upstream gap)
+    "gent/no-platform-module-export-alias": "error",
     // Custom — a child-session writer admits the depth in its own function
     "gent/child-session-writer-admits": "error",
     // Custom — a whole-object JSON encode decides no identity (shipped source)
@@ -202,7 +204,8 @@
         "packages/tooling/src/check-guide-code.ts"
       ],
       "rules": {
-        "effect/noPlatformLayerOutsideEntry": "off"
+        "effect/noPlatformLayerOutsideEntry": "off",
+        "gent/no-platform-module-export-alias": "off"
       }
     },
     {
