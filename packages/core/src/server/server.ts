@@ -1795,6 +1795,8 @@ interface DependencyOverrides {
   >
   readonly configServiceLayer?: Layer.Layer<ConfigService>
   readonly modelRegistryLayer?: Layer.Layer<ModelRegistry>
+  /** Replaces the auth-backed live resolver (a scripted or fixed model). */
+  readonly modelResolverLayer?: Layer.Layer<ModelResolver>
   readonly toolRunnerLayer?: Layer.Layer<ToolRunner>
   readonly sessionProfileCacheLayer?: Layer.Layer<SessionProfileCache>
   readonly extraLayers?: ReadonlyArray<Layer.Layer<never>>
@@ -1835,9 +1837,6 @@ interface DependenciesConfig<A = never> {
   state: StateLocation
   /** A failed extension fails the profile build. Test roots set it; production leaves one broken extension out and runs. */
   failOnExtensionFailure: boolean
-  /** Model resolver override. When set, replaces the auth-backed live resolver.
-   *  Must be a fully-provided layer (no requirements, no errors). */
-  modelResolverOverride?: Layer.Layer<ModelResolver, never, never>
   /** Extensions to load. Composition roots pass this in. */
   extensions: ReadonlyArray<GentExtension<ExtensionSetupServices>>
   /**
@@ -1940,10 +1939,7 @@ export const createDependencies = <A = never>(config: DependenciesConfig<A>) => 
   )
 
   const modelRegistryLive = config.overrides?.modelRegistryLayer ?? ModelRegistry.Live
-  const modelResolverLive = Option.getOrElse(
-    Option.fromUndefinedOr(config.modelResolverOverride),
-    () => ModelResolver.Live,
-  )
+  const modelResolverLive = config.overrides?.modelResolverLayer ?? ModelResolver.Live
   // ApprovalService — single handler for all interaction types
   const approvalServiceLive = config.overrides?.approvalLayer ?? ApprovalService.Live
   const toolRunnerLive = config.overrides?.toolRunnerLayer ?? ToolRunner.Live

@@ -842,7 +842,6 @@ const e2eDependencies = <A>(
       onNone: () => StateLocation.cases.Memory.make({}),
       onSome: (dbPath) => StateLocation.cases.Disk.make({ dbPath }),
     }),
-    modelResolverOverride: LanguageModelLayers.resolver(config.providerLayer),
     extensions: extensionInputsForConfig(config),
     // A broken extension fails the test with its reason, not a later timeout.
     failOnExtensionFailure: config.allowFailedExtensions !== true,
@@ -852,6 +851,7 @@ const e2eDependencies = <A>(
         config.models ?? [],
         Option.fromUndefinedOr(config.modelPricing),
       ),
+      modelResolverLayer: LanguageModelLayers.resolver(config.providerLayer),
       authLayer: config.authLayer ?? Auth.Test(),
       approvalLayer: config.approvalLayer ?? ApprovalService.Test(),
       configServiceLayer: config.configServiceLayer ?? ConfigService.Test(),
