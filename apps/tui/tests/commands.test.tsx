@@ -254,6 +254,23 @@ describe("CommandPalette renderer", () => {
     }),
   )
 
+  it.scopedLive("escape on a filtered palette clears the filter first, then closes", () =>
+    Effect.gen(function* () {
+      const setup = yield* renderScoped(() => <OpenPaletteOnMount />, { width: 90, height: 28 })
+      yield* waitForFrame(setup, (frame) => frame.includes("Branches"), "commands root")
+      setup.mockInput.pressKeys(["z", "z", "q"])
+      yield* waitForFrame(setup, (frame) => frame.includes("No matches"), "filtered")
+      setup.mockInput.pressEscape()
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("Commands") && frame.includes("Branches"),
+        "filter cleared",
+      )
+      setup.mockInput.pressEscape()
+      yield* waitForFrame(setup, (frame) => !frame.includes("Commands"), "closed")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
   // A failed branch list is the level's answer, not a crash: the palette
   // stays open and says why, and Esc still steps back.
   it.scopedLive("a branch list that fails shows why in the palette", () =>

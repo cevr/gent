@@ -67,7 +67,6 @@ export {
   plainRow,
   selectable,
   SelectList,
-  type SelectListApi,
   type SelectListRow,
   ToolFrame,
   TrayFrame,

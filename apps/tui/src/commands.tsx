@@ -481,17 +481,6 @@ export function CommandPalette() {
     listToTop()
   }
 
-  // Escape clears a query before it leaves a level, and backspace on an empty
-  // query walks back a level. Both are the list's keys otherwise, so the pane
-  // claims them only in those cases.
-  const escapeLevel = () => {
-    if (searchQuery().length > 0) {
-      resetList()
-      return
-    }
-    popLevel()
-  }
-
   createEffect(() => {
     if (command.paletteOpen()) {
       setState({ levelStack: [rootLevel()], category: "" })
@@ -611,14 +600,11 @@ export function CommandPalette() {
               cycleCategory(event.shift === true)
               return true
             }
-            if (event.name === "escape") {
-              escapeLevel()
-              return true
-            }
             if (event.name === "left") {
               popLevel()
               return true
             }
+            // Backspace on an empty query walks back a level; the list keeps it otherwise.
             if (event.name === "backspace" && searchQuery().length === 0) {
               if (state().levelStack.length <= 1) return false
               popLevel()
@@ -631,7 +617,7 @@ export function CommandPalette() {
             return false
           }}
           onSelect={handleSelect}
-          onDismiss={escapeLevel}
+          onDismiss={popLevel}
         />
       </PickerFrame>
     </Show>

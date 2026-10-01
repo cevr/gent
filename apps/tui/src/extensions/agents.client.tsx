@@ -26,7 +26,6 @@ import {
   PickerFrame,
   selectable,
   SelectList,
-  type SelectListApi,
   type SelectListRow,
   sessionQuery,
   textWidth,
@@ -534,9 +533,6 @@ export function AgentsPane(props: {
   // Filtering is the server's job — it owns the same search the projection
   // tests cover — so typing refetches rather than filtering a local copy.
   const visible = () => props.controller.rows()
-  // Esc clears a typed query before it closes the pane, as the palette does.
-  const [query, setQuery] = createSignal("")
-  let list = Option.none<SelectListApi>()
 
   // The toggle binds whether or not the pane is showing, so it can open as well
   // as close. Registered separately from the pane's own keys, which the list
@@ -706,13 +702,7 @@ export function AgentsPane(props: {
           open={props.open}
           rows={rows}
           rowKey={(row) => `${row.sessionId}/${row.branchId}`}
-          filter={{
-            onQueryChange: (next) => {
-              setQuery(next)
-              props.controller.refresh(next)
-            },
-          }}
-          api={(api) => (list = Option.some(api))}
+          filter={{ onQueryChange: props.controller.refresh }}
           sticky={sticky}
           // One detail read per selection, not per keystroke batch: the
           // controller ignores a repeat of the row it is already fetching.
@@ -720,10 +710,6 @@ export function AgentsPane(props: {
           extraKeys={(event, selected) => {
             if (event.name === "escape" && Option.isSome(armed())) {
               setArmed(Option.none())
-              return true
-            }
-            if (event.name === "escape" && query().length > 0) {
-              Option.map(list, (api) => api.reset())
               return true
             }
             if (event.ctrl === true && event.name === "x") return armOrDelete(selected)

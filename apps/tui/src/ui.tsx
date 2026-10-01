@@ -1005,6 +1005,7 @@ interface SelectListProps<A> {
    */
   readonly rowKey: (value: A) => string
   readonly onSelect: (value: A) => void
+  /** Esc on an empty query: Esc over a typed query clears it first. */
   readonly onDismiss: () => void
   readonly filter?: SelectListFilter
   /**
@@ -1213,8 +1214,10 @@ export function SelectList<A>(props: SelectListProps<A>) {
     (event) => {
       if (props.extraKeys && props.extraKeys(event, selected())) return true
 
+      // Esc on a filtered list clears the query first, and closes the next time.
       if (event.name === "escape") {
-        props.onDismiss()
+        if (props.filter && state().query.length > 0) reset()
+        else props.onDismiss()
         return true
       }
 

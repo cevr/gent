@@ -333,7 +333,8 @@ describe("Settings picker", () => {
       setup.mockInput.pressKey("u")
       yield* waitForFrame(setup, () => renderFrame(setup).includes("Model · 1"), "filtered")
 
-      setup.mockInput.pressEscape()
+      // Closed from outside while filtered, as ctrl+c closes a docked pane.
+      setOpen(false)
       yield* waitForFrame(setup, () => !renderFrame(setup).includes("Model ·"), "closed")
 
       setOpen(true)
@@ -342,6 +343,31 @@ describe("Settings picker", () => {
       expect(renderFrame(setup)).toContain("Model · 3")
       expect(renderFrame(setup)).toContain("Claude Opus 5")
       expect(renderFrame(setup)).toContain("GPT-5.6 Luna")
+    }),
+  )
+
+  it.scopedLive("Esc on a filtered list clears the filter first, then closes", () =>
+    Effect.gen(function* () {
+      const [open, setOpen] = createSignal(true)
+      const setup = yield* renderScoped(() => (
+        <SettingsPicker
+          open={open()}
+          title="Model"
+          rows={modelRows(catalogue)}
+          current={Option.some("anthropic/claude-opus-5")}
+          onSelect={() => {}}
+          onClose={() => setOpen(false)}
+        />
+      ))
+      yield* waitForFrame(setup, () => renderFrame(setup).includes("Model · 3"), "picker")
+      setup.mockInput.pressKeys(["z", "z"])
+      yield* waitForFrame(setup, () => renderFrame(setup).includes("Model · 0"), "filtered")
+
+      setup.mockInput.pressEscape()
+      yield* waitForFrame(setup, () => renderFrame(setup).includes("Model · 3"), "filter cleared")
+      expect(open()).toBe(true)
+      setup.mockInput.pressEscape()
+      yield* waitForFrame(setup, () => !open(), "closed")
     }),
   )
 })
