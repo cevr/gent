@@ -7,7 +7,7 @@ import { BranchId, SessionId } from "@gent/core/extensions/api"
 import type { ForkViewType } from "@gent/extensions/client"
 import btwExtension, { ForkPane, makeForkPane } from "../../src/extensions/btw.client"
 import { createMockClient, renderFrame, renderScoped } from "../render-harness-boundary"
-import { waitForFrame } from "../helpers-boundary"
+import { waitForFrame, waitUntil } from "../helpers-boundary"
 import {
   makeClientExtensionRuntime,
   makeClientTestTransport,
@@ -90,6 +90,9 @@ describe("fork pane", () => {
         expect(server.forked).toEqual(["why?"])
         expect(Option.isNone(controller.pending())).toBe(true)
         yield* waitForFrame(setup, (frame) => frame.includes("thinking"), "thinking")
+        // The title is the fork's own name, with no second `btw` before it.
+        expect(renderFrame(setup)).toContain("btw: why?")
+        expect(renderFrame(setup)).not.toContain("btw · btw")
         // A second ask while the fork replies is dropped on the client.
         controller.ask("too soon?")
         yield* queue.drain
@@ -118,7 +121,7 @@ describe("fork pane", () => {
         yield* waitForFrame(setup, (frame) => frame.includes("then that"), "second answer")
         const frame = renderFrame(setup)
         expect(frame).toContain("btw: why?")
-        expect(frame).toContain("ctrl+o open")
+        expect(frame).toContain("enter open · esc close")
       }),
   )
 
@@ -213,6 +216,41 @@ describe("fork pane", () => {
       expect(server.asked).toEqual([])
       expect(notices).toHaveLength(2)
     }),
+  )
+
+  // Enter means "go there" on an empty line, as on an agents row; ctrl+o
+  // keeps its one meaning, the transcript's detail level.
+  it.scopedLive("enter on an empty ask line opens the fork, and ctrl+o does not", () =>
+    Effect.gen(function* () {
+      const queue = makeCastQueue()
+      const server = makeServer()
+      server.set(Option.some(view([{ question: "why?", answer: "because" }], false)))
+      const controller = yield* provideClientServices(makeForkPane(server.actions), {
+        ...onSession,
+        shell: { cast: queue.cast },
+      })
+      yield* queue.drain
+      let opened = 0
+      const setup = yield* renderScoped(() => (
+        <ForkPane
+          open={true}
+          onClose={() => {}}
+          onOpen={() => (opened += 1)}
+          controller={controller}
+        />
+      ))
+      yield* waitForFrame(setup, (frame) => frame.includes("enter open"), "fork view")
+      setup.mockInput.pressKey("o", { ctrl: true })
+      yield* Effect.promise(() => setup.mockInput.typeText("x"))
+      yield* waitForFrame(setup, (frame) => frame.includes("enter submit"), "a draft")
+      expect(opened).toBe(0)
+      setup.mockInput.pressBackspace()
+      yield* waitForFrame(setup, (frame) => frame.includes("enter open"), "the draft gone")
+      setup.mockInput.pressEnter()
+      yield* waitUntil(() => opened === 1, "the fork opened")
+      yield* queue.drain
+      expect(server.asked).toEqual([])
+    }).pipe(Effect.timeout("4 seconds")),
   )
 
   it.scopedLive("keys typed into the docked pane fill its ask line and enter sends them", () =>

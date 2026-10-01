@@ -316,7 +316,7 @@ describe("CommandPalette renderer", () => {
       setup.mockInput.pressEnter()
       yield* waitForFrame(
         setup,
-        (frame) => frame.includes("Agents ·") && frame.includes("Delegate"),
+        (frame) => frame.includes("Sessions ·") && frame.includes("Delegate"),
         "agents pane",
       )
       // Every row is stored: no loop runs, and the pane still lists them all.
@@ -327,7 +327,7 @@ describe("CommandPalette renderer", () => {
       setup.mockInput.pressArrow("down")
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressEnter()
-      yield* waitForFrame(setup, (frame) => !frame.includes("Agents ·"), "agents pane closed")
+      yield* waitForFrame(setup, (frame) => !frame.includes("Sessions ·"), "agents pane closed")
       expect(ctx.value.session()).toEqual({
         sessionId: delegateId,
         branchId: delegateBranchId,
@@ -365,7 +365,7 @@ describe("CommandPalette renderer", () => {
       expect(executeSlashCommand("sessions", "", commands())).toBe(true)
       yield* waitForFrame(
         setup,
-        (frame) => frame.includes("Agents ·") && frame.includes("Delegate"),
+        (frame) => frame.includes("Sessions ·") && frame.includes("Delegate"),
         "agents pane",
       )
       const lines = renderFrame(setup).split("\n")

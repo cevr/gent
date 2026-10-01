@@ -409,7 +409,7 @@ describe("PromptSearchPalette renderer", () => {
       )
       yield* waitForFrame(setup, (frame) => frame.includes("first prompt"), "open")
       setup.mockInput.pressKeys(["z", "z", "z"])
-      yield* waitForFrame(setup, (frame) => frame.includes("No prompt matches"), "empty")
+      yield* waitForFrame(setup, (frame) => frame.includes("No matches"), "empty")
       expect(events.at(-1)).toEqual({ _tag: "Highlight", entry: Option.none() })
     }),
   )
@@ -440,7 +440,7 @@ describe("PromptSearchPalette renderer", () => {
     Effect.gen(function* () {
       const events: Array<PromptSearchEvent> = []
       const setup = yield* openPalette([], (event) => events.push(event))
-      yield* waitForFrame(setup, (frame) => frame.includes("No prompt matches"), "open")
+      yield* waitForFrame(setup, (frame) => frame.includes("Nothing here"), "open")
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
       expect(events.at(-1)).toEqual({ _tag: "Accept" })

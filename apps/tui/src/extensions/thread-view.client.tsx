@@ -343,11 +343,6 @@ export const detailFor = (window: Option.Option<ThreadWindow>): string =>
       }),
   })
 
-const emptyLabel = (loading: boolean): string => {
-  if (loading) return "loading…"
-  return "no windows"
-}
-
 export function ThreadPane(props: {
   open: boolean
   onClose: () => void
@@ -425,9 +420,7 @@ export function ThreadPane(props: {
           // The detail line below reads the row under the cursor; the list is
           // the only thing that knows where it is.
           onCursor={setCursor}
-          empty={() => (
-            <text style={{ fg: theme.textMuted }}>{emptyLabel(props.controller.loading())}</text>
-          )}
+          loading={props.controller.loading}
           onSelect={props.onSelect}
           onDismiss={props.onClose}
         />

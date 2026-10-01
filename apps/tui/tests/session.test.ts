@@ -52,7 +52,7 @@ import {
   ModelId,
   ProviderId,
   type QueueEntryInfo,
-  type ActiveInteraction,
+  type InteractionPresented,
   AgentEvent,
   AgentName,
   assistantMessageIdForTurn,
@@ -1066,16 +1066,30 @@ describe("slash autocomplete contribution", () => {
     expect(ids(slashAutocompleteItems(commands, "thi"))[0]).toBe("think")
   })
 
-  test("offers every command when nothing is typed yet", () => {
-    // One row per slash name plus the alias.
+  test("offers every command once when nothing is typed yet", () => {
+    // One row per command, by its name: an alias row would read the same
+    // title twice.
     expect(ids(slashAutocompleteItems(commands, ""))).toEqual([
       "fork",
       "auth",
       "agents",
-      "tree",
       "model",
       "think",
     ])
+  })
+
+  test("a filter both names match shows the command once", () => {
+    const fresh: ReadonlyArray<Command> = [
+      {
+        id: "session.new",
+        title: "New Session",
+        slash: "new",
+        aliases: ["clear"],
+        onSelect: () => {},
+      },
+    ]
+    expect(ids(slashAutocompleteItems(fresh, "e"))).toHaveLength(1)
+    expect(ids(slashAutocompleteItems(fresh, "cl"))).toEqual(["clear"])
   })
 
   test("offers nothing for a filter no command matches", () => {
@@ -1176,6 +1190,35 @@ const makeEnvelope = (id: number, event: AgentEvent, createdAt = 0): EventEnvelo
     event,
     createdAt,
   })
+
+/**
+ * Core's order for a step that calls a tool: the stream ends, the answer with
+ * its call part is stored, and only then does the call start
+ * (`turn.ts` publishes StreamEnded before it stores the step and runs tools).
+ */
+const stepEndEnvelopes = (
+  sessionId: SessionId,
+  branchId: BranchId,
+  callId: ToolCallId,
+  firstId: number,
+): EventEnvelope[] => [
+  makeEnvelope(firstId, AgentEvent.cases.StreamEnded.make({ sessionId, branchId })),
+  makeEnvelope(
+    firstId + 1,
+    AgentEvent.cases.MessageReceived.make({
+      message: Message.cases.regular.make({
+        id: MessageId.make(`answer-${callId}`),
+        sessionId,
+        branchId,
+        role: "assistant",
+        parts: [
+          Prompt.toolCallPart({ id: callId, name: "cell", params: {}, providerExecuted: false }),
+        ],
+        createdAt: dateFromMillis(0),
+      }),
+    }),
+  ),
+]
 
 const makeUserMessage = (sessionId: SessionId, branchId: BranchId): Message =>
   Message.cases.regular.make({
@@ -1913,8 +1956,9 @@ describe("useSessionFeed", () => {
     innerId: ToolCallId,
   ): EventEnvelope[] => [
     makeEnvelope(1, AgentEvent.cases.StreamStarted.make({ sessionId, branchId })),
+    ...stepEndEnvelopes(sessionId, branchId, cellId, 2),
     makeEnvelope(
-      2,
+      4,
       AgentEvent.cases.ToolCallStarted.make({
         sessionId,
         branchId,
@@ -1924,7 +1968,7 @@ describe("useSessionFeed", () => {
       }),
     ),
     makeEnvelope(
-      3,
+      5,
       AgentEvent.cases.ToolCallStarted.make({
         sessionId,
         branchId,
@@ -1935,7 +1979,7 @@ describe("useSessionFeed", () => {
       }),
     ),
     makeEnvelope(
-      4,
+      6,
       AgentEvent.cases.ToolCallFailed.make({
         sessionId,
         branchId,
@@ -1946,7 +1990,7 @@ describe("useSessionFeed", () => {
       }),
     ),
     makeEnvelope(
-      5,
+      7,
       AgentEvent.cases.ToolCallSucceeded.make({
         sessionId,
         branchId,
@@ -1956,7 +2000,7 @@ describe("useSessionFeed", () => {
         output: "{}",
       }),
     ),
-    makeEnvelope(6, AgentEvent.cases.TurnCompleted.make({ sessionId, branchId, durationMs: 1 })),
+    makeEnvelope(8, AgentEvent.cases.TurnCompleted.make({ sessionId, branchId, durationMs: 1 })),
   ]
 
   it.live("nests cell-admitted tool calls under their cell with final status", () =>
@@ -2144,8 +2188,9 @@ describe("useSessionFeed", () => {
       const opId = ToolCallId.make("tool-call-interrupted-op")
       const { cellOf, dispose } = openFeed(snapshotFor(sessionId, branchId), [
         makeEnvelope(1, AgentEvent.cases.StreamStarted.make({ sessionId, branchId })),
+        ...stepEndEnvelopes(sessionId, branchId, cellId, 2),
         makeEnvelope(
-          2,
+          4,
           AgentEvent.cases.ToolCallStarted.make({
             sessionId,
             branchId,
@@ -2155,7 +2200,7 @@ describe("useSessionFeed", () => {
           }),
         ),
         makeEnvelope(
-          3,
+          5,
           AgentEvent.cases.ToolCallStarted.make({
             sessionId,
             branchId,
@@ -2166,7 +2211,7 @@ describe("useSessionFeed", () => {
           }),
         ),
         makeEnvelope(
-          4,
+          6,
           AgentEvent.cases.ToolCallFailed.make({
             sessionId,
             branchId,
@@ -2303,7 +2348,7 @@ describe("useSessionFeed", () => {
         4,
         AgentEvent.cases.TurnCompleted.make({ sessionId, branchId, durationMs: 1 }),
       )
-      const interactionSeen = yield* Deferred.make<ActiveInteraction>()
+      const interactionSeen = yield* Deferred.make<InteractionPresented>()
       const liveSeen = yield* Deferred.make<void>()
       let requestedAfter: Option.Option<number> = Option.none()
       const bufferedTags: string[] = []

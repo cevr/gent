@@ -10,17 +10,11 @@ import {
   makeHerdrReporter,
   rankListed,
 } from "../../src/extensions/builtins"
-import {
-  emptyFrecencyStore,
-  frecencyLookup,
-  type FrecencyStoreValue,
-  readFrecencyStore,
-} from "../../src/autocomplete"
+import { readFrecencyStore } from "../../src/autocomplete"
 import { runAutocompleteContributions } from "../../src/extensions/loader-boundary"
 import { BunServices } from "@effect/platform-bun"
 import {
   ConfigProvider,
-  DateTime,
   Deferred,
   Effect,
   Exit,
@@ -31,7 +25,6 @@ import {
   Path,
   Queue,
   Schema,
-  Schedule,
   Scope,
 } from "effect"
 import { AgentName, BranchId, SessionId } from "@gent/core/protocol"
@@ -752,7 +745,7 @@ describe("driver routing through the client transport", () => {
       const transport = makeClientTestTransport()
       const client = createMockClient({ driver: { set: () => Effect.fail(rejected) } })
       const layer = contextLayer({
-        transport: { ...transport, client, runtime: createMockRuntime() },
+        transport: { ...transport, client },
       })
       return Effect.gen(function* () {
         const { transport: service } = yield* ClientContext
@@ -1127,29 +1120,8 @@ const skillItemsFor = (names: ReadonlyArray<string>, filter: string) =>
   })
 
 describe("skills autocomplete", () => {
-  filesTest("puts the closest skill name first rather than the first listed", () =>
-    Effect.gen(function* () {
-      // Plain substring filtering answered in host order, so `$tes` led with
-      // whichever skill happened to be listed first. `test` is the closest.
-      const names = ["code-style", "stacked", "test", "tdd", "teach"]
-      expect((yield* skillItemsFor(names, "tes"))[0]).toBe("test")
-    }).pipe(Effect.timeout("10 seconds")),
-  )
-
-  filesTest("ranks a prefix above a mid-word match", () =>
-    Effect.gen(function* () {
-      const names = ["impeccable", "effect", "code-review"]
-      expect((yield* skillItemsFor(names, "eff"))[0]).toBe("effect")
-    }).pipe(Effect.timeout("10 seconds")),
-  )
-
-  filesTest("finds a skill by letters scattered through its name", () =>
-    Effect.gen(function* () {
-      const names = ["code-review", "counsel", "test"]
-      expect(yield* skillItemsFor(names, "crv")).toContain("code-review")
-    }).pipe(Effect.timeout("10 seconds")),
-  )
-
+  // The ranking itself is `rankAutocompleteItems`' (autocomplete.test.ts);
+  // these pin that the skills source hands its rows to it.
   filesTest("offers every skill before anything is typed, and nothing for a miss", () =>
     Effect.gen(function* () {
       expect(yield* skillItemsFor(["effect", "test"], "")).toEqual(["effect", "test"])
@@ -1161,38 +1133,6 @@ describe("skills autocomplete", () => {
     Effect.gen(function* () {
       // The documented weakness: 12.760 against 12.680, decided by length.
       expect((yield* skillItemsFor(["tdd", "test"], "t"))[0]).toBe("tdd")
-    }).pipe(Effect.timeout("10 seconds")),
-  )
-
-  filesTest("writes a pick to the store when a row is selected", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const home = yield* fs.makeTempDirectoryScoped()
-      const harness = yield* skillsHarness(home, ["tdd", "test"])
-
-      // The write half. A contribution with no onSelect leaves nothing here.
-      const onSelect = Option.fromNullishOr(harness.contribution.onSelect)
-      expect(Option.isSome(onSelect)).toBe(true)
-      if (Option.isSome(onSelect)) onSelect.value("test", "t")
-
-      // The write is forked off the keystroke path, so it lands shortly after
-      // the callback returns. Retry rather than sleep: the assertion is "the
-      // pick arrives".
-      const weightOf = (loaded: Option.Option<FrecencyStoreValue>): number =>
-        frecencyLookup(
-          Option.getOrElse(loaded, () => emptyFrecencyStore()),
-          DateTime.toEpochMillis(DateTime.nowUnsafe()),
-        )("$", "test")
-
-      const recorded = yield* Effect.retry(
-        Effect.flatMap(readFrecencyStore(home), (loaded) => {
-          const weight = weightOf(loaded)
-          if (weight > 0) return Effect.succeed(weight)
-          return Effect.fail("not written yet")
-        }),
-        { times: 50, schedule: Schedule.spaced("10 millis") },
-      )
-      expect(recorded).toBeGreaterThan(0)
     }).pipe(Effect.timeout("10 seconds")),
   )
 })

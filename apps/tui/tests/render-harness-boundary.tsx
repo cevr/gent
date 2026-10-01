@@ -67,6 +67,27 @@ type MockMethod = (...args: ReadonlyArray<never>) => unknown
 type MockNamespace = { readonly [method: string]: MockMethod }
 type NamespaceOverrides = Partial<Record<string, Partial<MockNamespace>>>
 
+/**
+ * A `session` mock whose snapshot is of the session asked for and names
+ * `agent`: the agent a session runs reaches the UI only through its snapshot.
+ */
+export const snapshotNaming = (agent: AgentName) => ({
+  getSnapshot: (input: { readonly sessionId: SessionId; readonly branchId: BranchId }) =>
+    Effect.succeed({
+      sessionId: input.sessionId,
+      branchId: input.branchId,
+      messages: [],
+      // eslint-disable-next-line effect/noNullish -- JSON on the wire carries null here; the test hands it on as is.
+      lastEventId: null,
+      // eslint-disable-next-line effect/noNullish -- a wire field the server leaves unset is present and undefined.
+      reasoningLevel: undefined,
+      resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
+      agent,
+      runtime: { _tag: "Idle" satisfies "Idle", queue: emptyQueueSnapshot() },
+      metrics: { turns: 0, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
+    }),
+})
+
 export const createMockClient = (overrides?: NamespaceOverrides): GentNamespacedClient => {
   const noRpcError = <A,>(value: A) => Effect.succeed(value)
   // eslint-disable-next-line effect/noNullish -- a wire field the server leaves unset is present and undefined.
@@ -85,26 +106,9 @@ export const createMockClient = (overrides?: NamespaceOverrides): GentNamespaced
       list: () => noRpcError([]),
       get: () => noRpcError(nullValue),
       delete: () => noRpcError(absent),
-      getSnapshot: () =>
-        noRpcError({
-          sessionId: SessionId.make("session-test"),
-          branchId: BranchId.make("branch-test"),
-          messages: [],
-          lastEventId: nullValue,
-          reasoningLevel: absent,
-          resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
-          agent: AgentName.make("primary"),
-          runtime: {
-            _tag: "Idle",
-            queue: emptyQueueSnapshot(),
-          },
-          metrics: {
-            turns: 0,
-            durationMs: 0,
-            costUsd: 0,
-            lastInputTokens: 0,
-          },
-        }),
+      // The snapshot of the session asked for, as the server's: it names the
+      // agent the session runs, the one way the UI learns it.
+      getSnapshot: snapshotNaming(AgentName.make("primary")).getSnapshot,
       updateSettings: () => noRpcError({ modelId: absent, reasoningLevel: absent }),
       // As the server's: the events stream ends its (empty) replay with the
       // synchronized marker and stays open; the runtime watch stays open.
@@ -222,8 +226,6 @@ export const createMockRuntime = (
   },
   fork: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     Effect.runForkWith(Context.makeUnsafe<R>(new Map(services)))(effect),
-  run: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    Effect.runPromiseWith(Context.makeUnsafe<R>(new Map(services)))(effect),
   lifecycle: {
     getState: () => ConnectionState.cases.Connected.make({ generation: 0 }),
     subscribe: (listener) => {
@@ -356,7 +358,6 @@ export const renderWithProviders = (
     client?: GentNamespacedClient
     runtime?: GentRuntime
     initialSession?: DomainSession | Session
-    initialAgent?: AgentName
     initialPrompt?: Option.Option<string>
     width?: number
     height?: number
@@ -452,7 +453,6 @@ export const renderWithProviders = (
                               services={services}
                               log={options?.log ?? noopLog}
                               initialSession={initialSession}
-                              initialAgent={options?.initialAgent}
                             >
                               <ExtensionUIProvider
                                 builtins={options?.builtins}

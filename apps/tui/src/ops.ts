@@ -37,8 +37,8 @@ import {
 import { BranchStorage, GentPlatform, MessageStorage, SessionStorage } from "@gent/core/host"
 import * as Prompt from "effect/ai/Prompt"
 import { Command, Flag } from "effect/cli"
-import { readonlySqlite } from "./bun-adapter"
-import { formatBytes, isConversation } from "./utils"
+import { readonlySqlite, textWidth } from "./bun-adapter"
+import { formatBytes, isConversation, padWidth } from "./utils"
 import * as Terminal from "effect/Terminal"
 
 // ── local health report ─────────────────────────────────────────────────────
@@ -734,12 +734,23 @@ const serverOptions = (choice: ServerChoice): Parameters<typeof Gent.server>[0] 
  * `connect` attaches to a server someone else started. Otherwise this starts
  * one in-process, which is what every caller wants when no url is given: the
  * bundle owns its own server for the life of the call.
+ *
+ * `scriptedModel` says whether that server answers with a scripted model,
+ * which needs no sign-in. Only a server this call starts takes the `mock`
+ * choice: a connected server chose its own model.
  */
 export const resolveClientBundle = (
   options: ServerChoice & { readonly connect: Option.Option<string> },
 ) => {
-  if (Option.isSome(options.connect)) return Gent.client(options.connect.value)
-  return Effect.flatMap(Gent.server(serverOptions(options)), Gent.client)
+  if (Option.isSome(options.connect))
+    return Effect.map(Gent.client(options.connect.value), (bundle) => ({
+      ...bundle,
+      scriptedModel: false,
+    }))
+  return Gent.server(serverOptions(options)).pipe(
+    Effect.flatMap(Gent.client),
+    Effect.map((bundle) => ({ ...bundle, scriptedModel: Option.isSome(options.mock) })),
+  )
 }
 
 /**
@@ -810,11 +821,11 @@ const formatTable = (
   rows: ReadonlyArray<ReadonlyArray<string>>,
 ): string => {
   const widths = headers.map((header, column) =>
-    Math.max(header.length, ...rows.map((row) => (row[column] ?? "").length)),
+    Math.max(textWidth(header), ...rows.map((row) => textWidth(row[column] ?? ""))),
   )
   const line = (cells: ReadonlyArray<string>) =>
     cells
-      .map((cell, column) => cell.padEnd(widths[column] ?? 0))
+      .map((cell, column) => padWidth(cell, widths[column] ?? 0))
       .join(" ")
       .trimEnd()
   const width = widths.reduce((sum, w) => sum + w, 0) + widths.length - 1
@@ -843,10 +854,10 @@ export const formatServerStatus = (
     fields.map(([header]) => header),
     [fields.map(([, , value]) => value)],
   )
-  const width = Math.max(...table.split("\n").map((line) => line.length))
+  const width = Math.max(...table.split("\n").map(textWidth))
   if (width <= columns) return table
-  const labelWidth = Math.max(...fields.map(([, name]) => name.length)) + 1
-  return fields.map(([, name, value]) => `${`${name}:`.padEnd(labelWidth)} ${value}`).join("\n")
+  const labelWidth = Math.max(...fields.map(([, name]) => textWidth(name))) + 1
+  return fields.map(([, name, value]) => `${padWidth(`${name}:`, labelWidth)} ${value}`).join("\n")
 }
 
 const serverStatus = Command.make("status", {}, () =>

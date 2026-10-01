@@ -30,7 +30,6 @@ import {
   Stream,
 } from "effect"
 import {
-  type ActiveInteraction,
   type AgentEvent,
   ApprovalDecisionSchema,
   type ApprovalResult,
@@ -38,6 +37,7 @@ import {
   Branch,
   type BranchId,
   Message as DurableMessage,
+  type AuthProviderInfo,
   type EventEnvelope,
   InteractionPresented,
   type MessageId,
@@ -428,7 +428,7 @@ export type ComposerEvent = Schema.Schema.Type<typeof ComposerEvent>
 
 type ComposerEffect = {
   readonly _tag: "DispatchInteractionResult"
-  readonly interaction: ActiveInteraction
+  readonly interaction: InteractionPresented
   readonly result: ApprovalResult
 }
 
@@ -1359,6 +1359,8 @@ interface SessionCommandRegistryProps {
   readonly openModelPicker: () => void
   readonly openReasoningPicker: () => void
   readonly openAuth: () => void
+  /** Opens the palette: every command and its key. */
+  readonly openPalette: () => void
 }
 
 /** `/think <level>`: a core reasoning level, or `default`/`off` to clear the session override. */
@@ -1398,19 +1400,40 @@ export const slashAutocompleteItems = (
   frecency: FrecencyLookup = noFrecency,
 ): ReadonlyArray<AutocompleteItem> => {
   const items: Array<AutocompleteItem> = []
+  // The command each name runs: an alias reaches its command, but the popup
+  // shows one row per command, its best-ranked name (`/new` until `/cl` is typed).
+  const owner = new Map<string, Command>()
   for (const command of commands) {
     const slash = Option.fromNullishOr(command.slash)
     if (Option.isNone(slash)) continue
     const description = command.description ?? command.title
-    items.push({ id: slash.value, label: `/${slash.value}`, description })
-    for (const alias of command.aliases ?? []) {
-      items.push({ id: alias, label: `/${alias}`, description })
+    for (const name of [slash.value, ...(command.aliases ?? [])]) {
+      items.push({ id: name, label: `/${name}`, description })
+      owner.set(name, command)
     }
   }
-  return rankAutocompleteItems(items, filter, { prefix: "/", frecency })
+  const shown = new Set<Command>()
+  return rankAutocompleteItems(items, filter, { prefix: "/", frecency }).filter((item) =>
+    Option.match(Option.fromUndefinedOr(owner.get(item.id)), {
+      onNone: () => true,
+      onSome: (command) => {
+        if (shown.has(command)) return false
+        shown.add(command)
+        return true
+      },
+    }),
+  )
 }
 
 const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] => [
+  {
+    // The usual way to look for commands: it opens the one list of them.
+    id: "session.help",
+    title: "Show Commands",
+    category: "Session",
+    slash: "help",
+    onSelect: props.openPalette,
+  },
   {
     id: "session.new",
     title: "New Session",
@@ -1422,7 +1445,7 @@ const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] =>
   {
     id: "session.frecency-reset",
     title: "Reset Autocomplete Ranking",
-    description: "Forget which commands and skills you pick most (/frecency-reset)",
+    description: "Forget which commands and skills you pick most",
     category: "Session",
     slash: "frecency-reset",
     onSelect: props.resetFrecency,
@@ -1603,7 +1626,7 @@ export const runWithReconnect = <E, R>(
 // ── Types ──
 
 interface SessionFeedCallbacks {
-  onInteraction: (interaction: ActiveInteraction) => void
+  onInteraction: (interaction: InteractionPresented) => void
   onInteractionDismissed: (requestId: string) => void
   onBranchSwitch: (sessionId: SessionId, branchId: BranchId) => void
   onQueueSnapshot: (queue: QueueSnapshot) => void
@@ -1614,6 +1637,8 @@ type ToolResultEvent = Extract<AgentEvent, { _tag: "ToolCallSucceeded" | "ToolCa
 interface SessionFeed {
   items: () => SessionItem[]
   messages: () => Message[]
+  /** The answer the step in flight streams into; none between steps. */
+  openAnswer: () => Option.Option<string>
   /** The label of the tool that runs now; none between tools. */
   activeTool: () => Option.Option<string>
 }
@@ -1773,7 +1798,8 @@ const buildMessage = (m: ProjectedMessage, toolCalls: ReadonlyArray<ToolCall>): 
 /**
  * A received message takes its row, or replaces the row its id names. The
  * replaced row's tool calls stay: the feed attached them live, and their
- * status is newer than the received message's.
+ * status is newer than the received message's. The message itself carries
+ * none: the feed projects it with no tool results (`projectMessage(m, [])`).
  */
 const upsertReceivedMessage = (
   setStore: SetStoreFunction<SessionFeedStore>,
@@ -1783,16 +1809,12 @@ const upsertReceivedMessage = (
   setStore(
     produce((draft) => {
       const index = draft.messages.findIndex((candidate) => candidate.id === message.id)
-      const projectedCalls = message.toolInteractions.map(toToolCall)
       const existing = Option.fromNullishOr(draft.messages[index])
       if (Option.isNone(existing)) {
-        draft.messages.push(buildMessage(message, projectedCalls))
+        draft.messages.push(buildMessage(message, []))
         return
       }
-      draft.messages[index] = buildMessage(message, [
-        ...projectedCalls,
-        ...messageToolCalls(existing.value),
-      ])
+      draft.messages[index] = buildMessage(message, messageToolCalls(existing.value))
     }),
   )
 }
@@ -1969,7 +1991,7 @@ const handleToolCallResult = (
   )
 }
 
-const toActiveInteraction = (event: AgentEvent): Option.Option<ActiveInteraction> => {
+const toActiveInteraction = (event: AgentEvent): Option.Option<InteractionPresented> => {
   if (event._tag === "InteractionPresented") return Option.some(event)
   return Option.none()
 }
@@ -2095,7 +2117,10 @@ export function useSessionFeed(
   })
   const [runningCalls, setRunningCalls] = createSignal<ReadonlyArray<RunningCall>>([])
   const [streamReady, setStreamReady] = createSignal(false)
-  let streamMessageId = Option.none<string>()
+  // The answer the step in flight streams into: the one row drawn as streaming.
+  const [openAnswer, setOpenAnswer] = createSignal(Option.none<string>(), {
+    equals: Option.makeEquivalence<string>((left, right) => left === right),
+  })
   // When the open answer's request went out: its row, drawn with the first chunk, sorts there.
   let answerStartedAt = 0
   let eventSeq = 0
@@ -2126,7 +2151,7 @@ export function useSessionFeed(
         return
 
       case "StreamEnded":
-        streamMessageId = Option.none()
+        setOpenAnswer(Option.none())
         // A cut stream ends a retry that had not answered; a settled one means it ran.
         if (event.interrupted === true) settleRetryingEvents(setStore, "cancelled")
         else settleRetryingEvents(setStore, "retried")
@@ -2134,7 +2159,7 @@ export function useSessionFeed(
         return
 
       case "TurnCompleted":
-        streamMessageId = Option.none()
+        setOpenAnswer(Option.none())
         // A cancel ends a retry that had not answered; any other end means it ran.
         if (event.interrupted === true)
           settleRetryingEvents(setStore, "cancelled", ["pending", "stopped"])
@@ -2144,9 +2169,6 @@ export function useSessionFeed(
 
       case "ToolCallStarted":
         setRunningCalls((calls) => startCall(calls, event, client.pathPlace()))
-        // A call is content too: it draws the open answer's row if no chunk did.
-        if (Predicate.isUndefined(event.parentToolCallId))
-          drawOpenAnswer(Option.fromUndefinedOr(event.assistantMessageId))
         startToolCall(setStore, event, receivedAt)
         return
 
@@ -2233,8 +2255,8 @@ export function useSessionFeed(
   const applySnapshotMessages = (messages: ReadonlyArray<ProjectedMessage>) => {
     snapshotAnswers = new Set(messages.map((message) => String(message.id)))
     const next = buildMessages(messages)
-    streamMessageId = Option.filter(streamMessageId, (id) => !snapshotAnswers.has(id))
-    const inProgress = Option.flatMap(streamMessageId, (id) =>
+    setOpenAnswer(Option.filter(openAnswer(), (id) => !snapshotAnswers.has(id)))
+    const inProgress = Option.flatMap(openAnswer(), (id) =>
       Option.fromNullishOr(store.messages.find((message) => message.id === id)),
     )
     if (Option.isSome(inProgress)) next.push(unwrap(inProgress.value))
@@ -2261,12 +2283,11 @@ export function useSessionFeed(
       )
       answerStartedAt = stampedAt
       if (!live) {
-        streamMessageId = Option.filter(durable, (id) => !snapshotAnswers.has(id))
+        setOpenAnswer(Option.filter(durable, (id) => !snapshotAnswers.has(id)))
         return
       }
-      streamMessageId = Option.some(
-        yield* Option.match(durable, { onNone: () => randomId, onSome: Effect.succeed }),
-      )
+      const id = yield* Option.match(durable, { onNone: () => randomId, onSome: Effect.succeed })
+      setOpenAnswer(Option.some(id))
     })
 
   /**
@@ -2281,28 +2302,16 @@ export function useSessionFeed(
     live: boolean,
   ): Effect.Effect<void> =>
     Effect.gen(function* () {
-      if (!live && Option.isNone(streamMessageId)) return
-      if (Option.isNone(streamMessageId)) answerStartedAt = stampedAt
-      const id = yield* Option.match(streamMessageId, {
+      const open = openAnswer()
+      if (!live && Option.isNone(open)) return
+      if (Option.isNone(open)) answerStartedAt = stampedAt
+      const id = yield* Option.match(open, {
         onNone: () => randomId,
         onSome: Effect.succeed,
       })
-      streamMessageId = Option.some(id)
+      setOpenAnswer(Option.some(id))
       ensureAssistantMessage(setStore, chunk, id, answerStartedAt)
     })
-
-  /**
-   * Draw the open answer's row, empty, when its first content is a tool call
-   * (`named` is the answer the call names, when it names one). An answer
-   * already drawn, or a call for another answer, draws nothing.
-   */
-  const drawOpenAnswer = (named: Option.Option<string>) => {
-    if (Option.isNone(streamMessageId)) return
-    const id = streamMessageId.value
-    if (Option.isSome(named) && named.value !== id) return
-    if (store.messages.some((message) => message.id === id)) return
-    ensureAssistantMessage(setStore, "", id, answerStartedAt)
-  }
 
   /** The transcript row that closes a turn: an interruption or a duration. */
   const appendTurnEndRow = (
@@ -2617,6 +2626,7 @@ export function useSessionFeed(
   return {
     items,
     messages: () => store.messages,
+    openAnswer,
     activeTool: () => runningLabel(runningCalls()),
   }
 }
@@ -2624,9 +2634,9 @@ export function useSessionFeed(
 // ── session controller ──────────────────────────────────────────────────────
 
 /**
- * A submitted slash command. `send` sends its text as a message when no
- * command source names it; `refuse` gives it back to its draft when the view
- * goes before it could run.
+ * A submitted slash command. `send` sends its text as a message: a path no
+ * command source names. `refuse` gives it back to its draft with a reason: an
+ * unknown name, or the view going before it could run.
  */
 export interface SlashSubmission {
   readonly cmd: string
@@ -2648,6 +2658,10 @@ export interface SessionController {
    */
   itemsSettled: () => boolean
   messages: () => Message[]
+  /** The answer the step in flight streams into: the one row drawn as streaming. */
+  openAnswer: () => Option.Option<string>
+  /** The providers the newest auth check read: the status row names a provider by them. */
+  authProviders: () => ReadonlyArray<AuthProviderInfo>
   forkMessages: () => readonly DurableMessage[]
   queueState: () => QueueState
   composerState: () => ComposerState
@@ -2657,6 +2671,7 @@ export interface SessionController {
   /** The `ctrl+r` palette: its state, its entries, and its key handling. */
   promptSearch: PromptSearchController
   activity: () => { phase: "idle" } | { phase: "thinking" } | { phase: "tool"; toolInfo: string }
+  /** The phase word: `idle`/`ready` for the status row, `Generating` or the tool for the activity row. */
   phaseLabel: () => string
   /** The status row's cue while a key's second press is armed (`esc again to clear`). */
   armedCue: () => Option.Option<string>
@@ -2674,7 +2689,8 @@ export interface SessionController {
   ) => Effect.Effect<void, GentClientRpcError>
   /**
    * Run a slash command. One no command source names, once every source has
-   * answered, is not a command: its text goes out as a message (`send`).
+   * answered, is not a command: a path goes out as a message (`send`), any
+   * other name comes back to its draft (`refuse`).
    */
   onSlashCommand: (command: SlashSubmission) => Effect.Effect<void>
   /**
@@ -2737,7 +2753,8 @@ export function createSessionController(props: {
    * loop to choose between.
    */
   initialBranches: Option.Option<readonly Branch[]>
-  debugMode?: boolean
+  /** The model is scripted (`--debug`, `--mock-empty`): it needs no sign-in. */
+  scriptedModel?: boolean
 }): SessionController {
   const client = useClient()
   const command = useCommand()
@@ -2812,6 +2829,8 @@ export function createSessionController(props: {
 
   // ── Auth gate ──
   const [controllerState, setControllerState] = createSignal(initialSessionControllerState())
+  // The providers the newest auth check read, with the names `/auth` shows.
+  const [authProviders, setAuthProviders] = createSignal<ReadonlyArray<AuthProviderInfo>>([])
   const authGateState = () => controllerState().authGate
   const validatedAgent = () => controllerState().validatedAgent
   const queueState = () => controllerState().queue
@@ -2823,7 +2842,7 @@ export function createSessionController(props: {
     on(
       [() => client.agent(), branchPickerOpen],
       ([agentName, pickerOpen]) => {
-        if (props.debugMode) return
+        if (props.scriptedModel === true) return
         if (pickerOpen) return
         Option.match(agentName, {
           onNone: () => {},
@@ -2836,6 +2855,9 @@ export function createSessionController(props: {
                 .pipe(
                   Effect.tap((providers) =>
                     Effect.sync(() => {
+                      // The newest check names the providers: the status row labels by them.
+                      if (version === controllerState().authCheckVersion)
+                        setAuthProviders(providers)
                       const missing = providers.some((p) => p.required && !p.hasKey)
                       updateControllerState((state) =>
                         completeAuthCheck(state, {
@@ -2864,7 +2886,7 @@ export function createSessionController(props: {
   )
 
   const authGatePending = () =>
-    !props.debugMode &&
+    props.scriptedModel !== true &&
     (authGateState() !== "closed" || !Equal.equals(validatedAgent(), client.agent()))
 
   const [composerState, setComposerState] = createSignal<ComposerState>(
@@ -2967,7 +2989,7 @@ export function createSessionController(props: {
     handleComposerEffect(Option.fromNullishOr(result.effect))
   }
 
-  const onInteraction = (interaction: ActiveInteraction) => {
+  const onInteraction = (interaction: InteractionPresented) => {
     dispatchComposer(ComposerEvent.cases.EnterInteraction.make({ interaction }))
   }
 
@@ -3149,7 +3171,7 @@ export function createSessionController(props: {
         if (Option.exists(client.turnsStarted(), (turns) => turns > 0)) return "idle"
         return "ready"
       case "thinking":
-        return "thinking"
+        return "Generating"
       case "tool":
         return nextActivity.toolInfo
     }
@@ -3185,6 +3207,7 @@ export function createSessionController(props: {
     openReasoningPicker: () =>
       dispatchSessionUi(SessionUiEvent.cases.OpenSettingsPicker.make({ picker: "reasoning" })),
     openAuth: () => dispatchSessionUi(SessionUiEvent.cases.OpenAuth.make({ enforceAuth: false })),
+    openPalette: command.openPalette,
   })
 
   const onRestoreQueue = () => {
@@ -3214,9 +3237,13 @@ export function createSessionController(props: {
     closeOverlay()
   }
 
-  // A command no source names is not a command: its text goes out as a message.
+  // A name no source carries is a typo: it comes back to its draft. A first
+  // word that reads as a path, with a second `/` or a `.`, is text for the
+  // model, so it goes out as a message.
   const runSlashCommand = (held: SlashSubmission) => {
-    if (!executeSlashCommand(held.cmd, held.args, ext.commands())) held.send()
+    if (executeSlashCommand(held.cmd, held.args, ext.commands())) return
+    if (held.cmd.includes("/") || held.cmd.includes(".")) held.send()
+    else held.refuse(`Unknown command: /${held.cmd} · ctrl+p commands`)
   }
 
   // A command sent before every command source has answered (the client
@@ -3489,6 +3516,8 @@ export function createSessionController(props: {
     items,
     itemsSettled: noticeRowsSettled,
     messages: feed.messages,
+    openAnswer: feed.openAnswer,
+    authProviders,
     forkMessages: () => {
       const overlay = uiState().overlay
       if (overlay._tag !== "fork") return []

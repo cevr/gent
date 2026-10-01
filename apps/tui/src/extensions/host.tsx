@@ -194,7 +194,6 @@ export function ExtensionUIProvider(props: {
   const clientRuntime: ClientRuntime = makeClientRuntime(platform, {
     transport: {
       client: client.client,
-      runtime: client.runtime,
       // The client's identity memo: it holds across a rename, so an effect
       // tracking this accessor stays put while the session and the branch do.
       currentSession: client.sessionIdentity,

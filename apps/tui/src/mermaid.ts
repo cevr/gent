@@ -114,10 +114,59 @@ const spaceLineArrows = (line: string): string => {
     .join("")
 }
 
+/** A statement whose value holds `;` (`fill:#f9f;stroke:#333`): its text runs to the end of the line. */
+const STYLE_STATEMENT = /^(?:style|classDef|linkStyle)\b/
+
+/**
+ * Mermaid reads `;` as a statement separator; beautiful-mermaid 1.1.3 reads
+ * one statement per line, so `graph TD;` names no diagram and `A-->B; B-->C`
+ * loses its second edge. Each statement goes on its own line. A `;` inside
+ * written text stays as written. A `%%` comment and a style statement run to
+ * the end of the line, so a `;` in either splits nothing.
+ */
+const splitStatements = (line: string): ReadonlyArray<string> => {
+  if (!line.includes(";")) return [line]
+  const statements: Array<string> = []
+  let current = ""
+  // Once a comment or a style statement starts, the rest of the line is its text.
+  let toLineEnd = false
+  line.split(WRITTEN_TEXT).forEach((part, index) => {
+    // The split puts each quoted or shaped run at an odd index.
+    if (toLineEnd || index % 2 === 1) {
+      current += part
+      return
+    }
+    const commentAt = part.indexOf("%%")
+    let code = part
+    if (commentAt !== -1) code = part.slice(0, commentAt)
+    const [first = "", ...rest] = code.split(";")
+    current += first
+    for (const [at, next] of rest.entries()) {
+      if (STYLE_STATEMENT.test(current.trim())) {
+        current += ";" + rest.slice(at).join(";")
+        toLineEnd = true
+        break
+      }
+      statements.push(current)
+      current = next
+    }
+    if (commentAt !== -1) {
+      current += part.slice(commentAt)
+      toLineEnd = true
+    }
+  })
+  statements.push(current)
+  return statements.filter((statement) => statement.trim().length > 0)
+}
+
+/**
+ * The flowchart source beautiful-mermaid draws as Mermaid does: one statement
+ * per line, and a space between each id and the dash arrow written against it.
+ */
 const spaceEdgeArrows = (source: string): string => {
   const lines = source.split("\n")
   if (!isFlowchart(lines)) return source
-  return lines.map(spaceLineArrows).join("\n")
+  return lines.flatMap(splitStatements).map(spaceLineArrows).join("\n")
 }
 
 /**

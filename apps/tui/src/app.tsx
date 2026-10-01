@@ -1,9 +1,9 @@
 import { Effect, Option, Predicate, Record, Schema } from "effect"
 import {
-  type AgentName,
+  type AuthProviderInfo,
   Branch,
   type BranchId,
-  DEFAULT_AGENT_NAME,
+  type Model,
   ModelId,
   ReasoningEffort,
   type SessionAdmission,
@@ -15,6 +15,7 @@ import {
 } from "@gent/core/protocol"
 import { type Session as ClientSession, useClient } from "./client"
 import { formatCost, formatDuration, isConversation, randomId, truncate } from "./utils"
+import { textWidth } from "./bun-adapter"
 import { createMemo, createSignal, ErrorBoundary, For, type JSX, Show } from "solid-js"
 import { buildSyntaxStyle, resolveThemeColor, ThemeProvider, useTheme } from "./theme"
 import {
@@ -27,7 +28,15 @@ import type { RGBA } from "@opentui/core"
 import { MessageList, NativeTranscript, splitFooterHeight } from "./message-list"
 import { createMermaidCache, MermaidCacheContext } from "./mermaid"
 import { Composer, ComposerFrame, StatusRow } from "./composer"
-import { DockFooter, DockProvider, keyHint, KeyHints, keyHintsLine, useDockSpacer } from "./ui"
+import {
+  DockFooter,
+  DockProvider,
+  KEY_HINT_SEPARATOR,
+  keyHint,
+  KeyHints,
+  keyHintsLine,
+  useDockSpacer,
+} from "./ui"
 import { CommandPalette, CommandProvider, useCommand } from "./commands"
 import {
   BranchPicker,
@@ -118,12 +127,6 @@ interface AppBootstrap {
   readonly initialBranches: Option.Option<readonly Branch[]>
 }
 
-interface InteractiveBootstrapResult {
-  readonly bootstrap: AppBootstrap
-  // eslint-disable-next-line effect/noNullish -- bootstrap API uses absence for headless startup.
-  readonly initialAgent: AgentName | undefined
-}
-
 /** The session view's record; none for a record with no active branch to mount. */
 const toSession = (session: DomainSession): Option.Option<ClientSession> => {
   const branchId = Option.fromNullishOr(session.activeBranchId)
@@ -187,48 +190,15 @@ export const resolveInteractiveBootstrap = (input: {
   sessionId?: string
   continue_: boolean
   prompt?: string
-}): Effect.Effect<InteractiveBootstrapResult, GentClientRpcError | AppBootstrapError> =>
-  Effect.gen(function* () {
-    const state = yield* resolveInteractiveState({
-      client: input.client,
-      cwd: input.cwd,
-      session: Option.fromNullishOr(input.sessionId),
-      continue_: input.continue_,
-      prompt: Option.fromNullishOr(input.prompt),
-    })
-
-    const initialAgent = yield* resolveStartupAgent({ client: input.client, state })
-
-    return {
-      bootstrap: yield* resolveAppBootstrap(state),
-      initialAgent: Option.getOrUndefined(initialAgent),
-    }
-  })
-
-/** A session runs as its own agent, which its snapshot names; one with no branch yet runs the default. */
-const sessionAgent = (
-  client: Pick<GentNamespacedClient, "session">,
-  session: DomainSession,
-): Effect.Effect<AgentName, GentClientRpcError> => {
-  const branchId = Option.fromNullishOr(session.activeBranchId)
-  if (Option.isNone(branchId)) return Effect.succeed(DEFAULT_AGENT_NAME)
-  return client.session
-    .getSnapshot({ sessionId: session.id, branchId: branchId.value })
-    .pipe(Effect.map((snapshot) => snapshot.agent))
-}
-
-/**
- * The agent the interactive client starts as: the resumed session's own. The
- * boot branch picker names none, because the reader has not chosen a branch.
- * The session view's auth gate checks that agent's providers itself.
- */
-const resolveStartupAgent = (input: {
-  client: Pick<GentNamespacedClient, "session">
-  state: InteractiveState
-}): Effect.Effect<Option.Option<AgentName>, GentClientRpcError> => {
-  if (input.state._tag === "branchPicker") return Effect.succeedNone
-  return sessionAgent(input.client, input.state.session).pipe(Effect.asSome)
-}
+}): Effect.Effect<AppBootstrap, GentClientRpcError | AppBootstrapError> =>
+  // The session view reads its agent from the snapshot it loads anyway.
+  resolveInteractiveState({
+    client: input.client,
+    cwd: input.cwd,
+    session: Option.fromNullishOr(input.sessionId),
+    continue_: input.continue_,
+    prompt: Option.fromNullishOr(input.prompt),
+  }).pipe(Effect.flatMap(resolveAppBootstrap))
 
 /**
  * The sign-ins the headless run's agent is missing: each required provider
@@ -236,14 +206,13 @@ const resolveStartupAgent = (input: {
  * A headless run has no reader to sign in, so it stops before its turn.
  */
 export const resolveHeadlessMissingSignIns = (input: {
-  client: Pick<GentNamespacedClient, "auth" | "session">
+  client: Pick<GentNamespacedClient, "auth">
   state: HeadlessState
 }): Effect.Effect<ReadonlyArray<string>, GentClientRpcError> =>
   Effect.gen(function* () {
-    const agent = yield* sessionAgent(input.client, input.state.session)
-    // The session id lets its cwd resolve project-level driver overrides.
+    // The session id names the agent the session runs, and its cwd resolves
+    // project-level driver overrides.
     const providers = yield* input.client.auth.listProviders({
-      agentName: agent,
       sessionId: input.state.session.id,
     })
     return providers
@@ -473,7 +442,7 @@ export function QueueWidget(props: QueueWidgetProps) {
             </text>
           )}
         </For>
-        <text style={{ fg: theme.textMuted }}> cmd+up restore</text>
+        <text style={{ fg: theme.textMuted }}> {keyHintsLine([KeyHints.restoreQueue], 80)}</text>
       </box>
     </Show>
   )
@@ -491,6 +460,8 @@ interface SessionProps {
   /** Branches to dock the picker over at boot; `None` resumes straight in. */
   initialBranches: Option.Option<readonly Branch[]>
   debugMode?: boolean
+  /** The model is scripted (`--debug`, `--mock-empty`): it needs no sign-in. */
+  scriptedModel?: boolean
 }
 
 function ExtensionWidgets(props: { slot: WidgetSlot }) {
@@ -515,6 +486,34 @@ function ActivityRow(props: { children: JSX.Element }) {
       {props.children}
     </box>
   )
+}
+
+/**
+ * The model as the status row names it: its name, and its provider's label
+ * (`providerLabel`) when another provider's model has the same name, so the
+ * row says which provider runs, and bills, the next turn.
+ */
+export const statusModelName = (
+  model: Model,
+  models: ReadonlyArray<Model>,
+  providers: ReadonlyArray<AuthProviderInfo>,
+): string => {
+  const shared = models.some(
+    (other) => other.name === model.name && other.provider !== model.provider,
+  )
+  if (!shared) return model.name
+  return `${model.name} (${providerLabel(providers, model.provider)})`
+}
+
+/**
+ * The activity row while a turn runs: what it does, how long it has run, and
+ * the way out. Too narrow, the elapsed time goes first, then the label cuts;
+ * the way out stays.
+ */
+export const activityLine = (label: string, elapsed: string, width: number): string => {
+  const hint = `${KEY_HINT_SEPARATOR}${keyHintsLine([KeyHints.cancel], width)}`
+  if (textWidth(label + elapsed + hint) <= width) return label + elapsed + hint
+  return truncate(label, Math.max(1, width - textWidth(hint))) + hint
 }
 
 /** A reasoning row id; `default` decodes to `None` and clears the override. */
@@ -580,7 +579,11 @@ export function Session(props: SessionProps) {
   const modelLabels = (): StatusRowLabel[] => {
     const model = client.modelInfo()
     const items: StatusRowLabel[] = []
-    if (Option.isSome(model)) items.push({ text: model.value.name, color: theme.textMuted })
+    if (Option.isSome(model))
+      items.push({
+        text: statusModelName(model.value, client.models(), controller.authProviders()),
+        color: theme.textMuted,
+      })
     return items.concat(
       buildModelLabels({
         reasoningLevel: client.reasoningLevel(),
@@ -607,7 +610,7 @@ export function Session(props: SessionProps) {
     const items: StatusRowLabel[] = []
     if (controller.uiState().transcriptExpanded) {
       items.push({
-        text: `transcript · ${keyHintsLine([keyHint("esc", "return")], 80)}`,
+        text: `transcript · ${keyHintsLine([KeyHints.close], 80)}`,
         color: theme.textMuted,
       })
     }
@@ -665,13 +668,13 @@ export function Session(props: SessionProps) {
             overlayOpen={
               command.paletteOpen() || overlayHoldsComposer(controller.uiState().overlay)
             }
-            renderItems={(items, streaming) => (
+            renderItems={(items) => (
               <MessageList
                 items={items}
                 disclosure={controller.uiState().disclosure}
                 fullDetail={controller.uiState().transcriptExpanded}
                 syntaxStyle={syntaxStyle}
-                streaming={streaming}
+                openAnswer={controller.openAnswer()}
               />
             )}
           >
@@ -712,11 +715,11 @@ export function Session(props: SessionProps) {
               <ActivityRow>
                 <text wrapMode="none" style={{ fg: theme.textMuted }}>
                   {(() => {
-                    let label = "Generating"
-                    if (controller.activity().phase === "tool") label = controller.phaseLabel()
+                    const label = controller.phaseLabel()
+                    let elapsed = ""
                     if (controller.elapsed() >= 1000)
-                      label += ` (${formatDuration(controller.elapsed(), "compact")})`
-                    return truncate(label, Math.max(1, dimensions().width - 2))
+                      elapsed = ` (${formatDuration(controller.elapsed(), "compact")})`
+                    return activityLine(label, elapsed, Math.max(1, dimensions().width - 2))
                   })()}
                 </text>
               </ActivityRow>
@@ -810,6 +813,8 @@ export function Session(props: SessionProps) {
 
 interface AppProps {
   debugMode?: boolean
+  /** The model is scripted (`--debug`, `--mock-empty`): it needs no sign-in. */
+  scriptedModel?: boolean
   initialThemeMode?: "dark" | "light"
   /**
    * Branches the boot flow resumed into, when the session has more than one.
@@ -855,6 +860,7 @@ function AppContent(props: AppProps) {
               branchId={session.branchId}
               initialBranches={branches}
               debugMode={props.debugMode}
+              scriptedModel={props.scriptedModel}
             />
           )
         }}

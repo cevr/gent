@@ -1,7 +1,11 @@
 import { describe, expect, it, test } from "effect-bun-test"
-import { Deferred, Effect, Exit, Option, Scope } from "effect"
-import { createMemo, createRoot, createSignal } from "solid-js"
-import { BranchId, SessionId } from "@gent/core/protocol"
+import { Deferred, Effect, Exit, Fiber, Option, Scope } from "effect"
+import { createRoot, createSignal } from "solid-js"
+import { AgentName, BranchId, ModelId, SessionId } from "@gent/core/protocol"
+import { emptyQueueSnapshot } from "@gent/core/test-utils"
+import { type ClientContextValue, useClient } from "../../src/client"
+import { ref } from "@gent/core/extensions/api"
+import { WakeRpc } from "@gent/extensions/client"
 import {
   ClientContext,
   clientContributions,
@@ -39,30 +43,10 @@ describe("contribution constructors", () => {
 const throwCleanup = (): never => Option.getOrThrow(Option.none())
 
 describe("transport-only extension widgets", () => {
-  test("cleanups fire in registration order", () => {
-    const calls: string[] = []
-    const cleanups: Array<() => void> = []
-    const lifecycle = { addCleanup: (fn: () => void) => cleanups.push(fn) }
-    lifecycle.addCleanup(() => calls.push("first"))
-    lifecycle.addCleanup(() => calls.push("second"))
-    lifecycle.addCleanup(() => calls.push("third"))
-    for (const cleanup of cleanups) cleanup()
-    expect(calls).toEqual(["first", "second", "third"])
-  })
-  it.live("a thrown cleanup does not block later cleanups", () =>
-    Effect.gen(function* () {
-      const calls: string[] = []
-      const cleanups: Array<() => void> = []
-      const lifecycle = { addCleanup: (fn: () => void) => cleanups.push(fn) }
-      lifecycle.addCleanup(() => calls.push("before-throw"))
-      lifecycle.addCleanup(throwCleanup)
-      lifecycle.addCleanup(() => calls.push("after-throw"))
-      yield* Effect.forEach(cleanups, (cleanup) => Effect.sync(cleanup).pipe(Effect.ignoreCause))
-      expect(calls).toEqual(["before-throw", "after-throw"])
-    }),
-  )
+  // The host disposer runs cleanups in registration order; a cleanup that
+  // throws stops neither the cleanups after it nor the runtime's end.
   it.scopedLive(
-    "closing the UI scope at shutdown runs extension cleanups before the runtime ends",
+    "closing the UI scope runs every cleanup in order, past a throwing one, before the runtime ends",
     () =>
       Effect.gen(function* () {
         const calls: string[] = []
@@ -71,6 +55,8 @@ describe("transport-only extension widgets", () => {
           setup: Effect.gen(function* () {
             const { lifecycle } = yield* ClientContext
             lifecycle.addCleanup(() => calls.push("cleanup"))
+            lifecycle.addCleanup(throwCleanup)
+            lifecycle.addCleanup(() => calls.push("after"))
             yield* lifecycle.scoped(
               Effect.addFinalizer(() => Effect.sync(() => calls.push("runtime"))),
             )
@@ -82,48 +68,74 @@ describe("transport-only extension widgets", () => {
         yield* renderScoped(() => [], { builtins: [tracked], uiScope })
         yield* Deferred.await(registered).pipe(Effect.timeout("2 seconds"))
         yield* Scope.close(uiScope, Exit.void)
-        expect(calls).toEqual(["cleanup", "runtime"])
+        expect(calls).toEqual(["cleanup", "after", "runtime"])
       }),
+  )
+})
+
+// ── transport ───────────────────────────────────────────────────────────────
+
+describe("transport", () => {
+  // A session switch or a closed pane interrupts the read that asked; the RPC
+  // must stop with it, or its reply still runs for a session nobody views.
+  it.scopedLive("interrupting a request interrupts its RPC", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>()
+      const interrupted = yield* Deferred.make<void>()
+      yield* provideClientServices(
+        Effect.gen(function* () {
+          const { transport } = yield* ClientContext
+          const fiber = yield* Effect.forkChild(transport.request(ref(WakeRpc.Pending), {}))
+          yield* Deferred.await(started)
+          yield* Fiber.interrupt(fiber)
+        }),
+        {
+          requestEffect: () =>
+            Deferred.done(started, Exit.void).pipe(
+              Effect.andThen(Effect.never),
+              Effect.onInterrupt(() => Deferred.done(interrupted, Exit.void)),
+            ),
+        },
+      )
+      yield* Deferred.await(interrupted).pipe(Effect.timeout("2 seconds"))
+    }),
   )
 })
 
 // ── client session resource ─────────────────────────────────────────────────
 
-type SessionIdentity = { readonly sessionId: SessionId; readonly branchId: BranchId }
-
-const sessionId = SessionId.make("session-resource")
-const branchId = BranchId.make("branch-resource")
-
-/**
- * The provider's identity accessor, rebuilt here with the same equivalence: a
- * rename makes a new session record, and the identity a widget sees must not
- * move with it.
- */
-const identityMemo = (record: () => { readonly name: string }) =>
-  createMemo(
-    (): SessionIdentity => {
-      // Track the record so a rename re-runs this body, exactly as the client does.
-      record()
-      return { sessionId, branchId }
-    },
-    { sessionId, branchId },
-    {
-      equals: (left, right) =>
-        left.sessionId === right.sessionId && left.branchId === right.branchId,
-    },
-  )
-
 describe("sessionQuery", () => {
+  // The identity comes from the real ClientProvider, so a change to its
+  // equivalence fails here.
   it.scopedLive("keeps its value when the session is renamed", () =>
     Effect.gen(function* () {
-      let renameTo: (name: string) => void = () => {}
       let fetches = 0
-
-      const { identity, dispose } = createRoot((disposeRoot) => {
-        const [record, setRecord] = createSignal({ name: "A" })
-        renameTo = (name) => setRecord({ name })
-        return { identity: identityMemo(record), dispose: disposeRoot }
+      let ctx = Option.none<ClientContextValue>()
+      yield* renderScoped(() => {
+        ctx = Option.some(useClient())
+        return []
       })
+      const client = yield* Option.match(ctx, {
+        onNone: () => Effect.die("client context not ready"),
+        onSome: Effect.succeed,
+      })
+      const identity = client.sessionIdentity
+      const renameTo = (name: string) => {
+        const session = client.session()
+        client.applySessionSnapshot({
+          sessionId: session.sessionId,
+          branchId: session.branchId,
+          name,
+          messages: [],
+          // eslint-disable-next-line effect/noNullish -- JSON on the wire carries null here; the test hands it on as is.
+          lastEventId: null,
+          reasoningLevel: session.reasoningLevel,
+          resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
+          agent: AgentName.make("primary"),
+          runtime: { _tag: "Idle", queue: emptyQueueSnapshot() },
+          metrics: { turns: 0, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
+        })
+      }
       const query = yield* provideClientServices(
         sessionQuery({
           initial: 0,
@@ -137,19 +149,17 @@ describe("sessionQuery", () => {
         { currentSession: identity },
       )
 
-      yield* waitUntil(() => query.value() === 1, "first value").pipe(
-        Effect.onError(() => Effect.sync(dispose)),
-      )
+      yield* waitUntil(() => query.value() === 1, "first value")
 
       // The wake tray row and the goal border label are drawn from queries
       // like this one. A rename must not blank them for a round trip.
       renameTo("A better name")
+      expect(client.session().name).toBe("A better name")
       // oxlint-disable-next-line effect/noFixedWaitInTests -- a real-clock gap so a refetch, if one starts, lands before the assertion
       yield* Effect.sleep("50 millis")
 
       expect(query.value()).toBe(1)
       expect(fetches).toBe(1)
-      dispose()
     }),
   )
 

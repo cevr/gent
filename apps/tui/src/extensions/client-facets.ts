@@ -10,7 +10,7 @@ import {
   Scope,
 } from "effect"
 import {
-  type ActiveInteraction,
+  type InteractionPresented,
   type AgentName,
   type ApprovalResult,
   type BranchId,
@@ -24,7 +24,6 @@ import {
   type GentClientRpcError,
   type GentNamespacedClient,
 } from "@gent/core/protocol"
-import type { GentRuntime } from "@gent/sdk"
 import type { CapabilityRef } from "@gent/core/extensions/api"
 import { createEffect, createRoot, createSignal, on } from "solid-js"
 import type { ToolRenderer } from "../tool-renderers"
@@ -32,6 +31,7 @@ import type { Command } from "../commands"
 import type { JSX } from "@opentui/solid"
 import { RGBA } from "@opentui/core"
 import { NamedThemeColor } from "../theme"
+import { repliesInView, type ReplyWriter } from "../utils"
 
 // ── effect boundary ─────────────────────────────────────────────────────────
 
@@ -53,8 +53,8 @@ import { NamedThemeColor } from "../theme"
  * Layering: `ClientDeps` is the TUI-local *floor* (`FileSystem | Path`).
  * The TUI shell augments its runtime with `ClientContext`, and an extension
  * that yields it widens its `R`. `ClientContext` lives here, not in
- * `@gent/core`, because the SDK client types (`GentNamespacedClient`,
- * `GentRuntime`) live downstream of `@gent/core`.
+ * `@gent/core`, because its facets (the shell, the panes, the activity) are
+ * the TUI's.
  */
 
 // ── Dependencies ──────────────────────────────────────────────────────────
@@ -202,15 +202,14 @@ export interface ClientTransport {
 }
 
 /**
- * What the shell hands the transport facet: the raw SDK client and runtime,
- * which never reach an extension, plus the session accessors it passes through.
+ * What the shell hands the transport facet: the raw SDK client, which never
+ * reaches an extension, plus the session accessors it passes through.
  */
 export type ClientShellTransport = Pick<
   ClientTransport,
   "currentSession" | "onExtensionStateChanged" | "onSessionEvent" | "modelCatalog"
 > & {
   readonly client: GentNamespacedClient
-  readonly runtime: GentRuntime
 }
 
 /** Seal the shell's authority behind the typed transport an extension sees. */
@@ -277,25 +276,26 @@ const requestExtensionAt = <Input, Output>(
   Effect.gen(function* () {
     // A request names its session, or goes to the one in view.
     const session = Option.getOrElse(Option.fromNullishOr(activeSession), transport.currentSession)
-    const reply = yield* Effect.tryPromise({
-      try: () =>
-        transport.runtime.run(
-          transport.client.extension.request({
-            sessionId: session.sessionId,
-            extensionId: ref.extensionId,
-            capabilityId: ref.capabilityId,
-            input,
-            branchId: session.branchId,
-          }),
+    // The RPC runs in the caller's fiber, so interrupting the caller stops it.
+    const reply = yield* transport.client.extension
+      .request({
+        sessionId: session.sessionId,
+        extensionId: ref.extensionId,
+        capabilityId: ref.capabilityId,
+        input,
+        branchId: session.branchId,
+      })
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new ClientTransportRequestError({
+              extensionId: ref.extensionId,
+              tag: ref.capabilityId,
+              message: `request failed: ${String(cause)}`,
+              cause,
+            }),
         ),
-      catch: (cause) =>
-        new ClientTransportRequestError({
-          extensionId: ref.extensionId,
-          tag: ref.capabilityId,
-          message: `request failed: ${String(cause)}`,
-          cause,
-        }),
-    })
+      )
     return yield* Schema.decodeUnknownEffect(ref.output)(reply).pipe(
       Effect.mapError(
         (cause) =>
@@ -315,16 +315,17 @@ const shellRead = <A>(
   tag: string,
   read: (client: GentNamespacedClient) => Effect.Effect<A, GentClientRpcError>,
 ): Effect.Effect<A, ClientTransportRequestError> =>
-  Effect.tryPromise({
-    try: () => transport.runtime.run(read(transport.client)),
-    catch: (cause) =>
-      new ClientTransportRequestError({
-        extensionId: "@gent/tui/client-transport",
-        tag,
-        message: `${tag} failed: ${String(cause)}`,
-        cause,
-      }),
-  })
+  read(transport.client).pipe(
+    Effect.mapError(
+      (cause) =>
+        new ClientTransportRequestError({
+          extensionId: "@gent/tui/client-transport",
+          tag,
+          message: `${tag} failed: ${String(cause)}`,
+          cause,
+        }),
+    ),
+  )
 
 /**
  * Narrow the session snapshot down to the fields a per-loop detail line shows.
@@ -546,25 +547,26 @@ export const sessionQuery = <A>(opts: {
 
       const isCurrent = (session: ActiveExtensionSession): boolean =>
         sameSession(transport.currentSession(), session)
+      // The shell may move while a read is out; its reply then belongs to a
+      // session nobody is looking at any more, and is dropped.
+      const replies = repliesInView(transport.currentSession, sameSession)
 
-      const settle = (session: ActiveExtensionSession, write: () => void) => {
+      const settle = (reply: ReplyWriter, write: () => void) => {
         setLoading(false)
-        // The shell may have moved while this was out; that reply belongs to a
-        // session nobody is looking at any more.
-        if (!isCurrent(session)) return
-        write()
+        reply.write(write)
       }
 
       // The session is read when the read starts, so a read queued behind a
       // switch asks the session the shell moved to.
       const refresh = coalescedRead(shell.cast, () => {
         const session = transport.currentSession()
+        const reply = replies.take()
         setLoading(true)
         return opts.fetch(session).pipe(
           Effect.match({
-            onFailure: (failure) => settle(session, () => setError(Option.some(failure.message))),
+            onFailure: (failure) => settle(reply, () => setError(Option.some(failure.message))),
             onSuccess: (value) =>
-              settle(session, () => {
+              settle(reply, () => {
                 setStored(Option.some({ session, value }))
                 setError(Option.none())
               }),
@@ -630,7 +632,7 @@ export type WidgetSlot = "below-messages" | "above-input" | "below-input"
 
 /** Props passed to an interaction renderer component */
 export interface InteractionRendererProps {
-  readonly event: ActiveInteraction
+  readonly event: InteractionPresented
   readonly resolve: (result: ApprovalResult) => void
 }
 

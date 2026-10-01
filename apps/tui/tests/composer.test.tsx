@@ -23,7 +23,7 @@ import {
 } from "effect"
 import { runProcess } from "@gent/core/extensions/api"
 import {
-  type ActiveInteraction,
+  type InteractionPresented,
   BranchId,
   dateFromMillis,
   type GentClientRpcError,
@@ -491,6 +491,8 @@ function TestComposer(props: {
     itemsSettled: () => true,
     items: () => [],
     messages: () => [],
+    openAnswer: () => Option.none(),
+    authProviders: () => [],
     forkMessages: () => [],
     queueState: () => ({ steering: [], followUp: [] }),
     interactionState,
@@ -617,7 +619,7 @@ describe("Composer renderer", () => {
         requestId: InteractionRequestId.make("req-pending"),
         text: "Ship the release?",
         metadata: { type: "ask-user", questions: [{ question: "Ship the release?" }] },
-      } satisfies ActiveInteraction
+      } satisfies InteractionPresented
       const setup = yield* renderScoped(
         () => (
           <TestComposer
@@ -1229,7 +1231,7 @@ describe("Composer submit", () => {
     ["echo out; exit 3", "$ echo out; exit 3\n\nout\n\n[exit 3]"],
     ["echo out", "$ echo out\n\nout"],
   ] as const) {
-    submitTest(`!${command} sends its exit status when it is not zero`, () =>
+    submitTest(`!${command}: a non-zero exit is named, a zero one adds nothing`, () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
         const dir = yield* fs.makeTempDirectoryScoped()
@@ -1966,6 +1968,8 @@ function TestComposerGhost(props: {
     itemsSettled: () => true,
     items: () => [],
     messages: () => [],
+    openAnswer: () => Option.none(),
+    authProviders: () => [],
     forkMessages: () => [],
     queueState: () => ({ steering: [], followUp: [] }),
     interactionState,
@@ -2089,8 +2093,8 @@ describe("Composer ghost line", () => {
  * An unregistered name is the same one Enter. `/xyz` opens the popup — the
  * trigger only needs a `/` at position 0, not a matching row — and the popup
  * then holds no rows to select. The popup declines a key it cannot act on,
- * so the draft submits on the first press, and a name no command carries
- * goes out as a message.
+ * so the draft submits on the first press, and the session decides what a
+ * name no command carries becomes.
  *
  * Tab does not run anything. It is the key that builds `/model sonnet`:
  * complete the name, keep the caret, type the argument. Enter and tab reach
@@ -2213,6 +2217,8 @@ function TestComposerSlashEnter(props: {
     itemsSettled: () => true,
     items: () => [],
     messages: () => [],
+    openAnswer: () => Option.none(),
+    authProviders: () => [],
     forkMessages: () => [],
     queueState: () => ({ steering: [], followUp: [] }),
     interactionState,
@@ -2407,8 +2413,7 @@ describe("Composer slash Enter", () => {
   )
 
   // Only a known command name is a command, and the session decides which
-  // names are known. A path, a typo or a pasted log line that starts with `/`
-  // that it calls no command goes out whole as text for the model.
+  // names are known. A draft the session sends back as text goes out whole.
   it.scopedLive("a draft whose first word the session calls no command is sent as a message", () =>
     Effect.gen(function* () {
       for (const draft of ["/xyz", "/tmp/x.log what is this?"]) {

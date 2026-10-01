@@ -274,6 +274,9 @@ const runGent = ({
       mock,
       authDirectory: authDirectoryOpt,
     })
+    // A scripted model (`--debug`, `--mock-empty` on the server this run
+    // starts) needs no sign-in, in headless and in the TUI alike.
+    const { scriptedModel } = bundle
     if (headless) {
       // The agent is a session property: the flag shapes a new session only.
       if (Option.isSome(requestedAgent) && Option.isSome(session)) {
@@ -303,8 +306,7 @@ const runGent = ({
         state,
       })
 
-      // A scripted model (`--debug`, `--mock-empty`) needs no sign-in.
-      if (missingSignIns.length > 0 && Option.isNone(mock) && Option.isNone(connect)) {
+      if (missingSignIns.length > 0 && !scriptedModel && Option.isNone(connect)) {
         return yield* new CliStartupError({
           message: `missing required sign-ins: ${missingSignIns.join(", ")}`,
         })
@@ -322,8 +324,8 @@ const runGent = ({
     // Block until supervisor is ready (same as headless path)
     yield* bundle.runtime.lifecycle.waitForReady
 
-    // Resolve the session and its agent before rendering — eliminates the loading route
-    const { bootstrap, initialAgent } = yield* resolveInteractiveBootstrap({
+    // Resolve the session before rendering — eliminates the loading route
+    const bootstrap = yield* resolveInteractiveBootstrap({
       client: bundle.client,
       cwd,
       sessionId: Option.getOrUndefined(session),
@@ -368,7 +370,6 @@ const runGent = ({
                 services={uiServices}
                 log={log}
                 initialSession={bootstrap.initialSession}
-                initialAgent={initialAgent}
               >
                 <ExtensionUIProvider scope={scope}>
                   <TerminalDimensionsProvider>
@@ -379,6 +380,7 @@ const runGent = ({
                       >
                         <App
                           debugMode={debug}
+                          scriptedModel={scriptedModel}
                           initialBranches={bootstrap.initialBranches}
                           initialThemeMode={initialThemeMode}
                         />

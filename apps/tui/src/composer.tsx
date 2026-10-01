@@ -74,7 +74,7 @@ import { isSlashCommandName, parseSlashCommand, useCommand } from "./commands"
 import { useEnv, useWorkspace } from "./workspace"
 import { openExternalEditor, resolveEditor } from "./os"
 import {
-  type ActiveInteraction,
+  type InteractionPresented,
   type ApprovalResult,
   type GentClientRpcError,
   lineCount,
@@ -603,16 +603,6 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
       }),
     )
 
-  const emptyRow = () => {
-    let label = "No matches"
-    if (loading()) label = "Loading…"
-    return (
-      <box paddingLeft={1}>
-        <text style={{ fg: theme.textMuted }}>{label}</text>
-      </box>
-    )
-  }
-
   return (
     <PickerFrame title={title()} keys={keys} error={Option.none()}>
       <SelectList
@@ -630,7 +620,8 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
         rowKey={(entry) => entry.item.id}
         sticky={() => Option.some(0)}
         api={(api) => (list = Option.some(api))}
-        empty={emptyRow}
+        loading={loading}
+        query={() => props.state.filter}
         onCursor={setCursor}
         extraKeys={(event, selected) => {
           // Tab completes without running. The popup is the last place that
@@ -1198,9 +1189,9 @@ function useComposerController(): ComposerController {
 
   /**
    * A draft that starts with `/name` goes to the session, which decides
-   * whether the name is a command: only a known command name is one, and a
-   * path, a typo or a pasted line that starts with `/` goes out as a message
-   * through `send`. The session asks the command sources again before it
+   * whether the name is a command: only a known command name is one. A path
+   * goes out as a message through `send`; an unknown name comes back to its
+   * draft through `refuse`. The session asks the command sources again before it
    * calls a name unknown. The name is read from the draft as typed, so text
    * from a paste chip never names one.
    */
@@ -1656,14 +1647,14 @@ export function Composer(props: ComposerProps) {
    * The interaction to draw. It waits for the client extensions: a renderer
    * chosen before they load would be the fallback for good.
    */
-  const activeInteraction = (): Option.Option<ActiveInteraction> => {
+  const activeInteraction = (): Option.Option<InteractionPresented> => {
     const cs = sc.composerState()
     if (cs._tag !== "interaction" || !ext.loaded()) return Option.none()
     return Option.some(cs.interaction)
   }
 
   /** The renderer for `metadata.type`; the host's `PromptRenderer` draws the rest. */
-  const interactionRenderer = (interaction: ActiveInteraction): InteractionRendererComponent =>
+  const interactionRenderer = (interaction: InteractionPresented): InteractionRendererComponent =>
     decodeMetadata(interaction.metadata).pipe(
       Option.flatMap((metadata) => decodeString(metadata["type"])),
       Option.flatMap((type) => Option.fromNullishOr(ext.interactionRenderers().get(type))),
