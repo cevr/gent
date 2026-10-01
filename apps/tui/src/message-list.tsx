@@ -1489,6 +1489,16 @@ export const holdUntilRendererDestroyed = (
     })
   })
 
+/**
+ * Transcript rows keep the terminal's last column free. OpenTUI writes a
+ * committed row and then erases to the line's end; after a row that fills
+ * the last column the cursor still sits on it (the wrap is pending), so an
+ * xterm-like terminal erases that column: a table's right border would be
+ * lost in history. The live view keeps the same column free, so an item
+ * commits at the width it showed.
+ */
+const FREE_LAST_COLUMN = 1
+
 interface NativeTranscriptProps {
   items: SessionItem[]
   /** The items are final: no source still derives rows that would land among them. */
@@ -1663,7 +1673,9 @@ export function NativeTranscript(props: NativeTranscriptProps) {
               insert(surface.root, () => (
                 <RendererContext.Provider value={surfaceRenderer}>
                   <PlainHistoryContext.Provider value={plain}>
-                    {props.renderItems(items)}
+                    <box flexDirection="column" paddingRight={FREE_LAST_COLUMN}>
+                      {props.renderItems(items)}
+                    </box>
                   </PlainHistoryContext.Provider>
                 </RendererContext.Provider>
               ))
@@ -2130,6 +2142,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
         <box
           flexDirection="column"
           flexShrink={0}
+          paddingRight={FREE_LAST_COLUMN}
           onSizeChange={function () {
             if (props.expanded || props.overlayOpen || !hasRows()) return
             setLiveHeight(this.height)

@@ -3312,6 +3312,62 @@ const rowsUnderRegion = (renderer: CliRenderer): number =>
 const committedTextOf = (event: CliRendererExternalOutputEvent) =>
   new TextDecoder().decode(event.snapshot.getRealCharBytes(false))
 
+// OpenTUI writes each committed row, then erases to the line's end. After a
+// row that fills the terminal's last column, the cursor still sits on that
+// column (the wrap is pending), so an xterm-like terminal erases the row's
+// last character: a table's right border is lost in history. Committed rows
+// keep the last column free.
+describe("native transcript rows in history", () => {
+  it.scopedLive(
+    "a table wider than the answer keeps its right border in history",
+    () =>
+      Effect.gen(function* () {
+        const width = 45
+        const committedRows: string[] = []
+        const table = [
+          "| Name | Purpose | Where it lives |",
+          "| --- | --- | --- |",
+          "| NativeTranscript | owns native history snapshots | apps/tui/src/message-list.tsx |",
+          "| DockFooter | the footer column the panes dock in | apps/tui/src/ui.tsx |",
+        ].join("\n")
+        const setup = yield* renderScoped(
+          () =>
+            roomTranscript({
+              items: () => [
+                assistant("table", `TABLE-ANSWER\n\n${table}`),
+                assistant("tail", "TAIL"),
+              ],
+              streaming: () => false,
+              footer: () => 3,
+              onRenderer: (renderer) => {
+                renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+                  const text = new TextDecoder().decode(event.snapshot.getRealCharBytes(true))
+                  committedRows.push(...text.split("\n"))
+                })
+              },
+            }),
+          { width, height: 14 },
+        )
+        yield* Effect.promise(() => setup.flush()).pipe(
+          Effect.repeat({
+            until: () => committedRows.some((row) => row.includes("└")),
+            schedule: Schedule.spaced("10 millis"),
+          }),
+          Effect.timeout("6 seconds"),
+          Effect.ignore,
+        )
+        const tableRows = committedRows.filter((row) => /[┌├│└]/.test(row))
+        // The cells wrap to fit the answer: more rows than the source's four.
+        expect(tableRows.length).toBeGreaterThan(4)
+        for (const row of tableRows) {
+          expect(row.trimEnd()).toMatch(/[┐┤│┘]$/)
+          expect(Bun.stringWidth(row.trimEnd())).toBeLessThan(width)
+        }
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
+  )
+})
+
 describe("native transcript rows under the footer", () => {
   it.scopedLive(
     "a docked pane that closes leaves no empty row under the footer",
