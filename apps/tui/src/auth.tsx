@@ -345,16 +345,22 @@ export function Auth(props: AuthProps) {
   /**
    * The browser leg of an `auto` flow. The server holds the login, and its
    * loopback port, while this call is in flight, so the screen that started
-   * it ends it: any next action, and the pane closing.
+   * it ends it: the wait stops when its OAuth screen goes (Esc, a failure,
+   * a finished sign-in) and when the pane closes. A pasted code does not
+   * stop it: the wait may be trading the redirect's one-use grant, and the
+   * server holds the paste behind that trade.
    */
-  let browserWait = Option.none<Fiber.Fiber<void, never>>()
+  let browserWait = Option.none<{
+    readonly authorizationId: string
+    readonly fiber: Fiber.Fiber<void, never>
+  }>()
 
   const stopSuccessTimer = () => {
     if (Option.isSome(successTimer)) cast(Fiber.interrupt(successTimer.value))
     successTimer = Option.none()
   }
   const stopBrowserWait = () => {
-    if (Option.isSome(browserWait)) cast(Fiber.interrupt(browserWait.value))
+    if (Option.isSome(browserWait)) cast(Fiber.interrupt(browserWait.value.fiber))
     browserWait = Option.none()
   }
   const clearSuccess = () => {
@@ -368,7 +374,6 @@ export function Auth(props: AuthProps) {
   /** Start an action: everything already in flight stops counting. */
   const begin = () => {
     clearSuccess()
-    stopBrowserWait()
     return actions.take()
   }
 
@@ -397,6 +402,18 @@ export function Auth(props: AuthProps) {
 
   const failed = (token: ReplyWriter) => (err: UiError) =>
     whileCurrent(token, () => send(AuthEvent.cases.Failed.make({ error: formatError(err) })))
+
+  /**
+   * A finished sign-in leaves its screen before the reload: a code typed
+   * while the catalog reloads has no OAuth screen to go to, so it never
+   * asks the server for the login it already finished.
+   */
+  const signedIn = (token: ReplyWriter, message: string) =>
+    whileCurrent(token, () => {
+      send(AuthEvent.cases.Close.make({}))
+      flashSuccess(message)
+      loadAuth(token)
+    })
 
   // ── Loading ───────────────────────────────────────────────────────
 
@@ -536,8 +553,9 @@ export function Auth(props: AuthProps) {
     authorizationId: string,
   ) => {
     stopBrowserWait()
-    browserWait = Option.some(
-      clientCtx.runtime.fork(
+    browserWait = Option.some({
+      authorizationId,
+      fiber: clientCtx.runtime.fork(
         clientCtx.client.auth
           .callback({
             sessionId,
@@ -546,12 +564,7 @@ export function Auth(props: AuthProps) {
             authorizationId,
           })
           .pipe(
-            Effect.tap(() =>
-              whileCurrent(token, () => {
-                flashSuccess(`Authenticated ${label(provider)} via OAuth`)
-                loadAuth(token)
-              }),
-            ),
+            Effect.tap(() => signedIn(token, `Authenticated ${label(provider)} via OAuth`)),
             Effect.catchEager((err) =>
               whileCurrent(token, () =>
                 send(AuthEvent.cases.OAuthAutoFailed.make({ error: formatError(err) })),
@@ -559,7 +572,7 @@ export function Auth(props: AuthProps) {
             ),
           ),
       ),
-    )
+    })
   }
 
   const startMethod = (provider: string, methodIndex: number, method: AuthMethod) => {
@@ -646,12 +659,7 @@ export function Auth(props: AuthProps) {
           }),
         )
         .pipe(
-          Effect.tap(() =>
-            whileCurrent(token, () => {
-              flashSuccess(`Authenticated ${label(screen.provider)} via OAuth`)
-              loadAuth(token)
-            }),
-          ),
+          Effect.tap(() => signedIn(token, `Authenticated ${label(screen.provider)} via OAuth`)),
           Effect.catchEager(failed(token)),
         ),
     )
@@ -683,6 +691,15 @@ export function Auth(props: AuthProps) {
     if (current._tag === "Method") return Option.some(current)
     return Option.none()
   }
+
+  // A browser wait lives while its OAuth screen does.
+  createEffect(() => {
+    const current = oauthScreen()
+    if (Option.isNone(browserWait)) return
+    const waitedFor = browserWait.value.authorizationId
+    if (Option.exists(current, (open) => open.authorization.authorizationId === waitedFor)) return
+    stopBrowserWait()
+  })
 
   /** The provider the open method screen is about, if the catalog still has it. */
   const methodProvider = () =>

@@ -26,6 +26,7 @@ import {
   renderScoped,
 } from "./render-harness-boundary"
 import { waitForFrame } from "./helpers-boundary"
+import { ProviderAuthError } from "@gent/core/extensions/api"
 import { onMount } from "solid-js"
 
 // ── auth state ──────────────────────────────────────────────────────────────
@@ -882,6 +883,120 @@ describe("Auth route", () => {
       yield* Deferred.await(waiting)
       setup.mockInput.pressEscape()
       yield* Deferred.await(interrupted)
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
+  // A code trades once. A browser wait that took the redirect may be
+  // exchanging it when the reader pastes a code: the server holds the paste
+  // behind that exchange, so the wait must run on to store the credential.
+  it.scopedLive(
+    "a code pasted while the browser exchanges its grant lets the exchange finish",
+    () =>
+      Effect.gen(function* () {
+        const waiting = yield* Deferred.make<void>()
+        const redirect = yield* Deferred.make<void>()
+        const exchanging = yield* Deferred.make<void>()
+        const stored = yield* Deferred.make<void>()
+        const client = yield* browserSignIn((input) => {
+          // The pasted code waits behind the exchange, then takes its outcome.
+          if (Option.isSome(Option.fromUndefinedOr(input.code))) return Deferred.await(stored)
+          return Deferred.done(waiting, Exit.void).pipe(
+            Effect.andThen(Deferred.await(redirect)),
+            Effect.andThen(Deferred.done(exchanging, Exit.void)),
+            Effect.andThen(Effect.yieldNow),
+            Effect.andThen(Deferred.done(stored, Exit.void)),
+          )
+        })
+        const services = yield* servicesWithLinkOpener(() => Effect.void)
+        const setup = yield* renderScoped(() => <Auth sessionId={activeSessionId} />, {
+          client,
+          runtime: createMockRuntime(),
+          services,
+        })
+        yield* waitForFrame(setup, (frame) => frame.includes("anthropic"))
+        setup.mockInput.pressEnter()
+        yield* Effect.promise(() => setup.renderOnce())
+        setup.mockInput.pressEnter()
+        yield* Deferred.await(waiting)
+        yield* Effect.promise(() => setup.mockInput.typeText("pasted-code"))
+        yield* Effect.promise(() => setup.renderOnce())
+        yield* Deferred.done(redirect, Exit.void)
+        yield* Deferred.await(exchanging)
+        setup.mockInput.pressEnter()
+        yield* waitForFrame(
+          setup,
+          (frame) => frame.includes("Authenticated anthropic via OAuth"),
+          "the exchange stores the credential and the paste takes its outcome",
+        )
+      }).pipe(Effect.timeout("4 seconds")),
+  )
+
+  // The pane reloads its catalog after a browser sign-in. A code sent in
+  // that window would ask the server for a login it already finished.
+  it.scopedLive("a code typed after the browser signed in sends no second callback", () =>
+    Effect.gen(function* () {
+      const callbacks: Array<string> = []
+      const reload = yield* Deferred.make<void>()
+      let loads = 0
+      const provider = {
+        provider: "anthropic",
+        hasKey: false,
+        required: false,
+        source: "none" as const,
+        authType: absent,
+      }
+      const client = createMockClient({
+        auth: {
+          listProviders: () =>
+            Effect.suspend(() => {
+              loads++
+              // The reload after the sign-in waits until the test lets it go.
+              if (loads === 1) return Effect.succeed([provider])
+              return Deferred.await(reload).pipe(Effect.as([provider]))
+            }),
+          listMethods: () => Effect.succeed({ anthropic: [oauthMethodRoute] }),
+          authorize: () =>
+            Effect.succeed({
+              authorizationId: "auth-wait",
+              url: "https://example.com/oauth",
+              method: "auto",
+            }),
+          callback: (input: { readonly code?: string }) => {
+            const code = Option.fromUndefinedOr(input.code)
+            callbacks.push(Option.getOrElse(code, () => "<browser wait>"))
+            if (Option.isNone(code)) return Effect.void
+            return Effect.fail(
+              new ProviderAuthError({ message: "callback state is missing or expired" }),
+            )
+          },
+        },
+      })
+      const services = yield* servicesWithLinkOpener(() => Effect.void)
+      const setup = yield* renderScoped(() => <Auth sessionId={activeSessionId} />, {
+        client,
+        runtime: createMockRuntime(),
+        services,
+      })
+      yield* waitForFrame(setup, (frame) => frame.includes("anthropic"))
+      setup.mockInput.pressEnter()
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("Authenticated anthropic via OAuth") && loads === 2,
+        "the browser signs in and the reload starts",
+      )
+      yield* Effect.promise(() => setup.mockInput.typeText("late-code"))
+      setup.mockInput.pressEnter()
+      yield* Effect.promise(() => setup.renderOnce())
+      yield* Deferred.done(reload, Exit.void)
+      const frame = yield* waitForFrame(
+        setup,
+        (next) => next.includes("Authenticated anthropic via OAuth") && loads === 2,
+        "the reload lands",
+      )
+      expect(frame).not.toContain("expired")
+      expect(callbacks).toEqual(["<browser wait>"])
     }).pipe(Effect.timeout("4 seconds")),
   )
 
