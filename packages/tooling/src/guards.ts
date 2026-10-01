@@ -2426,14 +2426,16 @@ export const TurboTypecheckInputsSchema = Schema.Struct({
 
 export const TurboTaskInputsSchema = Schema.Struct({
   tasks: Schema.optionalKey(
-    Schema.Record(
-      Schema.String,
-      Schema.Struct({
-        // Turbo owns validation of deferred input objects; this guard reads only paths.
-        inputs: Schema.optionalKey(
-          Schema.NullOr(Schema.Array(Schema.Union([Schema.String, Schema.Struct({})]))),
-        ),
-      }),
+    Schema.NullOr(
+      Schema.Record(
+        Schema.String,
+        Schema.Struct({
+          // Turbo owns validation of deferred input objects; this guard reads only paths.
+          inputs: Schema.optionalKey(
+            Schema.NullOr(Schema.Array(Schema.Union([Schema.String, Schema.Struct({})]))),
+          ),
+        }),
+      ),
     ),
   ),
 })

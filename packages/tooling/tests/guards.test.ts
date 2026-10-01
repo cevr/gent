@@ -2199,6 +2199,9 @@ test("Turbo deferred and default inputs need no tracked output", () => {
     },
   })
   expect(findDeadTurboInputs("packages/tooling/turbo.json", config.tasks, [])).toEqual([])
+  // eslint-disable-next-line effect/noNullish -- Turbo's JSON config accepts null for the inherited task map.
+  const inherited = Schema.decodeSync(TurboTaskInputsSchema)({ tasks: null })
+  expect(findDeadTurboInputs("packages/tooling/turbo.json", inherited.tasks, [])).toEqual([])
 })
 
 test("Turbo directory and compound globs match tracked files", () => {
