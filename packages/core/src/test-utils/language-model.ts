@@ -1,4 +1,3 @@
-// @effect-diagnostics nodeBuiltinImport:off -- test fixture lifecycle comes from bun:test
 import {
   Cause,
   Clock,

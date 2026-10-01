@@ -2499,7 +2499,7 @@ export const findTuiSessionIdentityReads = (file: string, text: string): Readonl
 /**
  * The one suppression the linters cannot police: `@effect-diagnostics` comments.
  * Every other kind (`@ts-ignore`, `as any`, block eslint-disables) is banned by
- * oxlint or by `blanket-eslint-disable`, so this inventory is the approved list
+ * oxlint or by `findBlanketEslintDisables`, so this inventory is the approved list
  * of diagnostics suppressions and nothing else.
  *
  * The inventory is checked in both directions: a suppression comment with no
@@ -2544,36 +2544,6 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     text: "globalTimersInEffect:off -- process lifetime handle: OpenTUI render resolves after mount and suspended Effect fibers do not keep Bun alive",
   },
   {
-    file: "apps/tui/src/client.tsx",
-    scope: "next-line",
-    text: "nodeBuiltinImport:off -- synchronous shutdown logging runs after the Effect runtime closes.",
-  },
-  {
-    file: "apps/tui/tests/extensions/loader-boundary.test.ts",
-    scope: "next-line",
-    text: "nodeBuiltinImport:off -- synchronous filesystem fixture setup is a test boundary.",
-  },
-  {
-    file: "apps/tui/tests/extensions/loader-boundary.test.ts",
-    scope: "next-line",
-    text: "nodeBuiltinImport:off -- synchronous path fixture setup is a test boundary.",
-  },
-  {
-    file: "packages/core/src/server/workspace-rpc.ts",
-    scope: "file",
-    text: "nodeBuiltinImport:off -- the workspace id is a wire constant, see workspaceIdForCwd",
-  },
-  {
-    file: "packages/core/src/server/workspace-rpc.ts",
-    scope: "file",
-    text: "nodeBuiltinImport:off -- the workspace id canonicalizes its cwd before hashing",
-  },
-  {
-    file: "packages/sdk/src/server.ts",
-    scope: "file",
-    text: "nodeBuiltinImport:off -- server primitive owns filesystem path resolution for gent's data directory",
-  },
-  {
     file: "packages/sdk/src/server.ts",
     scope: "next-line",
     text: "strictEffectProvide:off -- the public entry point provides the local platform it resolves on.",
@@ -2592,16 +2562,6 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     file: "packages/tooling/src/check-guide-code.ts",
     scope: "next-line",
     text: "strictEffectProvide:off -- the script's process entry provides the platform once.",
-  },
-  {
-    file: "packages/core/src/test-utils/language-model.ts",
-    scope: "file",
-    text: "nodeBuiltinImport:off -- test fixture lifecycle comes from bun:test",
-  },
-  {
-    file: "packages/tooling/src/test-preload.ts",
-    scope: "file",
-    text: "nodeBuiltinImport:off -- the test preload runs in bun's test host before any Effect runtime",
   },
   {
     file: "packages/core/src/test-utils/language-model.ts",

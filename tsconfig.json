@@ -21,9 +21,12 @@
         "ignoreEffectSuggestionsInTscExitCode": false,
         "ignoreEffectWarningsInTscExitCode": false,
         "ignoreEffectErrorsInTscExitCode": false,
+        // A diagnostic that an oxlint rule holds at every site is off here, so
+        // one site takes one suppression: `effect/noAsyncFunction` holds
+        // `asyncFunction`, `effect/noNodeBuiltinImport` holds `nodeBuiltinImport`.
         "diagnosticSeverity": {
           "anyUnknownInErrorContext": "error",
-          "asyncFunction": "error",
+          "asyncFunction": "off",
           "catchAllToMapError": "error",
           "catchUnfailableEffect": "error",
           "classSelfMismatch": "error",
@@ -70,7 +73,7 @@
           "multipleEffectProvide": "error",
           "nestedEffectGenYield": "error",
           "newPromise": "error",
-          "nodeBuiltinImport": "error",
+          "nodeBuiltinImport": "off",
           "nonObjectEffectServiceType": "error",
           "outdatedApi": "error",
           "overriddenSchemaConstructor": "error",
@@ -125,24 +128,11 @@
             }
           },
           {
-            "include": [
-              "packages/tooling/src/gent-rules.ts",
-              "apps/tui/tests/render-harness-boundary.tsx"
-            ],
-            "options": {
-              "diagnosticSeverity": {
-                "nodeBuiltinImport": "off"
-              }
-            }
-          },
-          {
             "include": ["testbeds/gamut/gamut.ts"],
             "options": {
               "diagnosticSeverity": {
-                "asyncFunction": "off",
                 "globalConsole": "off",
-                "globalDate": "off",
-                "nodeBuiltinImport": "off"
+                "globalDate": "off"
               }
             }
           },
@@ -150,10 +140,8 @@
             "include": [".claude/skills/architecture-loop/fetch-capture.ts"],
             "options": {
               "diagnosticSeverity": {
-                "asyncFunction": "off",
                 "globalDate": "off",
                 "globalFetch": "off",
-                "nodeBuiltinImport": "off",
                 "processEnv": "off"
               }
             }

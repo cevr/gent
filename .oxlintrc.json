@@ -89,6 +89,9 @@
           },
           "bun": {
             "use": "an Effect platform service (GentPlatform, FileSystem, ChildProcessSpawner, KeyValueStore, Config); Bun stays in adapter, tooling and test code"
+          },
+          "crypto": {
+            "use": "Effect Crypto for random bytes and ids, GentPlatform.hash for digests"
           }
         }
       }
@@ -186,7 +189,8 @@
       // the host directly. The retired `Bun.Glob` and `Bun.randomUUIDv7` stay
       // out: the built-in `noGlobals` bans hold the global, the `bun` module
       // ban below holds an import, and `gent/no-host-fact-bypass` holds
-      // `globalThis.Bun` and a computed member.
+      // `globalThis.Bun` and a computed member. `node:crypto` stays out
+      // everywhere: Effect `Crypto` and `GentPlatform.hash` own ids and digests.
       "files": [
         "packages/core/src/runtime/gent-platform-bun.ts",
         "**/*-adapter.ts",
@@ -207,6 +211,9 @@
               "bun": {
                 "members": ["Glob", "randomUUIDv7"],
                 "use": "Effect FileSystem to list files, GentPlatform.randomId for ids"
+              },
+              "crypto": {
+                "use": "Effect Crypto for random bytes and ids, GentPlatform.hash for digests"
               }
             }
           }

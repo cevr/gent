@@ -34,9 +34,7 @@ import {
   runAutocompleteContributions,
 } from "../../src/extensions/loader-boundary"
 import type { ToolRenderer, ToolRendererProps } from "../../src/tool-renderers"
-// @effect-diagnostics-next-line nodeBuiltinImport:off -- synchronous filesystem fixture setup is a test boundary.
 import { mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs" // eslint-disable-line effect/noNodeBuiltinImport -- synchronous filesystem fixture setup is a test boundary.
-// @effect-diagnostics-next-line nodeBuiltinImport:off -- synchronous path fixture setup is a test boundary.
 import { join } from "node:path" // eslint-disable-line effect/noNodeBuiltinImport -- synchronous path fixture setup is a test boundary.
 import { BunServices } from "@effect/platform-bun"
 import { BuiltinExtensions } from "@gent/extensions"

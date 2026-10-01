@@ -1,4 +1,3 @@
-// @effect-diagnostics nodeBuiltinImport:off -- server primitive owns filesystem path resolution for gent's data directory
 import {
   Clock,
   Context,

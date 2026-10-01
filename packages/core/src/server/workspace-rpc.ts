@@ -2,10 +2,8 @@ import { Effect, Layer, Option, Schema } from "effect"
 import { Headers } from "effect/http"
 import { RpcMiddleware } from "effect/rpc"
 import { CurrentWorkspaceId, WorkspaceId } from "../domain/ids.js"
-// @effect-diagnostics nodeBuiltinImport:off -- the workspace id is a wire constant, see workspaceIdForCwd
 // oxlint-disable-next-line effect/noNodeBuiltinImport -- a client and its server derive the wire id in separate processes; it is pinned to node:crypto sha256, not an adapter's hash
 import { createHash } from "node:crypto"
-// @effect-diagnostics nodeBuiltinImport:off -- the workspace id canonicalizes its cwd before hashing
 // oxlint-disable-next-line effect/noNodeBuiltinImport -- sync, context-free canonicalization: the wire id must not depend on a Path layer being wired
 import { resolve as resolvePath } from "node:path"
 
