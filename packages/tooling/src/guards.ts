@@ -2035,29 +2035,63 @@ const SOURCE_ROOT = /^(?:packages|apps|plans|testbeds|examples|docs|patches|\.cl
 /** Text between backticks, which is what marks a reference as a path. */
 const BACKTICKED = /`([^`\n]+)`/g
 
-/** A fence: three or more backticks or tildes, at any indent (a list item indents its fences). */
-const FENCE = /^\s*(`{3,}|~{3,})/
+/**
+ * A fence: three or more backticks or tildes, at any indent (a list item
+ * indents its fences), then the info string.
+ */
+const FENCE = /^(\s*)(`{3,}|~{3,})(.*)$/
 
 /** A closing fence: the fence alone on its line. */
 const FENCE_CLOSE = /^\s*(`{3,}|~{3,})\s*$/
 
+/** One fenced block of a Markdown text, by line index. */
+export interface FencedBlock {
+  /** The opening fence's line. */
+  readonly open: number
+  /** The closing fence's line, or the line count when the text ends first. */
+  readonly close: number
+  /** The opener's indent, which each code line carries too. */
+  readonly indent: string
+  /** The opener's info string, trimmed: the language, then any attributes. */
+  readonly info: string
+}
+
 /**
- * Whether each line of `text` is fenced: a fence line, or a line inside a
- * block whose contents are commands, not prose. A block closes on a bare
- * fence of its own character at least as long as the opener, so a ````
- * block can show a ``` line, and a ~~~ block closes only on tildes.
+ * The fenced blocks of `text`, the one fence reader of the tooling: the
+ * guards skip their lines, and the guide check compiles their code. A block
+ * closes on a bare fence of its own character at least as long as the
+ * opener, so a ```` block can show a ``` line, and a ~~~ block closes only
+ * on tildes; one the text never closes runs to its end.
  */
-const fencedLines = (text: string): ReadonlyArray<boolean> => {
-  let opener = ""
-  return text.split("\n").map((line) => {
-    if (opener === "") {
-      opener = FENCE.exec(line)?.[1] ?? ""
-      return opener !== ""
+export const fencedBlocks = (text: string): ReadonlyArray<FencedBlock> => {
+  const lines = text.split("\n")
+  const blocks: Array<FencedBlock> = []
+  const closes = (line: string, fence: string): boolean =>
+    (FENCE_CLOSE.exec(line)?.[1] ?? "").startsWith(fence)
+  let index = 0
+  while (index < lines.length) {
+    const opener = Option.fromNullishOr(FENCE.exec(lines[index] ?? ""))
+    if (Option.isSome(opener)) {
+      const [, indent = "", fence = "", info = ""] = opener.value
+      const open = index
+      index += 1
+      while (index < lines.length && !closes(lines[index] ?? "", fence)) index += 1
+      blocks.push({ open, close: index, indent, info: info.trim() })
     }
-    const close = FENCE_CLOSE.exec(line)?.[1] ?? ""
-    if (close.startsWith(opener)) opener = ""
-    return true
-  })
+    index += 1
+  }
+  return blocks
+}
+
+/** Whether each line of `text` is fenced: a fence line, or a line inside a block. */
+const fencedLines = (text: string): ReadonlyArray<boolean> => {
+  const fenced = text.split("\n").map(() => false)
+  for (const block of fencedBlocks(text)) {
+    for (let line = block.open; line <= Math.min(block.close, fenced.length - 1); line += 1) {
+      fenced[line] = true
+    }
+  }
+  return fenced
 }
 
 /** Stands for a set of paths: a glob, or a brace expansion over filenames. */
