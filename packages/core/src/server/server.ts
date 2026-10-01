@@ -25,6 +25,7 @@ import {
   Branch,
   type BranchTreeNode,
   copyMessageToBranch,
+  DEFAULT_SESSION_NAME,
   projectMessagesWithToolInteractions,
   Session,
   type SessionAdmission,
@@ -697,7 +698,7 @@ const makeSessionMutationsService: Effect.Effect<
 
         const branchId = BranchId.make(yield* platform.randomId)
         const now = yield* DateTime.nowAsDate
-        const name = input.name ?? "New Chat"
+        const name = input.name ?? DEFAULT_SESSION_NAME
         // A handoff joins its parent's thread. Every other create, a spawned
         // child included, starts its own: storage defaults the thread to the
         // session id.

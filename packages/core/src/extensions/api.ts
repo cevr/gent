@@ -63,7 +63,6 @@ export {
 export {
   type GentExtension,
   LoadedArtifactIdentity,
-  type SystemPromptInput,
   type TurnAfterInput,
   type TurnUsage,
 } from "../domain/extension.js"
@@ -96,7 +95,12 @@ export { interjectionMessageId } from "../domain/agent-loop.js"
 export { Model, ModelId, type ModelPricing, ProviderId } from "../domain/agent.js"
 export { AuthMethod } from "../domain/driver.js"
 // The assistant message a turn's step stores; `StreamStarted` names the turn and step.
-export { type Message, type Branch, assistantMessageIdForTurn } from "../domain/message.js"
+export {
+  type Message,
+  type Branch,
+  assistantMessageIdForTurn,
+  DEFAULT_SESSION_NAME,
+} from "../domain/message.js"
 export type { AgentEvent, Question } from "../domain/event.js"
 export {
   isRuntimeUserMessage,

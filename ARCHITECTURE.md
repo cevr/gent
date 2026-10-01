@@ -523,6 +523,12 @@ Shape:
   terminal columns on a grapheme) over the text; `sessionMessageBody` removes
   the header, with or without the child line, so older rows render the same.
   Full detail shows the header the model reads.
+- A session takes its name from its first user message: at a turn end,
+  `@gent/session-tools` renames a session that still has
+  `DEFAULT_SESSION_NAME` to the first line of its branch's first user
+  message (the rename trims it to 80 characters), as a delegate child takes
+  its task. No prompt text asks the model to name a session; `rename_session`
+  stays for a rename the user asks for, and a name it gave first wins.
 - `Interject` steering never interrupts an open stream. The item is admitted to
   the durable steering queue; a running turn delivers it at its next safe step
   boundary (tool results stored, no stream open) by persisting the interjection
