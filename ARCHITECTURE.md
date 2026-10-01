@@ -638,12 +638,18 @@ Shape:
   in its own code (gate, route, retry). A driver serves classifiers through the
   optional `resolveDecisionModel` beside `resolveModel` and lists them with
   `Model.kind: "classifier"`, so they share its id, auth, env credential and
-  catalog; the TUI picker leaves them out. `DecisionModelResolver`
+  catalog; the TUI picker leaves them out, and the turn refuses one by name
+  (`ModelContextCapabilityFailure.ClassifierModel`) before any chat
+  `resolveModel`, whichever agent, config or override named it.
+  `DecisionModelResolver`
   (`runtime/provider.ts`, in the loop's runtime services) picks the named
   catalog classifier. With none named it takes a classifier whose driver has a
   stored or env credential: a `-latest` alias first (drivers are ordered by
   extension id, so the order cannot pick it), else the first listed. It fails
-  readably naming the variables when none has a credential. The
+  readably naming the variables when none has a credential; a driver defect
+  while the model is resolved or built fails that call, not the cell. One call
+  has 60 s from resolve to answer (`DECIDE_DEADLINE_MS`; the cell may ask for
+  less with `timeoutMs`), since the watchdog pauses during host calls. The
   reply carries the provider's token usage: the runtime keeps no spend record
   for a tool's own model call. Like `context.*`, a decide call leaves no
   receipt and a recovered cell does not repeat it. Two drivers serve Jev

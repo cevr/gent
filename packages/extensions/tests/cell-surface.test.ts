@@ -402,7 +402,7 @@ const judgeExtension = (calls: Ref.Ref<ReadonlyArray<JudgeCall>>) =>
         resolveModel: () => Effect.die("judge serves classifier models only"),
         listModels: () =>
           Effect.succeed(
-            ["jev-test", "jev-other", "jev-latest"].map((name) =>
+            ["jev-test", "jev-other", "jev-latest", "jev-broken", "jev-stalled"].map((name) =>
               Model.make({
                 id: ModelId.make(`judge/${name}`),
                 name,
@@ -411,8 +411,21 @@ const judgeExtension = (calls: Ref.Ref<ReadonlyArray<JudgeCall>>) =>
               }),
             ),
           ),
-        resolveDecisionModel: (model, authInfo) =>
-          Effect.succeed(
+        resolveDecisionModel: (model, authInfo) => {
+          // A driver whose model throws while it is built.
+          if (model === "jev-broken")
+            return Effect.succeed(
+              Layer.effect(DecisionModel.DecisionModel, Effect.die("judge model failed to build")),
+            )
+          // A provider that takes the request and never answers.
+          if (model === "jev-stalled")
+            return Effect.succeed(
+              Layer.effect(
+                DecisionModel.DecisionModel,
+                DecisionModel.make({ decide: () => Effect.never }),
+              ),
+            )
+          return Effect.succeed(
             Layer.effect(
               DecisionModel.DecisionModel,
               DecisionModel.make({
@@ -437,7 +450,8 @@ const judgeExtension = (calls: Ref.Ref<ReadonlyArray<JudgeCall>>) =>
                   ),
               }),
             ),
-          ),
+          )
+        },
       })
     }),
   })
@@ -555,15 +569,21 @@ describe("cell models host", () => {
             "const named = await models.decide('late order', urgent, { model: 'judge/jev-other' })",
             "const unknown = await models.decide('late order', urgent, { model: 'judge/nope' }).catch((error) => error.message)",
             "const single = await models.decide('late order', { team: models.classify({ instructions: 'Which team', criteria: { billing: 'payments' } }) }).catch((error) => error.message)",
-            "JSON.stringify({ model: named.model, unknown, single })",
+            "const broken = await models.decide('late order', urgent, { model: 'judge/jev-broken' }).catch((error) => error.message)",
+            "const stalled = await models.decide('late order', urgent, { model: 'judge/jev-stalled', timeoutMs: 200 }).catch((error) => error.message)",
+            "JSON.stringify({ model: named.model, unknown, single, broken, stalled })",
           ].join("\n"),
         })
         expect(yield* decodeDecideJson(display)).toEqual({
           model: "judge/jev-other",
           unknown:
-            'models.decide: Unknown classifier model "judge/nope". Classifier models: judge/jev-test, judge/jev-other, judge/jev-latest',
+            'models.decide: Unknown classifier model "judge/nope". Classifier models: judge/jev-test, judge/jev-other, judge/jev-latest, judge/jev-broken, judge/jev-stalled',
           single:
             "models.decide input is invalid: Error: Decision.classify: criteria must contain at least two labels",
+          // A model that throws while it is built rejects this call, not the cell.
+          broken: "models.decide: judge/jev-broken: judge model failed to build",
+          // A provider that never answers is cut off at the deadline; the cell goes on.
+          stalled: "models.decide (judge/jev-stalled) gave no answer within 200 ms",
         })
         expect((yield* Ref.get(calls)).map((call) => call.model)).toEqual(["jev-other"])
       }).pipe(Effect.timeout("15 seconds"), Effect.provide(platform)),
@@ -1784,7 +1804,8 @@ describe("cell prompt guidelines", () => {
     () =>
       Effect.sync(() => {
         const guidelines = (getToolMetadata(CellTool).promptGuidelines ?? []).join("\n")
-        expect(guidelines).toContain("models.decide(input, decisions, { model })")
+        expect(guidelines).toContain("models.decide(input, decisions, { model, timeoutMs })")
+        expect(guidelines).toContain("within timeoutMs (at most and by default 60000) rejects")
         expect(guidelines).toContain("models.classify(")
         expect(guidelines).toContain("models.rate(")
         expect(guidelines).toContain("models.probability(")

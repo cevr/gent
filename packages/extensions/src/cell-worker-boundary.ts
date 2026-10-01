@@ -486,6 +486,18 @@ interface DecisionOptions {
   readonly criteria?: Schema.Json
 }
 
+/** What `models.decide` takes beside the input and the decisions. */
+interface DecideOptions {
+  readonly model?: Schema.Json
+  readonly timeoutMs?: Schema.Json
+}
+
+/** The host call `models.decide` sends: only the options the cell set. */
+interface DecideRequest extends DecideOptions {
+  readonly input: Schema.Json
+  readonly decisions: Schema.Json
+}
+
 /** The namespaces `tools`, `context` and `models` read: the latest evaluator's. */
 const hostNamespaces = new Map<string, unknown>()
 /**
@@ -776,14 +788,13 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
   // decision in `effect/ai/Decision`'s vocabulary, which the host checks. Cell
   // code may pass any value: the types name what the host accepts.
   const models = {
-    decide: (
-      input: Schema.Json,
-      decisions: Schema.Json,
-      options: { readonly model?: Schema.Json } = {},
-    ) => {
-      if (Predicate.isUndefined(options.model))
-        return namespaceCall("models.decide", { input, decisions })
-      return namespaceCall("models.decide", { input, decisions, model: options.model })
+    decide: (input: Schema.Json, decisions: Schema.Json, options: DecideOptions = {}) => {
+      // Only the options the cell set travel; the host checks their types.
+      let request: DecideRequest = { input, decisions }
+      if (!Predicate.isUndefined(options.model)) request = { ...request, model: options.model }
+      if (!Predicate.isUndefined(options.timeoutMs))
+        request = { ...request, timeoutMs: options.timeoutMs }
+      return namespaceCall("models.decide", request)
     },
     classify: (options: DecisionOptions) => ({ _tag: "Classify", ...options }),
     rate: (options: DecisionOptions) => ({ _tag: "Rate", ...options }),

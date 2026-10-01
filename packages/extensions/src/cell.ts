@@ -2,6 +2,7 @@ import {
   Context,
   DateTime,
   Deferred,
+  Duration,
   Effect,
   Exit,
   FileSystem,
@@ -1800,10 +1801,18 @@ const DecisionSpec = Schema.TaggedUnion({
 })
 type DecisionSpec = typeof DecisionSpec.Type
 
+/**
+ * The most one `models.decide` may take, from resolving the model to its
+ * answer. Neither the cell watchdog (paused during a host call) nor the
+ * provider's HTTP client bounds it otherwise. A call may ask for less.
+ */
+const DECIDE_DEADLINE_MS = 60_000
+
 const DecideInput = Schema.Struct({
   input: Schema.Json,
   decisions: Schema.Record(Schema.String, DecisionSpec),
   model: Schema.optional(Schema.String),
+  timeoutMs: Schema.optional(Schema.Finite),
 })
 
 const ModelsOperation = Schema.Literals(["decide"])
@@ -1850,16 +1859,33 @@ const handleModelsCall = Effect.fn("CellModelsHost.call")(function* (params: {
   })
   if (Option.isNone(params.resolver))
     return yield* contextHostFailure("models.decide is not available in this runtime")
-  const resolved = yield* params.resolver.value
-    .resolve(Option.fromUndefinedOr(request.model))
-    .pipe(Effect.mapError((error) => contextHostFailure(`models.decide: ${error.message}`)))
-  const response = yield* resolved.model
-    .decide(definition, { input: request.input })
-    .pipe(
-      Effect.mapError((error) =>
-        contextHostFailure(`models.decide (${resolved.modelId}) failed: ${error.message}`),
-      ),
-    )
+  const resolver = params.resolver.value
+  const deadlineMs = Option.match(Option.fromUndefinedOr(request.timeoutMs), {
+    onNone: () => DECIDE_DEADLINE_MS,
+    onSome: (asked) => Math.min(Math.max(Math.round(asked), 1), DECIDE_DEADLINE_MS),
+  })
+  const named = Option.getOrElse(Option.fromUndefinedOr(request.model), () => "default classifier")
+  const { resolved, response } = yield* Effect.gen(function* () {
+    const resolved = yield* resolver
+      .resolve(Option.fromUndefinedOr(request.model))
+      .pipe(Effect.mapError((error) => contextHostFailure(`models.decide: ${error.message}`)))
+    const response = yield* resolved.model
+      .decide(definition, { input: request.input })
+      .pipe(
+        Effect.mapError((error) =>
+          contextHostFailure(`models.decide (${resolved.modelId}) failed: ${error.message}`),
+        ),
+      )
+    return { resolved, response }
+  }).pipe(
+    Effect.timeoutOrElse({
+      duration: Duration.millis(deadlineMs),
+      orElse: () =>
+        Effect.fail(
+          contextHostFailure(`models.decide (${named}) gave no answer within ${deadlineMs} ms`),
+        ),
+    }),
+  )
   // The answers have null prototypes, and a confidence or a token count the
   // provider left out is undefined: through JSON text they become plain JSON
   // without those fields. The runtime keeps no spend record for a tool's own
@@ -2862,7 +2888,7 @@ export const CellTool = tool({
     "Return a summary, not the data. You see at most 8,000 characters of any tool result (head and tail); a larger result is spilled and its `read` field says how to page the rest with context.read. Slice arrays, count instead of listing, and keep the full value in a binding for the next cell.",
     "Bun.$`cmd`.text() returns stdout only, and Bun.$ pipes stderr away; test runners and many tools report on stderr. Use Bun.spawn with inherited stdio so the output returns with the cell, or .quiet() and read .stderr.",
     "The whole session stays reachable from the cell. context.history({ offset, limit }) lists this branch's durable messages in order (id, role, chars, preview, kind), 50 per page with nextOffset. context.read(id, { offset, limit }) returns durable text by message id or tool call id, paged by character offset and limit (nextOffset continues); receipts in a cell result carry the ids of inner calls. context.status() reports what the model sees: tokens, limit, percent, omittedMessages, handoffMessageId. When the window overflows, the history before the current turn is handed off: one durable notice summarizes it and names the session, branch, and message-id range it replaced, so read it back with context.history and context.read instead of guessing. context.compact(instructions?) asks for that handoff at the next step of this turn, focused on the instructions (a turn that ends first drops it). context.newWindow() drops older history from the model view without a summary. All five are awaited host calls.",
-    "models.decide(input, decisions, { model }) asks a classifier model (Jev) typed questions about any JSON input in one awaited host call. decisions maps a name to models.classify({ instructions, criteria: { label: description } }), models.rate({ instructions, criteria: [lowest, ..., highest] }) or models.probability({ instructions, criteria?: { false, true } }); the reply is { model, answers, usage } with label and probabilities, rating, or probability per name. One call is one small paid request, a fraction of a cent and far less than a model turn, so compose it in code with other tools: check the state between actions, then gate, route or retry on the answer. Without model it uses a classifier model with a key, a -latest one first; model names one, such as typesafe/jev-latest or opencode/jev-1.13.",
+    "models.decide(input, decisions, { model, timeoutMs }) asks a classifier model (Jev) typed questions about any JSON input in one awaited host call. decisions maps a name to models.classify({ instructions, criteria: { label: description } }), models.rate({ instructions, criteria: [lowest, ..., highest] }) or models.probability({ instructions, criteria?: { false, true } }); the reply is { model, answers, usage } with label and probabilities, rating, or probability per name. One call is one small paid request, a fraction of a cent and far less than a model turn, so compose it in code with other tools: check the state between actions, then gate, route or retry on the answer. Without model it uses a classifier model with a key, a -latest one first; model names one, such as typesafe/jev-latest or opencode/jev-1.13. A call that gets no answer within timeoutMs (at most and by default 60000) rejects.",
     "Set reset: true to discard retained values and the saved namespace before running new code.",
     "A failed cell may have completed effects. Do not replay source to recover unknown outcomes.",
   ],

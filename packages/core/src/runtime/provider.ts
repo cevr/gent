@@ -888,9 +888,14 @@ const resolveDecisionModel = Effect.fn("DecisionModelResolver.resolve")(function
     })
   }
   const authInfo = yield* storedAuth(chosen.driver.id)
-  const layer = yield* Effect.suspend(() =>
+  const scope = yield* Effect.scope
+  // Resolving, building and reading the driver's model all run driver code:
+  // a defect in any of them fails this call, never the cell's host.
+  const model = yield* Effect.suspend(() =>
     resolveFor.value(modelName.value, Option.getOrUndefined(authInfo)),
   ).pipe(
+    Effect.flatMap((layer) => Layer.buildWithScope(layer, scope)),
+    Effect.map((built) => Context.get(built, DecisionModel.DecisionModel)),
     Effect.catchDefect((defect) =>
       Effect.fail(new ProviderAuthError({ message: causeMessage(defect) })),
     ),
@@ -902,8 +907,7 @@ const resolveDecisionModel = Effect.fn("DecisionModelResolver.resolve")(function
         }),
     ),
   )
-  const built = yield* Layer.buildWithScope(layer, yield* Effect.scope)
-  return { modelId: chosen.model.id, model: Context.get(built, DecisionModel.DecisionModel) }
+  return { modelId: chosen.model.id, model }
 })
 
 /**
