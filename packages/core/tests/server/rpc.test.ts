@@ -53,6 +53,7 @@ import {
   Auth,
   AuthError,
   serializeAuthStore,
+  AuthApi,
 } from "../../src/runtime/provider"
 import {
   LanguageModelLayers,
@@ -853,6 +854,72 @@ describe("auth persistence RPC failures", () => {
   )
 })
 describe("provider login", () => {
+  // Reads try the owner's key first, so a key stored under the sharing
+  // driver's own id would sit behind a stale owner key.
+  it.live("a key or a login through a driver that shares a sign-in is stored under its owner", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const stale = AuthApi.make({ type: "api", key: "sk-stale" })
+        const auth = yield* Effect.provide(Effect.service(Auth), Auth.Test({ gate: stale }))
+        const sharing = defineExtension({
+          id: "@test/shared-sign-in",
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register("modelDriver", {
+              id: "gate",
+              name: "Gate",
+              resolveModel: () => Effect.succeed(stubModel),
+              auth: { methods: [AuthMethod.make({ type: "api", label: "Gate key" })] },
+            })
+            yield* host.register("modelDriver", {
+              id: "gate-plus",
+              name: "Gate Plus",
+              credentialFrom: "gate",
+              resolveModel: () => Effect.succeed(stubModel),
+              auth: {
+                methods: [AuthMethod.make({ type: "api", label: "Gate Plus key" })],
+                authorize: (ctx) =>
+                  ctx.persist({ type: "api", key: "sk-login" }).pipe(Effect.as(Option.none())),
+              },
+            })
+          }),
+        })
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const { client } = yield* createRpcClient(
+          createE2ELayer({
+            agents: e2ePreset.agents,
+            providerLayer,
+            extensionInputs: [sharing],
+            authLayer: Layer.succeed(Auth, auth),
+          }),
+        )
+        const stored = Effect.forEach(["gate", "gate-plus"], (id) =>
+          Effect.map(auth.get(id), (info) => {
+            if (Predicate.isUndefined(info) || info.type !== "api") return "none"
+            return info.key
+          }),
+        )
+
+        yield* client.auth.setKey({ provider: "gate-plus", key: "sk-set" })
+        expect(yield* stored).toEqual(["sk-set", "none"])
+
+        const { sessionId } = yield* client.session.create({})
+        yield* client.auth.authorize({ sessionId, provider: "gate-plus", method: 0 })
+        expect(yield* stored).toEqual(["sk-login", "none"])
+
+        yield* client.auth.setKey({ provider: "gate-plus", key: "sk-session", sessionId })
+        expect(yield* stored).toEqual(["sk-session", "none"])
+
+        yield* client.session.delete({ sessionId })
+        const error = yield* Effect.flip(
+          client.auth.setKey({ provider: "gate-plus", key: "sk-gone", sessionId }),
+        )
+        expect(error._tag).toBe("NotFoundError")
+        expect(yield* stored).toEqual(["sk-session", "none"])
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+
   it.live("a session logs in through the drivers of its own profile, not the launch profile", () =>
     Effect.scoped(
       Effect.gen(function* () {

@@ -647,6 +647,44 @@ describe("cell models host", () => {
       }).pipe(Effect.timeout("15 seconds"), Effect.provide(platform)),
     20000,
   )
+
+  it.scopedLive(
+    "a classifier the call cannot resolve names each classifier catalog that failed",
+    () =>
+      Effect.gen(function* () {
+        const calls = yield* Ref.make<ReadonlyArray<JudgeCall>>([])
+        const offline = defineExtension({
+          id: "@test/offline-judge",
+          setup: Effect.gen(function* () {
+            yield* (yield* ExtensionHost).register("modelDriver", {
+              id: "offline",
+              name: "Offline",
+              resolveModel: () => Effect.die("offline serves classifier models only"),
+              listModels: () => Effect.die("catalog unreachable"),
+              resolveDecisionModel: () => Effect.die("offline lists no model"),
+            })
+          }),
+        })
+        const { display } = yield* runJudgeCell({
+          calls,
+          storeKey: false,
+          extensions: [offline],
+          code: [
+            "const urgent = { urgent: models.probability({ instructions: 'Needs action today' }) }",
+            "const named = await models.decide('late order', urgent, { model: 'offline/jev-1' }).catch((error) => error.message)",
+            "const unnamed = await models.decide('late order', urgent).catch((error) => error.message)",
+            "JSON.stringify({ named, unnamed })",
+          ].join("\n"),
+        })
+        expect(yield* decodeDecideJson(display)).toEqual({
+          named:
+            'models.decide: Unknown classifier model "offline/jev-1". Classifier models: judge/jev-test, judge/jev-other, judge/jev-latest, judge/jev-broken, judge/jev-stalled. Classifier catalogs that failed: offline (catalog unreachable)',
+          unnamed: `models.decide: No classifier model has a credential: set ${JUDGE_ENV}, or sign in with /auth. Classifier catalogs that failed: offline (catalog unreachable)`,
+        })
+        expect(yield* Ref.get(calls)).toEqual([])
+      }).pipe(Effect.timeout("15 seconds"), Effect.provide(platform)),
+    20000,
+  )
 })
 
 // ── shipped model surface ───────────────────────────────────────────────────

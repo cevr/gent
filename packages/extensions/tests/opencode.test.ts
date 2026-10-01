@@ -1049,7 +1049,7 @@ describe("OpenCode sign-in", () => {
       expect(yield* rows).toEqual([["opencode", "OpenCode", "none"]])
       expect(yield* methods).toEqual([["opencode", ["OpenCode API key — Zen, Go and Go Plus"]]])
 
-      // A store from before the two shared holds only Go's key.
+      // A key typed for Go is the OpenCode key.
       yield* client.auth.setKey({ provider: "opencode-go", key: "oc-go-key" })
       expect(yield* rows).toEqual([["opencode", "OpenCode", "stored"]])
       yield* client.auth.deleteKey({ provider: "opencode" })
