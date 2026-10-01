@@ -7,8 +7,6 @@
  * - core-entry-boundary: extensions read only the authoring entries of `@gent/core`.
  * - declared-workspace-imports: a package imports only the workspace packages it declares.
  * - no-define-extension-throw: an extension factory fails through its Effect, never a throw.
- * - no-dynamic-imports: no `import(...)` or `require(...)` without an architectural allow
- *   comment (until upstream 0.19.0 `effect/noDynamicImports` strict mode).
  * - no-bun-outside-adapter: `Bun.*` and host facts stay in the platform adapters (until
  *   upstream 0.19.0).
  * - child-session-writer-admits: a core child-session writer admits the nesting depth first.
@@ -39,24 +37,6 @@ const fieldOf = (node: AstNode, field: string): unknown => Reflect.get(node, fie
 const isAstNode = (value: unknown): value is AstNode =>
   isRecord(value) && typeof value["type"] === "string" && Array.isArray(value["range"])
 
-/** Visit `node` and its descendants, leaving out each subtree `skip` names. */
-const walkAst = (
-  node: unknown,
-  visit: (n: AstNode) => void,
-  skip: (n: AstNode) => boolean = () => false,
-): void => {
-  if (Array.isArray(node)) {
-    for (const child of node) walkAst(child, visit, skip)
-    return
-  }
-  if (!isAstNode(node) || skip(node)) return
-  visit(node)
-  for (const key in node) {
-    if (key === "type" || key === "loc" || key === "range" || key === "parent") continue
-    walkAst(fieldOf(node, key), visit, skip)
-  }
-}
-
 const getStringField = (n: AstNode, field: string): string | undefined => {
   const v = fieldOf(n, field)
   return typeof v === "string" ? v : undefined
@@ -71,40 +51,6 @@ const getNodeArrayField = (n: AstNode, field: string): AstNode[] | undefined => 
   const v = fieldOf(n, field)
   if (!Array.isArray(v)) return undefined
   return v.filter(isAstNode)
-}
-
-const getLocLine = (node: AstNode, edge: "start" | "end"): number | undefined => {
-  const loc = fieldOf(node, "loc")
-  if (!isRecord(loc)) return undefined
-  const point = loc[edge]
-  if (!isRecord(point)) return undefined
-  const line = point["line"]
-  return typeof line === "number" ? line : undefined
-}
-
-/**
- * Whether a `// gent/<rule>: allow <reason>` comment sits on the line above
- * `node`, or, when `sameLine` holds, trails it on its own line. The reason
- * must be non-empty, so the carve-out says why this one site is intentional.
- */
-const hasAllowComment = (
-  context: Context,
-  node: AstNode,
-  rule: string,
-  sameLine: boolean,
-): boolean => {
-  const startLine = getLocLine(node, "start")
-  if (startLine === undefined) return false
-  const allow = new RegExp(`\\bgent/${rule}:\\s*allow\\s+\\S`)
-  return context.sourceCode
-    .getAllComments()
-    .filter(isAstNode)
-    .some((comment) => {
-      const endLine = getLocLine(comment, "end")
-      const placed = endLine === startLine - 1 || (sameLine && endLine === startLine)
-      const value = getStringField(comment, "value")
-      return placed && value !== undefined && allow.test(value)
-    })
 }
 
 /** A lint fixture: a file the rule tests run through the rules. */
@@ -467,68 +413,6 @@ const findArrowInFirstArg = (node: AstNode, propName: string): AstNode | undefin
   const arg = args[0]
   if (!isAstNode(arg)) return undefined
   return findArrowInObject(arg, propName)
-}
-
-/** Classification for a CallExpression that smells like dynamic loading. */
-type DynamicLoadKind = "require" | "moduleRequire" | "createRequire"
-
-const DYNAMIC_LOAD_MESSAGES: Readonly<Record<DynamicLoadKind, string>> = {
-  require:
-    "`require(...)` is forbidden — use a top-level static `import` statement. CommonJS dynamic loading defeats static analysis, leaks into the compiled binary unpredictably, and is the wrong primitive in an ESM Bun project. If this exact site is a documented architectural exception, add `// gent/no-dynamic-imports: allow <reason>` immediately above it.",
-  moduleRequire:
-    "`module.require(...)` is forbidden — use a top-level static `import` statement. Same rationale as bare `require`: it bypasses static analysis. If this exact site is a documented architectural exception, add `// gent/no-dynamic-imports: allow <reason>` immediately above it.",
-  createRequire:
-    "`createRequire(...)` / createRequire aliases are forbidden — use a top-level static `import` statement. The createRequire bridge from `node:module` is the canonical way to smuggle CommonJS into ESM and is exactly what this rule is meant to catch. If this exact site is a documented architectural exception, add `// gent/no-dynamic-imports: allow <reason>` immediately above it.",
-}
-
-/** Return the dynamic-load kind for a CallExpression's callee, or undefined. */
-const classifyDynamicLoadCall = (
-  callee: AstNode | undefined,
-  createRequireAliases: ReadonlySet<string>,
-): DynamicLoadKind | undefined => {
-  if (callee === undefined) return undefined
-  // Bare `require(...)`
-  if (callee.type === "Identifier" && getStringField(callee, "name") === "require") {
-    return "require"
-  }
-  if (callee.type === "Identifier") {
-    const name = getStringField(callee, "name")
-    if (name !== undefined && createRequireAliases.has(name)) return "createRequire"
-  }
-  // `module.require(...)`
-  if (callee.type === "MemberExpression") {
-    const obj = getNodeField(callee, "object")
-    const prop = getNodeField(callee, "property")
-    if (
-      obj?.type === "Identifier" &&
-      getStringField(obj, "name") === "module" &&
-      prop?.type === "Identifier" &&
-      getStringField(prop, "name") === "require"
-    ) {
-      return "moduleRequire"
-    }
-  }
-  // `createRequire(import.meta.url)("x")` — outer call's callee is a
-  // CallExpression whose callee is `Identifier{name:"createRequire"}`.
-  if (callee.type === "CallExpression") {
-    const inner = getNodeField(callee, "callee")
-    if (inner?.type === "Identifier" && getStringField(inner, "name") === "createRequire") {
-      return "createRequire"
-    }
-  }
-  return undefined
-}
-
-const createRequireAliasName = (node: AstNode): string | undefined => {
-  if (node.type !== "VariableDeclarator") return undefined
-  const id = getNodeField(node, "id")
-  const init = getNodeField(node, "init")
-  if (id?.type !== "Identifier" || init?.type !== "CallExpression") return undefined
-  const callee = getNodeField(init, "callee")
-  if (callee?.type !== "Identifier" || getStringField(callee, "name") !== "createRequire") {
-    return undefined
-  }
-  return getStringField(id, "name")
 }
 
 // ── a whole-object encode decides no identity ───────────────────────────────
@@ -937,70 +821,6 @@ const plugin: Plugin = {
                 node: n,
               })
             })
-          },
-        }
-      },
-    },
-
-    /**
-     * Bans dynamic `import("...")` expressions and `require(...)` calls
-     * across the codebase.
-     *
-     * Why: dynamic imports defeat static analysis (typecheck, bundler graph,
-     * dead-code elimination) and hide test/runtime coupling. The repo's
-     * compiled-binary deployment (`Bun.build` for the TUI) requires every
-     * module to be reachable through static imports — dynamic `import(...)`
-     * results in load failures at runtime in the binary.
-     *
-     * Allowed: expression-level opt-in only. Put
-     * `// gent/no-dynamic-imports: allow <reason>` immediately above the exact
-     * dynamic load. This keeps the unusual boundary visible at the call site
-     * and prevents whole-file exceptions from hiding new dynamic loads.
-     *
-     * Valid:   import { foo } from "./foo.js"
-     * Invalid: const foo = await import("./foo.js")
-     * Invalid: const fs = require("node:fs")
-     *
-     * The allow comment must include a non-empty reason.
-     *
-     * Stricter than `effect/noDynamicImports` in 0.18.0, which accepts a
-     * named or lazily bound `import()`. Goes when gent consumes
-     * oxlint-plugin-effect 0.19.0, whose strict mode holds this line.
-     */
-    "no-dynamic-imports": {
-      create(context) {
-        const createRequireAliases = new Set<string>()
-
-        const reportUnlessAllowed = (node: AstNode, message: string): void => {
-          if (hasAllowComment(context, node, "no-dynamic-imports", false)) return
-          context.report({ message, node })
-        }
-
-        return {
-          Program(node) {
-            walkAst(node, (child) => {
-              const alias = createRequireAliasName(child)
-              if (alias !== undefined) createRequireAliases.add(alias)
-            })
-          },
-          VariableDeclarator(node) {
-            if (!isAstNode(node)) return
-            const alias = createRequireAliasName(node)
-            if (alias === undefined) return
-            reportUnlessAllowed(node, DYNAMIC_LOAD_MESSAGES.createRequire)
-          },
-          ImportExpression(node) {
-            reportUnlessAllowed(
-              node,
-              `Dynamic \`import(...)\` is forbidden — use a top-level static import. Dynamic imports defeat static analysis and break the compiled-binary build (Bun.build cannot resolve runtime-determined module paths). If this exact site is a documented architectural exception, add \`// gent/no-dynamic-imports: allow <reason>\` immediately above it.`,
-            )
-          },
-          CallExpression(node) {
-            const callee: unknown = node.callee
-            if (!isAstNode(callee)) return
-            const kind = classifyDynamicLoadCall(callee, createRequireAliases)
-            if (kind === undefined) return
-            reportUnlessAllowed(node, DYNAMIC_LOAD_MESSAGES[kind])
           },
         }
       },

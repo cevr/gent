@@ -11,7 +11,6 @@
     "gent/core-entry-boundary": "error",
     "gent/declared-workspace-imports": "error",
     "gent/no-define-extension-throw": "error",
-    "gent/no-dynamic-imports": "error",
     "gent/no-bun-outside-adapter": "error",
     "gent/child-session-writer-admits": "error",
     "gent/no-identity-encode": "error"

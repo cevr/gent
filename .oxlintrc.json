@@ -32,8 +32,6 @@
     "gent/declared-workspace-imports": "error",
     // Custom — definePackage/defineExtension factories must not throw
     "gent/no-define-extension-throw": "error",
-    // Custom — no dynamic `import(...)` or `require(...)` (compiled-binary safety)
-    "gent/no-dynamic-imports": "error",
     // Custom — no Bun.* outside adapter, entrypoint, tooling, and test harness boundaries
     "gent/no-bun-outside-adapter": "error",
     // Custom — a child-session writer admits the depth in its own function

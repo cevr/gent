@@ -253,12 +253,6 @@ const CASES: ReadonlyArray<RuleCase> = [
     expectedCount: 1,
   },
   {
-    rule: "gent/no-dynamic-imports",
-    invalid: "no-dynamic-imports.invalid.ts",
-    valid: ["no-dynamic-imports.valid.ts"],
-    expectedCount: 7,
-  },
-  {
     rule: "gent/no-bun-outside-adapter",
     invalid: "no-bun-outside-adapter.invalid.ts",
     // valid file lives at `runtime/gent-platform-bun.ts` — the canonical

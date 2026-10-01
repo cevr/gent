@@ -3676,8 +3676,8 @@ const DYNAMIC_IMPORT_NAMESPACE = new RegExp(
 )
 
 /**
- * The names a file reads through a literal dynamic import (allowed where a
- * `gent/no-dynamic-imports` comment says why): a member read off the
+ * The names a file reads through a literal dynamic import (allowed where an
+ * `effect/noDynamicImports` suppression says why): a member read off the
  * import, a destructured key, or a member read off the binding it is
  * stored in. A read on a `@ts-expect-error` line reads nothing.
  */

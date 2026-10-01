@@ -604,8 +604,8 @@ const EntriesProbe = Schema.Struct({
   helperSessionId: Schema.Unknown,
   packageCreateSignal: Schema.Unknown,
 })
-// gent/no-dynamic-imports: allow the test imports a server-style file as the server loader does
-const importFile = (file: string) => Effect.tryPromise(() => import(file)) // oxlint-disable-line effect/noDynamicImports -- see the reason above
+// oxlint-disable-next-line effect/noDynamicImports -- the test imports a server-style file as the server loader does
+const importFile = (file: string) => Effect.tryPromise(() => import(file))
 const runtime = makeClientExtensionRuntime()
 describe("loadTuiExtensions Effect setup", () => {
   it.scopedLive("does not import project code until the user grants trust", () =>

@@ -3930,7 +3930,7 @@ describe("an export is read only through an import", () => {
         "",
       ].join("\n"),
     }
-    const allow = "// gent/no-dynamic-imports: allow the probe loads late"
+    const allow = "// oxlint-disable-next-line effect/noDynamicImports -- the probe loads late"
     const readers = [
       `${allow}\nconst direct = (await import("../src/probe")).probe`,
       `${allow}\nconst { probe: late, run } = await import("../src/probe")`,

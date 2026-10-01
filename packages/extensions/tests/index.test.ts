@@ -20,8 +20,8 @@ import {
 const EFFECT_SPECIFIER = /^(?:effect(?:\/.+)?|@effect\/.+)$/
 const IMPORT_SOURCE = /(?:\bfrom\s+|\bimport\s*\(\s*|^\s*import\s+)"([^"]+)"/gm
 
-// gent/no-dynamic-imports: allow the test compares each binding with the module its name resolves to here
-const importSpecifier = (specifier: string) => Effect.promise(() => import(specifier)) // oxlint-disable-line effect/noDynamicImports -- see the reason above
+// oxlint-disable-next-line effect/noDynamicImports -- the test compares each binding with the module its name resolves to here
+const importSpecifier = (specifier: string) => Effect.promise(() => import(specifier))
 
 describe("builtin peer modules", () => {
   it.live("bind exactly the effect modules the shipped extensions import", () =>
