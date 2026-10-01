@@ -23,7 +23,7 @@ const repoRoot = decodeURIComponent(new URL("../../..", import.meta.url).pathnam
 )
 // The TUI binary owns `gent server start`; it runs from its package, whose
 // bunfig preloads the JSX transform.
-const tuiDirectory = `${repoRoot}/apps/tui`
+export const tuiDirectory = `${repoRoot}/apps/tui`
 
 class ServerProcessFixtureError extends Schema.TaggedError<ServerProcessFixtureError>()(
   "@gent/e2e/src/server-process-fixture/ServerProcessFixtureError",
