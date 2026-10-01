@@ -1,4 +1,4 @@
-import { Context, Effect, FiberMap, Layer, Option, Ref, Schema, Stream } from "effect"
+import { Context, Effect, FiberMap, Layer, Option, Order, Ref, Schema, Stream } from "effect"
 import {
   type AgentEvent,
   BranchId,
@@ -8,9 +8,11 @@ import {
   ExtensionContext,
   ExtensionHost,
   ExtensionId,
+  headChars,
   isSpawnedSession,
   request,
   SessionId,
+  tailChars,
 } from "@gent/core/extensions/api"
 
 // Test seam: only tests read these exports. The row shapes (LiveAgentRow,
@@ -202,13 +204,13 @@ export const buildRowTree = (rows: ReadonlyArray<AgentRow>): ReadonlyArray<Agent
     const recency =
       Option.getOrElse(right.updatedAt, () => 0) - Option.getOrElse(left.updatedAt, () => 0)
     if (recency !== 0) return recency
-    return rowKey(left).localeCompare(rowKey(right))
+    return Order.String(rowKey(left), rowKey(right))
   }
   const byStart = (left: AgentRow, right: AgentRow) => {
     const start =
       Option.getOrElse(left.createdAt, () => 0) - Option.getOrElse(right.createdAt, () => 0)
     if (start !== 0) return start
-    return rowKey(left).localeCompare(rowKey(right))
+    return Order.String(rowKey(left), rowKey(right))
   }
   // The parent a row nests under here: one in the same section.
   const parentKeyOf = (row: AgentRow): Option.Option<string> =>
@@ -315,7 +317,7 @@ export const foldActivity = (state: ActivityFold, event: AgentEvent): ActivityFo
     case "StreamStarted":
       return { ...state, partial: "" }
     case "StreamChunk":
-      return { ...state, partial: (state.partial + event.chunk).slice(-4 * ACTIVITY_CHARS) }
+      return { ...state, partial: tailChars(state.partial + event.chunk, 4 * ACTIVITY_CHARS) }
     case "ToolCallStarted":
       return {
         ...state,
@@ -340,14 +342,14 @@ export const foldActivity = (state: ActivityFold, event: AgentEvent): ActivityFo
 /** One line for the tray: the newest running tool and what it works on, else the last streamed line. */
 export const activityText = (state: ActivityFold): Option.Option<string> =>
   Option.fromUndefinedOr(state.tools.at(-1)).pipe(
-    Option.map((tool) => [...`running ${tool.label}`].slice(0, ACTIVITY_CHARS).join("")),
+    Option.map((tool) => headChars(`running ${tool.label}`, ACTIVITY_CHARS)),
     Option.orElse(() =>
       Option.fromUndefinedOr(
         state.partial
           .split("\n")
           .map((text) => text.trim())
           .findLast((text) => text.length > 0),
-      ).pipe(Option.map((line) => [...line].slice(0, ACTIVITY_CHARS).join(""))),
+      ).pipe(Option.map((line) => headChars(line, ACTIVITY_CHARS))),
     ),
   )
 

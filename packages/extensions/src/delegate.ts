@@ -42,11 +42,11 @@ import {
   ExtensionHost,
   ExtensionId,
   type ExtensionServiceError,
+  headChars,
   headTailChars,
   isRuntimeUserMessage,
   latestAssistantText,
   type Message,
-  makeRunSpec,
   MessageId,
   RequestId,
   type RunSpec,
@@ -329,11 +329,10 @@ const childMessages = (entry: DelegateEntry) =>
   })
 
 /** Children never spend the parent's patience on a broken model. */
-const childRunSpec = (base: RunSpec): RunSpec =>
-  makeRunSpec({
-    ...base,
-    overrides: { maxModelAttempts: CHILD_MAX_MODEL_ATTEMPTS, ...base.overrides },
-  })
+const childRunSpec = (base: RunSpec = {}): RunSpec => ({
+  ...base,
+  overrides: { maxModelAttempts: CHILD_MAX_MODEL_ATTEMPTS, ...base.overrides },
+})
 
 // ── completion delivery ─────────────────────────────────────────────────────
 
@@ -354,9 +353,9 @@ const completionError = (outcome: ChildOutcome, error: Option.Option<string>) =>
   error.pipe(
     Option.filter(() => failureNames(outcome).length > 0),
     Option.map((text) => {
-      const chars = [...text.replace(/\s+/g, " ").trim()]
-      if (chars.length <= maximumErrorChars) return chars.join("")
-      return `${chars.slice(0, maximumErrorChars - 1).join("")}…`
+      const line = text.replace(/\s+/g, " ").trim()
+      if (line.length <= maximumErrorChars) return line
+      return `${headChars(line, maximumErrorChars - 1)}…`
     }),
     Option.filter((text) => text.length > 0),
   )
@@ -833,7 +832,7 @@ const admitChild = Effect.fn("Delegate.admit")(function* (params: AdmitParams) {
           parentBranchId: ctx.branchId,
           admission: {
             agent: DELEGATE_AGENT_NAME,
-            runSpec: childRunSpec(makeRunSpec(params.runSpec)),
+            runSpec: childRunSpec(params.runSpec),
           },
           ...Record.filter(
             { requestId: params.requestId, historyBranchId: params.historyBranchId },
@@ -1029,9 +1028,9 @@ const maximumNoticeTaskChars = 80
 const maximumNoticeChildren = 8
 
 const noticeTask = (prompt: string) => {
-  const chars = [...(prompt.trim().split("\n")[0] ?? "")]
-  if (chars.length <= maximumNoticeTaskChars) return chars.join("")
-  return `${chars.slice(0, maximumNoticeTaskChars - 1).join("")}…`
+  const line = prompt.trim().split("\n")[0] ?? ""
+  if (line.length <= maximumNoticeTaskChars) return line
+  return `${headChars(line, maximumNoticeTaskChars - 1)}…`
 }
 
 /** One line, so the tray and the agents view show it whole. */
@@ -1209,7 +1208,7 @@ export const StartChild = tool({
       ),
       requestId: RequestId.make(ctx.toolCallId),
       toolCallId: ctx.toolCallId,
-      runSpec: makeRunSpec({ overrides: childOverrides(params.overrides) }),
+      runSpec: { overrides: childOverrides(params.overrides) },
     })
     return { requestId: entry.requestId, sessionId: entry.sessionId, branchId: entry.branchId }
   }),

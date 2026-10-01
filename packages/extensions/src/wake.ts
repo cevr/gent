@@ -28,6 +28,7 @@ import {
   type ExtensionServiceError,
   omitUndefined,
   request,
+  tailChars,
   tool,
 } from "@gent/core/extensions/api"
 import { makeBranchStateStore } from "./branch-state-store.js"
@@ -215,7 +216,7 @@ export const wakeMessage = (entry: Extract<WakeEntry, { readonly _tag: "alarm" }
 const tailOf = (text: string): string => {
   const trimmed = text.trim()
   if (trimmed.length <= MONITOR_OUTPUT_TAIL_CHARS) return trimmed
-  return `…${trimmed.slice(-MONITOR_OUTPUT_TAIL_CHARS)}`
+  return `…${tailChars(trimmed, MONITOR_OUTPUT_TAIL_CHARS)}`
 }
 
 const monitorHead = (

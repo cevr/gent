@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { DateTime, Effect, Option, Predicate, Schedule } from "effect"
+import { DateTime, Effect, Option, Order, Predicate, Schedule } from "effect"
 import { createEffect, createSignal, For, on, Show } from "solid-js"
 import {
   type AgentRowEntry,
@@ -108,7 +108,8 @@ const inStartOrder = (rows: ReadonlyArray<AgentRowEntry>): ReadonlyArray<AgentRo
   rows.toSorted((left, right) => {
     const byStart = (left.createdAt ?? 0) - (right.createdAt ?? 0)
     if (byStart !== 0) return byStart
-    return `${left.sessionId}:${left.branchId}`.localeCompare(
+    return Order.String(
+      `${left.sessionId}:${left.branchId}`,
       `${right.sessionId}:${right.branchId}`,
     )
   })

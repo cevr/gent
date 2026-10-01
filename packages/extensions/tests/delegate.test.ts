@@ -48,6 +48,7 @@ import {
   waitFor,
   ConfigService,
   UserConfig,
+  systemTextOf,
 } from "@gent/core/test-utils"
 import {
   BranchId,
@@ -208,9 +209,6 @@ const promptTexts = (prompt: Prompt.Prompt): ReadonlyArray<string> =>
       return [part.text]
     })
   })
-
-/** The prompt's system text, where standing extension prompt sections land. */
-const systemText = (prompt: Prompt.Prompt): string => turnRequestText(prompt).systemPrompt
 
 /** The turn notices the runtime places after the conversation. */
 const noticeText = (prompt: Prompt.Prompt): string => turnRequestText(prompt).notices
@@ -1099,7 +1097,7 @@ describe("a parent interrupt", () => {
             if (texts[0]?.endsWith(childTask) === true)
               return Effect.succeed(stalled("working", childStreaming))
             parentRequests.push({
-              system: systemText(options.prompt),
+              system: systemTextOf(options.prompt),
               notices: noticeText(options.prompt),
               last: texts.at(-1) ?? "",
             })
@@ -2306,10 +2304,10 @@ describe("delegation guidance", () => {
           let parentCalls = 0
           const providerLayer = LanguageModelLayers.testStream((options) => {
             if (promptTexts(options.prompt)[0]?.endsWith(childTask) === true) {
-              childSystems.push(systemText(options.prompt))
+              childSystems.push(systemTextOf(options.prompt))
               return Effect.succeed(reply("pong"))
             }
-            parentSystems.push(systemText(options.prompt))
+            parentSystems.push(systemTextOf(options.prompt))
             parentCalls += 1
             if (parentCalls === 1) {
               return Effect.succeed(toolStep("delegate.start", { todo: childTask }, "start-1"))

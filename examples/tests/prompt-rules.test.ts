@@ -1,9 +1,9 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Fiber, Stream } from "effect"
-import * as Prompt from "effect/ai/Prompt"
 import {
   createRpcHarness,
   LanguageModelLayers,
+  systemTextOf,
   testAgent,
   testTurnExtension,
   textStep,
@@ -15,15 +15,6 @@ import PromptRulesExtension from "../extensions/prompt-rules.js"
  * through the public entry and its rules reach the model's system prompt.
  */
 
-/** The system text a model call received. */
-const systemText = (prompt: Prompt.RawInput): string =>
-  Prompt.make(prompt)
-    .content.values()
-    .filter((message): message is Prompt.SystemMessage => message.role === "system")
-    .map((message) => message.content)
-    .toArray()
-    .join("\n")
-
 describe("prompt rules example extension", () => {
   it.scopedLive("its rules reach the system prompt of a turn", () =>
     Effect.gen(function* () {
@@ -32,7 +23,7 @@ describe("prompt rules example extension", () => {
         {
           ...textStep("ok"),
           assertOptions: (options) => {
-            prompts.push(systemText(options.prompt))
+            prompts.push(systemTextOf(options.prompt))
           },
         },
       ])

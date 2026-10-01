@@ -7,11 +7,11 @@ import {
   textDeltaPart,
   waitFor,
   createRpcHarness,
+  systemTextOf,
   testLeafContext,
   testToolContext,
 } from "@gent/core/test-utils"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
-import * as Prompt from "effect/ai/Prompt"
 import { ExtensionContext } from "@gent/core/extensions/api"
 import {
   basePromptSections,
@@ -25,12 +25,6 @@ import { e2ePreset } from "./helpers/test-preset.js"
  * The agents extension owns the persona sections and reads project
  * instructions from `AGENTS.md` (or `CLAUDE.md`) on every turn.
  */
-
-const systemText = (prompt: Prompt.Prompt): string =>
-  prompt.content
-    .filter((message): message is Prompt.SystemMessage => message.role === "system")
-    .map((message) => message.content)
-    .join("\n")
 
 /** The helpers read home and cwd off the context and files off the platform, as a turn does. */
 const instructionsIn = (home: string, cwd: string) =>
@@ -92,6 +86,31 @@ describe("project instructions", () => {
     }).pipe(Effect.provide(BunServices.layer)),
   )
 
+  it.scopedLive(
+    "a session in a subdirectory reads each directory's file up to the git root, root first",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* makeTempDirectoryScoped("instructions-home-")
+        const root = yield* makeTempDirectoryScoped("instructions-repo-")
+        // A worktree's `.git` is a file; it marks the root as a directory does.
+        yield* writeFile(`${root}/.git`, "gitdir: /nonexistent/loop-probe-x\n")
+        yield* writeFile(`${root}/AGENTS.md`, "root rules")
+        yield* writeFile(`${root}/packages/core/CLAUDE.md`, "core rules")
+        expect(yield* instructionsIn(home, `${root}/packages/core`)).toBe(
+          "root rules\n---\ncore rules",
+        )
+        // A link to the subdirectory walks up from the directory it names.
+        const links = yield* makeTempDirectoryScoped("instructions-links-")
+        yield* (yield* FileSystem.FileSystem).symlink(`${root}/packages/core`, `${links}/core`)
+        expect(yield* instructionsIn(home, `${links}/core`)).toBe("root rules\n---\ncore rules")
+        // Outside a git work tree only the session's own directory is read.
+        const outer = yield* makeTempDirectoryScoped("instructions-outer-")
+        yield* writeFile(`${outer}/AGENTS.md`, "outer rules")
+        yield* writeFile(`${outer}/sub/AGENTS.md`, "sub rules")
+        expect(yield* instructionsIn(home, `${outer}/sub`)).toBe("sub rules")
+      }).pipe(Effect.provide(BunServices.layer)),
+  )
+
   it.scopedLive("an empty AGENTS.md defers to CLAUDE.md beside it", () =>
     Effect.gen(function* () {
       const home = yield* makeTempDirectoryScoped("instructions-home-")
@@ -130,7 +149,7 @@ describe("project instructions", () => {
       yield* writeFile(`${cwd}/AGENTS.md`, "Answer in Latin.")
       const prompts: Array<string> = []
       const providerLayer = LanguageModelLayers.testStream((options) => {
-        prompts.push(systemText(Prompt.make(options.prompt)))
+        prompts.push(systemTextOf(options.prompt))
         return Effect.succeed(
           Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
         )

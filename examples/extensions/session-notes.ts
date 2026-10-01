@@ -12,6 +12,7 @@
  */
 import { Context, Effect, HashMap, Layer, Option, Ref, Schema } from "effect"
 import {
+  AGENT_PROMPT_PRIORITY,
   defineExtension,
   defineResource,
   ExtensionContext,
@@ -104,7 +105,9 @@ export default defineExtension({
           promptSections: [
             {
               id: "session-notes",
-              priority: 20,
+              // Per-session text sorts after the agent, outside the part a
+              // session shares byte for byte with its children.
+              priority: AGENT_PROMPT_PRIORITY + 20,
               content: notes.map((note) => `- ${note}`).join("\n"),
             },
           ],

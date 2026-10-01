@@ -20,6 +20,7 @@ import {
   toolCallStep,
   waitFor,
   createRpcHarness,
+  systemTextOf,
 } from "@gent/core/test-utils"
 import {
   estimateTextTokens,
@@ -154,24 +155,21 @@ describe("context handoff", () => {
   })
 
   it.scopedLive("instructions reach the system prompt; retained names reach both", () => {
-    let system = Option.none<string>()
+    let system = ""
     let user = ""
     return Effect.gen(function* () {
       const result = yield* compact({
         instructions: "keep the loader decisions",
         retainedBindings: ["rows", "index"],
       })
-      expect(Option.getOrElse(system, () => "")).toContain("keep the loader decisions")
+      expect(system).toContain("keep the loader decisions")
       expect(user).toContain("Names retained on this branch: rows, index")
       expect(result.notice).toContain("Names still bound on this branch: rows, index.")
     }).pipe(
       Effect.provide(
         LanguageModelLayers.testStream((options) => {
           const prompt = Prompt.make(options.prompt)
-          system = Option.fromNullishOr(prompt.content[0]).pipe(
-            Option.filter((message) => message.role === "system"),
-            Option.map((message) => String(message.content)),
-          )
+          system = systemTextOf(prompt)
           user = promptText(prompt)
           return Effect.succeed(
             Stream.fromIterable([textDeltaPart("focused"), finishPart({ finishReason: "stop" })]),
@@ -373,44 +371,117 @@ describe("context handoff", () => {
     },
   )
 
+  const typedMessage = (
+    id: string,
+    text: string,
+    at: number,
+    metadata: NonNullable<Message["metadata"]>,
+  ) => Message.cases.regular.make({ ...textMessage(id, "user", text, at), metadata })
+
   it.scopedLive(
-    "the notice lists what the user wrote whatever its custom type, and leaves out the runtime's and extensions' notices",
-    () => {
-      const typed = (
-        id: string,
-        text: string,
-        at: number,
-        metadata: NonNullable<Message["metadata"]>,
-      ) => Message.cases.regular.make({ ...textMessage(id, "user", text, at), metadata })
-      return Effect.gen(function* () {
+    "the notice lists what the user wrote, by its origin, and leaves out what the runtime, an extension or another session sent",
+    () =>
+      Effect.gen(function* () {
         const result = yield* compact({
           history: [
             textMessage("task", "user", "Rename the billing module.", 1),
             // An older build stored a user's mid-turn correction as "steering".
-            typed("correction", "Keep the old export name.", 2, { customType: "steering" }),
+            typedMessage("correction", "Keep the old export name.", 2, { customType: "steering" }),
             // The user's `/goal` runs as a client request: the goal it queues is the user's.
-            typed("slash", "Rename it in every package.", 3, {
+            typedMessage("slash", "Rename it in every package.", 3, {
               customType: "goal-context",
               fromClient: true,
             }),
+            // A `/btw` question: the pane delivers it, and the user wrote it.
+            typedMessage("btw", "You are a fork of session s1.\n\nWhich package is first?", 3, {
+              customType: "btw-question",
+              extensionId: "@gent/btw",
+              userText: "Which package is first?",
+            }),
             // A later goal continuation is the extension's.
-            typed("goal", "Continue toward the goal.", 4, { customType: "goal-context" }),
-            typed("child", "The child finished.", 5, { customType: "child-completion" }),
-            typed("wake", "The alarm fired.", 6, { customType: "wake" }),
-            typed("step", "Continue.", 7, { customType: "continuation" }),
-            textMessage("work", "assistant", "a".repeat(6_000), 8),
-            textMessage("last", "assistant", "b".repeat(100), 9),
+            typedMessage("goal", "Continue toward the goal.", 4, {
+              customType: "goal-context",
+              extensionId: "@gent/goal",
+            }),
+            typedMessage("child", "The child finished.", 5, {
+              customType: "child-completion",
+              extensionId: "@gent/delegate",
+            }),
+            typedMessage("wake", "The alarm fired.", 6, {
+              customType: "wake",
+              extensionId: "@gent/wake",
+            }),
+            typedMessage("step", "Continue.", 7, { customType: "continuation" }),
+            // A background job's completion, as stored before it had a custom type.
+            typedMessage("job", "Background command completed (exit code 0).", 8, {
+              extensionId: "@gent/exec-tools",
+            }),
+            // Another session's message, a child's question among them.
+            typedMessage("peer", "Which schema do I use?", 9, {
+              customType: "session-message",
+              extensionId: "@gent/session-tools",
+            }),
+            textMessage("work", "assistant", "a".repeat(6_000), 10),
+            textMessage("last", "assistant", "b".repeat(100), 11),
           ],
           budget: budget(1_700),
         })
         expect(result.notice).toContain(
-          "The user's messages, oldest first:\n- task: Rename the billing module.\n- correction: Keep the old export name.\n- slash: Rename it in every package.\n",
+          "The user's messages, oldest first:\n- task: Rename the billing module.\n- correction: Keep the old export name.\n- slash: Rename it in every package.\n- btw: Which package is first?\nBefore you continue",
         )
-        expect(result.notice).not.toContain("- goal:")
-        expect(result.notice).not.toContain("- child:")
-        expect(result.notice).not.toContain("- wake:")
-        expect(result.notice).not.toContain("- step:")
-      }).pipe(Effect.provide(summaryProvider("tail only")), Effect.timeout("10 seconds"))
+      }).pipe(Effect.provide(summaryProvider("tail only")), Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive("a child's handoff lists the task its parent sent as the first message", () =>
+    Effect.gen(function* () {
+      const result = yield* compact({
+        history: [
+          typedMessage("task", "Task from your parent session: audit the loader.", 1, {
+            extensionId: "@gent/delegate",
+          }),
+          typedMessage("peer", "Also check the cache.", 2, {
+            customType: "session-message",
+            extensionId: "@gent/session-tools",
+          }),
+          textMessage("work", "assistant", "a".repeat(6_000), 3),
+          textMessage("last", "assistant", "b".repeat(100), 4),
+        ],
+        budget: budget(1_700),
+      })
+      expect(result.notice).toContain(
+        "The user's messages, oldest first:\n- task: Task from your parent session: audit the loader.\nBefore you continue",
+      )
+    }).pipe(Effect.provide(summaryProvider("tail only")), Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive(
+    "a cut that lands inside an emoji keeps the notice and the summary input well formed",
+    () => {
+      let captured = Option.none<Prompt.Prompt>()
+      // The preview cut (120) and the summary-input cut (8,000) each land
+      // between the two halves of the emoji.
+      const asked = `${"a".repeat(119)}😀 tail`
+      const long = `${"b".repeat(7_999)}😀 tail`
+      return Effect.gen(function* () {
+        const result = yield* compact({
+          history: [
+            textMessage("task", "user", asked, 1),
+            textMessage("work", "assistant", long, 2),
+            textMessage("ask", "user", "go on", 3),
+            textMessage("last", "assistant", "c".repeat(100), 4),
+          ],
+        })
+        expect(result.notice).toContain(`- task: ${"a".repeat(119)}…`)
+        expect(result.notice.isWellFormed()).toBe(true)
+        expect(promptText(Option.getOrThrow(captured)).isWellFormed()).toBe(true)
+      }).pipe(
+        Effect.provide(
+          summaryProvider("bridge", (prompt) => {
+            captured = Option.some(prompt)
+          }),
+        ),
+        Effect.timeout("10 seconds"),
+      )
     },
   )
 
@@ -418,10 +489,7 @@ describe("context handoff", () => {
     let captured = Option.none<Prompt.Prompt>()
     return Effect.gen(function* () {
       yield* compact()
-      const system = Option.getOrThrow(captured).content.find(
-        (message) => message.role === "system",
-      )
-      expect(system?.content).toContain("at most 150 words")
+      expect(systemTextOf(Option.getOrThrow(captured))).toContain("at most 150 words")
     }).pipe(
       Effect.provide(
         summaryProvider("bridge", (prompt) => {

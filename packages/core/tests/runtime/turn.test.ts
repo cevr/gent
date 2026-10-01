@@ -59,7 +59,6 @@ import {
   AgentName,
   DriverRef,
   ModelId,
-  makeRunSpec,
   Model,
   ProviderId,
 } from "../../src/domain/agent"
@@ -1682,7 +1681,7 @@ describe("max turn steps", () => {
         // The budget is the agent's to lower; three steps prove the same exit
         // the default two hundred do.
         yield* runAgentLoop(agentLoop, userMessage("loop forever"), {
-          runSpec: makeRunSpec({ overrides: { maxSteps: 3 } }),
+          runSpec: { overrides: { maxSteps: 3 } },
         })
 
         const events = yield* Ref.get(eventsRef)
@@ -1711,7 +1710,7 @@ describe("max turn steps", () => {
       yield* Effect.gen(function* () {
         const agentLoop = yield* makeAgentLoopService
         yield* runAgentLoop(agentLoop, userMessage("two steps at most"), {
-          runSpec: makeRunSpec({ overrides: { maxSteps: 2 } }),
+          runSpec: { overrides: { maxSteps: 2 } },
         })
         const events = yield* Ref.get(eventsRef)
         expect(events.filter((event) => event._tag === "ToolCallStarted")).toHaveLength(1)
@@ -1747,7 +1746,7 @@ describe("max turn steps", () => {
       yield* Effect.gen(function* () {
         const agentLoop = yield* makeAgentLoopService
         yield* runAgentLoop(agentLoop, userMessage("two steps at most"), {
-          runSpec: makeRunSpec({ overrides: { maxSteps: 2 } }),
+          runSpec: { overrides: { maxSteps: 2 } },
         })
         yield* controls.assertDone
         // A failed `assertOptions` fails the stream, not the test: read the outcome.
@@ -1775,7 +1774,7 @@ describe("max turn steps", () => {
       yield* Effect.gen(function* () {
         const agentLoop = yield* makeAgentLoopService
         yield* runAgentLoop(agentLoop, userMessage("answer once"), {
-          runSpec: makeRunSpec({ overrides: { maxSteps: 1 } }),
+          runSpec: { overrides: { maxSteps: 1 } },
         })
 
         const messageStorage = yield* MessageStorage
@@ -1819,7 +1818,7 @@ describe("max turn steps", () => {
         const agentLoop = yield* makeAgentLoopService
         const fiber = yield* Effect.forkChild(
           runAgentLoop(agentLoop, userMessage("answer once"), {
-            runSpec: makeRunSpec({ overrides: { maxSteps: 1 } }),
+            runSpec: { overrides: { maxSteps: 1 } },
           }),
         )
         yield* controls.waitForCall(0)
@@ -2920,9 +2919,9 @@ describe("turn record", () => {
         const sessionId = SessionId.make("admission-recovery-session")
         const branchId = BranchId.make("admission-recovery-branch")
         const addendum = "CHILD-ADDENDUM-SURVIVES-RESTART"
-        const runSpec = makeRunSpec({
+        const runSpec = {
           overrides: { deniedTools: ["resume_probe"], systemPromptAddendum: addendum },
-        })
+        }
         type SeenRequest = { readonly tools: ReadonlyArray<string>; readonly prompt: string }
         const seenRequest = (options: LanguageModel.ProviderOptions): SeenRequest => ({
           tools: options.tools.map((entry) => entry.name),

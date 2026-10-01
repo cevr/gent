@@ -3,7 +3,7 @@
  * prompt that runs as a model turn through the per-request scope.
  */
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Fiber, FileSystem, Path, Schema, Stream } from "effect"
+import { Effect, Fiber, FileSystem, Order, Path, Schema, Stream } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import {
   LanguageModelLayers,
@@ -138,7 +138,7 @@ describe("WorkflowsExtension via RPC", () => {
             (command) => command.extensionId === WORKFLOWS_EXTENSION_ID,
           )
           const displayNames = workflowCommands.map((command) => command.displayName ?? "")
-          expect(displayNames.toSorted((a, b) => a.localeCompare(b))).toEqual([
+          expect(displayNames.toSorted(Order.String)).toEqual([
             "Audit",
             "Counsel",
             "Handoff",
@@ -214,6 +214,7 @@ describe("WorkflowsExtension via RPC", () => {
         expect(research).toContain("Research: inspect the fixture\n")
         expect(research).toContain("citations")
         expect(handoff).toContain("Use the handoff tool with the distilled context")
+        expect(handoff).toContain("\nFocus: inspect the fixture")
         expect(savedPlan).toContain(`/.gent/results/${sessionId}/${branchId}/plan.md`)
         expect(savedPlan).toContain("Do not depend on kernel bindings")
         expect(savedPlan).not.toContain("atomic: true")

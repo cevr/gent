@@ -35,6 +35,7 @@ export {
   captureProviderStopReason,
   createWorkerEnv,
   fakeFetchLayer,
+  freePort,
   type FakeFetchState,
   LanguageModelLayers,
   makeFakeFetchState,
@@ -46,6 +47,7 @@ export {
   type SequenceStep,
   textStep,
   toolCallStep,
+  systemTextOf,
   turnRequestText,
   waitFor,
 } from "./language-model.js"

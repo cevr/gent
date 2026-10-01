@@ -30,6 +30,12 @@ const MAXIMUM_GOAL_OBJECTIVE_CHARS = 4000
 const GoalStatus = Schema.Literals(["active", "paused", "budget_limited", "complete"])
 type GoalStatus = typeof GoalStatus.Type
 
+/** A status as a reader says it: `budget_limited` is "out of budget". */
+const statusWords = (status: GoalStatus): string => {
+  if (status === "budget_limited") return "out of budget"
+  return status
+}
+
 /** One durable objective per branch. Token and time usage accumulate per turn. */
 export const GoalState = Schema.Struct({
   goalId: Schema.String,
@@ -279,7 +285,7 @@ const createGoal = (input: CreateGoalInput) =>
       Effect.gen(function* () {
         if (Option.isSome(current) && isPendingGoal(current.value)) {
           return yield* new GoalError({
-            message: `A goal is already ${current.value.status}; clear or complete it first`,
+            message: `A goal is already ${statusWords(current.value.status)}; clear or complete it first`,
           })
         }
         const time = yield* now
@@ -304,6 +310,8 @@ const createGoal = (input: CreateGoalInput) =>
 
 interface StatusChange {
   readonly status: GoalState["status"]
+  /** The change as the user asked for it, for an error message. */
+  readonly verb: "pause" | "resume" | "complete"
   readonly allowed: ReadonlyArray<GoalState["status"]>
   /** A fresh budget; required to leave `budget_limited`, since the old one is spent. */
   readonly tokenBudget: Option.Option<number>
@@ -320,7 +328,7 @@ const setStatus = (change: StatusChange) =>
           return yield* new GoalError({ message: "No goal on this branch" })
         if (!change.allowed.includes(current.value.status)) {
           return yield* new GoalError({
-            message: `Cannot ${change.status} a goal that is ${current.value.status}`,
+            message: `Cannot ${change.verb} a goal that is ${statusWords(current.value.status)}`,
           })
         }
         if (
@@ -357,6 +365,7 @@ const setStatus = (change: StatusChange) =>
 
 const completeGoal = setStatus({
   status: "complete",
+  verb: "complete",
   allowed: ["active", "paused", "budget_limited"],
   tokenBudget: Option.none(),
 })
@@ -535,6 +544,7 @@ const GoalCommand = request({
         const parsed = parseBudget(Option.getOrElse(Option.fromUndefinedOr(resume[1]), () => ""))
         const goal = yield* setStatus({
           status: "active",
+          verb: "resume",
           allowed: ["paused", "budget_limited"],
           tokenBudget: parsed.budget,
         })
@@ -548,6 +558,7 @@ const GoalCommand = request({
         case "pause": {
           const goal = yield* setStatus({
             status: "paused",
+            verb: "pause",
             allowed: ["active", "budget_limited"],
             tokenBudget: Option.none(),
           })

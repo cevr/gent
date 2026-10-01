@@ -43,6 +43,7 @@ import {
   testSqliteStorage,
   ApprovalService,
   turnRequestText,
+  systemTextOf,
 } from "@gent/core/test-utils"
 import { BunServices } from "@effect/platform-bun"
 import * as Prompt from "effect/ai/Prompt"
@@ -160,7 +161,9 @@ const layer = Layer.mergeAll(
 const seedTranscript = Effect.gen(function* () {
   yield* ensureStorageParents({ sessionId: sessionIdContextHost, branchId: branchIdContextHost })
   const storage = yield* MessageStorage
-  const lines = Array.from({ length: 30 }, (_, index) => `line ${index + 1}`).join("\n")
+  const plain = Array.from({ length: 30 }, (_, index) => `line ${index + 1}`).join("\n")
+  // The 120-character preview cut falls between the emoji's two halves.
+  const lines = `${plain.slice(0, 119)}😀${plain.slice(119)}`
   yield* storage.createMessage(
     Message.cases.regular.make({
       id: MessageId.make("m-long"),
@@ -238,6 +241,7 @@ describe("cell context host", () => {
       expect(first.entries?.map((entry) => entry.id)).toEqual(["m-long"])
       expect(first.entries?.[0]?.role).toBe("assistant")
       expect(first.entries?.[0]?.preview.startsWith("line 1 line 2")).toBe(true)
+      expect(first.entries?.[0]?.preview.isWellFormed()).toBe(true)
       expect(first.entries?.[0]?.chars).toBeGreaterThan(200)
       const rest = decodeReply(
         yield* handleContextCall({
@@ -701,10 +705,7 @@ const cellOnly = (step: SequenceStep): SequenceStep => ({
   ...step,
   assertOptions: (options) => {
     expect(options.tools.map((tool) => tool.name)).toEqual(["cell"])
-    const system = options.prompt.content
-      .filter((message) => message.role === "system")
-      .map((message) => message.content)
-      .join("\n")
+    const system = systemTextOf(options.prompt)
     expect(system).toContain("## Host Tools")
     expect(system).toContain("- tools.read(input: { path: string")
     expect(system).toContain("`await tools(id)` returns its full input schema")
@@ -1181,10 +1182,7 @@ describe("branch cell lifetime", () => {
             // The allow list scopes the host tools inside the child's cell; the cell
             // stays the surface and the denied tool leaves the catalog.
             expect(options.tools.map((tool) => tool.name)).toEqual(["cell"])
-            const system = options.prompt.content
-              .filter((message) => message.role === "system")
-              .map((message) => message.content)
-              .join("\n")
+            const system = systemTextOf(options.prompt)
             expect(system).toContain("Report the verified result")
             expect(system).toContain("- tools.read_session(input: { sessionId: string")
             expect(system).not.toContain("- tools.delegate.start(")
@@ -2376,12 +2374,7 @@ describe("host tool catalog budget", () => {
         const recordSystem = (step: SequenceStep): SequenceStep => ({
           ...step,
           assertOptions: (options) => {
-            systems.push(
-              options.prompt.content
-                .filter((message) => message.role === "system")
-                .map((message) => String(message.content))
-                .join("\n"),
-            )
+            systems.push(systemTextOf(options.prompt))
           },
         })
         const code = [

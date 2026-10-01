@@ -14,6 +14,8 @@ import {
   AuthMethod,
   DEFAULT_RETRY_POLICY,
   defineExtension,
+  DriverError,
+  DriverFailureId,
   ExtensionHost,
   type ModelDriverContribution,
   ProviderAuthError,
@@ -162,21 +164,16 @@ const wireFormatOf = (wire: Option.Option<ModelWire>): Option.Option<WireFormat>
     Option.flatMap((npm) => Option.fromUndefinedOr(WIRE_FORMATS.get(npm))),
   )
 
-/** A model whose catalog entry names no wire format the driver speaks. */
-class UnsupportedWireFormat extends Schema.TaggedError<UnsupportedWireFormat>(
-  "@gent/extensions/src/opencode/UnsupportedWireFormat",
-)("UnsupportedWireFormat", {
-  message: Schema.String,
-}) {}
-
+/** A model whose catalog entry names no wire format the driver speaks: an expected failure. */
 const unsupportedWireFormat = (
   gateway: Gateway,
   modelName: string,
   wire: Option.Option<ModelWire>,
-): UnsupportedWireFormat => {
+): DriverError => {
   const npm = Option.flatMap(wire, (value) => Option.fromUndefinedOr(value.npm))
-  return new UnsupportedWireFormat({
-    message: Option.match(npm, {
+  return new DriverError({
+    driver: DriverFailureId.make(gateway.id),
+    reason: Option.match(npm, {
       onNone: () => `${gateway.name} model "${modelName}" has no entry in the models.dev catalog`,
       onSome: (name) =>
         `${gateway.name} model "${modelName}" speaks the ${name} wire format, which gent does not support`,
@@ -714,8 +711,7 @@ export const buildOpenCodeModelDriver = (
         const apiKey = yield* gatewayApiKey(gateway, Option.fromNullishOr(authInfo), envApiKey)
         const wire = yield* driverModelWire(catalog, `${gateway.id}/${modelName}`)
         const format = wireFormatOf(wire)
-        if (Option.isNone(format))
-          return yield* Effect.die(unsupportedWireFormat(gateway, modelName, wire))
+        if (Option.isNone(format)) return yield* unsupportedWireFormat(gateway, modelName, wire)
         const hints = Option.fromNullishOr(hintsInput)
         const sessionId = yield* Option.match(
           Option.flatMap(hints, (value) => Option.fromUndefinedOr(value.cacheKey)),

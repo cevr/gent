@@ -36,7 +36,9 @@ export default defineExtension({
 })
 ```
 
-That's it. Save as `~/.gent/extensions/greet.ts` and restart gent.
+That's it. Save as `~/.gent/extensions/greet.ts`. The next turn loads it; an
+edited, added or removed extension file reaches the next turn the same way, with
+no restart.
 
 For the smallest complete product loop, see
 `examples/extensions/session-notes.ts`. It is still one file, but covers the
@@ -48,7 +50,7 @@ slash request through the registry surface.
 
 ## Named Concepts
 
-You need at most 7 concepts to write a complete extension:
+You need at most 6 concepts to write a complete extension:
 
 | #   | Concept           | What it is                                          |
 | --- | ----------------- | --------------------------------------------------- |
@@ -61,7 +63,7 @@ You need at most 7 concepts to write a complete extension:
 
 Registration domains: `"tool"`, `"request"`, `"resource"`, `"agent"`,
 `"modelDriver"`. Hook kinds: `"systemPrompt"`,
-`"turnProjection"`, `"turnAfter"`.
+`"turnProjection"`, `"turnAfter"`, `"loopOpen"`, `"sessionDeleted"`.
 
 Extensions import authoring primitives from one path:
 `@gent/core/extensions/api`.
@@ -220,14 +222,15 @@ overrides User overrides Builtin.
 
 ## Disabling Extensions
 
-Create `.gent/disabled-extensions.json`:
+List the extension ids under the `disabledExtensions` key of `.gent/config.json`:
 
 ```json
-["extension-id-to-disable"]
+{ "disabledExtensions": ["extension-id-to-disable"] }
 ```
 
-Both `~/.gent/disabled-extensions.json` (user-level) and
-`.gent/disabled-extensions.json` (project-level) are merged.
+The user list (`~/.gent/config.json`) and the project list
+(`.gent/config.json` in the working directory) are merged. A project list counts
+only when the project is a scope of its own, not when gent runs from home.
 
 ## Capabilities
 
@@ -268,7 +271,8 @@ export default defineExtension({
 - `execute(params)` — returns `Effect`; host access comes from
   `yield* ExtensionContext`
 - Optional: `readonly`, `destructive`, `interactive`, `dispatches`,
-  `promptSnippet`, `promptGuidelines`
+  `promptSnippet`, `promptGuidelines`, `summary` (the one-line result summary
+  a client shows for a call)
 
 `readonly` and `destructive` are provider hints lowered to Effect AI's
 `AiTool.Readonly` / `AiTool.Destructive` annotations. They are not authority
@@ -355,28 +359,30 @@ export default defineExtension({
 ```
 
 Lifecycle extension points are typed hook kinds, not keyed middleware bags:
-`systemPrompt`, `turnProjection`, and `turnAfter`.
+`systemPrompt`, `turnProjection`, `turnAfter`, `loopOpen` (a branch's loop was
+built in this process: re-arm timers, report lost work), and `sessionDeleted`
+(remove what the extension keeps for a deleted session outside the database).
 Each `host.on` call is typed by the kind's input and output.
 
 ## Resource (long-lived state)
 
-A Resource declares a stable `id`, its scope (lifetime), and a service Layer
-plus optional `start` and `stop` effects. Resources build in extension
-resolution order, so a resource may depend on services from extensions that
+A Resource is `defineResource({ id, scope, layer })`: a stable `id`, its scope
+(lifetime), and a service Layer. Startup and shutdown work lives in the layer
+itself (`Layer.effect`, with `Effect.addFinalizer` or `acquireRelease`).
+Resources build in extension resolution order, so a resource may depend on services from extensions that
 resolve before its own. Extension-owned state is a resource whose
 service is a `Ref` (or any Effect data cell) behind the extension's own Tag.
 True actor protocols belong at their owning runtime
 boundary through Effect Entity/RPC, not in extension registrations.
 
-| Scope     | Lifetime        |
-| --------- | --------------- |
-| `process` | Server lifetime |
+| Scope     | Lifetime              |
+| --------- | --------------------- |
+| `process` | Server lifetime       |
+| `branch`  | One agent-loop branch |
 
-`process` is the only public Resource scope today. `cwd`, `session`, and
-`branch` are intentionally absent until those lifetimes have real host owners.
-A `start` failure degrades only the owning extension, removes its dependent
-contributions from active registries, and appears in extension health surfaces
-including `gent doctor`.
+`cwd` and `session` are absent until those lifetimes have real host owners. A
+`branch` resource starts without an `ExtensionContext`; work that needs the
+session facade waits for the `loopOpen` hook.
 
 ```ts
 import { defineExtension, defineResource, ExtensionHost } from "@gent/core/extensions/api"

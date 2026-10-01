@@ -10,13 +10,9 @@ import { ChildProcess } from "effect/process"
  */
 const catalogTest = it.scopedLive.layer(BunServices.layer)
 
-const PACKAGE_DIR = new URL("..", import.meta.url).pathname
-const HELPER = new URL("./helpers/catalog-source.ts", import.meta.url).pathname
-const PRELOAD = new URL("../../tooling/src/test-preload.ts", import.meta.url).pathname
-
 /** A test file that reads the catalog home once; it lives in the sandbox, so its imports resolve from here. */
-const READ_ONCE = `import { expect, test } from "bun:test"
-import { testCatalogSource } from "${HELPER}"
+const readOnce = (helper: string) => `import { expect, test } from "bun:test"
+import { testCatalogSource } from "${helper}"
 
 test("reads the home", () => {
   expect(testCatalogSource().home.length).toBeGreaterThan(0)
@@ -28,11 +24,19 @@ describe("the drivers' catalog home", () => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
+      const packageDir = path.resolve(yield* path.fromFileUrl(new URL("..", import.meta.url)))
+      const helper = yield* path.fromFileUrl(
+        new URL("./helpers/catalog-source.ts", import.meta.url),
+      )
+      const preload = yield* path.fromFileUrl(
+        new URL("../../tooling/src/test-preload.ts", import.meta.url),
+      )
       const sandbox = yield* fs.makeTempDirectoryScoped({ prefix: "gent-catalog-home-" })
       const file = path.join(sandbox, "read-once.test.ts")
-      yield* fs.writeFileString(file, READ_ONCE)
-      const handle = yield* ChildProcess.make("bun", ["test", "--preload", PRELOAD, file], {
-        cwd: PACKAGE_DIR,
+      yield* fs.writeFileString(file, readOnce(helper))
+      const handle = yield* ChildProcess.make("bun", ["test", "--preload", preload, file], {
+        cwd: packageDir,
+        forceKillAfter: "5 seconds",
         env: { PATH: yield* Config.String("PATH"), TMPDIR: sandbox, HOME: sandbox, NO_COLOR: "1" },
         extendEnv: false,
       })

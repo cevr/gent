@@ -1,6 +1,5 @@
 import { Option, Schema, SchemaGetter } from "effect"
 import { SessionId } from "./ids.js"
-import { omitUndefined } from "./guards.js"
 
 // ── model ───────────────────────────────────────────────────────────────────
 
@@ -373,8 +372,6 @@ export const RunSpecSchema = Schema.Struct({
   overrides: Schema.optional(AgentRunOverridesSchema),
 })
 export type RunSpec = typeof RunSpecSchema.Type
-
-export const makeRunSpec = (input: RunSpec = {}): RunSpec => omitUndefined(input)
 
 // Agent run depth
 

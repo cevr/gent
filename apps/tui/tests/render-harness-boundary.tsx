@@ -61,7 +61,12 @@ const makeRenderHome = Effect.gen(function* () {
 }).pipe(Effect.provide(BunServices.layer), Effect.orDie)
 
 let sharedServices: Option.Option<Context.Context<unknown>> = Option.none()
-const defaultWorkspaceCwd = new URL("../../..", import.meta.url).pathname
+
+/** The repo root: the workspace a render opens when its test names no cwd. */
+const defaultWorkspaceCwd = Effect.gen(function* () {
+  const path = yield* Path.Path
+  return yield* path.fromFileUrl(new URL("../../..", import.meta.url))
+}).pipe(Effect.provide(BunServices.layer), Effect.orDie)
 
 type MockMethod = (...args: ReadonlyArray<never>) => unknown
 type MockNamespace = { readonly [method: string]: MockMethod }
@@ -397,6 +402,7 @@ export const renderWithProviders = (
       // Each render gets its own home: prompt history, frecency and caches
       // written under it never reach another test or another run.
       const home = yield* makeRenderHome
+      const cwd = options?.cwd ?? (yield* defaultWorkspaceCwd)
       const initialSession = toInitialSession(Option.fromNullishOr(options?.initialSession))
 
       // A kept terminal takes the renderer's bytes as a real stdout would.
@@ -442,11 +448,7 @@ export const renderWithProviders = (
                         }}
                       >
                         <CommandProvider>
-                          <WorkspaceProvider
-                            cwd={options?.cwd ?? defaultWorkspaceCwd}
-                            home={home}
-                            services={services}
-                          >
+                          <WorkspaceProvider cwd={cwd} home={home} services={services}>
                             <ClientProvider
                               client={client}
                               runtime={runtime}

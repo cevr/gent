@@ -13,9 +13,10 @@ import {
   Path,
   Ref,
   Schema,
+  Semaphore,
   SynchronizedRef,
 } from "effect"
-import { Model, ModelId, ProviderId } from "@gent/core/extensions/api"
+import { Model, ModelId, ProviderAuthError, ProviderId } from "@gent/core/extensions/api"
 import { makeTempDirectoryScoped } from "@gent/core/test-utils"
 import { HttpClient, HttpClientResponse } from "effect/http"
 import { TestClock } from "effect/testing"
@@ -24,10 +25,13 @@ import type { ChildProcessSpawner } from "effect/process"
 import {
   catalogSource,
   type CredentialCacheCell,
+  type CredentialFailure,
+  type CredentialStore,
   driverCatalog,
   driverListModels,
   EMPTY_CREDENTIAL_CELL,
   freshEnoughAt,
+  makeCredentialCache,
   modelsDevCatalog,
 } from "../src/providers.js"
 import {
@@ -45,9 +49,8 @@ const platformLayer = Layer.merge(BunFileSystem.layer, Path.layer)
  * The models.dev catalog a driver serves from `listModels`.
  *
  * Covers the disk cache, the 24 h staleness rule, the shape written back, and
- * the per-home memo two drivers share. These behaviors used to live in
- * `packages/core/tests/runtime/provider.test.ts`; they moved here with the
- * code, because the catalog belongs to the driver, not to the kernel.
+ * the per-home memo two drivers share. The catalog belongs to the driver,
+ * not to the kernel.
  */
 
 const TWO_DAYS_MS = 2 * 24 * 60 * 60 * 1000
@@ -773,3 +776,206 @@ describe("freshEnoughAt", () => {
     expect(freshEnoughAt(now - 1, now)).toBe(false)
   })
 })
+
+// ── credential cache ────────────────────────────────────────────────────────
+
+/**
+ * `makeCredentialCache` as both OAuth drivers build it. A cache whose cell
+ * cannot serve finds the credential in one of two sources: a keychain it
+ * reads (Anthropic), or the gent auth store it reads and writes under the
+ * store lock (OpenAI). Each case runs over both. The driver files keep only
+ * what their adapters add: the OpenAI account id and the keychain order.
+ */
+
+const TestCredentials = Schema.Struct({
+  access: Schema.String,
+  refresh: Schema.String,
+  expires: Schema.Finite,
+})
+type TestCredentials = typeof TestCredentials.Type
+
+/** The test clock starts at 0, so an expiry is an offset from the start. */
+const FAR_FUTURE_MS = 10 * 60 * 1000
+const EXPIRING_SOON_MS = 30_000
+const credentialsNamed = (name: string, expires: number): TestCredentials => ({
+  access: `${name}-access`,
+  refresh: `${name}-refresh`,
+  expires,
+})
+
+const SOURCES = ["keychain", "auth store"] as const
+type Source = (typeof SOURCES)[number]
+
+/** A cache over a fresh cell; `source.current` is what the keychain or store holds. */
+const sourcedCache = (
+  kind: Source,
+  initial: TestCredentials,
+  refresh: (
+    held: Option.Option<TestCredentials>,
+  ) => Effect.Effect<TestCredentials, CredentialFailure>,
+) =>
+  Effect.gen(function* () {
+    const source = { current: initial }
+    const cellRef =
+      yield* SynchronizedRef.make<CredentialCacheCell<TestCredentials>>(EMPTY_CREDENTIAL_CELL)
+    const lock = yield* Semaphore.make(1)
+    let read =
+      Option.none<
+        (cached: Option.Option<TestCredentials>) => Effect.Effect<Option.Option<TestCredentials>>
+      >()
+    let store = Option.none<CredentialStore<TestCredentials>>()
+    if (kind === "keychain")
+      read = Option.some(() => Effect.sync(() => Option.some(source.current)))
+    if (kind === "auth store")
+      store = Option.some({
+        update: (f) =>
+          Effect.gen(function* () {
+            const [answer, write] = yield* f(Option.some(source.current))
+            if (Option.isSome(write)) source.current = write.value
+            return answer
+          }).pipe((update) => lock.withPermit(update)),
+        same: (a, b) => a.refresh === b.refresh,
+      })
+    // A keychain refresh, as Claude Code's does, starts from the keychain's
+    // token when the cell holds none, and writes the keychain.
+    let refreshFrom = refresh
+    if (kind === "keychain")
+      refreshFrom = (held) =>
+        refresh(Option.orElse(held, () => Option.some(source.current))).pipe(
+          Effect.tap((fresh) =>
+            Effect.sync(() => {
+              source.current = fresh
+            }),
+          ),
+        )
+    const cache = yield* makeCredentialCache({
+      label: "Test",
+      credentials: TestCredentials,
+      cellRef,
+      expiresAt: (credentials) => credentials.expires,
+      read,
+      refresh: refreshFrom,
+      store,
+    })
+    return { cache, source }
+  })
+
+const onTestClock = <A, E>(effect: Effect.Effect<A, E>) =>
+  effect.pipe(Effect.provide(TestClock.layer()), Effect.timeout("3 seconds"))
+
+for (const kind of SOURCES) {
+  describe(`credential cache over a ${kind}`, () => {
+    it.live("a credential inside the cache lifetime is served though the source changed", () =>
+      onTestClock(
+        Effect.gen(function* () {
+          const { cache, source } = yield* sourcedCache(
+            kind,
+            credentialsNamed("k1", FAR_FUTURE_MS),
+            () => Effect.die(new Error("no refresh expected")),
+          )
+          expect((yield* cache.getFresh).access).toBe("k1-access")
+          source.current = credentialsNamed("k2", FAR_FUTURE_MS)
+          expect((yield* cache.getFresh).access).toBe("k1-access")
+        }),
+      ),
+    )
+
+    it.live("callers that find a stale credential at once share one refresh", () =>
+      onTestClock(
+        Effect.gen(function* () {
+          const started = yield* Deferred.make<void>()
+          const release = yield* Deferred.make<void>()
+          let refreshes = 0
+          const { cache } = yield* sourcedCache(
+            kind,
+            credentialsNamed("seed", EXPIRING_SOON_MS),
+            () =>
+              Effect.gen(function* () {
+                refreshes += 1
+                yield* Deferred.succeed(started, void 0)
+                yield* Deferred.await(release)
+                return credentialsNamed("fresh", FAR_FUTURE_MS)
+              }),
+          )
+          const both = yield* Effect.forkChild(
+            Effect.all([cache.getFresh, cache.getFresh], { concurrency: 2 }),
+          )
+          yield* Deferred.await(started)
+          yield* Deferred.succeed(release, void 0)
+          const results = yield* Fiber.join(both)
+          expect(results.map((credentials) => credentials.access)).toEqual([
+            "fresh-access",
+            "fresh-access",
+          ])
+          expect(refreshes).toBe(1)
+        }),
+      ),
+    )
+
+    it.live("a credential in its last minute is refreshed with its own refresh token", () =>
+      onTestClock(
+        Effect.gen(function* () {
+          const used: Array<string> = []
+          const { cache } = yield* sourcedCache(
+            kind,
+            credentialsNamed("seed", EXPIRING_SOON_MS),
+            (held) =>
+              Effect.sync(() => {
+                used.push(Option.match(held, { onNone: () => "", onSome: (h) => h.refresh }))
+                return credentialsNamed("fresh", FAR_FUTURE_MS)
+              }),
+          )
+          expect((yield* cache.getFresh).access).toBe("fresh-access")
+          expect(used).toEqual(["seed-refresh"])
+        }),
+      ),
+    )
+
+    it.live("a failed refresh reaches the caller and the rotated refresh token stays", () =>
+      onTestClock(
+        Effect.gen(function* () {
+          const used: Array<string> = []
+          const answers: ReadonlyArray<Effect.Effect<TestCredentials, CredentialFailure>> = [
+            Effect.succeed(credentialsNamed("rotated", EXPIRING_SOON_MS)),
+            Effect.fail(new ProviderAuthError({ message: "OAuth 401 from refresh" })),
+            Effect.succeed(credentialsNamed("third", FAR_FUTURE_MS)),
+          ]
+          const { cache } = yield* sourcedCache(
+            kind,
+            credentialsNamed("seed", EXPIRING_SOON_MS),
+            (held) =>
+              Effect.suspend(() => {
+                used.push(Option.match(held, { onNone: () => "", onSome: (h) => h.refresh }))
+                return answers[used.length - 1] ?? Effect.die(new Error("one refresh too many"))
+              }),
+          )
+          expect((yield* cache.getFresh).access).toBe("rotated-access")
+          const failure = yield* Effect.flip(cache.getFresh)
+          expect(failure.message).toContain("401")
+          expect((yield* cache.getFresh).access).toBe("third-access")
+          // A cleared cell would send the spent seed token the third time.
+          expect(used).toEqual(["seed-refresh", "rotated-refresh", "rotated-refresh"])
+        }),
+      ),
+    )
+
+    it.live("a rejected credential is refreshed on the next call, though it has not expired", () =>
+      onTestClock(
+        Effect.gen(function* () {
+          let refreshes = 0
+          const seed = credentialsNamed("seed", FAR_FUTURE_MS)
+          const { cache } = yield* sourcedCache(kind, seed, () =>
+            Effect.sync(() => {
+              refreshes += 1
+              return credentialsNamed("fresh", FAR_FUTURE_MS)
+            }),
+          )
+          expect((yield* cache.getFresh).access).toBe("seed-access")
+          yield* cache.invalidate(seed)
+          expect((yield* cache.getFresh).access).toBe("fresh-access")
+          expect(refreshes).toBe(1)
+        }),
+      ),
+    )
+  })
+}

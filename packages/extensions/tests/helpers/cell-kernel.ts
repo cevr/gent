@@ -36,7 +36,16 @@ import type { OwnedToolCallAddress } from "@gent/core/extensions/branch-tools"
 // ── cell worker build ───────────────────────────────────────────────────────
 
 /** Where the direct kernel tests run their workers: this package. */
-export const packageDirectory = new URL("../..", import.meta.url).pathname
+export const packageDirectory = Effect.gen(function* () {
+  const path = yield* Path.Path
+  return path.resolve(yield* path.fromFileUrl(new URL("../..", import.meta.url)))
+})
+
+/** The cell worker entry the builds and the script launch run. */
+export const cellWorkerSource = Effect.gen(function* () {
+  const path = yield* Path.Path
+  return yield* path.fromFileUrl(new URL("../../src/cell-worker-boundary.ts", import.meta.url))
+})
 
 export const buildCellWorker = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
@@ -45,11 +54,11 @@ export const buildCellWorker = Effect.gen(function* () {
   const binaryPath = yield* platform.execPath
   const directory = yield* fs.makeTempDirectoryScoped()
   const workerPath = path.join(directory, "worker.js")
-  const sourcePath = new URL("../../src/cell-worker-boundary.ts", import.meta.url).pathname
+  const sourcePath = yield* cellWorkerSource
   const build = yield* ChildProcess.make(
     binaryPath,
     ["build", sourcePath, "--target=bun", "--outfile", workerPath],
-    { stdout: "ignore", stderr: "inherit" },
+    { stdout: "ignore", stderr: "inherit", forceKillAfter: "5 seconds" },
   )
   expect(Number(yield* build.exitCode)).toBe(0)
   return CellWorker.cases.Script.make({ runtimePath: binaryPath, scriptPath: workerPath })
@@ -62,7 +71,7 @@ export const buildCellExecutable = Effect.gen(function* () {
   const bunPath = yield* platform.execPath
   const directory = yield* fs.makeTempDirectoryScoped()
   const binaryPath = path.join(directory, "gent-cell")
-  const sourcePath = new URL("../../src/cell-worker-boundary.ts", import.meta.url).pathname
+  const sourcePath = yield* cellWorkerSource
   const build = yield* ChildProcess.make(
     bunPath,
     [
@@ -76,7 +85,7 @@ export const buildCellExecutable = Effect.gen(function* () {
       "--outfile",
       binaryPath,
     ],
-    { stdout: "ignore", stderr: "inherit" },
+    { stdout: "ignore", stderr: "inherit", forceKillAfter: "5 seconds" },
   )
   expect(Number(yield* build.exitCode)).toBe(0)
   return CellWorker.cases.Compiled.make({ binaryPath })

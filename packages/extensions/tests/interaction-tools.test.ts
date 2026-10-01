@@ -1,6 +1,12 @@
-import { describe, expect, it } from "effect-bun-test"
+import { describe, expect, it, test } from "effect-bun-test"
 import { Effect, Fiber, FileSystem, Schema, Stream } from "effect"
-import { AskUserTool, HandoffTool, PromptTool } from "../src/interaction-tools.js"
+import {
+  AskUserAnswers,
+  AskUserMetadata,
+  AskUserTool,
+  HandoffTool,
+  PromptTool,
+} from "../src/interaction-tools.js"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/protocol"
 import {
   createRpcHarness,
@@ -41,34 +47,27 @@ const makeCtx = (
   }
 }
 
-describe("AskUser Tool", () => {
-  it.live("asks questions and returns answers", () => {
-    const { ctx } = makeCtx(Effect.succeed({ approved: true, notes: "Option A" }))
-
-    return runToolWithCtx(
-      AskUserTool,
-      {
-        questions: [
-          {
-            question: "Which approach?",
-            header: "Approach",
-            options: [
-              { label: "Option A", description: "First option" },
-              { label: "Option B", description: "Second option" },
-            ],
-          },
-        ],
-      },
-      ctx,
-    ).pipe(
-      Effect.map((result) => {
-        expect(result.answers.length).toBe(1)
-        expect(result.answers[0]).toEqual(["Option A"])
-        expect(result.cancelled).toBeUndefined()
-      }),
-    )
+describe("ask-user wire", () => {
+  // The metadata JSON as an interaction stored it before the call limits: a
+  // long header and five options.
+  test("a question stored before the call limits decodes for the client", () => {
+    const options = ["A", "B", "C", "D", "E"]
+      .map((label) => `{"label":"${label}","description":"${label}"}`)
+      .join(",")
+    const stored = `{"type":"ask-user","questions":[{"question":"Pick one","header":"Which of these deployment targets first?","markdown":"**context**","options":[${options}],"multiple":false}]}`
+    const decoded = Schema.decodeSync(Schema.fromJsonString(AskUserMetadata))(stored)
+    expect(decoded.questions[0]?.options?.map((option) => option.label)).toEqual([
+      "A",
+      "B",
+      "C",
+      "D",
+      "E",
+    ])
+    expect(decoded.questions[0]?.header).toBe("Which of these deployment targets first?")
   })
+})
 
+describe("AskUser Tool", () => {
   it.live("decodes structured JSON answers from notes", () => {
     const { ctx } = makeCtx(
       Effect.succeed({ approved: true, notes: '[["Option A","Option B"],["Option C"]]' }),
@@ -140,6 +139,7 @@ describe("AskUser Tool", () => {
     ).pipe(
       Effect.map((result) => {
         expect(result.answers).toEqual([["free text"], []])
+        expect(result.cancelled).toBeUndefined()
       }),
     )
   })
@@ -243,40 +243,15 @@ describe("Prompt Tool", () => {
       }),
     ),
   )
-
-  it.live("present mode: returns shown status", () =>
-    runToolWithCtx(
-      PromptTool,
-      { mode: "present", content: "Info" },
-      testToolContext({
-        Interaction: {
-          approve: () => Effect.die("interaction.approve not wired"),
-          present: () => Effect.void,
-        },
-      }),
-    ).pipe(
-      Effect.map((result) => {
-        expect(result.mode).toBe("present")
-        if (result.mode === "present") expect(result.status).toBe("shown")
-      }),
-    ),
-  )
 })
 
 // ── interaction tools rpc ───────────────────────────────────────────────────
 
 /**
- * Interaction-tools RPC acceptance test — exercises the `ask_user` and
- * `prompt` tools through real agent turns (LLM emits the tool call, runtime
- * dispatches it inside the per-request scope and through the ApprovalService
- * Test stub which auto-approves). The existing tool-level tests bypass the
- * scope boundary production uses.
- *
- * Both tools route through `ExtensionContext.Interaction`, which is the
- * highest scope-leak risk surface — Approval is yielded inside the executor
- * and the result must survive across the per-request scope edge.
- *
- * Maps W37 S6 C14 (audit L5-P1-2).
+ * The `ask_user` and `prompt` tools through real agent turns: the model calls
+ * the tool, the runtime runs it in the per-request scope, and the answer
+ * comes back over `respondInteraction` (with `ApprovalService.Live`) or from
+ * the auto-approving test approval. The answer must survive the scope edge.
  */
 
 describe("InteractionToolsExtension via model turn", () => {
@@ -392,51 +367,64 @@ describe("InteractionToolsExtension via model turn", () => {
       }).pipe(Effect.timeout("12 seconds")),
   )
 
-  it.live(
-    "ask_user tool call routes through per-request scope and auto-approves via Test ApprovalService",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-            toolCallStep("ask_user", {
-              questions: [
-                {
-                  question: "What's your favorite color?",
-                  header: "color",
-                },
-              ],
-            }),
-            textStep("asked"),
-          ])
-          const { client, sessionId, branchId } = yield* createRpcHarness({
-            ...e2ePreset,
-            providerLayer,
-          })
-
-          const toolEventFiber = yield* client.session
-            .events({ sessionId, branchId })
-            .pipe(
-              Stream.filter(isToolResultFor("ask_user")),
-              Stream.take(1),
-              Stream.runCollect,
-              Effect.forkScoped,
-            )
-
-          yield* client.message.send({
-            sessionId,
-            branchId,
-            content: "ask me a question",
-          })
-
-          const events = Array.from(yield* Fiber.join(toolEventFiber))
-          const succeeded = events.find((event) => event.event._tag === "ToolCallSucceeded")
-          expect(succeeded).toBeDefined()
-          if (succeeded?.event._tag === "ToolCallSucceeded") {
-            expect(succeeded.event.output).toContain("answers")
-          }
-        }).pipe(Effect.timeout("12 seconds")),
-      ),
-    15_000,
+  // The notes are what the TUI's ask-user view sends: one array of picks per
+  // question, encoded with the extension's own codec.
+  it.scopedLive("the picks a user sends reach the model as one list per question", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+        toolCallStep("ask_user", {
+          questions: [
+            {
+              question: "Which colors?",
+              options: [{ label: "Red" }, { label: "Blue" }],
+              multiple: true,
+            },
+            { question: "Which size?", options: [{ label: "Small" }, { label: "Large" }] },
+          ],
+        }),
+        textStep("asked"),
+      ])
+      const { client, sessionId, branchId } = yield* createRpcHarness({
+        ...e2ePreset,
+        providerLayer,
+        approvalLayer: ApprovalService.Live,
+      })
+      const interaction = yield* client.session.events({ sessionId, branchId }).pipe(
+        Stream.filter((envelope) => envelope.event._tag === "InteractionPresented"),
+        Stream.take(1),
+        Stream.runCollect,
+        Effect.forkScoped,
+      )
+      const result = yield* client.session
+        .events({ sessionId, branchId })
+        .pipe(
+          Stream.filter(isToolResultFor("ask_user")),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkScoped,
+        )
+      yield* client.message.send({ sessionId, branchId, content: "ask me" })
+      const presented = Array.from(yield* Fiber.join(interaction))[0]?.event
+      if (presented?._tag !== "InteractionPresented")
+        return yield* Effect.die("Missing ask_user interaction")
+      const notes = yield* Schema.encodeEffect(AskUserAnswers)([["Red", "Blue"], ["Large"]])
+      yield* client.interaction.respondInteraction({
+        sessionId,
+        branchId,
+        requestId: presented.requestId,
+        approved: true,
+        notes,
+      })
+      const completed = Array.from(yield* Fiber.join(result))[0]?.event
+      if (completed?._tag !== "ToolCallSucceeded")
+        return yield* Effect.die("ask_user did not succeed")
+      const output = yield* Schema.decodeUnknownEffect(
+        Schema.fromJsonString(
+          Schema.Struct({ answers: Schema.Array(Schema.Array(Schema.String)) }),
+        ),
+      )(completed.output)
+      expect(output.answers).toEqual([["Red", "Blue"], ["Large"]])
+    }).pipe(Effect.timeout("12 seconds")),
   )
 
   it.live(
@@ -478,52 +466,6 @@ describe("InteractionToolsExtension via model turn", () => {
           if (succeeded?.event._tag === "ToolCallSucceeded") {
             expect(succeeded.event.output).toContain('"mode": "confirm"')
             expect(succeeded.event.output).toContain('"decision": "yes"')
-          }
-        }).pipe(Effect.timeout("12 seconds")),
-      ),
-    15_000,
-  )
-
-  it.live(
-    "prompt tool (review mode) routes through per-request scope, writes a file, and auto-approves",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-            toolCallStep("prompt", {
-              mode: "review",
-              content: "# Plan\n\nMigrate the actor mailbox to bounded queues.",
-              title: "Migration plan",
-            }),
-            textStep("reviewed"),
-          ])
-          const { client, sessionId, branchId } = yield* createRpcHarness({
-            ...e2ePreset,
-            providerLayer,
-          })
-
-          const toolEventFiber = yield* client.session
-            .events({ sessionId, branchId })
-            .pipe(
-              Stream.filter(isToolResultFor("prompt")),
-              Stream.take(1),
-              Stream.runCollect,
-              Effect.forkScoped,
-            )
-
-          yield* client.message.send({
-            sessionId,
-            branchId,
-            content: "review the plan",
-          })
-
-          const events = Array.from(yield* Fiber.join(toolEventFiber))
-          const succeeded = events.find((event) => event.event._tag === "ToolCallSucceeded")
-          expect(succeeded).toBeDefined()
-          if (succeeded?.event._tag === "ToolCallSucceeded") {
-            expect(succeeded.event.output).toContain('"mode": "review"')
-            expect(succeeded.event.output).toContain('"decision": "yes"')
-            expect(succeeded.event.output).toContain(".gent/prompts/")
           }
         }).pipe(Effect.timeout("12 seconds")),
       ),

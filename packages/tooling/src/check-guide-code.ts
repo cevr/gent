@@ -133,7 +133,7 @@ const run = Effect.fn("Tooling.run")(function* (
   args: ReadonlyArray<string>,
   cwd: string,
 ) {
-  const handle = yield* ChildProcess.make(command, args, { cwd })
+  const handle = yield* ChildProcess.make(command, args, { cwd, forceKillAfter: "2 seconds" })
   const [exitCode, output] = yield* Effect.all(
     [handle.exitCode, Stream.mkString(Stream.decodeText(handle.all))],
     { concurrency: "unbounded" },
@@ -211,7 +211,7 @@ export const compileContext = Effect.fn("Tooling.compileContext")(function* (
 const checkGuideCode = Effect.fn("Tooling.checkGuideCode")(function* () {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
-  const repoRoot = path.resolve(import.meta.dirname, "..", "..", "..")
+  const repoRoot = path.resolve(yield* path.fromFileUrl(new URL("../../..", import.meta.url)))
   // The guards' one file set: the git index. An untracked file is not read, since a
   // clean clone would not hold it. In a hook, the staged text: the check compiles
   // the commit being made.

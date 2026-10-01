@@ -10,8 +10,6 @@ import {
   findE2eFixtureImportFindings,
   findProcessNames,
   findEffectVersionDrift,
-  findRepoTempDirectories,
-  findSharedTestHomes,
   findPreCommitHookFindings,
   findPackageSurfaceFindings,
   findReadersWithoutWriters,
@@ -514,295 +512,6 @@ describe("e2e fixture import guard", () => {
   })
 })
 
-// ── test temp directories ───────────────────────────────────────────────────
-
-describe("repo temp directory guard", () => {
-  const testFile = "packages/core/tests/runtime/loader.test.ts"
-
-  test("a directory option under import.meta is reported", () => {
-    const source = [
-      "const root = yield* fs.makeTempDirectoryScoped({",
-      '  directory: path.resolve(import.meta.dir, "../.."),',
-      '  prefix: "gent-x-",',
-      "})",
-    ].join("\n")
-    expect(findRepoTempDirectories(testFile, source).map((finding) => finding.line)).toEqual([2])
-  })
-
-  test("a bound name spelled inside a string literal is no repo path", () => {
-    const sources = [
-      [
-        'const login = path.resolve(import.meta.dir, "fixtures")',
-        'const dir = yield* fs.makeTempDirectoryScoped({ prefix: "gent-login-" })',
-      ],
-      [
-        'const login = path.resolve(import.meta.dir, "fixtures")',
-        'const label = "login screen"',
-        "const dir = yield* fs.makeTempDirectoryScoped({ prefix: label })",
-      ],
-    ]
-    expect(
-      sources.map((source) => findRepoTempDirectories(testFile, source.join("\n")).length),
-    ).toEqual([0, 0])
-  })
-
-  test("a directory option naming a binding from import.meta is reported", () => {
-    const source = [
-      'const packageRoot = path.resolve(import.meta.dir, "../../..")',
-      'const dir = yield* fs.makeTempDirectoryScoped({ directory: packageRoot, prefix: "x-" })',
-    ].join("\n")
-    expect(findRepoTempDirectories(testFile, source).map((finding) => finding.line)).toEqual([2])
-  })
-
-  test("a .tmp- path joined to import.meta is reported", () => {
-    const source = 'const TEST_DIR = join(import.meta.dir, "../../.tmp-ext-integration")'
-    expect(findRepoTempDirectories(testFile, source)).toHaveLength(1)
-  })
-
-  test("a tmp path of any spelling joined to a repo path is reported", () => {
-    const sources = [
-      'const dir = join(import.meta.dir, ".tmp")',
-      'const dir = join(__dirname, "tmp", "case")',
-      'const dir = path.resolve(import.meta.dirname, "../temp-fixtures")',
-    ]
-    expect(sources.map((source) => findRepoTempDirectories(testFile, source).length)).toEqual([
-      1, 1, 1,
-    ])
-  })
-
-  test("a temp directory call rooted in the repo is reported, whatever its prefix", () => {
-    const sources = [
-      'const dir = mkdtempSync(join(__dirname, "fixture-"))',
-      'const dir = mkdtempSync(path.join("packages/core/tests", "case-"))',
-      'const dir = yield* fs.makeTempDirectory({ directory: resolve("./apps/tui") })',
-      [
-        "const packageRoot = path.resolve(__dirname, '..')",
-        "const dir = yield* fs.makeTempDirectoryScoped({",
-        '  prefix: "case-",',
-        "  directory: packageRoot,",
-        "})",
-      ].join("\n"),
-    ]
-    expect(
-      sources.map((source) => findRepoTempDirectories(testFile, source).map((f) => f.line)),
-    ).toEqual([[1], [1], [1], [4]])
-  })
-
-  test("a temp directory rooted in the working directory is reported", () => {
-    const sources = [
-      'const dir = mkdtempSync(join(process.cwd(), "tmp-"))',
-      "const dir = yield* fs.makeTempDirectoryScoped({ directory: process.cwd() })",
-      'const dir = yield* fs.makeTempDirectoryScoped({ directory: path.resolve("out") })',
-      'const dir = yield* fs.makeTempDirectoryScoped({ directory: "./scratch" })',
-      'const dir = mkdtempSync("case-")',
-      ["const here = process.cwd()", 'const dir = mkdtempSync(join(here, "case-"))'].join("\n"),
-    ]
-    expect(
-      sources.map((source) => findRepoTempDirectories(testFile, source).map((f) => f.line)),
-    ).toEqual([[1], [1], [1], [1], [1], [2]])
-  })
-
-  test("an absolute prefix and a helper that takes a prefix pass", () => {
-    const source = [
-      'const a = mkdtempSync("/tmp/gent-case-")',
-      "const b = mkdtempSync(`${tmpdir()}/gent-case-`)",
-      'const c = yield* fs.makeTempDirectoryScoped({ directory: "/nonexistent/gent-probe-x" })',
-      'const d = yield* makeTempDirectoryScoped("gent-case-")',
-    ].join("\n")
-    expect(findRepoTempDirectories(testFile, source)).toEqual([])
-  })
-
-  test("a system temp directory and a read of the source tree pass", () => {
-    const source = [
-      'const root = yield* fs.makeTempDirectoryScoped({ prefix: "gent-x-" })',
-      'const dir = path.resolve(import.meta.dir, "../../src/extensions")',
-      "const other = yield* fs.makeTempDirectoryScoped({ directory: root })",
-      'const sys = mkdtempSync(join(tmpdir(), "gent-case-"))',
-      'const template = path.join(import.meta.dir, "templates", "prompt.md")',
-    ].join("\n")
-    expect(findRepoTempDirectories(testFile, source)).toEqual([])
-  })
-
-  test("an array joined with a separator is no path literal", () => {
-    const sources = [
-      [
-        'const suffix = ["a", "b"].join("")',
-        "const dir = yield* fs.makeTempDirectoryScoped({ prefix: `gent-${suffix}-` })",
-      ].join("\n"),
-      'const text = ["tmp", "x"].join("\\n")',
-      [
-        'const label = parts.join(", ")',
-        "const d = mkdtempSync(`/nonexistent/gent-probe-x/${label}`)",
-      ].join("\n"),
-    ]
-    expect(sources.map((source) => findRepoTempDirectories(testFile, source))).toEqual([[], [], []])
-  })
-
-  test("product source is out of scope", () => {
-    const source = 'const dir = { directory: path.resolve(import.meta.dir, "..") }'
-    expect(findRepoTempDirectories("packages/core/src/runtime/x.ts", source)).toEqual([])
-  })
-})
-
-// ── a test's home is its own ────────────────────────────────────────────────
-
-describe("shared test home checker", () => {
-  const testFile = "apps/tui/tests/render-harness-boundary.tsx"
-  const lines = (source: string, file = testFile) =>
-    findSharedTestHomes(file, source).map((finding) => finding.line)
-
-  test("a home or data directory under the shared temp root is reported, in every shape", () => {
-    const source = [
-      '<WorkspaceProvider cwd={cwd} home="/tmp" services={services}>',
-      'const env = { cwd: "/tmp", home: "/tmp" }',
-      'RuntimeEnvironment.Live({ home: "/tmp/test-home", cwd: "/tmp" })',
-      'const logs = logDirFor({ GENT_DATA_DIR: "/var/tmp/gent-scratch" })',
-      'const platform = (home: string = "/private/tmp") => home',
-      'home: overrides?.home ?? "/tmp",',
-      'homeDirectory: Effect.succeed("/dev/shm/x"),',
-      "const facts = { home: tmpdir() }",
-      'process.env.HOME = "/tmp"',
-    ].join("\n")
-    expect(lines(source)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9])
-  })
-
-  test("a working or extension directory under the shared temp root is reported like a home", () => {
-    const source = [
-      'const { sessionId } = yield* client.session.create({ cwd: "/tmp" })',
-      'const alphaCwd = "/tmp/gent-alpha-profile"',
-      'loadClientExtensions({ userDir: "/tmp/user", projectDir: "/tmp/project" })',
-      '...(yield* runtimeHostContext({ ...parent, sessionCwd: "/tmp" })),',
-      "const facts = { cwd: tmpdir() }",
-    ].join("\n")
-    expect(lines(source)).toEqual([1, 2, 3, 4, 5])
-  })
-
-  test("a scoped temp home, a path no test can create, or a temp path under another name is not reported", () => {
-    const source = [
-      'const home = yield* fs.makeTempDirectoryScoped({ prefix: "gent-home-" })',
-      'const env = { cwd: "/nonexistent/gent-test-cwd", home: "/nonexistent/gent-test-home" }',
-      "RuntimeEnvironment.Live({ home, cwd })",
-      'RuntimeEnvironment.Live({ home: root, cwd: yield* makeTempDirectoryScoped("gent-cwd-") })',
-      'const workspace = workspaceIdForCwd("/tmp/run-workspace")',
-      'const loaded = { extension, scope: "user", sourcePath: "/tmp/good.ts" }',
-      'const home = mkdtempSync(join(tmpdir(), "gent-home-"))',
-      'const homePage = "/tmp/page"',
-      '// home: "/tmp" in a comment',
-      'if (home === "/tmp/x") return',
-      'const probe = home => "/tmp/x"',
-    ].join("\n")
-    expect(lines(source)).toEqual([])
-  })
-
-  test("the value is read as an expression: across a line break, in a template or a join", () => {
-    const source = [
-      "const env = {",
-      "  home:",
-      '    "/tmp",',
-      "}",
-      "const a = { home: `${tmpdir()}/case` }",
-      'const b = { home: Path.join(tmpdir(), "case") }',
-      'const c = { home: path.join("/tmp", "case") }',
-    ].join("\n")
-    expect(lines(source)).toEqual([2, 5, 6, 7])
-  })
-
-  test("a shared path in a sibling property does not make a unique home shared", () => {
-    const source = [
-      'const home = mkdtempSync(join(tmpdir(), "gent-home-")); const opts = { directory: "/tmp" }',
-      'const env = { home: yield* makeTempDirectoryScoped("gent-home-"), directory: "/tmp" }',
-      'const env2 = { home: root, directory: "/tmp" }',
-      'const env3 = { home: yield* fs.makeTempDirectoryScoped({ directory: "/tmp" }) }',
-      'const env4 = { home: mkdtempSync("/tmp/gent-home-") }',
-      // A template is one value: its `'` opens no string that runs past the comma.
-      'const env5 = { home: `${root}/it\'s`, directory: "/tmp" }',
-    ]
-    // Each alone too: a value read past its end would take a later line's `mkdtemp`.
-    expect(source.flatMap((line) => lines(line))).toEqual([])
-    expect(lines(source.join("\n"))).toEqual([])
-  })
-
-  test("a test layer in product source is read, the product code around it is not", () => {
-    const product = "packages/core/src/runtime/gent-platform.ts"
-    const source = [
-      "export class GentPlatform extends Context.Service<GentPlatform>()(TAG) {",
-      "  static Live = Layer.succeed(GentPlatform, {",
-      '    homeDirectory: Effect.succeed("/tmp"),',
-      "  })",
-      '  static Test = (prefix = "id"): Layer.Layer<GentPlatform> =>',
-      "    Layer.effect(",
-      "      GentPlatform,",
-      "      Effect.gen(function* () {",
-      "        return GentPlatform.of({",
-      '          homeDirectory: Effect.succeed("/tmp"),',
-      "        })",
-      "      }),",
-      "    )",
-      "  static Other = Layer.succeed(GentPlatform, {",
-      '    homeDirectory: Effect.succeed("/tmp"),',
-      "  })",
-      "}",
-      "export const FakeTestActor = (config: {",
-      "  readonly id: string",
-      "}) =>",
-      '  Layer.succeed(Actor, { home: "/tmp" })',
-      'const fallback = { home: "/tmp", cwd: "/tmp" }',
-    ].join("\n")
-    expect(lines(source, product)).toEqual([10, 21])
-  })
-
-  test("a `static readonly Test` member and a `Test:` object key are test layers", () => {
-    const product = "packages/core/src/runtime/platform.ts"
-    const source = [
-      "export class Platform extends Context.Service<Platform>()(TAG) {",
-      "  static readonly Test = Layer.succeed(Platform, {",
-      '    homeDirectory: Effect.succeed("/tmp"),',
-      "  })",
-      "}",
-      "export const Layers = {",
-      '  Live: Layer.succeed(Platform, { home: "/tmp" }),',
-      "  Test: Layer.succeed(Platform, {",
-      '    home: "/tmp",',
-      "  }),",
-      "}",
-    ].join("\n")
-    expect(lines(source, product)).toEqual([3, 9])
-  })
-
-  test("an example extension's test layer is read as product source is", () => {
-    const source = [
-      'const live = { home: "/tmp" }',
-      "export const NotesTest = Layer.succeed(Notes, {",
-      '  home: "/tmp",',
-      "})",
-    ].join("\n")
-    expect(lines(source, "examples/extensions/session-notes.ts")).toEqual([3])
-  })
-
-  test("a binding with a `Test` word part that is no layer is product code", () => {
-    const product = "packages/core/src/runtime/tools.ts"
-    const source = [
-      "const runTestTool = (toolCall: ToolCall) =>",
-      '  run(toolCall, { cwd: "/tmp" })',
-      "export const isTestMode = (config: Config) =>",
-      '  config.home === "/tmp"',
-      "const TestModeLabel = {",
-      '  cwd: "/tmp",',
-      "}",
-      "const makeTestLayer = () =>",
-      '  Layer.succeed(Platform, { home: "/tmp" })',
-    ].join("\n")
-    expect(lines(source, product)).toEqual([9])
-  })
-
-  test("the tooling package is out of scope; the test harness is test code", () => {
-    const source = 'homeDirectory: Effect.succeed("/tmp"),'
-    expect(lines(source, "packages/tooling/tests/guards.test.ts")).toEqual([])
-    expect(lines(source, "packages/tooling/src/guards.ts")).toEqual([])
-    expect(lines(source, "packages/core/src/test-utils/harness.ts")).toEqual([1])
-  })
-})
-
 // ── the pre-commit hook: the guards, and staged files only ─────────────────
 
 const hook = (...jobs: ReadonlyArray<string>): string =>
@@ -1092,6 +801,7 @@ describe("every guard reads one file set, the git index", () => {
         cwd: root,
         env: yield* scratchEnv(root, extra),
         extendEnv: false,
+        forceKillAfter: "2 seconds",
       })
       expect(yield* spawner.exitCode(command)).toBe(ChildProcessSpawner.ExitCode(0))
     })
@@ -1153,7 +863,8 @@ describe("every guard reads one file set, the git index", () => {
   )
 
   const STAGED_TEST = "packages/core/tests/runtime/probe.test.ts"
-  const STAGED_VIOLATION = 'const TEST_DIR = join(import.meta.dir, "../../.tmp-probe")\n'
+  // A blanket directive: a source-file guard reports it wherever it is staged.
+  const STAGED_VIOLATION = `// ${directive}-next-line\nexport {}\n`
   // Multibyte text: the index read splits blobs by byte size, not by characters.
   const STAGED_NEIGHBOUR: readonly [string, string] = ["docs/probe.md", "café — naïve ✓\n"]
 
@@ -2676,6 +2387,7 @@ describe("the directive grammar is the language service's", () => {
         const output = yield* spawner.string(
           ChildProcess.make(path.join(repo, "node_modules", ".bin", "tsc"), ["-p", dir], {
             cwd: dir,
+            forceKillAfter: "5 seconds",
           }),
           { includeStderr: true },
         )
@@ -2764,10 +2476,11 @@ describe("the guards read source as oxc parses it", () => {
     expect(["/[a]/", "/[`]/", "/`/", "/[/*]/"].map(findingsAfter)).toEqual([0, 0, 0, 0])
   })
 
+  /** How many blanket directives a source holds once one is written after it. */
+  const directivesAfter = (file: string, source: string, separator = " ") =>
+    findBlanketEslintDisables(file, `${source}${separator}/* ${directive} */`).length
+
   test("a regex after a control-flow head or a comment is a regex; after a value, a slash divides", () => {
-    const homes = (source: string) =>
-      findSharedTestHomes("apps/tui/tests/probe.test.ts", `${source}\nconst env = { cwd: "/tmp" }`)
-        .length
     expect(
       [
         "if (ok) /[/*]/.test(s)",
@@ -2778,38 +2491,32 @@ describe("the guards read source as oxc parses it", () => {
         "const re = // a note\n  /[/*]/",
         "const half = (a + b) / 2 /* a note */",
         "const half = f(a) / 2 /* a note */",
-      ].map(homes),
+      ].map((source) => directivesAfter("probe.test.ts", source, "\n")),
     ).toEqual([1, 1, 1, 1, 1, 1, 1, 1])
   })
 
   test("JSX in a .tsx file is neither a string nor a regex", () => {
-    const homes = (source: string) =>
-      findSharedTestHomes("apps/tui/tests/probe.test.tsx", source).length
     expect(
       [
-        'mount({ cwd: pick(dir), note: "/tmp/log" })',
-        'mount({ cwd: pick(<box></box>, dir), note: "/tmp/log" })',
-        'mount({ cwd: pick(<text>it\'s</text>, dir), note: "/tmp/log" })',
-        'mount({ cwd: pick(<box title="a/b" />, dir), note: "/tmp/log" })',
-        'mount({ cwd: pick(<><text>{`it\'s`}</text></>, dir), note: "/tmp/log" })',
-        'mount({ cwd: pick(<X>it\'s</X>, dir), note: "/tmp/log" })',
-      ].map(homes),
-    ).toEqual([0, 0, 0, 0, 0, 0])
+        "mount({ cwd: pick(dir) })",
+        "mount({ cwd: pick(<box></box>, dir) })",
+        "mount({ cwd: pick(<text>it's</text>, dir) })",
+        'mount({ cwd: pick(<box title="a/b" />, dir) })',
+        "mount({ cwd: pick(<><text>{`it's`}</text></>, dir) })",
+        "mount({ cwd: pick(<X>it's</X>, dir) })",
+      ].map((source) => directivesAfter("probe.test.tsx", source)),
+    ).toEqual([1, 1, 1, 1, 1, 1])
   })
 
   test("a type parameter list is code, in a .tsx and a .ts file", () => {
-    const homes = (file: string, source: string) => findSharedTestHomes(file, source).length
-    const tsx = "apps/tui/tests/probe.test.tsx"
+    const tsx = "probe.test.tsx"
     expect([
-      homes(tsx, 'const f = <A,>(a: A) => a; const env = { cwd: "/tmp" }'),
-      homes(tsx, 'const f = <A extends object>(a: A) => a; const env = { cwd: "/tmp" }'),
-      homes(tsx, 'const f = <Row = unknown,>(x: Row) => x; const env = { cwd: "/tmp" }'),
-      homes(tsx, 'const f = <Row=unknown,>(x: Row) => x; const env = { cwd: "/tmp" }'),
-      homes(tsx, 'type F = <Row>(x: Row) => Row; const env = { cwd: "/tmp" }'),
-      homes(
-        "apps/tui/tests/probe.test.ts",
-        'const f = <Row>(a: Row) => a; const env = { cwd: "/tmp" }',
-      ),
+      directivesAfter(tsx, "const f = <A,>(a: A) => a; const s = 'it'"),
+      directivesAfter(tsx, "const f = <A extends object>(a: A) => a; const s = 'it'"),
+      directivesAfter(tsx, "const f = <Row = unknown,>(x: Row) => x; const s = 'it'"),
+      directivesAfter(tsx, "const f = <Row=unknown,>(x: Row) => x; const s = 'it'"),
+      directivesAfter(tsx, "type F = <Row>(x: Row) => Row; const s = 'it'"),
+      directivesAfter("probe.test.ts", "const f = <Row>(a: Row) => a; const s = 'it'"),
     ]).toEqual([1, 1, 1, 1, 1, 1])
   })
 

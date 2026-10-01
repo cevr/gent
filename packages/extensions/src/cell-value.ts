@@ -2,6 +2,7 @@ import { Option, Predicate, Result, Schema } from "effect"
 import { types } from "node:util"
 import {
   type CellSnapshot,
+  cutHead,
   type SnapshotBinding,
   type SnapshotOmission,
   snapshotTag,
@@ -1035,8 +1036,9 @@ const quoteText = (text: string): string => `'${escapeText(text)}'`
 
 const formatString = (value: string): string => {
   if (value.length <= displayStringLength) return quoteText(value)
-  const remaining = value.length - displayStringLength
-  return `${quoteText(value.slice(0, displayStringLength))}... ${remaining} more ${plural(remaining, "character", "characters")}`
+  const shown = cutHead(value, displayStringLength)
+  const remaining = value.length - shown.length
+  return `${quoteText(shown)}... ${remaining} more ${plural(remaining, "character", "characters")}`
 }
 
 const formatPrimitive = (value: unknown): string => {

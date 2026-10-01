@@ -334,12 +334,16 @@ export interface ModelDriverContribution {
   readonly id: string
   /** Display name; `/auth` shows it for the driver's sign-in. */
   readonly name: string
-  /** Resolve a model name to an Effect AI model. */
+  /**
+   * Resolve a model name to an Effect AI model. A missing credential fails
+   * with `ProviderAuthError`; a model the driver cannot serve, such as one
+   * whose catalog entry is missing, fails with `DriverError`. A defect is a bug.
+   */
   readonly resolveModel: (
     modelName: string,
     authInfo?: ProviderAuthInfo,
     hints?: ProviderHints,
-  ) => Effect.Effect<ProviderResolution, ProviderAuthError>
+  ) => Effect.Effect<ProviderResolution, ProviderAuthError | DriverError>
   /**
    * Resolve a classifier model name to an Effect AI `DecisionModel` with its
    * auth and endpoint baked in. The driver lists those models in `listModels`

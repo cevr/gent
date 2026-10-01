@@ -9,6 +9,7 @@ export {
   DELEGATE_EXTENSION_ID,
   readChildCompletionHeadline,
 } from "./delegate.js"
+export { ASK_USER_INTERACTION_TYPE, AskUserAnswers, AskUserMetadata } from "./interaction-tools.js"
 export { SkillsRpc } from "./skills.js"
 export { FilesRpc } from "./fs-tools.js"
 export {

@@ -43,6 +43,7 @@ export {
   defineClientExtension,
   type ExtensionAgentDetail,
   interactionRendererContribution,
+  type InteractionRendererProps,
   messageRendererContribution,
   type MessageRowProps,
   type NoticeRow,
@@ -97,5 +98,5 @@ export {
 // ── shipped renderers and ranking ──
 
 export { BUILTIN_TOOL_RENDERERS, type ToolRendererProps } from "./tool-renderers"
-export { AskUserRenderer, HandoffRenderer, PromptRenderer } from "./interaction-renderers"
+export { HandoffRenderer, OptionList, PromptRenderer, yesNoAnswer } from "./interaction-renderers"
 export { rankAutocompleteItems, readFrecencyLookup, recordFrecencyPick } from "./autocomplete"

@@ -23,6 +23,7 @@ import {
   projectResponsePartsToMessageParts,
   splitLines,
   SteerCommand,
+  tailChars,
   toolCallReceipts,
 } from "../../src/domain/message"
 import { AgentEvent, EventEnvelope, EventId } from "../../src/domain/event"
@@ -169,6 +170,12 @@ describe("code-point-safe cuts", () => {
     expect(headChars(`${"a".repeat(79)}😀`, 80)).toBe("a".repeat(79))
     expect(headChars(`${"a".repeat(78)}😀`, 80)).toBe(`${"a".repeat(78)}😀`)
     expect(headChars("short", 80)).toBe("short")
+  })
+
+  test("a tail cut drops an emoji that straddles the limit and keeps one that fits", () => {
+    expect(tailChars(`😀${"a".repeat(79)}`, 80)).toBe("a".repeat(79))
+    expect(tailChars(`😀${"a".repeat(78)}`, 80)).toBe(`😀${"a".repeat(78)}`)
+    expect(tailChars("short", 80)).toBe("short")
   })
 
   test("a tool summary keeps an emoji at its bound whole", () => {

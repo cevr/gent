@@ -1,16 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import {
-  Cause,
-  Crypto,
-  Effect,
-  Exit,
-  Layer,
-  Option,
-  Path,
-  Predicate,
-  Redacted,
-  Schema,
-} from "effect"
+import { Crypto, Effect, Layer, Option, Order, Path, Predicate, Redacted, Schema } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http"
 import {
   OpenAiClient as OpenAiChatClient,
@@ -920,7 +909,7 @@ describe("OpenCode catalog", () => {
         expect(
           models
             .map((model) => [model.id, Option.fromUndefinedOr(model.promptCacheTtlMs)] as const)
-            .toSorted(([left], [right]) => left.localeCompare(right)),
+            .toSorted(([left], [right]) => Order.String(left, right)),
         ).toEqual([
           [ModelId.make("opencode-go/glm-5.3"), Option.none()],
           [ModelId.make("opencode-go/gpt-5.6-luna"), Option.some(1_800_000)],
@@ -937,13 +926,14 @@ describe("OpenCode catalog", () => {
       const ids = (yield* listModels()).map((model) => model.id)
       expect(ids).toContain(ModelId.make("opencode/claude-opus-5"))
       expect(ids).not.toContain(ModelId.make("opencode/gemini-3.6-flash"))
-      const exit = yield* Effect.exit(zen.resolveModel("gemini-3.6-flash", apiAuth))
-      expect(Exit.isFailure(exit)).toBe(true)
-      if (Exit.isSuccess(exit)) return
-      expect(Cause.hasDies(exit.cause)).toBe(true)
-      expect(Cause.pretty(exit.cause)).toContain(
-        'OpenCode Zen model "gemini-3.6-flash" speaks the @ai-sdk/google wire format, which gent does not support',
-      )
+      // An expected failure: a typed driver error, not a defect.
+      const error = yield* Effect.flip(zen.resolveModel("gemini-3.6-flash", apiAuth))
+      expect(error).toMatchObject({
+        _tag: "DriverError",
+        driver: "opencode",
+        reason:
+          'OpenCode Zen model "gemini-3.6-flash" speaks the @ai-sdk/google wire format, which gent does not support',
+      })
     }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
   )
 

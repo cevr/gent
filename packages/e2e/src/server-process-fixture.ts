@@ -1,4 +1,5 @@
 import { Duration, Effect, Filter, Option, Schema, type Scope, Stream } from "effect"
+import { fileURLToPath } from "node:url"
 
 // ── process exit ────────────────────────────────────────────────────────────
 
@@ -17,13 +18,9 @@ export const exitWithin = (
 
 // ── server-process-fixture ──────────────────────────────────────────────────
 
-const repoRoot = decodeURIComponent(new URL("../../..", import.meta.url).pathname).replace(
-  /\/$/,
-  "",
-)
 // The TUI binary owns `gent server start`; it runs from its package, whose
 // bunfig preloads the JSX transform.
-export const tuiDirectory = `${repoRoot}/apps/tui`
+export const tuiDirectory = fileURLToPath(new URL("../../../apps/tui", import.meta.url))
 
 class ServerProcessFixtureError extends Schema.TaggedError<ServerProcessFixtureError>()(
   "@gent/e2e/src/server-process-fixture/ServerProcessFixtureError",

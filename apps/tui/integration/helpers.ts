@@ -1,7 +1,13 @@
+import { BunServices } from "@effect/platform-bun"
+import { Effect, Path } from "effect"
 import type { Session } from "../src/client"
 import type { BranchId, SessionId } from "@gent/core/protocol"
 
-export const repoRoot = new URL("../../..", import.meta.url).pathname.replace(/\/$/, "")
+/** The repo root, without its trailing slash: the cwd these sessions open in. */
+export const repoRoot = Effect.gen(function* () {
+  const path = yield* Path.Path
+  return path.resolve(yield* path.fromFileUrl(new URL("../../..", import.meta.url)))
+}).pipe(Effect.provide(BunServices.layer), Effect.orDie)
 
 export const makeSessionState = (created: {
   sessionId: SessionId
