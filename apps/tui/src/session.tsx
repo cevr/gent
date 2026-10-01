@@ -1799,7 +1799,8 @@ const buildMessage = (m: ProjectedMessage, toolCalls: ReadonlyArray<ToolCall>): 
 /**
  * A received message takes its row, or replaces the row its id names. The
  * replaced row's tool calls stay: the feed attached them live, and their
- * status is newer than the received message's.
+ * status is newer than the received message's. The message itself carries
+ * none: the feed projects it with no tool results (`projectMessage(m, [])`).
  */
 const upsertReceivedMessage = (
   setStore: SetStoreFunction<SessionFeedStore>,
@@ -1809,16 +1810,12 @@ const upsertReceivedMessage = (
   setStore(
     produce((draft) => {
       const index = draft.messages.findIndex((candidate) => candidate.id === message.id)
-      const projectedCalls = message.toolInteractions.map(toToolCall)
       const existing = Option.fromNullishOr(draft.messages[index])
       if (Option.isNone(existing)) {
-        draft.messages.push(buildMessage(message, projectedCalls))
+        draft.messages.push(buildMessage(message, []))
         return
       }
-      draft.messages[index] = buildMessage(message, [
-        ...projectedCalls,
-        ...messageToolCalls(existing.value),
-      ])
+      draft.messages[index] = buildMessage(message, messageToolCalls(existing.value))
     }),
   )
 }
@@ -2173,9 +2170,6 @@ export function useSessionFeed(
 
       case "ToolCallStarted":
         setRunningCalls((calls) => startCall(calls, event, client.pathPlace()))
-        // A call is content too: it draws the open answer's row if no chunk did.
-        if (Predicate.isUndefined(event.parentToolCallId))
-          drawOpenAnswer(Option.fromUndefinedOr(event.assistantMessageId))
         startToolCall(setStore, event, receivedAt)
         return
 
@@ -2319,20 +2313,6 @@ export function useSessionFeed(
       setOpenAnswer(Option.some(id))
       ensureAssistantMessage(setStore, chunk, id, answerStartedAt)
     })
-
-  /**
-   * Draw the open answer's row, empty, when its first content is a tool call
-   * (`named` is the answer the call names, when it names one). An answer
-   * already drawn, or a call for another answer, draws nothing.
-   */
-  const drawOpenAnswer = (named: Option.Option<string>) => {
-    const open = openAnswer()
-    if (Option.isNone(open)) return
-    const id = open.value
-    if (Option.isSome(named) && named.value !== id) return
-    if (store.messages.some((message) => message.id === id)) return
-    ensureAssistantMessage(setStore, "", id, answerStartedAt)
-  }
 
   /** The transcript row that closes a turn: an interruption or a duration. */
   const appendTurnEndRow = (

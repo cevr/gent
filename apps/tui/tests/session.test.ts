@@ -1191,6 +1191,35 @@ const makeEnvelope = (id: number, event: AgentEvent, createdAt = 0): EventEnvelo
     createdAt,
   })
 
+/**
+ * Core's order for a step that calls a tool: the stream ends, the answer with
+ * its call part is stored, and only then does the call start
+ * (`turn.ts` publishes StreamEnded before it stores the step and runs tools).
+ */
+const stepEndEnvelopes = (
+  sessionId: SessionId,
+  branchId: BranchId,
+  callId: ToolCallId,
+  firstId: number,
+): EventEnvelope[] => [
+  makeEnvelope(firstId, AgentEvent.cases.StreamEnded.make({ sessionId, branchId })),
+  makeEnvelope(
+    firstId + 1,
+    AgentEvent.cases.MessageReceived.make({
+      message: Message.cases.regular.make({
+        id: MessageId.make(`answer-${callId}`),
+        sessionId,
+        branchId,
+        role: "assistant",
+        parts: [
+          Prompt.toolCallPart({ id: callId, name: "cell", params: {}, providerExecuted: false }),
+        ],
+        createdAt: dateFromMillis(0),
+      }),
+    }),
+  ),
+]
+
 const makeUserMessage = (sessionId: SessionId, branchId: BranchId): Message =>
   Message.cases.regular.make({
     id: MessageId.make("message-feed-duplicate-user"),
@@ -1927,8 +1956,9 @@ describe("useSessionFeed", () => {
     innerId: ToolCallId,
   ): EventEnvelope[] => [
     makeEnvelope(1, AgentEvent.cases.StreamStarted.make({ sessionId, branchId })),
+    ...stepEndEnvelopes(sessionId, branchId, cellId, 2),
     makeEnvelope(
-      2,
+      4,
       AgentEvent.cases.ToolCallStarted.make({
         sessionId,
         branchId,
@@ -1938,7 +1968,7 @@ describe("useSessionFeed", () => {
       }),
     ),
     makeEnvelope(
-      3,
+      5,
       AgentEvent.cases.ToolCallStarted.make({
         sessionId,
         branchId,
@@ -1949,7 +1979,7 @@ describe("useSessionFeed", () => {
       }),
     ),
     makeEnvelope(
-      4,
+      6,
       AgentEvent.cases.ToolCallFailed.make({
         sessionId,
         branchId,
@@ -1960,7 +1990,7 @@ describe("useSessionFeed", () => {
       }),
     ),
     makeEnvelope(
-      5,
+      7,
       AgentEvent.cases.ToolCallSucceeded.make({
         sessionId,
         branchId,
@@ -1970,7 +2000,7 @@ describe("useSessionFeed", () => {
         output: "{}",
       }),
     ),
-    makeEnvelope(6, AgentEvent.cases.TurnCompleted.make({ sessionId, branchId, durationMs: 1 })),
+    makeEnvelope(8, AgentEvent.cases.TurnCompleted.make({ sessionId, branchId, durationMs: 1 })),
   ]
 
   it.live("nests cell-admitted tool calls under their cell with final status", () =>
@@ -2158,8 +2188,9 @@ describe("useSessionFeed", () => {
       const opId = ToolCallId.make("tool-call-interrupted-op")
       const { cellOf, dispose } = openFeed(snapshotFor(sessionId, branchId), [
         makeEnvelope(1, AgentEvent.cases.StreamStarted.make({ sessionId, branchId })),
+        ...stepEndEnvelopes(sessionId, branchId, cellId, 2),
         makeEnvelope(
-          2,
+          4,
           AgentEvent.cases.ToolCallStarted.make({
             sessionId,
             branchId,
@@ -2169,7 +2200,7 @@ describe("useSessionFeed", () => {
           }),
         ),
         makeEnvelope(
-          3,
+          5,
           AgentEvent.cases.ToolCallStarted.make({
             sessionId,
             branchId,
@@ -2180,7 +2211,7 @@ describe("useSessionFeed", () => {
           }),
         ),
         makeEnvelope(
-          4,
+          6,
           AgentEvent.cases.ToolCallFailed.make({
             sessionId,
             branchId,

@@ -355,7 +355,7 @@ export function CommandPalette() {
         }),
       ),
     )
-    const isCurrent = (branch: Branch) => client.session().branchId === branch.id
+    const isCurrent = (branch: Branch) => client.sessionIdentity().branchId === branch.id
     return {
       id: "branches",
       title: "Branches",
