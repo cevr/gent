@@ -270,6 +270,13 @@ export const MessageMetadata = Schema.Struct({
    * A turn such a message opens has a user watching it (`turnCanAsk`).
    */
   fromClient: Schema.optional(Schema.Boolean),
+  /**
+   * The words the user wrote, when an extension delivered them inside its
+   * own text (a `/btw` question the pane sends its fork). It carries no
+   * authority: a turn's user comes from `fromClient` alone. A summary that
+   * lists what the user asked lists these words.
+   */
+  userText: Schema.optional(Schema.String),
   /** If true, message is excluded from LLM context but visible in transcript */
   hidden: Schema.optional(Schema.Boolean),
   /**

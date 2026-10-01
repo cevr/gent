@@ -281,8 +281,12 @@ const CONTEXT_WINDOW_TYPE = "context-window"
 /** Characters of one listed user message's one-line preview. */
 const HANDOFF_PREVIEW_CHARS = 120
 
+/** A message's one-line preview: the user's own words when an extension wrapped them. */
 const previewOf = (message: Message): string => {
-  const line = message.parts.map(partToText).join(" ").replace(/\s+/g, " ").trim()
+  const text = Option.getOrElse(Option.fromUndefinedOr(message.metadata?.userText), () =>
+    message.parts.map(partToText).join(" "),
+  )
+  const line = text.replace(/\s+/g, " ").trim()
   if (line.length <= HANDOFF_PREVIEW_CHARS) return line
   return `${headChars(line, HANDOFF_PREVIEW_CHARS)}…`
 }
@@ -293,7 +297,9 @@ const LEGACY_STEERING_TYPE = "steering"
 /**
  * Whether the user asked a message, read from its origin. A message a client
  * sent is the user's whatever its custom type (a `/goal` runs as a client
- * request, so the goal it queues is the user's). A message an extension sent
+ * request, so the goal it queues is the user's), and so is one an extension
+ * delivered with the user's words (`userText`: a `/btw` question). Any other
+ * message an extension sent
  * (`extensionId`: a wake, a goal continuation, a child's completion, a
  * background job, another session's message or a child's question) is not,
  * and neither is a runtime notice (continuation, max-steps, model-change),
@@ -303,6 +309,7 @@ const LEGACY_STEERING_TYPE = "steering"
  */
 const askedByUser = (message: Message): boolean => {
   if (message.metadata?.fromClient === true) return true
+  if (Predicate.isNotUndefined(message.metadata?.userText)) return true
   if (Predicate.isNotUndefined(message.metadata?.extensionId)) return false
   const customType = message.metadata?.customType
   return Predicate.isUndefined(customType) || customType === LEGACY_STEERING_TYPE

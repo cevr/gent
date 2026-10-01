@@ -125,8 +125,9 @@ updates this list in the same commit.
     session, the branch, and the id range it replaced; every replaced message
     stays readable from the cell through `context.history` and `context.read`.
     The marker leans on that discovery, not on a long summary: it lists the
-    user's messages (by origin: what a client sent, and the branch's first
-    message, its task) by id with a one-line preview, oldest first so the
+    user's messages (by origin: what a client sent, an extension's message that
+    names the user's words in `userText` (a `/btw` question), and the branch's
+    first message, its task) by id with a one-line preview, oldest first so the
     original task is always there (12 at most, then how many more), tells
     the model to read the task and any message its next step depends on
     before it continues, and carries a summary of at most 150 words.

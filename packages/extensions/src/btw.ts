@@ -435,7 +435,7 @@ const sendToFork = (parentBranchId: string, fork: OpenFork, question: string) =>
       branchId: fork.branchId,
       content: forkQuestionText(ctx.sessionId, question),
       completion: "admission",
-      metadata: { customType: BTW_QUESTION_TYPE },
+      metadata: { customType: BTW_QUESTION_TYPE, userText: question },
     }).pipe(
       Effect.tapError(() => markReplying(false)),
       Effect.mapError(

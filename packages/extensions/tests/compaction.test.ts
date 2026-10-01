@@ -392,6 +392,12 @@ describe("context handoff", () => {
               customType: "goal-context",
               fromClient: true,
             }),
+            // A `/btw` question: the pane delivers it, and the user wrote it.
+            typedMessage("btw", "You are a fork of session s1.\n\nWhich package is first?", 3, {
+              customType: "btw-question",
+              extensionId: "@gent/btw",
+              userText: "Which package is first?",
+            }),
             // A later goal continuation is the extension's.
             typedMessage("goal", "Continue toward the goal.", 4, {
               customType: "goal-context",
@@ -421,7 +427,7 @@ describe("context handoff", () => {
           budget: budget(1_700),
         })
         expect(result.notice).toContain(
-          "The user's messages, oldest first:\n- task: Rename the billing module.\n- correction: Keep the old export name.\n- slash: Rename it in every package.\nBefore you continue",
+          "The user's messages, oldest first:\n- task: Rename the billing module.\n- correction: Keep the old export name.\n- slash: Rename it in every package.\n- btw: Which package is first?\nBefore you continue",
         )
       }).pipe(Effect.provide(summaryProvider("tail only")), Effect.timeout("10 seconds")),
   )

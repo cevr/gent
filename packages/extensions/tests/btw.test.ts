@@ -37,6 +37,7 @@ import { e2ePreset } from "./helpers/test-preset"
 import { AgentEvent } from "@gent/core/protocol"
 import {
   BTW_EXTENSION_ID,
+  BTW_QUESTION_TYPE,
   ForkProgress,
   foldForkEvent,
   forkQuestionBody,
@@ -273,6 +274,16 @@ describe("btw forks", () => {
           // The fork is a session of its own, under this one, with the context copied in.
           const forkDetail = yield* client.session.getSnapshot(handle)
           expect(forkDetail.messages.length).toBe(6)
+          // The pane delivers each question, and it names the words the user wrote.
+          const questions = forkDetail.messages.filter(
+            (message) => message.metadata?.customType === BTW_QUESTION_TYPE,
+          )
+          expect(
+            questions.map((message) => [message.metadata?.extensionId, message.metadata?.userText]),
+          ).toEqual([
+            [BTW_EXTENSION_ID, "What is the codeword?"],
+            [BTW_EXTENSION_ID, "How long is it?"],
+          ])
           const forkSession = yield* client.session.get({ sessionId: handle.sessionId })
           expect(forkSession?.parentSessionId).toBe(sessionId)
           const snapshot = yield* client.session.getSnapshot({ sessionId, branchId })
