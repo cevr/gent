@@ -354,6 +354,11 @@ const runGent = ({
     const renderer = yield* Effect.promise(() =>
       createCliRenderer({
         exitOnCtrlC: false,
+        // The session view's native transcript mode from the first frame: the
+        // terminal is set up once, not in the alternate screen and then again.
+        screenMode: "split-footer",
+        externalOutputMode: "capture-stdout",
+        useMouse: false,
         // Exit clears the split region only: the transcript above it stays
         // on screen, and the shell prompt follows.
         clearOnShutdown: false,

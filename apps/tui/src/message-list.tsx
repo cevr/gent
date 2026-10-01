@@ -1516,7 +1516,9 @@ export function NativeTranscript(props: NativeTranscriptProps) {
 
   onMount(() => {
     renderer.footerHeight = props.footerHeight
-    renderer.screenMode = "split-footer"
+    // The first transcript finds the renderer made in this mode; a later one
+    // (another session) finds the alternate screen the last one left.
+    if (renderer.screenMode !== "split-footer") renderer.screenMode = "split-footer"
     renderer.externalOutputMode = "capture-stdout"
     // Native history scrolls in the terminal. Mouse tracking would swallow the wheel.
     renderer.useMouse = false
