@@ -348,6 +348,45 @@ describe("Auth route", () => {
       expect(deleted).toEqual(["openai"])
     }).pipe(Effect.timeout("10 seconds")),
   )
+  // The session's profile decides which driver owns a sign-in, so a typed
+  // key is saved in that profile, as a sign-out is.
+  it.scopedLive("a typed key is saved in the session's profile", () =>
+    Effect.gen(function* () {
+      const saved: Array<{ provider: string; sessionId?: string }> = []
+      const client = createMockClient({
+        auth: {
+          listProviders: () =>
+            Effect.succeed([
+              {
+                provider: ProviderId.make("anthropic"),
+                hasKey: false,
+                required: false,
+                source: "none",
+                authType: absent,
+              },
+            ]),
+          listMethods: () => Effect.succeed({ anthropic: [apiMethodRoute] }),
+          setKey: (input: { provider: string; key: string; sessionId?: string }) =>
+            Effect.sync(() => {
+              saved.push({ provider: input.provider, sessionId: input.sessionId })
+            }),
+        },
+      })
+      const setup = yield* renderScoped(() => <Auth sessionId={activeSessionId} />, {
+        client,
+        runtime: createMockRuntime(),
+      })
+      yield* waitForFrame(setup, (frame) => frame.includes("anthropic"))
+      setup.mockInput.pressEnter()
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, (frame) => frame.includes("Sign in · anthropic · API key"))
+      yield* Effect.promise(() => setup.mockInput.typeText("new-key"))
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, (frame) => frame.includes("API key saved for anthropic"))
+      expect(saved).toEqual([{ provider: "anthropic", sessionId: activeSessionId }])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   it.scopedLive("reads the sign-in methods of the session's own drivers", () =>
     Effect.gen(function* () {
       const methodCalls: Array<{ sessionId?: string } | void> = []

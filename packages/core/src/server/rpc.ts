@@ -233,9 +233,15 @@ export const UpdateSessionSettingsInput = Schema.Struct({
 })
 export type UpdateSessionSettingsInput = typeof UpdateSessionSettingsInput.Type
 
+/**
+ * A key for a sign-in, stored under the driver that owns it, as the session's
+ * profile resolves the owner; the launch profile without one. A session that
+ * does not exist fails and stores nothing.
+ */
 export const SetAuthKeyInput = Schema.Struct({
   provider: Schema.String,
   key: Schema.String,
+  sessionId: Schema.optional(SessionId),
 })
 export type SetAuthKeyInput = typeof SetAuthKeyInput.Type
 

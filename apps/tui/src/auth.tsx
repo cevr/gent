@@ -489,7 +489,7 @@ export function Auth(props: AuthProps) {
     const token = begin()
     clientCtx.log.info("auth:submit-key", { provider })
     cast(
-      clientCtx.client.auth.setKey({ provider, key }).pipe(
+      clientCtx.client.auth.setKey({ provider, key, sessionId }).pipe(
         Effect.tap(() =>
           whileCurrent(token, () => {
             flashSuccess(`API key saved for ${label(provider)}`)

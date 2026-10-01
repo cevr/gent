@@ -53,6 +53,7 @@ import {
   Auth,
   AuthError,
   serializeAuthStore,
+  AuthApi,
 } from "../../src/runtime/provider"
 import {
   LanguageModelLayers,
@@ -853,6 +854,137 @@ describe("auth persistence RPC failures", () => {
   )
 })
 describe("provider login", () => {
+  // Reads try the owner's key first, so a key stored under the sharing
+  // driver's own id would sit behind a stale owner key.
+  it.live("a key or a login through a driver that shares a sign-in is stored under its owner", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const stale = AuthApi.make({ type: "api", key: "sk-stale" })
+        const auth = yield* Effect.provide(Effect.service(Auth), Auth.Test({ gate: stale }))
+        const sharing = defineExtension({
+          id: "@test/shared-sign-in",
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register("modelDriver", {
+              id: "gate",
+              name: "Gate",
+              resolveModel: () => Effect.succeed(stubModel),
+              auth: { methods: [AuthMethod.make({ type: "api", label: "Gate key" })] },
+            })
+            yield* host.register("modelDriver", {
+              id: "gate-plus",
+              name: "Gate Plus",
+              credentialFrom: "gate",
+              resolveModel: () => Effect.succeed(stubModel),
+              auth: {
+                methods: [AuthMethod.make({ type: "api", label: "Gate Plus key" })],
+                authorize: (ctx) =>
+                  ctx.persist({ type: "api", key: "sk-login" }).pipe(Effect.as(Option.none())),
+              },
+            })
+          }),
+        })
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const { client } = yield* createRpcClient(
+          createE2ELayer({
+            agents: e2ePreset.agents,
+            providerLayer,
+            extensionInputs: [sharing],
+            authLayer: Layer.succeed(Auth, auth),
+          }),
+        )
+        const stored = Effect.forEach(["gate", "gate-plus"], (id) =>
+          Effect.map(auth.get(id), (info) => {
+            if (Predicate.isUndefined(info) || info.type !== "api") return "none"
+            return info.key
+          }),
+        )
+
+        yield* client.auth.setKey({ provider: "gate-plus", key: "sk-set" })
+        expect(yield* stored).toEqual(["sk-set", "none"])
+
+        const { sessionId } = yield* client.session.create({})
+        yield* client.auth.authorize({ sessionId, provider: "gate-plus", method: 0 })
+        expect(yield* stored).toEqual(["sk-login", "none"])
+
+        yield* client.auth.setKey({ provider: "gate-plus", key: "sk-session", sessionId })
+        expect(yield* stored).toEqual(["sk-session", "none"])
+
+        yield* client.session.delete({ sessionId })
+        const error = yield* Effect.flip(
+          client.auth.setKey({ provider: "gate-plus", key: "sk-gone", sessionId }),
+        )
+        expect(error._tag).toBe("NotFoundError")
+        expect(yield* stored).toEqual(["sk-session", "none"])
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+
+  // A driver may share a sign-in in one profile and own its own in another.
+  it.live("a key typed in a session goes to the owner its profile names, not the launch one", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const auth = yield* Effect.provide(Effect.service(Auth), Auth.Test({}))
+        const driver = (id: string, credentialFrom: Option.Option<string>) => {
+          const base: ModelDriverContribution = {
+            id,
+            name: id,
+            resolveModel: () => Effect.succeed(stubModel),
+            auth: { methods: [AuthMethod.make({ type: "api", label: `${id} key` })] },
+          }
+          return Option.match(credentialFrom, {
+            onNone: () => base,
+            onSome: (owner) => ({ ...base, credentialFrom: owner }),
+          })
+        }
+        const loaded = (id: string, drivers: ReadonlyArray<ModelDriverContribution>) =>
+          ({
+            manifest: { id: ExtensionId.make(id) },
+            scope: "builtin",
+            sourcePath: "test",
+            contributions: { modelDrivers: [...drivers] },
+          }) satisfies LoadedExtension
+        const launch = loaded("@test/launch-sharing", [
+          driver("other", Option.none()),
+          driver("gate", Option.some("other")),
+        ])
+        const launchCwd = yield* makeTempDirectoryScoped("gent-key-launch-")
+        const launchProfile = yield* makeProfile(launchCwd, [launch])
+        const profileCwd = yield* makeTempDirectoryScoped("gent-key-owner-")
+        const profile = yield* makeProfile(profileCwd, [
+          loaded("@test/session-own", [driver("gate", Option.none())]),
+        ])
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const { client } = yield* createRpcClient(
+          createE2ELayer({
+            agents: e2ePreset.agents,
+            providerLayer,
+            extensions: [],
+            cwd: launchCwd,
+            authLayer: Layer.succeed(Auth, auth),
+            sessionProfileCacheLayer: fixedSessionProfiles(
+              new Map([
+                [launchCwd, launchProfile],
+                [profileCwd, profile],
+              ]),
+            ),
+          }),
+        )
+        const stored = Effect.forEach(["gate", "other"], (id) =>
+          Effect.map(auth.get(id), (info) => {
+            if (Predicate.isUndefined(info) || info.type !== "api") return "none"
+            return info.key
+          }),
+        )
+        const { sessionId } = yield* client.session.create({ cwd: profileCwd })
+        yield* client.auth.setKey({ provider: "gate", key: "sk-own", sessionId })
+        expect(yield* stored).toEqual(["sk-own", "none"])
+        yield* client.auth.setKey({ provider: "gate", key: "sk-launch" })
+        expect(yield* stored).toEqual(["sk-own", "sk-launch"])
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+
   it.live("a session logs in through the drivers of its own profile, not the launch profile", () =>
     Effect.scoped(
       Effect.gen(function* () {

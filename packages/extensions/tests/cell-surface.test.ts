@@ -42,6 +42,7 @@ import {
   toolResultMessageIdForTurn,
   testSqliteStorage,
   ApprovalService,
+  turnRequestText,
 } from "@gent/core/test-utils"
 import { BunServices } from "@effect/platform-bun"
 import * as Prompt from "effect/ai/Prompt"
@@ -196,7 +197,7 @@ describe("cell context host", () => {
       const before = decodeReply(
         yield* handleContextCall({
           branchId: branchIdContextHost,
-          name: "context.status",
+          name: "context:status",
           input: {},
         }),
       )
@@ -211,7 +212,7 @@ describe("cell context host", () => {
       const after = decodeReply(
         yield* handleContextCall({
           branchId: branchIdContextHost,
-          name: "context.status",
+          name: "context:status",
           input: {},
         }),
       )
@@ -227,7 +228,7 @@ describe("cell context host", () => {
       const first = decodeReply(
         yield* handleContextCall({
           branchId: branchIdContextHost,
-          name: "context.history",
+          name: "context:history",
           input: { limit: 1 },
         }),
       )
@@ -241,7 +242,7 @@ describe("cell context host", () => {
       const rest = decodeReply(
         yield* handleContextCall({
           branchId: branchIdContextHost,
-          name: "context.history",
+          name: "context:history",
           input: { offset: 1 },
         }),
       )
@@ -256,7 +257,7 @@ describe("cell context host", () => {
       const page = decodeReply(
         yield* handleContextCall({
           branchId: branchIdContextHost,
-          name: "context.read",
+          name: "context:read",
           input: { id: "m-long", offset: 7, limit: 13 },
         }),
       )
@@ -268,7 +269,7 @@ describe("cell context host", () => {
       const result = decodeReply(
         yield* handleContextCall({
           branchId: branchIdContextHost,
-          name: "context.read",
+          name: "context:read",
           input: { id: "call-1" },
         }),
       )
@@ -276,7 +277,7 @@ describe("cell context host", () => {
       expect(result.text).toContain("full file body")
       const missing = yield* handleContextCall({
         branchId: branchIdContextHost,
-        name: "context.read",
+        name: "context:read",
         input: { id: "nope" },
       }).pipe(Effect.flip)
       expect(missing.message).toContain("No stored message or result has id nope")
@@ -289,7 +290,7 @@ describe("cell context host", () => {
       const compact = decodeReply(
         yield* handleContextCall({
           branchId: branchIdContextHost,
-          name: "context.compact",
+          name: "context:compact",
           input: { instructions: "keep file paths" },
         }),
       )
@@ -299,7 +300,7 @@ describe("cell context host", () => {
       if (directive._tag === "Compact") expect(directive.instructions).toBe("keep file paths")
       yield* handleContextCall({
         branchId: branchIdContextHost,
-        name: "context.newWindow",
+        name: "context:newWindow",
         input: {},
       })
       expect(Option.map(yield* ledger.pendingDirective, (d) => d._tag)).toEqual(
@@ -307,7 +308,7 @@ describe("cell context host", () => {
       )
       const unknown = yield* handleContextCall({
         branchId: branchIdContextHost,
-        name: "context.reset",
+        name: "context:reset",
         input: {},
       }).pipe(Effect.flip)
       expect(unknown.message).toContain("Unknown context operation")
@@ -466,6 +467,7 @@ const runJudgeCell = Effect.fn("test.runJudgeCell")(function* (params: {
   readonly code: string
   readonly storeKey: boolean
   readonly calls: Ref.Ref<ReadonlyArray<JudgeCall>>
+  readonly extensions?: ReadonlyArray<(typeof BuiltinExtensions)[number]>
 }) {
   const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
     toolCallStep("cell", { code: params.code }),
@@ -477,6 +479,7 @@ const runJudgeCell = Effect.fn("test.runJudgeCell")(function* (params: {
     extensionInputs: [
       ...BuiltinExtensions.filter((extension) => !SHIPPED_JEV_DRIVERS.has(extension.manifest.id)),
       judgeExtension(params.calls),
+      ...Option.getOrElse(Option.fromUndefinedOr(params.extensions), () => []),
     ],
     providerLayer,
   })
@@ -603,6 +606,81 @@ describe("cell models host", () => {
         expect(display).toBe(
           `models.decide: No classifier model has a credential: set ${JUDGE_ENV}, or sign in with /auth`,
         )
+        expect(yield* Ref.get(calls)).toEqual([])
+      }).pipe(Effect.timeout("15 seconds"), Effect.provide(platform)),
+    20000,
+  )
+
+  // The namespaces share the host call channel with the tools; a tool id
+  // can spell `models.x` or `context.x`, so it must still reach its tool.
+  it.scopedLive(
+    "a tool whose id starts with models or context runs from a cell",
+    () =>
+      Effect.gen(function* () {
+        const calls = yield* Ref.make<ReadonlyArray<JudgeCall>>([])
+        const echo = (id: string) =>
+          tool({
+            id,
+            description: "Echo the tool's id.",
+            params: Schema.Struct({}),
+            output: Schema.Struct({ echoed: Schema.String }),
+            execute: () => Effect.succeed({ echoed: id }),
+          })
+        const namesake = defineExtension({
+          id: "@test/namespace-namesake",
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register("tool", echo("models.compare"))
+            yield* host.register("tool", echo("context.pin"))
+          }),
+        })
+        const { display } = yield* runJudgeCell({
+          calls,
+          storeKey: false,
+          extensions: [namesake],
+          code: "JSON.stringify([await tools.models.compare({}), await tools.context.pin({})])",
+        })
+        expect(yield* decodeDecideJson(display)).toEqual([
+          { echoed: "models.compare" },
+          { echoed: "context.pin" },
+        ])
+      }).pipe(Effect.timeout("15 seconds"), Effect.provide(platform)),
+    20000,
+  )
+
+  it.scopedLive(
+    "a classifier the call cannot resolve names each classifier catalog that failed",
+    () =>
+      Effect.gen(function* () {
+        const calls = yield* Ref.make<ReadonlyArray<JudgeCall>>([])
+        const offline = defineExtension({
+          id: "@test/offline-judge",
+          setup: Effect.gen(function* () {
+            yield* (yield* ExtensionHost).register("modelDriver", {
+              id: "offline",
+              name: "Offline",
+              resolveModel: () => Effect.die("offline serves classifier models only"),
+              listModels: () => Effect.die("catalog unreachable"),
+              resolveDecisionModel: () => Effect.die("offline lists no model"),
+            })
+          }),
+        })
+        const { display } = yield* runJudgeCell({
+          calls,
+          storeKey: false,
+          extensions: [offline],
+          code: [
+            "const urgent = { urgent: models.probability({ instructions: 'Needs action today' }) }",
+            "const named = await models.decide('late order', urgent, { model: 'offline/jev-1' }).catch((error) => error.message)",
+            "const unnamed = await models.decide('late order', urgent).catch((error) => error.message)",
+            "JSON.stringify({ named, unnamed })",
+          ].join("\n"),
+        })
+        expect(yield* decodeDecideJson(display)).toEqual({
+          named:
+            'models.decide: Unknown classifier model "offline/jev-1". Classifier models: judge/jev-test, judge/jev-other, judge/jev-latest, judge/jev-broken, judge/jev-stalled. Classifier catalogs that failed: offline (catalog unreachable)',
+          unnamed: `models.decide: No classifier model has a credential: set ${JUDGE_ENV}, or sign in with /auth. Classifier catalogs that failed: offline (catalog unreachable)`,
+        })
         expect(yield* Ref.get(calls)).toEqual([])
       }).pipe(Effect.timeout("15 seconds"), Effect.provide(platform)),
     20000,
@@ -1799,20 +1877,69 @@ describe("cell prompt guidelines", () => {
       }),
   )
 
-  it.effect(
-    "names models.decide, its three decision kinds, its cost, and composing it in code",
+  it.scopedLive(
+    "with a classifier credential the prompt names models.decide, its three decision kinds, and composing it in code, but no model and no price",
     () =>
-      Effect.sync(() => {
-        const guidelines = (getToolMetadata(CellTool).promptGuidelines ?? []).join("\n")
-        expect(guidelines).toContain("models.decide(input, decisions, { model, timeoutMs })")
-        expect(guidelines).toContain("within timeoutMs (at most and by default 60000) rejects")
-        expect(guidelines).toContain("models.classify(")
-        expect(guidelines).toContain("models.rate(")
-        expect(guidelines).toContain("models.probability(")
-        expect(guidelines).toContain("a fraction of a cent")
-        expect(guidelines).toContain("compose it in code with other tools")
-      }),
+      Effect.gen(function* () {
+        const prompt = yield* cellSystemPrompt({ storeKey: true })
+        expect(prompt).toContain("models.decide(input, decisions, { model, timeoutMs })")
+        expect(prompt).toContain("within timeoutMs (at most and by default 60000) rejects")
+        expect(prompt).toContain("models.classify(")
+        expect(prompt).toContain("models.rate(")
+        expect(prompt).toContain("models.probability(")
+        expect(prompt).toContain("compose it in code with other tools")
+        const guide = prompt.split("# Classifier models in the cell")[1]?.split("\n# ")[0] ?? ""
+        expect(guide).toContain("models.decide")
+        expect(guide).not.toMatch(/jev-|judge\/|cent\b|\$/)
+      }).pipe(Effect.timeout("10 seconds")),
+    12_000,
   )
+
+  it.scopedLive(
+    "without a classifier credential the prompt does not name models.decide",
+    () =>
+      Effect.gen(function* () {
+        const prompt = yield* cellSystemPrompt({ storeKey: false })
+        expect(prompt).toContain("# Working in the cell")
+        expect(prompt).not.toContain("models.decide")
+        expect((getToolMetadata(CellTool).promptGuidelines ?? []).join("\n")).not.toContain(
+          "models.decide",
+        )
+      }).pipe(Effect.timeout("10 seconds")),
+    12_000,
+  )
+})
+
+/** The system prompt of the first model request, with the judge driver and optionally its key. */
+const cellSystemPrompt = Effect.fn("test.cellSystemPrompt")(function* (params: {
+  readonly storeKey: boolean
+}) {
+  const prompts = yield* Ref.make<ReadonlyArray<string>>([])
+  const providerLayer = LanguageModelLayers.testStream((options) =>
+    Ref.update(prompts, (seen) => [...seen, turnRequestText(options.prompt).systemPrompt]).pipe(
+      Effect.as(Stream.fromIterable([textDeltaPart("done"), finishPart({ finishReason: "stop" })])),
+    ),
+  )
+  const calls = yield* Ref.make<ReadonlyArray<JudgeCall>>([])
+  const { client, sessionId, branchId } = yield* createRpcHarness({
+    ...shippedPreset,
+    // The shipped Jev drivers read the developer's keys.
+    extensionInputs: [
+      ...BuiltinExtensions.filter((extension) => !SHIPPED_JEV_DRIVERS.has(extension.manifest.id)),
+      judgeExtension(calls),
+    ],
+    providerLayer,
+  })
+  if (params.storeKey) yield* client.auth.setKey({ provider: "judge", key: "judge-key" })
+  yield* client.message.send({ sessionId, branchId, content: "hello" })
+  const seen = yield* waitFor(
+    Ref.get(prompts),
+    (all) => all.length > 0,
+    8_000,
+    "the first model request",
+  )
+  expect(yield* Ref.get(calls)).toEqual([])
+  return seen[0] ?? ""
 })
 
 // ── tool signatures ─────────────────────────────────────────────────────────

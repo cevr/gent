@@ -19,6 +19,7 @@ import {
   ProviderAuthError,
   type ProviderAuthInfo,
   type ProviderHints,
+  ReasoningEffort,
 } from "@gent/core/extensions/api"
 import { type ClassifierEntry, classifierModel, typeSafeDecisionModel } from "./typesafe.js"
 import {
@@ -27,10 +28,19 @@ import {
   catalogSource,
   driverListModels,
   driverModelWire,
+  isCacheableBlock,
+  isHostContextUpdate,
+  isJsonObject,
   effortAtOrAbove,
   type ModelWire,
   type ReasoningOption,
   readOptionalEnv,
+  rewriteJsonBody,
+  RESPONSES_PROMPT_CACHE_TTL,
+  withEncryptedReasoning,
+  modelReasons,
+  withPromptCacheTtl,
+  writesPromptCache,
 } from "./providers.js"
 
 // Test seam: only tests read OPENCODE_GATEWAYS and buildOpenCodeModelDriver,
@@ -106,12 +116,6 @@ export const OPENCODE_GATEWAYS = {
 /** models.dev names this variable for both gateways. */
 const ENV_CREDENTIAL = "OPENCODE_API_KEY"
 
-/**
- * How long a prompt stays cached. The gateways do not say, and the upstreams
- * differ; 5 minutes is the shortest of them (an Anthropic `ephemeral` entry).
- */
-const PROMPT_CACHE_TTL = Duration.minutes(5)
-
 // ── headers ─────────────────────────────────────────────────────────────────
 
 /**
@@ -183,16 +187,13 @@ const unsupportedWireFormat = (
 // ── reasoning ───────────────────────────────────────────────────────────────
 
 /** Every effort level, lowest first; the catalog's `null` effort reads as `"none"`. */
-const Effort = Schema.Literals(["none", "minimal", "low", "medium", "high", "xhigh", "max"])
-type Effort = typeof Effort.Type
-const EFFORT_ORDER = Effort.literals
-const decodeEffort = Schema.decodeUnknownOption(Effort)
+const EFFORT_ORDER = ReasoningEffort.literals
 
 /** The hint's level, when the model reasons, the catalog says so, and the request names one. */
-const reasoningHint = (hints: Option.Option<ProviderHints>): Option.Option<Effort> =>
+const reasoningHint = (hints: Option.Option<ProviderHints>): Option.Option<ReasoningEffort> =>
   hints.pipe(
     Option.filter((value) => value.supportsReasoning !== false),
-    Option.flatMap((value) => decodeEffort(value.reasoning)),
+    Option.flatMap((value) => Option.fromUndefinedOr(value.reasoning)),
   )
 
 /** The model's reasoning controls; none when the catalog lists none. */
@@ -203,7 +204,10 @@ const reasoningOptions = (wire: Option.Option<ModelWire>): ReadonlyArray<Reasoni
   )
 
 /** The effort the request names: the lowest the model accepts at or above the hint, else its highest. */
-const effortFor = (options: ReadonlyArray<ReasoningOption>, hint: Effort): Option.Option<Effort> =>
+const effortFor = (
+  options: ReadonlyArray<ReasoningOption>,
+  hint: ReasoningEffort,
+): Option.Option<ReasoningEffort> =>
   Option.fromUndefinedOr(options.find((option) => option.type === "effort")).pipe(
     Option.flatMap((option) =>
       effortAtOrAbove(
@@ -228,7 +232,7 @@ const BUDGET_CEILING = 31_999
  */
 const thinkingBudget = (
   options: ReadonlyArray<ReasoningOption>,
-  hint: Effort,
+  hint: ReasoningEffort,
   maxTokens: Option.Option<number>,
 ): Option.Option<number> =>
   Option.fromUndefinedOr(options.find((option) => option.type === "budget_tokens")).pipe(
@@ -251,38 +255,13 @@ const thinkingBudget = (
 
 // ── request bodies ──────────────────────────────────────────────────────────
 
-const JsonBody = Schema.fromJsonString(Schema.Json)
-const decodeJsonBody = Schema.decodeUnknownOption(JsonBody)
-const isObject = Schema.is(Schema.JsonObject)
 const isArray = Schema.is(Schema.Array(Schema.Json))
-const isJsonObject = (value: Schema.Json): value is Schema.JsonObject => isObject(value)
 const isJsonArray = (value: Schema.Json): value is Schema.JsonArray => isArray(value)
 const isJsonString = Schema.is(Schema.String)
 
 /** A field of a JSON object; none when it is absent. */
 const field = (object: Schema.JsonObject, key: string): Option.Option<Schema.Json> =>
   Option.fromUndefinedOr(object[key])
-
-/** The request's JSON object body; none for any other body. */
-const requestJson = (
-  request: HttpClientRequest.HttpClientRequest,
-): Option.Option<Schema.JsonObject> => {
-  if (request.body._tag !== "Uint8Array") return Option.none()
-  return decodeJsonBody(new TextDecoder().decode(request.body.body)).pipe(
-    Option.filter(isJsonObject),
-  )
-}
-
-/** A client that rewrites each JSON request body with `rewrite`; any other body passes. */
-const rewriteJsonBody =
-  (rewrite: (body: Schema.JsonObject) => Schema.JsonObject) =>
-  (client: HttpClient.HttpClient): HttpClient.HttpClient =>
-    HttpClient.mapRequest(client, (request) =>
-      Option.match(requestJson(request), {
-        onNone: () => request,
-        onSome: (body) => HttpClientRequest.bodyJsonUnsafe(request, rewrite(body)),
-      }),
-    )
 
 /** The body's `messages`; none when it has no list there. */
 const messagesOf = (body: Schema.JsonObject): Option.Option<ReadonlyArray<Schema.Json>> =>
@@ -295,7 +274,8 @@ type ResponsesConfig = Required<Parameters<typeof OpenAiResponsesLanguageModel.l
 /**
  * The Responses request: not stored, the session as the prompt cache key
  * (OpenCode sets `promptCacheKey` for its gateways), and the effort the
- * catalog accepts with a reasoning summary.
+ * catalog accepts with a reasoning summary. The body asks for the encrypted
+ * reasoning (`withEncryptedReasoning`).
  */
 const responsesConfig = (
   hints: Option.Option<ProviderHints>,
@@ -384,7 +364,7 @@ type MessagesConfig = NonNullable<Parameters<typeof AnthropicLanguageModel.layer
 /** What a Messages request carries for reasoning: the thinking object and `output_config.effort`. */
 interface MessagesPlan {
   readonly thinking: Option.Option<Schema.JsonObject>
-  readonly effort: Option.Option<Effort>
+  readonly effort: Option.Option<ReasoningEffort>
 }
 
 const NO_PLAN: MessagesPlan = { thinking: Option.none(), effort: Option.none() }
@@ -508,11 +488,13 @@ const planApplied =
  * Prompt caching as OpenCode asks the gateway for it on this format
  * (`applyCaching` in `provider/transform.ts`): an `ephemeral` marker on the
  * first two system blocks and on the last block of each of the last two
- * messages, four markers, the Messages API's limit. A thinking block takes
- * no marker, so the last block that can carry one does.
+ * messages, four markers, the Messages API's limit. The blocks and messages
+ * follow the Messages block rule (`isCacheableBlock`, `isHostContextUpdate`):
+ * the last block that takes a marker carries it, and a host context update
+ * does not count as one of the two messages. A request that writes no cache
+ * (`writesPromptCache`) is not marked.
  */
 const CACHE_MARKER: Schema.JsonObject = { type: "ephemeral" }
-const UNMARKABLE_BLOCKS: ReadonlySet<Schema.Json> = new Set(["thinking", "redacted_thinking"])
 
 const markBlocks = (
   content: Schema.Json,
@@ -529,8 +511,7 @@ const markBlocks = (
   })
 }
 
-const isMarkable = (block: Schema.Json): boolean =>
-  isJsonObject(block) && !Option.exists(field(block, "type"), (type) => UNMARKABLE_BLOCKS.has(type))
+const isMarkable = (block: Schema.Json): boolean => isJsonObject(block) && isCacheableBlock(block)
 
 const lastMarkable = (blocks: ReadonlyArray<Schema.Json>): ReadonlyArray<number> => {
   const index = blocks.findLastIndex(isMarkable)
@@ -539,7 +520,18 @@ const lastMarkable = (blocks: ReadonlyArray<Schema.Json>): ReadonlyArray<number>
 }
 
 const firstTwo = (blocks: ReadonlyArray<Schema.Json>): ReadonlyArray<number> =>
-  [0, 1].filter((index) => index < blocks.length)
+  [0, 1].filter((index) => Option.exists(Option.fromUndefinedOr(blocks[index]), isMarkable))
+
+/** The indexes of the last two messages of the conversation, host context updates left out. */
+const lastTwoMessages = (messages: ReadonlyArray<Schema.Json>): ReadonlySet<number> =>
+  new Set(
+    messages
+      .flatMap((message, index) => {
+        if (isJsonObject(message) && isHostContextUpdate(message)) return []
+        return [index]
+      })
+      .slice(-2),
+  )
 
 const cacheMarked = (body: Schema.JsonObject): Schema.JsonObject => {
   let result = body
@@ -547,11 +539,11 @@ const cacheMarked = (body: Schema.JsonObject): Schema.JsonObject => {
   if (Option.isSome(system)) result = { ...result, system: markBlocks(system.value, firstTwo) }
   const messages = messagesOf(body)
   if (Option.isNone(messages)) return result
-  const firstMarked = messages.value.length - 2
+  const marked = lastTwoMessages(messages.value)
   return {
     ...result,
     messages: messages.value.map((message, index) => {
-      if (index < firstMarked || !isJsonObject(message)) return message
+      if (!marked.has(index) || !isJsonObject(message)) return message
       return Option.match(field(message, "content"), {
         onNone: () => message,
         onSome: (content) => ({ ...message, content: markBlocks(content, lastMarkable) }),
@@ -571,11 +563,20 @@ interface Resolution {
   readonly wire: Option.Option<ModelWire>
 }
 
+/** Whether a Responses model reasons: the catalog's flag, else whether it lists reasoning controls. */
+const responsesModelReasons = (resolution: Resolution): boolean =>
+  modelReasons(resolution.hints, () => reasoningOptions(resolution.wire).length > 0)
+
 const responsesModel = (resolution: Resolution) => {
+  const reasons = responsesModelReasons(resolution)
   const client = OpenAiResponsesClient.layer({
     apiKey: Redacted.make(resolution.apiKey),
     apiUrl: `${resolution.gateway.origin}/v1`,
-    transformClient: gatewayHeaders(resolution.sessionId),
+    transformClient: (http) =>
+      http.pipe(
+        rewriteJsonBody(withEncryptedReasoning(reasons)),
+        gatewayHeaders(resolution.sessionId),
+      ),
   }).pipe(Layer.provide(FetchHttpClient.layer))
   return OpenAiResponsesLanguageModel.layer({
     model: resolution.modelName,
@@ -604,14 +605,14 @@ const chatCompletionsModel = (resolution: Resolution) => {
 
 const messagesModel = (resolution: Resolution) => {
   const plan = messagesPlan(resolution.modelName, resolution.hints, resolution.wire)
+  const planned = planApplied(plan)
+  let rewrite = planned
+  if (writesPromptCache(resolution.hints)) rewrite = (body) => cacheMarked(planned(body))
   const client = AnthropicClient.layer({
     apiKey: Redacted.make(resolution.apiKey),
     apiUrl: resolution.gateway.origin,
     transformClient: (http) =>
-      http.pipe(
-        rewriteJsonBody((body) => cacheMarked(planApplied(plan)(body))),
-        gatewayHeaders(resolution.sessionId),
-      ),
+      http.pipe(rewriteJsonBody(rewrite), gatewayHeaders(resolution.sessionId)),
   }).pipe(Layer.provide(FetchHttpClient.layer))
   return AnthropicLanguageModel.layer({
     model: resolution.modelName,
@@ -632,18 +633,39 @@ const modelLayer = (format: WireFormat, resolution: Resolution) => {
 }
 
 /**
+ * How long a prompt stays cached, by wire format. The gateways do not say, so
+ * each format takes its upstream's rule: Responses the OpenAI driver's
+ * lifetime, Messages 5 minutes (the `ephemeral` markers it sends). Chat
+ * Completions upstreams cache implicitly with no write price, so a model on
+ * that format has no lifetime and never goes cold: a cold handoff there would
+ * cost more than the warm resend it replaces, and lose detail.
+ */
+const PROMPT_CACHE_TTL: Record<WireFormat, Option.Option<Duration.Duration>> = {
+  responses: Option.some(RESPONSES_PROMPT_CACHE_TTL),
+  messages: Option.some(Duration.minutes(5)),
+  "chat-completions": Option.none(),
+}
+
+/**
  * The models the driver lists: the gateway's catalog entries in a wire format
- * it speaks, then its classifier models.
+ * it speaks, each with its format's cache lifetime, then its classifier models.
  */
 const listGatewayModels = (gateway: Gateway, catalog: CatalogSource) =>
-  driverListModels(catalog, gateway.id, PROMPT_CACHE_TTL)().pipe(
+  driverListModels(catalog, gateway.id, Option.none())().pipe(
     Effect.flatMap((models) =>
-      Effect.filter(models, (model) =>
+      Effect.forEach(models, (model) =>
         driverModelWire(catalog, model.id).pipe(
-          Effect.map((wire) => Option.isSome(wireFormatOf(wire))),
+          Effect.map((wire) =>
+            Option.toArray(
+              Option.map(wireFormatOf(wire), (format) =>
+                withPromptCacheTtl(model, PROMPT_CACHE_TTL[format]),
+              ),
+            ),
+          ),
         ),
       ),
     ),
+    Effect.map((listed) => listed.flat()),
     Effect.map((models) => [
       ...models,
       ...gateway.classifiers.map((entry) => classifierModel(gateway.id, entry)),

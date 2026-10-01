@@ -106,6 +106,15 @@ const remotePayload = {
         reasoning: true,
         reasoning_options: [{ type: "toggle" }],
       },
+      "gpt-6-sol": {
+        name: "GPT-6 Sol",
+        tool_call: true,
+        reasoning: true,
+        provider: { npm: "@ai-sdk/openai" },
+        reasoning_options: [
+          { type: "effort", values: ["none", "low", "medium", "high", "xhigh", "max"] },
+        ],
+      },
       "gpt-5.4": {
         name: "GPT-5.4",
         tool_call: true,
@@ -448,6 +457,32 @@ describe("OpenCode reasoning", () => {
     }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
   )
 
+  // `@effect/ai-openai` asks for the encrypted reasoning only for the model
+  // prefixes it knows; GPT-6 is not one of them.
+  it.live("Responses asks for encrypted reasoning whenever it reasons without store", () =>
+    Effect.gen(function* () {
+      const { zen } = yield* fixtureDrivers
+      const state = makeFakeFetchState()
+      yield* generate(zen, "gpt-6-sol", state, { cacheKey: "s", reasoning: "high" })
+      expect((yield* bodyOf(lastRequest(state)))["include"]).toEqual([
+        "reasoning.encrypted_content",
+      ])
+      // With no effort named the model still reasons, at its default effort.
+      yield* generate(zen, "gpt-6-sol", state, { cacheKey: "s", supportsReasoning: true })
+      expect((yield* bodyOf(lastRequest(state)))["include"]).toEqual([
+        "reasoning.encrypted_content",
+      ])
+      yield* generate(zen, "gpt-6-sol", state, {
+        cacheKey: "s",
+        reasoning: "high",
+        supportsReasoning: false,
+      })
+      expect(field(yield* bodyOf(lastRequest(state)), "include")).not.toEqual(
+        Option.some(["reasoning.encrypted_content"]),
+      )
+    }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  )
+
   it.live("Messages maps a toggle, a budget and an effort list as OpenCode does", () =>
     Effect.gen(function* () {
       const { go, zen } = yield* fixtureDrivers
@@ -475,7 +510,7 @@ describe("OpenCode reasoning", () => {
     Effect.gen(function* () {
       const { zen } = yield* fixtureDrivers
       const state = makeFakeFetchState()
-      const sent = (modelName: string, reasoning: string) =>
+      const sent = (modelName: string, reasoning: ProviderHints["reasoning"]) =>
         generate(zen, modelName, state, { cacheKey: "s", reasoning, maxTokens: 8192 }).pipe(
           Effect.andThen(Effect.suspend(() => bodyOf(lastRequest(state)))),
           Effect.map((body) => ({
@@ -511,7 +546,7 @@ describe("OpenCode reasoning", () => {
     Effect.gen(function* () {
       const { go, zen } = yield* fixtureDrivers
       const state = makeFakeFetchState()
-      const hints = { cacheKey: "s", reasoning: "high", supportsReasoning: false }
+      const hints: ProviderHints = { cacheKey: "s", reasoning: "high", supportsReasoning: false }
       yield* generate(go, "glm-5.3", state, hints)
       yield* generate(go, "gpt-5.6-luna", state, hints)
       yield* generate(zen, "claude-opus-4-6", state, hints)
@@ -711,6 +746,81 @@ describe("OpenCode prompt caching", () => {
       ).toEqual([[false], [true], [true]])
     }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
   )
+
+  /** Which blocks of each message carry a cache marker, and how many markers the body has. */
+  const markers = (state: FakeFetchState) =>
+    Effect.gen(function* () {
+      const body = yield* bodyOf(lastRequest(state))
+      const Blocks = Schema.Array(Schema.JsonObject)
+      const messages = yield* Schema.decodeUnknownEffect(
+        Schema.Array(Schema.Struct({ role: Schema.String, content: Blocks })),
+      )(body["messages"])
+      const system = yield* Schema.decodeUnknownEffect(Blocks)(body["system"])
+      const marked = (block: Schema.JsonObject) => Predicate.isObject(block["cache_control"])
+      return {
+        messages: messages.map((message) => message.content.map(marked)),
+        system: system.map(marked),
+      }
+    })
+
+  // The patched SDK sends a system message after the conversation (a turn
+  // notice) as a user message of its own; caching it would spend a marker on
+  // text the next turn does not repeat.
+  it.live("Messages keeps the markers off a turn notice and on the conversation", () =>
+    Effect.gen(function* () {
+      const { zen } = yield* fixtureDrivers
+      const state = makeFakeFetchState()
+      const conversation = Prompt.make([
+        { role: "system", content: "be brief" },
+        { role: "user", content: "one" },
+        { role: "assistant", content: "two" },
+        { role: "user", content: "three" },
+        { role: "system", content: "the cache is cold" },
+      ])
+      yield* generate(zen, "claude-opus-5", state, { cacheKey: "s" }, conversation)
+      expect((yield* markers(state)).messages).toEqual([[false], [true], [true], [false]])
+    }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  )
+
+  it.live("Messages puts no marker on an empty text block", () =>
+    Effect.gen(function* () {
+      const { zen } = yield* fixtureDrivers
+      const state = makeFakeFetchState()
+      const conversation = Prompt.make([
+        { role: "system", content: "be brief" },
+        { role: "user", content: "one" },
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "two" },
+            { type: "text", text: "" },
+          ],
+        },
+        { role: "user", content: "three" },
+      ])
+      yield* generate(zen, "claude-opus-5", state, { cacheKey: "s" }, conversation)
+      expect((yield* markers(state)).messages).toEqual([[false], [true, false], [true]])
+    }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  )
+
+  // The compaction summary names no conversation: nothing reads its cache back.
+  it.live("Messages marks nothing on a request without a conversation", () =>
+    Effect.gen(function* () {
+      const { zen } = yield* fixtureDrivers
+      const state = makeFakeFetchState()
+      const conversation = Prompt.make([
+        { role: "system", content: "summarize" },
+        { role: "user", content: "one" },
+        { role: "assistant", content: "two" },
+        { role: "user", content: "three" },
+      ])
+      yield* generate(zen, "claude-opus-5", state, {}, conversation)
+      expect(yield* markers(state)).toEqual({
+        messages: [[false], [false], [false]],
+        system: [false],
+      })
+    }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  )
 })
 
 // ── classifiers ─────────────────────────────────────────────────────────────
@@ -798,19 +908,26 @@ describe("OpenCode Zen classifiers", () => {
 // ── catalog ─────────────────────────────────────────────────────────────────
 
 describe("OpenCode catalog", () => {
-  it.live("each gateway lists its own models, deprecated ones too, with a 5 minute cache", () =>
-    Effect.gen(function* () {
-      const { go } = yield* fixtureDrivers
-      const listModels = Option.getOrThrow(Option.fromUndefinedOr(go.listModels))
-      const models = yield* listModels()
-      expect(models.map((model) => model.id).toSorted()).toEqual([
-        ModelId.make("opencode-go/glm-5.3"),
-        ModelId.make("opencode-go/gpt-5.6-luna"),
-        ModelId.make("opencode-go/kimi-k2.6"),
-        ModelId.make("opencode-go/minimax-m3"),
-      ])
-      expect(models.every((model) => model.promptCacheTtlMs === 300_000)).toBe(true)
-    }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  // A model with no cache lifetime never goes cold: Chat Completions caches
+  // implicitly, with no write price, so a cold handoff would only lose detail.
+  it.live(
+    "each gateway lists its own models, deprecated ones too, with the cache lifetime of their wire format",
+    () =>
+      Effect.gen(function* () {
+        const { go } = yield* fixtureDrivers
+        const listModels = Option.getOrThrow(Option.fromUndefinedOr(go.listModels))
+        const models = yield* listModels()
+        expect(
+          models
+            .map((model) => [model.id, Option.fromUndefinedOr(model.promptCacheTtlMs)] as const)
+            .toSorted(([left], [right]) => left.localeCompare(right)),
+        ).toEqual([
+          [ModelId.make("opencode-go/glm-5.3"), Option.none()],
+          [ModelId.make("opencode-go/gpt-5.6-luna"), Option.some(1_800_000)],
+          [ModelId.make("opencode-go/kimi-k2.6"), Option.none()],
+          [ModelId.make("opencode-go/minimax-m3"), Option.some(300_000)],
+        ])
+      }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
   )
 
   it.live("a Zen model on the Google format is not listed, and resolving it names the format", () =>
@@ -937,7 +1054,7 @@ describe("OpenCode sign-in", () => {
       expect(yield* rows).toEqual([["opencode", "OpenCode", "none"]])
       expect(yield* methods).toEqual([["opencode", ["OpenCode API key — Zen, Go and Go Plus"]]])
 
-      // A store from before the two shared holds only Go's key.
+      // A key typed for Go is the OpenCode key.
       yield* client.auth.setKey({ provider: "opencode-go", key: "oc-go-key" })
       expect(yield* rows).toEqual([["opencode", "OpenCode", "stored"]])
       yield* client.auth.deleteKey({ provider: "opencode" })

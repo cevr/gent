@@ -53,7 +53,7 @@ import { Model as AiModel, LanguageModel } from "effect/ai"
 import { test as bunTest } from "bun:test"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extension-host"
 import type { LoadedExtension } from "../../src/domain/extension.js"
-import { ModelId, ProviderId, Model } from "../../src/domain/agent"
+import { ModelId, ProviderId, Model, type ReasoningEffort } from "../../src/domain/agent"
 import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "../../src/domain/ids"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { tool, type ToolCapability } from "@gent/core/extensions/api"
@@ -1210,7 +1210,7 @@ const makeExt = (extId: string, modelDrivers: ModelDriverContribution[]): Loaded
 })
 interface ModelRequest {
   readonly model: string
-  readonly reasoning?: string
+  readonly reasoning?: ReasoningEffort
   readonly maxTokens?: number
   readonly temperature?: number
   readonly driverId?: string
@@ -1838,8 +1838,8 @@ const readsWithStored = (stored: Record<string, string>) =>
       yield* resolver.resolve({ modelId: "solo/m" })
       yield* modelCatalog()
       const classifiers = yield* DecisionModelResolver
-      yield* Effect.exit(classifiers.resolve(Option.some("gateway/judge")))
-      yield* Effect.exit(classifiers.resolve(Option.some("gateway-plus/judge")))
+      yield* Effect.exit((yield* classifiers.profile).resolve(Option.some("gateway/judge")))
+      yield* Effect.exit((yield* classifiers.profile).resolve(Option.some("gateway-plus/judge")))
     }).pipe(Effect.provide(layer))
     return seen
   })
@@ -1986,5 +1986,74 @@ describe("shared sign-in", () => {
       }).pipe(Effect.provide(Layer.merge(Auth.Test(stored), sharedSignInRegistry([]))))
       expect(left).toEqual([Option.none(), Option.none(), Option.some(key("sk-solo"))])
     }),
+  )
+})
+
+describe("classifier availability", () => {
+  /** A classifier driver that lists `classifiers`, counting its catalog runs. */
+  const classifierDriver = (
+    id: string,
+    classifiers: ReadonlyArray<string>,
+    listed: Array<string>,
+  ): ModelDriverContribution => ({
+    id,
+    name: id,
+    resolveModel: () => Effect.succeed(fakeResolution()),
+    listModels: () =>
+      Effect.sync(() => {
+        listed.push(id)
+        return classifiers.map((name) =>
+          Model.make({ ...catalogModel(`${id}/${name}`), kind: "classifier" }),
+        )
+      }),
+    resolveDecisionModel: () => Effect.fail(new ProviderAuthError({ message: "unused" })),
+  })
+
+  const available = (
+    drivers: ReadonlyArray<ModelDriverContribution>,
+    stored: Record<string, string>,
+    checks: number,
+  ) =>
+    Effect.gen(function* () {
+      const seed = Object.fromEntries(
+        Object.entries(stored).map(([id, key]) => [id, AuthApi.make({ type: "api", key })]),
+      )
+      const registry = ExtensionRegistry.fromResolved(
+        resolveExtensions([makeExt("classifiers", [...drivers])]),
+      )
+      return yield* Effect.gen(function* () {
+        const resolver = yield* DecisionModelResolver
+        const answers: Array<boolean> = []
+        for (let index = 0; index < checks; index++) {
+          answers.push(yield* (yield* resolver.profile).hasCredential)
+        }
+        return answers
+      }).pipe(
+        Effect.provide(
+          DecisionModelResolver.Live.pipe(
+            Layer.provideMerge(Layer.merge(Auth.Test(seed), registry)),
+          ),
+        ),
+      )
+    })
+
+  it.live("a credentialed driver that lists no classifier has none to offer", () =>
+    Effect.gen(function* () {
+      const listed: Array<string> = []
+      const hollow = classifierDriver("hollow", [], listed)
+      expect(yield* available([hollow], { hollow: "sk-hollow" }, 1)).toEqual([false])
+      const judge = classifierDriver("judge", ["jev-1"], listed)
+      expect(yield* available([hollow, judge], { hollow: "sk-hollow" }, 1)).toEqual([false])
+      expect(yield* available([hollow, judge], { judge: "sk-judge" }, 1)).toEqual([true])
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
+  it.live("the catalog of one profile is read once, however many turns ask", () =>
+    Effect.gen(function* () {
+      const listed: Array<string> = []
+      const judge = classifierDriver("judge", ["jev-1"], listed)
+      expect(yield* available([judge], { judge: "sk-judge" }, 3)).toEqual([true, true, true])
+      expect(listed).toEqual(["judge"])
+    }).pipe(Effect.timeout("4 seconds")),
   )
 })

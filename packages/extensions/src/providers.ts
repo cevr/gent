@@ -16,6 +16,7 @@ import {
 } from "effect"
 import {
   isRecord,
+  isRecordArray,
   Model,
   ModelId,
   type ModelPricing,
@@ -23,6 +24,7 @@ import {
   credentialFailureMetadata,
   ProviderAuthError,
   type ProviderAuthInfo,
+  type ProviderHints,
   ProviderId,
   writeFileAtomic,
 } from "@gent/core/extensions/api"
@@ -560,6 +562,87 @@ const CredentialRejection = Context.Reference<Option.Option<{ reject: Effect.Eff
   { defaultValue: () => Option.none() },
 )
 
+// ── json request bodies ─────────────────────────────────────────────────────
+
+/**
+ * The provider SDKs send every JSON body as bytes (`bodyJsonUnsafe`). A
+ * driver that rewrites a request reads the body with `requestJsonObject` and
+ * writes it back the same way; a body of any other kind passes unread.
+ */
+const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json))
+const isObject = Schema.is(Schema.JsonObject)
+const isArray = Schema.is(Schema.Array(Schema.Json))
+
+/** True for a JSON object (not an array). */
+export const isJsonObject = (value: Schema.Json): value is Schema.JsonObject => isObject(value)
+
+/** The request's JSON object body; none for any other body. */
+export const requestJsonObject = (
+  request: HttpClientRequest.HttpClientRequest,
+): Option.Option<Schema.JsonObject> => {
+  if (request.body._tag !== "Uint8Array") return Option.none()
+  return decodeJson(new TextDecoder().decode(request.body.body)).pipe(Option.filter(isJsonObject))
+}
+
+/** A client that rewrites each JSON object body with `rewrite`; any other body passes. */
+export const rewriteJsonBody =
+  (rewrite: (body: Schema.JsonObject) => Schema.JsonObject) =>
+  (client: HttpClient.HttpClient): HttpClient.HttpClient =>
+    HttpClient.mapRequest(client, (request) =>
+      Option.match(requestJsonObject(request), {
+        onNone: () => request,
+        onSome: (body) => HttpClientRequest.bodyJsonUnsafe(request, rewrite(body)),
+      }),
+    )
+
+// ── responses requests ──────────────────────────────────────────────────────
+
+/**
+ * How long OpenAI keeps a Responses prompt cached. OpenAI documents 5 to 10
+ * minutes of inactivity for in-memory prompt caching, but a cache lives
+ * longer in practice: in the owner's Codex transcripts 238 of 244 requests
+ * after a 5-10 minute gap, and 108 of 110 after a 10-30 minute gap, still read
+ * the cache. At 5 minutes about 45% of the turn starts a cold handoff would
+ * compact had a warm cache. The OpenAI driver and the OpenCode gateways'
+ * Responses models use it.
+ */
+export const RESPONSES_PROMPT_CACHE_TTL = Duration.minutes(30)
+
+/**
+ * A Responses request with `store: false` keeps no reasoning on the server,
+ * so a reasoning item can go back to the model only with its
+ * `encrypted_content`, and a reply carries that only when `include` asks for
+ * it. `@effect/ai-openai` asks only for the model prefixes it knows (`o1`,
+ * `o3`, `o4-mini`, `codex-mini`, `gpt-5`), and its computed `include`
+ * replaces any the config names. So every request without store to a model
+ * that reasons asks for it here. A reasoning model reasons at its default
+ * effort when the request names none, so the model decides, not the body's
+ * `reasoning` field.
+ */
+const ENCRYPTED_REASONING = "reasoning.encrypted_content"
+
+/** Whether the resolved model reasons: the catalog's word (`supportsReasoning`), else `fallback`. */
+export const modelReasons = (
+  hints: Option.Option<ProviderHints>,
+  fallback: () => boolean,
+): boolean =>
+  Option.getOrElse(
+    Option.flatMap(hints, (value) => Option.fromUndefinedOr(value.supportsReasoning)),
+    fallback,
+  )
+
+export const withEncryptedReasoning =
+  (reasons: boolean) =>
+  (body: Schema.JsonObject): Schema.JsonObject => {
+    if (body["store"] !== false || !reasons) return body
+    const include = Option.getOrElse(
+      Option.filter(Option.fromUndefinedOr(body["include"]), isArray),
+      (): ReadonlyArray<Schema.Json> => [],
+    )
+    if (include.includes(ENCRYPTED_REASONING)) return body
+    return { ...body, include: [...include, ENCRYPTED_REASONING] }
+  }
+
 // ── oauth token endpoint ────────────────────────────────────────────────────
 
 /**
@@ -652,9 +735,6 @@ const CACHE_RELATIVE = ".gent/models.json"
 const CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000
 const FETCH_TIMEOUT_MS = 10_000
 const EMPTY_MODELS = [] satisfies ReadonlyArray<Model>
-
-const JsonSchema = Schema.fromJsonString(Schema.Json)
-const decodeJson = Schema.decodeUnknownOption(JsonSchema)
 
 const ModelsDevCost = Schema.Struct({
   input: Schema.Finite,
@@ -1079,21 +1159,28 @@ export const catalogSource = Effect.fn("ModelsDev.catalogSource")(function* (hom
  * A driver's `listModels`: its own models.dev entries, with the platform
  * services and the HTTP client provided from what setup captured. Each entry
  * carries `promptCacheTtl`, how long the driver's provider keeps a request's
- * prompt cached; models.dev does not say.
+ * prompt cached; models.dev does not say. A driver whose models differ passes
+ * none and stamps each model with `withPromptCacheTtl`.
  */
 export const driverListModels =
-  (source: CatalogSource, providerId: string, promptCacheTtl: Duration.Duration) =>
+  (source: CatalogSource, providerId: string, promptCacheTtl: Option.Option<Duration.Duration>) =>
   (): Effect.Effect<ReadonlyArray<Model>> =>
     readCatalog(
       source,
       driverCatalog(source.home, providerId).pipe(
-        Effect.map((models) =>
-          models.map((model) =>
-            Model.make({ ...model, promptCacheTtlMs: Duration.toMillis(promptCacheTtl) }),
-          ),
-        ),
+        Effect.map((models) => models.map((model) => withPromptCacheTtl(model, promptCacheTtl))),
       ),
     )
+
+/** The model with `promptCacheTtl` as its cache lifetime; a model with none never goes cold. */
+export const withPromptCacheTtl = (
+  model: Model,
+  promptCacheTtl: Option.Option<Duration.Duration>,
+): Model =>
+  Option.match(promptCacheTtl, {
+    onNone: () => model,
+    onSome: (ttl) => Model.make({ ...model, promptCacheTtlMs: Duration.toMillis(ttl) }),
+  })
 
 /**
  * The wire facts of one model of the catalog, for a driver's `resolveModel`:
@@ -1128,8 +1215,9 @@ const readCatalog = <A>(
  * the host speaking, not the user. An API that takes no system message after
  * the conversation gets it as a user message in this wrap: the Anthropic SDK
  * builds this text from a later system message (`prepareMessages` in
- * `@effect/ai-anthropic`, patched). The Anthropic driver reads the wrap to keep its cache marker off the update.
- * The content is escaped, so a notice cannot close the wrap.
+ * `@effect/ai-anthropic`, patched). The Messages drivers read the wrap to keep
+ * their cache markers off the update. The content is escaped, so a notice
+ * cannot close the wrap.
  */
 const HOST_CONTEXT_UPDATE_OPEN = "<host-context-update>\n"
 const HOST_CONTEXT_UPDATE_CLOSE = "\n</host-context-update>"
@@ -1139,9 +1227,49 @@ export const hostContextUpdateText = (content: string): string =>
   `${HOST_CONTEXT_UPDATE_OPEN}${content.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")}${HOST_CONTEXT_UPDATE_CLOSE}`
 
 /** True for a text block that carries a later system message. */
-export const isHostContextUpdateText = Schema.is(
+const isHostContextUpdateText = Schema.is(
   Schema.String.check(Schema.isStartingWith(HOST_CONTEXT_UPDATE_OPEN)),
 )
+
+// ── messages prompt cache ───────────────────────────────────────────────────
+
+/**
+ * The block rule both Messages drivers (Anthropic, and the OpenCode gateways'
+ * Messages models) mark by. A request that names no conversation (its hints
+ * carry no `cacheKey`: the compaction summary) writes no cache, since no later
+ * request reads it back. A marker goes on a block the API takes one on, never
+ * on a thinking block or an empty text block (the API refuses it), and never
+ * on a host context update, which the next turn does not repeat.
+ */
+/** A block or message of a request body, as either driver reads it. */
+const WireRecord = Schema.Record(Schema.String, Schema.Unknown)
+type WireRecord = typeof WireRecord.Type
+
+const CACHEABLE_BLOCK_TYPES: ReadonlySet<unknown> = new Set([
+  "text",
+  "image",
+  "document",
+  "search_result",
+  "tool_use",
+  "tool_result",
+])
+
+/** Whether a request writes a prompt cache: only one that names its conversation. */
+export const writesPromptCache = (hints: Option.Option<ProviderHints>): boolean =>
+  Option.exists(hints, (value) => Predicate.isNotUndefined(value.cacheKey))
+
+/** True for a content block that takes `cache_control`. */
+export const isCacheableBlock = (block: WireRecord): boolean =>
+  CACHEABLE_BLOCK_TYPES.has(block["type"]) && !(block["type"] === "text" && block["text"] === "")
+
+/** True for a user message the SDK built from a later system message, not from the conversation. */
+export const isHostContextUpdate = (message: WireRecord): boolean => {
+  const content = message["content"]
+  if (message["role"] !== "user" || !isRecordArray(content) || content.length === 0) return false
+  return content.every(
+    (block) => block["type"] === "text" && isHostContextUpdateText(block["text"]),
+  )
+}
 
 // ── api keys ────────────────────────────────────────────────────────────────
 
