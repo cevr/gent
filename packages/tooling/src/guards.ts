@@ -169,20 +169,21 @@ const regexEnd = (text: string, start: number): number => {
 
 /**
  * A tag name after `<`, and what follows it. A `,`, an `extends` or a `=`
- * after the name, or a one-letter capital name, makes the `<` a type
- * parameter list: `.tsx` spells a generic arrow `<A,>(a: A) => a`, with a
- * constraint `<A extends B,>` or a default `<A = B,>`. No JSX tag name is
- * followed by `=`.
+ * after the name, or `>(` right after it, makes the `<` a type parameter
+ * list: `.tsx` spells a generic arrow `<A,>(a: A) => a`, with a constraint
+ * `<A extends B,>` or a default `<A = B,>`, and a generic function type
+ * `<A>(a: A) => A`. No JSX tag name is followed by `=`. Any other name,
+ * one letter or more (`<X>it's</X>`), opens an element.
  */
-const JSX_OPENER = /^<(?:>|([A-Za-z_$][\w$.:-]*)(\s*(?:,|=|extends\b))?)/
+const JSX_OPENER = /^<(?:>|[A-Za-z_$][\w$.:-]*(\s*(?:,|=|extends\b)|>\()?)/
 
 /** Whether the `<` at `at` opens a JSX element. */
 const opensJsx = (text: string, at: number): boolean => {
   if (!startsOperand(text, at)) return false
   const opener = Option.fromNullishOr(JSX_OPENER.exec(text.slice(at, at + 64)))
   if (Option.isNone(opener)) return false
-  const [, name = "", typeParameter] = opener.value
-  return Predicate.isUndefined(typeParameter) && !/^[A-Z]$/.test(name)
+  const [, typeParameter] = opener.value
+  return Predicate.isUndefined(typeParameter)
 }
 
 /** A lookup of the character codes in `chars`, for a scan that stops on any of them. */

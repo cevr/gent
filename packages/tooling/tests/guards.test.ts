@@ -144,6 +144,19 @@ describe("blanket eslint disable checker", () => {
     ])
   })
 
+  test("a directive after JSX text with an apostrophe is read", () => {
+    // A one-letter component is JSX: its text is not a string opener that
+    // swallows the comment after the element.
+    const text = [
+      `const x = <X>it's fine</X>; /* ${directive} */`,
+      `const y = <Row>it's fine</Row>; /* ${directive} */`,
+    ].join("\n")
+    expect(findBlanketEslintDisables("sample.tsx", text)).toMatchObject([
+      { file: "sample.tsx", line: 1 },
+      { file: "sample.tsx", line: 2 },
+    ])
+  })
+
   test("a directive spelled inside a string or after other comment text is not one", () => {
     const text = [
       `const a = "// ${directive}"`,
@@ -2439,8 +2452,9 @@ describe("the guards' lexer", () => {
         'mount({ cwd: pick(<text>it\'s</text>, dir), note: "/tmp/log" })',
         'mount({ cwd: pick(<box title="a/b" />, dir), note: "/tmp/log" })',
         'mount({ cwd: pick(<><text>{`it\'s`}</text></>, dir), note: "/tmp/log" })',
+        'mount({ cwd: pick(<X>it\'s</X>, dir), note: "/tmp/log" })',
       ].map(homes),
-    ).toEqual([0, 0, 0, 0, 0])
+    ).toEqual([0, 0, 0, 0, 0, 0])
   })
 
   test("a type parameter list is code, in a .tsx and a .ts file", () => {
@@ -2452,11 +2466,12 @@ describe("the guards' lexer", () => {
       homes(tsx, 'const f = <A>(a: A) => a; const env = { cwd: "/tmp" }'),
       homes(tsx, 'const f = <Row = unknown,>(x: Row) => x; const env = { cwd: "/tmp" }'),
       homes(tsx, 'const f = <Row=unknown,>(x: Row) => x; const env = { cwd: "/tmp" }'),
+      homes(tsx, 'type F = <Row>(x: Row) => Row; const env = { cwd: "/tmp" }'),
       homes(
         "apps/tui/tests/probe.test.ts",
         'const f = <Row>(a: Row) => a; const env = { cwd: "/tmp" }',
       ),
-    ]).toEqual([1, 1, 1, 1, 1, 1])
+    ]).toEqual([1, 1, 1, 1, 1, 1, 1])
   })
 
   test("a defaulted type parameter in a .tsx file hides no read after it", () => {
