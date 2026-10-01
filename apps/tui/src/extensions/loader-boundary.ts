@@ -871,7 +871,7 @@ export const loadTuiExtensions = (opts: {
     )
     const discovered = yield* discoverTuiExtensions(opts)
     const load = yield* provideClientExtensionModules
-    const [importFailures, imported] = yield* Effect.partition(discovered, (entry) =>
+    const [imported, importFailures] = yield* Effect.partition(discovered, (entry) =>
       importExtension(load, entry, timeout),
     )
     const builtins = Option.getOrElse(Option.fromNullishOr(opts.builtins), () => []).map(
@@ -884,7 +884,7 @@ export const loadTuiExtensions = (opts: {
     const enabled = rejectDuplicateIds(
       [...builtins, ...imported].filter((ext) => !disabled.has(ext.module.id)),
     )
-    const [setupFailures, loaded] = yield* Effect.partition(enabled.unique, (ext) =>
+    const [loaded, setupFailures] = yield* Effect.partition(enabled.unique, (ext) =>
       setupExtension(ext, timeout),
     )
     return resolveTuiExtensions(loaded, [...importFailures, ...enabled.failures, ...setupFailures])

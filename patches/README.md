@@ -24,7 +24,7 @@ Remove this patch when an OpenTUI release handles non-bottom-pinned
 split-footer resize cleanup. Recheck these paths before removing it.
 Rechecked on 2026-09-08: 0.5.11 still ships the unbounded clear, so the patch was regenerated for that release.
 
-## `@effect/ai-anthropic@4.0.0-rc.118`
+## `@effect/ai-anthropic@4.0.0`
 
 `prepareMessages` sets the request's `system` field from each system group
 it meets, so a system message after the first message replaces the system
@@ -41,11 +41,11 @@ Anthropic extension (`packages/extensions/src/anthropic.ts`) reads it through
 `isHostContextUpdateText` to keep the cache marker off these blocks.
 
 Remove this patch when the SDK keeps a later system message in place.
-Rechecked on 2026-09-30: rc.118 still replaces `system`, so the patch was
+Rechecked on 2026-10-01: 4.0.0 still replaces `system`, so the patch was
 regenerated for that release. It patches `dist` only; the shipped `src` copy
 keeps the upstream text.
 
-## `@effect/ai-openai-compat@4.0.0-rc.118`
+## `@effect/ai-openai-compat@4.0.0`
 
 The SDK reads a model's reasoning from a Chat Completions reply
 (`reasoning_content`), but never sends it back. The prompt conversion drops
@@ -67,6 +67,7 @@ OpenCode driver
 the field the model's models.dev entry names (`interleaved.field`), or drops
 it when the entry names none.
 
-Remove this patch when the SDK sends the reasoning back itself. It patches
-`dist` only (the `.js` and the option's type in the `.d.ts`); the shipped
+Remove this patch when the SDK sends the reasoning back itself. Rechecked on
+2026-10-01: 4.0.0 still drops reasoning without an item id, so the patch was
+regenerated for that release. It patches `dist` only (the `.js` and the option's type in the `.d.ts`); the shipped
 `src` copy keeps the upstream text.

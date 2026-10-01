@@ -27,7 +27,7 @@
   "devDependencies": {
     "@effect/platform-bun": "catalog:",
     "@effect/sql-sqlite-bun": "catalog:",
-    "@effect/tsgo": "0.47.0",
+    "@effect/tsgo": "0.47.2",
     "@gent/core": "workspace:*",
     "@oxlint/plugins": "^1.86.0",
     "@types/bun": "^1.4.2",
@@ -44,34 +44,34 @@
     "typescript": "^7.0.2"
   },
   "overrides": {
-    "@effect/ai-anthropic": "4.0.0-rc.118",
-    "@effect/ai-openai": "4.0.0-rc.118",
-    "@effect/ai-openai-compat": "4.0.0-rc.118",
-    "@effect/ai-typesafe": "4.0.0-rc.118",
-    "@effect/platform-node-shared": "4.0.0-rc.118",
-    "effect": "4.0.0-rc.118"
+    "@effect/ai-anthropic": "4.0.0",
+    "@effect/ai-openai": "4.0.0",
+    "@effect/ai-openai-compat": "4.0.0",
+    "@effect/ai-typesafe": "4.0.0",
+    "@effect/platform-node-shared": "4.0.0",
+    "effect": "4.0.0"
   },
   "packageManager": "bun@1.4.1",
   "catalog": {
-    "effect": "4.0.0-rc.118",
-    "@effect/platform-bun": "4.0.0-rc.118",
-    "@effect/sql-sqlite-bun": "4.0.0-rc.118",
-    "@effect/opentelemetry": "4.0.0-rc.118",
-    "effect-encore": "^0.32.0",
-    "effect-wide-event": "0.5.0",
+    "effect": "4.0.0",
+    "@effect/platform-bun": "4.0.0",
+    "@effect/sql-sqlite-bun": "4.0.0",
+    "@effect/opentelemetry": "4.0.0",
+    "effect-encore": "^0.33.0",
+    "effect-wide-event": "0.6.0",
     "picomatch": "^4.0.7",
     "@types/picomatch": "^4.0.3",
-    "effect-bun-test": "0.3.0",
+    "effect-bun-test": "0.4.0",
     "solid-js": "^1.9.15",
-    "@effect/ai-anthropic": "4.0.0-rc.118",
-    "@effect/ai-openai": "4.0.0-rc.118",
-    "@effect/ai-openai-compat": "4.0.0-rc.118",
-    "@effect/ai-typesafe": "4.0.0-rc.118",
+    "@effect/ai-anthropic": "4.0.0",
+    "@effect/ai-openai": "4.0.0",
+    "@effect/ai-openai-compat": "4.0.0",
+    "@effect/ai-typesafe": "4.0.0",
     "@ff-labs/fff-bun": "0.10.6"
   },
   "patchedDependencies": {
     "@opentui/core@0.5.11": "patches/@opentui%2Fcore@0.5.11.patch",
-    "@effect/ai-anthropic@4.0.0-rc.118": "patches/@effect%2Fai-anthropic@4.0.0-rc.118.patch",
-    "@effect/ai-openai-compat@4.0.0-rc.118": "patches/@effect%2Fai-openai-compat@4.0.0-rc.118.patch"
+    "@effect/ai-anthropic@4.0.0": "patches/@effect%2Fai-anthropic@4.0.0.patch",
+    "@effect/ai-openai-compat@4.0.0": "patches/@effect%2Fai-openai-compat@4.0.0.patch"
   }
 }
