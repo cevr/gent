@@ -3362,6 +3362,57 @@ describe("native transcript rows under the footer", () => {
     15_000,
   )
 
+  // A short session's region sits under the shell's last line, with the
+  // terminal's own empty rows under it. A pane that closes there gives its
+  // rows back: the region shrinks, and no empty row stays above the composer.
+  it.scopedLive(
+    "a docked pane that closes in a short session leaves no empty row above the composer",
+    () =>
+      Effect.gen(function* () {
+        const [footer, setFooter] = createSignal(3)
+        const committedText: string[] = []
+        let screen = Option.none<CliRenderer>()
+        const setup = yield* renderScoped(
+          () =>
+            roomTranscript({
+              items: () => [assistant("short", "SHORT-ANSWER"), assistant("tail", "TAIL")],
+              streaming: () => false,
+              footer,
+              onRenderer: (renderer) => {
+                screen = Option.some(renderer)
+                renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+                  committedText.push(committedTextOf(event))
+                })
+              },
+            }),
+          { width: 60, height: 30 },
+        )
+        yield* Effect.promise(() => setup.flush()).pipe(
+          Effect.repeat({
+            until: () => committedText.join("").includes("SHORT-ANSWER"),
+            schedule: Schedule.spaced("10 millis"),
+          }),
+          Effect.timeout("4 seconds"),
+          Effect.ignore,
+        )
+        const renderer = Option.getOrThrow(screen)
+        yield* Effect.promise(() => setup.flush())
+        const regionRows = renderer.footerHeight
+        // The region is not at the terminal's bottom: the session is short.
+        expect(rowsUnderRegion(renderer)).toBeGreaterThan(0)
+        // A pane docks in the footer, then closes.
+        setFooter(9)
+        yield* Effect.promise(() => setup.flush())
+        yield* Effect.promise(() => setup.flush())
+        expect(renderer.footerHeight).toBe(regionRows + 6)
+        setFooter(3)
+        yield* Effect.promise(() => setup.flush())
+        yield* Effect.promise(() => setup.flush())
+        expect(renderer.footerHeight).toBe(regionRows)
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
+  )
+
   it.scopedLive(
     "a turn's final items reach history while it runs, and leave no empty row behind",
     () =>

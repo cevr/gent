@@ -2065,8 +2065,11 @@ export function NativeTranscript(props: NativeTranscriptProps) {
    * the region left. Any other shrink (a docked pane or the suggestions
    * closing, the composer losing lines) would leave its rows empty under
    * the status row, so the region keeps them above the live tail, and the
-   * next rows the tail grows take them. A replay clears the screen and
-   * starts from the rows the region wants.
+   * next rows the tail grows take them. That holds only for a region at the
+   * terminal's bottom, whose rows above went to the terminal's scrollback
+   * and cannot come back. A region above the bottom (a short session) has
+   * the terminal's own empty rows under it, so it shrinks to what it wants.
+   * A replay clears the screen and starts from the rows the region wants.
    */
   function sizeRegion(replaying: boolean) {
     const height = dimensions().height
@@ -2075,7 +2078,8 @@ export function NativeTranscript(props: NativeTranscriptProps) {
       props.footerHeight + stickyRows() + Math.max(1, liveHeight()),
     )
     let held = Math.min(splitFooterHeight(height, height), renderer.footerHeight - releasedRows)
-    if (replaying) held = wanted
+    const place = regionPlace(renderer)
+    if (replaying || place.top + place.rows < renderer.terminalHeight) held = wanted
     releasedRows = 0
     renderer.footerHeight = Math.max(wanted, held)
   }
