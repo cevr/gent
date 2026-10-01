@@ -615,6 +615,39 @@ export const findCoreVendorModelPins = (file: string, text: string): ReadonlyArr
   return findings
 }
 
+// ── names describe the product, not the process ─────────────────────────────
+
+/**
+ * Guard: source and tests name product behavior, not the process that made
+ * them (AGENTS.md "Process-shaped names"). A ledger id (`PROCESS_NAME`
+ * spells the forms: a work-item id, an architecture-loop row id) or a pass
+ * name (wave, batch or pass with its number) in a comment, a test name or
+ * an identifier is history, and it outlives the ledger that explains it.
+ * Seven commits since 2026-09-15 removed such ids by hand. Only the id form
+ * is read; history told in prose stays a review item. `plans/` and the dated
+ * receipts are outside the source roots, so they keep their ids.
+ */
+const PROCESS_NAME_ROOT = /^(?:packages|apps|examples|testbeds)\//
+
+const PROCESS_NAME =
+  /\bW\d{2}-C\d|\b(?:R|EF|UI|TUI|T|C|X)\d{2}-[\w-]*\d\b|\bwave\d+|\bbatch\d+|\bpass-\d+/
+
+export const findProcessNames = (file: string, text: string): ReadonlyArray<Finding> => {
+  if (!PROCESS_NAME_ROOT.test(file)) return []
+  return text.split("\n").flatMap((line, index) =>
+    Option.match(Option.fromNullishOr(PROCESS_NAME.exec(line)?.[0]), {
+      onNone: () => [],
+      onSome: (token) => [
+        {
+          file,
+          line: index + 1,
+          message: `\`${token}\` names the process that made this code, not what it does; name the behavior, and leave the id to the ledger`,
+        },
+      ],
+    }),
+  )
+}
+
 // ── every e2e test drives a subprocess ──────────────────────────────────────
 
 /**

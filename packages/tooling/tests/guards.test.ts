@@ -8,6 +8,7 @@ import {
   findCoreFeatureIndependenceFindings,
   findCoreVendorModelPins,
   findE2eFixtureImportFindings,
+  findProcessNames,
   findEffectVersionDrift,
   findRepoTempDirectories,
   findSharedTestHomes,
@@ -399,6 +400,51 @@ export const requireTelepathy = Effect.gen(function* () {
     const findings = findUnadaptedSeams(new Map([[SEAMS_FILE, source]]), new Set(["State"]))
     expect(findings).toHaveLength(1)
     expect(findings[0]?.message).toContain('extension context facet "Telepathy"')
+  })
+})
+
+// ── process-shaped names ────────────────────────────────────────────────────
+
+describe("process name guard", () => {
+  // Each token is spelled in two parts, so this file holds none of them.
+  const tokens = [
+    ["W33", "-C4"],
+    ["R26", "-tooling-1"],
+    ["EF12", "-3"],
+    ["T24", "-3"],
+    ["wave", "14"],
+    ["batch", "12"],
+    ["pass", "-26"],
+  ].map(([head, tail]) => `${head}${tail}`)
+
+  test("a ledger id or a pass name in source or a test is reported", () => {
+    expect(
+      tokens.map(
+        (token) =>
+          findProcessNames("packages/core/tests/a.test.ts", `// fixed in ${token}\n`).length,
+      ),
+    ).toEqual(tokens.map(() => 1))
+    expect(findProcessNames("apps/tui/src/a.ts", `\nconst ${tokens[4]}Probe = 1\n`)).toMatchObject([
+      { file: "apps/tui/src/a.ts", line: 2 },
+    ])
+  })
+
+  test("product words that only look like ids are not reported", () => {
+    expect(
+      findProcessNames(
+        "packages/core/src/a.ts",
+        [
+          "const T = 1 // T-1 is a type",
+          "ES2022, UTF-8, C17 and W3C",
+          "batchSize, waves, passes",
+        ].join("\n"),
+      ),
+    ).toEqual([])
+  })
+
+  test("plans and files outside the source roots are not read", () => {
+    expect(findProcessNames("plans/a.ts", `// ${tokens[0]}`)).toEqual([])
+    expect(findProcessNames("scripts/a.ts", `// ${tokens[0]}`)).toEqual([])
   })
 })
 
