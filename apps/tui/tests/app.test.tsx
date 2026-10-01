@@ -99,7 +99,8 @@ import { seedDebugSession } from "../src/ops"
 
 // eslint-disable-next-line effect/noNullish -- a wire field the server leaves unset is present and undefined.
 const absent = undefined
-const nullValue = Option.getOrNull(Option.none())
+// eslint-disable-next-line effect/noNullish -- JSON on the wire carries null here; the test hands it on as is.
+const nullValue = null
 const idleTag = "Idle" satisfies "Idle"
 const refusedInA = Schema.decodeSync(GentRpcError)({
   _tag: "InvalidStateError",
@@ -646,7 +647,7 @@ const mountIdleSession = (
       /** Tears the view down, as the harness does after the test. */
       unmount,
       /** Time for a key to be parsed and handled before a negative assertion. */
-      // gent/no-sleep: allow a lone escape byte stays in the stdin parser until its timeout flushes it as a key
+      // oxlint-disable-next-line gent/no-wrapped-sleep-in-tests -- A lone escape byte stays in the stdin parser until its real-clock timeout flushes it as a key; no event marks the flush.
       settle: Effect.sleep("100 millis"),
     }
   })
@@ -2073,10 +2074,10 @@ describe("App auth gate", () => {
       view.setup.mockInput.pressKey("c", { ctrl: true })
       yield* waitForFrame(view.setup, () => view.steers.length === 1, "cancel")
       view.setup.mockInput.pressKey("o", { ctrl: true, shift: true })
-      // gent/no-sleep: allow the toggle must be parsed and handled before the next press
+      // oxlint-disable-next-line effect/noFixedWaitInTests -- the toggle must be parsed and handled before the next press
       yield* Effect.sleep("50 millis")
       view.setup.mockInput.pressKey("c", { ctrl: true })
-      // gent/no-sleep: allow the press must be parsed and handled before the negative assertion
+      // oxlint-disable-next-line effect/noFixedWaitInTests -- the press must be parsed and handled before the negative assertion
       yield* Effect.sleep("100 millis")
       expect(view.shutdowns()).toBe(0)
     }).pipe(Effect.timeout("10 seconds")),
@@ -2091,7 +2092,7 @@ describe("App auth gate", () => {
         view.setup.mockInput.pressKey("c", { ctrl: true })
         yield* waitForFrame(view.setup, () => view.steers.length === 1, "first cancel")
         view.setup.mockInput.pressKey("o", { ctrl: true })
-        // gent/no-sleep: allow the key must be parsed and handled before the next press
+        // oxlint-disable-next-line effect/noFixedWaitInTests -- the key must be parsed and handled before the next press
         yield* Effect.sleep("50 millis")
         view.setup.mockInput.pressKey("c", { ctrl: true })
         yield* waitForFrame(view.setup, () => view.steers.length === 2, "second cancel")
@@ -2157,7 +2158,7 @@ describe("App auth gate", () => {
       setup.mockInput.pressKey("c", { ctrl: true })
       yield* waitForFrame(setup, () => !streaming(), "turn cancelled")
       setup.mockInput.pressEscape()
-      // gent/no-sleep: allow the escape must be parsed and handled before the negative assertion
+      // oxlint-disable-next-line effect/noFixedWaitInTests -- the escape must be parsed and handled before the negative assertion
       yield* Effect.sleep("100 millis")
       expect(shutdowns).toBe(0)
       setup.renderer.destroy = destroy
@@ -3097,7 +3098,7 @@ describe("App auth gate", () => {
         "the pane with no row",
       )
       view.setup.mockInput.pressEscape()
-      // gent/no-sleep: allow a lone escape byte stays in the stdin parser until its timeout flushes it as a key
+      // oxlint-disable-next-line effect/noFixedWaitInTests -- a lone escape byte stays in the stdin parser until its timeout flushes it as a key
       yield* Effect.sleep("100 millis")
       // The held pane let go of the composer: typing at 5 rows reaches it. With
       // no pane open the blank rows are back, so the draft shows once the
@@ -3129,7 +3130,7 @@ describe("App auth gate", () => {
         "the agents pane with no row",
       )
       view.setup.mockInput.pressEscape()
-      // gent/no-sleep: allow a lone escape byte stays in the stdin parser until its timeout flushes it as a key
+      // oxlint-disable-next-line effect/noFixedWaitInTests -- a lone escape byte stays in the stdin parser until its timeout flushes it as a key
       yield* Effect.sleep("100 millis")
       view.setup.resize(width, 24)
       yield* waitForFrame(
@@ -3304,7 +3305,7 @@ describe("App auth gate", () => {
       }
       expect(renderFrame(setup)).toContain("ctrl+c exit")
       setup.mockInput.pressEscape()
-      // gent/no-sleep: allow a lone escape byte stays in the stdin parser until its timeout flushes it as a key
+      // oxlint-disable-next-line effect/noFixedWaitInTests -- a lone escape byte stays in the stdin parser until its timeout flushes it as a key
       yield* Effect.sleep("100 millis")
       const frame = yield* waitForFrame(setup, () => true, "the key handled")
       expect(frame).toContain("Resume: Session A")
@@ -3575,7 +3576,7 @@ describe("App auth gate", () => {
       expect(list).not.toContain("esc close")
       const atList = loads
       setup.mockInput.pressEscape()
-      // gent/no-sleep: allow a lone escape byte stays in the stdin parser until its timeout flushes it as a key
+      // oxlint-disable-next-line effect/noFixedWaitInTests -- a lone escape byte stays in the stdin parser until its timeout flushes it as a key
       yield* Effect.sleep("100 millis")
       const frame = yield* waitForFrame(setup, () => true, "the key handled")
       expect(frame).toContain("Sign in · 1 provider")
@@ -3626,7 +3627,7 @@ describe("App auth gate", () => {
         initialPrompt: Option.some("must not send"),
       })
       yield* waitForFrame(setup, () => authChecks > 0, "auth check failure")
-      // gent/no-sleep: allow real-clock gap so any spurious send fiber has time to surface (negative assertion follows)
+      // oxlint-disable-next-line effect/noFixedWaitInTests -- real-clock gap so any spurious send fiber has time to surface (negative assertion follows)
       yield* Effect.sleep("20 millis")
       yield* Effect.promise(() => setup.renderOnce())
       expect(sentMessages).toEqual([])
@@ -4064,7 +4065,7 @@ describe("App auth gate", () => {
           authType: absent,
         },
       ])
-      // gent/no-sleep: allow real-clock gap so the resumed-send fiber resolves before assertion
+      // oxlint-disable-next-line effect/noFixedWaitInTests -- real-clock gap so the resumed-send fiber resolves before assertion
       yield* Effect.sleep("20 millis")
       yield* Effect.promise(() => setup.renderOnce())
       expect(renderFrame(setup)).not.toContain("Sign in ·")
@@ -4120,7 +4121,7 @@ describe("App auth gate", () => {
         "A better name",
       )
       yield* Effect.promise(() => setup.renderOnce())
-      // gent/no-sleep: allow real-clock gap so a second send, if one starts, lands before the assertion
+      // oxlint-disable-next-line effect/noFixedWaitInTests -- real-clock gap so a second send, if one starts, lands before the assertion
       yield* Effect.sleep("50 millis")
       yield* Effect.promise(() => setup.renderOnce())
       expect(sentMessages.filter((message) => message.content === initialPrompt)).toHaveLength(1)
@@ -4272,7 +4273,7 @@ describe("App auth gate", () => {
         "A better name",
       )
       yield* Effect.promise(() => setup.renderOnce())
-      // gent/no-sleep: allow real-clock gap so a refetch, if one starts, lands before the assertion
+      // oxlint-disable-next-line effect/noFixedWaitInTests -- real-clock gap so a refetch, if one starts, lands before the assertion
       yield* Effect.sleep("50 millis")
       yield* Effect.promise(() => setup.renderOnce())
       expect(slashCommandCalls).toBe(before)

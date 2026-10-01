@@ -198,7 +198,7 @@ export const settlePty = (
               `(${seen} characters captured)`,
           })
         }
-        // gent/no-sleep: allow the poll interval of the quiet-window wait; only the absence of output marks the end of a repaint
+        // oxlint-disable-next-line effect/noFixedWaitInTests -- the poll interval of the quiet-window wait; only the absence of output marks the end of a repaint
         yield* Effect.sleep(`${SETTLE_POLL_MS} millis`)
         return yield* loop(seen, stable)
       })

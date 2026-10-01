@@ -415,7 +415,7 @@ describe("Agents pane refresh while open", () => {
       const slow = <A,>(read: () => A, count: (delta: number) => number) =>
         Effect.acquireUseRelease(
           Effect.sync(() => count(1)),
-          // gent/no-sleep: allow a read slower than the poll is the subject
+          // A read slower than the poll is the subject
           () => Effect.sleep("120 millis").pipe(Effect.map(read)),
           () => Effect.sync(() => count(-1)),
         )

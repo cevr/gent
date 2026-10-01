@@ -144,7 +144,7 @@ describe("sessionQuery", () => {
       // The wake tray row and the goal border label are drawn from queries
       // like this one. A rename must not blank them for a round trip.
       renameTo("A better name")
-      // gent/no-sleep: allow a real-clock gap so a refetch, if one starts, lands before the assertion
+      // oxlint-disable-next-line effect/noFixedWaitInTests -- a real-clock gap so a refetch, if one starts, lands before the assertion
       yield* Effect.sleep("50 millis")
 
       expect(query.value()).toBe(1)

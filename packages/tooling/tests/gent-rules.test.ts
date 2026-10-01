@@ -163,20 +163,6 @@ interface RuleCase {
 
 const CASES: ReadonlyArray<RuleCase> = [
   {
-    rule: "gent/no-positional-log-error",
-    invalid: "no-positional-log-error.invalid.ts",
-    valid: ["no-positional-log-error.valid.ts"],
-    // logWarning and logError, each with an error as a positional argument
-    expectedCount: 2,
-  },
-  {
-    rule: "gent/no-runpromise-outside-boundary",
-    invalid: "no-runpromise-outside-boundary.invalid.ts",
-    valid: ["no-runpromise-outside-boundary-boundary.ts"],
-    // 3 Effect statics + 3 runtime instance + 3 nested member access
-    expectedCount: 9,
-  },
-  {
     // A shipped extension reads only the two authoring entries.
     rule: "gent/core-entry-boundary",
     invalid: "packages/extensions/src/core-entry-boundary.invalid.ts",
@@ -273,28 +259,6 @@ const CASES: ReadonlyArray<RuleCase> = [
     expectedCount: 7,
   },
   {
-    rule: "gent/no-promise-control-flow-in-tests",
-    invalid: "no-promise-control-flow-in-tests.invalid.test.ts",
-    valid: ["no-promise-control-flow-in-tests.valid.test.ts"],
-    // four chain methods, one on a capitalised promise variable, and three
-    // runPromise edges
-    expectedCount: 7,
-  },
-  {
-    rule: "gent/no-promise-control-flow-in-tests",
-    invalid: "test-module-control-flow/tests/no-promise-control-flow-in-tests.invalid.module.ts",
-    valid: ["test-module-control-flow/tests/no-promise-control-flow-in-tests.valid.module.ts"],
-    // `.then`, `.catch` and `.finally` on one chain
-    expectedCount: 3,
-  },
-  {
-    rule: "gent/no-promise-control-flow-in-tests",
-    invalid: "apps/tui/integration/promise-helpers.invalid.ts",
-    valid: [],
-    // An integration helper is test code: one `.then`
-    expectedCount: 1,
-  },
-  {
     rule: "gent/no-bun-outside-adapter",
     invalid: "no-bun-outside-adapter.invalid.ts",
     // valid file lives at `runtime/gent-platform-bun.ts` — the canonical
@@ -343,52 +307,6 @@ const CASES: ReadonlyArray<RuleCase> = [
     expectedCount: 1,
   },
   {
-    rule: "gent/no-hand-rolled-tagged-union",
-    invalid: "no-hand-rolled-tagged-union.invalid.ts",
-    valid: ["no-hand-rolled-tagged-union.valid.ts"],
-    // 4 hand-rolled `_tag` unions in the invalid fixture
-    expectedCount: 4,
-  },
-  {
-    rule: "gent/no-sleep",
-    invalid: "no-sleep.invalid.test.ts",
-    valid: ["no-sleep.valid.test.ts"],
-    // 4 unguarded sleeps + 1 malformed-carveout sleep
-    expectedCount: 5,
-  },
-  {
-    rule: "gent/no-sleep",
-    invalid: "packages/core/src/test-utils/no-sleep.invalid.ts",
-    // A shipped `-boundary` file is product code, not a test's boundary
-    valid: ["packages/sdk/src/no-sleep-valid-boundary.ts"],
-    // The harness is test code: one sleep
-    expectedCount: 1,
-  },
-  {
-    rule: "gent/no-die-in-test-helpers",
-    invalid: "no-die-in-test-helpers.invalid.test.ts",
-    valid: ["no-die-in-test-helpers.valid.test.ts"],
-    // 3 unguarded Effect.die/dieMessage + 1 malformed-carveout die
-    expectedCount: 4,
-  },
-  {
-    rule: "gent/no-with-wrapper-call",
-    invalid: "no-with-wrapper-call.invalid.ts",
-    valid: ["no-with-wrapper-call.valid.ts"],
-    // Calls: withX(innerCall()), withX(...)(innerCall()), withX(innerCall(), arg),
-    // withX(arrow), withX(arg, function). Definitions: an Effect parameter,
-    // a curried Effect parameter, a callback parameter, and an Effect parameter
-    // inside Effect.fn and inside Effect.fnUntraced.
-    expectedCount: 10,
-  },
-  {
-    rule: "gent/no-inert-it",
-    invalid: "no-inert-it.invalid.test.ts",
-    valid: ["no-inert-it.valid.test.ts"],
-    // Arrow body + function reference + the renamed import + a namespace import
-    expectedCount: 4,
-  },
-  {
     // A child-session writer admits the depth in its own function, first.
     rule: "gent/child-session-writer-admits",
     invalid: "packages/core/src/server/child-session-writer-admits.invalid.ts",
@@ -398,15 +316,6 @@ const CASES: ReadonlyArray<RuleCase> = [
     ],
     // no admission, a sibling's admission, a nested arrow, a method shorthand,
     // and an admission after the write
-    expectedCount: 5,
-  },
-  {
-    rule: "gent/no-lint-evasion",
-    invalid: "no-lint-evasion.invalid.ts",
-    valid: ["no-lint-evasion.valid.ts"],
-    // `Option.getOrUndefined(Option.none())` bare, with a type argument and in
-    // a record; `Schema.Schema.Type<typeof Schema.Unknown>` as an alias and as
-    // a parameter type
     expectedCount: 5,
   },
   {
@@ -422,6 +331,46 @@ const CASES: ReadonlyArray<RuleCase> = [
     // broken across lines, an encoder called where it is built, and three
     // in-place structs with a field of open or unknown encoding
     expectedCount: 16,
+  },
+  {
+    // The harness is test code; a runtime's runPromise passes both upstream rules.
+    rule: "gent/no-runtime-run-promise-in-tests",
+    invalid: "packages/core/src/test-utils/no-runtime-run-promise-in-tests.invalid.ts",
+    valid: [
+      "packages/core/tests/no-runtime-run-promise-in-tests.valid.ts",
+      "packages/core/tests/no-runtime-run-promise-in-tests-boundary.ts",
+      "packages/sdk/src/no-runtime-run-promise-in-tests.valid.ts",
+    ],
+    // a runtime call, a nested runtime, another receiver, and a piped reference
+    expectedCount: 4,
+  },
+  {
+    // Upstream skips these checks in every test module; gent only in tests/.
+    rule: "gent/no-with-wrapper-helper-in-test-code",
+    invalid: "apps/tui/integration/no-with-wrapper-helper-in-test-code.invalid.test.ts",
+    valid: ["packages/core/tests/no-with-wrapper-helper-in-test-code.valid.ts"],
+    // two callback calls; an Effect, a callback and an Effect.fn definition
+    expectedCount: 5,
+  },
+  {
+    // Upstream reports a sleep only when a statement waits on it alone.
+    rule: "gent/no-wrapped-sleep-in-tests",
+    invalid: "packages/core/src/test-utils/no-wrapped-sleep-in-tests.invalid.ts",
+    valid: ["packages/core/tests/no-wrapped-sleep-in-tests.valid.ts"],
+    // piped, raced, sequenced, bound, and an awaited Bun.sleep in a race;
+    // stored under a const, an object field, a piped const, and a Bun.sleep const
+    expectedCount: 9,
+  },
+  {
+    // Upstream reads a die message only from strings and constructor arguments.
+    rule: "gent/no-timeout-die-payload-in-tests",
+    invalid: "packages/core/src/test-utils/no-timeout-die-payload-in-tests.invalid.ts",
+    valid: [
+      "packages/core/tests/no-timeout-die-payload-in-tests.valid.ts",
+      "packages/sdk/src/no-timeout-die-payload-in-tests.valid.ts",
+    ],
+    // a typed error payload, a plain object, and an object inside a constructor
+    expectedCount: 3,
   },
 ]
 

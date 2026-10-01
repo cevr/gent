@@ -1,4 +1,4 @@
-import { Duration, Effect, Option, Schema, type Scope } from "effect"
+import { Duration, Effect, Filter, Option, Schema, type Scope, Stream } from "effect"
 
 // ── process exit ────────────────────────────────────────────────────────────
 
@@ -37,46 +37,40 @@ const readReadyUrl = (
   proc: Bun.Subprocess,
   readyWithin: Duration.Input,
 ): Effect.Effect<string, ServerProcessFixtureError> => {
-  const ready = Effect.callback<string, ServerProcessFixtureError>((resume) => {
-    const chunks: string[] = []
-    const decoder = new TextDecoder()
-    const stdout = proc.stdout
-    // oxlint-disable-next-line effect/noNullish, effect/noRuntimeTypeof -- Bun stdout uses an external stream, fd, or absent union
-    if (stdout === undefined || typeof stdout === "number") {
-      resume(Effect.fail(new ServerProcessFixtureError({ message: "server stdout was not piped" })))
-      return
-    }
-    const reader = stdout.getReader()
-    const pump = (): void => {
-      reader.read().then(
-        ({ value, done }) => {
-          if (done) {
-            resume(
-              Effect.fail(new ServerProcessFixtureError({ message: "stdout closed before ready" })),
-            )
-            return
-          }
-          chunks.push(decoder.decode(value))
-          const match = chunks.join("").match(READY_LINE)
-          if (match) {
-            reader.releaseLock()
-            resume(Effect.succeed(match[0].slice(READY_PREFIX.length).trim()))
-          } else {
-            pump()
-          }
-        },
-        (error: unknown) =>
-          resume(
-            Effect.fail(
-              new ServerProcessFixtureError({ message: `reading stdout failed: ${String(error)}` }),
-            ),
-          ),
-      )
-    }
-    pump()
-    // A missed ready bound interrupts the wait: the pending read is cancelled with it.
-    return Effect.tryPromise(() => reader.cancel()).pipe(Effect.ignore)
-  })
+  const stdout = proc.stdout
+  // oxlint-disable-next-line effect/noNullish, effect/noRuntimeTypeof -- Bun stdout uses an external stream, fd, or absent union
+  if (stdout === undefined || typeof stdout === "number") {
+    return Effect.fail(new ServerProcessFixtureError({ message: "server stdout was not piped" }))
+  }
+  // The read ends at the ready line or at a missed bound, and either way
+  // releases its lock without cancelling: the server keeps its stdout open.
+  const ready = Stream.fromReadableStream({
+    evaluate: () => stdout,
+    onError: (error) =>
+      new ServerProcessFixtureError({ message: `reading stdout failed: ${String(error)}` }),
+    releaseLockOnEnd: true,
+  }).pipe(
+    Stream.decodeText,
+    Stream.scan(
+      () => "",
+      (text, chunk) => text + chunk,
+    ),
+    Stream.filterMap(
+      Filter.fromPredicateOption((text: string) =>
+        Option.map(Option.fromNullishOr(text.match(READY_LINE)), (match) =>
+          match[0].slice(READY_PREFIX.length).trim(),
+        ),
+      ),
+    ),
+    Stream.runHead,
+    Effect.flatMap(
+      Option.match({
+        onNone: () =>
+          Effect.fail(new ServerProcessFixtureError({ message: "stdout closed before ready" })),
+        onSome: Effect.succeed,
+      }),
+    ),
+  )
   return ready.pipe(
     Effect.timeoutOrElse({
       duration: readyWithin,

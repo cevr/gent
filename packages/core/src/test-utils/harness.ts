@@ -19,6 +19,7 @@ import {
   ExtensionContext,
   type ExtensionContextService,
   type ExtensionContributions,
+  extensionServicesFromHostContext,
   type ExtensionFileLockServiceApi,
   ExtensionHost,
   type ExtensionHostContext,
@@ -329,7 +330,7 @@ export const runToolWithCtx = <Input, Output, Error>(
  * a tool.
  */
 export const testLeafContext = (ctx: TestToolContext): ExtensionContextService =>
-  Effect.runSync(provideExtensionServices(ctx, Effect.service(ExtensionContext)))
+  Context.get(extensionServicesFromHostContext(ctx), ExtensionContext)
 
 // ── call recording ──────────────────────────────────────────────────────────
 

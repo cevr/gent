@@ -108,7 +108,8 @@ describe("edit diff", () => {
 
   // The renderer falls back to the summary line for each of these.
   const undecodable: ReadonlyArray<readonly [string, Parameters<typeof getEditUnifiedDiff>[0]]> = [
-    ["no input", Option.getOrNull(Option.none())],
+    // eslint-disable-next-line effect/noNullish -- A tool call's JSON input can be null.
+    ["no input", null],
     ["a string", "string"],
     ["a number", 123],
     ["no path", { oldString: "a", newString: "b" }],

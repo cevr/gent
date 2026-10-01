@@ -7,7 +7,7 @@
  * not a Promise edge) but live alongside `run` because they share the
  * same captured `services` context — the runtime IS the boundary surface.
  *
- * Per `gent/no-runpromise-outside-boundary`, the Promise edge lives in
+ * Per `effect/noRunPromise`, the Promise edge lives in
  * a `*-boundary.ts` module. The export names the specific external seam.
  */
 

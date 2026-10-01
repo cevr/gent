@@ -301,7 +301,8 @@ class ClientMetricsTestError extends Schema.TaggedError<ClientMetricsTestError>(
   { message: Schema.String },
 ) {}
 
-const nullValue = Option.getOrNull(Option.none())
+// eslint-disable-next-line effect/noNullish -- JSON on the wire carries null here; the test hands it on as is.
+const nullValue = null
 
 const requireClient = (
   context: Option.Option<ClientContextValue>,

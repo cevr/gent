@@ -926,7 +926,7 @@ export const loadExtensionUi = (
  * AutocompleteItem[]>` (Solid's signal lane). When a contribution returns an
  * `Effect`, we exit Effect-land via `clientRuntime.runPromise(...)` — the only
  * sanctioned form is from a `*-boundary.ts` module per
- * `gent/no-runpromise-outside-boundary`.
+ * `effect/noRunPromise`.
  */
 
 const toAutocompleteEffect = (

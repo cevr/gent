@@ -983,7 +983,7 @@ export class ExtensionContext extends Context.Service<ExtensionContext, Extensio
  * forwarded, because the run already built it over the services that own its
  * inputs.
  */
-const extensionServicesFromHostContext = (
+export const extensionServicesFromHostContext = (
   ctx: ExtensionHostContext & { readonly toolCallId?: ToolCallId },
 ): Context.Context<ExtensionContext> => {
   const extensionIdOption = Option.fromUndefinedOr(ctx.extensionId)
