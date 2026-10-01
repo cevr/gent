@@ -275,12 +275,21 @@ const CASES: ReadonlyArray<RuleCase> = [
     expectedCount: 1,
   },
   {
+    // The harness reaches Bun, but the retired members stay out in any spelling.
+    rule: "gent/no-host-fact-bypass",
+    invalid: "packages/e2e/src/no-host-fact-bypass.invalid.ts",
+    valid: ["packages/e2e/src/no-host-fact-bypass.valid.ts", "runtime/gent-platform-bun.ts"],
+    // globalThis.Bun.Glob, globalThis["Bun"].randomUUIDv7, Bun["Glob"]
+    expectedCount: 3,
+  },
+  {
     // An exported alias carries a platform binding past the upstream layer rule.
     rule: "gent/no-platform-module-export-alias",
     invalid: "packages/core/src/runtime/no-platform-module-export-alias.invalid.ts",
     valid: ["packages/core/src/runtime/no-platform-module-export-alias.valid.ts"],
-    // a named import, a namespace member, a cast module, a let
-    expectedCount: 4,
+    // a named import, a namespace member, a cast module, a let, a local alias,
+    // an alias of an alias, a destructured alias, and a member of an alias
+    expectedCount: 8,
   },
   {
     // A child-session writer admits the depth in its own function, first.

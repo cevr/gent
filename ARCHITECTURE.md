@@ -96,10 +96,17 @@ updates this list in the same commit.
     (through `@gent/core/extensions/api`) and the TUI (through
     `@gent/core/host`) all call it. Host facts core cannot get from
     Effect (OS info, executable path, home directory) stay on `GentPlatform`.
-    The lint holds the edge: the `effect/noGlobals` and
-    `effect/noNodeBuiltinImport` project bans keep `Bun.*`, the process facts
-    and the host modules in the platform file and the adapters, and
-    `effect/noPlatformLayerOutsideEntry` keeps the Bun platform layers in the
+    The lint holds the edge outside the platform impl, the adapters, the
+    tooling and test code: `effect/noGlobals` and `effect/noNodeBuiltinImport`
+    ban `Bun.*`, the `bun` module, `process.execPath`, `kill`, `pid` and
+    `platform`, and `os.homedir`, `hostname` and `release`, read as a global
+    or through an import, and in core and
+    shipped-extension source also `process.cwd` and the `os`, `crypto` and
+    `url` modules; `gent/no-host-fact-bypass` holds the `globalThis.Bun`,
+    `globalThis.process` and computed `Bun[...]` spellings. A read through a
+    local alias of `globalThis` or `Reflect.get` is not caught.
+    `effect/noPlatformLayerOutsideEntry` and
+    `gent/no-platform-module-export-alias` keep the Bun platform layers in the
     platform entry files.
     The TUI session controller owns screen state, views render and dispatch;
     app-specific UI facets live at the app edge. Receipts:

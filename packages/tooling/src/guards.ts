@@ -1685,9 +1685,13 @@ export const findWritersWithoutReaders = (
  * name there is an instruction to bring it back. `docs/research/` is out; like
  * `plans/`, it holds dated receipts that name what existed at the time.
  *
- * Retired `Bun.*` members (`Bun.Glob`, `Bun.randomUUIDv7` outside the platform
- * adapter) are banned by the built-in bans of `effect/noGlobals` instead,
- * because only the AST sees a member access.
+ * Retired `Bun.*` members (`Bun.Glob`, and `Bun.randomUUIDv7` outside the
+ * platform impl) are banned by the lint instead, because only the AST sees a
+ * member access: the built-in bans of `effect/noGlobals` hold `Bun.Glob`, the
+ * `bun` module ban of `effect/noNodeBuiltinImport` holds an import of either
+ * member, and `gent/no-host-fact-bypass` holds `globalThis.Bun.Glob`,
+ * `globalThis["Bun"].Glob` and `Bun["Glob"]`. A read through a local alias of
+ * `globalThis` (`const g = globalThis`) or `Reflect.get` passes all three.
  *
  * @module
  */

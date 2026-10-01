@@ -84,6 +84,13 @@
           "os": {
             "members": ["homedir", "hostname", "release"],
             "use": "GentPlatform (osInfo, homeDirectory)"
+          },
+          "process": {
+            "members": ["execPath", "kill", "pid", "platform"],
+            "use": "GentPlatform or an adapter-local Effect service"
+          },
+          "bun": {
+            "use": "an Effect platform service (GentPlatform, FileSystem, ChildProcessSpawner, KeyValueStore, Config); Bun stays in adapter, tooling and test code"
           }
         }
       }
@@ -166,7 +173,11 @@
               "crypto": {
                 "use": "Effect Crypto for random bytes and ids, GentPlatform.hash for digests"
               },
-              "url": { "use": "Effect Path.fromFileUrl" }
+              "url": { "use": "Effect Path.fromFileUrl" },
+              "process": {
+                "members": ["cwd", "execPath", "kill", "pid", "platform"],
+                "use": "GentPlatform, RuntimeEnvironment, or the extension context's cwd"
+              }
             }
           }
         ]
@@ -174,8 +185,10 @@
     },
     {
       // The platform adapters, the tooling and the test code may reach Bun and
-      // the host directly; only the built-in bans apply there, which keep the
-      // retired `Bun.Glob` and `Bun.randomUUIDv7` out.
+      // the host directly. The retired `Bun.Glob` and `Bun.randomUUIDv7` stay
+      // out: the built-in `noGlobals` bans hold the global, the `bun` module
+      // ban below holds an import, and `gent/no-host-fact-bypass` holds
+      // `globalThis.Bun` and a computed member.
       "files": [
         "packages/core/src/runtime/gent-platform-bun.ts",
         "**/*-adapter.ts",
@@ -189,7 +202,17 @@
       ],
       "rules": {
         "effect/noGlobals": "error",
-        "effect/noNodeBuiltinImport": "error"
+        "effect/noNodeBuiltinImport": [
+          "error",
+          {
+            "modules": {
+              "bun": {
+                "members": ["Glob", "randomUUIDv7"],
+                "use": "Effect FileSystem to list files, GentPlatform.randomId for ids"
+              }
+            }
+          }
+        ]
       }
     },
     {

@@ -323,6 +323,39 @@ const hostBypassMessage = (node: AstNode): string | undefined => {
   return undefined
 }
 
+/** The `Bun` members retired everywhere, and their replacements. */
+const RETIRED_BUN_MEMBERS: ReadonlyMap<string, string> = new Map([
+  ["Glob", "`Bun.Glob` is retired; list files through Effect `FileSystem`."],
+  ["randomUUIDv7", "`Bun.randomUUIDv7` is adapter-only; use `GentPlatform.randomId`."],
+])
+
+/** `globalThis.Bun` or `globalThis["Bun"]`. */
+const isGlobalThisBun = (node: AstNode | undefined): boolean => {
+  if (node?.type !== "MemberExpression") return false
+  const object = getNodeField(node, "object")
+  return (
+    object?.type === "Identifier" &&
+    getStringField(object, "name") === "globalThis" &&
+    memberPropertyName(node) === "Bun"
+  )
+}
+
+/**
+ * The retired `Bun` member a read names where `effect/noGlobals` does not
+ * look: `globalThis.Bun.Glob`, `globalThis["Bun"].Glob` or `Bun["Glob"]`.
+ */
+const bypassedRetiredBunMember = (node: AstNode): string | undefined => {
+  const object = getNodeField(node, "object")
+  const viaGlobalThis = isGlobalThisBun(object)
+  const computedBun =
+    object?.type === "Identifier" &&
+    getStringField(object, "name") === "Bun" &&
+    fieldOf(node, "computed") === true
+  if (!viaGlobalThis && !computedBun) return undefined
+  const property = memberPropertyName(node)
+  return property !== undefined && RETIRED_BUN_MEMBERS.has(property) ? property : undefined
+}
+
 const callExpressionArgs = (node: AstNode): ReadonlyArray<AstNode> => {
   const args = fieldOf(node, "arguments")
   if (!Array.isArray(args)) return []
@@ -812,16 +845,34 @@ const plugin: Plugin = {
      *
      * Exempt by filename, as the upstream project bans are by override:
      * `runtime/gent-platform-bun.ts`, `*-adapter.ts`, the tooling, and test
-     * code. Goes when an upstream release reads these spellings.
+     * code. The retired `Bun.Glob` and `Bun.randomUUIDv7` stay banned in
+     * those files too, as the built-in bans of `effect/noGlobals` keep the
+     * dotted spelling: `globalThis.Bun.Glob`, `globalThis["Bun"].Glob` and
+     * `Bun["Glob"]` are reported in every file, and `randomUUIDv7` is allowed
+     * in the platform impl only. Goes when an upstream release reads these
+     * spellings.
      */
     "no-host-fact-bypass": {
       create(context) {
         const subject = ruleSubject(context)
-        if (platformBoundaryFilename(subject)) return {}
+        const platformImpl = /(?:^|\/)runtime\/gent-platform-bun\.ts$/.test(subject)
+        const reportRetired = (node: AstNode): boolean => {
+          const member = bypassedRetiredBunMember(node)
+          if (member === undefined || (platformImpl && member === "randomUUIDv7")) return false
+          context.report({ message: RETIRED_BUN_MEMBERS.get(member) ?? member, node })
+          return true
+        }
+        if (platformBoundaryFilename(subject)) {
+          return {
+            MemberExpression(node) {
+              if (isAstNode(node)) reportRetired(node)
+            },
+          }
+        }
         const protectedFile = protectedHostFactFilename(subject)
         return {
           MemberExpression(node) {
-            if (!isAstNode(node)) return
+            if (!isAstNode(node) || reportRetired(node)) return
             if (protectedFile && isImportMetaUrlConstruction(getNodeField(node, "object"))) {
               context.report({
                 message:
@@ -849,19 +900,53 @@ const plugin: Plugin = {
      *
      * Reported outside test code: an exported `const`, `let` or `var` whose
      * value is a binding imported from an `@effect/platform-*` package or
-     * module, or a member of one (`PlatformBun.BunServices`). A layer read
+     * module, or a member of one (`PlatformBun.BunServices`), or a local alias
+     * of one, however many steps away (`const Local = BunServices`, or
+     * `const { BunServices: Local } = PlatformBun`). A layer read
      * (`BunServices.layer`, `import { layer }`) is left to upstream, which
-     * reports it where it stands. The platform
-     * entry files are exempt by their `.oxlintrc.json` override, as they are
-     * from the upstream rule. Goes when an upstream release follows an
-     * exported alias.
+     * reports it where it stands. The platform entry files are exempt by
+     * their `.oxlintrc.json` override, as they are from the upstream rule.
+     * Goes when an upstream release follows an exported alias.
      */
     "no-platform-module-export-alias": {
       create(context) {
         if (isTestCode(ruleSubject(context))) return {}
         const platformBindings = new Set<string>()
         const exported: Array<{ readonly node: AstNode; readonly root: string }> = []
+        /** Each local name, and the name its value is read off. */
+        const localAliases = new Map<string, string>()
+        const platformRoot = (name: string): string | undefined => {
+          const seen = new Set<string>()
+          let current: string | undefined = name
+          while (current !== undefined && !seen.has(current)) {
+            if (platformBindings.has(current)) return current
+            seen.add(current)
+            current = localAliases.get(current)
+          }
+          return undefined
+        }
         return {
+          VariableDeclarator(node) {
+            if (!isAstNode(node)) return
+            const root = aliasRoot(getNodeField(node, "init"))
+            const id = getNodeField(node, "id")
+            if (root === undefined || id === undefined) return
+            if (id.type === "Identifier") {
+              const name = getStringField(id, "name")
+              if (name !== undefined) localAliases.set(name, root)
+              return
+            }
+            if (id.type !== "ObjectPattern") return
+            for (const property of getNodeArrayField(id, "properties") ?? []) {
+              const key = getNodeField(property, "key")
+              const value = getNodeField(property, "value")
+              const keyName = key === undefined ? undefined : getStringField(key, "name")
+              if (keyName === undefined || LAYER_NAME.test(keyName)) continue
+              if (value?.type !== "Identifier") continue
+              const name = getStringField(value, "name")
+              if (name !== undefined) localAliases.set(name, root)
+            }
+          },
           ImportDeclaration(node) {
             if (!isAstNode(node) || getStringField(node, "importKind") === "type") return
             const source = importSourceOf(node) ?? ""
@@ -892,9 +977,10 @@ const plugin: Plugin = {
           },
           "Program:exit"() {
             for (const alias of exported) {
-              if (!platformBindings.has(alias.root)) continue
+              const root = platformRoot(alias.root)
+              if (root === undefined) continue
               context.report({
-                message: `exports an alias of \`${alias.root}\`, a binding from an @effect/platform package, which hands its layers to every importer where no rule follows them; import the package where it is used, or yield the service the platform entry provides`,
+                message: `exports an alias of \`${root}\`, a binding from an @effect/platform package, which hands its layers to every importer where no rule follows them; import the package where it is used, or yield the service the platform entry provides`,
                 node: alias.node,
               })
             }
