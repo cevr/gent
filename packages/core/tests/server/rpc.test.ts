@@ -5583,6 +5583,22 @@ describe("session profile lookup", () => {
     expect([...payloads, listModels, listStatus]).toHaveLength(8)
   })
 
+  // The client builds each payload with its schema's constructor, so a tag
+  // the constructor filled in would turn an empty scope into `Launch`.
+  it.live("a health read whose scope names neither a session nor the launch is refused", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+        const { client } = yield* createRpcHarness({ ...e2ePreset, providerLayer })
+        const exit = yield* Effect.exit(
+          // @ts-expect-error -- a scope names its tag; no constructor default picks `Launch`
+          client.extension.listStatus({ scope: {} }),
+        )
+        expect(Exit.isFailure(exit)).toBe(true)
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+
   test("a session-scoped payload that names no session does not decode", () => {
     const statusPayload = Schema.Struct({ scope: ExtensionStatusScope })
     const driver = { _tag: "Model", id: "anthropic" }

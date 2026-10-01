@@ -386,7 +386,10 @@ The production server uses one live profile owner:
   error at the call site and a decode failure on the wire; no handler has a
   launch-profile branch for a missing session. `extension.listStatus` takes an
   explicit `scope` (`ExtensionStatusScope`: `Session { id }` or `Launch`);
-  only `gent doctor`, which has no session, asks for `Launch`. A session that
+  only `gent doctor`, which has no session, asks for `Launch`. Its tags carry
+  no constructor default (plain `Schema.Literal`, not `TaggedStruct`): the RPC
+  client builds each payload with the schema's constructor, so a defaulted tag
+  would read `{ scope: {} }` as `Launch`. A session that
   stored no cwd runs in the host's cwd, so it reads the launch profile as its
   loop does. `driver.clear` writes the user config and reads no profile, so
   it names no session. Receipt: the `@ts-expect-error` payloads in

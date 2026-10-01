@@ -4,7 +4,6 @@ import {
   dateFromMillis,
   type ExtensionHealthIssue,
   type ExtensionHealthSnapshot,
-  ExtensionStatusScope,
   Message,
   MessageId,
   Session,
@@ -985,7 +984,7 @@ export const readDoctorExtensionHealth = (
         yield* bundle.runtime.lifecycle.waitForReady
         // The doctor has no session: it reads the profile the server started in.
         const snapshot = yield* bundle.client.extension.listStatus({
-          scope: ExtensionStatusScope.cases.Launch.make({}),
+          scope: { _tag: "Launch" },
         })
         return extensionHealthFromSnapshot(snapshot)
       }),
