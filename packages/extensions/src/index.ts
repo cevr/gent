@@ -7,6 +7,7 @@ import {
 import type { ChildProcessSpawner } from "effect/process/ChildProcessSpawner"
 import * as EffectAiAnthropic from "@effect/ai-anthropic"
 import * as EffectAiOpenAi from "@effect/ai-openai"
+import * as EffectAiOpenAiCompat from "@effect/ai-openai-compat"
 import * as EffectPlatformBun from "@effect/platform-bun"
 import * as EffectRoot from "effect"
 import * as EffectAi from "effect/ai"
@@ -28,6 +29,7 @@ import { AgentsExtension } from "./agents.js"
 import { AgentsViewExtension } from "./agents-view.js"
 import { AnthropicExtension } from "./anthropic.js"
 import { OpenAIExtension } from "./openai.js"
+import { OpenCodeExtension } from "./opencode.js"
 import { SkillsExtension } from "./skills.js"
 import { WorkflowsExtension } from "./workflows.js"
 import { GoalExtension } from "./goal.js"
@@ -91,6 +93,7 @@ export const BuiltinExtensions: ReadonlyArray<
   SkillsExtension,
   AnthropicExtension,
   OpenAIExtension,
+  OpenCodeExtension,
 ].map((extension) => {
   if (Option.isNone(BuiltinArtifactIdentity)) return extension
   return {
@@ -115,6 +118,7 @@ export const BuiltinExtensionModules: ReadonlyMap<string, () => object> = new Ma
 >([
   ["@effect/ai-anthropic", () => EffectAiAnthropic],
   ["@effect/ai-openai", () => EffectAiOpenAi],
+  ["@effect/ai-openai-compat", () => EffectAiOpenAiCompat],
   ["@effect/platform-bun", () => EffectPlatformBun],
   ["effect", () => EffectRoot],
   ["effect/ai", () => EffectAi],

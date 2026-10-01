@@ -1,0 +1,758 @@
+import { describe, expect, it } from "effect-bun-test"
+import {
+  Cause,
+  Crypto,
+  Effect,
+  Exit,
+  Layer,
+  Option,
+  Path,
+  Predicate,
+  Redacted,
+  Schema,
+} from "effect"
+import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http"
+import {
+  OpenAiClient as OpenAiChatClient,
+  OpenAiLanguageModel as OpenAiChatLanguageModel,
+} from "@effect/ai-openai-compat"
+import { Prompt } from "effect/ai"
+import { BunCrypto, BunFileSystem } from "@effect/platform-bun"
+import {
+  ModelId,
+  ProviderAuthError,
+  ProviderAuthInfo,
+  type ProviderHints,
+} from "@gent/core/extensions/api"
+import {
+  type CapturedRequest,
+  createRpcHarness,
+  type FakeFetchState,
+  LanguageModelLayers,
+  makeFakeFetchState,
+  makeTempDirectoryScoped,
+  oneGenerate,
+  textStep,
+} from "@gent/core/test-utils"
+import { buildOpenCodeModelDriver, OPENCODE_GATEWAYS, OpenCodeExtension } from "../src/opencode.js"
+import { catalogSource, modelsDevCatalog } from "../src/providers.js"
+import { encodeExternalJson, externalWireNull } from "./helpers/external-wire.js"
+
+/**
+ * The OpenCode gateways, Zen and Go: one driver constructor, three wire
+ * formats picked from the models.dev catalog, the gateway's session headers,
+ * and the reasoning and cache fields each format carries. Every request goes
+ * to a captured fake `fetch`; no test reaches the gateway.
+ */
+
+const platformLayer = Layer.merge(BunFileSystem.layer, Path.layer)
+
+/** The Crypto a host provides; the driver captures it at setup. */
+const hostCrypto = Effect.service(Crypto.Crypto).pipe(Effect.provide(BunCrypto.layer))
+
+const API_KEY = "oc-test-key"
+const apiAuth = ProviderAuthInfo.cases.Api.make({ key: API_KEY })
+
+// ── catalog fixture ─────────────────────────────────────────────────────────
+
+/** The models.dev entries the tests read, as models.dev writes them (2026-10-01). */
+const remotePayload = {
+  "opencode-go": {
+    npm: "@ai-sdk/openai-compatible",
+    models: {
+      "glm-5.3": {
+        name: "GLM-5.3",
+        tool_call: true,
+        reasoning: true,
+        reasoning_options: [{ type: "effort", values: ["low", "high", "max"] }],
+        interleaved: { field: "reasoning_content" },
+      },
+      "gpt-5.6-luna": {
+        name: "GPT-5.6 Luna",
+        tool_call: true,
+        reasoning: true,
+        provider: { npm: "@ai-sdk/openai" },
+        reasoning_options: [
+          { type: "effort", values: ["none", "low", "medium", "high", "xhigh", "max"] },
+        ],
+      },
+      "minimax-m3": {
+        name: "MiniMax M3",
+        tool_call: true,
+        reasoning: true,
+        provider: { npm: "@ai-sdk/anthropic" },
+        reasoning_options: [{ type: "toggle" }],
+      },
+      "kimi-k2.6": {
+        name: "Kimi K2.6",
+        tool_call: true,
+        reasoning: true,
+        status: "deprecated",
+        interleaved: { field: "reasoning_content" },
+      },
+    },
+  },
+  opencode: {
+    npm: "@ai-sdk/openai-compatible",
+    models: {
+      "qwen3.8-max": {
+        name: "Qwen3.8 Max",
+        tool_call: true,
+        reasoning: true,
+        reasoning_options: [{ type: "toggle" }],
+      },
+      "gpt-5.4": {
+        name: "GPT-5.4",
+        tool_call: true,
+        reasoning: true,
+        provider: { npm: "@ai-sdk/openai" },
+        reasoning_options: [{ type: "effort", values: ["none", "low", "medium", "high", "xhigh"] }],
+      },
+      "claude-opus-4-6": {
+        name: "Claude Opus 4.6",
+        tool_call: true,
+        reasoning: true,
+        provider: { npm: "@ai-sdk/anthropic" },
+        reasoning_options: [
+          { type: "effort", values: ["low", "medium", "high", "max"] },
+          { type: "budget_tokens", min: 1024 },
+        ],
+      },
+      "claude-opus-4-5": {
+        name: "Claude Opus 4.5",
+        tool_call: true,
+        reasoning: true,
+        provider: { npm: "@ai-sdk/anthropic" },
+        reasoning_options: [
+          { type: "effort", values: ["low", "medium", "high"] },
+          { type: "budget_tokens", min: 1024 },
+        ],
+      },
+      "claude-sonnet-4": {
+        name: "Claude Sonnet 4",
+        tool_call: true,
+        reasoning: true,
+        provider: { npm: "@ai-sdk/anthropic" },
+        reasoning_options: [{ type: "budget_tokens", min: 1024 }],
+      },
+      "qwen3.8-flash": {
+        name: "Qwen3.8 Flash",
+        tool_call: true,
+        reasoning: true,
+        provider: { npm: "@ai-sdk/anthropic" },
+        reasoning_options: [
+          { type: "toggle" },
+          { type: "effort", values: ["low", "medium", "xhigh"] },
+          { type: "budget_tokens" },
+        ],
+      },
+      "claude-opus-5": {
+        name: "Claude Opus 5",
+        tool_call: true,
+        reasoning: true,
+        provider: { npm: "@ai-sdk/anthropic" },
+        reasoning_options: [{ type: "effort", values: ["low", "medium", "high", "xhigh", "max"] }],
+      },
+      "gemini-3.6-flash": {
+        name: "Gemini 3.6 Flash",
+        tool_call: true,
+        reasoning: true,
+        provider: { npm: "@ai-sdk/google" },
+        reasoning_options: [{ type: "effort", values: ["minimal", "low", "medium", "high"] }],
+      },
+    },
+  },
+}
+
+/** An HTTP client that answers the models.dev fetch with the fixture. */
+const catalogHttpLayer = Layer.succeed(
+  HttpClient.HttpClient,
+  HttpClient.make((request) =>
+    Effect.succeed(
+      HttpClientResponse.fromWeb(
+        request,
+        new Response(encodeExternalJson(remotePayload), { status: 200 }),
+      ),
+    ),
+  ),
+)
+
+/**
+ * A home whose catalog holds the fixture. The catalog keeps one load per
+ * home, so a driver pointed at this home reads the fixture from then on.
+ */
+const fixtureHome = Effect.gen(function* () {
+  const home = yield* makeTempDirectoryScoped("opencode-catalog-")
+  const models = yield* modelsDevCatalog(home).pipe(
+    Effect.provide(Layer.merge(catalogHttpLayer, platformLayer)),
+  )
+  expect(models.length).toBeGreaterThan(0)
+  return home
+})
+
+const fixtureDrivers = Effect.gen(function* () {
+  const home = yield* fixtureHome
+  const source = yield* catalogSource(home).pipe(Effect.provide(platformLayer))
+  const crypto = yield* hostCrypto
+  return {
+    zen: buildOpenCodeModelDriver(OPENCODE_GATEWAYS.zen, Option.none(), source, crypto),
+    go: buildOpenCodeModelDriver(OPENCODE_GATEWAYS.go, Option.none(), source, crypto),
+  }
+})
+
+// ── wire fixtures ───────────────────────────────────────────────────────────
+
+const responsesBody = {
+  id: "resp-1",
+  object: "response",
+  created_at: 1_700_000_000,
+  model: "gpt",
+  output: [
+    {
+      id: "msg-1",
+      type: "message",
+      role: "assistant",
+      status: "completed",
+      content: [{ type: "output_text", text: "ok", annotations: [], logprobs: [] }],
+    },
+  ],
+  usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+}
+
+const chatBody = {
+  id: "chatcmpl-1",
+  object: "chat.completion",
+  created: 1_700_000_000,
+  model: "chat",
+  choices: [
+    {
+      index: 0,
+      message: { role: "assistant", content: "ok" },
+      finish_reason: "stop",
+    },
+  ],
+  usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+}
+
+const messagesBody = {
+  id: "msg_1",
+  type: "message",
+  role: "assistant",
+  model: "claude",
+  content: [{ type: "text", text: "ok" }],
+  stop_reason: "end_turn",
+  stop_sequence: externalWireNull,
+  usage: {
+    input_tokens: 1,
+    output_tokens: 1,
+    cache_creation: externalWireNull,
+    cache_creation_input_tokens: externalWireNull,
+    cache_read_input_tokens: externalWireNull,
+    inference_geo: externalWireNull,
+    service_tier: externalWireNull,
+  },
+}
+
+/** Each wire format's success reply, chosen by the request's path. */
+const gatewayReply = (request: CapturedRequest) => {
+  const path = new URL(request.url).pathname
+  const reply = (body: typeof chatBody | typeof responsesBody | typeof messagesBody) => ({
+    status: 200,
+    headers: { "content-type": "application/json" },
+    body: encodeExternalJson(body),
+  })
+  if (path.endsWith("/responses")) return reply(responsesBody)
+  if (path.endsWith("/messages")) return reply(messagesBody)
+  return reply(chatBody)
+}
+
+type Driver = ReturnType<typeof buildOpenCodeModelDriver>
+
+/** One generate through the driver's model, captured into `state`. */
+const generate = (
+  driver: Driver,
+  modelName: string,
+  state: FakeFetchState,
+  hints: ProviderHints = {},
+  prompt: Prompt.RawInput = "hi",
+) =>
+  driver
+    .resolveModel(modelName, apiAuth, hints)
+    .pipe(Effect.flatMap((model) => oneGenerate(model, state, gatewayReply, prompt)))
+
+const RequestBody = Schema.fromJsonString(Schema.JsonObject)
+
+const bodyOf = (request: CapturedRequest) =>
+  Schema.decodeEffect(RequestBody)(Option.getOrThrow(Option.fromUndefinedOr(request.body)))
+
+const MessagesBody = Schema.fromJsonString(
+  Schema.Struct({ messages: Schema.Array(Schema.JsonObject) }),
+)
+
+/** The request's assistant messages, as the wire carries them. */
+const assistantMessages = (request: CapturedRequest) =>
+  Schema.decodeEffect(MessagesBody)(Option.getOrThrow(Option.fromUndefinedOr(request.body))).pipe(
+    Effect.map((body) => body.messages.filter((message) => message["role"] === "assistant")),
+  )
+
+/** A field of a request body; none when the body leaves it out. */
+const field = (body: Schema.JsonObject, key: string) => Option.fromUndefinedOr(body[key])
+
+const lastRequest = (state: FakeFetchState) =>
+  Option.getOrThrow(Option.fromUndefinedOr(state.captured.at(-1)))
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+
+// ── request wiring ──────────────────────────────────────────────────────────
+
+/** One model per supported wire format on each gateway, with its URL and auth header. */
+const routes = [
+  {
+    gateway: "go",
+    model: "glm-5.3",
+    url: "https://opencode.ai/zen/go/v1/chat/completions",
+    auth: ["authorization", `Bearer ${API_KEY}`],
+  },
+  {
+    gateway: "go",
+    model: "gpt-5.6-luna",
+    url: "https://opencode.ai/zen/go/v1/responses",
+    auth: ["authorization", `Bearer ${API_KEY}`],
+  },
+  {
+    gateway: "go",
+    model: "minimax-m3",
+    url: "https://opencode.ai/zen/go/v1/messages?beta=true",
+    auth: ["x-api-key", API_KEY],
+  },
+  {
+    gateway: "zen",
+    model: "qwen3.8-max",
+    url: "https://opencode.ai/zen/v1/chat/completions",
+    auth: ["authorization", `Bearer ${API_KEY}`],
+  },
+  {
+    gateway: "zen",
+    model: "gpt-5.4",
+    url: "https://opencode.ai/zen/v1/responses",
+    auth: ["authorization", `Bearer ${API_KEY}`],
+  },
+  {
+    gateway: "zen",
+    model: "claude-opus-4-6",
+    url: "https://opencode.ai/zen/v1/messages?beta=true",
+    auth: ["x-api-key", API_KEY],
+  },
+] as const
+
+describe("OpenCode request wiring", () => {
+  it.live(
+    "each wire format posts to its gateway path with the key, and names the session, the client and gent",
+    () =>
+      Effect.gen(function* () {
+        const drivers = yield* fixtureDrivers
+        for (const route of routes) {
+          const state = makeFakeFetchState()
+          const driver = drivers[route.gateway]
+          yield* generate(driver, route.model, state, { cacheKey: "session-a" })
+          yield* generate(driver, route.model, state, { cacheKey: "session-a" })
+          yield* generate(driver, route.model, state, { cacheKey: "session-b" })
+          expect(state.captured.map((request) => request.url)).toEqual([
+            route.url,
+            route.url,
+            route.url,
+          ])
+          for (const request of state.captured) {
+            const [authHeader, authValue] = route.auth
+            expect(request.headers[authHeader]).toBe(authValue)
+            expect(request.headers["x-opencode-client"]).toBe("gent")
+            expect(request.headers["user-agent"]).toBe("gent")
+            // The key travels in the auth header only.
+            const others = Object.entries(request.headers).filter(([name]) => name !== authHeader)
+            expect(others.filter(([, value]) => value.includes(API_KEY))).toEqual([])
+          }
+          expect(state.captured.map((request) => request.headers["x-opencode-session"])).toEqual([
+            "session-a",
+            "session-a",
+            "session-b",
+          ])
+        }
+      }).pipe(Effect.scoped, Effect.timeout("20 seconds")),
+  )
+
+  it.live("a model the catalog serves over Messages posts to /v1/messages", () =>
+    Effect.gen(function* () {
+      const { go } = yield* fixtureDrivers
+      const state = makeFakeFetchState()
+      // The gateway's default is Chat Completions; minimax-m3's entry names @ai-sdk/anthropic.
+      yield* generate(go, "minimax-m3", state, { cacheKey: "s" })
+      expect(lastRequest(state).url).toBe("https://opencode.ai/zen/go/v1/messages?beta=true")
+    }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  )
+
+  it.live("a call without a conversation names a session of its own", () =>
+    Effect.gen(function* () {
+      const { go } = yield* fixtureDrivers
+      const state = makeFakeFetchState()
+      yield* generate(go, "glm-5.3", state)
+      yield* generate(go, "glm-5.3", state)
+      const sessions = state.captured.map((request) => request.headers["x-opencode-session"] ?? "")
+      expect(sessions.every((session) => UUID.test(session))).toBe(true)
+      expect(new Set(sessions).size).toBe(2)
+    }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  )
+
+  it.live("without a stored key or OPENCODE_API_KEY, resolving fails and names the variable", () =>
+    Effect.gen(function* () {
+      const drivers = yield* fixtureDrivers
+      for (const driver of [drivers.zen, drivers.go]) {
+        const error = yield* Effect.flip(driver.resolveModel("glm-5.3"))
+        expect(error).toBeInstanceOf(ProviderAuthError)
+        expect(error.message).toContain("OPENCODE_API_KEY")
+      }
+    }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  )
+})
+
+// ── reasoning ───────────────────────────────────────────────────────────────
+
+describe("OpenCode reasoning", () => {
+  it.live("Chat Completions sends the lowest catalog effort at or above the hint", () =>
+    Effect.gen(function* () {
+      const { go } = yield* fixtureDrivers
+      const state = makeFakeFetchState()
+      yield* generate(go, "glm-5.3", state, { cacheKey: "s", reasoning: "medium" })
+      const body = yield* bodyOf(lastRequest(state))
+      expect(body["reasoning_effort"]).toBe("high")
+    }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  )
+
+  it.live("Responses sends the effort with a summary, and the session as the cache key", () =>
+    Effect.gen(function* () {
+      const { go } = yield* fixtureDrivers
+      const state = makeFakeFetchState()
+      yield* generate(go, "gpt-5.6-luna", state, { cacheKey: "s", reasoning: "high" })
+      const body = yield* bodyOf(lastRequest(state))
+      expect(body["reasoning"]).toEqual({ effort: "high", summary: "auto" })
+      expect(body["prompt_cache_key"]).toBe("s")
+      expect(body["store"]).toBe(false)
+    }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  )
+
+  it.live("Messages maps a toggle, a budget and an effort list as OpenCode does", () =>
+    Effect.gen(function* () {
+      const { go, zen } = yield* fixtureDrivers
+      const state = makeFakeFetchState()
+
+      yield* generate(go, "minimax-m3", state, { cacheKey: "s", reasoning: "high" })
+      const toggle = yield* bodyOf(lastRequest(state))
+      expect(toggle["thinking"]).toEqual({ type: "adaptive" })
+      expect(toggle["output_config"]).toBeUndefined()
+
+      yield* generate(go, "minimax-m3", state, { cacheKey: "s", reasoning: "none" })
+      expect((yield* bodyOf(lastRequest(state)))["thinking"]).toEqual({ type: "disabled" })
+
+      yield* generate(zen, "claude-opus-5", state, { cacheKey: "s", reasoning: "xhigh" })
+      const adaptive = yield* bodyOf(lastRequest(state))
+      expect(adaptive["thinking"]).toEqual({ type: "adaptive", display: "summarized" })
+      expect(adaptive["output_config"]).toEqual({ effort: "xhigh" })
+    }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  )
+
+  // OpenCode's `reasoningVariants`: an effort list wins over a budget, and
+  // `anthropicEffort` picks the thinking mode by Claude family. A manual budget
+  // cannot think between tool calls on the adaptive families.
+  it.live("Messages prefers the effort list, and sends a budget only to a model with none", () =>
+    Effect.gen(function* () {
+      const { zen } = yield* fixtureDrivers
+      const state = makeFakeFetchState()
+      const sent = (modelName: string, reasoning: string) =>
+        generate(zen, modelName, state, { cacheKey: "s", reasoning, maxTokens: 8192 }).pipe(
+          Effect.andThen(Effect.suspend(() => bodyOf(lastRequest(state)))),
+          Effect.map((body) => ({
+            thinking: field(body, "thinking"),
+            output: field(body, "output_config"),
+          })),
+        )
+
+      expect(yield* sent("claude-opus-4-6", "high")).toEqual({
+        thinking: Option.some({ type: "adaptive" }),
+        output: Option.some({ effort: "high" }),
+      })
+      expect(yield* sent("claude-opus-4-5", "high")).toEqual({
+        thinking: Option.some({ type: "enabled", budget_tokens: 4095 }),
+        output: Option.some({ effort: "high" }),
+      })
+      expect(yield* sent("qwen3.8-flash", "high")).toEqual({
+        thinking: Option.none(),
+        output: Option.some({ effort: "xhigh" }),
+      })
+      expect(yield* sent("claude-sonnet-4", "high")).toEqual({
+        thinking: Option.some({ type: "enabled", budget_tokens: 4096 }),
+        output: Option.none(),
+      })
+      expect(yield* sent("claude-sonnet-4", "max")).toEqual({
+        thinking: Option.some({ type: "enabled", budget_tokens: 8191 }),
+        output: Option.none(),
+      })
+    }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  )
+
+  it.live("a model the catalog says does not reason gets no reasoning field", () =>
+    Effect.gen(function* () {
+      const { go, zen } = yield* fixtureDrivers
+      const state = makeFakeFetchState()
+      const hints = { cacheKey: "s", reasoning: "high", supportsReasoning: false }
+      yield* generate(go, "glm-5.3", state, hints)
+      yield* generate(go, "gpt-5.6-luna", state, hints)
+      yield* generate(zen, "claude-opus-4-6", state, hints)
+      const bodies = yield* Effect.forEach(state.captured, bodyOf)
+      for (const body of bodies) {
+        expect(body["reasoning_effort"]).toBeUndefined()
+        expect(body["reasoning"]).toBeUndefined()
+        expect(body["thinking"]).toBeUndefined()
+        expect(body["output_config"]).toBeUndefined()
+      }
+    }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  )
+
+  it.live(
+    "Chat Completions returns the model's reasoning in its catalog field, and none where it names no field",
+    () =>
+      Effect.gen(function* () {
+        const { go, zen } = yield* fixtureDrivers
+        const conversation = Prompt.make([
+          { role: "user", content: "first" },
+          {
+            role: "assistant",
+            content: [
+              Prompt.makePart("reasoning", { text: "thought it through" }),
+              Prompt.makePart("text", { text: "answer" }),
+            ],
+          },
+          { role: "assistant", content: [Prompt.makePart("text", { text: "no thinking" })] },
+          { role: "user", content: "second" },
+        ])
+        const state = makeFakeFetchState()
+        yield* generate(go, "glm-5.3", state, { cacheKey: "s" }, conversation)
+        const withField = yield* assistantMessages(lastRequest(state))
+        expect(withField.map((message) => message["reasoning_content"])).toEqual([
+          "thought it through",
+          "",
+        ])
+
+        yield* generate(zen, "qwen3.8-max", state, { cacheKey: "s" }, conversation)
+        const withoutField = yield* assistantMessages(lastRequest(state))
+        expect(withoutField.map((message) => "reasoning_content" in message)).toEqual([
+          false,
+          false,
+        ])
+      }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  )
+
+  it.live(
+    "a step that reasoned, wrote and called a tool goes back as one assistant message with its reasoning",
+    () =>
+      Effect.gen(function* () {
+        const { go } = yield* fixtureDrivers
+        const state = makeFakeFetchState()
+        yield* generate(go, "glm-5.3", state, { cacheKey: "s" }, reasonedToolStep)
+        const assistants = yield* assistantMessages(lastRequest(state))
+        expect(assistants.length).toBe(1)
+        expect(assistants[0]?.["reasoning_content"]).toBe("need the file")
+        expect(assistants[0]?.["content"]).toBe("Reading it.")
+        const calls = yield* Schema.decodeUnknownEffect(ToolCalls)(assistants[0]?.["tool_calls"])
+        expect(calls.map((call) => call.id)).toEqual(["call_read"])
+      }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  )
+
+  // The replay is OpenCode's opt-in (`replayReasoning`); every other user of
+  // the compat SDK sends what the unpatched SDK sends.
+  it.live("a compat client without the opt-in sends no reasoning and keeps upstream messages", () =>
+    Effect.gen(function* () {
+      const client = OpenAiChatClient.layer({
+        apiKey: Redacted.make(API_KEY),
+        apiUrl: "https://compat.example/v1",
+      }).pipe(Layer.provide(FetchHttpClient.layer))
+      const model = OpenAiChatLanguageModel.layer({ model: "plain" }).pipe(Layer.provide(client))
+      const state = makeFakeFetchState()
+      yield* oneGenerate(model, state, gatewayReply, reasonedToolStep)
+      const assistants = yield* assistantMessages(lastRequest(state))
+      expect(assistants.map((message) => "reasoning_content" in message)).toEqual([false, false])
+      expect(assistants.map((message) => message["content"])).toEqual([
+        "Reading it.",
+        externalWireNull,
+      ])
+      const calls = yield* Schema.decodeUnknownEffect(ToolCalls)(assistants[1]?.["tool_calls"])
+      expect(calls.map((call) => call.id)).toEqual(["call_read"])
+    }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  )
+
+  // A reply cut off after its reasoning leaves an assistant message with no
+  // text; that reasoning belongs to it alone, not to a later reply.
+  it.live("reasoning stays with its own assistant message, not the messages after it", () =>
+    Effect.gen(function* () {
+      const { go } = yield* fixtureDrivers
+      const conversation = Prompt.make([
+        { role: "user", content: "first question" },
+        {
+          role: "assistant",
+          content: [Prompt.makePart("reasoning", { text: "cut off mid thought" })],
+        },
+        { role: "user", content: "new question" },
+        { role: "assistant", content: [Prompt.makePart("text", { text: "unrelated answer" })] },
+        {
+          role: "assistant",
+          content: [
+            Prompt.makePart("tool-call", {
+              id: "call_read",
+              name: "read",
+              params: { path: "a.txt" },
+              providerExecuted: false,
+            }),
+          ],
+        },
+        {
+          role: "tool",
+          content: [
+            Prompt.makePart("tool-result", {
+              id: "call_read",
+              name: "read",
+              result: "alpha",
+              isFailure: false,
+              providerExecuted: false,
+            }),
+          ],
+        },
+      ])
+      const state = makeFakeFetchState()
+      yield* generate(go, "glm-5.3", state, { cacheKey: "s" }, conversation)
+      const assistants = yield* assistantMessages(lastRequest(state))
+      expect(
+        assistants.map((message) => ({
+          content: message["content"],
+          reasoning: message["reasoning_content"],
+          calls: "tool_calls" in message,
+        })),
+      ).toEqual([
+        { content: "unrelated answer", reasoning: "", calls: false },
+        { content: externalWireNull, reasoning: "", calls: true },
+      ])
+    }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  )
+})
+
+const ToolCalls = Schema.Array(Schema.Struct({ id: Schema.String }))
+
+/** A step that reasoned, wrote, and called a tool, then the tool's result. */
+const reasonedToolStep = Prompt.make([
+  { role: "user", content: "Read a.txt." },
+  {
+    role: "assistant",
+    content: [
+      Prompt.makePart("reasoning", { text: "need the file" }),
+      Prompt.makePart("text", { text: "Reading it." }),
+      Prompt.makePart("tool-call", {
+        id: "call_read",
+        name: "read",
+        params: { path: "a.txt" },
+        providerExecuted: false,
+      }),
+    ],
+  },
+  {
+    role: "tool",
+    content: [
+      Prompt.makePart("tool-result", {
+        id: "call_read",
+        name: "read",
+        result: "alpha",
+        isFailure: false,
+        providerExecuted: false,
+      }),
+    ],
+  },
+])
+
+// ── prompt caching ──────────────────────────────────────────────────────────
+
+describe("OpenCode prompt caching", () => {
+  it.live("Messages marks the first system block and the last block of the last two messages", () =>
+    Effect.gen(function* () {
+      const { zen } = yield* fixtureDrivers
+      const state = makeFakeFetchState()
+      const conversation = Prompt.make([
+        { role: "system", content: "be brief" },
+        { role: "user", content: "one" },
+        { role: "assistant", content: "two" },
+        { role: "user", content: "three" },
+      ])
+      yield* generate(zen, "claude-opus-5", state, { cacheKey: "s" }, conversation)
+      const body = yield* bodyOf(lastRequest(state))
+      const Blocks = Schema.Array(Schema.JsonObject)
+      const system = yield* Schema.decodeUnknownEffect(Blocks)(body["system"])
+      expect(system.map((block) => block["cache_control"])).toEqual([{ type: "ephemeral" }])
+      const messages = yield* Schema.decodeUnknownEffect(
+        Schema.Array(Schema.Struct({ role: Schema.String, content: Blocks })),
+      )(body["messages"])
+      expect(
+        messages.map((message) =>
+          message.content.map((block) => Predicate.isObject(block["cache_control"])),
+        ),
+      ).toEqual([[false], [true], [true]])
+    }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  )
+})
+
+// ── catalog ─────────────────────────────────────────────────────────────────
+
+describe("OpenCode catalog", () => {
+  it.live("each gateway lists its own models, deprecated ones too, with a 5 minute cache", () =>
+    Effect.gen(function* () {
+      const { go } = yield* fixtureDrivers
+      const listModels = Option.getOrThrow(Option.fromUndefinedOr(go.listModels))
+      const models = yield* listModels()
+      expect(models.map((model) => model.id).toSorted()).toEqual([
+        ModelId.make("opencode-go/glm-5.3"),
+        ModelId.make("opencode-go/gpt-5.6-luna"),
+        ModelId.make("opencode-go/kimi-k2.6"),
+        ModelId.make("opencode-go/minimax-m3"),
+      ])
+      expect(models.every((model) => model.promptCacheTtlMs === 300_000)).toBe(true)
+    }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  )
+
+  it.live("a Zen model on the Google format is not listed, and resolving it names the format", () =>
+    Effect.gen(function* () {
+      const { zen } = yield* fixtureDrivers
+      const listModels = Option.getOrThrow(Option.fromUndefinedOr(zen.listModels))
+      const ids = (yield* listModels()).map((model) => model.id)
+      expect(ids).toContain(ModelId.make("opencode/claude-opus-5"))
+      expect(ids).not.toContain(ModelId.make("opencode/gemini-3.6-flash"))
+      const exit = yield* Effect.exit(zen.resolveModel("gemini-3.6-flash", apiAuth))
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isSuccess(exit)) return
+      expect(Cause.hasDies(exit.cause)).toBe(true)
+      expect(Cause.pretty(exit.cause)).toContain(
+        'OpenCode Zen model "gemini-3.6-flash" speaks the @ai-sdk/google wire format, which gent does not support',
+      )
+    }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  )
+
+  it.live("the shipped extension lists both gateways' models over RPC", () =>
+    Effect.gen(function* () {
+      const home = yield* fixtureHome
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+      const { client } = yield* createRpcHarness({
+        agents: [],
+        home,
+        extensionInputs: [OpenCodeExtension],
+        providerLayer,
+      })
+      const ids = (yield* client.model.list({})).map((model) => model.id)
+      expect(ids).toContain(ModelId.make("opencode-go/minimax-m3"))
+      expect(ids).toContain(ModelId.make("opencode/gpt-5.4"))
+      expect(ids).not.toContain(ModelId.make("opencode/gemini-3.6-flash"))
+    }).pipe(Effect.scoped, Effect.timeout("20 seconds")),
+  )
+})
