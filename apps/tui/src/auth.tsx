@@ -872,6 +872,7 @@ export function Auth(props: AuthProps) {
       <SolidMatch when={Option.getOrUndefined(methodScreen())}>
         {(current) => (
           <PickerFrame
+            error={Option.none()}
             title={`Sign in · ${current().provider} · method`}
             keys={[KeyHints.move, KeyHints.select, KeyHints.back]}
           >
@@ -893,6 +894,7 @@ export function Auth(props: AuthProps) {
       <SolidMatch when={Option.getOrUndefined(keyScreen())}>
         {(current) => (
           <PickerFrame
+            error={Option.none()}
             height={pickerHeight(1, dimensions().height)}
             title={`Sign in · ${current().provider} · API key`}
             keys={[KeyHints.submit, KeyHints.back]}

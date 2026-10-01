@@ -591,7 +591,7 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
   }
 
   return (
-    <PickerFrame title={title()} keys={keys}>
+    <PickerFrame title={title()} keys={keys} error={Option.none()}>
       <SelectList
         id="autocomplete"
         // The composer owns the filter; the list draws it as its query row.

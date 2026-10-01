@@ -570,7 +570,7 @@ export function PickerFrame(
      * The pane's error. It draws in the note row, in place of the detail line,
      * and a pane without a detail line gets the row while the error shows.
      */
-    error?: Option.Option<string>
+    error: Option.Option<string>
   },
 ) {
   const { theme } = useTheme()
@@ -589,11 +589,7 @@ export function PickerFrame(
   // (detail or error) gives way first, then the list's headings, then its filter row
   // (`SelectList` reads its rows from the frame), and one row stays for the
   // cursor.
-  const error = () =>
-    Option.filter(
-      Option.getOrElse(Option.fromUndefinedOr(props.error), () => Option.none<string>()),
-      (text) => text.length > 0,
-    )
+  const error = () => Option.filter(props.error, (text) => text.length > 0)
   // The note row: the error while there is one, else the detail line.
   const note = (): Option.Option<{ readonly text: string; readonly error: boolean }> =>
     Option.orElse(

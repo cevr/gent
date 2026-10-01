@@ -1638,8 +1638,8 @@ type ToolResultEvent = Extract<AgentEvent, { _tag: "ToolCallSucceeded" | "ToolCa
 interface SessionFeed {
   items: () => SessionItem[]
   messages: () => Message[]
-  // eslint-disable-next-line effect/noNullish -- Solid accessor omits an inactive tool.
-  activeTool: () => string | undefined
+  /** The label of the tool that runs now; none between tools. */
+  activeTool: () => Option.Option<string>
 }
 
 type SessionFeedClient = Pick<
@@ -2119,8 +2119,9 @@ export function useSessionFeed(
   client: SessionFeedClient,
   callbacks: SessionFeedCallbacks,
   /** Read at send time, so the owner decides whether the prompt is still unsent. */
-  takeInitialPrompt?: () => Option.Option<StartupPrompt>,
-  canSendPrompt?: () => boolean,
+  takeInitialPrompt: () => Option.Option<StartupPrompt>,
+  /** False while sign-in or the branch picker holds the startup prompt back. */
+  canSendPrompt: () => boolean,
 ): SessionFeed {
   const [store, setStore] = createStore<{ messages: Message[]; events: SessionEvent[] }>({
     messages: [],
@@ -2294,8 +2295,6 @@ export function useSessionFeed(
   // reconnect's replay on from where the last attempt stopped.
   let lastSeenEventId = 0
   const processedEnvelopeIds = new Set<EventEnvelope["id"]>()
-  const takeInitialPromptValue = Option.fromNullishOr(takeInitialPrompt)
-  const canSendPromptValue = Option.fromNullishOr(canSendPrompt)
 
   // The events the client held for the session before this one are not this feed's.
   client.resetSessionEvents()
@@ -2312,17 +2311,11 @@ export function useSessionFeed(
     () => `${client.sessionIdentity().sessionId}:${client.sessionIdentity().branchId}`,
   )
 
-  const canSendPromptNow = () =>
-    Option.getOrElse(
-      Option.map(canSendPromptValue, (check) => check()),
-      () => true,
-    )
-
   createEffect(
-    on([activeSessionKey, streamReady, canSendPromptNow], ([active, ready, canSend]) => {
+    on([activeSessionKey, streamReady, canSendPrompt], ([active, ready, canSend]) => {
       if (active !== feedKey) return
       if (!ready || !canSend) return
-      const startup = Option.flatMap(takeInitialPromptValue, (take) => take())
+      const startup = takeInitialPrompt()
       if (Option.isNone(startup)) return
       const prompt = startup.value
       if (prompt.content === "") return
@@ -2588,7 +2581,7 @@ export function useSessionFeed(
   return {
     items,
     messages: () => store.messages,
-    activeTool: () => Option.getOrUndefined(runningLabel(runningCalls())),
+    activeTool: () => runningLabel(runningCalls()),
   }
 }
 
@@ -3084,7 +3077,7 @@ export function createSessionController(props: {
     const shell = Option.fromUndefinedOr(runningShells().at(-1))
     if (Option.isSome(shell)) return { phase: "tool", toolInfo: `$ ${shell.value.command}` }
     if (!client.isStreaming()) return { phase: "idle" }
-    const tool = Option.fromNullishOr(feed.activeTool())
+    const tool = feed.activeTool()
     if (Option.isSome(tool)) {
       return { phase: "tool", toolInfo: tool.value }
     }

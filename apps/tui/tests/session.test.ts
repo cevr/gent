@@ -1117,6 +1117,9 @@ describe("slash autocomplete reads pick history", () => {
 
 type FeedClient = Parameters<typeof useSessionFeed>[2]
 
+/** A feed opened without `-p`: there is no startup prompt to send. */
+const noStartupPrompt: Parameters<typeof useSessionFeed>[4] = () => Option.none()
+
 /** A feed client whose every member a test does not name does nothing. */
 const feedClientStub = (
   parts: Pick<FeedClient, "sessionIdentity" | "client" | "runtime"> & Partial<FeedClient>,
@@ -1249,6 +1252,8 @@ describe("useSessionFeed", () => {
             onQueueSnapshot: () => {},
             onBranchSwitch: () => {},
           },
+          noStartupPrompt,
+          () => true,
         )
         return disposeRoot
       })
@@ -1298,16 +1303,23 @@ describe("useSessionFeed", () => {
           },
           applySessionEvent: () => setActive(makeSession(sessionId, nextBranchId)),
         })
-        useSessionFeed(sessionId, branchId, client, {
-          onInteraction: () => {},
-          onInteractionDismissed: () => {},
-          onQueueSnapshot: () => {},
-          onBranchSwitch: (nextSession, nextBranch) => {
-            expect(nextSession).toBe(sessionId)
-            expect(nextBranch).toBe(nextBranchId)
-            runtime.cast(Deferred.succeed(switched, void 0))
+        useSessionFeed(
+          sessionId,
+          branchId,
+          client,
+          {
+            onInteraction: () => {},
+            onInteractionDismissed: () => {},
+            onQueueSnapshot: () => {},
+            onBranchSwitch: (nextSession, nextBranch) => {
+              expect(nextSession).toBe(sessionId)
+              expect(nextBranch).toBe(nextBranchId)
+              runtime.cast(Deferred.succeed(switched, void 0))
+            },
           },
-        })
+          noStartupPrompt,
+          () => true,
+        )
         return disposeRoot
       })
       yield* Deferred.await(switched).pipe(
@@ -1387,12 +1399,19 @@ describe("useSessionFeed", () => {
           }),
           runtime,
         })
-        useSessionFeed(sessionId, branchId, client, {
-          onInteraction: () => {},
-          onInteractionDismissed: () => {},
-          onQueueSnapshot: () => {},
-          onBranchSwitch: () => {},
-        })
+        useSessionFeed(
+          sessionId,
+          branchId,
+          client,
+          {
+            onInteraction: () => {},
+            onInteractionDismissed: () => {},
+            onQueueSnapshot: () => {},
+            onBranchSwitch: () => {},
+          },
+          noStartupPrompt,
+          () => true,
+        )
         return disposeRoot
       })
       yield* waitUntilAdvancing(
@@ -1563,12 +1582,19 @@ describe("useSessionFeed", () => {
         })
 
         feed = Option.some(
-          useSessionFeed(sessionId, branchId, client, {
-            onInteraction: () => {},
-            onInteractionDismissed: () => {},
-            onBranchSwitch: () => {},
-            onQueueSnapshot: () => {},
-          }),
+          useSessionFeed(
+            sessionId,
+            branchId,
+            client,
+            {
+              onInteraction: () => {},
+              onInteractionDismissed: () => {},
+              onBranchSwitch: () => {},
+              onQueueSnapshot: () => {},
+            },
+            noStartupPrompt,
+            () => true,
+          ),
         )
         return disposeRoot
       })
@@ -1654,12 +1680,19 @@ describe("useSessionFeed", () => {
           runtime: createMockRuntime(),
         })
         feed = Option.some(
-          useSessionFeed(sessionId, branchId, client, {
-            onInteraction: () => {},
-            onInteractionDismissed: () => {},
-            onBranchSwitch: () => {},
-            onQueueSnapshot: () => {},
-          }),
+          useSessionFeed(
+            sessionId,
+            branchId,
+            client,
+            {
+              onInteraction: () => {},
+              onInteractionDismissed: () => {},
+              onBranchSwitch: () => {},
+              onQueueSnapshot: () => {},
+            },
+            noStartupPrompt,
+            () => true,
+          ),
         )
         return disposeRoot
       })
@@ -1719,12 +1752,19 @@ describe("useSessionFeed", () => {
           runtime: createMockRuntime(),
         })
         feed = Option.some(
-          useSessionFeed(sessionId, branchId, client, {
-            onInteraction: () => {},
-            onInteractionDismissed: () => {},
-            onBranchSwitch: () => {},
-            onQueueSnapshot: () => {},
-          }),
+          useSessionFeed(
+            sessionId,
+            branchId,
+            client,
+            {
+              onInteraction: () => {},
+              onInteractionDismissed: () => {},
+              onBranchSwitch: () => {},
+              onQueueSnapshot: () => {},
+            },
+            noStartupPrompt,
+            () => true,
+          ),
         )
         return disposeRoot
       })
@@ -1803,12 +1843,19 @@ describe("useSessionFeed", () => {
           runtime: createMockRuntime(),
         })
         feed = Option.some(
-          useSessionFeed(sessionId, branchId, client, {
-            onInteraction: () => {},
-            onInteractionDismissed: () => {},
-            onBranchSwitch: () => {},
-            onQueueSnapshot: () => {},
-          }),
+          useSessionFeed(
+            sessionId,
+            branchId,
+            client,
+            {
+              onInteraction: () => {},
+              onInteractionDismissed: () => {},
+              onBranchSwitch: () => {},
+              onQueueSnapshot: () => {},
+            },
+            noStartupPrompt,
+            () => true,
+          ),
         )
         return disposeRoot
       })
@@ -1851,7 +1898,7 @@ describe("useSessionFeed", () => {
     expect(operation?.summary).toBe("missing file")
     const segment = assistant?.segments?.find((entry) => entry._tag === "tool-call")
     expect(segment?._tag === "tool-call" && segment.toolCall.operations?.[0]?.status).toBe("error")
-    expect(feed.activeTool()).toBeUndefined()
+    expect(Option.isNone(feed.activeTool())).toBe(true)
   }
 
   const cellNestingEnvelopes = (
@@ -1929,12 +1976,19 @@ describe("useSessionFeed", () => {
           runtime: createMockRuntime(),
         })
         feed = Option.some(
-          useSessionFeed(sessionId, branchId, client, {
-            onInteraction: () => {},
-            onInteractionDismissed: () => {},
-            onBranchSwitch: () => {},
-            onQueueSnapshot: () => {},
-          }),
+          useSessionFeed(
+            sessionId,
+            branchId,
+            client,
+            {
+              onInteraction: () => {},
+              onInteractionDismissed: () => {},
+              onBranchSwitch: () => {},
+              onQueueSnapshot: () => {},
+            },
+            noStartupPrompt,
+            () => true,
+          ),
         )
         return disposeRoot
       })
@@ -1973,12 +2027,19 @@ describe("useSessionFeed", () => {
         runtime: createMockRuntime(),
       })
       feed = Option.some(
-        useSessionFeed(snapshot.sessionId, snapshot.branchId, client, {
-          onInteraction: () => {},
-          onInteractionDismissed: () => {},
-          onBranchSwitch: () => {},
-          onQueueSnapshot: () => {},
-        }),
+        useSessionFeed(
+          snapshot.sessionId,
+          snapshot.branchId,
+          client,
+          {
+            onInteraction: () => {},
+            onInteractionDismissed: () => {},
+            onBranchSwitch: () => {},
+            onQueueSnapshot: () => {},
+          },
+          noStartupPrompt,
+          () => true,
+        ),
       )
       return disposeRoot
     })
@@ -1992,8 +2053,7 @@ describe("useSessionFeed", () => {
           )[0],
         ),
       )
-    const activeTool = () =>
-      Option.flatMap(feed, (value) => Option.fromUndefinedOr(value.activeTool()))
+    const activeTool = () => Option.flatMap(feed, (value) => value.activeTool())
     return { cellOf, activeTool, dispose }
   }
 
@@ -2271,16 +2331,23 @@ describe("useSessionFeed", () => {
           },
         })
 
-        useSessionFeed(sessionId, branchId, client, {
-          onInteraction: (interaction) => {
-            client.runtime.cast(Deferred.succeed(interactionSeen, interaction))
+        useSessionFeed(
+          sessionId,
+          branchId,
+          client,
+          {
+            onInteraction: (interaction) => {
+              client.runtime.cast(Deferred.succeed(interactionSeen, interaction))
+            },
+            onInteractionDismissed: () => {},
+            onBranchSwitch: (nextSessionId, nextBranchId) => {
+              branchSwitches.push({ sessionId: nextSessionId, branchId: nextBranchId })
+            },
+            onQueueSnapshot: () => {},
           },
-          onInteractionDismissed: () => {},
-          onBranchSwitch: (nextSessionId, nextBranchId) => {
-            branchSwitches.push({ sessionId: nextSessionId, branchId: nextBranchId })
-          },
-          onQueueSnapshot: () => {},
-        })
+          noStartupPrompt,
+          () => true,
+        )
         return disposeRoot
       })
 
@@ -2431,12 +2498,19 @@ describe("useSessionFeed", () => {
             },
           })
           feed = Option.some(
-            useSessionFeed(sessionId, branchId, client, {
-              onInteraction: () => {},
-              onInteractionDismissed: () => {},
-              onBranchSwitch: () => {},
-              onQueueSnapshot: () => {},
-            }),
+            useSessionFeed(
+              sessionId,
+              branchId,
+              client,
+              {
+                onInteraction: () => {},
+                onInteractionDismissed: () => {},
+                onBranchSwitch: () => {},
+                onQueueSnapshot: () => {},
+              },
+              noStartupPrompt,
+              () => true,
+            ),
           )
           return disposeRoot
         })
@@ -2532,12 +2606,19 @@ describe("useSessionFeed", () => {
           },
         })
         feed = Option.some(
-          useSessionFeed(sessionId, branchId, client, {
-            onInteraction: () => {},
-            onInteractionDismissed: () => {},
-            onBranchSwitch: () => {},
-            onQueueSnapshot: () => {},
-          }),
+          useSessionFeed(
+            sessionId,
+            branchId,
+            client,
+            {
+              onInteraction: () => {},
+              onInteractionDismissed: () => {},
+              onBranchSwitch: () => {},
+              onQueueSnapshot: () => {},
+            },
+            noStartupPrompt,
+            () => true,
+          ),
         )
         return disposeRoot
       })
@@ -2609,12 +2690,19 @@ describe("useSessionFeed", () => {
           runtime: createMockRuntime(),
         })
         feed = Option.some(
-          useSessionFeed(sessionId, branchId, client, {
-            onInteraction: () => {},
-            onInteractionDismissed: () => {},
-            onBranchSwitch: () => {},
-            onQueueSnapshot: () => {},
-          }),
+          useSessionFeed(
+            sessionId,
+            branchId,
+            client,
+            {
+              onInteraction: () => {},
+              onInteractionDismissed: () => {},
+              onBranchSwitch: () => {},
+              onQueueSnapshot: () => {},
+            },
+            noStartupPrompt,
+            () => true,
+          ),
         )
         return disposeRoot
       })
@@ -2684,12 +2772,19 @@ describe("useSessionFeed", () => {
           runtime: createMockRuntime(),
         })
         feed = Option.some(
-          useSessionFeed(sessionId, branchId, client, {
-            onInteraction: () => {},
-            onInteractionDismissed: () => {},
-            onBranchSwitch: () => {},
-            onQueueSnapshot: () => {},
-          }),
+          useSessionFeed(
+            sessionId,
+            branchId,
+            client,
+            {
+              onInteraction: () => {},
+              onInteractionDismissed: () => {},
+              onBranchSwitch: () => {},
+              onQueueSnapshot: () => {},
+            },
+            noStartupPrompt,
+            () => true,
+          ),
         )
         return disposeRoot
       })
@@ -2761,12 +2856,19 @@ describe("useSessionFeed", () => {
           runtime: createMockRuntime(),
         })
         feed = Option.some(
-          useSessionFeed(sessionId, branchId, client, {
-            onInteraction: () => {},
-            onInteractionDismissed: () => {},
-            onBranchSwitch: () => {},
-            onQueueSnapshot: () => {},
-          }),
+          useSessionFeed(
+            sessionId,
+            branchId,
+            client,
+            {
+              onInteraction: () => {},
+              onInteractionDismissed: () => {},
+              onBranchSwitch: () => {},
+              onQueueSnapshot: () => {},
+            },
+            noStartupPrompt,
+            () => true,
+          ),
         )
         return disposeRoot
       })

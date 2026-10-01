@@ -1593,7 +1593,7 @@ describe("Subagent tray", () => {
               }}
             />
             <Show when={open()}>
-              <PickerFrame title="PANE" keys={[]}>
+              <PickerFrame title="PANE" keys={[]} error={Option.none()}>
                 <box />
               </PickerFrame>
             </Show>

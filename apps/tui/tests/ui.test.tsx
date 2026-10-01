@@ -636,7 +636,12 @@ describe("picker height rule", () => {
       const setup = yield* Effect.promise(() =>
         renderWithProviders(
           () => (
-            <PickerFrame title="TITLE" keys={[keyHint("KEY-HINT", "go")]} {...note}>
+            <PickerFrame
+              title="TITLE"
+              keys={[keyHint("KEY-HINT", "go")]}
+              error={Option.none()}
+              {...note}
+            >
               <SelectList
                 id="frame-rows"
                 open={true}
@@ -814,7 +819,12 @@ const mountSqueezableFrame = (initial: number) =>
       renderWithProviders(
         () => (
           <box flexDirection="column" height={10} maxHeight={10}>
-            <PickerFrame height={height()} title="TITLE" keys={[keyHint("KEY-HINT", "go")]}>
+            <PickerFrame
+              height={height()}
+              title="TITLE"
+              keys={[keyHint("KEY-HINT", "go")]}
+              error={Option.none()}
+            >
               <box flexDirection="column" flexGrow={1}>
                 <text>BODY-1</text>
               </box>

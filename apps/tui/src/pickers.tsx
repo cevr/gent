@@ -208,6 +208,7 @@ export function PromptSearchPalette(props: PromptSearchPaletteProps) {
 
         return (
           <PickerFrame
+            error={Option.none()}
             title={`Prompt search · ${items().length}`}
             keys={[KeyHints.filter, KeyHints.move, KeyHints.select, KeyHints.close]}
           >
@@ -400,6 +401,7 @@ export function MessagePicker(props: MessagePickerProps) {
   return (
     <Show when={props.open}>
       <PickerFrame
+        error={Option.none()}
         title={`Fork from message · ${items().length}`}
         keys={[KeyHints.move, KeyHints.select, KeyHints.close]}
       >
@@ -496,6 +498,7 @@ export function SettingsPicker(props: SettingsPickerProps) {
   return (
     <Show when={props.open}>
       <PickerFrame
+        error={Option.none()}
         title={`${props.title} · ${visible().length}`}
         keys={[KeyHints.filter, KeyHints.move, KeyHints.select, KeyHints.close]}
       >

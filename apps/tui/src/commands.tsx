@@ -593,7 +593,7 @@ export function CommandPalette() {
 
   return (
     <Show when={command.paletteOpen()}>
-      <PickerFrame title={paletteTitle()} keys={keys()}>
+      <PickerFrame title={paletteTitle()} keys={keys()} error={Option.none()}>
         <SelectList
           id="command-palette"
           queryRow={() => (

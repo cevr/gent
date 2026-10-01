@@ -254,6 +254,7 @@ export function ForkPane(props: {
   return (
     <Show when={props.open}>
       <PickerFrame
+        error={Option.none()}
         height={height()}
         title={title()}
         keys={[KeyHints.submit, keyHint("ctrl+o", "open"), KeyHints.close]}
