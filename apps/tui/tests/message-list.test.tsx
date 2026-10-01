@@ -3628,6 +3628,56 @@ describe("native transcript commit handover", () => {
       }).pipe(Effect.timeout("10 seconds")),
     15_000,
   )
+
+  it.live(
+    "items reach scrollback in transcript order while an earlier commit still settles",
+    () =>
+      Effect.gen(function* () {
+        const hold = yield* makeSettleHold
+        const items = [
+          assistant("first", longBody("FIRST-ITEM")),
+          assistant("second", longBody("SECOND-ITEM")),
+          assistant("third", "TAIL"),
+        ]
+        const committedText: string[] = []
+
+        const setup = yield* Effect.promise(() =>
+          renderWithProviders(
+            () =>
+              transcriptCommit({
+                items,
+                displayRevision: () => 0,
+                overlayOpen: () => false,
+                onRenderer: (renderer) => {
+                  hold.applyTo(renderer)
+                  renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+                    committedText.push(
+                      new TextDecoder().decode(event.snapshot.getRealCharBytes(false)),
+                    )
+                  })
+                },
+              }),
+            { width: 60, height: 14 },
+          ),
+        )
+        yield* Effect.promise(() => setup.flush())
+        // The first item's commit waits in `settle`; the second is asked for
+        // behind it. Scrollback is immutable, so the second must not land first.
+        yield* hold.held
+        yield* Effect.promise(() => setup.flush())
+        yield* hold.release
+        yield* Effect.promise(() => setup.flush()).pipe(
+          Effect.repeat({
+            until: () => committedText.join("").includes("SECOND-ITEM line 1"),
+            times: 200,
+          }),
+        )
+        const text = committedText.join("")
+        expect(text).toContain("FIRST-ITEM line 1")
+        expect(text.indexOf("FIRST-ITEM line 1")).toBeLessThan(text.indexOf("SECOND-ITEM line 1"))
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
+  )
 })
 
 // ── sticky last prompt ──────────────────────────────────────────────────────

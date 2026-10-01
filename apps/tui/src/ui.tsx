@@ -12,7 +12,7 @@ import {
   Show,
   useContext,
 } from "solid-js"
-import { Clock, Effect, Fiber, Match, Option, Schedule, Schema } from "effect"
+import { Effect, Fiber, Match, Option, Schedule, Schema } from "effect"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { useRenderer } from "@opentui/solid"
 import {
@@ -52,41 +52,6 @@ export const useSpinnerClock = (): Accessor<number> =>
     SpinnerClockContext,
     "useSpinnerClock must be used within SpinnerClockProvider",
   )
-
-// ── wait helper ─────────────────────────────────────────────────────────────
-
-class WaitForTimeout extends Schema.TaggedError<WaitForTimeout>()("WaitForTimeout", {
-  label: Schema.String,
-}) {
-  override get message(): string {
-    return `timed out waiting for ${this.label}`
-  }
-}
-
-/**
- * Poll a synchronous probe until it returns a defined value or the deadline
- * elapses. Production-side equivalent of the test-utils `waitFor` helper.
- * Suitable for DOM-shaped retries (frame N may not have rendered the element
- * yet; frame N+1 will) where there is no event signal to subscribe to.
- */
-const waitFor = <A,>(
-  probe: () => Option.Option<A>,
-  options: { label: string; intervalMs?: number; timeoutMs?: number },
-): Effect.Effect<A, WaitForTimeout> =>
-  Effect.gen(function* () {
-    const interval = options.intervalMs ?? 30
-    const deadline = (yield* Clock.currentTimeMillis) + (options.timeoutMs ?? 500)
-    const loop: Effect.Effect<A, WaitForTimeout> = Effect.gen(function* () {
-      const value = probe()
-      if (Option.isSome(value)) return value.value
-      if ((yield* Clock.currentTimeMillis) >= deadline) {
-        return yield* new WaitForTimeout({ label: options.label })
-      }
-      yield* Effect.sleep(`${interval} millis`)
-      return yield* loop
-    })
-    return yield* loop
-  })
 
 // ── scroll sync ─────────────────────────────────────────────────────────────
 
@@ -136,12 +101,17 @@ function useScrollSync(
     let fiber = Option.none<Fiber.Fiber<void>>()
     const afterLayout = () => {
       fiber = Option.some(
+        // A row not laid out yet may be there a frame later; past the last
+        // try the sync gives up, and the next selection tries again.
         Effect.runFork(
-          waitFor(() => syncScroll(id), {
-            label: `scroll-target ${id}`,
-            intervalMs: SCROLL_SYNC_INTERVAL_MS,
-            timeoutMs: SCROLL_SYNC_TRIES * SCROLL_SYNC_INTERVAL_MS,
-          }).pipe(Effect.ignore),
+          Effect.suspend(() => Effect.fromOption(syncScroll(id))).pipe(
+            Effect.retry({
+              schedule: Schedule.spaced(`${SCROLL_SYNC_INTERVAL_MS} millis`),
+              times: SCROLL_SYNC_TRIES,
+            }),
+            Effect.asVoid,
+            Effect.ignore,
+          ),
         ),
       )
     }
