@@ -55,7 +55,6 @@ import {
 export {
   AgentDefinition,
   AgentName,
-  makeRunSpec,
   ReasoningEffort,
   type RunSpec,
   RunSpecSchema,
@@ -69,6 +68,8 @@ export {
 export {
   credentialFailureMetadata,
   DEFAULT_RETRY_POLICY,
+  DriverError,
+  DriverFailureId,
   ProviderAuthError,
   ProviderAuthInfo,
   reportProviderStopReason,

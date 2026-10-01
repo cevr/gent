@@ -836,6 +836,15 @@ const resolveProviderModel = Effect.fn("ModelResolver.resolveProviderModel")(fun
   return yield* Effect.suspend(() =>
     extensionProvider.resolveModel(modelName, Option.getOrUndefined(authParam), request.hints),
   ).pipe(
+    Effect.catchTag("DriverError", (error) =>
+      Effect.fail(
+        new ProviderError({
+          message: `Extension provider "${providerName}" failed: ${error.reason}`,
+          model: request.modelId,
+          cause: error,
+        }),
+      ),
+    ),
     Effect.catchDefect((defect) =>
       Effect.fail(resolveModelDefect(defect, providerName, request.modelId)),
     ),

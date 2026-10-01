@@ -30,7 +30,11 @@ import {
 } from "../src/anthropic.js"
 import { buildOpenAIModelDriver, type OpenAICredentials } from "../src/openai.js"
 import { type CredentialCacheCell, EMPTY_CREDENTIAL_CELL } from "../src/providers.js"
-import { type ProviderAuthError, ProviderAuthInfo } from "@gent/core/extensions/api"
+import {
+  type DriverError,
+  type ProviderAuthError,
+  ProviderAuthInfo,
+} from "@gent/core/extensions/api"
 import {
   createRpcHarness,
   fakeFetchLayer,
@@ -249,7 +253,10 @@ const toolRun = (event: AgentEvent): ReadonlyArray<string> =>
 
 interface WireCase {
   readonly provider: string
-  readonly model: Effect.Effect<Layer.Layer<LanguageModel.LanguageModel>, ProviderAuthError>
+  readonly model: Effect.Effect<
+    Layer.Layer<LanguageModel.LanguageModel>,
+    ProviderAuthError | DriverError
+  >
   readonly toolCall: (name: string) => FakeReply
   readonly text: (text: string) => FakeReply
   /** The tool names one request body's history calls. */

@@ -47,7 +47,6 @@ import {
   isRuntimeUserMessage,
   latestAssistantText,
   type Message,
-  makeRunSpec,
   MessageId,
   RequestId,
   type RunSpec,
@@ -330,11 +329,10 @@ const childMessages = (entry: DelegateEntry) =>
   })
 
 /** Children never spend the parent's patience on a broken model. */
-const childRunSpec = (base: RunSpec): RunSpec =>
-  makeRunSpec({
-    ...base,
-    overrides: { maxModelAttempts: CHILD_MAX_MODEL_ATTEMPTS, ...base.overrides },
-  })
+const childRunSpec = (base: RunSpec = {}): RunSpec => ({
+  ...base,
+  overrides: { maxModelAttempts: CHILD_MAX_MODEL_ATTEMPTS, ...base.overrides },
+})
 
 // ── completion delivery ─────────────────────────────────────────────────────
 
@@ -834,7 +832,7 @@ const admitChild = Effect.fn("Delegate.admit")(function* (params: AdmitParams) {
           parentBranchId: ctx.branchId,
           admission: {
             agent: DELEGATE_AGENT_NAME,
-            runSpec: childRunSpec(makeRunSpec(params.runSpec)),
+            runSpec: childRunSpec(params.runSpec),
           },
           ...Record.filter(
             { requestId: params.requestId, historyBranchId: params.historyBranchId },
@@ -1210,7 +1208,7 @@ export const StartChild = tool({
       ),
       requestId: RequestId.make(ctx.toolCallId),
       toolCallId: ctx.toolCallId,
-      runSpec: makeRunSpec({ overrides: childOverrides(params.overrides) }),
+      runSpec: { overrides: childOverrides(params.overrides) },
     })
     return { requestId: entry.requestId, sessionId: entry.sessionId, branchId: entry.branchId }
   }),
