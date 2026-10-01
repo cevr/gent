@@ -2942,6 +2942,7 @@ describe("buildAnthropicModelDriver — prompt caching", () => {
     after: ReadonlyArray<Prompt.Message> = [],
     system?: ReadonlyArray<string>,
     child = false,
+    reasoning: Pick<ProviderHints, "reasoning"> = {},
   ) =>
     Effect.gen(function* () {
       const credentialCellRef = yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(
@@ -2957,6 +2958,7 @@ describe("buildAnthropicModelDriver — prompt caching", () => {
       const model = yield* driver.resolveModel("claude-sonnet-4-6", authInfo, {
         cacheKey: "session-cache-key",
         child,
+        ...reasoning,
       })
       const state = makeFakeFetchState()
       yield* runCachingRequest(model, state, options, after, system)
@@ -3093,10 +3095,15 @@ describe("buildAnthropicModelDriver — prompt caching", () => {
   // A fresh child reads the shared part back from its parent's entry only
   // when every cached byte through that part's end is the parent's.
   // Anthropic caches the prefix in the order tools → system → messages, and
-  // a marker is not part of the cached bytes. On the Claude Code path the
-  // billing header in `system` hashes the first user text block.
+  // a marker is not part of the cached bytes. The thinking settings and the
+  // effort render into the prompt too: a change to either invalidates the
+  // messages cache, and on some models the tools and system caches. On the
+  // Claude Code path the billing header in `system` hashes the first user
+  // text block.
   const PrefixRequest = Schema.fromJsonString(
     Schema.Struct({
+      thinking: Schema.optional(Schema.Unknown),
+      output_config: Schema.optional(Schema.Unknown),
       tools: Schema.optional(Schema.Array(Schema.Unknown)),
       system: Schema.optional(Schema.Array(Schema.Unknown)),
       messages: Schema.Array(
@@ -3117,11 +3124,13 @@ describe("buildAnthropicModelDriver — prompt caching", () => {
   )
   const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
   /**
-   * The request in cache order, without its markers. The Claude Code path
-   * sends none on the tools or the system blocks.
+   * The request in cache order, without its markers, after the thinking
+   * settings and the effort that key it. The Claude Code path sends no
+   * marker on the tools or the system blocks.
    */
   const cachedBytes = (request: typeof PrefixRequest.Type) =>
     encodeJson([
+      { thinking: request.thinking, output_config: request.output_config },
       request.tools,
       request.system,
       request.messages.map((message) => ({
@@ -3134,28 +3143,56 @@ describe("buildAnthropicModelDriver — prompt caching", () => {
       .flatMap((message) => message.content)
       .find((block) => block.text === sharedPart)
 
-  it.live("a child's first request repeats its parent's cached bytes through the shared part", () =>
+  /**
+   * A parent's and a child's first Claude Code request at the given efforts,
+   * and where their cached bytes first differ. The shared text is matched as
+   * it renders, without the closing quote: the parent may send it as a block
+   * of its own or at the start of a longer one.
+   */
+  const parentAndChild = (
+    parentReasoning: Pick<ProviderHints, "reasoning">,
+    childReasoning: Pick<ProviderHints, "reasoning">,
+  ) =>
     Effect.gen(function* () {
       const childPart = "# Task\n\n- Report to the parent."
       const decode = Schema.decodeEffect(PrefixRequest)
       // The Claude Code path: the API-key path keeps the shared part in `system`.
-      const parent = yield* decode(yield* bodyFor(makeOAuthInfo(), {}, [], [sharedPart, agentPart]))
+      const parent = yield* decode(
+        yield* bodyFor(makeOAuthInfo(), {}, [], [sharedPart, agentPart], false, parentReasoning),
+      )
       const child = yield* decode(
-        yield* bodyFor(makeOAuthInfo(), {}, [], [sharedPart, childPart], true),
+        yield* bodyFor(makeOAuthInfo(), {}, [], [sharedPart, childPart], true, childReasoning),
       )
       const parentBytes = cachedBytes(parent)
       const childBytes = cachedBytes(child)
       let firstDifference = 0
       while (parentBytes[firstDifference] === childBytes[firstDifference]) firstDifference += 1
-      // The shared text as it renders, without the closing quote: the parent
-      // may send it as a block of its own or at the start of a longer one.
       const sharedText = encodeJson(sharedPart).slice(0, -1)
       const sharedEnd = parentBytes.indexOf(sharedText) + sharedText.length
+      return { parent, child, firstDifference, sharedEnd, sharedText }
+    })
+
+  it.live("a child's first request repeats its parent's cached bytes through the shared part", () =>
+    Effect.gen(function* () {
+      const { parent, child, firstDifference, sharedEnd, sharedText } = yield* parentAndChild(
+        { reasoning: "max" },
+        { reasoning: "max" },
+      )
       expect(firstDifference).toBeGreaterThan(sharedEnd)
       expect(sharedEnd).toBeGreaterThan(sharedText.length)
       // Both mark the shared end for the parent's lifetime, so the child reads the parent's entry.
       expect(sharedBlock(parent)?.cache_control?.ttl).toBe("1h")
       expect(sharedBlock(child)?.cache_control?.ttl).toBe("1h")
+    }),
+  )
+
+  // The live Claude Code run on a6c6b4edb: the `main` parent sent effort
+  // `max`, the `delegate` child sent none, and the child's first step read 0
+  // tokens. The effort renders ahead of the messages, so it keys every marker.
+  it.live("a child at another effort than its parent differs before the shared part", () =>
+    Effect.gen(function* () {
+      const { firstDifference, sharedEnd } = yield* parentAndChild({ reasoning: "max" }, {})
+      expect(firstDifference).toBeLessThan(sharedEnd)
     }),
   )
 })
