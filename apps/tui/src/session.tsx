@@ -2624,9 +2624,9 @@ export function useSessionFeed(
 // ── session controller ──────────────────────────────────────────────────────
 
 /**
- * A submitted slash command. `send` sends its text as a message when no
- * command source names it; `refuse` gives it back to its draft when the view
- * goes before it could run.
+ * A submitted slash command. `send` sends its text as a message: a path no
+ * command source names. `refuse` gives it back to its draft with a reason: an
+ * unknown name, or the view going before it could run.
  */
 export interface SlashSubmission {
   readonly cmd: string
@@ -2674,7 +2674,8 @@ export interface SessionController {
   ) => Effect.Effect<void, GentClientRpcError>
   /**
    * Run a slash command. One no command source names, once every source has
-   * answered, is not a command: its text goes out as a message (`send`).
+   * answered, is not a command: a path goes out as a message (`send`), any
+   * other name comes back to its draft (`refuse`).
    */
   onSlashCommand: (command: SlashSubmission) => Effect.Effect<void>
   /**
@@ -3214,9 +3215,13 @@ export function createSessionController(props: {
     closeOverlay()
   }
 
-  // A command no source names is not a command: its text goes out as a message.
+  // A name no source carries is a typo: it comes back to its draft. A first
+  // word that reads as a path, with a second `/` or a `.`, is text for the
+  // model, so it goes out as a message.
   const runSlashCommand = (held: SlashSubmission) => {
-    if (!executeSlashCommand(held.cmd, held.args, ext.commands())) held.send()
+    if (executeSlashCommand(held.cmd, held.args, ext.commands())) return
+    if (held.cmd.includes("/") || held.cmd.includes(".")) held.send()
+    else held.refuse(`Unknown command: /${held.cmd} · ctrl+p commands`)
   }
 
   // A command sent before every command source has answered (the client

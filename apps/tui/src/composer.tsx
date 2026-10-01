@@ -1198,9 +1198,9 @@ function useComposerController(): ComposerController {
 
   /**
    * A draft that starts with `/name` goes to the session, which decides
-   * whether the name is a command: only a known command name is one, and a
-   * path, a typo or a pasted line that starts with `/` goes out as a message
-   * through `send`. The session asks the command sources again before it
+   * whether the name is a command: only a known command name is one. A path
+   * goes out as a message through `send`; an unknown name comes back to its
+   * draft through `refuse`. The session asks the command sources again before it
    * calls a name unknown. The name is read from the draft as typed, so text
    * from a paste chip never names one.
    */

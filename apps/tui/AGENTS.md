@@ -287,8 +287,9 @@ extensions' load and the session's server slash list, `commandsSettled` in
 name is a command, and the session decides which names are known. A name
 the settled sources lack makes the session read the server list once more
 (`refreshCommands`), since an extension can register a command after the
-last listing; a line whose first word still names no command (a path, a
-typo, a pasted log line) then goes out as a message. A draft that starts
+last listing. A first word that still names no command is refused into its
+draft, `Unknown command: /zzq · ctrl+p commands`, unless it reads as a path
+(a second `/` or a `.`): that line goes out as a message. A draft that starts
 with a paste chip is never a command. A command still waiting when the
 session view goes comes back to its draft too. The server list is read once
 per session and connection and on each refresh: a listing that a dropped

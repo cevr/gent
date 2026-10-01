@@ -2272,7 +2272,7 @@ describe("App auth gate", () => {
       setup.mockInput.pressEnter()
       yield* waitForFrame(setup, (frame) => !frame.includes("/btw"), "the command sent")
       // A name no extension carries yet waits too; once the load settles it
-      // is no command, and its text goes out as a message.
+      // is no command, and it comes back to the draft.
       yield* Effect.promise(() => setup.mockInput.typeText("/nonesuch"))
       yield* waitForFrame(setup, (frame) => frame.includes("/nonesuch"), "the unknown command")
       setup.mockInput.pressEnter()
@@ -2281,11 +2281,35 @@ describe("App auth gate", () => {
       yield* Deferred.complete(release, Effect.void)
       yield* waitForFrame(
         setup,
-        (frame) => frame.includes("btw · fork") && sent.includes("/nonesuch"),
-        "btw pane and the settled name sent",
+        (frame) => frame.includes("btw · fork") && frame.includes("Unknown command: /nonesuch"),
+        "btw pane and the settled name refused",
       )
-      expect(sent).toEqual(["/nonesuch"])
+      expect(sent).toEqual([])
     }).pipe(Effect.timeout("10 seconds")),
+  )
+  // A `/word` no command source names is a typo, not a message: it stays in
+  // the draft with the way to the commands. A first word that reads as a
+  // path, with a second `/` or a `.`, is text for the model.
+  it.scopedLive("an unknown slash command is refused into its draft, and a path is sent", () =>
+    Effect.gen(function* () {
+      const typo = yield* mountIdleSession()
+      yield* typeCommand("/zzq")(typo.setup)
+      yield* waitForFrame(
+        typo.setup,
+        (frame) =>
+          frame.includes("Unknown command: /zzq · ctrl+p commands") && frame.includes("┃ /zzq"),
+        "the refusal and the draft back",
+      )
+      expect(typo.sent()).toEqual([])
+      typo.unmount()
+      for (const path of ["/tmp/x what is this", "/notes.md read it"]) {
+        const view = yield* mountIdleSession()
+        yield* typeCommand(path)(view.setup)
+        yield* waitUntil(() => view.sent().length > 0, "the path sent")
+        expect(view.sent()).toEqual([path])
+        view.unmount()
+      }
+    }).pipe(Effect.timeout("4 seconds")),
   )
   it.scopedLive("a pane that opens over a previewing prompt search gives the draft back", () =>
     Effect.gen(function* () {
@@ -2443,9 +2467,14 @@ describe("App auth gate", () => {
       yield* waitForFrame(setup, () => requests.length + sent.length > 0, "the command answered")
       expect(requests).toEqual(["now"])
       expect(sent).toEqual([])
+      // The second listing knows no `/nowhere` either: it is refused.
       yield* typeCommand("/nowhere else")(setup)
-      yield* waitForFrame(setup, () => sent.length > 0, "the message sent")
-      expect(sent).toEqual(["/nowhere else"])
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("Unknown command: /nowhere"),
+        "the unknown name refused",
+      )
+      expect(sent).toEqual([])
     }).pipe(Effect.timeout("10 seconds")),
   )
   // A server command the server refuses says so on the status row.
