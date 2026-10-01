@@ -1,5 +1,6 @@
-import { describe, expect, test } from "effect-bun-test"
-import { Option } from "effect"
+import { describe, expect, it, test } from "effect-bun-test"
+import { BunServices } from "@effect/platform-bun"
+import { Config, Effect, Option, Path, Schema } from "effect"
 import { createMermaidCache, extractMermaidBlocks, replaceMermaidBlocks } from "../src/mermaid"
 import { textWidth } from "../src/bun-adapter"
 
@@ -146,6 +147,39 @@ describe("inline mermaid replace", () => {
     expect(narrow).not.toContain("```mermaid")
     expect(widest(narrow)).toBeLessThan(widest(uncached(diagram, 200)))
   })
+
+  /** A string as a JavaScript string literal, for the child process's code. */
+  const literal = Schema.encodeSync(Schema.fromJsonString(Schema.String))
+
+  // beautiful-mermaid colors its drawing when stdout is a color terminal, as
+  // the TUI's is. The transcript draws text, not escape codes, so the drawing
+  // stays plain whatever the terminal. The terminal is process-wide, so the
+  // drawing runs in a child process whose stdout reads as a color terminal.
+  it.scopedLive("a diagram drawn on a color terminal holds no escape codes", () =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path
+      const module = path.resolve(import.meta.dir, "../src/mermaid.ts")
+      const diagram = "```mermaid\ngraph TD\n  A-->B\n  A-->C\n```"
+      const draw = [
+        "Object.assign(process.stdout, { isTTY: true })",
+        `const { replaceMermaidBlocks } = await import(${literal(module)})`,
+        'const { Option } = await import("effect")',
+        `process.stdout.write(replaceMermaidBlocks(Option.none())(${literal(diagram)}, 80))`,
+      ].join("\n")
+      const searchPath = yield* Config.String("PATH")
+      // eslint-disable-next-line effect/noGlobals -- the color terminal is process-wide, so the child process is the boundary under test.
+      const child = Bun.spawn(["bun", "-e", draw], {
+        cwd: path.resolve(import.meta.dir, ".."),
+        env: { PATH: searchPath, COLORTERM: "truecolor", TERM: "xterm-256color" },
+        stdout: "pipe",
+      })
+      const drawn = yield* Effect.promise(() => new Response(child.stdout).text()).pipe(
+        Effect.timeout("10 seconds"),
+      )
+      expect(drawn).not.toContain("\x1b")
+      expect(drawn).toContain("│  C  │")
+    }).pipe(Effect.provide(BunServices.layer)),
+  )
 
   test("a source that does not parse stays as its code block", () => {
     const broken = "```mermaid\nnot a diagram {{{\n```"

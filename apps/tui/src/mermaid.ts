@@ -62,14 +62,10 @@ const PRESETS: readonly Preset[] = [
   { paddingX: 1, paddingY: 1, boxBorderPadding: 0 },
 ]
 
+/** The widest line in terminal columns: a CJK label takes two a character. */
 function getMaxLineWidth(text: string): number {
   let max = 0
-  for (const line of text.split("\n")) {
-    // Strip ANSI escape codes, then count terminal columns: a CJK label takes two a character.
-    // eslint-disable-next-line no-control-regex -- ANSI escape stripping needs literal control-byte patterns
-    const stripped = line.replace(/\x1b\[[0-9;]*m/g, "")
-    max = Math.max(max, textWidth(stripped))
-  }
+  for (const line of text.split("\n")) max = Math.max(max, textWidth(line))
   return max
 }
 
@@ -124,8 +120,15 @@ const spaceEdgeArrows = (source: string): string => {
   return lines.map(spaceLineArrows).join("\n")
 }
 
+/**
+ * beautiful-mermaid colors its drawing with ANSI escapes when stdout is a
+ * color terminal, as the TUI's is. The transcript draws its text as written,
+ * so the escapes would print as text and wrap the diagram: draw it plain.
+ */
 const renderWith = (source: string, preset: Preset): Option.Option<string> =>
-  Effect.runSync(Effect.option(Effect.try(() => renderMermaidASCII(source, preset)))).pipe(
+  Effect.runSync(
+    Effect.option(Effect.try(() => renderMermaidASCII(source, { ...preset, colorMode: "none" }))),
+  ).pipe(
     Option.flatMap(Option.fromNullishOr),
     Option.filter((ascii) => ascii.length > 0),
   )
