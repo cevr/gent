@@ -933,6 +933,33 @@ describe("Composer renderer", () => {
       ).toEqual(["tail"])
     }).pipe(Effect.timeout("10 seconds")),
   )
+  // A selection that cuts into a chip grows over the whole chip before the
+  // edit replaces it. Shift+left from the chip's end selects its closing `]` and
+  // the space after it, as the textarea draws a keyboard selection.
+  const selectChipEnd = (keys: TestKeys) => {
+    keys.pressKey("e", { ctrl: true })
+    for (let i = 0; i < 5; i++) keys.pressArrow("left")
+    keys.pressArrow("left", { shift: true })
+  }
+  it.scopedLive("an edit over a selection that cuts into a chip takes the whole chip", () =>
+    Effect.gen(function* () {
+      expect(
+        yield* editAtChip(
+          selectChipEnd,
+          press((keys) => keys.pressKey("DELETE")),
+        ),
+      ).toEqual(["keep tail"])
+      expect(
+        yield* editAtChip(
+          selectChipEnd,
+          press((keys) => keys.pressBackspace()),
+        ),
+      ).toEqual(["keep tail"])
+      expect(
+        yield* editAtChip(selectChipEnd, (keys) => Effect.promise(() => keys.typeText("z"))),
+      ).toEqual(["keep ztail"])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   // A caret inside a chip never edits its text: typed text lands after the chip.
   it.scopedLive("a character typed inside a chip goes after it, and the paste still sends", () =>
     Effect.gen(function* () {

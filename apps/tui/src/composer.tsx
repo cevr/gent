@@ -998,10 +998,24 @@ function useComposerController(): ComposerController {
    * offsets by the same count as its indices.
    */
   const keepChipsWhole = (textarea: TextareaRenderable, edit: DraftEdit): boolean => {
-    if (textarea.hasSelection()) return false
     const value = textarea.plainText
-    const span = draftEditSpan(textarea, edit)
     const indexOf = (offset: number) => textarea.getTextRange(0, offset).length
+    // Any edit replaces a selection. A selection that cuts into a chip grows
+    // over the whole chip first, and the textarea's own edit then takes it.
+    const selection = Option.filter(Option.fromNullishOr(textarea.getSelection()), () =>
+      textarea.hasSelection(),
+    )
+    if (Option.isSome(selection)) {
+      const { start: from, end: to } = selection.value
+      const start = indexOf(from)
+      const end = indexOf(to)
+      const whole = paste.keepChipsWhole(value, start, end)
+      if (whole.start !== start || whole.end !== end) {
+        textarea.setSelection(from - (start - whole.start), to + (whole.end - end))
+      }
+      return false
+    }
+    const span = draftEditSpan(textarea, edit)
     const start = indexOf(span.start)
     const end = indexOf(span.end)
     const whole = paste.keepChipsWhole(value, start, end)
