@@ -73,6 +73,57 @@ function getMaxLineWidth(text: string): number {
   return max
 }
 
+// ── edge arrows ─────────────────────────────────────────────────────────────
+
+/**
+ * Mermaid reads `A-->B` as `A --> B`. beautiful-mermaid 1.1.3 reads a
+ * flowchart node id as `[\w-]+`, so an id written against a dash arrow takes
+ * the arrow's dashes (`A--`) and the rest of the line is lost. A space between
+ * the id and the arrow gives the parser the edge Mermaid reads. Text in a
+ * shape, a quote or an edge label stays as written.
+ */
+const WRITTEN_TEXT = /("[^"]*"|\[[^\]]*\]|\([^)]*\)|\{[^}]*\}|\|[^|]*\|)/
+
+/** An id character right before a dash arrow: `-->`, `---`, `-.->`, `-.-`, or a `-- text -->` start. */
+const ID_AGAINST_ARROW = /(?<=\w)(?=-->|---|-\.->|-\.-|--\s|-\.\s)/g
+
+const FLOWCHART_HEADER = /^(?:graph|flowchart)\b/
+
+/** The first line that is not blank or a `%%` comment names the diagram. */
+const isFlowchart = (lines: ReadonlyArray<string>): boolean =>
+  Option.match(
+    Option.fromUndefinedOr(
+      lines.map((line) => line.trim()).find((line) => line.length > 0 && !line.startsWith("%%")),
+    ),
+    { onNone: () => false, onSome: (header) => FLOWCHART_HEADER.test(header) },
+  )
+
+/**
+ * A line that is not an edge statement: the diagram header, a comment, or a
+ * subgraph, style, class or click line, whose text holds no edge.
+ */
+const NOT_AN_EDGE =
+  /^(?:%%|(?:graph|flowchart|subgraph|end|direction|style|classDef|class|linkStyle|click)\b)/
+
+/** One edge statement with a space between each id and the dash arrow written against it. */
+const spaceLineArrows = (line: string): string => {
+  if (NOT_AN_EDGE.test(line.trim())) return line
+  return line
+    .split(WRITTEN_TEXT)
+    .map((part, index) => {
+      // The split puts each quoted or shaped run at an odd index.
+      if (index % 2 === 1) return part
+      return part.replace(ID_AGAINST_ARROW, " ")
+    })
+    .join("")
+}
+
+const spaceEdgeArrows = (source: string): string => {
+  const lines = source.split("\n")
+  if (!isFlowchart(lines)) return source
+  return lines.map(spaceLineArrows).join("\n")
+}
+
 const renderWith = (source: string, preset: Preset): Option.Option<string> =>
   Effect.runSync(Effect.option(Effect.try(() => renderMermaidASCII(source, preset)))).pipe(
     Option.flatMap(Option.fromNullishOr),
@@ -84,7 +135,8 @@ const renderWith = (source: string, preset: Preset): Option.Option<string> =>
  * first render that fits `maxWidth`. When none fits, keep the tightest render
  * that succeeded.
  */
-function renderMermaidToAscii(source: string, maxWidth: number): Option.Option<string> {
+function renderMermaidToAscii(written: string, maxWidth: number): Option.Option<string> {
+  const source = spaceEdgeArrows(written)
   let tightest = Option.none<string>()
   for (const preset of PRESETS) {
     const rendered = renderWith(source, preset)

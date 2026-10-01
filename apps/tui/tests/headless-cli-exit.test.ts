@@ -150,6 +150,20 @@ describe("headless CLI", () => {
     20000,
   )
 
+  // The scripted model needs no sign-in: a keyless run reaches its turn.
+  it.scopedLive(
+    "a --mock-empty run needs no sign-in",
+    () =>
+      Effect.gen(function* () {
+        const { exitCode, stderr } = yield* runGent(["-H", "--mock-empty", "Say hi in 3 words"], {
+          keyless: true,
+        })
+        expect(stderr).toBe("HeadlessUnansweredError: the turn ended without an answer\n")
+        expect(exitCode).toBe(1)
+      }).pipe(Effect.provide(BunServices.layer)),
+    20000,
+  )
+
   it.scopedLive(
     "--approve-all without -H is refused",
     () =>

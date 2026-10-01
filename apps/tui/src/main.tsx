@@ -303,7 +303,8 @@ const runGent = ({
         state,
       })
 
-      if (missingSignIns.length > 0 && !debug && !Option.isSome(connect)) {
+      // A scripted model (`--debug`, `--mock-empty`) needs no sign-in.
+      if (missingSignIns.length > 0 && Option.isNone(mock) && Option.isNone(connect)) {
         return yield* new CliStartupError({
           message: `missing required sign-ins: ${missingSignIns.join(", ")}`,
         })

@@ -1223,6 +1223,31 @@ describe("Composer submit", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
 
+  // A failing command says so: its output alone may not.
+  for (const [command, message] of [
+    ["false", "$ false\n\n[exit 1]"],
+    ["echo out; exit 3", "$ echo out; exit 3\n\nout\n\n[exit 3]"],
+    ["echo out", "$ echo out\n\nout"],
+  ] as const) {
+    submitTest(`!${command} sends its exit status when it is not zero`, () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const dir = yield* fs.makeTempDirectoryScoped()
+        const submitted: Array<string> = []
+        const setup = yield* renderScoped(
+          () => <TestComposer onSubmit={(content) => submitted.push(content)} />,
+          { cwd: dir },
+        )
+        yield* Effect.promise(() => setup.mockInput.typeText("!"))
+        yield* Effect.promise(() => setup.mockInput.typeText(command))
+        yield* Effect.promise(() => setup.renderOnce())
+        setup.mockInput.pressEnter()
+        yield* waitForFrame(setup, () => submitted.length === 1, "submitted")
+        expect(submitted).toEqual([message])
+      }).pipe(Effect.timeout("10 seconds")),
+    )
+  }
+
   // The spill file goes under the workspace's home, the one storage and the
   // server lock read, not wherever the process's own home points.
   submitTest("a !cmd's spill file lands under the workspace's home", () =>

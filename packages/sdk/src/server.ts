@@ -128,9 +128,10 @@ type BuildFingerprintServices =
  * Compute a build fingerprint from local sources (no env). A compiled gent,
  * as `compiled` reports it, names its build by the binary's mtime, wherever
  * the binary is installed; a source run by the checkout's git hash. A build
- * neither names is `"unknown"`.
+ * neither names is `"unknown"`. `resolveServer` reads it once, so the lock
+ * entry and the identity endpoint name one build.
  */
-const computeLocalFingerprintUncached = (
+export const buildFingerprint = (
   compiled: Effect.Effect<boolean>,
 ): Effect.Effect<string, never, BuildFingerprintServices> =>
   Effect.gen(function* () {
@@ -166,40 +167,9 @@ const computeLocalFingerprintUncached = (
     return UNKNOWN_BUILD
   })
 
-/**
- * The one build fingerprint. The lock entry and the identity endpoint both
- * read it, so a probe that compares them compares one fact.
- */
-interface BuildFingerprintApi {
-  /** Cached computation. Identical across yields within the TTL. */
-  readonly current: Effect.Effect<string>
-}
-
-export class BuildFingerprint extends Context.Service<BuildFingerprint, BuildFingerprintApi>()(
-  "@gent/sdk/src/server/BuildFingerprint",
-) {
-  /** The fingerprint of a process whose compiled-ness `compiled` reports. */
-  static layer = (
-    compiled: Effect.Effect<boolean>,
-  ): Layer.Layer<BuildFingerprint, never, BuildFingerprintServices> =>
-    Layer.effect(
-      BuildFingerprint,
-      Effect.gen(function* () {
-        const ctx = yield* Effect.context<BuildFingerprintServices>()
-        const cached = yield* Effect.cachedWithTTL(
-          computeLocalFingerprintUncached(compiled),
-          "1 hour",
-        )
-        // oxlint-disable-next-line effect/noInlineProvide -- Layer construction captures the services required by the cached computation.
-        const current: Effect.Effect<string> = Effect.provide(cached, ctx)
-        return BuildFingerprint.of({ current })
-      }),
-    )
-
-  /** This process's fingerprint: compiled-ness is the build's own define (`isCompiledBuild`). */
-  static Live: Layer.Layer<BuildFingerprint, never, BuildFingerprintServices> =
-    BuildFingerprint.layer(isCompiledBuild)
-}
+/** This process's fingerprint: compiled-ness is the build's own define (`isCompiledBuild`). */
+export const ownBuildFingerprint: Effect.Effect<string, never, BuildFingerprintServices> =
+  buildFingerprint(isCompiledBuild)
 
 // ── server-lock ─────────────────────────────────────────────────────────────
 
@@ -651,7 +621,7 @@ const resolveLanguageModelLayer = (
 // ── Platform layers ──
 
 /** Built once per `resolveServer`; the owned server's root and listener share it. */
-const LocalPlatformLayer = Layer.provideMerge(BuildFingerprint.Live, BunPlatformLive)
+const LocalPlatformLayer = BunPlatformLive
 type LocalPlatform = Layer.Success<typeof LocalPlatformLayer>
 
 // ── Helpers ──
@@ -671,6 +641,7 @@ const buildOwnedServer = (
   options: GentServerOptions,
   stateSpec: StateSpec,
   providerSpec: ProviderSpec,
+  fingerprint: string,
 ): Effect.Effect<GentServer, GentConnectionError, Scope.Scope | LocalPlatform> =>
   Effect.gen(function* () {
     const scope = yield* Effect.scope
@@ -701,7 +672,6 @@ const buildOwnedServer = (
     const workspaceHeaders = workspaceHeadersForCwd(options.cwd)
     const home = resolveHome(stateSpec, homeDirectory)
     const serverId = yield* platform.randomId
-    const buildFingerprint = yield* (yield* BuildFingerprint).current
 
     const languageModelLayer = resolveLanguageModelLayer(providerSpec)
     // The database sits in the data directory beside the server lock and the
@@ -758,7 +728,7 @@ const buildOwnedServer = (
         pid,
         hostname: osInfo.hostname,
         dbPath: Option.getOrElse(dbPath, () => ":memory:"),
-        buildFingerprint,
+        buildFingerprint: fingerprint,
       },
     })
 
@@ -863,10 +833,12 @@ const resolveServerInternal = (
   Effect.gen(function* () {
     const stateSpec = options.state ?? state.sqlite()
     const providerSpec = options.provider ?? provider.live()
+    // Read once: the lock entry and the identity endpoint name one build.
+    const fingerprint = yield* ownBuildFingerprint
 
     // Memory state has nothing to share: owned outright, no lock.
     if (stateSpec._tag === "Memory") {
-      return yield* buildOwnedServer(options, stateSpec, providerSpec)
+      return yield* buildOwnedServer(options, stateSpec, providerSpec, fingerprint)
     }
 
     // SQLite state: one server per database, decided by the kernel lock. A
@@ -877,7 +849,6 @@ const resolveServerInternal = (
     const home = resolveHome(stateSpec, yield* platform.homeDirectory)
     const paths = yield* dataPaths(home)
     const dbPath = paths.dbPath
-    const fingerprint = yield* (yield* BuildFingerprint).current
 
     // An entry that failed the identity probe once. The owner writes its entry
     // only after it listens, so a second failure on the same entry is final.
@@ -947,7 +918,7 @@ const startOwnedServer = (
     const platform = yield* GentPlatform
     const osInfo = yield* platform.osInfo
     const pid = yield* platform.pid
-    const server = yield* buildOwnedServer(options, stateSpec, providerSpec)
+    const server = yield* buildOwnedServer(options, stateSpec, providerSpec, fingerprint)
     const internal = yield* Effect.fromOption(getOwnedInternal(server)).pipe(
       Effect.mapError(
         () => new GentConnectionError({ message: "owned server internal state missing" }),

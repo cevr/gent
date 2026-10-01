@@ -80,7 +80,56 @@ describe("inline mermaid replace", () => {
     expect(drawn.endsWith("\nafter")).toBe(true)
     expect(drawn).not.toContain("```mermaid")
     expect(drawn).toContain("Alpha")
+    expect(drawn).toContain("Beta")
+    expect(drawn).not.toContain("Alpha-")
+    // The edge draws as an arrow into Beta.
+    expect(drawn).toContain("►")
     expect(widest(drawn)).toBeLessThanOrEqual(80)
+  })
+
+  test("a hyphen inside an id stays part of the id", () => {
+    const drawn = uncached("```mermaid\ngraph LR\n  us-east-->db\n```", 120)
+    expect(drawn).toContain("us-east")
+    expect(drawn).toContain("db")
+  })
+
+  // Mermaid reads an edge written without spaces as the spaced one. Each
+  // drawing names every node, and a labelled edge draws its label.
+  const edges: ReadonlyArray<readonly [string, ReadonlyArray<string>]> = [
+    ["Alpha-->Beta", []],
+    ["Alpha---Beta", []],
+    ["Alpha-.->Beta", []],
+    ["Alpha==>Beta", []],
+    ["Alpha-->|go|Beta", ["go"]],
+    ["Alpha-- go -->Beta", ["go"]],
+    ["Alpha-->Beta-->Gamma", ["Gamma"]],
+  ]
+  for (const [edge, more] of edges) {
+    for (const header of ["graph TD", "flowchart LR"]) {
+      test(`${header} ${edge} draws every node`, () => {
+        const drawn = uncached(`\`\`\`mermaid\n${header}\n  ${edge}\n\`\`\``, 120)
+        expect(drawn).not.toContain("```mermaid")
+        for (const text of ["Alpha", "Beta", ...more]) expect(drawn).toContain(text)
+        expect(drawn).not.toMatch(/Alpha[-.=]/)
+      })
+    }
+  }
+
+  // Only an edge statement is an edge: a subgraph title keeps its text.
+  test("a subgraph title stays as written", () => {
+    const drawn = uncached(
+      "```mermaid\ngraph LR\n  subgraph a-->b\n    Alpha-->Beta\n  end\n```",
+      120,
+    )
+    expect(drawn).toContain("a-->b")
+    expect(drawn).toContain("Alpha")
+    expect(drawn).toContain("Beta")
+  })
+
+  test("an arrow inside a label stays as written", () => {
+    const drawn = uncached("```mermaid\ngraph LR\n  Alpha[a-->b]-->Beta\n```", 120)
+    expect(drawn).toContain("a-->b")
+    expect(drawn).toContain("Beta")
   })
 
   // A CJK label takes two columns a character: the fit counts columns, not

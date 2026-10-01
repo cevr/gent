@@ -17,7 +17,8 @@ import { dateFromMillis } from "@gent/core/protocol"
 import { BunGentPlatformLive, makeTempDirectoryScoped } from "@gent/core/test-utils"
 import { GentPlatform } from "@gent/core/host"
 import {
-  BuildFingerprint,
+  buildFingerprint,
+  ownBuildFingerprint,
   dataPaths,
   serverLock,
   serverLockFile,
@@ -30,9 +31,7 @@ import { buildLogPaths } from "../src/logger"
 
 // ── build fingerprint ───────────────────────────────────────────────────────
 
-// FileSystem.layerNoop with a counter-driven stat: each stat call returns a
-// fresh mtime. Cached: first mtime is locked in. Uncached: every read sees a
-// new mtime → fingerprint changes between calls.
+// FileSystem.layerNoop whose stat counts its calls; each call answers a new mtime.
 const makeCountingFs = (counter: Ref.Ref<number>): Layer.Layer<FileSystem.FileSystem> =>
   FileSystem.layerNoop({
     stat: () =>
@@ -77,88 +76,55 @@ const gitFindsNoRepository = Effect.acquireRelease(
 )
 
 /**
- * The fingerprint of a compiled gent whose executable is `execPath`, over a
- * filesystem whose stat counts calls, with a fresh mtime each call. A
- * compiled build names itself by one stat; the spawner dies if it reaches git.
+ * The services of a compiled gent whose executable is `execPath`, over a
+ * filesystem whose stat counts calls. The spawner dies if it reaches git.
  */
-const compiledFingerprintLayer = (execPath: string, counter: Ref.Ref<number>) =>
-  BuildFingerprint.layer(Effect.succeed(true)).pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        Layer.effect(
-          GentPlatform,
-          Effect.gen(function* () {
-            const platform = yield* GentPlatform
-            return GentPlatform.of({ ...platform, execPath: Effect.succeed(execPath) })
-          }),
-        ).pipe(Layer.provide(GentPlatform.Test("bf"))),
-        makeCountingFs(counter),
-        Path.layer,
-        Layer.succeed(
-          ChildProcessSpawnerNs.ChildProcessSpawner,
-          ChildProcessSpawnerNs.make(() =>
-            Effect.die(new Error("ChildProcessSpawner.spawn unreachable in this test")),
-          ),
-        ),
+const compiledServices = (execPath: string, counter: Ref.Ref<number>) =>
+  Layer.mergeAll(
+    Layer.effect(
+      GentPlatform,
+      Effect.gen(function* () {
+        const platform = yield* GentPlatform
+        return GentPlatform.of({ ...platform, execPath: Effect.succeed(execPath) })
+      }),
+    ).pipe(Layer.provide(GentPlatform.Test("bf"))),
+    makeCountingFs(counter),
+    Path.layer,
+    Layer.succeed(
+      ChildProcessSpawnerNs.ChildProcessSpawner,
+      ChildProcessSpawnerNs.make(() =>
+        Effect.die(new Error("ChildProcessSpawner.spawn unreachable in this test")),
       ),
     ),
   )
 
-describe("BuildFingerprint", () => {
+describe("buildFingerprint", () => {
   it.live("a compiled gent installed under ~/.bun/bin names its build by the binary", () =>
     Effect.gen(function* () {
       const counter = yield* Ref.make(0)
-      const fingerprint = yield* Effect.gen(function* () {
-        return yield* (yield* BuildFingerprint).current
-      }).pipe(
-        Effect.provide(
-          compiledFingerprintLayer("/nonexistent/gent-probe-x/.bun/bin/gent", counter),
-        ),
+      const fingerprint = yield* buildFingerprint(Effect.succeed(true)).pipe(
+        Effect.provide(compiledServices("/nonexistent/gent-probe-x/.bun/bin/gent", counter)),
       )
       expect(fingerprint).toMatch(/^bin-/)
+      // A compiled build names itself by one stat of its binary.
       expect(yield* Ref.get(counter)).toBe(1)
     }),
-  )
-
-  it.live(
-    "Live caches local fingerprint across calls (regression — without cache, mtime changes per call)",
-    () =>
-      Effect.gen(function* () {
-        const counter = yield* Ref.make(0)
-        const buildFp = compiledFingerprintLayer("/nonexistent/gent-probe-x/gent", counter)
-
-        const program = Effect.gen(function* () {
-          const bf = yield* BuildFingerprint
-          const fp1 = yield* bf.current
-          const fp2 = yield* bf.current
-          const fp3 = yield* bf.current
-          return { fp1, fp2, fp3, statCalls: yield* Ref.get(counter) }
-        })
-
-        const result = yield* program.pipe(Effect.provide(buildFp))
-
-        // Caching contract: only one underlying stat call, all three fingerprints identical.
-        expect(result.statCalls).toBe(1)
-        expect(result.fp1).toBe(result.fp2)
-        expect(result.fp2).toBe(result.fp3)
-        expect(result.fp1).toMatch(/^bin-/)
-      }),
   )
 })
 
 // ── server lock ─────────────────────────────────────────────────────────────
 
-const PlatformBaseLayer = Layer.mergeAll(BunServices.layer, BunGentPlatformLive)
-const PlatformLayer = Layer.merge(
-  PlatformBaseLayer,
-  BuildFingerprint.Live.pipe(Layer.provide(PlatformBaseLayer)),
-)
+const PlatformLayer = Layer.mergeAll(BunServices.layer, BunGentPlatformLive)
 
 const provideFs = <A, E>(
   effect: Effect.Effect<
     A,
     E,
-    BuildFingerprint | FileSystem.FileSystem | GentPlatform | Path.Path | Scope.Scope
+    | ChildProcessSpawnerNs.ChildProcessSpawner
+    | FileSystem.FileSystem
+    | GentPlatform
+    | Path.Path
+    | Scope.Scope
   >,
 ): Effect.Effect<A, E, Scope.Scope> => effect.pipe(Effect.provide(PlatformLayer))
 
@@ -277,7 +243,7 @@ describe("Server Lock", () => {
       Effect.gen(function* () {
         const home = yield* makeTmpHomeScoped
         const dbPath = (yield* dataPaths(home)).dbPath
-        const buildFingerprint = yield* (yield* BuildFingerprint).current
+        const buildFingerprint = yield* ownBuildFingerprint
         const entry = makeEntry({ dbPath, buildFingerprint })
         const fakeOwner = yield* Effect.acquireRelease(
           Effect.sync(() =>
@@ -366,7 +332,7 @@ describe("Server Lock", () => {
       Effect.gen(function* () {
         const home = yield* makeTmpHomeScoped
         const ownDb = (yield* dataPaths(home)).dbPath
-        const buildFingerprint = yield* (yield* BuildFingerprint).current
+        const buildFingerprint = yield* ownBuildFingerprint
         const entry = makeEntry({ dbPath: `${ownDb}.other`, buildFingerprint })
         const foreignOwner = yield* Effect.acquireRelease(
           Effect.sync(() =>
@@ -528,7 +494,7 @@ describe("Server Lock Ownership", () => {
     Effect.gen(function* () {
       const home = yield* makeTmpHomeScoped
       const dbPath = (yield* dataPaths(home)).dbPath
-      const buildFingerprint = yield* (yield* BuildFingerprint).current
+      const buildFingerprint = yield* ownBuildFingerprint
       yield* serverLockFile.write(
         home,
         makeEntry({ pid, dbPath, buildFingerprint, rpcUrl: "http://127.0.0.1:1/rpc" }),
@@ -610,7 +576,7 @@ describe("Server Lock Ownership", () => {
       provideFs(
         Effect.gen(function* () {
           const home = yield* makeTmpHomeScoped
-          const buildFingerprint = yield* (yield* BuildFingerprint).current
+          const buildFingerprint = yield* ownBuildFingerprint
           const dbPath = (yield* dataPaths(home)).dbPath
           // The pid is alive, but the endpoint names another process: a server
           // that cannot be confirmed may still hold the database.
@@ -721,7 +687,7 @@ describe("Server Lock Ownership", () => {
         Effect.gen(function* () {
           const home = yield* makeTmpHomeScoped
           const paths = yield* dataPaths(home)
-          const buildFingerprint = yield* (yield* BuildFingerprint).current
+          const buildFingerprint = yield* ownBuildFingerprint
           yield* (yield* FileSystem.FileSystem).makeDirectory(paths.dataDir, { recursive: true })
           // A separate process takes the kernel lock the way a server does, then dies by SIGKILL.
           const holder = yield* Effect.acquireRelease(
