@@ -3365,14 +3365,29 @@ export function createSessionController(props: {
     return true
   }
 
+  // One rule for Esc and ctrl+c over open UI: the palette, then the expanded
+  // transcript under it, closes before the key reaches the draft or the turn.
+  // A press that closes a layer arms nothing.
+  const closeOpenLayer = (): boolean => {
+    if (command.paletteOpen()) {
+      command.closePalette()
+      return true
+    }
+    if (uiState().transcriptExpanded) {
+      dispatchSessionUi(SessionUiEvent.cases.ToggleTranscript.make({}))
+      return true
+    }
+    return false
+  }
+
   /**
    * ctrl+c undoes the nearest thing, then exits on a second press. A press
    * that cancels a turn arms the exit, and a second press in the window exits
    * whatever started since: a session that children keep waking has a new
    * turn running at every press, and cancelling each one would never let the
-   * reader leave. Something nearer that appeared since (a draft, an expanded
-   * transcript, a running `!cmd`) still comes first: the press clears or stops
-   * it and never exits over it. On an idle empty composer the first press only
+   * reader leave. Something nearer that appeared since (the palette, an
+   * expanded transcript, a draft, a running `!cmd`) still comes first: the
+   * press closes, clears or stops it and never exits over it. On an idle empty composer the first press only
    * arms the exit.
    */
   const handleInterrupt = () => {
@@ -3392,10 +3407,7 @@ export function createSessionController(props: {
       closeOverlay()
       return
     }
-    if (uiState().transcriptExpanded) {
-      dispatchSessionUi(SessionUiEvent.cases.ToggleTranscript.make({}))
-      return
-    }
+    if (closeOpenLayer()) return
     if (interactionState().draft.length > 0) {
       onComposerInteraction(ComposerInteractionEvent.cases.ClearDraft.make({}))
       return
@@ -3410,19 +3422,12 @@ export function createSessionController(props: {
     arm("interrupt")
   }
 
-  // Esc steps back one layer: transcript, palette, disclosure, turn, then the
+  // Esc steps back one layer: the open layer, disclosure, turn, then the
   // draft, which the first press arms and the second clears. Esc never exits.
   const handleEscape = () => {
     const second = armedFor("escape")
     disarm()
-    if (uiState().transcriptExpanded && !command.paletteOpen()) {
-      dispatchSessionUi(SessionUiEvent.cases.ToggleTranscript.make({}))
-      return
-    }
-    if (command.paletteOpen()) {
-      command.closePalette()
-      return
-    }
+    if (closeOpenLayer()) return
     if (uiState().disclosure !== "collapsed") {
       dispatchSessionUi(SessionUiEvent.cases.CollapseDisclosure.make({}))
       return

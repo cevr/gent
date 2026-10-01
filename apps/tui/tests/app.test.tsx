@@ -1628,6 +1628,23 @@ describe("App draft, shell and exit keys", () => {
       yield* waitForFrame(view.setup, () => view.shutdowns() > 0, "quit")
     }).pipe(Effect.timeout("10 seconds")),
   )
+  it.scopedLive("ctrl+c over the palette on an idle composer closes it and arms nothing", () =>
+    Effect.gen(function* () {
+      const view = yield* mountIdleSession()
+      view.setup.mockInput.pressKey("p", { ctrl: true })
+      yield* waitForFrame(view.setup, (frame) => frame.includes("Commands"), "palette")
+      view.setup.mockInput.pressKey("c", { ctrl: true })
+      const frame = yield* waitForFrame(
+        view.setup,
+        (next) => !next.includes("Commands"),
+        "palette closed",
+      )
+      expect(frame).not.toContain(CTRL_C_CUE)
+      view.setup.mockInput.pressKey("c", { ctrl: true })
+      yield* waitForFrame(view.setup, (next) => next.includes(CTRL_C_CUE), "the exit cue")
+      expect(view.shutdowns()).toBe(0)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   it.scopedLive("ctrl+c on a draft clears it and never quits over it", () =>
     Effect.gen(function* () {
       const view = yield* mountIdleSession()
@@ -2138,6 +2155,26 @@ describe("App cancel and quit keys during a turn", () => {
       }).pipe(Effect.timeout("10 seconds")),
     )
   }
+  // The palette is a layer as for Esc: ctrl+c closes it and arms nothing,
+  // and the turn behind it runs on.
+  it.scopedLive("ctrl+c closes the command palette before it cancels the turn", () =>
+    Effect.gen(function* () {
+      const view = yield* mountRunningTurn()
+      view.setup.mockInput.pressKey("p", { ctrl: true })
+      yield* waitForFrame(view.setup, (frame) => frame.includes("Commands"), "palette")
+      view.setup.mockInput.pressKey("c", { ctrl: true })
+      const frame = yield* waitForFrame(
+        view.setup,
+        (next) => !next.includes("Commands"),
+        "palette closed",
+      )
+      expect(frame).not.toContain(CTRL_C_CUE)
+      expect(view.steers).toEqual([])
+      view.setup.mockInput.pressKey("c", { ctrl: true })
+      yield* waitForFrame(view.setup, () => view.steers.length === 1, "the turn cancelled")
+      expect(view.shutdowns()).toBe(0)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   // Each render has its own home: no prompt an earlier test or run sent is
   // in its history.
   // Prompt search holds the composer: a paste while it previews an entry
