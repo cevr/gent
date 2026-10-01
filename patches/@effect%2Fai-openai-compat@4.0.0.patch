@@ -1,17 +1,5 @@
-diff --git a/node_modules/@effect/ai-openai-compat/.bun-tag-49e28114bd1e9eff b/.bun-tag-49e28114bd1e9eff
-new file mode 100644
-index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
-diff --git a/node_modules/@effect/ai-openai-compat/.bun-tag-65b143343c3ce065 b/.bun-tag-65b143343c3ce065
-new file mode 100644
-index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
-diff --git a/node_modules/@effect/ai-openai-compat/.bun-tag-db8e45df92885e0a b/.bun-tag-db8e45df92885e0a
-new file mode 100644
-index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
-diff --git a/node_modules/@effect/ai-openai-compat/.bun-tag-edbdab4f5bc6a53b b/.bun-tag-edbdab4f5bc6a53b
-new file mode 100644
-index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/dist/OpenAiLanguageModel.d.ts b/dist/OpenAiLanguageModel.d.ts
-index bf77c3c6e9ddb535e3e5b502030959187d17a04d..8d6aec50661a61de8f1130ee02630d5a87b88d2b 100644
+index c53fc70dc67401d995687f94748d2f2c850c7b24..0befec16ffae42e2b34290e4490a0d6fc941a295 100644
 --- a/dist/OpenAiLanguageModel.d.ts
 +++ b/dist/OpenAiLanguageModel.d.ts
 @@ -38,6 +38,13 @@ type ConfigOptions = Simplify<Partial<Omit<CreateResponse, "input" | "tools" | "
@@ -37,10 +25,10 @@ index bf77c3c6e9ddb535e3e5b502030959187d17a04d..8d6aec50661a61de8f1130ee02630d5a
      readonly [x: string]: unknown;
  }>;
 diff --git a/dist/OpenAiLanguageModel.js b/dist/OpenAiLanguageModel.js
-index 53783fcab2843189b0890dbf4b981c21726e1bcc..73ae95d9287c209d74a7df5df0fe0e72b9df835a 100644
+index 85198f93e653004dcdce833f659bde6eb7e3f2f1..32a40bec33b3a40b8275e6e946c40f5245dcfa3b 100644
 --- a/dist/OpenAiLanguageModel.js
 +++ b/dist/OpenAiLanguageModel.js
-@@ -135,6 +135,7 @@ export const make = /*#__PURE__*/Effect.fnUntraced(function* ({
+@@ -139,6 +139,7 @@ export const make = /*#__PURE__*/Effect.fnUntraced(function* ({
      const {
        fileIdPrefixes: _fip,
        strictJsonSchema: _sjs,
@@ -48,7 +36,7 @@ index 53783fcab2843189b0890dbf4b981c21726e1bcc..73ae95d9287c209d74a7df5df0fe0e72
        ...apiConfig
      } = config;
      const request = {
-@@ -152,7 +153,7 @@ export const make = /*#__PURE__*/Effect.fnUntraced(function* ({
+@@ -156,7 +157,7 @@ export const make = /*#__PURE__*/Effect.fnUntraced(function* ({
          tool_choice: toolChoice
        } : undefined)
      };
@@ -57,7 +45,7 @@ index 53783fcab2843189b0890dbf4b981c21726e1bcc..73ae95d9287c209d74a7df5df0fe0e72
    });
    return yield* LanguageModel.make({
      codecTransformer: toCodecOpenAI,
-@@ -255,6 +256,11 @@ const prepareMessages = /*#__PURE__*/Effect.fnUntraced(function* ({
+@@ -261,6 +262,11 @@ const prepareMessages = /*#__PURE__*/Effect.fnUntraced(function* ({
    }
    const messages = [];
    for (const message of options.prompt.content) {
@@ -69,7 +57,7 @@ index 53783fcab2843189b0890dbf4b981c21726e1bcc..73ae95d9287c209d74a7df5df0fe0e72
      switch (message.role) {
        case "system":
          {
-@@ -379,6 +385,15 @@ const prepareMessages = /*#__PURE__*/Effect.fnUntraced(function* ({
+@@ -385,6 +391,15 @@ const prepareMessages = /*#__PURE__*/Effect.fnUntraced(function* ({
                    if (hasConversation && Predicate.isNotNull(id)) {
                      break;
                    }
@@ -85,7 +73,7 @@ index 53783fcab2843189b0890dbf4b981c21726e1bcc..73ae95d9287c209d74a7df5df0fe0e72
                    if (Predicate.isNotNull(id)) {
                      const message = reasoningMessages[id];
                      if (config.store === true) {
-@@ -985,8 +1000,8 @@ const prepareTools = /*#__PURE__*/Effect.fnUntraced(function* ({
+@@ -991,8 +1006,8 @@ const prepareTools = /*#__PURE__*/Effect.fnUntraced(function* ({
      toolChoice
    };
  });
@@ -96,7 +84,7 @@ index 53783fcab2843189b0890dbf4b981c21726e1bcc..73ae95d9287c209d74a7df5df0fe0e72
    const responseFormat = toChatResponseFormat(payload.text?.format);
    const tools = payload.tools !== undefined ? payload.tools.map(toChatTool).filter(tool => tool !== undefined) : [];
    const toolChoice = toChatToolChoice(payload.tool_choice);
-@@ -1133,7 +1148,7 @@ const toChatTool = tool => {
+@@ -1139,7 +1154,7 @@ const toChatTool = tool => {
    }
    return undefined;
  };
@@ -105,7 +93,7 @@ index 53783fcab2843189b0890dbf4b981c21726e1bcc..73ae95d9287c209d74a7df5df0fe0e72
    if (Predicate.isUndefined(input)) {
      return [];
    }
-@@ -1143,6 +1158,12 @@ const toChatMessages = input => {
+@@ -1149,6 +1164,12 @@ const toChatMessages = input => {
        content: input
      }];
    }
@@ -118,7 +106,7 @@ index 53783fcab2843189b0890dbf4b981c21726e1bcc..73ae95d9287c209d74a7df5df0fe0e72
    const messages = [];
    for (const item of input) {
      if (Predicate.hasProperty(item, "type") && item.type === "function_call") {
-@@ -1166,6 +1187,48 @@ const toChatMessages = input => {
+@@ -1172,6 +1193,48 @@ const toChatMessages = input => {
    }
    return messages;
  };
