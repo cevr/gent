@@ -25,9 +25,14 @@ import * as path from "node:path"
 import type { ProviderOptions } from "effect/ai/LanguageModel"
 import type * as AiError from "effect/ai/AiError"
 import type * as Prompt from "effect/ai/Prompt"
-import { ProviderStopReason, reportProviderStopReason } from "../domain/driver.js"
+import {
+  type ModelDriverContribution,
+  ProviderStopReason,
+  reportProviderStopReason,
+} from "../domain/driver.js"
+import { ExtensionRegistry, resolveExtensions } from "../runtime/extension-host.js"
 import { omitUndefined } from "../domain/guards.js"
-import { ToolCallId } from "../domain/ids.js"
+import { ExtensionId, ToolCallId } from "../domain/ids.js"
 import { ProviderError } from "../domain/errors.js"
 import {
   aiError,
@@ -186,6 +191,41 @@ export const oneGenerate = (
     Effect.scoped,
     Effect.catchCause((cause) => Effect.die(cause)),
   )
+
+/**
+ * The language model a turn resolves for `modelId` through the production
+ * resolver, from `modelDrivers` and an auth store holding the API keys in
+ * `stored` (store key → key). Drive it with `oneGenerate` to see which
+ * credential a sign-in sends; a failed resolution is a defect.
+ */
+export const storedCredentialModel = (input: {
+  readonly modelDrivers: ReadonlyArray<ModelDriverContribution>
+  readonly stored: Readonly<Record<string, string>>
+  readonly modelId: string
+}): Layer.Layer<LanguageModel.LanguageModel> => {
+  const resolved = resolveExtensions([
+    {
+      manifest: { id: ExtensionId.make("@gent/test/stored-credential") },
+      scope: "builtin",
+      sourcePath: "test",
+      contributions: { modelDrivers: input.modelDrivers },
+    },
+  ])
+  const seed = Record.map(input.stored, (key) => AuthApi.make({ type: "api", key }))
+  return Layer.effect(
+    LanguageModel.LanguageModel,
+    Effect.gen(function* () {
+      const resolver = yield* ModelResolver
+      return yield* resolver.resolve({ modelId: input.modelId })
+    }).pipe(
+      Effect.provideService(
+        ExtensionRegistry,
+        ExtensionRegistry.of({ getResolved: () => resolved }),
+      ),
+      Effect.orDie,
+    ),
+  ).pipe(Layer.provide(ModelResolver.Live), Layer.provide(Auth.Test(seed)))
+}
 
 /**
  * Run `effect` as a loop step does, listening for the raw stop reason a

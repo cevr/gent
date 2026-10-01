@@ -257,7 +257,7 @@ const providerFor = (catalog: AuthCatalog, provider: string): Option.Option<Auth
   Option.fromNullishOr(catalog.providers.find((entry) => entry.provider === provider))
 
 /**
- * What the pane calls a provider: its driver's name ("OpenCode Go"), or its
+ * What the pane calls a provider: its driver's name ("OpenCode"), or its
  * id when the server sends no name. A name two providers share carries the
  * id beside it: "Mirror (mirror-a)".
  */
@@ -470,7 +470,7 @@ export function Auth(props: AuthProps) {
     if (provider.source !== "stored") return
     const token = begin()
     cast(
-      clientCtx.client.auth.deleteKey({ provider: provider.provider }).pipe(
+      clientCtx.client.auth.deleteKey({ provider: provider.provider, sessionId }).pipe(
         Effect.tap(() => whileCurrent(token, () => loadAuth(token))),
         Effect.catchEager(failed(token)),
       ),

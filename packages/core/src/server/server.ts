@@ -126,6 +126,7 @@ import {
   DecisionModelResolver,
   listAuthMethods,
   listAuthProviders,
+  removeSignIn,
   ModelCatalogRecord,
   ModelRegistry,
   ModelResolver,
@@ -1652,10 +1653,20 @@ const RpcHandlers = GentRpcs.toLayer(
           .set(provider, AuthApi.make({ type: "api", key }))
           .pipe(Effect.mapError((error) => authPersistenceError("set", provider, error))),
 
-      "auth.deleteKey": ({ provider }: DeleteAuthKeyInput) =>
-        authStore
-          .remove(provider)
-          .pipe(Effect.mapError((error) => authPersistenceError("delete", provider, error))),
+      // A sign-in other drivers share removes every credential it reads.
+      "auth.deleteKey": ({ provider, sessionId }: DeleteAuthKeyInput) =>
+        Effect.gen(function* () {
+          const requested = Option.fromUndefinedOr(sessionId)
+          if (Option.isSome(requested) && Option.isNone(yield* loadSession(requested))) {
+            return yield* new NotFoundError({ message: "Session not found" })
+          }
+          yield* inSessionProfile(
+            requested,
+            removeSignIn(provider).pipe(
+              Effect.mapError((error) => authPersistenceError("delete", provider, error)),
+            ),
+          )
+        }),
 
       "auth.listMethods": (input: ListAuthMethodsInput) => {
         if (!Predicate.isObject(input)) return inSessionProfile(Option.none(), listAuthMethods())

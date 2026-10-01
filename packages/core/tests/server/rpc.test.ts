@@ -714,6 +714,24 @@ describe("auth.listProviders", () => {
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )
+  it.live("signing out for a deleted session fails and keeps the key", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
+        const session = yield* client.session.create({})
+        yield* client.session.delete({ sessionId: session.sessionId })
+        yield* client.auth.setKey({ provider: "anthropic", key: "sk-kept" })
+        const error = yield* Effect.flip(
+          client.auth.deleteKey({ provider: "anthropic", sessionId: session.sessionId }),
+        )
+        expect(error._tag).toBe("NotFoundError")
+        const providers = yield* client.auth.listProviders({})
+        const anthropic = providers.find((entry) => entry.provider === "anthropic")
+        expect(anthropic?.source).toBe("stored")
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
 })
 describe("auth persistence RPC failures", () => {
   it.live("auth.listProviders surfaces auth read failures", () =>

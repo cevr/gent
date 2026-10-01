@@ -332,7 +332,7 @@ export const DEFAULT_RETRY_POLICY: RetryPolicy = {
 export interface ModelDriverContribution {
   /** Driver id — matches the provider id segment in `provider/model` model names. */
   readonly id: string
-  /** Display name. */
+  /** Display name; `/auth` shows it for the driver's sign-in. */
   readonly name: string
   /** Resolve a model name to an Effect AI model. */
   readonly resolveModel: (
@@ -356,10 +356,24 @@ export interface ModelDriverContribution {
   /** Auth configuration — OAuth + API key methods + handlers. */
   readonly auth?: ProviderAuthContribution
   /**
+   * The id of the driver whose sign-in this driver uses, for two drivers one
+   * account serves (OpenCode's Zen and Go gateways take one key). Core hands
+   * this driver that driver's stored credential, lists one sign-in for both,
+   * and hides this driver's own `auth`. A credential stored under this
+   * driver's own id (from before it shared) serves both while the owner has
+   * none stored, and signing out removes it too.
+   *
+   * Sharing is one hop: the named driver must itself name none. When the
+   * profile registers no such driver, or the named one shares another's
+   * sign-in (a chain or a cycle), this driver keeps a sign-in of its own,
+   * with its own `auth`, and the auth listing logs a warning for the chain.
+   */
+  readonly credentialFrom?: string
+  /**
    * The environment variable the driver reads a credential from when nothing
    * is stored (e.g. `ANTHROPIC_API_KEY`). The auth listing reports a set one
    * as `source: "env"`, so a user with only that variable is not asked to
-   * sign in.
+   * sign in. A driver that shares a sign-in still reads only its own.
    */
   readonly envCredential?: string
   /** Retry policy for this driver's transient failures; `DEFAULT_RETRY_POLICY` when absent. */
