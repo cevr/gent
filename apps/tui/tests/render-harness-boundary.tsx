@@ -1,6 +1,5 @@
 /** @jsxImportSource @opentui/solid */
 
-import { afterEach } from "bun:test"
 import { Writable } from "node:stream" // eslint-disable-line effect/noNodeBuiltinImport -- the renderer writes to a Node stream; a test terminal must be one.
 import { BunServices } from "@effect/platform-bun"
 import { Config, Context, Effect, FileSystem, Layer, Option, Path, Scope, Stream } from "effect"
@@ -40,8 +39,6 @@ const noop = () => {}
 const noopLog: ClientLog = { debug: noop, info: noop, warn: noop, error: noop }
 
 type TestRenderSetup = Awaited<ReturnType<typeof createTestRenderer>>
-
-let currentSetup: Option.Option<TestRenderSetup> = Option.none()
 
 // ── temp homes ──────────────────────────────────────────────────────────────
 
@@ -263,19 +260,30 @@ export const createMutableRuntime = (initialState: ConnectionState) => {
   }
 }
 
-const toInitialSession = (
-  session: Option.Option<DomainSession | Session>,
-): Option.Option<Session> =>
-  Option.flatMap(session, (value) => {
-    if ("sessionId" in value) return Option.some(value)
-    return Option.map(Option.fromNullishOr(value.activeBranchId), (branchId) => ({
-      sessionId: value.id,
-      branchId,
-      name: Option.getOrElse(Option.fromNullishOr(value.name), () => "Unnamed"),
-      modelId: value.modelId,
-      reasoningLevel: value.reasoningLevel,
-      cwd: value.cwd,
-    }))
+/** The session a render starts on when the test names none: the client always holds one. */
+export const defaultTestSession: Session = {
+  sessionId: SessionId.make("session-test"),
+  branchId: BranchId.make("branch-test"),
+  name: "Test Session",
+}
+
+const toInitialSession = (session: Option.Option<DomainSession | Session>): Session =>
+  Option.match(session, {
+    onNone: () => defaultTestSession,
+    onSome: (value) => {
+      if ("sessionId" in value) return value
+      return {
+        sessionId: value.id,
+        branchId: Option.getOrElse(
+          Option.fromNullishOr(value.activeBranchId),
+          () => defaultTestSession.branchId,
+        ),
+        name: Option.getOrElse(Option.fromNullishOr(value.name), () => "Unnamed"),
+        modelId: value.modelId,
+        reasoningLevel: value.reasoningLevel,
+        cwd: value.cwd,
+      }
+    },
   })
 
 const getServices = (): Promise<Context.Context<unknown>> => {
@@ -387,6 +395,7 @@ export const renderWithProviders = (
       // Each render gets its own home: prompt history, frecency and caches
       // written under it never reach another test or another run.
       const home = yield* makeRenderHome
+      const initialSession = toInitialSession(Option.fromNullishOr(options?.initialSession))
 
       // A kept terminal takes the renderer's bytes as a real stdout would.
       const output = Option.match(Option.fromNullishOr(options?.output), {
@@ -405,7 +414,6 @@ export const renderWithProviders = (
           ...output,
         }),
       )
-      currentSetup = Option.some(setup)
       // Exercise terminal lifecycle operations against OpenTUI's in-memory streams.
       yield* Effect.promise(() => setup.renderer.setupTerminal())
       yield* Effect.promise(() =>
@@ -418,10 +426,7 @@ export const renderWithProviders = (
                     Option.fromNullishOr(options?.initialPrompt),
                     () => Option.none<string>(),
                   )}
-                  initialSessionId={Option.map(
-                    toInitialSession(Option.fromNullishOr(options?.initialSession)),
-                    (session) => session.sessionId,
-                  )}
+                  initialSessionId={Option.some(initialSession.sessionId)}
                 >
                   <KeyboardScopeProvider>
                     <ThemeProvider mode="dark">
@@ -445,9 +450,7 @@ export const renderWithProviders = (
                               runtime={runtime}
                               services={services}
                               log={options?.log ?? noopLog}
-                              initialSession={Option.getOrUndefined(
-                                toInitialSession(Option.fromNullishOr(options?.initialSession)),
-                              )}
+                              initialSession={initialSession}
                               initialAgent={options?.initialAgent}
                             >
                               <ExtensionUIProvider
@@ -485,7 +488,6 @@ export const answerPalette = (renderer: CliRenderer, colors: TerminalColors) => 
 }
 
 export const destroyRenderSetup = (setup: TestRenderSetup) => {
-  if (Option.isSome(currentSetup) && currentSetup.value === setup) currentSetup = Option.none()
   setup.renderer.destroy()
 }
 
@@ -496,28 +498,13 @@ export const renderScoped = (...args: Parameters<typeof renderWithProviders>) =>
     (setup) => Effect.sync(() => destroyRenderSetup(setup)),
   )
 
-// eslint-disable-next-line effect/noTestLifecycleHooks -- OpenTUI renderers require synchronous per-test teardown at this shared test boundary.
-afterEach(() => {
-  if (Option.isSome(currentSetup)) destroyRenderSetup(currentSetup.value)
-  currentSetup = Option.none()
-})
-
 /**
  * The agent a session runs as reaches the UI only through its snapshot. A
  * test that needs the agent to change lands a snapshot that names the new
- * one: of the active session, as a refresh would, or of a test session when
- * none is active, as opening one would.
+ * one, of the session in view, as a refresh would.
  */
 export const applySnapshotAgent = (client: ClientContextValue, agent: AgentName): void => {
-  const session: Pick<Session, "sessionId" | "branchId" | "name"> &
-    Partial<Pick<Session, "modelId" | "reasoningLevel">> = Option.getOrElse(
-    client.session(),
-    () => ({
-      sessionId: SessionId.make("session-test"),
-      branchId: BranchId.make("branch-test"),
-      name: "Test Session",
-    }),
-  )
+  const session = client.session()
   client.applySessionSnapshot({
     sessionId: session.sessionId,
     branchId: session.branchId,

@@ -25,7 +25,7 @@ import {
   type GentNamespacedClient,
 } from "@gent/core/protocol"
 import type { GentRuntime } from "@gent/sdk"
-import { omitUndefined, type CapabilityRef } from "@gent/core/extensions/api"
+import type { CapabilityRef } from "@gent/core/extensions/api"
 import { createEffect, createRoot, createSignal, on } from "solid-js"
 import type { ToolRenderer } from "../tool-renderers"
 import type { Command } from "../commands"
@@ -86,8 +86,6 @@ interface ClientActivity {
   readonly snapshot: () => ClientActivitySnapshot
 }
 
-const unknownActivity = (): ClientActivitySnapshot => ({ state: "unknown" })
-
 // ── transport facet ─────────────────────────────────────────────────────────
 
 export type ActiveExtensionSession = { readonly sessionId: SessionId; readonly branchId: BranchId }
@@ -137,16 +135,17 @@ export interface ExtensionAgentDetail {
  * with `makeClientRuntime`, and `loadTuiExtensions` runs each setup on it.
  */
 export interface ClientTransport {
-  /** Active (sessionId, branchId); `None` before a session is mounted. */
-  readonly currentSession: () => Option.Option<ActiveExtensionSession>
+  /**
+   * The (sessionId, branchId) in view. The client starts with a session and
+   * only ever moves to another, so there is no time without one. A reactive
+   * read: it changes only when the session or the branch moves.
+   */
+  readonly currentSession: () => ActiveExtensionSession
   readonly request: <Input, Output>(
     ref: CapabilityRef<Input, Output>,
     input: Input,
     activeSession?: ActiveExtensionSession,
-  ) => Effect.Effect<
-    Output,
-    NoActiveSessionError | ClientTransportRequestError | ClientTransportReplyDecodeError
-  >
+  ) => Effect.Effect<Output, ClientTransportRequestError | ClientTransportReplyDecodeError>
   /** Subscribe to `ExtensionStateChanged` pulses from the active session.
    *  Returns an unsubscribe function. Multiple subscribers receive each
    *  pulse independently. Widgets use this to invalidate cached state
@@ -237,18 +236,17 @@ const transportFacet = (payload: ClientShellTransport): ClientTransport => ({
   // Drivers belong to the active session's profile: its project drivers count.
   driverSet: ({ agentName, driverId }) =>
     shellRead(payload, "driver.set", (client) =>
-      client.driver.set({ agentName, driver: { id: driverId }, ...activeSessionPayload(payload) }),
+      client.driver.set({
+        agentName,
+        driver: { id: driverId },
+        sessionId: payload.currentSession().sessionId,
+      }),
     ).pipe(Effect.asVoid),
   driverClear: (input) =>
     shellRead(payload, "driver.clear", (client) => client.driver.clear(input)).pipe(Effect.asVoid),
 })
 
 // ── request helper ────────────────────────────────────────────────────────
-
-class NoActiveSessionError extends Schema.TaggedError<NoActiveSessionError>()(
-  "NoActiveSessionError",
-  {},
-) {}
 
 class ClientTransportRequestError extends Schema.TaggedError<ClientTransportRequestError>()(
   "ClientTransportRequestError",
@@ -270,27 +268,15 @@ class ClientTransportReplyDecodeError extends Schema.TaggedError<ClientTransport
   },
 ) {}
 
-const currentOrActiveSession = (
-  transport: ClientShellTransport,
-  activeSession?: ActiveExtensionSession,
-): Effect.Effect<ActiveExtensionSession, NoActiveSessionError> => {
-  const session = Option.orElse(Option.fromNullishOr(activeSession), transport.currentSession)
-  if (Option.isNone(session)) return Effect.fail(new NoActiveSessionError())
-  return Effect.succeed(session.value)
-}
-
 const requestExtensionAt = <Input, Output>(
   transport: ClientShellTransport,
   ref: CapabilityRef<Input, Output>,
   input: Input,
   activeSession?: ActiveExtensionSession,
-): Effect.Effect<
-  Output,
-  NoActiveSessionError | ClientTransportRequestError | ClientTransportReplyDecodeError,
-  never
-> =>
+): Effect.Effect<Output, ClientTransportRequestError | ClientTransportReplyDecodeError, never> =>
   Effect.gen(function* () {
-    const session = yield* currentOrActiveSession(transport, activeSession)
+    // A request names its session, or goes to the one in view.
+    const session = Option.getOrElse(Option.fromNullishOr(activeSession), transport.currentSession)
     const reply = yield* Effect.tryPromise({
       try: () =>
         transport.runtime.run(
@@ -321,14 +307,6 @@ const requestExtensionAt = <Input, Output>(
           }),
       ),
     )
-  })
-
-/** `{ sessionId }` of the active session, or `{}` before one exists. */
-const activeSessionPayload = (transport: ClientShellTransport) =>
-  omitUndefined({
-    sessionId: Option.getOrUndefined(
-      Option.map(transport.currentSession(), (session) => session.sessionId),
-    ),
   })
 
 /** One shell RPC read, with its failure named by the RPC it came from. */
@@ -383,7 +361,7 @@ interface ClientWorkspace {
   /**
    * The active session's directory, which `@` paths and the model's tools
    * resolve against. A resumed or switched session can be rooted outside the
-   * launch `cwd`; with no session it is the launch `cwd`.
+   * launch `cwd`; a failed read of it gives the launch `cwd`.
    */
   readonly sessionCwd: Effect.Effect<string>
 }
@@ -462,25 +440,18 @@ export class ClientContext extends Context.Service<
 >()("@gent/tui/src/extensions/client-facets/ClientContext") {}
 
 /**
- * What a surface supplies: the transport, the workspace, the `cast` of its
- * connected runtime, and the pane slot. The other shell callbacks, the activity reader, and the
- * cleanup registry default to no-ops, so a test does not restate them.
+ * What a surface supplies: the transport, the workspace, the shell callbacks
+ * over its connected runtime, the activity reader and the cleanup registry.
+ * A test supplies its no-ops through `extension-test-harness-boundary.ts`.
  */
 export interface ClientContextDeps {
   readonly transport: ClientShellTransport
-  /** `sessionCwd` defaults to the launch `cwd`, for a surface with no session to read. */
-  readonly workspace: Omit<ClientWorkspace, "sessionCwd"> &
-    Partial<Pick<ClientWorkspace, "sessionCwd">>
-  readonly shell: Pick<ClientShell, "cast" | "pane"> & Partial<Omit<ClientShell, "cast" | "pane">>
-  /** Current UI activity; absent when the surface has no activity to report. */
-  readonly activity?: () => ClientActivitySnapshot
-  /** Cleanup registry; absent when the surface disposes the runtime whole. */
-  readonly lifecycle?: Pick<ClientLifecycle, "addCleanup">
+  readonly workspace: ClientWorkspace
+  readonly shell: ClientShell
+  /** Current UI activity; a surface with nothing to report answers `"unknown"`. */
+  readonly activity: () => ClientActivitySnapshot
+  readonly lifecycle: Pick<ClientLifecycle, "addCleanup">
 }
-
-const noopShell: Omit<ClientShell, "cast" | "pane"> = { notify: () => {}, switchSession: () => {} }
-
-const noopLifecycle: Pick<ClientLifecycle, "addCleanup"> = { addCleanup: () => {} }
 
 /** `lifecycle.scoped` allocates in the scope that builds this layer: the client runtime's. */
 export const makeClientContextLayer = (deps: ClientContextDeps): Layer.Layer<ClientContext> =>
@@ -488,21 +459,12 @@ export const makeClientContextLayer = (deps: ClientContextDeps): Layer.Layer<Cli
     ClientContext,
     Effect.gen(function* () {
       const scope = yield* Scope.Scope
-      const lifecycle = Option.getOrElse(
-        Option.fromUndefinedOr(deps.lifecycle),
-        () => noopLifecycle,
-      )
       return ClientContext.of({
         transport: transportFacet(deps.transport),
-        shell: { ...noopShell, ...deps.shell },
-        workspace: {
-          sessionCwd: Effect.succeed(deps.workspace.cwd),
-          ...deps.workspace,
-        },
-        lifecycle: { ...lifecycle, scoped: (effect) => Scope.provide(scope)(effect) },
-        activity: {
-          snapshot: Option.getOrElse(Option.fromUndefinedOr(deps.activity), () => unknownActivity),
-        },
+        shell: deps.shell,
+        workspace: deps.workspace,
+        lifecycle: { ...deps.lifecycle, scoped: (effect) => Scope.provide(scope)(effect) },
+        activity: { snapshot: deps.activity },
       })
     }),
   )
@@ -583,7 +545,7 @@ export const sessionQuery = <A>(opts: {
       const [loading, setLoading] = createSignal(false)
 
       const isCurrent = (session: ActiveExtensionSession): boolean =>
-        Option.exists(transport.currentSession(), (now) => sameSession(now, session))
+        sameSession(transport.currentSession(), session)
 
       const settle = (session: ActiveExtensionSession, write: () => void) => {
         setLoading(false)
@@ -595,25 +557,20 @@ export const sessionQuery = <A>(opts: {
 
       // The session is read when the read starts, so a read queued behind a
       // switch asks the session the shell moved to.
-      const refresh = coalescedRead(shell.cast, () =>
-        Option.match(transport.currentSession(), {
-          onNone: () => Effect.void,
-          onSome: (session) => {
-            setLoading(true)
-            return opts.fetch(session).pipe(
-              Effect.match({
-                onFailure: (failure) =>
-                  settle(session, () => setError(Option.some(failure.message))),
-                onSuccess: (value) =>
-                  settle(session, () => {
-                    setStored(Option.some({ session, value }))
-                    setError(Option.none())
-                  }),
+      const refresh = coalescedRead(shell.cast, () => {
+        const session = transport.currentSession()
+        setLoading(true)
+        return opts.fetch(session).pipe(
+          Effect.match({
+            onFailure: (failure) => settle(session, () => setError(Option.some(failure.message))),
+            onSuccess: (value) =>
+              settle(session, () => {
+                setStored(Option.some({ session, value }))
+                setError(Option.none())
               }),
-            )
-          },
-        }),
-      )
+          }),
+        )
+      })
 
       // `currentSession` is the client's identity accessor, so this fires only
       // when the session or the branch moves, never for a rename or a model change.

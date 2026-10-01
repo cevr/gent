@@ -28,8 +28,8 @@ import { createCliRenderer, type CliRenderer } from "@opentui/core"
 import {
   App,
   AppBootstrapError,
-  type InitialState,
-  resolveInitialState,
+  type HeadlessState,
+  resolveHeadlessState,
   resolveInteractiveBootstrap,
   resolveHeadlessMissingProviders,
 } from "./app"
@@ -98,7 +98,7 @@ const makeUiLayer = () => Layer.provideMerge(LinkOpener.Live, BunPlatformLive)
 
 const runHeadlessTurn = (
   bundle: GentClientBundle,
-  state: Extract<InitialState, { readonly _tag: "headless" }>,
+  state: HeadlessState,
   options: HeadlessOptions,
 ) => {
   const branchId = Option.fromNullishOr(state.session.activeBranchId)
@@ -162,6 +162,28 @@ const gentFlags = {
 }
 
 /**
+ * The TUI starts sessions from the composer, which names no agent and asks
+ * the reader, and takes its startup prompt from -p; the positional prompt is
+ * headless input. A headless-only input the TUI cannot honour fails here
+ * instead of being dropped.
+ */
+const refuseHeadlessInput = (given: {
+  readonly agent: boolean
+  readonly approveAll: boolean
+  readonly promptArg: boolean
+}): Effect.Effect<void, CliStartupError> => {
+  const refusals: ReadonlyArray<readonly [boolean, string]> = [
+    [given.agent, "--agent applies to headless mode; add -H with a prompt"],
+    [given.approveAll, "--approve-all applies to headless mode; add -H with a prompt"],
+    [given.promptArg, "a prompt argument needs -H; use -p to start the TUI with a prompt"],
+  ]
+  return Option.match(Option.fromUndefinedOr(refusals.find(([isGiven]) => isGiven)), {
+    onNone: () => Effect.void,
+    onSome: ([, message]) => Effect.fail(new CliStartupError({ message })),
+  })
+}
+
+/**
  * Launch the TUI, or run one headless turn.
  *
  * `gent` and `gent resume` differ only in how they name the session to open, so
@@ -196,16 +218,11 @@ const runGent = ({
   Effect.gen(function* () {
     // The server checks the name against its roster when the session starts.
     const requestedAgent = Option.map(agent, (name) => AgentName.make(name))
-    // The TUI starts sessions from the composer, which names no agent, so a
-    // flag it cannot honour fails here instead of being dropped.
-    if (Option.isSome(requestedAgent) && !headless) {
-      return yield* new CliStartupError({
-        message: "--agent applies to headless mode; add -H with a prompt",
-      })
-    }
-    if (approveAll && !headless) {
-      return yield* new CliStartupError({
-        message: "--approve-all applies to headless mode; add -H with a prompt",
+    if (!headless) {
+      yield* refuseHeadlessInput({
+        agent: Option.isSome(requestedAgent),
+        approveAll,
+        promptArg: Option.isSome(promptArg),
       })
     }
 
@@ -266,13 +283,10 @@ const runGent = ({
         })
       }
       yield* waitForHeadlessReady(bundle.runtime.lifecycle.waitForReady)
-      const state = yield* resolveInitialState({
+      const state = yield* resolveHeadlessState({
         client: bundle.client,
         cwd,
         session,
-        continue_: continue_ || debug,
-        headless,
-        prompt,
         promptArg,
         // No flag, no admission: the session stores none rather than `{}`.
         ...Record.filter(
@@ -284,12 +298,6 @@ const runGent = ({
           Predicate.isNotUndefined,
         ),
       })
-
-      if (state._tag !== "headless") {
-        return yield* new CliStartupError({
-          message: "headless startup resolved an interactive state",
-        })
-      }
 
       const missingProviders = yield* resolveHeadlessMissingProviders({
         client: bundle.client,
@@ -321,7 +329,6 @@ const runGent = ({
       sessionId: Option.getOrUndefined(session),
       continue_: continue_ || debug,
       prompt: Option.getOrUndefined(prompt),
-      debugMode: debug,
     })
 
     // Resolve the terminal color scheme once before render so theme detection

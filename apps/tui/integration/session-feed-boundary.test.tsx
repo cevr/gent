@@ -3,7 +3,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect, Option } from "effect"
 import { Session } from "../src/app"
 import { Gent } from "@gent/sdk"
-import { destroyRenderSetup, renderWithProviders } from "../tests/render-harness-boundary"
+import { renderScoped } from "../tests/render-harness-boundary"
 import {
   baseLocalLayerWithProvider as _baseLocalLayerWithProvider,
   LanguageModelLayers,
@@ -24,26 +24,23 @@ describe("session feed boundary", () => {
           )
           const { client, runtime } = yield* Gent.test(baseLocalLayerWithProvider(signalLayer))
           const created = yield* client.session.create({ cwd: repoRoot })
-          const setup = yield* Effect.promise(() =>
-            renderWithProviders(
-              () => (
-                <Session
-                  sessionId={created.sessionId}
-                  branchId={created.branchId}
-                  initialBranches={Option.none()}
-                />
-              ),
-              {
-                client,
-                runtime,
-                initialSession: makeSessionState(created),
-                cwd: repoRoot,
-                width: 100,
-                height: 32,
-              },
+          const setup = yield* renderScoped(
+            () => (
+              <Session
+                sessionId={created.sessionId}
+                branchId={created.branchId}
+                initialBranches={Option.none()}
+              />
             ),
+            {
+              client,
+              runtime,
+              initialSession: makeSessionState(created),
+              cwd: repoRoot,
+              width: 100,
+              height: 32,
+            },
           )
-          yield* Effect.addFinalizer(() => Effect.sync(() => destroyRenderSetup(setup)))
           yield* client.message.send({
             sessionId: created.sessionId,
             branchId: created.branchId,
@@ -78,26 +75,23 @@ describe("session feed boundary", () => {
           )
           const { client, runtime } = yield* Gent.test(baseLocalLayerWithProvider(signalLayer))
           const created = yield* client.session.create({ cwd: repoRoot })
-          const setup = yield* Effect.promise(() =>
-            renderWithProviders(
-              () => (
-                <Session
-                  sessionId={created.sessionId}
-                  branchId={created.branchId}
-                  initialBranches={Option.none()}
-                />
-              ),
-              {
-                client,
-                runtime,
-                initialSession: makeSessionState(created),
-                cwd: repoRoot,
-                width: 100,
-                height: 32,
-              },
+          const setup = yield* renderScoped(
+            () => (
+              <Session
+                sessionId={created.sessionId}
+                branchId={created.branchId}
+                initialBranches={Option.none()}
+              />
             ),
+            {
+              client,
+              runtime,
+              initialSession: makeSessionState(created),
+              cwd: repoRoot,
+              width: 100,
+              height: 32,
+            },
           )
-          yield* Effect.addFinalizer(() => Effect.sync(() => destroyRenderSetup(setup)))
           // Send first message — will be gated by signal provider
           yield* client.message.send({
             sessionId: created.sessionId,
@@ -145,26 +139,23 @@ describe("session feed boundary", () => {
             baseLocalLayerWithProvider(LanguageModelLayers.failing),
           )
           const created = yield* client.session.create({ cwd: repoRoot })
-          const setup = yield* Effect.promise(() =>
-            renderWithProviders(
-              () => (
-                <Session
-                  sessionId={created.sessionId}
-                  branchId={created.branchId}
-                  initialBranches={Option.none()}
-                />
-              ),
-              {
-                client,
-                runtime,
-                initialSession: makeSessionState(created),
-                cwd: repoRoot,
-                width: 100,
-                height: 32,
-              },
+          const setup = yield* renderScoped(
+            () => (
+              <Session
+                sessionId={created.sessionId}
+                branchId={created.branchId}
+                initialBranches={Option.none()}
+              />
             ),
+            {
+              client,
+              runtime,
+              initialSession: makeSessionState(created),
+              cwd: repoRoot,
+              width: 100,
+              height: 32,
+            },
           )
-          yield* Effect.addFinalizer(() => Effect.sync(() => destroyRenderSetup(setup)))
           yield* client.message.send({
             sessionId: created.sessionId,
             branchId: created.branchId,

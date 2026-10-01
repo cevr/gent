@@ -16,6 +16,7 @@ import {
   defineClientExtension,
   fitWidth,
   formatAge,
+  groupedRows,
   KeyHints,
   PickerFrame,
   plainRow,
@@ -241,7 +242,7 @@ interface Loaded {
 interface ThreadController {
   readonly windows: () => ReadonlyArray<ThreadWindow>
   readonly sessions: () => number
-  readonly current: () => Option.Option<{ sessionId: string; branchId: string }>
+  readonly current: () => { readonly sessionId: string; readonly branchId: string }
   readonly error: () => Option.Option<string>
   readonly loading: () => boolean
   readonly refresh: () => void
@@ -322,24 +323,6 @@ export const makeThreadController = (
     }
   })
 
-/** The list as drawn: a heading opens each session, windows keep their index for selection. */
-type ThreadItem =
-  | { readonly kind: "heading"; readonly sessionName: string; readonly count: number }
-  | { readonly kind: "window"; readonly window: ThreadWindow; readonly index: number }
-
-export const threadItems = (windows: ReadonlyArray<ThreadWindow>): ReadonlyArray<ThreadItem> => {
-  const items: Array<ThreadItem> = []
-  windows.forEach((window, index) => {
-    const previous = Option.fromUndefinedOr(windows[index - 1])
-    if (Option.isNone(previous) || previous.value.sessionId !== window.sessionId) {
-      const count = windows.filter((entry) => entry.sessionId === window.sessionId).length
-      items.push({ kind: "heading", sessionName: window.sessionName, count })
-    }
-    items.push({ kind: "window", window, index })
-  })
-  return items
-}
-
 /** `window 3 · 12 messages · 7 summarized · 2 omitted · <preview>` */
 export const windowLabel = (window: ThreadWindow): string => {
   const parts = [`window ${window.index}`, plural(window.count, "message")]
@@ -375,12 +358,10 @@ export function ThreadPane(props: {
   const [cursor, setCursor] = createSignal(Option.none<ThreadWindow>())
 
   const windows = () => props.controller.windows()
-  const isCurrent = (window: ThreadWindow): boolean =>
-    Option.match(props.controller.current(), {
-      onNone: () => false,
-      onSome: (active) =>
-        active.sessionId === window.sessionId && active.branchId === window.branchId,
-    })
+  const isCurrent = (window: ThreadWindow): boolean => {
+    const active = props.controller.current()
+    return active.sessionId === window.sessionId && active.branchId === window.branchId
+  }
 
   // The same framing the slash-command popup and the agents pane use: ruled
   // off top and bottom under the composer, so a row budgets the picker's
@@ -399,21 +380,21 @@ export function ThreadPane(props: {
     return `${fitWidth(left, width)}  ${age}`
   }
 
+  /** The list's rows: a heading opens each session. */
   const rows = (): ReadonlyArray<SelectListRow<ThreadWindow>> =>
-    threadItems(windows()).map((item) => {
-      if (item.kind === "heading") {
-        return decoration<ThreadWindow>(() => (
+    groupedRows(
+      windows(),
+      (window) => window.sessionId,
+      (first, count) =>
+        decoration<ThreadWindow>(() => (
           <box paddingLeft={1}>
             <text style={{ fg: theme.textMuted }} wrapMode="none">
-              {truncate(`${item.sessionName} (${plural(item.count, "window")})`, rowWidth())}
+              {truncate(`${first.sessionName} (${plural(count, "window")})`, rowWidth())}
             </text>
           </box>
-        ))
-      }
-      return plainRow(item.window, () => rowLine(item.window), {
-        muted: () => !isCurrent(item.window),
-      })
-    })
+        )),
+      (window) => plainRow(window, () => rowLine(window), { muted: () => !isCurrent(window) }),
+    )
 
   /** Open on the live window: the last one on the shell's own branch. */
   const sticky = (values: ReadonlyArray<ThreadWindow>): Option.Option<number> => {

@@ -126,9 +126,7 @@ export const makeForkPane = (
             return entry.send(entry.session).pipe(
               Effect.tapError((failure) =>
                 Effect.suspend(() => {
-                  const here = Option.exists(transport.currentSession(), (now) =>
-                    sameSession(now, entry.session),
-                  )
+                  const here = sameSession(transport.currentSession(), entry.session)
                   if (here) return Effect.void
                   return notify(failure)
                 }),
@@ -153,14 +151,13 @@ export const makeForkPane = (
       }
       if (question.length === 0 && Option.isSome(fork)) return
       const session = transport.currentSession()
-      if (Option.isNone(session)) return
       const send = Option.match(fork, {
         onNone: () => actions.fork,
         onSome: () => actions.ask,
       })
       outgoing = Option.some({
         question,
-        session: session.value,
+        session,
         send: (target) => send(question, target),
       })
       view.refresh()
@@ -254,6 +251,7 @@ export function ForkPane(props: {
   return (
     <Show when={props.open}>
       <PickerFrame
+        error={Option.none()}
         height={height()}
         title={title()}
         keys={[KeyHints.submit, keyHint("ctrl+o", "open"), KeyHints.close]}

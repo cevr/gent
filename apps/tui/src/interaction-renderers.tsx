@@ -307,7 +307,6 @@ function OptionList(props: OptionListProps): JSX.Element {
               <input
                 focused={isFreeformFocused()}
                 onInput={setFreeformText}
-                onSubmit={submitAnswer}
                 backgroundColor="transparent"
                 focusedBackgroundColor="transparent"
               />

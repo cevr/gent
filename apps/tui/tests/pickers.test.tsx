@@ -26,7 +26,7 @@ import {
   reasoningRows,
   SettingsPicker,
 } from "../src/pickers"
-import { createMockClient, renderFrame, renderWithProviders } from "./render-harness-boundary"
+import { createMockClient, renderFrame, renderScoped } from "./render-harness-boundary"
 import { waitForFrame } from "./helpers-boundary"
 
 // ── pickers ─────────────────────────────────────────────────────────────────
@@ -60,23 +60,21 @@ const branch = (id: string, name: string): Branch => ({
 })
 
 describe("Message picker", () => {
-  it.live("moves the cursor down the transcript and forks from the chosen message", () =>
+  it.scopedLive("moves the cursor down the transcript and forks from the chosen message", () =>
     Effect.gen(function* () {
       const forked: Array<string> = []
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <MessagePicker
-            open={true}
-            messages={[
-              message("m1", "user", "first ask"),
-              message("m2", "assistant", "first reply"),
-              message("m3", "user", "second ask"),
-            ]}
-            onSelect={(id) => forked.push(id)}
-            onClose={() => {}}
-          />
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <MessagePicker
+          open={true}
+          messages={[
+            message("m1", "user", "first ask"),
+            message("m2", "assistant", "first reply"),
+            message("m3", "user", "second ask"),
+          ]}
+          onSelect={(id) => forked.push(id)}
+          onClose={() => {}}
+        />
+      ))
       yield* waitForFrame(setup, () => renderFrame(setup).includes("U: first ask"), "open")
       expect(renderFrame(setup)).toContain("A: first reply")
 
@@ -88,19 +86,17 @@ describe("Message picker", () => {
     }),
   )
 
-  it.live("closes on escape", () =>
+  it.scopedLive("closes on escape", () =>
     Effect.gen(function* () {
       const [open, setOpen] = createSignal(true)
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <MessagePicker
-            open={open()}
-            messages={[message("m1", "user", "only ask")]}
-            onSelect={() => {}}
-            onClose={() => setOpen(false)}
-          />
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <MessagePicker
+          open={open()}
+          messages={[message("m1", "user", "only ask")]}
+          onSelect={() => {}}
+          onClose={() => setOpen(false)}
+        />
+      ))
       yield* waitForFrame(setup, () => renderFrame(setup).includes("only ask"), "open")
       setup.mockInput.pressEscape()
       yield* waitForFrame(setup, () => !open(), "closed")
@@ -110,34 +106,32 @@ describe("Message picker", () => {
 })
 
 describe("Branch picker", () => {
-  it.live("lists branches with their message counts", () =>
+  it.scopedLive("lists branches with their message counts", () =>
     Effect.gen(function* () {
       const main = branch("branch-main", "main")
       const side = branch("branch-side", "side-quest")
 
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <BranchPicker
-              open={true}
-              sessionId={SessionId.make("session-test")}
-              sessionName="Test Session"
-              branches={[main, side]}
-              onSelect={() => {}}
-            />
-          ),
-          {
-            client: createMockClient({
-              branch: {
-                getTree: () =>
-                  Effect.succeed([
-                    { branch: main, messageCount: 4, children: [] },
-                    { branch: side, messageCount: 2, children: [] },
-                  ]),
-              },
-            }),
-          },
+      const setup = yield* renderScoped(
+        () => (
+          <BranchPicker
+            open={true}
+            sessionId={SessionId.make("session-test")}
+            sessionName="Test Session"
+            branches={[main, side]}
+            onSelect={() => {}}
+          />
         ),
+        {
+          client: createMockClient({
+            branch: {
+              getTree: () =>
+                Effect.succeed([
+                  { branch: main, messageCount: 4, children: [] },
+                  { branch: side, messageCount: 2, children: [] },
+                ]),
+            },
+          }),
+        },
       )
       yield* waitForFrame(setup, () => renderFrame(setup).includes("main (4)"), "counts")
       expect(renderFrame(setup)).toContain("side-quest (2)")
@@ -145,7 +139,7 @@ describe("Branch picker", () => {
     }),
   )
 
-  it.live("two unnamed branches started in the same minute get different labels", () =>
+  it.scopedLive("two unnamed branches started in the same minute get different labels", () =>
     Effect.gen(function* () {
       // Branch ids are UUIDv7: the head is the start time, the tail is random.
       const unnamed = (id: string): Branch => ({
@@ -155,29 +149,27 @@ describe("Branch picker", () => {
       })
       const first = unnamed("0199a1b2-c3d4-7e5f-8a6b-111111111111")
       const fork = unnamed("0199a1b2-c3d5-7e5f-8a6b-222222222222")
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <BranchPicker
-              open={true}
-              sessionId={SessionId.make("session-test")}
-              sessionName="Test Session"
-              branches={[first, fork]}
-              onSelect={() => {}}
-            />
-          ),
-          {
-            client: createMockClient({
-              branch: {
-                getTree: () =>
-                  Effect.succeed([
-                    { branch: first, messageCount: 4, children: [] },
-                    { branch: fork, messageCount: 2, children: [] },
-                  ]),
-              },
-            }),
-          },
+      const setup = yield* renderScoped(
+        () => (
+          <BranchPicker
+            open={true}
+            sessionId={SessionId.make("session-test")}
+            sessionName="Test Session"
+            branches={[first, fork]}
+            onSelect={() => {}}
+          />
         ),
+        {
+          client: createMockClient({
+            branch: {
+              getTree: () =>
+                Effect.succeed([
+                  { branch: first, messageCount: 4, children: [] },
+                  { branch: fork, messageCount: 2, children: [] },
+                ]),
+            },
+          }),
+        },
       )
       const frame = yield* waitForFrame(setup, (next) => next.includes("(4)"), "counts")
       expect(frame).toContain("11111111 (4)")
@@ -185,24 +177,22 @@ describe("Branch picker", () => {
     }),
   )
 
-  it.live("resumes the branch the reader selects", () =>
+  it.scopedLive("resumes the branch the reader selects", () =>
     Effect.gen(function* () {
       const main = branch("branch-main", "main")
       const side = branch("branch-side", "side-quest")
       const selected: Array<string> = []
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <BranchPicker
-            open={true}
-            sessionId={SessionId.make("session-test")}
-            sessionName="Test Session"
-            branches={[main, side]}
-            onSelect={(branchId) => {
-              selected.push(branchId)
-            }}
-          />
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <BranchPicker
+          open={true}
+          sessionId={SessionId.make("session-test")}
+          sessionName="Test Session"
+          branches={[main, side]}
+          onSelect={(branchId) => {
+            selected.push(branchId)
+          }}
+        />
+      ))
       yield* waitForFrame(setup, () => renderFrame(setup).includes("side-quest"), "open")
       setup.mockInput.pressArrow("down")
       yield* Effect.promise(() => setup.renderOnce())
@@ -232,30 +222,28 @@ const catalogue = [
 ]
 
 describe("Settings picker", () => {
-  it.live("keeps typing from snapping the cursor back to the current row", () =>
+  it.scopedLive("keeps typing from snapping the cursor back to the current row", () =>
     Effect.gen(function* () {
       // The pane preselects the row the next turn would use. That anchor has to
       // let go once the reader types: re-applying it on every narrowing drags
       // the cursor off whatever they were filtering for.
       const selected: Array<string> = []
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <SettingsPicker
-            open={true}
-            title="Model"
-            rows={modelRows([
-              model("a/one", "Alpha One"),
-              model("a/two", "Alpha Two"),
-              model("a/three", "Alpha Three"),
-            ])}
-            current={Option.some("a/three")}
-            onSelect={(id) => {
-              selected.push(id)
-            }}
-            onClose={() => {}}
-          />
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <SettingsPicker
+          open={true}
+          title="Model"
+          rows={modelRows([
+            model("a/one", "Alpha One"),
+            model("a/two", "Alpha Two"),
+            model("a/three", "Alpha Three"),
+          ])}
+          current={Option.some("a/three")}
+          onSelect={(id) => {
+            selected.push(id)
+          }}
+          onClose={() => {}}
+        />
+      ))
       yield* waitForFrame(setup, () => renderFrame(setup).includes("Model · 3"), "picker")
       // Every row matches "a", so the list does not narrow; the cursor still
       // has to move to the top, the way a fresh query always does.
@@ -266,23 +254,21 @@ describe("Settings picker", () => {
     }),
   )
 
-  it.live("marks the current model, filters on typing, and selects with enter", () =>
+  it.scopedLive("marks the current model, filters on typing, and selects with enter", () =>
     Effect.gen(function* () {
       const selected: Array<string> = []
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <SettingsPicker
-            open={true}
-            title="Model"
-            rows={modelRows(catalogue)}
-            current={Option.some("anthropic/claude-opus-5")}
-            onSelect={(id) => {
-              selected.push(id)
-            }}
-            onClose={() => {}}
-          />
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <SettingsPicker
+          open={true}
+          title="Model"
+          rows={modelRows(catalogue)}
+          current={Option.some("anthropic/claude-opus-5")}
+          onSelect={(id) => {
+            selected.push(id)
+          }}
+          onClose={() => {}}
+        />
+      ))
       yield* waitForFrame(setup, () => renderFrame(setup).includes("Model · 3"), "picker")
       expect(renderFrame(setup)).toContain("● Claude Opus 5")
       expect(renderFrame(setup)).toContain("  Claude Sonnet 5")
@@ -296,23 +282,21 @@ describe("Settings picker", () => {
     }),
   )
 
-  it.live("lists default plus every reasoning level and marks the session override", () =>
+  it.scopedLive("lists default plus every reasoning level and marks the session override", () =>
     Effect.gen(function* () {
       const selected: Array<string> = []
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <SettingsPicker
-            open={true}
-            title="Reasoning"
-            rows={reasoningRows(Option.some("max"))}
-            current={Option.some("high")}
-            onSelect={(id) => {
-              selected.push(id)
-            }}
-            onClose={() => {}}
-          />
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <SettingsPicker
+          open={true}
+          title="Reasoning"
+          rows={reasoningRows(Option.some("max"))}
+          current={Option.some("high")}
+          onSelect={(id) => {
+            selected.push(id)
+          }}
+          onClose={() => {}}
+        />
+      ))
       yield* waitForFrame(setup, () => renderFrame(setup).includes("Reasoning · 8"), "pane")
       expect(renderFrame(setup)).toContain("agent or config default (max)")
       expect(renderFrame(setup)).toContain("● high")
@@ -327,24 +311,22 @@ describe("Settings picker", () => {
     }),
   )
 
-  it.live("reopening after a filter shows every row again", () =>
+  it.scopedLive("reopening after a filter shows every row again", () =>
     Effect.gen(function* () {
       // The pane holds the query and unmounts the list on close, so closing has
       // to tell the pane the query is gone. Otherwise `/model` reopens with an
       // empty input over rows the last filter is still hiding.
       const [open, setOpen] = createSignal(true)
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <SettingsPicker
-            open={open()}
-            title="Model"
-            rows={modelRows(catalogue)}
-            current={Option.some("anthropic/claude-opus-5")}
-            onSelect={() => {}}
-            onClose={() => setOpen(false)}
-          />
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <SettingsPicker
+          open={open()}
+          title="Model"
+          rows={modelRows(catalogue)}
+          current={Option.some("anthropic/claude-opus-5")}
+          onSelect={() => {}}
+          onClose={() => setOpen(false)}
+        />
+      ))
       yield* waitForFrame(setup, () => renderFrame(setup).includes("Model · 3"), "picker")
 
       setup.mockInput.pressKey("l")
@@ -367,17 +349,15 @@ describe("Settings picker", () => {
 // ── prompt search render ────────────────────────────────────────────────────
 
 const openPalette = (entries: readonly string[], onEvent: (event: PromptSearchEvent) => void) =>
-  Effect.promise(() =>
-    renderWithProviders(
-      () => (
-        <PromptSearchPalette
-          state={PromptSearchState.open("draft")}
-          entries={entries}
-          onEvent={onEvent}
-        />
-      ),
-      { width: 90, height: 28 },
+  renderScoped(
+    () => (
+      <PromptSearchPalette
+        state={PromptSearchState.open("draft")}
+        entries={entries}
+        onEvent={onEvent}
+      />
     ),
+    { width: 90, height: 28 },
   )
 
 describe("prompt search row keys", () => {
@@ -397,7 +377,7 @@ describe("prompt search row keys", () => {
 })
 
 describe("PromptSearchPalette renderer", () => {
-  it.live("renders matching prompts with selection and footer", () =>
+  it.scopedLive("renders matching prompts with selection and footer", () =>
     Effect.gen(function* () {
       const entries = [
         "fix the session queue bug",
@@ -425,7 +405,7 @@ describe("PromptSearchPalette renderer", () => {
     }),
   )
 
-  it.live("renders empty-state fallback when no items match", () =>
+  it.scopedLive("renders empty-state fallback when no items match", () =>
     Effect.gen(function* () {
       const events: Array<PromptSearchEvent> = []
       const setup = yield* openPalette(["first prompt", "second prompt"], (event) =>
@@ -438,7 +418,7 @@ describe("PromptSearchPalette renderer", () => {
     }),
   )
 
-  it.live("keeps the draft until the reader moves, then wraps at both ends", () =>
+  it.scopedLive("keeps the draft until the reader moves, then wraps at both ends", () =>
     Effect.gen(function* () {
       const events: Array<PromptSearchEvent> = []
       const setup = yield* openPalette(["alpha", "beta", "gamma"], (event) => events.push(event))
@@ -460,7 +440,7 @@ describe("PromptSearchPalette renderer", () => {
     }),
   )
 
-  it.live("enter on an empty list still accepts, and escape cancels", () =>
+  it.scopedLive("enter on an empty list still accepts, and escape cancels", () =>
     Effect.gen(function* () {
       const events: Array<PromptSearchEvent> = []
       const setup = yield* openPalette([], (event) => events.push(event))
@@ -478,42 +458,38 @@ describe("prompt search and the fork picker on a short terminal", () => {
   // Docked panes give way in whole rows: the key hint and the title go
   // before the rows the reader opened the pane for.
   for (const height of [12, 9, 8, 7, 6]) {
-    it.live(`prompt search keeps its top entry at ${height} rows`, () =>
+    it.scopedLive(`prompt search keeps its top entry at ${height} rows`, () =>
       Effect.gen(function* () {
-        const setup = yield* Effect.promise(() =>
-          renderWithProviders(
-            () => (
-              <PromptSearchPalette
-                state={PromptSearchState.open("draft")}
-                entries={["ENTRY-ONE", "ENTRY-TWO", "ENTRY-THREE"]}
-                onEvent={() => {}}
-              />
-            ),
-            { width: 60, height },
+        const setup = yield* renderScoped(
+          () => (
+            <PromptSearchPalette
+              state={PromptSearchState.open("draft")}
+              entries={["ENTRY-ONE", "ENTRY-TWO", "ENTRY-THREE"]}
+              onEvent={() => {}}
+            />
           ),
+          { width: 60, height },
         )
         yield* waitForFrame(setup, (frame) => frame.includes("ENTRY-ONE"), "top entry")
       }).pipe(Effect.timeout("5 seconds")),
     )
 
-    it.live(`the fork picker keeps its top message at ${height} rows`, () =>
+    it.scopedLive(`the fork picker keeps its top message at ${height} rows`, () =>
       Effect.gen(function* () {
-        const setup = yield* Effect.promise(() =>
-          renderWithProviders(
-            () => (
-              <MessagePicker
-                open={true}
-                messages={[
-                  message("m1", "user", "FIRST-ASK"),
-                  message("m2", "assistant", "FIRST-REPLY"),
-                  message("m3", "user", "SECOND-ASK"),
-                ]}
-                onSelect={() => {}}
-                onClose={() => {}}
-              />
-            ),
-            { width: 60, height },
+        const setup = yield* renderScoped(
+          () => (
+            <MessagePicker
+              open={true}
+              messages={[
+                message("m1", "user", "FIRST-ASK"),
+                message("m2", "assistant", "FIRST-REPLY"),
+                message("m3", "user", "SECOND-ASK"),
+              ]}
+              onSelect={() => {}}
+              onClose={() => {}}
+            />
           ),
+          { width: 60, height },
         )
         yield* waitForFrame(setup, (frame) => frame.includes("FIRST-ASK"), "top message")
       }).pipe(Effect.timeout("5 seconds")),

@@ -63,7 +63,7 @@ Ported from opencode. Key patterns:
 One ladder, owned by `createSessionController` (`handleEscape`, `handleInterrupt` in `session.tsx`). Esc never quits.
 
 - **Esc** steps back one layer: the expanded transcript, the palette, the disclosure, then a running turn (one press cancels it). On a draft the first press arms and the status row says `esc again to clear`; the second clears the draft. On an empty idle composer it does nothing. In shell mode a draft arms and clears the same way; on an empty shell draft the composer takes Esc and leaves shell mode.
-- **ctrl+c** closes a pane that holds the composer, collapses the expanded transcript, clears a draft, then cancels a running turn. A press that cancels a turn, or one on an idle empty composer, arms the exit and the status row says `ctrl+c again to exit`; the second press exits, even over a turn that started since (children that keep waking the session).
+- **ctrl+c** closes a pane that holds the composer, collapses the expanded transcript, clears a draft, stops a running `!cmd` (and arms nothing), then cancels a running turn. A press that cancels a turn, or one on an idle empty composer, arms the exit and the status row says `ctrl+c again to exit`; the second press exits, even over a turn that started since (children that keep waking the session).
 - **ctrl+d** on an empty composer exits (no pane, palette or ask open, the transcript collapsed); on a draft it deletes forward.
 - An armed key disarms on any other key (the other ladder key included: an Esc that leaves shell mode disarms a ctrl+c), a paste, a keybind, or after one second (a fiber on the client runtime, so a test clock moves it; the view interrupts it when it unmounts). The arm is per key: a ctrl+c then an Esc is two gestures.
 - Over the boot branch picker and an enforced sign-in, Esc does nothing and the hint says `ctrl+c quit`; ctrl+c arms the exit as on an empty composer, and the second press exits.
@@ -243,12 +243,14 @@ Special prefixes at input start trigger different modes:
 
 - Type `!` at cursor position 0 → enters shell mode (prompt: `$`)
 - Submit executes command, output shown in chat
-- ESC or backspace at empty input exits shell mode; ESC on a shell draft arms its clear (see Keys)
+- ESC at an empty shell draft, or Backspace at the draft's start (it stands for deleting the `!`), exits shell mode; Backspace elsewhere edits the command; ESC on a shell draft arms its clear (see Keys)
 - Runs in the session's cwd; a spawn failure (the cwd is gone) is a refused submission (below)
+- Has no time limit: while it runs the activity row shows `$ cmd`, and ctrl+c stops it (or the view going). A stopped command sends nothing, and the status row says so
+- Output is read as it arrives, up to 8 MiB (`SHELL_READ_CAP_BYTES` in `composer.tsx`); past that the command is ended. The message keeps the lines that fit the `@file` cap; a cut writes the output read to `<data dir>/shell-output/` and the message names the file
 
 ### Refused submissions
 
-- A submit leaves the composer before it is sent. A send the server refuses, a `!cmd` that cannot spawn, or a `/command` no command source names, comes back to the draft of the branch it was sent from, with its reason (`ComposerRefusals` in `session.tsx`)
+- A submit leaves the composer before it is sent. A send the server refuses, a `!cmd` that cannot spawn, or a `/command` still waiting for the command sources when the view goes, comes back to the draft of the branch it was sent from, with its reason (`ComposerRefusals` in `session.tsx`)
 - A `!cmd` that ran but whose output the server refused comes back as that output, a plain message, and the reason says the command ran. Enter sends the output; it never runs the command again. Once back it is an ordinary draft: an `@path` in it expands on that send, as in any draft
 - A refused message as large as a paste (`isLargePaste`) comes back into the composer on screen as a paste placeholder; a kept draft of a branch the reader left holds the text itself, and a kept block that joins a composer on screen is written the same way. A refused command always comes back as its text, so the reader sees the command Enter would run
 - A lost connection is not a refusal: the send may have landed. It retries four times under its first request id (`SEND_RETRY` in `utils.ts`, shared with the startup prompt and the headless send's predicate), and the text comes back only after the last try. That text keeps the request id: Enter on it unchanged sends it under the same id, so the server's dedup runs it once. An edited text, a draft that joins several refused texts, or a text the server answered goes under a new id. The `-p` startup prompt is a submission too: it is sent once, and a failed send comes back to the draft of its branch with its reason
@@ -278,11 +280,16 @@ at 2000 lines or 50 KB of UTF-8, counted by the core line rule.
 
 A command sent before every command source has answered (the client
 extensions' load and the session's server slash list, `commandsSettled` in
-`extensions/host.tsx`) waits for them, then resolves. Only then does an
-unresolved command come back to its draft with `Unknown command: /x`. A
-command still waiting when the session view goes comes back to its draft too.
-The server list is read once per session and connection: a listing that a
-dropped connection cut short is no answer, and the reconnect reads it again.
+`extensions/host.tsx`) waits for them, then resolves. Only a known command
+name is a command, and the session decides which names are known. A name
+the settled sources lack makes the session read the server list once more
+(`refreshCommands`), since an extension can register a command after the
+last listing; a line whose first word still names no command (a path, a
+typo, a pasted log line) then goes out as a message. A draft that starts
+with a paste chip is never a command. A command still waiting when the
+session view goes comes back to its draft too. The server list is read once
+per session and connection and on each refresh: a listing that a dropped
+connection cut short is no answer, and the reconnect reads it again.
 
 ## Extensions
 

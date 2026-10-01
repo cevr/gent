@@ -9,12 +9,14 @@ import {
   Schedule,
   Schema,
 } from "effect"
+import { pathToFileURL } from "node:url"
 import { type Context, useContext } from "solid-js"
 import { textWidth } from "./bun-adapter"
 import {
   GentConnectionError,
   GentRpcError,
   lineCount,
+  type Session,
   splitLines,
   type GentClientRpcError,
 } from "@gent/core/protocol"
@@ -154,6 +156,17 @@ export const getString = (input: ToolInput, key: string, fallback = ""): string 
     decodeJsonObject(input).pipe(Option.flatMap((record) => decodeString(record[key]))),
     () => fallback,
   )
+
+// ── sessions ────────────────────────────────────────────────────────────────
+
+/**
+ * A session the reader can return to. A delegate or `/btw` child has a
+ * parent and its own thread: it is the agent's work, not a conversation the
+ * reader left. A handoff has a parent but joins its thread, so it is one.
+ */
+export const isConversation = (
+  session: Pick<Session, "id" | "parentSessionId" | "threadId">,
+): boolean => Predicate.isUndefined(session.parentSessionId) || session.threadId !== session.id
 
 // ── size formatting ─────────────────────────────────────────────────────────
 
@@ -592,16 +605,17 @@ export function formatGenericToolText(text: ToolCall["output"]) {
  */
 
 /**
- * Truncate path from start, keeping filename visible
+ * Truncate path from start, keeping filename visible. `maxLen` counts
+ * terminal columns: a wide (CJK) name takes two a character.
  * e.g., "/Users/cvr/Developer/personal/gent/apps/tui/src/app.tsx" -> "…/tui/src/app.tsx"
  */
 export function truncatePath(path: string, maxLen = 40): string {
-  if (path.length <= maxLen) return path
+  if (textWidth(path) <= maxLen) return path
   const parts = path.split("/")
   let result = parts[parts.length - 1] ?? ""
   for (let i = parts.length - 2; i >= 0; i--) {
     const next = parts[i] + "/" + result
-    if (next.length + 1 > maxLen) break
+    if (textWidth(next) + 1 > maxLen) break
     result = next
   }
   return "…/" + result
@@ -913,13 +927,16 @@ export const formatFileRef = (path: string): string => {
   return `@${path}`
 }
 
-export function isAbsPath(path: string): boolean {
-  return path.startsWith("/")
-}
-
-export function fileUrl(path: string): string {
-  return `file://${path}`
-}
+/**
+ * The `file://` link a tool row gives an absolute path. A terminal opens it
+ * as a URL, so the path is percent-encoded as `pathToFileURL` encodes it: a
+ * space, `#` or `%` stays part of the name. A relative path has no link.
+ */
+export const fileHref = (path: string): Option.Option<string> =>
+  Option.some(path).pipe(
+    Option.filter((p) => p.startsWith("/")),
+    Option.map((p) => pathToFileURL(p).href),
+  )
 
 /**
  * The file references in `text`, with the span each was written at.
@@ -1004,10 +1021,12 @@ const readFileContent = (
 
     if (Option.isSome(startLine)) {
       const start = Math.max(0, startLine.value - 1) // Convert 1-indexed to 0-indexed
-      // A range that starts past the end names no line: it stays a reference.
+      // A range that starts past the end, or ends before it starts, names no
+      // line: it stays a reference.
       if (start >= lines.length) return Option.none<string>()
       let end = start + 1
       if (Option.isSome(endLine)) end = Math.min(lines.length, endLine.value)
+      if (end <= start) return Option.none<string>()
       lines = lines.slice(start, end)
       whole = lines.join("\n")
     }

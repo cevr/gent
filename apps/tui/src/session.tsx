@@ -17,6 +17,7 @@ import {
   Duration,
   Effect,
   Equal,
+  Exit,
   Fiber,
   FileSystem,
   Match,
@@ -31,6 +32,7 @@ import {
 import {
   type ActiveInteraction,
   type AgentEvent,
+  ApprovalDecisionSchema,
   type ApprovalResult,
   assistantMessageIdForTurn,
   Branch,
@@ -331,11 +333,11 @@ export type ComposerInteractionEvent = Schema.Schema.Type<typeof ComposerInterac
  * Start triggers (like /) detected only at text position 0.
  */
 const deriveAutocomplete = (
-  _state: ComposerInteractionState,
+  state: ComposerInteractionState,
   text: string,
   contributions: ReadonlyArray<AutocompleteContribution>,
 ): Option.Option<AutocompleteState> => {
-  if (_state.mode === "shell") return Option.none()
+  if (state.mode === "shell") return Option.none()
 
   const prefixes = contributions.map((c) => c.prefix)
   if (prefixes.length === 0) return Option.none()
@@ -367,31 +369,39 @@ export function transitionComposerInteraction(
   event: ComposerInteractionEvent,
   contributions: ReadonlyArray<AutocompleteContribution> = [],
 ): ComposerInteractionState {
-  if (event._tag === "DraftChanged") {
-    return {
-      ...state,
-      draft: event.text,
-      autocomplete: deriveAutocomplete(state, event.text, contributions),
-    }
-  }
-
-  if (event._tag === "RestoreDraft") {
-    return { ...state, draft: event.text, autocomplete: Option.none() }
-  }
-
-  if (event._tag === "ClearDraft") {
-    return { ...state, draft: "", autocomplete: Option.none() }
-  }
-
-  if (event._tag === "EnterShell") {
-    return { ...state, mode: "shell", autocomplete: Option.none() }
-  }
-
-  if (event._tag === "ExitShell") {
-    return { ...state, mode: "editing", autocomplete: Option.none() }
-  }
-
-  return { ...state, autocomplete: Option.none() }
+  return Match.value(event).pipe(
+    Match.tagsExhaustive({
+      DraftChanged: ({ text }): ComposerInteractionState => ({
+        ...state,
+        draft: text,
+        autocomplete: deriveAutocomplete(state, text, contributions),
+      }),
+      RestoreDraft: ({ text }): ComposerInteractionState => ({
+        ...state,
+        draft: text,
+        autocomplete: Option.none(),
+      }),
+      ClearDraft: (): ComposerInteractionState => ({
+        ...state,
+        draft: "",
+        autocomplete: Option.none(),
+      }),
+      EnterShell: (): ComposerInteractionState => ({
+        ...state,
+        mode: "shell",
+        autocomplete: Option.none(),
+      }),
+      ExitShell: (): ComposerInteractionState => ({
+        ...state,
+        mode: "editing",
+        autocomplete: Option.none(),
+      }),
+      CloseAutocomplete: (): ComposerInteractionState => ({
+        ...state,
+        autocomplete: Option.none(),
+      }),
+    }),
+  )
 }
 
 // ── composer state ──────────────────────────────────────────────────────────
@@ -403,12 +413,6 @@ export function transitionComposerInteraction(
  * This state handles server-driven interaction flows (questions, permissions, prompts, handoffs).
  */
 
-const ApprovalResultSchema = Schema.Struct({
-  approved: Schema.Boolean,
-  notes: Schema.optional(Schema.String),
-  editedContent: Schema.optional(Schema.String),
-})
-
 export type ComposerState =
   | { readonly _tag: "idle" }
   | { readonly _tag: "interaction"; readonly interaction: ActiveInteraction }
@@ -419,7 +423,7 @@ export const ComposerState = {
 
 export const ComposerEvent = Schema.TaggedUnion({
   EnterInteraction: { interaction: InteractionPresented },
-  ResolveInteraction: { result: ApprovalResultSchema },
+  ResolveInteraction: { result: ApprovalDecisionSchema },
   DismissInteraction: { requestId: Schema.String },
 })
 export type ComposerEvent = Schema.Schema.Type<typeof ComposerEvent>
@@ -436,27 +440,31 @@ interface TransitionResult {
 }
 
 function transition(state: ComposerState, event: ComposerEvent): TransitionResult {
-  if (event._tag === "EnterInteraction") {
-    return { state: { _tag: "interaction", interaction: event.interaction } }
-  }
-
-  if (event._tag === "ResolveInteraction") {
-    if (state._tag !== "interaction") return { state }
-    return {
-      state: ComposerState.idle(),
-      effect: {
-        _tag: "DispatchInteractionResult",
-        interaction: state.interaction,
-        result: event.result,
+  return Match.value(event).pipe(
+    Match.tagsExhaustive({
+      EnterInteraction: ({ interaction }): TransitionResult => ({
+        state: { _tag: "interaction", interaction },
+      }),
+      ResolveInteraction: ({ result }): TransitionResult => {
+        if (state._tag !== "interaction") return { state }
+        return {
+          state: ComposerState.idle(),
+          effect: {
+            _tag: "DispatchInteractionResult",
+            interaction: state.interaction,
+            result,
+          },
+        }
       },
-    }
-  }
-
-  if (state._tag !== "interaction") return { state }
-  if (!("requestId" in state.interaction) || state.interaction.requestId !== event.requestId) {
-    return { state }
-  }
-  return { state: ComposerState.idle() }
+      // Only the interaction on screen is dismissed; a late dismissal of another is dropped.
+      DismissInteraction: ({ requestId }): TransitionResult => {
+        if (state._tag !== "interaction" || state.interaction.requestId !== requestId) {
+          return { state }
+        }
+        return { state: ComposerState.idle() }
+      },
+    }),
+  )
 }
 
 // ── composer memory ─────────────────────────────────────────────────────────
@@ -1036,8 +1044,6 @@ export const queuedDraftText = (queue: QueueState): Option.Option<string> => {
 
 const isBlockingAuthGate = (state: AuthGateState): boolean => state === "open" || state === "error"
 
-// ── controller activity ─────────────────────────────────────────────────────
-
 // ── prompt history ──────────────────────────────────────────────────────────
 
 /**
@@ -1440,7 +1446,7 @@ const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] =>
     category: "Session",
     slash: "branch",
     onSelect: () => {
-      props.cast(props.client.surfaceError(props.client.createBranch()))
+      props.cast(props.client.surfaceError(props.client.createBranch))
     },
   },
   {
@@ -1625,8 +1631,8 @@ type ToolResultEvent = Extract<AgentEvent, { _tag: "ToolCallSucceeded" | "ToolCa
 interface SessionFeed {
   items: () => SessionItem[]
   messages: () => Message[]
-  // eslint-disable-next-line effect/noNullish -- Solid accessor omits an inactive tool.
-  activeTool: () => string | undefined
+  /** The label of the tool that runs now; none between tools. */
+  activeTool: () => Option.Option<string>
 }
 
 type SessionFeedClient = Pick<
@@ -2101,20 +2107,21 @@ const startToolCall = (
 // ── Hook ──
 
 export function useSessionFeed(
-  sessionId: () => SessionId,
-  branchId: () => BranchId,
+  sessionId: SessionId,
+  branchId: BranchId,
   client: SessionFeedClient,
   callbacks: SessionFeedCallbacks,
   /** Read at send time, so the owner decides whether the prompt is still unsent. */
-  takeInitialPrompt?: () => Option.Option<StartupPrompt>,
-  canSendPrompt?: () => boolean,
+  takeInitialPrompt: () => Option.Option<StartupPrompt>,
+  /** False while sign-in or the branch picker holds the startup prompt back. */
+  canSendPrompt: () => boolean,
 ): SessionFeed {
   const [store, setStore] = createStore<{ messages: Message[]; events: SessionEvent[] }>({
     messages: [],
     events: [],
   })
   const [runningCalls, setRunningCalls] = createSignal<ReadonlyArray<RunningCall>>([])
-  const [streamReadyKey, setStreamReadyKey] = createSignal<Option.Option<string>>(Option.none())
+  const [streamReady, setStreamReady] = createSignal(false)
   let streamMessageId = Option.none<string>()
   let eventSeq = 0
   // The steps of the turn in flight; TurnCompleted spends them on its label.
@@ -2276,103 +2283,73 @@ export function useSessionFeed(
     })
   }
   // The session view mounts keyed on the identity (app.tsx), so one feed
-  // serves one session and branch: a switch remounts it, and the cleanup
-  // interrupts this feed's fiber. A reactivation of the same identity (the
-  // client's identity went none and came back) resumes from the cursor.
+  // serves one session and branch for its whole life: a switch remounts it,
+  // and the cleanup interrupts this feed's fiber. The cursor carries a
+  // reconnect's replay on from where the last attempt stopped.
   let lastSeenEventId = 0
-  let processedEnvelopeIds = new Set<EventEnvelope["id"]>()
-  let activated = false
-  const takeInitialPromptValue = Option.fromNullishOr(takeInitialPrompt)
-  const canSendPromptValue = Option.fromNullishOr(canSendPrompt)
+  const processedEnvelopeIds = new Set<EventEnvelope["id"]>()
 
-  const resetProjection = () => {
-    setStore({ messages: [], events: [] })
-    setRunningCalls([])
-    setStreamReadyKey(Option.none())
-    streamMessageId = Option.none()
-    eventSeq = 0
-    processedEnvelopeIds = new Set()
-    client.resetSessionEvents()
-  }
+  // The events the client held for the session before this one are not this feed's.
+  client.resetSessionEvents()
 
   const items = createMemo((): SessionItem[] =>
     [...store.messages, ...store.events].sort(compareSessionItems),
   )
 
-  // Keyed subscription — re-runs only when sessionId:branchId identity changes
-  const feedKey = createMemo(() => `${sessionId()}:${branchId()}`)
+  const feedKey = `${sessionId}:${branchId}`
 
-  // Wait for session to become active before subscribing
+  // The client names the session in view. It moves first on a switch; the
+  // feed stops then, before the view that holds it unmounts.
   const activeSessionKey = createMemo(
-    (): Option.Option<string> =>
-      Option.map(
-        client.sessionIdentity(),
-        (identity) => `${identity.sessionId}:${identity.branchId}`,
-      ),
-    Option.none(),
-    { equals: Equal.equals },
+    () => `${client.sessionIdentity().sessionId}:${client.sessionIdentity().branchId}`,
   )
 
-  const canSendPromptNow = () =>
-    Option.getOrElse(
-      Option.map(canSendPromptValue, (check) => check()),
-      () => true,
-    )
-
   createEffect(
-    on(
-      [activeSessionKey, feedKey, streamReadyKey, canSendPromptNow],
-      ([active, key, readyKey, canSend]) => {
-        if (Option.isNone(active) || active.value !== key) return
-        if (Option.isNone(readyKey) || readyKey.value !== key || !canSend) return
-        const startup = Option.flatMap(takeInitialPromptValue, (take) => take())
-        if (Option.isNone(startup)) return
-        const prompt = startup.value
-        if (prompt.content === "") return
+    on([activeSessionKey, streamReady, canSendPrompt], ([active, ready, canSend]) => {
+      if (active !== feedKey) return
+      if (!ready || !canSend) return
+      const startup = takeInitialPrompt()
+      if (Option.isNone(startup)) return
+      const prompt = startup.value
+      if (prompt.content === "") return
 
-        const session = sessionId()
-        const branch = branchId()
-        client.log.info("feed.sendInitialPrompt", {
-          sessionId: session,
-          branchId: branch,
-        })
-        client.runtime.cast(
-          Effect.gen(function* () {
-            const requestId = yield* randomId
-            yield* client.client.message
-              .send({ sessionId: session, branchId: branch, content: prompt.content, requestId })
-              .pipe(
-                // A lost connection retries under the one request id; after
-                // the last try the prompt is refused like a composer send.
-                Effect.retry(SEND_RETRY),
-                Effect.catchEager((err) =>
-                  Effect.sync(() =>
-                    prompt.refuse(
-                      { sessionId: session, branchId: branch },
-                      formatError(err),
-                      lostRequest(err, requestId),
-                    ),
+      const session = sessionId
+      const branch = branchId
+      client.log.info("feed.sendInitialPrompt", {
+        sessionId: session,
+        branchId: branch,
+      })
+      client.runtime.cast(
+        Effect.gen(function* () {
+          const requestId = yield* randomId
+          yield* client.client.message
+            .send({ sessionId: session, branchId: branch, content: prompt.content, requestId })
+            .pipe(
+              // A lost connection retries under the one request id; after
+              // the last try the prompt is refused like a composer send.
+              Effect.retry(SEND_RETRY),
+              Effect.catchEager((err) =>
+                Effect.sync(() =>
+                  prompt.refuse(
+                    { sessionId: session, branchId: branch },
+                    formatError(err),
+                    lostRequest(err, requestId),
                   ),
                 ),
-              )
-          }),
-        )
-      },
-    ),
+              ),
+            )
+        }),
+      )
+    }),
   )
 
   createEffect(
-    on([activeSessionKey, feedKey], ([active, key]) => {
-      if (Option.isNone(active) || active.value !== key) return
+    on(activeSessionKey, (active) => {
+      if (active !== feedKey) return
 
-      // The first activation clears what the client held for another session.
-      if (!activated) {
-        resetProjection()
-        activated = true
-      }
-
-      const branch = branchId()
-      const session = sessionId()
+      const key = feedKey
+      const branch = branchId
+      const session = sessionId
       client.log.info("feed.activate", { key })
 
       const streamFiber = client.runtime.fork(
@@ -2462,7 +2439,7 @@ export function useSessionFeed(
                   Effect.forkScoped,
                 )
 
-              yield* Effect.sync(() => setStreamReadyKey(Option.some(key)))
+              yield* Effect.sync(() => setStreamReady(true))
 
               return yield* Effect.raceFirst(Fiber.join(eventsFiber), Fiber.join(runtimeFiber))
             }).pipe(
@@ -2597,18 +2574,28 @@ export function useSessionFeed(
   return {
     items,
     messages: () => store.messages,
-    activeTool: () => Option.getOrUndefined(runningLabel(runningCalls())),
+    activeTool: () => runningLabel(runningCalls()),
   }
 }
 
 // ── session controller ──────────────────────────────────────────────────────
 
-/** A submitted slash command, and the way back to its draft if nothing runs it. */
-interface HeldSlashCommand {
+/**
+ * A submitted slash command. `send` sends its text as a message when no
+ * command source names it; `refuse` gives it back to its draft when the view
+ * goes before it could run.
+ */
+export interface SlashSubmission {
   readonly cmd: string
   readonly args: string
+  readonly send: () => void
   readonly refuse: (reason: string) => void
 }
+
+/** A running `!cmd` was stopped: ctrl+c, or the session view went. Nothing is sent. */
+class ShellStopped extends Schema.TaggedError<ShellStopped>()("ShellStopped", {
+  command: Schema.String,
+}) {}
 
 export interface SessionController {
   items: () => SessionItem[]
@@ -2643,14 +2630,18 @@ export interface SessionController {
     requestId: string,
   ) => Effect.Effect<void, GentClientRpcError>
   /**
-   * Run a slash command. One no command source names is handed to `refuse`
-   * with its reason; the composer gives it back to the draft it came from.
+   * Run a slash command. One no command source names, once every source has
+   * answered, is not a command: its text goes out as a message (`send`).
    */
-  onSlashCommand: (
-    cmd: string,
-    args: string,
-    refuse: (reason: string) => void,
-  ) => Effect.Effect<void>
+  onSlashCommand: (command: SlashSubmission) => Effect.Effect<void>
+  /**
+   * Runs a `!cmd` as this view's: the activity row shows `$ command` while it
+   * runs, and ctrl+c, or the view going, stops it with `ShellStopped`.
+   */
+  runShell: <A, E, R>(
+    command: string,
+    run: Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E | ShellStopped, R>
   onRestoreQueue: () => void
   dispatchComposer: (event: ComposerEvent) => void
   resolveAuthGate: () => void
@@ -2673,6 +2664,27 @@ const ARMED_CUE = {
   interrupt: "ctrl+c again to exit",
 } satisfies Record<ArmedKey, string>
 
+/**
+ * The one way gent leaves: the session view's exit and the fatal screen's.
+ * The session id is the only way back into this conversation, and it is
+ * about to leave the screen. It is printed after the renderer is destroyed,
+ * so it lands in the terminal the reader keeps, not in the alternate screen.
+ * An in-memory store ends with the process, so it has nothing to resume.
+ */
+export const useExit = () => {
+  const client = useClient()
+  const renderer = useRenderer()
+  const env = useEnv()
+  return () => {
+    const leaving = client.activeSessionId()
+    shutdownLog("exit.renderer-destroy")
+    renderer.destroy()
+    if (env.resumable) env.writeTerminal(`\nto resume: gent resume ${leaving}\n`)
+    shutdownLog("exit.shutdown-signal")
+    env.shutdown()
+  }
+}
+
 export function createSessionController(props: {
   sessionId: SessionId
   branchId: BranchId
@@ -2690,23 +2702,7 @@ export function createSessionController(props: {
   const refusals = useComposerRefusals()
   const { takePrompt } = useComposerMemory()
   const { cast } = useRuntime()
-  const renderer = useRenderer()
-  const env = useEnv()
-  const exit = () => {
-    // The session id is the only way back into this conversation, and it is
-    // about to leave the screen. Printed after the renderer is destroyed so it
-    // lands in the terminal the reader keeps, not in the alternate screen.
-    // An in-memory store ends with the process, so it has nothing to resume.
-    const leaving = client.session().pipe(Option.filter(() => env.resumable))
-    shutdownLog("exit.renderer-destroy")
-    renderer.destroy()
-    Option.match(leaving, {
-      onNone: () => {},
-      onSome: (session) => env.writeTerminal(`\nto resume: gent resume ${session.sessionId}\n`),
-    })
-    shutdownLog("exit.shutdown-signal")
-    env.shutdown()
-  }
+  const exit = useExit()
   // ── exit and cancel ladder: the armed key ──
   //
   // A destructive second press is armed by the first, and the status row says
@@ -2749,11 +2745,7 @@ export function createSessionController(props: {
   const history = usePromptHistory()
   const frecency = useAutocompleteFrecency()
 
-  const currentSessionName = (): string =>
-    Option.getOrElse(
-      Option.flatMap(client.session(), (value) => Option.fromNullishOr(value.name)),
-      () => "Unnamed",
-    )
+  const currentSessionName = (): string => client.session().name
 
   // ── Branch picker ──
   //
@@ -2885,8 +2877,7 @@ export function createSessionController(props: {
   onCleanup(() => ext.setPaneOwner(Option.none()))
 
   ext.setActivityProvider(() => {
-    const session = client.session()
-    const sessionId = Option.getOrUndefined(Option.map(session, (value) => value.sessionId))
+    const sessionId = client.activeSessionId()
     if (client.isReconnecting()) return { sessionId, state: "unknown" }
     if (isBlockingAuthGate(authGateState()) || composerState()._tag === "interaction") {
       return { sessionId, state: "blocked" }
@@ -2942,8 +2933,8 @@ export function createSessionController(props: {
   }
 
   const feed = useSessionFeed(
-    () => props.sessionId,
-    () => props.branchId,
+    props.sessionId,
+    props.branchId,
     client,
     {
       onInteraction,
@@ -3042,9 +3033,44 @@ export function createSessionController(props: {
     dispatch: (event) => dispatchSessionUi(SessionUiEvent.cases.PromptSearch.make({ event })),
   })
 
+  // ── the running `!cmd` ──
+  //
+  // A `!cmd` has no time limit; it runs until it ends, ctrl+c stops it, or the
+  // view goes. Each one runs against its own stop signal, and the activity
+  // row names the latest while any runs.
+  interface RunningShell {
+    readonly command: string
+    readonly stop: Deferred.Deferred<void>
+  }
+  const [runningShells, setRunningShells] = createSignal<ReadonlyArray<RunningShell>>([])
+  const runShell = <A, E, R>(
+    command: string,
+    run: Effect.Effect<A, E, R>,
+  ): Effect.Effect<A, E | ShellStopped, R> =>
+    Effect.gen(function* () {
+      const running: RunningShell = { command, stop: yield* Deferred.make<void>() }
+      const stopped = Deferred.await(running.stop).pipe(
+        Effect.andThen(Effect.fail(new ShellStopped({ command }))),
+      )
+      return yield* Effect.acquireUseRelease(
+        Effect.sync(() => setRunningShells((shells) => [...shells, running])),
+        () => Effect.raceFirst(run, stopped),
+        () => Effect.sync(() => setRunningShells((shells) => shells.filter((s) => s !== running))),
+      )
+    })
+  /** Stops every running `!cmd`; true when one was running. */
+  const stopShells = () => {
+    const shells = untrack(runningShells)
+    for (const shell of shells) client.runtime.cast(Deferred.done(shell.stop, Exit.void))
+    return shells.length > 0
+  }
+  onCleanup(stopShells)
+
   const activity = (): ReturnType<SessionController["activity"]> => {
+    const shell = Option.fromUndefinedOr(runningShells().at(-1))
+    if (Option.isSome(shell)) return { phase: "tool", toolInfo: `$ ${shell.value.command}` }
     if (!client.isStreaming()) return { phase: "idle" }
-    const tool = Option.fromNullishOr(feed.activeTool())
+    const tool = feed.activeTool()
     if (Option.isSome(tool)) {
       return { phase: "tool", toolInfo: tool.value }
     }
@@ -3143,21 +3169,19 @@ export function createSessionController(props: {
     closeOverlay()
   }
 
-  // A command no source names is refused: it goes back to its draft with the reason.
-  const runSlashCommand = (held: HeldSlashCommand) => {
-    const result = executeSlashCommand(held.cmd, held.args, ext.commands())
-    Option.match(Option.fromNullishOr(result.error), {
-      onNone: () => {},
-      onSome: held.refuse,
-    })
+  // A command no source names is not a command: its text goes out as a message.
+  const runSlashCommand = (held: SlashSubmission) => {
+    if (!executeSlashCommand(held.cmd, held.args, ext.commands())) held.send()
   }
 
   // A command sent before every command source has answered (the client
   // extensions' load, the session's server slash list) may belong to one of
   // them: it waits for them to settle, then resolves. Only settled sources
-  // report `Unknown command`. A command still held when the session view
-  // goes comes back to its draft.
-  let heldSlashCommands: ReadonlyArray<HeldSlashCommand> = []
+  // decide that a name is no command, and a name they lack lists the server's
+  // commands once more first: an extension can register a command after the
+  // session listed them. A command still held when the session view goes
+  // comes back to its draft.
+  let heldSlashCommands: ReadonlyArray<SlashSubmission> = []
   createEffect(
     on(ext.commandsSettled, (settled) => {
       if (!settled || heldSlashCommands.length === 0) return
@@ -3174,18 +3198,16 @@ export function createSessionController(props: {
     }
   })
 
-  const onSlashCommand = (
-    cmd: string,
-    args: string,
-    refuse: (reason: string) => void,
-  ): Effect.Effect<void> =>
+  const onSlashCommand = (command: SlashSubmission): Effect.Effect<void> =>
     Effect.sync(() => {
-      const command: HeldSlashCommand = { cmd, args, refuse }
-      if (!ext.commandsSettled() && !isSlashCommandName(cmd, ext.commands())) {
-        heldSlashCommands = [...heldSlashCommands, command]
+      if (isSlashCommandName(command.cmd, ext.commands())) {
+        runSlashCommand(command)
         return
       }
-      runSlashCommand(command)
+      // Held first: a listing that answers at once settles before this returns.
+      const settled = ext.commandsSettled()
+      heldSlashCommands = [...heldSlashCommands, command]
+      if (settled) ext.refreshCommands()
     })
 
   const onModelSelect = (modelId: ModelId) => {
@@ -3220,9 +3242,7 @@ export function createSessionController(props: {
   ): Effect.Effect<void, GentClientRpcError> => {
     // Interjecting steers the stream in view, so it holds only while the
     // drafted-in session is still the one streaming; otherwise the message queues there.
-    const stillHere = Option.exists(client.sessionIdentity(), (current) =>
-      sameIdentity(current, target),
-    )
+    const stillHere = sameIdentity(client.sessionIdentity(), target)
     if (mode === "interject" && stillHere && client.isStreaming()) {
       return client.steer(
         target,
@@ -3234,14 +3254,13 @@ export function createSessionController(props: {
   }
   /** Cancel the turn streaming in the session in view. */
   const cancelTurn = () => {
-    Option.map(client.sessionIdentity(), (target) =>
-      cast(
-        randomId.pipe(
-          Effect.flatMap((requestId) =>
-            client.steer(target, SteerCommandInput.cases.Cancel.make({}), requestId),
-          ),
-          client.surfaceError,
+    const target = client.sessionIdentity()
+    cast(
+      randomId.pipe(
+        Effect.flatMap((requestId) =>
+          client.steer(target, SteerCommandInput.cases.Cancel.make({}), requestId),
         ),
+        client.surfaceError,
       ),
     )
   }
@@ -3272,8 +3291,9 @@ export function createSessionController(props: {
    * whatever started since: a session that children keep waking has a new
    * turn running at every press, and cancelling each one would never let the
    * reader leave. Something nearer that appeared since (a draft, an expanded
-   * transcript) still comes first: the press clears it and never exits over
-   * it. On an idle empty composer the first press only arms the exit.
+   * transcript, a running `!cmd`) still comes first: the press clears or stops
+   * it and never exits over it. On an idle empty composer the first press only
+   * arms the exit.
    */
   const handleInterrupt = () => {
     const second = armedFor("interrupt")
@@ -3300,6 +3320,8 @@ export function createSessionController(props: {
       onComposerInteraction(ComposerInteractionEvent.cases.ClearDraft.make({}))
       return
     }
+    // A running `!cmd` is nearer than the turn: the press stops it and arms nothing.
+    if (stopShells()) return
     if (second) {
       exit()
       return
@@ -3440,6 +3462,7 @@ export function createSessionController(props: {
     onComposerInteraction,
     onSubmit,
     onSlashCommand,
+    runShell,
     onRestoreQueue,
     dispatchComposer,
     resolveAuthGate,

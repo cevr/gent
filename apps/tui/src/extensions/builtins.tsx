@@ -342,20 +342,14 @@ export const builtinFiles = defineClientExtension("@gent/files-ui", {
      */
     interface Asker {
       readonly key: string
-      readonly session: Option.Option<ActiveExtensionSession>
+      readonly session: ActiveExtensionSession
     }
     const askingSession = (): Asker => {
       const session = transport.currentSession()
-      return {
-        key: Option.match(session, { onNone: () => "", onSome: (s) => String(s.sessionId) }),
-        session,
-      }
+      return { key: String(session.sessionId), session }
     }
     const fetchListing = ({ key: session, session: asked }: Asker, generation: number) =>
-      Option.match(asked, {
-        onNone: () => Effect.succeed<ReadonlyArray<string>>([]),
-        onSome: (active) => transport.request(ref(FilesRpc.List), {}, active),
-      }).pipe(
+      transport.request(ref(FilesRpc.List), {}, asked).pipe(
         Effect.map((paths) => paths.filter(isReferenceablePath)),
         // A failed listing offers nothing until the popup opens again.
         Effect.orElseSucceed((): ReadonlyArray<string> => []),
@@ -872,10 +866,10 @@ export const builtinSkills = defineClientExtension("@gent/skills-ui", {
   }),
 })
 
-// Builtins keep their precise `R` locally; the load membrane erases them in
-// one place when `loader-boundary.ts` runs `runtime.runPromise(...)`.
 // ── builtin module registry ─────────────────────────────────────────────────
 
+// Each builtin keeps its precise `R` where it is defined; the list holds them
+// erased, and `loader-boundary.ts` provides it once, in `runtime.runPromise`.
 export const builtinClientModules: ReadonlyArray<AnyExtensionClientModule> = [
   builtinAgentsView,
   builtinBtw,

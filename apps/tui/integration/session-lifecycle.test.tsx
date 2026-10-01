@@ -2,9 +2,9 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Option } from "effect"
 import { onMount } from "solid-js"
-import { App, resolveInitialState, resolveInteractiveBootstrap } from "../src/app"
+import { App, resolveInteractiveState, resolveInteractiveBootstrap } from "../src/app"
 import { type ClientContextValue, useClient } from "../src/client"
-import { destroyRenderSetup, renderWithProviders } from "../tests/render-harness-boundary"
+import { renderScoped } from "../tests/render-harness-boundary"
 import {
   baseLocalLayer,
   baseLocalLayerWithProvider as _baseLocalLayerWithProvider,
@@ -35,14 +35,12 @@ describe("app bootstrap", () => {
           // gent/no-sleep: allow real-clock gap so the second session's createdAt sorts strictly after the first
           yield* Effect.sleep("5 millis")
           const second = yield* client.session.create({ cwd: repoRoot })
-          const state = yield* resolveInitialState({
+          const state = yield* resolveInteractiveState({
             client,
             cwd: repoRoot,
             session: Option.none(),
             continue_: true,
-            headless: false,
             prompt: Option.none(),
-            promptArg: Option.none(),
           })
           expect(state._tag).toBe("session")
           if (state._tag !== "session") return
@@ -58,14 +56,12 @@ describe("app bootstrap", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const { client } = yield* Gent.test(localLayer())
-          const state = yield* resolveInitialState({
+          const state = yield* resolveInteractiveState({
             client,
             cwd: repoRoot,
             session: Option.none(),
             continue_: true,
-            headless: false,
             prompt: Option.some("bootstrap prompt"),
-            promptArg: Option.none(),
           })
           expect(state._tag).toBe("session")
           if (state._tag !== "session") return
@@ -92,36 +88,32 @@ describe("session lifecycle", () => {
             client,
             cwd: repoRoot,
             continue_: false,
-            debugMode: false,
           })
           expect(bootstrap.initialSession).toBeDefined()
           expect(Option.isNone(bootstrap.initialBranches)).toBe(true)
-          const setup = yield* Effect.promise(() =>
-            renderWithProviders(
-              () => (
-                <>
-                  <StateProbe onReady={(c) => (ctx = Option.some(c))} />
-                  <App />
-                </>
-              ),
-              {
-                client,
-                runtime,
-                initialPrompt: bootstrap.initialPrompt,
-                initialSession: bootstrap.initialSession,
-                cwd: repoRoot,
-                width: 100,
-                height: 32,
-              },
+          const setup = yield* renderScoped(
+            () => (
+              <>
+                <StateProbe onReady={(c) => (ctx = Option.some(c))} />
+                <App />
+              </>
             ),
+            {
+              client,
+              runtime,
+              initialPrompt: bootstrap.initialPrompt,
+              initialSession: bootstrap.initialSession,
+              cwd: repoRoot,
+              width: 100,
+              height: 32,
+            },
           )
-          yield* Effect.addFinalizer(() => Effect.sync(() => destroyRenderSetup(setup)))
           // Route should already be session
           expect(Option.isSome(ctx)).toBe(true)
           if (Option.isNone(ctx)) return
           // The shell mounts whatever the client says is active; the bootstrap
           // handed it a session, so that is what shows.
-          expect(Option.isSome(ctx.value.client.session())).toBe(true)
+          expect(ctx.value.client.session().sessionId).toBe(bootstrap.initialSession.sessionId)
           // waitForFrame polls until the composer renders — no pre-sleep
           // needed; the visible "ready/idle/❯" marker is the readiness signal.
           const frame = yield* waitForFrame(
@@ -150,28 +142,24 @@ describe("session lifecycle", () => {
             client,
             cwd: repoRoot,
             continue_: false,
-            debugMode: false,
           })
-          const setup = yield* Effect.promise(() =>
-            renderWithProviders(
-              () => (
-                <>
-                  <StateProbe onReady={(c) => (ctx = Option.some(c))} />
-                  <App />
-                </>
-              ),
-              {
-                client,
-                runtime,
-                initialPrompt: bootstrap.initialPrompt,
-                initialSession: bootstrap.initialSession,
-                cwd: repoRoot,
-                width: 100,
-                height: 32,
-              },
+          const setup = yield* renderScoped(
+            () => (
+              <>
+                <StateProbe onReady={(c) => (ctx = Option.some(c))} />
+                <App />
+              </>
             ),
+            {
+              client,
+              runtime,
+              initialPrompt: bootstrap.initialPrompt,
+              initialSession: bootstrap.initialSession,
+              cwd: repoRoot,
+              width: 100,
+              height: 32,
+            },
           )
-          yield* Effect.addFinalizer(() => Effect.sync(() => destroyRenderSetup(setup)))
           yield* waitForFrame(
             setup,
             (frame) => frame.includes("ready") || frame.includes("idle") || frame.includes("❯"),
@@ -184,12 +172,10 @@ describe("session lifecycle", () => {
           expect(Option.isSome(ctx)).toBe(true)
           if (Option.isNone(ctx)) return
           const session = ctx.value.client.session()
-          expect(Option.isSome(session)).toBe(true)
-          if (Option.isNone(session)) return
           yield* client.message
             .send({
-              sessionId: session.value.sessionId,
-              branchId: session.value.branchId,
+              sessionId: session.sessionId,
+              branchId: session.branchId,
               content: "hello world",
             })
             .pipe(

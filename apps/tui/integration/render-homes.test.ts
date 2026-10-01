@@ -26,11 +26,10 @@ const HARNESS = new URL("../tests/render-harness-boundary.tsx", import.meta.url)
 const PRELOAD = new URL("../../../packages/tooling/src/test-preload.ts", import.meta.url).pathname
 
 /** A test file that renders once through the harness; it lives in the sandbox, so its imports resolve from here. */
-const RENDER_ONCE = `import { Effect } from "${import.meta.resolve("effect")}"
-import { it } from "${import.meta.resolve("effect-bun-test")}"
-import { renderWithProviders } from "${HARNESS}"
+const RENDER_ONCE = `import { it } from "${import.meta.resolve("effect-bun-test")}"
+import { renderScoped } from "${HARNESS}"
 
-it.live("renders once", () => Effect.promise(() => renderWithProviders(() => undefined)))
+it.scopedLive("renders once", () => renderScoped(() => undefined))
 `
 
 const WORKSPACE = new URL("../src/workspace.tsx", import.meta.url).pathname
@@ -47,7 +46,7 @@ import { join } from "node:path"
 import { Effect } from "${import.meta.resolve("effect")}"
 import { it } from "${import.meta.resolve("effect-bun-test")}"
 import { useWorkspace } from "${WORKSPACE}"
-import { renderWithProviders } from "${HARNESS}"
+import { renderScoped } from "${HARNESS}"
 
 const writers = []
 const write = async (home) => {
@@ -69,8 +68,8 @@ const StartWriting = () => {
 }
 
 for (let n = 0; n < ${WRITING_RENDERS}; n++) {
-  it.live("writes past its end " + n, () =>
-    Effect.promise(() => renderWithProviders(() => StartWriting())).pipe(Effect.andThen(Effect.sleep("2 millis"))),
+  it.scopedLive("writes past its end " + n, () =>
+    renderScoped(() => StartWriting()).pipe(Effect.andThen(Effect.sleep("2 millis"))),
   )
 }
 it.live("the writers stop", () => Effect.promise(() => Promise.all(writers)))

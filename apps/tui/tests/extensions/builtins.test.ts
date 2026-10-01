@@ -48,7 +48,7 @@ import { createMockClient, createMockRuntime } from "../render-harness-boundary"
 import {
   makeClientExtensionRuntime,
   makeClientTestTransport,
-  makePaneSlot,
+  testClientContextDeps,
   makePromiseHold,
   provideClientServices,
   runClientExtensionSetup,
@@ -160,7 +160,7 @@ const withFilesPopup = <A>(
       {
         // The session is rooted outside the launch directory: fff scans the session's.
         workspace: { cwd: launchCwd, home, sessionCwd: Effect.succeed(sessionCwd) },
-        currentSession: () => Option.some(session),
+        currentSession: () => session,
         requestEffect: () =>
           Effect.sync(() => {
             reads++
@@ -241,7 +241,7 @@ describe("files popup across sessions", () => {
               home,
               sessionCwd: Effect.sync(() => current.dir),
             },
-            currentSession: () => Option.some(current.key),
+            currentSession: () => current.key,
             requestEffect: () => {
               const asked = current
               if (asked !== sessions.a) return Effect.succeed(asked.paths)
@@ -315,7 +315,7 @@ describe("files popup listing session", () => {
               return Deferred.await(cwdGate).pipe(Effect.as(dir))
             }),
           },
-          currentSession: () => Option.some(current.key),
+          currentSession: () => current.key,
           requestEffect: (request) =>
             Effect.succeed(
               Option.match(Option.fromUndefinedOr(bySession.get(request.sessionId)), {
@@ -581,7 +581,7 @@ describe("files popup finder", () => {
           }).pipe(Effect.orDie),
           {
             workspace: { cwd: home, home, sessionCwd: Effect.sync(() => cwd) },
-            currentSession: () => Option.some(session),
+            currentSession: () => session,
             requestEffect: () => Effect.succeed(["note.md"]),
           },
         ),
@@ -653,7 +653,7 @@ describe("files popup finder", () => {
         }),
         {
           workspace: { cwd: home, home, sessionCwd: Effect.sync(() => cwd) },
-          currentSession: () => Option.some(session),
+          currentSession: () => session,
           requestEffect: () => Effect.succeed(["note.md"]),
         },
       )
@@ -687,13 +687,10 @@ describe("files popup finder", () => {
 })
 
 /** A `ClientContext` layer over a test transport; `deps` replaces any default. */
-const contextLayer = (deps: Partial<ClientContextDeps> = {}) =>
-  makeClientContextLayer({
-    transport: makeClientTestTransport({ currentSession: () => Option.none() }),
-    workspace: { cwd: "/nonexistent/test-cwd", home: "/nonexistent/test-home" },
-    shell: { cast: createMockRuntime().cast, pane: makePaneSlot() },
-    ...deps,
-  })
+const contextLayer = (deps: Partial<Omit<ClientContextDeps, "shell" | "workspace">> = {}) =>
+  makeClientContextLayer(
+    testClientContextDeps({ shell: { cast: createMockRuntime().cast }, ...deps }),
+  )
 
 // ── driver transport ────────────────────────────────────────────────────────
 
@@ -752,7 +749,7 @@ describe("driver routing through the client transport", () => {
     "driverSet keeps the server's tagged error as the cause of ClientTransportRequestError",
     () => {
       const rejected = new DriverRejected({ driverId: "model:nope" })
-      const transport = makeClientTestTransport({ currentSession: () => Option.none() })
+      const transport = makeClientTestTransport()
       const client = createMockClient({ driver: { set: () => Effect.fail(rejected) } })
       const layer = contextLayer({
         transport: { ...transport, client, runtime: createMockRuntime() },
@@ -784,7 +781,7 @@ describe("driver routing through the client transport", () => {
         },
       })
       const transport = {
-        ...makeClientTestTransport({ currentSession: () => Option.some(session) }),
+        ...makeClientTestTransport({ currentSession: () => session }),
         client,
       }
       const notices = yield* runDriverSlash(transport, "main model:sonnet", settled).pipe(
@@ -803,7 +800,7 @@ describe("driver routing through the client transport", () => {
         },
       })
       const transport = {
-        ...makeClientTestTransport({ currentSession: () => Option.some(session) }),
+        ...makeClientTestTransport({ currentSession: () => session }),
         client,
       }
       const notices = yield* runDriverSlash(
@@ -831,7 +828,7 @@ describe("driver routing through the client transport", () => {
         },
       })
       const transport = {
-        ...makeClientTestTransport({ currentSession: () => Option.some(session) }),
+        ...makeClientTestTransport({ currentSession: () => session }),
         client,
       }
       const notices = yield* runDriverSlash(transport, "main default", settled).pipe(
@@ -844,7 +841,7 @@ describe("driver routing through the client transport", () => {
 
   it.live("/driver with a malformed argument notifies the usage hint", () =>
     Effect.gen(function* () {
-      const transport = makeClientTestTransport({ currentSession: () => Option.some(session) })
+      const transport = makeClientTestTransport({ currentSession: () => session })
       const notices = yield* runDriverSlash(transport, "main", yield* Deferred.make<void>()).pipe(
         Effect.timeout("5 seconds"),
       )
@@ -1075,8 +1072,7 @@ describe("skills popup", () => {
  *
  * Drives the real skills contribution against a temp home and returns the
  * ranked ids and the contribution itself, so a test can also select a row.
- * The contribution asks for an active session before its request; without
- * one the call fails as `NoActiveSessionError` before any ranking happens.
+ * The contribution's request goes to the session in view.
  */
 const skillsHarness = (home: string, names: ReadonlyArray<string>) =>
   Effect.gen(function* () {
@@ -1085,8 +1081,10 @@ const skillsHarness = (home: string, names: ReadonlyArray<string>) =>
       // this test's temp directory. Left at the harness default, every run
       // would share one file in /tmp and read a previous run's pick.
       workspace: { cwd: home, home },
-      currentSession: () =>
-        Option.some({ sessionId: SessionId.make("sess-1"), branchId: BranchId.make("branch-1") }),
+      currentSession: () => ({
+        sessionId: SessionId.make("sess-1"),
+        branchId: BranchId.make("branch-1"),
+      }),
       requestReply: names.map((name) => ({
         name,
         description: `The ${name} skill`,

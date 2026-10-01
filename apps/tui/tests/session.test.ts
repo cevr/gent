@@ -378,40 +378,34 @@ describe("resolveModelQuery", () => {
 
 // ── prompt history ──────────────────────────────────────────────────────────
 
-describe("canNavigateAtCursor", () => {
-  test("up at cursor 0 → true", () => {
-    expect(canNavigateAtCursor("up", 0, 10, false)).toBe(true)
-  })
-
-  test("up at cursor 5 → false", () => {
-    expect(canNavigateAtCursor("up", 5, 10, false)).toBe(false)
-  })
-
-  test("down at end → true", () => {
-    expect(canNavigateAtCursor("down", 10, 10, false)).toBe(true)
-  })
-
-  test("down at middle → false", () => {
-    expect(canNavigateAtCursor("down", 5, 10, false)).toBe(false)
-  })
-
-  test("in history: up at either boundary → true", () => {
-    expect(canNavigateAtCursor("up", 0, 10, true)).toBe(true)
-    expect(canNavigateAtCursor("up", 10, 10, true)).toBe(true)
-  })
-
-  test("in history: down at either boundary → true", () => {
-    expect(canNavigateAtCursor("down", 0, 10, true)).toBe(true)
-    expect(canNavigateAtCursor("down", 10, 10, true)).toBe(true)
-  })
-
-  test("in history: middle → false", () => {
-    expect(canNavigateAtCursor("up", 5, 10, true)).toBe(false)
-  })
-
-  test("empty text: always at boundary", () => {
-    expect(canNavigateAtCursor("up", 0, 0, false)).toBe(true)
-    expect(canNavigateAtCursor("down", 0, 0, false)).toBe(true)
+describe("history navigation", () => {
+  test("arrow keys leave the draft for history only at its edge, and move freely inside history", () => {
+    // [key, cursor, text length, in history, leaves for history]
+    const cases: ReadonlyArray<readonly ["up" | "down", number, number, boolean, boolean]> = [
+      // A draft: up only from its start, down only from its end.
+      ["up", 0, 10, false, true],
+      ["up", 5, 10, false, false],
+      ["down", 10, 10, false, true],
+      ["down", 5, 10, false, false],
+      // An empty draft is at both edges.
+      ["up", 0, 0, false, true],
+      ["down", 0, 0, false, true],
+      // In history, either edge moves either way; the middle stays in the entry.
+      ["up", 0, 10, true, true],
+      ["up", 10, 10, true, true],
+      ["down", 0, 10, true, true],
+      ["down", 10, 10, true, true],
+      ["up", 5, 10, true, false],
+    ]
+    for (const [key, cursor, length, inHistory, leaves] of cases) {
+      expect([
+        key,
+        cursor,
+        length,
+        inHistory,
+        canNavigateAtCursor(key, cursor, length, inHistory),
+      ]).toEqual([key, cursor, length, inHistory, leaves])
+    }
   })
 })
 
@@ -1117,6 +1111,9 @@ describe("slash autocomplete reads pick history", () => {
 
 type FeedClient = Parameters<typeof useSessionFeed>[2]
 
+/** A feed opened without `-p`: there is no startup prompt to send. */
+const noStartupPrompt: Parameters<typeof useSessionFeed>[4] = () => Option.none()
+
 /** A feed client whose every member a test does not name does nothing. */
 const feedClientStub = (
   parts: Pick<FeedClient, "sessionIdentity" | "client" | "runtime"> & Partial<FeedClient>,
@@ -1203,8 +1200,10 @@ const makeSession = (sessionId: SessionId, branchId: BranchId): Session => ({
 })
 
 /** The feed reads only which session is active, so the probe supplies only that. */
-const identityOf = (active: () => Session) => () =>
-  Option.some({ sessionId: active().sessionId, branchId: active().branchId })
+const identityOf = (active: () => Session) => () => ({
+  sessionId: active().sessionId,
+  branchId: active().branchId,
+})
 
 const isSessionEvent = Predicate.or(
   Predicate.isTagged("turn-ended"),
@@ -1233,8 +1232,8 @@ describe("useSessionFeed", () => {
       const dispose = createRoot((disposeRoot) => {
         const [active] = createSignal(makeSession(sessionId, branchId))
         useSessionFeed(
-          () => sessionId,
-          () => branchId,
+          sessionId,
+          branchId,
           feedClientStub({
             sessionIdentity: identityOf(active),
             // The feed waits on its snapshot forever: only an interrupt ends it.
@@ -1247,6 +1246,8 @@ describe("useSessionFeed", () => {
             onQueueSnapshot: () => {},
             onBranchSwitch: () => {},
           },
+          noStartupPrompt,
+          () => true,
         )
         return disposeRoot
       })
@@ -1297,8 +1298,8 @@ describe("useSessionFeed", () => {
           applySessionEvent: () => setActive(makeSession(sessionId, nextBranchId)),
         })
         useSessionFeed(
-          () => sessionId,
-          () => branchId,
+          sessionId,
+          branchId,
           client,
           {
             onInteraction: () => {},
@@ -1310,6 +1311,8 @@ describe("useSessionFeed", () => {
               runtime.cast(Deferred.succeed(switched, void 0))
             },
           },
+          noStartupPrompt,
+          () => true,
         )
         return disposeRoot
       })
@@ -1391,8 +1394,8 @@ describe("useSessionFeed", () => {
           runtime,
         })
         useSessionFeed(
-          () => sessionId,
-          () => branchId,
+          sessionId,
+          branchId,
           client,
           {
             onInteraction: () => {},
@@ -1400,6 +1403,8 @@ describe("useSessionFeed", () => {
             onQueueSnapshot: () => {},
             onBranchSwitch: () => {},
           },
+          noStartupPrompt,
+          () => true,
         )
         return disposeRoot
       })
@@ -1572,8 +1577,8 @@ describe("useSessionFeed", () => {
 
         feed = Option.some(
           useSessionFeed(
-            () => sessionId,
-            () => branchId,
+            sessionId,
+            branchId,
             client,
             {
               onInteraction: () => {},
@@ -1581,6 +1586,8 @@ describe("useSessionFeed", () => {
               onBranchSwitch: () => {},
               onQueueSnapshot: () => {},
             },
+            noStartupPrompt,
+            () => true,
           ),
         )
         return disposeRoot
@@ -1668,8 +1675,8 @@ describe("useSessionFeed", () => {
         })
         feed = Option.some(
           useSessionFeed(
-            () => sessionId,
-            () => branchId,
+            sessionId,
+            branchId,
             client,
             {
               onInteraction: () => {},
@@ -1677,6 +1684,8 @@ describe("useSessionFeed", () => {
               onBranchSwitch: () => {},
               onQueueSnapshot: () => {},
             },
+            noStartupPrompt,
+            () => true,
           ),
         )
         return disposeRoot
@@ -1738,8 +1747,8 @@ describe("useSessionFeed", () => {
         })
         feed = Option.some(
           useSessionFeed(
-            () => sessionId,
-            () => branchId,
+            sessionId,
+            branchId,
             client,
             {
               onInteraction: () => {},
@@ -1747,6 +1756,8 @@ describe("useSessionFeed", () => {
               onBranchSwitch: () => {},
               onQueueSnapshot: () => {},
             },
+            noStartupPrompt,
+            () => true,
           ),
         )
         return disposeRoot
@@ -1827,8 +1838,8 @@ describe("useSessionFeed", () => {
         })
         feed = Option.some(
           useSessionFeed(
-            () => sessionId,
-            () => branchId,
+            sessionId,
+            branchId,
             client,
             {
               onInteraction: () => {},
@@ -1836,6 +1847,8 @@ describe("useSessionFeed", () => {
               onBranchSwitch: () => {},
               onQueueSnapshot: () => {},
             },
+            noStartupPrompt,
+            () => true,
           ),
         )
         return disposeRoot
@@ -1879,7 +1892,7 @@ describe("useSessionFeed", () => {
     expect(operation?.summary).toBe("missing file")
     const segment = assistant?.segments?.find((entry) => entry._tag === "tool-call")
     expect(segment?._tag === "tool-call" && segment.toolCall.operations?.[0]?.status).toBe("error")
-    expect(feed.activeTool()).toBeUndefined()
+    expect(Option.isNone(feed.activeTool())).toBe(true)
   }
 
   const cellNestingEnvelopes = (
@@ -1958,8 +1971,8 @@ describe("useSessionFeed", () => {
         })
         feed = Option.some(
           useSessionFeed(
-            () => sessionId,
-            () => branchId,
+            sessionId,
+            branchId,
             client,
             {
               onInteraction: () => {},
@@ -1967,6 +1980,8 @@ describe("useSessionFeed", () => {
               onBranchSwitch: () => {},
               onQueueSnapshot: () => {},
             },
+            noStartupPrompt,
+            () => true,
           ),
         )
         return disposeRoot
@@ -2007,8 +2022,8 @@ describe("useSessionFeed", () => {
       })
       feed = Option.some(
         useSessionFeed(
-          () => snapshot.sessionId,
-          () => snapshot.branchId,
+          snapshot.sessionId,
+          snapshot.branchId,
           client,
           {
             onInteraction: () => {},
@@ -2016,6 +2031,8 @@ describe("useSessionFeed", () => {
             onBranchSwitch: () => {},
             onQueueSnapshot: () => {},
           },
+          noStartupPrompt,
+          () => true,
         ),
       )
       return disposeRoot
@@ -2030,8 +2047,7 @@ describe("useSessionFeed", () => {
           )[0],
         ),
       )
-    const activeTool = () =>
-      Option.flatMap(feed, (value) => Option.fromUndefinedOr(value.activeTool()))
+    const activeTool = () => Option.flatMap(feed, (value) => value.activeTool())
     return { cellOf, activeTool, dispose }
   }
 
@@ -2310,8 +2326,8 @@ describe("useSessionFeed", () => {
         })
 
         useSessionFeed(
-          () => sessionId,
-          () => branchId,
+          sessionId,
+          branchId,
           client,
           {
             onInteraction: (interaction) => {
@@ -2323,6 +2339,8 @@ describe("useSessionFeed", () => {
             },
             onQueueSnapshot: () => {},
           },
+          noStartupPrompt,
+          () => true,
         )
         return disposeRoot
       })
@@ -2475,8 +2493,8 @@ describe("useSessionFeed", () => {
           })
           feed = Option.some(
             useSessionFeed(
-              () => sessionId,
-              () => branchId,
+              sessionId,
+              branchId,
               client,
               {
                 onInteraction: () => {},
@@ -2484,6 +2502,8 @@ describe("useSessionFeed", () => {
                 onBranchSwitch: () => {},
                 onQueueSnapshot: () => {},
               },
+              noStartupPrompt,
+              () => true,
             ),
           )
           return disposeRoot
@@ -2581,8 +2601,8 @@ describe("useSessionFeed", () => {
         })
         feed = Option.some(
           useSessionFeed(
-            () => sessionId,
-            () => branchId,
+            sessionId,
+            branchId,
             client,
             {
               onInteraction: () => {},
@@ -2590,6 +2610,8 @@ describe("useSessionFeed", () => {
               onBranchSwitch: () => {},
               onQueueSnapshot: () => {},
             },
+            noStartupPrompt,
+            () => true,
           ),
         )
         return disposeRoot
@@ -2663,8 +2685,8 @@ describe("useSessionFeed", () => {
         })
         feed = Option.some(
           useSessionFeed(
-            () => sessionId,
-            () => branchId,
+            sessionId,
+            branchId,
             client,
             {
               onInteraction: () => {},
@@ -2672,6 +2694,8 @@ describe("useSessionFeed", () => {
               onBranchSwitch: () => {},
               onQueueSnapshot: () => {},
             },
+            noStartupPrompt,
+            () => true,
           ),
         )
         return disposeRoot
@@ -2743,8 +2767,8 @@ describe("useSessionFeed", () => {
         })
         feed = Option.some(
           useSessionFeed(
-            () => sessionId,
-            () => branchId,
+            sessionId,
+            branchId,
             client,
             {
               onInteraction: () => {},
@@ -2752,6 +2776,8 @@ describe("useSessionFeed", () => {
               onBranchSwitch: () => {},
               onQueueSnapshot: () => {},
             },
+            noStartupPrompt,
+            () => true,
           ),
         )
         return disposeRoot
@@ -2825,8 +2851,8 @@ describe("useSessionFeed", () => {
         })
         feed = Option.some(
           useSessionFeed(
-            () => sessionId,
-            () => branchId,
+            sessionId,
+            branchId,
             client,
             {
               onInteraction: () => {},
@@ -2834,6 +2860,8 @@ describe("useSessionFeed", () => {
               onBranchSwitch: () => {},
               onQueueSnapshot: () => {},
             },
+            noStartupPrompt,
+            () => true,
           ),
         )
         return disposeRoot

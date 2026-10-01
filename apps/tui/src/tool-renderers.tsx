@@ -20,7 +20,7 @@ import {
   decodeToolOutputOption,
   describeCellCode,
   displayPath,
-  fileUrl,
+  fileHref,
   formatGenericToolDetail,
   formatGenericToolInput,
   formatGenericToolText,
@@ -28,13 +28,13 @@ import {
   formatPreviewFooter,
   getString,
   formatBytes,
-  isAbsPath,
   parseBashOutput,
   plural,
   shortId,
   toolArgSummary,
   type PathPlace,
   type ToolInput,
+  truncate,
   truncatePath,
 } from "./utils"
 
@@ -163,29 +163,28 @@ interface EditDiffResult {
   removed: number
 }
 
-/**
- * Generate unified diff from edit input for <diff> component
- */
-const decodeEditInput = Schema.decodeUnknownOption(Schema.JsonObject)
-const decodeString = Schema.decodeUnknownOption(Schema.String)
+const decodeEditInput = Schema.decodeUnknownOption(
+  Schema.Struct({ path: Schema.String, oldString: Schema.String, newString: Schema.String }),
+)
 type EditInput = Parameters<typeof decodeEditInput>[0]
 
-export function getEditUnifiedDiff(input: EditInput) {
-  const result = Option.gen(function* () {
-    const record = yield* decodeEditInput(input)
-    const path = yield* decodeString(record["path"])
-    const oldStr = yield* decodeString(record["oldString"]).pipe(
-      Option.orElse(() => decodeString(record["old_string"])),
-    )
-    const newStr = yield* decodeString(record["newString"]).pipe(
-      Option.orElse(() => decodeString(record["new_string"])),
-    )
-    const diff = createPatch(path, oldStr, newStr)
-    const filetype = getFiletype(path)
-    const { added, removed } = patchLineCounts(oldStr, newStr)
-    return { diff, filetype, added, removed } satisfies EditDiffResult
-  })
-  return Option.getOrNull(result)
+/** The unified diff an edit's input draws; none for an input that does not decode. */
+export const getEditUnifiedDiff = (input: EditInput): Option.Option<EditDiffResult> =>
+  Option.map(decodeEditInput(input), ({ path, oldString, newString }) => ({
+    diff: createPatch(path, oldString, newString),
+    filetype: getFiletype(path),
+    ...patchLineCounts(oldString, newString),
+  }))
+
+/** The row that stands for what a collapsed view leaves out: `· ··· 3 more lines`. */
+function ElisionRow(props: { readonly text: string }) {
+  const { theme } = useTheme()
+  return (
+    <text>
+      <span style={{ fg: theme.border }}>{"· ··· "}</span>
+      <span style={{ fg: theme.textMuted }}>{props.text}</span>
+    </text>
+  )
 }
 
 // ── generic renderer ────────────────────────────────────────────────────────
@@ -664,8 +663,8 @@ function CellToolRenderer(props: ToolRendererProps) {
     let first = codeLines()[0] ?? ""
     if (verbs.length > 0) first = verbs.join(" · ")
     if (operations.length > 0) first = formatOperationLabels(operations)
-    if (first.length > 60) return `${first.slice(0, 60)}…`
-    return first
+    // Sixty columns and the ellipsis, counted in terminal columns.
+    return truncate(first, 61)
   })
 
   // Operations are the calls the cell admitted, with their input and output,
@@ -920,9 +919,7 @@ export function ReadToolRenderer(props: ToolRendererProps) {
     <ToolFrame
       title="read"
       subtitle={displayPath(path(), pathPlace())}
-      subtitleHref={Option.getOrUndefined(
-        Option.some(path()).pipe(Option.filter(isAbsPath), Option.map(fileUrl)),
-      )}
+      subtitleHref={Option.getOrUndefined(fileHref(path()))}
       status={props.toolCall.status}
       expanded={props.expanded}
       collapsedContent={
@@ -942,12 +939,7 @@ export function ReadToolRenderer(props: ToolRendererProps) {
                     Match.value(item).pipe(
                       Match.tagsExhaustive({
                         elision: (item) => (
-                          <text>
-                            <span style={{ fg: theme.border }}>{"· ··· "}</span>
-                            <span style={{ fg: theme.textMuted }}>
-                              {plural(item.count, `more ${unitNoun(item.unit)}`)}
-                            </span>
-                          </text>
+                          <ElisionRow text={plural(item.count, `more ${unitNoun(item.unit)}`)} />
                         ),
                         line: (item) => (
                           <text>
@@ -973,12 +965,7 @@ export function ReadToolRenderer(props: ToolRendererProps) {
             Match.tagsExhaustive({
               run: (item) => <GutterText lines={[...item.lines]} startLine={item.startLine} />,
               elision: (item) => (
-                <text>
-                  <span style={{ fg: theme.border }}>{"· ··· "}</span>
-                  <span style={{ fg: theme.textMuted }}>
-                    {plural(item.count, `more ${unitNoun(item.unit)}`)}
-                  </span>
-                </text>
+                <ElisionRow text={plural(item.count, `more ${unitNoun(item.unit)}`)} />
               ),
             }),
           )
@@ -1020,12 +1007,7 @@ const renderDiffLine = (
   theme: ReturnType<typeof useTheme>["theme"],
 ): SolidJSX.Element => {
   if (item._tag === "elision") {
-    return (
-      <text>
-        <span style={{ fg: theme.border }}>{"· ··· "}</span>
-        <span style={{ fg: theme.textMuted }}>{item.count} more lines</span>
-      </text>
-    )
+    return <ElisionRow text={plural(item.count, "more line")} />
   }
   return (
     <text>
@@ -1040,27 +1022,29 @@ export function EditToolRenderer(props: ToolRendererProps) {
   const { theme } = useTheme()
   const syntaxStyle = createMemo(() => buildSyntaxStyle(theme))
 
-  const editData = () => getEditUnifiedDiff(props.toolCall.input)
+  // The diff is drawn once per input, not once per read.
+  const editData = createMemo(() => getEditUnifiedDiff(props.toolCall.input))
   const path = () => getPath(props.toolCall.input)
-  const subtitleHref = () =>
-    Option.getOrUndefined(Option.some(path()).pipe(Option.filter(isAbsPath), Option.map(fileUrl)))
+  const subtitleHref = () => Option.getOrUndefined(fileHref(path()))
 
-  const collapsedDiffLines = createMemo((): DiffLine[] => {
-    const data = editData()
-    // `getEditUnifiedDiff` returns null for invalid tool input at this adapter boundary.
-    // eslint-disable-next-line effect/noNullish -- invalid edit payloads are rendered as an empty diff.
-    if (data === null) return []
-    const lines: DiffLine[] = data.diff
-      .split("\n")
-      .map((text) => ({ _tag: "line", text, kind: diffLineKind(text) }))
-    const { head, tail, truncatedCount } = headTail(lines, 6)
-    if (truncatedCount === 0) return head
-    return [...head, { _tag: "elision", count: truncatedCount }, ...tail]
-  })
+  const collapsedDiffLines = createMemo((): DiffLine[] =>
+    Option.match(editData(), {
+      // An input that does not decode draws no diff.
+      onNone: () => [],
+      onSome: (data) => {
+        const lines: DiffLine[] = data.diff
+          .split("\n")
+          .map((text) => ({ _tag: "line", text, kind: diffLineKind(text) }))
+        const { head, tail, truncatedCount } = headTail(lines, 6)
+        if (truncatedCount === 0) return head
+        return [...head, { _tag: "elision", count: truncatedCount }, ...tail]
+      },
+    }),
+  )
 
   return (
     <Show
-      when={editData()}
+      when={Option.getOrUndefined(editData())}
       fallback={
         <ToolFrame
           title="edit"
@@ -1142,8 +1126,7 @@ function WriteToolRenderer(props: ToolRendererProps) {
   const data = createMemo(() => decodeToolOutput(WriteOutputSchema, props.toolCall.output))
   // The input names the file, so the header shows it while the write runs.
   const path = createMemo(() => getPath(props.toolCall.input))
-  const subtitleHref = () =>
-    Option.getOrUndefined(Option.some(path()).pipe(Option.filter(isAbsPath), Option.map(fileUrl)))
+  const subtitleHref = () => Option.getOrUndefined(fileHref(path()))
 
   // The header names the file, so the body, open or closed, says what the write did.
   const Written = () => (
@@ -1345,12 +1328,7 @@ function GrepToolRenderer(props: ToolRendererProps) {
                   Match.tagsExhaustive({
                     gap: (gap) => (
                       <box marginBottom={1}>
-                        <text>
-                          <span style={{ fg: theme.border }}>{"· ··· "}</span>
-                          <span style={{ fg: theme.textMuted }}>
-                            {plural(gap.count, "more match", "more matches")}
-                          </span>
-                        </text>
+                        <ElisionRow text={plural(gap.count, "more match", "more matches")} />
                       </box>
                     ),
                     file: (run) => (

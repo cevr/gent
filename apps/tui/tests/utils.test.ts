@@ -16,7 +16,7 @@ import {
   describeCellCode,
   expandFileRefs,
   fitWidth,
-  fileUrl,
+  fileHref,
   formatActivityHeader,
   formatAge,
   formatCost,
@@ -31,7 +31,6 @@ import {
   formatTokens,
   formatUsageStats,
   displayPath,
-  isAbsPath,
   previewOutput,
   toolArgSummary,
   truncate,
@@ -42,43 +41,29 @@ import {
 import { BunServices } from "@effect/platform-bun"
 import { ProviderAuthError } from "@gent/core/extensions/api"
 import os from "node:os"
+import { textWidth } from "../src/bun-adapter"
 
 // ── file refs ───────────────────────────────────────────────────────────────
 
-describe("fileUrl", () => {
-  test("converts absolute path to file:// URL", () => {
-    expect(fileUrl("/Users/cvr/foo.ts")).toBe("file:///Users/cvr/foo.ts")
-  })
-
-  test("handles root path", () => {
-    expect(fileUrl("/")).toBe("file:///")
-  })
-
-  test("handles path with spaces", () => {
-    expect(fileUrl("/Users/cvr/my project/foo.ts")).toBe("file:///Users/cvr/my project/foo.ts")
-  })
-})
-
-describe("isAbsPath", () => {
-  test("/foo is absolute", () => {
-    expect(isAbsPath("/foo")).toBe(true)
-  })
-
-  test("foo is not absolute", () => {
-    expect(isAbsPath("foo")).toBe(false)
-  })
-
-  test("~/foo is not absolute", () => {
-    expect(isAbsPath("~/foo")).toBe(false)
-  })
-
-  test("empty string is not absolute", () => {
-    expect(isAbsPath("")).toBe(false)
-  })
-
-  test("./foo is not absolute", () => {
-    expect(isAbsPath("./foo")).toBe(false)
-  })
+// A terminal opens the href as a URL: a space, `#` or `%` in the path is
+// encoded, or the link names another file. Only an absolute path has one.
+describe("fileHref", () => {
+  const cases: ReadonlyArray<readonly [string, Option.Option<string>]> = [
+    ["/Users/cvr/foo.ts", Option.some("file:///Users/cvr/foo.ts")],
+    ["/", Option.some("file:///")],
+    ["/Users/cvr/my project/foo.ts", Option.some("file:///Users/cvr/my%20project/foo.ts")],
+    ["/tmp/issue #4/a.ts", Option.some("file:///tmp/issue%20%234/a.ts")],
+    ["/tmp/100%/a.ts", Option.some("file:///tmp/100%25/a.ts")],
+    ["foo", Option.none()],
+    ["./foo", Option.none()],
+    ["~/foo", Option.none()],
+    ["", Option.none()],
+  ]
+  for (const [path, href] of cases) {
+    test(`"${path}" links to ${Option.getOrElse(href, () => "nothing")}`, () => {
+      expect(fileHref(path)).toEqual(href)
+    })
+  }
 })
 
 describe("expandFileRefs", () => {
@@ -174,6 +159,14 @@ describe("expandFileRefs", () => {
       const partial = yield* expandFileRefs("@src/foo.ts#4-20", testDir)
       expect(partial).toContain("```src/foo.ts:4-20")
       expect(partial).toContain("line5")
+    }),
+  )
+
+  // A range whose end is before its start names no line either.
+  fileRefsTest("a reversed range stays a reference", () =>
+    Effect.gen(function* () {
+      const testDir = yield* makeFixture
+      expect(yield* expandFileRefs("@src/foo.ts#4-2", testDir)).toBe("@src/foo.ts#4-2")
     }),
   )
 
@@ -361,38 +354,38 @@ describe("formatDuration", () => {
 
 // ── format error ────────────────────────────────────────────────────────────
 
-describe("formatError", () => {
-  test("StorageError → prefixed", () => {
+describe("error text", () => {
+  test("a storage failure reads as Storage: and its message", () => {
     const err = new StorageError({ message: "disk full" })
     expect(formatError(err)).toBe("Storage: disk full")
   })
 
-  test("SessionRuntimeError → prefixed", () => {
+  test("a runtime failure reads as Runtime: and its message", () => {
     const err = new SessionRuntimeError({ message: "max turns" })
     expect(formatError(err)).toBe("Runtime: max turns")
   })
 
-  test("ProviderError → model:message", () => {
+  test("a provider failure names the model it came from", () => {
     const err = new ProviderError({ message: "rate limited", model: "gpt-4" })
     expect(formatError(err)).toBe("gpt-4: rate limited")
   })
 
-  test("EventStoreError → prefixed", () => {
+  test("an event store failure reads as Events: and its message", () => {
     const err = new EventStoreError({ message: "replay failed" })
     expect(formatError(err)).toBe("Events: replay failed")
   })
 
-  test("NotFoundError → prefixed", () => {
+  test("a missing record reads as Not found: and what was missing", () => {
     const err = new NotFoundError({ message: "session abc" })
     expect(formatError(err)).toBe("Not found: session abc")
   })
 
-  test("ProviderAuthError → prefixed", () => {
+  test("an auth failure reads as Auth: and its message", () => {
     const err = new ProviderAuthError({ message: "invalid key" })
     expect(formatError(err)).toBe("Auth: invalid key")
   })
 
-  test("DriverError → driver and reason", () => {
+  test("a driver failure names the driver and its reason", () => {
     const err = new DriverError({
       driver: DriverFailureId.make("openai"),
       reason: "catalog filter failed",
@@ -743,6 +736,15 @@ describe("truncatePath", () => {
 
   test("handles just filename", () => {
     expect(truncatePath("file.ts", 5)).toBe("…/file.ts")
+  })
+
+  // A CJK directory takes two columns a character: the budget counts columns.
+  test("a wide-character path is cut by the columns it takes", () => {
+    const path = "/项目/文档/设计/说明.md"
+    const result = truncatePath(path, 20)
+    expect(result.startsWith("…/")).toBe(true)
+    expect(result.endsWith("说明.md")).toBe(true)
+    expect(textWidth(result)).toBeLessThanOrEqual(22) // +2 for "…/"
   })
 })
 

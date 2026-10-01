@@ -12,7 +12,7 @@ import {
   Show,
   useContext,
 } from "solid-js"
-import { Clock, Effect, Fiber, Match, Option, Schedule, Schema } from "effect"
+import { Effect, Fiber, Match, Option, Schedule, Schema } from "effect"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { useRenderer } from "@opentui/solid"
 import {
@@ -53,57 +53,16 @@ export const useSpinnerClock = (): Accessor<number> =>
     "useSpinnerClock must be used within SpinnerClockProvider",
   )
 
-// ── wait helper ─────────────────────────────────────────────────────────────
-
-class WaitForTimeout extends Schema.TaggedError<WaitForTimeout>()("WaitForTimeout", {
-  label: Schema.String,
-}) {
-  override get message(): string {
-    return `timed out waiting for ${this.label}`
-  }
-}
-
-/**
- * Poll a synchronous probe until it returns a defined value or the deadline
- * elapses. Production-side equivalent of the test-utils `waitFor` helper.
- * Suitable for DOM-shaped retries (frame N may not have rendered the element
- * yet; frame N+1 will) where there is no event signal to subscribe to.
- */
-const waitFor = <A,>(
-  probe: () => Option.Option<A>,
-  options: { label: string; intervalMs?: number; timeoutMs?: number },
-): Effect.Effect<A, WaitForTimeout> =>
-  Effect.gen(function* () {
-    const interval = options.intervalMs ?? 30
-    const deadline = (yield* Clock.currentTimeMillis) + (options.timeoutMs ?? 500)
-    const loop: Effect.Effect<A, WaitForTimeout> = Effect.gen(function* () {
-      const value = probe()
-      if (Option.isSome(value)) return value.value
-      if ((yield* Clock.currentTimeMillis) >= deadline) {
-        return yield* new WaitForTimeout({ label: options.label })
-      }
-      yield* Effect.sleep(`${interval} millis`)
-      return yield* loop
-    })
-    return yield* loop
-  })
-
 // ── scroll sync ─────────────────────────────────────────────────────────────
-
-/**
- * useScrollSync Hook
- *
- * Provides ID-based scroll synchronization for scrollbox components.
- * Finds elements by ID and scrolls to keep them visible in the viewport.
- */
 
 /** How often, and how far apart, the sync looks for a row that has not laid out yet. */
 const SCROLL_SYNC_TRIES = 15
 const SCROLL_SYNC_INTERVAL_MS = 30
 
 /**
- * ID-based scroll sync - finds element by ID and scrolls to keep it visible.
- * The scrollbox is absent before it attaches and after cleanup.
+ * Keeps the row with the selected id in the scrollbox's viewport, scrolling
+ * the least that shows it. The scrollbox is absent before it attaches and
+ * after cleanup.
  */
 function useScrollSync(
   selectedId: Accessor<string>,
@@ -136,12 +95,17 @@ function useScrollSync(
     let fiber = Option.none<Fiber.Fiber<void>>()
     const afterLayout = () => {
       fiber = Option.some(
+        // A row not laid out yet may be there a frame later; past the last
+        // try the sync gives up, and the next selection tries again.
         Effect.runFork(
-          waitFor(() => syncScroll(id), {
-            label: `scroll-target ${id}`,
-            intervalMs: SCROLL_SYNC_INTERVAL_MS,
-            timeoutMs: SCROLL_SYNC_TRIES * SCROLL_SYNC_INTERVAL_MS,
-          }).pipe(Effect.ignore),
+          Effect.suspend(() => Effect.fromOption(syncScroll(id))).pipe(
+            Effect.retry({
+              schedule: Schedule.spaced(`${SCROLL_SYNC_INTERVAL_MS} millis`),
+              times: SCROLL_SYNC_TRIES,
+            }),
+            Effect.asVoid,
+            Effect.ignore,
+          ),
         ),
       )
     }
@@ -600,7 +564,7 @@ export function PickerFrame(
      * The pane's error. It draws in the note row, in place of the detail line,
      * and a pane without a detail line gets the row while the error shows.
      */
-    error?: Option.Option<string>
+    error: Option.Option<string>
   },
 ) {
   const { theme } = useTheme()
@@ -619,11 +583,7 @@ export function PickerFrame(
   // (detail or error) gives way first, then the list's headings, then its filter row
   // (`SelectList` reads its rows from the frame), and one row stays for the
   // cursor.
-  const error = () =>
-    Option.filter(
-      Option.getOrElse(Option.fromUndefinedOr(props.error), () => Option.none<string>()),
-      (text) => text.length > 0,
-    )
+  const error = () => Option.filter(props.error, (text) => text.length > 0)
   // The note row: the error while there is one, else the detail line.
   const note = (): Option.Option<{ readonly text: string; readonly error: boolean }> =>
     Option.orElse(
@@ -973,6 +933,24 @@ export const decoration = <A,>(render: () => JSX.Element): SelectListRow<A> => (
   value: Option.none(),
   render: () => render(),
 })
+
+/**
+ * A list's rows in groups: a heading opens each run of items in one group,
+ * drawn from the run's first item and the group's size; each item then draws
+ * its own row. Items keep their order.
+ */
+export const groupedRows = <A,>(
+  items: ReadonlyArray<A>,
+  groupOf: (item: A) => string,
+  heading: (first: A, count: number) => SelectListRow<A>,
+  row: (item: A) => SelectListRow<A>,
+): ReadonlyArray<SelectListRow<A>> =>
+  items.flatMap((item, index) => {
+    const previous = Option.fromUndefinedOr(items[index - 1])
+    if (Option.exists(previous, (value) => groupOf(value) === groupOf(item))) return [row(item)]
+    const count = items.filter((entry) => groupOf(entry) === groupOf(item)).length
+    return [heading(item, count), row(item)]
+  })
 
 /**
  * The two moves a pane makes on the list from outside a key press.

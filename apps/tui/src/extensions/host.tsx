@@ -88,6 +88,12 @@ interface ExtensionUIContextValue {
    * Until then an unresolved slash command may still be one of theirs.
    */
   readonly commandsSettled: Accessor<boolean>
+  /**
+   * Lists the session's server slash commands again: an extension can
+   * register one after the last listing. Commands are unsettled until the
+   * new listing answers.
+   */
+  readonly refreshCommands: () => void
   readonly setActivityProvider: (provider: () => ClientActivitySnapshot) => void
   /**
    * The session view installs its overlay as the pane owner while it is
@@ -159,16 +165,12 @@ export function ExtensionUIProvider(props: {
   >(Option.none())
   const commandsSettled = () =>
     loaded() &&
-    Option.match(client.activeSessionId(), {
-      onNone: () => true,
-      onSome: (id) =>
-        Option.exists(
-          serverListed(),
-          (listed) =>
-            listed.sessionId === id &&
-            Option.contains(client.connectedGeneration(), listed.generation),
-        ),
-    })
+    Option.exists(
+      serverListed(),
+      (listed) =>
+        listed.sessionId === client.activeSessionId() &&
+        Option.contains(client.connectedGeneration(), listed.generation),
+    )
   const [dynamicAutocomplete, setDynamicAutocomplete] = createSignal<
     ReadonlyArray<AutocompleteContribution>
   >([])
@@ -193,9 +195,8 @@ export function ExtensionUIProvider(props: {
     transport: {
       client: client.client,
       runtime: client.runtime,
-      // The client's identity memo, read straight through: the reference is
-      // stable across a rename, so an effect tracking this accessor stays put
-      // while the session and the branch do.
+      // The client's identity memo: it holds across a rename, so an effect
+      // tracking this accessor stays put while the session and the branch do.
       currentSession: client.sessionIdentity,
       onExtensionStateChanged: (cb) => client.onExtensionStateChanged(cb),
       onSessionEvent: (cb) => client.onSessionEvent(cb),
@@ -272,109 +273,114 @@ export function ExtensionUIProvider(props: {
     }),
   )
 
-  // Listed once per session and connection: a reconnect lists again, so a
-  // listing a dropped connection cut short is not lost, and a command held
-  // for it waits for that answer. A refusal is an answer and settles this
-  // connection.
+  // Listed once per session and connection, and again on each refresh: a
+  // reconnect lists again, so a listing a dropped connection cut short is not
+  // lost, and a command held for it waits for that answer. A refusal is an
+  // answer and settles this connection.
+  const [listingRequest, setListingRequest] = createSignal(0)
+  const refreshCommands = () => {
+    setServerListed(Option.none())
+    setListingRequest((request) => request + 1)
+  }
   createEffect(
-    on([client.activeSessionId, client.connectedGeneration], ([current, generation]) => {
-      if (Option.isNone(current) || Option.isNone(generation)) return
+    on(
+      [client.activeSessionId, client.connectedGeneration, listingRequest],
+      ([current, generation]) => {
+        if (Option.isNone(generation)) return
 
-      let active = true
-      const listed = () => {
-        if (active)
-          setServerListed(Option.some({ sessionId: current.value, generation: generation.value }))
-      }
-      onCleanup(() => {
-        active = false
-      })
+        let active = true
+        const listed = () => {
+          if (active)
+            setServerListed(Option.some({ sessionId: current, generation: generation.value }))
+        }
+        onCleanup(() => {
+          active = false
+        })
 
-      client.runtime.cast(
-        client.client.extension.listSlashCommands({ sessionId: current.value }).pipe(
-          Effect.tap((cmds) =>
-            Effect.sync(() => {
-              if (!active) return
-              const byExtension = new Map<string, Array<Command>>()
-              for (const c of cmds) {
-                const run = (args: string) => {
-                  const activeSession = client.session()
-                  if (Option.isNone(activeSession)) return
-                  const sid = activeSession.value.sessionId
-                  const bid = activeSession.value.branchId
-                  client.runtime.cast(
-                    client.client.extension
-                      .request({
-                        sessionId: sid,
-                        extensionId: c.extensionId,
-                        capabilityId: c.capabilityId,
-                        input: args,
-                        branchId: bid,
-                      })
-                      .pipe(
-                        // The reader ran the command, so a failure shows on the
-                        // status row of the session it ran in.
-                        Effect.catchEager((error) =>
-                          Effect.sync(() =>
-                            client.setErrorIn(
-                              { sessionId: sid, branchId: bid },
-                              `/${c.name} failed: ${formatError(error)}`,
+        client.runtime.cast(
+          client.client.extension.listSlashCommands({ sessionId: current }).pipe(
+            Effect.tap((cmds) =>
+              Effect.sync(() => {
+                if (!active) return
+                const byExtension = new Map<string, Array<Command>>()
+                for (const c of cmds) {
+                  const run = (args: string) => {
+                    const { sessionId: sid, branchId: bid } = client.sessionIdentity()
+                    client.runtime.cast(
+                      client.client.extension
+                        .request({
+                          sessionId: sid,
+                          extensionId: c.extensionId,
+                          capabilityId: c.capabilityId,
+                          input: args,
+                          branchId: bid,
+                        })
+                        .pipe(
+                          // The reader ran the command, so a failure shows on the
+                          // status row of the session it ran in.
+                          Effect.catchEager((error) =>
+                            Effect.sync(() =>
+                              client.setErrorIn(
+                                { sessionId: sid, branchId: bid },
+                                `/${c.name} failed: ${formatError(error)}`,
+                              ),
+                            ).pipe(
+                              Effect.andThen(Effect.logWarning("slash.command.failed")),
+                              Effect.annotateLogs({
+                                extensionId: c.extensionId,
+                                capabilityId: c.capabilityId,
+                                error: String(error),
+                              }),
                             ),
-                          ).pipe(
-                            Effect.andThen(Effect.logWarning("slash.command.failed")),
-                            Effect.annotateLogs({
-                              extensionId: c.extensionId,
-                              capabilityId: c.capabilityId,
-                              error: String(error),
-                            }),
                           ),
                         ),
-                      ),
-                  )
-                }
+                    )
+                  }
 
-                const base = {
-                  id: `server:${c.name}`,
-                  title: Option.getOrElse(Option.fromNullishOr(c.displayName), () => c.name),
-                  slash: c.name,
-                  description: c.description,
-                  category: Option.getOrElse(Option.fromNullishOr(c.category), () => "Extension"),
-                  onSelect: () => run(""),
-                  onSlash: run,
+                  const base = {
+                    id: `server:${c.name}`,
+                    title: Option.getOrElse(Option.fromNullishOr(c.displayName), () => c.name),
+                    slash: c.name,
+                    description: c.description,
+                    category: Option.getOrElse(Option.fromNullishOr(c.category), () => "Extension"),
+                    onSelect: () => run(""),
+                    onSlash: run,
+                  }
+                  const command = Option.match(Option.fromNullishOr(c.keybind), {
+                    onNone: (): Command => base,
+                    onSome: (keybind): Command => ({ ...base, keybind }),
+                  })
+                  byExtension.set(c.extensionId, [
+                    ...Option.getOrElse(
+                      Option.fromNullishOr(byExtension.get(c.extensionId)),
+                      () => [],
+                    ),
+                    command,
+                  ])
                 }
-                const command = Option.match(Option.fromNullishOr(c.keybind), {
-                  onNone: (): Command => base,
-                  onSome: (keybind): Command => ({ ...base, keybind }),
-                })
-                byExtension.set(c.extensionId, [
-                  ...Option.getOrElse(
-                    Option.fromNullishOr(byExtension.get(c.extensionId)),
-                    () => [],
-                  ),
-                  command,
-                ])
-              }
-              setServerCommands(
-                [...byExtension].map(([extensionId, commands]) => ({
-                  id: extensionId,
-                  scope: "builtin",
-                  source: `server:${extensionId}`,
-                  commands,
-                })),
-              )
-              listed()
-            }),
+                setServerCommands(
+                  [...byExtension].map(([extensionId, commands]) => ({
+                    id: extensionId,
+                    scope: "builtin",
+                    source: `server:${extensionId}`,
+                    commands,
+                  })),
+                )
+                listed()
+              }),
+            ),
+            Effect.catchEager((error) =>
+              Effect.sync(() => {
+                // A drop is not an answer: the reconnect lists again.
+                if (isConnectionLoss(error)) return
+                if (active) setServerCommands([])
+                listed()
+              }),
+            ),
           ),
-          Effect.catchEager((error) =>
-            Effect.sync(() => {
-              // A drop is not an answer: the reconnect lists again.
-              if (isConnectionLoss(error)) return
-              if (active) setServerCommands([])
-              listed()
-            }),
-          ),
-        ),
-      )
-    }),
+        )
+      },
+    ),
   )
 
   // The session's commands first, then the client extensions', then the
@@ -397,6 +403,7 @@ export function ExtensionUIProvider(props: {
       value={{
         loaded,
         commandsSettled,
+        refreshCommands,
         messageRenderers: () => resolved().messageRenderers,
         widgets: () => resolved().widgets,
         commands: () => resolvedCommands().commands,

@@ -18,13 +18,16 @@ import {
 } from "../../src/extensions/agents.client"
 import type { ExtensionAgentDetail } from "../../src/extensions/client-facets"
 import { DockProvider, PickerFrame, usePickerGeometry } from "../../src/ui"
-import { renderFrame, renderWithProviders } from "../render-harness-boundary"
+import { renderFrame, renderScoped } from "../render-harness-boundary"
 import { waitForFrame, waitUntil, waitUntilAdvancing } from "../helpers-boundary"
 import {
   makeClientTestTransport,
   makePaneSlot,
   provideClientServices,
 } from "../extension-test-harness-boundary"
+
+/** A session in view that no listed row is. */
+const ELSEWHERE = { sessionId: SessionId.make("elsewhere"), branchId: BranchId.make("elsewhere") }
 
 // ── agents controller ───────────────────────────────────────────────────────
 
@@ -75,7 +78,6 @@ describe("Agents controller detail", () => {
               onSome: (gate) => Deferred.await(gate),
             }),
         ),
-        { currentSession: () => Option.none() },
       )
 
       // Select the first row, then move on before its reply arrives.
@@ -103,7 +105,6 @@ describe("Agents controller detail", () => {
           () => Effect.succeed([]),
           () => Deferred.await(gate),
         ),
-        { currentSession: () => Option.none() },
       )
 
       controller.select(Option.some(row("only")))
@@ -131,8 +132,10 @@ describe("Agents controller reload", () => {
           () => Effect.never,
         ),
         {
-          currentSession: () =>
-            Option.some({ sessionId: SessionId.make("only"), branchId: BranchId.make("only") }),
+          currentSession: () => ({
+            sessionId: SessionId.make("only"),
+            branchId: BranchId.make("only"),
+          }),
         },
       )
 
@@ -163,8 +166,10 @@ describe("Agents controller listing scope", () => {
             () => Effect.never,
           ),
           {
-            currentSession: () =>
-              Option.some({ sessionId: SessionId.make("here"), branchId: BranchId.make("here") }),
+            currentSession: () => ({
+              sessionId: SessionId.make("here"),
+              branchId: BranchId.make("here"),
+            }),
             shell: { pane },
           },
         )
@@ -193,7 +198,6 @@ describe("Agents controller stored rows", () => {
             return Effect.succeed(detail(1))
           },
         ),
-        { currentSession: () => Option.none() },
       )
       controller.select(Option.some(row("stored", false)))
       expect(asked).toEqual([])
@@ -233,7 +237,7 @@ describe("Agents pane refresh while open", () => {
           () => Effect.sync(listed),
           () => Effect.sync(() => ({ ...detail(turns), status })),
         ).pipe(Effect.provideService(Clock.Clock, clock)),
-        { currentSession: () => Option.some(parentKey), shell: { pane } },
+        { currentSession: () => parentKey, shell: { pane } },
       )
       controller.refresh("")
       yield* waitUntil(() => controller.rows().length === 2, "first listing")
@@ -278,7 +282,7 @@ describe("Agents pane refresh while open", () => {
             }),
           () => Effect.succeed(detail(1)),
         ).pipe(Effect.provideService(Clock.Clock, clock)),
-        { currentSession: () => Option.some(parentKey) },
+        { currentSession: () => parentKey },
       )
       controller.refresh("")
       yield* waitUntil(() => controller.rows().length === 1, "first listing")
@@ -321,7 +325,7 @@ describe("Agents pane refresh while open", () => {
               return detail(detailReads)
             }),
         ).pipe(Effect.provideService(Clock.Clock, clock)),
-        { currentSession: () => Option.some(parentKey), shell: { pane } },
+        { currentSession: () => parentKey, shell: { pane } },
       )
       controller.refresh("")
       yield* waitUntil(() => controller.rows().length === 1, "first listing")
@@ -373,7 +377,7 @@ describe("Agents pane refresh while open", () => {
                 return { ...detail(1), status: "Running", costUsd: detailReads / 100 }
               }),
           ).pipe(Effect.provideService(Clock.Clock, clock)),
-          { currentSession: () => Option.some(parentKey), shell: { pane } },
+          { currentSession: () => parentKey, shell: { pane } },
         )
         controller.refresh("")
         yield* waitUntil(() => controller.rows().length === 1, "first listing")
@@ -435,7 +439,7 @@ describe("Agents pane refresh while open", () => {
               },
             ),
         ).pipe(Effect.provideService(Clock.Clock, clock)),
-        { currentSession: () => Option.some(parentKey), shell: { pane } },
+        { currentSession: () => parentKey, shell: { pane } },
       )
       controller.refresh("")
       yield* waitUntil(() => controller.rows().length === 1, "first listing")
@@ -480,10 +484,10 @@ describe("Agents pane refresh while open", () => {
             () => Effect.never,
           ).pipe(Effect.provideService(Clock.Clock, clock)),
           {
-            currentSession: () => Option.some(parentKey),
+            currentSession: () => parentKey,
             shell: { pane },
             transport: {
-              ...makeClientTestTransport({ currentSession: () => Option.some(parentKey) }),
+              ...makeClientTestTransport({ currentSession: () => parentKey }),
               onExtensionStateChanged: (cb) => {
                 pulses.add(cb)
                 return () => {
@@ -547,37 +551,35 @@ const agedRow = (id: string, name: string, updatedAt: number): AgentRowEntry => 
 })
 
 describe("Agents pane navigation", () => {
-  it.live("selects a child with the keyboard and closes with Escape", () =>
+  it.scopedLive("selects a child with the keyboard and closes with Escape", () =>
     Effect.gen(function* () {
       const parent = rowPane("agents-root", "Alpha", 0)
       const child = rowPane("agents-child", "Beta", 1)
       let selected = Option.none<AgentRowEntry>()
       const [open, setOpen] = createSignal(true)
 
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <AgentsPane
-            open={open()}
-            controller={{
-              rows: () => [parent, child],
-              current: () => Option.none(),
-              error: () => Option.none(),
-              loading: () => false,
-              refresh: () => {},
-              reload: () => {},
-              detail: () => Option.none(),
-              select: () => {},
-              open: () => true,
-            }}
-            onSelect={(value) => {
-              selected = Option.some(value)
-            }}
-            onToggle={() => {}}
-            onDelete={() => {}}
-            onClose={() => setOpen(false)}
-          />
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <AgentsPane
+          open={open()}
+          controller={{
+            rows: () => [parent, child],
+            current: () => ELSEWHERE,
+            error: () => Option.none(),
+            loading: () => false,
+            refresh: () => {},
+            reload: () => {},
+            detail: () => Option.none(),
+            select: () => {},
+            open: () => true,
+          }}
+          onSelect={(value) => {
+            selected = Option.some(value)
+          }}
+          onToggle={() => {}}
+          onDelete={() => {}}
+          onClose={() => setOpen(false)}
+        />
+      ))
 
       setup.mockInput.pressArrow("down")
       yield* Effect.promise(() => setup.renderOnce())
@@ -591,32 +593,30 @@ describe("Agents pane navigation", () => {
     }),
   )
 
-  it.live("Escape clears a typed filter first, then closes the pane", () =>
+  it.scopedLive("Escape clears a typed filter first, then closes the pane", () =>
     Effect.gen(function* () {
       const queries: Array<string> = []
       const [open, setOpen] = createSignal(true)
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <AgentsPane
-            open={open()}
-            controller={{
-              rows: () => [rowPane("agents-root", "Alpha", 0)],
-              current: () => Option.none(),
-              error: () => Option.none(),
-              loading: () => false,
-              refresh: (query) => queries.push(query),
-              reload: () => {},
-              detail: () => Option.none(),
-              select: () => {},
-              open: () => true,
-            }}
-            onSelect={() => {}}
-            onToggle={() => {}}
-            onDelete={() => {}}
-            onClose={() => setOpen(false)}
-          />
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <AgentsPane
+          open={open()}
+          controller={{
+            rows: () => [rowPane("agents-root", "Alpha", 0)],
+            current: () => ELSEWHERE,
+            error: () => Option.none(),
+            loading: () => false,
+            refresh: (query) => queries.push(query),
+            reload: () => {},
+            detail: () => Option.none(),
+            select: () => {},
+            open: () => true,
+          }}
+          onSelect={() => {}}
+          onToggle={() => {}}
+          onDelete={() => {}}
+          onClose={() => setOpen(false)}
+        />
+      ))
       yield* waitForFrame(setup, (frame) => frame.includes("Alpha"), "agents pane")
       setup.mockInput.pressKey("a")
       yield* waitForFrame(setup, (frame) => frame.includes("› a"), "typed filter")
@@ -629,30 +629,30 @@ describe("Agents pane navigation", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
 
-  it.live("a poll that lists the same sessions again leaves the cursor on the reader's row", () =>
-    Effect.gen(function* () {
-      // Every poll decodes fresh row objects. The pane opens on the session
-      // the shell is on; the reader moves off it, and the next poll must not
-      // pull the cursor back.
-      const listing = () => [
-        rowPane("agents-root", "Alpha", 0),
-        rowPane("agents-child", "Beta", 1),
-        rowPane("agents-other", "Gamma", 1),
-      ]
-      const [rows, setRows] = createSignal<ReadonlyArray<AgentRowEntry>>(listing())
-      let selected = Option.none<AgentRowEntry>()
+  it.scopedLive(
+    "a poll that lists the same sessions again leaves the cursor on the reader's row",
+    () =>
+      Effect.gen(function* () {
+        // Every poll decodes fresh row objects. The pane opens on the session
+        // the shell is on; the reader moves off it, and the next poll must not
+        // pull the cursor back.
+        const listing = () => [
+          rowPane("agents-root", "Alpha", 0),
+          rowPane("agents-child", "Beta", 1),
+          rowPane("agents-other", "Gamma", 1),
+        ]
+        const [rows, setRows] = createSignal<ReadonlyArray<AgentRowEntry>>(listing())
+        let selected = Option.none<AgentRowEntry>()
 
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
+        const setup = yield* renderScoped(() => (
           <AgentsPane
             open={true}
             controller={{
               rows,
-              current: () =>
-                Option.some({
-                  sessionId: SessionId.make("agents-root"),
-                  branchId: BranchId.make("agents-root-branch"),
-                }),
+              current: () => ({
+                sessionId: SessionId.make("agents-root"),
+                branchId: BranchId.make("agents-root-branch"),
+              }),
               error: () => Option.none(),
               loading: () => false,
               refresh: () => {},
@@ -668,76 +668,73 @@ describe("Agents pane navigation", () => {
             onDelete={() => {}}
             onClose={() => {}}
           />
-        )),
-      )
-      yield* waitForFrame(setup, () => renderFrame(setup).includes("Gamma"), "agents pane open")
+        ))
+        yield* waitForFrame(setup, () => renderFrame(setup).includes("Gamma"), "agents pane open")
 
-      setup.mockInput.pressArrow("down")
-      setup.mockInput.pressArrow("down")
-      yield* Effect.promise(() => setup.renderOnce())
-      setRows(listing())
-      yield* Effect.promise(() => setup.renderOnce())
-      setup.mockInput.pressEnter()
-      expect(Option.map(selected, (row) => row.sessionId)).toEqual(
-        Option.some(SessionId.make("agents-other")),
-      )
+        setup.mockInput.pressArrow("down")
+        setup.mockInput.pressArrow("down")
+        yield* Effect.promise(() => setup.renderOnce())
+        setRows(listing())
+        yield* Effect.promise(() => setup.renderOnce())
+        setup.mockInput.pressEnter()
+        expect(Option.map(selected, (row) => row.sessionId)).toEqual(
+          Option.some(SessionId.make("agents-other")),
+        )
 
-      // A poll that no longer lists the reader's row keeps the cursor in the list.
-      setRows(listing().slice(0, 2))
-      yield* Effect.promise(() => setup.renderOnce())
-      setup.mockInput.pressEnter()
-      expect(Option.map(selected, (row) => row.sessionId)).toEqual(
-        Option.some(SessionId.make("agents-child")),
-      )
-    }),
+        // A poll that no longer lists the reader's row keeps the cursor in the list.
+        setRows(listing().slice(0, 2))
+        yield* Effect.promise(() => setup.renderOnce())
+        setup.mockInput.pressEnter()
+        expect(Option.map(selected, (row) => row.sessionId)).toEqual(
+          Option.some(SessionId.make("agents-child")),
+        )
+      }),
   )
 
-  it.live("asks for detail about the row under the cursor and renders it", () =>
+  it.scopedLive("asks for detail about the row under the cursor and renders it", () =>
     Effect.gen(function* () {
       const parent = rowPane("detail-root", "Alpha", 0)
       const child = rowPane("detail-child", "Beta", 1)
       const asked: Array<string> = []
       const [detail, setDetail] = createSignal(Option.none<ExtensionAgentDetail>())
 
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <AgentsPane
-            open={true}
-            controller={{
-              rows: () => [parent, child],
-              current: () => Option.none(),
-              error: () => Option.none(),
-              loading: () => false,
-              refresh: () => {},
-              reload: () => {},
-              detail,
-              select: (selection) => {
-                Option.match(selection, {
-                  onNone: () => {},
-                  onSome: (value) => {
-                    asked.push(value.sessionId)
-                    setDetail(
-                      Option.some({
-                        status: "Idle",
-                        model: "anthropic/claude-sonnet-5",
-                        turns: 7,
-                        costUsd: 0.125,
-                        durationMs: 93_000,
-                        omittedMessages: 0,
-                      }),
-                    )
-                  },
-                })
-              },
-              open: () => true,
-            }}
-            onSelect={() => {}}
-            onToggle={() => {}}
-            onDelete={() => {}}
-            onClose={() => {}}
-          />
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <AgentsPane
+          open={true}
+          controller={{
+            rows: () => [parent, child],
+            current: () => ELSEWHERE,
+            error: () => Option.none(),
+            loading: () => false,
+            refresh: () => {},
+            reload: () => {},
+            detail,
+            select: (selection) => {
+              Option.match(selection, {
+                onNone: () => {},
+                onSome: (value) => {
+                  asked.push(value.sessionId)
+                  setDetail(
+                    Option.some({
+                      status: "Idle",
+                      model: "anthropic/claude-sonnet-5",
+                      turns: 7,
+                      costUsd: 0.125,
+                      durationMs: 93_000,
+                      omittedMessages: 0,
+                    }),
+                  )
+                },
+              })
+            },
+            open: () => true,
+          }}
+          onSelect={() => {}}
+          onToggle={() => {}}
+          onDelete={() => {}}
+          onClose={() => {}}
+        />
+      ))
 
       // The first row is selected on open, so its detail is requested without
       // any keypress; moving down asks about the row now under the cursor.
@@ -755,42 +752,40 @@ describe("Agents pane navigation", () => {
     }),
   )
 
-  it.live("corrects the selected row's section from live state", () =>
+  it.scopedLive("corrects the selected row's section from live state", () =>
     Effect.gen(function* () {
       // The listing has to report a resident loop as idle — it never reads
       // state — so the detail read is the only thing that knows better.
       const busy: AgentRowEntry = { ...rowPane("busy", "Alpha", 0), section: "idle", live: true }
 
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <AgentsPane
-            open={true}
-            controller={{
-              rows: () => [busy],
-              current: () => Option.none(),
-              error: () => Option.none(),
-              loading: () => false,
-              refresh: () => {},
-              reload: () => {},
-              detail: () =>
-                Option.some({
-                  status: "Running",
-                  model: "anthropic/claude-sonnet-5",
-                  turns: 1,
-                  costUsd: 0,
-                  durationMs: 0,
-                  omittedMessages: 0,
-                }),
-              select: () => {},
-              open: () => true,
-            }}
-            onSelect={() => {}}
-            onToggle={() => {}}
-            onDelete={() => {}}
-            onClose={() => {}}
-          />
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <AgentsPane
+          open={true}
+          controller={{
+            rows: () => [busy],
+            current: () => ELSEWHERE,
+            error: () => Option.none(),
+            loading: () => false,
+            refresh: () => {},
+            reload: () => {},
+            detail: () =>
+              Option.some({
+                status: "Running",
+                model: "anthropic/claude-sonnet-5",
+                turns: 1,
+                costUsd: 0,
+                durationMs: 0,
+                omittedMessages: 0,
+              }),
+            select: () => {},
+            open: () => true,
+          }}
+          onSelect={() => {}}
+          onToggle={() => {}}
+          onDelete={() => {}}
+          onClose={() => {}}
+        />
+      ))
 
       const frame = renderFrame(setup)
       expect(frame).toContain("Idle (1)")
@@ -798,38 +793,36 @@ describe("Agents pane navigation", () => {
     }),
   )
 
-  it.live("toggles with Ctrl+T while the pane is hidden", () =>
+  it.scopedLive("toggles with Ctrl+T while the pane is hidden", () =>
     Effect.gen(function* () {
       // The pane's other keys are gated on `open`, so the toggle has to be
       // registered separately or it can close the pane but never reopen it.
       const [open, setOpen] = createSignal(false)
       let toggles = 0
 
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <AgentsPane
-            open={open()}
-            controller={{
-              rows: () => [rowPane("toggle", "Alpha", 0)],
-              current: () => Option.none(),
-              error: () => Option.none(),
-              loading: () => false,
-              refresh: () => {},
-              reload: () => {},
-              detail: () => Option.none(),
-              select: () => {},
-              open,
-            }}
-            onSelect={() => {}}
-            onToggle={() => {
-              toggles++
-              setOpen((current) => !current)
-            }}
-            onDelete={() => {}}
-            onClose={() => setOpen(false)}
-          />
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <AgentsPane
+          open={open()}
+          controller={{
+            rows: () => [rowPane("toggle", "Alpha", 0)],
+            current: () => ELSEWHERE,
+            error: () => Option.none(),
+            loading: () => false,
+            refresh: () => {},
+            reload: () => {},
+            detail: () => Option.none(),
+            select: () => {},
+            open,
+          }}
+          onSelect={() => {}}
+          onToggle={() => {
+            toggles++
+            setOpen((current) => !current)
+          }}
+          onDelete={() => {}}
+          onClose={() => setOpen(false)}
+        />
+      ))
 
       expect(renderFrame(setup)).not.toContain("Agents")
 
@@ -847,31 +840,29 @@ describe("Agents pane navigation", () => {
 })
 
 describe("Agents pane delete", () => {
-  it.live("Ctrl+X arms the row in place and a second press deletes it", () =>
+  it.scopedLive("Ctrl+X arms the row in place and a second press deletes it", () =>
     Effect.gen(function* () {
       const deleted: Array<string> = []
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <AgentsPane
-            open={true}
-            controller={{
-              rows: () => [rowPane("doomed", "Alpha", 0)],
-              current: () => Option.none(),
-              error: () => Option.none(),
-              loading: () => false,
-              refresh: () => {},
-              reload: () => {},
-              detail: () => Option.none(),
-              select: () => {},
-              open: () => true,
-            }}
-            onSelect={() => {}}
-            onToggle={() => {}}
-            onDelete={(target) => deleted.push(target.sessionId)}
-            onClose={() => {}}
-          />
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <AgentsPane
+          open={true}
+          controller={{
+            rows: () => [rowPane("doomed", "Alpha", 0)],
+            current: () => ELSEWHERE,
+            error: () => Option.none(),
+            loading: () => false,
+            refresh: () => {},
+            reload: () => {},
+            detail: () => Option.none(),
+            select: () => {},
+            open: () => true,
+          }}
+          onSelect={() => {}}
+          onToggle={() => {}}
+          onDelete={(target) => deleted.push(target.sessionId)}
+          onClose={() => {}}
+        />
+      ))
 
       setup.mockInput.pressKey("x", { ctrl: true })
       yield* Effect.promise(() => setup.renderOnce())
@@ -920,22 +911,20 @@ describe("Agents pane reopen", () => {
           },
         ),
         {
-          currentSession: () => Option.some({ sessionId: live.sessionId, branchId: live.branchId }),
+          currentSession: () => ({ sessionId: live.sessionId, branchId: live.branchId }),
         },
       )
 
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <AgentsPane
-            open={open()}
-            controller={controller}
-            onSelect={() => {}}
-            onToggle={() => {}}
-            onDelete={() => {}}
-            onClose={() => setOpen(false)}
-          />
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <AgentsPane
+          open={open()}
+          controller={controller}
+          onSelect={() => {}}
+          onToggle={() => {}}
+          onDelete={() => {}}
+          onClose={() => setOpen(false)}
+        />
+      ))
       yield* Effect.promise(() => setup.renderOnce())
       expect(asked).toEqual(["reopened"])
 
@@ -957,19 +946,24 @@ describe("Agents pane reopen", () => {
 })
 
 describe("Agents pane framing", () => {
-  it.live("presents as the slash-command popup does: ruled off, titled, one muted footer", () =>
-    Effect.gen(function* () {
-      // The pane reads as a continuation of the composer, not a floating box
-      // over the transcript: the same frame the autocomplete popup draws.
-      const idle: AgentRowEntry = { ...rowPane("framed", "Alpha", 0), section: "idle", live: true }
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
+  it.scopedLive(
+    "presents as the slash-command popup does: ruled off, titled, one muted footer",
+    () =>
+      Effect.gen(function* () {
+        // The pane reads as a continuation of the composer, not a floating box
+        // over the transcript: the same frame the autocomplete popup draws.
+        const idle: AgentRowEntry = {
+          ...rowPane("framed", "Alpha", 0),
+          section: "idle",
+          live: true,
+        }
+        const setup = yield* renderScoped(
           () => (
             <AgentsPane
               open={true}
               controller={{
                 rows: () => [idle],
-                current: () => Option.none(),
+                current: () => ELSEWHERE,
                 error: () => Option.none(),
                 loading: () => false,
                 refresh: () => {},
@@ -993,70 +987,67 @@ describe("Agents pane framing", () => {
             />
           ),
           { width: 80, height: 40 },
-        ),
-      )
-      yield* waitForFrame(setup, (frame) => frame.includes("ctrl+t hide"), "agents pane")
-      const lines = renderFrame(setup).split("\n")
+        )
+        yield* waitForFrame(setup, (frame) => frame.includes("ctrl+t hide"), "agents pane")
+        const lines = renderFrame(setup).split("\n")
 
-      // Ruled top and bottom, never the rounded box a docked pane draws.
-      const rules = lines.filter((line) => line.startsWith("────"))
-      expect(rules.length).toBe(2)
-      expect(renderFrame(setup)).not.toContain("╭")
-      expect(renderFrame(setup)).not.toContain("╰")
+        // Ruled top and bottom, never the rounded box a docked pane draws.
+        const rules = lines.filter((line) => line.startsWith("────"))
+        expect(rules.length).toBe(2)
+        expect(renderFrame(setup)).not.toContain("╭")
+        expect(renderFrame(setup)).not.toContain("╰")
 
-      // The title carries its counts, on the first line inside the top rule.
-      const top = lines.findIndex((line) => line.startsWith("────"))
-      expect(lines[top + 1]).toContain("Agents · 0 running, 1 idle, 0 inactive")
+        // The title carries its counts, on the first line inside the top rule.
+        const top = lines.findIndex((line) => line.startsWith("────"))
+        expect(lines[top + 1]).toContain("Agents · 0 running, 1 idle, 0 inactive")
 
-      // One muted footer line, immediately under the bottom rule.
-      const bottom = lines.findLastIndex((line) => line.startsWith("────"))
-      expect(lines[bottom + 1]).toContain(
-        "↑↓ move · enter select · ctrl+x delete · ctrl+t hide · esc close",
-      )
+        // One muted footer line, immediately under the bottom rule.
+        const bottom = lines.findLastIndex((line) => line.startsWith("────"))
+        expect(lines[bottom + 1]).toContain(
+          "↑↓ move · enter select · ctrl+x delete · ctrl+t hide · esc close",
+        )
 
-      // Every capability the pane had inside the bordered box still draws:
-      // the section heading, the row, and the detail line, each on its own
-      // line. The picker height rule counts items, so a pane that budgeted
-      // rows rather than drawn lines overprints these.
-      const body = lines.slice(top + 1, bottom)
-      expect(body.some((line) => line.includes("Idle (1)"))).toBe(true)
-      expect(body.some((line) => line.includes("Alpha"))).toBe(true)
-      expect(
-        body.some((line) => line.includes("claude-sonnet-5") && line.includes("7 turns")),
-      ).toBe(true)
-    }),
+        // Every capability the pane had inside the bordered box still draws:
+        // the section heading, the row, and the detail line, each on its own
+        // line. The picker height rule counts items, so a pane that budgeted
+        // rows rather than drawn lines overprints these.
+        const body = lines.slice(top + 1, bottom)
+        expect(body.some((line) => line.includes("Idle (1)"))).toBe(true)
+        expect(body.some((line) => line.includes("Alpha"))).toBe(true)
+        expect(
+          body.some((line) => line.includes("claude-sonnet-5") && line.includes("7 turns")),
+        ).toBe(true)
+      }),
   )
 
-  it.live("budgets a row the full width the rule spans, not a bordered pane's", () =>
+  it.scopedLive("budgets a row the full width the rule spans, not a bordered pane's", () =>
     Effect.gen(function* () {
       // The frame rules off top and bottom and has no side border or margin,
       // so a row spends only its own left pad. Budgeting a docked pane's
       // allowance here truncates every row five columns short of the rule.
       const wide = rowPane("wide", "W".repeat(200), 0)
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <AgentsPane
-              open={true}
-              controller={{
-                rows: () => [wide],
-                current: () => Option.none(),
-                error: () => Option.none(),
-                loading: () => false,
-                refresh: () => {},
-                reload: () => {},
-                detail: () => Option.none(),
-                select: () => {},
-                open: () => true,
-              }}
-              onSelect={() => {}}
-              onToggle={() => {}}
-              onDelete={() => {}}
-              onClose={() => {}}
-            />
-          ),
-          { width: 80, height: 40 },
+      const setup = yield* renderScoped(
+        () => (
+          <AgentsPane
+            open={true}
+            controller={{
+              rows: () => [wide],
+              current: () => ELSEWHERE,
+              error: () => Option.none(),
+              loading: () => false,
+              refresh: () => {},
+              reload: () => {},
+              detail: () => Option.none(),
+              select: () => {},
+              open: () => true,
+            }}
+            onSelect={() => {}}
+            onToggle={() => {}}
+            onDelete={() => {}}
+            onClose={() => {}}
+          />
         ),
+        { width: 80, height: 40 },
       )
       yield* waitForFrame(setup, (frame) => frame.includes("WWW"), "wide row")
       const lines = renderFrame(setup).split("\n")
@@ -1076,7 +1067,7 @@ describe("Agents pane framing", () => {
     }),
   )
 
-  it.live("keeps a row's age on the row's own line in a narrow pane", () =>
+  it.scopedLive("keeps a row's age on the row's own line in a narrow pane", () =>
     Effect.gen(function* () {
       // Observed at 58 columns: every row wrapped its age onto a line of its
       // own. A row is drawn inside the list body, which pads a column each
@@ -1085,30 +1076,28 @@ describe("Agents pane framing", () => {
       // off the end.
       const now = yield* Clock.currentTimeMillis
       const aged = agedRow("aged", "New Chat", now - 60_000)
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <AgentsPane
-              open={true}
-              controller={{
-                rows: () => [aged],
-                current: () => Option.none(),
-                error: () => Option.none(),
-                loading: () => false,
-                refresh: () => {},
-                reload: () => {},
-                detail: () => Option.none(),
-                select: () => {},
-                open: () => true,
-              }}
-              onSelect={() => {}}
-              onToggle={() => {}}
-              onDelete={() => {}}
-              onClose={() => {}}
-            />
-          ),
-          { width: 58, height: 24 },
+      const setup = yield* renderScoped(
+        () => (
+          <AgentsPane
+            open={true}
+            controller={{
+              rows: () => [aged],
+              current: () => ELSEWHERE,
+              error: () => Option.none(),
+              loading: () => false,
+              refresh: () => {},
+              reload: () => {},
+              detail: () => Option.none(),
+              select: () => {},
+              open: () => true,
+            }}
+            onSelect={() => {}}
+            onToggle={() => {}}
+            onDelete={() => {}}
+            onClose={() => {}}
+          />
         ),
+        { width: 58, height: 24 },
       )
       yield* waitForFrame(setup, (frame) => frame.includes("New Chat"), "aged row")
       const lines = renderFrame(setup).split("\n")
@@ -1130,7 +1119,7 @@ describe("Agents pane framing", () => {
     }),
   )
 
-  it.live("cuts an overlong label instead of wrapping it under the row", () =>
+  it.scopedLive("cuts an overlong label instead of wrapping it under the row", () =>
     Effect.gen(function* () {
       // With the budget right, `rowLine` already builds exactly the columns a
       // row may spend, so the clamp on the row's text changes nothing here —
@@ -1139,30 +1128,28 @@ describe("Agents pane framing", () => {
       // not reflowed under its own line.
       const now = yield* Clock.currentTimeMillis
       const aged = agedRow("long", "L".repeat(400), now - 2 * 24 * 60 * 60 * 1000)
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <AgentsPane
-              open={true}
-              controller={{
-                rows: () => [aged],
-                current: () => Option.none(),
-                error: () => Option.none(),
-                loading: () => false,
-                refresh: () => {},
-                reload: () => {},
-                detail: () => Option.none(),
-                select: () => {},
-                open: () => true,
-              }}
-              onSelect={() => {}}
-              onToggle={() => {}}
-              onDelete={() => {}}
-              onClose={() => {}}
-            />
-          ),
-          { width: 58, height: 24 },
+      const setup = yield* renderScoped(
+        () => (
+          <AgentsPane
+            open={true}
+            controller={{
+              rows: () => [aged],
+              current: () => ELSEWHERE,
+              error: () => Option.none(),
+              loading: () => false,
+              refresh: () => {},
+              reload: () => {},
+              detail: () => Option.none(),
+              select: () => {},
+              open: () => true,
+            }}
+            onSelect={() => {}}
+            onToggle={() => {}}
+            onDelete={() => {}}
+            onClose={() => {}}
+          />
         ),
+        { width: 58, height: 24 },
       )
       yield* waitForFrame(setup, (frame) => frame.includes("LLL"), "long row")
       const lines = renderFrame(setup).split("\n")
@@ -1181,7 +1168,7 @@ describe("Agents pane framing", () => {
     }),
   )
 
-  it.live("budgets a row the columns it actually spends", () =>
+  it.scopedLive("budgets a row the columns it actually spends", () =>
     Effect.gen(function* () {
       // The drawn row cannot witness this once the text is clamped: the clamp
       // cuts a line to the row's box whatever the budget says, so an
@@ -1194,40 +1181,36 @@ describe("Agents pane framing", () => {
         seen.push({ rowPane: rowWidth(), section: sectionWidth() })
         return <text>probe</text>
       }
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <Probe />, { width: 58, height: 24 }),
-      )
+      const setup = yield* renderScoped(() => <Probe />, { width: 58, height: 24 })
       yield* waitForFrame(setup, (frame) => frame.includes("probe"), "probe")
       expect(seen[0]).toEqual({ rowPane: 55, section: 56 })
     }),
   )
 
-  it.live("keeps the error surface inside the frame", () =>
+  it.scopedLive("keeps the error surface inside the frame", () =>
     Effect.gen(function* () {
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <AgentsPane
-              open={true}
-              controller={{
-                rows: () => [rowPane("erred", "Alpha", 0)],
-                current: () => Option.none(),
-                error: () => Option.some("listing failed"),
-                loading: () => false,
-                refresh: () => {},
-                reload: () => {},
-                detail: () => Option.none(),
-                select: () => {},
-                open: () => true,
-              }}
-              onSelect={() => {}}
-              onToggle={() => {}}
-              onDelete={() => {}}
-              onClose={() => {}}
-            />
-          ),
-          { width: 80, height: 40 },
+      const setup = yield* renderScoped(
+        () => (
+          <AgentsPane
+            open={true}
+            controller={{
+              rows: () => [rowPane("erred", "Alpha", 0)],
+              current: () => ELSEWHERE,
+              error: () => Option.some("listing failed"),
+              loading: () => false,
+              refresh: () => {},
+              reload: () => {},
+              detail: () => Option.none(),
+              select: () => {},
+              open: () => true,
+            }}
+            onSelect={() => {}}
+            onToggle={() => {}}
+            onDelete={() => {}}
+            onClose={() => {}}
+          />
         ),
+        { width: 80, height: 40 },
       )
       yield* waitForFrame(setup, (frame) => frame.includes("listing failed"), "error row")
       const lines = renderFrame(setup).split("\n")
@@ -1281,33 +1264,31 @@ const rows = [
 describe("agents pane rows", () => {
   /** The pane over `listed`, in the order the server sent them, at `width` columns. */
   const paneOver = (listed: ReadonlyArray<AgentRowEntry>, width: number) =>
-    Effect.promise(() =>
-      renderWithProviders(
-        () => (
-          <AgentsPane
-            open={true}
-            controller={{
-              rows: () => listed,
-              current: () => Option.none(),
-              error: () => Option.none(),
-              loading: () => false,
-              refresh: () => {},
-              reload: () => {},
-              detail: () => Option.none(),
-              select: () => {},
-              open: () => true,
-            }}
-            onSelect={() => {}}
-            onToggle={() => {}}
-            onDelete={() => {}}
-            onClose={() => {}}
-          />
-        ),
-        { width, height: 24 },
+    renderScoped(
+      () => (
+        <AgentsPane
+          open={true}
+          controller={{
+            rows: () => listed,
+            current: () => ELSEWHERE,
+            error: () => Option.none(),
+            loading: () => false,
+            refresh: () => {},
+            reload: () => {},
+            detail: () => Option.none(),
+            select: () => {},
+            open: () => true,
+          }}
+          onSelect={() => {}}
+          onToggle={() => {}}
+          onDelete={() => {}}
+          onClose={() => {}}
+        />
       ),
+      { width, height: 24 },
     )
 
-  it.live(
+  it.scopedLive(
     "each agent is one line with its glyph, task, what it does now and its time, running first, at 43 columns",
     () =>
       Effect.gen(function* () {
@@ -1350,7 +1331,7 @@ describe("agents pane rows", () => {
       }),
   )
 
-  it.live("a long task name leaves room for what the agent is doing", () =>
+  it.scopedLive("a long task name leaves room for what the agent is doing", () =>
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis
       const listed: ReadonlyArray<AgentRowEntry> = [
@@ -1370,7 +1351,7 @@ describe("agents pane rows", () => {
     }),
   )
 
-  it.live("a child woken after it settled shows its current run time, not its age", () =>
+  it.scopedLive("a child woken after it settled shows its current run time, not its age", () =>
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis
       const listed: ReadonlyArray<AgentRowEntry> = [
@@ -1390,7 +1371,7 @@ describe("agents pane rows", () => {
     }),
   )
 
-  it.live("a wide-character task name keeps the time on the row at 43 columns", () =>
+  it.scopedLive("a wide-character task name keeps the time on the row at 43 columns", () =>
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis
       const listed: ReadonlyArray<AgentRowEntry> = [
@@ -1456,8 +1437,7 @@ describe("idle middle parent", () => {
   ]
   const controllerOver = (open: () => boolean) => ({
     rows: () => nested,
-    current: () =>
-      Option.some({ sessionId: SessionId.make("main"), branchId: BranchId.make("main-branch") }),
+    current: () => ({ sessionId: SessionId.make("main"), branchId: BranchId.make("main-branch") }),
     error: () => Option.none(),
     loading: () => false,
     refresh: () => {},
@@ -1467,33 +1447,31 @@ describe("idle middle parent", () => {
     open,
   })
 
-  it.live("the tray lists only the grandchild that works", () =>
+  it.scopedLive("the tray lists only the grandchild that works", () =>
     Effect.gen(function* () {
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <SubagentTray controller={controllerOver(() => false)} />),
-      )
+      const setup = yield* renderScoped(() => (
+        <SubagentTray controller={controllerOver(() => false)} />
+      ))
       const frame = yield* waitForFrame(setup, (next) => next.includes("working"), "tray")
       expect(frame).toContain("working · delegate: b task")
       expect(frame).not.toContain("a task")
     }),
   )
 
-  it.live("the pane counts it idle in its title, its section and its glyph", () =>
+  it.scopedLive("the pane counts it idle in its title, its section and its glyph", () =>
     Effect.gen(function* () {
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <AgentsPane
-              open={true}
-              controller={controllerOver(() => true)}
-              onSelect={() => {}}
-              onToggle={() => {}}
-              onDelete={() => {}}
-              onClose={() => {}}
-            />
-          ),
-          { width: 100, height: 20 },
+      const setup = yield* renderScoped(
+        () => (
+          <AgentsPane
+            open={true}
+            controller={controllerOver(() => true)}
+            onSelect={() => {}}
+            onToggle={() => {}}
+            onDelete={() => {}}
+            onClose={() => {}}
+          />
         ),
+        { width: 100, height: 20 },
       )
       const frame = yield* waitForFrame(setup, (next) => next.includes("Agents"), "pane")
       expect(frame).toContain("1 running, 2 idle, 0 inactive")
@@ -1563,43 +1541,40 @@ describe("trayLines", () => {
 })
 
 describe("Subagent tray", () => {
-  it.live("lists the running child and hides when the pane opens", () =>
+  it.scopedLive("lists the running child and hides when the pane opens", () =>
     Effect.gen(function* () {
       const [open, setOpen] = createSignal(false)
       const refreshes: Array<string> = []
 
       // As in the app: the dock wraps the footer, and the open agents pane
       // mounts a `PickerFrame` in it.
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <DockProvider>
-            <SubagentTray
-              controller={{
-                rows: () => rows,
-                current: () =>
-                  Option.some({
-                    sessionId: SessionId.make("root"),
-                    branchId: BranchId.make("root-branch"),
-                  }),
-                error: () => Option.none(),
-                loading: () => false,
-                refresh: (query) => {
-                  refreshes.push(query)
-                },
-                reload: () => {},
-                detail: () => Option.none(),
-                select: () => {},
-                open,
-              }}
-            />
-            <Show when={open()}>
-              <PickerFrame title="PANE" keys={[]}>
-                <box />
-              </PickerFrame>
-            </Show>
-          </DockProvider>
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <DockProvider>
+          <SubagentTray
+            controller={{
+              rows: () => rows,
+              current: () => ({
+                sessionId: SessionId.make("root"),
+                branchId: BranchId.make("root-branch"),
+              }),
+              error: () => Option.none(),
+              loading: () => false,
+              refresh: (query) => {
+                refreshes.push(query)
+              },
+              reload: () => {},
+              detail: () => Option.none(),
+              select: () => {},
+              open,
+            }}
+          />
+          <Show when={open()}>
+            <PickerFrame title="PANE" keys={[]} error={Option.none()}>
+              <box />
+            </PickerFrame>
+          </Show>
+        </DockProvider>
+      ))
 
       yield* waitForFrame(setup, () => renderFrame(setup).includes("working"), "tray")
       const frame = renderFrame(setup)
@@ -1615,51 +1590,21 @@ describe("Subagent tray", () => {
     }),
   )
 
-  it.live("the hint stays on the row when a child's name is wide", () =>
+  it.scopedLive("the hint stays on the row when a child's name is wide", () =>
     Effect.gen(function* () {
       const wide = [
         root("root", "idle"),
         { ...child("wide", "running", "root"), name: "日本語のタスク" },
       ]
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <SubagentTray
-              controller={{
-                rows: () => wide,
-                current: () =>
-                  Option.some({
-                    sessionId: SessionId.make("root"),
-                    branchId: BranchId.make("root-branch"),
-                  }),
-                error: () => Option.none(),
-                loading: () => false,
-                refresh: () => {},
-                reload: () => {},
-                detail: () => Option.none(),
-                select: () => {},
-                open: () => false,
-              }}
-            />
-          ),
-          { width: 80, height: 10 },
-        ),
-      )
-      const frame = yield* waitForFrame(setup, (next) => next.includes("working"), "wide tray")
-      // Padding counts display columns: each of these characters takes two.
-      expect(frame).toContain("ctrl+t agents")
-    }),
-  )
-
-  it.live("stays hidden for a session whose children are all idle or inactive", () =>
-    Effect.gen(function* () {
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
+      const setup = yield* renderScoped(
+        () => (
           <SubagentTray
             controller={{
-              rows: () => rows,
-              current: () =>
-                Option.some({ sessionId: SessionId.make("child-b"), branchId: BranchId.make("b") }),
+              rows: () => wide,
+              current: () => ({
+                sessionId: SessionId.make("root"),
+                branchId: BranchId.make("root-branch"),
+              }),
               error: () => Option.none(),
               loading: () => false,
               refresh: () => {},
@@ -1669,8 +1614,32 @@ describe("Subagent tray", () => {
               open: () => false,
             }}
           />
-        )),
+        ),
+        { width: 80, height: 10 },
       )
+      const frame = yield* waitForFrame(setup, (next) => next.includes("working"), "wide tray")
+      // Padding counts display columns: each of these characters takes two.
+      expect(frame).toContain("ctrl+t agents")
+    }),
+  )
+
+  it.scopedLive("stays hidden for a session whose children are all idle or inactive", () =>
+    Effect.gen(function* () {
+      const setup = yield* renderScoped(() => (
+        <SubagentTray
+          controller={{
+            rows: () => rows,
+            current: () => ({ sessionId: SessionId.make("child-b"), branchId: BranchId.make("b") }),
+            error: () => Option.none(),
+            loading: () => false,
+            refresh: () => {},
+            reload: () => {},
+            detail: () => Option.none(),
+            select: () => {},
+            open: () => false,
+          }}
+        />
+      ))
       yield* Effect.promise(() => setup.renderOnce())
       expect(renderFrame(setup)).not.toContain("working")
       expect(renderFrame(setup)).not.toContain("agents")
@@ -1713,7 +1682,7 @@ describe("Agents controller across a session switch", () => {
       const gate = yield* Deferred.make<ReadonlyArray<AgentRowEntry>>()
 
       // The shell starts on "first"; the test moves it while the fetch is out.
-      let active = Option.some(key("first"))
+      let active = key("first")
 
       const controller = yield* provideClientServices(
         makeAgentsController(
@@ -1725,7 +1694,7 @@ describe("Agents controller across a session switch", () => {
 
       // Fetch for "first" goes out, then the shell switches to "second".
       controller.refresh("")
-      active = Option.some(key("second"))
+      active = key("second")
 
       // The in-flight reply carries the previous session's rows.
       yield* Deferred.succeed(gate, [rowStaleReply("first")])
@@ -1744,7 +1713,7 @@ describe("Agents controller across a session switch", () => {
         ["ab", second],
       ])
 
-      const active = Option.some(key("only"))
+      const active = key("only")
       const controller = yield* provideClientServices(
         makeAgentsController(
           ({ query }) =>
@@ -1775,7 +1744,7 @@ describe("Agents controller across a session switch", () => {
     Effect.gen(function* () {
       const gate = yield* Deferred.make<ReadonlyArray<AgentRowEntry>>()
 
-      let active = Option.some(key("first"))
+      let active = key("first")
       const controller = yield* provideClientServices(
         makeAgentsController(
           () => Deferred.await(gate),
@@ -1786,7 +1755,7 @@ describe("Agents controller across a session switch", () => {
 
       controller.refresh("")
       expect(controller.loading()).toBe(true)
-      active = Option.some(key("second"))
+      active = key("second")
 
       yield* Deferred.succeed(gate, [rowStaleReply("first")])
       yield* Effect.yieldNow

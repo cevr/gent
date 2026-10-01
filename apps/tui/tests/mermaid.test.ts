@@ -1,6 +1,7 @@
 import { describe, expect, test } from "effect-bun-test"
 import { Option } from "effect"
 import { createMermaidCache, extractMermaidBlocks, replaceMermaidBlocks } from "../src/mermaid"
+import { textWidth } from "../src/bun-adapter"
 
 // ── mermaid blocks ──────────────────────────────────────────────────────────
 
@@ -80,6 +81,15 @@ describe("inline mermaid replace", () => {
     expect(drawn).not.toContain("```mermaid")
     expect(drawn).toContain("Alpha")
     expect(widest(drawn)).toBeLessThanOrEqual(80)
+  })
+
+  // A CJK label takes two columns a character: the fit counts columns, not
+  // code units, so the drawing chosen fits the terminal.
+  test("a diagram with wide labels is fitted by the columns it takes", () => {
+    const wide = "```mermaid\ngraph LR\n  A[甲乙丙丁戊己庚辛]-->B[壬癸子丑寅卯辰巳]\n```"
+    const drawn = uncached(wide, 45)
+    expect(drawn).not.toContain("```mermaid")
+    expect(Math.max(...drawn.split("\n").map((line) => textWidth(line)))).toBeLessThanOrEqual(45)
   })
 
   test("a width no preset fits keeps the tightest drawing", () => {

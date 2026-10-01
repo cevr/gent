@@ -16,14 +16,13 @@ import {
   makeThreadController,
   summaryBody,
   threadChain,
-  threadItems,
   ThreadPane,
   type ThreadWindow,
   windowLabel,
   windowsOf,
 } from "../../src/extensions/thread-view.client"
 import { childTaskText } from "@gent/extensions/client"
-import { renderFrame, renderWithProviders } from "../render-harness-boundary"
+import { renderFrame, renderScoped } from "../render-harness-boundary"
 import { waitForFrame } from "../helpers-boundary"
 import { provideClientServices } from "../extension-test-harness-boundary"
 
@@ -182,35 +181,10 @@ describe("windows on a branch", () => {
     expect(detailFor(Option.some({ ...window, summary: Option.none() }))).toBe("a … b")
     expect(summaryBody("no preamble")).toBe("no preamble")
   })
-
-  test("opens a heading per session", () => {
-    const base: ThreadWindow = {
-      sessionId,
-      branchId,
-      sessionName: "Session s1",
-      index: 1,
-      firstMessageId: "a",
-      lastMessageId: "b",
-      count: 1,
-      summary: Option.none(),
-      summarizedCount: 0,
-      omittedCount: 0,
-      preview: "",
-      updatedAt: 0,
-    }
-    const other = { ...base, sessionId: SessionId.make("s2"), sessionName: "Session s2" }
-    expect(threadItems([base, { ...base, index: 2 }, other]).map((item) => item.kind)).toEqual([
-      "heading",
-      "window",
-      "window",
-      "heading",
-      "window",
-    ])
-  })
 })
 
 describe("thread pane", () => {
-  it.live("opens on the live window, moves with the keyboard, and closes with Escape", () =>
+  it.scopedLive("opens on the live window, moves with the keyboard, and closes with Escape", () =>
     Effect.gen(function* () {
       const base: ThreadWindow = {
         sessionId,
@@ -238,26 +212,24 @@ describe("thread pane", () => {
       }
       let selected = Option.none<ThreadWindow>()
       const [open, setOpen] = createSignal(true)
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <ThreadPane
-            open={open()}
-            controller={{
-              windows: () => [base, second],
-              sessions: () => 1,
-              current: () => Option.some({ sessionId, branchId }),
-              error: () => Option.none(),
-              loading: () => false,
-              refresh: () => {},
-              open: () => true,
-            }}
-            onSelect={(value) => {
-              selected = Option.some(value)
-            }}
-            onClose={() => setOpen(false)}
-          />
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <ThreadPane
+          open={open()}
+          controller={{
+            windows: () => [base, second],
+            sessions: () => 1,
+            current: () => ({ sessionId, branchId }),
+            error: () => Option.none(),
+            loading: () => false,
+            refresh: () => {},
+            open: () => true,
+          }}
+          onSelect={(value) => {
+            selected = Option.some(value)
+          }}
+          onClose={() => setOpen(false)}
+        />
+      ))
 
       yield* waitForFrame(setup, () => renderFrame(setup).includes("2 windows"), "thread pane")
       expect(renderFrame(setup)).toContain("what happened before")
@@ -291,7 +263,7 @@ describe("Thread controller across a session switch", () => {
     Effect.gen(function* () {
       const gate = yield* Deferred.make<ReadonlyArray<Session>>()
 
-      let active = Option.some(key("first"))
+      let active = key("first")
 
       const controller = yield* provideClientServices(
         makeThreadController(
@@ -303,7 +275,7 @@ describe("Thread controller across a session switch", () => {
       )
 
       controller.refresh()
-      active = Option.some(key("second"))
+      active = key("second")
 
       yield* Deferred.succeed(gate, [
         new Session({

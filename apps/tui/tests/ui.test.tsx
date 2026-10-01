@@ -4,6 +4,7 @@ import { Clock, Effect, Option } from "effect"
 import { createSignal } from "solid-js"
 import {
   decoration,
+  groupedRows,
   keyHint,
   keyHintsLine,
   KeyHints,
@@ -17,7 +18,7 @@ import {
   transitionSelectList,
   usePickerGeometry,
 } from "../src/ui"
-import { createMockClient, renderFrame, renderWithProviders } from "./render-harness-boundary"
+import { createMockClient, renderFrame, renderScoped } from "./render-harness-boundary"
 import { waitForFrame } from "./helpers-boundary"
 import {
   BranchId,
@@ -112,21 +113,19 @@ describe("select list reducer", () => {
 })
 
 describe("select list keyboard", () => {
-  it.live("moves with arrows and control keys, and selects with enter", () =>
+  it.scopedLive("moves with arrows and control keys, and selects with enter", () =>
     Effect.gen(function* () {
       const picked: Array<string> = []
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <SelectList
-            id="fruit"
-            open={true}
-            rows={() => plainRows(fruits)}
-            rowKey={(fruit) => fruit.id}
-            onSelect={(fruit) => picked.push(fruit.id)}
-            onDismiss={() => {}}
-          />
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <SelectList
+          id="fruit"
+          open={true}
+          rows={() => plainRows(fruits)}
+          rowKey={(fruit) => fruit.id}
+          onSelect={(fruit) => picked.push(fruit.id)}
+          onDismiss={() => {}}
+        />
+      ))
       yield* waitForFrame(setup, () => renderFrame(setup).includes("> Apple"), "open")
 
       setup.mockInput.pressArrow("down")
@@ -151,21 +150,19 @@ describe("select list keyboard", () => {
     }),
   )
 
-  it.live("dismisses on escape", () =>
+  it.scopedLive("dismisses on escape", () =>
     Effect.gen(function* () {
       const [open, setOpen] = createSignal(true)
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <SelectList
-            id="fruit"
-            open={open()}
-            rows={() => plainRows(fruits)}
-            rowKey={(fruit) => fruit.id}
-            onSelect={() => {}}
-            onDismiss={() => setOpen(false)}
-          />
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <SelectList
+          id="fruit"
+          open={open()}
+          rows={() => plainRows(fruits)}
+          rowKey={(fruit) => fruit.id}
+          onSelect={() => {}}
+          onDismiss={() => setOpen(false)}
+        />
+      ))
       yield* waitForFrame(setup, () => renderFrame(setup).includes("Apple"), "open")
       setup.mockInput.pressEscape()
       // The mock terminal holds an escape until the next frame, so poll for the
@@ -175,29 +172,27 @@ describe("select list keyboard", () => {
     }),
   )
 
-  it.live("gives a pane its own keys before the list sees them", () =>
+  it.scopedLive("gives a pane its own keys before the list sees them", () =>
     Effect.gen(function* () {
       const armed: Array<string> = []
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <SelectList
-            id="fruit"
-            open={true}
-            rows={() => plainRows(fruits)}
-            rowKey={(fruit) => fruit.id}
-            extraKeys={(event, selected) => {
-              if (event.ctrl !== true || event.name !== "x") return false
-              Option.match(selected, {
-                onNone: () => {},
-                onSome: (fruit) => armed.push(fruit.id),
-              })
-              return true
-            }}
-            onSelect={() => {}}
-            onDismiss={() => {}}
-          />
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <SelectList
+          id="fruit"
+          open={true}
+          rows={() => plainRows(fruits)}
+          rowKey={(fruit) => fruit.id}
+          extraKeys={(event, selected) => {
+            if (event.ctrl !== true || event.name !== "x") return false
+            Option.match(selected, {
+              onNone: () => {},
+              onSome: (fruit) => armed.push(fruit.id),
+            })
+            return true
+          }}
+          onSelect={() => {}}
+          onDismiss={() => {}}
+        />
+      ))
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressArrow("down")
       yield* Effect.promise(() => setup.renderOnce())
@@ -206,21 +201,19 @@ describe("select list keyboard", () => {
     }),
   )
 
-  it.live("leaves every key alone while closed", () =>
+  it.scopedLive("leaves every key alone while closed", () =>
     Effect.gen(function* () {
       const picked: Array<string> = []
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <SelectList
-            id="fruit"
-            open={false}
-            rows={() => plainRows(fruits)}
-            rowKey={(fruit) => fruit.id}
-            onSelect={(fruit) => picked.push(fruit.id)}
-            onDismiss={() => {}}
-          />
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <SelectList
+          id="fruit"
+          open={false}
+          rows={() => plainRows(fruits)}
+          rowKey={(fruit) => fruit.id}
+          onSelect={(fruit) => picked.push(fruit.id)}
+          onDismiss={() => {}}
+        />
+      ))
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressEnter()
       expect(picked).toEqual([])
@@ -229,31 +222,29 @@ describe("select list keyboard", () => {
 })
 
 describe("select list filter", () => {
-  it.live("draws the query, reports every change, and narrows the rows", () =>
+  it.scopedLive("draws the query, reports every change, and narrows the rows", () =>
     Effect.gen(function* () {
       const [query, setQuery] = createSignal("")
       const seen: Array<string> = []
       const visible = () =>
         fruits.filter((fruit) => fruit.name.toLowerCase().includes(query().toLowerCase()))
 
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <SelectList
-            id="fruit"
-            open={true}
-            rows={() => plainRows(visible())}
-            rowKey={(fruit) => fruit.id}
-            filter={{
-              onQueryChange: (next) => {
-                seen.push(next)
-                setQuery(next)
-              },
-            }}
-            onSelect={() => {}}
-            onDismiss={() => {}}
-          />
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <SelectList
+          id="fruit"
+          open={true}
+          rows={() => plainRows(visible())}
+          rowKey={(fruit) => fruit.id}
+          filter={{
+            onQueryChange: (next) => {
+              seen.push(next)
+              setQuery(next)
+            },
+          }}
+          onSelect={() => {}}
+          onDismiss={() => {}}
+        />
+      ))
       yield* waitForFrame(setup, () => renderFrame(setup).includes("Cherry"), "open")
 
       setup.mockInput.pressKey("a")
@@ -272,22 +263,20 @@ describe("select list filter", () => {
     }),
   )
 
-  it.live("ignores control characters as filter input", () =>
+  it.scopedLive("ignores control characters as filter input", () =>
     Effect.gen(function* () {
       const seen: Array<string> = []
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <SelectList
-            id="fruit"
-            open={true}
-            rows={() => plainRows(fruits)}
-            rowKey={(fruit) => fruit.id}
-            filter={{ onQueryChange: (next) => seen.push(next) }}
-            onSelect={() => {}}
-            onDismiss={() => {}}
-          />
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <SelectList
+          id="fruit"
+          open={true}
+          rows={() => plainRows(fruits)}
+          rowKey={(fruit) => fruit.id}
+          filter={{ onQueryChange: (next) => seen.push(next) }}
+          onSelect={() => {}}
+          onDismiss={() => {}}
+        />
+      ))
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressTab()
       yield* Effect.promise(() => setup.renderOnce())
@@ -298,29 +287,27 @@ describe("select list filter", () => {
 })
 
 describe("select list sticky selection", () => {
-  it.live("moves the cursor onto the anchored row when the data lands", () =>
+  it.scopedLive("moves the cursor onto the anchored row when the data lands", () =>
     Effect.gen(function* () {
       // The fetch resolves after the pane mounts, which is why the anchor
       // cannot be applied once at open time.
       const [rows, setRows] = createSignal<ReadonlyArray<Fruit>>([])
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <SelectList
-            id="fruit"
-            open={true}
-            rows={() => plainRows(rows())}
-            rowKey={(fruit) => fruit.id}
-            sticky={(values) => {
-              const index = values.findIndex((fruit) => fruit.id === "cherry")
-              if (index < 0) return Option.none()
-              return Option.some(index)
-            }}
-            empty={() => <text>nothing yet</text>}
-            onSelect={() => {}}
-            onDismiss={() => {}}
-          />
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <SelectList
+          id="fruit"
+          open={true}
+          rows={() => plainRows(rows())}
+          rowKey={(fruit) => fruit.id}
+          sticky={(values) => {
+            const index = values.findIndex((fruit) => fruit.id === "cherry")
+            if (index < 0) return Option.none()
+            return Option.some(index)
+          }}
+          empty={() => <text>nothing yet</text>}
+          onSelect={() => {}}
+          onDismiss={() => {}}
+        />
+      ))
       yield* waitForFrame(setup, () => renderFrame(setup).includes("nothing yet"), "empty")
 
       setRows(fruits)
@@ -329,7 +316,7 @@ describe("select list sticky selection", () => {
     }),
   )
 
-  it.live("stops re-anchoring once the reader has typed", () =>
+  it.scopedLive("stops re-anchoring once the reader has typed", () =>
     Effect.gen(function* () {
       // A sticky rule that keeps firing while the filter narrows drags the
       // cursor off whatever the reader is looking for.
@@ -338,24 +325,22 @@ describe("select list sticky selection", () => {
         fruits.filter((fruit) => fruit.name.toLowerCase().includes(query().toLowerCase()))
       const picked: Array<string> = []
 
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <SelectList
-            id="fruit"
-            open={true}
-            rows={() => plainRows(visible())}
-            rowKey={(fruit) => fruit.id}
-            filter={{ onQueryChange: setQuery }}
-            sticky={(values) => {
-              const index = values.findIndex((fruit) => fruit.id === "cherry")
-              if (index < 0) return Option.some(0)
-              return Option.some(index)
-            }}
-            onSelect={(fruit) => picked.push(fruit.id)}
-            onDismiss={() => {}}
-          />
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <SelectList
+          id="fruit"
+          open={true}
+          rows={() => plainRows(visible())}
+          rowKey={(fruit) => fruit.id}
+          filter={{ onQueryChange: setQuery }}
+          sticky={(values) => {
+            const index = values.findIndex((fruit) => fruit.id === "cherry")
+            if (index < 0) return Option.some(0)
+            return Option.some(index)
+          }}
+          onSelect={(fruit) => picked.push(fruit.id)}
+          onDismiss={() => {}}
+        />
+      ))
       yield* waitForFrame(setup, () => renderFrame(setup).includes("> Cherry"), "anchored")
 
       // "an" matches Banana only; the cursor has to land on it rather than
@@ -368,7 +353,7 @@ describe("select list sticky selection", () => {
     }),
   )
 
-  it.live("a key two rows share keeps the cursor on the one nearest where it was", () =>
+  it.scopedLive("a key two rows share keeps the cursor on the one nearest where it was", () =>
     Effect.gen(function* () {
       // Two entries share a key; the reader sits on the second. A new entry
       // lands on top, and the cursor must stay on the second, not jump to
@@ -381,18 +366,16 @@ describe("select list sticky selection", () => {
         older,
       ])
       const picked: Array<string> = []
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <SelectList
-            id="fruit"
-            open={true}
-            rows={() => plainRows(rows())}
-            rowKey={(fruit) => fruit.id}
-            onSelect={(fruit) => picked.push(fruit.name)}
-            onDismiss={() => {}}
-          />
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <SelectList
+          id="fruit"
+          open={true}
+          rows={() => plainRows(rows())}
+          rowKey={(fruit) => fruit.id}
+          onSelect={(fruit) => picked.push(fruit.name)}
+          onDismiss={() => {}}
+        />
+      ))
       yield* waitForFrame(setup, () => renderFrame(setup).includes("> Newer apple"), "open")
       setup.mockInput.pressArrow("up")
       yield* waitForFrame(setup, () => renderFrame(setup).includes("> Older apple"), "moved")
@@ -408,26 +391,24 @@ describe("select list sticky selection", () => {
     }),
   )
 
-  it.live("keeps the cursor on the reader's row when the rows arrive again reordered", () =>
+  it.scopedLive("keeps the cursor on the reader's row when the rows arrive again reordered", () =>
     Effect.gen(function* () {
       // A pane that polls hands the list fresh objects, in a new order. The
       // cursor the reader moved stays on the same entry, not the same index
       // and not the sticky row.
       const [rows, setRows] = createSignal<ReadonlyArray<Fruit>>(fruits)
       const picked: Array<string> = []
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <SelectList
-            id="fruit"
-            open={true}
-            rows={() => plainRows(rows())}
-            rowKey={(fruit) => fruit.id}
-            sticky={(values) => Option.some(values.findIndex((fruit) => fruit.id === "cherry"))}
-            onSelect={(fruit) => picked.push(fruit.id)}
-            onDismiss={() => {}}
-          />
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <SelectList
+          id="fruit"
+          open={true}
+          rows={() => plainRows(rows())}
+          rowKey={(fruit) => fruit.id}
+          sticky={(values) => Option.some(values.findIndex((fruit) => fruit.id === "cherry"))}
+          onSelect={(fruit) => picked.push(fruit.id)}
+          onDismiss={() => {}}
+        />
+      ))
       yield* waitForFrame(setup, () => renderFrame(setup).includes("> Cherry"), "anchored")
       setup.mockInput.pressArrow("up")
       yield* waitForFrame(setup, () => renderFrame(setup).includes("> Banana"), "moved")
@@ -444,22 +425,20 @@ describe("select list sticky selection", () => {
     }),
   )
 
-  it.live("keeps the cursor inside a list that shrank under it", () =>
+  it.scopedLive("keeps the cursor inside a list that shrank under it", () =>
     Effect.gen(function* () {
       const [rows, setRows] = createSignal(fruits)
       const picked: Array<string> = []
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <SelectList
-            id="fruit"
-            open={true}
-            rows={() => plainRows(rows())}
-            rowKey={(fruit) => fruit.id}
-            onSelect={(fruit) => picked.push(fruit.id)}
-            onDismiss={() => {}}
-          />
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <SelectList
+          id="fruit"
+          open={true}
+          rows={() => plainRows(rows())}
+          rowKey={(fruit) => fruit.id}
+          onSelect={(fruit) => picked.push(fruit.id)}
+          onDismiss={() => {}}
+        />
+      ))
       yield* waitForFrame(setup, () => renderFrame(setup).includes("Cherry"), "open")
       setup.mockInput.pressArrow("down")
       setup.mockInput.pressArrow("down")
@@ -474,7 +453,23 @@ describe("select list sticky selection", () => {
 })
 
 describe("select list rows", () => {
-  it.live("draws decorations without letting the cursor stop on them", () =>
+  test("a heading opens each run of one group and counts the group", () => {
+    const rows = groupedRows(
+      ["a1", "a2", "b1"],
+      (item) => item.slice(0, 1),
+      (first, count) => selectable(`# ${first.slice(0, 1)} ${count}`, () => <box />),
+      (item) => selectable(item, () => <box />),
+    )
+    expect(rows.map((row) => Option.getOrElse(row.value, () => ""))).toEqual([
+      "# a 2",
+      "a1",
+      "a2",
+      "# b 1",
+      "b1",
+    ])
+  })
+
+  it.scopedLive("draws decorations without letting the cursor stop on them", () =>
     Effect.gen(function* () {
       const picked: Array<string> = []
       const rows = (): ReadonlyArray<SelectListRow<Fruit>> => [
@@ -484,18 +479,16 @@ describe("select list rows", () => {
         ...plainRows(fruits.slice(1)),
       ]
 
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <SelectList
-            id="fruit"
-            open={true}
-            rows={rows}
-            rowKey={(fruit) => fruit.id}
-            onSelect={(fruit) => picked.push(fruit.id)}
-            onDismiss={() => {}}
-          />
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <SelectList
+          id="fruit"
+          open={true}
+          rows={rows}
+          rowKey={(fruit) => fruit.id}
+          onSelect={(fruit) => picked.push(fruit.id)}
+          onDismiss={() => {}}
+        />
+      ))
       yield* waitForFrame(setup, () => renderFrame(setup).includes("— Berries —"), "open")
       // The first press moves past a heading onto the second fruit, not onto
       // the heading itself.
@@ -506,21 +499,19 @@ describe("select list rows", () => {
     }),
   )
 
-  it.live("draws the empty fallback when nothing is selectable", () =>
+  it.scopedLive("draws the empty fallback when nothing is selectable", () =>
     Effect.gen(function* () {
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <SelectList
-            id="fruit"
-            open={true}
-            rows={(): ReadonlyArray<SelectListRow<Fruit>> => []}
-            rowKey={(fruit) => fruit.id}
-            empty={() => <text>nothing matches</text>}
-            onSelect={() => {}}
-            onDismiss={() => {}}
-          />
-        )),
-      )
+      const setup = yield* renderScoped(() => (
+        <SelectList
+          id="fruit"
+          open={true}
+          rows={(): ReadonlyArray<SelectListRow<Fruit>> => []}
+          rowKey={(fruit) => fruit.id}
+          empty={() => <text>nothing matches</text>}
+          onSelect={() => {}}
+          onDismiss={() => {}}
+        />
+      ))
       yield* waitForFrame(setup, () => renderFrame(setup).includes("nothing matches"), "empty")
       expect(renderFrame(setup)).not.toContain("Apple")
     }),
@@ -633,28 +624,31 @@ describe("picker height rule", () => {
             </box>
           )),
         )
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <PickerFrame title="TITLE" keys={[keyHint("KEY-HINT", "go")]} {...note}>
-              <SelectList
-                id="frame-rows"
-                open={true}
-                rows={bodyRows}
-                rowKey={(label) => label}
-                onSelect={() => {}}
-                onDismiss={() => {}}
-              />
-            </PickerFrame>
-          ),
-          { width: 80, height: 40 },
+      const setup = yield* renderScoped(
+        () => (
+          <PickerFrame
+            title="TITLE"
+            keys={[keyHint("KEY-HINT", "go")]}
+            error={Option.none()}
+            {...note}
+          >
+            <SelectList
+              id="frame-rows"
+              open={true}
+              rows={bodyRows}
+              rowKey={(label) => label}
+              onSelect={() => {}}
+              onDismiss={() => {}}
+            />
+          </PickerFrame>
         ),
+        { width: 80, height: 40 },
       )
       yield* waitForFrame(setup, (frame) => frame.includes("KEY-HINT"), "frame")
       return { rows: renderedFrameRows(renderFrame(setup)), frame: renderFrame(setup) }
     })
 
-  it.live("a pane with a detail line gets its row, drawn or not yet", () =>
+  it.scopedLive("a pane with a detail line gets its row, drawn or not yet", () =>
     Effect.gen(function* () {
       expect((yield* frameRows({})).rows).toBe(pickerHeight(2, 40))
       // The row stays while the detail has nothing to say, so the pane does
@@ -669,7 +663,7 @@ describe("picker height rule", () => {
     }),
   )
 
-  it.live("an error draws in the note row and is budgeted as it", () =>
+  it.scopedLive("an error draws in the note row and is budgeted as it", () =>
     Effect.gen(function* () {
       const failed = yield* frameRows({ error: Option.some("ERROR-LINE") })
       expect(failed.rows).toBe(pickerHeight(3, 40))
@@ -700,28 +694,26 @@ describe("key hints", () => {
 })
 
 describe("docked panes", () => {
-  it.live("the thread pane keeps the picker's height rule", () =>
+  it.scopedLive("the thread pane keeps the picker's height rule", () =>
     Effect.gen(function* () {
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <ThreadPane
-              open={true}
-              controller={{
-                windows: () => [agedWindow(0)],
-                sessions: () => 1,
-                current: () => Option.some({ sessionId, branchId }),
-                error: () => Option.none(),
-                loading: () => false,
-                refresh: () => {},
-                open: () => true,
-              }}
-              onSelect={() => {}}
-              onClose={() => {}}
-            />
-          ),
-          { width: 80, height: 40 },
+      const setup = yield* renderScoped(
+        () => (
+          <ThreadPane
+            open={true}
+            controller={{
+              windows: () => [agedWindow(0)],
+              sessions: () => 1,
+              current: () => ({ sessionId, branchId }),
+              error: () => Option.none(),
+              loading: () => false,
+              refresh: () => {},
+              open: () => true,
+            }}
+            onSelect={() => {}}
+            onClose={() => {}}
+          />
         ),
+        { width: 80, height: 40 },
       )
       yield* waitForFrame(setup, (frame) => frame.includes("enter select"), "thread pane")
       // One heading, one window, one detail line: three drawn lines.
@@ -729,22 +721,20 @@ describe("docked panes", () => {
     }),
   )
 
-  it.live("the settings pane keeps the picker's height rule", () =>
+  it.scopedLive("the settings pane keeps the picker's height rule", () =>
     Effect.gen(function* () {
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <SettingsPicker
-              open={true}
-              title="Model"
-              rows={modelRows([wideModel])}
-              current={Option.none()}
-              onSelect={() => {}}
-              onClose={() => {}}
-            />
-          ),
-          { width: 80, height: 40 },
+      const setup = yield* renderScoped(
+        () => (
+          <SettingsPicker
+            open={true}
+            title="Model"
+            rows={modelRows([wideModel])}
+            current={Option.none()}
+            onSelect={() => {}}
+            onClose={() => {}}
+          />
         ),
+        { width: 80, height: 40 },
       )
       yield* waitForFrame(setup, (frame) => frame.includes("Model · 1"), "settings pane")
       // One row plus the query row above it.
@@ -752,24 +742,22 @@ describe("docked panes", () => {
     }),
   )
 
-  it.live("the resume-branch pane keeps the picker's height rule", () =>
+  it.scopedLive("the resume-branch pane keeps the picker's height rule", () =>
     Effect.gen(function* () {
       // A flat list: no heading opens a group and no detail line follows it,
       // so the pane draws exactly the branches it holds and budgets items
       // rather than lines. It used to cap itself at sixteen rows of its own.
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <BranchPicker
-              open={true}
-              sessionId={sessionId}
-              sessionName="Test Session"
-              branches={[branch("b1", "main"), branch("b2", "side-quest")]}
-              onSelect={() => {}}
-            />
-          ),
-          { width: 80, height: 40 },
+      const setup = yield* renderScoped(
+        () => (
+          <BranchPicker
+            open={true}
+            sessionId={sessionId}
+            sessionName="Test Session"
+            branches={[branch("b1", "main"), branch("b2", "side-quest")]}
+            onSelect={() => {}}
+          />
         ),
+        { width: 80, height: 40 },
       )
       yield* waitForFrame(setup, (frame) => frame.includes("side-quest"), "branch pane")
       expect(renderedFrameRows(renderFrame(setup))).toBe(pickerHeight(2, 40))
@@ -778,21 +766,19 @@ describe("docked panes", () => {
 
   // The frame asks for its chrome as it draws it: two rules, the title and
   // the key hint. A flat list of three draws no blank row under its last row.
-  it.live("a flat list closes on its rule under its last row", () =>
+  it.scopedLive("a flat list closes on its rule under its last row", () =>
     Effect.gen(function* () {
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <BranchPicker
-              open={true}
-              sessionId={sessionId}
-              sessionName="Test Session"
-              branches={[branch("b1", "main"), branch("b2", "side-quest"), branch("b3", "third")]}
-              onSelect={() => {}}
-            />
-          ),
-          { width: 80, height: 40 },
+      const setup = yield* renderScoped(
+        () => (
+          <BranchPicker
+            open={true}
+            sessionId={sessionId}
+            sessionName="Test Session"
+            branches={[branch("b1", "main"), branch("b2", "side-quest"), branch("b3", "third")]}
+            onSelect={() => {}}
+          />
         ),
+        { width: 80, height: 40 },
       )
       const frame = yield* waitForFrame(setup, (current) => current.includes("third"), "pane")
       const lines = frame.split("\n")
@@ -810,71 +796,76 @@ describe("docked panes", () => {
 const mountSqueezableFrame = (initial: number) =>
   Effect.gen(function* () {
     const [height, setHeight] = createSignal(initial)
-    const setup = yield* Effect.promise(() =>
-      renderWithProviders(
-        () => (
-          <box flexDirection="column" height={10} maxHeight={10}>
-            <PickerFrame height={height()} title="TITLE" keys={[keyHint("KEY-HINT", "go")]}>
-              <box flexDirection="column" flexGrow={1}>
-                <text>BODY-1</text>
-              </box>
-            </PickerFrame>
-          </box>
-        ),
-        { width: 40, height: 20 },
+    const setup = yield* renderScoped(
+      () => (
+        <box flexDirection="column" height={10} maxHeight={10}>
+          <PickerFrame
+            height={height()}
+            title="TITLE"
+            keys={[keyHint("KEY-HINT", "go")]}
+            error={Option.none()}
+          >
+            <box flexDirection="column" flexGrow={1}>
+              <text>BODY-1</text>
+            </box>
+          </PickerFrame>
+        </box>
       ),
+      { width: 40, height: 20 },
     )
     return { setup, setHeight }
   })
 
 describe("picker squeeze", () => {
-  it.live("a squeezed frame that then asks for exactly the rows it has shows its key hint", () =>
-    Effect.gen(function* () {
-      const { setup, setHeight } = yield* mountSqueezableFrame(14)
-      yield* waitForFrame(
-        setup,
-        (frame) => frame.includes("TITLE") && !frame.includes("KEY-HINT"),
-        "squeezed frame",
-      )
-      setHeight(10)
-      yield* waitForFrame(setup, (frame) => frame.includes("KEY-HINT"), "key hint back", 1_000)
-    }).pipe(Effect.timeout("4 seconds")),
+  it.scopedLive(
+    "a squeezed frame that then asks for exactly the rows it has shows its key hint",
+    () =>
+      Effect.gen(function* () {
+        const { setup, setHeight } = yield* mountSqueezableFrame(14)
+        yield* waitForFrame(
+          setup,
+          (frame) => frame.includes("TITLE") && !frame.includes("KEY-HINT"),
+          "squeezed frame",
+        )
+        setHeight(10)
+        yield* waitForFrame(setup, (frame) => frame.includes("KEY-HINT"), "key hint back", 1_000)
+      }).pipe(Effect.timeout("4 seconds")),
   )
 
-  it.live("a frame that fits and then asks for more rows than it has drops its key hint", () =>
-    Effect.gen(function* () {
-      const { setup, setHeight } = yield* mountSqueezableFrame(10)
-      yield* waitForFrame(setup, (frame) => frame.includes("KEY-HINT"), "fitting frame")
-      setHeight(14)
-      yield* waitForFrame(setup, (frame) => !frame.includes("KEY-HINT"), "key hint gone", 1_000)
-    }).pipe(Effect.timeout("4 seconds")),
+  it.scopedLive(
+    "a frame that fits and then asks for more rows than it has drops its key hint",
+    () =>
+      Effect.gen(function* () {
+        const { setup, setHeight } = yield* mountSqueezableFrame(10)
+        yield* waitForFrame(setup, (frame) => frame.includes("KEY-HINT"), "fitting frame")
+        setHeight(14)
+        yield* waitForFrame(setup, (frame) => !frame.includes("KEY-HINT"), "key hint gone", 1_000)
+      }).pipe(Effect.timeout("4 seconds")),
   )
 })
 
 describe("docked pane column budget", () => {
-  it.live("a thread row keeps its age on the row, one column inside the rule", () =>
+  it.scopedLive("a thread row keeps its age on the row, one column inside the rule", () =>
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <ThreadPane
-              open={true}
-              controller={{
-                windows: () => [agedWindow(now - 2 * 24 * 60 * 60 * 1000)],
-                sessions: () => 1,
-                current: () => Option.some({ sessionId, branchId }),
-                error: () => Option.none(),
-                loading: () => false,
-                refresh: () => {},
-                open: () => true,
-              }}
-              onSelect={() => {}}
-              onClose={() => {}}
-            />
-          ),
-          { width: 58, height: 30 },
+      const setup = yield* renderScoped(
+        () => (
+          <ThreadPane
+            open={true}
+            controller={{
+              windows: () => [agedWindow(now - 2 * 24 * 60 * 60 * 1000)],
+              sessions: () => 1,
+              current: () => ({ sessionId, branchId }),
+              error: () => Option.none(),
+              loading: () => false,
+              refresh: () => {},
+              open: () => true,
+            }}
+            onSelect={() => {}}
+            onClose={() => {}}
+          />
         ),
+        { width: 58, height: 30 },
       )
       yield* waitForFrame(setup, (frame) => frame.includes("PPP"), "thread row")
       const lines = renderFrame(setup).split("\n")
@@ -889,7 +880,7 @@ describe("docked pane column budget", () => {
     }),
   )
 
-  it.live("a settings row spends the picker's columns, not a bordered pane's", () =>
+  it.scopedLive("a settings row spends the picker's columns, not a bordered pane's", () =>
     Effect.gen(function* () {
       // The drawn row cannot witness an overspent budget: the row box clamps
       // its text, so a row budgeted four columns too wide still draws one
@@ -902,23 +893,21 @@ describe("docked pane column budget", () => {
         seen.push({ row: rowWidth(), section: sectionWidth() })
         return <text>probe</text>
       }
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <>
-              <Probe />
-              <SettingsPicker
-                open={true}
-                title="Model"
-                rows={modelRows([wideModel])}
-                current={Option.none()}
-                onSelect={() => {}}
-                onClose={() => {}}
-              />
-            </>
-          ),
-          { width: 58, height: 30 },
+      const setup = yield* renderScoped(
+        () => (
+          <>
+            <Probe />
+            <SettingsPicker
+              open={true}
+              title="Model"
+              rows={modelRows([wideModel])}
+              current={Option.none()}
+              onSelect={() => {}}
+              onClose={() => {}}
+            />
+          </>
         ),
+        { width: 58, height: 30 },
       )
       yield* waitForFrame(setup, (frame) => frame.includes("NNN"), "settings row")
       // A row pads itself one column inside a body that pads one each side.
@@ -932,7 +921,7 @@ describe("docked pane column budget", () => {
     }),
   )
 
-  it.live("a branch row spends the picker's columns, not a bordered pane's", () =>
+  it.scopedLive("a branch row spends the picker's columns, not a bordered pane's", () =>
     Effect.gen(function* () {
       // The pane budgeted `width - 8` while it drew its own border and
       // margins. Ruled, it spends three: the body pads one each side and the
@@ -945,31 +934,29 @@ describe("docked pane column budget", () => {
         seen.push({ row: rowWidth(), section: sectionWidth() })
         return <text>probe</text>
       }
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <>
-              <Probe />
-              <BranchPicker
-                open={true}
-                sessionId={sessionId}
-                sessionName="Test Session"
-                branches={[wideBranch]}
-                onSelect={() => {}}
-              />
-            </>
-          ),
-          {
-            width: 58,
-            height: 30,
-            client: createMockClient({
-              branch: {
-                getTree: () =>
-                  Effect.succeed([{ branch: wideBranch, messageCount: 4, children: [] }]),
-              },
-            }),
-          },
+      const setup = yield* renderScoped(
+        () => (
+          <>
+            <Probe />
+            <BranchPicker
+              open={true}
+              sessionId={sessionId}
+              sessionName="Test Session"
+              branches={[wideBranch]}
+              onSelect={() => {}}
+            />
+          </>
         ),
+        {
+          width: 58,
+          height: 30,
+          client: createMockClient({
+            branch: {
+              getTree: () =>
+                Effect.succeed([{ branch: wideBranch, messageCount: 4, children: [] }]),
+            },
+          }),
+        },
       )
       yield* waitForFrame(setup, (frame) => frame.includes("LLL"), "branch row")
       // A row pads itself one column inside a body that pads one each side.

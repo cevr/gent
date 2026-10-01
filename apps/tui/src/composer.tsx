@@ -1,8 +1,7 @@
-import { type ProcessError, runProcess } from "@gent/core/extensions/api"
+import { ProcessError } from "@gent/core/extensions/api"
 import { dataPaths } from "@gent/sdk"
-import { DateTime, Effect, FileSystem, Option, Path, Schema } from "effect"
-import type { ChildProcessSpawner } from "effect/process"
-import { homedir } from "os"
+import { DateTime, Duration, Effect, FileSystem, Option, Path, Schema, Stream } from "effect"
+import { ChildProcess, type ChildProcessSpawner } from "effect/process"
 import {
   type Accessor,
   createContext,
@@ -72,7 +71,7 @@ import {
 } from "@opentui/core"
 import { useRenderer } from "@opentui/solid"
 import { isSlashCommandName, parseSlashCommand, useCommand } from "./commands"
-import { useEnv } from "./workspace"
+import { useEnv, useWorkspace } from "./workspace"
 import { openExternalEditor, resolveEditor } from "./os"
 import {
   type ActiveInteraction,
@@ -88,62 +87,108 @@ import {
  * Shell execution utility with an inline output cap and a spill file.
  *
  * The composer's `!cmd` shell puts its output straight into a chat message, so
- * the inline copy has to stay small. A command that overruns the cap writes its
- * whole output under the gent data directory and the notice names that file, so
- * nothing the reader ran is lost to the cap.
+ * the inline copy has to stay small. A command that overruns the cap writes the
+ * output read under the gent data directory and the notice names that file, so
+ * the inline cap loses nothing that was read.
  */
 
 /**
- * Spill files live beside the rest of the gent data, not in a temp directory.
+ * Spill files live beside the rest of the gent data under the workspace's
+ * home (the one storage reads), not in a temp directory.
  * A run with its own `GENT_DATA_DIR` keeps them there, off the real home.
  */
-const shellOutputDirectory = (): Effect.Effect<string> =>
-  Effect.map(dataPaths(homedir()), ({ dataDir }) => `${dataDir}/shell-output`)
+const shellOutputDirectory = (home: string): Effect.Effect<string> =>
+  Effect.map(dataPaths(home), ({ dataDir }) => `${dataDir}/shell-output`)
+
+/**
+ * Past this many bytes of output a `!cmd` stops being read and ends: memory
+ * holds at most this much, and the spill file keeps it. The command has no
+ * time limit; ctrl+c stops it.
+ */
+export const SHELL_READ_CAP_BYTES = 8 * 1024 * 1024
 
 /**
  * Execute a shell command. The inline copy keeps the whole lines that fit the
  * `@file` cap (`inlineHead`). The caller sees `truncated` when the cap drops
- * output, and `savedPath` names the file holding the whole of it.
+ * output, and `savedPath` names the file holding all that was read. `ended`
+ * says the output passed `SHELL_READ_CAP_BYTES`, so the command was ended
+ * there and the file holds its first part.
  */
-export const executeShell = (command: string, cwd: string) =>
+export const executeShell = (command: string, cwd: string, home: string) =>
   Effect.gen(function* () {
-    const { stdout, stderr } = yield* runCommand(command, cwd)
+    const { stdout, stderr, ended } = yield* runCommand(command, cwd)
     let fullOutput = stdout
     if (stderr.length > 0) fullOutput = `${stdout}\n${stderr}`
 
     const lines = splitLines(fullOutput)
     const kept = inlineHead(lines)
 
-    if (kept.length === lines.length) {
-      return { output: fullOutput.trim(), truncated: false, savedPath: Option.none<string>() }
+    if (kept.length === lines.length && !ended) {
+      return {
+        output: fullOutput.trim(),
+        truncated: false,
+        ended,
+        savedPath: Option.none<string>(),
+      }
     }
 
-    const savedPath = yield* saveFullOutput(command, fullOutput)
+    const savedPath = yield* saveFullOutput({ command, home }, fullOutput, ended)
     return {
       output: kept.join("\n").trim(),
       truncated: true,
+      ended,
       savedPath,
     }
   })
 
 /**
- * Writes the whole output beside the rest of the gent data. A write that fails
- * costs the reader the spill file, not the command they just ran, so the
- * failure reports as an absent path rather than a failed shell.
+ * The message a `!cmd` sends: the command, then its inline output. A cut
+ * names the spill file, so the rest stays reachable.
+ */
+const shellMessage =
+  (command: string) =>
+  (result: Effect.Success<ReturnType<typeof executeShell>>): string => {
+    const message = `$ ${command}\n\n${result.output}`
+    if (!result.truncated) return message
+    let cut = "output truncated"
+    let saved = "full output saved to"
+    if (result.ended) {
+      cut = `output past ${SHELL_READ_CAP_BYTES} bytes not read; the command was ended`
+      saved = "the output read is saved to"
+    }
+    return (
+      message +
+      Option.match(result.savedPath, {
+        onNone: () => `\n\n[${cut}]`,
+        onSome: (path) => `\n\n[${cut}; ${saved} ${path}]`,
+      })
+    )
+  }
+
+/**
+ * Writes the output read beside the rest of the gent data: all of it, or its
+ * first `SHELL_READ_CAP_BYTES` when the command was ended there, which the
+ * header says. A write that fails costs the reader the spill file, not the
+ * command they just ran, so the failure reports as an absent path rather
+ * than a failed shell.
  */
 const saveFullOutput = (
-  command: string,
+  { command, home }: { readonly command: string; readonly home: string },
   output: string,
+  ended: boolean,
 ): Effect.Effect<Option.Option<string>, never, FileSystem.FileSystem | Path.Path> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
-    const directory = yield* shellOutputDirectory()
+    const directory = yield* shellOutputDirectory(home)
     yield* fs.makeDirectory(directory, { recursive: true })
     const now = yield* DateTime.nowAsDate
     const stamp = now.toISOString().replaceAll(":", "-").replaceAll(".", "-")
     const filePath = path.join(directory, `shell_${stamp}.txt`)
-    const header = `# Command: ${command}\n# Timestamp: ${now.toISOString()}\n\n`
+    let header = `# Command: ${command}\n# Timestamp: ${now.toISOString()}\n`
+    if (ended)
+      header += `# Output past ${SHELL_READ_CAP_BYTES} bytes was not read; the command was ended\n`
+    header += "\n"
     yield* fs.writeFileString(filePath, header + output)
     return Option.some(filePath)
   }).pipe(
@@ -156,19 +201,75 @@ const saveFullOutput = (
   )
 
 /**
- * A spawn that fails (the session's directory is gone, bash is missing) is a
- * typed failure: the submit restores the command and says why.
+ * One streaming decoder across the chunks: a character split between two
+ * chunks decodes whole. Output the read cap cut short can end inside a
+ * character whose last bytes were never read; `cut` drops those first bytes
+ * instead of flushing them as `�`.
+ */
+const decodeUtf8 = (chunks: ReadonlyArray<Uint8Array>, cut: boolean): string => {
+  const decoder = new TextDecoder()
+  let out = ""
+  for (const chunk of chunks) out += decoder.decode(chunk, { stream: true })
+  if (cut) return out
+  return out + decoder.decode()
+}
+
+/** What a `!cmd` wrote, read up to `SHELL_READ_CAP_BYTES`. */
+interface ShellOutput {
+  readonly stdout: string
+  readonly stderr: string
+  /** The output passed the cap: reading stopped there and the command was ended. */
+  readonly ended: boolean
+}
+
+/**
+ * Runs `bash -c <command>` and reads stdout and stderr as they arrive, up to
+ * `SHELL_READ_CAP_BYTES` in all. Past the cap the reading stops, and closing
+ * the scope ends the process (SIGTERM, then SIGKILL). An interrupt ends it the
+ * same way. A spawn that fails (the session's directory is gone, bash is
+ * missing) is a typed failure: the submit restores the command and says why.
  */
 const runCommand = (
   command: string,
   cwd: string,
-): Effect.Effect<
-  { stdout: string; stderr: string },
-  ProcessError,
-  ChildProcessSpawner.ChildProcessSpawner
-> =>
-  runProcess("bash", ["-c", command], { cwd, stdout: "pipe", stderr: "pipe" }).pipe(
-    Effect.map((r) => ({ stdout: r.stdout, stderr: r.stderr })),
+): Effect.Effect<ShellOutput, ProcessError, ChildProcessSpawner.ChildProcessSpawner> =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const handle = yield* ChildProcess.make("bash", ["-c", command], {
+        cwd,
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "pipe",
+        forceKillAfter: Duration.seconds(2),
+      })
+      const stdout: Array<Uint8Array> = []
+      const stderr: Array<Uint8Array> = []
+      let bytes = 0
+      const chunks = Stream.merge(
+        handle.stdout.pipe(Stream.map((chunk) => ({ into: stdout, chunk }))),
+        handle.stderr.pipe(Stream.map((chunk) => ({ into: stderr, chunk }))),
+      )
+      yield* Stream.runForEachWhile(chunks, ({ into, chunk }) =>
+        Effect.sync(() => {
+          into.push(chunk)
+          bytes += chunk.byteLength
+          return bytes < SHELL_READ_CAP_BYTES
+        }),
+      )
+      const ended = bytes >= SHELL_READ_CAP_BYTES
+      // Both streams closed: the command is done, or about to be.
+      if (!ended) yield* handle.exitCode
+      return { stdout: decodeUtf8(stdout, ended), stderr: decodeUtf8(stderr, ended), ended }
+    }),
+  ).pipe(
+    Effect.mapError(
+      (error) =>
+        new ProcessError({
+          command: "bash",
+          message: `bash failed: ${error.message}`,
+          cause: error,
+        }),
+    ),
   )
 
 // ── composer frame ──────────────────────────────────────────────────────────
@@ -496,7 +597,7 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
   }
 
   return (
-    <PickerFrame title={title()} keys={keys}>
+    <PickerFrame title={title()} keys={keys} error={Option.none()}>
       <SelectList
         id="autocomplete"
         // The composer owns the filter; the list draws it as its query row.
@@ -536,9 +637,112 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
 
 const PASTE_THRESHOLD_LINES = 3
 const PASTE_THRESHOLD_LENGTH = 150
+/** A paste chip; the group is the id of its stored paste. */
+const PLACEHOLDER = /\[Pasted \d+ (?:lines|chars) #(\d+)\]/g
 
 export function isLargePaste(inserted: string): boolean {
   return lineCount(inserted) >= PASTE_THRESHOLD_LINES || inserted.length >= PASTE_THRESHOLD_LENGTH
+}
+
+/** What a key does to the draft around the caret, as the textarea's bindings resolve it. */
+type DraftEdit =
+  | "backward"
+  | "word-backward"
+  | "forward"
+  | "word-forward"
+  | "to-line-end"
+  | "to-line-start"
+  | "insert"
+
+interface DraftKey {
+  readonly name?: string
+  readonly sequence?: string
+  readonly ctrl?: boolean
+  readonly meta?: boolean
+  readonly shift?: boolean
+  readonly super?: boolean
+}
+
+/**
+ * The keys that edit the draft around the caret: the OpenTUI textarea
+ * defaults plus the composer's own bindings (`meta+backspace`, the newline
+ * keys). Modifiers match exactly, as the textarea's own binding map does. A
+ * key that only moves the caret, submits, or undoes is not here.
+ */
+const DRAFT_EDIT_KEYS: ReadonlyArray<{
+  readonly name: string
+  readonly ctrl?: true
+  readonly meta?: true
+  readonly shift?: true
+  readonly edit: DraftEdit
+}> = [
+  { name: "backspace", edit: "backward" },
+  { name: "backspace", shift: true, edit: "backward" },
+  { name: "backspace", ctrl: true, edit: "word-backward" },
+  { name: "backspace", meta: true, edit: "word-backward" },
+  { name: "w", ctrl: true, edit: "word-backward" },
+  { name: "delete", edit: "forward" },
+  { name: "delete", shift: true, edit: "forward" },
+  { name: "d", ctrl: true, edit: "forward" },
+  { name: "delete", ctrl: true, edit: "word-forward" },
+  { name: "delete", meta: true, edit: "word-forward" },
+  { name: "d", meta: true, edit: "word-forward" },
+  { name: "k", ctrl: true, edit: "to-line-end" },
+  { name: "u", ctrl: true, edit: "to-line-start" },
+  { name: "return", shift: true, edit: "insert" },
+  { name: "return", ctrl: true, edit: "insert" },
+  { name: "linefeed", edit: "insert" },
+  { name: "linefeed", shift: true, edit: "insert" },
+  { name: "j", ctrl: true, edit: "insert" },
+  { name: "space", edit: "insert" },
+]
+
+/** A key with no binding and no modifier types its character, as the textarea does. */
+const typesCharacter = (key: DraftKey): boolean => {
+  if (key.ctrl === true || key.meta === true || key.super === true) return false
+  const code = (key.sequence ?? "").charCodeAt(0)
+  return code >= 32 && code !== 127
+}
+
+const draftEditOf = (key: DraftKey): Option.Option<DraftEdit> =>
+  Option.fromUndefinedOr(
+    DRAFT_EDIT_KEYS.find(
+      (binding) =>
+        binding.name === key.name &&
+        (binding.ctrl === true) === (key.ctrl === true) &&
+        (binding.meta === true) === (key.meta === true) &&
+        (binding.shift === true) === (key.shift === true) &&
+        key.super !== true,
+    ),
+  ).pipe(
+    Option.map((binding) => binding.edit),
+    Option.orElse(() =>
+      Option.liftPredicate(typesCharacter)(key).pipe(Option.as("insert" as const)),
+    ),
+  )
+
+/** A span of the draft, in textarea offsets or in string indices. */
+interface DraftSpan {
+  readonly start: number
+  readonly end: number
+}
+
+/** The textarea offsets an edit covers; an insert is the empty span at the caret. */
+const draftEditSpan = (textarea: TextareaRenderable, edit: DraftEdit): DraftSpan => {
+  const caret = textarea.cursorOffset
+  const spans: Record<DraftEdit, () => DraftSpan> = {
+    backward: () => ({ start: Math.max(0, caret - 1), end: caret }),
+    "word-backward": () => ({
+      start: textarea.editBuffer.getPrevWordBoundary().offset,
+      end: caret,
+    }),
+    forward: () => ({ start: caret, end: caret + 1 }),
+    "word-forward": () => ({ start: caret, end: textarea.editBuffer.getNextWordBoundary().offset }),
+    "to-line-end": () => ({ start: caret, end: textarea.editBuffer.getEOL().offset }),
+    "to-line-start": () => ({ start: caret - textarea.logicalCursor.col, end: caret }),
+    insert: () => ({ start: caret, end: caret }),
+  }
+  return spans[edit]()
 }
 
 /**
@@ -560,23 +764,29 @@ export function createPasteManager() {
       return `[Pasted ${text.length} chars #${id}]`
     },
     expandPlaceholders(text: string): string {
-      return text.replace(/\[Pasted \d+ (?:lines|chars) #(\d+)\]/g, (match, id) =>
+      return text.replace(PLACEHOLDER, (match, id) =>
         Option.getOrElse(Option.fromNullishOr(store.get(id)), () => match),
       )
     },
     /**
-     * The chip that string index `index` stands inside or at the end of, and
-     * that still holds its stored text.
+     * The span an edit of string indices `[start, end)` takes so that every
+     * chip that still holds its stored text stays whole. A delete that cuts
+     * into a chip grows to take the whole chip. An insert (`start === end`)
+     * strictly inside a chip moves to the chip's end.
      */
-    chipAt(text: string, index: number): Option.Option<{ start: number; end: number }> {
-      for (const match of text.matchAll(/\[Pasted \d+ (?:lines|chars) #(\d+)\]/g)) {
-        const start = match.index
-        const end = start + match[0].length
-        if (start < index && index <= end && store.has(match[1] ?? "")) {
-          return Option.some({ start, end })
+    keepChipsWhole(text: string, start: number, end: number): DraftSpan {
+      let span: DraftSpan = { start, end }
+      for (const match of text.matchAll(PLACEHOLDER)) {
+        const chipStart = match.index
+        const chipEnd = chipStart + match[0].length
+        if (!store.has(match[1] ?? "")) continue
+        if (start === end) {
+          if (chipStart < start && start < chipEnd) span = { start: chipEnd, end: chipEnd }
+        } else if (chipStart < end && start < chipEnd) {
+          span = { start: Math.min(span.start, chipStart), end: Math.max(span.end, chipEnd) }
         }
       }
-      return Option.none()
+      return span
     },
     clear() {
       store.clear()
@@ -591,14 +801,9 @@ interface ComposerController {
   readonly inputFocused: Accessor<boolean>
   // eslint-disable-next-line effect/noNullish -- OpenTUI refs pass null before attachment and on cleanup.
   readonly attachTextarea: (renderable: TextareaRenderable | null) => void
-  readonly handleTextareaKeyDown: (event: {
-    name?: string
-    shift?: boolean
-    ctrl?: boolean
-    meta?: boolean
-    super?: boolean
-    preventDefault: () => void
-  }) => void
+  readonly handleTextareaKeyDown: (
+    event: DraftKey & { readonly preventDefault: () => void },
+  ) => void
   readonly handleSubmitFromTextarea: () => void
   readonly resolveInteraction: (result: ApprovalResult) => void
   /** Enter on a row: completes, and dispatches when the row names a command. */
@@ -615,13 +820,13 @@ function useComposerController(): ComposerController {
   const client = useClient()
   const renderer = useRenderer()
   const env = useEnv()
+  const workspace = useWorkspace()
   const { cast } = useRuntime()
   const history = usePromptHistory()
   const paste = createPasteManager()
   const extensionUI = useExtensionUI()
 
   let inputRef = Option.none<TextareaRenderable>()
-  let submitMode: "queue" | "interject" = "queue"
 
   // Token highlighting — colors autocomplete-resolved tokens with theme.primary
   const tokenStyle = SyntaxStyle.create()
@@ -722,7 +927,7 @@ function useComposerController(): ComposerController {
       isSlashCommandName(value, extensionUI.commands())
     ) {
       clearAutocomplete()
-      submitSlashCommand(`/${value}`)
+      submitSlashCommand(`/${value}`, `/${value}`)
       return
     }
 
@@ -776,6 +981,8 @@ function useComposerController(): ComposerController {
    */
   const handlePaste = (event: PasteEvent) => {
     if (Option.isNone(inputRef)) return
+    // A paste is an insert: inside a chip it lands after the chip.
+    keepChipsWhole(inputRef.value, "insert")
     const pasted = stripAnsiSequences(decodePasteBytes(event.bytes)).replace(/\r\n?/g, "\n")
     if (!isLargePaste(pasted)) return
     event.preventDefault()
@@ -783,33 +990,50 @@ function useComposerController(): ComposerController {
   }
 
   /**
-   * A paste chip is one unit. Backspace or a word delete at its end or from
-   * inside it removes the whole chip in one undo step; editing it a character
-   * at a time would send the fragment and lose the paste. The stored text
-   * stays, so an undo gives back a chip that still sends its paste.
+   * A paste chip is one unit, and a caret inside it never edits its text.
+   * A delete that would cut into a chip (a character, a word or a line, in
+   * either direction) takes the whole chip in one undo step; editing it a
+   * character at a time would send the fragment and lose the paste. The
+   * stored text stays, so an undo gives back a chip that still sends its
+   * paste. Text typed inside a chip goes after it.
    *
    * The textarea counts its caret in its own units, which a wide or
    * multi-byte character makes differ from string indices. The text before
-   * the caret gives the caret's string index. A chip is all ASCII, one unit
-   * per character in both counts, so the caret moves back by the part of the
-   * chip before it.
+   * an offset gives its string index. A chip is all ASCII, one unit per
+   * character in both counts, so a span that grows over a chip moves its
+   * offsets by the same count as its indices.
    */
-  const removeChipAtCaret = (event: {
-    readonly name?: string
-    readonly ctrl?: boolean
-    readonly preventDefault: () => void
-  }): boolean => {
-    const deletesBack = event.name === "backspace" || (event.name === "w" && event.ctrl === true)
-    if (!deletesBack || Option.isNone(inputRef) || inputRef.value.hasSelection()) return false
-    const value = inputRef.value.plainText
-    const caret = inputRef.value.cursorOffset
-    const caretIndex = inputRef.value.getTextRange(0, caret).length
-    const chip = paste.chipAt(value, caretIndex)
-    if (Option.isNone(chip)) return false
-    event.preventDefault()
-    const next = value.slice(0, chip.value.start) + value.slice(chip.value.end)
-    inputRef.value.replaceText(next)
-    inputRef.value.cursorOffset = caret - (caretIndex - chip.value.start)
+  const keepChipsWhole = (textarea: TextareaRenderable, edit: DraftEdit): boolean => {
+    const value = textarea.plainText
+    const indexOf = (offset: number) => textarea.getTextRange(0, offset).length
+    // Any edit replaces a selection. A selection that cuts into a chip grows
+    // over the whole chip first, and the textarea's own edit then takes it.
+    const selection = Option.filter(Option.fromNullishOr(textarea.getSelection()), () =>
+      textarea.hasSelection(),
+    )
+    if (Option.isSome(selection)) {
+      const { start: from, end: to } = selection.value
+      const start = indexOf(from)
+      const end = indexOf(to)
+      const whole = paste.keepChipsWhole(value, start, end)
+      if (whole.start !== start || whole.end !== end) {
+        textarea.setSelection(from - (start - whole.start), to + (whole.end - end))
+      }
+      return false
+    }
+    const span = draftEditSpan(textarea, edit)
+    const start = indexOf(span.start)
+    const end = indexOf(span.end)
+    const whole = paste.keepChipsWhole(value, start, end)
+    if (whole.start === start && whole.end === end) return false
+    if (edit === "insert") {
+      // The textarea inserts at the moved caret.
+      textarea.cursorOffset = span.start + (whole.start - start)
+      return false
+    }
+    const next = value.slice(0, whole.start) + value.slice(whole.end)
+    textarea.replaceText(next)
+    textarea.cursorOffset = span.start - (start - whole.start)
     sc.onComposerInteraction(ComposerInteractionEvent.cases.DraftChanged.make({ text: next }))
     return true
   }
@@ -857,9 +1081,8 @@ function useComposerController(): ComposerController {
   // submit, never when a refusal lands.
   createEffect(() => {
     const identity = client.sessionIdentity()
-    if (Option.isNone(identity)) return
     onCleanup(
-      refusals.link(identity.value.branchId, {
+      refusals.link(identity.branchId, {
         current: () => ({
           draft: Option.getOrElse(
             Option.map(inputRef, (renderable) => renderable.plainText),
@@ -894,12 +1117,10 @@ function useComposerController(): ComposerController {
    * The session a draft was written in. A submission carries it to the end:
    * a switch while `@file` expands or `!cmd` runs does not move the message.
    */
-  const draftedIn = (): Option.Option<SessionIdentity> => client.sessionIdentity()
+  const draftedIn = (): SessionIdentity => client.sessionIdentity()
 
   const submitShellCommand = (text: string) => {
-    const drafted = draftedIn()
-    if (Option.isNone(drafted)) return
-    const target = drafted.value
+    const target = draftedIn()
     const order = refusals.nextOrder()
     refusals.submitted(target.branchId, text)
     // The command leaves the composer before it runs, so a second Enter
@@ -907,83 +1128,98 @@ function useComposerController(): ComposerController {
     sc.onComposerInteraction(ComposerInteractionEvent.cases.ExitShell.make({}))
     clearInput()
     cast(
-      client.cwdOf(target.sessionId).pipe(
-        Effect.flatMap((cwd) => executeShell(text, cwd)),
-        Effect.map(({ output, truncated, savedPath }) => {
-          let userMessage = `$ ${text}\n\n${output}`
-          if (!truncated) return userMessage
-          // The notice names the spill file, so the rest stays reachable.
-          userMessage += Option.match(savedPath, {
-            onNone: () => `\n\n[output truncated]`,
-            onSome: (path) => `\n\n[output truncated; full output saved to ${path}]`,
-          })
-          return userMessage
-        }),
-        Effect.flatMap((userMessage) =>
-          // The command has run, and its side effects are done. A refused send
-          // gives back the output as a message, never the command to run again.
-          randomId.pipe(
-            Effect.flatMap((requestId) =>
-              sc.onSubmit(userMessage, "queue", target, requestId).pipe(
-                Effect.catchEager((error) =>
-                  Effect.sync(() =>
-                    refuse(
-                      target,
-                      {
-                        order,
-                        text: userMessage,
-                        shell: false,
-                        requestId: lostRequest(error, requestId),
-                      },
-                      `The command ran; its output was not sent. ${formatError(error)}`,
+      sc
+        .runShell(
+          text,
+          client
+            .cwdOf(target.sessionId)
+            .pipe(Effect.flatMap((cwd) => executeShell(text, cwd, workspace.home))),
+        )
+        .pipe(
+          Effect.map(shellMessage(text)),
+          Effect.flatMap((userMessage) =>
+            // The command has run, and its side effects are done. A refused send
+            // gives back the output as a message, never the command to run again.
+            randomId.pipe(
+              Effect.flatMap((requestId) =>
+                sc.onSubmit(userMessage, "queue", target, requestId).pipe(
+                  Effect.catchEager((error) =>
+                    Effect.sync(() =>
+                      refuse(
+                        target,
+                        {
+                          order,
+                          text: userMessage,
+                          shell: false,
+                          requestId: lostRequest(error, requestId),
+                        },
+                        `The command ran; its output was not sent. ${formatError(error)}`,
+                      ),
                     ),
                   ),
                 ),
               ),
             ),
           ),
+          // The reader stopped it, or left the view: the output is not sent.
+          Effect.catchTag("ShellStopped", ({ command }) =>
+            Effect.sync(() => client.setNotice(`Stopped: $ ${command}; its output was not sent`)),
+          ),
+          // Nothing ran: the command comes back to run.
+          Effect.catchEager((error) =>
+            Effect.sync(() => {
+              refuse(
+                target,
+                { order, text, shell: true, requestId: Option.none() },
+                shellRefusal(error),
+              )
+            }),
+          ),
         ),
-        // Nothing ran: the command comes back to run.
-        Effect.catchEager((error) =>
-          Effect.sync(() => {
-            refuse(
-              target,
-              { order, text, shell: true, requestId: Option.none() },
-              shellRefusal(error),
-            )
-          }),
-        ),
-      ),
     )
   }
 
-  const submitSlashCommand = (text: string) => {
-    const parsed = Option.fromNullishOr(parseSlashCommand(text))
-    if (Option.isNone(parsed)) return false
+  /**
+   * A draft that starts with `/name` goes to the session, which decides
+   * whether the name is a command: only a known command name is one, and a
+   * path, a typo or a pasted line that starts with `/` goes out as a message
+   * through `send`. The session asks the command sources again before it
+   * calls a name unknown. The name is read from the draft as typed, so text
+   * from a paste chip never names one.
+   */
+  const submitSlashCommand = (draft: string, text: string) => {
+    const named = parseSlashCommand(draft)
+    if (Option.isNone(named)) return false
+    const [cmd] = named.value
+    // The arguments take the paste they name.
+    const args = Option.match(parseSlashCommand(text), {
+      onNone: () => "",
+      onSome: ([, value]) => value,
+    })
 
-    const [cmd, args] = parsed.value
     client.log.info("slash-command", { cmd })
     const order = refusals.nextOrder()
-    const drafted = draftedIn()
-    Option.map(drafted, (target) => refusals.submitted(target.branchId, text))
+    const target = draftedIn()
+    const reused = refusals.submitted(target.branchId, text)
     clearInput()
 
-    // A command nothing runs comes back to the draft it was written in.
+    // A command still held when the view goes comes back to the draft it was written in.
     const refuseCommand = (reason: string) =>
-      Option.match(drafted, {
-        onNone: () => client.setError(reason),
-        onSome: (target) =>
-          refuse(target, { order, text, shell: false, requestId: Option.none() }, reason),
-      })
-    cast(client.surfaceError(sc.onSlashCommand(cmd, args, refuseCommand)))
+      refuse(target, { order, text, shell: false, requestId: Option.none() }, reason)
+    const sendAsMessage = () => {
+      history.add(text)
+      sendMessage(target, text, "queue", order, reused)
+    }
+    cast(
+      client.surfaceError(
+        sc.onSlashCommand({ cmd, args, send: sendAsMessage, refuse: refuseCommand }),
+      ),
+    )
     return true
   }
 
   const submitMessage = (text: string, mode: "queue" | "interject") => {
-    const drafted = draftedIn()
-    if (Option.isNone(drafted)) return
-    const target = drafted.value
-    client.log.info("composer.submit.requested", { contentLength: text.length, mode })
+    const target = draftedIn()
     history.add(text)
     const order = refusals.nextOrder()
     // A refused text sent again unchanged after a lost reply keeps its id.
@@ -991,6 +1227,18 @@ function useComposerController(): ComposerController {
     // The message leaves the composer before its `@file` refs expand, so a
     // second Enter finds an empty draft instead of sending it again.
     clearInput()
+    sendMessage(target, text, mode, order, reused)
+  }
+
+  /** Sends `text` to `target`; a refusal comes back to its draft in `order`. */
+  const sendMessage = (
+    target: SessionIdentity,
+    text: string,
+    mode: "queue" | "interject",
+    order: number,
+    reused: Option.Option<string>,
+  ) => {
+    client.log.info("composer.submit.requested", { contentLength: text.length, mode })
     cast(
       Option.match(reused, { onNone: () => randomId, onSome: Effect.succeed }).pipe(
         Effect.flatMap((requestId) =>
@@ -1013,14 +1261,12 @@ function useComposerController(): ComposerController {
     )
   }
 
-  const handleSubmit = () => {
-    const expandedValue = paste.expandPlaceholders(
-      Option.getOrElse(
-        Option.map(inputRef, (renderable) => renderable.plainText),
-        () => "",
-      ),
+  const handleSubmit = (mode: "queue" | "interject") => {
+    const draft = Option.getOrElse(
+      Option.map(inputRef, (renderable) => renderable.plainText),
+      () => "",
     )
-    const text = expandedValue.trim()
+    const text = paste.expandPlaceholders(draft).trim()
     if (text.length === 0) return
 
     clearAutocomplete()
@@ -1028,17 +1274,13 @@ function useComposerController(): ComposerController {
 
     if (effectiveMode() === "shell") {
       submitShellCommand(text)
-      submitMode = "queue"
       return
     }
 
-    if (submitSlashCommand(text)) {
-      submitMode = "queue"
+    if (submitSlashCommand(draft, text)) {
       return
     }
 
-    const mode = submitMode
-    submitMode = "queue"
     submitMessage(text, mode)
   }
 
@@ -1048,9 +1290,13 @@ function useComposerController(): ComposerController {
   }): boolean => {
     if (!(event.ctrl === true && event.name === "g")) return false
 
-    const currentContent = Option.getOrElse(
-      Option.map(inputRef, (renderable) => renderable.plainText),
-      () => "",
+    // The editor gets the draft as it would be sent: a paste chip is its
+    // text, so the paste can be edited there.
+    const currentContent = paste.expandPlaceholders(
+      Option.getOrElse(
+        Option.map(inputRef, (renderable) => renderable.plainText),
+        () => "",
+      ),
     )
     const editor = resolveEditor(env.visual, env.editor)
     cast(
@@ -1134,7 +1380,8 @@ function useComposerController(): ComposerController {
       Option.map(inputRef, (renderable) => renderable.cursorOffset),
       () => 0,
     )
-    if (event.name === "backspace" && cursorOffset <= 1) {
+    // The `!` is not in the draft: Backspace at the start stands for deleting it.
+    if (event.name === "backspace" && cursorOffset === 0) {
       sc.onComposerInteraction(ComposerInteractionEvent.cases.ExitShell.make({}))
       clearAutocomplete()
       return true
@@ -1214,8 +1461,7 @@ function useComposerController(): ComposerController {
    */
   const handleSubmitFromTextarea = () => {
     if (holdsComposer() || effectiveMode() === "interaction") return
-    submitMode = "queue"
-    handleSubmit()
+    handleSubmit("queue")
   }
 
   /**
@@ -1224,15 +1470,16 @@ function useComposerController(): ComposerController {
    *   bare return → submit (→ handleSubmitFromTextarea)
    *   shift/ctrl+return → newline
    */
-  const handleTextareaKeyDown = (event: {
-    name?: string
-    shift?: boolean
-    ctrl?: boolean
-    meta?: boolean
-    super?: boolean
-    preventDefault: () => void
-  }) => {
-    if (removeChipAtCaret(event)) return
+  const handleTextareaKeyDown = (event: DraftKey & { readonly preventDefault: () => void }) => {
+    const edit = draftEditOf(event)
+    if (
+      Option.isSome(edit) &&
+      Option.isSome(inputRef) &&
+      keepChipsWhole(inputRef.value, edit.value)
+    ) {
+      event.preventDefault()
+      return
+    }
     const isEnterKey = event.name === "return" || event.name === "linefeed"
     if (!isEnterKey) return
 
@@ -1244,16 +1491,15 @@ function useComposerController(): ComposerController {
     // Meta/Super+Enter = interject (bypasses keybindings)
     if (event.meta === true || event.super === true) {
       event.preventDefault()
-      submitMode = "interject"
-      handleSubmit()
+      handleSubmit("interject")
       return
     }
 
     // An open popup is not a reason to swallow enter. A popup with rows has
     // already consumed the key through its own list; one without rows has
     // nothing to select, and the draft underneath is what the reader meant to
-    // send. Both cases fall through to the textarea keybindings below.
-    // All other Enter variants (bare, shift, ctrl) fall through to textarea keybindings
+    // send. Both cases, and every other Enter variant (bare, shift, ctrl), fall
+    // through to the textarea keybindings below.
   }
 
   createEffect(() => {

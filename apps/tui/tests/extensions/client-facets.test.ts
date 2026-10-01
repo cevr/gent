@@ -7,16 +7,31 @@ import {
   clientContributions,
   defineClientExtension,
   sessionQuery,
+  widgetContribution,
 } from "../../src/extensions/client-facets"
-import { BunServices } from "@effect/platform-bun"
-import { makeClientRuntime } from "../../src/extensions/host"
-import {
-  makeClientTestTransport,
-  makePaneSlot,
-  provideClientServices,
-} from "../extension-test-harness-boundary"
-import { createMockRuntime, renderWithProviders } from "../render-harness-boundary"
-import { inRuntime, waitUntil } from "../helpers-boundary"
+import { provideClientServices } from "../extension-test-harness-boundary"
+import { renderScoped } from "../render-harness-boundary"
+import { waitUntil } from "../helpers-boundary"
+
+// ── contribution constructors ───────────────────────────────────────────────
+
+describe("contribution constructors", () => {
+  test("a widget takes no props: the constructor refuses a component that wants some", () => {
+    const good = widgetContribution({
+      id: "typed-widget",
+      slot: "below-input",
+      component: () => "typed",
+    })
+
+    widgetContribution({
+      id: "bad-widget",
+      slot: "below-input",
+      // @ts-expect-error -- widgets receive no props
+      component: (_props: { readonly open: boolean }) => "bad",
+    })
+    expect(good.widgets?.[0]?.id).toBe("typed-widget")
+  })
+})
 
 // ── extension lifecycle ─────────────────────────────────────────────────────
 
@@ -46,27 +61,29 @@ describe("transport-only extension widgets", () => {
       expect(calls).toEqual(["before-throw", "after-throw"])
     }),
   )
-  it.live("closing the UI scope at shutdown runs extension cleanups before the runtime ends", () =>
-    Effect.gen(function* () {
-      const calls: string[] = []
-      const registered = yield* Deferred.make<void>()
-      const tracked = defineClientExtension("@test/cleanup-at-shutdown", {
-        setup: Effect.gen(function* () {
-          const { lifecycle } = yield* ClientContext
-          lifecycle.addCleanup(() => calls.push("cleanup"))
-          yield* lifecycle.scoped(
-            Effect.addFinalizer(() => Effect.sync(() => calls.push("runtime"))),
-          )
-          yield* Deferred.done(registered, Exit.void)
-          return clientContributions()
-        }),
-      })
-      const uiScope = yield* Scope.make()
-      yield* Effect.promise(() => renderWithProviders(() => [], { builtins: [tracked], uiScope }))
-      yield* Deferred.await(registered).pipe(Effect.timeout("2 seconds"))
-      yield* Scope.close(uiScope, Exit.void)
-      expect(calls).toEqual(["cleanup", "runtime"])
-    }),
+  it.scopedLive(
+    "closing the UI scope at shutdown runs extension cleanups before the runtime ends",
+    () =>
+      Effect.gen(function* () {
+        const calls: string[] = []
+        const registered = yield* Deferred.make<void>()
+        const tracked = defineClientExtension("@test/cleanup-at-shutdown", {
+          setup: Effect.gen(function* () {
+            const { lifecycle } = yield* ClientContext
+            lifecycle.addCleanup(() => calls.push("cleanup"))
+            yield* lifecycle.scoped(
+              Effect.addFinalizer(() => Effect.sync(() => calls.push("runtime"))),
+            )
+            yield* Deferred.done(registered, Exit.void)
+            return clientContributions()
+          }),
+        })
+        const uiScope = yield* Scope.make()
+        yield* renderScoped(() => [], { builtins: [tracked], uiScope })
+        yield* Deferred.await(registered).pipe(Effect.timeout("2 seconds"))
+        yield* Scope.close(uiScope, Exit.void)
+        expect(calls).toEqual(["cleanup", "runtime"])
+      }),
   )
 })
 
@@ -84,16 +101,15 @@ const branchId = BranchId.make("branch-resource")
  */
 const identityMemo = (record: () => { readonly name: string }) =>
   createMemo(
-    (): Option.Option<SessionIdentity> => {
+    (): SessionIdentity => {
       // Track the record so a rename re-runs this body, exactly as the client does.
       record()
-      return Option.some({ sessionId, branchId })
+      return { sessionId, branchId }
     },
-    Option.none<SessionIdentity>(),
+    { sessionId, branchId },
     {
-      equals: Option.makeEquivalence<SessionIdentity>(
-        (left, right) => left.sessionId === right.sessionId && left.branchId === right.branchId,
-      ),
+      equals: (left, right) =>
+        left.sessionId === right.sessionId && left.branchId === right.branchId,
     },
   )
 
@@ -150,8 +166,10 @@ describe("sessionQuery", () => {
           fetch: (session) => Effect.succeed(String(session.sessionId)),
         }),
         {
-          currentSession: () =>
-            Option.some({ sessionId: SessionId.make(active()), branchId: BranchId.make("b") }),
+          currentSession: () => ({
+            sessionId: SessionId.make(active()),
+            branchId: BranchId.make("b"),
+          }),
         },
       )
       yield* waitUntil(() => query.value() === "a", "first session")
@@ -184,8 +202,10 @@ describe("sessionQuery", () => {
           },
         }),
         {
-          currentSession: () =>
-            Option.some({ sessionId: SessionId.make(active()), branchId: BranchId.make("b") }),
+          currentSession: () => ({
+            sessionId: SessionId.make(active()),
+            branchId: BranchId.make("b"),
+          }),
         },
       )
       yield* waitUntil(() => reads.length === 1, "a's read started")
@@ -200,80 +220,4 @@ describe("sessionQuery", () => {
       dispose()
     }),
   )
-})
-
-// ── client runtime ──────────────────────────────────────────────────────────
-
-/**
- * `makeClientRuntime` is the one runtime every client-extension surface
- * loads against. A surface gives it a transport, a workspace, and
- * `cast`; everything else defaults so a test does not
- * restate no-op callbacks.
- */
-
-const workspace = {
-  cwd: "/nonexistent/client-runtime-cwd",
-  home: "/nonexistent/client-runtime-home",
-}
-const mockRuntime = createMockRuntime()
-const runCast = { cast: mockRuntime.cast, pane: makePaneSlot() }
-const session = { sessionId: SessionId.make("sess-1"), branchId: BranchId.make("branch-1") }
-
-describe("makeClientRuntime", () => {
-  it.live("transport, workspace and cast alone resolve every client facet", () => {
-    const runtime = makeClientRuntime(BunServices.layer, {
-      transport: makeClientTestTransport({ currentSession: () => Option.some(session) }),
-      workspace,
-      shell: runCast,
-    })
-    return Effect.gen(function* () {
-      const seen = yield* inRuntime(
-        runtime,
-        Effect.gen(function* () {
-          const { shell, workspace: ws, lifecycle, activity, transport } = yield* ClientContext
-          shell.notify("ignored")
-          shell.switchSession({ ...session, name: "ignored" })
-          lifecycle.addCleanup(() => {})
-          return {
-            cwd: ws.cwd,
-            activity: activity.snapshot().state,
-            session: transport.currentSession(),
-          }
-        }),
-      )
-      expect(seen).toEqual({
-        cwd: workspace.cwd,
-        activity: "unknown",
-        session: Option.some(session),
-      })
-      yield* Effect.promise(() => runtime.dispose())
-    })
-  })
-
-  it.live("supplied shell, activity and lifecycle callbacks replace the no-op defaults", () => {
-    const sent: Array<string> = []
-    const cleanups: Array<() => void> = []
-    const runtime = makeClientRuntime(BunServices.layer, {
-      transport: makeClientTestTransport({ currentSession: () => Option.some(session) }),
-      workspace,
-      shell: { ...runCast, notify: (message) => sent.push(message) },
-      activity: () => ({ state: "working" }),
-      lifecycle: { addCleanup: (fn) => cleanups.push(fn) },
-    })
-    return Effect.gen(function* () {
-      const state = yield* inRuntime(
-        runtime,
-        Effect.gen(function* () {
-          const { shell, lifecycle, activity } = yield* ClientContext
-          shell.notify("hello")
-          lifecycle.addCleanup(() => {})
-          return activity.snapshot().state
-        }),
-      )
-      expect(state).toEqual("working")
-      expect(sent).toEqual(["hello"])
-      expect(cleanups).toHaveLength(1)
-      yield* Effect.promise(() => runtime.dispose())
-    })
-  })
 })

@@ -17,7 +17,17 @@ import {
   truncate,
   workingIconFrame,
 } from "./utils"
-import { DateTime, Effect, Fiber, Match, Option, Predicate, Schema } from "effect"
+import {
+  type Cause,
+  DateTime,
+  Effect,
+  Match,
+  Option,
+  Predicate,
+  Queue,
+  Schema,
+  Stream,
+} from "effect"
 import { resolveThemeColor, useTheme } from "./theme"
 import { useClient } from "./client"
 import {
@@ -70,18 +80,13 @@ import { insert, RendererContext, useRenderer } from "@opentui/solid"
 /**
  * Reasoning summaries, prepared for the markdown renderer.
  *
- * A model emits reasoning as a run of summaries, and each one is its own bold
- * markdown heading. `messagePartsReasoning` joins the parts with an empty
- * string, so the headings collide and the pane showed one unreadable line:
+ * A model emits reasoning as a run of summaries, each its own bold markdown
+ * heading, and `messagePartsReasoning` joins the parts with an empty string:
  *
  *     **Verifying final test output****Refactoring LedgerStore.list…**
  *
- * The literal asterisks were there because reasoning rendered as plain text
- * rather than through the markdown element the reply uses.
- *
- * Splitting the run back into summaries and joining them with a blank line
- * gives markdown the paragraph break it needs, so each summary renders as its
- * own line with the emphasis applied rather than printed.
+ * The run is split back into summaries and joined with a blank line, the
+ * paragraph break markdown needs to draw each summary as its own line.
  */
 
 /** A bold span that ends where the next one begins, with no separator between. */
@@ -496,7 +501,6 @@ function AssistantMessage(props: {
     return groups
   })
 
-  // Replace mermaid code blocks with rendered ASCII art (skip while streaming)
   return (
     <box marginTop={contentMargin()} paddingLeft={2} flexDirection="column">
       {/* The feed writes a segment for every assistant part, so an answer with
@@ -531,6 +535,7 @@ function AssistantMessage(props: {
                   />
                 ),
                 text: (segment) => {
+                  // Mermaid blocks draw as ASCII art once the text settles.
                   const renderContent = () => {
                     if (props.streaming) return segment.content
                     return replaceMermaidBlocks(segment.content, props.dimensions().width)
@@ -1114,11 +1119,6 @@ interface NativeTranscriptProps {
   children: JSX.Element
 }
 
-/** The surface did not settle before its timeout; the rows still commit as rendered. */
-class NativeSettleError extends Schema.TaggedError<NativeSettleError>()("NativeSettleError", {
-  message: Schema.String,
-}) {}
-
 /** Owns native history snapshots. The session feed remains the source of truth. */
 export function NativeTranscript(props: NativeTranscriptProps) {
   const renderer = useRenderer()
@@ -1207,25 +1207,30 @@ export function NativeTranscript(props: NativeTranscriptProps) {
   // Native history commits are serialized: markdown highlights arrive from the
   // tree-sitter worker asynchronously, and scrollback is immutable once written,
   // so each item renders on a surface, settles, and only then commits its rows.
+  // One worker takes the commits off a queue in the order they were asked; a
+  // semaphore would not keep that order, as a new taker can pass a waiting one.
+  // Cleanup ends the queue: a task still queued then finds the transcript
+  // disposed and does nothing, and the worker stops.
   let disposed = false
-  let nativeTail: Fiber.Fiber<void> = Effect.runFork(Effect.void)
-  const enqueueNative = (task: Effect.Effect<void>) => {
-    const previous = nativeTail
-    nativeTail = Effect.runFork(
-      Fiber.await(previous).pipe(
-        Effect.andThen(
-          Effect.suspend(() => {
-            if (disposed || renderer.isDestroyed) return Effect.void
-            return task
-          }),
-        ),
-        Effect.catchCause((cause) =>
-          Effect.logWarning("transcript.native-commit-failed").pipe(
-            Effect.annotateLogs({ cause: String(cause) }),
+  const nativeTasks = Effect.runSync(Queue.unbounded<Effect.Effect<void>, Cause.Done>())
+  Effect.runFork(
+    Stream.fromQueue(nativeTasks).pipe(
+      Stream.runForEach((task) =>
+        Effect.suspend(() => {
+          if (disposed || renderer.isDestroyed) return Effect.void
+          return task
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("transcript.native-commit-failed").pipe(
+              Effect.annotateLogs({ cause: String(cause) }),
+            ),
           ),
         ),
       ),
-    )
+    ),
+  )
+  const enqueueNative = (task: Effect.Effect<void>) => {
+    Queue.offerUnsafe(nativeTasks, task)
   }
 
   /** Scrollback accepts a commit only while the split footer owns the screen. */
@@ -1269,10 +1274,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
           }),
         ),
       )
-      return Effect.tryPromise({
-        try: () => surface.settle(2000),
-        catch: (error) => new NativeSettleError({ message: String(error) }),
-      }).pipe(
+      return Effect.tryPromise(() => surface.settle(2000)).pipe(
         // A highlight that never lands still commits; the row text is complete.
         // A surface the renderer already tore down has nothing left to draw.
         Effect.catch(() =>
@@ -1341,6 +1343,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
 
   onCleanup(() => {
     disposed = true
+    Queue.endUnsafe(nativeTasks)
     renderer.off("frame", finishNativeReturn)
     if (renderer.isDestroyed) return
     renderer.externalOutputMode = "passthrough"

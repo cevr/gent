@@ -20,6 +20,7 @@ import {
   formatAge,
   formatCost,
   formatDuration,
+  groupedRows,
   keyHint,
   KeyHints,
   PickerFrame,
@@ -57,12 +58,11 @@ import { ref } from "@gent/core/extensions/api"
 /** Descendants of `root` at any depth, in the server's parent-before-child order. */
 const subtreeRows = (
   rows: ReadonlyArray<AgentRowEntry>,
-  root: Option.Option<{ readonly sessionId: string }>,
+  root: { readonly sessionId: string },
 ): ReadonlyArray<AgentRowEntry> => {
-  if (Option.isNone(root)) return []
-  const known = new Set<string>([root.value.sessionId])
+  const known = new Set<string>([root.sessionId])
   const descendants: Array<AgentRowEntry> = []
-  let pending = rows.filter((row) => row.sessionId !== root.value.sessionId)
+  let pending = rows.filter((row) => row.sessionId !== root.sessionId)
   for (;;) {
     const next = pending.filter(
       (row) => Predicate.isNotUndefined(row.parentSessionId) && known.has(row.parentSessionId),
@@ -138,7 +138,7 @@ export function SubagentTray(props: { controller: AgentsController }) {
   // Switching sessions changes whose subtree the tray lists; refetch for it.
   createEffect(
     on(
-      () => Option.getOrUndefined(Option.map(props.controller.current(), (row) => row.sessionId)),
+      () => props.controller.current().sessionId,
       () => props.controller.refresh(""),
     ),
   )
@@ -196,7 +196,7 @@ const AGENTS_VIEW_EXTENSION_ID = "@gent/agents-view"
 interface AgentsController {
   readonly rows: () => ReadonlyArray<AgentRowEntry>
   /** The loop the shell is currently on, so the pane can mark and preselect it. */
-  readonly current: () => Option.Option<ActiveExtensionSession>
+  readonly current: () => ActiveExtensionSession
   readonly error: () => Option.Option<string>
   readonly loading: () => boolean
   readonly refresh: (query: string) => void
@@ -290,13 +290,10 @@ export const makeAgentsController = (
     // The open pane lists the workspace under the reader's filter. The closed
     // pane leaves only the tray, which draws the current session's subtree,
     // so it reads that subtree alone: its cost follows the subtree, not the
-    // number of stored sessions. With no current session it has nothing to draw.
+    // number of stored sessions.
     const read = (): Effect.Effect<ReadonlyArray<AgentRowEntry>, { readonly message: string }> => {
       if (open()) return fetchRows({ query })
-      return Option.match(transport.currentSession(), {
-        onNone: () => Effect.succeed(empty),
-        onSome: (current) => fetchRows({ query, root: current.sessionId }),
-      })
+      return fetchRows({ query, root: transport.currentSession().sessionId })
     }
     const listing = yield* sessionQuery({
       initial: empty,
@@ -378,24 +375,6 @@ const SECTION_TITLE = {
   idle: "Idle",
   inactive: "Inactive",
 } satisfies Record<AgentRowEntry["section"], string>
-
-/** The list as drawn: a heading opens each section, rows keep their index for selection. */
-type PaneItem =
-  | { readonly kind: "heading"; readonly section: AgentRowEntry["section"]; readonly count: number }
-  | { readonly kind: "row"; readonly row: AgentRowEntry; readonly index: number }
-
-const paneItems = (rows: ReadonlyArray<AgentRowEntry>): ReadonlyArray<PaneItem> => {
-  const items: PaneItem[] = []
-  rows.forEach((row, index) => {
-    const previous = rows[index - 1]
-    if (Option.isNone(Option.fromNullishOr(previous)) || previous?.section !== row.section) {
-      const count = rows.filter((entry) => entry.section === row.section).length
-      items.push({ kind: "heading", section: row.section, count })
-    }
-    items.push({ kind: "row", row, index })
-  })
-  return items
-}
 
 /** "1 running, 0 idle, 3 inactive" for the pane title: each loop counted by its section, its own state. */
 const countsLabel = (rows: ReadonlyArray<AgentRowEntry>): string => {
@@ -552,11 +531,10 @@ export function AgentsPane(props: {
   // The row a first Ctrl+X armed; the second press on it deletes, any other key disarms.
   const [armed, setArmed] = createSignal(Option.none<string>())
 
-  const isCurrent = (row: AgentRowEntry): boolean =>
-    Option.match(props.controller.current(), {
-      onNone: () => false,
-      onSome: (active) => active.sessionId === row.sessionId && active.branchId === row.branchId,
-    })
+  const isCurrent = (row: AgentRowEntry): boolean => {
+    const active = props.controller.current()
+    return active.sessionId === row.sessionId && active.branchId === row.branchId
+  }
 
   // Filtering is the server's job — it owns the same search the projection
   // tests cover — so typing refetches rather than filtering a local copy.
@@ -668,44 +646,42 @@ export function AgentsPane(props: {
 
   /** The list's rows: a heading opens each section. */
   const rows = (): ReadonlyArray<SelectListRow<AgentRowEntry>> =>
-    paneItems(visible()).map((item) => {
-      if (item.kind === "heading") {
-        return decoration<AgentRowEntry>(() => (
+    groupedRows(
+      visible(),
+      (row) => row.section,
+      (first, count) =>
+        decoration<AgentRowEntry>(() => (
           <box paddingLeft={1}>
             <text style={{ fg: theme.textMuted }}>
-              {`${SECTION_TITLE[item.section]} (${item.count})`}
+              {`${SECTION_TITLE[first.section]} (${count})`}
             </text>
           </box>
-        ))
-      }
-      return selectable(item.row, (selected, id) => {
-        const background = () => {
-          if (selected()) return theme.primary
-          return "transparent"
-        }
-        const section = () => item.row.section
-        const line = () => rowLine(item.row, selected())
-        return (
-          <box id={id} backgroundColor={background()} paddingLeft={1}>
-            {/* One row, one line: the time is right-aligned into the budget, so
-                an overflowing label is cut rather than wrapped under it, the
-                way the autocomplete popup and the thread rows clamp theirs. */}
-            <text
-              wrapMode="none"
-              truncate
-              style={{ fg: lineColor(item.row, section(), selected()) }}
-            >
-              {leftRuns(line()).before}
-              <span style={{ fg: glyphColorFor(section(), selected()) }}>
-                {leftRuns(line()).glyph}
-              </span>
-              {leftRuns(line()).after}
-              <span style={{ fg: rightColor(item.row, selected()) }}>{line().right}</span>
-            </text>
-          </box>
-        )
-      })
-    })
+        )),
+      (row) =>
+        selectable(row, (selected, id) => {
+          const background = () => {
+            if (selected()) return theme.primary
+            return "transparent"
+          }
+          const section = () => row.section
+          const line = () => rowLine(row, selected())
+          return (
+            <box id={id} backgroundColor={background()} paddingLeft={1}>
+              {/* One row, one line: the time is right-aligned into the budget, so
+                  an overflowing label is cut rather than wrapped under it, the
+                  way the autocomplete popup and the thread rows clamp theirs. */}
+              <text wrapMode="none" truncate style={{ fg: lineColor(row, section(), selected()) }}>
+                {leftRuns(line()).before}
+                <span style={{ fg: glyphColorFor(section(), selected()) }}>
+                  {leftRuns(line()).glyph}
+                </span>
+                {leftRuns(line()).after}
+                <span style={{ fg: rightColor(row, selected()) }}>{line().right}</span>
+              </text>
+            </box>
+          )
+        }),
+    )
 
   /** Open on the loop the shell is already on. */
   const sticky = (values: ReadonlyArray<AgentRowEntry>): Option.Option<number> =>

@@ -4,51 +4,33 @@ import { parseEditorCommand, resolveEditor } from "../src/os"
 
 // ── external editor ─────────────────────────────────────────────────────────
 
-// ── Editor resolution ─────────────────────────────────────────────────
-
-describe("resolveEditor", () => {
-  test("prefers $VISUAL", () => {
+describe("external editor", () => {
+  test("$VISUAL wins over $EDITOR", () => {
     expect(resolveEditor(Option.some("code"), Option.some("vim"))).toBe("code")
   })
 
-  test("falls back to $EDITOR", () => {
+  test("without $VISUAL, $EDITOR names the editor", () => {
     expect(resolveEditor(Option.none(), Option.some("nano"))).toBe("nano")
   })
 
-  test("falls back to vi", () => {
+  test("with neither set, the editor is vi", () => {
     expect(resolveEditor(Option.none(), Option.none())).toBe("vi")
   })
 
-  test("$VISUAL empty string falls through", () => {
+  test("an empty $VISUAL counts as unset", () => {
     expect(resolveEditor(Option.some(""), Option.some("vim"))).toBe("vim")
   })
-})
 
-// ── Editor command parsing ────────────────────────────────────────────
-
-describe("parseEditorCommand", () => {
-  test("single command", () => {
-    expect(parseEditorCommand("vim")).toEqual(["vim"])
-  })
-
-  test("command with args", () => {
-    expect(parseEditorCommand("code --wait")).toEqual(["code", "--wait"])
-  })
-
-  test("command with multiple args", () => {
-    expect(parseEditorCommand("emacsclient -c -a emacs")).toEqual([
-      "emacsclient",
-      "-c",
-      "-a",
-      "emacs",
-    ])
-  })
-
-  test("extra whitespace trimmed", () => {
-    expect(parseEditorCommand("  nvim  -f  ")).toEqual(["nvim", "-f"])
-  })
-
-  test("empty string falls back to vi", () => {
-    expect(parseEditorCommand("")).toEqual(["vi"])
+  test("an editor setting splits into a program and its arguments; blank falls back to vi", () => {
+    const cases: ReadonlyArray<readonly [string, [string, ...string[]]]> = [
+      ["vim", ["vim"]],
+      ["code --wait", ["code", "--wait"]],
+      ["emacsclient -c -a emacs", ["emacsclient", "-c", "-a", "emacs"]],
+      ["  nvim  -f  ", ["nvim", "-f"]],
+      ["", ["vi"]],
+    ]
+    for (const [setting, command] of cases) {
+      expect([setting, parseEditorCommand(setting)]).toEqual([setting, command])
+    }
   })
 })

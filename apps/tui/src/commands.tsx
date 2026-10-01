@@ -1,19 +1,19 @@
 /** @jsxImportSource @opentui/solid */
-import { Array, Option, Predicate } from "effect"
+import { Array, Effect, Option, Predicate, Result } from "effect"
+import type { Branch } from "@gent/core/protocol"
 import {
   type Accessor,
   createContext,
   createEffect,
   createMemo,
-  createResource,
   createSignal,
   type JSX,
   Show,
 } from "solid-js"
-import { shortId, truncate, truncateStart, useRequiredContext } from "./utils"
+import { formatError, shortId, truncate, truncateStart, useRequiredContext } from "./utils"
 import { useTerminalDimensions } from "./terminal"
 import { matchSorter } from "match-sorter"
-import { useClient } from "./client"
+import { useClient, useRuntime } from "./client"
 import {
   keyHint,
   KeyHints,
@@ -93,7 +93,6 @@ interface CommandContextValue {
     composerIdle: boolean,
   ) => boolean
   paletteOpen: Accessor<boolean>
-  openPalette: () => void
   closePalette: () => void
 }
 
@@ -144,7 +143,6 @@ export function CommandProvider(props: CommandProviderProps) {
   const value: CommandContextValue = {
     handleKeybind,
     paletteOpen,
-    openPalette: () => setPaletteOpen(true),
     closePalette: () => setPaletteOpen(false),
   }
 
@@ -152,15 +150,6 @@ export function CommandProvider(props: CommandProviderProps) {
 }
 
 // ── slash commands ──────────────────────────────────────────────────────────
-
-/**
- * Slash command resolution — looks up commands by slash name or alias.
- */
-
-interface SlashCommandResult {
-  handled: boolean
-  error?: string
-}
 
 /**
  * The command `/name` names, case-insensitively: the one whose `slash` it is,
@@ -179,39 +168,32 @@ const findSlashCommand = (
   )
 }
 
-/** Find and execute a slash command from the resolved commands. */
+/**
+ * Runs the command `/cmd` names with `args`. Answers whether one ran: a name
+ * no command carries runs nothing.
+ */
 export const executeSlashCommand = (
   cmd: string,
   args: string,
   commands: ReadonlyArray<Command>,
-): SlashCommandResult => {
-  const match = findSlashCommand(cmd, commands)
-  if (Option.isNone(match)) {
-    return { handled: false, error: `Unknown command: /${cmd}` }
-  }
+): boolean =>
+  Option.match(findSlashCommand(cmd, commands), {
+    onNone: () => false,
+    onSome: (command) => {
+      const onSlash = Option.fromNullishOr(command.onSlash)
+      if (Option.isSome(onSlash)) onSlash.value(args)
+      else command.onSelect()
+      return true
+    },
+  })
 
-  const onSlash = Option.fromNullishOr(match.value.onSlash)
-  if (Option.isSome(onSlash)) onSlash.value(args)
-  else match.value.onSelect()
-  return { handled: true }
-}
-
-/**
- * Parse slash command from input
- * @returns [command, args] or null if not a slash command
- */
-// eslint-disable-next-line effect/noNullish -- parser API uses null as its no-match sentinel.
-export function parseSlashCommand(input: string): [string, string] | null {
+/** A line's command name and the rest, trimmed; `None` for a line that does not start with `/`. */
+export const parseSlashCommand = (input: string): Option.Option<readonly [string, string]> => {
   const trimmed = input.trim()
-  // eslint-disable-next-line effect/noNullish -- parser API uses null as its no-match sentinel.
-  if (!trimmed.startsWith("/")) return null
-
+  if (!trimmed.startsWith("/")) return Option.none()
   const spaceIdx = trimmed.indexOf(" ")
-  if (spaceIdx === -1) {
-    return [trimmed.slice(1), ""]
-  }
-
-  return [trimmed.slice(1, spaceIdx), trimmed.slice(spaceIdx + 1).trim()]
+  if (spaceIdx === -1) return Option.some([trimmed.slice(1), ""])
+  return Option.some([trimmed.slice(1, spaceIdx), trimmed.slice(spaceIdx + 1).trim()])
 }
 
 /**
@@ -236,20 +218,22 @@ interface PaletteItem {
   readonly description?: string
   readonly category?: string
   readonly shortcut?: string
-  readonly disabled?: boolean
   readonly onSelect: () => void
 }
 
-/** A structural level in the palette stack.
- *
- *  `source` is a Solid accessor — can be a plain function for sync levels
- *  or a `Resource` for async levels. Returns `undefined` while loading. */
+/**
+ * A level's rows: `None` while its request is pending, else the rows or the
+ * reason the request failed.
+ */
+type LevelRows = Option.Option<Result.Result<readonly PaletteItem[], string>>
+
+const levelRows = (items: readonly PaletteItem[]): LevelRows => Option.some(Result.succeed(items))
+
+/** A structural level in the palette stack; `source` is a Solid accessor. */
 interface PaletteLevel {
   readonly id: string
   readonly title: string
-  // eslint-disable-next-line effect/noNullish -- Solid Resource returns undefined while its request is pending.
-  readonly source: Accessor<readonly PaletteItem[] | undefined>
-  readonly onEnter?: () => void
+  readonly source: Accessor<LevelRows>
 }
 
 /**
@@ -284,6 +268,7 @@ export function CommandPalette() {
   const ext = useExtensionUI()
   const { theme, selected, set, all, mode, setMode } = useTheme()
   const client = useClient()
+  const { cast } = useRuntime()
   const dimensions = useTerminalDimensions()
   const [state, setState] = createSignal(closedPalette)
   // The list owns the query and the cursor; the palette keeps a copy of the
@@ -307,7 +292,7 @@ export function CommandPalette() {
   const themeLevel = (): PaletteLevel => ({
     id: "theme",
     title: "Theme",
-    source: (): readonly PaletteItem[] => {
+    source: () => {
       const active = selected()
       const named = Object.keys(all())
         .filter((name) => name !== "system")
@@ -319,7 +304,7 @@ export function CommandPalette() {
             closePalette()
           },
         }))
-      return [
+      return levelRows([
         {
           id: "theme.system",
           title: selectedTitle("System", active === "system"),
@@ -330,7 +315,7 @@ export function CommandPalette() {
           },
         },
         ...named,
-      ]
+      ])
     },
   })
 
@@ -339,7 +324,7 @@ export function CommandPalette() {
   const modeLevel = (): PaletteLevel => ({
     id: "mode",
     title: "Mode",
-    source: (): readonly PaletteItem[] => {
+    source: () => {
       const current = mode()
       const item = (value: "dark" | "light", title: string): PaletteItem => ({
         id: `mode.${value}`,
@@ -349,27 +334,41 @@ export function CommandPalette() {
           closePalette()
         },
       })
-      return [item("dark", "Dark"), item("light", "Light")]
+      return levelRows([item("dark", "Dark"), item("light", "Light")])
     },
   })
 
+  // The list is read once per open. A failed read is the level's answer: the
+  // palette stays open and its row says why.
   const branchesLevel = (): PaletteLevel => {
-    const [branches] = createResource(() => client.runtime.run(client.listBranches))
+    const [branches, setBranches] = createSignal<
+      Option.Option<Result.Result<readonly Branch[], string>>
+    >(Option.none())
+    cast(
+      client.listBranches.pipe(
+        Effect.match({
+          onFailure: (error) =>
+            setBranches(Option.some(Result.fail(`Branches: ${formatError(error)}`))),
+          onSuccess: (items) => setBranches(Option.some(Result.succeed(items))),
+        }),
+      ),
+    )
+    const isCurrent = (branch: Branch) => client.session().branchId === branch.id
     return {
       id: "branches",
       title: "Branches",
       source: () =>
-        Option.getOrUndefined(
-          Option.map(Option.fromNullishOr(branches()), (items) =>
+        Option.map(
+          branches(),
+          Result.map((items) =>
             items.map((branch) => ({
               id: `branch.${branch.id}`,
               title: selectedTitle(
                 branch.name ?? `Branch ${shortId(branch.id)}`,
-                Option.exists(client.session(), (session) => session.branchId === branch.id),
+                isCurrent(branch),
               ),
               onSelect: () => {
-                if (!Option.exists(client.session(), (session) => session.branchId === branch.id))
-                  client.switchBranch(branch.id)
+                if (!isCurrent(branch)) client.switchBranch(branch.id)
                 closePalette()
               },
             })),
@@ -381,59 +380,58 @@ export function CommandPalette() {
   const pushLevel = (level: PaletteLevel) => {
     setState((current) => ({ levelStack: [...current.levelStack, level], category: "" }))
     resetList()
-    level.onEnter?.()
   }
 
   const rootLevel = (): PaletteLevel => ({
     id: "root",
     title: "Commands",
-    source: (): readonly PaletteItem[] => [
-      {
-        id: "theme",
-        title: "Theme",
-        description: "Switch color theme",
-        category: "Appearance",
-        onSelect: () => pushLevel(themeLevel()),
-      },
-      {
-        id: "mode",
-        title: "Mode",
-        description: "Dark or light variant",
-        category: "Appearance",
-        onSelect: () => pushLevel(modeLevel()),
-      },
-      {
-        id: "branches",
-        title: "Branches",
-        description: "Switch branches in this session",
-        category: "Session",
-        onSelect: () => pushLevel(branchesLevel()),
-      },
-      ...ext.commands().map((cmd) => ({
-        id: `ext:${cmd.id}`,
-        title: cmd.title,
-        description: cmd.description,
-        category: cmd.category ?? "General",
-        shortcut: cmd.keybind,
-        onSelect: () => {
-          cmd.onSelect()
-          closePalette()
+    source: () =>
+      levelRows([
+        {
+          id: "theme",
+          title: "Theme",
+          description: "Switch color theme",
+          category: "Appearance",
+          onSelect: () => pushLevel(themeLevel()),
         },
-      })),
-    ],
+        {
+          id: "mode",
+          title: "Mode",
+          description: "Dark or light variant",
+          category: "Appearance",
+          onSelect: () => pushLevel(modeLevel()),
+        },
+        {
+          id: "branches",
+          title: "Branches",
+          description: "Switch branches in this session",
+          category: "Session",
+          onSelect: () => pushLevel(branchesLevel()),
+        },
+        ...ext.commands().map((cmd) => ({
+          id: `ext:${cmd.id}`,
+          title: cmd.title,
+          description: cmd.description,
+          category: cmd.category ?? "General",
+          shortcut: cmd.keybind,
+          onSelect: () => {
+            cmd.onSelect()
+            closePalette()
+          },
+        })),
+      ]),
   })
 
   // ── Derived state ──
 
   const currentLevel = () => Array.last(state().levelStack)
 
-  /** `None` while the level's request is pending. */
-  const levelSource = createMemo(() =>
-    Option.flatMap(currentLevel(), (level) => Option.fromNullishOr(level.source())),
-  )
+  const levelSource = createMemo(() => Option.flatMap(currentLevel(), (level) => level.source()))
   const loading = () => Option.isNone(levelSource())
+  /** Why the level's request failed. */
+  const levelFailure = () => Option.flatMap(levelSource(), Result.getFailure)
   const levelItems = createMemo<readonly PaletteItem[]>(() =>
-    Option.getOrElse(levelSource(), (): readonly PaletteItem[] => []),
+    Option.getOrElse(Option.flatMap(levelSource(), Result.getSuccess), () => []),
   )
 
   const categories = createMemo(() => [
@@ -468,7 +466,6 @@ export function CommandPalette() {
   }
 
   const handleSelect = (item: PaletteItem) => {
-    if (item.disabled === true) return
     item.onSelect()
   }
 
@@ -542,14 +539,11 @@ export function CommandPalette() {
   const rows = (): ReadonlyArray<SelectListRow<PaletteItem>> =>
     filteredItems().map((item) =>
       selectable(item, (isSelected, id) => {
-        const disabled = item.disabled === true
         const itemTextColor = () => {
-          if (disabled) return theme.textMuted
           if (isSelected()) return theme.primary
           return theme.text
         }
         const metaColor = () => {
-          if (disabled) return theme.textMuted
           if (isSelected()) return theme.primary
           return theme.textMuted
         }
@@ -567,9 +561,7 @@ export function CommandPalette() {
               truncate
               style={{ fg: itemTextColor() }}
             >
-              <span style={{ bold: isSelected() && !disabled }}>
-                {truncate(item.title, labelWidth() - 2)}
-              </span>
+              <span style={{ bold: isSelected() }}>{truncate(item.title, labelWidth() - 2)}</span>
             </text>
             <Show when={hasDetails()}>
               <text flexGrow={1} wrapMode="none" truncate style={{ fg: metaColor() }}>
@@ -582,18 +574,26 @@ export function CommandPalette() {
     )
 
   const emptyRow = () => {
+    const failure = levelFailure()
     let label = "No matches"
     if (loading()) label = "Loading…"
+    let color = theme.textMuted
+    if (Option.isSome(failure)) {
+      label = failure.value
+      color = theme.error
+    }
     return (
       <box paddingLeft={1}>
-        <text style={{ fg: theme.textMuted }}>{label}</text>
+        <text wrapMode="none" truncate style={{ fg: color }}>
+          {label}
+        </text>
       </box>
     )
   }
 
   return (
     <Show when={command.paletteOpen()}>
-      <PickerFrame title={paletteTitle()} keys={keys()}>
+      <PickerFrame title={paletteTitle()} keys={keys()} error={Option.none()}>
         <SelectList
           id="command-palette"
           queryRow={() => (

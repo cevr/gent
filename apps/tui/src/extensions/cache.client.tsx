@@ -581,9 +581,8 @@ export default defineClientExtension(CACHE_EXTENSION_ID, {
           priority: 60,
           produce: (): ReadonlyArray<{ readonly text: string; readonly color: "textMuted" }> => {
             const total = Option.getOrElse(
-              Option.map(
-                Option.flatMap(transport.currentSession(), (session) => priced(branchKey(session))),
-                (misses) => misses.reduce((sum, miss) => sum + miss.costUsd, 0),
+              Option.map(priced(branchKey(transport.currentSession())), (misses) =>
+                misses.reduce((sum, miss) => sum + miss.costUsd, 0),
               ),
               () => 0,
             )

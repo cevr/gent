@@ -7,13 +7,13 @@ import {
   parseSlashCommand,
   useCommand,
 } from "../src/commands"
-import { createEffect, For, onCleanup, onMount } from "solid-js"
-import { Effect, Option } from "effect"
-import { BranchId, dateFromMillis, SessionId } from "@gent/core/protocol"
+import { createEffect, ErrorBoundary, For, onCleanup, onMount } from "solid-js"
+import { Effect, Option, Schema } from "effect"
+import { BranchId, dateFromMillis, GentRpcError, SessionId } from "@gent/core/protocol"
 import { type ClientContextValue, useClient } from "../src/client"
 import { useExtensionUI } from "../src/extensions/host"
 import type { AgentRowEntry } from "@gent/extensions/client"
-import { createMockClient, renderFrame, renderWithProviders } from "./render-harness-boundary"
+import { createMockClient, renderFrame, renderScoped } from "./render-harness-boundary"
 import { waitForFrame } from "./helpers-boundary"
 import { makePaneSlot } from "./extension-test-harness-boundary"
 
@@ -27,13 +27,13 @@ describe("parseSlashCommand", () => {
       ["  /clear  ", ["clear", ""]],
     ]
     for (const [line, parsed] of cases) {
-      expect(parseSlashCommand(line)).toEqual(parsed)
+      expect(parseSlashCommand(line)).toEqual(Option.some(parsed))
     }
   })
 
   test("reads a line without a leading slash as no command", () => {
-    expect(parseSlashCommand("hello")).toBeNull()
-    expect(parseSlashCommand("")).toBeNull()
+    expect(parseSlashCommand("hello")).toEqual(Option.none())
+    expect(parseSlashCommand("")).toEqual(Option.none())
   })
 })
 
@@ -57,15 +57,13 @@ describe("executeSlashCommand", () => {
           },
         }),
       ]
-      expect(executeSlashCommand(typed, "", commands).handled).toBe(true)
+      expect(executeSlashCommand(typed, "", commands)).toBe(true)
       expect(called).toBe(true)
     }
   })
 
-  test("an unknown slash reports itself", () => {
-    const result = executeSlashCommand("unknown", "", [])
-    expect(result.handled).toBe(false)
-    expect(result.error).toBe("Unknown command: /unknown")
+  test("a name no command carries runs nothing", () => {
+    expect(executeSlashCommand("unknown", "", [])).toBe(false)
   })
 
   test("prefers onSlash over onSelect when args present", () => {
@@ -80,8 +78,7 @@ describe("executeSlashCommand", () => {
         },
       }),
     ]
-    const result = executeSlashCommand("think", "high", commands)
-    expect(result.handled).toBe(true)
+    expect(executeSlashCommand("think", "high", commands)).toBe(true)
     expect(receivedArgs).toBe("high")
   })
 
@@ -96,8 +93,7 @@ describe("executeSlashCommand", () => {
         },
       }),
     ]
-    const result = executeSlashCommand("ext", "ignored", commands)
-    expect(result.handled).toBe(true)
+    expect(executeSlashCommand("ext", "ignored", commands)).toBe(true)
     expect(selectCalled).toBe(true)
   })
 
@@ -117,10 +113,11 @@ describe("executeSlashCommand", () => {
 // eslint-disable-next-line effect/noNullish -- a wire field the server leaves unset is present and undefined.
 const absent = undefined
 
+/** The palette as ctrl+p opens it: the session view hands the key to `handleKeybind`. */
 function OpenPaletteOnMount() {
   const command = useCommand()
   createEffect(() => {
-    command.openPalette()
+    command.handleKeybind({ name: "p", ctrl: true }, [], true)
   })
   return <CommandPalette />
 }
@@ -220,14 +217,12 @@ const storedSessionsClient = () =>
   })
 
 describe("CommandPalette renderer", () => {
-  it.live("opens the theme submenu through keyboard navigation and activation", () =>
+  it.scopedLive("opens the theme submenu through keyboard navigation and activation", () =>
     Effect.gen(function* () {
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <OpenPaletteOnMount />, {
-          width: 90,
-          height: 28,
-        }),
-      )
+      const setup = yield* renderScoped(() => <OpenPaletteOnMount />, {
+        width: 90,
+        height: 28,
+      })
       expect(renderFrame(setup)).toContain("Commands")
       // Theme is the first row.
       setup.mockInput.pressKey("RETURN")
@@ -240,11 +235,9 @@ describe("CommandPalette renderer", () => {
     }),
   )
 
-  it.live("a submenu's escape steps back to the root, where escape closes", () =>
+  it.scopedLive("a submenu's escape steps back to the root, where escape closes", () =>
     Effect.gen(function* () {
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <OpenPaletteOnMount />, { width: 90, height: 28 }),
-      )
+      const setup = yield* renderScoped(() => <OpenPaletteOnMount />, { width: 90, height: 28 })
       yield* waitForFrame(
         setup,
         (frame) => frame.includes("Commands") && frame.includes("Branches"),
@@ -261,20 +254,57 @@ describe("CommandPalette renderer", () => {
     }),
   )
 
-  it.live("the palette Sessions item opens the agents pane and a row switches to it", () =>
+  // A failed branch list is the level's answer, not a crash: the palette
+  // stays open and says why, and Esc still steps back.
+  it.scopedLive("a branch list that fails shows why in the palette", () =>
+    Effect.gen(function* () {
+      const client = createMockClient({
+        branch: {
+          list: () =>
+            Effect.fail(
+              Schema.decodeSync(GentRpcError)({
+                _tag: "InvalidStateError",
+                message: "branch list refused",
+              }),
+            ),
+        },
+      })
+      const setup = yield* renderScoped(
+        () => (
+          <ErrorBoundary fallback={(error) => <text>crashed: {String(error)}</text>}>
+            <OpenPaletteOnMount />
+          </ErrorBoundary>
+        ),
+        { client, initialSession: rootSession, width: 90, height: 28 },
+      )
+      yield* waitForFrame(setup, (frame) => frame.includes("Branches"), "commands root")
+      setup.mockInput.pressArrow("up")
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      const failed = yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("branch list refused") || frame.includes("crashed"),
+        "the branch level answers",
+      )
+      expect(failed).not.toContain("crashed")
+      expect(failed).toContain("esc back")
+      setup.mockInput.pressEscape()
+      yield* waitForFrame(setup, (frame) => frame.includes("esc close"), "root again")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive("the palette Sessions item opens the agents pane and a row switches to it", () =>
     Effect.gen(function* () {
       let ctx: Option.Option<ClientContextValue> = Option.none()
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <>
-              <OpenPaletteOnMount />
-              <AgentsPaneWidget />
-              <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
-            </>
-          ),
-          { client: storedSessionsClient(), initialSession: rootSession, width: 90, height: 28 },
+      const setup = yield* renderScoped(
+        () => (
+          <>
+            <OpenPaletteOnMount />
+            <AgentsPaneWidget />
+            <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
+          </>
         ),
+        { client: storedSessionsClient(), initialSession: rootSession, width: 90, height: 28 },
       )
       if (Option.isNone(ctx)) return yield* Effect.die("client context not ready")
       yield* waitForFrame(
@@ -298,32 +328,28 @@ describe("CommandPalette renderer", () => {
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressEnter()
       yield* waitForFrame(setup, (frame) => !frame.includes("Agents ·"), "agents pane closed")
-      expect(ctx.value.session()).toEqual(
-        Option.some({
-          sessionId: delegateId,
-          branchId: delegateBranchId,
-          name: "Delegate",
-          modelId: absent,
-          reasoningLevel: absent,
-          cwd: absent,
-        }),
-      )
+      expect(ctx.value.session()).toEqual({
+        sessionId: delegateId,
+        branchId: delegateBranchId,
+        name: "Delegate",
+        modelId: absent,
+        reasoningLevel: absent,
+        cwd: absent,
+      })
     }),
   )
 
-  it.live("/sessions opens the agents pane over stored sessions and marks side threads", () =>
+  it.scopedLive("/sessions opens the agents pane over stored sessions and marks side threads", () =>
     Effect.gen(function* () {
       let ext: Option.Option<ReturnType<typeof useExtensionUI>> = Option.none()
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <>
-              <AgentsPaneWidget />
-              <ExtensionProbe onReady={(value) => (ext = Option.some(value))} />
-            </>
-          ),
-          { client: storedSessionsClient(), initialSession: rootSession, width: 90, height: 28 },
+      const setup = yield* renderScoped(
+        () => (
+          <>
+            <AgentsPaneWidget />
+            <ExtensionProbe onReady={(value) => (ext = Option.some(value))} />
+          </>
         ),
+        { client: storedSessionsClient(), initialSession: rootSession, width: 90, height: 28 },
       )
       if (Option.isNone(ext)) return yield* Effect.die("extension context not ready")
       const commands = () =>
@@ -336,7 +362,7 @@ describe("CommandPalette renderer", () => {
         () => commands().some((command) => command.slash === "sessions"),
         "extension commands loaded",
       )
-      expect(executeSlashCommand("sessions", "", commands())).toEqual({ handled: true })
+      expect(executeSlashCommand("sessions", "", commands())).toBe(true)
       yield* waitForFrame(
         setup,
         (frame) => frame.includes("Agents ·") && frame.includes("Delegate"),

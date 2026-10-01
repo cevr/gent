@@ -10,7 +10,6 @@ import {
   SessionId,
   ToolCallId,
 } from "@gent/core/protocol"
-import { Database } from "bun:sqlite"
 import {
   Cause,
   Clock,
@@ -38,7 +37,8 @@ import {
 import { BranchStorage, GentPlatform, MessageStorage, SessionStorage } from "@gent/core/host"
 import * as Prompt from "effect/ai/Prompt"
 import { Command, Flag } from "effect/cli"
-import { formatBytes } from "./utils"
+import { readonlySqlite } from "./bun-adapter"
+import { formatBytes, isConversation } from "./utils"
 import * as Terminal from "effect/Terminal"
 
 // ── local health report ─────────────────────────────────────────────────────
@@ -94,41 +94,43 @@ interface StorageResetResult {
 
 type SqliteHealth = Omit<StorageHealth, "dbPath" | "exists" | "sizeBytes">
 
+const decodeTableRows = Schema.decodeUnknownEffect(
+  Schema.Array(Schema.Struct({ name: Schema.String })),
+)
+const decodeCountRows = Schema.decodeUnknownEffect(
+  Schema.Array(Schema.Struct({ count: Schema.Finite })),
+)
+
 const readSqliteHealth = (dbPath: string): Effect.Effect<SqliteHealth> =>
-  Effect.acquireUseRelease(
-    Effect.try(() => new Database(dbPath, { readonly: true })),
-    (db) =>
-      Effect.try((): SqliteHealth => {
-        const tables = db
-          .query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type = 'table'")
-          .all()
-          .map((row) => row.name)
-        let migrationTable: StorageHealth["migrationTable"] = "missing"
-        if (tables.includes("gent_storage_migrations")) migrationTable = "present"
-        let migrationCount = 0
-        if (migrationTable === "present") {
-          migrationCount = Option.fromNullishOr(
-            db
-              .query<{ count: number }, []>("SELECT COUNT(*) AS count FROM gent_storage_migrations")
-              .get(),
-          ).pipe(
-            Option.map((row) => row.count),
-            Option.getOrElse(() => 0),
-          )
-        }
-        const existingStorageTables = STORAGE_TABLES.filter((table) => tables.includes(table))
-        const incompatible = existingStorageTables.length > 0 && migrationCount === 0
-        let status: StorageHealth["status"] = "ok"
-        if (incompatible) status = "incompatible"
-        return {
-          migrationTable,
-          migrationCount,
-          existingStorageTables,
-          status,
-        }
-      }),
-    (db) => Effect.sync(() => db.close()),
-  ).pipe(
+  Effect.gen(function* () {
+    const rows = yield* readonlySqlite(dbPath)
+    const tables = (yield* decodeTableRows(
+      yield* rows("SELECT name FROM sqlite_master WHERE type = 'table'"),
+    )).map((row) => row.name)
+    let migrationTable: StorageHealth["migrationTable"] = "missing"
+    if (tables.includes("gent_storage_migrations")) migrationTable = "present"
+    let migrationCount = 0
+    if (migrationTable === "present") {
+      const counted = yield* decodeCountRows(
+        yield* rows("SELECT COUNT(*) AS count FROM gent_storage_migrations"),
+      )
+      migrationCount = Option.getOrElse(
+        Option.map(Option.fromNullishOr(counted[0]), (row) => row.count),
+        () => 0,
+      )
+    }
+    const existingStorageTables = STORAGE_TABLES.filter((table) => tables.includes(table))
+    const incompatible = existingStorageTables.length > 0 && migrationCount === 0
+    let status: StorageHealth["status"] = "ok"
+    if (incompatible) status = "incompatible"
+    return {
+      migrationTable,
+      migrationCount,
+      existingStorageTables,
+      status,
+    } satisfies SqliteHealth
+  }).pipe(
+    Effect.scoped,
     Effect.catchEager((error) =>
       Effect.succeed({
         migrationTable: "missing",
@@ -261,22 +263,16 @@ export const extensionHealthFromSnapshot = (
 export const makeDoctorReport = (
   home: string,
   serverStatus: ServerLockStatus,
-  extensions?: ExtensionDoctorHealth,
+  extensions: ExtensionDoctorHealth,
 ): Effect.Effect<DoctorReport, never, FileSystem.FileSystem | GentPlatform> =>
   Effect.gen(function* () {
-    const server = inspectServer(serverStatus)
-    const defaultExtensions = () => {
-      let summary = "No live server for this data directory."
-      if (server.status === "alive") summary = "Extension health was not queried."
-      return extensionHealthUnavailable(summary)
-    }
     const storage = yield* inspectStorage(home)
     return {
       home,
       storage,
-      server,
+      server: inspectServer(serverStatus),
       logs: yield* inspectLogs((yield* dataPaths(home)).logDir),
-      extensions: Option.getOrElse(Option.fromNullishOr(extensions), defaultExtensions),
+      extensions,
     }
   })
 
@@ -780,26 +776,29 @@ export const sessions = Command.make("sessions", { connect: connectFlag }, ({ co
       authDirectory: Option.none(),
     })
     yield* bundle.runtime.lifecycle.waitForReady
-    const allSessions = yield* bundle.client.session.list()
-
-    if (allSessions.length === 0) {
-      yield* Console.log("No sessions found.")
-      return
-    }
-
-    yield* Console.log("Sessions:")
-    for (const s of allSessions) {
-      const date = DateTime.make(s.updatedAt).pipe(
-        Option.match({
-          onNone: () => "unknown",
-          onSome: DateTime.formatIso,
-        }),
-      )
-      const name = Option.getOrElse(Option.fromNullishOr(s.name), () => "Unnamed")
-      yield* Console.log(`  ${s.id} - ${name} (${date})`)
-    }
+    yield* Console.log(formatSessionList(yield* bundle.client.session.list()))
   }),
 )
+
+/**
+ * The `gent sessions` listing: what `gent resume` can pick. The conversations
+ * (`isConversation`), newest first, each with the directory it runs in.
+ */
+export const formatSessionList = (sessions: ReadonlyArray<Session>): string => {
+  const rows = sessions
+    .filter(isConversation)
+    .toSorted((left, right) => right.updatedAt.getTime() - left.updatedAt.getTime())
+    .map((s) => [
+      s.id,
+      Option.getOrElse(Option.fromNullishOr(s.name), () => "Unnamed"),
+      Option.getOrElse(Option.fromNullishOr(s.cwd), () => "-"),
+      DateTime.make(s.updatedAt).pipe(
+        Option.match({ onNone: () => "unknown", onSome: DateTime.formatIso }),
+      ),
+    ])
+  if (rows.length === 0) return "No sessions found."
+  return formatTable(["ID", "NAME", "CWD", "UPDATED"], rows)
+}
 
 /**
  * Lay out a table: each column is as wide as its widest cell, one space apart,

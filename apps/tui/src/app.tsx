@@ -15,7 +15,7 @@ import {
   type Session as DomainSession,
 } from "@gent/core/protocol"
 import { type Session as ClientSession, useClient } from "./client"
-import { formatCost, formatDuration, randomId, truncate } from "./utils"
+import { formatCost, formatDuration, isConversation, randomId, truncate } from "./utils"
 import { createMemo, createSignal, ErrorBoundary, For, type JSX, Show } from "solid-js"
 import { buildSyntaxStyle, resolveThemeColor, ThemeProvider, useTheme } from "./theme"
 import {
@@ -39,7 +39,7 @@ import {
   reasoningRows,
   SettingsPicker,
 } from "./pickers"
-import { useEnv, useWorkspace } from "./workspace"
+import { useWorkspace } from "./workspace"
 import {
   type StatusRowLabel,
   buildContextLabels,
@@ -48,20 +48,18 @@ import {
   formatCwdGit,
   overlayHoldsComposer,
   SessionControllerContext,
+  useExit,
 } from "./session"
 import { useExtensionUI } from "./extensions/host"
 import { Auth } from "./auth"
 import type { StatusLabelColor, WidgetSlot } from "./extensions/client-facets.js"
-import { useRenderer } from "@opentui/solid"
 
 // ── boot flow ───────────────────────────────────────────────────────────────
 
 /**
- * Surfaces a corrupt session record (session row exists but has no
- * `activeBranchId`). Caught at the bootstrap boundary in `main.tsx`
- * so the user sees a structured error message instead of a stack
- * trace. Thrown synchronously because `resolveAppBootstrap` is a
- * synchronous projection at the render boundary.
+ * Why the interactive or headless start could not resolve its session: a
+ * corrupt record (no `activeBranchId`), a missing session or prompt. A typed
+ * failure, so the CLI prints its one line instead of a stack trace.
  */
 export class AppBootstrapError extends Schema.TaggedError<AppBootstrapError>()(
   "AppBootstrapError",
@@ -69,7 +67,6 @@ export class AppBootstrapError extends Schema.TaggedError<AppBootstrapError>()(
     sessionId: Schema.optional(SessionId),
     reason: Schema.Literals([
       "created-session-unreadable",
-      "interactive-headless-state",
       "headless-missing-prompt",
       "missing-branch",
       "session-not-found",
@@ -81,8 +78,6 @@ export class AppBootstrapError extends Schema.TaggedError<AppBootstrapError>()(
     switch (this.reason) {
       case "created-session-unreadable":
         return `Created session ${sessionLabel} was not readable`
-      case "interactive-headless-state":
-        return "Interactive bootstrap resolved a headless state"
       case "headless-missing-prompt":
         return "Headless startup requires a prompt argument"
       case "missing-branch":
@@ -93,7 +88,8 @@ export class AppBootstrapError extends Schema.TaggedError<AppBootstrapError>()(
   }
 }
 
-export type InitialState =
+/** Where the interactive start lands: the session, or its branch picker when it has more than one branch. */
+type InteractiveState =
   | { _tag: "session"; session: DomainSession; prompt?: string }
   | {
       _tag: "branchPicker"
@@ -101,7 +97,12 @@ export type InitialState =
       branches: readonly Branch[]
       prompt?: string
     }
-  | { _tag: "headless"; session: DomainSession; prompt: string }
+
+/** The session a headless run sends its one prompt to. */
+export interface HeadlessState {
+  readonly session: DomainSession
+  readonly prompt: string
+}
 
 interface AppBootstrap {
   readonly initialSession: ClientSession
@@ -112,7 +113,6 @@ interface AppBootstrap {
    * the picker over it; `None` means resume straight into the session.
    */
   readonly initialBranches: Option.Option<readonly Branch[]>
-  readonly debugMode: boolean
 }
 
 interface InteractiveBootstrapResult {
@@ -159,26 +159,23 @@ const createAndLoadSession = (input: {
   })
 
 const resolveAppBootstrap = (
-  state: Exclude<InitialState, { _tag: "headless" }>,
-  options: {
-    debugMode: boolean
-  },
-): AppBootstrap => {
+  state: InteractiveState,
+): Effect.Effect<AppBootstrap, AppBootstrapError> => {
   // A created session always has its branch. A corrupt record from `-s <id>`
   // may not, and the view (and a picker docked over it) needs one to mount.
   const initialSession = toSession(state.session)
   if (Option.isNone(initialSession)) {
-    // eslint-disable-next-line effect/noThrowStatement -- synchronous render-boundary validation must throw.
-    throw new AppBootstrapError({ sessionId: state.session.id, reason: "missing-branch" })
+    return Effect.fail(
+      new AppBootstrapError({ sessionId: state.session.id, reason: "missing-branch" }),
+    )
   }
   let initialBranches = Option.none<readonly Branch[]>()
   if (state._tag === "branchPicker") initialBranches = Option.some(state.branches)
-  return {
+  return Effect.succeed({
     initialSession: initialSession.value,
     initialPrompt: Option.fromNullishOr(state.prompt),
     initialBranches,
-    debugMode: options.debugMode,
-  }
+  })
 }
 
 export const resolveInteractiveBootstrap = (input: {
@@ -187,27 +184,20 @@ export const resolveInteractiveBootstrap = (input: {
   sessionId?: string
   continue_: boolean
   prompt?: string
-  debugMode: boolean
 }): Effect.Effect<InteractiveBootstrapResult, GentClientRpcError | AppBootstrapError> =>
   Effect.gen(function* () {
-    const state = yield* resolveInitialState({
+    const state = yield* resolveInteractiveState({
       client: input.client,
       cwd: input.cwd,
       session: Option.fromNullishOr(input.sessionId),
       continue_: input.continue_,
-      headless: false,
       prompt: Option.fromNullishOr(input.prompt),
-      promptArg: Option.none(),
     })
-
-    if (state._tag === "headless") {
-      return yield* new AppBootstrapError({ reason: "interactive-headless-state" })
-    }
 
     const initialAgent = yield* resolveStartupAgent({ client: input.client, state })
 
     return {
-      bootstrap: resolveAppBootstrap(state, { debugMode: input.debugMode }),
+      bootstrap: yield* resolveAppBootstrap(state),
       initialAgent: Option.getOrUndefined(initialAgent),
     }
   })
@@ -231,7 +221,7 @@ const sessionAgent = (
  */
 const resolveStartupAgent = (input: {
   client: Pick<GentNamespacedClient, "session">
-  state: Exclude<InitialState, { _tag: "headless" }>
+  state: InteractiveState
 }): Effect.Effect<Option.Option<AgentName>, GentClientRpcError> => {
   if (input.state._tag === "branchPicker") return Effect.succeedNone
   return sessionAgent(input.client, input.state.session).pipe(Effect.asSome)
@@ -243,7 +233,7 @@ const resolveStartupAgent = (input: {
  */
 export const resolveHeadlessMissingProviders = (input: {
   client: Pick<GentNamespacedClient, "auth" | "session">
-  state: Extract<InitialState, { _tag: "headless" }>
+  state: HeadlessState
 }): Effect.Effect<readonly ProviderId[], GentClientRpcError> =>
   Effect.gen(function* () {
     const agent = yield* sessionAgent(input.client, input.state.session)
@@ -276,49 +266,54 @@ const resumeState = (
   client: Pick<GentNamespacedClient, "branch">,
   session: DomainSession,
   prompt: Option.Option<string>,
-): Effect.Effect<InitialState, GentClientRpcError> =>
+): Effect.Effect<InteractiveState, GentClientRpcError> =>
   Effect.gen(function* () {
     const promptText = Option.getOrUndefined(prompt)
     const branches = yield* client.branch.list({ sessionId: session.id })
     if (branches.length > 1) {
-      return { _tag: "branchPicker", session, branches, prompt: promptText } satisfies InitialState
+      return {
+        _tag: "branchPicker",
+        session,
+        branches,
+        prompt: promptText,
+      } satisfies InteractiveState
     }
-    return { _tag: "session", session, prompt: promptText } satisfies InitialState
+    return { _tag: "session", session, prompt: promptText } satisfies InteractiveState
   })
 
-export const resolveInitialState = (input: {
+/** The session `-H` runs its prompt in: the one `-s` names, else a new one. */
+export const resolveHeadlessState = (input: {
+  client: Pick<GentNamespacedClient, "session">
+  cwd: string
+  session: Option.Option<string>
+  promptArg: Option.Option<string>
+  /** The agent and run spec a new headless session runs as, for every turn. */
+  admission?: SessionAdmission
+}): Effect.Effect<HeadlessState, GentClientRpcError | AppBootstrapError> =>
+  Effect.gen(function* () {
+    const { client, cwd, session, promptArg, admission } = input
+    if (Option.isNone(promptArg) || promptArg.value.trim().length === 0) {
+      return yield* new AppBootstrapError({ reason: "headless-missing-prompt" })
+    }
+    if (Option.isSome(session)) {
+      return { session: yield* loadSession(client, session.value), prompt: promptArg.value }
+    }
+    return {
+      session: yield* createAndLoadSession({ client, cwd, admission }),
+      prompt: promptArg.value,
+    }
+  })
+
+/** The session the TUI opens: the one `-s` names, the last one in `cwd` to continue, else a new one. */
+export const resolveInteractiveState = (input: {
   client: Pick<GentNamespacedClient, "session" | "branch">
   cwd: string
   session: Option.Option<string>
   continue_: boolean
-  headless: boolean
   prompt: Option.Option<string>
-  promptArg: Option.Option<string>
-  /** The agent and run spec a new headless session runs as, for every turn. */
-  admission?: SessionAdmission
-}): Effect.Effect<InitialState, GentClientRpcError | AppBootstrapError> =>
+}): Effect.Effect<InteractiveState, GentClientRpcError | AppBootstrapError> =>
   Effect.gen(function* () {
-    const { client, cwd, session, continue_, headless, prompt, promptArg, admission } = input
-
-    if (headless) {
-      if (Option.isNone(promptArg) || promptArg.value.trim().length === 0) {
-        return yield* new AppBootstrapError({ reason: "headless-missing-prompt" })
-      }
-      if (Option.isSome(session)) {
-        return {
-          _tag: "headless",
-          session: yield* loadSession(client, session.value),
-          prompt: promptArg.value,
-        } satisfies InitialState
-      }
-
-      const created = yield* createAndLoadSession({ client, cwd, admission })
-      return {
-        _tag: "headless",
-        session: created,
-        prompt: promptArg.value,
-      } satisfies InitialState
-    }
+    const { client, cwd, session, continue_, prompt } = input
 
     if (Option.isSome(session)) {
       return yield* resumeState(client, yield* loadSession(client, session.value), prompt)
@@ -330,13 +325,7 @@ export const resolveInitialState = (input: {
           Option.fromNullishOr(
             sessions
               .filter((candidate) => candidate.cwd === cwd)
-              // A delegate or `/btw` child has a parent and its own thread.
-              // It is the agent's work, not a conversation the user left.
-              .filter(
-                (candidate) =>
-                  Predicate.isUndefined(candidate.parentSessionId) ||
-                  candidate.threadId !== candidate.id,
-              )
+              .filter(isConversation)
               .sort((left, right) => right.updatedAt.getTime() - left.updatedAt.getTime())[0],
           ),
         ),
@@ -347,7 +336,7 @@ export const resolveInitialState = (input: {
 
     const promptText = Option.getOrUndefined(prompt)
     const created = yield* createAndLoadSession({ client, cwd })
-    return { _tag: "session", session: created, prompt: promptText } satisfies InitialState
+    return { _tag: "session", session: created, prompt: promptText } satisfies InteractiveState
   })
 
 // ── connection widget ───────────────────────────────────────────────────────
@@ -664,7 +653,7 @@ export function Session(props: SessionProps) {
           <NativeTranscript
             items={controller.items()}
             settled={controller.itemsSettled()}
-            streaming={controller.activity().phase !== "idle"}
+            streaming={client.isStreaming()}
             footerHeight={footerHeight()}
             expanded={controller.uiState().transcriptExpanded}
             disclosure={controller.uiState().disclosure}
@@ -764,9 +753,7 @@ export function Session(props: SessionProps) {
               rows={reasoningRows(client.resolvedReasoningLevel())}
               current={Option.some(
                 Option.getOrElse(
-                  Option.flatMap(client.session(), (session) =>
-                    Option.fromUndefinedOr(session.reasoningLevel),
-                  ),
+                  Option.fromUndefinedOr(client.session().reasoningLevel),
                   () => DEFAULT_ROW_ID,
                 ),
               )}
@@ -839,7 +826,7 @@ function AppContent(props: AppProps) {
   // makes a new record, and a mount keyed on the record would tear the whole
   // session view down for it. `sessionIdentity` is the client's one answer to
   // "which session"; every consumer that does not read the name shares it.
-  const active = () => Option.getOrUndefined(sessionClient.sessionIdentity())
+  const active = sessionClient.sessionIdentity
 
   // The boot picker belongs to the first session this process mounts. A later
   // switch is a session the reader already chose, so it docks nothing.
@@ -847,18 +834,17 @@ function AppContent(props: AppProps) {
   // Read once and remember the answer: Solid re-reads a prop every time the
   // child touches it, so a getter that consumes the branches would hand the
   // first read `Some` and every read after it `None`.
-  const [bootBranches, setBootBranches] = createSignal(
-    Option.getOrElse(Option.fromNullishOr(props.initialBranches), () =>
-      Option.none<readonly Branch[]>(),
-    ),
+  // No computation reads it: the keyed child runs untracked, once per mount.
+  let bootBranches = Option.getOrElse(Option.fromNullishOr(props.initialBranches), () =>
+    Option.none<readonly Branch[]>(),
   )
 
   return (
     <box flexDirection="column" width="100%" height="100%">
       <Show when={active()} keyed>
         {(session) => {
-          const branches = bootBranches()
-          setBootBranches(Option.none())
+          const branches = bootBranches
+          bootBranches = Option.none()
           return (
             <Session
               sessionId={session.sessionId}
@@ -882,8 +868,7 @@ const decodeError = Schema.decodeUnknownOption(Schema.instanceOf(Error))
  * message.
  */
 function FatalScreen(props: { readonly error: unknown }) {
-  const renderer = useRenderer()
-  const env = useEnv()
+  const exit = useExit()
   const client = useClient()
   const cause = decodeError(props.error)
   const message = Option.match(cause, {
@@ -899,8 +884,8 @@ function FatalScreen(props: { readonly error: unknown }) {
   })
   useScopedKeyboard((event) => {
     if (event.ctrl !== true || (event.name !== "c" && event.name !== "d")) return false
-    renderer.destroy()
-    env.shutdown()
+    // A crash is when the reader most needs the session id: exit prints it.
+    exit()
     return true
   })
   return (

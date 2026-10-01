@@ -124,6 +124,21 @@ describe("headless CLI", () => {
     20000,
   )
 
+  // The positional prompt is headless input, as --help says; the TUI takes
+  // its startup prompt from -p. Without -H the prompt is refused, not dropped.
+  it.scopedLive(
+    "a prompt argument without -H is refused, not dropped",
+    () =>
+      Effect.gen(function* () {
+        const { exitCode, stderr } = yield* runGent(["fix the tests"])
+        expect(exitCode).toBe(1)
+        expect(stderr).toBe(
+          "CliStartupError: a prompt argument needs -H; use -p to start the TUI with a prompt\n",
+        )
+      }).pipe(Effect.provide(BunServices.layer)),
+    20000,
+  )
+
   it.scopedLive(
     "an unanswered turn exits 1 with one line on stderr",
     () =>
