@@ -137,7 +137,7 @@ export {
   ExtensionServiceError,
   type ExtensionContextService,
 } from "../domain/extension.js"
-export { isRecord, isRecordArray, omitUndefined } from "../domain/guards.js"
+export { isRecord, isRecordArray, type JsonRecord, omitUndefined } from "../domain/guards.js"
 // Runs a command to completion over the Effect `ChildProcessSpawner`.
 export {
   ProcessError,
