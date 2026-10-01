@@ -235,34 +235,28 @@ export type UpdateSessionSettingsInput = typeof UpdateSessionSettingsInput.Type
 
 /**
  * A key for a sign-in, stored under the driver that owns it, as the session's
- * profile resolves the owner; the launch profile without one. A session that
- * does not exist fails and stores nothing.
+ * profile resolves the owner. A session that does not exist fails and stores
+ * nothing.
  */
 export const SetAuthKeyInput = Schema.Struct({
   provider: Schema.String,
   key: Schema.String,
-  sessionId: Schema.optional(SessionId),
+  sessionId: SessionId,
 })
 export type SetAuthKeyInput = typeof SetAuthKeyInput.Type
 
 /**
- * The sign-in to remove, read in the session's profile; the launch profile
- * without one. A session that does not exist fails and removes nothing.
+ * The sign-in to remove, read in the session's profile. A session that does
+ * not exist fails and removes nothing.
  */
 export const DeleteAuthKeyInput = Schema.Struct({
   provider: Schema.String,
-  sessionId: Schema.optional(SessionId),
+  sessionId: SessionId,
 })
 export type DeleteAuthKeyInput = typeof DeleteAuthKeyInput.Type
 
-/**
- * The session whose profile's drivers answer; the launch profile without one.
- * A caller may send no payload at all.
- */
-const ListAuthMethodsInput = Schema.Union([
-  Schema.Struct({ sessionId: Schema.optional(SessionId) }),
-  Schema.Void,
-])
+/** The session whose profile's drivers answer. */
+const ListAuthMethodsInput = Schema.Struct({ sessionId: SessionId })
 export type ListAuthMethodsInput = typeof ListAuthMethodsInput.Type
 
 const ListAuthMethodsSuccess = Schema.Record(Schema.String, Schema.Array(AuthMethod))
@@ -317,6 +311,17 @@ export class SlashCommandInfo extends Schema.Class<SlashCommandInfo>("SlashComma
   extensionId: ExtensionId,
   capabilityId: Schema.String,
 }) {}
+
+/**
+ * The profile whose extension health `extension.listStatus` reads: a
+ * session's, or the launch profile the server started in. Only `gent doctor`,
+ * which has no session, asks for `Launch`.
+ */
+export const ExtensionStatusScope = Schema.TaggedUnion({
+  Session: { id: SessionId },
+  Launch: {},
+})
+export type ExtensionStatusScope = typeof ExtensionStatusScope.Type
 
 const ExtensionActivationPhase = Schema.Literals(["load", "setup", "validation", "startup"])
 
@@ -385,8 +390,8 @@ export const SetDriverOverrideInput = Schema.Struct({
   /** A registered driver. An override that names none routes as no override
    *  does, so `driver.clear` is the one way back to the default. */
   driver: Schema.TaggedStruct("Model", { id: Schema.String }),
-  /** Validate the driver against this session's profile; the launch profile without one. */
-  sessionId: Schema.optional(SessionId),
+  /** Validate the driver against this session's profile. */
+  sessionId: SessionId,
 })
 export type SetDriverOverrideInput = typeof SetDriverOverrideInput.Type
 
@@ -542,7 +547,7 @@ class AuthRpcs extends RpcGroup.make(
     error: GentRpcError,
   }),
   Rpc.make("listMethods", {
-    payload: ListAuthMethodsInput,
+    payload: ListAuthMethodsInput.fields,
     success: ListAuthMethodsSuccess,
     error: GentRpcError,
   }),
@@ -566,7 +571,7 @@ class ExtensionRpcs extends RpcGroup.make(
     error: GentRpcError,
   }),
   Rpc.make("extension.listStatus", {
-    payload: { sessionId: Schema.optional(SessionId) },
+    payload: { scope: ExtensionStatusScope },
     success: ExtensionHealthSnapshot,
     error: GentRpcError,
   }),
@@ -576,7 +581,7 @@ class ExtensionRpcs extends RpcGroup.make(
     error: GentRpcError,
   }),
   Rpc.make("driver.list", {
-    payload: { sessionId: Schema.optional(SessionId) },
+    payload: { sessionId: SessionId },
     success: DriverListResult,
     error: GentRpcError,
   }),
@@ -589,7 +594,7 @@ class ExtensionRpcs extends RpcGroup.make(
     error: GentRpcError,
   }),
   Rpc.make("model.list", {
-    payload: { sessionId: Schema.optional(SessionId) },
+    payload: { sessionId: SessionId },
     success: Schema.Array(Model),
     error: GentRpcError,
   }),

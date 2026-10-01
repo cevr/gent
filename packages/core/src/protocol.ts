@@ -74,6 +74,7 @@ export {
   CreateSessionInput,
   ExtensionHealthIssue,
   ExtensionHealthSnapshot,
+  ExtensionStatusScope,
   GentConnectionError,
   type GentLifecycle,
   SessionSnapshot,

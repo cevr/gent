@@ -41,6 +41,7 @@ import {
   type Branch,
   ConnectionState,
   type ExtensionHealthSnapshot,
+  ExtensionStatusScope,
   type GentClientRpcError,
   type GentNamespacedClient,
   initialSessionMetrics,
@@ -932,7 +933,7 @@ export function ClientProvider(props: ClientProviderProps) {
           return
         }
 
-        const request = { sessionId }
+        const request = { scope: ExtensionStatusScope.cases.Session.make({ id: sessionId }) }
         cast(
           client.extension.listStatus(request).pipe(
             Effect.tap((nextHealth) =>

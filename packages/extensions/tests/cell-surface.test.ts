@@ -488,7 +488,7 @@ const runJudgeCell = Effect.fn("test.runJudgeCell")(function* (params: {
     ],
     providerLayer,
   })
-  if (params.storeKey) yield* client.auth.setKey({ provider: "judge", key: "judge-key" })
+  if (params.storeKey) yield* client.auth.setKey({ provider: "judge", key: "judge-key", sessionId })
   yield* client.message.send({ sessionId, branchId, content: "decide" })
   const messages = yield* waitFor(
     client.message.list({ branchId }),
@@ -1929,7 +1929,7 @@ const cellSystemPrompt = Effect.fn("test.cellSystemPrompt")(function* (params: {
     ],
     providerLayer,
   })
-  if (params.storeKey) yield* client.auth.setKey({ provider: "judge", key: "judge-key" })
+  if (params.storeKey) yield* client.auth.setKey({ provider: "judge", key: "judge-key", sessionId })
   yield* client.message.send({ sessionId, branchId, content: "hello" })
   const seen = yield* waitFor(
     Ref.get(prompts),

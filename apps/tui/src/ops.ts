@@ -4,6 +4,7 @@ import {
   dateFromMillis,
   type ExtensionHealthIssue,
   type ExtensionHealthSnapshot,
+  ExtensionStatusScope,
   Message,
   MessageId,
   Session,
@@ -982,7 +983,10 @@ export const readDoctorExtensionHealth = (
       Effect.gen(function* () {
         const bundle = yield* Gent.client(entry.rpcUrl, { cwd: process.cwd() })
         yield* bundle.runtime.lifecycle.waitForReady
-        const snapshot = yield* bundle.client.extension.listStatus({})
+        // The doctor has no session: it reads the profile the server started in.
+        const snapshot = yield* bundle.client.extension.listStatus({
+          scope: ExtensionStatusScope.cases.Launch.make({}),
+        })
         return extensionHealthFromSnapshot(snapshot)
       }),
     ).pipe(
