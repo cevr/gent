@@ -42,6 +42,8 @@
     "gent/no-with-wrapper-helper-in-test-code": "error",
     // Custom — test code waits on no sleep wrapped in a larger expression (upstream gap)
     "gent/no-wrapped-sleep-in-tests": "error",
+    // Custom — test code dies on no timeout spelled in an object payload (upstream gap)
+    "gent/no-timeout-die-payload-in-tests": "error",
     // Custom — a child-session writer admits the depth in its own function
     "gent/child-session-writer-admits": "error",
     // Custom — a whole-object JSON encode decides no identity (shipped source)

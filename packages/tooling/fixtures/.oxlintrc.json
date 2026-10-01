@@ -16,6 +16,7 @@
     "gent/no-runtime-run-promise-in-tests": "error",
     "gent/no-with-wrapper-helper-in-test-code": "error",
     "gent/no-wrapped-sleep-in-tests": "error",
+    "gent/no-timeout-die-payload-in-tests": "error",
     "gent/child-session-writer-admits": "error",
     "gent/no-identity-encode": "error"
   }
