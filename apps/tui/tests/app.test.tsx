@@ -647,7 +647,7 @@ const mountIdleSession = (
       /** Tears the view down, as the harness does after the test. */
       unmount,
       /** Time for a key to be parsed and handled before a negative assertion. */
-      // A lone escape byte stays in the stdin parser until its timeout flushes it as a key
+      // oxlint-disable-next-line gent/no-wrapped-sleep-in-tests -- A lone escape byte stays in the stdin parser until its real-clock timeout flushes it as a key; no event marks the flush.
       settle: Effect.sleep("100 millis"),
     }
   })

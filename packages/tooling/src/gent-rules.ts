@@ -1422,14 +1422,38 @@ const plugin: Plugin = {
      *
      * Reported in test code (`isTestCode`): an `Effect.sleep`, `Bun.sleep` or
      * `Bun.sleepSync` call inside the argument of a `yield*` or an `await`,
-     * outside a nested function, unless it is upstream's case. A sleep built
-     * as a value (returned, stored, or handed to a mock as the subject's own
-     * delay) is not waited here and stays allowed, as it does upstream.
+     * outside a nested function, unless it is upstream's case. Also reported:
+     * a sleep stored under a name (a variable's initialiser or an object
+     * field, outside a nested function), since a later `yield* pause` waits
+     * on it where no rule sees the sleep. A sleep a function builds and
+     * returns, or hands to a mock as the subject's own delay, stays allowed.
      */
     "no-wrapped-sleep-in-tests": {
       create(context) {
         if (!isTestCode(ruleSubject(context))) return {}
         const reported = new Set<AstNode>()
+        const report = (node: AstNode, sleep: string, how: string) => {
+          reported.add(node)
+          context.report({
+            message: `\`${sleep}(...)\` ${how} in test code — replace the fixed delay with deterministic synchronisation (\`Deferred\`, \`controls.waitForCall(...)\`, a \`waitFor\` poll, or \`TestClock.adjust\`). A real-clock wait that is the subject takes a line-local suppression with its reason.`,
+            node,
+          })
+        }
+        // A waited expression inside a stored value is visitWait's to report.
+        const skipStored = (node: AstNode) =>
+          isFunctionLike(node) || node.type === "YieldExpression" || node.type === "AwaitExpression"
+        const visitStored = (value: AstNode | undefined) => {
+          if (value === undefined) return
+          walkAst(
+            value,
+            (inner) => {
+              const sleep = sleepCallName(inner)
+              if (sleep === undefined || reported.has(inner)) return
+              report(inner, sleep, "stored under a name")
+            },
+            skipStored,
+          )
+        }
         const visitWait = (wait: AstNode) => {
           const argument = getNodeField(wait, "argument")
           if (argument === undefined) return
@@ -1439,11 +1463,7 @@ const plugin: Plugin = {
               const sleep = sleepCallName(inner)
               if (sleep === undefined || reported.has(inner)) return
               if (inner === argument && isUpstreamWaitedStatement(wait)) return
-              reported.add(inner)
-              context.report({
-                message: `\`${sleep}(...)\` waited in test code — replace the fixed delay with deterministic synchronisation (\`Deferred\`, \`controls.waitForCall(...)\`, a \`waitFor\` poll, or \`TestClock.adjust\`). A real-clock wait that is the subject takes a line-local suppression with its reason.`,
-                node: inner,
-              })
+              report(inner, sleep, "waited")
             },
             isFunctionLike,
           )
@@ -1454,6 +1474,12 @@ const plugin: Plugin = {
           },
           AwaitExpression(node) {
             if (isAstNode(node)) visitWait(node)
+          },
+          VariableDeclarator(node) {
+            if (isAstNode(node)) visitStored(getNodeField(node, "init"))
+          },
+          Property(node) {
+            if (isAstNode(node)) visitStored(getNodeField(node, "value"))
           },
         }
       },

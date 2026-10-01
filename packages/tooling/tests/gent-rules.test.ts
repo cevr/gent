@@ -357,8 +357,9 @@ const CASES: ReadonlyArray<RuleCase> = [
     rule: "gent/no-wrapped-sleep-in-tests",
     invalid: "packages/core/src/test-utils/no-wrapped-sleep-in-tests.invalid.ts",
     valid: ["packages/core/tests/no-wrapped-sleep-in-tests.valid.ts"],
-    // piped, raced, sequenced, bound, and an awaited Bun.sleep in a race
-    expectedCount: 5,
+    // piped, raced, sequenced, bound, and an awaited Bun.sleep in a race;
+    // stored under a const, an object field, a piped const, and a Bun.sleep const
+    expectedCount: 9,
   },
   {
     // Upstream reads a die message only from strings and constructor arguments.
