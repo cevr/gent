@@ -56,15 +56,15 @@ export interface ClientBuildNames {
 
 /**
  * OpenTUI's Solid plugin, loaded on the first client build: it loads Babel,
- * which a launch with no client extension file never needs.
+ * which a launch with no client extension file never needs. Each build
+ * imports it; the module registry keeps the loaded module, and an
+ * interrupted build leaves nothing behind for the next one to read.
  */
-const loadSolidPlugin = Effect.cached(
-  Effect.tryPromise({
-    // oxlint-disable-next-line effect/noDynamicImports -- Babel loads only when a client extension file compiles
-    try: () => import("@opentui/solid/bun-plugin"),
-    catch: (cause) => new ClientExtensionBuildError({ cause }),
-  }),
-).pipe(Effect.runSync)
+const loadSolidPlugin = Effect.tryPromise({
+  // oxlint-disable-next-line effect/noDynamicImports -- Babel loads only when a client extension file compiles
+  try: () => import("@opentui/solid/bun-plugin"),
+  catch: (cause) => new ClientExtensionBuildError({ cause }),
+})
 
 /**
  * Compile a client file and the relative modules it imports as the build

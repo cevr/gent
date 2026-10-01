@@ -7,12 +7,15 @@
  * by the file's path and text: an edit or an upgrade misses. The cache lives
  * in `$XDG_CACHE_HOME/gent/solid-transform/<lockfile digest>/` (else under
  * `~/.cache`); the first launch after a lockfile change removes the
- * directories of other digests. The compiled binary transforms at build time
- * and never reads it. The Bun plugin's callbacks are this file's Promise edge.
+ * directories of other digests that gained no entry for a month, since other
+ * checkouts share the root. A cache that cannot be made or written costs only
+ * speed: the launch transforms uncached. The compiled binary transforms at
+ * build time and never reads it. The Bun plugin's callbacks are this file's
+ * Promise edge.
  */
 // oxlint-disable-next-line effect/noNodeBuiltinImport -- a preload registers its Bun plugin itself; Effect has no plugin service
 import { plugin } from "bun"
-import { Config, Effect, FileSystem, ManagedRuntime, Option, Path } from "effect"
+import { Clock, Config, Duration, Effect, FileSystem, ManagedRuntime, Option, Path } from "effect"
 import { BunPlatformLive, GentPlatform, writeFileAtomic } from "@gent/core/host"
 
 /** Raise it when this file changes what a cached result holds. */
@@ -57,7 +60,13 @@ const loadTransform = Effect.promise(
     import(new URL("./solid-transform.js", import.meta.resolve("@opentui/solid/bun-plugin")).href),
 )
 
-/** The cache directory for this lockfile, made once per launch, and the transform behind it. */
+/** Another lockfile's directory that gained no entry for this long is removed. */
+const UNUSED_CACHE_AGE = Duration.days(30)
+
+/**
+ * The cache directory for this lockfile, made once per launch. None when it
+ * cannot be made: the launch then transforms every file, uncached.
+ */
 const openCache = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
@@ -71,14 +80,26 @@ const openCache = Effect.gen(function* () {
   const digest = platform.hash("sha256", `${CACHE_FORMAT}\0${yield* fs.readFileString(lockfile)}`)
   const directory = path.join(root, digest)
   if (!(yield* fs.exists(directory))) {
-    const stale = yield* fs.readDirectory(root).pipe(Effect.orElseSucceed(() => []))
-    yield* Effect.forEach(stale, (name) =>
-      fs.remove(path.join(root, name), { recursive: true }).pipe(Effect.ignore),
-    )
     yield* fs.makeDirectory(directory, { recursive: true })
+    // Other checkouts share the root: only a directory no launch wrote to for a month goes.
+    const now = yield* Clock.currentTimeMillis
+    const others = yield* fs.readDirectory(root).pipe(Effect.orElseSucceed(() => []))
+    yield* Effect.forEach(
+      others.filter((name) => name !== digest),
+      (name) =>
+        Effect.gen(function* () {
+          const other = path.join(root, name)
+          const modified = Option.match((yield* fs.stat(other)).mtime, {
+            onNone: () => now,
+            onSome: (mtime) => mtime.getTime(),
+          })
+          if (now - modified < Duration.toMillis(UNUSED_CACHE_AGE)) return
+          yield* fs.remove(other, { recursive: true })
+        }).pipe(Effect.ignore),
+    )
   }
-  return { directory, transform: yield* Effect.cached(loadTransform) }
-})
+  return directory
+}).pipe(Effect.option)
 
 const runtime = ManagedRuntime.make(BunPlatformLive)
 const cache = runtime.runPromise(openCache)
@@ -89,17 +110,22 @@ const transformed = (file: string) =>
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
     const platform = yield* GentPlatform
-    const { directory, transform } = yield* Effect.promise(() => cache)
+    const directory = yield* Effect.promise(() => cache)
     const code = yield* fs.readFileString(file)
-    const cached = path.join(directory, `${platform.hash("sha256", `${file}\0${code}`)}.js`)
-    const hit = yield* fs.readFileString(cached).pipe(Effect.option)
-    if (Option.isSome(hit)) return hit.value
-    const { transformSolidSource } = yield* transform
+    const cached = Option.map(directory, (dir) =>
+      path.join(dir, `${platform.hash("sha256", `${file}\0${code}`)}.js`),
+    )
+    if (Option.isSome(cached)) {
+      const hit = yield* fs.readFileString(cached.value).pipe(Effect.option)
+      if (Option.isSome(hit)) return hit.value
+    }
+    // The module registry keeps the loaded transform, so each miss imports it again cheaply.
+    const { transformSolidSource } = yield* loadTransform
     const contents = yield* Effect.promise(() =>
       transformSolidSource(code, { filename: file, moduleName: SOLID_RUNTIME }),
     )
     // A result that cannot be stored costs only the next launch a transform.
-    yield* writeFileAtomic(cached, contents).pipe(Effect.ignore)
+    if (Option.isSome(cached)) yield* writeFileAtomic(cached.value, contents).pipe(Effect.ignore)
     return contents
   })
 

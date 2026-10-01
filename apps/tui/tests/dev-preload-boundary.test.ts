@@ -1,6 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
 import { BunChildProcessSpawner, BunServices } from "@effect/platform-bun"
-import { Effect, FileSystem, Layer, Path } from "effect"
+import { Clock, Effect, FileSystem, Layer, Path } from "effect"
 import { runProcess } from "@gent/core/extensions/api"
 import { BunPlatformLive, GentPlatform } from "@gent/core/host"
 import { makeTempDirectoryScoped } from "@gent/core/test-utils"
@@ -55,15 +55,58 @@ describe("source run preload", () => {
           expect(yield* runUnderPreload(file, cacheHome)).toBe("second")
           expect((yield* fs.readDirectory(lockDirectory)).length).toBe(2)
         }),
-      ).pipe(
-        Effect.timeout("25 seconds"),
-        Effect.provide(
-          Layer.mergeAll(
-            BunPlatformLive,
-            BunChildProcessSpawner.layer.pipe(Layer.provide(BunServices.layer)),
-          ),
-        ),
-      ),
+      ).pipe(Effect.timeout("25 seconds"), Effect.provide(preloadLayer)),
+    30_000,
+  )
+
+  it.live(
+    "a cache home it cannot write still transforms every file",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const path = yield* Path.Path
+          const directory = yield* makeTempDirectoryScoped("gent-dev-preload-")
+          const file = path.join(directory, "probe.tsx")
+          yield* fs.writeFileString(file, `console.log("uncached")\n`)
+          // A file, not a directory: no cache directory can be made under it.
+          const blocked = path.join(directory, "blocked")
+          yield* fs.writeFileString(blocked, "")
+          expect(yield* runUnderPreload(file, blocked)).toBe("uncached")
+        }),
+      ).pipe(Effect.timeout("25 seconds"), Effect.provide(preloadLayer)),
+    30_000,
+  )
+
+  it.live(
+    "keeps another lockfile's cache unless it went unused for a month",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const path = yield* Path.Path
+          const directory = yield* makeTempDirectoryScoped("gent-dev-preload-")
+          const cacheHome = path.join(directory, "cache")
+          const root = path.join(cacheHome, "gent", "solid-transform")
+          const recent = path.join(root, "recent-checkout")
+          const old = path.join(root, "old-checkout")
+          yield* fs.makeDirectory(recent, { recursive: true })
+          yield* fs.makeDirectory(old, { recursive: true })
+          // Seconds since the epoch, as the platform takes a numeric time.
+          const longAgo = (yield* Clock.currentTimeMillis) / 1000 - 40 * 24 * 60 * 60
+          yield* fs.utimes(old, longAgo, longAgo)
+          const file = path.join(directory, "probe.tsx")
+          yield* fs.writeFileString(file, `console.log("ran")\n`)
+          expect(yield* runUnderPreload(file, cacheHome)).toBe("ran")
+          expect(yield* fs.exists(recent)).toBe(true)
+          expect(yield* fs.exists(old)).toBe(false)
+        }),
+      ).pipe(Effect.timeout("25 seconds"), Effect.provide(preloadLayer)),
     30_000,
   )
 })
+
+const preloadLayer = Layer.mergeAll(
+  BunPlatformLive,
+  BunChildProcessSpawner.layer.pipe(Layer.provide(BunServices.layer)),
+)

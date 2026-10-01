@@ -1649,43 +1649,72 @@ describe("tool renderer reach", () => {
 })
 
 describe("client extension compile", () => {
-  // The test run's preload loads Babel itself, so a fresh process without it
-  // shows what importing the adapter costs.
+  // The test run's preload loads Babel itself, so these run in a fresh process
+  // that loads it the way a launch does.
   it.live(
     "importing the Bun adapter loads no Babel module until a client extension compiles",
     () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem
-          const path = yield* Path.Path
-          const platform = yield* GentPlatform
-          const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-babel-lazy-" })
-          const adapter = new URL("../../src/bun-adapter.ts", import.meta.url).href
-          const script = path.join(directory, "import-adapter.ts")
-          yield* fs.writeFileString(
-            script,
-            [
-              `await import("${adapter}")`,
-              `console.log(Object.keys(require.cache).filter((key) => key.includes("/@babel/")).length)`,
-            ].join("\n"),
-          )
-          const result = yield* runProcess(
-            yield* platform.execPath,
-            ["--config=/dev/null", script],
-            { cwd: directory },
-          )
-          expect(result.exitCode).toBe(0)
-          expect(result.stdout.trim()).toBe("0")
-        }),
-      ).pipe(
-        Effect.timeout("25 seconds"),
-        Effect.provide(
-          Layer.mergeAll(
-            BunPlatformLive,
-            BunChildProcessSpawner.layer.pipe(Layer.provide(BunServices.layer)),
-          ),
-        ),
-      ),
+      Effect.gen(function* () {
+        const stdout = yield* runFresh(
+          [
+            `await import("${adapterUrl}")`,
+            `console.log(Object.keys(require.cache).filter((key) => key.includes("/@babel/")).length)`,
+          ],
+          [],
+        )
+        expect(stdout).toBe("0")
+      }).pipe(Effect.timeout("25 seconds"), Effect.provide(freshProcessLayer)),
+    30_000,
+  )
+
+  it.live(
+    "a build interrupted while the Solid plugin loads leaves the next build working",
+    () =>
+      Effect.gen(function* () {
+        const stdout = yield* runFresh(
+          [
+            `const { Effect, Fiber, Option } = await import("${import.meta.resolve("effect")}")`,
+            `const { buildClientExtension } = await import("${adapterUrl}")`,
+            `const names = { external: [], rename: () => Option.none(), solidRuntime: "@opentui/solid" }`,
+            `const file = import.meta.dir + "/widget.tsx"`,
+            `const first = Effect.runFork(buildClientExtension(file, names))`,
+            `await Effect.runPromise(Fiber.interrupt(first))`,
+            `const exit = await Effect.runPromiseExit(buildClientExtension(file, names))`,
+            `console.log(exit._tag === "Success" && exit.value.includes("widget-text") ? "built" : String(exit))`,
+          ],
+          [["widget.tsx", `export const widget = "widget-text"`]],
+        )
+        expect(stdout).toBe("built")
+      }).pipe(Effect.timeout("25 seconds"), Effect.provide(freshProcessLayer)),
     30_000,
   )
 })
+
+const adapterUrl = new URL("../../src/bun-adapter.ts", import.meta.url).href
+
+/** Run `lines` as a script in a fresh Bun beside `files`; its stdout, trimmed. */
+const runFresh = (
+  lines: ReadonlyArray<string>,
+  files: ReadonlyArray<readonly [name: string, text: string]>,
+) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const platform = yield* GentPlatform
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-fresh-process-" })
+      for (const [name, text] of files) yield* fs.writeFileString(path.join(directory, name), text)
+      const script = path.join(directory, "script.ts")
+      yield* fs.writeFileString(script, lines.join("\n"))
+      const result = yield* runProcess(yield* platform.execPath, ["--config=/dev/null", script], {
+        cwd: directory,
+      })
+      expect(result.exitCode).toBe(0)
+      return result.stdout.trim()
+    }),
+  )
+
+const freshProcessLayer = Layer.mergeAll(
+  BunPlatformLive,
+  BunChildProcessSpawner.layer.pipe(Layer.provide(BunServices.layer)),
+)
