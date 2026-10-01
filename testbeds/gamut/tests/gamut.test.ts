@@ -1,7 +1,14 @@
 import { describe, expect, test } from "bun:test"
 import { Database } from "bun:sqlite"
-import { makeTempDirectoryScoped, testSqliteStorage } from "@gent/core/test-utils"
-import { Effect, Layer, Schema } from "effect"
+import { BunServices } from "@effect/platform-bun"
+import {
+  BunGentPlatformLive,
+  makeTempDirectoryScoped,
+  testSqliteStorage,
+} from "@gent/core/test-utils"
+import { GentPlatform } from "@gent/core/host"
+import { runProcess } from "@gent/core/extensions/api"
+import { Config, Effect, FileSystem, Layer, Path, Schema } from "effect"
 import { SqlClient } from "effect/sql"
 import { it } from "effect-bun-test"
 import {
@@ -21,7 +28,6 @@ import {
   encodeState,
   parseCount,
   parseUpArgs,
-  binaryProcessPattern,
   runRecord,
   sessionStatuses,
   userMessageTexts,
@@ -479,22 +485,6 @@ describe("gamut up arguments", () => {
   })
 })
 
-describe("gamut process match", () => {
-  const binary = "/Users/me/.rifts/gent/x/apps/tui/bin/gent"
-  const matches = (commandLine: string) =>
-    new RegExp(binaryProcessPattern(binary)).test(commandLine)
-  test("matches the TUI however it was launched", () => {
-    expect(matches(binary)).toBe(true)
-    expect(matches(`${binary} -p 'fix the suite'`)).toBe(true)
-    expect(matches(`${binary} resume`)).toBe(true)
-  })
-  test("does not match the gent-cell sibling or another checkout's binary", () => {
-    expect(matches(`${binary}-cell`)).toBe(false)
-    expect(matches(binary.replace(".rifts", "Xrifts"))).toBe(false)
-    expect(matches(`/bin/sh -c ${binary}`)).toBe(false)
-  })
-})
-
 describe("gamut status", () => {
   test("reads the bun test summary through its colour", () => {
     const coloured = "\u001b[0m\u001b[32m 17 pass\u001b[0m\n\u001b[0m\u001b[2m 0 fail\u001b[0m\n"
@@ -546,4 +536,105 @@ describe("gamut reads the schema gent migrates", () => {
       Effect.timeout("10 seconds"),
     ),
   )
+})
+
+describe("gamut CLI cleanup", () => {
+  const missingPane =
+    '#!/usr/bin/env bun\nconsole.log(\'{"error":{"code":"pane_not_found","message":"pane not found"}}\')\nprocess.exit(1)\n'
+  const stalledHerdr =
+    "#!/usr/bin/env bun\nrequire('node:fs').writeFileSync(process.env.HERDR_TEST_PID, String(process.pid))\nawait Bun.sleep(60000)\n"
+  for (const scenario of [
+    {
+      name: "a closed pane allows cleanup",
+      command: "down",
+      herdr: missingPane,
+      stalled: false,
+      exit: 0,
+      kept: false,
+    },
+    {
+      name: "a closed pane cannot restart",
+      command: "restart",
+      herdr: missingPane,
+      stalled: false,
+      exit: 1,
+      kept: true,
+    },
+    {
+      name: "a stalled Herdr process is reaped at the quit deadline",
+      command: "down",
+      herdr: stalledHerdr,
+      stalled: true,
+      exit: 1,
+      kept: true,
+    },
+  ]) {
+    it.scopedLive(
+      scenario.name,
+      () =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const path = yield* Path.Path
+          const platform = yield* GentPlatform
+          const scratch = yield* makeTempDirectoryScoped("gent-gamut-cli-")
+          const driver = yield* path.fromFileUrl(new URL("../gamut.ts", import.meta.url))
+          const root = path.join(scratch, "run")
+          const herdrPath = path.join(scratch, "herdr")
+          const pidPath = path.join(scratch, "herdr-pid")
+          const statePath = path.join(
+            scratch,
+            `gent-gamut-${path.basename(path.resolve(path.dirname(driver), "../.."))}.json`,
+          )
+          yield* fs.makeDirectory(root)
+          // Only the external Herdr boundary is simulated; Gamut runs as a real CLI over real files/processes.
+          yield* fs.writeFileString(herdrPath, scenario.herdr)
+          yield* fs.chmod(herdrPath, 0o755)
+          // Reap the test-owned boundary process even when the old driver hangs and the outer timeout fires.
+          yield* Effect.acquireRelease(Effect.void, () =>
+            Effect.gen(function* () {
+              if (!(yield* fs.exists(pidPath))) return
+              const pid = yield* fs.readFileString(pidPath)
+              const child = yield* runProcess("ps", ["-p", pid, "-o", "args="])
+              if (child.stdout.includes(herdrPath)) {
+                const number = yield* Schema.decodeEffect(Schema.FiniteFromString)(pid)
+                yield* platform.signal(number, "SIGKILL").pipe(Effect.ignore)
+              }
+            }).pipe(Effect.orDie),
+          )
+          yield* fs.writeFileString(
+            statePath,
+            encodeState({
+              root,
+              work: root,
+              data: root,
+              pane: "wTest:closed",
+              binary: "/unused/gent",
+              preset: "offline",
+              sendMark: 0,
+              awaitsTurn: false,
+            }),
+          )
+          const result = yield* runProcess(yield* platform.execPath, [driver, scenario.command], {
+            env: {
+              PATH: `${scratch}:${yield* Config.String("PATH")}`,
+              TMPDIR: scratch,
+              HERDR_TEST_PID: pidPath,
+            },
+            extendEnv: true,
+          }).pipe(Effect.timeout("22 seconds"))
+          expect(result.exitCode).toBe(scenario.exit)
+          expect(yield* fs.exists(root)).toBe(scenario.kept)
+          expect(yield* fs.exists(statePath)).toBe(scenario.kept)
+          if (scenario.stalled) {
+            expect(result.stderr).toContain("quit timed out after 15s")
+            const pid = yield* fs.readFileString(pidPath)
+            expect((yield* runProcess("ps", ["-p", pid, "-o", "pid="])).exitCode).toBe(1)
+          }
+        }).pipe(
+          Effect.provide(Layer.mergeAll(BunGentPlatformLive, BunServices.layer)),
+          Effect.timeout("25 seconds"),
+        ),
+      30_000,
+    )
+  }
 })

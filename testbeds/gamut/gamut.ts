@@ -384,51 +384,86 @@ const requireHerdrPane = async (): Promise<void> => {
   throw new Error(`herdr has no current pane (${reason}); start herdr, then rerun from a pane`)
 }
 
-/** Ctrl-C as the raw byte. `send-keys` does not deliver Ctrl chords. */
+/** Ctrl-C as the raw byte, as a person would press it in the TUI. */
 const CTRL_C = "\x03"
 
-/**
- * The `pgrep -f` pattern for a process running `binary` itself: the command
- * line starts with the path and the path ends there. An unanchored path also
- * matches its `gent-cell` sibling (`bin/gent` is a prefix of `bin/gent-cell`).
- */
-export const binaryProcessPattern = (binary: string): string => {
-  const literal = binary.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-  return `^${literal}( |$)`
-}
+/** The foreground processes of this run's pane, independent of other runs. */
+const ProcessReply = Schema.fromJsonString(
+  Schema.Struct({
+    result: Schema.Struct({
+      process_info: Schema.Struct({
+        shell_pid: Schema.optional(Schema.NullOr(Schema.Finite)),
+        foreground_processes: Schema.Array(
+          Schema.Struct({
+            pid: Schema.Finite,
+            argv: Schema.optional(Schema.NullOr(Schema.Array(Schema.String))),
+          }),
+        ),
+      }),
+    }),
+  }),
+)
 
-const binaryRunning = async (binary: string): Promise<boolean> =>
-  (await $`pgrep -f ${binaryProcessPattern(binary)}`.quiet().nothrow()).exitCode === 0
+const MissingPaneReply = Schema.fromJsonString(
+  Schema.Struct({ error: Schema.Struct({ code: Schema.Literal("pane_not_found") }) }),
+)
 
-/** Poll until no process is running the binary, so a relaunch gets a shell. */
-const waitForBinaryGone = async (binary: string): Promise<void> => {
-  for (let attempt = 0; attempt < 30; attempt += 1) {
-    if (!(await binaryRunning(binary))) return
-    await Bun.sleep(500)
+/** Bound and reap each Herdr subprocess within the quit's remaining budget. */
+const herdrBefore = async (deadline: number, args: ReadonlyArray<string>) => {
+  const remaining = deadline - Date.now()
+  if (remaining <= 0)
+    throw new Error("quit timed out after 15s; inspect the pane before relaunching")
+  const child = Bun.spawn(["herdr", ...args], {
+    stdout: "pipe",
+    stderr: "pipe",
+    timeout: remaining,
+    killSignal: "SIGKILL",
+  })
+  try {
+    // oxlint-disable-next-line effect/noNewPromise -- the plain Bun driver drains both child pipes and reaps exit within its subprocess timeout
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ])
+    if (Date.now() >= deadline)
+      throw new Error("quit timed out after 15s; inspect the pane before relaunching")
+    return { stdout, stderr, exitCode }
+  } finally {
+    if (child.exitCode === null) child.kill("SIGKILL")
+    await child.exited
   }
-  throw new Error(`${binary} is still running after 15s; kill it before relaunching`)
 }
 
 /**
- * Ctrl-C presses that reach exit from the deepest state: each press peels one
- * layer (an expanded transcript, a draft in the composer, a running turn),
- * and the last one exits.
- */
-const QUIT_PRESSES = 4
-
-/**
- * Quit the TUI: Ctrl-C until the binary is gone, at most `QUIT_PRESSES`,
- * then wait for the process to release the PTY. `pkill` returns before the
- * process is gone, and herdr writes into whatever is attached at that moment.
+ * Peel open UI and cancel work until the pane returns to its shell. The
+ * number of layers is the TUI's concern; stop by observed exit with a 15s
+ * deadline. Send nothing while another process owns the foreground.
  */
 const quitTui = async (state: GamutState): Promise<void> => {
-  // A press sent after the TUI exited lands at an idle shell prompt: `restart` relaunches only after this returns.
-  for (let press = 0; press < QUIT_PRESSES; press += 1) {
-    await $`herdr pane send-text ${state.pane} ${CTRL_C}`.quiet().nothrow()
-    await Bun.sleep(300)
-    if (!(await binaryRunning(state.binary))) return
+  const deadline = Date.now() + 15_000
+  while (Date.now() < deadline) {
+    const reply = await herdrBefore(deadline, ["pane", "process-info", "--pane", state.pane])
+    if (reply.exitCode !== 0) {
+      // `down` can clean an already-closed pane; `restart` still fails when its launch finds no pane.
+      if (Schema.decodeOption(MissingPaneReply)(reply.stdout)._tag === "Some") return
+      throw new Error(failureText(reply.stdout, reply.stderr))
+    }
+    const info = Schema.decodeSync(ProcessReply)(reply.stdout).result.process_info
+    if (
+      info.foreground_processes.length === 1 &&
+      info.foreground_processes[0]?.pid === info.shell_pid
+    )
+      return
+    if (info.foreground_processes.some((process) => process.argv?.[0] === state.binary)) {
+      const sent = await herdrBefore(deadline, ["pane", "send-text", state.pane, CTRL_C])
+      if (sent.exitCode !== 0) throw new Error(failureText(sent.stdout, sent.stderr))
+    }
+    await Bun.sleep(Math.min(300, Math.max(0, deadline - Date.now())))
   }
-  await waitForBinaryGone(state.binary)
+  throw new Error(
+    `${state.pane} has not returned to its shell after 15s; inspect it before relaunching`,
+  )
 }
 
 // ── up ──────────────────────────────────────────────────────────────────

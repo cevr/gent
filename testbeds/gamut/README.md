@@ -74,10 +74,12 @@ It reads the run's own `data.db` read-only and prints:
    is this checkout's too.
 3. **The stale TUI.** `pkill` returns before the process releases the PTY, so
    the next command types into the dying session. `restart` and `down` press
-   Ctrl-C up to four times, one raw `\x03` byte per press (`send-keys` does not
-   deliver Ctrl chords), until the binary is gone: each press peels one layer
-   (an expanded transcript, a draft in the composer, a running turn) and the
-   last one exits. Then they poll `pgrep` until the process releases the PTY.
+   Ctrl-C as a raw `\x03` byte while this run's binary owns the foreground.
+   Each press closes a UI layer, clears the draft or cancels a turn before
+   arming exit. They check this pane's foreground processes until its shell
+   owns the PTY, with a 15-second deadline. Another run of the same binary
+   cannot delay the quit. Each press checks that the binary still owns the
+   foreground; a different foreground process is left alone.
 
 ## The fixture
 
