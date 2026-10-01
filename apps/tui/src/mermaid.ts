@@ -208,23 +208,56 @@ interface Diagram {
   readonly height: number
 }
 
-/** The diagram of `source`, or none when beautiful-mermaid cannot read it. */
-const drawDiagram = (
+/** A `>` that ends a link (`-->`, `==>`, `-.->`) or a `<` that starts one (`<--`). */
+const WRITTEN_ARROWHEAD = /(?<=[-=.])>|<(?=[-=.])/g
+
+/** The arrowheads beautiful-mermaid draws, in either direction. */
+const DRAWN_ARROWHEAD = /[▲▼◄►▶◀]/g
+
+/** The arrowheads a flowchart's edge statements write, outside their written text. */
+const writtenArrowheads = (source: string): number => {
+  const lines = source.split("\n")
+  if (!isFlowchart(lines)) return 0
+  return lines
+    .filter((line) => !NOT_AN_EDGE.test(line.trim()))
+    .flatMap((line) => line.split(WRITTEN_TEXT).filter((_, index) => index % 2 === 0))
+    .reduce((count, code) => count + [...code.matchAll(WRITTEN_ARROWHEAD)].length, 0)
+}
+
+const drawAt = (
   library: DiagramLibrary,
   source: string,
-  colors: DiagramColors,
-): Option.Option<Diagram> =>
+  spacing: Partial<typeof COMPACT>,
+): Option.Option<string> =>
   Effect.runSync(
     Effect.option(
       Effect.try(() =>
-        library.renderMermaidASCII(spaceEdgeArrows(source), {
-          ...COMPACT,
+        library.renderMermaidASCII(source, {
+          ...spacing,
           colorMode: "truecolor",
           theme: PART_MARKS,
         }),
       ),
     ),
-  ).pipe(
+  )
+
+/**
+ * The diagram of `source`, or none when beautiful-mermaid cannot read it.
+ * Compact spacing draws first. It draws some cycles wrong: a back edge loses
+ * its head, a node its label, or the draw throws. A compact draw that throws
+ * or draws fewer heads than the source writes draws again at the library's
+ * own spacing.
+ */
+const drawDiagram = (
+  library: DiagramLibrary,
+  source: string,
+  colors: DiagramColors,
+): Option.Option<Diagram> => {
+  const spaced = spaceEdgeArrows(source)
+  const heads = writtenArrowheads(spaced)
+  return drawAt(library, spaced, COMPACT).pipe(
+    Option.filter((drawn) => [...drawn.matchAll(DRAWN_ARROWHEAD)].length >= heads),
+    Option.orElse(() => drawAt(library, spaced, {})),
     Option.map((drawn) => drawn.replace(/\n+$/, "")),
     Option.filter((drawn) => drawn.trim().length > 0),
     Option.map((drawn) => ({
@@ -232,6 +265,7 @@ const drawDiagram = (
       height: drawn.split("\n").length,
     })),
   )
+}
 
 // ── library ─────────────────────────────────────────────────────────────────
 

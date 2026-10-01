@@ -223,6 +223,31 @@ describe("mermaid diagrams", () => {
     }),
   )
 
+  // Compact spacing draws a cycle wrong: a back edge loses its arrowhead, a
+  // node loses its label, or the draw throws. Such a diagram draws at the
+  // library's own spacing: every node names itself and every edge has its head.
+  const pair = ["Alpha", "Beta"]
+  const triple = ["Alpha", "Beta", "Gamma"]
+  const cycles: ReadonlyArray<readonly [string, string, ReadonlyArray<string>, number]> = [
+    ["a back edge", "graph TD\n  Alpha-->Beta\n  Beta-->Alpha", pair, 2],
+    [
+      "a left-right 3-cycle",
+      "graph LR\n  Alpha-->Beta\n  Beta-->Gamma\n  Gamma-->Alpha",
+      triple,
+      3,
+    ],
+    ["a top-down 3-cycle", "graph TD\n  Alpha-->Beta\n  Beta-->Gamma\n  Gamma-->Alpha", triple, 3],
+  ]
+  for (const [name, source, nodes, edgeCount] of cycles) {
+    it.scopedLive(`${name} draws every node and every arrowhead`, () =>
+      Effect.gen(function* () {
+        const frame = yield* drawn(source)
+        for (const node of nodes) expect(frame).toContain(node)
+        expect([...frame.matchAll(/[▲▼◄►▶◀]/g)].length).toBeGreaterThanOrEqual(edgeCount)
+      }),
+    )
+  }
+
   // A diagram does not wrap: one wider than the answer is cut at its right
   // edge, so its row of boxes stays one row.
   it.scopedLive("a diagram wider than the answer is cut, not wrapped", () =>
