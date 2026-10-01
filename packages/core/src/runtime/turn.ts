@@ -147,6 +147,7 @@ import {
   ModelResolver,
   type ResolveModelRequest,
   retryProviderCall,
+  retryReason,
 } from "./provider.js"
 import { WideEvent, WideEventBoundary, withWideEvent } from "effect-wide-event"
 import {
@@ -1861,7 +1862,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
                 attempt,
                 maxAttempts,
                 delayMs,
-                error: error.message,
+                error: retryReason(error),
               }),
             ),
         }),

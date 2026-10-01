@@ -6846,6 +6846,11 @@ describe("provider retry in a turn", () => {
         expect(streamCalls).toBe(2)
         expect(tags).toContain("ProviderRetrying")
         expect(tags).not.toContain("ErrorOccurred")
+        // The retry row names the provider's reason, not the SDK module and method.
+        const retrying = events.find((event) => event._tag === "ProviderRetrying")
+        expect(retrying?._tag === "ProviderRetrying" && retrying.error).toBe(
+          retryableStreamError().reason.message,
+        )
         const assistant = yield* messageStorage.getMessage(assistantMessageIdForTurn(message.id, 1))
         expect(assistant?.parts).toEqual([Prompt.textPart({ text: "after retry" })])
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef)))
