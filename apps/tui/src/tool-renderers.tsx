@@ -163,30 +163,18 @@ interface EditDiffResult {
   removed: number
 }
 
-/**
- * Generate unified diff from edit input for <diff> component
- */
-const decodeEditInput = Schema.decodeUnknownOption(Schema.JsonObject)
-const decodeString = Schema.decodeUnknownOption(Schema.String)
+const decodeEditInput = Schema.decodeUnknownOption(
+  Schema.Struct({ path: Schema.String, oldString: Schema.String, newString: Schema.String }),
+)
 type EditInput = Parameters<typeof decodeEditInput>[0]
 
-export function getEditUnifiedDiff(input: EditInput) {
-  const result = Option.gen(function* () {
-    const record = yield* decodeEditInput(input)
-    const path = yield* decodeString(record["path"])
-    const oldStr = yield* decodeString(record["oldString"]).pipe(
-      Option.orElse(() => decodeString(record["old_string"])),
-    )
-    const newStr = yield* decodeString(record["newString"]).pipe(
-      Option.orElse(() => decodeString(record["new_string"])),
-    )
-    const diff = createPatch(path, oldStr, newStr)
-    const filetype = getFiletype(path)
-    const { added, removed } = patchLineCounts(oldStr, newStr)
-    return { diff, filetype, added, removed } satisfies EditDiffResult
-  })
-  return Option.getOrNull(result)
-}
+/** The unified diff an edit's input draws; none for an input that does not decode. */
+export const getEditUnifiedDiff = (input: EditInput): Option.Option<EditDiffResult> =>
+  Option.map(decodeEditInput(input), ({ path, oldString, newString }) => ({
+    diff: createPatch(path, oldString, newString),
+    filetype: getFiletype(path),
+    ...patchLineCounts(oldString, newString),
+  }))
 
 // ── generic renderer ────────────────────────────────────────────────────────
 
@@ -1038,26 +1026,29 @@ export function EditToolRenderer(props: ToolRendererProps) {
   const { theme } = useTheme()
   const syntaxStyle = createMemo(() => buildSyntaxStyle(theme))
 
-  const editData = () => getEditUnifiedDiff(props.toolCall.input)
+  // The diff is drawn once per input, not once per read.
+  const editData = createMemo(() => getEditUnifiedDiff(props.toolCall.input))
   const path = () => getPath(props.toolCall.input)
   const subtitleHref = () => Option.getOrUndefined(fileHref(path()))
 
-  const collapsedDiffLines = createMemo((): DiffLine[] => {
-    const data = editData()
-    // `getEditUnifiedDiff` returns null for invalid tool input at this adapter boundary.
-    // eslint-disable-next-line effect/noNullish -- invalid edit payloads are rendered as an empty diff.
-    if (data === null) return []
-    const lines: DiffLine[] = data.diff
-      .split("\n")
-      .map((text) => ({ _tag: "line", text, kind: diffLineKind(text) }))
-    const { head, tail, truncatedCount } = headTail(lines, 6)
-    if (truncatedCount === 0) return head
-    return [...head, { _tag: "elision", count: truncatedCount }, ...tail]
-  })
+  const collapsedDiffLines = createMemo((): DiffLine[] =>
+    Option.match(editData(), {
+      // An input that does not decode draws no diff.
+      onNone: () => [],
+      onSome: (data) => {
+        const lines: DiffLine[] = data.diff
+          .split("\n")
+          .map((text) => ({ _tag: "line", text, kind: diffLineKind(text) }))
+        const { head, tail, truncatedCount } = headTail(lines, 6)
+        if (truncatedCount === 0) return head
+        return [...head, { _tag: "elision", count: truncatedCount }, ...tail]
+      },
+    }),
+  )
 
   return (
     <Show
-      when={editData()}
+      when={Option.getOrUndefined(editData())}
       fallback={
         <ToolFrame
           title="edit"

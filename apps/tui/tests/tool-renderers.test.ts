@@ -81,85 +81,47 @@ describe("edit diff counts", () => {
   for (const { name, oldString, newString, added, removed } of cases) {
     test(name, () => {
       const result = getEditUnifiedDiff({ path: "/foo/bar.ts", oldString, newString })
-      expect(result?.added).toBe(added)
-      expect(result?.removed).toBe(removed)
+      expect(Option.map(result, (diff) => [diff.added, diff.removed])).toEqual(
+        Option.some([added, removed]),
+      )
     })
   }
 })
 
-describe("getEditUnifiedDiff", () => {
-  test("generates diff from valid input with oldString/newString", () => {
-    const input = {
-      path: "/foo/bar.ts",
-      oldString: "const x = 1",
-      newString: "const x = 2",
-    }
-    const result = getEditUnifiedDiff(input)
-
-    expect(result).not.toBeNull()
-    expect(result!.filetype).toBe("typescript")
-    expect(result!.diff).toContain("---")
-    expect(result!.diff).toContain("+++")
-    expect(result!.added).toBe(1)
-    expect(result!.removed).toBe(1)
-  })
-
-  test("supports old_string/new_string snake_case", () => {
-    const input = {
-      path: "/foo/bar.py",
-      old_string: "x = 1",
-      new_string: "x = 2",
-    }
-    const result = getEditUnifiedDiff(input)
-
-    expect(result).not.toBeNull()
-    expect(result!.filetype).toBe("python")
-  })
-
-  test("returns null for null input", () => {
-    const absentInput = Option.getOrNull(Option.none())
-    expect(Option.isNone(Option.fromNullishOr(getEditUnifiedDiff(absentInput)))).toBe(true)
-  })
-
-  test("returns null for non-object input", () => {
-    expect(getEditUnifiedDiff("string")).toBeNull()
-    expect(getEditUnifiedDiff(123)).toBeNull()
-  })
-
-  test("returns null when path missing", () => {
-    const input = { oldString: "a", newString: "b" }
-    expect(getEditUnifiedDiff(input)).toBeNull()
-  })
-
-  test("returns null when oldString missing", () => {
-    const input = { path: "/foo.ts", newString: "b" }
-    expect(getEditUnifiedDiff(input)).toBeNull()
-  })
-
-  test("returns null when newString missing", () => {
-    const input = { path: "/foo.ts", oldString: "a" }
-    expect(getEditUnifiedDiff(input)).toBeNull()
-  })
-
-  test("returns null when values are wrong type", () => {
-    expect(getEditUnifiedDiff({ path: 123, oldString: "a", newString: "b" })).toBeNull()
-    expect(getEditUnifiedDiff({ path: "/foo", oldString: 123, newString: "b" })).toBeNull()
-    expect(getEditUnifiedDiff({ path: "/foo", oldString: "a", newString: 123 })).toBeNull()
-  })
-
-  test("generates valid unified diff format", () => {
-    const input = {
+describe("edit diff", () => {
+  test("an edit draws a unified diff of its old and new text, highlighted by its path", () => {
+    const result = getEditUnifiedDiff({
       path: "/foo/bar.ts",
       oldString: "const x = 1\n",
       newString: "const x = 2\n",
-    }
-    const result = getEditUnifiedDiff(input)
+    })
+    expect(Option.map(result, (diff) => diff.filetype)).toEqual(Option.some("typescript"))
+    const diff = Option.getOrElse(
+      Option.map(result, (value) => value.diff),
+      () => "",
+    )
+    expect(diff).toContain("--- /foo/bar.ts")
+    expect(diff).toContain("+++ /foo/bar.ts")
+    expect(diff).toContain("-const x = 1")
+    expect(diff).toContain("+const x = 2")
+  })
 
-    // Verify unified diff structure
-    expect(result!.diff).toContain("--- /foo/bar.ts")
-    expect(result!.diff).toContain("+++ /foo/bar.ts")
-    expect(result!.diff).toContain("-const x = 1")
-    expect(result!.diff).toContain("+const x = 2")
+  // The renderer falls back to the summary line for each of these.
+  const undecodable: ReadonlyArray<readonly [string, Parameters<typeof getEditUnifiedDiff>[0]]> = [
+    ["no input", Option.getOrNull(Option.none())],
+    ["a string", "string"],
+    ["a number", 123],
+    ["no path", { oldString: "a", newString: "b" }],
+    ["no old text", { path: "/foo.ts", newString: "b" }],
+    ["no new text", { path: "/foo.ts", oldString: "a" }],
+    ["a path that is not text", { path: 123, oldString: "a", newString: "b" }],
+    ["old text that is not text", { path: "/foo", oldString: 123, newString: "b" }],
+    ["new text that is not text", { path: "/foo", oldString: "a", newString: 123 }],
+  ]
+  test("an input that does not decode draws no diff", () => {
+    for (const [name, input] of undecodable) {
+      expect([name, Option.isNone(getEditUnifiedDiff(input))]).toEqual([name, true])
+    }
   })
 })
 
