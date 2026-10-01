@@ -280,17 +280,24 @@
       // the driver decodes the SQLite rows it reads.
       "files": ["testbeds/gamut/gamut.ts", "testbeds/gamut/tests/**"],
       "rules": {
-        "effect/noAsyncFunction": "off",
         "effect/noGlobals": "off",
         "effect/noKnownValueWidening": "off",
         "effect/noNewError": "off",
-        "effect/noNodeBuiltinImport": "off",
         "effect/noNullish": "off",
         "effect/noTernary": "off",
         "effect/noThrowStatement": "off",
         "effect/noTryCatch": "off",
         "effect/noUnknownParameters": "off",
         "eslint/no-await-in-loop": "off"
+      }
+    },
+    {
+      // The driver itself awaits shell calls and reads the file system through
+      // Node. Its tests use neither, so both rules hold there.
+      "files": ["testbeds/gamut/gamut.ts"],
+      "rules": {
+        "effect/noAsyncFunction": "off",
+        "effect/noNodeBuiltinImport": "off"
       }
     },
     {
