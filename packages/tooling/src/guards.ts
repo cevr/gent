@@ -2804,10 +2804,9 @@ const DECLARATION =
  * second consumable name at this module path, so a dead one is dead here even
  * though `./x.js` keeps its own alive.
  *
- * Two kinds of name in a *bare* block are not this file's own, and counting
- * either would hide a real consumer: one it imported, and one it declares
- * elsewhere in the file. A `from` block has no such ambiguity: it names only
- * what it exposes.
+ * A bare block can also pass on a name the file imported. That name is
+ * measured here like a `from` re-export, and the import still reads the
+ * upstream declaration.
  */
 const declaredNames = (
   text: string,
@@ -2825,14 +2824,15 @@ const declaredNames = (
     const keyword = match?.[1] ?? ""
     found.push({ name, line: index + 1, typeOnly: keyword === "type" || keyword === "interface" })
   }
-  // A bare block exposes names; only the ones this file also imports are its
-  // own surface. A name it imported is another file's declaration being passed
-  // through, and counting it here would hide that file's real consumer.
+  // A bare block exposes names. A name the file declares is counted once, at
+  // its declaration. A name it imported is passed through, as a `from` block
+  // passes it: this path is measured, and the import stays the upstream
+  // declaration's consumer.
   const declared = new Set(found.map((entry) => entry.name))
   const imported = importedNames(text)
-  const bare = bareExportedNames(text).filter(
-    (entry) => !declared.has(entry.name) && !imported.has(entry.name),
-  )
+  const bare = bareExportedNames(text)
+    .filter((entry) => !declared.has(entry.name))
+    .map((entry) => ({ ...entry, passthrough: imported.has(entry.name) }))
   // A `from` re-export is this module's own surface entry even when the file
   // also imports the name for its own use: the two are separate consumable
   // paths, and only the re-export is being measured here.

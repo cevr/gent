@@ -431,8 +431,6 @@ export function ComposerFrame(props: { children: JSX.Element }) {
  * binds and unbinds those keys; escape closes the popup either way.
  */
 
-export type { AutocompleteState }
-
 interface AutocompletePopupProps {
   state: AutocompleteState
   /**

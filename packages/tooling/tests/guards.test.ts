@@ -2637,13 +2637,23 @@ export { buildLogPaths }
     expect(declaredNames(SDK_FILE, source)).toEqual(["buildLogPaths"])
   })
 
-  test("a bare block re-exporting an imported name declares nothing", () => {
-    // The name belongs to the file that declared it. Counting the pass-through
-    // here would make this file a declaring site and hide the real consumer.
+  test("a bare block re-exporting an imported name declares it at this path", () => {
     const source = `import { WakeExtension } from "./wake/index.js"
 export { WakeExtension }
 `
-    expect(declaredNames("packages/extensions/src/index.ts", source)).toEqual([])
+    expect(declaredNames("packages/extensions/src/index.ts", source)).toEqual(["WakeExtension"])
+  })
+
+  test("a bare re-export of an imported name nothing reads is reported, and its import keeps the upstream", () => {
+    // `export type { DisclosureLevel }` in the TUI's message list passed the
+    // scan while every reader imported the name from its declaring module.
+    const findings = findingsFor([
+      { file: SDK_FILE, text: `import { Passed } from "./origin.js"\nexport { Passed }\n` },
+      { file: "packages/sdk/src/origin.ts", text: `export const Passed = 1\n` },
+    ])
+    expect(findings.map(({ file, message }) => ({ file, name: message.split("`")[1] }))).toEqual([
+      { file: SDK_FILE, name: "Passed" },
+    ])
   })
 
   test("a from block on a module surface declares the name it exposes", () => {

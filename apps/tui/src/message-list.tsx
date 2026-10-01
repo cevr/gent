@@ -292,7 +292,6 @@ function SessionEventIndicator(props: SessionEventIndicatorProps) {
 // ── message list ────────────────────────────────────────────────────────────
 
 export type { ToolCall }
-export type { DisclosureLevel }
 
 const CellFailure = Schema.Struct({
   display: Schema.optional(Schema.String),
