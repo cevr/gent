@@ -1,5 +1,5 @@
 import { describe, expect, it, test } from "effect-bun-test"
-import { Effect, FileSystem, Option, Path, Predicate, Schema } from "effect"
+import { Effect, FileSystem, Logger, Option, Path, Predicate, References, Schema } from "effect"
 import { AgentEvent, BranchId, SessionId } from "@gent/core/protocol"
 import { InteractionRequestId } from "@gent/core/extensions/branch-tools"
 import {
@@ -992,6 +992,71 @@ export default {
       }).pipe(Effect.provide(BunServices.layer)),
     )
   })
+
+  // Each import is a build and an import, up to the load timeout. Two files
+  // whose imports finish only once both have started load only when the
+  // imports overlap; one at a time, the first waits out its timeout. The
+  // first file's import also finishes only after the last file has failed,
+  // so its failure completes last, and the failures still keep discovery order.
+  it.scopedLive("discovered files import concurrently and fail in discovery order", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "gent-client-overlap-" })
+      const userDir = path.join(root, "user")
+      yield* fs.makeDirectory(userDir, { recursive: true })
+      const gateKey = `gent-probe-overlap-${path.basename(root)}`
+      // The module of `a` waits for this file; the first import failure the
+      // loader logs writes it, in the failing fiber before that fiber ends.
+      // While `a` waits, only `c` can fail.
+      const lastFailed = path.join(root, "last-failed")
+      const failureSeen = Logger.make(({ message }) => {
+        if ([message].flat().map(String).join(" ") === "tui-ext.import.failed")
+          writeFileSync(lastFailed, "")
+      })
+      const bothStarted = `
+const gate = (globalThis[Symbol.for("${gateKey}")] ??= (() => {
+  let open = () => {}
+  const opened = new Promise((resolve) => { open = resolve })
+  return { arrived: 0, open, opened }
+})())
+gate.arrived += 1
+if (gate.arrived === 2) gate.open()
+await gate.opened
+`
+      yield* fs.writeFileString(
+        path.join(userDir, "a-slow.client.ts"),
+        `${bothStarted}\nwhile (!(await Bun.file("${lastFailed}").exists())) await Bun.sleep(5)\nexport default { not: "an extension" }`,
+      )
+      yield* fs.writeFileString(
+        path.join(userDir, "b-slow.client.ts"),
+        `import { Effect } from "effect"
+import { defineClientExtension, clientCommandContribution } from "@gent/tui/extensions"
+${bothStarted}
+export default defineClientExtension("@test/overlap", {
+  setup: Effect.succeed(clientCommandContribution({ id: "overlap", title: "Overlap", onSelect: () => {} })),
+})`,
+      )
+      yield* fs.writeFileString(
+        path.join(userDir, "c-broken.client.ts"),
+        `export default { not: "an extension" }`,
+      )
+      const result = yield* loadTuiExtensions({
+        userDir,
+        projectDir: path.join(root, "project"),
+        loadTimeout: "3 seconds",
+        runtime,
+      }).pipe(
+        Effect.provide(Logger.layer([failureSeen])),
+        Effect.provideService(References.MinimumLogLevel, "All"),
+      )
+      expect(result.failures).toEqual([
+        { id: path.join(userDir, "a-slow.client.ts"), reason: "missing id" },
+        { id: path.join(userDir, "c-broken.client.ts"), reason: "missing id" },
+      ])
+      expect(commandsOf(result).map((command) => command.id)).toContain("overlap")
+    }).pipe(Effect.timeout("10 seconds"), Effect.provide(BunServices.layer)),
+  )
 })
 
 // ── autocomplete effect items ───────────────────────────────────────────────

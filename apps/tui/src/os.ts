@@ -91,11 +91,6 @@ export function parseEditorCommand(editor: string): [string, ...string[]] {
   return [cmd.value, ...parts.slice(1)]
 }
 
-const EditorProcessOutcome = Schema.TaggedUnion({
-  ExitCode: { value: Schema.Finite },
-  SpawnError: { message: Schema.String },
-})
-
 const EditorResult = Schema.Union([
   Schema.TaggedStruct("applied", { content: Schema.String }),
   Schema.TaggedStruct("cancelled", {}),
@@ -137,26 +132,23 @@ export const openExternalEditor = (
 
       yield* Effect.sync(suspend)
 
-      const editorOutcome = yield* runProcess(cmd, [...args, tmpPath], {
+      // Some when the editor settles the result itself: a spawn error, or a non-zero exit.
+      const settled = yield* runProcess(cmd, [...args, tmpPath], {
         stdin: "inherit",
         stdout: "inherit",
         stderr: "inherit",
       }).pipe(
-        Effect.map((result) =>
-          EditorProcessOutcome.cases.ExitCode.make({ value: result.exitCode }),
+        Effect.map((result): Option.Option<EditorResult> =>
+          Option.liftPredicate(EditorResult.cases.cancelled.make({}), () => result.exitCode !== 0),
         ),
         Effect.catchTag("ProcessError", (e) =>
-          Effect.succeed(EditorProcessOutcome.cases.SpawnError.make({ message: e.message })),
+          Effect.succeedSome(
+            EditorResult.cases.error.make({ message: `Editor failed: ${e.message}` }),
+          ),
         ),
         Effect.ensuring(Effect.sync(resume)),
       )
-
-      if (editorOutcome._tag === "SpawnError") {
-        return EditorResult.cases.error.make({ message: `Editor failed: ${editorOutcome.message}` })
-      }
-      if (editorOutcome.value !== 0) {
-        return EditorResult.cases.cancelled.make({})
-      }
+      if (Option.isSome(settled)) return settled.value
 
       const content = yield* fs.readFileString(tmpPath).pipe(Effect.result)
       if (content._tag === "Failure") {

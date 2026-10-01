@@ -31,7 +31,7 @@ import {
   type HeadlessState,
   resolveHeadlessState,
   resolveInteractiveBootstrap,
-  resolveHeadlessMissingProviders,
+  resolveHeadlessMissingSignIns,
 } from "./app"
 import { TerminalDimensionsProvider } from "./terminal"
 import { SpinnerClockProvider } from "./ui"
@@ -299,14 +299,14 @@ const runGent = ({
         ),
       })
 
-      const missingProviders = yield* resolveHeadlessMissingProviders({
+      const missingSignIns = yield* resolveHeadlessMissingSignIns({
         client: bundle.client,
         state,
       })
 
-      if (missingProviders.length > 0 && !debug && !Option.isSome(connect)) {
+      if (missingSignIns.length > 0 && !debug && !Option.isSome(connect)) {
         return yield* new CliStartupError({
-          message: `missing required API keys: ${missingProviders.join(", ")}`,
+          message: `missing required sign-ins: ${missingSignIns.join(", ")}`,
         })
       }
 

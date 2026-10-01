@@ -175,14 +175,14 @@ describe("headless CLI", () => {
   )
 
   it.scopedLive(
-    "missing API keys are one line on stderr",
+    "missing sign-ins are one line on stderr, by provider name",
     () =>
       Effect.gen(function* () {
         const { exitCode, stdout, stderr } = yield* runGent(["-H", "Say hi in 3 words"], {
           keyless: true,
         })
         expect(exitCode).toBe(1)
-        expect(stderr).toBe("CliStartupError: missing required API keys: anthropic\n")
+        expect(stderr).toBe("CliStartupError: missing required sign-ins: Anthropic\n")
         expect(stdout).toBe("")
       }).pipe(Effect.provide(BunServices.layer)),
     20000,
