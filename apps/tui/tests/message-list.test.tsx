@@ -351,6 +351,9 @@ describe("worked-for row", () => {
 const absent = undefined
 let messageIndex = 0
 
+// Core's projection owns running calls, pairing, the first-line summary and
+// the 100-character cut (packages/core/tests/domain/message.test.ts). These
+// cases core does not cover yet stay here until core takes them.
 describe("projectMessagesWithToolInteractions", () => {
   const makeMsg = (role: "user" | "assistant" | "tool", parts: MessagePart[]): DomainMessage =>
     Message.cases.regular.make({
@@ -373,78 +376,11 @@ describe("projectMessagesWithToolInteractions", () => {
       result: value,
     })
 
-  test("exposes running tool calls on projected messages", () => {
-    const messages: DomainMessage[] = [
-      makeMsg("assistant", [
-        Prompt.toolCallPart({
-          id: ToolCallId.make("tc1"),
-          name: "read",
-          params: { path: "/foo" },
-          providerExecuted: false,
-        }),
-        Prompt.textPart({ text: "Some text" }),
-        Prompt.toolCallPart({
-          id: ToolCallId.make("tc2"),
-          name: "edit",
-          params: { path: "/bar" },
-          providerExecuted: false,
-        }),
-      ]),
-    ]
-
-    const projected = projectMessagesWithToolInteractions(messages)[0]
-    expect(projected?.toolInteractions).toEqual([
-      {
-        id: ToolCallId.make("tc1"),
-        toolName: "read",
-        status: "running",
-        input: { path: "/foo" },
-        summary: absent,
-        output: absent,
-        durationMs: absent,
-      },
-      {
-        id: ToolCallId.make("tc2"),
-        toolName: "edit",
-        status: "running",
-        input: { path: "/bar" },
-        summary: absent,
-        output: absent,
-        durationMs: absent,
-      },
-    ])
-  })
-
   test("returns empty interactions when no tool calls", () => {
     const projected = projectMessagesWithToolInteractions([
       makeMsg("assistant", [Prompt.textPart({ text: "Just text" })]),
     ])[0]
     expect(projected?.toolInteractions).toEqual([])
-  })
-
-  test("joins tool calls with tool-message results", () => {
-    const messages: DomainMessage[] = [
-      makeMsg("assistant", [
-        Prompt.toolCallPart({
-          id: ToolCallId.make("tc1"),
-          name: "read",
-          params: {},
-          providerExecuted: false,
-        }),
-      ]),
-      makeMsg("tool", [toolResult("tc1", "file contents here")]),
-    ]
-
-    const projected = projectMessagesWithToolInteractions(messages)[0]
-    expect(projected?.toolInteractions[0]).toEqual({
-      id: ToolCallId.make("tc1"),
-      toolName: "read",
-      status: "completed",
-      input: {},
-      summary: "file contents here",
-      output: "file contents here",
-      durationMs: absent,
-    })
   })
 
   test("handles error results", () => {
@@ -472,46 +408,6 @@ describe("projectMessagesWithToolInteractions", () => {
     })
   })
 
-  test("truncates long output in summary", () => {
-    const longText = "x".repeat(150)
-    const messages: DomainMessage[] = [
-      makeMsg("assistant", [
-        Prompt.toolCallPart({
-          id: ToolCallId.make("tc1"),
-          name: "read",
-          params: {},
-          providerExecuted: false,
-        }),
-      ]),
-      makeMsg("tool", [toolResult("tc1", longText)]),
-    ]
-
-    const result = projectMessagesWithToolInteractions(messages)[0]!.toolInteractions[0]!
-    const summary = Option.getOrElse(Option.fromNullishOr(result.summary), () => "")
-    expect(summary.length).toBe(103) // 100 + "..."
-    expect(summary.endsWith("...")).toBe(true)
-    expect(result.output).toBe(longText) // full output preserved
-  })
-
-  test("summary uses first line only", () => {
-    const multiline = "First line\nSecond line\nThird line"
-    const messages: DomainMessage[] = [
-      makeMsg("assistant", [
-        Prompt.toolCallPart({
-          id: ToolCallId.make("tc1"),
-          name: "read",
-          params: {},
-          providerExecuted: false,
-        }),
-      ]),
-      makeMsg("tool", [toolResult("tc1", multiline)]),
-    ]
-
-    expect(projectMessagesWithToolInteractions(messages)[0]?.toolInteractions[0]?.summary).toBe(
-      "First line",
-    )
-  })
-
   test("handles object output", () => {
     const messages: DomainMessage[] = [
       makeMsg("assistant", [
@@ -528,31 +424,6 @@ describe("projectMessagesWithToolInteractions", () => {
     const result = projectMessagesWithToolInteractions(messages)[0]!.toolInteractions[0]!
     expect(result.summary).toBe('{"files":["a.ts","b.ts"]}')
     expect(result.output).toContain('"files"')
-  })
-
-  test("handles multiple tool results", () => {
-    const messages: DomainMessage[] = [
-      makeMsg("assistant", [
-        Prompt.toolCallPart({
-          id: ToolCallId.make("tc1"),
-          name: "read",
-          params: {},
-          providerExecuted: false,
-        }),
-        Prompt.toolCallPart({
-          id: ToolCallId.make("tc2"),
-          name: "edit",
-          params: {},
-          providerExecuted: false,
-        }),
-      ]),
-      makeMsg("tool", [toolResult("tc1", "result1"), toolResult("tc2", "result2")]),
-    ]
-
-    const interactions = projectMessagesWithToolInteractions(messages)[0]!.toolInteractions
-    expect(interactions.length).toBe(2)
-    expect(interactions[0]?.output).toBe("result1")
-    expect(interactions[1]?.output).toBe("result2")
   })
 
   test("ignores tool results without matching message-local calls", () => {
@@ -4326,5 +4197,53 @@ describe("tool group rows", () => {
         expect(lines.slice(row + 1).join("\n")).not.toContain("semantics")
       }
     }).pipe(Effect.timeout("10 seconds")),
+  )
+})
+
+describe("message rows", () => {
+  it.scopedLive("a steer row carries its label, and an answer its reasoning", () =>
+    Effect.gen(function* () {
+      const items: SessionItem[] = [
+        {
+          _tag: "interjection-message",
+          id: "user-1",
+          role: "user",
+          pendingMode: "steer",
+          content: "Stop and switch agent",
+          reasoning: "",
+          images: [],
+          createdAt: 0,
+        } satisfies ListMessage,
+        {
+          _tag: "regular-message",
+          id: "assistant-1",
+          role: "assistant",
+          content: "Switching now",
+          reasoning: "Considering current todo state",
+          images: [],
+          createdAt: 0,
+          // The feed spells an assistant answer as segments in part order,
+          // with the flat fields alongside for readers that want the whole
+          // text at once.
+          segments: [
+            { _tag: "reasoning", content: "Considering current todo state" },
+            { _tag: "text", content: "Switching now" },
+          ],
+        } satisfies ListMessage,
+      ]
+      const setup = yield* renderScoped(() => (
+        <MessageList
+          items={items}
+          disclosure="collapsed"
+          syntaxStyle={syntaxStyle}
+          openAnswer={Option.none()}
+        />
+      ))
+      yield* Effect.promise(() => setup.renderOnce())
+      const frame = renderFrame(setup)
+      expect(frame).toContain("[steer]")
+      expect(frame).toContain("Stop and switch agent")
+      expect(frame).toContain("Considering current todo state")
+    }),
   )
 })

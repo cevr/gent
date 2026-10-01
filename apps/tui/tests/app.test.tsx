@@ -88,8 +88,6 @@ import {
   waitUntilAdvancing,
 } from "./helpers-boundary"
 import { useTerminalDimensions } from "../src/terminal"
-import { SyntaxStyle } from "@opentui/core"
-import { type Message, MessageList, type SessionItem } from "../src/message-list"
 import { useExtensionUI } from "../src/extensions/host"
 import { builtinClientModules } from "../src/extensions/builtins"
 import {
@@ -947,7 +945,7 @@ describe("notice rows", () => {
   )
 })
 
-describe("App auth gate", () => {
+describe("App sign-in pane", () => {
   it.scopedLive("shares one terminal resize source across App and cleans it up", () =>
     Effect.gen(function* () {
       const setup = yield* renderScoped(
@@ -1437,6 +1435,9 @@ describe("App auth gate", () => {
       expect(sentMessages.filter((message) => message.sessionId === nextSessionId)).toEqual([])
     }),
   )
+})
+
+describe("App session view and fatal screen", () => {
   // Mermaid draws inline in the transcript. No key opens a full-screen
   // viewer over the session: panes dock, and the composer keeps the keys.
   it.scopedLive("ctrl+shift+m keeps the session view and its composer", () =>
@@ -1566,6 +1567,9 @@ describe("App auth gate", () => {
       expect(clientContext.session().sessionId).toEqual(SessionId.make("session-kept"))
     }).pipe(Effect.timeout("10 seconds")),
   )
+})
+
+describe("App draft, shell and exit keys", () => {
   // Esc never quits: on a draft the first press arms and says so, and the
   // second clears the draft.
   it.scopedLive("Esc Esc on a draft clears it and never quits", () =>
@@ -1805,6 +1809,9 @@ describe("App auth gate", () => {
       yield* waitForFrame(view.setup, () => view.shutdowns() > 0, "quit")
     }).pipe(Effect.timeout("10 seconds")),
   )
+})
+
+describe("App status and activity rows", () => {
   // Every hint row spells a key the same way: lowercase key, one verb.
   it.scopedLive("the empty state and the transcript label use the hint spelling", () =>
     Effect.gen(function* () {
@@ -1996,6 +2003,9 @@ describe("App auth gate", () => {
     })
     expect(statusModelName(model, [model], [])).toBe("Claude Opus 5")
   })
+})
+
+describe("App cancel and quit keys during a turn", () => {
   it.scopedLive("escape cancels a running turn while an error shows, and never quits", () =>
     Effect.gen(function* () {
       const view = yield* mountRunningTurnWithError
@@ -2347,6 +2357,9 @@ describe("App auth gate", () => {
       setup.renderer.destroy = destroy
     }).pipe(Effect.timeout("10 seconds")),
   )
+})
+
+describe("App slash commands", () => {
   it.scopedLive("a slash command typed before the client extensions load runs once they do", () =>
     Effect.gen(function* () {
       const release = yield* Deferred.make<void>()
@@ -2672,6 +2685,9 @@ describe("App auth gate", () => {
       expect(renderFrame(setup)).toContain("Detect, audit")
     }).pipe(Effect.timeout("10 seconds")),
   )
+})
+
+describe("App docked panes at short heights", () => {
   // A connection drop while the list is in flight is not an answer: the held
   // command waits, and the reconnect lists the server commands again.
   // The failed reply may reach the client before or after the connection
@@ -3407,6 +3423,9 @@ describe("App auth gate", () => {
       }
     }).pipe(Effect.timeout("10 seconds")),
   )
+})
+
+describe("App interjections and the boot branch picker", () => {
   it.scopedLive("an interjection steers a running turn while an error shows", () =>
     Effect.gen(function* () {
       const view = yield* mountRunningTurnWithError
@@ -3519,6 +3538,9 @@ describe("App auth gate", () => {
       expect(shutdowns).toBe(1)
     }).pipe(Effect.timeout("10 seconds")),
   )
+})
+
+describe("App auth gate at startup", () => {
   it.scopedLive("branch picker does not trigger auth gating before a branch is selected", () =>
     Effect.gen(function* () {
       const calls: Array<{
@@ -4250,6 +4272,9 @@ describe("App auth gate", () => {
       expect(sentMessages.filter((message) => message.content === initialPrompt)).toHaveLength(1)
     }),
   )
+})
+
+describe("App startup prompt and renames", () => {
   it.scopedLive("a renamed session keeps its view and does not send the startup prompt again", () =>
     Effect.gen(function* () {
       let ctx: Option.Option<ClientContextValue> = Option.none()
@@ -4457,7 +4482,6 @@ describe("App auth gate", () => {
 
 // ── widgets render ──────────────────────────────────────────────────────────
 
-const syntaxStyle = () => SyntaxStyle.create()
 const testSession: Session = {
   id: SessionId.make("session-test"),
   name: "Test Session",
@@ -5155,51 +5179,6 @@ describe("TUI renderer surfaces", () => {
       expect(renderFrame(setup)).not.toContain("ready ·")
     }).pipe(Effect.timeout("10 seconds")),
   )
-  it.scopedLive("MessageList renders user labels and assistant reasoning", () =>
-    Effect.gen(function* () {
-      const items: SessionItem[] = [
-        {
-          _tag: "interjection-message",
-          id: "user-1",
-          role: "user",
-          pendingMode: "steer",
-          content: "Stop and switch agent",
-          reasoning: "",
-          images: [],
-          createdAt: 0,
-        } satisfies Message,
-        {
-          _tag: "regular-message",
-          id: "assistant-1",
-          role: "assistant",
-          content: "Switching now",
-          reasoning: "Considering current todo state",
-          images: [],
-          createdAt: 0,
-          // The feed spells an assistant answer as segments in part order,
-          // with the flat fields alongside for readers that want the whole
-          // text at once.
-          segments: [
-            { _tag: "reasoning", content: "Considering current todo state" },
-            { _tag: "text", content: "Switching now" },
-          ],
-        } satisfies Message,
-      ]
-      const setup = yield* renderScoped(() => (
-        <MessageList
-          items={items}
-          disclosure="collapsed"
-          syntaxStyle={syntaxStyle}
-          openAnswer={Option.none()}
-        />
-      ))
-      yield* Effect.promise(() => setup.renderOnce())
-      const frame = renderFrame(setup)
-      expect(frame).toContain("[steer]")
-      expect(frame).toContain("Stop and switch agent")
-      expect(frame).toContain("Considering current todo state")
-    }),
-  )
   it.scopedLive("QueueWidget renders steer and queued summaries", () =>
     Effect.gen(function* () {
       const steerMessages: QueueEntryInfo[] = [
@@ -5341,27 +5320,6 @@ describe("TUI renderer surfaces", () => {
       expect(frame).toContain("failed extensions")
       expect(frame).toContain("@gent/plan")
     }),
-  )
-  // The status row and the activity report read `isReconnecting`, so both
-  // wire states that mean "not connected yet" have to answer true.
-  it.scopedLive("isReconnecting follows the connecting and reconnecting states", () =>
-    Effect.gen(function* () {
-      const lifecycle = createMutableRuntime(
-        ConnectionState.cases.Connected.make({ generation: 0 }),
-      )
-      const ReconnectProbe = () => {
-        const client = useClient()
-        return <text>{`reconnecting:${String(client.isReconnecting())}`}</text>
-      }
-      const setup = yield* renderScoped(() => <ReconnectProbe />, { runtime: lifecycle.runtime })
-      yield* waitForFrame(setup, (frame) => frame.includes("reconnecting:false"), "connected")
-      lifecycle.emit(ConnectionState.cases.Reconnecting.make({ attempt: 1, generation: 1 }))
-      yield* waitForFrame(setup, (frame) => frame.includes("reconnecting:true"), "reconnecting")
-      lifecycle.emit(ConnectionState.cases.Connected.make({ generation: 1 }))
-      yield* waitForFrame(setup, (frame) => frame.includes("reconnecting:false"), "reconnected")
-      lifecycle.emit(ConnectionState.cases.Connecting.make({}))
-      yield* waitForFrame(setup, (frame) => frame.includes("reconnecting:true"), "connecting")
-    }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive(
     "ConnectionWidget refreshes extension status after reconnect generation changes",

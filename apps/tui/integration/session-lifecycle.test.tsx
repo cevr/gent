@@ -74,8 +74,10 @@ describe("app bootstrap", () => {
 })
 
 describe("session lifecycle", () => {
+  // Bootstrap, render, then a send: the session the bootstrap names shows
+  // with no loading route, and the debug model's reply draws.
   it.live(
-    "bootstrap to session renders composer",
+    "bootstrap to session renders the composer, and a send shows the debug reply",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -83,13 +85,12 @@ describe("session lifecycle", () => {
             baseLocalLayerWithProvider(LanguageModelLayers.debug({ retries: false })),
           )
           let ctx = Option.none<{ client: ClientContextValue }>()
-          // Pre-resolve bootstrap (same as main.tsx now does)
+          // Pre-resolve bootstrap
           const bootstrap = yield* resolveInteractiveBootstrap({
             client,
             cwd: repoRoot,
             continue_: false,
           })
-          expect(bootstrap.initialSession).toBeDefined()
           expect(Option.isNone(bootstrap.initialBranches)).toBe(true)
           const setup = yield* renderScoped(
             () => (
@@ -108,70 +109,22 @@ describe("session lifecycle", () => {
               height: 32,
             },
           )
-          // Route should already be session
-          expect(Option.isSome(ctx)).toBe(true)
-          if (Option.isNone(ctx)) return
-          // The shell mounts whatever the client says is active; the bootstrap
-          // handed it a session, so that is what shows.
-          expect(ctx.value.client.session().sessionId).toBe(bootstrap.initialSession.sessionId)
-          // waitForFrame polls until the composer renders — no pre-sleep
-          // needed; the visible "ready/idle/❯" marker is the readiness signal.
-          const frame = yield* waitForFrame(
-            setup,
-            (f) => f.includes("ready") || f.includes("idle") || f.includes("❯"),
-            "composer visible",
-            3000,
-          )
-          expect(frame).not.toContain("Loading Gent")
-          expect(frame).not.toContain("Loading session")
-        }),
-      ),
-    10000,
-  )
-  it.live(
-    "send message and see debug provider response",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const { client, runtime } = yield* Gent.test(
-            baseLocalLayerWithProvider(LanguageModelLayers.debug({ retries: false })),
-          )
-          let ctx = Option.none<{ client: ClientContextValue }>()
-          // Pre-resolve bootstrap
-          const bootstrap = yield* resolveInteractiveBootstrap({
-            client,
-            cwd: repoRoot,
-            continue_: false,
-          })
-          const setup = yield* renderScoped(
-            () => (
-              <>
-                <StateProbe onReady={(c) => (ctx = Option.some(c))} />
-                <App />
-              </>
-            ),
-            {
-              client,
-              runtime,
-              initialPrompt: bootstrap.initialPrompt,
-              initialSession: bootstrap.initialSession,
-              cwd: repoRoot,
-              width: 100,
-              height: 32,
-            },
-          )
-          yield* waitForFrame(
+          const composer = yield* waitForFrame(
             setup,
             (frame) => frame.includes("ready") || frame.includes("idle") || frame.includes("❯"),
             "composer visible before send",
             3000,
           )
+          expect(composer).not.toContain("Loading Gent")
+          expect(composer).not.toContain("Loading session")
           // Send a message through the client (simulates user input).
           // The downstream waitForFrame polls until the response arrives;
           // the response itself confirms the feed fiber was subscribed.
           expect(Option.isSome(ctx)).toBe(true)
           if (Option.isNone(ctx)) return
           const session = ctx.value.client.session()
+          // The shell mounts the session the bootstrap handed it.
+          expect(session.sessionId).toBe(bootstrap.initialSession.sessionId)
           yield* client.message
             .send({
               sessionId: session.sessionId,

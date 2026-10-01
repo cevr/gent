@@ -1231,7 +1231,7 @@ describe("Composer submit", () => {
     ["echo out; exit 3", "$ echo out; exit 3\n\nout\n\n[exit 3]"],
     ["echo out", "$ echo out\n\nout"],
   ] as const) {
-    submitTest(`!${command} sends its exit status when it is not zero`, () =>
+    submitTest(`!${command}: a non-zero exit is named, a zero one adds nothing`, () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
         const dir = yield* fs.makeTempDirectoryScoped()

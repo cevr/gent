@@ -431,69 +431,65 @@ describe("runHeadless", () => {
     }),
   )
 
-  headlessTest(
-    "retries reuse the same sendRequestId so the server-side dedup collapses them onto one mutation",
-    () =>
-      Effect.gen(function* () {
-        const observedRequestIds: Array<string> = []
-        let sendAttempts = 0
-        const sent = Deferred.makeUnsafe<void>()
-        const marker = AgentEvent.cases.StreamSynchronized.make({
-          sessionId,
-          branchId,
-          lastEventId: EventId.make(0),
-        })
-        const live = [opening(OWN_TURN, PROMPT), completed()]
-        const client = createMockClient({
-          session: {
-            events: () =>
-              Stream.make(
-                EventEnvelope.make({ id: EventId.make(1), event: marker, createdAt: 0 }),
-              ).pipe(
-                Stream.concat(
-                  Stream.fromEffect(Deferred.await(sent)).pipe(
-                    Stream.flatMap(() =>
-                      Stream.fromIterable(
-                        live.map((event, index) =>
-                          EventEnvelope.make({ id: EventId.make(index + 2), event, createdAt: 0 }),
-                        ),
+  headlessTest("a retried send is one message on the server, not two", () =>
+    Effect.gen(function* () {
+      const observedRequestIds: Array<string> = []
+      let sendAttempts = 0
+      const sent = Deferred.makeUnsafe<void>()
+      const marker = AgentEvent.cases.StreamSynchronized.make({
+        sessionId,
+        branchId,
+        lastEventId: EventId.make(0),
+      })
+      const live = [opening(OWN_TURN, PROMPT), completed()]
+      const client = createMockClient({
+        session: {
+          events: () =>
+            Stream.make(
+              EventEnvelope.make({ id: EventId.make(1), event: marker, createdAt: 0 }),
+            ).pipe(
+              Stream.concat(
+                Stream.fromEffect(Deferred.await(sent)).pipe(
+                  Stream.flatMap(() =>
+                    Stream.fromIterable(
+                      live.map((event, index) =>
+                        EventEnvelope.make({ id: EventId.make(index + 2), event, createdAt: 0 }),
                       ),
                     ),
                   ),
                 ),
-                Stream.concat(Stream.never),
               ),
+              Stream.concat(Stream.never),
+            ),
+        },
+        message: {
+          send: (input: { requestId?: string }) => {
+            observedRequestIds.push(input.requestId ?? "<missing>")
+            sendAttempts += 1
+            // Fail the first two attempts with a lost connection so the
+            // retry policy fires; succeed on the third.
+            if (sendAttempts < 3) {
+              return Effect.fail(
+                new RpcClientError({ reason: new SocketCloseError({ code: 1006 }) }),
+              )
+            }
+            return Deferred.done(sent, Exit.void).pipe(Effect.asVoid)
           },
-          message: {
-            send: (input: { requestId?: string }) => {
-              observedRequestIds.push(input.requestId ?? "<missing>")
-              sendAttempts += 1
-              // Fail the first two attempts with a lost connection so the
-              // retry policy fires; succeed on the third.
-              if (sendAttempts < 3) {
-                return Effect.fail(
-                  new RpcClientError({ reason: new SocketCloseError({ code: 1006 }) }),
-                )
-              }
-              return Deferred.done(sent, Exit.void).pipe(Effect.asVoid)
-            },
-          },
-        })
-        const exit = yield* Effect.exit(
-          runHeadless(client, sessionId, branchId, PROMPT, noUser).pipe(
-            Effect.timeout("5 seconds"),
-          ),
-        )
-        expect(exit._tag).toBe("Success")
-        expect(sendAttempts).toBe(3)
-        // Same id across all attempts: server-side dedup collapses retries onto
-        // a single mutation. If the runner generated a fresh id each retry, the
-        // server would treat each as a new send and double-deliver.
-        expect(observedRequestIds.length).toBe(3)
-        expect(new Set(observedRequestIds).size).toBe(1)
-        // Never empty — runner must always supply an id.
-        expect(observedRequestIds[0]).not.toBe("<missing>")
-      }),
+        },
+      })
+      const exit = yield* Effect.exit(
+        runHeadless(client, sessionId, branchId, PROMPT, noUser).pipe(Effect.timeout("5 seconds")),
+      )
+      expect(exit._tag).toBe("Success")
+      expect(sendAttempts).toBe(3)
+      // Same id across all attempts: server-side dedup collapses retries onto
+      // a single mutation. If the runner generated a fresh id each retry, the
+      // server would treat each as a new send and double-deliver.
+      expect(observedRequestIds.length).toBe(3)
+      expect(new Set(observedRequestIds).size).toBe(1)
+      // Never empty — runner must always supply an id.
+      expect(observedRequestIds[0]).not.toBe("<missing>")
+    }),
   )
 
   headlessTest("fails when the event stream ends before turn completion", () =>

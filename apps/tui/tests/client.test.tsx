@@ -2075,3 +2075,27 @@ describe("ClientProvider errors", () => {
     }),
   )
 })
+
+describe("ClientProvider connection", () => {
+  // The status row and the activity report read `isReconnecting`, so both
+  // wire states that mean "not connected yet" have to answer true.
+  it.scopedLive("the client reads as reconnecting while it connects or reconnects", () =>
+    Effect.gen(function* () {
+      const lifecycle = createMutableRuntime(
+        ConnectionState.cases.Connected.make({ generation: 0 }),
+      )
+      const ReconnectProbe = () => {
+        const client = useClient()
+        return <text>{`reconnecting:${String(client.isReconnecting())}`}</text>
+      }
+      const setup = yield* renderScoped(() => <ReconnectProbe />, { runtime: lifecycle.runtime })
+      yield* waitForFrame(setup, (frame) => frame.includes("reconnecting:false"), "connected")
+      lifecycle.emit(ConnectionState.cases.Reconnecting.make({ attempt: 1, generation: 1 }))
+      yield* waitForFrame(setup, (frame) => frame.includes("reconnecting:true"), "reconnecting")
+      lifecycle.emit(ConnectionState.cases.Connected.make({ generation: 1 }))
+      yield* waitForFrame(setup, (frame) => frame.includes("reconnecting:false"), "reconnected")
+      lifecycle.emit(ConnectionState.cases.Connecting.make({}))
+      yield* waitForFrame(setup, (frame) => frame.includes("reconnecting:true"), "connecting")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+})

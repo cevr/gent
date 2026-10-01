@@ -876,7 +876,7 @@ export default tui.defineClientExtension("@user/client-entries", {
       }).pipe(Effect.provide(BunServices.layer)),
   )
 
-  it.live("Effect setup is run through the runtime; FileSystem is provided", () =>
+  it.live("an extension setup reads the file system and contributes its rows", () =>
     Effect.gen(function* () {
       const fxSetup: Effect.Effect<ClientContributions, never, FileSystem.FileSystem | Path.Path> =
         Effect.gen(function* () {
@@ -957,7 +957,7 @@ export default tui.defineClientExtension("@user/client-entries", {
   // Effect-valued `setup` must pass `importExtension`'s shape validator.
   // Rejecting Effect values silently drops the entire discovered population.
   describe("discovered Effect-setup modules", () => {
-    it.scopedLive("imports + runs an Effect-valued setup discovered from userDir", () =>
+    it.scopedLive("a user extension found in the user directory contributes its rows", () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
         const path = yield* Path.Path
@@ -1162,7 +1162,7 @@ describe("autocomplete Effect items() through the client transport", () => {
       yield* Effect.promise(() => runtime.dispose())
     }),
   )
-  it.live("transport.request dispatches extension.request through the transport runtime", () =>
+  it.live("an extension request returns the server's reply", () =>
     Effect.gen(function* () {
       const transport = makeFakeTransport({ requestReply: ["effect-v4", "react"] })
       const runtime = makeTestRuntime(transport)
