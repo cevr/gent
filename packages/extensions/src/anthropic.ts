@@ -39,7 +39,7 @@ import {
   type CatalogSource,
   catalogSource,
   type CredentialCache,
-  type CredentialCacheCell,
+  CredentialCacheCell,
   type CredentialCacheCellRef,
   type CredentialFailure,
   checkCredentials,
@@ -507,6 +507,14 @@ const credentialsFilePath = (home: string) =>
     return path.join(home, ".claude", ".credentials.json")
   })
 
+const credentialFileDeadline = <A, R>(io: Effect.Effect<A, ProviderAuthError, R>) =>
+  io.pipe(
+    Effect.timeoutOrElse({
+      duration: Duration.seconds(5),
+      orElse: () => new ProviderAuthError({ message: "Claude credentials file IO timed out" }),
+    }),
+  )
+
 const readCredentialsFile: Effect.Effect<
   ClaudeCredentials,
   ProviderAuthError,
@@ -539,7 +547,7 @@ const readCredentialsFile: Effect.Effect<
     ),
   )
   return yield* decodeCredentials(raw)
-})
+}).pipe(credentialFileDeadline)
 
 /** Two stored credentials, or their absence, are the same sign-in at the same rotation. */
 const sameStoredCredential = Option.makeEquivalence(Schema.toEquivalence(ClaudeCredentials))
@@ -630,7 +638,7 @@ const writeCredentialsFile = (
     return yield* compareAndWrite(raw, creds, base, (blob) =>
       writeFileAtomic(credentialsFile, blob, { mode: 0o600 }).pipe(Effect.mapError(mapFsError)),
     )
-  })
+  }).pipe(credentialFileDeadline)
 
 // ── oauth keychain ──────────────────────────────────────────────────────────
 
@@ -973,27 +981,8 @@ const refreshClaudeCodeCredentials = (
       )
     if (candidates.length === 0) failures.push("no stored refresh token")
     for (const sent of candidates) {
-      const refreshed = yield* Effect.exit(refreshViaOAuth(sent.refreshToken))
-      if (Exit.isSuccess(refreshed)) {
-        // Best-effort write-back so subsequent processes pick up the
-        // new token. A failure here doesn't lose the refresh — the
-        // caller has it in memory.
-        const base: RefreshBase = { read, sent }
-        const outcome = yield* writeBackCredentials(refreshed.value, base).pipe(
-          Effect.catchEager((e: ProviderAuthError) =>
-            Effect.logWarning("anthropic.oauth.writeback.failed").pipe(
-              Effect.annotateLogs({ error: String(e) }),
-              Effect.as(WriteBack.cases.Kept.make({})),
-            ),
-          ),
-        )
-        // A sign-in written during the refresh is newer: use it, and drop
-        // this refresh rather than overwrite it.
-        if (outcome._tag === "Superseded" && Option.isSome(outcome.stored)) {
-          return outcome.stored.value
-        }
-        return refreshed.value
-      }
+      const refreshed = yield* Effect.exit(rotateAndWriteBack({ read, sent }))
+      if (Exit.isSuccess(refreshed)) return refreshed.value
       const error = Cause.findErrorOption(refreshed.cause)
       failures.push(
         Option.match(error, {
@@ -1010,7 +999,9 @@ const refreshClaudeCodeCredentials = (
     // Direct path failed — fall back to the CLI spawn (second attempt
     // historically helps when the first invocation kicks a stale-token
     // error). The CLI refreshes its active account, which is the
-    // primary one read here.
+    // primary one read here. The CLI rotates and stores the token itself,
+    // so a caller may stop it even inside the credential cache's
+    // uninterruptible refresh step.
     const platform = yield* AnthropicPlatform
     return yield* spawnClaudeCli(platform.home).pipe(
       Effect.retry({ times: 1 }),
@@ -1020,8 +1011,39 @@ const refreshClaudeCodeCredentials = (
         if (endpointUnavailable) return new CredentialRefreshUnavailable({ message, cause })
         return new ProviderAuthError({ message, cause })
       }),
+      Effect.interruptible,
     )
   })
+
+/**
+ * One direct OAuth refresh and its write-back, as one step a caller cannot
+ * stop: the token endpoint spends the refresh token it is sent, so a
+ * rotation stopped before the write-back would leave the keychain only the
+ * spent token. Timeouts bound the token request and interruptible keychain
+ * IO. Masked filesystem acquisition and finalizers can still exceed those
+ * deadlines; the step waits for them before cancellation surfaces.
+ *
+ * The write-back is best-effort so later processes pick up the new token. A
+ * failed write-back does not lose the refresh: the caller has it in memory.
+ */
+const rotateAndWriteBack = (base: RefreshBase) =>
+  Effect.gen(function* () {
+    const refreshed = yield* refreshViaOAuth(base.sent.refreshToken)
+    const outcome = yield* writeBackCredentials(refreshed, base).pipe(
+      Effect.catchEager((e: ProviderAuthError) =>
+        Effect.logWarning("anthropic.oauth.writeback.failed").pipe(
+          Effect.annotateLogs({ error: String(e) }),
+          Effect.as(WriteBack.cases.Kept.make({})),
+        ),
+      ),
+    )
+    // A sign-in written during the refresh is newer: use it, and drop
+    // this refresh rather than overwrite it.
+    if (outcome._tag === "Superseded" && Option.isSome(outcome.stored)) {
+      return outcome.stored.value
+    }
+    return refreshed
+  }).pipe(Effect.uninterruptible)
 
 // ── credential service ──────────────────────────────────────────────────────
 
@@ -2561,31 +2583,53 @@ export const buildAnthropicModelDriver = (
     authorize: (ctx) =>
       Effect.gen(function* () {
         if (ctx.methodIndex !== 0) return Option.none()
-        // The Claude Code authorize flow reads the primary account.
-        let creds = yield* readClaudeCodeCredentials
-        const now = yield* Clock.currentTimeMillis
-        if (!freshEnoughAt(creds.expiresAt, now)) {
-          // Use the returned creds — re-reading keychain after refresh
-          // would silently lose direct-OAuth tokens whenever write-back
-          // failed.
-          creds = yield* refreshClaudeCodeCredentials(Option.none()).pipe(
-            Effect.mapError((cause) => {
-              if (cause._tag === "ProviderAuthError") return cause
-              return new ProviderAuthError({ message: cause.message, cause })
+        // The cell owns sign-in and refresh together. A spent token's rotation
+        // reaches the cell before cancellation or a persistence failure surfaces.
+        return yield* Effect.uninterruptibleMask((restore) =>
+          SynchronizedRef.modifyEffect(credentialCellRef, () =>
+            Effect.gen(function* () {
+              let creds = yield* restore(readClaudeCodeCredentials)
+              const now = yield* Clock.currentTimeMillis
+              if (!freshEnoughAt(creds.expiresAt, now)) {
+                creds = yield* refreshClaudeCodeCredentials(Option.none()).pipe(
+                  Effect.mapError((cause) => {
+                    if (cause._tag === "ProviderAuthError") return cause
+                    return new ProviderAuthError({ message: cause.message, cause })
+                  }),
+                )
+              }
+              const persisted = yield* Effect.exit(
+                ctx
+                  .persist({
+                    type: "oauth",
+                    access: creds.accessToken,
+                    refresh: creds.refreshToken,
+                    expires: creds.expiresAt,
+                  })
+                  .pipe(
+                    Effect.timeoutOrElse({
+                      duration: Duration.seconds(5),
+                      orElse: () =>
+                        new ProviderAuthError({ message: "Anthropic auth persistence timed out" }),
+                    }),
+                  ),
+              )
+              const at = yield* Clock.currentTimeMillis
+              return [
+                persisted.pipe(
+                  Effect.as(
+                    Option.some({ url: "", method: "done" } satisfies ProviderAuthorizationResult),
+                  ),
+                ),
+                CredentialCacheCell(ClaudeCredentials).cases.Durable.make({
+                  creds,
+                  at,
+                  invalidated: false,
+                }),
+              ] as const
             }),
-          )
-        }
-        // Persist keychain creds to Auth
-        yield* ctx.persist({
-          type: "oauth",
-          access: creds.accessToken,
-          refresh: creds.refreshToken,
-          expires: creds.expiresAt,
-        })
-        return Option.some({
-          url: "",
-          method: "done",
-        } satisfies ProviderAuthorizationResult)
+          ),
+        ).pipe(Effect.flatten)
       }).pipe(
         Effect.catchDefect((cause) =>
           Effect.fail(

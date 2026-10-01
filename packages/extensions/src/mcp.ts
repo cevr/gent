@@ -46,6 +46,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js"
 import { compareIds } from "./cell-protocol.js"
 import { type SdkFetch, sdkFetch } from "./mcp-boundary.js"
+import { makeStartedMemo } from "./started-memo.js"
 import {
   defineExtension,
   defineResource,
@@ -608,20 +609,26 @@ const pruneBlobs = Effect.fn("Mcp.pruneBlobs")(function* (directory: string) {
  * The first write of the process removes files older than `BLOB_MAX_AGE`
  * (see `pruneBlobs`); a reused file's modification time is set to now.
  */
-const makeBlobStore = (directory: string) =>
+export const makeBlobStore = (directory: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
     const crypto = yield* Crypto.Crypto
-    const prune = yield* Effect.cached(
-      pruneBlobs(directory).pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning("mcp.blobs.prune.failed").pipe(
-            Effect.annotateLogs({ error: String(cause) }),
+    // The prune of the directory runs once, as its own fiber in the store's
+    // scope (`makeStartedMemo`). A save stopped while it waits only stops
+    // waiting: the prune goes on, and the next save joins it.
+    const prunes = yield* makeStartedMemo({
+      load: (pruned: string) =>
+        pruneBlobs(pruned).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("mcp.blobs.prune.failed").pipe(
+              Effect.annotateLogs({ error: String(cause) }),
+            ),
           ),
         ),
-      ),
-    )
+      keep: () => Duration.infinity,
+    })
+    const prune = prunes.get(directory)
     const saveOne = (data: string, mimeType: Option.Option<string>) =>
       Effect.gen(function* () {
         if (base64Bytes(data) > BLOB_FILE_LIMIT) return Option.none<string>()

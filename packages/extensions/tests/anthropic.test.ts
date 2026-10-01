@@ -33,6 +33,7 @@ import {
   Match,
   Option,
   Path,
+  PlatformError,
   Predicate,
   Ref,
   Schema,
@@ -65,6 +66,7 @@ import {
   type ExtensionHostService,
   ProviderAuthError,
   type ProviderHints,
+  SessionId,
   ProviderAuthInfo,
 } from "@gent/core/extensions/api"
 import { encodeExternalJson, externalWireNull } from "./helpers/external-wire.js"
@@ -2168,6 +2170,117 @@ describe("buildAnthropicModelDriver — refresh token order", () => {
   )
 })
 describe("buildAnthropicModelDriver — refresh writes only the keychain", () => {
+  for (const stallsAt of ["read", "sync"] as const) {
+    it.live(
+      `a stalled credential-file ${stallsAt} releases the refresh and retains its rotation`,
+      () =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const path = yield* Path.Path
+          const home = yield* fs.makeTempDirectoryScoped()
+          const credentialsFile = path.join(home, ".claude", ".credentials.json")
+          yield* fs.makeDirectory(path.join(home, ".claude"))
+          yield* fs.writeFileString(
+            credentialsFile,
+            encodeExternalJson({
+              claudeAiOauth: {
+                accessToken: "old-access",
+                refreshToken: "old-refresh",
+                expiresAt: 0,
+              },
+            }),
+          )
+          const stalled = yield* Deferred.make<void>()
+          const release = yield* Deferred.make<void>()
+          const expired = yield* Deferred.make<void>()
+          const hang = Deferred.succeed(stalled, void 0).pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.andThen(
+              Effect.fail(
+                PlatformError.systemError({
+                  _tag: "TimedOut",
+                  module: "FileSystem",
+                  method: "test-stall",
+                }),
+              ),
+            ),
+            Effect.onInterrupt(() => Deferred.succeed(expired, void 0)),
+          )
+          let reads = 0
+          const hostFs: FileSystem.FileSystem = {
+            ...fs,
+            readFileString: (file, encoding) => {
+              if (file === credentialsFile && ++reads === 2 && stallsAt === "read") return hang
+              return fs.readFileString(file, encoding)
+            },
+            open: (file, options) =>
+              fs.open(file, options).pipe(
+                Effect.map((opened): FileSystem.File => ({
+                  [FileSystem.FileTypeId]: FileSystem.FileTypeId,
+                  stat: opened.stat,
+                  seek: (offset, from) => opened.seek(offset, from),
+                  sync: Effect.suspend(() => {
+                    if (stallsAt === "sync") return hang
+                    return opened.sync
+                  }),
+                  read: (buffer) => opened.read(buffer),
+                  readAlloc: (size) => opened.readAlloc(size),
+                  truncate: (length) => opened.truncate(length),
+                  write: (buffer) => opened.write(buffer),
+                  writeAll: (buffer) => opened.writeAll(buffer),
+                })),
+              ),
+          }
+          const cellRef = yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>({
+            _tag: "Durable",
+            creds: { accessToken: "old-access", refreshToken: "old-refresh", expiresAt: 0 },
+            at: 0,
+            invalidated: false,
+          })
+          const driver = buildAnthropicModelDriverLive(
+            cellRef,
+            Option.none(),
+            Context.add(
+              yield* driverServices(AnthropicPlatform.of({ platform: "linux", home, env: {} })),
+              FileSystem.FileSystem,
+              hostFs,
+            ),
+            testCatalogSource(),
+            "1h",
+          )
+          const fetchState = makeFakeFetchState()
+          const fetchLayer = fakeFetchLayer(fetchState, () => ({
+            status: 200,
+            body: encodeExternalJson({
+              access_token: "new-access",
+              refresh_token: "new-refresh",
+              expires_in: 3600,
+            }),
+          }))
+          yield* Effect.gen(function* () {
+            const resolving = yield* Effect.forkChild(
+              driver
+                .resolveModel("claude-opus-4-6", makeOAuthInfo())
+                .pipe(Effect.provide(fetchLayer)),
+            )
+            yield* Deferred.await(stalled)
+            yield* TestClock.adjust("6 seconds")
+            const stoppedAtDeadline = yield* Deferred.isDone(expired)
+            // Release the fake even on broken code, so the red proof closes its files.
+            yield* Deferred.succeed(release, void 0)
+            yield* Fiber.join(resolving)
+            expect(stoppedAtDeadline).toBe(true)
+            const cell = yield* SynchronizedRef.get(cellRef)
+            expect(cell._tag).toBe("Durable")
+            if (cell._tag !== "Empty") expect(cell.creds.refreshToken).toBe("new-refresh")
+            expect(
+              fetchState.captured.filter((request) => request.url.endsWith("/v1/oauth/token")),
+            ).toHaveLength(1)
+          }).pipe(Effect.provide(TestClock.layer()))
+        }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("3 seconds")),
+      5000,
+    )
+  }
   it.live("a refresh serves the request and never writes the gent auth store", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
@@ -2282,6 +2395,169 @@ describe("buildAnthropicModelDriver — refresh writes only the keychain", () =>
         expect(yield* fs.readFileString(credentialsFile)).toContain("refreshed-refresh")
       }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
   )
+  it.live("a sign-in stopped after the token endpoint rotated the token still writes it back", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const home = yield* fs.makeTempDirectoryScoped()
+      const credentialsFile = path.join(home, ".claude", ".credentials.json")
+      yield* fs.makeDirectory(path.join(home, ".claude"))
+      yield* fs.writeFileString(
+        credentialsFile,
+        encodeExternalJson({
+          claudeAiOauth: {
+            accessToken: "keychain-access",
+            refreshToken: "keychain-refresh",
+            expiresAt: 0,
+          },
+        }),
+      )
+      const credentialCellRef =
+        yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
+      const driver = buildAnthropicModelDriverLive(
+        credentialCellRef,
+        Option.none(),
+        yield* driverServices(AnthropicPlatform.of({ platform: "linux", home, env: {} })),
+        testCatalogSource(),
+        "1h",
+      )
+      const rotated = yield* Deferred.make<void>()
+      const answered = yield* Deferred.make<void>()
+      // The endpoint spends the token it is sent; its answer is on the way back.
+      const fetchLayer = fakeFetchLayer(makeFakeFetchState(), () =>
+        Effect.gen(function* () {
+          yield* Deferred.succeed(rotated, void 0)
+          yield* Deferred.await(answered)
+          return {
+            status: 200,
+            body: encodeExternalJson({
+              access_token: "refreshed-access",
+              refresh_token: "refreshed-refresh",
+              expires_in: 3600,
+            }),
+          }
+        }),
+      )
+      const authorize = Option.fromUndefinedOr(driver.auth?.authorize)
+      if (Option.isNone(authorize)) return yield* Effect.die(new Error("no authorize"))
+      const signIn = authorize.value({
+        sessionId: SessionId.make("session-sign-in"),
+        methodIndex: 0,
+        authorizationId: "sign-in",
+        persist: () => Effect.void,
+      })
+      const first = yield* Effect.forkChild(signIn.pipe(Effect.provide(fetchLayer)))
+      yield* Deferred.await(rotated)
+      // Stop the sign-in while the rotated token is in flight.
+      const stopping = yield* Effect.forkChild(Fiber.interrupt(first), { startImmediately: true })
+      yield* Deferred.succeed(answered, void 0)
+      yield* Fiber.join(stopping)
+
+      expect(yield* fs.readFileString(credentialsFile)).toContain("refreshed-refresh")
+    }).pipe(Effect.timeout("5 seconds"), Effect.scoped, Effect.provide(BunServices.layer)),
+  )
+  for (const persistFails of [false, true]) {
+    let name = "a stopped sign-in retains its rotation when write-back fails"
+    if (persistFails) name += " and auth persistence fails"
+    it.live(name, () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const home = yield* fs.makeTempDirectoryScoped()
+        const credentialsFile = path.join(home, ".claude", ".credentials.json")
+        yield* fs.makeDirectory(path.join(home, ".claude"))
+        yield* fs.writeFileString(
+          credentialsFile,
+          encodeExternalJson({
+            claudeAiOauth: {
+              accessToken: "old-access",
+              refreshToken: "old-refresh",
+              expiresAt: 0,
+            },
+          }),
+        )
+        const credentialCellRef =
+          yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
+        const services = Context.add(
+          yield* driverServices(AnthropicPlatform.of({ platform: "linux", home, env: {} })),
+          FileSystem.FileSystem,
+          {
+            ...fs,
+            rename: () =>
+              Effect.fail(
+                PlatformError.systemError({
+                  _tag: "PermissionDenied",
+                  module: "FileSystem",
+                  method: "rename",
+                }),
+              ),
+          },
+        )
+        const driver = buildAnthropicModelDriverLive(
+          credentialCellRef,
+          Option.none(),
+          services,
+          testCatalogSource(),
+          "1h",
+        )
+        const rotated = yield* Deferred.make<void>()
+        const answered = yield* Deferred.make<void>()
+        const fetchState = makeFakeFetchState()
+        const fetchLayer = fakeFetchLayer(fetchState, (request) => {
+          if (!request.url.endsWith("/v1/oauth/token")) return anthropicHappyResponse()
+          return Effect.gen(function* () {
+            yield* Deferred.succeed(rotated, void 0)
+            yield* Deferred.await(answered)
+            return {
+              status: 200,
+              body: encodeExternalJson({
+                access_token: "new-access",
+                refresh_token: "new-refresh",
+                expires_in: 3600,
+              }),
+            }
+          })
+        })
+        const authorize = Option.fromUndefinedOr(driver.auth?.authorize)
+        if (Option.isNone(authorize)) return yield* Effect.die(new Error("no authorize"))
+        const persisted: Array<string> = []
+        const first = yield* Effect.forkChild(
+          authorize
+            .value({
+              sessionId: SessionId.make("session-sign-in"),
+              methodIndex: 0,
+              authorizationId: "sign-in",
+              persist: (credential) =>
+                Effect.gen(function* () {
+                  if (credential.type === "oauth") persisted.push(credential.refresh)
+                  if (persistFails)
+                    return yield* new ProviderAuthError({ message: "auth store unavailable" })
+                }),
+            })
+            .pipe(Effect.provide(fetchLayer)),
+        )
+        yield* Deferred.await(rotated)
+        const stopping = yield* Effect.forkChild(Fiber.interrupt(first), {
+          startImmediately: true,
+        })
+        yield* Deferred.succeed(answered, void 0)
+        yield* Fiber.join(stopping)
+        expect(persisted).toEqual(["new-refresh"])
+        const cell = yield* SynchronizedRef.get(credentialCellRef)
+        expect(cell._tag).toBe("Durable")
+        if (cell._tag !== "Empty") expect(cell.creds.refreshToken).toBe("new-refresh")
+        expect(yield* fs.readFileString(credentialsFile)).toContain("old-refresh")
+        const model = yield* driver
+          .resolveModel("claude-opus-4-6", makeOAuthInfo())
+          .pipe(Effect.provide(fetchLayer))
+        yield* runOne(model, fetchState)
+        expect(fetchState.captured.at(-1)?.headers["authorization"]).toBe("Bearer new-access")
+        expect(
+          fetchState.captured.filter((request) => request.url.endsWith("/v1/oauth/token")),
+        ).toHaveLength(1)
+      }).pipe(Effect.timeout("5 seconds"), Effect.scoped, Effect.provide(BunServices.layer)),
+    )
+  }
   it.live("a sign-in written during the refresh survives, and the request uses it", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
