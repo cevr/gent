@@ -303,7 +303,7 @@ The app surface is split by concern:
 
 `message.send` request-id dedup lives in `server/server.ts` next to the handler; the runtime keys the actor command on the same request id.
 
-The app services are one layer, `createDependencies` in `packages/core/src/server/server.ts`; no separate app-services layer exists. It is one stack of levels, each provided once to every level above it (host, storage, kernel, launch profile, models, tools, sessions, actor), so each layer in it builds once: Effect memoizes only leaf layers, and a composite named on several paths built once per path (the launch build visited 35,831 layers before, 347 now). The storage entry builds its SQL client once under every repository, and a branch-tool feature's storage is a layer over that client and the interaction storage (`ExtraRepositories`). A test in `packages/core/tests/server/server.test.ts` counts the builds. The SDK builds it in the server scope and hands the context to `buildServerRoutes`; the test harness provides it as a layer.
+The app services are one layer, `createDependencies` in `packages/core/src/server/server.ts`; no separate app-services layer exists. It is one stack of levels, each provided once to every level above it (host, storage, kernel, launch profile, models, tools, sessions, actor), so each layer in it builds once: Effect memoizes only leaf layers, and a composite named on several paths built once per path. One build of the production root (the shipped extensions, the cell feature, in-memory state) reaches a leaf layer 138 times, memo hits included, counted on 2026-10-01 as the calls to the memo map's `getOrElseMemoize`. The storage entry builds its SQL client once under every repository, and a branch-tool feature's storage is a layer over that client and the interaction storage (`ExtraRepositories`). A test in `packages/core/tests/server/server.test.ts` counts the builds. The SDK builds it in the server scope and hands the context to `buildServerRoutes`; the test harness provides it as a layer.
 
 `packages/core/src/server/server.ts` owns startup wiring:
 
@@ -379,7 +379,16 @@ The production server uses one live profile owner:
 - `server/server.ts` selects the launch profile from that cache. An RPC that
   names a session reads that session's profile; one shared lookup
   (`loadSession`) fails it with `NotFoundError` when the session does not
-  exist, so no call answers from the launch profile instead.
+  exist, so no call answers from the launch profile instead. Only the
+  launch registry and the launch prompt sections join the server context; an
+  extension's resource services never do. A turn, an extension request and a
+  hook read them from their session's profile (for a session with no stored
+  cwd, the profile of the host's cwd), the one owner of a turn's services, so
+  a project that disables an extension does not see its resources. Driver
+  catalog, auth and health callbacks also run under the selected profile's
+  resource context. A pending login keeps that context with its profile lease
+  until its callbacks finish. Receipt:
+  "turn services" in `packages/core/tests/runtime/extension-host.test.ts`.
 - Every session-scoped RPC names its session (owner rule). The contract
   (`packages/core/src/server/rpc.ts`) requires `sessionId` on `auth.setKey`,
   `auth.deleteKey`, `auth.listMethods`, `auth.listProviders`, `driver.set`,
@@ -604,7 +613,9 @@ Shape:
   cancellation can stop active work without waiting for that work to finish.
 - `RequestExtension` takes the side-mutation permit unless the request declared
   `answersDuringTurn: true`; such a request answers while the turn runs and
-  must not change the branch's loop state.
+  must not need the branch's side-mutation permit. Reads, extension-owned
+  writes under their own lock, and the Session facade's queued send and
+  `dequeueFollowUp` qualify: the queue owner serializes those verbs separately.
 - Targeted cancellation records `turn.cancel` in the existing workspace-scoped
   durable-operation table before the steering handler starts the branch owner.
   The receipt belongs to the child session/branch and survives until that branch
@@ -1664,8 +1675,10 @@ host-owned design. It should expose:
   platform facts such as OS info, executable path, and home directory;
 - `runProcess` / `ProcessError`: the one command helper over the Effect
   `ChildProcessSpawner`;
-- author-facing errors: capability, provider-auth, agent-run, and typed
-  transition errors that extension code can intentionally return or inspect.
+- author-facing errors: load, driver, provider-auth, service, process and
+  interaction errors that extension code can intentionally return or inspect;
+  an error only tests read (the capability errors) stays in core, where core
+  tests import it by relative path.
 
 Everything else is builtin/internal:
 
@@ -1902,3 +1915,7 @@ Principles ship as an ordinary `principles` skill with Markdown reference files.
 Repository research uses the bundled `repositories` skill and supervised native commands. Git and package tools own authentication, fetches, revision reads, and command errors. Gent has no repository service, repository model tool, or native Git dependency. The skill preserves existing caches and requires exact revision receipts.
 
 Saved-result writes use the existing `write` tool with `atomic: true`. The tool calls `writeFileAtomic` under its existing file lock. A symlink at the path is followed to its target, as a plain write follows it: the target is replaced and the link stays. The content is staged in a hidden sibling file beside the target, synced, then renamed over it; the target keeps its mode. Ordinary completion, failure, and scoped interruption remove the sibling file. Abrupt process death can leave that one hidden file, never a directory, and does not expose a partial destination. This does not claim power-loss durability.
+
+An outer Effect deadline waits for acquisition and finalization: the platform's
+file open and close and the writer's staging cleanup cannot be abandoned safely.
+A stalled platform operation there can exceed the caller's deadline.

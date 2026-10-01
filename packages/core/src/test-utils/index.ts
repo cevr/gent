@@ -79,5 +79,6 @@ export {
   projectMessagesWithToolInteractions,
   toolResultMessageIdForTurn,
 } from "../domain/message.js"
+export { type ApprovalDecision } from "../domain/interaction.js"
 export { SessionRuntimeError } from "../runtime/session.js"
-export { ExtensionHealth } from "../server/rpc.js"
+export { ExtensionHealth, ExtensionStatusScope } from "../server/rpc.js"

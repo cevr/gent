@@ -17,9 +17,10 @@ import {
   textStep,
   toolCallStep,
   ApprovalService,
+  type ApprovalDecision,
 } from "@gent/core/test-utils"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
-import type { ApprovalDecision, ExtensionContextService } from "@gent/core/extensions/api"
+import type { ExtensionContextService } from "@gent/core/extensions/api"
 import { e2ePreset, shippedPreset } from "./helpers/test-preset"
 import { isToolResultFor } from "./helpers/tool-event.js"
 

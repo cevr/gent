@@ -3145,10 +3145,12 @@ export const sessionWorkingDirectory = (
   })
 
 /**
- * Resolve the turn profile for one branch: the stored session cwd selects a
- * profile from the cache; without a session or a cache, the launch registry
- * and the host defaults apply. A failed session read fails the resolve.
- * The caller's scope holds the profile's lease for as long as it uses it.
+ * Resolve the turn profile for one branch. With a cache, the profile of the
+ * session's working directory (the stored cwd, else the host's) is the one
+ * owner of the turn's extension services. Without a cache, the launch
+ * registry and the host defaults apply. A failed session read fails the
+ * resolve. The caller's scope holds the profile's lease for as long as it
+ * uses it.
  */
 export const resolveTurnProfile = (params: {
   readonly sessionId: SessionId
@@ -3160,10 +3162,11 @@ export const resolveTurnProfile = (params: {
 }): Effect.Effect<
   AgentLoopTurnProfile,
   StorageError,
-  ExtensionRegistry | SessionStorage | ScopeType.Scope
+  ExtensionRegistry | SessionStorage | RuntimeEnvironment | ScopeType.Scope
 > =>
   Effect.gen(function* () {
     const launchRegistry = yield* ExtensionRegistry
+    const environment = yield* RuntimeEnvironment
     const hostProvider = params.hostProvider
     const session = yield* storedSession(params.sessionId)
     const sessionCwd = Option.flatMap(session, (value) => Option.fromUndefinedOr(value.cwd))
@@ -3178,13 +3181,13 @@ export const resolveTurnProfile = (params: {
       interactive,
       clientRequest: clientRequestOf(params.opener),
     }
-    const profile = yield* Option.match(
-      Option.all([Option.fromUndefinedOr(params.profileCache), sessionCwd]),
-      {
-        onNone: () => Effect.succeedNone,
-        onSome: ([profileCache, cwd]) => profileCache.resolve(cwd).pipe(Effect.asSome),
-      },
-    )
+    const profile = yield* Option.match(Option.fromUndefinedOr(params.profileCache), {
+      onNone: () => Effect.succeedNone,
+      onSome: (profileCache) =>
+        profileCache
+          .resolve(Option.getOrElse(sessionCwd, () => environment.cwd))
+          .pipe(Effect.asSome),
+    })
     if (Option.isNone(profile)) {
       return {
         turnBaseSections: params.defaults.baseSections,
