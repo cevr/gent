@@ -1838,8 +1838,8 @@ const readsWithStored = (stored: Record<string, string>) =>
       yield* resolver.resolve({ modelId: "solo/m" })
       yield* modelCatalog()
       const classifiers = yield* DecisionModelResolver
-      yield* Effect.exit(classifiers.resolve(Option.some("gateway/judge")))
-      yield* Effect.exit(classifiers.resolve(Option.some("gateway-plus/judge")))
+      yield* Effect.exit((yield* classifiers.profile).resolve(Option.some("gateway/judge")))
+      yield* Effect.exit((yield* classifiers.profile).resolve(Option.some("gateway-plus/judge")))
     }).pipe(Effect.provide(layer))
     return seen
   })

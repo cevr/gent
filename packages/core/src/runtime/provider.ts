@@ -880,7 +880,8 @@ interface ResolvedDecisionModel {
   readonly model: DecisionModel.DecisionModel
 }
 
-interface DecisionModelResolverService {
+/** The classifier models of one profile: the drivers of its `ExtensionRegistry`. */
+interface ProfileClassifiers {
   /**
    * The named classifier model (`provider/model`), or with none a classifier
    * whose driver has a stored or env credential: a `-latest` alias first,
@@ -888,8 +889,39 @@ interface DecisionModelResolverService {
    */
   readonly resolve: (
     modelId: Option.Option<string>,
-  ) => Effect.Effect<ResolvedDecisionModel, DecisionModelError, Scope.Scope | ExtensionRegistry>
+  ) => Effect.Effect<ResolvedDecisionModel, DecisionModelError, Scope.Scope>
+  /**
+   * Whether some driver that serves classifiers has a stored or env
+   * credential, so a call that names no model has one to resolve. An auth
+   * store that fails to read counts as none.
+   */
+  readonly hasCredential: Effect.Effect<boolean>
 }
+
+interface DecisionModelResolverService {
+  /** The classifiers of the caller's profile, read from its `ExtensionRegistry`. */
+  readonly profile: Effect.Effect<ProfileClassifiers, never, ExtensionRegistry>
+}
+
+/** Whether some driver that serves classifiers has a stored or env credential. */
+const classifierCredentialExists = Effect.fn("DecisionModelResolver.hasCredential")(function* (
+  auth: AuthService,
+  drivers: ModelDrivers,
+) {
+  for (const driver of drivers.values()) {
+    if (Predicate.isUndefined(driver.resolveDecisionModel)) continue
+    const stored = yield* driverAuthInfo(auth, drivers, driver.id).pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning("classifier.credential-read-failed").pipe(
+          Effect.annotateLogs({ driverId: driver.id, error: String(cause) }),
+          Effect.as(Option.none()),
+        ),
+      ),
+    )
+    if (Option.isSome(stored) || (yield* driverEnvReady(driver))) return true
+  }
+  return false
+})
 
 /** The model-name suffix of an alias that tracks its provider's newest model. */
 const LATEST_ALIAS = "-latest"
@@ -902,9 +934,9 @@ interface ClassifierEntry {
 
 const resolveDecisionModel = Effect.fn("DecisionModelResolver.resolve")(function* (
   auth: AuthService,
+  allDrivers: ModelDrivers,
   requested: Option.Option<string>,
 ) {
-  const allDrivers = (yield* ExtensionRegistry).getResolved().modelDrivers
   const storedAuth = (driverId: string) =>
     driverAuthInfo(auth, allDrivers, driverId).pipe(
       Effect.mapError(
@@ -1022,7 +1054,13 @@ export class DecisionModelResolver extends Context.Service<
     Effect.gen(function* () {
       const auth = yield* Auth
       return DecisionModelResolver.of({
-        resolve: (modelId) => resolveDecisionModel(auth, modelId),
+        profile: Effect.map(ExtensionRegistry, (registry) => {
+          const drivers = registry.getResolved().modelDrivers
+          return {
+            resolve: (modelId) => resolveDecisionModel(auth, drivers, modelId),
+            hasCredential: classifierCredentialExists(auth, drivers),
+          }
+        }),
       })
     }),
   )

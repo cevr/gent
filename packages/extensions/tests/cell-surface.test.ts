@@ -42,6 +42,7 @@ import {
   toolResultMessageIdForTurn,
   testSqliteStorage,
   ApprovalService,
+  turnRequestText,
 } from "@gent/core/test-utils"
 import { BunServices } from "@effect/platform-bun"
 import * as Prompt from "effect/ai/Prompt"
@@ -1838,20 +1839,69 @@ describe("cell prompt guidelines", () => {
       }),
   )
 
-  it.effect(
-    "names models.decide, its three decision kinds, its cost, and composing it in code",
+  it.scopedLive(
+    "with a classifier credential the prompt names models.decide, its three decision kinds, and composing it in code, but no model and no price",
     () =>
-      Effect.sync(() => {
-        const guidelines = (getToolMetadata(CellTool).promptGuidelines ?? []).join("\n")
-        expect(guidelines).toContain("models.decide(input, decisions, { model, timeoutMs })")
-        expect(guidelines).toContain("within timeoutMs (at most and by default 60000) rejects")
-        expect(guidelines).toContain("models.classify(")
-        expect(guidelines).toContain("models.rate(")
-        expect(guidelines).toContain("models.probability(")
-        expect(guidelines).toContain("a fraction of a cent")
-        expect(guidelines).toContain("compose it in code with other tools")
-      }),
+      Effect.gen(function* () {
+        const prompt = yield* cellSystemPrompt({ storeKey: true })
+        expect(prompt).toContain("models.decide(input, decisions, { model, timeoutMs })")
+        expect(prompt).toContain("within timeoutMs (at most and by default 60000) rejects")
+        expect(prompt).toContain("models.classify(")
+        expect(prompt).toContain("models.rate(")
+        expect(prompt).toContain("models.probability(")
+        expect(prompt).toContain("compose it in code with other tools")
+        const guide = prompt.split("# Classifier models in the cell")[1]?.split("\n# ")[0] ?? ""
+        expect(guide).toContain("models.decide")
+        expect(guide).not.toMatch(/jev-|judge\/|cent\b|\$/)
+      }).pipe(Effect.timeout("10 seconds")),
+    12_000,
   )
+
+  it.scopedLive(
+    "without a classifier credential the prompt does not name models.decide",
+    () =>
+      Effect.gen(function* () {
+        const prompt = yield* cellSystemPrompt({ storeKey: false })
+        expect(prompt).toContain("# Working in the cell")
+        expect(prompt).not.toContain("models.decide")
+        expect((getToolMetadata(CellTool).promptGuidelines ?? []).join("\n")).not.toContain(
+          "models.decide",
+        )
+      }).pipe(Effect.timeout("10 seconds")),
+    12_000,
+  )
+})
+
+/** The system prompt of the first model request, with the judge driver and optionally its key. */
+const cellSystemPrompt = Effect.fn("test.cellSystemPrompt")(function* (params: {
+  readonly storeKey: boolean
+}) {
+  const prompts = yield* Ref.make<ReadonlyArray<string>>([])
+  const providerLayer = LanguageModelLayers.testStream((options) =>
+    Ref.update(prompts, (seen) => [...seen, turnRequestText(options.prompt).systemPrompt]).pipe(
+      Effect.as(Stream.fromIterable([textDeltaPart("done"), finishPart({ finishReason: "stop" })])),
+    ),
+  )
+  const calls = yield* Ref.make<ReadonlyArray<JudgeCall>>([])
+  const { client, sessionId, branchId } = yield* createRpcHarness({
+    ...shippedPreset,
+    // The shipped Jev drivers read the developer's keys.
+    extensionInputs: [
+      ...BuiltinExtensions.filter((extension) => !SHIPPED_JEV_DRIVERS.has(extension.manifest.id)),
+      judgeExtension(calls),
+    ],
+    providerLayer,
+  })
+  if (params.storeKey) yield* client.auth.setKey({ provider: "judge", key: "judge-key" })
+  yield* client.message.send({ sessionId, branchId, content: "hello" })
+  const seen = yield* waitFor(
+    Ref.get(prompts),
+    (all) => all.length > 0,
+    8_000,
+    "the first model request",
+  )
+  expect(yield* Ref.get(calls)).toEqual([])
+  return seen[0] ?? ""
 })
 
 // ── tool signatures ─────────────────────────────────────────────────────────
