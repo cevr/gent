@@ -648,6 +648,14 @@ interface ImportedExtension {
  */
 const EXTENSION_LOAD_TIMEOUT: Duration.Input = "10 seconds"
 
+/**
+ * How many discovered files build and import at once. One at a time, N slow
+ * files hold the host for the sum of their imports; the bound keeps a large
+ * extension directory from starting every `Bun.build` together. Setups still
+ * run one at a time.
+ */
+const EXTENSION_IMPORT_CONCURRENCY = 4
+
 /** A load step that outlives `timeout` fails with a recorded reason. */
 const withinLoadTimeout =
   (id: string, step: "import" | "setup", timeout: Duration.Input) =>
@@ -871,8 +879,11 @@ export const loadTuiExtensions = (opts: {
     )
     const discovered = yield* discoverTuiExtensions(opts)
     const load = yield* provideClientExtensionModules
-    const [imported, importFailures] = yield* Effect.partition(discovered, (entry) =>
-      importExtension(load, entry, timeout),
+    // Results, failures included, keep discovery order whatever order the imports finish in.
+    const [imported, importFailures] = yield* Effect.partition(
+      discovered,
+      (entry) => importExtension(load, entry, timeout),
+      { concurrency: EXTENSION_IMPORT_CONCURRENCY },
     )
     const builtins = Option.getOrElse(Option.fromNullishOr(opts.builtins), () => []).map(
       (module): ImportedExtension => ({
