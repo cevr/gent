@@ -324,8 +324,8 @@ const runGent = ({
     // Block until supervisor is ready (same as headless path)
     yield* bundle.runtime.lifecycle.waitForReady
 
-    // Resolve the session and its agent before rendering — eliminates the loading route
-    const { bootstrap, initialAgent } = yield* resolveInteractiveBootstrap({
+    // Resolve the session before rendering — eliminates the loading route
+    const bootstrap = yield* resolveInteractiveBootstrap({
       client: bundle.client,
       cwd,
       sessionId: Option.getOrUndefined(session),
@@ -370,7 +370,6 @@ const runGent = ({
                 services={uiServices}
                 log={log}
                 initialSession={bootstrap.initialSession}
-                initialAgent={initialAgent}
               >
                 <ExtensionUIProvider scope={scope}>
                   <TerminalDimensionsProvider>

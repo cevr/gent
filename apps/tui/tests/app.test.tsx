@@ -31,7 +31,6 @@ import {
   AgentName,
   BranchId,
   dateFromMillis,
-  DEFAULT_AGENT_NAME,
   GentRpcError,
   MessageId,
   Model,
@@ -76,6 +75,7 @@ import {
   renderFrame,
   renderScoped,
   TerminalOutput,
+  snapshotNaming,
 } from "./render-harness-boundary"
 import { LinkOpener, LinkOpenerError } from "../src/os"
 import { createSignal, type JSX, onMount, Show, type Signal } from "solid-js"
@@ -150,91 +150,46 @@ const branchOf = (id: string, createdAtMs: number) => ({
   createdAt: dateFromMillis(createdAtMs),
 })
 
-describe("startup agent and headless auth", () => {
-  it.live("interactive startup uses the session snapshot agent and lists no providers", () =>
+describe("startup and headless auth", () => {
+  // The session view reads the agent from the snapshot it loads; startup
+  // reads neither the snapshot nor the providers before it renders.
+  it.live("interactive startup reads no snapshot and lists no providers", () =>
     Effect.gen(function* () {
-      const calls: Array<{
-        agentName?: AgentName
-        sessionId?: string
-      }> = []
+      const reads: Array<string> = []
       const client = createMockClient({
         branch: { list: () => Effect.succeed([branchOf("branch-a", 0)]) },
         session: {
           get: () => Effect.succeed(sessionA),
           getSnapshot: () =>
-            Effect.succeed({
-              sessionId: SessionId.make("session-a"),
-              branchId: BranchId.make("branch-a"),
-              messages: [],
-              lastEventId: nullValue,
-              reasoningLevel: absent,
-              agent: AgentName.make("secondary"),
-              runtime: {
-                _tag: idleTag,
-                queue: emptyQueueSnapshot(),
-              },
-              metrics: {
-                turns: 0,
-                durationMs: 0,
-                costUsd: 0,
-                lastInputTokens: 0,
-              },
-            }),
+            Effect.sync(() => {
+              reads.push("getSnapshot")
+            }).pipe(Effect.andThen(Effect.die("startup reads no snapshot"))),
         },
         auth: {
-          listProviders: (input: { agentName?: AgentName; sessionId?: string }) => {
-            calls.push(input)
-            return Effect.succeed([
-              {
-                provider: "openai",
-                hasKey: false,
-                required: true,
-                source: noAuthSource,
-                authType: absent,
-              },
-            ])
-          },
+          listProviders: () =>
+            Effect.sync(() => {
+              reads.push("listProviders")
+              return []
+            }),
         },
       })
-      const result = yield* resolveInteractiveBootstrap({
+      const bootstrap = yield* resolveInteractiveBootstrap({
         client,
         cwd: "/nonexistent/gent-test-cwd",
         sessionId: "session-a",
         continue_: false,
       })
-      expect(result.initialAgent).toBe(AgentName.make("secondary"))
-      // The session view's auth gate checks the providers itself, once mounted.
-      expect(calls).toEqual([])
+      expect(bootstrap.initialSession.sessionId).toBe(sessionA.id)
+      expect(reads).toEqual([])
     }),
   )
-  it.live("a headless session names the missing sign-ins of the agent it was created with", () =>
+  it.live("a headless session names the missing sign-ins of the agent it runs", () =>
     Effect.gen(function* () {
       const calls: Array<{
         agentName?: AgentName
         sessionId?: string
       }> = []
       const client = createMockClient({
-        session: {
-          getSnapshot: () =>
-            Effect.succeed({
-              sessionId: SessionId.make("session-a"),
-              branchId: BranchId.make("branch-a"),
-              messages: [],
-              lastEventId: nullValue,
-              reasoningLevel: absent,
-              agent: AgentName.make("secondary"),
-              runtime: {
-                _tag: idleTag,
-                queue: emptyQueueSnapshot(),
-              },
-              metrics: {
-                turns: 0,
-                durationMs: 0,
-                costUsd: 0,
-                lastInputTokens: 0,
-              },
-            }),
-        },
         auth: {
           listProviders: (input: { agentName?: AgentName; sessionId?: string }) => {
             calls.push(input)
@@ -300,34 +255,12 @@ describe("startup agent and headless auth", () => {
       // name two drivers share keeps the id beside it.
       const missing = yield* resolveHeadlessMissingSignIns({ client, state })
       expect(missing).toEqual(["OpenCode", "openai", "Mirror (mirror-a)"])
-      expect(calls).toEqual([
-        { agentName: AgentName.make("secondary"), sessionId: SessionId.make("session-a") },
-      ])
+      // The session id is the question: the server answers for the agent the
+      // session runs.
+      expect(calls).toEqual([{ sessionId: SessionId.make("session-a") }])
     }),
   )
-  it.live("a session with no branch yet starts as the default agent", () =>
-    Effect.gen(function* () {
-      const calls: Array<{
-        agentName?: AgentName
-        sessionId?: string
-      }> = []
-      const client = createMockClient({
-        auth: {
-          listProviders: (input: { agentName?: AgentName; sessionId?: string }) => {
-            calls.push(input)
-            return Effect.succeed([])
-          },
-        },
-      })
-      const state: HeadlessState = {
-        session: { ...sessionA, activeBranchId: absent },
-        prompt: "hi",
-      }
-      yield* resolveHeadlessMissingSignIns({ client, state })
-      expect(calls).toEqual([{ agentName: DEFAULT_AGENT_NAME, sessionId: sessionA.id }])
-    }),
-  )
-  it.live("names no agent while the user is choosing a branch", () =>
+  it.live("a session with several branches boots into the branch picker", () =>
     Effect.gen(function* () {
       const calls: Array<{
         agentName?: AgentName
@@ -346,16 +279,15 @@ describe("startup agent and headless auth", () => {
             }),
         },
       })
-      const result = yield* resolveInteractiveBootstrap({
+      const bootstrap = yield* resolveInteractiveBootstrap({
         client,
         cwd: "/nonexistent/gent-test-cwd",
         sessionId: "session-a",
         continue_: false,
       })
-      expect(Option.map(result.bootstrap.initialBranches, (branches) => branches.length)).toEqual(
+      expect(Option.map(bootstrap.initialBranches, (branches) => branches.length)).toEqual(
         Option.some(2),
       )
-      expect(result.initialAgent).toBeUndefined()
       expect(calls).toEqual([])
     }),
   )
@@ -1162,13 +1094,14 @@ describe("App auth gate", () => {
       expect(frame).toContain("Sign in ·")
     }),
   )
-  it.scopedLive("seeds startup auth gating from the initial selected agent", () =>
+  it.scopedLive("the startup auth check asks for the agent the session's snapshot names", () =>
     Effect.gen(function* () {
       const calls: Array<{
         agentName?: string
         sessionId?: string
       }> = []
       const client = createMockClient({
+        session: snapshotNaming(AgentName.make("secondary")),
         auth: {
           listProviders: (input: { agentName?: string; sessionId?: string }) => {
             calls.push(input)
@@ -1195,7 +1128,6 @@ describe("App auth gate", () => {
       const setup = yield* renderScoped(() => <App />, {
         client,
         runtime,
-        initialAgent: AgentName.make("secondary"),
         initialSession: {
           id: SessionId.make("session-a"),
           activeBranchId: BranchId.make("branch-a"),
@@ -1260,7 +1192,6 @@ describe("App auth gate", () => {
       const setup = yield* renderScoped(() => <App />, {
         client,
         runtime: createMockRuntime(),
-        initialAgent: AgentName.make("main"),
         height,
         initialSession: {
           id: SessionId.make("session-a"),
@@ -3650,7 +3581,6 @@ describe("App auth gate", () => {
           // An agent is what makes the auth check runnable at all. Without one
           // the gate short-circuits before it reads the picker, and this test
           // proves nothing.
-          initialAgent: AgentName.make("primary"),
           initialSession: {
             id: SessionId.make("session-a"),
             activeBranchId: BranchId.make("branch-a"),
@@ -3705,7 +3635,6 @@ describe("App auth gate", () => {
         const setup = yield* renderScoped(() => <App />, {
           client,
           runtime,
-          initialAgent: AgentName.make("primary"),
           initialSession: {
             id: SessionId.make("session-a"),
             activeBranchId: BranchId.make("branch-a"),
@@ -3762,7 +3691,6 @@ describe("App auth gate", () => {
       const setup = yield* renderScoped(() => <App />, {
         client,
         runtime: createMockRuntime(),
-        initialAgent: AgentName.make("primary"),
         initialSession: {
           id: SessionId.make("session-a"),
           activeBranchId: BranchId.make("branch-a"),
@@ -3812,7 +3740,6 @@ describe("App auth gate", () => {
       const setup = yield* renderScoped(() => <App />, {
         client,
         runtime: createMockRuntime(),
-        initialAgent: AgentName.make("primary"),
         initialSession: {
           id: SessionId.make("session-a"),
           activeBranchId: BranchId.make("branch-a"),
@@ -3872,7 +3799,6 @@ describe("App auth gate", () => {
       const setup = yield* renderScoped(() => <App />, {
         client,
         runtime,
-        initialAgent: AgentName.make("primary"),
         initialSession: {
           id: SessionId.make("session-a"),
           activeBranchId: BranchId.make("branch-a"),
@@ -3925,7 +3851,6 @@ describe("App auth gate", () => {
       const setup = yield* renderScoped(() => <App />, {
         client,
         runtime,
-        initialAgent: AgentName.make("primary"),
         initialSession: {
           id: SessionId.make("session-a"),
           activeBranchId: BranchId.make("branch-a"),
@@ -3970,7 +3895,6 @@ describe("App auth gate", () => {
       const setup = yield* renderScoped(() => <App />, {
         client,
         runtime,
-        initialAgent: AgentName.make("primary"),
         initialSession: {
           id: SessionId.make("session-a"),
           activeBranchId: BranchId.make("branch-a"),
@@ -4121,7 +4045,6 @@ describe("App auth gate", () => {
           {
             client,
             runtime,
-            initialAgent: AgentName.make("primary"),
             initialSession: {
               id: alphaSessionId,
               activeBranchId: alphaBranchId,
@@ -4279,7 +4202,6 @@ describe("App auth gate", () => {
         {
           client,
           runtime,
-          initialAgent: AgentName.make("primary"),
           initialSession: {
             id: SessionId.make("session-a"),
             activeBranchId: BranchId.make("branch-a"),
@@ -4352,7 +4274,6 @@ describe("App auth gate", () => {
         {
           client,
           runtime,
-          initialAgent: AgentName.make("primary"),
           initialSession: {
             id: SessionId.make("session-a"),
             activeBranchId: BranchId.make("branch-a"),
@@ -4411,7 +4332,6 @@ describe("App auth gate", () => {
         {
           client,
           runtime,
-          initialAgent: AgentName.make("primary"),
           initialSession: {
             id: SessionId.make("session-a"),
             activeBranchId: BranchId.make("branch-a"),
@@ -4462,7 +4382,6 @@ describe("App auth gate", () => {
         const setup = yield* renderScoped(() => <App />, {
           client,
           runtime: createMockRuntime(),
-          initialAgent: AgentName.make("primary"),
           initialSession: {
             id: SessionId.make("session-a"),
             activeBranchId: BranchId.make("branch-a"),
@@ -4509,7 +4428,6 @@ describe("App auth gate", () => {
         {
           client,
           runtime,
-          initialAgent: AgentName.make("primary"),
           initialSession: {
             id: SessionId.make("session-a"),
             activeBranchId: BranchId.make("branch-a"),
@@ -4716,7 +4634,6 @@ describe("App clipboard", () => {
         runtime: createMockRuntime(),
         services,
         output,
-        initialAgent: AgentName.make("main"),
         initialSession: {
           id: SessionId.make("session-a"),
           activeBranchId: BranchId.make("branch-a"),

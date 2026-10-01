@@ -212,6 +212,11 @@ function ClientProbe(props: { readonly onReady: (ctx: ClientContextValue) => voi
   onMount(() => props.onReady(client))
   return <box />
 }
+/** Lands a snapshot naming `agent` before the panes after it mount, as the session view does. */
+function SnapshotAgent(props: { readonly agent: AgentName }) {
+  applySnapshotAgent(useClient(), props.agent)
+  return <box />
+}
 /**
  * Build a services Context that includes a test `LinkOpener` impl.
  *
@@ -246,11 +251,18 @@ describe("Auth route", () => {
         },
       })
       const runtime = createMockRuntime()
-      yield* renderScoped(() => <Auth sessionId={activeSessionId} />, {
-        client,
-        runtime,
-        initialAgent: AgentName.make("helper:google"),
-      })
+      yield* renderScoped(
+        () => (
+          <>
+            <SnapshotAgent agent={AgentName.make("helper:google")} />
+            <Auth sessionId={activeSessionId} />
+          </>
+        ),
+        {
+          client,
+          runtime,
+        },
+      )
       expect(calls).toEqual([{ agentName: "helper:google", sessionId: activeSessionId }])
     }),
   )
@@ -438,7 +450,6 @@ describe("Auth route", () => {
       yield* renderScoped(() => <Auth sessionId={activeSessionId} />, {
         client,
         runtime: createMockRuntime(),
-        initialAgent: AgentName.make("helper:google"),
       })
       expect(methodCalls).toEqual([{ sessionId: activeSessionId }])
     }).pipe(Effect.timeout("10 seconds")),
@@ -477,6 +488,7 @@ describe("Auth route", () => {
       const setup = yield* renderScoped(
         () => (
           <>
+            <SnapshotAgent agent={AgentName.make("primary")} />
             <ClientProbe onReady={(c) => (ctx = Option.some(c))} />
             <Auth sessionId={activeSessionId} />
           </>
@@ -484,7 +496,6 @@ describe("Auth route", () => {
         {
           client,
           runtime,
-          initialAgent: AgentName.make("primary"),
         },
       )
       expect(pending.map((entry) => entry.agentName)).toEqual(["primary"])
@@ -568,7 +579,6 @@ describe("Auth route", () => {
         {
           client,
           runtime,
-          initialAgent: AgentName.make("primary"),
         },
       )
       yield* waitForFrame(setup, (frame) => frame.includes("anthropic"))
@@ -681,7 +691,6 @@ describe("Auth route", () => {
         {
           client,
           runtime,
-          initialAgent: AgentName.make("primary"),
         },
       )
       yield* waitForFrame(setup, (frame) => frame.includes("anthropic"))
@@ -760,7 +769,6 @@ describe("Auth route", () => {
         client,
         runtime,
         services,
-        initialAgent: AgentName.make("primary"),
       })
       yield* waitForFrame(setup, (frame) => frame.includes("anthropic"))
       setup.mockInput.pressEnter()
@@ -826,7 +834,6 @@ describe("Auth route", () => {
         client,
         runtime: createMockRuntime(),
         services,
-        initialAgent: AgentName.make("primary"),
       })
       yield* waitForFrame(setup, (frame) => frame.includes("anthropic"))
       setup.mockInput.pressEnter()
@@ -867,7 +874,6 @@ describe("Auth route", () => {
         client,
         runtime: createMockRuntime(),
         services,
-        initialAgent: AgentName.make("primary"),
       })
       yield* waitForFrame(setup, (frame) => frame.includes("anthropic"))
       setup.mockInput.pressEnter()
@@ -952,7 +958,6 @@ describe("Auth route", () => {
           client,
           runtime,
           services,
-          initialAgent: AgentName.make("primary"),
         },
       )
       yield* waitForFrame(setup, (frame) => frame.includes("anthropic"))
@@ -1025,7 +1030,6 @@ describe("Auth route", () => {
         client,
         runtime,
         services,
-        initialAgent: AgentName.make("primary"),
       })
       yield* waitForFrame(setup, (frame) => frame.includes("anthropic"))
       setup.mockInput.pressEnter()
@@ -1108,7 +1112,6 @@ describe("Auth route", () => {
         client,
         runtime: createMockRuntime(),
         services,
-        initialAgent: AgentName.make("primary"),
       })
       yield* waitForFrame(setup, (frame) => frame.includes("openai"))
       setup.mockInput.pressEnter()
@@ -1171,6 +1174,7 @@ describe("Auth route", () => {
         const setup = yield* renderScoped(
           () => (
             <>
+              <SnapshotAgent agent={AgentName.make("primary")} />
               <ClientProbe onReady={(c) => (ctx = Option.some(c))} />
               <Auth sessionId={activeSessionId} />
             </>
@@ -1179,7 +1183,6 @@ describe("Auth route", () => {
             client,
             runtime: createMockRuntime(),
             services,
-            initialAgent: AgentName.make("primary"),
           },
         )
         yield* waitForFrame(setup, (frame) => frame.includes("openai"))
@@ -1227,7 +1230,6 @@ describe("Auth route", () => {
         client,
         runtime: createMockRuntime(),
         services,
-        initialAgent: AgentName.make("primary"),
       })
       yield* waitForFrame(setup, (frame) => frame.includes("openai"))
       setup.mockInput.pressEnter()
@@ -1277,7 +1279,6 @@ describe("Auth route", () => {
         client,
         runtime: createMockRuntime(),
         services,
-        initialAgent: AgentName.make("main"),
         initialSession: {
           id: SessionId.make("session-oauth"),
           activeBranchId: BranchId.make("branch-oauth"),

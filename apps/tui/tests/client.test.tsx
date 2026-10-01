@@ -41,6 +41,7 @@ import {
 } from "../src/client"
 import { createSignal, onMount, Show } from "solid-js"
 import {
+  applySnapshotAgent,
   createMockClient,
   createMutableRuntime,
   defaultTestSession,
@@ -854,11 +855,12 @@ describe("ClientProvider session lifecycle", () => {
               createdAt: dateFromMillis(0),
               updatedAt: dateFromMillis(0),
             },
-            initialAgent: AgentName.make("secondary"),
           },
         )
         if (Option.isNone(ctx)) return yield* Effect.die("client context not ready")
         const active = ctx.value
+        // The resumed session's snapshot names its agent.
+        applySnapshotAgent(active, AgentName.make("secondary"))
         expect(active.agent()).toEqual(Option.some(AgentName.make("secondary")))
         active.createSession()
         yield* waitForFrame(

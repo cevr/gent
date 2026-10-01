@@ -1,10 +1,8 @@
 import { Effect, Option, Predicate, Record, Schema } from "effect"
 import {
-  type AgentName,
   type AuthProviderInfo,
   Branch,
   type BranchId,
-  DEFAULT_AGENT_NAME,
   type Model,
   ModelId,
   ReasoningEffort,
@@ -129,12 +127,6 @@ interface AppBootstrap {
   readonly initialBranches: Option.Option<readonly Branch[]>
 }
 
-interface InteractiveBootstrapResult {
-  readonly bootstrap: AppBootstrap
-  // eslint-disable-next-line effect/noNullish -- bootstrap API uses absence for headless startup.
-  readonly initialAgent: AgentName | undefined
-}
-
 /** The session view's record; none for a record with no active branch to mount. */
 const toSession = (session: DomainSession): Option.Option<ClientSession> => {
   const branchId = Option.fromNullishOr(session.activeBranchId)
@@ -198,48 +190,15 @@ export const resolveInteractiveBootstrap = (input: {
   sessionId?: string
   continue_: boolean
   prompt?: string
-}): Effect.Effect<InteractiveBootstrapResult, GentClientRpcError | AppBootstrapError> =>
-  Effect.gen(function* () {
-    const state = yield* resolveInteractiveState({
-      client: input.client,
-      cwd: input.cwd,
-      session: Option.fromNullishOr(input.sessionId),
-      continue_: input.continue_,
-      prompt: Option.fromNullishOr(input.prompt),
-    })
-
-    const initialAgent = yield* resolveStartupAgent({ client: input.client, state })
-
-    return {
-      bootstrap: yield* resolveAppBootstrap(state),
-      initialAgent: Option.getOrUndefined(initialAgent),
-    }
-  })
-
-/** A session runs as its own agent, which its snapshot names; one with no branch yet runs the default. */
-const sessionAgent = (
-  client: Pick<GentNamespacedClient, "session">,
-  session: DomainSession,
-): Effect.Effect<AgentName, GentClientRpcError> => {
-  const branchId = Option.fromNullishOr(session.activeBranchId)
-  if (Option.isNone(branchId)) return Effect.succeed(DEFAULT_AGENT_NAME)
-  return client.session
-    .getSnapshot({ sessionId: session.id, branchId: branchId.value })
-    .pipe(Effect.map((snapshot) => snapshot.agent))
-}
-
-/**
- * The agent the interactive client starts as: the resumed session's own. The
- * boot branch picker names none, because the reader has not chosen a branch.
- * The session view's auth gate checks that agent's providers itself.
- */
-const resolveStartupAgent = (input: {
-  client: Pick<GentNamespacedClient, "session">
-  state: InteractiveState
-}): Effect.Effect<Option.Option<AgentName>, GentClientRpcError> => {
-  if (input.state._tag === "branchPicker") return Effect.succeedNone
-  return sessionAgent(input.client, input.state.session).pipe(Effect.asSome)
-}
+}): Effect.Effect<AppBootstrap, GentClientRpcError | AppBootstrapError> =>
+  // The session view reads its agent from the snapshot it loads anyway.
+  resolveInteractiveState({
+    client: input.client,
+    cwd: input.cwd,
+    session: Option.fromNullishOr(input.sessionId),
+    continue_: input.continue_,
+    prompt: Option.fromNullishOr(input.prompt),
+  }).pipe(Effect.flatMap(resolveAppBootstrap))
 
 /**
  * The sign-ins the headless run's agent is missing: each required provider
@@ -247,14 +206,13 @@ const resolveStartupAgent = (input: {
  * A headless run has no reader to sign in, so it stops before its turn.
  */
 export const resolveHeadlessMissingSignIns = (input: {
-  client: Pick<GentNamespacedClient, "auth" | "session">
+  client: Pick<GentNamespacedClient, "auth">
   state: HeadlessState
 }): Effect.Effect<ReadonlyArray<string>, GentClientRpcError> =>
   Effect.gen(function* () {
-    const agent = yield* sessionAgent(input.client, input.state.session)
-    // The session id lets its cwd resolve project-level driver overrides.
+    // The session id names the agent the session runs, and its cwd resolves
+    // project-level driver overrides.
     const providers = yield* input.client.auth.listProviders({
-      agentName: agent,
       sessionId: input.state.session.id,
     })
     return providers

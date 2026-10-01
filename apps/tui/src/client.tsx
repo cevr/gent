@@ -670,7 +670,6 @@ interface ClientProviderProps extends ParentProps {
   log: ClientLog
   /** The session the process starts on: bootstrap always resolves one. */
   initialSession: Session
-  initialAgent?: AgentName
   /**
    * Host-provided platform services (e.g. `FileSystem`, `ChildProcessSpawner`).
    * Used by `useRuntime`'s `cast` / `call` so component effects requiring
@@ -695,9 +694,6 @@ export function ClientProvider(props: ClientProviderProps) {
 
   const eventHub = createClientEventHub(log)
 
-  // The agent startup resolved for the startup session holds until its
-  // snapshot lands. Past startup a session's snapshot names its agent.
-  const initialAgent = Option.fromNullishOr(props.initialAgent)
   const [session, setSession] = createSignal<Session>(props.initialSession)
   const dispatchSession = (event: Parameters<typeof transitionSessionState>[1]) => {
     setSession((current) => transitionSessionState(current, event))
@@ -756,7 +752,8 @@ export function ClientProvider(props: ClientProviderProps) {
 
   // Agent state (derived from events)
   const [agentStore, setAgentStore] = createStore<AgentState>({
-    agent: initialAgent,
+    // A session's snapshot names its agent; until it lands, none is known.
+    agent: Option.none(),
     running: false,
     turnsStarted: Option.none(),
     error: Option.none(),

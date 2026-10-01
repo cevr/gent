@@ -84,7 +84,7 @@ describe("session lifecycle", () => {
           )
           let ctx = Option.none<{ client: ClientContextValue }>()
           // Pre-resolve bootstrap (same as main.tsx now does)
-          const { bootstrap } = yield* resolveInteractiveBootstrap({
+          const bootstrap = yield* resolveInteractiveBootstrap({
             client,
             cwd: repoRoot,
             continue_: false,
@@ -138,7 +138,7 @@ describe("session lifecycle", () => {
           )
           let ctx = Option.none<{ client: ClientContextValue }>()
           // Pre-resolve bootstrap
-          const { bootstrap } = yield* resolveInteractiveBootstrap({
+          const bootstrap = yield* resolveInteractiveBootstrap({
             client,
             cwd: repoRoot,
             continue_: false,
