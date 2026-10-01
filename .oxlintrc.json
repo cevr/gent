@@ -47,6 +47,10 @@
     "gent/no-lint-evasion": "error",
     // Custom — a whole-object JSON encode decides no identity (shipped source)
     "gent/no-identity-encode": "error",
+    // Off until the gent rule each duplicates is deleted: gent/no-sleep and
+    // gent/no-lint-evasion hold these lines and their carve-outs today.
+    "effect/noFixedWaitInTests": "off",
+    "effect/noLintEvasion": "off",
 
     // TypeScript - no any
     "typescript/no-explicit-any": "error",
