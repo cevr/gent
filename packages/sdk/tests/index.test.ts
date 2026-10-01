@@ -14,9 +14,6 @@ describe("SDK public surface", () => {
       "makeJsonFileLogger",
       "serverLock",
     ])
-    expect("GentRpcs" in RuntimePublicSdk).toBe(false)
-    expect("RpcHandlersLive" in RuntimePublicSdk).toBe(false)
-    expect("makeRpcClient" in RuntimePublicSdk).toBe(false)
   })
 
   test("the server lock offers a client status, probe and stop only", () => {

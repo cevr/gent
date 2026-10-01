@@ -112,13 +112,6 @@ const WsTransport = (url: string): Layer.Layer<RpcClient.Protocol> =>
   )
 
 // ---------------------------------------------------------------------------
-// RPC client assembly (internal)
-// ---------------------------------------------------------------------------
-
-const makeRpcClient: Effect.Effect<GentRpcClient, never, RpcClient.Protocol | Scope.Scope> =
-  RpcClient.make(GentRpcs)
-
-// ---------------------------------------------------------------------------
 // Gent — unified client constructors
 // ---------------------------------------------------------------------------
 
@@ -170,7 +163,7 @@ const connectWs = (
       scope,
     )
     // oxlint-disable-next-line effect/noInlineProvide -- the connection factory owns its scoped transport
-    const rpcClient = yield* makeRpcClient.pipe(Effect.provide(transport))
+    const rpcClient: GentRpcClient = yield* RpcClient.make(GentRpcs).pipe(Effect.provide(transport))
     const services = yield* Effect.context<Scope.Scope>()
 
     const lifecycle: GentLifecycle = {
@@ -182,7 +175,7 @@ const connectWs = (
           listeners.delete(listener)
         }
       },
-      waitForReady: Effect.callback<void>((resume, signal) => {
+      waitForReady: Effect.callback<void>((resume) => {
         if (currentState._tag === "Connected") {
           resume(Effect.void)
           return
@@ -192,13 +185,7 @@ const connectWs = (
           unsubscribe()
           resume(Effect.void)
         })
-        signal.addEventListener(
-          "abort",
-          () => {
-            unsubscribe()
-          },
-          { once: true },
-        )
+        // The one cleanup: an interrupted wait runs this canceler.
         return Effect.sync(unsubscribe)
       }),
     }
