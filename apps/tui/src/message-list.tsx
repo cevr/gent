@@ -1406,6 +1406,64 @@ const exitFlushes = new WeakMap<CliRenderer, Effect.Effect<void>>()
 export const flushTranscriptForExit = (renderer: CliRenderer): Effect.Effect<void> =>
   Option.getOrElse(Option.fromUndefinedOr(exitFlushes.get(renderer)), () => Effect.void)
 
+/** The escape that moves the terminal's cursor up `rows` rows. */
+const cursorUp = (rows: number): string => `${String.fromCharCode(27)}[${rows}A`
+
+/**
+ * Every way gent leaves the terminal: the reader's exit, a signal, a fatal
+ * error. The live view's last items reach native history first
+ * (`flushTranscriptForExit`, bounded), then the renderer goes. Its destroy
+ * clears the split region and leaves the cursor under it, so the cursor
+ * goes back up by the region's rows: what the shell writes next follows the
+ * transcript with no empty rows between.
+ */
+export const leaveTerminal = (
+  renderer: CliRenderer,
+  writeTerminal: (text: string) => void,
+): Effect.Effect<void> =>
+  flushTranscriptForExit(renderer).pipe(
+    Effect.ensuring(
+      Effect.sync(() => {
+        if (renderer.isDestroyed) return
+        const regionRows = Option.liftPredicate(
+          renderer.height,
+          () => renderer.screenMode === "split-footer",
+        )
+        renderer.destroy()
+        Option.map(regionRows, (rows) => writeTerminal(cursorUp(rows)))
+      }),
+    ),
+  )
+
+/**
+ * Holds the process until the renderer is destroyed: OpenTUI mounts
+ * synchronously, and a bare suspended fiber does not keep Bun alive.
+ * Interrupted (a signal, the session's shutdown), it leaves the terminal as
+ * the reader's exit does.
+ */
+export const holdUntilRendererDestroyed = (
+  renderer: CliRenderer,
+  writeTerminal: (text: string) => void,
+): Effect.Effect<void> =>
+  Effect.callback<void>((resume) => {
+    let settled = false
+    const keepAlive = setInterval(() => {}, 60_000) // eslint-disable-line effect/noGlobals -- OpenTUI needs a process-lifetime handle until renderer destruction.
+    const onDestroy = () => {
+      if (settled) return
+      settled = true
+      clearInterval(keepAlive)
+      resume(Effect.void)
+    }
+    renderer.once("destroy", onDestroy)
+    return Effect.suspend(() => {
+      if (settled) return Effect.void
+      settled = true
+      clearInterval(keepAlive)
+      renderer.off("destroy", onDestroy)
+      return leaveTerminal(renderer, writeTerminal)
+    })
+  })
+
 interface NativeTranscriptProps {
   items: SessionItem[]
   /** The items are final: no source still derives rows that would land among them. */

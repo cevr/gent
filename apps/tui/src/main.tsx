@@ -24,7 +24,7 @@ import { LinkOpener } from "./os"
 import { AgentName } from "@gent/core/protocol"
 
 import { render } from "@opentui/solid"
-import { createCliRenderer, type CliRenderer } from "@opentui/core"
+import { createCliRenderer } from "@opentui/core"
 import {
   App,
   AppBootstrapError,
@@ -34,6 +34,7 @@ import {
   resolveHeadlessMissingSignIns,
 } from "./app"
 import { TerminalDimensionsProvider } from "./terminal"
+import { holdUntilRendererDestroyed } from "./message-list"
 import { SpinnerClockProvider } from "./ui"
 import { ComposerMemoryProvider } from "./session"
 import { detectColorScheme } from "./theme"
@@ -63,28 +64,6 @@ import {
 
 // Clear client log on startup
 clearClientLog()
-
-const waitForRendererDestroy = (renderer: CliRenderer) =>
-  Effect.callback<void>((resume) => {
-    let settled = false
-    const keepAlive = setInterval(() => {}, 60_000) // eslint-disable-line effect/noGlobals -- OpenTUI needs a process-lifetime handle until renderer destruction.
-    const onDestroy = () => {
-      if (settled) return
-      settled = true
-      clearInterval(keepAlive)
-      resume(Effect.void)
-    }
-
-    renderer.once("destroy", onDestroy)
-
-    return Effect.sync(() => {
-      if (settled) return
-      settled = true
-      clearInterval(keepAlive)
-      renderer.off("destroy", onDestroy)
-      renderer.destroy()
-    })
-  })
 
 // `BunPlatformLive` bundles `BunServices.layer` (FileSystem, Path,
 // ChildProcessSpawner, …) with `BunGentPlatformLive`, so callers can yield
@@ -403,10 +382,10 @@ const runGent = ({
         renderer,
       ),
     )
-    // Keep a real process handle open until the renderer is destroyed.
-    // OpenTUI mounts synchronously and `render(...)` resolves immediately;
-    // a bare suspended fiber does not keep Bun alive.
-    return yield* waitForRendererDestroy(renderer).pipe(
+    // Keep a real process handle open until the renderer is destroyed. A
+    // signal leaves the terminal as the reader's exit does: the live view's
+    // last items reach history before the renderer goes.
+    return yield* holdUntilRendererDestroyed(renderer, envWithShutdown.writeTerminal).pipe(
       Effect.onInterrupt(() =>
         Effect.sync(() => {
           shutdownLog("shutdown.interrupted")

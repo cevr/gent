@@ -107,7 +107,7 @@ import {
   type AssistantSegment,
   currentMillis,
   emptyTurnSteps,
-  flushTranscriptForExit,
+  leaveTerminal,
   isMessageItem,
   type Message,
   messageToolCalls,
@@ -2720,18 +2720,14 @@ const ARMED_CUE = {
   interrupt: "ctrl+c again to exit",
 } satisfies Record<ArmedKey, string>
 
-/** The escape that moves the terminal's cursor up `rows` rows. */
-const cursorUp = (rows: number): string => `${String.fromCharCode(27)}[${rows}A`
-
 /**
- * The one way gent leaves: the session view's exit and the fatal screen's.
- * The session id is the only way back into this conversation, and it is
- * about to leave the screen. It is printed after the renderer is destroyed,
- * so it lands in the terminal the reader keeps, not in the alternate screen.
- * An in-memory store ends with the process, so it has nothing to resume.
- * First the live view's last items reach native history: destroying the
- * renderer clears the split region, and a turn still on screen would go
- * with it. A second exit while that runs does nothing.
+ * The reader's exit: the session view's and the fatal screen's. It leaves
+ * the terminal as every shutdown does (`leaveTerminal`), then names the way
+ * back. The session id is the only way back into this conversation, and it
+ * is about to leave the screen. It is printed after the renderer is
+ * destroyed, so it lands in the terminal the reader keeps. An in-memory
+ * store ends with the process, so it has nothing to resume. A second exit
+ * while that runs does nothing.
  */
 export const useExit = () => {
   const client = useClient()
@@ -2743,19 +2739,9 @@ export const useExit = () => {
     leavingNow = true
     const leaving = client.activeSessionId()
     client.runtime.cast(
-      flushTranscriptForExit(renderer).pipe(
+      leaveTerminal(renderer, env.writeTerminal).pipe(
         Effect.ensuring(
           Effect.sync(() => {
-            shutdownLog("exit.renderer-destroy")
-            // The destroy clears the split region and leaves the cursor under
-            // it. The cursor goes back up by the region's rows, so the shell
-            // prompt follows the transcript with no empty rows between.
-            const regionRows = Option.liftPredicate(
-              renderer.height,
-              () => renderer.screenMode === "split-footer",
-            )
-            renderer.destroy()
-            Option.map(regionRows, (rows) => env.writeTerminal(cursorUp(rows)))
             if (env.resumable) env.writeTerminal(`\nto resume: gent resume ${leaving}\n`)
             shutdownLog("exit.shutdown-signal")
             env.shutdown()

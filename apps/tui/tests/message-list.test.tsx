@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { Deferred, Effect, Option, Schedule, Schema } from "effect"
+import { Deferred, Effect, Fiber, Option, Schedule, Schema } from "effect"
 import {
   type CliRenderer,
   type CliRendererExternalOutputEvent,
@@ -12,6 +12,7 @@ import {
   currentMillis,
   emptyTurnSteps,
   flushTranscriptForExit,
+  holdUntilRendererDestroyed,
   getSessionEventLabel,
   type Message as ListMessage,
   MessageList,
@@ -3470,6 +3471,58 @@ describe("native transcript exit", () => {
         expect(committedText.join("")).not.toContain("IN-FLIGHT-DRAFT")
         yield* flushTranscriptForExit(Option.getOrThrow(screen))
         expect(committedText.join("")).toContain("IN-FLIGHT-DRAFT")
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
+  )
+
+  // A signal interrupts the fiber that holds the process open. It leaves the
+  // terminal as the reader's exit does: history first, then the renderer.
+  it.scopedLive(
+    "a signal moves a turn still in flight into history before the renderer goes",
+    () =>
+      Effect.gen(function* () {
+        const committedText: string[] = []
+        const written: string[] = []
+        let screen = Option.none<CliRenderer>()
+        const items: ListMessage[] = [
+          assistant("earlier", "EARLIER-ANSWER"),
+          { ...assistant("open", "SIGNALLED-DRAFT"), draft: true },
+        ]
+        const setup = yield* renderScoped(
+          () =>
+            roomTranscript({
+              items: () => items,
+              streaming: () => true,
+              footer: () => 3,
+              onRenderer: (renderer) => {
+                screen = Option.some(renderer)
+                renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+                  committedText.push(committedTextOf(event))
+                })
+              },
+            }),
+          { width: 60, height: 14 },
+        )
+        yield* Effect.promise(() => setup.flush()).pipe(
+          Effect.repeat({
+            until: () => committedText.join("").includes("EARLIER-ANSWER"),
+            schedule: Schedule.spaced("10 millis"),
+          }),
+          Effect.timeout("4 seconds"),
+          Effect.ignore,
+        )
+        const renderer = Option.getOrThrow(screen)
+        const hold = yield* Effect.forkChild(
+          holdUntilRendererDestroyed(renderer, (text) => written.push(text)),
+        )
+        // The hold has started: it waits on the renderer, as the process entry does.
+        yield* Effect.yieldNow
+        yield* Fiber.interrupt(hold)
+        expect(committedText.join("")).toContain("SIGNALLED-DRAFT")
+        expect(renderer.isDestroyed).toBe(true)
+        // The cursor goes back over the cleared region, under the transcript.
+        expect(written).toHaveLength(1)
+        expect(written[0]).toMatch(new RegExp(`^${String.fromCharCode(27)}\\[[1-9][0-9]*A$`))
       }).pipe(Effect.timeout("10 seconds")),
     15_000,
   )
