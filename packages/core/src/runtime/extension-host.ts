@@ -65,12 +65,15 @@ import {
   type BranchId,
   ClientRequestGrant,
   ExtensionId,
+  type InteractionRequestId,
   MessageId,
   ProcessGenerationId,
   RequestId,
   type RpcId,
   type SessionId,
   type ToolCallId,
+  CurrentWorkspaceId,
+  type WorkspaceId,
 } from "../domain/ids.js"
 import {
   bindRequestCapabilityExtension,
@@ -108,7 +111,6 @@ import {
   RuntimeEnvironment,
   type UserConfig,
 } from "./config.js"
-import { CurrentWorkspaceId, type WorkspaceId } from "../server/workspace-rpc.js"
 import {
   EventId,
   EventStore,
@@ -2473,6 +2475,12 @@ export class SessionProfileCache extends Context.Service<
  * Tools access this indirectly via `ctx.interaction.approve()` on ToolCapabilityContext.
  */
 
+const logStoreFailure =
+  (write: "resolve" | "take", requestId: InteractionRequestId) => (error: StorageError) =>
+    Effect.logWarning(`interaction.${write}-failed`).pipe(
+      Effect.annotateLogs({ requestId, error: String(error) }),
+    )
+
 const makeApprovalInteractionService: Effect.Effect<
   InteractionService,
   never,
@@ -2488,8 +2496,12 @@ const makeApprovalInteractionService: Effect.Effect<
             new EventStoreError({ message: "Failed to persist interaction request", cause }),
         ),
       ),
-    resolve: (requestId) => store.resolve(requestId).pipe(Effect.catchEager(() => Effect.void)),
-    take: (requestId) => store.take(requestId).pipe(Effect.catchEager(() => Effect.void)),
+    // A failed resolve or take leaves the row open, so the startup recovery
+    // asks it again; the call goes on, and the log names the request.
+    resolve: (requestId) =>
+      store.resolve(requestId).pipe(Effect.catchEager(logStoreFailure("resolve", requestId))),
+    take: (requestId) =>
+      store.take(requestId).pipe(Effect.catchEager(logStoreFailure("take", requestId))),
     decide: (branch, requestId, decisionJson) =>
       store
         .decide(branch, requestId, decisionJson)
@@ -3096,7 +3108,7 @@ export const makeExtensionHostContextProvider = (
 
 // ── session-runtime-context ─────────────────────────────────────────────────
 
-export interface TurnProfileDefaults {
+interface TurnProfileDefaults {
   readonly baseSections: ReadonlyArray<PromptSection>
 }
 
@@ -3107,17 +3119,17 @@ interface ExistingSessionBranch {
   readonly branchId: BranchId
 }
 
-/** The stored session. A missing session or a storage failure reads as none. */
+/**
+ * The stored session; none when its row is missing (a deleted session). A
+ * storage failure fails: the launch profile and the host cwd would be
+ * another project's.
+ */
 const storedSession = (
   sessionId: SessionId,
-): Effect.Effect<Option.Option<Session>, never, SessionStorage> =>
-  Effect.gen(function* () {
-    const sessions = yield* SessionStorage
-    return yield* sessions.getSession(sessionId).pipe(
-      Effect.map(Option.fromUndefinedOr),
-      Effect.orElseSucceed(() => Option.none<Session>()),
-    )
-  })
+): Effect.Effect<Option.Option<Session>, StorageError, SessionStorage> =>
+  Effect.flatMap(SessionStorage, (sessions) =>
+    Effect.map(sessions.getSession(sessionId), Option.fromUndefinedOr),
+  )
 
 /**
  * The session's working directory: its stored cwd, else the host's. The same
@@ -3125,7 +3137,7 @@ const storedSession = (
  */
 export const sessionWorkingDirectory = (
   sessionId: SessionId,
-): Effect.Effect<string, never, SessionStorage | RuntimeEnvironment> =>
+): Effect.Effect<string, StorageError, SessionStorage | RuntimeEnvironment> =>
   Effect.gen(function* () {
     const environment = yield* RuntimeEnvironment
     const stored = yield* storedSession(sessionId)
@@ -3138,7 +3150,7 @@ export const sessionWorkingDirectory = (
 /**
  * Resolve the turn profile for one branch: the stored session cwd selects a
  * profile from the cache; without a session or a cache, the launch registry
- * and the host defaults apply. A storage lookup failure falls back to them as well.
+ * and the host defaults apply. A failed session read fails the resolve.
  * The caller's scope holds the profile's lease for as long as it uses it.
  */
 export const resolveTurnProfile = (params: {
@@ -3150,7 +3162,7 @@ export const resolveTurnProfile = (params: {
   readonly opener: RunOpener
 }): Effect.Effect<
   AgentLoopTurnProfile,
-  never,
+  StorageError,
   ExtensionRegistry | SessionStorage | ScopeType.Scope
 > =>
   Effect.gen(function* () {

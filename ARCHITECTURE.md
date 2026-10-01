@@ -1123,7 +1123,7 @@ surface narrows to `cell`; it cannot reuse a cell-only advertised map for discov
 The catalog is instruction plus data, not a tool. When the surface narrows to
 `cell`, the cell extension's `systemPrompt` hook adds a `## Host Tools` section.
 Its heading is the one place that explains the discovery calls
-(`tools.search`, `tools.describe`, `tools(id)`); the cell guidelines do not
+(`tools.search`, `tools(id)`); the cell guidelines do not
 repeat it. The section has one signature line per selected host tool: its callable path, an input
 type and a result type rendered from the JSON Schema, and the first line of its
 prompt snippet or description (`- tools.wake.cancel(input?: { wakeId?:
@@ -1180,10 +1180,10 @@ fewer than all distinct words of a one- or two-word query (60% of a longer one;
 a repeated word counts once) unless
 the whole query appears in a field, and breaks ties by id in code-unit order
 (`searchCatalog` in `cell-worker-boundary.ts`). `namespace` keeps the ids under
-that prefix, and an empty query lists them by id. `tools.describe(id)`
-returns the rendered signature line. They are
-local like `tools(id)`, and their results arrive as cell output, so discovery
-never changes the prompt. An id whose first segment is `search` or `describe`
+that prefix, and an empty query lists them by id. `tools(id).signature`
+holds the rendered signature line. Both are
+local, and their results arrive as cell output, so discovery
+never changes the prompt. An id whose first segment is `search`
 renders and is reached as `tools("search.x")`. A call with no
 argument sends `{}`; the signature marks `input?` only when the schema accepts
 `{}`. Enums past eight literals, and input or result types past 300 characters,
@@ -1298,8 +1298,8 @@ the loose result schema); core has no MCP concept. The one Promise edge, the
 is the `mcpServers` object Claude Code, Cursor, and opencode share, in
 `~/.gent/mcp.json` and, for a project root `trustedProjects` names, in
 `<project>/.gent/mcp.json` (a project entry wins by name). A `command` entry
-runs over stdio with the host's whole environment, empty values included and
-read once per setup, its own `env` winning (its stderr is ignored, so it never
+runs over stdio with the process's flat environment, empty values included and
+read in one pass at the first setup, its own `env` winning (its stderr is ignored, so it never
 draws on the TUI). A `url` entry sends its
 `headers`; its `type` picks the transport: `http` (or `streamable-http`) and
 `sse` pin one, and `auto`, the default, tries streamable HTTP and then SSE
@@ -1346,12 +1346,15 @@ Setup reads each server's tool list from `<data dir>/mcp-catalog.json`, keyed
 by the SHA-256 digest of the entry as it runs (its expanded values, for a
 `url` entry its configured `type`, with `http` and `streamable-http` one
 value, and for stdio the resolved directory its `cwd` names), so an edited
-entry or a changed variable lists again. A stdio entry whose command or
-arguments name a relative path (`./server.ts`, `src/x.js`, `server.py`, or a
-flag value such as `--config=./x.json`) also keys with the session directory,
-so two projects' `./server.ts` are two servers. Any other stdio entry that
-names no `cwd` runs in the session directory but keys without it, so a new
-project does not spawn every server at setup. A relist on the first
+entry or a changed variable lists again. An entry from a project's
+`.gent/mcp.json` belongs to that project and always keys with the session
+directory, so two projects' `bun run mcp` (or `http://localhost:3000/mcp`) are
+two servers. A user-file stdio entry whose command or arguments name a
+relative path (`./server.ts`, `src/x.js`, `server.py`, or a flag value such as
+`--config=./x.json`) also keys with the session directory, so two projects'
+`./server.ts` are two servers. Any other user-file entry that names no `cwd`
+keys without it, so a new project does not spawn every server at setup. A
+relist on the first
 connection corrects the cache for the next session; the capabilities a
 session registered stay as its setup listed them. The file holds only the
 digest, the server's `initialize` instructions and a `listedAt` stamp, never a
@@ -1413,7 +1416,7 @@ name `mcp__<server>__<tool>` within 64 characters (a server takes at most 20).
 Names that clean to one segment all stay: in code-unit order of the original
 names, the first keeps it and the next take `_2`, `_3`, and so on. Many MCP tools collapse in the prompt catalog by
 the host tool catalog budget; the model reaches them with `tools.search` and
-`tools.describe`.
+`tools(id)`.
 
 App entrypoints bind concrete Bun/OS behavior:
 
@@ -1430,7 +1433,7 @@ Production rule:
 `packages/sdk/src/server.ts` owns shared-server discovery. Two files sit beside `data.db` in the data directory (`GENT_DATA_DIR`, else `~/.gent`):
 
 - `server.lock.db` is the kernel lock. The owning server holds an exclusive SQLite lock on it (`BEGIN EXCLUSIVE`, `busy_timeout` 0) for the life of its scope. The OS releases it when the process exits. A server is alive exactly when this lock cannot be taken, so a crash, a reboot, or a reused pid cannot leave a live-looking lock, and two concurrent starts give one owner: the other waits for the owner's entry and attaches.
-- `server.lock` is the discovery entry the owner writes once it listens: url, pid, and the identity tuple. Clients attach only after `/_gent/identity` confirms the full tuple. An entry whose endpoint confirms the tuple counts as alive even when the kernel lock is free (a server from before the kernel lock), and a start probes it after it takes the lock, before it replaces the entry. `gent server stop` sends SIGTERM only after the same probe; `--all` removes an entry whose kernel lock is free and whose endpoint does not answer, and holds the kernel lock through that removal so a new owner's entry is never deleted.
+- `server.lock` is the discovery entry the owner writes once it listens: url, pid, and the identity tuple. Clients attach only after `/_gent/identity` confirms the full tuple. An entry whose kernel lock is free names a server that is gone, and a start that takes the lock replaces it. `gent server stop` sends SIGTERM only after the identity probe; `--all` removes an entry whose kernel lock is free, and holds the kernel lock through that removal so a new owner's entry is never deleted.
 
 A start that finds a confirmed server of another build on the database fails with a message that names its pid; it never signals it. `gent server stop` is the explicit way to stop it.
 

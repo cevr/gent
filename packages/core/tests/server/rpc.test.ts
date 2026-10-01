@@ -30,12 +30,20 @@ import {
 } from "../../src/server/rpc"
 import {
   WorkspaceRpcMiddleware,
-  CurrentWorkspaceId,
   WORKSPACE_ID_HEADER,
   workspaceHeadersForCwd,
   workspaceIdForCwd,
-  WorkspaceId,
 } from "../../src/server/workspace-rpc"
+import {
+  CurrentWorkspaceId,
+  WorkspaceId,
+  BranchId,
+  ExtensionId,
+  InteractionRequestId,
+  ProcessGenerationId,
+  RequestId,
+  SessionId,
+} from "../../src/domain/ids"
 import { describe, expect, it } from "effect-bun-test"
 import { RpcClient } from "effect/rpc"
 import { SqlClient } from "effect/sql"
@@ -44,7 +52,6 @@ import {
   textDeltaPart,
   Auth,
   AuthError,
-  AuthMethod,
   serializeAuthStore,
 } from "../../src/runtime/provider"
 import {
@@ -72,17 +79,13 @@ import {
   testTurnExtension,
 } from "../../src/test-utils/harness"
 import { e2ePreset, testAgent } from "../helpers/test-preset"
-import {
-  BranchId,
-  ExtensionId,
-  InteractionRequestId,
-  ProcessGenerationId,
-  RequestId,
-  SessionId,
-} from "../../src/domain/ids"
 import { Model as AiModel, type LanguageModel } from "effect/ai"
 import { BunServices } from "@effect/platform-bun"
-import type { ModelDriverContribution } from "../../src/domain/driver.js"
+import {
+  AuthMethod,
+  type ModelDriverContribution,
+  ProviderAuthError,
+} from "../../src/domain/driver.js"
 import { type ExtensionHealthSnapshot, SetDriverOverrideInput } from "../../src/server/rpc.js"
 import {
   defineResource,
@@ -890,6 +893,177 @@ describe("provider login", () => {
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )
+
+  // A login's pending state lives on the driver instance that authorized it.
+  // A config edit between the two calls supersedes the session's profile;
+  // the callback still reaches the instance that holds the login.
+  it.live("a login finishes on the profile that began it, across a config edit", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const project = yield* makeTempDirectoryScoped("gent-login-edit-")
+        const home = yield* makeTempDirectoryScoped("gent-login-edit-home-")
+        const loginDriver = defineExtension({
+          id: "@test/pending-login",
+          setup: Effect.gen(function* () {
+            const pending = new Set<string>()
+            yield* (yield* ExtensionHost).register("modelDriver", {
+              id: "pending-oauth",
+              name: "Pending OAuth",
+              resolveModel: () => Effect.succeed(stubModel),
+              auth: {
+                methods: [AuthMethod.make({ type: "oauth", label: "OAuth" })],
+                authorize: (ctx) =>
+                  Effect.sync(() => {
+                    pending.add(ctx.authorizationId)
+                    return Option.some({ url: "http://example.com/auth", method: "code" as const })
+                  }),
+                callback: (ctx) =>
+                  Effect.gen(function* () {
+                    if (!pending.delete(ctx.authorizationId)) {
+                      return yield* new ProviderAuthError({ message: "login state missing" })
+                    }
+                    yield* ctx.persist({ type: "api", key: ctx.code ?? "" })
+                  }),
+              },
+            })
+          }),
+        })
+        const toggle = defineExtension({ id: "@test/login-toggle", setup: Effect.void })
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const { client } = yield* createRpcClient(
+          createE2ELayer({
+            agents: e2ePreset.agents,
+            providerLayer,
+            extensionInputs: [loginDriver, toggle],
+            configServiceLayer: ConfigService.Live.pipe(
+              Layer.provide(RuntimeEnvironment.Live({ cwd: project, home })),
+              Layer.provide(BunPlatformLive),
+            ),
+          }),
+        )
+        const { sessionId } = yield* client.session.create({ cwd: project })
+        const authorization = yield* client.auth.authorize({
+          sessionId,
+          provider: "pending-oauth",
+          method: 0,
+        })
+        if (Predicate.isNull(authorization)) return yield* Effect.die("authorize gave no link")
+        const projectConfig = path.join(project, ".gent", "config.json")
+        yield* fs.makeDirectory(path.dirname(projectConfig), { recursive: true })
+        yield* fs.writeFileString(
+          projectConfig,
+          encodeJson({ disabledExtensions: ["@test/login-toggle"] }),
+        )
+        yield* client.auth.callback({
+          sessionId,
+          provider: "pending-oauth",
+          method: 0,
+          authorizationId: authorization.authorizationId,
+          code: "sk-edited",
+        })
+        const providers = yield* client.auth.listProviders({ sessionId })
+        expect(providers.find((entry) => entry.provider === "pending-oauth")?.hasKey).toBe(true)
+      }).pipe(Effect.timeout("8 seconds")),
+    ).pipe(Effect.provide(BunServices.layer)),
+  )
+
+  // Two callbacks for one login: the one that succeeds first must not
+  // retire the superseded profile under the one still running.
+  it.live("a finished callback keeps the login's profile until a slower callback ends", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const project = yield* makeTempDirectoryScoped("gent-login-race-")
+        const home = yield* makeTempDirectoryScoped("gent-login-race-home-")
+        const slowStarted = yield* Deferred.make<void>()
+        const slowGate = yield* Deferred.make<void>()
+        const loginDriver = defineExtension({
+          id: "@test/racing-login",
+          setup: Effect.gen(function* () {
+            // Set when this instance's profile retires.
+            const retired = MutableRef.make(false)
+            const host = yield* ExtensionHost
+            yield* host.register(
+              "resource",
+              // oxlint-disable-next-line effect/noAs -- The fixture erases a resource with no service output at the contribution boundary.
+              defineResource({
+                id: "test/racing-login/instance",
+                scope: "process",
+                layer: Layer.effectDiscard(
+                  Effect.addFinalizer(() => Effect.sync(() => MutableRef.set(retired, true))),
+                ),
+              }) as never,
+            )
+            yield* host.register("modelDriver", {
+              id: "racing-oauth",
+              name: "Racing OAuth",
+              resolveModel: () => Effect.succeed(stubModel),
+              auth: {
+                methods: [AuthMethod.make({ type: "oauth", label: "OAuth" })],
+                authorize: () =>
+                  Effect.succeedSome({ url: "http://example.com/auth", method: "code" as const }),
+                callback: (ctx) =>
+                  Effect.gen(function* () {
+                    if (ctx.code === "sk-slow") {
+                      yield* Deferred.succeed(slowStarted, void 0)
+                      yield* Deferred.await(slowGate)
+                    }
+                    if (MutableRef.get(retired)) {
+                      return yield* new ProviderAuthError({ message: "login instance retired" })
+                    }
+                    yield* ctx.persist({ type: "api", key: ctx.code ?? "" })
+                  }),
+              },
+            })
+          }),
+        })
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const { client } = yield* createRpcClient(
+          createE2ELayer({
+            agents: e2ePreset.agents,
+            providerLayer,
+            extensionInputs: [loginDriver],
+            configServiceLayer: ConfigService.Live.pipe(
+              Layer.provide(RuntimeEnvironment.Live({ cwd: project, home })),
+              Layer.provide(BunPlatformLive),
+            ),
+          }),
+        )
+        const { sessionId } = yield* client.session.create({ cwd: project })
+        const authorization = yield* client.auth.authorize({
+          sessionId,
+          provider: "racing-oauth",
+          method: 0,
+        })
+        if (Predicate.isNull(authorization)) return yield* Effect.die("authorize gave no link")
+        const projectConfig = path.join(project, ".gent", "config.json")
+        yield* fs.makeDirectory(path.dirname(projectConfig), { recursive: true })
+        yield* fs.writeFileString(
+          projectConfig,
+          encodeJson({ disabledExtensions: ["@test/racing-login"] }),
+        )
+        // Reading the providers builds the new profile, which supersedes the login's.
+        yield* client.auth.listProviders({ sessionId })
+        const callback = (code: string) =>
+          client.auth.callback({
+            sessionId,
+            provider: "racing-oauth",
+            method: 0,
+            authorizationId: authorization.authorizationId,
+            code,
+          })
+        const slow = yield* callback("sk-slow").pipe(Effect.exit, Effect.forkChild)
+        yield* Deferred.await(slowStarted)
+        yield* callback("sk-fast")
+        yield* Deferred.succeed(slowGate, void 0)
+        const slowExit = yield* Fiber.join(slow)
+        expect(Exit.isSuccess(slowExit)).toBe(true)
+      }).pipe(Effect.timeout("8 seconds")),
+    ).pipe(Effect.provide(BunServices.layer)),
+  )
 })
 
 // ── interaction commands ────────────────────────────────────────────────────
@@ -1263,7 +1437,7 @@ describe("interaction.respondInteraction", () => {
                 agents: e2ePreset.agents,
                 providerLayer: firstProvider.layer,
                 extensions: [InteractionProbeExtension],
-                durableApproval: true,
+                approvalLayer: ApprovalService.Live,
                 storagePath: dbPath,
               }),
             )
@@ -1312,7 +1486,7 @@ describe("interaction.respondInteraction", () => {
                 agents: e2ePreset.agents,
                 providerLayer: secondProvider.layer,
                 extensions: [InteractionProbeExtension],
-                durableApproval: true,
+                approvalLayer: ApprovalService.Live,
                 storagePath: dbPath,
               }),
             )
@@ -1394,7 +1568,7 @@ describe("interaction.respondInteraction", () => {
                 agents: e2ePreset.agents,
                 providerLayer: firstProvider.layer,
                 extensions: [InteractionProbeExtension],
-                durableApproval: true,
+                approvalLayer: ApprovalService.Live,
                 storagePath: dbPath,
               }),
             )
@@ -1452,7 +1626,7 @@ describe("interaction.respondInteraction", () => {
                 agents: e2ePreset.agents,
                 providerLayer: secondProvider.layer,
                 extensions: [InteractionProbeExtension],
-                durableApproval: true,
+                approvalLayer: ApprovalService.Live,
                 storagePath: dbPath,
               }),
             )
@@ -2435,7 +2609,7 @@ describe("interaction.respondInteraction", () => {
                 agents: e2ePreset.agents,
                 providerLayer: firstProvider.layer,
                 extensions: [extension],
-                durableApproval: true,
+                approvalLayer: ApprovalService.Live,
                 storagePath: dbPath,
               }),
             )
@@ -2480,7 +2654,7 @@ describe("interaction.respondInteraction", () => {
                 agents: e2ePreset.agents,
                 providerLayer: secondProvider.layer,
                 extensions: [extension],
-                durableApproval: true,
+                approvalLayer: ApprovalService.Live,
                 storagePath: dbPath,
               }),
             )
@@ -2615,7 +2789,7 @@ describe("interaction.respondInteraction", () => {
                 agents: e2ePreset.agents,
                 providerLayer,
                 extensions: [extension],
-                durableApproval: true,
+                approvalLayer: ApprovalService.Live,
                 storagePath: dbPath,
               }),
             )
@@ -2679,7 +2853,7 @@ describe("interaction.respondInteraction", () => {
                 agents: e2ePreset.agents,
                 providerLayer: firstProvider.layer,
                 extensions: [extension],
-                durableApproval: true,
+                approvalLayer: ApprovalService.Live,
                 storagePath: dbPath,
               }),
             )
@@ -2712,7 +2886,7 @@ describe("interaction.respondInteraction", () => {
                 agents: e2ePreset.agents,
                 providerLayer: secondProvider.layer,
                 extensions: [extension],
-                durableApproval: true,
+                approvalLayer: ApprovalService.Live,
                 storagePath: dbPath,
               }),
             )
@@ -3169,7 +3343,7 @@ describe("interaction.respondInteraction", () => {
               agents: e2ePreset.agents,
               providerLayer: firstProvider.layer,
               extensions: [extension],
-              durableApproval: true,
+              approvalLayer: ApprovalService.Live,
               storagePath: dbPath,
             }),
           )
@@ -3221,7 +3395,7 @@ describe("interaction.respondInteraction", () => {
               agents: e2ePreset.agents,
               providerLayer: secondProvider.layer,
               extensions: [extension],
-              durableApproval: true,
+              approvalLayer: ApprovalService.Live,
               storagePath: dbPath,
             }),
           )
@@ -3384,9 +3558,10 @@ const TestCommandsExtension: GentExtension = {
         id: "noop",
         slash: { name: "noop", description: "noop" },
         description: "noop",
-        input: Schema.String,
-        output: Schema.Void,
-        execute: () => Effect.void,
+        // A structured input and output, so the round trip decodes both.
+        input: Schema.Struct({ value: Schema.String }),
+        output: Schema.Struct({ value: Schema.String }),
+        execute: (input: { value: string }) => Effect.succeed({ value: input.value }),
       }),
     ],
   }),
@@ -3470,6 +3645,15 @@ describe("extension requests and slash commands", () => {
           expect(extensionRequestEvent?.annotations["extensionId"]).toBe(greet!.extensionId)
           expect(extensionRequestEvent?.annotations["capabilityId"]).toBe(greet!.capabilityId)
 
+          const echoed = yield* client.extension.request({
+            sessionId,
+            extensionId: ExtensionId.make("@test/commands"),
+            capabilityId: "noop",
+            input: { value: "hi" },
+            branchId,
+          })
+          expect(echoed).toEqual({ value: "hi" })
+
           const missingCapabilityId = "missing-greet"
           const failed = yield* client.extension
             .request({
@@ -3504,7 +3688,7 @@ describe("extension requests and slash commands", () => {
     }),
   )
 
-  it.live("RPC request can queue follow-up through ExtensionContext service", () =>
+  it.live("RPC slash request can queue follow-up through ExtensionContext service", () =>
     Effect.gen(function* () {
       const extensionId = ExtensionId.make("@test/queue-follow-up-request")
       const ext: LoadedExtension = {
@@ -3515,6 +3699,11 @@ describe("extension requests and slash commands", () => {
           requests: [
             request({
               id: "queue-follow-up",
+              slash: {
+                trigger: "queue",
+                name: "Queue Follow Up",
+                description: "Queue follow-up request",
+              },
               input: Schema.String,
               output: Schema.Void,
               execute: (input) =>
@@ -3548,6 +3737,8 @@ describe("extension requests and slash commands", () => {
             extensions: [ext],
             cwd: "/nonexistent/gent-extension-queue-follow-up",
           })
+          const commands = yield* client.extension.listSlashCommands({ sessionId })
+          expect(commands.map((command) => command.name)).toEqual(["queue"])
           yield* client.extension.request({
             sessionId,
             branchId,
@@ -3655,77 +3846,6 @@ describe("extension requests and slash commands", () => {
           ).toBe(true)
           yield* controls.assertDone
         }).pipe(Effect.timeout("10 seconds")),
-      )
-    }),
-  )
-
-  it.live("RPC request runs slash request with ExtensionContext service", () =>
-    Effect.gen(function* () {
-      const extensionId = ExtensionId.make("@test/queue-follow-up-slash")
-      const ext: LoadedExtension = {
-        manifest: { id: extensionId },
-        scope: "builtin",
-        sourcePath: "test",
-        contributions: {
-          requests: [
-            request({
-              id: "queue-follow-up-slash",
-              slash: {
-                trigger: "queue-follow-up",
-                name: "Queue Follow Up",
-                description: "Queue follow-up request",
-              },
-              description: "Queue follow-up request",
-              input: Schema.String,
-              output: Schema.Void,
-              execute: (input: string) =>
-                Effect.gen(function* () {
-                  const ctx = yield* ExtensionContext
-                  yield* ctx.Session.send({
-                    delivery: "queue",
-                    sourceId: "test-slash-request",
-                    content: input,
-                  })
-                }).pipe(
-                  Effect.mapError(
-                    (cause) =>
-                      new CapabilityError({
-                        extensionId,
-                        capabilityId: "queue-follow-up-slash",
-                        reason: cause.message,
-                      }),
-                  ),
-                ),
-            }),
-          ],
-        },
-      }
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-          const { client, sessionId, branchId } = yield* createRpcHarness({
-            agents: e2ePreset.agents,
-            providerLayer,
-            extensions: [ext],
-            cwd: "/nonexistent/gent-extension-queue-follow-up-slash",
-          })
-          const commands = yield* client.extension.listSlashCommands({ sessionId })
-          expect(commands.map((command) => command.name)).toEqual(["queue-follow-up"])
-          yield* client.extension.request({
-            sessionId,
-            branchId,
-            extensionId,
-            capabilityId: "queue-follow-up-slash",
-            input: "queued through slash request",
-          })
-          const queue = yield* client.queue.get({ sessionId, branchId })
-          expect(queue.followUp).toEqual([
-            expect.objectContaining({
-              _tag: "FollowUp",
-              content: "queued through slash request",
-            }),
-          ])
-        }).pipe(Effect.timeout("4 seconds")),
       )
     }),
   )
@@ -3851,6 +3971,12 @@ describe("extension requests and slash commands", () => {
               output: Schema.Void,
               execute: () => Effect.void,
             }),
+            request({
+              id: "hidden",
+              input: Schema.String,
+              output: Schema.Void,
+              execute: () => Effect.void,
+            }),
           ],
         },
       }
@@ -3864,110 +3990,6 @@ describe("extension requests and slash commands", () => {
           })
           const commands = yield* client.extension.listSlashCommands({ sessionId })
           expect(commands.map((command) => command.name)).toEqual(["visible"])
-        }).pipe(Effect.timeout("4 seconds")),
-      )
-    }),
-  )
-
-  it.live("RPC handlers receive ExtensionContext authority without intent ceremony", () =>
-    Effect.gen(function* () {
-      const extensionId = ExtensionId.make("@test/read-context")
-      const ext: GentExtension = {
-        manifest: { id: extensionId },
-        setup: registerContributions({
-          requests: [
-            request({
-              id: "inspect",
-              input: Schema.Void,
-              output: Schema.Struct({
-                hasSessionMutations: Schema.Boolean,
-                hasAgentRun: Schema.Boolean,
-                extensionContextFollowUpQueued: Schema.Boolean,
-              }),
-              execute: () =>
-                Effect.gen(function* () {
-                  const extensionCtx = yield* ExtensionContext
-                  const followUpExit = yield* Effect.exit(
-                    extensionCtx.Session.send({
-                      delivery: "queue",
-                      sourceId: "rpc",
-                      content: "queued",
-                    }),
-                  )
-                  return {
-                    hasSessionMutations: false,
-                    hasAgentRun: false,
-                    extensionContextFollowUpQueued: Exit.isSuccess(followUpExit),
-                  }
-                }),
-            }),
-          ],
-        }),
-      }
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-          const { client, sessionId, branchId } = yield* createRpcHarness({
-            ...e2ePreset,
-            providerLayer,
-            extensionInputs: [...e2ePreset.extensionInputs, ext],
-          })
-          const result = yield* client.extension.request({
-            sessionId,
-            branchId,
-            extensionId,
-            capabilityId: "inspect",
-            // oxlint-disable-next-line effect/noNullish -- Keep the absent field in this schema boundary fixture.
-            input: undefined,
-          })
-          expect(result).toEqual({
-            hasSessionMutations: false,
-            hasAgentRun: false,
-            extensionContextFollowUpQueued: true,
-          })
-        }).pipe(Effect.timeout("4 seconds")),
-      )
-    }),
-  )
-
-  it.live("RPC request invokes slash-decorated requests through the transport boundary", () =>
-    Effect.gen(function* () {
-      const extensionId = ExtensionId.make("@test/public-shadow")
-      const projectExt: LoadedExtension = {
-        manifest: { id: extensionId },
-        scope: "project",
-        sourcePath: "project",
-        contributions: {
-          requests: [
-            request({
-              id: "shadowed",
-              slash: { name: "shadowed private", description: "shadowed private" },
-              description: "shadowed private",
-              input: Schema.Struct({ value: Schema.String }),
-              output: Schema.Struct({ value: Schema.String }),
-              execute: (input: { value: string }) => Effect.succeed({ value: input.value }),
-            }),
-          ],
-        },
-      }
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-          const { client, sessionId, branchId } = yield* createRpcHarness({
-            agents: e2ePreset.agents,
-            providerLayer,
-            extensions: [projectExt],
-          })
-          const commands = yield* client.extension.listSlashCommands({ sessionId })
-          expect(commands.map((command) => command.name)).toEqual(["shadowed"])
-          const result = yield* client.extension.request({
-            sessionId,
-            branchId,
-            extensionId,
-            capabilityId: "shadowed",
-            input: { value: "hi" },
-          })
-          expect(result).toEqual({ value: "hi" })
         }).pipe(Effect.timeout("4 seconds")),
       )
     }),
@@ -5469,7 +5491,7 @@ describe("a resumed call that had taken its answer", () => {
             agents: e2ePreset.agents,
             providerLayer,
             extensions: [extension],
-            durableApproval: true,
+            approvalLayer: ApprovalService.Live,
             storagePath: dbPath,
           })
 
@@ -5590,7 +5612,7 @@ describe("a call answered while a sibling call still ran", () => {
             agents: e2ePreset.agents,
             providerLayer,
             extensions: [extension],
-            durableApproval: true,
+            approvalLayer: ApprovalService.Live,
             storagePath: dbPath,
           })
 

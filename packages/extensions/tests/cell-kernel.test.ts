@@ -25,7 +25,7 @@ import {
   cellWorkerLaunch,
   openCellKernel,
 } from "../src/cell.js"
-import { CellEvaluationError } from "../src/cell-protocol.js"
+import { CellEvaluationError, maximumCellFrameBytes } from "../src/cell-protocol.js"
 import {
   packageDirectory,
   buildCellWorker,
@@ -620,6 +620,38 @@ describe("cell worker kernel", () => {
           .evaluate(describe)
           .pipe(Effect.provideService(CellOperationHost, host))
         expect(restored.display).toBe("Read a file")
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(platform)),
+    10000,
+  )
+
+  it.scopedLive(
+    "a listing too large for one frame fails the cell and names the tool count to cut",
+    () =>
+      Effect.gen(function* () {
+        const kernel = yield* openCellKernel({
+          worker: yield* buildCellWorker,
+          cwd: packageDirectory,
+        })
+        const catalog = {
+          hash: "huge-v1",
+          tools: [
+            {
+              name: "huge",
+              description: "A tool whose summary alone fills a frame",
+              guidelines: [],
+              parameters: {},
+              signature: "",
+              summary: "x".repeat(maximumCellFrameBytes),
+            },
+          ],
+        }
+        const host = CellOperationHost.of({ catalog, call: () => Effect.succeed(true) })
+        const failed = yield* kernel
+          .evaluate("1 + 1")
+          .pipe(Effect.provideService(CellOperationHost, host), Effect.flip)
+        expect(failed.message).toContain(
+          "the listing of 1 host tools does not fit one frame; select fewer tools for this agent",
+        )
       }).pipe(Effect.timeout("8 seconds"), Effect.provide(platform)),
     10000,
   )

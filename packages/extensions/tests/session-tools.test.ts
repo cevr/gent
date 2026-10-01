@@ -1,8 +1,7 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import { Effect, Fiber, Option, Stream } from "effect"
-import { AgentsExtension } from "../src/agents.js"
-import { builtinAgent } from "./helpers/builtin-agents.js"
-import type { SystemPromptInput } from "@gent/core/extensions/api"
+import { AgentsExtension, main as builtinAgent } from "../src/agents.js"
+import { getToolId, type SystemPromptInput } from "@gent/core/extensions/api"
 import {
   collectTestContributions,
   createRpcHarness,
@@ -15,6 +14,7 @@ import {
 import * as Prompt from "effect/ai/Prompt"
 import {
   renderSessionTree,
+  type SessionMessageDetails,
   sessionMessageBody,
   sessionMessageText,
   SessionToolsExtension,
@@ -86,7 +86,7 @@ describe("session.send summary", () => {
     Effect.gen(function* () {
       const contributions = yield* collectTestContributions(SessionToolsExtension.setup)
       const send = Option.fromUndefinedOr(
-        contributions.tools?.find((candidate) => candidate.id === "session.send"),
+        contributions.tools?.find((candidate) => getToolId(candidate) === "session.send"),
       )
       expect(Option.isSome(send)).toBe(true)
       expect(
@@ -305,7 +305,10 @@ describe("Session tools via model turn", () => {
 })
 
 describe("session message header", () => {
-  const from = { sessionId: SessionId.make("child-1"), relation: "child" }
+  const from = {
+    sessionId: SessionId.make("child-1"),
+    relation: "child",
+  } satisfies SessionMessageDetails["from"]
 
   test("a child's message says it is not the completion, before and after it", () => {
     const text = sessionMessageText({ from, message: "CI is green" })

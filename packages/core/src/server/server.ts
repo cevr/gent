@@ -2,17 +2,25 @@ import {
   Context,
   Crypto,
   DateTime,
+  Duration,
   Effect,
+  Exit,
   FileSystem,
   Layer,
   Option,
   Path,
   Predicate,
   Schema,
-  type Scope,
+  Scope,
   Stream,
 } from "effect"
-import { BranchId, MessageId, type RequestId, SessionId } from "../domain/ids.js"
+import {
+  BranchId,
+  MessageId,
+  type RequestId,
+  SessionId,
+  CurrentWorkspaceId,
+} from "../domain/ids.js"
 import {
   Branch,
   type BranchTreeNode,
@@ -109,7 +117,7 @@ import {
   SessionRuntime,
   type SessionRuntimeError,
 } from "../runtime/session.js"
-import { CurrentWorkspaceId, workspaceIdForCwd, WorkspaceRpcMiddleware } from "./workspace-rpc.js"
+import { workspaceIdForCwd, WorkspaceRpcMiddleware } from "./workspace-rpc.js"
 import {
   Auth,
   AuthApi,
@@ -899,15 +907,14 @@ const makeSessionMutationsService: Effect.Effect<
   // ── requestId dedup ──
   //
   // Clients generate a `requestId` per mutation so a WS-level retry after an
-  // ambiguous failure converges on one durable outcome. Each body also checks
-  // the durable operation row, which owns restart/retry correctness; the
-  // in-memory cache only collapses concurrent same-process fibers.
+  // ambiguous failure converges on one durable outcome. Each body checks the
+  // durable operation row, which answers every sequential retry, a restart
+  // included.
   //
-  // Dedup is *concurrency-safe*: `RpcServer.layerHttp` runs with
-  // `concurrency: "unbounded"` and the client has `retryTransientErrors: true`,
-  // so the same requestId can land on two fibers in parallel. `Cache`
-  // collapses concurrent same-key lookups via an internal Deferred so the
-  // second fiber awaits the first's outcome.
+  // `RpcServer.layerHttp` runs with `concurrency: "unbounded"` and the client
+  // has `retryTransientErrors: true`, so the same requestId can land on two
+  // fibers in parallel. `makeRequestDeduper` runs the body once for the calls
+  // in flight together; the others await its outcome.
   const keyOf = (input: { readonly requestId?: string }) => Option.fromUndefinedOr(input.requestId)
   const dedupCreateSession = yield* makeRequestDeduper<
     CreateSessionInput,
@@ -1240,6 +1247,22 @@ const rpc = <A, E, R>(
 
 // ── rpc handlers layer ──────────────────────────────────────────────────────
 
+/** A login no callback finishes lets its profile go after this. */
+const LOGIN_LEASE = Duration.minutes(10)
+
+/** The profile a pending login holds; see "login leases" in `RpcHandlers`. */
+interface LoginLease {
+  readonly registry: ExtensionRegistryService
+  readonly scope: Scope.Closeable
+  /** Callbacks running on the lease. */
+  inFlight: number
+  /**
+   * A callback succeeded or `LOGIN_LEASE` passed. The lease goes when it is
+   * done and no callback runs on it: the last one out lets it go.
+   */
+  done: boolean
+}
+
 const RpcHandlers = GentRpcs.toLayer(
   Effect.gen(function* () {
     const mutations = yield* SessionMutations
@@ -1261,10 +1284,12 @@ const RpcHandlers = GentRpcs.toLayer(
     const runtimeEnvironment = yield* RuntimeEnvironment
     const pathService = yield* Path.Path
 
-    // `message.send` has no durable operation row; the runtime keys its actor
-    // command on `requestId`. This cache collapses concurrent same-requestId
-    // fibers (unbounded RPC concurrency + client transport retries) so the
-    // runtime sees one dispatch per request id.
+    // `message.send` has no durable operation row: its `requestId` names the
+    // user message, and the loop admits a message whose turn is admitted,
+    // running or settled as a replay (`LoopInbox.admit`), so a sequential
+    // retry runs no second turn. The deduper runs the body once for the
+    // calls in flight together (unbounded RPC concurrency + client transport
+    // retries).
     const sendMessage = yield* makeRequestDeduper<SendMessageInput, void, SessionRuntimeError>({
       body: (input) =>
         sessionRuntime
@@ -1313,17 +1338,113 @@ const RpcHandlers = GentRpcs.toLayer(
     ): Effect.Effect<ExtensionRegistryService, StorageError, Scope.Scope> =>
       sessionCwd(sessionId).pipe(Effect.flatMap(registryForCwd))
 
+    const underRegistry = <A, E>(
+      registry: ExtensionRegistryService,
+      effect: Effect.Effect<A, E, ExtensionRegistry | Auth | GentPlatform>,
+    ) =>
+      effect.pipe(
+        Effect.provideService(ExtensionRegistry, registry),
+        Effect.provideService(Auth, authStore),
+        Effect.provideService(GentPlatform, platform),
+      )
+
     /** Provider login runs against the drivers of the session's own profile. */
     const inSessionProfile = <A, E>(
       sessionId: Option.Option<SessionId>,
       effect: Effect.Effect<A, E, ExtensionRegistry | Auth | GentPlatform>,
     ) =>
       resolveSessionRegistry(sessionId).pipe(
-        Effect.flatMap((registry) => Effect.provideService(effect, ExtensionRegistry, registry)),
-        Effect.provideService(Auth, authStore),
-        Effect.provideService(GentPlatform, platform),
+        Effect.flatMap((registry) => underRegistry(registry, effect)),
         Effect.scoped,
       )
+
+    // ── login leases ──
+    // A login's pending state lives on the driver instance that authorized
+    // it. The login holds that instance's profile until its callback
+    // succeeds or `LOGIN_LEASE` passes, so a config edit between the two
+    // calls, which supersedes the session's profile, cannot retire the
+    // instance under the login. A callback in flight keeps the lease past
+    // its expiry or past another callback's success; the last one out lets
+    // it go.
+    const handlersScope = yield* Effect.scope
+    const loginLeases = new Map<string, LoginLease>()
+    const dropLoginLease = (authorizationId: string, lease: LoginLease) =>
+      Effect.suspend(() => {
+        if (loginLeases.get(authorizationId) !== lease) return Effect.void
+        loginLeases.delete(authorizationId)
+        return Scope.close(lease.scope, Exit.void)
+      })
+
+    const authorizeLogin = (input: AuthorizeAuthInput) =>
+      Effect.gen(function* () {
+        const scope = yield* Scope.fork(handlersScope)
+        const authorized = yield* Effect.gen(function* () {
+          const registry = yield* resolveSessionRegistry(Option.some(input.sessionId)).pipe(
+            Scope.provide(scope),
+          )
+          const authorization = yield* underRegistry(
+            registry,
+            authorizeProvider(input.sessionId, input.provider, input.method),
+          )
+          return { registry, authorization }
+        }).pipe(Effect.onError(() => Scope.close(scope, Exit.void)))
+        if (Option.isNone(authorized.authorization)) {
+          yield* Scope.close(scope, Exit.void)
+          return Option.none()
+        }
+        const authorizationId = authorized.authorization.value.authorizationId
+        const lease: LoginLease = {
+          registry: authorized.registry,
+          scope,
+          inFlight: 0,
+          done: false,
+        }
+        loginLeases.set(authorizationId, lease)
+        // The timer lives in the lease's scope: a lease let go stops it.
+        yield* Effect.sleep(LOGIN_LEASE).pipe(
+          Effect.andThen(
+            Effect.suspend(() => {
+              lease.done = true
+              if (lease.inFlight > 0) return Effect.void
+              return dropLoginLease(authorizationId, lease)
+            }),
+          ),
+          Effect.forkIn(scope),
+        )
+        return authorized.authorization
+      })
+
+    const completeLogin = (input: CallbackAuthInput) => {
+      const run = completeProviderAuth(
+        input.sessionId,
+        input.provider,
+        input.method,
+        input.authorizationId,
+        input.code,
+      )
+      const held = Option.fromNullishOr(loginLeases.get(input.authorizationId))
+      if (Option.isNone(held)) return inSessionProfile(Option.some(input.sessionId), run)
+      const lease = held.value
+      return Effect.acquireUseRelease(
+        Effect.sync(() => {
+          lease.inFlight++
+        }),
+        () =>
+          underRegistry(lease.registry, run).pipe(
+            Effect.tap(() =>
+              Effect.sync(() => {
+                lease.done = true
+              }),
+            ),
+          ),
+        () =>
+          Effect.suspend(() => {
+            lease.inFlight--
+            if (!lease.done || lease.inFlight > 0) return Effect.void
+            return dropLoginLease(input.authorizationId, lease)
+          }),
+      )
+    }
 
     return {
       // ----------------------------------------------------------------------
@@ -1540,23 +1661,10 @@ const RpcHandlers = GentRpcs.toLayer(
         return inSessionProfile(Option.fromUndefinedOr(input.sessionId), listAuthMethods())
       },
 
-      "auth.authorize": ({ sessionId, provider, method }: AuthorizeAuthInput) =>
-        inSessionProfile(
-          Option.some(sessionId),
-          authorizeProvider(sessionId, provider, method),
-        ).pipe(Effect.map(Option.getOrNull)),
+      "auth.authorize": (input: AuthorizeAuthInput) =>
+        authorizeLogin(input).pipe(Effect.map(Option.getOrNull)),
 
-      "auth.callback": ({
-        sessionId,
-        provider,
-        method,
-        authorizationId,
-        code,
-      }: CallbackAuthInput) =>
-        inSessionProfile(
-          Option.some(sessionId),
-          completeProviderAuth(sessionId, provider, method, authorizationId, code),
-        ),
+      "auth.callback": (input: CallbackAuthInput) => completeLogin(input),
 
       // ----------------------------------------------------------------------
       // Extension transport
@@ -1601,21 +1709,11 @@ const RpcHandlers = GentRpcs.toLayer(
         input,
         branchId,
       }: ExtensionRpcRequestInput) =>
-        Effect.gen(function* () {
-          yield* WideEvent.set({
-            sessionId,
-            branchId,
-            extensionId,
-            capabilityId,
-          })
-          return yield* sessionRuntime
-            .requestExtension({
-              sessionId,
-              branchId,
-              extensionId,
-              capabilityId,
-              input,
-            })
+        rpc(
+          "extension.request",
+          { sessionId, branchId, extensionId, capabilityId },
+          sessionRuntime
+            .requestExtension({ sessionId, branchId, extensionId, capabilityId, input })
             .pipe(
               Effect.mapError(
                 (error) =>
@@ -1625,8 +1723,8 @@ const RpcHandlers = GentRpcs.toLayer(
                     message: error.message,
                   }),
               ),
-            )
-        }).pipe(withWideEvent(WideEventBoundary.rpc("extension.request"))),
+            ),
+        ),
 
       "extension.listSlashCommands": ({ sessionId }: SessionIdPayload) =>
         Effect.gen(function* () {
@@ -1953,12 +2051,6 @@ export const createDependencies = (config: DependenciesConfig) => {
   )
 }
 
-// ── http routes ─────────────────────────────────────────────────────────────
-
-// Reusable HTTP route assembly for gent servers.
-//
-// Used by the SDK's owned-server path: `Gent.server` with its in-process HTTP listener.
-
 // ── websocket lifecycle tracing ─────────────────────────────────────────────
 
 /**
@@ -2016,7 +2108,8 @@ interface ServerRoutesConfig {
 }
 
 /**
- * Build the full HTTP route layer for a gent server.
+ * Build the full HTTP route layer for a gent server; the SDK's owned-server
+ * path (`Gent.server`) serves it from its in-process HTTP listener.
  *
  * Includes: RPC-over-WS, identity route, CORS.
  * Caller provides `coreServicesLive` containing all service dependencies.

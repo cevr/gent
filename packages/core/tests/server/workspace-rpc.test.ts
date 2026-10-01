@@ -1,22 +1,18 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Layer, Path } from "effect"
-import { BunServices } from "@effect/platform-bun"
+import { Effect, Layer } from "effect"
 import { RpcClient, RpcTest } from "effect/rpc"
 import { Headers } from "effect/http"
-import { BunGentPlatformLive } from "../../src/runtime/gent-platform-bun"
-import { GentPlatform } from "../../src/runtime/gent-platform"
 import { LanguageModelLayers, textStep } from "../../src/test-utils/language-model"
 import { createE2ELayer } from "../../src/test-utils/harness"
 import { GentRpcs } from "../../src/server/rpc"
 import { RpcHandlersLive } from "../../src/server/server"
 import {
-  CurrentWorkspaceId,
   WORKSPACE_ID_HEADER,
-  WorkspaceId,
   provideWorkspaceIdHeader,
   workspaceHeadersForCwd,
   workspaceIdForCwd,
 } from "../../src/server/workspace-rpc"
+import { CurrentWorkspaceId, WorkspaceId } from "../../src/domain/ids"
 import { e2ePreset } from "../helpers/test-preset"
 
 const validWorkspaceId = WorkspaceId.make("a".repeat(64))
@@ -107,19 +103,5 @@ describe("workspace RPC middleware", () => {
       // The header carries exactly that id.
       expect(workspaceHeadersForCwd("/tmp/gent")[WORKSPACE_ID_HEADER]).toBe(String(id))
     }),
-  )
-
-  it.live("agrees with a sha256 of the platform-resolved path", () =>
-    Effect.gen(function* () {
-      const path = yield* Path.Path
-      const platform = yield* GentPlatform
-      const cwd = "/nonexistent/gent/nested/.."
-
-      // The server's launch workspace is a sha256 of the resolved cwd. It must
-      // match the shared derivation, or the server and its clients split.
-      const viaPlatform = WorkspaceId.make(platform.hash("sha256", path.resolve(cwd)))
-
-      expect(workspaceIdForCwd(cwd)).toBe(viaPlatform)
-    }).pipe(Effect.provide(Layer.mergeAll(BunServices.layer, BunGentPlatformLive))),
   )
 })

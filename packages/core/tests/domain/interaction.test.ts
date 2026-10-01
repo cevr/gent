@@ -1,19 +1,40 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Cause, Clock, Deferred, Effect, Exit, Fiber, Layer, Option, Queue, Schema } from "effect"
+import {
+  Cause,
+  Clock,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Logger,
+  Option,
+  Queue,
+  References,
+  Schema,
+} from "effect"
 import { InteractionStorage, type InteractionStorageService } from "../../src/storage/storage"
 import { ensureStorageParents, testSqliteStorage } from "../../src/test-utils/harness"
-import { EventStoreError } from "../../src/domain/event"
+import { EventStore, EventStoreError } from "../../src/domain/event"
+import { StorageError } from "../../src/domain/errors"
+import { ApprovalService } from "../../src/runtime/extension-host"
 import {
   CurrentInteractionOwner,
+  InteractionClosedError,
   InteractionPendingError,
   type InteractionRequestRecord,
   type InteractionService,
   type InteractionStorageConfig,
   makeInteractionService,
 } from "../../src/domain/interaction"
-import { BranchId, InteractionRequestId, SessionId, ToolCallId } from "../../src/domain/ids"
+import {
+  BranchId,
+  InteractionRequestId,
+  SessionId,
+  ToolCallId,
+  CurrentWorkspaceId,
+} from "../../src/domain/ids"
 import { GentPlatform } from "../../src/runtime/gent-platform"
-import { CurrentWorkspaceId } from "../../src/server/workspace-rpc"
 
 const persistInteraction = (is: InteractionStorageService, record: InteractionRequestRecord) =>
   is.persist(record).pipe(
@@ -843,6 +864,51 @@ describe("Interaction Request", () => {
     }).pipe(Effect.provide(storageLive)),
   )
 
+  // A failed resolve leaves the row open, so a restart asks it again; the
+  // log is the only trace of why.
+  it.live("a settle that storage fails logs its request and leaves the row open", () =>
+    Effect.gen(function* () {
+      const warnings: Array<{ readonly message: string; readonly requestId: unknown }> = []
+      const capture = Logger.make(({ message, fiber }) => {
+        const annotations = fiber.getRef(References.CurrentLogAnnotations)
+        warnings.push({ message: String(message), requestId: annotations["requestId"] })
+      })
+      const failingResolve = Layer.effect(
+        InteractionStorage,
+        Effect.map(InteractionStorage, (is) =>
+          InteractionStorage.of({
+            ...is,
+            resolve: () => Effect.fail(new StorageError({ message: "disk full" })),
+          }),
+        ),
+      ).pipe(Layer.provideMerge(storageLive))
+      const approvalLayer = ApprovalService.Live.pipe(
+        Layer.provideMerge(Layer.mergeAll(failingResolve, EventStore.Memory)),
+      )
+      yield* Effect.gen(function* () {
+        const approval = yield* ApprovalService
+        const branch = { sessionId: SessionId.make("s-fail"), branchId: BranchId.make("b-fail") }
+        yield* ensureStorageParents(branch)
+        const open = yield* pendingId(
+          yield* asCall(
+            approval,
+            branch,
+          )(approval.present({ text: "Go?" }, branch)).pipe(Effect.exit),
+        )
+        yield* approval.endTurn(branch)
+        expect(warnings).toContainEqual({
+          message: "interaction.resolve-failed",
+          requestId: open,
+        })
+        expect((yield* (yield* InteractionStorage).listOpen(branch)).length).toBe(1)
+      }).pipe(
+        Effect.provide(Layer.mergeAll(approvalLayer, Logger.layer([capture]))),
+        // The test preload turns logs off; this test reads one.
+        Effect.provideService(References.MinimumLogLevel, "Warn"),
+      )
+    }),
+  )
+
   /**
    * An ask by an inner call of a dispatching tool on `branch`, stored in
    * `is`; `taken` records what its receipt took.
@@ -929,6 +995,59 @@ describe("Interaction Request", () => {
         expect(answer.approved).toBe(false)
         expect(taken).toEqual([requestId])
       }).pipe(Effect.provide(storageLive)),
+  )
+
+  it.live("an inner call waiting in place is told its interaction closed when the turn ends", () =>
+    Effect.gen(function* () {
+      const is = yield* InteractionStorage
+      const presented = yield* Queue.unbounded<InteractionRequestId>()
+      const interaction = yield* makeInteractionService({
+        onPresent: (requestId) => Queue.offer(presented, requestId),
+        onDismiss: () => Effect.void,
+        storage: callbacksFor(is),
+      })
+      const branch = { sessionId: SessionId.make("s-closed"), branchId: BranchId.make("b-closed") }
+      yield* ensureStorageParents(branch)
+      const waiting = yield* asCall(
+        interaction,
+        branch,
+      )(askOwned(interaction, is, branch, [])("Delete it?")).pipe(Effect.flip, Effect.forkChild)
+      const requestId = yield* Queue.take(presented)
+      yield* interaction.endTurn(branch)
+      const error = yield* Fiber.join(waiting).pipe(Effect.timeout("2 seconds"))
+      expect(error).toEqual(
+        new InteractionClosedError({
+          message: "The interaction closed without an answer",
+          requestId,
+        }),
+      )
+    }).pipe(Effect.provide(storageLive)),
+  )
+
+  it.live("a resumed call whose request keeps no answer is told it closed", () =>
+    Effect.gen(function* () {
+      const is = yield* InteractionStorage
+      const interaction = yield* makeInteractionService({
+        onPresent: () => Effect.void,
+        onDismiss: () => Effect.void,
+        storage: callbacksFor(is),
+      })
+      const branch = { sessionId: SessionId.make("s-resume"), branchId: BranchId.make("b-resume") }
+      yield* ensureStorageParents(branch)
+      const requestId = InteractionRequestId.make("never-answered")
+      const error = yield* Effect.flip(
+        asCall(
+          interaction,
+          branch,
+        )(askOwned(interaction, is, branch, [], Option.some(requestId))("Delete it?")),
+      )
+      expect(error).toEqual(
+        new InteractionClosedError({
+          message: "The resumed interaction keeps no answer",
+          requestId,
+        }),
+      )
+    }).pipe(Effect.provide(storageLive)),
   )
 
   it.live("a dispatching owner does not take an answer to a changed question", () =>

@@ -74,16 +74,6 @@ export interface FakeFetchState {
 /** Build a fresh capture state. */
 export const makeFakeFetchState = (): FakeFetchState => ({ captured: [] })
 
-/**
- * Builds a fake `typeof globalThis.fetch` that captures each call into
- * `state.captured` and responds with the provided `responder` body.
- *
- * `responder` receives the captured request (same shape stored in
- * `state.captured`) so per-call response shaping is possible — e.g. 401
- * on first call, 200 on retry. A responder that returns an Effect runs it
- * before the response resolves, so a test can change the world while a
- * request is in flight.
- */
 type FakeFetchFn = (
   input: globalThis.RequestInfo | globalThis.URL,
   init?: globalThis.RequestInit,
@@ -104,6 +94,16 @@ const asEffect = (
   return Effect.succeed(answer)
 }
 
+/**
+ * Builds a fake `typeof globalThis.fetch` that captures each call into
+ * `state.captured` and responds with the provided `responder` body.
+ *
+ * `responder` receives the captured request (same shape stored in
+ * `state.captured`) so per-call response shaping is possible — e.g. 401
+ * on first call, 200 on retry. A responder that returns an Effect runs it
+ * before the response resolves, so a test can change the world while a
+ * request is in flight.
+ */
 const makeFakeFetch =
   (state: FakeFetchState, responder: FakeResponder): FakeFetchFn =>
   (input: globalThis.RequestInfo | globalThis.URL, init?: globalThis.RequestInit) => {
@@ -170,20 +170,13 @@ export const fakeFetchLayer = (
 /**
  * Build the Effect that drives one `LanguageModel.generateText({prompt})`
  * through `layer` with `FetchHttpClient.Fetch` overridden to capture into
- * `state` and reply via `responder`. The returned Effect is scoped — run
- * it via `Effect.runPromise(program)` (or your test runner's equivalent).
- *
- * Kept as an Effect (not Promise) so callers can compose with
- * `Effect.either`, `TestClock`, or any other Effect-native test plumbing.
+ * `state` and reply via `responder`. A test yields it inside its own
+ * Effect, so it composes with `Effect.exit`, `TestClock` and the rest.
  */
 export const oneGenerate = (
   layer: Layer.Layer<LanguageModel.LanguageModel>,
   state: FakeFetchState,
-  responder: (req: CapturedRequest) => {
-    status: number
-    headers?: Record<string, string>
-    body: string
-  },
+  responder: FakeResponder,
   prompt: Prompt.RawInput = "hi",
 ): Effect.Effect<void> =>
   LanguageModel.generateText({ prompt }).pipe(
@@ -436,22 +429,22 @@ const sequence = (steps: ReadonlyArray<SequenceStep>) =>
         Effect.gen(function* () {
           const idx = yield* Ref.getAndUpdate(indexRef, (n) => n + 1)
 
-          if (idx >= steps.length) {
+          const step = steps[idx]
+          if (Predicate.isUndefined(step)) {
             return yield* aiError(
               "Sequence.streamText",
               `Sequence language model: streamText() called ${idx + 1} times but only ${steps.length} steps scripted`,
             )
           }
-
-          const step = steps[idx]
           const started = callStarted[idx]
           const gate = emitGates[idx]
 
           if (!Predicate.isUndefined(started)) yield* Deferred.succeed(started, void 0)
 
-          if (step?.assertOptions) {
+          const assertOptions = step.assertOptions
+          if (Predicate.isNotUndefined(assertOptions)) {
             yield* Effect.try({
-              try: () => step.assertOptions?.(options),
+              try: () => assertOptions(options),
               catch: (e) =>
                 aiError(
                   "Sequence.streamText",
@@ -460,16 +453,16 @@ const sequence = (steps: ReadonlyArray<SequenceStep>) =>
             })
           }
 
-          if (Predicate.isNotUndefined(step?.stopReason)) {
+          if (Predicate.isNotUndefined(step.stopReason)) {
             yield* reportProviderStopReason(step.stopReason)
           }
 
           if (!Predicate.isUndefined(gate)) {
             return Stream.fromEffect(Deferred.await(gate)).pipe(
-              Stream.flatMap(() => Stream.fromIterable(step?.parts ?? [])),
+              Stream.flatMap(() => Stream.fromIterable(step.parts)),
             )
           }
-          return Stream.fromIterable(step?.parts ?? [])
+          return Stream.fromIterable(step.parts)
         }).pipe(Stream.unwrap),
       generateText: () => Effect.succeed("sequence language model"),
     })

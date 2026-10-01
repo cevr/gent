@@ -17,6 +17,7 @@ import {
 import { TestClock } from "effect/testing"
 import * as AiError from "effect/ai/AiError"
 import {
+  AuthMethod,
   DEFAULT_RETRY_POLICY,
   isContextOverflow,
   type ModelDriverContribution,
@@ -30,7 +31,6 @@ import {
   AuthError,
   listAuthProviders,
   AuthInfo,
-  AuthMethod,
   type AuthService,
   serializeAuthStore,
   ModelResolver,

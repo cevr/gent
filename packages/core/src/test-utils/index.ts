@@ -56,7 +56,7 @@ export { BunGentPlatformLive } from "../runtime/gent-platform-bun.js"
 export { ConfigService, RuntimeEnvironment, UserConfig } from "../runtime/config.js"
 export { toolCallReceipts } from "../domain/message.js"
 export { SqliteStorage } from "../storage/storage.js"
-export { CurrentWorkspaceId, WorkspaceId } from "../server/workspace-rpc.js"
+export { CurrentWorkspaceId, WorkspaceId } from "../domain/ids.js"
 // Protocol values only tests read: event and error fixtures, projections.
 export { type SessionRuntimeState } from "../domain/agent-loop.js"
 export { DriverError, DriverFailureId } from "../domain/driver.js"

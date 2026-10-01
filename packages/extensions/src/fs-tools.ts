@@ -1413,7 +1413,7 @@ export const EditTool = tool({
   description:
     "Edit file by replacing exact string matches. Fails if oldString not found or not unique (unless replaceAll).",
   promptSnippet: "Apply targeted edits to existing files",
-  promptGuidelines: ["Use for partial changes, not full rewrites", "old_string must match exactly"],
+  promptGuidelines: ["Use for partial changes, not full rewrites", "oldString must match exactly"],
   params: EditParams,
   output: EditResult,
   summary: (_input, output) => `${output.path} · ${countOf(output.replacements, "replacement")}`,

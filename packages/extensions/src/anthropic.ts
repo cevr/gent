@@ -62,10 +62,9 @@ import { FetchHttpClient, Headers, HttpClient, HttpClientRequest } from "effect/
 import { AnthropicClient, AnthropicLanguageModel, Generated } from "@effect/ai-anthropic"
 import { type AiError, Model as AiModel, type Response } from "effect/ai"
 
-// Test seam: only tests read these exports. The model table and its lookups
-// (MODEL_CONFIG, getModelOverride, getModelBetas), the billing header (SYSTEM_IDENTITY_PREFIX,
-// extractFirstUserMessageText, computeCch, computeVersionSuffix,
-// buildBillingHeaderValue), the wire transforms (transformPayload, transformResponseContent, transformStreamEvent)
+// Test seam: only tests read these exports. The model beta lookup
+// (getModelBetas), the billing header (SYSTEM_IDENTITY_PREFIX,
+// extractFirstUserMessageText, buildBillingHeaderValue), the wire transforms (transformPayload, transformResponseContent, transformStreamEvent)
 // and the credential parsers (ClaudeCredentials,
 // updateCredentialBlob, parseOAuthResponse) are pure functions with unit tests.
 // AnthropicKeychainEnv, AnthropicPlatform, AnthropicCredentialIO,
@@ -106,7 +105,7 @@ interface ModelConfig {
  * set; reference at
  * `~/.cache/repo/griffinmartin/opencode-claude-auth/src/model-config.ts`.
  */
-export const MODEL_CONFIG: ModelConfig = {
+const MODEL_CONFIG: ModelConfig = {
   ccVersion: "2.1.280",
   baseBetas: [
     "claude-code-20250219",
@@ -132,7 +131,7 @@ export const MODEL_CONFIG: ModelConfig = {
 }
 
 /** First-match-wins lookup against the override table, in its insertion order. */
-export const getModelOverride = (modelId: string): Option.Option<ModelOverride> => {
+const getModelOverride = (modelId: string): Option.Option<ModelOverride> => {
   const lower = modelId.toLowerCase()
   for (const [pattern, override] of Object.entries(MODEL_CONFIG.modelOverrides)) {
     if (lower.includes(pattern)) return Option.some(override)
@@ -215,10 +214,10 @@ export class AnthropicPlatform extends Context.Service<AnthropicPlatform, Anthro
 ) {
   /**
    * Build from the `ExtensionHost` seen during setup. `home` is sourced from
-   * `host.homeDirectory` (the OS user home), not `ctx.home` (the Gent
-   * configured home): the Claude Code credential file lives at the OS
-   * user's home regardless of a `GENT_HOME` override. This is the one place
-   * that picks the field.
+   * `host.homeDirectory` (the OS user home), not `ctx.home` (the home gent
+   * runs with, which a host may set elsewhere): the Claude Code credential
+   * file lives at the OS user's home whatever `ctx.home` is. This is the one
+   * place that picks the field.
    */
   static readonly fromSetup = (
     ctx: Pick<ExtensionHostService, "host">,
@@ -316,7 +315,7 @@ const sha256Hex = (text: string): Effect.Effect<string, never, Crypto.Crypto> =>
  * doesn't match the first user message we send, so this MUST be
  * recomputed per request.
  */
-export const computeCch = (messageText: string): Effect.Effect<string, never, Crypto.Crypto> =>
+const computeCch = (messageText: string): Effect.Effect<string, never, Crypto.Crypto> =>
   sha256Hex(messageText).pipe(Effect.map((hex) => hex.slice(0, 5)))
 
 /**
@@ -326,7 +325,7 @@ export const computeCch = (messageText: string): Effect.Effect<string, never, Cr
  * then hashes the lot. Anthropic checks this against the version we
  * advertise in the same header.
  */
-export const computeVersionSuffix = (
+const computeVersionSuffix = (
   messageText: string,
   version: string,
 ): Effect.Effect<string, never, Crypto.Crypto> =>
@@ -1251,47 +1250,22 @@ const stripExistingBillingBlocks = (blocks: ReadonlyArray<JsonRecord>): Readonly
   })
 
 /**
- * Split caller-provided system blocks into the identity entry, billing
- * entries (always discarded — re-computed per-request), and everything
- * else (the movable third-party content). Used by the relocator to
- * decide what to pull into the first user message before billing is
- * computed.
+ * The caller's system blocks the relocator moves into the first user
+ * message: every block but the billing entries (re-computed per request)
+ * and the identity prefix, which `buildSystemArray` writes itself.
  *
  * A single block carrying `IDENTITY + "\n\n<rest>"` (the shape
  * OpenCode's `system.transform` hook produces) is split at the identity
- * boundary: identity goes to identityBlocks,
- * the trailing remainder rides along as third-party so the relocator
- * pulls it into the first user message.
+ * boundary, and only the remainder moves.
  */
-type PartitionedSystemBlocks = {
-  readonly identityBlocks: ReadonlyArray<JsonRecord>
-  readonly thirdPartyBlocks: ReadonlyArray<JsonRecord>
-}
-
-const partitionSystemBlocks = (callerSystem: JsonValue): PartitionedSystemBlocks => {
-  const blocks = stripExistingBillingBlocks(normalizeSystemBlocks(callerSystem))
-  const identityBlocks: JsonRecord[] = []
-  const thirdPartyBlocks: JsonRecord[] = []
-  for (const block of blocks) {
+const thirdPartySystemBlocks = (callerSystem: JsonValue): ReadonlyArray<JsonRecord> =>
+  stripExistingBillingBlocks(normalizeSystemBlocks(callerSystem)).flatMap((block) => {
     const text = block["text"]
-    if (Predicate.isString(text) && text.startsWith(SYSTEM_IDENTITY_PREFIX)) {
-      const rest = text.slice(SYSTEM_IDENTITY_PREFIX.length).replace(/^\n+/, "")
-      const { text: _t, cache_control: _cc, ...rest_props } = block
-      // Identity itself rides without cache_control (validator rejects
-      // a marked identity block — counts toward the 4-block limit).
-      identityBlocks.push({ ...rest_props, text: SYSTEM_IDENTITY_PREFIX })
-      if (rest.length > 0) {
-        // Remainder picks back up the original block's `cache_control`
-        // and other props so users can still mark long instructions
-        // for prompt caching.
-        thirdPartyBlocks.push({ ...block, text: rest })
-      }
-    } else {
-      thirdPartyBlocks.push(block)
-    }
-  }
-  return { identityBlocks, thirdPartyBlocks }
-}
+    if (!Predicate.isString(text) || !text.startsWith(SYSTEM_IDENTITY_PREFIX)) return [block]
+    const rest = text.slice(SYSTEM_IDENTITY_PREFIX.length).replace(/^\n+/, "")
+    if (rest.length === 0) return []
+    return [{ ...block, text: rest }]
+  })
 
 /**
  * Build the final `system[]` array with the strict shape Anthropic's
@@ -1332,8 +1306,12 @@ const buildSystemArray = (
  * validates `system[]` against the Claude Code identity prefix.
  * Third-party system content alongside the prefix trips a 400 "out of
  * extra usage" rejection. The relocator takes the third-party blocks
- * (already partitioned by `partitionSystemBlocks`) and folds them into
- * the first user message as a single text block.
+ * (`thirdPartySystemBlocks`) and moves them into the first user message,
+ * one text block each, before the user's own text. The runtime sends the
+ * prompt as the part a session shares with its children, then the agent's
+ * own part: the shared part leads the message, so the billing hash of the
+ * first text block and every byte through the shared part are the same for
+ * a parent and its children.
  *
  * Ordering rules:
  *   - tool_result ordering: Anthropic requires tool_result blocks to be
@@ -1344,32 +1322,35 @@ const buildSystemArray = (
  *     billing hash is computed from the FINAL first-user text, and the
  *     wire hash matches the wire text.
  *
- * Returns the new messages array; mutates nothing.
+ * Returns the new messages and the number of blocks the system prompt
+ * takes in the first user message; mutates nothing.
  */
 const relocateThirdPartyIntoFirstUser = (
   thirdPartyBlocks: ReadonlyArray<JsonRecord>,
   messages: ReadonlyArray<JsonRecord>,
-): ReadonlyArray<JsonRecord> => {
+): RelocatedPrompt => {
+  const unmoved = { messages, blocks: 0 }
   const movedTexts: string[] = []
   for (const block of thirdPartyBlocks) {
     const text = block["text"]
     if (Predicate.isString(text) && text.length > 0) movedTexts.push(text)
   }
-  if (movedTexts.length === 0) return messages
+  if (movedTexts.length === 0) return unmoved
 
   const firstUserIdx = messages.findIndex((m) => m["role"] === "user")
-  if (firstUserIdx === -1) return messages
+  if (firstUserIdx === -1) return unmoved
 
   const firstUser = Option.fromUndefinedOr(messages[firstUserIdx])
-  if (Option.isNone(firstUser)) return messages
+  if (Option.isNone(firstUser)) return unmoved
   const firstUserValue = firstUser.value
   const content = firstUserValue["content"]
-  const prefix = movedTexts.join("\n\n")
   const nextMessages = messages.slice()
 
+  // A string content takes no marker, so the prompt joins into it.
   if (Predicate.isString(content)) {
+    const prefix = movedTexts.join("\n\n")
     nextMessages[firstUserIdx] = { ...firstUserValue, content: `${prefix}\n\n${content}` }
-    return nextMessages
+    return { messages: nextMessages, blocks: 0 }
   }
   if (isRecordArray(content)) {
     // Find the index where leading tool_result blocks end. Inserting
@@ -1386,14 +1367,20 @@ const relocateThirdPartyIntoFirstUser = (
       ...firstUserValue,
       content: [
         ...content.slice(0, firstNonToolResult),
-        { type: "text", text: prefix },
+        ...movedTexts.map((text) => ({ type: "text", text })),
         ...content.slice(firstNonToolResult),
       ],
     }
-    return nextMessages
+    return { messages: nextMessages, blocks: movedTexts.length }
   }
   // Unknown content shape — bail out rather than mangling it.
-  return messages
+  return unmoved
+}
+
+/** The messages after relocation, and how many blocks the system prompt takes in the first user message. */
+interface RelocatedPrompt {
+  readonly messages: ReadonlyArray<JsonRecord>
+  readonly blocks: number
 }
 
 /**
@@ -1432,15 +1419,19 @@ export const transformPayload = (
       result["tool_choice"] = transformToolChoice(result["tool_choice"])
     }
 
-    const { thirdPartyBlocks } = partitionSystemBlocks(result["system"])
-    let messagesAfterRelocate: ReadonlyArray<JsonRecord> = []
+    const thirdPartyBlocks = thirdPartySystemBlocks(result["system"])
+    let relocated: RelocatedPrompt = { messages: [], blocks: 0 }
     if (isRecordArray(result["messages"])) {
-      messagesAfterRelocate = relocateThirdPartyIntoFirstUser(thirdPartyBlocks, result["messages"])
+      relocated = relocateThirdPartyIntoFirstUser(thirdPartyBlocks, result["messages"])
     }
-    result["messages"] = messagesAfterRelocate
-    result["system"] = yield* buildSystemArray(messagesAfterRelocate)
+    result["messages"] = relocated.messages
+    result["system"] = yield* buildSystemArray(relocated.messages)
 
-    return markRequestCache(result, "first-user", cacheLifetimes)
+    return markRequestCache(
+      result,
+      CachePrefixEnd.cases.FirstUser.make({ blocks: relocated.blocks }),
+      cacheLifetimes,
+    )
   })
 
 // ── Prompt caching ──
@@ -1453,10 +1444,10 @@ export const transformPayload = (
  *
  * Markers, in priority order, while the limit allows:
  *   1. the end of the system prompt: the last system block, or on the
- *      Claude Code path the system prompt's block in the first user
- *      message (it moves there, before the user's own text, and the
- *      billing and identity blocks take no marker). A new session and
- *      every sibling child read the prompt back from this entry;
+ *      Claude Code path the last of the system prompt's blocks in the first
+ *      user message (they move there, before the user's own text, and the
+ *      billing and identity blocks take no marker). A new session of the
+ *      same agent reads the prompt back from this entry;
  *   2. the last cacheable block of the last conversation message, so each
  *      step reads the previous step's conversation back from the cache. A
  *      host context update after it (a later system message, which the SDK
@@ -1464,15 +1455,16 @@ export const transformPayload = (
  *      notices) takes no marker. It changes from turn to turn, so a marker
  *      on it would write an entry no later request reads, and the next step
  *      would find no entry at the conversation's end;
- *   3. on the API-key path, the end of the shared part of the system prompt:
- *      the runtime sends the prompt as two system blocks, the part a session
- *      shares with its children and then the agent's own part (the children
- *      guidance, the host tool list). A fresh child's first request reads the
- *      shared part back from its parent's entry. The marker goes only where
- *      the shared text reaches `SHARED_PREFIX_MIN_CHARS`: a shorter prefix is
- *      below the minimum cacheable length, and the marker would spend a slot
- *      for nothing. The Claude Code path joins the blocks into one relocated
- *      block, so it has no such point.
+ *   3. the end of the shared part of the system prompt: the runtime sends
+ *      the prompt as two system blocks, the part a session shares with its
+ *      children and then the agent's own part (the children guidance, the
+ *      host tool list). A fresh child's first request reads the shared part
+ *      back from its parent's entry. The marker goes only where the shared
+ *      text reaches `SHARED_PREFIX_MIN_CHARS`: a shorter prefix is below the
+ *      minimum cacheable length, and the marker would spend a slot for
+ *      nothing. On the Claude Code path the blocks keep their order in the
+ *      first user message, and the billing header hashes the first of them,
+ *      the shared part, so the child's bytes match through it.
  *
  * The tool list takes no marker of its own: it renders first, so the
  * system prompt's marker caches it, and alone it is below the minimum
@@ -1481,8 +1473,16 @@ export const transformPayload = (
  * Markers already on the payload count toward the limit. A marker does
  * not change the cached bytes, so the tail marker moves forward each
  * step, which is the documented multi-turn pattern.
+ *
+ * `CachePrefixEnd` is where the system prompt sits in the rendered payload: the `system` blocks,
+ * or (the Claude Code path) the first `blocks` text blocks of the first user
+ * message after any leading tool results.
  */
-type CachePrefixEnd = "system" | "first-user"
+const CachePrefixEnd = Schema.TaggedUnion({
+  System: {},
+  FirstUser: { blocks: Schema.Int },
+})
+type CachePrefixEnd = typeof CachePrefixEnd.Type
 
 const CACHE_BREAKPOINT_LIMIT = 4
 /**
@@ -1697,14 +1697,6 @@ const markLastCacheable = (blocks: ReadonlyArray<JsonRecord>, marker: JsonRecord
   markBlockAt(blocks, blocks.findLastIndex(isCacheableBlock), marker)
 
 /**
- * The block that ends the system prompt in a Claude Code request: the first
- * text after any leading tool results in the first user message, where
- * `relocateThirdPartyIntoFirstUser` puts it.
- */
-const systemPromptBlockIndex = (content: ReadonlyArray<JsonRecord>): number =>
-  content.findIndex((block) => block["type"] !== "tool_result" && isCacheableBlock(block))
-
-/**
  * The index of the system block that ends the shared part: the cacheable
  * block before the last one, when the text through it is long enough to cache.
  */
@@ -1799,37 +1791,80 @@ const markCacheBreakpoints = (
     })
   }
 
-  if (prefixEnd === "system") {
-    if (isRecordArray(payload["system"])) {
-      spend(markLastCacheable(payload["system"], marker), (system) => {
-        result["system"] = system
-      })
-    }
-  } else {
-    markMessage(
-      messages.findIndex((message) => message["role"] === "user"),
-      (content) => markBlockAt(content, systemPromptBlockIndex(content), marker),
-    )
-  }
+  const prompt = CachePrefixEnd.match(prefixEnd, {
+    System: (): PromptRegion => ({
+      read: () => {
+        const system = result["system"]
+        if (isRecordArray(system)) return system
+        return []
+      },
+      write: (blocks) => {
+        result["system"] = blocks
+      },
+    }),
+    FirstUser: ({ blocks }) => firstUserPrompt(messages, blocks),
+  })
+  spend(markLastCacheable(prompt.read(), marker), prompt.write)
   markMessage(
     messages.findLastIndex((message) => !isHostContextUpdate(message)),
     (content) => markLastCacheable(content, marker),
   )
-  const system = result["system"]
-  if (prefixEnd === "system" && isRecordArray(system)) {
-    const shared = sharedSystemEnd(system)
-    if (Option.isSome(shared)) {
-      const relabeled = withMarkerLifetime(system, sharedMarker, shared.value)
-      result["system"] = relabeled
-      if (isRecordArray(relabeled)) {
-        spend(markBlockAt(relabeled, shared.value, sharedMarker), (marked) => {
-          result["system"] = marked
-        })
-      }
+  const promptBlocks = prompt.read()
+  const shared = sharedSystemEnd(promptBlocks)
+  if (Option.isSome(shared)) {
+    const relabeled = withMarkerLifetime(promptBlocks, sharedMarker, shared.value)
+    if (isRecordArray(relabeled)) {
+      prompt.write(relabeled)
+      spend(markBlockAt(relabeled, shared.value, sharedMarker), prompt.write)
     }
   }
   if (isRecordArray(payload["messages"])) result["messages"] = messages
   return result
+}
+
+/** The system prompt's blocks in a payload being marked, read and written in place. */
+interface PromptRegion {
+  readonly read: () => ReadonlyArray<JsonRecord>
+  readonly write: (blocks: ReadonlyArray<JsonRecord>) => void
+}
+
+/**
+ * The system prompt's blocks on the Claude Code path: the first `blocks`
+ * blocks after any leading tool results in the first user message, where
+ * `relocateThirdPartyIntoFirstUser` puts them. A write replaces them in
+ * `messages`.
+ */
+const firstUserPrompt = (messages: Array<JsonRecord>, blocks: number): PromptRegion => {
+  const index = messages.findIndex((message) => message["role"] === "user")
+  // The SDK always sends block arrays; a string content takes no marker.
+  const content = (): ReadonlyArray<JsonRecord> => {
+    const message = Option.fromUndefinedOr(messages[index])
+    if (Option.isNone(message)) return []
+    const value = message.value["content"]
+    if (isRecordArray(value)) return value
+    return []
+  }
+  // After the leading tool results, as `relocateThirdPartyIntoFirstUser` counts them.
+  const start = (blocksNow: ReadonlyArray<JsonRecord>) => {
+    const first = blocksNow.findIndex((block) => block["type"] !== "tool_result")
+    if (first < 0) return blocksNow.length
+    return first
+  }
+  return {
+    read: () => {
+      const now = content()
+      return now.slice(start(now), start(now) + blocks)
+    },
+    write: (marked) => {
+      const message = Option.fromUndefinedOr(messages[index])
+      if (Option.isNone(message)) return
+      const now = content()
+      messages[index] = {
+        ...message.value,
+        content: [...now.slice(0, start(now)), ...marked, ...now.slice(start(now) + blocks)],
+      }
+    },
+  }
 }
 
 /**
@@ -1986,7 +2021,8 @@ const anthropicClientLayer = <R>(
  * The Claude Code path marks its payload in `transformPayload`.
  */
 const apiKeyClientPath = (cacheLifetimes: Option.Option<CacheLifetimes>): ClientPath<never> => ({
-  payload: (payload) => Effect.succeed(markRequestCache(payload, "system", cacheLifetimes)),
+  payload: (payload) =>
+    Effect.succeed(markRequestCache(payload, CachePrefixEnd.cases.System.make({}), cacheLifetimes)),
   message: (call) => call,
   stream: (call) => call,
 })
@@ -2441,7 +2477,7 @@ const applyRequestPlan = (payload: JsonRecord, plan: AnthropicRequestPlan): Json
 
 /**
  * API-key path: plain `AnthropicClient.layer` over `FetchHttpClient`.
- * No keychain wrapper — `keychainClient` injects Claude Code OAuth
+ * No keychain wrapper — `buildKeychainTransformClient` injects Claude Code OAuth
  * billing-header system blocks + identity prefix, which API-key users
  * are not on the hook for.
  */

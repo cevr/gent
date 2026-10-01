@@ -1,6 +1,6 @@
 import { Clock, Context, Deferred, Effect, Option, Predicate, Ref, Schema } from "effect"
 import { GentPlatform } from "../runtime/gent-platform.js"
-import { EventStoreError } from "./event.js"
+import type { EventStoreError } from "./event.js"
 import { BranchId, InteractionRequestId, SessionId, ToolCallId } from "./ids.js"
 
 // ── interaction-request ─────────────────────────────────────────────────────
@@ -109,6 +109,25 @@ export class InteractionRequestMismatchError extends Schema.TaggedError<Interact
   branchId: BranchId,
 }) {}
 
+/**
+ * An ask whose request closed before it had an answer: its turn ended, or a
+ * resumed call names a request that keeps no answer.
+ */
+export class InteractionClosedError extends Schema.TaggedError<InteractionClosedError>(
+  "@gent/core/src/domain/interaction/InteractionClosedError",
+)("InteractionClosedError", {
+  message: Schema.String,
+  requestId: InteractionRequestId,
+}) {}
+
+/** A question or an answer that its stored JSON form does not fit. */
+class InteractionCodecError extends Schema.TaggedError<InteractionCodecError>(
+  "@gent/core/src/domain/interaction/InteractionCodecError",
+)("InteractionCodecError", {
+  message: Schema.String,
+  cause: Schema.Defect(),
+}) {}
+
 // ── durable interaction record ──────────────────────────────────────────────
 
 /** `taken`: its call took the answer and keeps it until the call or its turn ends. */
@@ -143,16 +162,16 @@ const interactionJsonCodec = Schema.fromJsonString(ApprovalRequestSchema)
 const decisionJsonCodec = Schema.fromJsonString(ApprovalDecisionSchema)
 
 const jsonCodec = <A>(codec: Schema.Codec<A, string>, label: string) => ({
-  encode: (value: A): Effect.Effect<string, EventStoreError> =>
+  encode: (value: A): Effect.Effect<string, InteractionCodecError> =>
     Schema.encodeEffect(codec)(value).pipe(
       Effect.mapError(
-        (cause) => new EventStoreError({ message: `Failed to encode ${label}`, cause }),
+        (cause) => new InteractionCodecError({ message: `Failed to encode ${label}`, cause }),
       ),
     ),
-  decode: (json: string): Effect.Effect<A, EventStoreError> =>
+  decode: (json: string): Effect.Effect<A, InteractionCodecError> =>
     Schema.decodeEffect(codec)(json).pipe(
       Effect.mapError(
-        (cause) => new EventStoreError({ message: `Failed to decode ${label}`, cause }),
+        (cause) => new InteractionCodecError({ message: `Failed to decode ${label}`, cause }),
       ),
     ),
 })
@@ -161,10 +180,9 @@ const { encode: encodeInteractionParams, decode: decodeInteractionParams } = jso
   interactionJsonCodec,
   "interaction params",
 )
-export const { encode: encodeInteractionDecision, decode: decodeInteractionDecision } = jsonCodec(
-  decisionJsonCodec,
-  "interaction decision",
-)
+const decisionCodec = jsonCodec(decisionJsonCodec, "interaction decision")
+export const encodeInteractionDecision = decisionCodec.encode
+const decodeInteractionDecision = decisionCodec.decode
 
 // ── interaction service ─────────────────────────────────────────────────────
 
@@ -186,6 +204,8 @@ export interface InteractionService {
   ) => Effect.Effect<
     ApprovalDecision,
     | EventStoreError
+    | InteractionCodecError
+    | InteractionClosedError
     | InteractionPendingError
     | InteractionOwnerMissingError
     | InteractionSlotBusyError
@@ -220,7 +240,9 @@ export interface InteractionService {
    * unanswered one is published again for reconnecting clients. True when
    * the stored answer is ready for its owner to take.
    */
-  readonly rehydrate: (record: InteractionRequestRecord) => Effect.Effect<boolean, EventStoreError>
+  readonly rehydrate: (
+    record: InteractionRequestRecord,
+  ) => Effect.Effect<boolean, EventStoreError | InteractionCodecError>
   /**
    * Open a step on a branch; `callIds` are the calls it runs. An answer or a
    * place in the queue whose owner is not one of them is dropped by the next
@@ -732,8 +754,9 @@ export const makeInteractionService = (
         const current = yield* Ref.get(state)
         const decision = current.decisions.get(selected)
         if (Predicate.isUndefined(decision))
-          return yield* new EventStoreError({
-            message: "Selected interaction decision is unavailable",
+          return yield* new InteractionClosedError({
+            message: "The resumed interaction keeps no answer",
+            requestId: selected,
           })
         const open = Option.filter(
           branchOf(current, key).open,
@@ -785,7 +808,10 @@ export const makeInteractionService = (
         ),
       )
       while (!(yield* claim)) {}
-      type Answer = Effect.Effect<Option.Option<ApprovalDecision>, EventStoreError>
+      type Answer = Effect.Effect<
+        Option.Option<ApprovalDecision>,
+        EventStoreError | InteractionClosedError
+      >
       const answer = Effect.uninterruptibleMask((restore) =>
         Effect.flatten(
           Ref.get(state).pipe(
@@ -793,7 +819,10 @@ export const makeInteractionService = (
               const branch = branchOf(current, key)
               if (!Option.exists(branch.open, (value) => value.requestId === requestId))
                 return Effect.fail(
-                  new EventStoreError({ message: "The interaction closed without an answer" }),
+                  new InteractionClosedError({
+                    message: "The interaction closed without an answer",
+                    requestId,
+                  }),
                 )
               const decision = current.decisions.get(requestId)
               if (Predicate.isUndefined(decision))
@@ -813,7 +842,8 @@ export const makeInteractionService = (
       storeResolution: (branchRef, requestId, decision) =>
         Effect.gen(function* () {
           const key = contextKey(branchRef)
-          const decisionJson = yield* encodeInteractionDecision(decision)
+          // A decoded decision always encodes: a failure here is a defect.
+          const decisionJson = yield* Effect.orDie(encodeInteractionDecision(decision))
           const shown = (current: InteractionState) =>
             branchOf(current, key).open.pipe(Option.filter((open) => open.admitted))
           const shownHere = (current: InteractionState) =>
@@ -869,7 +899,7 @@ export const makeInteractionService = (
             Option.liftPredicate(row.decisionJson, () => !row.first),
           )
           if (Option.isSome(earlier) && Option.isNone(keptJson))
-            keptJson = Option.some(yield* encodeInteractionDecision(earlier.value))
+            keptJson = Option.some(yield* Effect.orDie(encodeInteractionDecision(earlier.value)))
           // Neither shown nor answered: a wrong id, or a request that closed
           // without an answer. Storage may have kept the reply on its closed
           // row; nothing takes it.

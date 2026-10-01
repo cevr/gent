@@ -36,9 +36,8 @@ import {
   testLeafContext,
   testToolContext,
   turnRequestText,
-  RuntimeEnvironment,
 } from "@gent/core/test-utils"
-import { builtinAgent } from "./helpers/builtin-agents"
+import { main as builtinAgent } from "../src/agents.js"
 import { e2ePreset } from "./helpers/test-preset"
 import {
   CancelTool,
@@ -60,7 +59,7 @@ import {
 } from "../src/wake.js"
 import { TestClock } from "effect/testing"
 import type { LanguageModel } from "effect/ai"
-import { toolResultSummary } from "@gent/core/extensions/branch-tools"
+import { getToolMetadata, toolResultSummary } from "@gent/core/extensions/branch-tools"
 import { BranchId, MessageId, SessionId, ToolCallId, SteerCommand } from "@gent/core/protocol"
 import {
   RequestId,
@@ -122,7 +121,8 @@ const restartedSession = (home: string) =>
         ...e2ePreset,
         providerLayer,
         storagePath: `${directory}/gent.db`,
-        extraLayers: [RuntimeEnvironment.Live({ cwd, home })],
+        cwd,
+        home,
       })
     const { layer: firstProvider } = yield* LanguageModelLayers.sequence([textStep("hello")])
     const ids = yield* Effect.scoped(
@@ -486,7 +486,8 @@ describe("wake", () => {
           const { client, sessionId, branchId } = yield* createRpcHarness({
             ...e2ePreset,
             providerLayer,
-            extraLayers: [RuntimeEnvironment.Live({ cwd, home })],
+            cwd,
+            home,
           })
           const fs = yield* FileSystem.FileSystem
           yield* fs.makeDirectory(`${home}/.gent/wakes`, { recursive: true })
@@ -1114,7 +1115,8 @@ describe("notices", () => {
           const { client, sessionId, branchId } = yield* createRpcHarness({
             ...e2ePreset,
             providerLayer,
-            extraLayers: [RuntimeEnvironment.Live({ cwd, home })],
+            cwd,
+            home,
           })
           yield* client.message.send({ sessionId, branchId, content: "hi" })
           yield* waitFor(
@@ -1217,7 +1219,8 @@ describe("notices", () => {
           const { client, sessionId, branchId } = yield* createRpcHarness({
             ...e2ePreset,
             providerLayer,
-            extraLayers: [RuntimeEnvironment.Live({ cwd, home })],
+            cwd,
+            home,
           })
           const fs = yield* FileSystem.FileSystem
           const file = `${home}/.gent/wakes/${branchId}.json`
@@ -1405,12 +1408,12 @@ const wakeFileExists = (home: string) =>
 
 describe("wake tool claims", () => {
   test("monitor runs shell commands, so it does not claim to be readonly", () => {
-    expect(MonitorTool.readonly).toBe(false)
+    expect(getToolMetadata(MonitorTool).readonly).toBe(false)
   })
 
   test("wake and wake.cancel arm and cancel timers, so they do not claim to be readonly", () => {
-    expect(WakeTool.readonly).toBe(false)
-    expect(CancelTool.readonly).toBe(false)
+    expect(getToolMetadata(WakeTool).readonly).toBe(false)
+    expect(getToolMetadata(CancelTool).readonly).toBe(false)
   })
 })
 

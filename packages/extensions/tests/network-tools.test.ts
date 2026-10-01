@@ -134,6 +134,19 @@ describe("WebSearchTool", () => {
     }),
   )
 
+  it.live("an SSE data field with no space after the colon is a frame too", () =>
+    Effect.gen(function* () {
+      const body = `event: message\ndata:${encodeWire(mcpHit("unspaced result"))}\n\n`
+      const result = yield* search(
+        clientLayer(
+          () =>
+            new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } }),
+        ),
+      )
+      expect(result.output).toBe("unspaced result")
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
   it.live("JSON result flagged isError surfaces its text as the Exa error", () =>
     Effect.gen(function* () {
       const failure = yield* failureOf(

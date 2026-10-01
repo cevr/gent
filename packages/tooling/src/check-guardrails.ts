@@ -15,7 +15,6 @@ import {
   findRepoTempDirectories,
   findSharedTestHomes,
   findPreCommitHookFindings,
-  findIdentityEncodes,
   findPackageSurfaceFindings,
   findPlatformDuplicationViolations,
   findReadersWithoutWriters,
@@ -24,6 +23,7 @@ import {
   findRetiredSurfaces,
   findSteeringFilePaths,
   findSuppressionInventoryFindings,
+  findTestLaneDefaults,
   findTuiSessionIdentityReads,
   findUnadaptedSeams,
   findUnconsumedExports,
@@ -90,7 +90,7 @@ export const indexFileNames = (root: string, env: typeof Bun.env) =>
   Effect.map(indexEntries(root, env), (entries) => entries.map((entry) => entry.file))
 
 /** One tracked file the scan reads: its path and its text. */
-export interface TrackedText {
+interface TrackedText {
   readonly file: string
   readonly text: string
 }
@@ -162,7 +162,7 @@ export const trackedTexts = (
  * environment `env`: this process's own unless one is given, so a hook's
  * index in a hook.
  */
-export interface FileSet {
+interface FileSet {
   readonly files: Effect.Effect<ReadonlyArray<string>>
   readonly texts: (files: ReadonlyArray<string>) => Effect.Effect<ReadonlyArray<TrackedText>>
 }
@@ -240,7 +240,7 @@ const lintConfigFindings = Effect.fn("Tooling.lintConfigFindings")(function* (
     onSome: (read) => read.text,
   })
   const rootRules = new Set(Object.keys(config.rules ?? {}))
-  const pluginText = Option.getOrElse(Option.fromNullishOr(sourceTexts.get(LINT_PLUGIN)), () => "")
+  const pluginText = sourceTexts.get(LINT_PLUGIN) ?? ""
   return [
     ...findUnmatchedOverrideGlobs(OXLINT_CONFIG, configText, config, indexFiles),
     ...findUnmatchedIgnoreRows(OXLINT_IGNORE, ignoreText, indexFiles),
@@ -270,6 +270,7 @@ const ANY_FILE_FINDERS: ReadonlyArray<FileFinder> = [
   findSuppressionInventoryFindings,
   findPreCommitHookFindings,
   findRetiredSurfaces,
+  findTestLaneDefaults,
 ]
 
 /** Findings a source file answers on its own, without the rest of the tree. */
@@ -281,7 +282,6 @@ const SOURCE_FILE_FINDERS: ReadonlyArray<FileFinder> = [
   findE2eFixtureImportFindings,
   findRepoTempDirectories,
   findSharedTestHomes,
-  findIdentityEncodes,
   findTuiSessionIdentityReads,
 ]
 
@@ -475,14 +475,16 @@ export const scanTrackedTexts = (
     collectWholeTreeFacts(file, text)
   }
 
+  // The two variable finders share one scan of this map.
+  const variableTexts = new Map([...sourceTexts, ...manifestTexts])
   findings.push(
     ...findUnusedSuppressionApprovals(sourceTexts),
     ...findUnconsumedExports(exportFacts, manifestTexts),
     ...findUnadaptedSeams(sourceTexts, adaptedSeams),
     // A GENT_* variable whose writer left: its reader is a branch nothing takes.
-    ...findReadersWithoutWriters(new Map([...sourceTexts, ...manifestTexts])),
+    ...findReadersWithoutWriters(variableTexts),
     // A GENT_* variable whose reader left: its setter configures nothing.
-    ...findWritersWithoutReaders(new Map([...sourceTexts, ...manifestTexts])),
+    ...findWritersWithoutReaders(variableTexts),
     // A bundled skill file the skills module does not import never ships.
     ...findUnshippedSkillFiles(sourceTexts.get(BUNDLED_SKILLS_MODULE) ?? "", indexFiles),
   )

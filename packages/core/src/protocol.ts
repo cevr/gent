@@ -7,7 +7,8 @@ export {
   ReasoningEffort,
   resolveAgentModel,
 } from "./domain/agent.js"
-export { AuthAuthorization, AuthMethod, AuthProviderInfo } from "./runtime/provider.js"
+export { AuthMethod } from "./domain/driver.js"
+export { AuthAuthorization, AuthProviderInfo } from "./runtime/provider.js"
 export {
   type ActiveInteraction,
   AgentEvent,
@@ -52,7 +53,7 @@ export {
   messagePartsReasoning,
   messagePartsText,
 } from "./domain/message.js"
-export { Model, ModelId, promptCacheTtlMsFor, ProviderId } from "./domain/agent.js"
+export { cacheWriteRate, Model, ModelId, promptCacheTtlMsFor, ProviderId } from "./domain/agent.js"
 export { QueueEntryInfo, QueueSnapshot } from "./domain/message.js"
 export {
   initialSessionMetrics,

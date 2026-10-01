@@ -10,15 +10,14 @@ import {
 } from "../domain/message.js"
 import { AgentEvent, EventId } from "../domain/event.js"
 import { isReasoningEffort, ModelId } from "../domain/agent.js"
-import { BranchId, MessageId, SessionId } from "../domain/ids.js"
+import { BranchId, MessageId, SessionId, DefaultWorkspaceId } from "../domain/ids.js"
 import { Migrator, SqlClient } from "effect/sql"
 import { SqliteMigrator } from "@effect/sql-sqlite-bun"
 import { storageError, StorageError } from "../domain/errors.js"
-import { DefaultWorkspaceId } from "../server/workspace-rpc.js"
 
 // ── stored rows ─────────────────────────────────────────────────────────────
 
-// Schema decoders - Effect-based (no sync throws)
+// A stored row decodes through its schema; a row that does not fit fails as a StorageError.
 const StoredPromptPartJson = Schema.fromJsonString(MessagePart)
 export const decodeStoredPromptPart = Schema.decodeUnknownEffect(StoredPromptPartJson)
 const encodeStoredPromptPart = Schema.encodeEffect(StoredPromptPartJson)
@@ -44,6 +43,8 @@ export const SessionRow = Schema.Struct({
   name: Schema.NullOr(Schema.String),
   cwd: Schema.NullOr(Schema.String),
   model_id: Schema.NullOr(ModelId),
+  // Read as text: a level this build no longer knows reads as unset (the
+  // default), so an older session still loads (see rowToSession).
   reasoning_level: Schema.NullOr(Schema.String),
   active_branch_id: Schema.NullOr(BranchId),
   parent_session_id: Schema.NullOr(SessionId),
@@ -138,6 +139,7 @@ const rowToSession = (row: SessionRow) =>
     })
   })
 
+// `sql<SessionRow>` is a cast, not a check: this decode is the boundary.
 const decodeSessionRow = Schema.decodeUnknownEffect(SessionRow)
 
 export const sessionFromRow = (row: SessionRow) =>
@@ -156,6 +158,7 @@ const rowToBranch = (row: BranchRow) =>
     })
   })
 
+// `sql<BranchRow>` is a cast, not a check: this decode is the boundary.
 const decodeBranchRow = Schema.decodeUnknownEffect(BranchRow)
 
 export const branchFromRow = (row: BranchRow) =>
@@ -790,6 +793,54 @@ const turnRecordsMigration = Effect.gen(function* () {
     .pipe(ignoreAlreadyAppliedSqliteError("018_turn_records", "CREATE TABLE turn_records"))
 })
 
+/**
+ * Give every session the thread it belongs to.
+ *
+ * `parent_session_id` was carrying two meanings: "continued from" for a
+ * compaction handoff, and "spawned by" for a delegate run or a `/btw`
+ * fork. Reading a thread from it needs the spawn receipt to tell the two
+ * apart, and that still fails from inside a spawn — the spawn climbs into its
+ * parent's tree and is then filtered out of it. One column, written when the
+ * writer already knows which kind of child it is making, answers both.
+ *
+ * The backfill uses the receipt, which is the right tool once: an existing
+ * session is a spawn exactly when an `agent.start` receipt names it. Every
+ * other session inherits the thread of the nearest ancestor that is not a
+ * spawn, so an existing handoff chain keeps one thread.
+ */
+const sessionThreadMigration = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+  yield* sql
+    .unsafe(`ALTER TABLE sessions ADD COLUMN thread_id TEXT`)
+    .pipe(ignoreAlreadyAppliedSqliteError("019_session_thread", "ADD COLUMN thread_id"))
+  yield* sql.unsafe(`
+    WITH RECURSIVE spawned(id) AS (
+      SELECT s.id FROM sessions s
+      WHERE s.parent_session_id IS NULL
+         OR EXISTS (
+           SELECT 1 FROM durable_operations d
+           WHERE d.workspace_id = s.workspace_id
+             AND d.operation = 'agent.start'
+             AND json_extract(d.result_json, '$.sessionId') = s.id
+         )
+    ),
+    threads(id, thread_id, depth) AS (
+      SELECT id, id, 0 FROM spawned
+      UNION ALL
+      SELECT s.id, t.thread_id, t.depth + 1
+      FROM sessions s
+      JOIN threads t ON s.parent_session_id = t.id
+      WHERE t.depth < 100 AND s.id NOT IN (SELECT id FROM spawned)
+    )
+    UPDATE sessions SET thread_id = (SELECT t.thread_id FROM threads t WHERE t.id = sessions.id)
+  `)
+  // A session orphaned by a deleted ancestor still belongs to a thread: its own.
+  yield* sql.unsafe(`UPDATE sessions SET thread_id = id WHERE thread_id IS NULL`)
+  yield* sql.unsafe(
+    `CREATE INDEX IF NOT EXISTS idx_sessions_thread ON sessions(workspace_id, thread_id)`,
+  )
+})
+
 const StoragePragmaLive: Layer.Layer<never, StorageError, SqlClient.SqlClient> =
   Layer.effectDiscard(
     configureSqliteConnection().pipe(
@@ -848,54 +899,6 @@ const makeStorageMigratorLive = (
     Layer.provideMerge(StorageCompatibilityLive),
     Layer.provideMerge(StoragePragmaLive),
   )
-
-/**
- * Give every session the thread it belongs to.
- *
- * `parent_session_id` was carrying two meanings: "continued from" for a
- * compaction handoff, and "spawned by" for a delegate run or a `/btw`
- * fork. Reading a thread from it needs the spawn receipt to tell the two
- * apart, and that still fails from inside a spawn — the spawn climbs into its
- * parent's tree and is then filtered out of it. One column, written when the
- * writer already knows which kind of child it is making, answers both.
- *
- * The backfill uses the receipt, which is the right tool once: an existing
- * session is a spawn exactly when an `agent.start` receipt names it. Every
- * other session inherits the thread of the nearest ancestor that is not a
- * spawn, so an existing handoff chain keeps one thread.
- */
-const sessionThreadMigration = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient
-  yield* sql
-    .unsafe(`ALTER TABLE sessions ADD COLUMN thread_id TEXT`)
-    .pipe(ignoreAlreadyAppliedSqliteError("019_session_thread", "ADD COLUMN thread_id"))
-  yield* sql.unsafe(`
-    WITH RECURSIVE spawned(id) AS (
-      SELECT s.id FROM sessions s
-      WHERE s.parent_session_id IS NULL
-         OR EXISTS (
-           SELECT 1 FROM durable_operations d
-           WHERE d.workspace_id = s.workspace_id
-             AND d.operation = 'agent.start'
-             AND json_extract(d.result_json, '$.sessionId') = s.id
-         )
-    ),
-    threads(id, thread_id, depth) AS (
-      SELECT id, id, 0 FROM spawned
-      UNION ALL
-      SELECT s.id, t.thread_id, t.depth + 1
-      FROM sessions s
-      JOIN threads t ON s.parent_session_id = t.id
-      WHERE t.depth < 100 AND s.id NOT IN (SELECT id FROM spawned)
-    )
-    UPDATE sessions SET thread_id = (SELECT t.thread_id FROM threads t WHERE t.id = sessions.id)
-  `)
-  // A session orphaned by a deleted ancestor still belongs to a thread: its own.
-  yield* sql.unsafe(`UPDATE sessions SET thread_id = id WHERE thread_id IS NULL`)
-  yield* sql.unsafe(
-    `CREATE INDEX IF NOT EXISTS idx_sessions_thread ON sessions(workspace_id, thread_id)`,
-  )
-})
 
 const StorageIntegrityLive: Layer.Layer<never, StorageError, SqlClient.SqlClient> =
   Layer.effectDiscard(
