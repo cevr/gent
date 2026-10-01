@@ -12,8 +12,14 @@ Sources used:
 plugin entry in `tsconfig.json`. Gent runs every rule as an error except
 `strictBooleanExpressions`, pipe-shaped suggestions, and the rules an oxlint
 rule holds at every site, so one site takes one suppression:
-`effect/noAsyncFunction` holds `asyncFunction` and `effect/noNodeBuiltinImport`
-holds `nodeBuiltinImport`. Test files inherit the
+`effect/noAsyncFunction` holds `asyncFunction`, `effect/noNodeBuiltinImport`
+holds `nodeBuiltinImport`, and `effect/noGlobals` holds the `global*`,
+`processEnv` and `cryptoRandomUUID` rules, including their `globalThis` and
+alias spellings. `newPromise` stays an error, because `effect/noNewPromise`
+misses `new globalThis.Promise` and an alias of `Promise`. The gamut driver,
+its tests and the capture preload turn `effect/noGlobals` off, so overrides
+turn the matching rules back on there for each global the file does not use.
+Test files inherit the
 same catalog, with `strictEffectProvide` disabled through an override because
 test layers intentionally provide partial worlds.
 
@@ -68,25 +74,25 @@ binary is not part of the compiler path.
 | Rule                       | Severity |
 | -------------------------- | -------- |
 | `asyncFunction`            | off      |
-| `cryptoRandomUUID`         | error    |
-| `cryptoRandomUUIDInEffect` | error    |
+| `cryptoRandomUUID`         | off      |
+| `cryptoRandomUUIDInEffect` | off      |
 | `extendsNativeError`       | error    |
-| `globalConsole`            | error    |
-| `globalConsoleInEffect`    | error    |
-| `globalDate`               | error    |
-| `globalDateInEffect`       | error    |
-| `globalFetch`              | error    |
-| `globalFetchInEffect`      | error    |
-| `globalRandom`             | error    |
-| `globalRandomInEffect`     | error    |
-| `globalTimers`             | error    |
-| `globalTimersInEffect`     | error    |
+| `globalConsole`            | off      |
+| `globalConsoleInEffect`    | off      |
+| `globalDate`               | off      |
+| `globalDateInEffect`       | off      |
+| `globalFetch`              | off      |
+| `globalFetchInEffect`      | off      |
+| `globalRandom`             | off      |
+| `globalRandomInEffect`     | off      |
+| `globalTimers`             | off      |
+| `globalTimersInEffect`     | off      |
 | `instanceOfSchema`         | error    |
 | `newPromise`               | error    |
 | `nodeBuiltinImport`        | off      |
 | `preferSchemaOverJson`     | error    |
-| `processEnv`               | error    |
-| `processEnvInEffect`       | error    |
+| `processEnv`               | off      |
+| `processEnvInEffect`       | off      |
 
 ## Style
 

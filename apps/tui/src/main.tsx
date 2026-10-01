@@ -67,7 +67,6 @@ clearClientLog()
 const waitForRendererDestroy = (renderer: CliRenderer) =>
   Effect.callback<void>((resume) => {
     let settled = false
-    // @effect-diagnostics-next-line globalTimersInEffect:off -- process lifetime handle: OpenTUI render resolves after mount and suspended Effect fibers do not keep Bun alive
     const keepAlive = setInterval(() => {}, 60_000) // eslint-disable-line effect/noGlobals -- OpenTUI needs a process-lifetime handle until renderer destruction.
     const onDestroy = () => {
       if (settled) return

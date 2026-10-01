@@ -2540,11 +2540,6 @@ const approvedComment = (entry: ApprovedSuppressionEntry): string =>
 /** Matching ignores line churn: an entry is keyed by file and exact comment text. */
 const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
   {
-    file: "apps/tui/src/main.tsx",
-    scope: "next-line",
-    text: "globalTimersInEffect:off -- process lifetime handle: OpenTUI render resolves after mount and suspended Effect fibers do not keep Bun alive",
-  },
-  {
     file: "packages/sdk/src/server.ts",
     scope: "next-line",
     text: "strictEffectProvide:off -- the public entry point provides the local platform it resolves on.",

@@ -23,15 +23,22 @@
         "ignoreEffectErrorsInTscExitCode": false,
         // A diagnostic that an oxlint rule holds at every site is off here, so
         // one site takes one suppression: `effect/noAsyncFunction` holds
-        // `asyncFunction`, `effect/noNodeBuiltinImport` holds `nodeBuiltinImport`.
+        // `asyncFunction`, `effect/noNodeBuiltinImport` holds `nodeBuiltinImport`,
+        // and `effect/noGlobals` holds the `global*`, `processEnv` and
+        // `cryptoRandomUUID` diagnostics, through `globalThis` and aliases too.
+        // `newPromise` stays on: `effect/noNewPromise` misses
+        // `new globalThis.Promise` and an alias of `Promise`. Where oxlint turns
+        // `effect/noGlobals` off (the gamut driver and its tests, the capture
+        // preload), the overrides below turn on each diagnostic for a global
+        // the file does not use.
         "diagnosticSeverity": {
           "anyUnknownInErrorContext": "error",
           "asyncFunction": "off",
           "catchAllToMapError": "error",
           "catchUnfailableEffect": "error",
           "classSelfMismatch": "error",
-          "cryptoRandomUUID": "error",
-          "cryptoRandomUUIDInEffect": "error",
+          "cryptoRandomUUID": "off",
+          "cryptoRandomUUIDInEffect": "off",
           "deterministicKeys": "error",
           "duplicatePackage": "error",
           "effectDoNotation": "error",
@@ -47,18 +54,18 @@
           "extendsNativeError": "error",
           "floatingEffect": "error",
           "genericEffectServices": "error",
-          "globalConsole": "error",
-          "globalConsoleInEffect": "error",
-          "globalDate": "error",
-          "globalDateInEffect": "error",
+          "globalConsole": "off",
+          "globalConsoleInEffect": "off",
+          "globalDate": "off",
+          "globalDateInEffect": "off",
           "globalErrorInEffectCatch": "error",
           "globalErrorInEffectFailure": "error",
-          "globalFetch": "error",
-          "globalFetchInEffect": "error",
-          "globalRandom": "error",
-          "globalRandomInEffect": "error",
-          "globalTimers": "error",
-          "globalTimersInEffect": "error",
+          "globalFetch": "off",
+          "globalFetchInEffect": "off",
+          "globalRandom": "off",
+          "globalRandomInEffect": "off",
+          "globalTimers": "off",
+          "globalTimersInEffect": "off",
           "instanceOfSchema": "error",
           "layerMergeAllWithDependencies": "error",
           "lazyPromiseInEffectSync": "error",
@@ -78,8 +85,8 @@
           "outdatedApi": "error",
           "overriddenSchemaConstructor": "error",
           "preferSchemaOverJson": "error",
-          "processEnv": "error",
-          "processEnvInEffect": "error",
+          "processEnv": "off",
+          "processEnvInEffect": "off",
           "redundantSchemaTagIdentifier": "error",
           "returnEffectInGen": "error",
           "runEffectInsideEffect": "error",
@@ -128,21 +135,58 @@
             }
           },
           {
+            // The driver prints and stamps with `console` and `Date`.
             "include": ["testbeds/gamut/gamut.ts"],
             "options": {
               "diagnosticSeverity": {
-                "globalConsole": "off",
-                "globalDate": "off"
+                "cryptoRandomUUID": "error",
+                "cryptoRandomUUIDInEffect": "error",
+                "globalFetch": "error",
+                "globalFetchInEffect": "error",
+                "globalRandom": "error",
+                "globalRandomInEffect": "error",
+                "globalTimers": "error",
+                "globalTimersInEffect": "error",
+                "processEnv": "error",
+                "processEnvInEffect": "error"
               }
             }
           },
           {
+            "include": ["testbeds/gamut/tests/**/*.ts"],
+            "options": {
+              "diagnosticSeverity": {
+                "cryptoRandomUUID": "error",
+                "cryptoRandomUUIDInEffect": "error",
+                "globalConsole": "error",
+                "globalConsoleInEffect": "error",
+                "globalDate": "error",
+                "globalDateInEffect": "error",
+                "globalFetch": "error",
+                "globalFetchInEffect": "error",
+                "globalRandom": "error",
+                "globalRandomInEffect": "error",
+                "globalTimers": "error",
+                "globalTimersInEffect": "error",
+                "processEnv": "error",
+                "processEnvInEffect": "error"
+              }
+            }
+          },
+          {
+            // The preload stamps with `Date`, replaces `fetch` and reads its
+            // environment.
             "include": [".claude/skills/architecture-loop/fetch-capture.ts"],
             "options": {
               "diagnosticSeverity": {
-                "globalDate": "off",
-                "globalFetch": "off",
-                "processEnv": "off"
+                "cryptoRandomUUID": "error",
+                "cryptoRandomUUIDInEffect": "error",
+                "globalConsole": "error",
+                "globalConsoleInEffect": "error",
+                "globalRandom": "error",
+                "globalRandomInEffect": "error",
+                "globalTimers": "error",
+                "globalTimersInEffect": "error"
               }
             }
           }
