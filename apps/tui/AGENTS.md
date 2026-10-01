@@ -229,6 +229,8 @@ library through `DiagramLibraryContext`.
 The transcript pins the reader's last prompt in one row (`↑ <first line>`) above
 the live tail while that prompt's own row is off screen: cut off the top of the
 live viewport, or deep enough in native history that the terminal no longer
+shows it. A prompt whose row history took among the live item's cut rows counts
+as on screen while the terminal still
 shows it (`promptOnScreen` in `message-list.tsx`, reckoned as if the row were
 drawn so it never flickers). It is derived from the displayed items, so it
 follows the branch and session in view. `readerPrompt` decides whose message

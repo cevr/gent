@@ -1302,8 +1302,13 @@ interface PromptGeometry {
   readonly liveHeight: number
   /** The rows the live tail may take before the pinned row takes one. */
   readonly liveRows: number
-  /** The rows of native history the terminal shows above the app, the pinned row drawn. */
+  /**
+   * The rows of native history the terminal shows above the app, the pinned
+   * row drawn, less the top rows of the first live item that history holds.
+   */
   readonly scrollbackRows: number
+  /** The top rows of the first live item that history holds. */
+  readonly cut: number
 }
 
 /**
@@ -1314,7 +1319,9 @@ interface PromptGeometry {
  * A live prompt is on screen while its row is at or below the viewport's top:
  * the viewport sticks to the bottom, so a live tail taller than it cuts rows
  * off the top. A committed prompt is on screen while it and the history rows
- * after it fit in the rows the terminal shows above the app. An unmeasured
+ * after it fit in the rows the terminal shows above the app; so is a prompt
+ * whose text row history holds among the live item's cut rows, while the
+ * terminal shows the rows of history from that row on. An unmeasured
  * height met before the answer is known counts as on screen, so nothing is
  * pinned on a guess.
  *
@@ -1332,6 +1339,10 @@ export const promptOnScreen = (geometry: PromptGeometry): boolean => {
     }
     return Option.some(total)
   }
+  // The cut rows are history's last rows, so the text row is `cut` less its
+  // own row above the region: on screen while the terminal shows that many.
+  if (geometry.index === geometry.committed && geometry.cut > PROMPT_TEXT_ROW)
+    return geometry.cut - PROMPT_TEXT_ROW <= geometry.scrollbackRows + geometry.cut
   if (geometry.index < geometry.committed) {
     const past = geometry.scrollbackRows + PROMPT_TEXT_ROW
     return Option.match(rowsUpTo(geometry.index, geometry.committed, past), {
@@ -1824,7 +1835,11 @@ export function NativeTranscript(props: NativeTranscriptProps) {
           })
           const start = Math.min(rows.from, end)
           const undo = handOver(end - start)
-          return Effect.try(() => surface.commitRows(start, end)).pipe(
+          // The rows end on their last row. A trailing newline would leave the
+          // terminal on an empty row that OpenTUI counts as history, so on a
+          // short screen the region would start a row under the rows: a blank
+          // row between them. The next commit starts on a new row itself.
+          return Effect.try(() => surface.commitRows(start, end, { trailingNewline: false })).pipe(
             Effect.as<CommitOutcome>("landed"),
             Effect.catch(() =>
               Effect.sync((): CommitOutcome => {
@@ -2306,6 +2321,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
         height -
         splitFooterHeight(height, props.footerHeight + 1 + Math.max(1, liveHeight())) -
         cut,
+      cut,
     })
     if (onScreen) return Option.none()
     return Option.some(prompt.value.text)

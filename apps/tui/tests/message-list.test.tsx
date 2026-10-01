@@ -55,7 +55,7 @@ import {
   type SessionMessageDetails,
   sessionMessageText,
 } from "@gent/extensions/client"
-import { batch, createSignal, onCleanup, Show } from "solid-js"
+import { batch, createSignal, For, onCleanup, Show } from "solid-js"
 import { useRenderer } from "@opentui/solid"
 import type { DisclosureLevel } from "../src/session"
 import { ToolCallIdentityProvider, ToolFrame } from "../src/ui"
@@ -3734,6 +3734,71 @@ describe("native transcript region at the terminal's bottom", () => {
     25_000,
   )
 
+  // A turn ends on a 24-row screen: the activity row goes (a footer of 6
+  // rows, then 4), and history takes the top row the region no longer shows.
+  // A 19-row item leaves the screen one row short of full: history's row
+  // sits at the top and the region starts on the next row, with a row free
+  // under it.
+  it.scopedLive(
+    "the region starts right under the rows history took on a short screen",
+    () =>
+      Effect.gen(function* () {
+        let historyRows = 0
+        let screen = Option.none<CliRenderer>()
+        const [streaming, setStreaming] = createSignal(true)
+        const [footer, setFooter] = createSignal(6)
+        // The one item draws one row per line.
+        const body = Array.from({ length: 19 }, (_, index) => `CUT-0 line ${index + 1}`)
+        const setup = yield* renderScoped(
+          () => {
+            const renderer = useRenderer()
+            screen = Option.some(renderer)
+            renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+              historyRows += event.snapshot.height
+            })
+            return (
+              <box flexDirection="column" flexGrow={1}>
+                <NativeTranscript
+                  items={[assistant("cut", body.join("\n"))]}
+                  settled
+                  streaming={streaming()}
+                  footerHeight={footer()}
+                  paneOpen={false}
+                  expanded={false}
+                  disclosure="collapsed"
+                  displayRevision={0}
+                  overlayOpen={false}
+                  renderItems={(visible) => (
+                    <box flexDirection="column">
+                      <For each={visible.flatMap(() => body)}>{(line) => <text>{line}</text>}</For>
+                    </box>
+                  )}
+                >
+                  <box />
+                </NativeTranscript>
+                <box height={footer()} flexShrink={0}>
+                  <text>COMPOSER</text>
+                </box>
+              </box>
+            )
+          },
+          { width: 60, height: 24 },
+        )
+        const renderer = Option.getOrThrow(screen)
+        yield* waitForFrame(setup, (frame) => frame.includes("CUT-0 line 19"), "the item")
+        batch(() => {
+          setStreaming(false)
+          setFooter(4)
+        })
+        yield* waitForFrame(setup, () => historyRows > 0, "the cut row in history", 6_000)
+        yield* waitForStableFrame(setup)
+        const { renderOffset: top } = yield* Schema.decodeUnknownEffect(RegionPlace)(renderer)
+        expect([historyRows, renderer.footerHeight]).toEqual([1, 22])
+        expect(top).toBe(historyRows)
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
+  )
+
   // A footer row that goes (an activity row a resumed turn drew, a status
   // row) leaves the region a row the tail does not fill. The row sits above
   // the tail, under history: the tail and the composer stay together.
@@ -5394,6 +5459,7 @@ describe("promptOnScreen", () => {
         liveHeight: 10,
         liveRows: 7,
         scrollbackRows: 0,
+        cut: 0,
       })
     // The prompt's text starts one row into its item, under the row's top margin.
     expect(at([3, 2, 5])).toBe(true)
@@ -5409,10 +5475,31 @@ describe("promptOnScreen", () => {
         liveHeight: 4,
         liveRows: 10,
         scrollbackRows,
+        cut: 0,
       })
     // Its text row and the reply under it: 1 + 5 rows of history.
     expect(committed(6)).toBe(true)
     expect(committed(5)).toBe(false)
+  })
+
+  // History holds the prompt's top rows, its text row among them; the live
+  // tail shows the rest. The text row is on screen while the terminal shows
+  // the history rows from it on.
+  test("a prompt whose text row is in history among the cut rows is on screen while they show", () => {
+    const cutPrompt = (scrollbackRows: number) =>
+      promptOnScreen({
+        heightAt: known([7, 12]),
+        index: 0,
+        committed: 0,
+        liveHeight: 17,
+        liveRows: 10,
+        scrollbackRows,
+        cut: 3,
+      })
+    // Three rows above the region show the margin row, the text row and one more.
+    expect(cutPrompt(0)).toBe(true)
+    expect(cutPrompt(-1)).toBe(true)
+    expect(cutPrompt(-2)).toBe(false)
   })
 
   test("an unmeasured row counts as on screen, so nothing is pinned on a guess", () => {
@@ -5424,6 +5511,7 @@ describe("promptOnScreen", () => {
         liveHeight: 40,
         liveRows: 5,
         scrollbackRows: 0,
+        cut: 0,
       }),
     ).toBe(true)
   })
@@ -5440,6 +5528,7 @@ describe("promptOnScreen", () => {
       liveHeight: 4,
       liveRows: 10,
       scrollbackRows: 12,
+      cut: 0,
     })
     expect(onScreen).toBe(false)
     expect(reads).toBeLessThanOrEqual(8)

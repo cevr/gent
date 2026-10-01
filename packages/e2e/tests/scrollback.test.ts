@@ -156,6 +156,34 @@ describe("E2E: Scrollback ownership", () => {
       TEST_TIMEOUT,
     )
   }
+
+  // At 80x24 a 5-row prompt whose turn retries fills the screen: history
+  // takes the prompt's top rows as the turn ends. The rows read on with no
+  // row added or lost between history and the screen.
+  it.scopedLive(
+    "a multiline prompt whose turn retries keeps its rows together at 80x24",
+    () =>
+      Effect.gen(function* () {
+        const ctx = yield* seedAndSpawn(["--debug"], { cols: 80, rows: 24 })
+        yield* ptyWaitFor(ctx, "ready", { timeout: 25_000 })
+        yield* settlePty(ctx, TYPED)
+        ctx.pty.write("/new")
+        yield* settlePty(ctx, TYPED)
+        ctx.pty.write(ENTER)
+        yield* settlePty(ctx, SETTLE)
+        const prompt = ["longg", "row two", "row three", "row four", "row five"]
+        ctx.pty.write(prompt.join("\n"))
+        yield* settlePty(ctx, TYPED)
+        ctx.pty.write(ENTER)
+        yield* ptyWaitFor(ctx, "Retried 2/3", { timeout: 25_000 })
+        const grid = yield* settleAndCapture(ctx, { quietMs: 1_500, timeoutMs: 25_000 })
+        const rows = [...grid.history, ...grid.visible].map((row) => row.trimEnd())
+        const first = rows.findIndex((row) => row === "┃ longg")
+        expect(first).toBeGreaterThanOrEqual(0)
+        expect(rows.slice(first, first + prompt.length)).toEqual(prompt.map((row) => `┃ ${row}`))
+      }).pipe(Effect.timeout(EFFECT_TIMEOUT)),
+    TEST_TIMEOUT,
+  )
 })
 
 describe("E2E: Settle then capture", () => {
