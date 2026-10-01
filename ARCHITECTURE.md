@@ -385,8 +385,11 @@ callback limits have focused validation. Full gate and terminal/server E2E pass.
 See `plans/live-composition-review.md` for evidence and recovery limits.
 
 Core writes two prompt sections: the environment, once per profile, and the
-local date, per turn (a profile outlives midnight; the date changes the cached
-prefix at most once a day). Extensions add sections
+date, per turn. The date is the local day the session tree's root session
+started (`dateSection`), so the cached prefix stays byte-identical past
+midnight and a child shares its parent's. A turn on a later day carries
+today's local date as a notice after the conversation (`dateNotice`, first
+among the turn's notices, never stored). Extensions add sections
 only from `turnProjection` hooks, which run each turn inside the extension
 service context.
 

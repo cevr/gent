@@ -18,6 +18,7 @@ import {
   AGENT_PROMPT_PRIORITY,
   compileSharedSystemPrompt,
   compileSystemPrompt,
+  dateNotice,
   dateSection,
   fromWireToolPart,
   getToolId,
@@ -68,7 +69,7 @@ import {
   Semaphore,
   Stream,
 } from "effect"
-import type { ExtensionHostContext, TurnProjection } from "../domain/extension.js"
+import type { ExtensionHostContext, TurnNotice, TurnProjection } from "../domain/extension.js"
 import {
   ApprovalService,
   CurrentExtensionHostContext,
@@ -112,6 +113,7 @@ import {
   makeStorageTransaction,
   MessageStorage,
   type PendingToolCall,
+  RelationshipStorage,
   SessionOperationStorage,
   SessionStorage,
   type StorageTransaction,
@@ -1197,9 +1199,17 @@ interface ResolvedTurnContext {
   hostToolBindings: ReadonlyMap<string, ResolvedToolCapability>
   /** Sent after the conversation, never in `systemPrompt`: see `toPrompt`. */
   notices: ReadonlyArray<ExtensionTurnNotice>
+  /** Today's date when the prompt names an earlier one (`dateNotice`); sent first among the notices. */
+  dateNotice: Option.Option<TurnNotice>
   /** The session is a spawned child (`isSpawnedSession`): its requests say so to the driver. */
   child: boolean
 }
+
+/** The notices a step's request carries after the conversation: the date first, then the extensions'. */
+const requestNotices = (resolved: ResolvedTurnContext): ReadonlyArray<TurnNotice> => [
+  ...Option.toArray(resolved.dateNotice),
+  ...resolved.notices.map(({ notice }) => notice),
+]
 
 const mergeSystemPromptAddendum = (
   base: Option.Option<string>,
@@ -1418,11 +1428,20 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
   const toolBindings = new Map([...hostToolBindings].filter(([name]) => selectedNames.has(name)))
 
   // Build the tool-aware prompt, then run it through the systemPrompt hooks,
-  // which receive the compiled `basePrompt`. The date is read per turn: the
-  // base sections live as long as the profile, which can outlive midnight.
-  const today = DateTime.setZone(yield* DateTime.now, DateTime.zoneMakeLocal())
+  // which receive the compiled `basePrompt`. The prompt's date is the day the
+  // session tree's root started, so the cached prefix holds past midnight and
+  // a child shares its parent's; a turn on a later day reads today's date in
+  // a notice after the conversation.
+  const zone = DateTime.zoneMakeLocal()
+  const today = DateTime.setZone(yield* DateTime.now, zone)
+  const ancestors = yield* (yield* RelationshipStorage).getSessionAncestors(params.sessionId)
+  const treeStart = Option.fromUndefinedOr(ancestors.at(-1)).pipe(
+    Option.flatMap((root) => DateTime.make(root.createdAt)),
+    Option.map((start) => DateTime.setZone(start, zone)),
+    Option.getOrElse(() => today),
+  )
   const sections = buildTurnPromptSections(
-    [...params.baseSections, dateSection(today)],
+    [...params.baseSections, dateSection(treeStart)],
     dispatchAgent,
     tools,
     extensionSections,
@@ -1448,6 +1467,7 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
     temperature: dispatchAgent.temperature,
     modelDriver: route.modelDriver,
     notices: projEval.notices,
+    dateNotice: dateNotice(treeStart, today),
     child: Option.exists(session, isSpawnedSession),
   }
 })
@@ -1625,7 +1645,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
     ...omitUndefined({ inputLimitTokens: Option.getOrUndefined(inputLimit) }),
     reservedSystemTokens:
       resolved.systemPrompt.reduce((sum, block) => sum + estimateTextTokens(block), 0) +
-      Option.match(turnNoticesText(resolved.notices.map(({ notice }) => notice)), {
+      Option.match(turnNoticesText(requestNotices(resolved)), {
         onNone: () => 0,
         onSome: estimateTextTokens,
       }),
@@ -1743,7 +1763,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   const prompt = toWirePrompt(
     toPrompt(projection.messages, {
       systemPrompt: resolved.systemPrompt,
-      notices: resolved.notices.map(({ notice }) => notice),
+      notices: requestNotices(resolved),
     }),
   )
   const toolkit = convertTools([...resolved.tools])

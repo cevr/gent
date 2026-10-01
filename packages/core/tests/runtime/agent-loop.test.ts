@@ -339,7 +339,7 @@ describe("session termination markers", () => {
 
 describe("system prompt date", () => {
   it.scopedLive(
-    "a turn after local midnight tells the model the new date",
+    "a turn after local midnight keeps the cached prefix and tells the model the new date after it",
     () =>
       Effect.gen(function* () {
         // One second before local midnight, set before the runtime starts: crossing midnight
@@ -349,16 +349,30 @@ describe("system prompt date", () => {
           { timeZone: DateTime.zoneMakeLocal(), adjustForTimeZone: true },
         ).pipe(Effect.fromOption)
         yield* TestClock.setTime(DateTime.toEpochMillis(beforeMidnight))
-        const systemTexts = yield* Ref.make<ReadonlyArray<string>>([])
+        // Per request: the leading system blocks (the cached prefix) and the
+        // system message after the conversation (the turn's notices).
+        const requests = yield* Ref.make<ReadonlyArray<{ prefix: string; tail: string }>>([])
         const secondCall = yield* Deferred.make<void>()
+        const systemText = (messages: ReadonlyArray<Prompt.Message>) =>
+          messages
+            .flatMap((message) => {
+              if (message.role !== "system") return []
+              return [message.content]
+            })
+            .join("\n")
         const providerLayer = LanguageModelLayers.testStream((options) =>
-          Ref.updateAndGet(systemTexts, (all) => [
-            ...all,
-            Prompt.make(options.prompt)
-              .content.filter((message) => message.role === "system")
-              .map((message) => message.content)
-              .join("\n"),
-          ]).pipe(
+          Ref.updateAndGet(requests, (all) => {
+            const content = Prompt.make(options.prompt).content
+            const firstTurn = content.findIndex((message) => message.role !== "system")
+            const lastTurn = content.findLastIndex((message) => message.role !== "system")
+            return [
+              ...all,
+              {
+                prefix: systemText(content.slice(0, firstTurn)),
+                tail: systemText(content.slice(lastTurn + 1)),
+              },
+            ]
+          }).pipe(
             Effect.tap((all) =>
               Effect.when(Deferred.succeed(secondCall, void 0), Effect.succeed(all.length >= 2)),
             ),
@@ -391,11 +405,12 @@ describe("system prompt date", () => {
         const tomorrow = yield* localDate
         yield* client.message.send({ sessionId, branchId, content: "second" })
         yield* Deferred.await(secondCall)
-        const [first, second] = yield* Ref.get(systemTexts)
+        const [first, second] = yield* Ref.get(requests)
         expect(today).not.toBe(tomorrow)
-        expect(first).toContain(`Date: ${today}`)
-        expect(second).toContain(`Date: ${tomorrow}`)
-        expect(second).not.toContain(`Date: ${today}`)
+        expect(first?.prefix).toContain(`Date: ${today}`)
+        expect(first?.tail).not.toContain("Date:")
+        expect(second?.prefix).toBe(first?.prefix)
+        expect(second?.tail).toContain(`Date: ${tomorrow}`)
       }).pipe(Effect.provide(TestClock.layer()), Effect.timeout("8 seconds")),
     10_000,
   )
