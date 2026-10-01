@@ -6,16 +6,14 @@ import { userInfo } from "node:os"
 
 /**
  * The efficiency capture preload refuses to start a run that could read the
- * owner's login or gent state (`safety.md` exception 1). Each case starts
- * `bun --preload fetch-capture.ts started.ts` with only `PATH` and the
- * variables the case names, and reads whether the script started.
+ * owner's login or gent state (the capture rule in `NORTH_STAR.md` → Owner
+ * rules). Each case starts `bun --preload fetch-capture.ts started.ts` with
+ * only `PATH` and the variables the case names, and reads whether the script
+ * started.
  */
 const captureTest = it.scopedLive.layer(BunServices.layer)
 
-const PRELOAD = new URL(
-  "../../../.claude/skills/architecture-loop/fetch-capture.ts",
-  import.meta.url,
-).pathname
+const PRELOAD = new URL("../../../docs/architecture/fetch-capture.ts", import.meta.url).pathname
 
 /** Start the preload with `env` alone; its combined output and exit code. */
 const startCapture = (root: string, env: Readonly<Record<string, string>>) =>

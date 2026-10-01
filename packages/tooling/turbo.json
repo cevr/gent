@@ -7,7 +7,7 @@
         "../../testbeds/gamut/gamut.ts",
         "../../testbeds/gamut/tests/**/*.ts",
         "../core/src/**",
-        "../../.claude/skills/architecture-loop/fetch-capture.ts"
+        "../../docs/architecture/fetch-capture.ts"
       ]
     }
   }

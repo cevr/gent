@@ -300,7 +300,7 @@
       // loads, so it is plain Bun, not an Effect program: it reads its
       // environment, the operator's script JSON and each request body, and
       // throws before the run starts when the environment is unsafe.
-      "files": [".claude/skills/architecture-loop/fetch-capture.ts"],
+      "files": ["docs/architecture/fetch-capture.ts"],
       "rules": {
         "effect/noAs": "off",
         "effect/noAsyncFunction": "off",

@@ -161,7 +161,7 @@
           {
             // The preload stamps with `Date`, replaces `fetch` and reads its
             // environment.
-            "include": [".claude/skills/architecture-loop/fetch-capture.ts"],
+            "include": ["docs/architecture/fetch-capture.ts"],
             "options": {
               "diagnosticSeverity": {
                 "cryptoRandomUUID": "error",
