@@ -47,12 +47,11 @@ const spawnWithDir = (
   Effect.acquireRelease(
     Effect.sync(() => {
       const mainPath = `${tuiDirectory}/src/main.tsx`
-      const preloadPath = `${tuiDirectory}/node_modules/@opentui/solid/scripts/preload.js`
 
       let output = ""
       let currentSize = size
 
-      const pty = spawn("bun", ["--preload", preloadPath, mainPath, "--isolate", ...extraArgs], {
+      const pty = spawn("bun", [mainPath, "--isolate", ...extraArgs], {
         name: "xterm-256color",
         cols: size.cols,
         rows: size.rows,

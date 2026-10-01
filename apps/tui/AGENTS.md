@@ -11,7 +11,7 @@
 - **render() is async** - Use `Effect.promise(() => render(...))`, not `Effect.sync`.
 - **File naming** - All files kebab-case: `message-list.tsx`, `workspace.tsx`.
 - **Error boundaries** - A failure travels in the Effect error channel and shows in the status row or the open pane's note row. No try/catch (`effect/noTryCatch`).
-- **Exit pattern** - Exit through `useExit()` (`session.tsx`): it leaves the terminal through `leaveTerminal` (`message-list.tsx`: commit the live transcript tail with `flushTranscriptForExit`, then `renderer.destroy()`), then runs `useEnv().shutdown()`. SIGINT and SIGTERM take the same path: the entry's hold on the renderer (`holdUntilRendererDestroyed`) runs `leaveTerminal` when it is interrupted, and the renderer leaves both signals to gent (`exitSignals` in `main.tsx`), so its own listener does not destroy it first. Never `process.exit()` — it bypasses Effect scope finalizers (server lock cleanup, SQLite WAL checkpoint).
+- **Exit pattern** - Exit through `useExit()` (`session.tsx`): it leaves the terminal through `leaveTerminal` (`message-list.tsx`: commit the live transcript tail with `flushTranscriptForExit`, then `renderer.destroy()`), then runs `useEnv().shutdown()`. SIGINT, SIGTERM and SIGHUP take the same path: the entry's hold on the renderer (`holdUntilRendererDestroyed`) runs `leaveTerminal` when it is interrupted, and the renderer leaves those signals to gent (`exitSignals` in `main.tsx`), so its own listener does not destroy it first. Never `process.exit()` — it bypasses Effect scope finalizers (server lock cleanup, SQLite WAL checkpoint).
 - **Intrinsic names** - Take the names from the opentui catalogue: some multi-word intrinsics use underscores (`tab_select`, `ascii_font`), `scrollbox` is one word.
 - **Use `<For>`** - Never `.map()` for JSX lists; use `<For each={items}>{item => ...}</For>`.
 
@@ -216,7 +216,9 @@ created with `clearOnShutdown: false`, so exit leaves every turn on screen.
 
 Answer markdown draws each top-level block on its own
 (`internalBlockMode="top-level"`), so a heading never shows its `#` marks
-before its highlight lands. A ` ```mermaid ` fence is its own block,
+before its highlight lands. Answer tables keep a grid, fit their content
+within the answer and pad each cell by one column (`ANSWER_TABLE`).
+A ` ```mermaid ` fence is its own block,
 drawn by `useDiagramCodeBlocks` (`mermaid.ts`; beautiful-mermaid loads on
 the first fence, and history waits for the load to end; a failed load
 shows the fence as code): compact boxes in theme colors, no wrap, no
@@ -275,7 +277,7 @@ flags (a historical one) exits 1 on an error with no answer text. An error
 marked `notice: true` (a compaction fallback) is only a warning. The client
 status also ignores a notice. A failed turn phase appends one `TurnCompleted`
 with `streamFailed: true`, which settles the run; the send fails too, and
-whichever comes first ends it. SIGINT exits 130 and SIGTERM 143. The run's end
+whichever comes first ends it. SIGHUP exits 129, SIGINT 130 and SIGTERM 143. The run's end
 owns stderr: a failed run prints one line, an answered run prints one
 `Warning:` line for each notice.
 

@@ -493,10 +493,13 @@ export const runHeadless = (
 
 // ── process exit ────────────────────────────────────────────────────────────
 
-export type ExitSignal = "SIGINT" | "SIGTERM"
+export type ExitSignal = "SIGINT" | "SIGTERM" | "SIGHUP"
 
 /** 128 plus the signal number, as a shell reports a process a signal ended. */
-const SIGNAL_EXIT_CODE = { SIGINT: 130, SIGTERM: 143 } satisfies Record<ExitSignal, number>
+const SIGNAL_EXIT_CODE = { SIGINT: 130, SIGTERM: 143, SIGHUP: 129 } satisfies Record<
+  ExitSignal,
+  number
+>
 
 /**
  * How the CLI's exit becomes the process exit code.
@@ -505,8 +508,8 @@ const SIGNAL_EXIT_CODE = { SIGINT: 130, SIGTERM: 143 } satisfies Record<ExitSign
  * and exits 0. Any other command a signal ended did not finish: a headless
  * run did not answer, and `gent server start` was stopped. A caller that
  * chains `gent -H … && next` or `gent server start && next` must not read it
- * as success, so it exits 130 or 143. Any other failure takes the default
- * teardown's code.
+ * as success, so it exits with 128 plus the signal number. Any other failure
+ * takes the default teardown's code.
  */
 export const makeCliTeardown =
   (run: {

@@ -676,9 +676,10 @@ const plainRenderable = (
  * before its highlight lands comes from its inline tokens: a heading never
  * shows its `#` marks, in the live view or in a row that reaches history
  * without its highlight. Tables keep their grid, which the top-level mode
- * would otherwise trade for borderless columns.
+ * would otherwise trade for borderless columns, with one column of padding
+ * and a width fitted to their content within the answer.
  */
-const ANSWER_TABLE = { style: "grid" } as const
+const ANSWER_TABLE = { style: "grid", cellPaddingX: 1, widthMode: "content" } as const
 
 function AssistantMessage(props: {
   content: string
@@ -1035,9 +1036,8 @@ export function MessageList(props: MessageListProps) {
  * What a transcript item looks like on screen, as a value that does not depend
  * on how the item was built.
  *
- * Two readers compare transcript items for identity: native history decides
- * what already reached scrollback, and the display boundary decides what a
- * `/clear` already dismissed. The fingerprint names the drawn fields in a
+ * Native history compares items with what already reached scrollback.
+ * The fingerprint names the drawn fields in a
  * fixed order, so an item rebuilt with the same fields gives the same value;
  * new text, a completed tool call, and a changed event change it.
  */
@@ -1560,11 +1560,11 @@ export function NativeTranscript(props: NativeTranscriptProps) {
   const dimensions = useTerminalDimensions()
   const [ready, setReady] = createSignal(false)
   const [nativeOutputReady, setNativeOutputReady] = createSignal(false)
-  const [committedCount, setCommittedCount] = createSignal(0)
+  const [committed, setCommitted] = createSignal<ReadonlyArray<string>>([])
+  const committedCount = () => committed().length
   const [liveHeight, setLiveHeight] = createSignal(0)
   const [measurementVersion, setMeasurementVersion] = createSignal(0)
   const itemHeights = new Map<SessionItem, number>()
-  let committed: string[] = []
   /**
    * How far the queue has been offered items. It runs ahead of `committed`
    * while commits are in flight, so a re-render cannot enqueue the same item
@@ -1578,14 +1578,8 @@ export function NativeTranscript(props: NativeTranscriptProps) {
    */
   const [retryVersion, setRetryVersion] = createSignal(0)
   /**
-   * Which display a commit belongs to. A `/clear` bumps it, so a commit queued
-   * before the clear finds a stale stamp when its surface finally settles and
-   * drops its rows instead of writing history the reader already dismissed.
-   */
-  let displayGeneration = 0
-  /**
-   * Bumped when an item comes back to the live view, so the items queued
-   * behind it do not land before it.
+   * Bumped when rows come back to the live view, replay, or are cleared, so
+   * commits drawn before that point never land.
    */
   let commitEpoch = 0
   /** Rows commits moved into history since the region was last sized. */
@@ -1615,15 +1609,12 @@ export function NativeTranscript(props: NativeTranscriptProps) {
   let prefixCheckedFor: ReadonlyArray<string> = []
   /** The tries each item's highlights missed, by fingerprint, until it lands. */
   const unsettledTries = new Map<string, number>()
-  let displayRevision = 0
   const [displayBoundary, setDisplayBoundary] = createSignal(captureTranscriptDisplay([]))
   const displayedItems = createMemo(() => projectTranscriptDisplay(props.items, displayBoundary()))
   let viewport = Option.none<ScrollBoxRenderable>()
   let settlingNative = false
   let leftRegion = Option.none<RegionPlace>()
   const [replayPending, setReplayPending] = createSignal(false)
-  let measuredDimensions = dimensions()
-  let measuredDisclosure = props.disclosure
   /**
    * The footer without the growing UI docked in it. While a pane or the
    * suggestions are open it keeps the height the footer had before, so the
@@ -1671,12 +1662,11 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     batch(() => {
       setNativeOutputReady(false)
       setReplayPending(true)
-      committed = []
+      setCommitted([])
       queued = 0
       queuedRows = 0
       pendingRows = 0
       setPartialRows(0)
-      setCommittedCount(0)
     })
   }
 
@@ -1811,14 +1801,9 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     Effect.suspend(() => {
       // An item queued behind one that came back waits for the next pass.
       if (commitEpoch !== epoch) return Effect.succeed("stale")
-      const generation = displayGeneration
       // The item may also have changed while it settled (its text replaced, a
       // call's result in): rows drawn from the old item never land.
-      const stillCurrent = () =>
-        displayGeneration === generation &&
-        commitEpoch === epoch &&
-        canCommitNatively() &&
-        stillOffered()
+      const stillCurrent = () => commitEpoch === epoch && canCommitNatively() && stillOffered()
       if (!stillCurrent()) return Effect.succeed("refused")
       // Settling is asynchronous. The screen may have changed hands and the
       // reader may have cleared the display while it ran, so both are
@@ -1884,7 +1869,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
    */
   const rewind = () => {
     commitEpoch += 1
-    queued = committed.length
+    queued = untrack(committedCount)
     queuedRows = untrack(partialRows)
     // Every offer still in flight is behind the one that came back: none lands.
     pendingRows = 0
@@ -1912,8 +1897,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
       pendingRows = Math.max(0, pendingRows - liveRowsGiven)
       batch(() => {
         if (completes) {
-          committed = [...committed, fingerprintValue]
-          setCommittedCount(committed.length)
+          setCommitted((values) => [...values, fingerprintValue])
           setPartialRows(0)
         } else {
           partialFingerprint = fingerprintValue
@@ -1929,8 +1913,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
         releasedRows = Math.max(0, releasedRows - rows)
         batch(() => {
           if (completes) {
-            committed = committed.filter((value) => value !== fingerprintValue)
-            setCommittedCount(committed.length)
+            setCommitted((values) => values.filter((value) => value !== fingerprintValue))
           }
           setPartialRows(range.from)
           setLiveHeight((height) => height + liveRowsGiven)
@@ -1946,7 +1929,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
         tries + 1 >= SETTLE_TRIES,
         handOver,
         // Commits land in transcript order, so this item is the next after history.
-        () => untrack(fingerprints)[committed.length] === fingerprintValue,
+        () => untrack(fingerprints)[untrack(committedCount)] === fingerprintValue,
       ).pipe(
         Effect.andThen((outcome) =>
           Effect.sync(() => {
@@ -2020,7 +2003,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     if (!canCommitNatively()) return Effect.void
     const items = displayedItems()
     const next = items.map((item) => transcriptFingerprint(item))
-    if (!committed.every((value, index) => next[index] === value)) return Effect.void
+    if (!untrack(committed).every((value, index) => next[index] === value)) return Effect.void
     while (queued < items.length) {
       const item = items[queued]
       const value = next[queued]
@@ -2062,19 +2045,19 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     renderer.useMouse = true
   })
 
-  createEffect(() => {
-    const next = dimensions()
-    const disclosure = props.disclosure
-    if (
-      next.width === measuredDimensions.width &&
-      next.height === measuredDimensions.height &&
-      disclosure === measuredDisclosure
-    )
-      return
-    measuredDimensions = next
-    measuredDisclosure = disclosure
-    untrack(requestReplay)
-  })
+  createEffect(
+    on(
+      () => [dimensions().width, dimensions().height, props.disclosure] as const,
+      (next, previous) => {
+        if (
+          Predicate.isUndefined(previous) ||
+          next.every((value, index) => value === previous[index])
+        )
+          return
+        requestReplay()
+      },
+    ),
+  )
 
   createEffect(() => {
     if (!ready()) return
@@ -2115,34 +2098,34 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     if (!settlingNative) setNativeOutputReady(true)
   })
 
-  createEffect(() => {
-    if (!nativeOutputReady()) return
-    const nextDisplayRevision = props.displayRevision
-    if (displayRevision === nextDisplayRevision) return
-    untrack(() => {
-      displayRevision = nextDisplayRevision
-      const cleared = props.items
-      // Bumped before the queue sees the reset: a commit already settling now
-      // finds a stale stamp and drops its rows rather than writing history the
-      // reader just dismissed.
-      displayGeneration += 1
-      // The boundary moves at once, so no later pass can offer a pre-clear
-      // item again while the queue is still draining.
-      batch(() => {
-        setDisplayBoundary(captureTranscriptDisplay(cleared))
-        committed = []
-        queued = 0
-        queuedRows = 0
-        pendingRows = 0
-        setPartialRows(0)
-        setCommittedCount(0)
-      })
-      // The reset takes the dismissed rows out of scrollback as well. It joins
-      // the commit queue rather than jumping it, so the queue stays the
-      // single writer of scrollback.
-      enqueueNative(Effect.sync(resetHistory))
-    })
-  })
+  createEffect(
+    on(
+      () => [nativeOutputReady(), props.displayRevision] as const,
+      ([ready, revision], _previous, consumed = 0) => {
+        if (!ready || consumed === revision) return consumed
+        const cleared = props.items
+        // Bumped before the queue sees the reset: a commit already settling now
+        // finds a stale stamp and drops its rows rather than writing history the
+        // reader just dismissed.
+        commitEpoch += 1
+        // The boundary moves at once, so no later pass can offer a pre-clear
+        // item again while the queue is still draining.
+        batch(() => {
+          setDisplayBoundary(captureTranscriptDisplay(cleared))
+          setCommitted([])
+          queued = 0
+          queuedRows = 0
+          pendingRows = 0
+          setPartialRows(0)
+        })
+        // The reset takes the dismissed rows out of scrollback as well. It joins
+        // the commit queue rather than jumping it, so the queue stays the
+        // single writer of scrollback.
+        enqueueNative(Effect.sync(resetHistory))
+        return revision
+      },
+    ),
+  )
 
   // Scrollback is immutable, so nothing commits until every client renderer
   // has loaded and every notice-row source has answered; the live view draws
@@ -2212,8 +2195,8 @@ export function NativeTranscript(props: NativeTranscriptProps) {
   ): boolean => {
     if (next === prefixCheckedFor) return true
     const prefixMatches =
-      committed.every((value, index) => next[index] === value) &&
-      (partialRows() === 0 || next[committed.length] === partialFingerprint)
+      untrack(committed).every((value, index) => next[index] === value) &&
+      (partialRows() === 0 || next[untrack(committedCount)] === partialFingerprint)
     if (!prefixMatches) return false
     prefixCheckedFor = next
     const currentItems = new Set(items)

@@ -14,13 +14,14 @@
  * visible: the live view looked correct the whole time.
  */
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Option } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { waitFor } from "@gent/core/test-utils"
 import {
   countRows,
   gridText,
   historyText,
   ptyWaitFor,
+  screenWaitFor,
   seedAndSpawn,
   settleAndCapture,
   settlePty,
@@ -42,6 +43,12 @@ const SETTLE = { quietMs: 800, timeoutMs: 25_000 }
 const TYPED = { quietMs: 200, timeoutMs: 5_000 }
 
 const messageText = (index: number) => `scrollback probe ${index}`
+const encodeTerminalBytes = Schema.encodeSync(Schema.fromJsonString(Schema.String))
+
+class TranscriptReadinessError extends Schema.TaggedError<TranscriptReadinessError>()(
+  "TranscriptReadinessError",
+  { message: Schema.String },
+) {}
 
 /**
  * Submit `count` messages and let each turn finish.
@@ -57,6 +64,11 @@ const submitMessages = (ctx: TestContext, count: number) =>
       ctx.pty.write(messageText(index))
       yield* settlePty(ctx, TYPED)
       ctx.pty.write(ENTER)
+      yield* screenWaitFor(
+        ctx,
+        (visible) => visible.some((row) => row.trimEnd() === `┃ ${messageText(index)}`),
+        { timeout: 25_000, label: `submitted message ${index}` },
+      )
       yield* settlePty(ctx, SETTLE)
     }
   })
@@ -140,13 +152,35 @@ describe("E2E: Scrollback ownership", () => {
 
   // A signal from outside (`kill`, a closing multiplexer) leaves the terminal
   // as ctrl+c twice does: the transcript stays above the shell prompt.
-  for (const signal of ["SIGTERM", "SIGINT"] as const) {
+  for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
     it.scopedLive(
       `${signal} from outside leaves every message on screen`,
       () =>
         Effect.gen(function* () {
           const ctx = yield* seedAndSpawn(["--mock-empty"], SHORT_SCREEN)
           yield* submitMessages(ctx, 2)
+          // A quiet screen can still hold rows above the live viewport while
+          // client notice sources settle. Wait for the complete transcript.
+          const before = yield* waitFor(
+            settleAndCapture(ctx, SETTLE).pipe(Effect.map(gridText)),
+            (rows) => [1, 2].every((index) => countRows(rows, messageText(index)) === 1),
+            25_000,
+            "both submitted message rows, once, before the signal",
+          ).pipe(
+            Effect.mapError(
+              (error) =>
+                new TranscriptReadinessError({
+                  message: `${error.message}\nPTY bytes: ${encodeTerminalBytes(ctx.output)}`,
+                }),
+            ),
+          )
+          for (const index of [1, 2]) {
+            expect(["before signal", index, countRows(before, messageText(index))]).toEqual([
+              "before signal",
+              index,
+              1,
+            ])
+          }
           expect(Option.isSome(yield* signalAndExit(ctx, signal, "10 seconds"))).toBe(true)
           const rows = gridText(yield* settleAndCapture(ctx, SETTLE))
           for (const index of [1, 2]) {

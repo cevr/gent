@@ -341,12 +341,12 @@ const runGent = ({
         // Exit clears the split region only: the transcript above it stays
         // on screen, and the shell prompt follows.
         clearOnShutdown: false,
-        // SIGINT and SIGTERM are the process entry's (`runCliMain`): they
+        // SIGINT, SIGTERM and SIGHUP are the process entry's (`runCliMain`): they
         // interrupt the main fiber, whose hold on the renderer commits the
         // live tail before it destroys the renderer. OpenTUI's own listener
         // would destroy it first and clear the transcript. It keeps the
         // signals gent does not handle, so they still restore the terminal.
-        exitSignals: ["SIGQUIT", "SIGABRT", "SIGHUP", "SIGPIPE", "SIGBUS"],
+        exitSignals: ["SIGQUIT", "SIGABRT", "SIGPIPE", "SIGBUS"],
         onDestroy: () => {
           shutdownLog("exit.renderer-destroy")
         },
@@ -487,6 +487,7 @@ const runCliMain = Runtime.makeRunMain(({ fiber, teardown }) => {
     if (!receivedSignal) {
       process.removeListener("SIGINT", onSignal)
       process.removeListener("SIGTERM", onSignal)
+      process.removeListener("SIGHUP", onSignal)
     }
     teardown(exit, (code) => {
       // eslint-disable-next-line effect/noGlobals -- CLI teardown must return the process exit code.
@@ -499,11 +500,13 @@ const runCliMain = Runtime.makeRunMain(({ fiber, teardown }) => {
     cliRun.signal = Option.some(signal)
     process.removeListener("SIGINT", onSignal)
     process.removeListener("SIGTERM", onSignal)
+    process.removeListener("SIGHUP", onSignal)
     fiber.interruptUnsafe(fiber.id)
   }
 
   process.on("SIGINT", onSignal)
   process.on("SIGTERM", onSignal)
+  process.on("SIGHUP", onSignal)
 })
 
 runCliMain(mainEffect, {
