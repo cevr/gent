@@ -256,6 +256,24 @@ const methodsFor = (catalog: AuthCatalog, provider: string): ReadonlyArray<AuthM
 const providerFor = (catalog: AuthCatalog, provider: string): Option.Option<AuthProviderInfo> =>
   Option.fromNullishOr(catalog.providers.find((entry) => entry.provider === provider))
 
+/**
+ * What the pane calls a provider: its driver's name ("OpenCode Go"), or its
+ * id when the server sends no name. A name two providers share carries the
+ * id beside it: "Mirror (mirror-a)".
+ */
+const providerLabel = (catalog: AuthCatalog, provider: string): string =>
+  Option.match(
+    Option.flatMap(providerFor(catalog, provider), (entry) => Option.fromUndefinedOr(entry.name)),
+    {
+      onNone: () => provider,
+      onSome: (name) => {
+        if (catalog.providers.filter((entry) => entry.name === name).length > 1)
+          return `${name} (${provider})`
+        return name
+      },
+    },
+  )
+
 /** The required providers that still have no credentials. */
 const missingRequired = (catalog: AuthCatalog): ReadonlyArray<AuthProviderInfo> =>
   catalog.providers.filter((entry) => entry.required && !entry.hasKey)
@@ -306,6 +324,8 @@ export function Auth(props: AuthProps) {
   const [state, setState] = createSignal(AuthState.initial())
   const send = (event: AuthEvent) => setState((current) => transitionAuth(current, event))
   const catalog = () => catalogOf(state())
+  /** What the pane calls `provider` ({@link providerLabel}). */
+  const label = (provider: string) => providerLabel(catalog(), provider)
 
   const [autoPrompted, setAutoPrompted] = createSignal(false)
   const [flashNote, setFlashNote] = createSignal(Option.none<string>())
@@ -466,7 +486,7 @@ export function Auth(props: AuthProps) {
       clientCtx.client.auth.setKey({ provider, key }).pipe(
         Effect.tap(() =>
           whileCurrent(token, () => {
-            flashSuccess(`API key saved for ${provider}`)
+            flashSuccess(`API key saved for ${label(provider)}`)
             loadAuth(token)
           }),
         ),
@@ -512,7 +532,7 @@ export function Auth(props: AuthProps) {
         .pipe(
           Effect.tap(() =>
             whileCurrent(token, () => {
-              flashSuccess(`Authenticated ${provider} via OAuth`)
+              flashSuccess(`Authenticated ${label(provider)} via OAuth`)
               loadAuth(token)
             }),
           ),
@@ -549,7 +569,7 @@ export function Auth(props: AuthProps) {
             }
             // "done" means the server finished it during `authorize`.
             if (result.value.method === "done") {
-              flashSuccess(`Authenticated ${provider}`)
+              flashSuccess(`Authenticated ${label(provider)}`)
               loadAuth(token)
               return
             }
@@ -610,7 +630,7 @@ export function Auth(props: AuthProps) {
         .pipe(
           Effect.tap(() =>
             whileCurrent(token, () => {
-              flashSuccess(`Authenticated ${screen.provider} via OAuth`)
+              flashSuccess(`Authenticated ${label(screen.provider)} via OAuth`)
               loadAuth(token)
             }),
           ),
@@ -688,11 +708,13 @@ export function Auth(props: AuthProps) {
             when={!Option.contains(armed(), provider.provider)}
             fallback={
               <text style={{ fg: theme.error }}>
-                ctrl+x again to delete {provider.provider} login
+                ctrl+x again to delete {label(provider.provider)} login
               </text>
             }
           >
-            <text style={{ fg: rowForeground(isSelected(), theme.text) }}>{provider.provider}</text>
+            <text style={{ fg: rowForeground(isSelected(), theme.text) }}>
+              {label(provider.provider)}
+            </text>
             <text style={{ fg: rowForeground(isSelected(), statusColor(provider)) }}>
               {" "}
               {authLabel(provider)}
@@ -909,7 +931,7 @@ export function Auth(props: AuthProps) {
         {(current) => (
           <PickerFrame
             error={Option.none()}
-            title={`Sign in · ${current().provider} · method`}
+            title={`Sign in · ${label(current().provider)} · method`}
             keys={[KeyHints.move, KeyHints.select, KeyHints.back]}
           >
             <SelectList
@@ -932,7 +954,7 @@ export function Auth(props: AuthProps) {
           <PickerFrame
             error={Option.none()}
             height={pickerHeight(1, dimensions().height)}
-            title={`Sign in · ${current().provider} · API key`}
+            title={`Sign in · ${label(current().provider)} · API key`}
             keys={[KeyHints.submit, KeyHints.back]}
           >
             <AuthTextLine
@@ -950,7 +972,7 @@ export function Auth(props: AuthProps) {
         {(current) => (
           <PickerFrame
             height={oauthBodyRows(current()) + OAUTH_CHROME_ROWS}
-            title={`Sign in · ${current().provider} · ${current().method.label}`}
+            title={`Sign in · ${label(current().provider)} · ${current().method.label}`}
             keys={OAUTH_KEYS}
             error={state().error}
             detail={oauthNote(current())}
