@@ -39,7 +39,6 @@ interface PromptTranscriptOptions {
    * driver can end a cached prefix at a block (see `systemPromptBlocks`).
    */
   readonly systemPrompt?: ReadonlyArray<string>
-  readonly includeHidden?: boolean
   /** The turn's notices, placed after the conversation; see `turnNoticesText`. */
   readonly notices?: ReadonlyArray<TurnNotice>
 }
@@ -283,7 +282,6 @@ const reasoningReplayAt = (index: number, lastModelChange: number): ReasoningRep
 
 export const toPromptMessages = (
   messages: ReadonlyArray<Message>,
-  options?: Pick<PromptTranscriptOptions, "includeHidden">,
 ): ReadonlyArray<Prompt.Message> => {
   const result: Prompt.Message[] = []
   const lastModelChange = messages.findLastIndex(
@@ -291,7 +289,7 @@ export const toPromptMessages = (
   )
 
   for (const [index, message] of messages.entries()) {
-    if (options?.includeHidden !== true && !isAiVisibleMessage(message)) continue
+    if (!isAiVisibleMessage(message)) continue
     const promptMessage = toPromptMessage(message, reasoningReplayAt(index, lastModelChange))
     if (Option.isSome(promptMessage)) result.push(promptMessage.value)
   }
@@ -336,7 +334,7 @@ export const toPrompt = (
   const systemBlocks = (options?.systemPrompt ?? []).filter((block) => block !== "")
   const promptMessages = [
     ...systemBlocks.map((block) => Prompt.systemMessage({ content: block })),
-    ...toPromptMessages(messages, options),
+    ...toPromptMessages(messages),
   ]
   const notices = turnNoticesText(options?.notices ?? [])
   if (Option.isSome(notices)) promptMessages.push(Prompt.systemMessage({ content: notices.value }))
@@ -1110,18 +1108,31 @@ const messageIds = (units: ReadonlyArray<ProjectionUnit>): ReadonlyArray<Message
   return ids
 }
 
-const latestUserUnit = (units: ReadonlyArray<ProjectionUnit>): Option.Option<number> => {
-  let latest: Option.Option<number> = Option.none()
-  for (const [index, unit] of units.entries()) {
-    if (unit.messages.some((message) => message.role === "user")) latest = Option.some(index)
-  }
-  return latest
-}
-
 /** The new-window notice is pinned: it must survive however tight the projection gets. */
 const isWindowMarkerUnit = (unit: ProjectionUnit): boolean =>
   unit.messages.length === 1 &&
   unit.messages[0]?.metadata?.customType === CONTEXT_WINDOW_MESSAGE_TYPE
+
+/**
+ * The unit a projection keeps with everything after it: the one that holds
+ * the turn's prompt (`latestUserMessageId`, which a line the runtime writes
+ * inside the turn never is), else the newest handoff marker. So a turn that
+ * outgrows the window overflows and hands off; it never drops its prompt.
+ */
+const anchorUnit = (units: ReadonlyArray<ProjectionUnit>): Option.Option<number> => {
+  const prompt = latestUserMessageId(units.flatMap((unit) => unit.messages))
+  const newest = (holds: (unit: ProjectionUnit) => boolean): Option.Option<number> => {
+    for (let index = units.length - 1; index >= 0; index -= 1) {
+      const unit = units[index]
+      if (Predicate.isNotUndefined(unit) && holds(unit)) return Option.some(index)
+    }
+    return Option.none()
+  }
+  return Option.match(prompt, {
+    onNone: () => newest(isWindowMarkerUnit),
+    onSome: (id) => newest((unit) => unit.messages.some((message) => message.id === id)),
+  })
+}
 
 const reserveTotal = (budget: ModelContextBudget): number =>
   budget.reservedSystemTokens + budget.reservedToolTokens + budget.reservedOutputTokens
@@ -1145,21 +1156,21 @@ const budgetExceeded = (
   )
 }
 
-const selectWithLatestUser = (
+const selectWithAnchor = (
   units: ReadonlyArray<ProjectionUnit>,
-  latestUserIndex: number,
+  anchorIndex: number,
   availableInputTokens: number,
 ): Result.Result<SelectedUnits, ModelContextError> => {
-  const pinned = units.slice(0, latestUserIndex).filter(isWindowMarkerUnit)
-  const tail = units.slice(latestUserIndex)
+  const pinned = units.slice(0, anchorIndex).filter(isWindowMarkerUnit)
+  const tail = units.slice(anchorIndex)
   const tailTokens = [...pinned, ...tail].reduce((total, unit) => total + unit.estimatedTokens, 0)
   if (tailTokens > availableInputTokens) {
     return budgetExceeded([...pinned, ...tail], availableInputTokens)
   }
 
-  let selectedStart = latestUserIndex
+  let selectedStart = anchorIndex
   let selectedTokens = tailTokens
-  for (let index = latestUserIndex - 1; index >= 0; index -= 1) {
+  for (let index = anchorIndex - 1; index >= 0; index -= 1) {
     const unit = Option.fromNullishOr(units[index])
     if (Option.isNone(unit)) continue
     // Already counted with the tail; it stays in view either way.
@@ -1174,7 +1185,7 @@ const selectWithLatestUser = (
   return Result.succeed({ start: selectedStart, estimatedTokens: selectedTokens })
 }
 
-const selectWithoutUser = (
+const selectWithoutAnchor = (
   units: ReadonlyArray<ProjectionUnit>,
   availableInputTokens: number,
 ): Result.Result<SelectedUnits, ModelContextError> => {
@@ -1197,13 +1208,13 @@ const selectWithoutUser = (
 
 const selectUnits = (
   units: ReadonlyArray<ProjectionUnit>,
-  latestUser: Option.Option<number>,
+  anchor: Option.Option<number>,
   availableInputTokens: number,
 ): Result.Result<SelectedUnits, ModelContextError> => {
-  if (Option.isSome(latestUser)) {
-    return selectWithLatestUser(units, latestUser.value, availableInputTokens)
+  if (Option.isSome(anchor)) {
+    return selectWithAnchor(units, anchor.value, availableInputTokens)
   }
-  return selectWithoutUser(units, availableInputTokens)
+  return selectWithoutAnchor(units, availableInputTokens)
 }
 
 const projectUnits = (
@@ -1220,8 +1231,8 @@ const projectUnits = (
     )
   }
 
-  const latestUser = latestUserUnit(units)
-  const selected = selectUnits(units, latestUser, availableInputTokens)
+  const anchor = anchorUnit(units)
+  const selected = selectUnits(units, anchor, availableInputTokens)
   if (Result.isFailure(selected)) return Result.fail(selected.failure)
 
   const earlier = units.slice(0, selected.success.start)

@@ -14,7 +14,7 @@
  */
 
 import * as os from "node:os"
-import { Effect, Layer, Option, Schema } from "effect"
+import { Effect, Layer } from "effect"
 import { causeMessage } from "../domain/guards.js"
 import { BunServices } from "@effect/platform-bun"
 import { GentPlatform, type RuntimeModuleSource, SignalError } from "./gent-platform.js"
@@ -78,21 +78,7 @@ export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.succeed(
         try: () => {
           process.kill(pid, signal)
         },
-        catch: (cause) => {
-          const code = Schema.decodeUnknownOption(Schema.Struct({ code: Schema.String }))(
-            cause,
-          ).pipe(
-            Option.map((error) => error.code),
-            Option.getOrNull,
-          )
-          const reason = causeMessage(cause)
-          return new SignalError({
-            pid,
-            signal,
-            code,
-            reason,
-          })
-        },
+        catch: (cause) => new SignalError({ pid, signal, reason: causeMessage(cause) }),
       }),
 
     hash: (algorithm, input) => new Bun.CryptoHasher(algorithm).update(input).digest("hex"),

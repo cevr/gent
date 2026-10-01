@@ -103,6 +103,10 @@ const SESSION_PARENT_BRANCH_CHECK =
 export const SESSION_COLUMNS =
   "id, name, cwd, model_id, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, thread_id, admission_json, created_at, updated_at"
 
+/** The branch columns, read through the alias `b`. Interpolate with `sql.literal`. */
+export const BRANCH_COLUMNS =
+  "b.id, b.session_id, b.parent_branch_id, b.parent_message_id, b.name, b.created_at"
+
 /** One message row per content chunk, scoped through the owning session. Interpolate with `sql.literal`. */
 export const MESSAGE_CHUNK_SELECT = `SELECT m.id, m.session_id, m.branch_id, m.kind, m.role, m.created_at, m.turn_duration_ms, m.metadata,
   mc.ordinal as chunk_ordinal, c.part_json as chunk_part_json

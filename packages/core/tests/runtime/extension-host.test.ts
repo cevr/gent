@@ -26,12 +26,10 @@ import { describe, expect, it, test } from "effect-bun-test"
 import * as ExtensionApiEntry from "../../src/extensions/api"
 import * as BranchToolsEntry from "../../src/extensions/branch-tools"
 import {
-  type CallRecord,
   createRpcHarness,
-  RecordingEventStore,
   registerContributions,
   runToolWithCtx,
-  SequenceRecorder,
+  recordingEventStore,
   testExtensionHostContext,
   testHostFacts,
   testToolContext,
@@ -4718,10 +4716,12 @@ const makeTestExtensions = () => {
     },
   ])
 }
-const makeMutationsLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) => {
+const makeMutationsLayer = (
+  providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
+  events: Ref.Ref<AgentEvent[]>,
+) => {
   const resolvedExtensions = makeTestExtensions()
-  const recorderLayer = SequenceRecorder.Live
-  const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
+  const eventStoreLayer = recordingEventStore(events)
   const storageLayer = testSqliteStorage(noBranchTools.storage, noBranchTools.migrations)
   const clusterRunnerLayer = Layer.provide(
     SingleRunner.layer({ runnerStorage: "memory" }),
@@ -4733,7 +4733,6 @@ const makeMutationsLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageMod
     providerLayer,
     LanguageModelLayers.resolver(providerLayer),
     eventStoreLayer,
-    recorderLayer,
     ExtensionRegistry.fromResolved(resolvedExtensions),
     ToolRunner.Test(),
     ApprovalService.Test(),
@@ -4759,12 +4758,6 @@ const makeMutationsLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageMod
   )
   return Layer.mergeAll(baseDeps, sessionRuntimeLayer, sessionMutationsLayer)
 }
-const eventTags = (calls: ReadonlyArray<CallRecord>) =>
-  calls
-    .values()
-    .filter((call) => call.service === "EventStore" && call.method === "append")
-    .map((call) => Schema.decodeUnknownSync(AgentEvent)(call.args)._tag)
-    .toArray()
 describe("session agent", () => {
   it.scopedLive("every turn of a session runs as the agent it was created with", () =>
     Effect.gen(function* () {
@@ -4782,11 +4775,11 @@ describe("session agent", () => {
           },
         },
       ])
+      const events = yield* Ref.make<AgentEvent[]>([])
       yield* Effect.gen(function* () {
         const mutations = yield* SessionMutations
         const sessionRuntime = yield* SessionRuntime
         const messageStorage = yield* MessageStorage
-        const recorder = yield* SequenceRecorder
         const session = yield* mutations.createSession({
           name: "Session Agent Test",
           admission: { agent: AgentName.make("memory:reflect") },
@@ -4807,16 +4800,16 @@ describe("session agent", () => {
           5000,
           "two assistant replies",
         )
-        const calls = yield* recorder.getCalls
+        const tags = (yield* Ref.get(events)).map((event) => event._tag)
         expect(messages.map((message) => message.role)).toEqual([
           "user",
           "assistant",
           "user",
           "assistant",
         ])
-        expect(eventTags(calls)).not.toContain("AgentSwitched")
+        expect(tags).not.toContain("AgentSwitched")
         yield* controls.assertDone
-      }).pipe(Effect.provide(makeMutationsLayer(providerLayer)), Effect.scoped)
+      }).pipe(Effect.provide(makeMutationsLayer(providerLayer, events)), Effect.scoped)
     }).pipe(Effect.provide(BunCrypto.layer)),
   )
   it.scopedLive("createSession skips dispatch when initialPrompt is missing or empty", () =>
@@ -4833,7 +4826,10 @@ describe("session agent", () => {
         expect(yield* messageStorage.listMessages(noPrompt.branchId)).toEqual([])
         expect(yield* messageStorage.listMessages(emptyPrompt.branchId)).toEqual([])
         yield* controls.assertDone
-      }).pipe(Effect.provide(makeMutationsLayer(providerLayer)), Effect.scoped)
+      }).pipe(
+        Effect.provide(makeMutationsLayer(providerLayer, yield* Ref.make<AgentEvent[]>([]))),
+        Effect.scoped,
+      )
     }).pipe(Effect.provide(BunCrypto.layer)),
   )
 })

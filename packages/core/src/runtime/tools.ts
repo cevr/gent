@@ -1004,7 +1004,7 @@ const runTool = Effect.fn("ToolRunner.execute")(function* (
  *
  * It stays here rather than in `test-utils` because the two publishes reach
  * five private helpers in this file; moving it would export the whole publish
- * path to save one layer. Thirteen services in the repo carry a `Test` layer
+ * path to save one layer. Several services in the repo carry a `Test` layer
  * this way, so this is the shape, not an exception to it.
  */
 const runTestTool = (toolCall: ToolCall) =>

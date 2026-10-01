@@ -1,5 +1,4 @@
 import {
-  Clock,
   Context,
   DateTime,
   Effect,
@@ -117,7 +116,7 @@ import {
   SqliteStorage,
   ToolCallBindingStorage,
 } from "../storage/storage.js"
-import { EventStore, type EventStoreService } from "../domain/event.js"
+import { type AgentEvent, EventStore, type EventStoreService } from "../domain/event.js"
 import { type LanguageModel, Model as AiModel } from "effect/ai"
 import { GentPlatform } from "../runtime/gent-platform.js"
 import { BunCrypto } from "@effect/platform-bun"
@@ -311,11 +310,9 @@ export const testToolContext = (overrides?: TestToolContextOverrides): TestToolC
 }
 
 /**
- * Test-only adapter for invoking a tool's effect with a wired
- * `ExtensionContext`. Production wraps tool execution in
- * `provideExtensionServices`; tests provide the service directly so mocks
- * stay observable. Keep this helper test-only — production code never wires
- * `ExtensionContext` at the tool boundary.
+ * Runs a tool's effect over a stub host context, wired through
+ * `provideExtensionServices` as production wires a tool call, so a test
+ * reads the stub's recorded calls.
  */
 export const runToolWithCtx = <Input, Output, Error>(
   tool: ToolCapability<Input, Output, Error>,
@@ -332,69 +329,35 @@ export const runToolWithCtx = <Input, Output, Error>(
 export const testLeafContext = (ctx: TestToolContext): ExtensionContextService =>
   Context.get(extensionServicesFromHostContext(ctx), ExtensionContext)
 
-// ── call recording ──────────────────────────────────────────────────────────
-
-export interface CallRecord {
-  service: string
-  method: string
-  args?: unknown
-  result?: unknown
-  timestamp: number
-}
-
-interface SequenceRecorderService {
-  readonly record: (call: Omit<CallRecord, "timestamp">) => Effect.Effect<void>
-  readonly getCalls: Effect.Effect<ReadonlyArray<CallRecord>>
-  readonly clear: Effect.Effect<void>
-}
-
-export class SequenceRecorder extends Context.Service<SequenceRecorder, SequenceRecorderService>()(
-  "@gent/core/src/test-utils/harness/SequenceRecorder",
-) {
-  static Live: Layer.Layer<SequenceRecorder> = Layer.effect(
-    SequenceRecorder,
-    Effect.gen(function* () {
-      const ref = yield* Ref.make<CallRecord[]>([])
-      return SequenceRecorder.of({
-        record: (call) =>
-          Effect.gen(function* () {
-            const timestamp = yield* Clock.currentTimeMillis
-            yield* Ref.update(ref, (calls) => [...calls, { ...call, timestamp }])
-          }),
-        getCalls: Ref.get(ref),
-        clear: Ref.set(ref, []),
-      })
-    }),
-  )
-}
+// ── event recording ─────────────────────────────────────────────────────────
 
 /**
- * The in-memory event store with each append recorded in the
- * `SequenceRecorder`, so a test asserts event order against the store
- * semantics production runs (sliding delivery, the synchronize marker). A
- * publish appends through the recording `append`.
+ * The in-memory event store that also keeps each event it appends, in order,
+ * in `events`, so a test asserts event order against the store semantics
+ * production runs (sliding delivery, the synchronize marker). A publish
+ * appends through the recording `append`.
  */
-export const RecordingEventStore: Layer.Layer<EventStore, never, SequenceRecorder> = Layer.effect(
-  EventStore,
-  Effect.gen(function* () {
-    const recorder = yield* SequenceRecorder
-    const inner = yield* EventStore
-    const append: EventStoreService["append"] = Effect.fn("RecordingEventStore.append")(
-      function* (event) {
-        const envelope = yield* inner.append(event)
-        yield* recorder.record({ service: "EventStore", method: "append", args: event })
-        return envelope
-      },
-    )
-    return EventStore.of({
-      ...inner,
-      append,
-      publish: Effect.fn("RecordingEventStore.publish")(function* (event) {
-        yield* inner.deliver(yield* append(event))
-      }),
-    })
-  }),
-).pipe(Layer.provide(EventStore.Memory))
+export const recordingEventStore = (events: Ref.Ref<AgentEvent[]>): Layer.Layer<EventStore> =>
+  Layer.effect(
+    EventStore,
+    Effect.gen(function* () {
+      const inner = yield* EventStore
+      const append: EventStoreService["append"] = Effect.fn("RecordingEventStore.append")(
+        function* (event) {
+          const envelope = yield* inner.append(event)
+          yield* Ref.update(events, (all) => [...all, event])
+          return envelope
+        },
+      )
+      return EventStore.of({
+        ...inner,
+        append,
+        publish: Effect.fn("RecordingEventStore.publish")(function* (event) {
+          yield* inner.deliver(yield* append(event))
+        }),
+      })
+    }),
+  ).pipe(Layer.provide(EventStore.Memory))
 
 // ── test extension host ─────────────────────────────────────────────────────
 

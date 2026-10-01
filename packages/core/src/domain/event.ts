@@ -481,7 +481,7 @@ const matchesEventFilter = (
   branchId?: BranchId,
 ): boolean => {
   const eventSessionId = getEventSessionId(env.event)
-  if (Predicate.isUndefined(eventSessionId) || eventSessionId !== sessionId) return false
+  if (eventSessionId !== sessionId) return false
   return matchesBranchFilter(env, branchId)
 }
 

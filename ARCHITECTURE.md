@@ -77,8 +77,7 @@ updates this list in the same commit.
     `packages/core/src/runtime/turn.ts`.
 12. **Tool guidance lives on the tool and follows the active tool list.**
     `promptGuidelines` are deduped per turn from the post-policy tools only.
-    Receipts: `buildTurnPromptSections` in
-    `packages/core/src/runtime/turn.ts`,
+    Receipt: `buildTurnPromptSections` in
     `packages/core/src/runtime/turn.ts`.
 13. **The cell runs in full Bun.** No sandbox, no interpreter; network reads,
     HTML parsing, and past-session queries happen in the cell. Receipt:
@@ -386,8 +385,11 @@ callback limits have focused validation. Full gate and terminal/server E2E pass.
 See `plans/live-composition-review.md` for evidence and recovery limits.
 
 Core writes two prompt sections: the environment, once per profile, and the
-local date, per turn (a profile outlives midnight; the date changes the cached
-prefix at most once a day). Extensions add sections
+date, per turn. The date is the local day the session tree's root session
+started (`dateSection`), so the cached prefix stays byte-identical past
+midnight and a child shares its parent's. A turn on a later day carries
+today's local date as a notice after the conversation (`dateNotice`, first
+among the turn's notices, never stored). Extensions add sections
 only from `turnProjection` hooks, which run each turn inside the extension
 service context.
 
@@ -529,12 +531,13 @@ Shape:
 - A session takes its name from its first user message: at a turn end,
   `@gent/session-tools` renames a session that still has
   `DEFAULT_SESSION_NAME` to the first line of its branch's first user
-  message (the rename trims it to 80 characters), as a delegate child takes
+  message (the rename cuts a name to 80 characters between code points and
+  trims it), as a delegate child takes
   its task. No prompt text asks the model to name a session; `rename_session`
   stays for a rename the user asks for, and a name it gave first wins: the
-  automatic rename passes `expectedName`, and the storage write renames only
-  while the stored name is still the default (`renameCurrent`,
-  `SessionStorage.renameSession`). A session whose first message has no text
+  automatic rename passes `expectedName`, and the rename's write transaction
+  renames only while the stored name is still the default (`renameCurrent`,
+  `SessionMutations.renameSession`). A session whose first message has no text
   keeps the default; its history is read once per process, not every turn.
 - `Interject` steering never interrupts an open stream. The item is admitted to
   the durable steering queue; a running turn delivers it at its next safe step
@@ -1779,13 +1782,13 @@ Use the smallest honest boundary:
 
 ```text
 tests/
-├── domain/        # auth, agent, event, message, skills, ...
-├── extensions/    # api, registry, compile-tool-policy, hooks, loader, ...
-├── helpers/       # shared test presets and agent-loop drivers, not tests
-├── runtime/       # session-runtime, agent-loop, retry, agent-runner, tool-runner, ...
-├── server/        # rpcs, session-queries, system-prompt
-├── storage/       # sqlite-storage and the focused sub-storages
-└── test-utils/    # the test entry and the scripted language model
+├── domain/        # agent, agent-loop, capability, event, extension, message, ...
+├── extensions/    # api
+├── helpers/       # agent-loop (the actor test root), test-preset
+├── runtime/       # agent-loop, config, extension-host, model-context, provider, session, tools, turn, ...
+├── server/        # rpc, server, workspace-rpc
+├── storage/       # schema, storage
+└── test-utils/    # index, language-model
 ```
 
 One test file per source file. No god tests. Names match source owners.
@@ -1796,8 +1799,9 @@ One test file per source file. No god tests. Names match source owners.
 
 ### Important files
 
-- `packages/core/src/test-utils/harness.ts` — `SequenceRecorder` and the
-  recording layers; `baseLocalLayer`, a production-root preset over
+- `packages/core/src/test-utils/harness.ts` — `recordingEventStore`, the
+  in-memory event store that keeps each appended event in a `Ref`;
+  `baseLocalLayer`, a production-root preset over
   `createDependencies` with in-memory SQLite, storage-backed events, debug
   providers, and test service overrides; `createE2ELayer`, a preset that keeps
   real `ToolRunner.Live`, extension setup/resource startup, event publishing,
@@ -1830,7 +1834,7 @@ Wide event boundaries (one structured log per unit of work) via `effect-wide-eve
 | ------------ | ------------- | ----------------------- |
 | Agent turn   | `agent-loop`  | `runtime/agent-loop.ts` |
 | Tool call    | `tool-runner` | `runtime/tools.ts`      |
-| Model stream | `model`       | `runtime/agent-loop.ts` |
+| Model stream | `provider`    | `runtime/turn.ts`       |
 | RPC request  | `rpc`         | `server/server.ts`      |
 
 Logging conventions:

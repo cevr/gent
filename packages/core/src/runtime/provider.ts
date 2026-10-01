@@ -1280,6 +1280,16 @@ const isRetryable =
     return Schema.is(policy.transientStreamEvent)(error.cause)
   }
 
+/**
+ * What a retry notice says: the provider's reason when an `AiError` carries
+ * it (`Rate limit exceeded`), without the SDK's module and method prefix;
+ * else the error's own message.
+ */
+export const retryReason = (error: ProviderError): string => {
+  if (AiError.isAiError(error.cause)) return error.cause.reason.message
+  return error.message
+}
+
 const retryAfterMs = (error: ProviderError): Option.Option<number> => {
   if (!AiError.isAiError(error.cause)) return Option.none()
   return Option.map(Option.fromUndefinedOr(error.cause.retryAfter), Duration.toMillis)

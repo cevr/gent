@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Duration, Effect, FileSystem, Layer, Path, Predicate } from "effect"
+import { Clock, Duration, Effect, FileSystem, Layer, Path, Predicate } from "effect"
 import { BunGentPlatformLive } from "../../src/runtime/gent-platform-bun"
 import {
   GentPlatform,
@@ -81,13 +81,11 @@ describe("GentPlatform", () => {
         // host (darwin: ~99999, linux default: 4194304). `process.kill`
         // therefore raises ESRCH for this pid on every CI runner we
         // support. We assert the typed `SignalError` is on the failure
-        // channel — not on the defect channel — and that `code` is
-        // populated (supervisor classification reads `code`, not `reason`).
+        // channel, not on the defect channel.
         const failure = yield* Effect.flip(platform.signal(2 ** 31 - 1, 0))
         expect(failure).toBeInstanceOf(SignalError)
         expect(failure.pid).toBe(2 ** 31 - 1)
         expect(failure.signal).toBe(0)
-        expect(failure.code).toBe("ESRCH")
         expect(Predicate.isString(failure.reason)).toBe(true)
         expect(failure.reason.length).toBeGreaterThan(0)
       }).pipe(Effect.provide(BunGentPlatformLive)),
@@ -187,6 +185,22 @@ describe("runProcess", () => {
         expect(failed.timedOut).toBe(true)
         expect(failed.message).toContain("timed out")
       }).pipe(withProcessTimeout),
+    processTestTimeout,
+  )
+  it.live(
+    "a timeout holds for a child that ignores SIGTERM",
+    () =>
+      Effect.gen(function* () {
+        const started = yield* Clock.currentTimeMillis
+        const failed = yield* provideBun(
+          runProcess("/bin/sh", ["-c", "trap '' TERM; sleep 8"], {
+            timeout: Duration.millis(300),
+          }).pipe(Effect.flip),
+        )
+        const elapsed = (yield* Clock.currentTimeMillis) - started
+        expect(failed.timedOut).toBe(true)
+        expect(elapsed).toBeLessThan(5_000)
+      }).pipe(Effect.timeout("6 seconds")),
     processTestTimeout,
   )
   it.live(

@@ -165,7 +165,7 @@ export const acceptance = Effect.gen(function* () {
 })
 ```
 
-Core tests record the event sequence for assertions with `RecordingEventStore` and `SequenceRecorder`, imported by relative path from `packages/core/src/test-utils/harness.ts`.
+Core tests record the event sequence for assertions with `recordingEventStore(ref)` (the in-memory store that also keeps each appended event in a `Ref`), imported by relative path from `packages/core/src/test-utils/harness.ts`.
 
 ## Key Files
 
