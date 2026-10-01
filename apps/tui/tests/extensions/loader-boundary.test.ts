@@ -1,5 +1,16 @@
 import { describe, expect, it, test } from "effect-bun-test"
-import { Effect, FileSystem, Logger, Option, Path, Predicate, References, Schema } from "effect"
+import {
+  Effect,
+  FileSystem,
+  Layer,
+  Logger,
+  Option,
+  Path,
+  Predicate,
+  References,
+  Schema,
+} from "effect"
+import { BunPlatformLive, GentPlatform } from "@gent/core/host"
 import { AgentEvent, BranchId, SessionId } from "@gent/core/protocol"
 import { InteractionRequestId } from "@gent/core/extensions/branch-tools"
 import {
@@ -36,7 +47,7 @@ import {
 import type { ToolRenderer, ToolRendererProps } from "../../src/tool-renderers"
 import { mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs" // eslint-disable-line effect/noNodeBuiltinImport -- synchronous filesystem fixture setup is a test boundary.
 import { join } from "node:path" // eslint-disable-line effect/noNodeBuiltinImport -- synchronous path fixture setup is a test boundary.
-import { BunServices } from "@effect/platform-bun"
+import { BunChildProcessSpawner, BunServices } from "@effect/platform-bun"
 import { BuiltinExtensions } from "@gent/extensions"
 import { collectTestContributions } from "@gent/core/test-utils"
 import {
@@ -44,7 +55,14 @@ import {
   makeClientTestTransport,
   makeUnreachableTransport,
 } from "../extension-test-harness-boundary"
-import { defineRequests, ExtensionId, getToolId, ref, request } from "@gent/core/extensions/api"
+import {
+  defineRequests,
+  ExtensionId,
+  getToolId,
+  ref,
+  request,
+  runProcess,
+} from "@gent/core/extensions/api"
 import { inRuntime } from "../helpers-boundary"
 import { builtinClientModules } from "../../src/extensions/builtins"
 import { type Command, executeSlashCommand } from "../../src/commands"
@@ -1627,5 +1645,47 @@ describe("tool renderer reach", () => {
       expect(loaded.renderers.has("delegate.start")).toBe(true)
       expect([...loaded.renderers.keys()].filter((name) => !toolIds.has(name))).toEqual([])
     }).pipe(Effect.provide(BunServices.layer)),
+  )
+})
+
+describe("client extension compile", () => {
+  // The test run's preload loads Babel itself, so a fresh process without it
+  // shows what importing the adapter costs.
+  it.live(
+    "importing the Bun adapter loads no Babel module until a client extension compiles",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const path = yield* Path.Path
+          const platform = yield* GentPlatform
+          const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-babel-lazy-" })
+          const adapter = new URL("../../src/bun-adapter.ts", import.meta.url).href
+          const script = path.join(directory, "import-adapter.ts")
+          yield* fs.writeFileString(
+            script,
+            [
+              `await import("${adapter}")`,
+              `console.log(Object.keys(require.cache).filter((key) => key.includes("/@babel/")).length)`,
+            ].join("\n"),
+          )
+          const result = yield* runProcess(
+            yield* platform.execPath,
+            ["--config=/dev/null", script],
+            { cwd: directory },
+          )
+          expect(result.exitCode).toBe(0)
+          expect(result.stdout.trim()).toBe("0")
+        }),
+      ).pipe(
+        Effect.timeout("25 seconds"),
+        Effect.provide(
+          Layer.mergeAll(
+            BunPlatformLive,
+            BunChildProcessSpawner.layer.pipe(Layer.provide(BunServices.layer)),
+          ),
+        ),
+      ),
+    30_000,
   )
 })
